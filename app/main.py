@@ -1,6 +1,6 @@
 """
 DocuAction AI — FastAPI Backend
-Production entry point with lifespan management
+Production entry point with 2026 Compliance Layer
 """
 import logging
 from contextlib import asynccontextmanager
@@ -19,7 +19,6 @@ logger = logging.getLogger("docuaction")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Create database tables on startup, cleanup on shutdown."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("═══ DocuAction AI Backend Started ═══")
@@ -29,16 +28,16 @@ async def lifespan(app: FastAPI):
     logger.info(f"  Anthropic Key: {'✓ Set' if settings.ANTHROPIC_API_KEY else '✗ Missing'}")
     logger.info(f"  OpenAI Key: {'✓ Set' if settings.OPENAI_API_KEY else '✗ Missing'}")
     logger.info(f"  Database: Connected")
+    logger.info(f"  2026 Compliance Layer: Active")
     logger.info("═══════════════════════════════════════")
     yield
     await engine.dispose()
-    logger.info("DocuAction AI Backend stopped.")
 
 
 app = FastAPI(
     title="DocuAction AI",
-    description="Enterprise Document & Voice Intelligence Platform API",
-    version="3.1.0",
+    description="Enterprise Document & Voice Intelligence Platform API — 2026 Compliance Ready",
+    version="3.2.0",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
@@ -54,21 +53,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ─── Import and mount routes ───
+# Core routes
 from app.api.routes import router as api_router
 app.include_router(api_router)
+
+# 2026 Compliance routes
+from app.api.compliance import router as compliance_router
+app.include_router(compliance_router)
+
+# Security & Residency routes
+from app.api.security import router as security_router
+app.include_router(security_router)
 
 
 @app.get("/", tags=["Health"])
 async def root():
     return {
         "app": "DocuAction AI",
-        "version": "3.1.0",
+        "version": "3.2.0",
         "status": "running",
+        "compliance": "2026 Layer Active",
         "docs": "/docs",
     }
 
 
 @app.get("/health", tags=["Health"])
 async def health():
-    return {"status": "healthy", "service": "docuaction-ai"}
+    return {"status": "healthy", "service": "docuaction-ai", "version": "3.2.0"}

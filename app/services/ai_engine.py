@@ -18,6 +18,7 @@ from app.services.pii_masking import mask_pii
 from app.services.text_chunker import chunk_and_summarize
 from app.services.model_router import classify_complexity
 from app.services.audit_logger import log_ai_request
+from app.services.ai_disclosure import attach_disclosure
 from app.core.config import settings
 
 logger = logging.getLogger("docuaction.ai_engine")
@@ -228,6 +229,9 @@ async def process_document(
             fallback_used=fallback_used,
         )
 
+        # ─── Step 7: Attach AI Disclosure (2026 Compliance) ───
+        parsed = attach_disclosure(parsed, model_used=model_used, confidence=parsed.get("confidence", 0))
+
         logger.info(f"AI engine complete: {action_type} in {processing_ms}ms via {model_used}")
         return parsed
 
@@ -263,6 +267,7 @@ async def process_document(
                         processing_time_ms=processing_ms, status="fallback",
                         confidence=parsed.get("confidence", 0), fallback_used=True,
                     )
+                    parsed = attach_disclosure(parsed, model_used=model_used, confidence=parsed.get("confidence", 0))
                     return parsed
             except Exception as fallback_error:
                 logger.error(f"Fallback also failed: {fallback_error}")
@@ -277,7 +282,7 @@ async def process_document(
             error=error_message,
         )
 
-        return {
+        error_output = {
             "summary": f"AI processing encountered an error. Please try again or contact support.",
             "tasks": [],
             "decisions": [],
@@ -290,6 +295,8 @@ async def process_document(
                 "error": error_message,
             },
         }
+        error_output = attach_disclosure(error_output, model_used="none", confidence=0)
+        return error_output
 
 
 # ═══════════════════════════════════════════════════════
