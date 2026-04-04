@@ -303,7 +303,7 @@ async def process_document(
 # MODEL CALLERS
 # ═══════════════════════════════════════════════════════
 
-async def _call_model(model_type: str, system_prompt: str, user_prompt: str, timeout: int = 15) -> str:
+async def _call_model(model_type: str, system_prompt: str, user_prompt: str, timeout: int = 75) -> str:
     """Call Anthropic API with timeout and retry."""
     
     model_name = _get_model_name(model_type)
@@ -347,7 +347,7 @@ async def _anthropic_call(model: str, system: str, user: str, max_tokens: int) -
         "temperature": 0.1,  # Low temperature for structured output consistency
     }
 
-    async with httpx.AsyncClient(timeout=20.0) as client:
+    async with httpx.AsyncClient(timeout=75.0) as client:
         response = await client.post(
             "https://api.anthropic.com/v1/messages",
             headers=headers,
