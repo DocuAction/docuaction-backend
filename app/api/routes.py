@@ -52,6 +52,7 @@ async def signup(data: SignupRequest, db: AsyncSession = Depends(get_db)):
         password_hash=hash_password(data.password),
         full_name=data.full_name,
         company=data.company,
+        plan=getattr(data, 'plan', 'free') or 'free',
     )
     db.add(user)
     await db.commit()
@@ -88,6 +89,11 @@ async def process_text(request: ProcessRequest, user=Depends(get_current_user)):
     """
     if not request.text or len(request.text.strip()) < 20:
         raise HTTPException(400, "Text must be at least 20 characters")
+
+    # Plan enforcement
+    from app.services.plan_enforcement import check_ai_action_limit
+    from app.core.database import get_db as _get_db
+    # Note: plan check happens at output generation level
 
     from app.services.ai_engine import process_document
 
@@ -215,6 +221,10 @@ async def transcribe_audio(
     if len(content) > 25 * 1024 * 1024:
         raise HTTPException(400, "Audio file too large. Maximum 25MB.")
 
+    # Check transcription plan limits
+    from app.services.plan_enforcement import check_transcription_limit
+    await check_transcription_limit(db, user.id, getattr(user, 'plan', 'free'))
+
     fname = f"{uuid.uuid4().hex}_{file.filename}"
     fpath = UPLOAD_DIR / "audio" / fname
     fpath.write_bytes(content)
@@ -324,6 +334,10 @@ async def generate_output(
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(404, "Document not found")
+
+    # Check plan limits before processing
+    from app.services.plan_enforcement import check_ai_action_limit
+    await check_ai_action_limit(db, user.id, getattr(user, 'plan', 'free'))
 
     # Extract text PROPERLY using document_extractor
     from app.services.document_extractor import extract_text

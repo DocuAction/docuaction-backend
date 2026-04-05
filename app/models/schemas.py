@@ -12,6 +12,7 @@ class SignupRequest(BaseModel):
     password: str
     full_name: Optional[str] = ""
     company: Optional[str] = ""
+    plan: Optional[str] = "free"
 
 class LoginRequest(BaseModel):
     email: str
@@ -23,9 +24,11 @@ class UserResponse(BaseModel):
     full_name: str
     company: str
     role: str
+    plan: Optional[str] = "free"
     created_at: datetime
     class Config:
         from_attributes = True
+        protected_namespaces = ()
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -33,12 +36,11 @@ class TokenResponse(BaseModel):
     user: UserResponse
 
 
-# ═══ PROCESS (AI Engine) ═══
+# ═══ PROCESS ═══
 
 class ProcessRequest(BaseModel):
-    """Input for /api/process — send text for AI analysis"""
     text: str
-    action_type: str = "summary"  # summary | actions | insights | email | brief
+    action_type: str = "summary"
     output_language: Optional[str] = None
 
 class TaskItem(BaseModel):
@@ -60,7 +62,6 @@ class FollowUpItem(BaseModel):
     due: str = "TBD"
 
 class ProcessResponse(BaseModel):
-    """Structured JSON output from AI engine"""
     summary: Optional[str] = None
     tasks: Optional[List[TaskItem]] = []
     decisions: Optional[List[DecisionItem]] = []
@@ -96,12 +97,12 @@ class OutputResponse(BaseModel):
     created_at: datetime
     class Config:
         from_attributes = True
+        protected_namespaces = ()
 
 
 # ═══ AUDIO ═══
 
 class TranscribeResponse(BaseModel):
-    """Output from /api/transcribe"""
     transcript: str
     word_count: int
     language: str
