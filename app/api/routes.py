@@ -15,7 +15,7 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.security import hash_password, verify_password, create_token, get_current_user
+from app.core.security import hash_password, verify_password, create_token, create_token_pair, get_current_user, ADMIN_EMAILS
 from app.models.database import User, Document, Output, AudioFile, Transcript
 from app.models.schemas import (
     SignupRequest, LoginRequest, TokenResponse, UserResponse,
@@ -27,10 +27,10 @@ from app.models.schemas import (
 logger = logging.getLogger("docuaction.api")
 router = APIRouter()
 
-# File storage handled by app.services.file_storage
-from app.services.file_storage import save_document, save_audio, delete_file, DOCUMENTS_DIR, AUDIO_DIR
-from pathlib import Path
-UPLOAD_DIR = Path(DOCUMENTS_DIR).parent
+UPLOAD_DIR = Path(settings.UPLOAD_DIR)
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+(UPLOAD_DIR / "documents").mkdir(exist_ok=True)
+(UPLOAD_DIR / "audio").mkdir(exist_ok=True)
 
 ALLOWED_DOCS = {".pdf", ".docx", ".doc", ".txt", ".xlsx", ".xls", ".csv", ".png", ".jpg", ".jpeg", ".tiff", ".bmp"}
 ALLOWED_AUDIO = {".mp3", ".wav", ".m4a", ".webm", ".ogg"}
@@ -57,8 +57,8 @@ async def signup(data: SignupRequest, db: AsyncSession = Depends(get_db)):
     db.add(user)
     await db.commit()
     await db.refresh(user)
-    token = create_token({"sub": str(user.id)})
-    return TokenResponse(access_token=token, user=UserResponse.model_validate(user))
+    tokens = create_token_pair(str(user.id), user.role, user.email)
+    return TokenResponse(access_token=tokens["access_token"], user=UserResponse.model_validate(user))
 
 
 @router.post("/api/auth/login", response_model=TokenResponse, tags=["Auth"])
@@ -67,8 +67,8 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
     user = result.scalar_one_or_none()
     if not user or not verify_password(data.password, user.password_hash):
         raise HTTPException(401, "Invalid email or password")
-    token = create_token({"sub": str(user.id)})
-    return TokenResponse(access_token=token, user=UserResponse.model_validate(user))
+    tokens = create_token_pair(str(user.id), user.role, user.email)
+    return TokenResponse(access_token=tokens["access_token"], user=UserResponse.model_validate(user))
 
 
 @router.get("/api/auth/me", response_model=UserResponse, tags=["Auth"])
@@ -285,10 +285,12 @@ async def upload_document(
     if len(content) > 50 * 1024 * 1024:
         raise HTTPException(400, "File too large (max 50MB)")
 
-    fpath = save_document(content, file.filename)
+    fname = f"{uuid.uuid4().hex}_{file.filename}"
+    fpath = UPLOAD_DIR / "documents" / fname
+    fpath.write_bytes(content)
 
     doc = Document(
-        user_id=user.id, filename=file.filename, file_path=fpath,
+        user_id=user.id, filename=file.filename, file_path=str(fpath),
         file_type=ext.replace(".", ""), file_size_bytes=len(content), status="uploaded",
     )
     db.add(doc)
@@ -309,7 +311,8 @@ async def delete_document(doc_id: str, db: AsyncSession = Depends(get_db), user=
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(404, "Document not found")
-    delete_file(doc.file_path)
+    if os.path.exists(doc.file_path):
+        os.remove(doc.file_path)
     await db.delete(doc)
     await db.commit()
     return {"detail": "Document deleted"}
