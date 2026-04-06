@@ -1,4 +1,4 @@
-"""DocuAction AI v3.5.0 - Bulletproof startup"""
+"""DocuAction AI v3.6.0 - Zero-failure audio pipeline"""
 import os
 import asyncio
 import logging
@@ -16,21 +16,29 @@ _failed = []
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _db_ready
-    logger.info("=== DocuAction AI v3.5.0 Starting ===")
-    
+    logger.info("=== DocuAction AI v3.6.0 Starting ===")
+
     base = os.getenv("UPLOAD_DIR", "./uploads")
     if not os.path.isabs(base):
         base = os.path.join(os.getcwd(), base)
     os.makedirs(os.path.join(base, "documents"), exist_ok=True)
     os.makedirs(os.path.join(base, "audio"), exist_ok=True)
-    
+    os.makedirs(os.path.join(base, "audio", "chunks"), exist_ok=True)
+
+    # Check FFmpeg
+    import subprocess
+    try:
+        subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=5)
+        logger.info("  FFmpeg: Available")
+    except Exception:
+        logger.warning("  FFmpeg: NOT FOUND - install via nixpacks.toml")
+
     try:
         from app.core.database import init_database
         _db_ready = await init_database(retries=5, delay=2.0)
     except Exception as e:
         logger.error(f"DB error: {e}")
-        _db_ready = False
-    
+
     logger.info(f"  DB: {'OK' if _db_ready else 'UNAVAILABLE'}")
     logger.info(f"  Routes: {', '.join(_loaded)}")
     if _failed:
@@ -43,15 +51,15 @@ async def lifespan(app: FastAPI):
     except:
         pass
 
-app = FastAPI(title="DocuAction AI", version="3.5.0", docs_url="/docs", lifespan=lifespan)
+app = FastAPI(title="DocuAction AI", version="3.6.0", docs_url="/docs", lifespan=lifespan)
 
 @app.get("/health", tags=["Health"])
 async def health():
-    return {"status": "healthy", "service": "docuaction-ai", "version": "3.5.0"}
+    return {"status": "healthy", "service": "docuaction-ai", "version": "3.6.0"}
 
 @app.get("/", tags=["Health"])
 async def root():
-    return {"app": "DocuAction AI", "version": "3.5.0", "status": "running"}
+    return {"app": "DocuAction AI", "version": "3.6.0", "status": "running"}
 
 allowed = os.getenv("ALLOWED_ORIGINS", "https://app.docuaction.io,http://localhost:3000")
 app.add_middleware(CORSMiddleware, allow_origins=[o.strip() for o in allowed.split(",")], allow_credentials=True, allow_methods=["*"], allow_headers=["*"], expose_headers=["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"])
@@ -80,6 +88,8 @@ def _load(path, name):
     except Exception as e:
         _failed.append(f"{name}:{e}")
 
+# Audio route FIRST — overrides old /api/transcribe in routes.py
+_load("app.api.audio_routes", "audio")
 _load("app.api.routes", "api")
 _load("app.api.auth_endpoints", "auth")
 _load("app.api.password_reset", "pwreset")
