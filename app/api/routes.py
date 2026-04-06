@@ -27,10 +27,10 @@ from app.models.schemas import (
 logger = logging.getLogger("docuaction.api")
 router = APIRouter()
 
-UPLOAD_DIR = Path(settings.UPLOAD_DIR)
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-(UPLOAD_DIR / "documents").mkdir(exist_ok=True)
-(UPLOAD_DIR / "audio").mkdir(exist_ok=True)
+# File storage handled by app.services.file_storage
+from app.services.file_storage import save_document, save_audio, delete_file, DOCUMENTS_DIR, AUDIO_DIR
+from pathlib import Path
+UPLOAD_DIR = Path(DOCUMENTS_DIR).parent
 
 ALLOWED_DOCS = {".pdf", ".docx", ".doc", ".txt", ".xlsx", ".xls", ".csv", ".png", ".jpg", ".jpeg", ".tiff", ".bmp"}
 ALLOWED_AUDIO = {".mp3", ".wav", ".m4a", ".webm", ".ogg"}
@@ -285,12 +285,10 @@ async def upload_document(
     if len(content) > 50 * 1024 * 1024:
         raise HTTPException(400, "File too large (max 50MB)")
 
-    fname = f"{uuid.uuid4().hex}_{file.filename}"
-    fpath = UPLOAD_DIR / "documents" / fname
-    fpath.write_bytes(content)
+    fpath = save_document(content, file.filename)
 
     doc = Document(
-        user_id=user.id, filename=file.filename, file_path=str(fpath),
+        user_id=user.id, filename=file.filename, file_path=fpath,
         file_type=ext.replace(".", ""), file_size_bytes=len(content), status="uploaded",
     )
     db.add(doc)
@@ -311,8 +309,7 @@ async def delete_document(doc_id: str, db: AsyncSession = Depends(get_db), user=
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(404, "Document not found")
-    if os.path.exists(doc.file_path):
-        os.remove(doc.file_path)
+    delete_file(doc.file_path)
     await db.delete(doc)
     await db.commit()
     return {"detail": "Document deleted"}
