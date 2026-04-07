@@ -1,18 +1,15 @@
 """
-DocuAction AI — Intelligence Engine v3
-Production-grade AI pipeline with model routing, JSON safety, chunking, and fallback.
-
+DocuAction AI — Intelligence Engine v4
+Production-grade AI pipeline with OCR support for scanned documents.
 Architecture:
-  Request → PII Masking → Complexity Router → Model (Sonnet/Haiku) → JSON Repair → Audit Log → Response
+  Request → OCR Extraction (if needed) → PII Masking → Complexity Router → Model → JSON Repair → Audit Log → Response
 """
-
 import json
 import time
 import logging
 import asyncio
 from typing import Optional
 from datetime import datetime
-
 from app.services.json_repair import extract_and_repair_json, haiku_json_cleanup
 from app.services.pii_masking import mask_pii
 from app.services.text_chunker import chunk_and_summarize
@@ -26,10 +23,8 @@ logger = logging.getLogger("docuaction.ai_engine")
 # ═══════════════════════════════════════════════════════
 # PROMPT TEMPLATES
 # ═══════════════════════════════════════════════════════
-
 SYSTEM_PROMPT = """You are DocuAction AI, an enterprise document intelligence system.
 You analyze documents and transcripts to produce structured outputs for executive decision-making.
-
 CRITICAL RULES:
 1. Respond ONLY with valid JSON — no text before or after
 2. Use internal reasoning but NEVER expose your thought process
@@ -130,20 +125,86 @@ Return ONLY valid JSON:
 
 
 # ═══════════════════════════════════════════════════════
+# OCR / TEXT EXTRACTION
+# ═══════════════════════════════════════════════════════
+def _try_extract_text(file_path: str) -> str:
+    """
+    Extract text from a document file. Handles scanned PDFs and images
+    using Claude Vision as OCR fallback.
+    """
+    try:
+        from app.services.document_processor import extract_text
+        result = extract_text(file_path)
+        if result.get("text") and len(result["text"].split()) > 20:
+            logger.info(f"OCR extraction: {result['word_count']} words via {result['method']}")
+            return result["text"]
+    except ImportError:
+        logger.warning("document_processor not available, using basic extraction")
+    except Exception as e:
+        logger.warning(f"Document processor error: {e}")
+
+    # Basic fallback: try reading as text
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+        if len(text.split()) > 20:
+            return text
+    except Exception:
+        pass
+
+    # PDF fallback without document_processor
+    try:
+        from PyPDF2 import PdfReader
+        reader = PdfReader(file_path)
+        texts = []
+        for page in reader.pages:
+            t = page.extract_text()
+            if t:
+                texts.append(t)
+        text = "\n\n".join(texts)
+        if len(text.split()) > 20:
+            return text
+    except Exception:
+        pass
+
+    return ""
+
+
+def _find_document_file(document_id: str) -> str:
+    """Find the uploaded file for a document ID."""
+    import os
+    upload_dir = os.getenv("UPLOAD_DIR", "./uploads")
+    if not os.path.isabs(upload_dir):
+        upload_dir = os.path.join(os.getcwd(), upload_dir)
+
+    doc_dir = os.path.join(upload_dir, "documents")
+    if not os.path.exists(doc_dir):
+        return ""
+
+    # Search for file matching document ID
+    for filename in os.listdir(doc_dir):
+        if str(document_id) in filename:
+            return os.path.join(doc_dir, filename)
+
+    return ""
+
+
+# ═══════════════════════════════════════════════════════
 # MAIN ENGINE
 # ═══════════════════════════════════════════════════════
-
 async def process_document(
     document_text: str,
     action_type: str = "summary",
     user_id: str = None,
     document_id: str = None,
     output_language: str = None,
+    file_path: str = None,
 ) -> dict:
     """
     Main entry point for the AI engine.
     
     Pipeline:
+    0. OCR extraction (if text is empty/too short)
     1. PII masking
     2. Context window management (chunking if needed)
     3. Complexity-based model routing
@@ -156,14 +217,72 @@ async def process_document(
     model_used = None
     fallback_used = False
     error_message = None
+    ocr_method = None
 
     try:
+        # ─── Step 0: OCR Extraction (for scanned PDFs / images) ───
+        if not document_text or len(document_text.split()) < 50:
+            logger.info(f"Document text is empty or too short ({len(document_text.split()) if document_text else 0} words). Attempting OCR extraction...")
+
+            # Try using provided file_path first
+            extracted = ""
+            if file_path:
+                extracted = _try_extract_text(file_path)
+                if extracted:
+                    ocr_method = "file_path"
+
+            # Try finding file by document_id
+            if not extracted and document_id:
+                found_path = _find_document_file(document_id)
+                if found_path:
+                    extracted = _try_extract_text(found_path)
+                    if extracted:
+                        ocr_method = "document_search"
+
+            if extracted and len(extracted.split()) > 20:
+                document_text = extracted
+                logger.info(f"OCR extraction successful: {len(extracted.split())} words via {ocr_method}")
+            else:
+                logger.warning("OCR extraction produced no usable text")
+                if not document_text:
+                    document_text = ""
+
         # ─── Step 1: PII Masking ───
         masked_text, pii_count = mask_pii(document_text)
         logger.info(f"PII masking: {pii_count} items redacted")
 
         # ─── Step 2: Context Window Management ───
         word_count = len(masked_text.split())
+
+        if word_count < 20:
+            # Still no meaningful text after OCR
+            processing_ms = int((time.time() - start_time) * 1000)
+            return {
+                "summary": "Unable to extract text from this document. The file may be image-based, scanned, or in an unsupported format.",
+                "key_metrics": [],
+                "recommendations": [
+                    "Resubmit as a text-based PDF or native Word document",
+                    "For scanned documents, ensure the file is not corrupted",
+                    "Try uploading as PNG/JPG image — the system will use vision OCR",
+                    "Contact support if the issue persists",
+                ],
+                "confidence": 0,
+                "tasks": [],
+                "decisions": [],
+                "follow_ups": [],
+                "insights": [],
+                "risk_factors": [],
+                "_meta": {
+                    "model_used": "none",
+                    "processing_time_ms": processing_ms,
+                    "status": "no_text",
+                    "word_count": word_count,
+                    "ocr_attempted": True,
+                    "ocr_method": ocr_method or "none",
+                    "action_type": action_type,
+                },
+            }
+
         if word_count > 20000:
             logger.info(f"Long document ({word_count} words) — chunking and pre-summarizing")
             masked_text = await chunk_and_summarize(masked_text)
@@ -195,7 +314,6 @@ async def process_document(
 
         # ─── Step 5: JSON Extraction & Repair ───
         parsed = extract_and_repair_json(raw_response)
-
         if parsed is None:
             logger.warning(f"JSON repair failed for {primary_model} output — sending to Haiku cleanup")
             parsed = await haiku_json_cleanup(raw_response, action_type)
@@ -215,6 +333,8 @@ async def process_document(
             "complexity": complexity,
             "fallback_used": fallback_used,
             "action_type": action_type,
+            "ocr_used": ocr_method is not None,
+            "ocr_method": ocr_method,
         }
 
         # ─── Step 6: Audit Log ───
@@ -232,7 +352,7 @@ async def process_document(
         # ─── Step 7: Attach AI Disclosure (2026 Compliance) ───
         parsed = attach_disclosure(parsed, model_used=model_used, confidence=parsed.get("confidence", 0))
 
-        logger.info(f"AI engine complete: {action_type} in {processing_ms}ms via {model_used}")
+        logger.info(f"AI engine complete: {action_type} in {processing_ms}ms via {model_used}" + (f" (OCR: {ocr_method})" if ocr_method else ""))
         return parsed
 
     except Exception as e:
@@ -260,7 +380,6 @@ async def process_document(
                         "action_type": action_type,
                         "original_error": error_message,
                     }
-
                     await log_ai_request(
                         user_id=user_id, document_id=document_id,
                         action_type=action_type, model_used=model_used,
@@ -302,14 +421,13 @@ async def process_document(
 # ═══════════════════════════════════════════════════════
 # MODEL CALLERS
 # ═══════════════════════════════════════════════════════
-
 async def _call_model(model_type: str, system_prompt: str, user_prompt: str, timeout: int = 75) -> str:
     """Call Anthropic API with timeout and retry."""
     
     model_name = _get_model_name(model_type)
     max_tokens = 4096 if model_type == "sonnet" else 2048
     
-    for attempt in range(2):  # 1 try + 1 retry
+    for attempt in range(2):
         try:
             response = await asyncio.wait_for(
                 _anthropic_call(model_name, system_prompt, user_prompt, max_tokens),
@@ -332,19 +450,18 @@ async def _call_model(model_type: str, system_prompt: str, user_prompt: str, tim
 async def _anthropic_call(model: str, system: str, user: str, max_tokens: int) -> str:
     """Make the actual Anthropic API call."""
     import httpx
-
+    
     headers = {
         "x-api-key": settings.ANTHROPIC_API_KEY,
         "content-type": "application/json",
         "anthropic-version": "2023-06-01",
     }
-
     body = {
         "model": model,
         "max_tokens": max_tokens,
         "system": system,
         "messages": [{"role": "user", "content": user}],
-        "temperature": 0.1,  # Low temperature for structured output consistency
+        "temperature": 0.1,
     }
 
     async with httpx.AsyncClient(timeout=75.0) as client:
@@ -376,21 +493,17 @@ def _get_model_name(model_type: str) -> str:
 # ═══════════════════════════════════════════════════════
 # LEGACY COMPATIBILITY
 # ═══════════════════════════════════════════════════════
-
 async def generate_output(action_type: str, document_text: str, user_id: str = None, **kwargs) -> dict:
-    """
-    Legacy-compatible wrapper.
-    Maps the old ai_service_v2.py interface to the new engine.
-    """
+    """Legacy-compatible wrapper."""
     result = await process_document(
         document_text=document_text,
         action_type=action_type,
         user_id=user_id,
+        document_id=kwargs.get("document_id"),
         output_language=kwargs.get("output_language"),
+        file_path=kwargs.get("file_path"),
     )
-
     meta = result.pop("_meta", {})
-
     return {
         "content": json.dumps(result, indent=2, ensure_ascii=False),
         "model_used": meta.get("model_used", "unknown"),
@@ -398,3 +511,4 @@ async def generate_output(action_type: str, document_text: str, user_id: str = N
         "processing_time_ms": meta.get("processing_time_ms", 0),
         "action_type": action_type,
     }
+
