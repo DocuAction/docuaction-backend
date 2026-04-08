@@ -1,4 +1,4 @@
-"""DocuAction AI v4.2.0 — Zero-Trust Governance"""
+"""DocuAction AI v4.3.0 — Enterprise Decision Intelligence"""
 import os, sys, logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -11,7 +11,7 @@ _db_ready = False
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _db_ready
-    logger.info("STARTING v4.2.0")
+    logger.info("STARTING v4.3.0")
     base = os.getenv("UPLOAD_DIR", "./uploads")
     if not os.path.isabs(base):
         base = os.path.join(os.getcwd(), base)
@@ -20,6 +20,13 @@ async def lifespan(app: FastAPI):
     try:
         from app.core.database import init_database
         _db_ready = await init_database(retries=5, delay=2.0)
+        if _db_ready:
+            try:
+                from app.core.database import engine
+                from app.models.enterprise_models import create_enterprise_tables
+                await create_enterprise_tables(engine)
+            except Exception as et:
+                logger.warning(f"Enterprise tables: {et}")
     except Exception as e:
         logger.error(f"DB: {e}")
     logger.info("READY")
@@ -30,15 +37,15 @@ async def lifespan(app: FastAPI):
     except:
         pass
 
-app = FastAPI(title="DocuAction AI", version="4.2.0", docs_url="/docs", lifespan=lifespan)
+app = FastAPI(title="DocuAction AI", version="4.3.0", docs_url="/docs", lifespan=lifespan)
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "service": "docuaction-ai", "version": "4.2.0"}
+    return {"status": "healthy", "service": "docuaction-ai", "version": "4.3.0"}
 
 @app.get("/")
 async def root():
-    return {"app": "DocuAction AI", "version": "4.2.0"}
+    return {"app": "DocuAction AI", "version": "4.3.0"}
 
 allowed = os.getenv("ALLOWED_ORIGINS", "https://app.docuaction.io,http://localhost:3000")
 app.add_middleware(CORSMiddleware, allow_origins=[o.strip() for o in allowed.split(",")], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -69,3 +76,4 @@ safe_load("app.api.cross_intel_routes", "cross_intel")
 safe_load("app.api.teams_routes", "teams")
 safe_load("app.api.governance_routes", "governance")
 safe_load("app.api.decision_intel_routes", "decision_intel")
+safe_load("app.api.enterprise_routes", "enterprise")
