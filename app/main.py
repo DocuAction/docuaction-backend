@@ -1,4 +1,4 @@
-"""DocuAction AI v4.0.0 — Cross-Meeting Intelligence"""
+"""DocuAction AI v4.1.0 — Zero-Trust Governance"""
 import os, sys, logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -11,7 +11,7 @@ _db_ready = False
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _db_ready
-    logger.info("STARTING v4.0.0")
+    logger.info("STARTING v4.1.0")
     base = os.getenv("UPLOAD_DIR", "./uploads")
     if not os.path.isabs(base):
         base = os.path.join(os.getcwd(), base)
@@ -30,15 +30,15 @@ async def lifespan(app: FastAPI):
     except:
         pass
 
-app = FastAPI(title="DocuAction AI", version="4.0.0", docs_url="/docs", lifespan=lifespan)
+app = FastAPI(title="DocuAction AI", version="4.1.0", docs_url="/docs", lifespan=lifespan)
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "service": "docuaction-ai", "version": "4.0.0"}
+    return {"status": "healthy", "service": "docuaction-ai", "version": "4.1.0"}
 
 @app.get("/")
 async def root():
-    return {"app": "DocuAction AI", "version": "4.0.0"}
+    return {"app": "DocuAction AI", "version": "4.1.0"}
 
 allowed = os.getenv("ALLOWED_ORIGINS", "https://app.docuaction.io,http://localhost:3000")
 app.add_middleware(CORSMiddleware, allow_origins=[o.strip() for o in allowed.split(",")], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -66,3 +66,5 @@ safe_load("app.api.meeting_routes", "meetings")
 safe_load("app.api.intelligence_routes", "intelligence")
 safe_load("app.api.validation_routes", "validation")
 safe_load("app.api.cross_intel_routes", "cross_intel")
+safe_load("app.api.teams_routes", "teams")
+safe_load("app.api.governance_routes", "governance")
