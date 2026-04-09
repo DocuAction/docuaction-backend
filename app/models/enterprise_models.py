@@ -98,7 +98,7 @@ class Context(Base):
     source_id = Column(String, nullable=True)  # links to existing documents table
     content_hash = Column(String(64), nullable=True)  # SHA-256 for dedup
     word_count = Column(Integer, default=0)
-    metadata = Column(JSON, default=dict)  # file_type, size, duration, etc.
+    extra_data = Column("metadata", JSON, default=dict)  # file_type, size, duration, etc.
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -359,7 +359,7 @@ class StateAuditLog(Base):
     change_reason = Column(Text, nullable=True)
     changed_by = Column(String, nullable=False)  # user_id or "system"
     ip_address = Column(String(50), nullable=True)
-    metadata = Column(JSON, default=dict)  # additional context
+    extra_data = Column("metadata", JSON, default=dict)  # additional context
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # This table is APPEND-ONLY. No updates. No deletes.

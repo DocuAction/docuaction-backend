@@ -166,7 +166,7 @@ async def transition_state(
         change_reason=reason,
         changed_by=changed_by,
         ip_address=ip_address,
-        metadata=metadata or {},
+        extra_data=metadata or {},
         timestamp=datetime.utcnow(),
     )
     db.add(audit_entry)

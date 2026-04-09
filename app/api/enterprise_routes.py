@@ -548,7 +548,7 @@ async def get_audit_log(
                 "old_state": e.old_state, "new_state": e.new_state,
                 "changed_by": e.changed_by, "reason": e.change_reason,
                 "timestamp": e.timestamp.isoformat(),
-                "metadata": e.metadata,
+                "metadata": e.extra_data,
             }
             for e in entries
         ],
