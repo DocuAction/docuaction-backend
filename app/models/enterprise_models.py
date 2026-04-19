@@ -183,7 +183,31 @@ class Decision(Base):
     status = Column(String(50), default="draft")  # draft → pending_review → approved → superseded
     approved_by = Column(String, nullable=True)
     approved_at = Column(DateTime, nullable=True)
+    approval_justification = Column(Text, nullable=True)  # REQUIRED on approval (ServiceNow pattern)
+    rejection_reason = Column(Text, nullable=True)
+    rejection_category = Column(String(100), nullable=True)
     superseded_by = Column(String, nullable=True)  # points to newer decision ID
+    supersedes = Column(String, nullable=True)  # points to previous version ID
+
+    # SLA & Escalation (ServiceNow pattern)
+    sla_hours = Column(Integer, default=24)  # review must complete within N hours
+    deadline = Column(DateTime, nullable=True)  # auto-set: created_at + sla_hours
+    escalation_level = Column(Integer, default=0)  # 0=none, 1=warning(50%), 2=urgent(75%), 3=breached(100%)
+    escalated_to = Column(String, nullable=True)  # manager/next-level reviewer
+    escalated_at = Column(DateTime, nullable=True)
+    is_overdue = Column(Boolean, default=False)
+
+    # Outcome Tracking (Cloverpop pattern)
+    outcome_text = Column(Text, nullable=True)  # what actually happened
+    outcome_date = Column(DateTime, nullable=True)
+    outcome_matched = Column(Boolean, nullable=True)  # did outcome match the decision?
+    outcome_notes = Column(Text, nullable=True)
+    outcome_recorded_by = Column(String, nullable=True)
+
+    # Decision Rights (Palantir pattern)
+    required_approver_role = Column(String(50), nullable=True)  # admin, manager, compliance_officer
+    approval_threshold_usd = Column(Float, nullable=True)  # decisions above $X need higher approval
+    domain = Column(String(50), default="enterprise")  # enterprise, government, healthcare, legal
 
     # Stakeholder alignment
     stakeholders = Column(JSON, default=list)
