@@ -1,6 +1,6 @@
 """
 DocuAction AI — Application Entry Point
-v4.5.0 — Adds Healthcare Claims Intelligence
+v5.0.0 — WOW Features: Multi-Doc Comparison, Structured Extraction, Automation Engine
 """
 import logging
 from fastapi import FastAPI
@@ -11,7 +11,7 @@ from app.core.database import engine, Base
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("docuaction")
 
-app = FastAPI(title="DocuAction AI", version="4.5.0", description="Enterprise Intelligence Operating System")
+app = FastAPI(title="DocuAction AI", version="5.0.0", description="Enterprise Intelligence Operating System — Next-Generation Document & Decision Intelligence")
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,7 +34,7 @@ async def startup():
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "version": "4.5.0", "platform": "DocuAction AI"}
+    return {"status": "healthy", "version": "5.0.0", "platform": "DocuAction AI", "features": ["comparison", "extraction", "automation", "healthcare", "governance"]}
 
 
 def safe_load(module_path: str, prefix: str):
@@ -69,4 +69,7 @@ safe_load("app.api.sla_routes", "sla")
 # ═══ HEALTHCARE CLAIMS INTELLIGENCE ═══
 safe_load("app.api.healthcare_claims_routes", "healthcare-claims")
 
-logger.info("DocuAction AI v4.5.0 ready — Healthcare Claims Intelligence active")
+# ═══ WOW FEATURES — Multi-Doc Comparison, Extraction, Automation ═══
+safe_load("app.api.wow_routes", "wow-features")
+
+logger.info("DocuAction AI v5.0.0 ready — WOW Features active")
