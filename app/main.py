@@ -1,6 +1,6 @@
 """
 DocuAction AI — Application Entry Point
-v5.0.0 — WOW Features: Multi-Doc Comparison, Structured Extraction, Automation Engine
+v6.0.0 — Migration Intelligence Module Added
 """
 import logging
 from fastapi import FastAPI
@@ -11,7 +11,11 @@ from app.core.database import engine, Base
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("docuaction")
 
-app = FastAPI(title="DocuAction AI", version="5.0.0", description="Enterprise Intelligence Operating System — Next-Generation Document & Decision Intelligence")
+app = FastAPI(
+    title="DocuAction AI",
+    version="6.0.0",
+    description="Enterprise Intelligence Operating System — Document, Voice, Healthcare, and Migration Intelligence with Decision-Grade Governance",
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,11 +38,25 @@ async def startup():
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "version": "5.0.0", "platform": "DocuAction AI", "features": ["comparison", "extraction", "automation", "healthcare", "governance"]}
+    return {
+        "status": "healthy",
+        "version": "6.0.0",
+        "platform": "DocuAction AI",
+        "modules": {
+            "documents": "active",
+            "audio": "active",
+            "healthcare": "active",
+            "data_systems": "active",
+            "comparison": "active",
+            "extraction": "active",
+            "automation": "active",
+        },
+    }
 
 
 def safe_load(module_path: str, prefix: str):
-    """Safely load a router module — if it fails, log and continue."""
+    """Safely load a router module — if it fails, log and continue.
+    This ensures one module's failure never affects other modules."""
     try:
         import importlib
         mod = importlib.import_module(module_path)
@@ -48,7 +66,7 @@ def safe_load(module_path: str, prefix: str):
         logger.warning(f"Skipped {prefix}: {e}")
 
 
-# ═══ CORE ROUTES ═══
+# ═══ CORE ROUTES (Documents, Auth, Process) ═══
 safe_load("app.api.routes", "core")
 
 # ═══ ENTERPRISE ROUTES ═══
@@ -72,4 +90,11 @@ safe_load("app.api.healthcare_claims_routes", "healthcare-claims")
 # ═══ WOW FEATURES — Multi-Doc Comparison, Extraction, Automation ═══
 safe_load("app.api.wow_routes", "wow-features")
 
-logger.info("DocuAction AI v5.0.0 ready — WOW Features active")
+# ═══ MIGRATION INTELLIGENCE (Feature-Gated) ═══
+# This module is protected by module_gate.py feature flags.
+# Even though routes are registered, every endpoint checks
+# module_data_systems flag before processing.
+# If the flag is FALSE, all endpoints return 403.
+safe_load("app.api.migration_routes", "migration")
+
+logger.info("DocuAction AI v6.0.0 ready — Migration Intelligence module registered")
