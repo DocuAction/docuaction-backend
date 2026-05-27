@@ -25,7 +25,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 @app.on_event("startup")
 async def startup():
     try:
@@ -34,7 +33,6 @@ async def startup():
         logger.info("Database tables verified")
     except Exception as e:
         logger.warning(f"Database init deferred: {e}")
-
 
 @app.get("/health")
 async def health():
@@ -50,9 +48,9 @@ async def health():
             "comparison": "active",
             "extraction": "active",
             "automation": "active",
+            "tefca_review_protocol": "active",
         },
     }
-
 
 def safe_load(module_path: str, prefix: str):
     """Safely load a router module — if it fails, log and continue.
@@ -64,7 +62,6 @@ def safe_load(module_path: str, prefix: str):
         logger.info(f"Loaded: {prefix}")
     except Exception as e:
         logger.warning(f"Skipped {prefix}: {e}")
-
 
 # ═══ CORE ROUTES (Documents, Auth, Process) ═══
 safe_load("app.api.routes", "core")
@@ -97,4 +94,10 @@ safe_load("app.api.wow_routes", "wow-features")
 # If the flag is FALSE, all endpoints return 403.
 safe_load("app.api.migration_routes", "migration")
 
-logger.info("DocuAction AI v6.0.0 ready — Migration Intelligence module registered")
+# ═══ TEFCA REVIEW PROTOCOL (ONC Contract) ═══
+# AGT — ONC TEFCA Participant & Subparticipant Data Accuracy Review
+# Tier 1 automated validation: NPPES · OIG LEIE · SAM.gov · PECOS
+# 5-element evidence records · All ONC SOW deliverables
+safe_load("app.Tefca", "tefca-review-protocol")
+
+logger.info("DocuAction AI v6.0.0 ready — Migration Intelligence + TEFCA Review Protocol registered")
