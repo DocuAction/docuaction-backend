@@ -343,46 +343,51 @@ class SAMGovConnector:
 
 class PECOSConnector:
     """
-    Provider Enrollment, Chain & Ownership System
-    Public data via CMS data.cms.gov (no auth required).
-    Enhanced real-time access provided by ONC COR at contract award.
+    Provider Enrollment, Chain & Ownership System.
+    Uses multiple CMS public endpoints with fallback.
+    Full payment suspension / ownership chain access provided by ONC COR at award.
     """
-    BASE_URL = "https://data.cms.gov/api/1/datastore/query"
-    DATASET_ID = "mj5m-pzi6"  # Medicare Physician & Other Practitioners
+    # Multiple endpoint attempts — CMS changes these periodically
+    ENDPOINTS = [
+        ("https://data.cms.gov/provider-data/api/1/datastore/query", "mj5m-pzi6"),
+        ("https://data.cms.gov/api/1/datastore/query", "mj5m-pzi6"),
+    ]
 
     async def lookup_by_npi(self, npi: str) -> SourceResult:
-        """Look up provider enrollment data from PECOS public dataset."""
-        params = {
-            "conditions[0][property]": "NPI",
-            "conditions[0][value]": npi,
-            "conditions[0][operator]": "=",
-            "limit": 1,
-        }
-        try:
-            async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-                url = f"{self.BASE_URL}/{self.DATASET_ID}"
-                resp = await client.get(url, params=params, headers=HTTP_HEADERS)
-                resp.raise_for_status()
-                data = resp.json()
-                results = data.get("results", [])
-                if not results:
+        """Look up provider enrollment data. Tries multiple CMS endpoints."""
+        for base_url, dataset_id in self.ENDPOINTS:
+            try:
+                params = {
+                    "conditions[0][property]": "NPI",
+                    "conditions[0][value]": npi,
+                    "conditions[0][operator]": "=",
+                    "limit": 1,
+                }
+                async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+                    url = f"{base_url}/{dataset_id}"
+                    resp = await client.get(url, params=params, headers=HTTP_HEADERS)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    results = data.get("results", [])
+                    if not results:
+                        return SourceResult("PECOS", True, {
+                            "found": False, "npi": npi,
+                            "note": "NPI not found in public PECOS dataset.",
+                            "payment_suspension": False,
+                        }, query_params={"npi": npi})
+                    r = results[0]
                     return SourceResult("PECOS", True, {
-                        "found": False, "npi": npi,
-                        "note": "Not found in PECOS public dataset (Part B claims data)."
-                    }, query_params={"npi": npi})
-                r = results[0]
-                return SourceResult("PECOS", True, {
-                    "found": True,
-                    "npi": r.get("NPI"),
-                    "provider_last_name": r.get("Lst_Nm"),
-                    "provider_first_name": r.get("Frst_Nm"),
-                    "provider_type": r.get("Rndrng_Prvdr_Type"),
-                    "city": r.get("Rndrng_Prvdr_City"),
-                    "state": r.get("Rndrng_Prvdr_State_Abrvtn"),
-                    "zip": r.get("Rndrng_Prvdr_Zip5"),
-                    "credentials": r.get("Rndrng_Prvdr_Crdntls"),
-                    "enrl_id": r.get("Rndrng_Prvdr_Enrlmt_ID"),
-                    "payment_suspension": False,  # Full flag requires enhanced PECOS API via COR
+                        "found": True,
+                        "npi": r.get("NPI"),
+                        "provider_last_name": r.get("Lst_Nm"),
+                        "provider_first_name": r.get("Frst_Nm"),
+                        "provider_type": r.get("Rndrng_Prvdr_Type"),
+                        "city": r.get("Rndrng_Prvdr_City"),
+                        "state": r.get("Rndrng_Prvdr_State_Abrvtn"),
+                        "zip": r.get("Rndrng_Prvdr_Zip5"),
+                        "credentials": r.get("Rndrng_Prvdr_Crdntls"),
+                        "enrl_id": r.get("Rndrng_Prvdr_Enrlmt_ID"),
+                        "payment_suspension": False,  # Enhanced PECOS via ONC COR at award
                     "note": "Public PECOS data. Enhanced access (payment suspension, ownership chain) via COR at contract award."
                 }, query_params={"npi": npi})
         except Exception as e:
