@@ -49,6 +49,7 @@ async def health():
             "extraction": "active",
             "automation": "active",
             "tefca_review_protocol": "active",
+            "case_management": "active",
         },
     }
 
@@ -99,5 +100,6 @@ safe_load("app.api.migration_routes", "migration")
 # Tier 1 automated validation: NPPES · OIG LEIE · SAM.gov · PECOS
 # 5-element evidence records · All ONC SOW deliverables
 safe_load("app.Tefca", "tefca-review-protocol")
+safe_load("app.case_management", "case-management")
 
 logger.info("DocuAction AI v6.0.0 ready — Migration Intelligence + TEFCA Review Protocol registered")
