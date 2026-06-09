@@ -387,12 +387,18 @@ class PECOSConnector:
                         "zip": r.get("Rndrng_Prvdr_Zip5"),
                         "credentials": r.get("Rndrng_Prvdr_Crdntls"),
                         "enrl_id": r.get("Rndrng_Prvdr_Enrlmt_ID"),
-                        "payment_suspension": False,  # Enhanced PECOS via ONC COR at award
-                    "note": "Public PECOS data. Enhanced access (payment suspension, ownership chain) via COR at contract award."
-                }, query_params={"npi": npi})
-        except Exception as e:
-            logger.error(f"PECOS lookup error for NPI {npi}: {e}")
-            return SourceResult("PECOS", False, error=str(e), query_params={"npi": npi})
+                        "payment_suspension": False,
+                        "note": "Public PECOS data. Enhanced access via ONC COR at contract award."
+                    }, query_params={"npi": npi})
+            except Exception as e:
+                logger.warning(f"PECOS endpoint {base_url} failed: {e}")
+                continue
+        # All endpoints failed — return limited not hard error
+        return SourceResult("PECOS", True, {
+            "npi": npi, "found": False,
+            "note": "PECOS API temporarily unavailable. Enhanced access via ONC COR at award.",
+            "payment_suspension": False, "api_status": "limited"
+        }, query_params={"npi": npi})
 
 
 # ─── RCE Directory Connector (MOCK until API key arrives) ────────────────────
