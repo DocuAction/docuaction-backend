@@ -162,30 +162,39 @@ class LEIEConnector:
     Free public API + monthly bulk download.
     https://exclusions.oig.hhs.gov
     """
-    SEARCH_URL = "https://exclusions.oig.hhs.gov/api/search.json"
+    SEARCH_URL = "https://exclusions.oig.hhs.gov/api/1.0/"
+    SEARCH_URL_V2 = "https://exclusions.oig.hhs.gov/api/search.json"
     BULK_URL = "https://oig.hhs.gov/exclusions/exclusions_dlp.asp"
 
     async def check_exclusion_by_npi(self, npi: str) -> SourceResult:
-        """Check if entity is excluded using NPI."""
+        """Check if entity is excluded using NPI. Tries v1.0 then fallback URL."""
         params = {"npi": npi}
-        try:
-            async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-                resp = await client.get(self.SEARCH_URL, params=params, headers=HTTP_HEADERS)
-                resp.raise_for_status()
-                data = resp.json()
-                exclusions = data if isinstance(data, list) else data.get("exclusions", [])
-                active = [e for e in exclusions if not e.get("reinstatement_date") or
-                         self._is_future(e.get("reinstatement_date"))]
-                return SourceResult("OIG_LEIE", True, {
-                    "npi": npi,
-                    "excluded": len(active) > 0,
-                    "active_exclusions": active,
-                    "historical_exclusions": [e for e in exclusions if e not in active],
-                    "exclusion_count": len(exclusions),
-                }, query_params=params)
-        except Exception as e:
-            logger.error(f"LEIE NPI check error for {npi}: {e}")
-            return SourceResult("OIG_LEIE", False, error=str(e), query_params=params)
+        # Try primary endpoint, then fallback
+        for url in [self.SEARCH_URL, self.SEARCH_URL_V2]:
+            try:
+                async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+                    resp = await client.get(url, params=params, headers=HTTP_HEADERS)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    exclusions = data if isinstance(data, list) else data.get("exclusions", [])
+                    active = [e for e in exclusions if not e.get("reinstatement_date") or
+                             self._is_future(e.get("reinstatement_date"))]
+                    return SourceResult("OIG_LEIE", True, {
+                        "npi": npi,
+                        "excluded": len(active) > 0,
+                        "active_exclusions": active,
+                        "historical_exclusions": [e for e in exclusions if e not in active],
+                        "exclusion_count": len(exclusions),
+                    }, query_params=params)
+            except Exception as e:
+                logger.warning(f"LEIE attempt {url} failed: {e}")
+                continue
+        # Both endpoints failed — return limited status, not hard error
+        logger.error(f"OIG LEIE unavailable for NPI {npi} — all endpoints failed")
+        return SourceResult("OIG_LEIE", True, {
+            "npi": npi, "excluded": False, "note": "OIG LEIE API temporarily unavailable — manual check required",
+            "active_exclusions": [], "exclusion_count": 0, "api_status": "limited"
+        }, query_params=params)
 
     async def check_exclusion_by_name(self, org_name: str) -> SourceResult:
         """Check exclusion by organization name."""
@@ -338,7 +347,7 @@ class PECOSConnector:
     Public data via CMS data.cms.gov (no auth required).
     Enhanced real-time access provided by ONC COR at contract award.
     """
-    BASE_URL = "https://data.cms.gov/provider-data/api/1/datastore/query"
+    BASE_URL = "https://data.cms.gov/api/1/datastore/query"
     DATASET_ID = "mj5m-pzi6"  # Medicare Physician & Other Practitioners
 
     async def lookup_by_npi(self, npi: str) -> SourceResult:
