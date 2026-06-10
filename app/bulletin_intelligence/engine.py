@@ -914,3 +914,4 @@ register_agency(AgencyConfig(
     delivery_time_et="07:30",
     archive_months=12,
 ))
+FCC_TOPIC_LABELS = TOPIC_LABELS
