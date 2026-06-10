@@ -99,7 +99,8 @@ safe_load("app.api.migration_routes", "migration")
 # AGT — ONC TEFCA Participant & Subparticipant Data Accuracy Review
 # Tier 1 automated validation: NPPES · OIG LEIE · SAM.gov · PECOS
 # 5-element evidence records · All ONC SOW deliverables
-safe_load("app.Tefca", "tefca-review-protocol")
 safe_load("app.case_management", "case-management")
+safe_load("app.bulletin_intelligence.routes", "bulletin-intelligence")
+logger.info("DocuAction AI v6.0.0 ready — Migration Intelligence + TEFCA + Bulletin Intelligence registered")
 
 logger.info("DocuAction AI v6.0.0 ready — Migration Intelligence + TEFCA Review Protocol registered")
