@@ -265,15 +265,19 @@ async def llm_visibility_check(agency_id: str):
 @router.get("/demo/{agency_id}")
 async def demo_cycle(agency_id: str = "fcc"):
     """Demo: run a mock daily cycle with simulated articles."""
-    from app.bulletin_intelligence.engine import (
-        Article, Briefing, _articles, _briefings, FCC_TOPIC_LABELS
-    )
     import random, uuid
     from datetime import datetime, timezone
+    try:
+        from app.bulletin_intelligence.engine import (
+            Article, Briefing, _articles, _briefings, FCC_TOPIC_LABELS, _now, get_agency
+        )
+    except ImportError as e:
+        raise HTTPException(status_code=500, detail=f"Engine import error: {e}")
 
-    agency = get_agency(agency_id)
-    if not agency:
+    agency_obj = get_agency(agency_id)
+    if not agency_obj:
         raise HTTPException(status_code=404, detail=f"Agency {agency_id} not found")
+    agency = agency_obj
 
     topics = agency.topics[:6]
     sources = [
@@ -319,14 +323,12 @@ async def demo_cycle(agency_id: str = "fcc"):
         topic_counts[art.topic] = topic_counts.get(art.topic, 0) + 1
 
     briefing_id = f"{agency_id}_demo_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    from app.bulletin_intelligence.engine import _now
     briefing = Briefing(
         briefing_id=briefing_id,
         agency_id=agency_id,
         briefing_date=datetime.now().strftime("%B %d, %Y"),
         status="pending_approval",
         html_content=f"<h1>Demo Briefing — {agency.name}</h1><p>30 demo articles loaded.</p>",
-        plain_text="",
         article_count=30,
         topic_counts=topic_counts,
         generated_at=_now(),
