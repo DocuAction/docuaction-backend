@@ -55,6 +55,7 @@ TOPIC_LABELS = {
     "spectrum_policy":         "Spectrum & Policy",
     "other":                   "Other",
 }
+FCC_TOPIC_LABELS = TOPIC_LABELS  # alias for backward compatibility
 
 
 # ── Data classes ───────────────────────────────────────────────────────────────
