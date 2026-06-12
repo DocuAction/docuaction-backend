@@ -1222,8 +1222,8 @@ register_agency(AgencyConfig(
         "satellite space communications SpaceX FCC",
     ],
     topics=FCC_TOPICS,
-    distribution_email="news@agtbi.com",
-    distribution_list=["news@agtbi.com", "imran@agtbi.com""],
-    delivery_time_et="06:30",
+    distribution_email="intelligence@docuaction.io",
+    distribution_list=["imran@agtbi.com"],
+    delivery_time_et="07:30",
     archive_months=12,
 ))

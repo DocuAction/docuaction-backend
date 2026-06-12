@@ -269,7 +269,7 @@ async def demo_cycle(agency_id: str = "fcc"):
     from datetime import datetime, timezone
     try:
         from app.bulletin_intelligence.engine import (
-            Article, Briefing, _articles, _briefings, FCC_TOPIC_LABELS, _now, get_agency
+            Article, Briefing, _articles, _briefings, _now, get_agency
         )
     except ImportError as e:
         raise HTTPException(status_code=500, detail=f"Engine import error: {e}")
@@ -299,10 +299,10 @@ async def demo_cycle(agency_id: str = "fcc"):
             agency_id=agency_id,
             source=outlet.lower().replace(" ", "_"),
             source_type=src_type,
-            title=f"[Demo] {FCC_TOPIC_LABELS.get(topic, topic)} Coverage — Article {i+1}",
+            title=f"[Demo] {topic.replace('_', ' ').title()} Coverage — Article {i+1}",
             url=f"https://example.com/article/{i+1}",
             published_at=datetime.now(timezone.utc).isoformat(),
-            summary=f"This is a demonstration article about {FCC_TOPIC_LABELS.get(topic, topic)} for the {agency.name} daily intelligence briefing.",
+            summary=f"This is a demonstration article about {topic.replace('_', ' ').title()} for the {agency.name} daily intelligence briefing.",
             full_text="Full article text would appear here in production.",
             author=f"Demo Author {i+1}",
             outlet=outlet,
