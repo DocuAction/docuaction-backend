@@ -1,21 +1,31 @@
 """
-DocuAction Bulletin Intelligence — Claude-Powered Engine
-Uses ONLY Anthropic Claude API for all functions:
-  - News ingestion:      Claude web_search tool (replaces Perigon $449/mo)
-  - Broadcast:          Claude web_search for TV/radio coverage (replaces TVEyes $600/mo)
-  - Social monitoring:  Claude web_search for social mentions (replaces Twitter API $100/mo)
-  - Regulatory:         Federal Register + Congress.gov APIs (FREE — no key needed)
-  - Classification:     Claude Haiku
-  - Briefing:           Claude Sonnet
-  - LLM Visibility:     Claude Haiku
+DocuAction Bulletin Intelligence — Multi-Source Intelligence Engine v2
+News Sources:
+  - GDELT Project API    FREE  — global news every 15 min, no key needed
+  - Tavily AI Search     FREE  — 1,000/mo free, AI-optimized (TAVILY_API_KEY)
+  - NewsAPI              FREE  — dev tier, 80K+ sources (NEWSAPI_KEY)
+  - Claude web_search    —     — fallback, uses existing ANTHROPIC_API_KEY
+  - Federal Register     FREE  — no key needed
+  - Congress.gov         FREE  — CONGRESS_API_KEY (optional)
 
-SWAP IN PAID APIs LATER by changing only the ingest_* functions below.
-Everything else stays identical.
+LLM Visibility Tracker (unique — no competitor has this):
+  - Claude (Anthropic)   existing ANTHROPIC_API_KEY
+  - ChatGPT (OpenAI)     OPENAI_API_KEY
+  - Perplexity           PERPLEXITY_API_KEY (sonar has real-time web)
+  - Gemini (Google)      GEMINI_API_KEY
 
-Required env vars (already set in Railway):
-  ANTHROPIC_API_KEY
-  SENDGRID_API_KEY
-  CONGRESS_API_KEY (free — register at api.congress.gov)
+Classification:  Claude Haiku
+Briefing:        Claude Sonnet → FCC Daily News Summary format
+
+Required env vars:
+  ANTHROPIC_API_KEY      already set ✓
+  SENDGRID_API_KEY       set in Railway
+  TAVILY_API_KEY         free at tavily.com
+  NEWSAPI_KEY            free at newsapi.org
+  OPENAI_API_KEY         for ChatGPT LLM visibility
+  PERPLEXITY_API_KEY     for Perplexity LLM visibility
+  GEMINI_API_KEY         for Gemini LLM visibility
+  CONGRESS_API_KEY       free at api.congress.gov
 """
 
 import os, json, logging, asyncio, hashlib, re
@@ -28,9 +38,14 @@ from anthropic import AsyncAnthropic
 
 logger = logging.getLogger(__name__)
 
-ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-SENDGRID_KEY  = os.getenv("SENDGRID_API_KEY", "")
-CONGRESS_KEY  = os.getenv("CONGRESS_API_KEY", "")
+ANTHROPIC_KEY   = os.getenv("ANTHROPIC_API_KEY", "")
+SENDGRID_KEY    = os.getenv("SENDGRID_API_KEY", "")
+CONGRESS_KEY    = os.getenv("CONGRESS_API_KEY", "")
+TAVILY_KEY      = os.getenv("TAVILY_API_KEY", "")
+NEWSAPI_KEY     = os.getenv("NEWSAPI_KEY", "")
+OPENAI_KEY      = os.getenv("OPENAI_API_KEY", "")
+PERPLEXITY_KEY  = os.getenv("PERPLEXITY_API_KEY", "")
+GEMINI_KEY      = os.getenv("GEMINI_API_KEY", "")
 
 TIMEOUT = httpx.Timeout(30.0)
 HTTP_HEADERS = {"User-Agent": "DocuAction-BulletinIntelligence/1.0 (Alliance Global Tech)"}
@@ -180,6 +195,179 @@ def _parse_json_safe(text: str) -> Any:
         text = text[start:end + 1]
 
     return json.loads(text)
+
+
+# ── INGESTION: GDELT Project (FREE — no key needed) ──────────────────────────
+# GDELT monitors 300+ languages, 65+ countries, updates every 15 minutes
+# Perfect for FCC broadcast, international, and US domestic news
+
+async def ingest_gdelt(agency: AgencyConfig, lookback_hours: int = 24) -> List[Article]:
+    """
+    GDELT Project API — completely free, real-time global news monitoring.
+    Updates every 15 minutes. No API key required.
+    """
+    articles = []
+    query_terms = " OR ".join([q.split()[0] for q in agency.search_queries[:3]])
+    query = f"({query_terms}) sourcelang:eng"
+
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            resp = await client.get(
+                "https://api.gdeltproject.org/api/v2/doc/doc",
+                params={
+                    "query": query,
+                    "mode": "artlist",
+                    "maxrecords": 25,
+                    "timespan": f"{min(lookback_hours, 24)}H",
+                    "sort": "DateDesc",
+                    "format": "json",
+                },
+                headers=HTTP_HEADERS
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                for art_data in data.get("articles", []):
+                    title = art_data.get("title", "")
+                    url   = art_data.get("url", "")
+                    if not title or not url:
+                        continue
+                    dedup = _hash(url, title)
+                    art = Article(
+                        article_id=f"{agency.agency_id}_gdelt_{dedup}",
+                        agency_id=agency.agency_id,
+                        source="gdelt",
+                        source_type="news",
+                        title=title,
+                        url=url,
+                        published_at=art_data.get("seendate", _now()),
+                        summary=title,
+                        full_text=title,
+                        author="",
+                        outlet=art_data.get("domain", "News"),
+                        relevance_score=0.6,
+                        ingested_at=_now(),
+                        dedup_hash=dedup,
+                    )
+                    articles.append(art)
+    except Exception as e:
+        logger.error(f"GDELT ingestion error: {e}")
+
+    logger.info(f"GDELT: {len(articles)} articles for {agency.agency_id}")
+    return articles
+
+
+# ── INGESTION: Tavily AI Search (1,000 free searches/month) ──────────────────
+# AI-optimized search built specifically for AI agents — returns clean summaries
+
+async def ingest_tavily(agency: AgencyConfig, lookback_hours: int = 24) -> List[Article]:
+    """
+    Tavily AI Search — purpose-built for AI agents.
+    Free tier: 1,000 searches/month. Sign up at tavily.com.
+    Set TAVILY_API_KEY in Railway.
+    """
+    if not TAVILY_KEY:
+        return []
+
+    articles = []
+    for query in agency.search_queries[:3]:
+        try:
+            async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+                resp = await client.post(
+                    "https://api.tavily.com/search",
+                    headers={"Content-Type": "application/json"},
+                    json={
+                        "api_key": TAVILY_KEY,
+                        "query": query,
+                        "search_depth": "advanced",
+                        "include_answer": True,
+                        "include_raw_content": False,
+                        "max_results": 8,
+                        "include_domains": [],
+                        "exclude_domains": [],
+                        "topic": "news",
+                    }
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    for r in data.get("results", []):
+                        dedup = _hash(r.get("url",""), r.get("title",""))
+                        art = Article(
+                            article_id=f"{agency.agency_id}_tavily_{dedup}",
+                            agency_id=agency.agency_id,
+                            source="tavily",
+                            source_type="news",
+                            title=r.get("title",""),
+                            url=r.get("url",""),
+                            published_at=r.get("published_date", _now()),
+                            summary=r.get("content","")[:400],
+                            full_text=r.get("content",""),
+                            author="",
+                            outlet=r.get("url","").split("/")[2] if r.get("url") else "Web",
+                            relevance_score=r.get("score", 0.7),
+                            ingested_at=_now(),
+                            dedup_hash=dedup,
+                        )
+                        articles.append(art)
+        except Exception as e:
+            logger.error(f"Tavily error for query '{query}': {e}")
+
+    logger.info(f"Tavily: {len(articles)} articles for {agency.agency_id}")
+    return articles
+
+
+# ── INGESTION: NewsAPI (free dev tier, 80K+ sources) ─────────────────────────
+
+async def ingest_newsapi(agency: AgencyConfig, lookback_hours: int = 24) -> List[Article]:
+    """
+    NewsAPI — 80,000+ news sources. Free dev tier.
+    Sign up at newsapi.org. Set NEWSAPI_KEY in Railway.
+    """
+    if not NEWSAPI_KEY:
+        return []
+
+    articles = []
+    from_date = (datetime.now() - timedelta(hours=lookback_hours)).strftime("%Y-%m-%dT%H:%M:%S")
+    query = " OR ".join([f'"{q.split()[0]}"' for q in agency.search_queries[:2]])
+
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            resp = await client.get(
+                "https://newsapi.org/v2/everything",
+                params={
+                    "apiKey": NEWSAPI_KEY,
+                    "q": query,
+                    "from": from_date,
+                    "sortBy": "publishedAt",
+                    "language": "en",
+                    "pageSize": 20,
+                },
+                headers=HTTP_HEADERS
+            )
+            if resp.status_code == 200:
+                for r in resp.json().get("articles", []):
+                    dedup = _hash(r.get("url",""), r.get("title",""))
+                    art = Article(
+                        article_id=f"{agency.agency_id}_newsapi_{dedup}",
+                        agency_id=agency.agency_id,
+                        source="newsapi",
+                        source_type="news",
+                        title=r.get("title",""),
+                        url=r.get("url",""),
+                        published_at=r.get("publishedAt", _now()),
+                        summary=r.get("description","")[:400],
+                        full_text=r.get("content","")[:800],
+                        author=r.get("author",""),
+                        outlet=r.get("source",{}).get("name","News"),
+                        is_paywalled=False,
+                        ingested_at=_now(),
+                        dedup_hash=dedup,
+                    )
+                    articles.append(art)
+    except Exception as e:
+        logger.error(f"NewsAPI error: {e}")
+
+    logger.info(f"NewsAPI: {len(articles)} articles for {agency.agency_id}")
+    return articles
 
 
 # ── INGESTION: Claude Web Search → News ──────────────────────────────────────
@@ -703,34 +891,118 @@ async def deliver_briefing(agency: AgencyConfig, html: str, briefing_date: str) 
         return {"status": "error", "error": str(e)}
 
 
-# ── LLM Visibility Tracker ─────────────────────────────────────────────────────
-async def run_llm_visibility_check(agency: AgencyConfig) -> Dict[str, Any]:
-    if not ANTHROPIC_KEY:
-        return {"status": "skipped"}
+# ── LLM Visibility Tracker — Multi-AI (UNIQUE FEATURE) ───────────────────────
+# No competitor tracks what AI engines say about a federal agency.
+# This answers: "When a journalist asks ChatGPT about the FCC, what does it say?"
 
-    client = _get_client()
-    queries = [
-        f"What is the {agency.name} currently working on?",
-        f"What are the most important recent decisions from the {agency.name}?",
-        f"What controversies or issues is the {agency.name} facing?",
-    ]
-    results = {}
-    for q in queries:
-        try:
-            resp = await client.messages.create(
-                model="claude-haiku-4-5",
-                max_tokens=400,
-                messages=[{"role": "user", "content": q}]
+async def _query_openai(question: str) -> str:
+    """Query ChatGPT for LLM visibility check."""
+    if not OPENAI_KEY:
+        return "OpenAI API key not configured (set OPENAI_API_KEY in Railway)"
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            resp = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {OPENAI_KEY}", "Content-Type": "application/json"},
+                json={
+                    "model": "gpt-4o-mini",
+                    "max_tokens": 400,
+                    "messages": [{"role": "user", "content": question}]
+                }
             )
-            results[q] = _extract_text(resp.content)
-        except Exception as e:
-            results[q] = f"Error: {e}"
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        return f"ChatGPT error: {e}"
+
+
+async def _query_perplexity(question: str) -> str:
+    """Query Perplexity (has real-time web access via sonar model)."""
+    if not PERPLEXITY_KEY:
+        return "Perplexity API key not configured (set PERPLEXITY_API_KEY in Railway)"
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            resp = await client.post(
+                "https://api.perplexity.ai/chat/completions",
+                headers={"Authorization": f"Bearer {PERPLEXITY_KEY}", "Content-Type": "application/json"},
+                json={
+                    "model": "sonar",
+                    "max_tokens": 400,
+                    "messages": [{"role": "user", "content": question}]
+                }
+            )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        return f"Perplexity error: {e}"
+
+
+async def _query_gemini(question: str) -> str:
+    """Query Google Gemini for LLM visibility check."""
+    if not GEMINI_KEY:
+        return "Gemini API key not configured (set GEMINI_API_KEY in Railway)"
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            resp = await client.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}",
+                headers={"Content-Type": "application/json"},
+                json={"contents": [{"parts": [{"text": question}]}]}
+            )
+            resp.raise_for_status()
+            return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception as e:
+        return f"Gemini error: {e}"
+
+
+async def run_llm_visibility_check(agency: AgencyConfig) -> Dict[str, Any]:
+    """
+    Query all major AI engines to see what they say about the agency.
+    Unique feature — no media monitoring vendor offers this.
+    Results show: AI engine awareness, accuracy, recency of information.
+    """
+    questions = [
+        f"What is the {agency.name} ({agency.short_name}) currently working on? What are their main priorities?",
+        f"What are the most important recent decisions or actions taken by the {agency.name}?",
+        f"What controversies, criticisms, or issues is the {agency.name} currently facing?",
+        f"Who are the current key leaders and commissioners at the {agency.name}?",
+    ]
+
+    results = {}
+
+    for question in questions:
+        q_results = {}
+
+        # Claude (existing)
+        if ANTHROPIC_KEY:
+            try:
+                client = _get_client()
+                resp = await client.messages.create(
+                    model="claude-haiku-4-5", max_tokens=400,
+                    messages=[{"role": "user", "content": question}]
+                )
+                q_results["Claude (Anthropic)"] = _extract_text(resp.content)
+            except Exception as e:
+                q_results["Claude (Anthropic)"] = f"Error: {e}"
+
+        # ChatGPT
+        q_results["ChatGPT (OpenAI)"] = await _query_openai(question)
+
+        # Perplexity
+        q_results["Perplexity"] = await _query_perplexity(question)
+
+        # Gemini
+        q_results["Gemini (Google)"] = await _query_gemini(question)
+
+        results[question] = q_results
 
     return {
         "agency_id": agency.agency_id,
+        "agency_name": agency.name,
         "checked_at": _now(),
-        "llm_source": "Claude Haiku",
+        "engines_queried": ["Claude (Anthropic)", "ChatGPT (OpenAI)", "Perplexity", "Gemini (Google)"],
+        "questions_asked": len(questions),
         "results": results,
+        "summary": f"Queried 4 AI engines on {len(questions)} questions about {agency.name}. This report shows AI engine awareness and information recency — a unique competitive differentiator unavailable from any other media monitoring vendor.",
     }
 
 
@@ -827,8 +1099,15 @@ async def run_daily_cycle(
     briefing_id = f"{agency_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     logger.info(f"Daily cycle starting: {agency.name}")
 
-    # Ingest all sources concurrently
-    tasks = [ingest_news(agency, lookback_hours)]
+    # Ingest all sources concurrently — GDELT + Tavily + NewsAPI + Claude + Regulatory
+    tasks = [
+        ingest_gdelt(agency, lookback_hours),      # FREE — always runs
+        ingest_news(agency, lookback_hours),        # Claude web_search — fallback
+    ]
+    if TAVILY_KEY:
+        tasks.append(ingest_tavily(agency, lookback_hours))   # AI-optimized search
+    if NEWSAPI_KEY:
+        tasks.append(ingest_newsapi(agency, lookback_hours))  # 80K+ sources
     if agency.include_broadcast:
         tasks.append(ingest_broadcast(agency, lookback_hours))
     if agency.include_social:
