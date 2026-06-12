@@ -94,6 +94,7 @@ safe_load("app.api.wow_routes", "wow-features")
 # module_data_systems flag before processing.
 # If the flag is FALSE, all endpoints return 403.
 safe_load("app.api.migration_routes", "migration")
+safe_load("app.Tefca", "tefca-review-protocol")
 
 # ═══ TEFCA REVIEW PROTOCOL (ONC Contract) ═══
 # AGT — ONC TEFCA Participant & Subparticipant Data Accuracy Review
