@@ -262,6 +262,59 @@ async def llm_visibility_check(agency_id: str):
 
 
 # ── Demo Endpoint ──────────────────────────────────────────────────────────────
+
+
+@router.get("/briefings/{briefing_id}/pdf")
+async def download_briefing_pdf(briefing_id: str):
+    """Download briefing as PDF."""
+    from fastapi.responses import Response
+    html = get_briefing_html(briefing_id)
+    if not html:
+        raise HTTPException(status_code=404, detail="Briefing not found")
+
+    # Try WeasyPrint first, fall back to pdfkit, fall back to HTML
+    pdf_bytes = None
+    try:
+        import weasyprint
+        pdf_bytes = weasyprint.HTML(string=html).write_pdf()
+    except ImportError:
+        pass
+
+    if not pdf_bytes:
+        try:
+            import pdfkit
+            pdf_bytes = pdfkit.from_string(html, False)
+        except (ImportError, Exception):
+            pass
+
+    if pdf_bytes:
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=FCC_Briefing_{briefing_id}.pdf"}
+        )
+    else:
+        # Fall back — return HTML with PDF print styles
+        from fastapi.responses import HTMLResponse
+        print_html = html.replace("</head>", "<style>@media print{body{margin:0}}</style></head>")
+        return HTMLResponse(
+            content=print_html,
+            headers={"Content-Disposition": f"inline; filename=FCC_Briefing_{briefing_id}.html"}
+        )
+
+
+@router.get("/run/{agency_id}/preview")
+async def run_and_preview(agency_id: str, lookback_hours: int = 48):
+    """Run full cycle and return HTML briefing directly in browser."""
+    from fastapi.responses import HTMLResponse
+    result = await run_daily_cycle(agency_id, auto_deliver=False, lookback_hours=lookback_hours)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    html = get_briefing_html(result.get("briefing_id", ""))
+    if not html:
+        return HTMLResponse(content=f"<h1>Cycle complete</h1><pre>{result}</pre>")
+    return HTMLResponse(content=html)
+
 @router.get("/demo/{agency_id}")
 async def demo_cycle(agency_id: str = "fcc"):
     """Demo: run a mock daily cycle with simulated articles."""

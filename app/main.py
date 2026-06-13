@@ -34,6 +34,13 @@ async def startup():
     except Exception as e:
         logger.warning(f"Database init deferred: {e}")
 
+    # Bulletin Intelligence — 6AM daily delivery scheduler
+    try:
+        from app.bulletin_intelligence.scheduler import start_scheduler
+        start_scheduler()
+    except Exception as e:
+        logger.warning(f"Bulletin scheduler not started: {e}")
+
 @app.get("/health")
 async def health():
     return {
@@ -50,12 +57,12 @@ async def health():
             "automation": "active",
             "tefca_review_protocol": "active",
             "case_management": "active",
+            "bulletin_intelligence": "active",
         },
     }
 
 def safe_load(module_path: str, prefix: str):
-    """Safely load a router module — if it fails, log and continue.
-    This ensures one module's failure never affects other modules."""
+    """Safely load a router module — if it fails, log and continue."""
     try:
         import importlib
         mod = importlib.import_module(module_path)
@@ -64,7 +71,7 @@ def safe_load(module_path: str, prefix: str):
     except Exception as e:
         logger.warning(f"Skipped {prefix}: {e}")
 
-# ═══ CORE ROUTES (Documents, Auth, Process) ═══
+# ═══ CORE ROUTES ═══
 safe_load("app.api.routes", "core")
 
 # ═══ ENTERPRISE ROUTES ═══
@@ -85,23 +92,20 @@ safe_load("app.api.sla_routes", "sla")
 # ═══ HEALTHCARE CLAIMS INTELLIGENCE ═══
 safe_load("app.api.healthcare_claims_routes", "healthcare-claims")
 
-# ═══ WOW FEATURES — Multi-Doc Comparison, Extraction, Automation ═══
+# ═══ WOW FEATURES ═══
 safe_load("app.api.wow_routes", "wow-features")
 
-# ═══ MIGRATION INTELLIGENCE (Feature-Gated) ═══
-# This module is protected by module_gate.py feature flags.
-# Even though routes are registered, every endpoint checks
-# module_data_systems flag before processing.
-# If the flag is FALSE, all endpoints return 403.
+# ═══ MIGRATION INTELLIGENCE ═══
 safe_load("app.api.migration_routes", "migration")
-safe_load("app.Tefca", "tefca-review-protocol")
 
 # ═══ TEFCA REVIEW PROTOCOL (ONC Contract) ═══
 # AGT — ONC TEFCA Participant & Subparticipant Data Accuracy Review
-# Tier 1 automated validation: NPPES · OIG LEIE · SAM.gov · PECOS
-# 5-element evidence records · All ONC SOW deliverables
-safe_load("app.case_management", "case-management")
-safe_load("app.bulletin_intelligence.routes", "bulletin-intelligence")
-logger.info("DocuAction AI v6.0.0 ready — Migration Intelligence + TEFCA + Bulletin Intelligence registered")
+safe_load("app.Tefca", "tefca-review-protocol")
 
-logger.info("DocuAction AI v6.0.0 ready — Migration Intelligence + TEFCA Review Protocol registered")
+# ═══ CASE MANAGEMENT ═══
+safe_load("app.case_management", "case-management")
+
+# ═══ BULLETIN INTELLIGENCE (FCC Daily News — 6AM ET) ═══
+safe_load("app.bulletin_intelligence.routes", "bulletin-intelligence")
+
+logger.info("DocuAction AI v6.0.0 ready — TEFCA + Bulletin Intelligence + All Modules registered")
