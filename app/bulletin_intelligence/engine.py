@@ -257,9 +257,6 @@ async def ingest_gdelt(agency: AgencyConfig, lookback_hours: int = 24) -> List[A
                     if not title or not url:
                         continue
                     dedup = _hash(url, title)
-                    # Pre-filter: skip obvious non-FCC content
-                    if not _is_fcc_relevant(title, art_data.get("socialimage", "") + title):
-                        continue
                     art = Article(
                         article_id=f"{agency.agency_id}_gdelt_{dedup}",
                         agency_id=agency.agency_id,
@@ -373,8 +370,6 @@ async def ingest_newsapi(agency: AgencyConfig, lookback_hours: int = 24) -> List
             )
             if resp.status_code == 200:
                 for r in resp.json().get("articles", []):
-                    if not _is_fcc_relevant(r.get("title",""), r.get("description","")):
-                        continue
                     dedup = _hash(r.get("url",""), r.get("title",""))
                     art = Article(
                         article_id=f"{agency.agency_id}_newsapi_{dedup}",
@@ -439,14 +434,9 @@ async def ingest_news(agency: AgencyConfig, lookback_hours: int = 24) -> List[Ar
                 messages=[
                     {"role": "user", "content": f"Search for news about: {query}"},
                     {"role": "assistant", "content": search_response.content},
-                    {"role": "user", "content": """From those search results, extract ONLY articles that are DIRECTLY about the FCC (Federal Communications Commission), FCC regulations, FCC enforcement, spectrum policy, telecom regulation, or FCC commissioners.
-
-DO NOT include: general AI articles, general tech news, cybersecurity articles unrelated to FCC, business news unrelated to telecom regulation.
-
-For each qualifying article return JSON with: title, url, outlet, author, published_at (ISO date), summary (2 factual sentences about what the FCC did/said/decided), is_paywalled (bool).
-
-If no articles are about FCC/telecom regulation, return an empty array [].
-Return ONLY the JSON array."""}
+                    {"role": "user", "content": """From those search results, extract up to 8 news articles as a JSON array.
+Each object: title, url, outlet, author, published_at (ISO date or today), summary (2 sentences), is_paywalled (bool).
+Return ONLY the JSON array. No explanation."""}
                 ]
             )
 
@@ -1214,10 +1204,10 @@ async def run_daily_cycle(
 
     # Filter for briefing
     briefing_arts = sorted(
-        [a for a in classified if a.relevance_score >= 0.35],
-        key=lambda a: a.relevance_score, reverse=True
-    )[:60]
-    logger.info(f"Briefing articles: {len(briefing_arts)} (from {len(classified)} classified)")
+        [a for a in classified if not (a.topic == "other" and a.relevance_score < 0.4)],
+        key=lambda a: (a.topic != "other", a.relevance_score), reverse=True
+    )[:80]
+    logger.info(f"Briefing: {len(briefing_arts)} articles from {len(classified)} classified")
 
     # Generate briefing
     html = await generate_briefing_html(agency, briefing_arts, briefing_date)
