@@ -256,8 +256,8 @@ async def ingest_gdelt(agency: AgencyConfig, lookback_hours: int = 24) -> List[A
                     if not title or not url:
                         continue
                     dedup = _hash(url, title)
-                    # Pre-filter: skip if not FCC-relevant
-                    if not _is_fcc_relevant(title, title):
+                    # Pre-filter: skip obvious non-FCC content
+                    if not _is_fcc_relevant(title, art_data.get("socialimage", "") + title):
                         continue
                     art = Article(
                         article_id=f"{agency.agency_id}_gdelt_{dedup}",
@@ -419,14 +419,15 @@ async def ingest_news(agency: AgencyConfig, lookback_hours: int = 24) -> List[Ar
 
     for query in queries_to_run:
         try:
-            # Step 1: Claude searches the web
+            # Step 1: Claude searches the web with FCC-specific query
+            fcc_query = f"site:reuters.com OR site:politico.com OR site:broadbandbreakfast.com OR site:fiercewireless.com {query}"
             search_response = await client.messages.create(
                 model="claude-haiku-4-5",
                 max_tokens=2000,
                 tools=[{"type": "web_search_20250305", "name": "web_search"}],
                 messages=[{
                     "role": "user",
-                    "content": f"Search for news articles published in the last {lookback_hours} hours about: {query}\n\nFind recent, relevant news articles."
+                    "content": f"Search for FCC Federal Communications Commission news from the last {lookback_hours} hours. Query: {query}. Focus on telecom industry news sources like Reuters, Politico, Broadband Breakfast, FierceWireless, Broadcasting+Cable, Multichannel News."
                 }]
             )
 
@@ -1207,10 +1208,10 @@ async def run_daily_cycle(
 
     # Filter for briefing
     briefing_arts = sorted(
-        [a for a in classified if a.relevance_score >= 0.55 and a.topic != "other"],
+        [a for a in classified if a.relevance_score >= 0.35],
         key=lambda a: a.relevance_score, reverse=True
     )[:60]
-    logger.info(f"Briefing articles after FCC filter: {len(briefing_arts)} (from {len(classified)} classified)")
+    logger.info(f"Briefing articles: {len(briefing_arts)} (from {len(classified)} classified)")
 
     # Generate briefing
     html = await generate_briefing_html(agency, briefing_arts, briefing_date)
