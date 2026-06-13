@@ -199,16 +199,17 @@ def _parse_json_safe(text: str) -> Any:
 
 # ── FCC Relevance Pre-Filter ──────────────────────────────────────────────────
 FCC_KEYWORDS = {
-    "fcc", "federal communications commission", "spectrum", "broadband",
-    "5g", "telecom", "telecommunications", "wireless", "broadcast",
-    "radio", "television", "cable", "satellite", "robocall", "tcpa",
-    "net neutrality", "e-rate", "lifeline", "carr", "olivia trusty",
-    "anna gomez", "media ownership", "fcc chairman", "fcc commissioner",
-    "911", "e911", "psap", "submarine cable", "undersea cable",
-    "spectrum auction", "aws-3", "small cells", "cell tower",
-    "internet service", "isp", "comcast", "att", "verizon", "t-mobile",
-    "emergency alert", "eas", "stir-shaken", "starlink", "spacex fcc",
-    "cybersecurity fcc", "privacy fcc", "section 230", "open internet",
+    "fcc", "federal communications commission", "fcc chairman", "fcc commissioner",
+    "brendan carr", "olivia trusty", "anna gomez",
+    "spectrum auction", "spectrum license", "aws-3", "spectrum policy",
+    "robocall", "tcpa", "stir-shaken", "robocall mitigation",
+    "net neutrality", "open internet", "e-rate", "lifeline program",
+    "media ownership", "broadcast license", "radio license", "tv license",
+    "submarine cable", "undersea cable", "subsea cable",
+    "911 fcc", "e911", "psap", "emergency alert system",
+    "fcc enforcement", "fcc fine", "fcc ruling", "fcc vote", "fcc proposes",
+    "fcc approves", "fcc order", "fcc notice", "fcc meeting",
+    "telecom policy", "telecommunications policy", "fcc regulation",
 }
 
 def _is_fcc_relevant(title: str, summary: str) -> bool:
@@ -438,9 +439,14 @@ async def ingest_news(agency: AgencyConfig, lookback_hours: int = 24) -> List[Ar
                 messages=[
                     {"role": "user", "content": f"Search for news about: {query}"},
                     {"role": "assistant", "content": search_response.content},
-                    {"role": "user", "content": """From those search results, extract up to 6 news articles as a JSON array.
-Each object must have: title, url, outlet, author, published_at (ISO date or today), summary (2 sentences max), is_paywalled (bool).
-Return ONLY the JSON array. No explanation."""}
+                    {"role": "user", "content": """From those search results, extract ONLY articles that are DIRECTLY about the FCC (Federal Communications Commission), FCC regulations, FCC enforcement, spectrum policy, telecom regulation, or FCC commissioners.
+
+DO NOT include: general AI articles, general tech news, cybersecurity articles unrelated to FCC, business news unrelated to telecom regulation.
+
+For each qualifying article return JSON with: title, url, outlet, author, published_at (ISO date), summary (2 factual sentences about what the FCC did/said/decided), is_paywalled (bool).
+
+If no articles are about FCC/telecom regulation, return an empty array [].
+Return ONLY the JSON array."""}
                 ]
             )
 
