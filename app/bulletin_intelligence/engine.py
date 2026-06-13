@@ -197,6 +197,27 @@ def _parse_json_safe(text: str) -> Any:
     return json.loads(text)
 
 
+# ── FCC Relevance Pre-Filter ──────────────────────────────────────────────────
+FCC_KEYWORDS = {
+    "fcc", "federal communications commission", "spectrum", "broadband",
+    "5g", "telecom", "telecommunications", "wireless", "broadcast",
+    "radio", "television", "cable", "satellite", "robocall", "tcpa",
+    "net neutrality", "e-rate", "lifeline", "carr", "olivia trusty",
+    "anna gomez", "media ownership", "fcc chairman", "fcc commissioner",
+    "911", "e911", "psap", "submarine cable", "undersea cable",
+    "spectrum auction", "aws-3", "small cells", "cell tower",
+    "internet service", "isp", "comcast", "att", "verizon", "t-mobile",
+    "emergency alert", "eas", "stir-shaken", "starlink", "spacex fcc",
+    "cybersecurity fcc", "privacy fcc", "section 230", "open internet",
+}
+
+def _is_fcc_relevant(title: str, summary: str) -> bool:
+    """Return True only if article is genuinely FCC-relevant."""
+    text = (title + " " + summary).lower()
+    return any(kw in text for kw in FCC_KEYWORDS)
+
+
+
 # ── INGESTION: GDELT Project (FREE — no key needed) ──────────────────────────
 # GDELT monitors 300+ languages, 65+ countries, updates every 15 minutes
 # Perfect for FCC broadcast, international, and US domestic news
@@ -207,8 +228,11 @@ async def ingest_gdelt(agency: AgencyConfig, lookback_hours: int = 24) -> List[A
     Updates every 15 minutes. No API key required.
     """
     articles = []
-    query_terms = " OR ".join([q.split()[0] for q in agency.search_queries[:3]])
-    query = f"({query_terms}) sourcelang:eng"
+    # Build targeted FCC query for GDELT
+    query = '("Federal Communications Commission" OR "FCC" OR "spectrum" OR "broadband" OR "telecommunications") sourcelang:eng'
+    if agency.agency_id != "fcc":
+        query_terms = " OR ".join([f'"{q.split()[0]}"' for q in agency.search_queries[:3]])
+        query = f"({query_terms}) sourcelang:eng"
 
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
@@ -232,6 +256,9 @@ async def ingest_gdelt(agency: AgencyConfig, lookback_hours: int = 24) -> List[A
                     if not title or not url:
                         continue
                     dedup = _hash(url, title)
+                    # Pre-filter: skip if not FCC-relevant
+                    if not _is_fcc_relevant(title, title):
+                        continue
                     art = Article(
                         article_id=f"{agency.agency_id}_gdelt_{dedup}",
                         agency_id=agency.agency_id,
@@ -345,6 +372,8 @@ async def ingest_newsapi(agency: AgencyConfig, lookback_hours: int = 24) -> List
             )
             if resp.status_code == 200:
                 for r in resp.json().get("articles", []):
+                    if not _is_fcc_relevant(r.get("title",""), r.get("description","")):
+                        continue
                     dedup = _hash(r.get("url",""), r.get("title",""))
                     art = Article(
                         article_id=f"{agency.agency_id}_newsapi_{dedup}",
@@ -1178,9 +1207,10 @@ async def run_daily_cycle(
 
     # Filter for briefing
     briefing_arts = sorted(
-        [a for a in classified if a.relevance_score >= 0.4],
+        [a for a in classified if a.relevance_score >= 0.55 and a.topic != "other"],
         key=lambda a: a.relevance_score, reverse=True
     )[:60]
+    logger.info(f"Briefing articles after FCC filter: {len(briefing_arts)} (from {len(classified)} classified)")
 
     # Generate briefing
     html = await generate_briefing_html(agency, briefing_arts, briefing_date)
