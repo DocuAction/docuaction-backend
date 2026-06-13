@@ -219,6 +219,145 @@ def _is_fcc_relevant(title: str, summary: str) -> bool:
 
 
 
+
+# ── INGESTION: RSS Feeds (Appendix B Sources — FREE, always FCC-relevant) ─────
+FCC_RSS_FEEDS = {
+    "fcc_news_events": [
+        ("https://www.fcc.gov/news-events/rss", "FCC"),
+        ("https://www.fcc.gov/rss/headlines", "FCC"),
+    ],
+    "wireless_mobile": [
+        ("https://www.fiercewireless.com/rss/xml", "FierceWireless"),
+        ("https://www.rcrwireless.com/feed", "RCR Wireless"),
+    ],
+    "media_broadcasting": [
+        ("https://www.radioworld.com/feed", "Radio World"),
+        ("https://www.tvtechnology.com/rss/all", "TV Technology"),
+        ("https://www.multichannel.com/rss/all", "Multichannel News"),
+        ("https://rbr.com/feed/", "RBR"),
+    ],
+    "consumers_advocacy": [
+        ("https://broadbandbreakfast.com/feed/", "Broadband Breakfast"),
+        ("https://www.telecompetitor.com/feed/", "Telecompetitor"),
+    ],
+    "spectrum_policy": [
+        ("https://broadbandbreakfast.com/feed/", "Broadband Breakfast"),
+        ("https://www.fiercewireless.com/rss/xml", "FierceWireless"),
+    ],
+    "public_safety_emergency": [
+        ("https://www.fcc.gov/news-events/rss", "FCC"),
+    ],
+    "business_industry": [
+        ("https://thehill.com/policy/technology/feed/", "The Hill"),
+        ("https://www.politico.com/rss/politicopicks.xml", "Politico"),
+    ],
+    "international_affairs": [
+        ("https://www.telegeography.com/feed/", "TeleGeography"),
+    ],
+    "ai_emerging_tech": [
+        ("https://thehill.com/policy/technology/feed/", "The Hill"),
+    ],
+}
+
+async def ingest_rss(agency: AgencyConfig, lookback_hours: int = 24) -> list:
+    """
+    Ingest RSS feeds from Appendix B sources.
+    Always FCC-relevant — no filtering needed.
+    FREE — no API key required.
+    """
+    import xml.etree.ElementTree as ET
+    from email.utils import parsedate_to_datetime
+
+    articles = []
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+    seen = set()
+
+    all_feeds = []
+    for topic, feeds in FCC_RSS_FEEDS.items():
+        for url, outlet in feeds:
+            all_feeds.append((url, outlet, topic))
+
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        for feed_url, outlet, topic in all_feeds:
+            try:
+                resp = await client.get(feed_url, headers=HTTP_HEADERS, follow_redirects=True)
+                if resp.status_code != 200:
+                    continue
+
+                root = ET.fromstring(resp.text)
+                ns = {"atom": "http://www.w3.org/2005/Atom"}
+
+                # Handle both RSS and Atom feeds
+                items = root.findall(".//item") or root.findall(".//atom:entry", ns)
+
+                for item in items[:10]:
+                    # Extract fields handling both RSS and Atom
+                    title = (
+                        getattr(item.find("title"), "text", "") or
+                        getattr(item.find("atom:title", ns), "text", "") or ""
+                    ).strip()
+
+                    link = (
+                        getattr(item.find("link"), "text", "") or
+                        (item.find("atom:link", ns).get("href") if item.find("atom:link", ns) is not None else "") or ""
+                    ).strip()
+
+                    pub_date = (
+                        getattr(item.find("pubDate"), "text", "") or
+                        getattr(item.find("atom:published", ns), "text", "") or
+                        getattr(item.find("atom:updated", ns), "text", "") or ""
+                    ).strip()
+
+                    description = (
+                        getattr(item.find("description"), "text", "") or
+                        getattr(item.find("atom:summary", ns), "text", "") or ""
+                    ).strip()[:400]
+
+                    if not title or not link:
+                        continue
+
+                    # Skip duplicates
+                    dedup = _hash(link, title)
+                    if dedup in seen:
+                        continue
+                    seen.add(dedup)
+
+                    # Date filter
+                    try:
+                        pub_dt = parsedate_to_datetime(pub_date)
+                        if pub_dt.tzinfo is None:
+                            pub_dt = pub_dt.replace(tzinfo=timezone.utc)
+                        if pub_dt < cutoff:
+                            continue
+                        pub_iso = pub_dt.isoformat()
+                    except Exception:
+                        pub_iso = _now()
+
+                    art = Article(
+                        article_id=f"{agency.agency_id}_rss_{dedup}",
+                        agency_id=agency.agency_id,
+                        source="rss",
+                        source_type="news",
+                        title=title,
+                        url=link,
+                        published_at=pub_iso,
+                        summary=description,
+                        full_text=description,
+                        author="",
+                        outlet=outlet,
+                        topic=topic,           # pre-assigned by feed category
+                        relevance_score=0.75,  # RSS feeds are always on-topic
+                        ingested_at=_now(),
+                        dedup_hash=dedup,
+                    )
+                    articles.append(art)
+
+            except Exception as e:
+                logger.error(f"RSS error {feed_url}: {e}")
+
+    logger.info(f"RSS: {len(articles)} articles for {agency.agency_id}")
+    return articles
+
 # ── INGESTION: GDELT Project (FREE — no key needed) ──────────────────────────
 # GDELT monitors 300+ languages, 65+ countries, updates every 15 minutes
 # Perfect for FCC broadcast, international, and US domestic news
@@ -1169,15 +1308,17 @@ async def run_daily_cycle(
     briefing_id = f"{agency_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     logger.info(f"Daily cycle starting: {agency.name}")
 
-    # Ingest all sources concurrently — GDELT + Tavily + NewsAPI + Claude + Regulatory
-    tasks = [
-        ingest_gdelt(agency, lookback_hours),      # FREE — always runs
-        ingest_news(agency, lookback_hours),        # Claude web_search — fallback
-    ]
-    if TAVILY_KEY:
-        tasks.append(ingest_tavily(agency, lookback_hours))   # AI-optimized search
+    # RSS ONLY — Appendix B sources, always FCC-relevant
+    tasks = [ingest_rss(agency, lookback_hours)]
+    # NewsAPI with FCC domain restrictions
     if NEWSAPI_KEY:
-        tasks.append(ingest_newsapi(agency, lookback_hours))  # 80K+ sources
+        tasks.append(ingest_newsapi(agency, lookback_hours))
+    # Tavily for additional FCC coverage
+    if TAVILY_KEY:
+        tasks.append(ingest_tavily(agency, lookback_hours))
+    # GDELT and Claude web_search disabled — too much noise
+    # tasks.append(ingest_gdelt(agency, lookback_hours))
+    # tasks.append(ingest_news(agency, lookback_hours))
     if agency.include_broadcast:
         tasks.append(ingest_broadcast(agency, lookback_hours))
     if agency.include_social:
