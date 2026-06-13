@@ -229,11 +229,8 @@ async def ingest_gdelt(agency: AgencyConfig, lookback_hours: int = 24) -> List[A
     Updates every 15 minutes. No API key required.
     """
     articles = []
-    # Build targeted FCC query for GDELT
-    query = '("Federal Communications Commission" OR "FCC" OR "spectrum" OR "broadband" OR "telecommunications") sourcelang:eng'
-    if agency.agency_id != "fcc":
-        query_terms = " OR ".join([f'"{q.split()[0]}"' for q in agency.search_queries[:3]])
-        query = f"({query_terms}) sourcelang:eng"
+    # GDELT: exact phrase only - strict FCC filter
+    query = "Federal Communications Commission sourcelang:eng"
 
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
