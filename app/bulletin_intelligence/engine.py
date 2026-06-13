@@ -416,7 +416,7 @@ async def ingest_news(agency: AgencyConfig, lookback_hours: int = 24) -> List[Ar
 
     client = _get_client()
     articles = []
-    queries_to_run = agency.search_queries[:4]  # limit to 4 queries per cycle
+    queries_to_run = agency.search_queries  # run ALL topic queries for full coverage
 
     for query in queries_to_run:
         try:
