@@ -117,8 +117,9 @@ def _capacity_note(keys: Dict[str, bool]) -> str:
 
 # ── Daily quality validation ──────────────────────────────────────────────────
 # FCC briefing contract thresholds (tunable).
-MIN_ARTICLES = 60
-MIN_SECTIONS = 6            # of 9; some sections are legitimately quiet some days
+MIN_ARTICLES = 25          # realistic floor; the FCC gold-standard sample
+                           # carries ~30 stories, so 60 was blocking valid sends
+MIN_SECTIONS = 6           # of 9; some sections are legitimately quiet some days
 MAX_SOURCE_SHARE = 0.20
 AUTHORITY_OUTLETS = {"reuters", "associated press", "ap", "bloomberg"}
 

@@ -89,11 +89,13 @@ FCC_BOOLEAN = {
         'OR "broadband privacy" OR "data sharing" OR "personally identifiable information")'
     ),
     "wireless_spectrum": (
-        '("FCC" OR "Federal Communications Commission") AND '
+        '(("FCC" OR "Federal Communications Commission") AND '
         '("Broadband" OR "Connectivity" OR "Wireless" OR "spectrum" OR "mobile phones" '
         'OR "cell phones" OR "data services" OR "telecom" OR "telecommunications" '
         'OR "calling cards" OR "cell service" OR "communications policy" OR "signal interference" '
-        'OR "cell tower" OR "5G" OR "small cells" OR "spectrum auction" OR "AWS-3")'
+        'OR "cell tower" OR "5G" OR "small cells" OR "spectrum auction" OR "AWS-3")) '
+        'OR "CBRS" OR "Citizens Broadband Radio Service" OR "midband spectrum" '
+        'OR "C-band" OR "6 GHz" OR "millimeter wave" OR "NTN" OR "non-terrestrial network"'
     ),
     "ai_ml": (
         '"generative ai" OR "agentic ai" OR "ai executive order" OR "ai in cybersecurity" '
