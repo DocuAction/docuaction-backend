@@ -22,9 +22,12 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-SEARCH_URL = "https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts"
+SEARCH_URL = "https://api.bsky.app/xrpc/app.bsky.feed.searchPosts"
 TIMEOUT = httpx.Timeout(15.0)
-HEADERS = {"User-Agent": "DocuAction-BulletinIntelligence/1.0"}
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; DocuActionBulletin/1.0)",
+    "Accept": "application/json",
+}
 
 # FCC-focused BlueSky search queries (kept tight to stay relevant)
 BSKY_QUERIES = [

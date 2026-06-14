@@ -350,18 +350,17 @@ async def ingest_rss(agency: AgencyConfig, lookback_hours: int = 24) -> list:
                             continue
                         pub_iso = pub_dt.isoformat()
                     except Exception:
+                        # Undated/malformed → assume current-cycle (don't drop)
                         pub_iso = _now()
 
                     # ── Boolean section assignment (Appendix A) ──
-                    # The feed bucket (`topic` var) is only a hint. The real
-                    # section comes from matching title+summary against the
-                    # Boolean expressions. Drop articles that match nothing.
+                    # The feed bucket (`topic` var) is the fallback section.
+                    # RSS feeds are CURATED telecom/FCC sources, so items are
+                    # relevant by construction — we keep them and use the feed
+                    # bucket when the Boolean match is thin (title+desc only).
                     section, _hits = bf.assign_section(title, description)
-                    if section == "other" and not bf.is_fcc_relevant(title, description):
-                        # Keep FCC-source feeds even if Boolean is thin;
-                        # drop off-topic items from broad feeds (The Hill etc.)
-                        if outlet not in ("FCC", "Law360"):
-                            continue
+                    if section == "other":
+                        section = topic  # fall back to the feed's category bucket
 
                     art = Article(
                         article_id=f"{agency.agency_id}_rss_{dedup}",
@@ -421,21 +420,25 @@ async def ingest_gdelt(agency: AgencyConfig, lookback_hours: int = 24) -> List[A
 
     async def _run_query(client, label, query):
         out = []
-        try:
-            resp = await client.get(
-                "https://api.gdeltproject.org/api/v2/doc/doc",
-                params={
-                    "query": f"{query} sourcelang:eng",
-                    "mode": "artlist",
-                    "maxrecords": 100,
-                    "timespan": timespan,
-                    "sort": "DateDesc",
-                    "format": "json",
-                },
-                headers=HTTP_HEADERS,
-            )
-            if resp.status_code == 200:
-                # GDELT occasionally returns non-JSON on rate limit
+        for attempt in range(3):
+            try:
+                resp = await client.get(
+                    "https://api.gdeltproject.org/api/v2/doc/doc",
+                    params={
+                        "query": f"{query} sourcelang:eng",
+                        "mode": "artlist",
+                        "maxrecords": 100,
+                        "timespan": timespan,
+                        "sort": "DateDesc",
+                        "format": "json",
+                    },
+                    headers=HTTP_HEADERS,
+                )
+                if resp.status_code == 429:
+                    await asyncio.sleep(2 * (attempt + 1))  # back off and retry
+                    continue
+                if resp.status_code != 200:
+                    return out
                 try:
                     data = resp.json()
                 except Exception:
@@ -448,9 +451,9 @@ async def ingest_gdelt(agency: AgencyConfig, lookback_hours: int = 24) -> List[A
                     dedup = _hash(url, title)
                     if dedup in seen:
                         continue
-                    # GDELT articles already matched an FCC-specific query group,
-                    # so they're relevant by construction. A light keyword check
-                    # only filters obvious noise; the classifier assigns section.
+                    # GDELT articles already matched an FCC-specific query group.
+                    # A light keyword check filters obvious noise; classifier
+                    # assigns the section downstream.
                     _t = title.lower()
                     if not ("fcc" in _t or "federal communications" in _t
                             or "brendan carr" in _t or "spectrum" in _t
@@ -475,19 +478,20 @@ async def ingest_gdelt(agency: AgencyConfig, lookback_hours: int = 24) -> List[A
                         ingested_at=_now(),
                         dedup_hash=dedup,
                     ))
-        except Exception as e:
-            logger.error(f"GDELT query '{label}' error: {e}")
-        return out
+                return out  # success
+            except Exception as e:
+                logger.error(f"GDELT query '{label}' error: {e}")
+                return out
+        return out  # exhausted retries
 
     try:
+        # Sequential with a small gap to avoid GDELT's 429 rate limiting
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-            results = await asyncio.gather(
-                *[_run_query(client, label, q) for label, q in GDELT_QUERY_GROUPS.items()],
-                return_exceptions=True,
-            )
-            for r in results:
+            for label, q in GDELT_QUERY_GROUPS.items():
+                r = await _run_query(client, label, q)
                 if isinstance(r, list):
                     articles.extend(r)
+                await asyncio.sleep(1.0)  # space out requests
     except Exception as e:
         logger.error(f"GDELT ingestion error: {e}")
 
@@ -1677,11 +1681,16 @@ async def run_daily_cycle(
     # Process pipeline
     unique = deduplicate(all_articles)
 
-    # Boolean noise-gate: drop articles that match no FCC section at all,
-    # EXCEPT trusted regulatory/FCC sources which are kept regardless.
+    # Boolean noise-gate: only GDELT/web-search pull from the open web and can
+    # carry noise. Curated sources (RSS feeds, Tavily FCC queries, regulatory,
+    # broadcast/social tied to FCC queries) are relevant by construction and
+    # are kept. We only require a relevance match for the open-web sources.
+    _curated = ("rss", "tavily", "federal_register", "congress_gov",
+                "claude_broadcast_search", "claude_social_search",
+                "youtube", "bluesky")
     gated = []
     for a in unique:
-        if a.source_type in ("regulatory",) or a.outlet in ("FCC", "Federal Register"):
+        if a.source in _curated or a.source_type == "regulatory":
             gated.append(a)
         elif bf.is_fcc_relevant(a.title, a.summary):
             gated.append(a)
