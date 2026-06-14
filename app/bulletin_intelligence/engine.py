@@ -354,13 +354,22 @@ async def ingest_rss(agency: AgencyConfig, lookback_hours: int = 24) -> list:
                         pub_iso = _now()
 
                     # ── Boolean section assignment (Appendix A) ──
-                    # The feed bucket (`topic` var) is the fallback section.
-                    # RSS feeds are CURATED telecom/FCC sources, so items are
-                    # relevant by construction — we keep them and use the feed
-                    # bucket when the Boolean match is thin (title+desc only).
                     section, _hits = bf.assign_section(title, description)
                     if section == "other":
-                        section = topic  # fall back to the feed's category bucket
+                        # Not a strong Boolean match. Keep ONLY if the item is
+                        # plausibly FCC/telecom-relevant (light keyword check),
+                        # otherwise drop it so off-topic feed items (celebrity
+                        # lawsuits, generic space/defense) don't leak in.
+                        _blob = f"{title} {description}".lower()
+                        _kw = ("fcc", "federal communications", "brendan carr",
+                               "spectrum", "broadband", "telecom", "wireless",
+                               "robocall", "5g", "satellite", "starlink",
+                               "net neutrality", "e-rate", "broadcast license",
+                               "radio license", "carrier", "cable", "911",
+                               "emergency alert", "submarine cable", "fiber")
+                        if not any(k in _blob for k in _kw):
+                            continue  # off-topic — drop
+                        section = topic  # relevant but thin → use feed bucket
 
                     art = Article(
                         article_id=f"{agency.agency_id}_rss_{dedup}",
@@ -1045,8 +1054,8 @@ async def generate_briefing_html(agency: AgencyConfig, articles: List[Article], 
             by_topic.setdefault(art.topic, []).append(art)
 
     ordered_topics = [t for t in SECTION_ORDER if t in by_topic]
-    if "other" in by_topic:
-        ordered_topics.append("other")
+    # FCC spec: NO "Other" / "Miscellaneous" / "General" section in the briefing.
+    # Items still classed "other" after editorial rules are excluded.
 
     context = []
     for topic in ordered_topics:
@@ -1674,17 +1683,30 @@ async def run_daily_cycle(
     # Process pipeline
     unique = deduplicate(all_articles)
 
-    # Boolean noise-gate: only GDELT/web-search pull from the open web and can
-    # carry noise. Curated sources (RSS feeds, Tavily FCC queries, regulatory,
-    # broadcast/social tied to FCC queries) are relevant by construction and
-    # are kept. We only require a relevance match for the open-web sources.
-    _curated = ("rss", "tavily", "federal_register", "congress_gov",
+    # Boolean noise-gate. Regulatory + social/broadcast (FCC-query-tied) are
+    # kept as-is. RSS and Tavily are curated but can still surface off-topic
+    # items, so they must pass a light FCC/telecom keyword check. Open-web
+    # (GDELT/web-search) requires a Boolean relevance match.
+    _trusted = ("federal_register", "congress_gov",
                 "claude_broadcast_search", "claude_social_search",
                 "youtube", "bluesky")
+    _light_kw = ("fcc", "federal communications", "brendan carr", "spectrum",
+                 "broadband", "telecom", "wireless", "robocall", "5g",
+                 "satellite", "starlink", "net neutrality", "e-rate",
+                 "broadcast", "radio", "carrier", "cable", "911",
+                 "emergency alert", "submarine cable", "fiber", "spectrum auction")
+
+    def _light_relevant(a):
+        blob = f"{a.title} {a.summary}".lower()
+        return any(k in blob for k in _light_kw)
+
     gated = []
     for a in unique:
-        if a.source in _curated or a.source_type == "regulatory":
+        if a.source in _trusted or a.source_type == "regulatory":
             gated.append(a)
+        elif a.source in ("rss", "tavily"):
+            if _light_relevant(a):
+                gated.append(a)
         elif bf.is_fcc_relevant(a.title, a.summary):
             gated.append(a)
     logger.info(f"Boolean gate: {len(unique)} → {len(gated)} FCC-relevant")
@@ -1719,10 +1741,37 @@ async def run_daily_cycle(
     classified = editorial.apply_editorial_rules(classified, lookback_hours, _now_dt)
     logger.info(f"Editorial rules applied → {len(classified)} articles")
 
+    # Re-home any "other" articles into a real FCC section by keyword, so
+    # genuinely relevant stories aren't lost — and the briefing has no "Other".
+    _rehome = [
+        ("consumers", ("robocall", "scam", "tcpa", "lifeline", "caller id",
+                       "phone scam", "fraud", "consumer", "stir")),
+        ("public_safety", ("911", "emergency alert", "cybersecurity", "privacy",
+                           "data breach", "outage", "submarine cable")),
+        ("space_policy", ("satellite", "starlink", "spacex", "orbit", "ngso",
+                          "earth station")),
+        ("wireless_spectrum", ("spectrum", "5g", "broadband", "wireless",
+                               "cell tower", "auction", "carrier")),
+        ("media_broadcasting", ("broadcast", "radio", "television", "cable tv",
+                                "fm ", "am radio", "license")),
+        ("ai_ml", ("artificial intelligence", " ai ", "machine learning")),
+        ("international", ("undersea cable", "itu", "international")),
+        ("business_tech", ("net neutrality", "internet policy", "telecom industry")),
+    ]
+    for a in classified:
+        if a.topic != "other":
+            continue
+        blob = f"{a.title} {a.summary}".lower()
+        for sec, kws in _rehome:
+            if any(k in blob for k in kws):
+                a.topic = sec
+                break
+
     # Problem #2: rank every article by composite FinalScore (relevance +
     # authority + recency). Boolean section is untouched; this is rank-only.
+    # Any article STILL "other" is excluded (FCC spec: no Other section).
     ranked = sorted(
-        [a for a in classified if not (a.topic == "other" and a.relevance_score < 0.4)],
+        [a for a in classified if a.topic != "other"],
         key=lambda a: scoring.final_score(a.relevance_score, a.outlet, a.published_at, _now_dt),
         reverse=True,
     )
