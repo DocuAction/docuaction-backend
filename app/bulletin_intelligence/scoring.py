@@ -22,8 +22,8 @@ SOURCE_AUTHORITY_SCORE = {
     "politico": 90,
     "law360": 90,
     "federal register": 90,
-    "fcc": 100,
-    "fcc.gov": 100,
+    "fcc": 40,             # FCC.gov — deprioritized; client gets FCC.gov directly,
+    "fcc.gov": 40,          # the value of this service is EXTERNAL media coverage
     "broadband breakfast": 85,
     "fiercewireless": 85,
     "fierce wireless": 85,

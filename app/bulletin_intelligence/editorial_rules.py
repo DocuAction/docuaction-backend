@@ -32,9 +32,11 @@ SUBSCRIPTION_SOURCES = {
 }
 
 # FCC.gov caps for the daily briefing
-MAX_FCCGOV = 3
-MAX_FCC_BLOG = 2
-MAX_FCC_FACTSHEET = 1
+MAX_FCCGOV = 1            # max 1 FCC.gov item in the entire briefing; client
+                           # gets FCC.gov directly — this service's value is
+                           # EXTERNAL media coverage (Reuters, AP, Axios, etc.)
+MAX_FCC_BLOG = 0           # no FCC blog posts — external media only
+MAX_FCC_FACTSHEET = 0      # no FCC fact sheets
 
 
 def _outlet_lc(a: Any) -> str:

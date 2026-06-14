@@ -1216,7 +1216,8 @@ RULES FOR TOC:
 - The headline link MUST point to the article's REAL source URL (the actual news URL), NOT an internal anchor. Use the exact URL provided for each article. This lets the reader click straight through to the source, like an official clipping service.
 - Always add target="_blank" so the source opens in a new tab
 - If same story covered by multiple outlets, list PRIMARY outlet only, group others as similar stories in summaries section
-- FCC.gov as source: include MAXIMUM 2 items total across entire briefing
+- FCC NEWS SECTION: must contain ONLY external media coverage of the FCC (Reuters, AP, Axios, NBC, Bloomberg, Law360, etc.) — NEVER FCC.gov press releases or FCC blog posts. The client already gets FCC.gov directly; this service provides media monitoring.
+- FCC.gov as source: include MAXIMUM 1 item total across entire briefing, and ONLY in a topical section (Consumers, Wireless, etc.), NEVER in FCC News
 - Mark paywalled: (SUBSCRIPTION REQUIRED) in parentheses after title
 
 ===STORY SUMMARIES===
@@ -1793,6 +1794,42 @@ async def run_daily_cycle(
     _now_dt = datetime.now(timezone.utc)
     classified = editorial.apply_editorial_rules(classified, lookback_hours, _now_dt)
     logger.info(f"Editorial rules applied → {len(classified)} articles")
+
+    # ── FCC.gov items must NOT appear in fcc_news ──────────────────────────
+    # The "FCC News" section is reserved for EXTERNAL media covering the FCC
+    # (Reuters, AP, Axios, NBC, Bloomberg, etc.). FCC.gov press releases go
+    # to the specific topical section matching their content. This is what the
+    # client is paying for — media monitoring, not FCC.gov republishing.
+    _fccgov_rehome = [
+        ("consumers", ("robocall", "scam", "tcpa", "lifeline", "caller id",
+                       "phone scam", "fraud", "consumer", "e-rate")),
+        ("public_safety", ("911", "emergency alert", "cybersecurity", "privacy",
+                           "data breach", "outage", "hurricane", "csric")),
+        ("wireless_spectrum", ("spectrum", "broadband", "wireless", "auction",
+                               "5g", "pole attachment", "wireline", "bead",
+                               "deployment", "permitting")),
+        ("media_broadcasting", ("broadcast", "radio", "television", "license",
+                                "media bureau", "world cup", "fm ", "lptv")),
+        ("space_policy", ("satellite", "starlink", "spacex", "orbit", "ngso",
+                          "earth station", "submarine cable", "undersea")),
+        ("international", ("submarine cable", "undersea", "international",
+                           "china", "itu")),
+    ]
+    for a in classified:
+        outlet_lc = (getattr(a, "outlet", "") or "").lower()
+        url_lc = (getattr(a, "url", "") or "").lower()
+        is_fccgov = ("fcc.gov" in url_lc or outlet_lc in ("fcc", "federal communications commission"))
+        if is_fccgov and a.topic == "fcc_news":
+            # Move to a topical section based on content
+            blob = f"{a.title} {a.summary}".lower()
+            rehomed = False
+            for sec, kws in _fccgov_rehome:
+                if any(k in blob for k in kws):
+                    a.topic = sec
+                    rehomed = True
+                    break
+            if not rehomed:
+                a.topic = "public_safety"  # safe default for FCC actions
 
     # Re-home any "other" articles into a real FCC section by keyword, so
     # genuinely relevant stories aren't lost — and the briefing has no "Other".
