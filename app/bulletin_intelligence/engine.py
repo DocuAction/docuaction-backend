@@ -136,6 +136,7 @@ class Briefing:
     approved_at: str = ""
     delivered_at: str = ""
     delivery_recipients: int = 0
+    pdf_path: str = ""
 
 
 # ── In-memory store ────────────────────────────────────────────────────────────
@@ -1308,26 +1309,54 @@ def _simple_html(agency: AgencyConfig, articles: List[Article], briefing_date: s
 
 
 # ── Email Delivery: SendGrid ───────────────────────────────────────────────────
-async def deliver_briefing(agency: AgencyConfig, html: str, briefing_date: str) -> Dict[str, Any]:
+async def deliver_briefing(agency: AgencyConfig, html: str, briefing_date: str,
+                           pdf_path: str = None) -> Dict[str, Any]:
     if not SENDGRID_KEY:
         logger.warning("SENDGRID_API_KEY not set — dry run mode")
         return {"status": "dry_run", "recipients": len(agency.distribution_list)}
 
     subject = f"FCC Daily News Briefing – {briefing_date}"
+
+    payload = {
+        "personalizations": [{"to": [{"email": e} for e in agency.distribution_list]}],
+        "from": {"email": agency.distribution_email, "name": f"{agency.name} Intelligence"},
+        "subject": subject,
+        "content": [{"type": "text/html", "value": html}],
+    }
+
+    # Attach the executive PDF (base64) alongside the HTML body, if available.
+    if pdf_path:
+        try:
+            import base64 as _b64, os as _os
+            if _os.path.exists(pdf_path):
+                with open(pdf_path, "rb") as f:
+                    encoded = _b64.b64encode(f.read()).decode("ascii")
+                fname = f"FCC_Daily_News_Briefing_{briefing_date.replace(' ', '_').replace(',', '')}.pdf"
+                payload["attachments"] = [{
+                    "content": encoded,
+                    "type": "application/pdf",
+                    "filename": fname,
+                    "disposition": "attachment",
+                }]
+            else:
+                logger.warning(f"PDF not found at {pdf_path}; sending HTML only")
+        except Exception as e:
+            logger.error(f"PDF attach failed (sending HTML only): {e}")
+
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             resp = await client.post(
                 "https://api.sendgrid.com/v3/mail/send",
                 headers={"Authorization": f"Bearer {SENDGRID_KEY}", "Content-Type": "application/json"},
-                json={
-                    "personalizations": [{"to": [{"email": e} for e in agency.distribution_list]}],
-                    "from": {"email": agency.distribution_email, "name": f"{agency.name} Intelligence"},
-                    "subject": subject,
-                    "content": [{"type": "text/html", "value": html}],
-                }
+                json=payload,
             )
             resp.raise_for_status()
-            return {"status": "delivered", "recipients": len(agency.distribution_list), "subject": subject}
+            return {
+                "status": "delivered",
+                "recipients": len(agency.distribution_list),
+                "subject": subject,
+                "pdf_attached": bool(payload.get("attachments")),
+            }
     except Exception as e:
         logger.error(f"SendGrid error: {e}")
         return {"status": "error", "error": str(e)}
@@ -1842,7 +1871,7 @@ async def run_daily_cycle(
     delivery = {}
     status = "pending_approval"
     if auto_deliver and quality_report["passed"]:
-        delivery = await deliver_briefing(agency, html, briefing_date)
+        delivery = await deliver_briefing(agency, html, briefing_date, pdf_path=pdf_path)
         status = "delivered" if delivery.get("status") in ("delivered", "dry_run") else "error"
     elif auto_deliver and not quality_report["passed"]:
         status = "held_quality_review"
@@ -1858,6 +1887,7 @@ async def run_daily_cycle(
         topic_counts=topic_counts,
         generated_at=_now(),
         delivery_recipients=len(agency.distribution_list),
+        pdf_path=pdf_path or "",
     )
     _briefings[briefing_id] = briefing
     try:
@@ -1895,7 +1925,8 @@ async def approve_and_deliver(briefing_id: str) -> Dict[str, Any]:
     if not agency:
         return {"error": "Agency not found"}
 
-    result = await deliver_briefing(agency, briefing.html_content, briefing.briefing_date)
+    result = await deliver_briefing(agency, briefing.html_content, briefing.briefing_date,
+                                    pdf_path=getattr(briefing, "pdf_path", "") or None)
     briefing.status = "delivered" if result.get("status") in ("delivered", "dry_run") else "error"
     briefing.approved_at = _now()
     briefing.delivered_at = _now()

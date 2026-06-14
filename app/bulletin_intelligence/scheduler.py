@@ -103,11 +103,8 @@ def trigger_all_agencies(mode: str):
 
 def start_scheduler():
     """
-    Start the APScheduler with the FCC delivery schedule:
-      Mon 6 AM ET  → 72-hour weekend rollup + deliver
-      Tue-Fri 6AM  → 24-hour briefing + deliver
-      Sat 6 AM ET  → collect only (no delivery)
-      Sun 6 AM ET  → collect only (no delivery)
+    Start the APScheduler with daily delivery:
+      Every day 6 AM ET → 24-hour briefing + deliver (incl. weekends)
     """
     global _scheduler
     try:
@@ -116,40 +113,17 @@ def start_scheduler():
 
         _scheduler = AsyncIOScheduler(timezone=ET)
 
-        # Monday 6 AM — 72hr rollup (Fri+Sat+Sun) + deliver
-        _scheduler.add_job(
-            lambda: trigger_all_agencies("monday"),
-            CronTrigger(day_of_week="mon", hour=6, minute=0, timezone=ET),
-            id="monday_delivery", replace_existing=True,
-            name="Monday 6AM — Weekend Rollup + Delivery"
-        )
-
-        # Tuesday–Friday 6 AM — 24hr briefing + deliver
+        # Every day 6 AM ET — 24hr briefing + deliver (7 days a week)
         _scheduler.add_job(
             lambda: trigger_all_agencies("weekday"),
-            CronTrigger(day_of_week="tue,wed,thu,fri", hour=6, minute=0, timezone=ET),
-            id="weekday_delivery", replace_existing=True,
-            name="Tue-Fri 6AM — Daily Briefing + Delivery"
-        )
-
-        # Saturday 6 AM — collect only
-        _scheduler.add_job(
-            lambda: trigger_all_agencies("weekend"),
-            CronTrigger(day_of_week="sat", hour=6, minute=0, timezone=ET),
-            id="saturday_collection", replace_existing=True,
-            name="Saturday 6AM — Collect Only"
-        )
-
-        # Sunday 6 AM — collect only
-        _scheduler.add_job(
-            lambda: trigger_all_agencies("weekend"),
-            CronTrigger(day_of_week="sun", hour=6, minute=0, timezone=ET),
-            id="sunday_collection", replace_existing=True,
-            name="Sunday 6AM — Collect Only"
+            CronTrigger(day_of_week="mon,tue,wed,thu,fri,sat,sun",
+                        hour=6, minute=0, timezone=ET),
+            id="daily_delivery", replace_existing=True,
+            name="Daily 6AM ET — Briefing + Delivery (incl. weekends)"
         )
 
         _scheduler.start()
-        logger.info("Bulletin scheduler started — Mon-Fri 6AM delivery, Sat-Sun collection only")
+        logger.info("Bulletin scheduler started — daily 6AM ET delivery (7 days/week)")
 
     except ImportError:
         logger.warning("APScheduler not installed — run: pip install apscheduler")
