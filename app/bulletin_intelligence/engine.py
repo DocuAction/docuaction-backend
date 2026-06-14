@@ -44,6 +44,7 @@ try:
     from . import health_monitor as health  # health checks + daily quality validation
     from . import editorial_rules as editorial  # subscription/FCC.gov/freshness rules
     from . import youtube_ingest as youtube  # YouTube media clips + social metrics
+    from . import bluesky_ingest as bluesky  # BlueSky social posts (free, no auth)
 except ImportError:  # standalone / test context
     import boolean_filter as bf
     import scoring
@@ -52,6 +53,7 @@ except ImportError:  # standalone / test context
     import health_monitor as health
     import editorial_rules as editorial
     import youtube_ingest as youtube
+    import bluesky_ingest as bluesky
 
 logger = logging.getLogger(__name__)
 
@@ -1114,21 +1116,46 @@ SUMMARY: {art.summary[:300]}{sim_lines}
         if _yt:
             _top_yt = max(_yt, key=lambda x: getattr(x, "yt_views", 0))
             _yt_line = (
-                f" YouTube real metrics: {len(_yt)} videos, "
+                f" YouTube: {len(_yt)} videos, "
                 f"top clip '{_top_yt.title[:80]}' ({_top_yt.outlet}) "
                 f"{getattr(_top_yt,'yt_views',0):,} views / "
                 f"{getattr(_top_yt,'yt_comments',0):,} comments."
             )
 
+        # Real BlueSky engagement (free public API, like/repost/reply counts)
+        _bs = [a for a in social_arts
+               if getattr(a, "source", "") == "bluesky" or "bluesky" in (a.outlet or "").lower()]
+        _bs_line = ""
+        if _bs:
+            _top_bs = max(_bs, key=lambda x: getattr(x, "social_reach", 0))
+            _bs_line = (
+                f" BlueSky: {len(_bs)} posts, "
+                f"top post by @{getattr(_top_bs,'author','')} "
+                f"({getattr(_top_bs,'bsky_likes',0):,} likes / "
+                f"{getattr(_top_bs,'bsky_reposts',0):,} reposts / "
+                f"{getattr(_top_bs,'bsky_replies',0):,} replies)."
+            )
+
+        # Highest-reach post across all platforms (FCC sample format)
+        _ranked_reach = sorted(
+            social_arts, key=lambda x: getattr(x, "social_reach",
+                                                getattr(x, "yt_views", 0)), reverse=True)
+        _highest = ""
+        if _ranked_reach:
+            _h = _ranked_reach[0]
+            _r = getattr(_h, "social_reach", getattr(_h, "yt_views", 0))
+            _highest = (f" Highest-reach post: {_h.outlet} — "
+                        f"'{_h.title[:80]}' ({_r:,} total engagements).")
+
         _social_metrics_block = (
-            f"Total social articles captured: {len(social_arts)}. "
+            f"Total social posts captured: {len(social_arts)}. "
             f"Platform split (by captured posts): "
             + ", ".join(f"{k} {_pct.get(k,0)}%" for k in ("X", "Reddit", "BlueSky", "YouTube"))
-            + "." + _yt_line
-            + " Top posts (with any available reach/engagement):\n"
+            + "." + _yt_line + _bs_line + _highest
+            + " Top posts:\n"
             + "\n".join(
                 f"  - {a.outlet}: {a.title[:120]} | {a.summary[:160]}"
-                for a in sorted(social_arts, key=lambda x: x.relevance_score, reverse=True)[:3]
+                for a in _ranked_reach[:3]
             )
         )
     else:
@@ -1627,6 +1654,13 @@ async def run_daily_cycle(
     # YouTube — real media clips + social metrics (fills FCC media/broadcast gap)
     if YOUTUBE_KEY:
         tasks.append(youtube.ingest_youtube(
+            agency, lookback_hours,
+            make_article=Article, hasher=_hash, now_iso=_now,
+            is_relevant=bf.is_fcc_relevant,
+        ))
+    # BlueSky — real social posts + engagement (free, no auth required)
+    if agency.include_social:
+        tasks.append(bluesky.ingest_bluesky(
             agency, lookback_hours,
             make_article=Article, hasher=_hash, now_iso=_now,
             is_relevant=bf.is_fcc_relevant,
