@@ -237,32 +237,31 @@ def _is_fcc_relevant(title: str, summary: str) -> bool:
 # the output never collapses to a single outlet.
 FCC_RSS_FEEDS = {
     "fcc_news": [
-        ("https://www.fcc.gov/news-events/rss", "FCC"),
-        ("https://www.fcc.gov/rss/headlines", "FCC"),
         ("https://www.law360.com/telecom/rss", "Law360"),
+        ("https://broadbandbreakfast.com/rss/", "Broadband Breakfast"),
     ],
     "wireless_spectrum": [
-        ("https://www.fiercewireless.com/rss/xml", "FierceWireless"),
+        ("https://www.fierce-network.com/rss/xml", "FierceWireless"),
         ("https://www.rcrwireless.com/feed", "RCR Wireless"),
-        ("https://broadbandbreakfast.com/feed/", "Broadband Breakfast"),
+        ("https://broadbandbreakfast.com/rss/", "Broadband Breakfast"),
     ],
     "media_broadcasting": [
         ("https://www.radioworld.com/feed", "Radio World"),
-        ("https://www.tvtechnology.com/rss/all", "TV Technology"),
-        ("https://www.tvnewscheck.com/feed/", "TV News Check"),
+        ("https://tvnewscheck.com/feed/", "TV News Check"),
         ("https://rbr.com/feed/", "RBR"),
+        ("https://www.tvtechnology.com/feeds/all", "TV Technology"),
     ],
     "consumers": [
-        ("https://broadbandbreakfast.com/feed/", "Broadband Breakfast"),
+        ("https://broadbandbreakfast.com/rss/", "Broadband Breakfast"),
         ("https://www.telecompetitor.com/feed/", "Telecompetitor"),
     ],
     "space_policy": [
         ("https://spacenews.com/feed/", "SpaceNews"),
-        ("https://www.fiercewireless.com/rss/xml", "FierceWireless"),
+        ("https://www.fierce-network.com/rss/xml", "FierceWireless"),
     ],
     "public_safety": [
-        ("https://www.fcc.gov/news-events/rss", "FCC"),
-        ("https://www.cisa.gov/news.xml", "CISA"),
+        ("https://www.lightreading.com/rss_simple.asp", "Light Reading"),
+        ("https://www.rcrwireless.com/feed", "RCR Wireless"),
     ],
     "business_tech": [
         ("https://thehill.com/policy/technology/feed/", "The Hill"),
@@ -447,8 +446,15 @@ async def ingest_gdelt(agency: AgencyConfig, lookback_hours: int = 24) -> List[A
                     dedup = _hash(url, title)
                     if dedup in seen:
                         continue
-                    # Boolean relevance gate at ingestion (cheap, deterministic)
-                    if not bf.is_fcc_relevant(title, title):
+                    # GDELT articles already matched an FCC-specific query group,
+                    # so they're relevant by construction. A light keyword check
+                    # only filters obvious noise; the classifier assigns section.
+                    _t = title.lower()
+                    if not ("fcc" in _t or "federal communications" in _t
+                            or "brendan carr" in _t or "spectrum" in _t
+                            or "broadband" in _t or "telecom" in _t
+                            or "robocall" in _t or "starlink" in _t
+                            or "net neutrality" in _t or "e-rate" in _t):
                         continue
                     seen.add(dedup)
                     out.append(Article(

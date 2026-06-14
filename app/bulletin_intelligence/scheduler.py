@@ -9,11 +9,19 @@ Schedule:
 import logging
 import asyncio
 from datetime import datetime, timedelta
-import pytz
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+ stdlib, no pytz dependency
+    ET = ZoneInfo("America/New_York")
+except Exception:  # pragma: no cover — fallback if tzdata missing
+    try:
+        import pytz
+        ET = pytz.timezone("America/New_York")
+    except Exception:
+        from datetime import timezone as _tz
+        ET = _tz.utc  # last-resort: UTC (scheduler still runs, time approximate)
 
 logger = logging.getLogger(__name__)
 _scheduler = None
-ET = pytz.timezone("America/New_York")
 
 
 async def run_weekday_delivery(agency_id: str):
@@ -144,7 +152,7 @@ def start_scheduler():
         logger.info("Bulletin scheduler started — Mon-Fri 6AM delivery, Sat-Sun collection only")
 
     except ImportError:
-        logger.warning("APScheduler not installed — run: pip install apscheduler pytz")
+        logger.warning("APScheduler not installed — run: pip install apscheduler")
     except Exception as e:
         logger.error(f"Scheduler failed: {e}")
 
