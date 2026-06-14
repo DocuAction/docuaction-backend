@@ -97,14 +97,21 @@ def trigger_all_agencies(mode: str):
                 loop.create_task(run_weekend_collection(agency.agency_id))
             elif mode == "monday":
                 loop.create_task(run_monday_delivery(agency.agency_id))
+            elif mode == "preview":
+                # Sunday 8 PM preview — generate but don't send, 48h lookback
+                # (Sat+Sun so far) for Katie/Jeffrey to review Sunday night
+                loop.create_task(run_weekend_collection(agency.agency_id))
     except Exception as e:
         logger.error(f"Scheduler trigger error: {e}")
 
 
 def start_scheduler():
     """
-    Start the APScheduler with daily delivery:
-      Every day 6 AM ET → 24-hour briefing + deliver (incl. weekends)
+    Start the APScheduler with the client-agreed schedule:
+      Sunday 8 PM ET  → Preview run (generate, hold for review — Katie reviews Sun night)
+      Monday 6 AM ET  → Weekend rollup delivery (Fri+Sat+Sun, 72h)
+      Tue-Fri 6 AM ET → Daily 24h briefing + deliver
+      Saturday 6 AM   → Daily 24h briefing + deliver
     """
     global _scheduler
     try:
@@ -113,17 +120,34 @@ def start_scheduler():
 
         _scheduler = AsyncIOScheduler(timezone=ET)
 
-        # Every day 6 AM ET — 24hr briefing + deliver (7 days a week)
+        # Sunday 8 PM ET — preview run (generate but do NOT auto-deliver)
+        # Katie and Jeffrey review Sunday night; finalize Monday morning
+        _scheduler.add_job(
+            lambda: trigger_all_agencies("preview"),
+            CronTrigger(day_of_week="sun", hour=20, minute=0, timezone=ET),
+            id="sunday_preview", replace_existing=True,
+            name="Sunday 8PM ET — Preview for review (no auto-send)"
+        )
+
+        # Monday 6 AM ET — weekend rollup (72h) + deliver
+        _scheduler.add_job(
+            lambda: trigger_all_agencies("monday"),
+            CronTrigger(day_of_week="mon", hour=6, minute=0, timezone=ET),
+            id="monday_delivery", replace_existing=True,
+            name="Monday 6AM ET — Weekend Rollup + Delivery"
+        )
+
+        # Tuesday–Saturday 6 AM ET — daily 24h briefing + deliver
         _scheduler.add_job(
             lambda: trigger_all_agencies("weekday"),
-            CronTrigger(day_of_week="mon,tue,wed,thu,fri,sat,sun",
+            CronTrigger(day_of_week="tue,wed,thu,fri,sat",
                         hour=6, minute=0, timezone=ET),
-            id="daily_delivery", replace_existing=True,
-            name="Daily 6AM ET — Briefing + Delivery (incl. weekends)"
+            id="weekday_delivery", replace_existing=True,
+            name="Tue-Sat 6AM ET — Daily Briefing + Delivery"
         )
 
         _scheduler.start()
-        logger.info("Bulletin scheduler started — daily 6AM ET delivery (7 days/week)")
+        logger.info("Bulletin scheduler started — Sun 8PM preview + Mon-Sat 6AM delivery")
 
     except ImportError:
         logger.warning("APScheduler not installed — run: pip install apscheduler")

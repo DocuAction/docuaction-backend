@@ -1203,7 +1203,6 @@ OUTPUT FORMAT — follow this exactly:
 <p class="date">{briefing_date}</p>
 <p class="agency">{agency.name}</p>
 <h1>Daily News Summary</h1>
-<p style="color:#666;font-size:12px;">Coverage window: {_window}</p>
 
 ===TABLE OF CONTENTS (TOC)===
 For EACH topic section that has articles, write:
