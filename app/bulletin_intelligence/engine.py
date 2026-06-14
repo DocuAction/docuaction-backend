@@ -1209,14 +1209,15 @@ OUTPUT FORMAT — follow this exactly:
 For EACH topic section that has articles, write:
 
 <h2>[Topic Name]</h2>
-<p class="toc-item"><span class="outlet">OUTLET NAME:</span> <a href="#story-[id]">Article Title</a> [add (SUBSCRIPTION REQUIRED) if paywalled]</p>
+<p class="toc-item"><span class="outlet">OUTLET NAME:</span> <a href="ACTUAL_SOURCE_URL" target="_blank">Article Title</a> [add (SUBSCRIPTION REQUIRED) if paywalled]</p>
 
 RULES FOR TOC:
 - Outlet name in ALL CAPS followed by colon
+- The headline link MUST point to the article's REAL source URL (the actual news URL), NOT an internal anchor. Use the exact URL provided for each article. This lets the reader click straight through to the source, like an official clipping service.
+- Always add target="_blank" so the source opens in a new tab
 - If same story covered by multiple outlets, list PRIMARY outlet only, group others as similar stories in summaries section
 - FCC.gov as source: include MAXIMUM 2 items total across entire briefing
 - Mark paywalled: (SUBSCRIPTION REQUIRED) in parentheses after title
-- Each article gets unique anchor id like #story-1, #story-2 etc.
 
 ===STORY SUMMARIES===
 After the complete TOC, write the summaries section:
@@ -1225,7 +1226,7 @@ After the complete TOC, write the summaries section:
 
 For each PRIMARY story:
 <div class="story" id="story-[id]">
-<p class="story-headline"><span class="outlet">OUTLET:</span> <a href="URL">Title</a>[if paywalled: <span class="sub-required"> (SUBSCRIPTION REQUIRED)</span>]</p>
+<p class="story-headline"><span class="outlet">OUTLET:</span> <a href="ACTUAL_SOURCE_URL" target="_blank">Title</a>[if paywalled: <span class="sub-required"> (SUBSCRIPTION REQUIRED)</span>]</p>
 [If NOT paywalled: <p class="story-body">2-3 factual sentences summarizing the article.</p>]
 [If paywalled: <p class="story-body">ONE short factual sentence based ONLY on the publicly visible headline/snippet — do NOT invent details or summarize the full paywalled article.</p><p class="sub-required">[SUBSCRIPTION REQUIRED]</p>]
 [If has similar stories:]
