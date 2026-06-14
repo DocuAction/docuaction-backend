@@ -43,6 +43,7 @@ try:
     from . import story_repository as repo  # persistent archive (Story Repository Layer)
     from . import health_monitor as health  # health checks + daily quality validation
     from . import editorial_rules as editorial  # subscription/FCC.gov/freshness rules
+    from . import youtube_ingest as youtube  # YouTube media clips + social metrics
 except ImportError:  # standalone / test context
     import boolean_filter as bf
     import scoring
@@ -50,6 +51,7 @@ except ImportError:  # standalone / test context
     import story_repository as repo
     import health_monitor as health
     import editorial_rules as editorial
+    import youtube_ingest as youtube
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +63,7 @@ NEWSAPI_KEY     = os.getenv("NEWSAPI_KEY", "")
 OPENAI_KEY      = os.getenv("OPENAI_API_KEY", "")
 PERPLEXITY_KEY  = os.getenv("PERPLEXITY_API_KEY", "")
 GEMINI_KEY      = os.getenv("GEMINI_API_KEY", "")
+YOUTUBE_KEY     = os.getenv("YOUTUBE_API_KEY", "")
 
 TIMEOUT = httpx.Timeout(30.0)
 HTTP_HEADERS = {"User-Agent": "DocuAction-BulletinIntelligence/1.0 (Alliance Global Tech)"}
@@ -1091,17 +1094,32 @@ SUMMARY: {art.summary[:300]}{sim_lines}
                 _plat["Reddit"] += 1
             elif "bluesky" in o or "bsky" in o:
                 _plat["BlueSky"] += 1
-            elif "youtube" in o:
+            elif getattr(a, "source", "") == "youtube" or "youtube" in o:
                 _plat["YouTube"] += 1
             else:
                 _plat["X"] += 1
         _tot = sum(_plat.values()) or 1
         _pct = {k: round(100 * v / _tot) for k, v in _plat.items()}
+
+        # Real YouTube engagement (when the YouTube API supplied counts)
+        _yt = [a for a in social_arts
+               if getattr(a, "source", "") == "youtube" or "youtube" in (a.outlet or "").lower()]
+        _yt_line = ""
+        if _yt:
+            _top_yt = max(_yt, key=lambda x: getattr(x, "yt_views", 0))
+            _yt_line = (
+                f" YouTube real metrics: {len(_yt)} videos, "
+                f"top clip '{_top_yt.title[:80]}' ({_top_yt.outlet}) "
+                f"{getattr(_top_yt,'yt_views',0):,} views / "
+                f"{getattr(_top_yt,'yt_comments',0):,} comments."
+            )
+
         _social_metrics_block = (
             f"Total social articles captured: {len(social_arts)}. "
             f"Platform split (by captured posts): "
             + ", ".join(f"{k} {_pct.get(k,0)}%" for k in ("X", "Reddit", "BlueSky", "YouTube"))
-            + ". Top posts (with any available reach/engagement):\n"
+            + "." + _yt_line
+            + " Top posts (with any available reach/engagement):\n"
             + "\n".join(
                 f"  - {a.outlet}: {a.title[:120]} | {a.summary[:160]}"
                 for a in sorted(social_arts, key=lambda x: x.relevance_score, reverse=True)[:3]
@@ -1600,6 +1618,13 @@ async def run_daily_cycle(
         tasks.append(ingest_broadcast(agency, lookback_hours))
     if agency.include_social:
         tasks.append(ingest_social(agency))
+    # YouTube — real media clips + social metrics (fills FCC media/broadcast gap)
+    if YOUTUBE_KEY:
+        tasks.append(youtube.ingest_youtube(
+            agency, lookback_hours,
+            make_article=Article, hasher=_hash, now_iso=_now,
+            is_relevant=bf.is_fcc_relevant,
+        ))
     if agency.include_regulatory:
         tasks.append(ingest_regulatory(agency))
 
