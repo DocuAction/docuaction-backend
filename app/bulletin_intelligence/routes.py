@@ -105,14 +105,17 @@ async def trigger_daily_cycle(
     agency_id: str,
     background_tasks: BackgroundTasks,
     auto_deliver: bool = False,
-    lookback_hours: int = 24,
+    lookback_hours: int = 72,
+    coverage_start: str = None,
+    coverage_end: str = None,
 ):
     """Trigger the daily intelligence cycle for an agency. Returns immediately; runs in background."""
     agency = get_agency(agency_id)
     if not agency:
         raise HTTPException(status_code=404, detail=f"Agency {agency_id} not found")
 
-    background_tasks.add_task(run_daily_cycle, agency_id, auto_deliver, lookback_hours)
+    background_tasks.add_task(run_daily_cycle, agency_id, auto_deliver,
+                             lookback_hours, coverage_start, coverage_end)
     return {
         "status": "started",
         "agency_id": agency_id,
@@ -126,10 +129,13 @@ async def trigger_daily_cycle(
 async def trigger_daily_cycle_sync(
     agency_id: str,
     auto_deliver: bool = False,
-    lookback_hours: int = 24,
+    lookback_hours: int = 72,
+    coverage_start: str = None,
+    coverage_end: str = None,
 ):
     """Synchronous version — waits for completion. Use for demos and testing."""
-    result = await run_daily_cycle(agency_id, auto_deliver, lookback_hours)
+    result = await run_daily_cycle(agency_id, auto_deliver, lookback_hours,
+                                   coverage_start, coverage_end)
     return result
 
 

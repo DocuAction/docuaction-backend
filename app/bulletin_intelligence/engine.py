@@ -426,7 +426,7 @@ async def ingest_gdelt(agency: AgencyConfig, lookback_hours: int = 24) -> List[A
     """
     seen = set()
     articles: List[Article] = []
-    timespan = f"{min(lookback_hours, 24)}H"
+    timespan = f"{min(lookback_hours, 72)}H"
 
     async def _run_query(client, label, query):
         out = []
@@ -1028,7 +1028,7 @@ Return ONLY the JSON array."""
 
 
 # ── Briefing Generator: Claude Sonnet ─────────────────────────────────────────
-async def generate_briefing_html(agency: AgencyConfig, articles: List[Article], briefing_date: str, clusters: Optional[list] = None) -> str:
+async def generate_briefing_html(agency: AgencyConfig, articles: List[Article], briefing_date: str, clusters: Optional[list] = None, coverage_window: str = None) -> str:
     if not ANTHROPIC_KEY:
         return _simple_html(agency, articles, briefing_date)
 
@@ -1089,8 +1089,11 @@ SUMMARY: {art.summary[:300]}{sim_lines}
     # Coverage window
     from datetime import datetime as _dt, timedelta as _td
     _today = _dt.now()
-    _start = (_today - _td(days=3)).strftime("%B %d")
-    _window = f"{_start} - {_today.strftime('%B %d, %Y')}"
+    if coverage_window:
+        _window = coverage_window
+    else:
+        _start = (_today - _td(days=3)).strftime("%B %d")
+        _window = f"{_start} - {_today.strftime('%B %d, %Y')}"
 
     # Count by topic for social media estimate
     total_articles = len(articles)
@@ -1659,11 +1662,31 @@ async def _ensure_coverage(agency: AgencyConfig, articles: List[Article],
 async def run_daily_cycle(
     agency_id: str,
     auto_deliver: bool = False,
-    lookback_hours: int = 24
+    lookback_hours: int = 24,
+    coverage_start: str = None,
+    coverage_end: str = None,
 ) -> Dict[str, Any]:
     agency = get_agency(agency_id)
     if not agency:
         return {"error": f"Agency {agency_id} not registered"}
+
+    # Optional explicit date range (ISO format, e.g. "2026-06-12T06:00:00").
+    # When provided, lookback_hours is derived from the range so all ingestion
+    # sources cover exactly the requested window (e.g. Fri 6AM → Mon 6AM).
+    _cov_window_label = None
+    if coverage_start:
+        try:
+            _cs = datetime.fromisoformat(coverage_start.replace("Z", ""))
+            _ce = (datetime.fromisoformat(coverage_end.replace("Z", ""))
+                   if coverage_end else datetime.now())
+            hrs = int((datetime.now() - _cs).total_seconds() // 3600)
+            lookback_hours = max(1, min(hrs, 168))  # cap at 7 days
+            _cov_window_label = (f"{_cs.strftime('%B %d')} - "
+                                 f"{_ce.strftime('%B %d, %Y')}")
+            logger.info(f"Coverage range set: {_cov_window_label} "
+                        f"({lookback_hours}h lookback)")
+        except Exception as e:
+            logger.error(f"Bad coverage range ({coverage_start}/{coverage_end}): {e}")
 
     briefing_date = datetime.now().strftime("%B %d, %Y")
     briefing_id = f"{agency_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -1824,7 +1847,7 @@ async def run_daily_cycle(
     )
 
     # Generate briefing (clusters passed through for Similar Stories grouping)
-    html = await generate_briefing_html(agency, briefing_arts, briefing_date, clusters=clusters)
+    html = await generate_briefing_html(agency, briefing_arts, briefing_date, clusters=clusters, coverage_window=_cov_window_label)
 
     # Executive PDF (mirrors HTML content). Built from the same clusters so the
     # PDF and email are identical. Subscription rule enforced in the generator.
