@@ -36,6 +36,21 @@ from dataclasses import dataclass, asdict, field
 import httpx
 from anthropic import AsyncAnthropic
 
+try:
+    from . import boolean_filter as bf  # Appendix A Boolean section assignment
+    from . import scoring               # Problem #2: authority + final-score ranking
+    from . import clustering            # Problems #3/#5/#7: cluster, quality, diversity
+    from . import story_repository as repo  # persistent archive (Story Repository Layer)
+    from . import health_monitor as health  # health checks + daily quality validation
+    from . import editorial_rules as editorial  # subscription/FCC.gov/freshness rules
+except ImportError:  # standalone / test context
+    import boolean_filter as bf
+    import scoring
+    import clustering
+    import story_repository as repo
+    import health_monitor as health
+    import editorial_rules as editorial
+
 logger = logging.getLogger(__name__)
 
 ANTHROPIC_KEY   = os.getenv("ANTHROPIC_API_KEY", "")
@@ -51,26 +66,15 @@ TIMEOUT = httpx.Timeout(30.0)
 HTTP_HEADERS = {"User-Agent": "DocuAction-BulletinIntelligence/1.0 (Alliance Global Tech)"}
 
 # ── Topic taxonomy ─────────────────────────────────────────────────────────────
-FCC_TOPICS = [
-    "fcc_news_events", "consumers_advocacy", "media_broadcasting",
-    "public_safety_emergency", "wireless_mobile", "ai_emerging_tech",
-    "business_industry", "international_affairs", "space_communications", "spectrum_policy",
-]
+# Aligned to the 9 official FCC Daily News Briefing sections (Appendix A).
+# Source of truth is boolean_filter.FCC_SECTIONS / FCC_SECTION_LABELS.
+FCC_TOPICS = list(bf.FCC_SECTIONS)
 
-TOPIC_LABELS = {
-    "fcc_news_events":         "FCC News & Events",
-    "consumers_advocacy":      "Consumers & Advocacy",
-    "media_broadcasting":      "Media & Broadcasting",
-    "public_safety_emergency": "Public Safety",
-    "wireless_mobile":         "Wireless & Mobile",
-    "ai_emerging_tech":        "AI & Emerging Tech",
-    "business_industry":       "Business & Industry",
-    "international_affairs":   "International Affairs",
-    "space_communications":    "Space Communications",
-    "spectrum_policy":         "Spectrum & Policy",
-    "other":                   "Other",
-}
+TOPIC_LABELS = dict(bf.FCC_SECTION_LABELS)
 FCC_TOPIC_LABELS = TOPIC_LABELS  # alias for backward compatibility
+
+# Display order for the briefing (matches the official email layout)
+SECTION_ORDER = bf.FCC_SECTIONS
 
 
 # ── Data classes ───────────────────────────────────────────────────────────────
@@ -221,41 +225,52 @@ def _is_fcc_relevant(title: str, summary: str) -> bool:
 
 
 # ── INGESTION: RSS Feeds (Appendix B Sources — FREE, always FCC-relevant) ─────
+#
+# NOTE: The dict keys here are NO LONGER the final section assignment.
+# Every ingested article is re-routed through boolean_filter.assign_section()
+# against the article's actual title/summary (Appendix A logic).
+# These keys are only a hint; the Boolean filter is authoritative.
+# Feeds are deliberately broad so each FCC section has source coverage and
+# the output never collapses to a single outlet.
 FCC_RSS_FEEDS = {
-    "fcc_news_events": [
+    "fcc_news": [
         ("https://www.fcc.gov/news-events/rss", "FCC"),
         ("https://www.fcc.gov/rss/headlines", "FCC"),
+        ("https://www.law360.com/telecom/rss", "Law360"),
     ],
-    "wireless_mobile": [
+    "wireless_spectrum": [
         ("https://www.fiercewireless.com/rss/xml", "FierceWireless"),
         ("https://www.rcrwireless.com/feed", "RCR Wireless"),
+        ("https://broadbandbreakfast.com/feed/", "Broadband Breakfast"),
     ],
     "media_broadcasting": [
         ("https://www.radioworld.com/feed", "Radio World"),
         ("https://www.tvtechnology.com/rss/all", "TV Technology"),
-        ("https://www.multichannel.com/rss/all", "Multichannel News"),
+        ("https://www.tvnewscheck.com/feed/", "TV News Check"),
         ("https://rbr.com/feed/", "RBR"),
     ],
-    "consumers_advocacy": [
+    "consumers": [
         ("https://broadbandbreakfast.com/feed/", "Broadband Breakfast"),
         ("https://www.telecompetitor.com/feed/", "Telecompetitor"),
     ],
-    "spectrum_policy": [
-        ("https://broadbandbreakfast.com/feed/", "Broadband Breakfast"),
+    "space_policy": [
+        ("https://spacenews.com/feed/", "SpaceNews"),
         ("https://www.fiercewireless.com/rss/xml", "FierceWireless"),
     ],
-    "public_safety_emergency": [
+    "public_safety": [
         ("https://www.fcc.gov/news-events/rss", "FCC"),
+        ("https://www.cisa.gov/news.xml", "CISA"),
     ],
-    "business_industry": [
+    "business_tech": [
         ("https://thehill.com/policy/technology/feed/", "The Hill"),
         ("https://www.politico.com/rss/politicopicks.xml", "Politico"),
     ],
-    "international_affairs": [
+    "international": [
         ("https://www.telegeography.com/feed/", "TeleGeography"),
     ],
-    "ai_emerging_tech": [
+    "ai_ml": [
         ("https://thehill.com/policy/technology/feed/", "The Hill"),
+        ("https://www.fedscoop.com/feed/", "FedScoop"),
     ],
 }
 
@@ -333,6 +348,17 @@ async def ingest_rss(agency: AgencyConfig, lookback_hours: int = 24) -> list:
                     except Exception:
                         pub_iso = _now()
 
+                    # ── Boolean section assignment (Appendix A) ──
+                    # The feed bucket (`topic` var) is only a hint. The real
+                    # section comes from matching title+summary against the
+                    # Boolean expressions. Drop articles that match nothing.
+                    section, _hits = bf.assign_section(title, description)
+                    if section == "other" and not bf.is_fcc_relevant(title, description):
+                        # Keep FCC-source feeds even if Boolean is thin;
+                        # drop off-topic items from broad feeds (The Hill etc.)
+                        if outlet not in ("FCC", "Law360"):
+                            continue
+
                     art = Article(
                         article_id=f"{agency.agency_id}_rss_{dedup}",
                         agency_id=agency.agency_id,
@@ -345,8 +371,8 @@ async def ingest_rss(agency: AgencyConfig, lookback_hours: int = 24) -> list:
                         full_text=description,
                         author="",
                         outlet=outlet,
-                        topic=topic,           # pre-assigned by feed category
-                        relevance_score=0.75,  # RSS feeds are always on-topic
+                        topic=section,        # Boolean-assigned FCC section
+                        relevance_score=0.75,
                         ingested_at=_now(),
                         dedup_hash=dedup,
                     )
@@ -362,38 +388,67 @@ async def ingest_rss(agency: AgencyConfig, lookback_hours: int = 24) -> list:
 # GDELT monitors 300+ languages, 65+ countries, updates every 15 minutes
 # Perfect for FCC broadcast, international, and US domestic news
 
+# ── INGESTION: GDELT Project (FREE — no key needed) ──────────────────────────
+# GDELT monitors 300+ languages, 65+ countries, updates every 15 minutes
+# Perfect for FCC broadcast, international, and US domestic news
+
+# Problem #1: multi-query strategy. Each group is a GDELT query string.
+# Boolean filter downstream is still authoritative for section assignment;
+# these queries only widen INGESTION so sections aren't starved.
+GDELT_QUERY_GROUPS = {
+    "fcc_core":  '("Federal Communications Commission" OR "FCC" OR "Brendan Carr" OR "Olivia Trusty" OR "Anna Gomez")',
+    "spectrum":  '("spectrum auction" OR "AWS-3" OR "wireless spectrum" OR "FCC spectrum")',
+    "consumer":  '("robocall" OR "STIR SHAKEN" OR "TCPA" OR "Lifeline")',
+    "broadband": '("E-Rate" OR "net neutrality" OR "open internet" OR ("broadband" AND "FCC"))',
+    "space":     '("Starlink" OR ("SpaceX" AND "FCC") OR "undersea cable" OR "submarine cable" OR "satellite communications")',
+}
+
+
 async def ingest_gdelt(agency: AgencyConfig, lookback_hours: int = 24) -> List[Article]:
     """
-    GDELT Project API — completely free, real-time global news monitoring.
-    Updates every 15 minutes. No API key required.
+    GDELT Project API — free, real-time global news. No API key.
+    Multi-query (Problem #1): runs all query groups in parallel,
+    maxrecords=100 each, merges, then dedups. Boolean filter applied so
+    only FCC-relevant items survive. Target: 25-40 articles/day.
     """
-    articles = []
-    # GDELT: exact phrase only - strict FCC filter
-    query = "Federal Communications Commission sourcelang:eng"
+    seen = set()
+    articles: List[Article] = []
+    timespan = f"{min(lookback_hours, 24)}H"
 
-    try:
-        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+    async def _run_query(client, label, query):
+        out = []
+        try:
             resp = await client.get(
                 "https://api.gdeltproject.org/api/v2/doc/doc",
                 params={
-                    "query": query,
+                    "query": f"{query} sourcelang:eng",
                     "mode": "artlist",
-                    "maxrecords": 25,
-                    "timespan": f"{min(lookback_hours, 24)}H",
+                    "maxrecords": 100,
+                    "timespan": timespan,
                     "sort": "DateDesc",
                     "format": "json",
                 },
-                headers=HTTP_HEADERS
+                headers=HTTP_HEADERS,
             )
             if resp.status_code == 200:
-                data = resp.json()
+                # GDELT occasionally returns non-JSON on rate limit
+                try:
+                    data = resp.json()
+                except Exception:
+                    return out
                 for art_data in data.get("articles", []):
                     title = art_data.get("title", "")
-                    url   = art_data.get("url", "")
+                    url = art_data.get("url", "")
                     if not title or not url:
                         continue
                     dedup = _hash(url, title)
-                    art = Article(
+                    if dedup in seen:
+                        continue
+                    # Boolean relevance gate at ingestion (cheap, deterministic)
+                    if not bf.is_fcc_relevant(title, title):
+                        continue
+                    seen.add(dedup)
+                    out.append(Article(
                         article_id=f"{agency.agency_id}_gdelt_{dedup}",
                         agency_id=agency.agency_id,
                         source="gdelt",
@@ -408,12 +463,24 @@ async def ingest_gdelt(agency: AgencyConfig, lookback_hours: int = 24) -> List[A
                         relevance_score=0.6,
                         ingested_at=_now(),
                         dedup_hash=dedup,
-                    )
-                    articles.append(art)
+                    ))
+        except Exception as e:
+            logger.error(f"GDELT query '{label}' error: {e}")
+        return out
+
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            results = await asyncio.gather(
+                *[_run_query(client, label, q) for label, q in GDELT_QUERY_GROUPS.items()],
+                return_exceptions=True,
+            )
+            for r in results:
+                if isinstance(r, list):
+                    articles.extend(r)
     except Exception as e:
         logger.error(f"GDELT ingestion error: {e}")
 
-    logger.info(f"GDELT: {len(articles)} articles for {agency.agency_id}")
+    logger.info(f"GDELT: {len(articles)} articles for {agency.agency_id} (multi-query)")
     return articles
 
 
@@ -844,16 +911,41 @@ async def ingest_regulatory(agency: AgencyConfig) -> List[Article]:
 
 
 # ── Deduplication ──────────────────────────────────────────────────────────────
+def _norm_title(title: str) -> str:
+    """Normalize a title for dedup: lowercase, strip punctuation, collapse space."""
+    t = re.sub(r"[^a-z0-9 ]", "", (title or "").lower())
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _canon_url(url: str) -> str:
+    """Canonicalize URL for dedup: drop scheme, query string, trailing slash."""
+    u = re.sub(r"^https?://(www\.)?", "", (url or "").lower())
+    u = u.split("?")[0].split("#")[0].rstrip("/")
+    return u
+
+
 def deduplicate(articles: List[Article]) -> List[Article]:
-    seen_hashes, seen_titles, unique = set(), {}, []
+    """
+    Multi-key dedup: (1) dedup_hash, (2) canonical URL, (3) normalized title.
+    Higher-relevance/authority copies are kept (sorted first). Clustering later
+    handles reworded same-event stories; this removes true duplicates only.
+    """
+    seen_hashes, seen_urls, seen_titles, unique = set(), set(), set(), []
     for art in sorted(articles, key=lambda a: a.relevance_score, reverse=True):
-        if art.dedup_hash in seen_hashes:
+        if art.dedup_hash and art.dedup_hash in seen_hashes:
             continue
-        title_key = art.title[:60].lower().strip()
-        if title_key in seen_titles:
+        cu = _canon_url(art.url)
+        if cu and cu in seen_urls:
             continue
-        seen_hashes.add(art.dedup_hash)
-        seen_titles[title_key] = True
+        nt = _norm_title(art.title)
+        if nt and nt in seen_titles:
+            continue
+        if art.dedup_hash:
+            seen_hashes.add(art.dedup_hash)
+        if cu:
+            seen_urls.add(cu)
+        if nt:
+            seen_titles.add(nt)
         unique.append(art)
     logger.info(f"Dedup: {len(articles)} → {len(unique)} articles")
     return unique
@@ -889,6 +981,7 @@ Return ONLY the JSON array."""
             resp = await client.messages.create(
                 model="claude-haiku-4-5",
                 max_tokens=1500,
+                temperature=0,  # deterministic classification
                 messages=[{"role": "user", "content": prompt}]
             )
             results = _parse_json_safe(_extract_text(resp.content))
@@ -896,7 +989,13 @@ Return ONLY the JSON array."""
 
             for art in batch:
                 r = rmap.get(art.article_id, {})
-                art.topic          = r.get("topic", "other")
+                # Boolean (Appendix A) is authoritative for the section.
+                # LLM only contributes article_type, sentiment, relevance.
+                bool_section, _hits = bf.assign_section(art.title, art.summary)
+                if bool_section != "other":
+                    art.topic = bool_section
+                elif not art.topic or art.topic == "other":
+                    art.topic = r.get("topic", "other")
                 art.article_type   = r.get("article_type", "news")
                 art.sentiment      = r.get("sentiment", "neutral")
                 art.relevance_score = float(r.get("relevance_score", 0.5))
@@ -911,32 +1010,62 @@ Return ONLY the JSON array."""
 
 
 # ── Briefing Generator: Claude Sonnet ─────────────────────────────────────────
-async def generate_briefing_html(agency: AgencyConfig, articles: List[Article], briefing_date: str) -> str:
+async def generate_briefing_html(agency: AgencyConfig, articles: List[Article], briefing_date: str, clusters: Optional[list] = None) -> str:
     if not ANTHROPIC_KEY:
         return _simple_html(agency, articles, briefing_date)
 
     client = _get_client()
 
-    # Group by topic, top 5 per topic
+    # Build a primary→similar map from clusters (Problem #3). If no clusters
+    # were supplied, every article is its own primary.
+    similar_map: Dict[str, List[Article]] = {}
+    primary_ids = set()
+    if clusters:
+        for cl in clusters:
+            primary_ids.add(cl.primary.article_id)
+            if cl.similar:
+                similar_map[cl.primary.article_id] = cl.similar
+        primaries = [cl.primary for cl in clusters]
+    else:
+        primaries = list(articles)
+        primary_ids = {a.article_id for a in primaries}
+
+    # Group PRIMARY stories by section, top 5 per section, official layout order
     by_topic: Dict[str, List[Article]] = {}
-    for art in articles:
+    for art in primaries:
         if art.relevance_score >= 0.4:
             by_topic.setdefault(art.topic, []).append(art)
 
+    ordered_topics = [t for t in SECTION_ORDER if t in by_topic]
+    if "other" in by_topic:
+        ordered_topics.append("other")
+
     context = []
-    for topic, arts in sorted(by_topic.items()):
+    for topic in ordered_topics:
+        arts = by_topic[topic]
         label = TOPIC_LABELS.get(topic, topic)
         context.append(f"\n=== {label} ===")
-        for art in sorted(arts, key=lambda a: a.relevance_score, reverse=True)[:5]:
+        for art in sorted(
+            arts,
+            key=lambda a: scoring.final_score(a.relevance_score, a.outlet, a.published_at),
+            reverse=True,
+        )[:5]:
             clip = f"[BROADCAST CLIP: {art.broadcast_clip_url}]" if art.broadcast_clip_url else ""
             lock = "[SUBSCRIPTION REQUIRED]" if art.is_paywalled else ""
             reg  = "[REGULATORY]" if art.source_type == "regulatory" else ""
+            # Render similar stories inline so the model groups them correctly
+            sims = similar_map.get(art.article_id, [])
+            sim_lines = ""
+            if sims:
+                sim_lines = "\nSIMILAR STORIES:\n" + "\n".join(
+                    f"  - {s.outlet}: {s.title} | {s.url}" for s in sims[:6]
+                )
             context.append(f"""
 TITLE: {art.title}
 TYPE: {art.article_type} | SENTIMENT: {art.sentiment} | SCORE: {art.relevance_score:.2f} {reg}
 OUTLET: {art.outlet} | AUTHOR: {art.author}
 URL: {art.url} {clip} {lock}
-SUMMARY: {art.summary[:300]}
+SUMMARY: {art.summary[:300]}{sim_lines}
 ---""")
 
     # Coverage window
@@ -948,6 +1077,38 @@ SUMMARY: {art.summary[:300]}
     # Count by topic for social media estimate
     total_articles = len(articles)
     social_arts = [a for a in articles if a.source_type == "social"]
+
+    # Build the social metrics block for the briefing's Social Media Summary.
+    # Platform split is derived from the social articles' outlets; if richer
+    # metrics are unavailable (pre-Perigon/TVEyes swap), provide conservative
+    # estimates so the section renders in the official format.
+    if social_arts:
+        from collections import Counter as _Counter
+        _plat = _Counter()
+        for a in social_arts:
+            o = (a.outlet or "").lower()
+            if "reddit" in o:
+                _plat["Reddit"] += 1
+            elif "bluesky" in o or "bsky" in o:
+                _plat["BlueSky"] += 1
+            elif "youtube" in o:
+                _plat["YouTube"] += 1
+            else:
+                _plat["X"] += 1
+        _tot = sum(_plat.values()) or 1
+        _pct = {k: round(100 * v / _tot) for k, v in _plat.items()}
+        _social_metrics_block = (
+            f"Total social articles captured: {len(social_arts)}. "
+            f"Platform split (by captured posts): "
+            + ", ".join(f"{k} {_pct.get(k,0)}%" for k in ("X", "Reddit", "BlueSky", "YouTube"))
+            + ". Top posts (with any available reach/engagement):\n"
+            + "\n".join(
+                f"  - {a.outlet}: {a.title[:120]} | {a.summary[:160]}"
+                for a in sorted(social_arts, key=lambda x: x.relevance_score, reverse=True)[:3]
+            )
+        )
+    else:
+        _social_metrics_block = "No social media articles captured this period."
 
     prompt = f"""You are generating the FCC Daily News Briefing exactly matching this official format.
 
@@ -1015,14 +1176,28 @@ For each PRIMARY story:
 </div>
 
 ===SOCIAL MEDIA SUMMARY===
-At the end, write a social media summary section:
+At the end, write a Social Media Summary section matching the official FCC format EXACTLY.
+The official format has TWO paragraphs:
+
+Paragraph 1 — VOLUME & PLATFORM BREAKDOWN (use the metrics provided below):
+"From {_start}–{_today.strftime("%B %d")}, approximately [TOTAL] social media posts mentioned the {agency.short_name}.
+Most of the conversation took place on 'X' ([X%], or approximately [X_COUNT] posts), followed by Reddit ([R%]),
+BlueSky ([B%]), and YouTube ([Y%])."
+
+Paragraph 2 — TOP POSTS (from the social articles in the list below):
+"The social media post with the highest reach originated from [account] ([reach] reach; [engagements] engagements).
+[Describe the post / quote ≤15 words if a direct quote is essential]." Add a second sentence for the next most
+significant post if available.
 
 <div class="social-section">
 <h2>Social Media Summary</h2>
-<p>From {_start}–{_today.strftime("%B %d")}, social media posts mentioned {agency.short_name} across major platforms. 
-Most conversation took place on X/Twitter, followed by Reddit, LinkedIn, and YouTube.
-[Write 2-3 sentences summarizing the most significant social media posts found about the agency's topics, based on any social media articles in the list below. Include reach/engagement numbers if available from the articles.]</p>
+<p>[Paragraph 1 — volume and platform breakdown using the metrics block below]</p>
+<p>[Paragraph 2 — highest-reach posts with reach/engagement numbers]</p>
 </div>
+
+SOCIAL METRICS (use these exact numbers; if zero social articles were found, write
+"Social media monitoring is being onboarded for this reporting period." instead):
+{_social_metrics_block}
 
 ===FOOTER===
 <div class="footer">
@@ -1048,6 +1223,7 @@ Write the complete HTML document now — exact FCC Daily News Briefing format.""
         resp = await client.messages.create(
             model="claude-sonnet-4-5",
             max_tokens=8000,
+            temperature=0,  # deterministic briefing output (govt clipping service)
             messages=[{"role": "user", "content": prompt}]
         )
         html = _extract_text(resp.content)
@@ -1080,7 +1256,7 @@ async def deliver_briefing(agency: AgencyConfig, html: str, briefing_date: str) 
         logger.warning("SENDGRID_API_KEY not set — dry run mode")
         return {"status": "dry_run", "recipients": len(agency.distribution_list)}
 
-    subject = f"{agency.short_name} Morning Intelligence Briefing — {briefing_date}"
+    subject = f"FCC Daily News Briefing – {briefing_date}"
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             resp = await client.post(
@@ -1294,6 +1470,105 @@ def get_archive_stats(agency_id: str) -> Dict[str, Any]:
     }
 
 
+# ── Problem #8: Coverage gate + supplemental search ──────────────────────────
+# Map each FCC section to a targeted GDELT supplemental query.
+_SECTION_SUPPLEMENT = {
+    "fcc_news":           '("FCC" OR "Brendan Carr" OR "Federal Communications Commission")',
+    "consumers":          '("robocall" OR "TCPA" OR "Lifeline" OR "STIR SHAKEN")',
+    "media_broadcasting": '("FCC" AND ("broadcast" OR "radio station" OR "television license"))',
+    "space_policy":       '("FCC" AND ("satellite" OR "Starlink" OR "space")) OR "submarine cable"',
+    "public_safety":      '("FCC" AND ("911" OR "emergency alert" OR "cybersecurity" OR "outage"))',
+    "wireless_spectrum":  '("FCC" AND ("spectrum" OR "5G" OR "broadband" OR "wireless"))',
+    "ai_ml":              '("artificial intelligence" AND ("FCC" OR "federal" OR "executive order"))',
+    "business_tech":      '("FCC" AND ("net neutrality" OR "internet policy" OR "telecom industry"))',
+    "international":      '("FCC" AND ("undersea cable" OR "ITU" OR "international telecommunications"))',
+}
+
+
+async def _supplemental_gdelt(agency: AgencyConfig, query: str, section: str,
+                              lookback_hours: int = 24) -> List[Article]:
+    """Targeted GDELT pull for one empty section."""
+    out: List[Article] = []
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            resp = await client.get(
+                "https://api.gdeltproject.org/api/v2/doc/doc",
+                params={
+                    "query": f"{query} sourcelang:eng",
+                    "mode": "artlist",
+                    "maxrecords": 30,
+                    "timespan": f"{min(lookback_hours, 48)}H",
+                    "sort": "DateDesc",
+                    "format": "json",
+                },
+                headers=HTTP_HEADERS,
+            )
+            if resp.status_code == 200:
+                try:
+                    data = resp.json()
+                except Exception:
+                    return out
+                for art_data in data.get("articles", []):
+                    title = art_data.get("title", "")
+                    url = art_data.get("url", "")
+                    if not title or not url:
+                        continue
+                    if not bf.is_fcc_relevant(title, title):
+                        continue
+                    dedup = _hash(url, title)
+                    out.append(Article(
+                        article_id=f"{agency.agency_id}_gdeltsup_{dedup}",
+                        agency_id=agency.agency_id,
+                        source="gdelt_supplemental",
+                        source_type="news",
+                        title=title,
+                        url=url,
+                        published_at=art_data.get("seendate", _now()),
+                        summary=title,
+                        full_text=title,
+                        author="",
+                        outlet=art_data.get("domain", "News"),
+                        topic=section,
+                        relevance_score=0.55,
+                        ingested_at=_now(),
+                        dedup_hash=dedup,
+                    ))
+    except Exception as e:
+        logger.error(f"Supplemental GDELT '{section}' error: {e}")
+    return out
+
+
+async def _ensure_coverage(agency: AgencyConfig, articles: List[Article],
+                           lookback_hours: int = 24) -> List[Article]:
+    """
+    Problem #8: if any FCC section is empty, run a supplemental search to fill
+    it. Returns the (possibly augmented) article list.
+    """
+    present = {a.topic for a in articles}
+    empty = [s for s in bf.FCC_SECTIONS if s not in present]
+    if not empty:
+        return articles
+
+    logger.info(f"Coverage gate: empty sections {empty} — running supplements")
+    seen_urls = {a.url for a in articles}
+    tasks = [
+        _supplemental_gdelt(agency, _SECTION_SUPPLEMENT[s], s, lookback_hours)
+        for s in empty if s in _SECTION_SUPPLEMENT
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for r in results:
+        if isinstance(r, list):
+            for a in r:
+                if a.url in seen_urls:
+                    continue
+                # Re-confirm section via Boolean (supplement topic is a hint)
+                sec, _ = bf.assign_section(a.title, a.summary)
+                a.topic = sec if sec != "other" else a.topic
+                seen_urls.add(a.url)
+                articles.append(a)
+    return articles
+
+
 # ── Master daily cycle ─────────────────────────────────────────────────────────
 async def run_daily_cycle(
     agency_id: str,
@@ -1308,17 +1583,19 @@ async def run_daily_cycle(
     briefing_id = f"{agency_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     logger.info(f"Daily cycle starting: {agency.name}")
 
-    # RSS ONLY — Appendix B sources, always FCC-relevant
+    # RSS — Appendix B sources (always on, free)
     tasks = [ingest_rss(agency, lookback_hours)]
-    # NewsAPI with FCC domain restrictions
+    # NewsAPI with FCC domain restrictions (if key set)
     if NEWSAPI_KEY:
         tasks.append(ingest_newsapi(agency, lookback_hours))
-    # Tavily for additional FCC coverage
+    # Tavily for additional FCC coverage (if key set)
     if TAVILY_KEY:
         tasks.append(ingest_tavily(agency, lookback_hours))
-    # GDELT and Claude web_search disabled — too much noise
-    # tasks.append(ingest_gdelt(agency, lookback_hours))
-    # tasks.append(ingest_news(agency, lookback_hours))
+    # GDELT — free, broad wire/daily coverage (Reuters, AP, USA Today, etc.)
+    tasks.append(ingest_gdelt(agency, lookback_hours))
+    # Claude web_search — fills wire/subscription gaps; Boolean-filtered downstream
+    if ANTHROPIC_KEY:
+        tasks.append(ingest_news(agency, lookback_hours))
     if agency.include_broadcast:
         tasks.append(ingest_broadcast(agency, lookback_hours))
     if agency.include_social:
@@ -1334,32 +1611,126 @@ async def run_daily_cycle(
 
     # Process pipeline
     unique = deduplicate(all_articles)
+
+    # Boolean noise-gate: drop articles that match no FCC section at all,
+    # EXCEPT trusted regulatory/FCC sources which are kept regardless.
+    gated = []
+    for a in unique:
+        if a.source_type in ("regulatory",) or a.outlet in ("FCC", "Federal Register"):
+            gated.append(a)
+        elif bf.is_fcc_relevant(a.title, a.summary):
+            gated.append(a)
+    logger.info(f"Boolean gate: {len(unique)} → {len(gated)} FCC-relevant")
+    unique = gated
+
+    # Problem #5: quality filter (reject thin/spam/malformed) — keep >= 0.70
+    quality_kept = clustering.filter_quality(unique, threshold=0.70)
+    logger.info(f"Quality filter: {len(unique)} → {len(quality_kept)} (>=0.70)")
+    # Don't starve the briefing: if quality filter is too aggressive, relax
+    if len(quality_kept) < 60:
+        quality_kept = clustering.filter_quality(unique, threshold=0.55)
+        logger.info(f"Quality filter relaxed to 0.55 → {len(quality_kept)}")
+    unique = quality_kept or unique
+
     classified = await classify_articles(unique, agency)
 
-    # Store in archive
+    # Store in archive — in-memory (fast path) AND persistent repository
+    # (survives Railway restarts, enforces 12-month retention).
     for art in classified:
         _articles[art.article_id] = art
+    try:
+        repo.upsert_articles([asdict(a) for a in classified])
+        repo.prune_old(agency.archive_months or 12)  # Archive Optimization
+    except Exception as e:
+        logger.error(f"Repository persist failed (continuing): {e}")
 
-    # Filter for briefing
-    briefing_arts = sorted(
+    # FCC editorial rules (deterministic, gold-standard): flag subscription
+    # outlets so they show [SUBSCRIPTION REQUIRED] (never AI-summarized),
+    # enforce 24h freshness, and cap FCC.gov content (max 3) so the briefing
+    # never becomes an FCC.gov newsletter.
+    _now_dt = datetime.now(timezone.utc)
+    classified = editorial.apply_editorial_rules(classified, lookback_hours, _now_dt)
+    logger.info(f"Editorial rules applied → {len(classified)} articles")
+
+    # Problem #2: rank every article by composite FinalScore (relevance +
+    # authority + recency). Boolean section is untouched; this is rank-only.
+    ranked = sorted(
         [a for a in classified if not (a.topic == "other" and a.relevance_score < 0.4)],
-        key=lambda a: (a.topic != "other", a.relevance_score), reverse=True
-    )[:80]
-    logger.info(f"Briefing: {len(briefing_arts)} articles from {len(classified)} classified")
+        key=lambda a: scoring.final_score(a.relevance_score, a.outlet, a.published_at, _now_dt),
+        reverse=True,
+    )
 
-    # Generate briefing
-    html = await generate_briefing_html(agency, briefing_arts, briefing_date)
+    # Problem #7: diversity protection — no outlet > 20% of briefing
+    capped, overflow = clustering.enforce_diversity(ranked, max_share=0.20)
+    briefing_pool = capped if len(capped) >= 60 else (capped + overflow[: 60 - len(capped)])
+    briefing_arts = briefing_pool[:100]
+
+    # Problem #8: briefing quality gate — ensure section coverage; run
+    # supplemental searches for any empty FCC section.
+    briefing_arts = await _ensure_coverage(agency, briefing_arts, lookback_hours)
+    briefing_arts = briefing_arts[:100]
+
+    # Problem #3: cluster same-event coverage → primary + similar stories.
+    # Clusters are attached for the HTML generator to render "Similar Stories".
+    clusters = clustering.cluster_stories(briefing_arts, threshold=0.85, now=_now_dt)
+    logger.info(
+        f"Briefing: {len(briefing_arts)} articles → {len(clusters)} clusters "
+        f"from {len(classified)} classified"
+    )
+
+    # Generate briefing (clusters passed through for Similar Stories grouping)
+    html = await generate_briefing_html(agency, briefing_arts, briefing_date, clusters=clusters)
+
+    # Executive PDF (mirrors HTML content). Built from the same clusters so the
+    # PDF and email are identical. Subscription rule enforced in the generator.
+    pdf_path = None
+    try:
+        import os as _os
+        from . import pdf_generator as _pdf  # local import; reportlab optional
+    except ImportError:
+        try:
+            import pdf_generator as _pdf
+        except Exception:
+            _pdf = None
+    if _pdf is not None:
+        try:
+            # Build primary→section and primary→similar maps from clusters
+            similar_map = {cl.primary.article_id: cl.similar for cl in clusters if cl.similar}
+            primaries = [cl.primary for cl in clusters]
+            abs_by_sec = {}
+            for p in primaries:
+                abs_by_sec.setdefault(p.topic, []).append(p)
+            out_dir = _os.getenv("BULLETIN_PDF_DIR", "/tmp")
+            pdf_path = f"{out_dir}/fcc_briefing_{briefing_id}.pdf"
+            _pdf.generate_pdf(
+                pdf_path, agency.name, agency.short_name, briefing_date,
+                bf.FCC_SECTIONS, TOPIC_LABELS, abs_by_sec, similar_map,
+                social_summary_html="", distribution_email=agency.distribution_email,
+            )
+            logger.info(f"Executive PDF generated: {pdf_path}")
+        except Exception as e:
+            logger.error(f"PDF generation failed (HTML still delivered): {e}")
+            pdf_path = None
 
     topic_counts = {}
     for art in briefing_arts:
         topic_counts[art.topic] = topic_counts.get(art.topic, 0) + 1
 
-    # Deliver if auto_deliver
+    # Daily Quality Validation (#7): validate against the FCC briefing contract.
+    quality_report = health.validate_briefing(briefing_arts, topic_counts, bf.FCC_SECTIONS)
+    if not quality_report["passed"]:
+        logger.warning(f"Quality validation: {quality_report['summary']}")
+
+    # Deliver if auto_deliver — but never auto-send a briefing that fails the
+    # critical quality gate; hold it for editorial review instead.
     delivery = {}
     status = "pending_approval"
-    if auto_deliver:
+    if auto_deliver and quality_report["passed"]:
         delivery = await deliver_briefing(agency, html, briefing_date)
         status = "delivered" if delivery.get("status") in ("delivered", "dry_run") else "error"
+    elif auto_deliver and not quality_report["passed"]:
+        status = "held_quality_review"
+        logger.warning("Auto-delivery blocked: briefing failed quality gate, held for review")
 
     briefing = Briefing(
         briefing_id=briefing_id,
@@ -1373,6 +1744,10 @@ async def run_daily_cycle(
         delivery_recipients=len(agency.distribution_list),
     )
     _briefings[briefing_id] = briefing
+    try:
+        repo.save_briefing(asdict(briefing))
+    except Exception as e:
+        logger.error(f"Briefing persist failed (continuing): {e}")
 
     return {
         "agency_id": agency_id,
@@ -1383,9 +1758,17 @@ async def run_daily_cycle(
         "after_dedup": len(unique),
         "in_briefing": len(briefing_arts),
         "topic_counts": topic_counts,
+        "quality_report": quality_report,
+        "pdf_path": pdf_path,
         "delivery": delivery,
         "message": f"Briefing ready. Approve at POST /api/v1/bulletin/briefings/{briefing_id}/approve"
     }
+
+
+async def bulletin_health() -> Dict[str, Any]:
+    """Production health check: source reachability, repo backend, key config.
+    Back a /health/bulletin endpoint with this for the 99.5% SLA."""
+    return await health.health_check(repo=repo)
 
 
 async def approve_and_deliver(briefing_id: str) -> Dict[str, Any]:
@@ -1409,12 +1792,24 @@ def get_editorial_queue(agency_id: str) -> List[Dict]:
 
 def get_briefing(briefing_id: str) -> Optional[Dict]:
     b = _briefings.get(briefing_id)
-    return asdict(b) if b else None
+    if b:
+        return asdict(b)
+    # Fall back to persistent repository (survives restart)
+    try:
+        return repo.get_briefing(briefing_id)
+    except Exception:
+        return None
 
 
 def get_briefing_html(briefing_id: str) -> Optional[str]:
     b = _briefings.get(briefing_id)
-    return b.html_content if b else None
+    if b:
+        return b.html_content
+    try:
+        rec = repo.get_briefing(briefing_id)
+        return rec.get("html_content") if rec else None
+    except Exception:
+        return None
 
 
 # ── Pre-register FCC ───────────────────────────────────────────────────────────
@@ -1424,18 +1819,19 @@ register_agency(AgencyConfig(
     short_name="FCC",
     primary_color="#0B3C5D",
     search_queries=[
-        "FCC Federal Communications Commission spectrum broadband",
-        "net neutrality internet access broadband deployment FCC",
-        "media ownership broadcast license radio television FCC",
-        "wireless 5G spectrum auction mobile telecommunications",
-        "artificial intelligence AI telecom media FCC regulation",
-        "public safety E911 emergency communications FCC",
-        "robocalls TCPA consumer protection FCC",
-        "satellite space communications SpaceX FCC",
+        "FCC Brendan Carr Federal Communications Commission enforcement",
+        "FCC robocalls TCPA STIR-SHAKEN consumer phone scam caller ID",
+        "FCC media ownership broadcast radio television cable license",
+        "FCC satellite space starlink earth station orbital NGSO",
+        "FCC 911 e911 emergency alert cybersecurity submarine cable privacy",
+        "FCC spectrum broadband wireless 5G auction cell tower",
+        "artificial intelligence executive order AI governance federal telecom",
+        "FCC net neutrality internet policy telecom industry social media",
+        "FCC international undersea cable ITU telecommunications treaty",
     ],
     topics=FCC_TOPICS,
-    distribution_email="intelligence@docuaction.io",
-    distribution_list=["imran@agtbi.com"],
-    delivery_time_et="07:30",
+    distribution_email="news@agtbi.com",
+    distribution_list=["news@agtbi.com"],
+    delivery_time_et="06:00",
     archive_months=12,
 ))
