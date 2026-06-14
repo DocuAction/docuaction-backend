@@ -420,78 +420,71 @@ async def ingest_gdelt(agency: AgencyConfig, lookback_hours: int = 24) -> List[A
 
     async def _run_query(client, label, query):
         out = []
-        for attempt in range(3):
-            try:
-                resp = await client.get(
-                    "https://api.gdeltproject.org/api/v2/doc/doc",
-                    params={
-                        "query": f"{query} sourcelang:eng",
-                        "mode": "artlist",
-                        "maxrecords": 100,
-                        "timespan": timespan,
-                        "sort": "DateDesc",
-                        "format": "json",
-                    },
-                    headers=HTTP_HEADERS,
-                )
-                if resp.status_code == 429:
-                    await asyncio.sleep(2 * (attempt + 1))  # back off and retry
-                    continue
-                if resp.status_code != 200:
-                    return out
-                try:
-                    data = resp.json()
-                except Exception:
-                    return out
-                for art_data in data.get("articles", []):
-                    title = art_data.get("title", "")
-                    url = art_data.get("url", "")
-                    if not title or not url:
-                        continue
-                    dedup = _hash(url, title)
-                    if dedup in seen:
-                        continue
-                    # GDELT articles already matched an FCC-specific query group.
-                    # A light keyword check filters obvious noise; classifier
-                    # assigns the section downstream.
-                    _t = title.lower()
-                    if not ("fcc" in _t or "federal communications" in _t
-                            or "brendan carr" in _t or "spectrum" in _t
-                            or "broadband" in _t or "telecom" in _t
-                            or "robocall" in _t or "starlink" in _t
-                            or "net neutrality" in _t or "e-rate" in _t):
-                        continue
-                    seen.add(dedup)
-                    out.append(Article(
-                        article_id=f"{agency.agency_id}_gdelt_{dedup}",
-                        agency_id=agency.agency_id,
-                        source="gdelt",
-                        source_type="news",
-                        title=title,
-                        url=url,
-                        published_at=art_data.get("seendate", _now()),
-                        summary=title,
-                        full_text=title,
-                        author="",
-                        outlet=art_data.get("domain", "News"),
-                        relevance_score=0.6,
-                        ingested_at=_now(),
-                        dedup_hash=dedup,
-                    ))
-                return out  # success
-            except Exception as e:
-                logger.error(f"GDELT query '{label}' error: {e}")
+        try:
+            resp = await client.get(
+                "https://api.gdeltproject.org/api/v2/doc/doc",
+                params={
+                    "query": f"{query} sourcelang:eng",
+                    "mode": "artlist",
+                    "maxrecords": 100,
+                    "timespan": timespan,
+                    "sort": "DateDesc",
+                    "format": "json",
+                },
+                headers=HTTP_HEADERS,
+            )
+            # Fail fast on rate limit: skip this query rather than block the
+            # whole cycle. The other sources (RSS/Tavily/BlueSky) carry volume.
+            if resp.status_code != 200:
                 return out
-        return out  # exhausted retries
+            try:
+                data = resp.json()
+            except Exception:
+                return out
+            for art_data in data.get("articles", []):
+                title = art_data.get("title", "")
+                url = art_data.get("url", "")
+                if not title or not url:
+                    continue
+                dedup = _hash(url, title)
+                if dedup in seen:
+                    continue
+                _t = title.lower()
+                if not ("fcc" in _t or "federal communications" in _t
+                        or "brendan carr" in _t or "spectrum" in _t
+                        or "broadband" in _t or "telecom" in _t
+                        or "robocall" in _t or "starlink" in _t
+                        or "net neutrality" in _t or "e-rate" in _t):
+                    continue
+                seen.add(dedup)
+                out.append(Article(
+                    article_id=f"{agency.agency_id}_gdelt_{dedup}",
+                    agency_id=agency.agency_id,
+                    source="gdelt",
+                    source_type="news",
+                    title=title,
+                    url=url,
+                    published_at=art_data.get("seendate", _now()),
+                    summary=title,
+                    full_text=title,
+                    author="",
+                    outlet=art_data.get("domain", "News"),
+                    relevance_score=0.6,
+                    ingested_at=_now(),
+                    dedup_hash=dedup,
+                ))
+        except Exception as e:
+            logger.error(f"GDELT query '{label}' error: {e}")
+        return out
 
     try:
-        # Sequential with a small gap to avoid GDELT's 429 rate limiting
-        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        # Single shared client; fail-fast per query (no slow retries that
+        # would push the whole cycle past its request timeout).
+        async with httpx.AsyncClient(timeout=httpx.Timeout(12.0)) as client:
             for label, q in GDELT_QUERY_GROUPS.items():
                 r = await _run_query(client, label, q)
                 if isinstance(r, list):
                     articles.extend(r)
-                await asyncio.sleep(1.0)  # space out requests
     except Exception as e:
         logger.error(f"GDELT ingestion error: {e}")
 
