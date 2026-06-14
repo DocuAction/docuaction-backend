@@ -1227,7 +1227,7 @@ For each PRIMARY story:
 <div class="story" id="story-[id]">
 <p class="story-headline"><span class="outlet">OUTLET:</span> <a href="URL">Title</a>[if paywalled: <span class="sub-required"> (SUBSCRIPTION REQUIRED)</span>]</p>
 [If NOT paywalled: <p class="story-body">2-3 factual sentences summarizing the article.</p>]
-[If paywalled: <p class="sub-required">[SUBSCRIPTION REQUIRED]</p>]
+[If paywalled: <p class="story-body">ONE short factual sentence based ONLY on the publicly visible headline/snippet — do NOT invent details or summarize the full paywalled article.</p><p class="sub-required">[SUBSCRIPTION REQUIRED]</p>]
 [If has similar stories:]
 <p style="font-size:12px;font-weight:bold;margin-bottom:3px;">Similar stories:</p>
 <ul class="similar">
@@ -1270,7 +1270,7 @@ Solicitation 7571MN26Q00027 · TEFCA ARC · FCC Daily News Briefing Service</p>
 CRITICAL RULES:
 1. NO DUPLICATE STORIES — if multiple outlets cover same story, pick the most authoritative outlet as primary, list others as similar stories
 2. FCC.GOV SOURCE — include maximum 2 articles from fcc.gov across the entire briefing
-3. SUBSCRIPTION REQUIRED — mark clearly any paywalled article, do not summarize paywalled content
+3. SUBSCRIPTION REQUIRED — for paywalled outlets, give ONE short factual sentence from the public headline/snippet ONLY, then mark [SUBSCRIPTION REQUIRED]. Never summarize the full paywalled article or invent details.
 4. FACTUAL ONLY — no editorial opinion, exactly like an official government clipping service
 5. OUTLET NAMES — always in ALL CAPS (REUTERS, BROADBAND BREAKFAST, etc.)
 6. ALL CAPS for section headers matching FCC taxonomy

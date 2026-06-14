@@ -124,21 +124,41 @@ def generate_pdf(out_path: str,
         for a in arts:
             outlet = (getattr(a, "outlet", "") or "News").upper()
             title = getattr(a, "title", "") or ""
+            url = (getattr(a, "url", "") or "").strip()
+            # Escape XML-special chars for ReportLab Paragraph markup
+            def _esc(t):
+                return (t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+            otitle = _esc(f"{outlet}: {title}")
+            # Clickable headline linking to the source URL (blue, like the sample)
+            if url:
+                head_markup = f'<a href="{_esc(url)}" color="#1F4E79">{otitle}</a>'
+            else:
+                head_markup = otitle
             if _is_paywalled(a):
-                flow.append(Paragraph(f"{outlet}: {title}", ss["StoryHead"]))
+                flow.append(Paragraph(head_markup, ss["StoryHead"]))
+                summ = (getattr(a, "summary", "") or "").strip()[:400]
+                if summ:
+                    flow.append(Paragraph(_esc(summ), ss["StoryBody"]))
                 flow.append(Paragraph("[SUBSCRIPTION REQUIRED]", ss["Sub"]))
             else:
-                flow.append(Paragraph(f"{outlet}: {title}", ss["StoryHead"]))
+                flow.append(Paragraph(head_markup, ss["StoryHead"]))
                 summ = (getattr(a, "summary", "") or "").strip()[:600]
                 if summ:
-                    flow.append(Paragraph(summ, ss["StoryBody"]))
-            # Similar stories
+                    flow.append(Paragraph(_esc(summ), ss["StoryBody"]))
+            # Similar stories — also clickable
             sims = similar_map.get(getattr(a, "article_id", ""), [])
             if sims:
                 flow.append(Paragraph("Similar stories:", ss["Similar"]))
                 for s in sims[:6]:
                     so = (getattr(s, "outlet", "") or "News").upper()
-                    flow.append(Paragraph(f"• {so}: {getattr(s,'title','')}", ss["Similar"]))
+                    surl = (getattr(s, "url", "") or "").strip()
+                    stitle = _esc(f"{so}: {getattr(s,'title','')}")
+                    if surl:
+                        flow.append(Paragraph(
+                            f'• <a href="{_esc(surl)}" color="#1F4E79">{stitle}</a>',
+                            ss["Similar"]))
+                    else:
+                        flow.append(Paragraph(f"• {stitle}", ss["Similar"]))
             flow.append(Spacer(1, 0.08 * inch))
 
     # ── Social Media Summary ──
