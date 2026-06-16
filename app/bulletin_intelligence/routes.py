@@ -407,35 +407,3 @@ async def demo_cycle(agency_id: str = "fcc"):
         "sources_represented": list(set(a.source_type for a in demo_articles)),
         "message": f"Demo complete. Approve briefing at POST /api/v1/bulletin/briefings/{briefing_id}/approve"
     }
-
-@router.get("/briefings/date/{date_str}")
-async def get_briefing_by_date(date_str: str, agency_id: str = "fcc"):
-    """Get the ONE briefing for a specific date (no duplicates)."""
-    briefing_key = f"{agency_id}_{date_str.replace('-', '')}"
-    briefing = get_briefing(briefing_key)
-    if not briefing:
-        return {"error": f"No briefing found for {date_str}"}
-    return {
-        "briefing_id": briefing_key,
-        "briefing_date": briefing.get("briefing_date"),
-        "article_count": briefing.get("article_count", 0),
-        "status": briefing.get("status"),
-        "sections": briefing.get("section_counts", {}),
-    }
-
-
-@router.get("/briefings/today")
-async def get_today_briefing(agency_id: str = "fcc"):
-    """Get today's briefing."""
-    from datetime import datetime
-    today_key = datetime.now().strftime("%Y%m%d")
-    briefing_key = f"{agency_id}_{today_key}"
-    briefing = get_briefing(briefing_key)
-    if not briefing:
-        return {"error": "No briefing generated yet today", "key": briefing_key}
-    return {
-        "briefing_id": briefing_key,
-        "briefing_date": briefing.get("briefing_date"),
-        "article_count": briefing.get("article_count", 0),
-        "status": briefing.get("status"),
-    }
