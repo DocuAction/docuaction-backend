@@ -32,7 +32,6 @@ import os, json, logging, asyncio, hashlib, re
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass, asdict, field
-from . import boolean_filter as bf
 
 import httpx
 from anthropic import AsyncAnthropic
@@ -1318,8 +1317,8 @@ async def run_daily_cycle(
     if TAVILY_KEY:
         tasks.append(ingest_tavily(agency, lookback_hours))
     # GDELT and Claude web_search disabled — too much noise
-    tasks.append(ingest_gdelt(agency, lookback_hours))
-    # # tasks.append(ingest_news(agency, lookback_hours))
+    # tasks.append(ingest_gdelt(agency, lookback_hours))
+    # tasks.append(ingest_news(agency, lookback_hours))
     if agency.include_broadcast:
         tasks.append(ingest_broadcast(agency, lookback_hours))
     if agency.include_social:
@@ -1349,11 +1348,7 @@ async def run_daily_cycle(
     logger.info(f"Briefing: {len(briefing_arts)} articles from {len(classified)} classified")
 
     # Generate briefing
-    try:
     html = await generate_briefing_html(agency, briefing_arts, briefing_date)
-except Exception as e:
-    logger.error(f"HTML gen failed: {e}")
-    html="<h1>FCC Daily News - "+briefing_date+"</h1>"
 
     topic_counts = {}
     for art in briefing_arts:
