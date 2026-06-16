@@ -1,111 +1,127 @@
 """
-DocuAction AI — Application Entry Point
-v6.0.0 — Migration Intelligence Module Added
+DocuAction AI Platform — Main Application
+v6.0.0 — All modules registered via safe_load
+File: app/main.py
 """
+import os
+import sys
+import importlib
 import logging
-from fastapi import FastAPI
+from datetime import datetime
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from app.core.config import settings
-from app.core.database import engine, Base
+from fastapi.responses import JSONResponse
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("docuaction")
+logger = logging.getLogger(__name__)
 
+# ── App ──────────────────────────────────────────────────────────────────────
 app = FastAPI(
-    title="DocuAction AI",
+    title="DocuAction AI Platform",
     version="6.0.0",
-    description="Enterprise Intelligence Operating System — Document, Voice, Healthcare, and Migration Intelligence with Decision-Grade Governance",
+    description="Enterprise Intelligence Platform — Alliance Global Tech, Inc.",
 )
 
+# ── CORS ─────────────────────────────────────────────────────────────────────
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "https://app.docuaction.io,http://localhost:3000").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS + ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-@app.on_event("startup")
-async def startup():
-    try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        logger.info("Database tables verified")
-    except Exception as e:
-        logger.warning(f"Database init deferred: {e}")
+# ── Bulletin Scheduler (start before routes) ─────────────────────────────────
+try:
+    from app.bulletin_intelligence.scheduler import start_scheduler
+    start_scheduler()
+    logger.info("✅ Bulletin scheduler started")
+except Exception as e:
+    logger.warning(f"⚠️ Bulletin scheduler: {e}")
 
-    # Bulletin Intelligence — 6AM daily delivery scheduler
-    try:
-        from app.bulletin_intelligence.scheduler import start_scheduler
-        start_scheduler()
-    except Exception as e:
-        logger.warning(f"Bulletin scheduler not started: {e}")
 
+# ── safe_load: modular-monolith pattern ──────────────────────────────────────
+_loaded_modules = {}
+
+def safe_load(module_path: str, prefix: str, tag: str = None):
+    """
+    Import a module's router and register it under /api/{prefix}.
+    If the module fails to import, log the error and continue.
+    One module failure does not affect others.
+    """
+    tag = tag or prefix
+    try:
+        mod = importlib.import_module(module_path)
+        router = getattr(mod, "router", None)
+        if router:
+            app.include_router(router, prefix=f"/api/{prefix}", tags=[tag])
+            _loaded_modules[prefix] = "active"
+            logger.info(f"✅ Loaded: {module_path} → /api/{prefix}")
+        else:
+            logger.warning(f"⚠️ No router in {module_path}")
+            _loaded_modules[prefix] = "no_router"
+    except Exception as e:
+        logger.error(f"❌ Failed to load {module_path}: {e}")
+        _loaded_modules[prefix] = f"error: {e}"
+
+
+# ── Health endpoint (always responds 200) ────────────────────────────────────
 @app.get("/health")
+@app.get("/api/health")
 async def health():
     return {
         "status": "healthy",
         "version": "6.0.0",
         "platform": "DocuAction AI",
-        "modules": {
-            "documents": "active",
-            "audio": "active",
-            "healthcare": "active",
-            "data_systems": "active",
-            "comparison": "active",
-            "extraction": "active",
-            "automation": "active",
-            "tefca_review_protocol": "active",
-            "case_management": "active",
-            "bulletin_intelligence": "active",
-        },
+        "timestamp": datetime.utcnow().isoformat(),
+        "modules": _loaded_modules,
     }
 
-def safe_load(module_path: str, prefix: str):
-    """Safely load a router module — if it fails, log and continue."""
-    try:
-        import importlib
-        mod = importlib.import_module(module_path)
-        app.include_router(mod.router)
-        logger.info(f"Loaded: {prefix}")
-    except Exception as e:
-        logger.warning(f"Skipped {prefix}: {e}")
 
-# ═══ CORE ROUTES ═══
-safe_load("app.api.routes", "core")
+# ── Core routes ──────────────────────────────────────────────────────────────
+safe_load("app.api.routes", "process", "Core Processing")
+safe_load("app.api.routes", "documents", "Documents")
+safe_load("app.api.routes", "auth", "Authentication")
+safe_load("app.api.routes", "outputs", "Outputs")
 
-# ═══ ENTERPRISE ROUTES ═══
-safe_load("app.api.enterprise_routes", "enterprise")
-safe_load("app.api.validation_routes", "validation")
-safe_load("app.api.decision_intel_routes", "decision-intel")
-safe_load("app.api.intelligence_routes", "intelligence")
-safe_load("app.api.cross_meeting_routes", "cross-meeting")
-safe_load("app.api.export_routes", "export")
-safe_load("app.api.template_routes", "templates")
-safe_load("app.api.meeting_routes", "meetings")
-safe_load("app.api.password_routes", "password")
-safe_load("app.api.plan_routes", "plans")
+# ── Feature modules ──────────────────────────────────────────────────────────
+safe_load("app.api.healthcare_claims_routes", "healthcare", "Healthcare Claims")
+safe_load("app.api.wow_routes", "wow", "Intelligence Engine")
+safe_load("app.api.migration_routes", "migration", "Migration Intelligence")
+safe_load("app.api.sla_routes", "sla", "SLA Engine")
 
-# ═══ SLA + ESCALATION ENGINE ═══
-safe_load("app.api.sla_routes", "sla")
+# ── Bulletin Intelligence ────────────────────────────────────────────────────
+safe_load("app.bulletin_intelligence.routes", "bulletin-intelligence", "Bulletin Intelligence")
 
-# ═══ HEALTHCARE CLAIMS INTELLIGENCE ═══
-safe_load("app.api.healthcare_claims_routes", "healthcare-claims")
+# ── TEFCA (if available) ─────────────────────────────────────────────────────
+safe_load("app.Tefca.routes", "tefca", "TEFCA Review Protocol")
 
-# ═══ WOW FEATURES ═══
-safe_load("app.api.wow_routes", "wow-features")
+# ── Case Management (if available) ───────────────────────────────────────────
+safe_load("app.case_management.routes", "case-management", "Case Management")
 
-# ═══ MIGRATION INTELLIGENCE ═══
-safe_load("app.api.migration_routes", "migration")
 
-# ═══ TEFCA REVIEW PROTOCOL (ONC Contract) ═══
-# AGT — ONC TEFCA Participant & Subparticipant Data Accuracy Review
-safe_load("app.Tefca", "tefca-review-protocol")
+# ── Error handler ────────────────────────────────────────────────────────────
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled error: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"error": str(exc), "path": str(request.url)},
+    )
 
-# ═══ CASE MANAGEMENT ═══
-safe_load("app.case_management", "case-management")
 
-# ═══ BULLETIN INTELLIGENCE (FCC Daily News — 6AM ET) ═══
-safe_load("app.bulletin_intelligence.routes", "bulletin-intelligence")
+# ── Startup log ──────────────────────────────────────────────────────────────
+@app.on_event("startup")
+async def startup_event():
+    active = [k for k, v in _loaded_modules.items() if v == "active"]
+    failed = [k for k, v in _loaded_modules.items() if "error" in str(v)]
+    logger.info(f"DocuAction AI v6.0.0 started — {len(active)} modules active, {len(failed)} failed")
+    if failed:
+        logger.warning(f"Failed modules: {failed}")
 
-logger.info("DocuAction AI v6.0.0 ready — TEFCA + Bulletin Intelligence + All Modules registered")
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run("app.main:app", host="0.0.0.0", port=port, reload=False)
