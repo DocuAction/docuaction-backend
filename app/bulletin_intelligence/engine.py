@@ -1349,7 +1349,11 @@ async def run_daily_cycle(
     logger.info(f"Briefing: {len(briefing_arts)} articles from {len(classified)} classified")
 
     # Generate briefing
+    try:
     html = await generate_briefing_html(agency, briefing_arts, briefing_date)
+except Exception as e:
+    logger.error(f"HTML gen failed: {e}")
+    html="<h1>FCC Daily News - "+briefing_date+"</h1>"
 
     topic_counts = {}
     for art in briefing_arts:
