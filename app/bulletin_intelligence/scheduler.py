@@ -25,7 +25,11 @@ _scheduler = None
 
 
 async def run_weekday_delivery(agency_id: str):
-    """Run and deliver — Monday through Friday 6 AM ET."""
+    """Run and deliver — Monday through Friday 6 AM ET. Skip federal holidays."""
+    from .engine import is_federal_holiday, now_et
+    if is_federal_holiday(now_et().date()):
+        logger.info(f"Skipping briefing — {now_et().date()} is a federal holiday")
+        return
     try:
         from app.bulletin_intelligence.engine import run_daily_cycle, get_agency
         agency = get_agency(agency_id)
