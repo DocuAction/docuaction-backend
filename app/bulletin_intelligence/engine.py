@@ -29,8 +29,15 @@ Required env vars:
 """
 
 import os
-from zoneinfo import ZoneInfo
-ET = ZoneInfo("America/New_York")
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
+try:
+    ET = ZoneInfo("America/New_York")
+except Exception:
+    import pytz
+    ET = pytz.timezone("America/New_York")
 
 # ── NEW FREE SOURCE MODULES ──────────────────────────────────────────────────
 try:
@@ -1752,11 +1759,14 @@ async def run_daily_cycle(
     tasks.append(ingest_gdelt(agency, lookback_hours))
     # FREE sources — broadcast, online news, Reddit, primary docs
     if _FREE_SOURCES_AVAILABLE:
-        tasks.append(gdelt_tv_ingest.ingest_broadcast_gdelt(lookback_hours))
-        tasks.append(gdelt_doc_ingest.ingest_gdelt_doc(lookback_hours))
-        tasks.append(cspan_fcc_ingest.ingest_primary_sources())
-        if os.getenv("REDDIT_CLIENT_ID"):
-            tasks.append(reddit_ingest.ingest_reddit())
+        try:
+            tasks.append(gdelt_tv_ingest.ingest_broadcast_gdelt(lookback_hours))
+            tasks.append(gdelt_doc_ingest.ingest_gdelt_doc(lookback_hours))
+            tasks.append(cspan_fcc_ingest.ingest_primary_sources())
+            if os.getenv("REDDIT_CLIENT_ID"):
+                tasks.append(reddit_ingest.ingest_reddit())
+        except Exception as e:
+            logger.warning(f"Free source init error (non-fatal): {e}")
     # Claude web_search — fills wire/subscription gaps; Boolean-filtered downstream
     if ANTHROPIC_KEY:
         tasks.append(ingest_news(agency, lookback_hours))
