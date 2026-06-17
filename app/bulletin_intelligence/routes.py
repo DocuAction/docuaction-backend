@@ -116,7 +116,7 @@ async def trigger_daily_cycle(
 
     background_tasks.add_task(run_daily_cycle, agency_id, auto_deliver,
                            lookback_hours)
-                             lookback_hours, coverage_start, coverage_end)
+                           
     return {
         "status": "started",
         "agency_id": agency_id,
@@ -136,7 +136,7 @@ async def trigger_daily_cycle_sync(
 ):
     """Synchronous version — waits for completion. Use for demos and testing."""
     result = await run_daily_cycle(agency_id, auto_deliver, lookback_hours)
-                                   coverage_start, coverage_end)
+                                  
     return result
 
 
