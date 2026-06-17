@@ -25,6 +25,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.on_event("startup")
 async def startup():
     try:
@@ -40,6 +41,7 @@ async def startup():
         start_scheduler()
     except Exception as e:
         logger.warning(f"Bulletin scheduler not started: {e}")
+
 
 @app.get("/health")
 async def health():
@@ -61,6 +63,7 @@ async def health():
         },
     }
 
+
 def safe_load(module_path: str, prefix: str):
     """Safely load a router module — if it fails, log and continue."""
     try:
@@ -70,6 +73,7 @@ def safe_load(module_path: str, prefix: str):
         logger.info(f"Loaded: {prefix}")
     except Exception as e:
         logger.warning(f"Skipped {prefix}: {e}")
+
 
 # ═══ CORE ROUTES ═══
 safe_load("app.api.routes", "core")
@@ -99,13 +103,13 @@ safe_load("app.api.wow_routes", "wow-features")
 safe_load("app.api.migration_routes", "migration")
 
 # ═══ TEFCA REVIEW PROTOCOL (ONC Contract) ═══
-# AGT — ONC TEFCA Participant & Subparticipant Data Accuracy Review
 safe_load("app.Tefca", "tefca-review-protocol")
 
 # ═══ CASE MANAGEMENT ═══
 safe_load("app.case_management", "case-management")
 
 # ═══ BULLETIN INTELLIGENCE (FCC Daily News — 6AM ET) ═══
+safe_load("app.bulletin_intelligence.routes", "bulletin-intelligence")
 safe_load("app.bulletin_intelligence.bulletin_download_routes", "bulletin-downloads")
 
 logger.info("DocuAction AI v6.0.0 ready — TEFCA + Bulletin Intelligence + All Modules registered")
