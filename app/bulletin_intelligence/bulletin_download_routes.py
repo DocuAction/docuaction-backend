@@ -2,7 +2,6 @@
 DocuAction Bulletin Intelligence — Download Routes
 Generates downloadable Word documents for FCC bulletins.
 Supports: 1, 2, 3, 4, 5, 7, 30 day ranges.
-
 Add to existing routes.py or register separately.
 """
 import io
@@ -11,15 +10,42 @@ import logging
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
+
 try:
     from docx.oxml.ns import qn
 except ImportError:
-    qn = None  # python-docx not installed — download endpoint will return 500
+    qn = None
 
 logger = logging.getLogger("docuaction.bulletin.download")
 router = APIRouter(prefix="/api/v1/bulletin", tags=["Bulletin Downloads"])
 
 ALLOWED_DAYS = [1, 2, 3, 4, 5, 7, 30]
+
+
+def _is_valid_article(art):
+    """Return True only for real, relevant FCC articles."""
+    url = getattr(art, 'url', '') or ''
+    title = getattr(art, 'title', '') or ''
+    relevance = getattr(art, 'relevance_score', 0) or 0
+    topic = getattr(art, 'topic', '') or ''
+
+    # Remove demo articles
+    if 'example.com' in url:
+        return False
+    if '[Demo]' in title:
+        return False
+    if 'This is a demonstration article' in (getattr(art, 'summary', '') or ''):
+        return False
+
+    # Remove low-relevance noise
+    if relevance < 0.4:
+        return False
+
+    # Remove low-relevance "other" category (FIFA, Audi, drownings, etc.)
+    if topic == 'other' and relevance < 0.6:
+        return False
+
+    return True
 
 
 @router.get("/download/{agency_id}")
@@ -34,7 +60,6 @@ async def download_bulletin(
     if days not in ALLOWED_DAYS:
         raise HTTPException(400, f"Invalid days parameter. Allowed: {ALLOWED_DAYS}")
 
-    # Get articles from the bulletin engine
     try:
         from app.bulletin_intelligence.engine import _articles, _agencies
     except ImportError:
@@ -44,28 +69,25 @@ async def download_bulletin(
     if not agency:
         raise HTTPException(404, f"Agency {agency_id} not found")
 
-    # Filter articles by date range
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     filtered = []
     for art in _articles.values():
         if art.agency_id != agency_id:
             continue
+        if not _is_valid_article(art):
+            continue
         try:
-            # Try parsing the article date
             art_date = None
             if hasattr(art, 'ingested_at') and art.ingested_at:
                 if isinstance(art.ingested_at, datetime):
                     art_date = art.ingested_at
                 elif isinstance(art.ingested_at, str):
                     art_date = datetime.fromisoformat(art.ingested_at.replace('Z', '+00:00'))
-
             if art_date and art_date.tzinfo is None:
                 art_date = art_date.replace(tzinfo=timezone.utc)
-
             if art_date and art_date >= cutoff:
                 filtered.append(art)
             elif not art_date:
-                # Include if we can't parse the date (better to include than miss)
                 filtered.append(art)
         except Exception:
             filtered.append(art)
@@ -73,7 +95,6 @@ async def download_bulletin(
     if not filtered:
         raise HTTPException(404, f"No articles found for the last {days} day(s)")
 
-    # Organize by topic
     topics = {}
     topic_labels = {
         "fcc_news_events": "FCC News & Events",
@@ -106,11 +127,9 @@ async def download_bulletin(
             topics[topic] = []
         topics[topic].append(art)
 
-    # Sort each topic by relevance score (highest first)
     for topic in topics:
         topics[topic].sort(key=lambda a: getattr(a, 'relevance_score', 0) or 0, reverse=True)
 
-    # Generate Word document
     try:
         from docx import Document as DocxDocument
         from docx.shared import Inches, Pt, Cm, RGBColor
@@ -121,14 +140,12 @@ async def download_bulletin(
 
     doc = DocxDocument()
 
-    # Page margins
     for section in doc.sections:
         section.top_margin = Cm(1.5)
         section.bottom_margin = Cm(1.5)
         section.left_margin = Cm(2)
         section.right_margin = Cm(2)
 
-    # Title
     title_para = doc.add_paragraph()
     title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = title_para.add_run("FCC DAILY INTELLIGENCE BRIEFING")
@@ -143,7 +160,6 @@ async def download_bulletin(
     run2.font.bold = True
     run2.font.color.rgb = RGBColor(0x0F, 0x17, 0x2A)
 
-    # Date range
     date_para = doc.add_paragraph()
     date_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
     now = datetime.now(timezone.utc)
@@ -157,7 +173,6 @@ async def download_bulletin(
     run3.font.size = Pt(10)
     run3.font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
 
-    # Stats line
     stats = doc.add_paragraph()
     stats.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run4 = stats.add_run(f"{len(filtered)} Articles | {len(topics)} Topics | AI-Classified")
@@ -167,7 +182,6 @@ async def download_bulletin(
 
     doc.add_paragraph()
 
-    # Topic Index
     idx_title = doc.add_paragraph()
     run_idx = idx_title.add_run("TOPIC INDEX")
     run_idx.font.size = Pt(12)
@@ -189,12 +203,10 @@ async def download_bulletin(
 
     doc.add_page_break()
 
-    # Each topic section
     for topic_key, articles in sorted(topics.items(), key=lambda x: len(x[1]), reverse=True):
         label = topic_labels.get(topic_key, topic_key.replace('_', ' ').title())
         color_hex = topic_colors.get(topic_key, "333333")
 
-        # Topic header
         header_para = doc.add_paragraph()
         header_para.paragraph_format.space_before = Pt(12)
         header_para.paragraph_format.space_after = Pt(8)
@@ -203,7 +215,6 @@ async def download_bulletin(
         run_h.font.bold = True
         run_h.font.color.rgb = RGBColor(int(color_hex[:2], 16), int(color_hex[2:4], 16), int(color_hex[4:6], 16))
 
-        # Articles
         for i, art in enumerate(articles):
             title_text = getattr(art, 'title', '') or 'Untitled'
             url = getattr(art, 'url', '') or ''
@@ -211,28 +222,21 @@ async def download_bulletin(
             summary = getattr(art, 'summary', '') or ''
             pub_date = getattr(art, 'published_at', '') or ''
             relevance = getattr(art, 'relevance_score', 0) or 0
-            sentiment = getattr(art, 'sentiment', '') or ''
 
-            # Clean title
             title_text = title_text.split(' - ')[0].split(' | ')[0].strip()
             if len(title_text) > 120:
                 title_text = title_text[:117] + '...'
 
-            # Clean summary - take first 2-3 sentences
             if summary:
                 summary = summary.replace('\n', ' ').strip()
-                # Remove HTML tags
                 summary = re.sub(r'<[^>]+>', '', summary)
-                # Take first 300 chars
                 if len(summary) > 300:
-                    # Find last sentence break
                     cut = summary[:300].rfind('.')
                     if cut > 100:
                         summary = summary[:cut + 1]
                     else:
                         summary = summary[:300] + '...'
 
-            # Article number + title as hyperlink
             art_para = doc.add_paragraph()
             art_para.paragraph_format.space_before = Pt(6)
             art_para.paragraph_format.space_after = Pt(2)
@@ -240,9 +244,7 @@ async def download_bulletin(
             run_num.font.size = Pt(10)
             run_num.font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
 
-            # Add hyperlink
             if url:
-                # Create hyperlink using python-docx
                 hyperlink = _add_hyperlink(art_para, url, title_text)
             else:
                 run_title = art_para.add_run(title_text)
@@ -250,14 +252,12 @@ async def download_bulletin(
                 run_title.font.bold = True
                 run_title.font.color.rgb = RGBColor(0x0F, 0x17, 0x2A)
 
-            # Source line
             if outlet or pub_date:
                 source_para = doc.add_paragraph()
                 source_para.paragraph_format.space_after = Pt(2)
                 source_para.paragraph_format.left_indent = Cm(0.5)
                 source_text = f"{outlet}"
                 if pub_date:
-                    # Clean date
                     try:
                         if 'T' in str(pub_date):
                             dt = datetime.fromisoformat(str(pub_date).replace('Z', '+00:00'))
@@ -266,16 +266,13 @@ async def download_bulletin(
                             source_text += f" | {pub_date}"
                     except Exception:
                         source_text += f" | {pub_date}"
-
                 if relevance > 0:
                     source_text += f" | Relevance: {int(relevance * 100)}%"
-
                 run_src = source_para.add_run(source_text)
                 run_src.font.size = Pt(8)
                 run_src.font.color.rgb = RGBColor(0x94, 0xA3, 0xB8)
                 run_src.font.italic = True
 
-            # Summary
             if summary:
                 sum_para = doc.add_paragraph()
                 sum_para.paragraph_format.space_after = Pt(8)
@@ -284,9 +281,8 @@ async def download_bulletin(
                 run_sum.font.size = Pt(9)
                 run_sum.font.color.rgb = RGBColor(0x33, 0x41, 0x55)
 
-        doc.add_paragraph()  # Space between topics
+        doc.add_paragraph()
 
-    # Footer
     footer_para = doc.add_paragraph()
     footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
     footer_para.paragraph_format.space_before = Pt(20)
@@ -298,12 +294,10 @@ async def download_bulletin(
     run_f2.font.size = Pt(7)
     run_f2.font.color.rgb = RGBColor(0x94, 0xA3, 0xB8)
 
-    # Save to buffer
     buffer = io.BytesIO()
     doc.save(buffer)
     buffer.seek(0)
 
-    # Generate filename
     if days == 1:
         fname = f"FCC_Briefing_{now.strftime('%Y%m%d')}.docx"
     else:
@@ -338,6 +332,8 @@ async def download_options(agency_id: str):
         count = 0
         for art in _articles.values():
             if art.agency_id != agency_id:
+                continue
+            if not _is_valid_article(art):
                 continue
             try:
                 art_date = None
@@ -379,36 +375,24 @@ def _add_hyperlink(paragraph, url, text):
     r_id = part.relate_to(url, RT.HYPERLINK, is_external=True)
 
     hyperlink = paragraph._element.makeelement(qn('w:hyperlink'), {qn('r:id'): r_id})
-
     new_run = paragraph._element.makeelement(qn('w:r'), {})
     rPr = paragraph._element.makeelement(qn('w:rPr'), {})
 
-    # Color
     color_elem = paragraph._element.makeelement(qn('w:color'), {qn('w:val'): '2563EB'})
     rPr.append(color_elem)
-
-    # Underline
     u_elem = paragraph._element.makeelement(qn('w:u'), {qn('w:val'): 'single'})
     rPr.append(u_elem)
-
-    # Bold
     b_elem = paragraph._element.makeelement(qn('w:b'), {})
     rPr.append(b_elem)
-
-    # Font size 10pt = 20 half-points
     sz_elem = paragraph._element.makeelement(qn('w:sz'), {qn('w:val'): '20'})
     rPr.append(sz_elem)
-
-    # Font name
     font_elem = paragraph._element.makeelement(qn('w:rFonts'), {qn('w:ascii'): 'Arial', qn('w:hAnsi'): 'Arial'})
     rPr.append(font_elem)
 
     new_run.append(rPr)
-
     text_elem = paragraph._element.makeelement(qn('w:t'), {})
     text_elem.text = text
     new_run.append(text_elem)
-
     hyperlink.append(new_run)
     paragraph._element.append(hyperlink)
 
