@@ -106,6 +106,6 @@ safe_load("app.Tefca", "tefca-review-protocol")
 safe_load("app.case_management", "case-management")
 
 # ═══ BULLETIN INTELLIGENCE (FCC Daily News — 6AM ET) ═══
-safe_load("app.bulletin_intelligence.routes", "bulletin-intelligence")
+safe_load("app.bulletin_intelligence.bulletin_download_routes", "bulletin-downloads")
 
 logger.info("DocuAction AI v6.0.0 ready — TEFCA + Bulletin Intelligence + All Modules registered")
