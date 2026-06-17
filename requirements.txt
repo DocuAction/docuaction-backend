@@ -18,3 +18,4 @@ openpyxl==3.1.5
 apscheduler==3.10.4
 weasyprint
 httpx
+python-docx
