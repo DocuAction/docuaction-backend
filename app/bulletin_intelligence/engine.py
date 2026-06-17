@@ -1334,7 +1334,7 @@ async def run_daily_cycle(
 
     # Process pipeline
     unique = deduplicate(all_articles)
-try:
+    try:
         classified = await classify_articles(unique, agency)
     except Exception as classify_err:
         logger.error(f"Classification failed: {classify_err}")
