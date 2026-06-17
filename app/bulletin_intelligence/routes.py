@@ -115,6 +115,7 @@ async def trigger_daily_cycle(
         raise HTTPException(status_code=404, detail=f"Agency {agency_id} not found")
 
     background_tasks.add_task(run_daily_cycle, agency_id, auto_deliver,
+                           lookback_hours)
                              lookback_hours, coverage_start, coverage_end)
     return {
         "status": "started",
@@ -134,7 +135,7 @@ async def trigger_daily_cycle_sync(
     coverage_end: str = None,
 ):
     """Synchronous version — waits for completion. Use for demos and testing."""
-    result = await run_daily_cycle(agency_id, auto_deliver, lookback_hours,
+    result = await run_daily_cycle(agency_id, auto_deliver, lookback_hours)
                                    coverage_start, coverage_end)
     return result
 
