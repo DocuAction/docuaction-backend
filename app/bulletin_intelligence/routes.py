@@ -134,7 +134,7 @@ async def trigger_daily_cycle_sync(
     coverage_end: str = None,
 ):
     """Synchronous version — waits for completion. Use for demos and testing."""
-    result = await run_daily_cycle(agency_id, auto_deliver, lookback_hours,
+    result = await run_daily_cycle(agency_id, auto_deliver, lookback_hours)
                                    coverage_start, coverage_end)
     return result
 
