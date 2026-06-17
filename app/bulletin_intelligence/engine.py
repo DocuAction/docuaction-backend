@@ -1334,7 +1334,14 @@ async def run_daily_cycle(
 
     # Process pipeline
     unique = deduplicate(all_articles)
-    classified = await classify_articles(unique, agency)
+try:
+        classified = await classify_articles(unique, agency)
+    except Exception as classify_err:
+        logger.error(f"Classification failed: {classify_err}")
+        for art in unique:
+            art.topic = art.topic or "fcc_news_events"
+            art.relevance_score = 0.7
+        classified = unique
 
     # Store in archive
     for art in classified:
