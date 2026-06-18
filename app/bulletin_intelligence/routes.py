@@ -412,6 +412,15 @@ async def demo_cycle(agency_id: str = "fcc"):
     )
     _briefings[briefing_id] = briefing
 
+    # Persist demo run so it survives restarts (best-effort)
+    try:
+        from dataclasses import asdict
+        from app.bulletin_intelligence import bulletin_store
+        await bulletin_store.save_articles([asdict(a) for a in demo_articles])
+        await bulletin_store.save_briefing(asdict(briefing))
+    except Exception as e:
+        logger.warning(f"Persist demo failed: {e}")
+
     return {
         "status": "demo_complete",
         "agency_id": agency_id,

@@ -35,6 +35,15 @@ async def startup():
     except Exception as e:
         logger.warning(f"Database init deferred: {e}")
 
+    # Bulletin Intelligence — durable store + restore prior state across restarts
+    try:
+        from app.bulletin_intelligence.bulletin_store import init_store
+        from app.bulletin_intelligence.engine import hydrate_from_store
+        if await init_store():
+            await hydrate_from_store()
+    except Exception as e:
+        logger.warning(f"Bulletin store init/hydrate skipped: {e}")
+
     # Bulletin Intelligence — 6AM daily delivery scheduler
     try:
         from app.bulletin_intelligence.scheduler import start_scheduler

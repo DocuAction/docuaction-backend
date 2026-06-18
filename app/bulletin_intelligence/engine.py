@@ -143,6 +143,35 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+async def hydrate_from_store() -> Dict[str, int]:
+    """Restore persisted articles/briefings into the in-memory cache on startup.
+
+    Best-effort: if the store is empty or unavailable, the cache simply stays
+    empty and the app runs as before.
+    """
+    try:
+        from dataclasses import fields as _fields
+        from app.bulletin_intelligence import bulletin_store
+        articles, briefings = await bulletin_store.load_all()
+        art_fields = {f.name for f in _fields(Article)}
+        brief_fields = {f.name for f in _fields(Briefing)}
+        for d in articles:
+            try:
+                _articles[d["article_id"]] = Article(**{k: v for k, v in d.items() if k in art_fields})
+            except Exception:
+                pass
+        for d in briefings:
+            try:
+                _briefings[d["briefing_id"]] = Briefing(**{k: v for k, v in d.items() if k in brief_fields})
+            except Exception:
+                pass
+        logger.info(f"Bulletin hydrate: {len(_articles)} articles, {len(_briefings)} briefings restored")
+        return {"articles": len(_articles), "briefings": len(_briefings)}
+    except Exception as e:
+        logger.warning(f"Bulletin hydrate failed: {e}")
+        return {"articles": 0, "briefings": 0}
+
+
 # ── Agency management ──────────────────────────────────────────────────────────
 def register_agency(config: AgencyConfig) -> None:
     _agencies[config.agency_id] = config
@@ -1381,6 +1410,14 @@ async def run_daily_cycle(
     )
     _briefings[briefing_id] = briefing
 
+    # Persist to durable store (best-effort; never blocks/fails the cycle)
+    try:
+        from app.bulletin_intelligence import bulletin_store
+        await bulletin_store.save_articles([asdict(a) for a in classified])
+        await bulletin_store.save_briefing(asdict(briefing))
+    except Exception as e:
+        logger.warning(f"Persist after daily cycle failed: {e}")
+
     return {
         "agency_id": agency_id,
         "briefing_id": briefing_id,
@@ -1407,6 +1444,14 @@ async def approve_and_deliver(briefing_id: str) -> Dict[str, Any]:
     briefing.status = "delivered" if result.get("status") in ("delivered", "dry_run") else "error"
     briefing.approved_at = _now()
     briefing.delivered_at = _now()
+
+    # Persist the updated status (best-effort)
+    try:
+        from app.bulletin_intelligence import bulletin_store
+        await bulletin_store.save_briefing(asdict(briefing))
+    except Exception as e:
+        logger.warning(f"Persist after approve failed: {e}")
+
     return {"briefing_id": briefing_id, "status": briefing.status, "delivery": result}
 
 
