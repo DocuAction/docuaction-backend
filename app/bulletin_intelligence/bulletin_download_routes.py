@@ -49,6 +49,25 @@ def _is_valid_article(art):
     return True
 
 
+def _parse_dt(raw):
+    """Parse a publish date that may be ISO 8601 OR RFC 2822 (RSS feeds use the
+    latter, e.g. 'Wed, 17 Jun 2026 12:00:00 GMT'). Returns a datetime or None."""
+    if isinstance(raw, datetime):
+        return raw
+    s = str(raw).strip()
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace('Z', '+00:00'))
+    except Exception:
+        pass
+    try:
+        from email.utils import parsedate_to_datetime
+        return parsedate_to_datetime(s)
+    except Exception:
+        return None
+
+
 def _published_within(art, cutoff):
     """True if the article was published on/after cutoff.
 
@@ -60,16 +79,12 @@ def _published_within(art, cutoff):
     raw = getattr(art, 'published_at', '') or getattr(art, 'ingested_at', '') or ''
     if not raw:
         return True
-    try:
-        if isinstance(raw, datetime):
-            art_date = raw
-        else:
-            art_date = datetime.fromisoformat(str(raw).replace('Z', '+00:00'))
-        if art_date.tzinfo is None:
-            art_date = art_date.replace(tzinfo=timezone.utc)
-        return art_date >= cutoff
-    except Exception:
+    art_date = _parse_dt(raw)
+    if art_date is None:
         return True
+    if art_date.tzinfo is None:
+        art_date = art_date.replace(tzinfo=timezone.utc)
+    return art_date >= cutoff
 
 
 @router.get("/download/{agency_id}")
