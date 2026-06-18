@@ -25,6 +25,7 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+        extra = "allow"  # tolerate keys meant for app.core.config (e.g. ANTHROPIC_API_KEY)
 
 
 @lru_cache()

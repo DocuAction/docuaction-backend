@@ -19,6 +19,9 @@ class User(Base):
     company = Column(String(255), default="")
     role = Column(String(20), default="contributor")
     plan = Column(String(20), default="free")  # free, pro, business, enterprise
+    # Per-user list of area/module ids the user may access (e.g. ["bulletin"]).
+    # Admins ignore this and see everything. Empty = no areas granted yet.
+    allowed_modules = Column(JSON, default=list)
     is_active = Column(Boolean, default=True)
     last_active_at = Column(DateTime, default=datetime.utcnow)
     created_at = Column(DateTime, default=datetime.utcnow)

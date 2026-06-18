@@ -5,6 +5,7 @@ v6.0.0 — Migration Intelligence Module Added
 import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 from app.core.config import settings
 from app.core.database import engine, Base
 
@@ -34,6 +35,29 @@ async def startup():
         logger.info("Database tables verified")
     except Exception as e:
         logger.warning(f"Database init deferred: {e}")
+
+    # Ensure per-user area access column exists on the live DB.
+    # create_all() only creates missing tables, never adds columns — so add it
+    # idempotently here for databases that predate this feature.
+    #
+    # GRANDFATHERING: the column DEFAULT is the full set of areas, so that when
+    # this column is first added to an existing database every current user
+    # keeps the all-areas access they had before gating existed (nobody gets
+    # locked out). New users created afterward start with [] via the ORM model
+    # default (SQLAlchemy always sends allowed_modules explicitly on insert), so
+    # they still get "nothing until an admin grants access". The DEFAULT only
+    # affects rows present at the moment the column is created.
+    try:
+        import json
+        from app.api.admin_users import AREAS
+        all_areas = json.dumps([a["id"] for a in AREAS])  # e.g. ["actions","bulletin",...]
+        async with engine.begin() as conn:
+            await conn.execute(text(
+                f"ALTER TABLE users ADD COLUMN IF NOT EXISTS allowed_modules JSON DEFAULT '{all_areas}'::json"
+            ))
+        logger.info("users.allowed_modules column verified (existing users grandfathered to all areas)")
+    except Exception as e:
+        logger.warning(f"allowed_modules column migration skipped: {e}")
 
     # Bulletin Intelligence — durable store + restore prior state across restarts
     try:
@@ -86,6 +110,9 @@ def safe_load(module_path: str, prefix: str):
 
 # ═══ CORE ROUTES ═══
 safe_load("app.api.routes", "core")
+
+# ═══ ADMIN — USER & AREA ACCESS MANAGEMENT ═══
+safe_load("app.api.admin_users", "admin-users")
 
 # ═══ ENTERPRISE ROUTES ═══
 safe_load("app.api.enterprise_routes", "enterprise")

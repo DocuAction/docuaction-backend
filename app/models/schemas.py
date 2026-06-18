@@ -25,6 +25,8 @@ class UserResponse(BaseModel):
     company: str
     role: str
     plan: Optional[str] = "free"
+    is_active: bool = True
+    allowed_modules: Optional[List[str]] = []
     created_at: datetime
     class Config:
         from_attributes = True
