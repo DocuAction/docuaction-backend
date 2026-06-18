@@ -24,17 +24,18 @@ ALLOWED_DAYS = [1, 2, 3, 4, 5, 7, 30]
 
 def _is_valid_article(art):
     """Return True only for real, relevant FCC articles."""
-    url = getattr(art, 'url', '') or ''
-    title = getattr(art, 'title', '') or ''
+    url = (getattr(art, 'url', '') or '').lower()
+    title = (getattr(art, 'title', '') or '').lower()
+    summary = (getattr(art, 'summary', '') or '').lower()
     relevance = getattr(art, 'relevance_score', 0) or 0
     topic = getattr(art, 'topic', '') or ''
 
     # Remove demo articles
     if 'example.com' in url:
         return False
-    if '[Demo]' in title:
+    if '[demo]' in title:
         return False
-    if 'This is a demonstration article' in (getattr(art, 'summary', '') or ''):
+    if 'demonstration article' in summary:
         return False
 
     # Remove low-relevance noise
