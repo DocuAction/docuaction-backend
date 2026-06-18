@@ -1424,6 +1424,18 @@ def get_briefing_html(briefing_id: str) -> Optional[str]:
     return b.html_content if b else None
 
 
+def get_briefing_history(agency_id: str) -> List[Dict]:
+    """All briefings for an agency (any status), newest first, without HTML payload."""
+    items = [b for b in _briefings.values() if b.agency_id == agency_id]
+    items.sort(key=lambda b: b.generated_at or "", reverse=True)
+    history = []
+    for b in items:
+        d = asdict(b)
+        d.pop("html_content", None)
+        history.append(d)
+    return history
+
+
 # ── Pre-register FCC ───────────────────────────────────────────────────────────
 register_agency(AgencyConfig(
     agency_id="fcc",

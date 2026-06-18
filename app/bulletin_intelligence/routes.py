@@ -12,7 +12,7 @@ from app.bulletin_intelligence.engine import (
     AgencyConfig, run_daily_cycle, approve_and_deliver,
     get_editorial_queue, get_briefing, get_briefing_html,
     search_archive, get_archive_stats, run_llm_visibility_check,
-    register_agency, get_agency, list_agencies,
+    register_agency, get_agency, list_agencies, get_briefing_history,
     _articles, _briefings,
 )
 
@@ -159,6 +159,17 @@ async def get_queue(agency_id: str):
             }
             for b in queue
         ]
+    }
+
+
+@router.get("/history/{agency_id}")
+async def briefing_history(agency_id: str):
+    """Full run history — all briefings for an agency (any status), newest first."""
+    history = get_briefing_history(agency_id)
+    return {
+        "agency_id": agency_id,
+        "count": len(history),
+        "briefings": history,
     }
 
 
