@@ -136,6 +136,20 @@ async def save_briefing(briefing: Dict[str, Any]) -> bool:
         return False
 
 
+async def counts() -> Dict[str, Any]:
+    """Lightweight persisted-record counts for health/observability."""
+    if not _enabled:
+        return {"enabled": False, "articles": 0, "briefings": 0}
+    try:
+        async with async_session_maker() as s:
+            a = (await s.execute(text("SELECT COUNT(*) FROM bulletin_articles"))).scalar() or 0
+            b = (await s.execute(text("SELECT COUNT(*) FROM bulletin_briefings"))).scalar() or 0
+        return {"enabled": True, "articles": int(a), "briefings": int(b)}
+    except Exception as e:
+        logger.warning(f"counts failed: {e}")
+        return {"enabled": True, "articles": 0, "briefings": 0, "error": str(e)}
+
+
 async def load_all() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Load all persisted articles and briefings (as plain dicts)."""
     if not _enabled:

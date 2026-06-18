@@ -23,6 +23,11 @@ router = APIRouter(prefix="/api/v1/bulletin", tags=["Bulletin Intelligence"])
 # ── Health ─────────────────────────────────────────────────────────────────────
 @router.get("/health")
 async def health():
+    try:
+        from app.bulletin_intelligence import bulletin_store
+        persisted = await bulletin_store.counts()
+    except Exception:
+        persisted = {"enabled": False}
     return {
         "module": "bulletin_intelligence",
         "status": "active",
@@ -30,6 +35,7 @@ async def health():
         "agencies_registered": len(list_agencies()),
         "articles_in_memory": len(_articles),
         "briefings_in_memory": len(_briefings),
+        "persisted": persisted,
     }
 
 
