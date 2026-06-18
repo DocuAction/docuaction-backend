@@ -150,6 +150,61 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _normalize_pub(s: str) -> str:
+    """Normalize a publish date to ISO 8601. Handles ISO, GDELT (YYYYMMDDTHHMMSSZ),
+    and RFC 2822 (RSS). Falls back to now() if unparseable."""
+    s = (s or "").strip()
+    if not s:
+        return _now()
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).isoformat()
+    except Exception:
+        pass
+    try:
+        return datetime.strptime(s, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc).isoformat()
+    except Exception:
+        pass
+    # Unix epoch seconds (Reddit created_utc), guarded to year 2001+ to avoid
+    # misreading short numeric strings as dates.
+    try:
+        v = float(s)
+        if v >= 1_000_000_000:
+            return datetime.fromtimestamp(v, tz=timezone.utc).isoformat()
+    except Exception:
+        pass
+    try:
+        from email.utils import parsedate_to_datetime
+        return parsedate_to_datetime(s).isoformat()
+    except Exception:
+        return _now()
+
+
+def _dict_to_article(d: dict, agency_id: str, default_source_type: str = "news") -> Optional["Article"]:
+    """Convert a raw ingester dict (GDELT, Reddit, etc.) into an Article. Returns
+    None for unusable rows (no url/title)."""
+    url = (d.get("url") or "").strip()
+    title = (d.get("title") or "").strip()
+    if not url or not title:
+        return None
+    summary = (d.get("summary") or "").strip() or title
+    outlet = d.get("outlet") or d.get("source") or ""
+    return Article(
+        article_id=f"{agency_id}_{_hash(url, title)}",
+        agency_id=agency_id,
+        source=d.get("source", "") or default_source_type,
+        source_type=d.get("source_type", default_source_type),
+        title=title,
+        url=url,
+        published_at=_normalize_pub(d.get("published_at", "")),
+        summary=summary,
+        full_text=d.get("full_text", "") or summary,
+        author=d.get("author", ""),
+        outlet=outlet,
+        ingested_at=_now(),
+        dedup_hash=_hash(url, title),
+    )
+
+
 async def hydrate_from_store() -> Dict[str, int]:
     """Restore persisted articles/briefings into the in-memory cache on startup.
 
@@ -1330,6 +1385,33 @@ def get_archive_stats(agency_id: str) -> Dict[str, Any]:
     }
 
 
+async def _ingest_gdelt_doc_articles(agency: AgencyConfig, lookback_hours: int) -> List["Article"]:
+    """GDELT DOC 2.0 online news (free, no API key, thousands of outlets) → Articles."""
+    try:
+        from app.bulletin_intelligence.gdelt_doc_ingest import ingest_gdelt_doc
+        raw = await ingest_gdelt_doc(lookback_hours)
+        out = [a for a in (_dict_to_article(d, agency.agency_id, "news") for d in raw) if a]
+        logger.info(f"GDELT DOC → {len(out)} articles for {agency.agency_id}")
+        return out
+    except Exception as e:
+        logger.warning(f"GDELT DOC ingest failed: {e}")
+        return []
+
+
+async def _ingest_reddit_articles(agency: AgencyConfig) -> List["Article"]:
+    """Reddit posts (free; needs REDDIT_CLIENT_ID/SECRET) → Articles. Skips if unset."""
+    try:
+        from app.bulletin_intelligence.reddit_ingest import ingest_reddit
+        raw = await ingest_reddit()
+        out = [a for a in (_dict_to_article(d, agency.agency_id, "social") for d in raw) if a]
+        if out:
+            logger.info(f"Reddit → {len(out)} posts for {agency.agency_id}")
+        return out
+    except Exception as e:
+        logger.warning(f"Reddit ingest failed: {e}")
+        return []
+
+
 # ── Master daily cycle ─────────────────────────────────────────────────────────
 async def run_daily_cycle(
     agency_id: str,
@@ -1366,9 +1448,31 @@ async def run_daily_cycle(
     # Tavily for additional FCC coverage
     if TAVILY_KEY:
         tasks.append(ingest_tavily(agency, lookback_hours))
-    # GDELT and Claude web_search disabled — too much noise
-    # tasks.append(ingest_gdelt(agency, lookback_hours))
+    # Claude web_search ingest_news disabled — too noisy/expensive
     # tasks.append(ingest_news(agency, lookback_hours))
+
+    # ── Free broad-coverage sources (no Claude cost; gather ignores failures) ──
+    # GDELT DOC 2.0 — thousands of online outlets, free, no key
+    tasks.append(_ingest_gdelt_doc_articles(agency, lookback_hours))
+    # BlueSky public search — free social, no key
+    try:
+        from app.bulletin_intelligence.bluesky_ingest import ingest_bluesky
+        tasks.append(ingest_bluesky(agency, lookback_hours, make_article=Article, hasher=_hash, now_iso=_now))
+    except Exception as e:
+        logger.warning(f"BlueSky source unavailable: {e}")
+    # YouTube — free video/broadcast (auto-skips if YOUTUBE_API_KEY is unset)
+    try:
+        from app.bulletin_intelligence.youtube_ingest import ingest_youtube
+        tasks.append(ingest_youtube(agency, lookback_hours, make_article=Article, hasher=_hash, now_iso=_now))
+    except Exception as e:
+        logger.warning(f"YouTube source unavailable: {e}")
+    # Reddit — free social (auto-skips if REDDIT_CLIENT_ID/SECRET unset)
+    try:
+        from app.bulletin_intelligence.reddit_ingest import ingest_reddit
+        tasks.append(_ingest_reddit_articles(agency))
+    except Exception as e:
+        logger.warning(f"Reddit source unavailable: {e}")
+
     if agency.include_broadcast:
         tasks.append(ingest_broadcast(agency, lookback_hours))
     if agency.include_social:
