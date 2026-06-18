@@ -134,6 +134,13 @@ _articles:  Dict[str, Article]  = {}
 _briefings: Dict[str, Briefing] = {}
 _agencies:  Dict[str, AgencyConfig] = {}
 
+# Cost guard: prevents overlapping/duplicate ingest cycles (each cycle makes
+# ~20+ Claude calls). Maps agency_id -> start timestamp; a cycle is considered
+# in-progress while a recent timestamp is present. Auto-expires after the TTL so
+# a crashed cycle can never permanently block future runs.
+_running_cycles: Dict[str, float] = {}
+CYCLE_LOCK_TTL = 180  # seconds (covers a typical 1-2 min cycle)
+
 
 def _hash(url: str, title: str) -> str:
     return hashlib.md5(f"{url}{title}".encode()).hexdigest()
@@ -1333,6 +1340,20 @@ async def run_daily_cycle(
     if not agency:
         return {"error": f"Agency {agency_id} not registered"}
 
+    # Cost guard: refuse to start if a cycle for this agency is already running
+    # (or started within the TTL). Prevents duplicate clicks / overlapping
+    # scheduler+manual runs from multiplying Claude API spend.
+    now_ts = datetime.now(timezone.utc).timestamp()
+    last = _running_cycles.get(agency_id, 0)
+    if last and (now_ts - last) < CYCLE_LOCK_TTL:
+        logger.info(f"Cycle already in progress for {agency_id}; skipping duplicate")
+        return {
+            "agency_id": agency_id,
+            "status": "already_running",
+            "message": "A collection cycle is already in progress for this agency. Please wait for it to finish.",
+        }
+    _running_cycles[agency_id] = now_ts
+
     briefing_date = datetime.now().strftime("%B %d, %Y")
     briefing_id = f"{agency_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     logger.info(f"Daily cycle starting: {agency.name}")
@@ -1417,6 +1438,9 @@ async def run_daily_cycle(
         await bulletin_store.save_briefing(asdict(briefing))
     except Exception as e:
         logger.warning(f"Persist after daily cycle failed: {e}")
+
+    # Release the cost guard so a fresh cycle can run once this one is done.
+    _running_cycles.pop(agency_id, None)
 
     return {
         "agency_id": agency_id,
