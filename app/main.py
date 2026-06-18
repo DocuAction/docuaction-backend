@@ -39,23 +39,33 @@ async def startup():
     except Exception:
         all_areas = "[]"
 
+    # Ensure every column the User model expects exists on the live DB. create_all()
+    # never adds columns to existing tables, so older/drifted databases can be
+    # missing columns — and ANY missing column makes every User query (login/
+    # signup) return 500. All statements are IF NOT EXISTS, so they are safe
+    # no-ops when the column already exists.
+    # GRANDFATHERING: allowed_modules' DEFAULT is the full area set, so existing
+    # users keep all-areas access the moment the column is first added; new users
+    # still start with [] via the ORM model default.
+    user_columns = [
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(50) NOT NULL DEFAULT 'default'",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS company VARCHAR(255) DEFAULT ''",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(255) DEFAULT ''",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'contributor'",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS plan VARCHAR(20) DEFAULT 'free'",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMP DEFAULT now()",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT now()",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT now()",
+        f"ALTER TABLE users ADD COLUMN IF NOT EXISTS allowed_modules JSON DEFAULT '{all_areas}'::json",
+    ]
     for attempt in range(1, 8):
         try:
             async with engine.begin() as conn:
-                # 1) create any missing tables
-                await conn.run_sync(Base.metadata.create_all)
-                # 2) Ensure per-user area access column exists. create_all() never
-                #    adds columns to existing tables, so add it idempotently here.
-                #    GRANDFATHERING: the DEFAULT is the full set of areas, so when
-                #    this column is first added to an existing DB every current
-                #    user keeps the all-areas access they had before gating existed
-                #    (nobody gets locked out). New users still start with [] via the
-                #    ORM model default. The DEFAULT only affects rows present when
-                #    the column is created.
-                await conn.execute(text(
-                    f"ALTER TABLE users ADD COLUMN IF NOT EXISTS allowed_modules JSON DEFAULT '{all_areas}'::json"
-                ))
-            logger.info("DB schema verified (tables + users.allowed_modules; existing users grandfathered)")
+                await conn.run_sync(Base.metadata.create_all)  # create any missing tables
+                for stmt in user_columns:
+                    await conn.execute(text(stmt))
+            logger.info("DB schema verified (tables + all users columns; existing users grandfathered)")
             break
         except Exception as e:
             logger.warning(f"DB schema setup attempt {attempt}/7 failed, retrying: {e}")
