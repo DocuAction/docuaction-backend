@@ -49,6 +49,29 @@ def _is_valid_article(art):
     return True
 
 
+def _published_within(art, cutoff):
+    """True if the article was published on/after cutoff.
+
+    Filters on publish date (when the news was published), not ingest date
+    (when we collected it), so a briefing only contains articles actually
+    published within the selected window. Articles with no parseable date
+    are kept rather than silently dropped.
+    """
+    raw = getattr(art, 'published_at', '') or getattr(art, 'ingested_at', '') or ''
+    if not raw:
+        return True
+    try:
+        if isinstance(raw, datetime):
+            art_date = raw
+        else:
+            art_date = datetime.fromisoformat(str(raw).replace('Z', '+00:00'))
+        if art_date.tzinfo is None:
+            art_date = art_date.replace(tzinfo=timezone.utc)
+        return art_date >= cutoff
+    except Exception:
+        return True
+
+
 @router.get("/download/{agency_id}")
 async def download_bulletin(
     agency_id: str,
@@ -77,20 +100,7 @@ async def download_bulletin(
             continue
         if not _is_valid_article(art):
             continue
-        try:
-            art_date = None
-            if hasattr(art, 'ingested_at') and art.ingested_at:
-                if isinstance(art.ingested_at, datetime):
-                    art_date = art.ingested_at
-                elif isinstance(art.ingested_at, str):
-                    art_date = datetime.fromisoformat(art.ingested_at.replace('Z', '+00:00'))
-            if art_date and art_date.tzinfo is None:
-                art_date = art_date.replace(tzinfo=timezone.utc)
-            if art_date and art_date >= cutoff:
-                filtered.append(art)
-            elif not art_date:
-                filtered.append(art)
-        except Exception:
+        if _published_within(art, cutoff):
             filtered.append(art)
 
     if not filtered:
@@ -336,20 +346,7 @@ async def download_options(agency_id: str):
                 continue
             if not _is_valid_article(art):
                 continue
-            try:
-                art_date = None
-                if hasattr(art, 'ingested_at') and art.ingested_at:
-                    if isinstance(art.ingested_at, datetime):
-                        art_date = art.ingested_at
-                    elif isinstance(art.ingested_at, str):
-                        art_date = datetime.fromisoformat(art.ingested_at.replace('Z', '+00:00'))
-                if art_date and art_date.tzinfo is None:
-                    art_date = art_date.replace(tzinfo=timezone.utc)
-                if art_date and art_date >= cutoff:
-                    count += 1
-                elif not art_date:
-                    count += 1
-            except Exception:
+            if _published_within(art, cutoff):
                 count += 1
 
         label = f"Last 24 Hours" if d == 1 else f"Last {d} Days"
