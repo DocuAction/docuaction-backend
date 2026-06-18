@@ -964,8 +964,16 @@ async def classify_articles(articles: List[Article], agency: AgencyConfig) -> Li
         batch = articles[i:i + batch_size]
         items = [{"id": a.article_id, "title": a.title, "summary": a.summary[:200]} for a in batch]
 
-        prompt = f"""Classify each article. Return a JSON array, one object per article:
+        prompt = f"""You are classifying news for a daily intelligence briefing about {agency.name} ({agency.short_name}).
+Return a JSON array, one object per article:
   id, topic (from list), article_type (news/opinion/analysis/editorial/press_release/regulatory), sentiment (positive/negative/neutral), relevance_score (0.0-1.0)
+
+relevance_score = how directly the article is about {agency.short_name} itself — its leadership/officials, decisions, proceedings, rulings, votes, or enforcement. Be STRICT and do not inflate:
+  0.85-1.0 : explicitly about {agency.short_name} actions, officials, or proceedings
+  0.55-0.80: a topic {agency.short_name} regulates, with {agency.short_name} clearly involved
+  0.40-0.54: {agency.short_name}-adjacent but the agency is not central
+  0.00-0.39: general tech/business/world news with no real {agency.short_name} connection
+If {agency.short_name} (the agency, its commissioners, or its specific actions) is not actually involved, score BELOW 0.4 even if the topic is telecom/media/tech.
 
 Topics:
 {topics_str}

@@ -21,6 +21,14 @@ router = APIRouter(prefix="/api/v1/bulletin", tags=["Bulletin Downloads"])
 
 ALLOWED_DAYS = [1, 2, 3, 4, 5, 7, 30]
 
+# Terms that signal a genuine FCC connection (agency + current leadership).
+# An article must mention one of these OR score highly with the classifier to be
+# shown — this filters out tangential tech/telecom news that never involves the FCC.
+FCC_TERMS = (
+    "fcc", "federal communications commission", "f.c.c.",
+    "brendan carr", "anna gomez", "olivia trusty", "geoffrey starks", "nathan simington",
+)
+
 
 def _is_valid_article(art):
     """Return True only for real, relevant FCC articles."""
@@ -44,6 +52,13 @@ def _is_valid_article(art):
 
     # Remove low-relevance "other" category (FIFA, Audi, drownings, etc.)
     if topic == 'other' and relevance < 0.6:
+        return False
+
+    # Require a real FCC connection: the article must mention the agency or its
+    # leadership, OR earn a high relevance score (trust the classifier for clear
+    # regulatory items that may not name the FCC verbatim).
+    text = title + ' ' + summary
+    if not any(term in text for term in FCC_TERMS) and relevance < 0.7:
         return False
 
     return True
