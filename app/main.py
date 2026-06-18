@@ -29,35 +29,39 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
+    # Schema setup MUST succeed before serving traffic — if the DB is briefly
+    # unavailable at boot, retry instead of silently skipping (a skipped column
+    # migration breaks every User query, i.e. login/signup return 500).
+    import asyncio, json
     try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        logger.info("Database tables verified")
-    except Exception as e:
-        logger.warning(f"Database init deferred: {e}")
-
-    # Ensure per-user area access column exists on the live DB.
-    # create_all() only creates missing tables, never adds columns — so add it
-    # idempotently here for databases that predate this feature.
-    #
-    # GRANDFATHERING: the column DEFAULT is the full set of areas, so that when
-    # this column is first added to an existing database every current user
-    # keeps the all-areas access they had before gating existed (nobody gets
-    # locked out). New users created afterward start with [] via the ORM model
-    # default (SQLAlchemy always sends allowed_modules explicitly on insert), so
-    # they still get "nothing until an admin grants access". The DEFAULT only
-    # affects rows present at the moment the column is created.
-    try:
-        import json
         from app.api.admin_users import AREAS
         all_areas = json.dumps([a["id"] for a in AREAS])  # e.g. ["actions","bulletin",...]
-        async with engine.begin() as conn:
-            await conn.execute(text(
-                f"ALTER TABLE users ADD COLUMN IF NOT EXISTS allowed_modules JSON DEFAULT '{all_areas}'::json"
-            ))
-        logger.info("users.allowed_modules column verified (existing users grandfathered to all areas)")
-    except Exception as e:
-        logger.warning(f"allowed_modules column migration skipped: {e}")
+    except Exception:
+        all_areas = "[]"
+
+    for attempt in range(1, 8):
+        try:
+            async with engine.begin() as conn:
+                # 1) create any missing tables
+                await conn.run_sync(Base.metadata.create_all)
+                # 2) Ensure per-user area access column exists. create_all() never
+                #    adds columns to existing tables, so add it idempotently here.
+                #    GRANDFATHERING: the DEFAULT is the full set of areas, so when
+                #    this column is first added to an existing DB every current
+                #    user keeps the all-areas access they had before gating existed
+                #    (nobody gets locked out). New users still start with [] via the
+                #    ORM model default. The DEFAULT only affects rows present when
+                #    the column is created.
+                await conn.execute(text(
+                    f"ALTER TABLE users ADD COLUMN IF NOT EXISTS allowed_modules JSON DEFAULT '{all_areas}'::json"
+                ))
+            logger.info("DB schema verified (tables + users.allowed_modules; existing users grandfathered)")
+            break
+        except Exception as e:
+            logger.warning(f"DB schema setup attempt {attempt}/7 failed, retrying: {e}")
+            await asyncio.sleep(3)
+    else:
+        logger.error("DB schema setup FAILED after retries — User queries/login may 500 until fixed")
 
     # Bulletin Intelligence — durable store + restore prior state across restarts
     try:
