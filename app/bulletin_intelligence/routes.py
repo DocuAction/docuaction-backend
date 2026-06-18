@@ -290,13 +290,16 @@ async def download_briefing_pdf(briefing_id: str):
     if not html:
         raise HTTPException(status_code=404, detail="Briefing not found")
 
-    # Try WeasyPrint first, fall back to pdfkit, fall back to HTML
+    # Try WeasyPrint first, fall back to pdfkit, fall back to HTML.
+    # Catch any exception (not just ImportError): WeasyPrint imports fine on
+    # many servers but fails at render time when native libs (pango/cairo) are
+    # missing — that must fall through to the HTML fallback, never 500.
     pdf_bytes = None
     try:
         import weasyprint
         pdf_bytes = weasyprint.HTML(string=html).write_pdf()
-    except ImportError:
-        pass
+    except Exception as e:
+        logger.warning(f"WeasyPrint PDF render failed, falling back: {e}")
 
     if not pdf_bytes:
         try:
