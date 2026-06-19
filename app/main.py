@@ -34,8 +34,8 @@ async def startup():
     # migration breaks every User query, i.e. login/signup return 500).
     import asyncio, json
     try:
-        from app.api.admin_users import AREAS
-        all_areas = json.dumps([a["id"] for a in AREAS])  # e.g. ["actions","bulletin",...]
+        from app.api.admin_users import MODULES
+        all_areas = json.dumps([m["id"] for m in MODULES])  # 15 module ids
     except Exception:
         all_areas = "[]"
 
