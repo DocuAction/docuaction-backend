@@ -51,19 +51,35 @@ _DDL = [
 _enabled = False
 
 
-async def init_store() -> bool:
-    """Create tables if needed. Returns True if persistence is available."""
+async def init_store(retries: int = 7, delay: float = 3.0) -> bool:
+    """Create tables if needed. Returns True if persistence is available.
+
+    Railway's Postgres is frequently not ready the instant the app boots. A
+    single no-retry attempt loses that race and leaves persistence disabled for
+    the whole process lifetime — which silently wipes the archive on every
+    restart (nothing to hydrate). Retry like the users-schema migration in
+    main.py does, so a transient boot-time DB blip doesn't permanently disable
+    durable storage.
+    """
     global _enabled
-    try:
-        async with async_session_maker() as s:
-            for ddl in _DDL:
-                await s.execute(text(ddl))
-            await s.commit()
-        _enabled = True
-        logger.info("Bulletin store ready (Postgres)")
-    except Exception as e:
-        _enabled = False
-        logger.warning(f"Bulletin store unavailable; running memory-only: {e}")
+    import asyncio
+    for attempt in range(1, retries + 1):
+        try:
+            async with async_session_maker() as s:
+                for ddl in _DDL:
+                    await s.execute(text(ddl))
+                await s.commit()
+            _enabled = True
+            logger.info(f"Bulletin store ready (Postgres) on attempt {attempt}")
+            return _enabled
+        except Exception as e:
+            logger.warning(
+                f"Bulletin store init attempt {attempt}/{retries} failed: {e}"
+            )
+            if attempt < retries:
+                await asyncio.sleep(delay)
+    _enabled = False
+    logger.error("Bulletin store unavailable after retries; running memory-only")
     return _enabled
 
 
