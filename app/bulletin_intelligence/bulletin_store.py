@@ -49,6 +49,9 @@ _DDL = [
 # Flipped to True once init_store() succeeds; gates write attempts so we don't
 # spam the log when the DB is unreachable.
 _enabled = False
+# Last init exception (string) — surfaced in counts() for prod diagnosis when
+# logs aren't reachable. Cleared on success.
+_last_init_error = None
 
 
 async def init_store(retries: int = 7, delay: float = 3.0) -> bool:
@@ -61,7 +64,7 @@ async def init_store(retries: int = 7, delay: float = 3.0) -> bool:
     main.py does, so a transient boot-time DB blip doesn't permanently disable
     durable storage.
     """
-    global _enabled
+    global _enabled, _last_init_error
     import asyncio
     for attempt in range(1, retries + 1):
         try:
@@ -70,9 +73,11 @@ async def init_store(retries: int = 7, delay: float = 3.0) -> bool:
                     await s.execute(text(ddl))
                 await s.commit()
             _enabled = True
+            _last_init_error = None
             logger.info(f"Bulletin store ready (Postgres) on attempt {attempt}")
             return _enabled
         except Exception as e:
+            _last_init_error = f"{type(e).__name__}: {e}"
             logger.warning(
                 f"Bulletin store init attempt {attempt}/{retries} failed: {e}"
             )
@@ -155,7 +160,8 @@ async def save_briefing(briefing: Dict[str, Any]) -> bool:
 async def counts() -> Dict[str, Any]:
     """Lightweight persisted-record counts for health/observability."""
     if not _enabled:
-        return {"enabled": False, "articles": 0, "briefings": 0}
+        return {"enabled": False, "articles": 0, "briefings": 0,
+                "diag_rev": "diag1", "last_error": _last_init_error}
     try:
         async with async_session_maker() as s:
             a = (await s.execute(text("SELECT COUNT(*) FROM bulletin_articles"))).scalar() or 0
