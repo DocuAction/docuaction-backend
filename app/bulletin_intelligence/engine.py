@@ -1159,31 +1159,72 @@ async def _prepare_briefing_sections(agency: AgencyConfig, articles: List[Articl
         if len(capped) >= 60:
             break
 
-    summaries = await _summaries_for(capped, agency)
-    return _collect_sections(capped, summaries)
+    # Cluster same-story-different-outlet into one primary + 'Similar Stories',
+    # then summarize ONLY the primaries (fewer Claude calls too).
+    clusters = _cluster_stories(capped)
+    primaries = [c[0] for c in clusters]
+    summaries = await _summaries_for(primaries, agency)
+    return _collect_sections(clusters, summaries)
 
 
-def _collect_sections(capped: List[Article], summaries: Dict[str, str]):
-    """Group stories into ALL AGT_SECTIONS in fixed order. Every section header is
-    always present (even with no stories that day), per the client's requirement."""
-    idx, sections = 0, []
-    for sec in AGT_SECTIONS:
-        stories = []
-        for a in capped:
-            if _section_of(a) != sec:
-                continue
-            idx += 1
-            stories.append({
-                "source": (a.outlet or a.source or "NEWS").strip(),
-                "headline": _clean_headline(a.title),
-                "url": (a.url or "").strip(),
-                "anchor": f"story_{idx}",
-                "summary": (summaries.get(a.article_id) or a.summary or "").strip(),
-                "is_paywalled": bool(a.is_paywalled),
-                "similar": [],
-            })
-        sections.append((sec, stories))   # always include the header
-    return sections
+def _cluster_stories(articles: List[Article]) -> List[List[Article]]:
+    """Group articles covering the SAME story across outlets (near-duplicate
+    headlines like 'RBR:' vs 'RBR.COM:' on the June Open Meeting). Input is sorted
+    by relevance, so each cluster's first member is the primary; the rest become
+    'Similar Stories'."""
+    import re
+    STOP = {"the", "a", "an", "of", "to", "in", "on", "for", "and", "or", "at", "by",
+            "with", "as", "is", "are", "be", "new", "says", "said", "after", "over",
+            "from", "amid", "its", "it", "fcc", "federal", "communications", "commission"}
+
+    def toks(title):
+        words = re.findall(r"[a-z0-9]+", _clean_headline(title).lower())
+        return {w for w in words if len(w) > 2 and w not in STOP}
+
+    clusters = []  # each: {"toks": set, "members": [Article]}
+    for a in articles:
+        tk = toks(a.title)
+        placed = False
+        for cl in clusters:
+            ct = cl["toks"]
+            denom = min(len(tk), len(ct)) if tk and ct else 0
+            inter = len(tk & ct) if denom else 0
+            if denom and inter >= 3 and (inter / denom) >= 0.6:
+                cl["members"].append(a)
+                cl["toks"] = ct | tk
+                placed = True
+                break
+        if not placed:
+            clusters.append({"toks": tk, "members": [a]})
+    return [cl["members"] for cl in clusters]
+
+
+def _collect_sections(clusters, summaries: Dict[str, str]):
+    """Build all 9 sections (always present). Each cluster -> one primary story
+    plus its Similar Stories. Empty section headers are kept per client spec."""
+    idx = 0
+    by_section = {s: [] for s in AGT_SECTIONS}
+    for members in clusters:
+        primary = members[0]
+        sec = _section_of(primary)
+        if sec not in by_section:
+            sec = "FCC News"
+        idx += 1
+        by_section[sec].append({
+            "source": (primary.outlet or primary.source or "NEWS").strip(),
+            "headline": _clean_headline(primary.title),
+            "url": (primary.url or "").strip(),
+            "anchor": f"story_{idx}",
+            "summary": (summaries.get(primary.article_id) or primary.summary or "").strip(),
+            "is_paywalled": bool(primary.is_paywalled),
+            "similar": [{
+                "source": (m.outlet or m.source or "NEWS").strip(),
+                "headline": _clean_headline(m.title),
+                "url": (m.url or "").strip(),
+                "is_paywalled": bool(m.is_paywalled),
+            } for m in members[1:]],
+        })
+    return [(sec, by_section[sec]) for sec in AGT_SECTIONS]
 
 
 async def _summaries_for(articles: List[Article], agency: AgencyConfig) -> Dict[str, str]:
