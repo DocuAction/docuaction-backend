@@ -32,7 +32,7 @@ async def startup():
     # Schema setup MUST succeed before serving traffic — if the DB is briefly
     # unavailable at boot, retry instead of silently skipping (a skipped column
     # migration breaks every User query, i.e. login/signup return 500).
-    import asyncio, json
+    import asyncio, json, os
     try:
         from app.api.admin_users import MODULES
         all_areas = json.dumps([m["id"] for m in MODULES])  # 15 module ids
@@ -89,12 +89,21 @@ async def startup():
     except Exception as e:
         logger.warning(f"Bulletin store init/hydrate skipped: {e}")
 
-    # Bulletin Intelligence — 6AM daily delivery scheduler
-    try:
-        from app.bulletin_intelligence.scheduler import start_scheduler
-        start_scheduler()
-    except Exception as e:
-        logger.warning(f"Bulletin scheduler not started: {e}")
+    # Bulletin Intelligence — 6AM daily delivery scheduler.
+    # Gated behind ENABLE_SCHEDULER so multiple identical deployments can share
+    # ONE database without both running the daily cycle — which would write
+    # duplicate briefings to the DB and email subscribers two copies of each
+    # briefing. Set ENABLE_SCHEDULER=true on exactly ONE box (the live one);
+    # leave it unset on any spare/duplicate box. Default off = safe (no sends).
+    if os.getenv("ENABLE_SCHEDULER", "false").strip().lower() == "true":
+        try:
+            from app.bulletin_intelligence.scheduler import start_scheduler
+            start_scheduler()
+            logger.info("Bulletin scheduler ENABLED (ENABLE_SCHEDULER=true)")
+        except Exception as e:
+            logger.warning(f"Bulletin scheduler not started: {e}")
+    else:
+        logger.info("Bulletin scheduler DISABLED (set ENABLE_SCHEDULER=true to enable)")
 
 
 @app.get("/health")

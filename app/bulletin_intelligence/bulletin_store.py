@@ -160,8 +160,7 @@ async def save_briefing(briefing: Dict[str, Any]) -> bool:
 async def counts() -> Dict[str, Any]:
     """Lightweight persisted-record counts for health/observability."""
     if not _enabled:
-        return {"enabled": False, "articles": 0, "briefings": 0,
-                "diag_rev": "diag1", "last_error": _last_init_error}
+        return {"enabled": False, "articles": 0, "briefings": 0}
     try:
         async with async_session_maker() as s:
             a = (await s.execute(text("SELECT COUNT(*) FROM bulletin_articles"))).scalar() or 0
