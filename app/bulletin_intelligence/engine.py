@@ -89,17 +89,21 @@ AGT_SECTIONS = [
 
 # Fallback topic -> section map (used if the classifier doesn't set a section).
 TOPIC_TO_SECTION = {
-    "fcc_news_events":         "FCC News",
-    "consumers_advocacy":      "Consumers",
-    "media_broadcasting":      "Media & Broadcasting",
-    "public_safety_emergency": "Public Safety / Cybersecurity / Privacy",
-    "wireless_mobile":         "Wireless & Spectrum",
-    "ai_emerging_tech":        "AI / Machine Learning",
-    "business_industry":       "Business & Tech",
-    "international_affairs":   "International",
-    "space_communications":    "Space Policy",
-    "spectrum_policy":         "Wireless & Spectrum",
-    "other":                   "FCC News",
+    "fcc_news_events":          "FCC News",
+    "consumers_advocacy":       "Consumers",
+    "media_broadcasting":       "Media & Broadcasting",
+    "public_safety_emergency":  "Public Safety / Cybersecurity / Privacy",
+    "wireless_mobile":          "Wireless & Spectrum",
+    "ai_emerging_tech":         "AI / Machine Learning",
+    "business_industry":        "Business & Tech",
+    "international_affairs":     "International",
+    "space_communications":     "Space Policy",
+    "spectrum_policy":          "Wireless & Spectrum",
+    # extra topic names the classifier sometimes emits — map them too so nothing drops
+    "broadband_infrastructure": "Wireless & Spectrum",
+    "equipment_authorization":  "FCC News",
+    "cybersecurity_privacy":    "Public Safety / Cybersecurity / Privacy",
+    "other":                    "FCC News",
 }
 
 
@@ -1099,7 +1103,10 @@ async def build_briefing_outputs(agency: AgencyConfig, articles: List[Article], 
 
 
 def _section_of(art: "Article") -> str:
-    return art.section if art.section in AGT_SECTIONS else TOPIC_TO_SECTION.get(art.topic, "General")
+    if art.section in AGT_SECTIONS:
+        return art.section
+    sec = TOPIC_TO_SECTION.get(art.topic, "FCC News")
+    return sec if sec in AGT_SECTIONS else "FCC News"   # never drop a story
 
 
 def _clean_headline(title: str) -> str:
@@ -1112,11 +1119,27 @@ def _clean_headline(title: str) -> str:
 
 
 async def _prepare_briefing_sections(agency: AgencyConfig, articles: List[Article]):
-    # NEWS only — relevant, non-social. Social posts never appear as news stories.
-    news = [a for a in articles if a.relevance_score >= 0.4 and a.source_type != "social"]
+    # Aggregate THIS cycle's articles with everything collected for this agency in
+    # the last 72h, so the briefing reflects full recent coverage across all
+    # sections — not just one cycle's fresh pull (which made sections look empty).
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=72)
+    pool = {a.article_id: a for a in articles}
+    for a in _articles.values():
+        if a.agency_id != agency.agency_id or a.article_id in pool:
+            continue
+        try:
+            pub = datetime.fromisoformat((a.published_at or "").replace("Z", "+00:00"))
+        except Exception:
+            pub = None
+        if pub is None or pub >= cutoff:
+            pool[a.article_id] = a
+
+    # NEWS only — relevant, non-social — then drop duplicate stories across cycles.
+    news = [a for a in pool.values() if a.relevance_score >= 0.4 and a.source_type != "social"]
+    news = deduplicate(news)
     news.sort(key=lambda a: a.relevance_score, reverse=True)
 
-    # Cap fcc.gov to 2 (client gets FCC.gov directly) and total stories to 45.
+    # Cap fcc.gov to 2 (client gets FCC.gov directly) and total stories to 60.
     capped, fcc_gov = [], 0
     for a in news:
         if "fcc.gov" in (a.url or "").lower():
@@ -1124,7 +1147,7 @@ async def _prepare_briefing_sections(agency: AgencyConfig, articles: List[Articl
                 continue
             fcc_gov += 1
         capped.append(a)
-        if len(capped) >= 45:
+        if len(capped) >= 60:
             break
 
     summaries = await _summaries_for(capped, agency)
