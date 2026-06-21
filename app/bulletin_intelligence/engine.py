@@ -1107,7 +1107,107 @@ async def build_briefing_outputs(agency: AgencyConfig, articles: List[Article], 
     return html, docx_bytes
 
 
+# ── Boolean section matching (the client's Appendix A spec) ────────────────────
+try:
+    from app.bulletin_intelligence.fcc_boolean_search import FCC_SEARCH_TOPICS as _FCC_BOOL
+except Exception:
+    _FCC_BOOL = {}
+
+# Map the boolean-spec topic keys -> our AGT_SECTIONS display names, in spec order.
+_BOOL_KEY_TO_SECTION = {
+    "FCC_NEWS":            "FCC News",
+    "CONSUMERS":           "Consumers",
+    "MEDIA_BROADCASTING":  "Media & Broadcasting",
+    "SPACE_POLICY":        "Space Policy",
+    "PUBLIC_SAFETY_CYBER": "Public Safety / Cybersecurity / Privacy",
+    "WIRELESS_SPECTRUM":   "Wireless & Spectrum",
+    "AI_MACHINE_LEARNING": "AI / Machine Learning",
+    "BUSINESS_TECH":       "Business & Tech",
+    "INTERNATIONAL":       "International",
+}
+
+
+def _phrase_in(phrase: str, text: str) -> bool:
+    import re
+    p = phrase.lower().strip().strip('"')
+    if p.startswith("title:"):
+        p = p[6:].strip().strip('"')
+    if not p:
+        return False
+    if re.fullmatch(r"[a-z0-9][a-z0-9\-]*", p):          # word-bounded for short tokens
+        return re.search(r"(?<![a-z0-9])" + re.escape(p) + r"(?![a-z0-9])", text) is not None
+    return p in text
+
+
+def _boolean_matches(expr: str, text: str) -> bool:
+    """Evaluate a boolean expression (AND/OR/parentheses/quoted phrases/title:) of
+    the client's spec against an article's lowercased text."""
+    import re
+    if not expr:
+        return False
+    tokens = re.findall(r'"[^"]*"|\(|\)|[^\s()]+', expr)
+
+    def atom(pos):
+        if pos >= len(tokens):
+            return False, pos
+        if tokens[pos] == "(":
+            val, pos = _or(pos + 1)
+            if pos < len(tokens) and tokens[pos] == ")":
+                pos += 1
+            return val, pos
+        tok = tokens[pos]
+        return _phrase_in(tok, text), pos + 1
+
+    def _and(pos):
+        val, pos = atom(pos)
+        while pos < len(tokens) and tokens[pos].upper() == "AND":
+            rhs, pos = atom(pos + 1)
+            val = val and rhs
+        return val, pos
+
+    def _or(pos):
+        val, pos = _and(pos)
+        while pos < len(tokens) and tokens[pos].upper() == "OR":
+            rhs, pos = _and(pos + 1)
+            val = val or rhs
+        return val, pos
+
+    try:
+        return bool(_or(0)[0])
+    except Exception:
+        return False
+
+
+# Check SPECIFIC topics before broad catch-alls (Wireless/FCC News) so e.g. an
+# international undersea-cable story isn't grabbed by the broad "FCC AND telecom".
+_BOOL_MATCH_ORDER = [
+    "INTERNATIONAL", "SPACE_POLICY", "AI_MACHINE_LEARNING", "PUBLIC_SAFETY_CYBER",
+    "CONSUMERS", "MEDIA_BROADCASTING", "BUSINESS_TECH", "WIRELESS_SPECTRUM", "FCC_NEWS",
+]
+
+
+def _boolean_section(title: str, summary: str):
+    """Return the AGT section whose boolean matches (specific topics first), or None."""
+    text = f"{title} {summary}".lower()
+    for key in _BOOL_MATCH_ORDER:
+        sec = _BOOL_KEY_TO_SECTION.get(key)
+        spec = _FCC_BOOL.get(key, {})
+        expr = spec.get("boolean", "")
+        if expr:
+            if _boolean_matches(expr, text):
+                return sec
+        else:  # keyword-only topic (AI / Machine Learning)
+            if any(_phrase_in(kw, text) for kw in spec.get("keywords", [])):
+                return sec
+    return None
+
+
 def _section_of(art: "Article") -> str:
+    # The client's boolean spec drives sectioning; fall back to the model's
+    # section, then the topic map. Never returns an invalid section.
+    bs = _boolean_section(art.title or "", art.summary or "")
+    if bs in AGT_SECTIONS:
+        return bs
     if art.section in AGT_SECTIONS:
         return art.section
     sec = TOPIC_TO_SECTION.get(art.topic, "FCC News")
