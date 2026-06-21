@@ -1183,9 +1183,8 @@ async def _summaries_for(articles: List[Article], agency: AgencyConfig) -> Dict[
     if not ANTHROPIC_KEY or not articles:
         return fallback
     client = _get_client()
-    out: Dict[str, str] = {}
-    for i in range(0, len(articles), 8):
-        batch = articles[i:i + 8]
+
+    async def _summary_batch(batch: List[Article]) -> Dict[str, str]:
         items = [{"id": a.article_id, "title": a.title, "outlet": a.outlet,
                   "text": (a.full_text or a.summary or "")[:1500]} for a in batch]
         prompt = (
@@ -1196,16 +1195,25 @@ async def _summaries_for(articles: List[Article], agency: AgencyConfig) -> Dict[
             'given — do NOT invent facts. Return ONLY a JSON array of {"id":"...","summary":"..."}.\n\n'
             "Items:\n" + json.dumps(items)
         )
+        res: Dict[str, str] = {}
         try:
             resp = await client.messages.create(
-                model="claude-sonnet-4-5", max_tokens=2200,
+                model="claude-haiku-4-5", max_tokens=2400,
                 messages=[{"role": "user", "content": prompt}],
             )
             for r in (_parse_json_safe(_extract_text(resp.content)) or []):
                 if isinstance(r, dict) and r.get("id") and (r.get("summary") or "").strip():
-                    out[r["id"]] = r["summary"].strip()
+                    res[r["id"]] = r["summary"].strip()
         except Exception as e:
             logger.warning(f"Summary batch failed: {e}")
+        return res
+
+    # Run the batches concurrently so 60 stories don't serialize into a slow cycle.
+    batches = [articles[i:i + 8] for i in range(0, len(articles), 8)]
+    results = await asyncio.gather(*[_summary_batch(b) for b in batches])
+    out: Dict[str, str] = {}
+    for r in results:
+        out.update(r)
     for k, v in fallback.items():
         out.setdefault(k, v)
     return out
