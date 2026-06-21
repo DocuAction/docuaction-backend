@@ -1091,9 +1091,14 @@ async def generate_briefing_html(agency: AgencyConfig, articles: List[Article], 
 async def build_briefing_outputs(agency: AgencyConfig, articles: List[Article], briefing_date: str):
     """Build the briefing sections ONCE and render BOTH the HTML and the editable
     .docx from them (so summaries aren't generated twice). Returns (html, docx_bytes).
-    docx_bytes is b'' if the Word render fails — HTML is always returned."""
-    sections = await _prepare_briefing_sections(agency, articles)
-    html = _render_agt_html(agency, briefing_date, sections)
+    docx_bytes is b'' if the Word render fails — HTML is always returned. Never
+    raises: any failure falls back to a simple HTML so the cycle can't crash."""
+    try:
+        sections = await _prepare_briefing_sections(agency, articles)
+        html = _render_agt_html(agency, briefing_date, sections)
+    except Exception as e:
+        logger.error(f"AGT briefing build failed; using simple HTML: {e}")
+        return _simple_html(agency, articles, briefing_date), b""
     try:
         docx_bytes = _render_agt_docx(agency, briefing_date, sections)
     except Exception as e:
@@ -1127,11 +1132,15 @@ async def _prepare_briefing_sections(agency: AgencyConfig, articles: List[Articl
     for a in _articles.values():
         if a.agency_id != agency.agency_id or a.article_id in pool:
             continue
+        recent = True
         try:
             pub = datetime.fromisoformat((a.published_at or "").replace("Z", "+00:00"))
+            if pub.tzinfo is None:                      # coerce naive -> UTC so the
+                pub = pub.replace(tzinfo=timezone.utc)  # comparison can't raise
+            recent = pub >= cutoff
         except Exception:
-            pub = None
-        if pub is None or pub >= cutoff:
+            recent = True   # unparseable date -> include rather than crash
+        if recent:
             pool[a.article_id] = a
 
     # NEWS only — relevant, non-social — then drop duplicate stories across cycles.
