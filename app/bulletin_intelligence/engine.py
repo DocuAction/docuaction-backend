@@ -116,6 +116,7 @@ class AgencyConfig:
     include_social: bool = True
     include_regulatory: bool = True
     archive_months: int = 12
+    logo_url: str = ""         # agency's own logo (e.g. FCC seal) shown in the header
 
 
 @dataclass
@@ -1163,9 +1164,10 @@ async def _summaries_for(articles: List[Article], agency: AgencyConfig) -> Dict[
     return out
 
 
-# AGT logo image URL (publicly hosted https URL). Set env AGT_LOGO_URL to show it
-# in the header; left blank = no logo (so the email never shows a broken image).
-_AGT_LOGO_URL = os.getenv("AGT_LOGO_URL", "").strip()
+# Header logo = the AGENCY's own logo (e.g. the FCC seal), taken from
+# AgencyConfig.logo_url. This env is just a fallback if the config has none.
+# Must be a publicly-hosted https image URL; blank = no logo (never a broken image).
+_AGT_LOGO_URL = os.getenv("AGENCY_LOGO_URL", "").strip()
 
 
 def _render_agt_html(agency: AgencyConfig, briefing_date: str, sections) -> str:
@@ -1230,8 +1232,10 @@ def _render_agt_html(agency: AgencyConfig, briefing_date: str, sections) -> str:
                 f'<a href="#doctop" style="{S_LINK}">&#8593; Back to Top</a></div>'
             )
 
-    logo = (f'<img src="{esc(_AGT_LOGO_URL)}" alt="AGT" style="max-height:54px;margin:0 0 12px"><br>'
-            if _AGT_LOGO_URL else "")
+    logo_src = (getattr(agency, "logo_url", "") or _AGT_LOGO_URL or "").strip()
+    logo = (f'<img src="{esc(logo_src)}" alt="{esc(agency.short_name)} logo" '
+            'style="max-height:60px;margin:0 0 12px"><br>'
+            if logo_src else "")
 
     return (
         '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8">\n'
