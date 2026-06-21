@@ -72,6 +72,33 @@ TOPIC_LABELS = {
 }
 FCC_TOPIC_LABELS = TOPIC_LABELS  # alias for backward compatibility
 
+# ── Client display sections (the 6 buckets in the AGT FCC Daily News email) ─────
+# These are what the CLIENT sees, grouped from the finer internal topics above.
+# Order here is the order they appear in the briefing.
+AGT_SECTIONS = [
+    "General",
+    "Media & Broadcasting",
+    "Wireless & Spectrum",
+    "Broadband & Infrastructure",
+    "Equipment Authorization",
+    "AI & Emerging Tech",
+]
+
+# Fallback topic -> section map (used if the classifier doesn't set a section).
+TOPIC_TO_SECTION = {
+    "fcc_news_events":         "General",
+    "consumers_advocacy":      "Broadband & Infrastructure",
+    "media_broadcasting":      "Media & Broadcasting",
+    "public_safety_emergency": "General",
+    "wireless_mobile":         "Wireless & Spectrum",
+    "ai_emerging_tech":        "AI & Emerging Tech",
+    "business_industry":       "General",
+    "international_affairs":   "General",
+    "space_communications":    "General",
+    "spectrum_policy":         "Wireless & Spectrum",
+    "other":                   "General",
+}
+
 
 # ── Data classes ───────────────────────────────────────────────────────────────
 @dataclass
@@ -105,6 +132,7 @@ class Article:
     author: str
     outlet: str
     topic: str = "other"
+    section: str = ""          # client display section (one of AGT_SECTIONS)
     article_type: str = "news"
     relevance_score: float = 0.5
     sentiment: str = "neutral"
@@ -966,7 +994,7 @@ async def classify_articles(articles: List[Article], agency: AgencyConfig) -> Li
 
         prompt = f"""You are classifying news for a daily intelligence briefing about {agency.name} ({agency.short_name}).
 Return a JSON array, one object per article:
-  id, topic (from list), article_type (news/opinion/analysis/editorial/press_release/regulatory), sentiment (positive/negative/neutral), relevance_score (0.0-1.0)
+  id, topic (from list), section (from SECTIONS), article_type (news/opinion/analysis/editorial/press_release/regulatory), sentiment (positive/negative/neutral), relevance_score (0.0-1.0)
 
 relevance_score = how directly the article concerns {agency.name} ({agency.short_name}) itself — its
 leadership/officials, decisions, proceedings, rulings, votes, enforcement, or a matter that genuinely
@@ -994,6 +1022,14 @@ Topics:
 {topics_str}
   other: Does not fit above topics
 
+SECTIONS — pick the ONE client display bucket each story belongs in:
+  General                    : {agency.short_name} leadership, meetings, enforcement, public safety, space, international, business/politics
+  Media & Broadcasting       : TV, radio, cable, satellite TV/radio, broadcast licenses, media mergers
+  Wireless & Spectrum        : spectrum, auctions, 5G, wireless/mobile carriers, cell towers
+  Broadband & Infrastructure : broadband deployment, E-Rate, consumers, net access, undersea cables, infrastructure
+  Equipment Authorization    : device/equipment authorization & certification, drones, prepaid-phone ID, covered-list/Huawei gear
+  AI & Emerging Tech         : artificial intelligence, machine learning, emerging technology
+
 Articles:
 {json.dumps(items)}
 
@@ -1014,6 +1050,8 @@ Return ONLY the JSON array."""
                 art.article_type   = r.get("article_type", "news")
                 art.sentiment      = r.get("sentiment", "neutral")
                 art.relevance_score = float(r.get("relevance_score", 0.5))
+                sect = (r.get("section") or "").strip()
+                art.section = sect if sect in AGT_SECTIONS else TOPIC_TO_SECTION.get(art.topic, "General")
                 classified.append(art)
 
         except Exception as e:
@@ -1024,8 +1062,196 @@ Return ONLY the JSON array."""
     return classified
 
 
-# ── Briefing Generator: Claude Sonnet ─────────────────────────────────────────
+# ── Briefing Generator: AGT FCC Daily News format (deterministic template) ─────
+# The HTML layout is rendered in code (ported from the client's fcc_digest.py) so
+# it always matches the deliverable exactly; the AI only writes the per-story
+# summaries. Groups stories into the 6 client display sections (AGT_SECTIONS),
+# news only (social posts feed nothing here — they'd go in a separate social block).
 async def generate_briefing_html(agency: AgencyConfig, articles: List[Article], briefing_date: str) -> str:
+    try:
+        return await _render_agt_briefing(agency, articles, briefing_date)
+    except Exception as e:
+        logger.error(f"AGT briefing render failed: {e}")
+        return _simple_html(agency, articles, briefing_date)
+
+
+def _section_of(art: "Article") -> str:
+    return art.section if art.section in AGT_SECTIONS else TOPIC_TO_SECTION.get(art.topic, "General")
+
+
+async def _render_agt_briefing(agency: AgencyConfig, articles: List[Article], briefing_date: str) -> str:
+    # NEWS only — relevant, non-social. Social posts never appear as news stories.
+    news = [a for a in articles if a.relevance_score >= 0.4 and a.source_type != "social"]
+    news.sort(key=lambda a: a.relevance_score, reverse=True)
+
+    # Cap fcc.gov to 2 (client gets FCC.gov directly) and total stories to 45.
+    capped, fcc_gov = [], 0
+    for a in news:
+        if "fcc.gov" in (a.url or "").lower():
+            if fcc_gov >= 2:
+                continue
+            fcc_gov += 1
+        capped.append(a)
+        if len(capped) >= 45:
+            break
+
+    summaries = await _summaries_for(capped, agency)
+
+    # Group into the 6 client sections in fixed order; hide empty sections.
+    idx, sections = 0, []
+    for sec in AGT_SECTIONS:
+        stories = []
+        for a in capped:
+            if _section_of(a) != sec:
+                continue
+            idx += 1
+            stories.append({
+                "source": (a.outlet or a.source or "NEWS").strip(),
+                "headline": (a.title or "").strip(),
+                "url": (a.url or "").strip(),
+                "anchor": f"story_{idx}",
+                "summary": (summaries.get(a.article_id) or a.summary or "").strip(),
+                "is_paywalled": bool(a.is_paywalled),
+                "similar": [],
+            })
+        if stories:
+            sections.append((sec, stories))
+
+    return _render_agt_html(agency, briefing_date, sections)
+
+
+async def _summaries_for(articles: List[Article], agency: AgencyConfig) -> Dict[str, str]:
+    """Claude-written 2-4 sentence factual summaries, keyed by article_id."""
+    fallback = {a.article_id: (a.summary or a.title or "")[:400] for a in articles}
+    if not ANTHROPIC_KEY or not articles:
+        return fallback
+    client = _get_client()
+    out: Dict[str, str] = {}
+    for i in range(0, len(articles), 8):
+        batch = articles[i:i + 8]
+        items = [{"id": a.article_id, "title": a.title, "outlet": a.outlet,
+                  "text": (a.full_text or a.summary or "")[:1500]} for a in batch]
+        prompt = (
+            f"You write summaries for the {agency.short_name} Daily News Monitoring briefing — a "
+            "government news-clipping service. For each item write a 2-4 sentence FACTUAL summary: "
+            "lead with the concrete news (who/what/when, dates, dollar amounts, votes, notable quotes). "
+            "No opinion, no marketing language. If the provided text is thin, summarize only what is "
+            'given — do NOT invent facts. Return ONLY a JSON array of {"id":"...","summary":"..."}.\n\n'
+            "Items:\n" + json.dumps(items)
+        )
+        try:
+            resp = await client.messages.create(
+                model="claude-sonnet-4-5", max_tokens=2200,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            for r in (_parse_json_safe(_extract_text(resp.content)) or []):
+                if isinstance(r, dict) and r.get("id") and (r.get("summary") or "").strip():
+                    out[r["id"]] = r["summary"].strip()
+        except Exception as e:
+            logger.warning(f"Summary batch failed: {e}")
+    for k, v in fallback.items():
+        out.setdefault(k, v)
+    return out
+
+
+_AGT_CSS = """<style>
+  html{scroll-behavior:smooth}
+  body{margin:0;padding:0;background:#eef1f6;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222}
+  .wrap{max-width:760px;margin:0 auto;background:#fff}
+  .hdr{background:#003087;padding:26px 30px 22px;text-align:center;border-bottom:5px solid #7eb4ea}
+  .hdr-agency{color:#fff;font-size:18px;font-weight:bold;letter-spacing:4px;text-transform:uppercase;margin-bottom:8px}
+  .hdr-title-main{color:#fff;font-size:28px;font-weight:bold;margin-bottom:8px}
+  .hdr-date{color:#d7e8ff;font-size:15px;font-weight:bold;margin-bottom:12px}
+  .hdr-divider{border-top:1px solid #4f7fbd;margin:12px auto;max-width:560px}
+  .hdr-prepared{color:#d7e8ff;font-size:12px}
+  .toc-wrap{background:#f5f8fd;padding:18px 30px 10px;border-bottom:3px solid #003087}
+  .toc-main-title{font-size:15px;font-weight:bold;color:#003087;margin-bottom:8px}
+  .toc-sec-name{font-size:10px;font-weight:bold;color:#003087;letter-spacing:1.5px;text-transform:uppercase;margin:14px 0 7px;border-left:4px solid #003087;padding-left:8px}
+  .toc-item{font-size:12.5px;padding:3px 0 3px 12px;line-height:1.5;margin-bottom:4px}
+  .toc-source,.similar-source{font-weight:bold;color:#003087}
+  a{color:#003087;text-decoration:underline}
+  .sub-label{font-weight:bold;color:#555;text-decoration:none}
+  .summ-banner{background:#003087;color:#fff;font-size:11px;font-weight:bold;letter-spacing:2px;text-transform:uppercase;padding:8px 30px}
+  .sec-hdr{background:#dde6f5;padding:9px 30px;font-size:10px;font-weight:bold;color:#003087;letter-spacing:1.5px;text-transform:uppercase;border-left:5px solid #003087}
+  .story{padding:16px 30px 12px;border-bottom:1px solid #e4e9f2;scroll-margin-top:20px}
+  .story-source{font-size:10.5px;font-weight:bold;color:#003087;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+  .story-headline{font-size:14.5px;font-weight:bold;color:#111;line-height:1.4;margin-bottom:9px}
+  .story-body{font-size:12.5px;line-height:1.75;color:#444}
+  .story-body p{margin:0 0 10px}
+  .similar-box{background:#f5f8fd;border-left:4px solid #003087;padding:10px 12px;margin-top:12px}
+  .similar-title{font-size:10px;font-weight:bold;color:#003087;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:6px}
+  .similar-item{font-size:12px;line-height:1.5;margin-bottom:4px}
+  .back{text-align:right;font-size:10px;padding:3px 30px 8px}
+  .ftr{background:#003087;padding:14px 30px;text-align:center;font-size:11px;color:#a8c8f0}
+  .ftr a{color:#7eb4ea}
+</style>"""
+
+
+def _render_agt_html(agency: AgencyConfig, briefing_date: str, sections) -> str:
+    import html as _h
+    esc = _h.escape
+    SUB = ' <span class="sub-label">SUBSCRIPTION REQUIRED</span>'
+
+    def extlink(url, label):
+        if not url:
+            return esc(label)
+        return f'<a href="{esc(url)}" target="_blank" rel="noopener noreferrer">{esc(label)}</a>'
+
+    toc = []
+    for name, stories in sections:
+        toc.append(f'<div class="toc-sec-name">{esc(name)}</div>')
+        for s in stories:
+            sub = SUB if s["is_paywalled"] else ""
+            toc.append(
+                f'<div class="toc-item"><span class="toc-source">{esc(s["source"])}:</span> '
+                f'<a href="#{esc(s["anchor"])}">{esc(s["headline"])}</a>{sub}</div>'
+            )
+
+    body = []
+    for name, stories in sections:
+        body.append(f'<div class="sec-hdr">{esc(name)}</div>')
+        for s in stories:
+            sub = SUB if s["is_paywalled"] else ""
+            similar = ""
+            if s.get("similar"):
+                items = "".join(
+                    f'<div class="similar-item"><span class="similar-source">{esc(x["source"])}:</span> '
+                    f'{extlink(x["url"], x["headline"])}{SUB if x.get("is_paywalled") else ""}</div>'
+                    for x in s["similar"]
+                )
+                similar = f'<div class="similar-box"><div class="similar-title">Similar Stories</div>{items}</div>'
+            body.append(
+                f'<div class="story" id="{esc(s["anchor"])}">'
+                f'<div class="story-source">{esc(s["source"])}</div>'
+                f'<div class="story-headline">{extlink(s["url"], s["headline"])}{sub}</div>'
+                f'<div class="story-body"><p>{esc(s["summary"])}</p></div>{similar}</div>'
+                f'<div class="back"><a href="#doctop">↑ Back to Top</a></div>'
+            )
+
+    return (
+        '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8">\n'
+        f'<title>{esc(agency.short_name)} Daily News Summary</title>\n'
+        + _AGT_CSS +
+        '\n</head>\n<body>\n<div class="wrap" id="doctop">\n'
+        '<div class="hdr">'
+        f'<div class="hdr-agency">{esc(agency.name)}</div>'
+        '<div class="hdr-title-main">Daily News Summary</div>'
+        f'<div class="hdr-date">{esc(briefing_date)}</div>'
+        '<div class="hdr-divider"></div>'
+        '<div class="hdr-prepared">Prepared by Alliance Global Tech, Inc. (AGT) | FCC Daily News Monitoring</div>'
+        '</div>\n'
+        '<div class="toc-wrap"><div class="toc-main-title">Today&rsquo;s Wire &mdash; Contents</div>\n'
+        + "\n".join(toc) + '\n</div>\n'
+        '<div class="summ-banner">&#9658;&nbsp; Story Summaries</div>\n'
+        + "\n".join(body) + '\n'
+        '<div class="ftr">Prepared by Alliance Global Tech, Inc. (AGT) | FCC Daily News Monitoring<br>'
+        '<a href="https://allianceglobaltech.com" target="_blank" rel="noopener noreferrer">allianceglobaltech.com</a>'
+        '</div>\n</div>\n</body>\n</html>'
+    )
+
+
+# ── Legacy LLM briefing generator (kept for reference; no longer called) ───────
+async def _legacy_generate_briefing_html(agency: AgencyConfig, articles: List[Article], briefing_date: str) -> str:
     if not ANTHROPIC_KEY:
         return _simple_html(agency, articles, briefing_date)
 
