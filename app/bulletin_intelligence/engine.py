@@ -1079,6 +1079,15 @@ def _section_of(art: "Article") -> str:
     return art.section if art.section in AGT_SECTIONS else TOPIC_TO_SECTION.get(art.topic, "General")
 
 
+def _clean_headline(title: str) -> str:
+    """Strip a leading source tag like '[Federal Register] ' or '[Broadcast] ' that
+    some ingesters prepend — the outlet is already shown separately."""
+    t = (title or "").strip()
+    if t.startswith("[") and "]" in t[:40]:
+        t = t[t.index("]") + 1:].strip()
+    return t
+
+
 async def _render_agt_briefing(agency: AgencyConfig, articles: List[Article], briefing_date: str) -> str:
     # NEWS only — relevant, non-social. Social posts never appear as news stories.
     news = [a for a in articles if a.relevance_score >= 0.4 and a.source_type != "social"]
@@ -1107,7 +1116,7 @@ async def _render_agt_briefing(agency: AgencyConfig, articles: List[Article], br
             idx += 1
             stories.append({
                 "source": (a.outlet or a.source or "NEWS").strip(),
-                "headline": (a.title or "").strip(),
+                "headline": _clean_headline(a.title),
                 "url": (a.url or "").strip(),
                 "anchor": f"story_{idx}",
                 "summary": (summaries.get(a.article_id) or a.summary or "").strip(),
@@ -1154,99 +1163,108 @@ async def _summaries_for(articles: List[Article], agency: AgencyConfig) -> Dict[
     return out
 
 
-_AGT_CSS = """<style>
-  html{scroll-behavior:smooth}
-  body{margin:0;padding:0;background:#eef1f6;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222}
-  .wrap{max-width:760px;margin:0 auto;background:#fff}
-  .hdr{background:#003087;padding:26px 30px 22px;text-align:center;border-bottom:5px solid #7eb4ea}
-  .hdr-agency{color:#fff;font-size:18px;font-weight:bold;letter-spacing:4px;text-transform:uppercase;margin-bottom:8px}
-  .hdr-title-main{color:#fff;font-size:28px;font-weight:bold;margin-bottom:8px}
-  .hdr-date{color:#d7e8ff;font-size:15px;font-weight:bold;margin-bottom:12px}
-  .hdr-divider{border-top:1px solid #4f7fbd;margin:12px auto;max-width:560px}
-  .hdr-prepared{color:#d7e8ff;font-size:12px}
-  .toc-wrap{background:#f5f8fd;padding:18px 30px 10px;border-bottom:3px solid #003087}
-  .toc-main-title{font-size:15px;font-weight:bold;color:#003087;margin-bottom:8px}
-  .toc-sec-name{font-size:10px;font-weight:bold;color:#003087;letter-spacing:1.5px;text-transform:uppercase;margin:14px 0 7px;border-left:4px solid #003087;padding-left:8px}
-  .toc-item{font-size:12.5px;padding:3px 0 3px 12px;line-height:1.5;margin-bottom:4px}
-  .toc-source,.similar-source{font-weight:bold;color:#003087}
-  a{color:#003087;text-decoration:underline}
-  .sub-label{font-weight:bold;color:#555;text-decoration:none}
-  .summ-banner{background:#003087;color:#fff;font-size:11px;font-weight:bold;letter-spacing:2px;text-transform:uppercase;padding:8px 30px}
-  .sec-hdr{background:#dde6f5;padding:9px 30px;font-size:10px;font-weight:bold;color:#003087;letter-spacing:1.5px;text-transform:uppercase;border-left:5px solid #003087}
-  .story{padding:16px 30px 12px;border-bottom:1px solid #e4e9f2;scroll-margin-top:20px}
-  .story-source{font-size:10.5px;font-weight:bold;color:#003087;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
-  .story-headline{font-size:14.5px;font-weight:bold;color:#111;line-height:1.4;margin-bottom:9px}
-  .story-body{font-size:12.5px;line-height:1.75;color:#444}
-  .story-body p{margin:0 0 10px}
-  .similar-box{background:#f5f8fd;border-left:4px solid #003087;padding:10px 12px;margin-top:12px}
-  .similar-title{font-size:10px;font-weight:bold;color:#003087;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:6px}
-  .similar-item{font-size:12px;line-height:1.5;margin-bottom:4px}
-  .back{text-align:right;font-size:10px;padding:3px 30px 8px}
-  .ftr{background:#003087;padding:14px 30px;text-align:center;font-size:11px;color:#a8c8f0}
-  .ftr a{color:#7eb4ea}
-</style>"""
+# AGT logo image URL (publicly hosted https URL). Set env AGT_LOGO_URL to show it
+# in the header; left blank = no logo (so the email never shows a broken image).
+_AGT_LOGO_URL = os.getenv("AGT_LOGO_URL", "").strip()
 
 
 def _render_agt_html(agency: AgencyConfig, briefing_date: str, sections) -> str:
+    """Render the briefing as Outlook-safe HTML with INLINE styles. Outlook ignores
+    <style> blocks (and strips them on copy/paste into a new email), so every style
+    is inlined. Layout matches the client's fcc_digest.py output."""
     import html as _h
     esc = _h.escape
-    SUB = ' <span class="sub-label">SUBSCRIPTION REQUIRED</span>'
+
+    S_LINK = "color:#003087;text-decoration:underline"
+    S_SRC  = "font-weight:bold;color:#003087"
+    SUB    = (' <span style="font-weight:bold;color:#555555;text-decoration:none">'
+              'SUBSCRIPTION REQUIRED</span>')
 
     def extlink(url, label):
         if not url:
             return esc(label)
-        return f'<a href="{esc(url)}" target="_blank" rel="noopener noreferrer">{esc(label)}</a>'
+        return (f'<a href="{esc(url)}" target="_blank" rel="noopener noreferrer" '
+                f'style="{S_LINK}">{esc(label)}</a>')
 
     toc = []
     for name, stories in sections:
-        toc.append(f'<div class="toc-sec-name">{esc(name)}</div>')
+        toc.append('<div style="font-size:10px;font-weight:bold;color:#003087;letter-spacing:1.5px;'
+                   'text-transform:uppercase;margin:14px 0 7px;border-left:4px solid #003087;'
+                   f'padding-left:8px">{esc(name)}</div>')
         for s in stories:
             sub = SUB if s["is_paywalled"] else ""
             toc.append(
-                f'<div class="toc-item"><span class="toc-source">{esc(s["source"])}:</span> '
-                f'<a href="#{esc(s["anchor"])}">{esc(s["headline"])}</a>{sub}</div>'
+                '<div style="font-size:13px;padding:3px 0 3px 12px;line-height:1.5;margin-bottom:4px">'
+                f'<span style="{S_SRC}">{esc(s["source"])}:</span> '
+                f'<a href="#{esc(s["anchor"])}" style="{S_LINK}">{esc(s["headline"])}</a>{sub}</div>'
             )
 
     body = []
     for name, stories in sections:
-        body.append(f'<div class="sec-hdr">{esc(name)}</div>')
+        body.append('<div style="background:#dde6f5;padding:9px 30px;font-size:10px;font-weight:bold;'
+                    'color:#003087;letter-spacing:1.5px;text-transform:uppercase;'
+                    f'border-left:5px solid #003087">{esc(name)}</div>')
         for s in stories:
             sub = SUB if s["is_paywalled"] else ""
             similar = ""
             if s.get("similar"):
                 items = "".join(
-                    f'<div class="similar-item"><span class="similar-source">{esc(x["source"])}:</span> '
+                    '<div style="font-size:12px;line-height:1.5;margin-bottom:4px">'
+                    f'<span style="{S_SRC}">{esc(x["source"])}:</span> '
                     f'{extlink(x["url"], x["headline"])}{SUB if x.get("is_paywalled") else ""}</div>'
                     for x in s["similar"]
                 )
-                similar = f'<div class="similar-box"><div class="similar-title">Similar Stories</div>{items}</div>'
+                similar = ('<div style="background:#f5f8fd;border-left:4px solid #003087;padding:10px 12px;'
+                           'margin-top:12px"><div style="font-size:10px;font-weight:bold;color:#003087;'
+                           'letter-spacing:1.2px;text-transform:uppercase;margin-bottom:6px">Similar Stories</div>'
+                           f'{items}</div>')
             body.append(
-                f'<div class="story" id="{esc(s["anchor"])}">'
-                f'<div class="story-source">{esc(s["source"])}</div>'
-                f'<div class="story-headline">{extlink(s["url"], s["headline"])}{sub}</div>'
-                f'<div class="story-body"><p>{esc(s["summary"])}</p></div>{similar}</div>'
-                f'<div class="back"><a href="#doctop">↑ Back to Top</a></div>'
+                f'<div id="{esc(s["anchor"])}" style="padding:16px 30px 12px;border-bottom:1px solid #e4e9f2">'
+                '<div style="font-size:11px;font-weight:bold;color:#003087;text-transform:uppercase;'
+                f'letter-spacing:.5px;margin-bottom:4px">{esc(s["source"])}</div>'
+                '<div style="font-size:15px;font-weight:bold;color:#111111;line-height:1.4;margin-bottom:9px">'
+                f'{extlink(s["url"], s["headline"])}{sub}</div>'
+                '<div style="font-size:13px;line-height:1.75;color:#444444">'
+                f'{esc(s["summary"])}</div>{similar}</div>'
+                '<div style="text-align:right;font-size:10px;padding:3px 30px 8px">'
+                f'<a href="#doctop" style="{S_LINK}">&#8593; Back to Top</a></div>'
             )
+
+    logo = (f'<img src="{esc(_AGT_LOGO_URL)}" alt="AGT" style="max-height:54px;margin:0 0 12px"><br>'
+            if _AGT_LOGO_URL else "")
 
     return (
         '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8">\n'
         f'<title>{esc(agency.short_name)} Daily News Summary</title>\n'
-        + _AGT_CSS +
-        '\n</head>\n<body>\n<div class="wrap" id="doctop">\n'
-        '<div class="hdr">'
-        f'<div class="hdr-agency">{esc(agency.name)}</div>'
-        '<div class="hdr-title-main">Daily News Summary</div>'
-        f'<div class="hdr-date">{esc(briefing_date)}</div>'
-        '<div class="hdr-divider"></div>'
-        '<div class="hdr-prepared">Prepared by Alliance Global Tech, Inc. (AGT) | FCC Daily News Monitoring</div>'
+        '<style>html{scroll-behavior:smooth}</style>\n</head>\n'
+        '<body style="margin:0;padding:0;background:#eef1f6">\n'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        'style="background:#eef1f6"><tr><td align="center">\n'
+        '<div id="doctop" style="max-width:760px;margin:0 auto;background:#ffffff;'
+        'font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222222">\n'
+        '<div style="background:#003087;padding:26px 30px 22px;text-align:center;'
+        'border-bottom:5px solid #7eb4ea">'
+        + logo +
+        '<div style="color:#ffffff;font-size:18px;font-weight:bold;letter-spacing:4px;'
+        f'text-transform:uppercase;margin:0 0 8px">{esc(agency.name)}</div>'
+        '<div style="color:#ffffff;font-size:28px;font-weight:bold;margin:0 0 8px">Daily News Summary</div>'
+        f'<div style="color:#d7e8ff;font-size:15px;font-weight:bold;margin:0 0 12px">{esc(briefing_date)}</div>'
+        '<div style="border-top:1px solid #4f7fbd;margin:12px auto;max-width:560px"></div>'
+        '<div style="color:#d7e8ff;font-size:12px">Prepared by Alliance Global Tech, Inc. (AGT) | '
+        'FCC Daily News Monitoring</div>'
         '</div>\n'
-        '<div class="toc-wrap"><div class="toc-main-title">Today&rsquo;s Wire &mdash; Contents</div>\n'
+        '<div style="background:#f5f8fd;padding:18px 30px 10px;border-bottom:3px solid #003087">'
+        '<div style="font-size:15px;font-weight:bold;color:#003087;margin:0 0 8px">'
+        'Today&rsquo;s Wire &mdash; Contents</div>\n'
         + "\n".join(toc) + '\n</div>\n'
-        '<div class="summ-banner">&#9658;&nbsp; Story Summaries</div>\n'
+        '<div style="background:#003087;color:#ffffff;font-size:11px;font-weight:bold;letter-spacing:2px;'
+        'text-transform:uppercase;padding:8px 30px">&#9658;&nbsp; Story Summaries</div>\n'
         + "\n".join(body) + '\n'
-        '<div class="ftr">Prepared by Alliance Global Tech, Inc. (AGT) | FCC Daily News Monitoring<br>'
-        '<a href="https://allianceglobaltech.com" target="_blank" rel="noopener noreferrer">allianceglobaltech.com</a>'
-        '</div>\n</div>\n</body>\n</html>'
+        '<div style="background:#003087;padding:14px 30px;text-align:center;font-size:11px;color:#a8c8f0">'
+        'Prepared by Alliance Global Tech, Inc. (AGT) | FCC Daily News Monitoring | '
+        '<a href="https://agtbi.com" target="_blank" rel="noopener noreferrer" '
+        'style="color:#7eb4ea">agtbi.com</a></div>\n'
+        '</div>\n</td></tr></table>\n</body>\n</html>'
     )
 
 
