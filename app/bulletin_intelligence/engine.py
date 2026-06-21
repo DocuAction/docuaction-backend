@@ -76,27 +76,30 @@ FCC_TOPIC_LABELS = TOPIC_LABELS  # alias for backward compatibility
 # These are what the CLIENT sees, grouped from the finer internal topics above.
 # Order here is the order they appear in the briefing.
 AGT_SECTIONS = [
-    "General",
+    "FCC News",
+    "Consumers",
     "Media & Broadcasting",
+    "Space Policy",
+    "Public Safety / Cybersecurity / Privacy",
     "Wireless & Spectrum",
-    "Broadband & Infrastructure",
-    "Equipment Authorization",
-    "AI & Emerging Tech",
+    "AI / Machine Learning",
+    "Business & Tech",
+    "International",
 ]
 
 # Fallback topic -> section map (used if the classifier doesn't set a section).
 TOPIC_TO_SECTION = {
-    "fcc_news_events":         "General",
-    "consumers_advocacy":      "Broadband & Infrastructure",
+    "fcc_news_events":         "FCC News",
+    "consumers_advocacy":      "Consumers",
     "media_broadcasting":      "Media & Broadcasting",
-    "public_safety_emergency": "General",
+    "public_safety_emergency": "Public Safety / Cybersecurity / Privacy",
     "wireless_mobile":         "Wireless & Spectrum",
-    "ai_emerging_tech":        "AI & Emerging Tech",
-    "business_industry":       "General",
-    "international_affairs":   "General",
-    "space_communications":    "General",
+    "ai_emerging_tech":        "AI / Machine Learning",
+    "business_industry":       "Business & Tech",
+    "international_affairs":   "International",
+    "space_communications":    "Space Policy",
     "spectrum_policy":         "Wireless & Spectrum",
-    "other":                   "General",
+    "other":                   "FCC News",
 }
 
 
@@ -156,6 +159,7 @@ class Briefing:
     approved_at: str = ""
     delivered_at: str = ""
     delivery_recipients: int = 0
+    docx_b64: str = ""         # editable Word version, base64 (for the download endpoint)
 
 
 # ── In-memory store ────────────────────────────────────────────────────────────
@@ -1023,13 +1027,16 @@ Topics:
 {topics_str}
   other: Does not fit above topics
 
-SECTIONS — pick the ONE client display bucket each story belongs in:
-  General                    : {agency.short_name} leadership, meetings, enforcement, public safety, space, international, business/politics
-  Media & Broadcasting       : TV, radio, cable, satellite TV/radio, broadcast licenses, media mergers
-  Wireless & Spectrum        : spectrum, auctions, 5G, wireless/mobile carriers, cell towers
-  Broadband & Infrastructure : broadband deployment, E-Rate, consumers, net access, undersea cables, infrastructure
-  Equipment Authorization    : device/equipment authorization & certification, drones, prepaid-phone ID, covered-list/Huawei gear
-  AI & Emerging Tech         : artificial intelligence, machine learning, emerging technology
+SECTIONS — pick the ONE display bucket each story belongs in (use these EXACT names):
+  FCC News                                : {agency.short_name} leadership/commissioners, meetings, enforcement, votes, orders, general agency news
+  Consumers                               : robocalls/TCPA, scams, accessibility, consumer protection, E-Rate, Lifeline
+  Media & Broadcasting                    : TV, radio, cable, satellite TV/radio, broadcast licenses, media mergers
+  Space Policy                            : satellites, NGSO/GSO, earth stations, space bureau, launch + spectrum
+  Public Safety / Cybersecurity / Privacy : 911/E911, emergency alerts, outages, cybersecurity, data breaches, privacy
+  Wireless & Spectrum                     : spectrum, auctions, 5G, broadband, wireless/mobile carriers, cell towers
+  AI / Machine Learning                   : artificial intelligence, machine learning, emerging tech
+  Business & Tech                         : net neutrality, internet policy, telecom industry/markets, big tech
+  International                           : foreign telecom, undersea/subsea cables, ITU, treaties, {agency.short_name} international affairs
 
 Articles:
 {json.dumps(items)}
@@ -1070,10 +1077,25 @@ Return ONLY the JSON array."""
 # news only (social posts feed nothing here — they'd go in a separate social block).
 async def generate_briefing_html(agency: AgencyConfig, articles: List[Article], briefing_date: str) -> str:
     try:
-        return await _render_agt_briefing(agency, articles, briefing_date)
+        sections = await _prepare_briefing_sections(agency, articles)
+        return _render_agt_html(agency, briefing_date, sections)
     except Exception as e:
         logger.error(f"AGT briefing render failed: {e}")
         return _simple_html(agency, articles, briefing_date)
+
+
+async def build_briefing_outputs(agency: AgencyConfig, articles: List[Article], briefing_date: str):
+    """Build the briefing sections ONCE and render BOTH the HTML and the editable
+    .docx from them (so summaries aren't generated twice). Returns (html, docx_bytes).
+    docx_bytes is b'' if the Word render fails — HTML is always returned."""
+    sections = await _prepare_briefing_sections(agency, articles)
+    html = _render_agt_html(agency, briefing_date, sections)
+    try:
+        docx_bytes = _render_agt_docx(agency, briefing_date, sections)
+    except Exception as e:
+        logger.warning(f"DOCX render failed: {e}")
+        docx_bytes = b""
+    return html, docx_bytes
 
 
 def _section_of(art: "Article") -> str:
@@ -1089,7 +1111,7 @@ def _clean_headline(title: str) -> str:
     return t
 
 
-async def _render_agt_briefing(agency: AgencyConfig, articles: List[Article], briefing_date: str) -> str:
+async def _prepare_briefing_sections(agency: AgencyConfig, articles: List[Article]):
     # NEWS only — relevant, non-social. Social posts never appear as news stories.
     news = [a for a in articles if a.relevance_score >= 0.4 and a.source_type != "social"]
     news.sort(key=lambda a: a.relevance_score, reverse=True)
@@ -1106,8 +1128,12 @@ async def _render_agt_briefing(agency: AgencyConfig, articles: List[Article], br
             break
 
     summaries = await _summaries_for(capped, agency)
+    return _collect_sections(capped, summaries)
 
-    # Group into the 6 client sections in fixed order; hide empty sections.
+
+def _collect_sections(capped: List[Article], summaries: Dict[str, str]):
+    """Group stories into ALL AGT_SECTIONS in fixed order. Every section header is
+    always present (even with no stories that day), per the client's requirement."""
     idx, sections = 0, []
     for sec in AGT_SECTIONS:
         stories = []
@@ -1124,10 +1150,8 @@ async def _render_agt_briefing(agency: AgencyConfig, articles: List[Article], br
                 "is_paywalled": bool(a.is_paywalled),
                 "similar": [],
             })
-        if stories:
-            sections.append((sec, stories))
-
-    return _render_agt_html(agency, briefing_date, sections)
+        sections.append((sec, stories))   # always include the header
+    return sections
 
 
 async def _summaries_for(articles: List[Article], agency: AgencyConfig) -> Dict[str, str]:
@@ -1270,6 +1294,84 @@ def _render_agt_html(agency: AgencyConfig, briefing_date: str, sections) -> str:
         'style="color:#7eb4ea">agtbi.com</a></div>\n'
         '</div>\n</td></tr></table>\n</body>\n</html>'
     )
+
+
+# ── Editable Word (.docx) export — matches the client's fcc_digest.py input ────
+def _docx_hyperlink(paragraph, text, url):
+    """Add a real Word hyperlink run to a paragraph (python-docx has no native API)."""
+    from docx.oxml.shared import OxmlElement
+    from docx.oxml.ns import qn
+    part = paragraph.part
+    r_id = part.relate_to(
+        url, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
+        is_external=True,
+    )
+    h = OxmlElement("w:hyperlink"); h.set(qn("r:id"), r_id)
+    r = OxmlElement("w:r"); rPr = OxmlElement("w:rPr")
+    col = OxmlElement("w:color"); col.set(qn("w:val"), "0563C1"); rPr.append(col)
+    u = OxmlElement("w:u"); u.set(qn("w:val"), "single"); rPr.append(u)
+    r.append(rPr)
+    t = OxmlElement("w:t"); t.text = text; t.set(qn("xml:space"), "preserve"); r.append(t)
+    h.append(r); paragraph._p.append(h)
+
+
+def _render_agt_docx(agency: AgencyConfig, briefing_date: str, sections) -> bytes:
+    """Render the briefing as an editable .docx in the structure the client's
+    fcc_digest.py parses: title block, TOC (all section headers + 'SOURCE: Headline'
+    with hyperlinks), a 'Story Summaries' split marker, then per-section stories
+    with summaries / Similar Stories / 'Back to Top', and the AGT footer."""
+    import io
+    from docx import Document
+    from docx.shared import Pt
+
+    doc = Document()
+
+    def heading(text):
+        doc.add_paragraph().add_run(text).bold = True
+
+    def src_headline(source, headline, url, paywalled):
+        p = doc.add_paragraph()
+        run = p.add_run(f"{(source or 'NEWS').upper()}: "); run.bold = True
+        if url:
+            _docx_hyperlink(p, headline, url)
+        else:
+            p.add_run(headline)
+        if paywalled:
+            p.add_run("  (SUBSCRIPTION REQUIRED)").italic = True
+
+    # Title block (filtered out as header/junk by fcc_digest.py)
+    r = doc.add_paragraph().add_run(agency.name); r.bold = True; r.font.size = Pt(16)
+    r = doc.add_paragraph().add_run("Daily News Summary"); r.bold = True; r.font.size = Pt(14)
+    doc.add_paragraph(briefing_date)
+    doc.add_paragraph("Prepared by Alliance Global Tech, Inc. (AGT) | FCC Daily News Monitoring | agtbi.com")
+    doc.add_paragraph("")
+
+    # Table of contents — every section header always present
+    for name, stories in sections:
+        heading(name)
+        for st in stories:
+            src_headline(st["source"], st["headline"], st["url"], st["is_paywalled"])
+    doc.add_paragraph("")
+
+    # Split marker
+    r = doc.add_paragraph().add_run("Story Summaries"); r.bold = True; r.font.size = Pt(13)
+
+    # Summaries — every section header always present
+    for name, stories in sections:
+        heading(name)
+        for st in stories:
+            src_headline(st["source"], st["headline"], st["url"], st["is_paywalled"])
+            if st["summary"]:
+                doc.add_paragraph(st["summary"])
+            for sim in st.get("similar", []):
+                heading("Similar Stories")
+                src_headline(sim.get("source", ""), sim.get("headline", ""),
+                             sim.get("url", ""), sim.get("is_paywalled", False))
+            doc.add_paragraph("Back to Top")
+
+    doc.add_paragraph("Prepared by Alliance Global Tech, Inc. (AGT) | FCC Daily News Monitoring")
+
+    buf = io.BytesIO(); doc.save(buf); return buf.getvalue()
 
 
 # ── Legacy LLM briefing generator (kept for reference; no longer called) ───────
@@ -1785,8 +1887,10 @@ async def run_daily_cycle(
     )[:80]
     logger.info(f"Briefing: {len(briefing_arts)} articles from {len(classified)} classified")
 
-    # Generate briefing
-    html = await generate_briefing_html(agency, briefing_arts, briefing_date)
+    # Generate briefing — HTML + editable Word (.docx), built from the same sections
+    html, docx_bytes = await build_briefing_outputs(agency, briefing_arts, briefing_date)
+    import base64 as _b64
+    docx_b64 = _b64.b64encode(docx_bytes).decode() if docx_bytes else ""
 
     topic_counts = {}
     for art in briefing_arts:
@@ -1809,6 +1913,7 @@ async def run_daily_cycle(
         topic_counts=topic_counts,
         generated_at=_now(),
         delivery_recipients=len(agency.distribution_list),
+        docx_b64=docx_b64,
     )
     _briefings[briefing_id] = briefing
 

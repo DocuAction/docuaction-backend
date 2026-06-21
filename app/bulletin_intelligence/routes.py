@@ -193,8 +193,8 @@ async def get_briefing_endpoint(briefing_id: str):
     briefing = get_briefing(briefing_id)
     if not briefing:
         raise HTTPException(status_code=404, detail="Briefing not found")
-    # Return without full HTML for summary view
-    return {k: v for k, v in briefing.items() if k != "html_content"}
+    # Return without the big HTML/DOCX blobs for the summary view
+    return {k: v for k, v in briefing.items() if k not in ("html_content", "docx_b64")}
 
 
 @router.get("/briefings/{briefing_id}/preview")
@@ -205,6 +205,28 @@ async def preview_briefing(briefing_id: str):
         raise HTTPException(status_code=404, detail="Briefing not found")
     from fastapi.responses import HTMLResponse
     return HTMLResponse(content=html)
+
+
+@router.get("/briefings/{briefing_id}/docx")
+async def download_briefing_docx(briefing_id: str):
+    """Download the editable Word (.docx) version of a briefing — open in Word,
+    tweak, then run it through fcc_digest.py to produce the final email."""
+    briefing = get_briefing(briefing_id)
+    if not briefing:
+        raise HTTPException(status_code=404, detail="Briefing not found")
+    b64 = briefing.get("docx_b64") or ""
+    if not b64:
+        raise HTTPException(status_code=404, detail="No Word document for this briefing yet (re-run the cycle).")
+    import base64
+    from fastapi.responses import Response
+    data = base64.b64decode(b64)
+    date_slug = (briefing.get("briefing_date") or "briefing").replace(",", "").replace(" ", "_")
+    fname = f"{briefing.get('agency_id', 'fcc').upper()}_Daily_News_{date_slug}.docx"
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 
 # ── Archive ────────────────────────────────────────────────────────────────────
