@@ -962,18 +962,33 @@ async def classify_articles(articles: List[Article], agency: AgencyConfig) -> Li
 
     for i in range(0, len(articles), batch_size):
         batch = articles[i:i + batch_size]
-        items = [{"id": a.article_id, "title": a.title, "summary": a.summary[:200]} for a in batch]
+        items = [{"id": a.article_id, "title": a.title, "outlet": a.outlet, "summary": a.summary[:400]} for a in batch]
 
         prompt = f"""You are classifying news for a daily intelligence briefing about {agency.name} ({agency.short_name}).
 Return a JSON array, one object per article:
   id, topic (from list), article_type (news/opinion/analysis/editorial/press_release/regulatory), sentiment (positive/negative/neutral), relevance_score (0.0-1.0)
 
-relevance_score = how directly the article is about {agency.short_name} itself — its leadership/officials, decisions, proceedings, rulings, votes, or enforcement. Be STRICT and do not inflate:
+relevance_score = how directly the article concerns {agency.name} ({agency.short_name}) itself — its
+leadership/officials, decisions, proceedings, rulings, votes, enforcement, or a matter that genuinely
+requires its approval. Be STRICT; do not inflate.
+
+CRITICAL — score 0.0-0.2 (NOT relevant) if ANY of these is true, no matter how on-topic it seems:
+  - "{agency.short_name}" refers to something OTHER than {agency.name} (e.g. a football/soccer club, a
+    church, a college, a company ticker, or a person's initials). "{agency.short_name}" has many meanings;
+    only the U.S. {agency.name} counts.
+  - "{agency.short_name}" appears only incidentally — in an image/photo caption, an advertisement, a
+    navigation menu or sidebar, a "related links" list, or as a single passing mention — with NO actual
+    {agency.short_name} action, official, ruling, or decision discussed in the body.
+  - There is no genuine {agency.short_name} involvement at all (generic tech/business/world news that just
+    happens to contain a related word).
+
+When it IS genuinely about {agency.name}:
   0.85-1.0 : explicitly about {agency.short_name} actions, officials, or proceedings
   0.55-0.80: a topic {agency.short_name} regulates, with {agency.short_name} clearly involved
-  0.40-0.54: {agency.short_name}-adjacent but the agency is not central
-  0.00-0.39: general tech/business/world news with no real {agency.short_name} connection
-If {agency.short_name} (the agency, its commissioners, or its specific actions) is not actually involved, score BELOW 0.4 even if the topic is telecom/media/tech.
+  0.40-0.54: {agency.short_name}-adjacent and genuinely implicated (e.g. a merger that needs
+             {agency.short_name} approval) but the agency is not the central subject
+  0.00-0.39: no real {agency.short_name} connection
+When in doubt about whether "{agency.short_name}" even refers to {agency.name}, score LOW (below 0.4).
 
 Topics:
 {topics_str}
