@@ -46,6 +46,12 @@ def _is_valid_article(art):
     if 'demonstration article' in summary:
         return False
 
+    # Exclude social-media posts (BlueSky / Reddit / YouTube). The bulletin is
+    # NEWS only; social belongs in the separate social summary, not the article
+    # list. Matches the briefing pipeline, which already drops source_type=='social'.
+    if (getattr(art, 'source_type', '') or '').lower() == 'social':
+        return False
+
     # Remove low-relevance noise
     if relevance < 0.4:
         return False
