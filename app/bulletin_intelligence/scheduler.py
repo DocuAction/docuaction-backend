@@ -3,11 +3,12 @@ DocuAction Bulletin Intelligence — Daily Delivery Scheduler (self-healing)
 
 Schedule (all times America/New_York):
   Sunday 8 PM ET   → Preview run (generate, hold for review — no auto-send)
-  Monday 4 AM ET   → Weekend rollup delivery (Fri+Sat+Sun, 72h) + deliver
-  Tue–Sat 4 AM ET  → Daily 24h briefing + deliver
+  Monday 1 AM ET   → Weekend rollup delivery (Fri+Sat+Sun, 72h) + deliver
+  Tue–Sat 1 AM ET  → Daily 24h briefing + deliver
 
-Why 4 AM (was 6 AM): gives a two-hour buffer before the team needs the bulletin,
-so a slow run or a retry still lands before anyone is waiting on it.
+Why 1 AM (was 6 AM): gives a large buffer before the team needs the bulletin,
+so a slow run, a retry, or a self-heal catch-up still lands well before anyone is
+waiting on it in the morning.
 
 Self-healing design — three independent safety nets so a morning is never
 silently dropped (the failure mode we hit when a restart near run-time made
@@ -51,13 +52,13 @@ logger = logging.getLogger(__name__)
 _scheduler = None
 
 # ── Tunables ────────────────────────────────────────────────────────────────
-RUN_HOUR = 4                       # 4 AM ET delivery (buffer before team needs it)
+RUN_HOUR = 1                       # 1 AM ET delivery (large buffer before team needs it)
 PREVIEW_HOUR = 20                  # Sunday 8 PM ET preview
 MAX_CYCLE_ATTEMPTS = 3             # retries per cycle before alerting
 RETRY_BACKOFF_S = 90               # wait between cycle retries
 MIN_VALID_ARTICLES = 1             # a real briefing must carry at least this many
 # A late job is still worth running any time before the team needs it. 5 hours
-# means a job scheduled for 4 AM still fires up to 9 AM if the scheduler was busy.
+# means a job scheduled for 1 AM still fires up to 6 AM if the scheduler was busy.
 MISFIRE_GRACE_S = 5 * 3600
 ALERT_EMAIL = os.getenv("BULLETIN_ALERT_EMAIL", "imran@agtbi.com")
 ALERT_FROM = os.getenv("BULLETIN_ALERT_FROM", "intelligence@docuaction.io")
@@ -176,13 +177,13 @@ async def _run_cycle_with_retry(agency_id: str, *, label: str,
 
 # ── Delivery entry points (called by APScheduler jobs) ───────────────────────
 async def run_weekday_delivery(agency_id: str):
-    """Tue–Sat 4 AM ET — run and deliver the last-24h briefing."""
+    """Tue–Sat 1 AM ET — run and deliver the last-24h briefing."""
     await _run_cycle_with_retry(agency_id, label="weekday delivery",
                                 auto_deliver=True, lookback_hours=24)
 
 
 async def run_monday_delivery(agency_id: str):
-    """Monday 4 AM ET — deliver Friday + Sat + Sun combined (72h lookback)."""
+    """Monday 1 AM ET — deliver Friday + Sat + Sun combined (72h lookback)."""
     await _run_cycle_with_retry(agency_id, label="Monday weekend-rollup delivery",
                                 auto_deliver=True, lookback_hours=72)
 
@@ -246,7 +247,7 @@ async def ensure_todays_briefing(*, source: str = "watchdog"):
     no briefing for an agency yet, run the cycle now and deliver.
 
     This is the safety net APScheduler can't provide: a process that boots AFTER
-    4 AM never fires today's cron, but this catch-up does. Idempotent — once a
+    1 AM never fires today's cron, but this catch-up does. Idempotent — once a
     briefing exists for today, it does nothing.
     """
     try:
@@ -283,7 +284,7 @@ def _watchdog_tick():
 
 
 async def _startup_catchup():
-    """Run a catch-up shortly after boot so a redeploy that missed the 4 AM cron
+    """Run a catch-up shortly after boot so a redeploy that missed the 1 AM cron
     still recovers the morning bulletin without waiting for the hourly watchdog."""
     await asyncio.sleep(60)  # let hydrate_from_store finish restoring prior state
     try:
@@ -317,7 +318,7 @@ def start_scheduler():
             **job_defaults,
         )
 
-        # Monday 4 AM ET — weekend rollup (72h) + deliver
+        # Monday 1 AM ET — weekend rollup (72h) + deliver
         _scheduler.add_job(
             lambda: trigger_all_agencies("monday"),
             CronTrigger(day_of_week="mon", hour=RUN_HOUR, minute=0, timezone=ET),
@@ -326,7 +327,7 @@ def start_scheduler():
             **job_defaults,
         )
 
-        # Tuesday–Saturday 4 AM ET — daily 24h briefing + deliver
+        # Tuesday–Saturday 1 AM ET — daily 24h briefing + deliver
         _scheduler.add_job(
             lambda: trigger_all_agencies("weekday"),
             CronTrigger(day_of_week="tue,wed,thu,fri,sat", hour=RUN_HOUR, minute=0, timezone=ET),
