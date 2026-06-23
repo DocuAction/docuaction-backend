@@ -45,6 +45,23 @@ async def health():
     }
 
 
+# ── Source Coverage Report ─────────────────────────────────────────────────────
+@router.get("/coverage/{agency_id}")
+async def coverage_report(agency_id: str):
+    """Daily source/coverage analytics from the most recent cycle: sources scanned,
+    stories collected/rejected, duplicates removed, subscription stories, coverage
+    by category/section, and missing-category warnings."""
+    from app.bulletin_intelligence.engine import _last_coverage
+    report = _last_coverage.get(agency_id)
+    if not report:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No coverage report yet for {agency_id}. Run a cycle first "
+                   f"(POST /api/v1/bulletin/run/{agency_id}).",
+        )
+    return report
+
+
 # ── Agency Management ─────────────────────────────────────────────────────────
 class AgencyCreateRequest(BaseModel):
     agency_id: str

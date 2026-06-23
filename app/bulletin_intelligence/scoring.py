@@ -13,39 +13,66 @@ from typing import Optional
 
 # ── Source authority table (Problem #2) ───────────────────────────────────────
 SOURCE_AUTHORITY_SCORE = {
+    # Wire services / national press (spec values)
     "reuters": 100,
     "associated press": 95,
     "ap": 95,
     "bloomberg": 95,
     "wall street journal": 95,
     "wsj": 95,
-    "politico": 90,
+    "politico": 92,
     "law360": 90,
     "federal register": 90,
-    "fcc": 40,             # FCC.gov — deprioritized; client gets FCC.gov directly,
-    "fcc.gov": 40,          # the value of this service is EXTERNAL media coverage
+    # FCC.gov — DELIBERATELY deprioritized (kept at 40 per product decision): the
+    # client gets FCC.gov directly, so this service's value is EXTERNAL media
+    # coverage. This intentionally diverges from the spec's FCC=100.
+    "fcc": 40,
+    "fcc.gov": 40,
+    # Telecom trade press (spec values)
+    "communications daily": 95,
+    "light reading": 90,
+    "fierce network": 90,
+    "fiercewireless": 90,
+    "fierce wireless": 90,
+    "rcr wireless": 88,
     "broadband breakfast": 85,
-    "fiercewireless": 85,
-    "fierce wireless": 85,
-    "rcr wireless": 85,
+    "telecompetitor": 82,
     "tv news check": 80,
     "tvnewscheck": 80,
     "radio world": 80,
+    "multichannel news": 80,
+    "tv technology": 78,
     "rbr": 80,
+    "cablefax": 78,
+    "wireless estimator": 75,
+    "telegeography": 80,
+    "spacenews": 82,
+    # National media / tech press
     "the hill": 80,
-    "fedscoop": 80,
-    # Reasonable defaults for other recognized outlets
+    "axios": 88,
+    "the verge": 80,
+    "ars technica": 80,
+    "cnbc": 85,
     "usa today": 88,
     "washington post": 92,
     "new york times": 92,
-    "spacenews": 82,
-    "cisa": 90,
-    "communications daily": 85,
-    "telecompetitor": 78,
-    "telegeography": 80,
-    "congress.gov": 90,
     "pc mag": 70,
+    "fedscoop": 80,
     "inside radio": 78,
+    # Government / regulatory
+    "cisa": 90,
+    "congress.gov": 90,
+    "ntia": 88,
+    "ftc": 90,
+    "gao": 88,
+    "white house": 90,
+    # Industry associations
+    "ctia": 75,
+    "ncta": 75,
+    "ustelecom": 75,
+    "nab": 75,
+    "wispa": 72,
+    "aca connects": 72,
 }
 
 DEFAULT_AUTHORITY = 60  # unknown outlets

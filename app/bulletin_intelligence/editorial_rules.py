@@ -19,6 +19,8 @@ from datetime import datetime, timezone, timedelta
 from typing import List, Any
 
 # Outlets that are subscription-only — show headline + [SUBSCRIPTION REQUIRED].
+# Substring-matched against the outlet name (case-insensitive), so "The New York
+# Times" matches "new york times". Keep these lowercase.
 SUBSCRIPTION_SOURCES = {
     "communications daily",
     "law360",
@@ -28,7 +30,16 @@ SUBSCRIPTION_SOURCES = {
     "politico pro",
     "the information",
     "telecompetitor pro",
-    "wall street journal",  # WSJ is paywalled
+    "wall street journal",   # WSJ
+    "wsj",
+    "bloomberg",
+    "new york times",        # NYT
+    "nytimes",
+    "washington post",       # WaPo
+    "financial times",
+    "the economist",
+    "light reading",         # registration-walled
+    "telecom paper",
 }
 
 # FCC.gov caps for the daily briefing

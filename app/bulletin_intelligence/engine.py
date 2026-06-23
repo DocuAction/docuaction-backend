@@ -392,9 +392,160 @@ MAJOR_OUTLET_FEEDS = [
     ("https://feeds.a.dj.com/rss/RSSWSJD.xml",                               "The Wall Street Journal", True),
     ("https://feeds.a.dj.com/rss/WSJcomUSBusiness.xml",                      "The Wall Street Journal", True),
     ("https://thehill.com/homenews/media/feed/",                            "The Hill", False),
+    # National tech press (Tier 2) — broad, so FCC-relevance filtered.
+    ("https://api.axios.com/feed/",                                          "Axios", False),
+    ("https://www.theverge.com/rss/index.xml",                              "The Verge", False),
+    ("https://feeds.arstechnica.com/arstechnica/index",                     "Ars Technica", False),
+    ("https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=19854910", "CNBC", False),
+    # Telecom/broadcast trade press (Tier 1).
+    ("https://www.lightreading.com/rss.xml",                                "Light Reading", True),
+    ("https://www.cablefax.com/feed",                                       "Cablefax", False),
+    ("https://wirelessestimator.com/feed/",                                 "Wireless Estimator", False),
+    ("https://tvnewscheck.com/feed/",                                       "TVNewsCheck", False),
+    # Regulatory + industry associations (Tier 3/4) — FCC-relevance filtered.
+    ("https://www.ftc.gov/feeds/press-release.xml",                         "FTC", False),
+    ("https://www.gao.gov/rss/reports.xml",                                 "GAO", False),
+    ("https://www.ustelecom.org/feed/",                                     "USTelecom", False),
     # (Politico is already covered by politicopicks in FCC_RSS_FEEDS; its
-    #  topic feeds 403 bot traffic, so they're not added here.)
+    #  topic feeds 403 bot traffic, so they're not added here. NTIA / White House /
+    #  House E&C / Senate Commerce / NAB / NCTA feeds were dead or empty on check.)
 ]
+
+
+# ── Deterministic FCC relevance scoring + categorization (client spec) ─────────
+# These AUGMENT the LLM classifier — they never replace it. The point score nudges
+# relevance up for clear FCC signals; the strict gate is OFF by default so the
+# bulletin's minimum-volume floor is never at risk.
+FCC_COMMISSIONERS = ("brendan carr", "anna gomez", "olivia trusty")
+
+# Flip BULLETIN_STRICT_FCC_GATE=true to hard-reject any story with no explicit FCC
+# mention. Default OFF (current behavior preserved).
+STRICT_FCC_GATE = os.getenv("BULLETIN_STRICT_FCC_GATE", "false").strip().lower() == "true"
+
+
+def _fcc_blob(art) -> str:
+    return " ".join([
+        getattr(art, "title", "") or "",
+        getattr(art, "summary", "") or "",
+        getattr(art, "full_text", "") or "",
+        getattr(art, "outlet", "") or "",
+    ]).lower()
+
+
+def _has_fcc_mention(art) -> bool:
+    """True if FCC / Federal Communications Commission / a commissioner appears
+    anywhere in the article's text (headline, summary, body, outlet)."""
+    return _mentions_fcc(_fcc_blob(art))
+
+
+def fcc_relevance_points(art) -> int:
+    """The client's additive FCC relevance score. Higher = more clearly FCC."""
+    title = ((getattr(art, "title", "") or "")).lower()
+    text = _fcc_blob(art)
+    pts = 0
+    if "fcc" in title or "federal communications commission" in title:
+        pts += 10
+    if any(c in text for c in FCC_COMMISSIONERS) or "commissioner" in text or "fcc chair" in text:
+        pts += 8
+    if "docket" in text or "rulemaking" in text or "proceeding" in text or "filing" in text:
+        pts += 7
+    if "spectrum" in text:
+        pts += 6
+    if "broadband" in text:
+        pts += 6
+    if "enforcement" in text or "forfeiture" in text or "consent decree" in text:
+        pts += 5
+    if "fcc vote" in text or ("vote" in text and "fcc" in text) or "order" in text:
+        pts += 5
+    if "satellite" in text or "space" in text:
+        pts += 4
+    if "911" in text or "emergency alert" in text or "public safety" in text:
+        pts += 4
+    return pts
+
+
+def apply_fcc_relevance_boost(articles) -> int:
+    """Additively nudge relevance up for clear FCC signals (commissioners, dockets,
+    enforcement, etc.). NEVER lowers a score; clamped to 1.0. Returns count boosted."""
+    n = 0
+    for a in articles:
+        pts = fcc_relevance_points(a)
+        if pts <= 0:
+            continue
+        boost = min(0.25, pts / 200.0)   # gentle: max +0.25
+        try:
+            new = min(1.0, (a.relevance_score or 0.0) + boost)
+            if new > (a.relevance_score or 0.0):
+                a.relevance_score = new
+                n += 1
+        except Exception:
+            pass
+    return n
+
+
+# Finer FCC categories (client spec) — derived deterministically for the coverage
+# report. Does NOT change the displayed AGT_SECTIONS; purely analytics metadata.
+FCC_CATEGORY_RULES = [
+    ("Commissioners",            ("brendan carr", "anna gomez", "olivia trusty", "commissioner", "fcc chair")),
+    ("Enforcement Actions",      ("enforcement", "forfeiture", "consent decree", "notice of apparent liability")),
+    ("Robocalls / TCPA",         ("robocall", "tcpa", "stir-shaken", "spoofing", "robotext")),
+    ("Net Neutrality",           ("net neutrality", "open internet", "title ii")),
+    ("Spectrum",                 ("spectrum", "auction", "megahertz", "gigahertz", " ghz", " mhz")),
+    ("Broadband",                ("broadband", "bead", "affordable connectivity", "lifeline", "e-rate")),
+    ("Wireless",                 ("wireless", "5g", "cell tower", "mobile carrier", "small cell")),
+    ("Satellite / Space",        ("satellite", "starlink", "ngso", "earth station", "space bureau", "kuiper")),
+    ("Undersea Cables",          ("undersea cable", "subsea cable", "submarine cable")),
+    ("Broadcast / Media",        ("broadcast", "radio station", "tv station", "media ownership", "license renewal")),
+    ("Telecom Mergers",          ("merger", "acquisition", "deal review", "antitrust")),
+    ("Public Safety / Emergency",("911", "e911", "emergency alert", "psap", "public safety")),
+    ("AI and Telecom",           ("artificial intelligence", "machine learning")),
+    ("International Telecom",     ("itu", "world radiocommunication", "foreign carrier", "international affairs")),
+    ("Congressional Oversight",  ("senate commerce", "house energy", "subcommittee", "oversight hearing", "congress")),
+]
+
+
+def fcc_category(art) -> str:
+    """Map an article to one of the finer FCC categories (analytics only)."""
+    text = _fcc_blob(art)
+    for label, terms in FCC_CATEGORY_RULES:
+        if any(t in text for t in terms):
+            return label
+    return "General"
+
+
+# Last coverage report per agency (for GET /coverage/{agency_id}).
+_last_coverage: Dict[str, Dict[str, Any]] = {}
+
+
+def _build_coverage_report(agency_id, all_articles, unique, classified, briefing_arts) -> Dict[str, Any]:
+    """Daily source/coverage analytics (additive; never affects the briefing)."""
+    from collections import Counter
+    sources_scanned = dict(Counter(getattr(a, "source", "?") or "?" for a in all_articles))
+    by_category = dict(Counter(fcc_category(a) for a in briefing_arts))
+    by_section = dict(Counter(_section_of(a) for a in briefing_arts))
+    subs = sum(1 for a in briefing_arts if getattr(a, "is_paywalled", False))
+    top_outlets = Counter((getattr(a, "outlet", "") or "?") for a in briefing_arts).most_common(10)
+    expected = [r[0] for r in FCC_CATEGORY_RULES]
+    missing = [c for c in expected if by_category.get(c, 0) == 0]
+    return {
+        "generated_at": _now(),
+        "agency_id": agency_id,
+        "sources_scanned": sources_scanned,
+        "source_count": len(sources_scanned),
+        "stories_collected": len(all_articles),
+        "after_dedup": len(unique),
+        "duplicates_removed": max(0, len(all_articles) - len(unique)),
+        "classified": len(classified),
+        "in_briefing": len(briefing_arts),
+        "rejected": max(0, len(classified) - len(briefing_arts)),
+        "subscription_stories": subs,
+        "by_category": by_category,
+        "by_section": by_section,
+        "missing_category_warnings": missing,
+        "top_outlets": top_outlets,
+        "strict_fcc_gate": STRICT_FCC_GATE,
+    }
+
 
 FCC_RSS_FEEDS = {
     "fcc_news_events": [
@@ -1033,9 +1184,26 @@ async def ingest_regulatory(agency: AgencyConfig) -> List[Article]:
 
 
 # ── Deduplication ──────────────────────────────────────────────────────────────
+def _final_score(art) -> float:
+    """Composite relevance+authority+recency rank (scoring.py). Falls back to
+    relevance alone if the scoring module is unavailable, so dedup never breaks."""
+    try:
+        from app.bulletin_intelligence import scoring
+        return scoring.final_score(
+            getattr(art, "relevance_score", 0.5) or 0.0,
+            getattr(art, "outlet", "") or "",
+            getattr(art, "published_at", "") or "",
+        )
+    except Exception:
+        return (getattr(art, "relevance_score", 0.0) or 0.0) * 100.0
+
+
 def deduplicate(articles: List[Article]) -> List[Article]:
     seen_hashes, seen_titles, unique = set(), {}, []
-    for art in sorted(articles, key=lambda a: a.relevance_score, reverse=True):
+    # Sort by composite score so the highest-AUTHORITY copy of a duplicated story
+    # is the one retained (e.g. Reuters kept over an unknown blog), not merely the
+    # highest LLM-relevance copy.
+    for art in sorted(articles, key=_final_score, reverse=True):
         if art.dedup_hash in seen_hashes:
             continue
         title_key = art.title[:60].lower().strip()
@@ -1304,10 +1472,29 @@ async def _prepare_briefing_sections(agency: AgencyConfig, articles: List[Articl
         if recent:
             pool[a.article_id] = a
 
+    # Label known subscription outlets so the briefing shows [SUBSCRIPTION REQUIRED]
+    # (deterministic pre-pass; safe no-op if the module is unavailable).
+    try:
+        from app.bulletin_intelligence.editorial_rules import flag_subscriptions
+        flag_subscriptions(list(pool.values()))
+    except Exception as _e:
+        logger.debug(f"flag_subscriptions skipped: {_e}")
+
     # NEWS only — relevant, non-social — then drop duplicate stories across cycles.
     news = [a for a in pool.values() if a.relevance_score >= 0.4 and a.source_type != "social"]
+
+    # Lenient spam/junk removal (press releases, malformed URLs, listicles). Uses a
+    # LOW threshold so only clear junk is dropped — volume is preserved.
+    try:
+        from app.bulletin_intelligence.clustering import quality_score
+        news = [a for a in news if quality_score(a) >= 0.35]
+    except Exception as _e:
+        logger.debug(f"quality filter skipped: {_e}")
+
     news = deduplicate(news)
-    news.sort(key=lambda a: a.relevance_score, reverse=True)
+    # Authority-aware ordering: the fcc.gov cap and cluster-primary selection below
+    # both consume this order, so the most authoritative stories lead each cluster.
+    news.sort(key=_final_score, reverse=True)
 
     # Cap fcc.gov to 2 (client gets FCC.gov directly) and total stories to 60.
     capped, fcc_gov = [], 0
@@ -2125,6 +2312,25 @@ async def run_daily_cycle(
             art.relevance_score = 0.7
         classified = unique
 
+    # ── Enhancement pass (deterministic, additive — never lowers volume by default) ──
+    # 1) Flag known subscription outlets → briefing shows [SUBSCRIPTION REQUIRED].
+    try:
+        from app.bulletin_intelligence.editorial_rules import flag_subscriptions
+        flagged = flag_subscriptions(classified)
+    except Exception as _e:
+        flagged = 0
+        logger.debug(f"flag_subscriptions skipped: {_e}")
+    # 2) Boost relevance for clear FCC signals (commissioners, dockets, enforcement).
+    boosted = apply_fcc_relevance_boost(classified)
+    # 3) Optional STRICT FCC gate — OFF by default so the minimum-volume floor is
+    #    never at risk. When BULLETIN_STRICT_FCC_GATE=true, drop any story with no
+    #    explicit FCC mention anywhere in its text.
+    if STRICT_FCC_GATE:
+        kept = [a for a in classified if _has_fcc_mention(a)]
+        logger.info(f"STRICT_FCC_GATE: {len(classified)} -> {len(kept)} FCC-mention-only")
+        classified = kept
+    logger.info(f"Enhancement pass: {flagged} subscription-flagged, {boosted} relevance-boosted")
+
     # Store in archive
     for art in classified:
         _articles[art.article_id] = art
@@ -2135,6 +2341,20 @@ async def run_daily_cycle(
         key=lambda a: (a.topic != "other", a.relevance_score), reverse=True
     )[:80]
     logger.info(f"Briefing: {len(briefing_arts)} articles from {len(classified)} classified")
+
+    # Coverage analytics (additive; surfaced at GET /coverage/{agency_id}).
+    try:
+        coverage = _build_coverage_report(agency_id, all_articles, unique, classified, briefing_arts)
+        _last_coverage[agency_id] = coverage
+        logger.info(
+            f"Coverage: {coverage['stories_collected']} collected, "
+            f"{coverage['duplicates_removed']} dupes removed, {coverage['in_briefing']} in briefing, "
+            f"{coverage['subscription_stories']} subscription; missing categories: "
+            f"{coverage['missing_category_warnings'] or 'none'}"
+        )
+    except Exception as _e:
+        coverage = None
+        logger.warning(f"Coverage report failed: {_e}")
 
     # Generate briefing — HTML + editable Word (.docx), built from the same sections
     html, docx_bytes = await build_briefing_outputs(agency, briefing_arts, briefing_date)
@@ -2187,6 +2407,7 @@ async def run_daily_cycle(
         "in_briefing": len(briefing_arts),
         "topic_counts": topic_counts,
         "delivery": delivery,
+        "coverage_report": coverage,
         "message": f"Briefing ready. Approve at POST /api/v1/bulletin/briefings/{briefing_id}/approve"
     }
 
