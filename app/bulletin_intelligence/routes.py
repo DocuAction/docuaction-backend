@@ -58,7 +58,11 @@ class AgencyCreateRequest(BaseModel):
 
 @router.post("/agencies")
 async def create_agency(req: AgencyCreateRequest):
-    config = AgencyConfig(**req.dict())
+    # The request model calls it `boolean_queries`; AgencyConfig's field is
+    # `search_queries`. Map it across so AgencyConfig(**...) doesn't raise.
+    data = req.dict()
+    data["search_queries"] = data.pop("boolean_queries", [])
+    config = AgencyConfig(**data)
     register_agency(config)
     return {"status": "registered", "agency_id": config.agency_id, "name": config.name}
 
@@ -93,7 +97,11 @@ async def get_agency_endpoint(agency_id: str):
         "name": agency.name,
         "short_name": agency.short_name,
         "primary_color": agency.primary_color,
-        "boolean_queries": agency.boolean_queries,
+        # AgencyConfig stores this as `search_queries`; the API/UI calls it
+        # boolean_queries. Reading the wrong attribute here was a hard 500 on
+        # GET /agencies/{id} (AttributeError) — the likely "Failed to load
+        # articles" the dashboard showed.
+        "boolean_queries": agency.search_queries,
         "topics": agency.topics,
         "distribution_email": agency.distribution_email,
         "distribution_list_size": len(agency.distribution_list),
