@@ -400,6 +400,7 @@ async def download_options(agency_id: str):
             "label": label,
             "article_count": count,
             "download_url": f"/api/v1/bulletin/download/{agency_id}?days={d}",
+            "excel_url": f"/api/v1/bulletin/download-excel/{agency_id}?days={d}",
         })
 
     return {
@@ -408,6 +409,154 @@ async def download_options(agency_id: str):
         "options": options,
         "total_articles_in_archive": len([a for a in _articles.values() if a.agency_id == agency_id]),
     }
+
+
+@router.get("/download-excel/{agency_id}")
+async def download_bulletin_excel(
+    agency_id: str,
+    days: int = Query(1, description="Number of days: 1, 2, 3, 4, 5, 7, or 30"),
+):
+    """Download the bulletin as an Excel (.xlsx) QA sheet — one row per article,
+    sorted by category, with the SAME-story-across-outlets grouped together so you
+    can spot duplicates and off-topic items at a glance.
+
+    Columns: #, Category, Story Group, Relationship (Primary/Similar), Title,
+    Summary, Source, Subscription Required (Yes/No), Relevance, URL.
+    """
+    if days not in ALLOWED_DAYS:
+        raise HTTPException(400, f"Invalid days parameter. Allowed: {ALLOWED_DAYS}")
+
+    try:
+        from app.bulletin_intelligence.engine import _articles, _agencies
+    except ImportError:
+        raise HTTPException(500, "Bulletin engine not available")
+
+    agency = _agencies.get(agency_id)
+    if not agency:
+        raise HTTPException(404, f"Agency {agency_id} not found")
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    filtered = [
+        art for art in _articles.values()
+        if art.agency_id == agency_id and _is_valid_article(art) and _published_within(art, cutoff)
+    ]
+    if not filtered:
+        raise HTTPException(404, f"No articles found for the last {days} day(s)")
+
+    # Group same-story-across-outlets so 'Similar' rows sit together, and resolve
+    # each article's display category — reuse the engine so this matches the
+    # bulletin exactly. Fall back to one-row-per-article if anything is unavailable.
+    try:
+        from app.bulletin_intelligence.engine import _cluster_stories, _section_of, AGT_SECTIONS
+        section_index = {s: i for i, s in enumerate(AGT_SECTIONS)}
+
+        def _sec(a):
+            try:
+                return _section_of(a)
+            except Exception:
+                return "General"
+
+        ordered = sorted(filtered, key=lambda a: getattr(a, "relevance_score", 0) or 0, reverse=True)
+        clusters = _cluster_stories(ordered)
+    except Exception as e:
+        logger.warning(f"Excel clustering unavailable, flat list: {e}")
+        section_index = {}
+        _sec = lambda a: getattr(a, "topic", "") or "General"
+        clusters = [[a] for a in filtered]
+
+    # Order clusters by their primary's category (bulletin order), then relevance.
+    clusters.sort(key=lambda m: (section_index.get(_sec(m[0]), 99),
+                                 -(getattr(m[0], "relevance_score", 0) or 0)))
+
+    try:
+        buffer = _render_excel_workbook(agency, clusters, _sec)
+    except ImportError:
+        raise HTTPException(500, "openpyxl not installed. Add 'openpyxl' to requirements.txt")
+
+    now = datetime.now(timezone.utc)
+    fname = f"FCC_Bulletin_QA_{days}day_{now.strftime('%Y%m%d')}.xlsx"
+    total = sum(len(m) for m in clusters)
+    logger.info(f"Excel download: agency={agency_id} days={days} rows={total} groups={len(clusters)}")
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={fname}"},
+    )
+
+
+def _render_excel_workbook(agency, clusters, sec_of):
+    """Build the QA spreadsheet from clustered articles. Each cluster = one primary
+    story plus its similar/duplicate coverage, kept adjacent and sharing a Story
+    Group number so duplicates are obvious."""
+    import io
+    import re as _re
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "FCC Bulletin QA"
+
+    headers = ["#", "Category", "Story Group", "Relationship", "Title", "Summary",
+               "Source", "Subscription Required", "Relevance", "URL"]
+    ws.append(headers)
+    header_fill = PatternFill("solid", fgColor="0F172A")
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    for c in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=c)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(vertical="center", horizontal="left", wrap_text=True)
+
+    similar_font = Font(color="64748B", italic=True)
+    group_fill = PatternFill("solid", fgColor="F1F5F9")  # tint multi-outlet groups
+    row = 2
+    num = 0
+    for gi, members in enumerate(clusters, 1):
+        is_multi = len(members) > 1
+        for mi, art in enumerate(members):
+            num += 1
+            title = (getattr(art, "title", "") or "").split(" - ")[0].split(" | ")[0].strip()
+            summary = _re.sub(r"<[^>]+>", "", (getattr(art, "summary", "") or "")).replace("\n", " ").strip()
+            if len(summary) > 600:
+                summary = summary[:600].rstrip() + "…"
+            outlet = getattr(art, "outlet", "") or ""
+            url = getattr(art, "url", "") or ""
+            rel = getattr(art, "relevance_score", 0) or 0
+            paywalled = bool(getattr(art, "is_paywalled", False))
+            relationship = "Primary" if mi == 0 else "Similar"
+            ws.append([num, sec_of(art), gi, relationship, title, summary, outlet,
+                       "Yes" if paywalled else "No", f"{int(rel * 100)}%", url])
+
+            if url:
+                uc = ws.cell(row=row, column=10)
+                uc.hyperlink = url
+                uc.font = Font(color="2563EB", underline="single")
+            if paywalled:
+                ws.cell(row=row, column=8).font = Font(bold=True, color="B45309")
+            if relationship == "Similar":
+                ws.cell(row=row, column=4).font = similar_font
+                ws.cell(row=row, column=5).font = similar_font
+            if is_multi:
+                ws.cell(row=row, column=3).fill = group_fill
+            row += 1
+
+    widths = [5, 24, 11, 12, 50, 72, 22, 18, 10, 42]
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    for r in range(2, row):
+        ws.cell(row=r, column=5).alignment = Alignment(wrap_text=True, vertical="top")
+        ws.cell(row=r, column=6).alignment = Alignment(wrap_text=True, vertical="top")
+    ws.freeze_panes = "A2"
+    if row > 2:
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{row - 1}"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
 
 
 def _add_hyperlink(paragraph, url, text):
