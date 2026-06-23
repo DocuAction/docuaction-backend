@@ -62,6 +62,29 @@ async def coverage_report(agency_id: str):
     return report
 
 
+# ── Refresh cache from the durable store ───────────────────────────────────────
+@router.post("/refresh/{agency_id}")
+async def refresh_cache(agency_id: str):
+    """Reload the in-memory article/briefing cache from the shared database, so the
+    dashboard reflects everything collected — including by the 1 AM scheduler box,
+    which writes to the same DB but a different process. FAST: this does NOT run a
+    new collection cycle (no ingestion, no AI cost), it just re-reads the store.
+    """
+    from app.bulletin_intelligence.engine import (
+        hydrate_from_store, _articles, _briefings, get_agency,
+    )
+    if not get_agency(agency_id):
+        raise HTTPException(status_code=404, detail=f"Agency {agency_id} not found")
+    counts = await hydrate_from_store()
+    return {
+        "status": "refreshed",
+        "agency_id": agency_id,
+        "articles_in_memory": len(_articles),
+        "briefings_in_memory": len(_briefings),
+        "restored": counts,
+    }
+
+
 # ── Agency Management ─────────────────────────────────────────────────────────
 class AgencyCreateRequest(BaseModel):
     agency_id: str
