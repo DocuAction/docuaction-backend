@@ -38,6 +38,15 @@ def _is_valid_article(art):
     relevance = getattr(art, 'relevance_score', 0) or 0
     topic = getattr(art, 'topic', '') or ''
 
+    # Client-excluded outlets (e.g. techdirt.com) — hide even if already stored.
+    try:
+        from app.bulletin_intelligence.engine import _is_excluded_domain
+        if _is_excluded_domain(url):
+            return False
+    except Exception:
+        if 'techdirt.com' in url:
+            return False
+
     # Remove demo articles
     if 'example.com' in url:
         return False
@@ -144,7 +153,7 @@ async def download_bulletin(
 
     topics = {}
     topic_labels = {
-        "fcc_news_events": "FCC News & Events",
+        "fcc_news_events": "General",
         "consumers_advocacy": "Consumers & Advocacy",
         "media_broadcasting": "Media & Broadcasting",
         "public_safety_emergency": "Public Safety & Emergency",
@@ -235,7 +244,7 @@ async def download_bulletin(
     run_idx.font.bold = True
     run_idx.font.color.rgb = RGBColor(0x0F, 0x17, 0x2A)
 
-    for topic_key, articles in sorted(topics.items(), key=lambda x: len(x[1]), reverse=True):
+    for topic_key, articles in sorted(topics.items(), key=lambda x: (x[0] != "fcc_news_events", -len(x[1]))):
         label = topic_labels.get(topic_key, topic_key.replace('_', ' ').title())
         idx_line = doc.add_paragraph()
         idx_line.paragraph_format.space_after = Pt(2)
@@ -250,7 +259,7 @@ async def download_bulletin(
 
     doc.add_page_break()
 
-    for topic_key, articles in sorted(topics.items(), key=lambda x: len(x[1]), reverse=True):
+    for topic_key, articles in sorted(topics.items(), key=lambda x: (x[0] != "fcc_news_events", -len(x[1]))):
         label = topic_labels.get(topic_key, topic_key.replace('_', ' ').title())
         color_hex = topic_colors.get(topic_key, "333333")
 

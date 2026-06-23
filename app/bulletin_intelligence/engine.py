@@ -76,7 +76,7 @@ FCC_TOPIC_LABELS = TOPIC_LABELS  # alias for backward compatibility
 # These are what the CLIENT sees, grouped from the finer internal topics above.
 # Order here is the order they appear in the briefing.
 AGT_SECTIONS = [
-    "FCC News",
+    "General",            # client's Appendix A label for FCC_NEWS; always first
     "Consumers",
     "Media & Broadcasting",
     "Space Policy",
@@ -89,7 +89,7 @@ AGT_SECTIONS = [
 
 # Fallback topic -> section map (used if the classifier doesn't set a section).
 TOPIC_TO_SECTION = {
-    "fcc_news_events":          "FCC News",
+    "fcc_news_events":          "General",
     "consumers_advocacy":       "Consumers",
     "media_broadcasting":       "Media & Broadcasting",
     "public_safety_emergency":  "Public Safety / Cybersecurity / Privacy",
@@ -101,9 +101,9 @@ TOPIC_TO_SECTION = {
     "spectrum_policy":          "Wireless & Spectrum",
     # extra topic names the classifier sometimes emits — map them too so nothing drops
     "broadband_infrastructure": "Wireless & Spectrum",
-    "equipment_authorization":  "FCC News",
+    "equipment_authorization":  "General",
     "cybersecurity_privacy":    "Public Safety / Cybersecurity / Privacy",
-    "other":                    "FCC News",
+    "other":                    "General",
 }
 
 
@@ -349,6 +349,53 @@ def _is_fcc_relevant(title: str, summary: str) -> bool:
 
 
 # ── INGESTION: RSS Feeds (Appendix B Sources — FREE, always FCC-relevant) ─────
+# Outlets the client has asked us NOT to include (not relevant to the FCC
+# mission). Matched as a substring of the article URL, so "techdirt.com" also
+# covers www.techdirt.com. Applied both at ingestion (new articles never enter)
+# and at download/render time (so already-stored articles are hidden too).
+EXCLUDED_DOMAINS = {
+    "techdirt.com",
+}
+
+
+def _is_excluded_domain(url: str) -> bool:
+    u = (url or "").lower()
+    return any(dom in u for dom in EXCLUDED_DOMAINS)
+
+
+# Terms that mark genuine FCC relevance — used to filter the broad major-outlet
+# feeds down to FCC stories only, so we add their coverage without flooding the
+# briefing with unrelated national news.
+_FCC_RELEVANCE_TERMS = (
+    "fcc", "federal communications commission", "f.c.c.",
+    "brendan carr", "anna gomez", "olivia trusty", "geoffrey starks", "nathan simington",
+)
+
+
+def _mentions_fcc(text: str) -> bool:
+    t = (text or "").lower()
+    return any(term in t for term in _FCC_RELEVANCE_TERMS)
+
+
+# Major national outlets the client wants represented on big FCC stories (e.g. the
+# WaPo/NYT/WSJ "ABC vs. FCC / The View" coverage). Their RSS section feeds carry
+# mostly non-FCC news, so items are kept ONLY when they mention the FCC — see the
+# relevance_required path in ingest_rss. Format: (feed_url, outlet, paywalled).
+MAJOR_OUTLET_FEEDS = [
+    ("https://rss.nytimes.com/services/xml/rss/nyt/MediaandAdvertising.xml", "The New York Times", True),
+    ("https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml",          "The New York Times", True),
+    ("https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",            "The New York Times", True),
+    ("https://rss.nytimes.com/services/xml/rss/nyt/Politics.xml",            "The New York Times", True),
+    ("https://feeds.washingtonpost.com/rss/business/technology",             "The Washington Post", True),
+    ("https://feeds.washingtonpost.com/rss/business",                        "The Washington Post", True),
+    ("https://feeds.washingtonpost.com/rss/politics",                        "The Washington Post", True),
+    ("https://feeds.a.dj.com/rss/RSSWSJD.xml",                               "The Wall Street Journal", True),
+    ("https://feeds.a.dj.com/rss/WSJcomUSBusiness.xml",                      "The Wall Street Journal", True),
+    ("https://thehill.com/homenews/media/feed/",                            "The Hill", False),
+    # (Politico is already covered by politicopicks in FCC_RSS_FEEDS; its
+    #  topic feeds 403 bot traffic, so they're not added here.)
+]
+
 FCC_RSS_FEEDS = {
     "fcc_news_events": [
         ("https://www.fcc.gov/news-events/rss", "FCC"),
@@ -400,13 +447,18 @@ async def ingest_rss(agency: AgencyConfig, lookback_hours: int = 24) -> list:
     cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
     seen = set()
 
+    # Each feed: (url, outlet, topic, relevance_required, paywalled).
+    # Appendix B feeds are always on-topic. Major-outlet feeds (NYT/WaPo/WSJ/...)
+    # are broad, so they're FCC-relevance filtered before anything is kept.
     all_feeds = []
     for topic, feeds in FCC_RSS_FEEDS.items():
         for url, outlet in feeds:
-            all_feeds.append((url, outlet, topic))
+            all_feeds.append((url, outlet, topic, False, False))
+    for url, outlet, paywalled in MAJOR_OUTLET_FEEDS:
+        all_feeds.append((url, outlet, "other", True, paywalled))
 
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        for feed_url, outlet, topic in all_feeds:
+        for feed_url, outlet, topic, relevance_required, paywalled in all_feeds:
             try:
                 resp = await client.get(feed_url, headers=HTTP_HEADERS, follow_redirects=True)
                 if resp.status_code != 200:
@@ -444,6 +496,14 @@ async def ingest_rss(agency: AgencyConfig, lookback_hours: int = 24) -> list:
                     if not title or not link:
                         continue
 
+                    # Client-excluded outlets (e.g. techdirt.com) never enter.
+                    if _is_excluded_domain(link):
+                        continue
+
+                    # Broad major-outlet feeds: keep only genuine FCC stories.
+                    if relevance_required and not _mentions_fcc(f"{title} {description}"):
+                        continue
+
                     # Skip duplicates
                     dedup = _hash(link, title)
                     if dedup in seen:
@@ -475,6 +535,7 @@ async def ingest_rss(agency: AgencyConfig, lookback_hours: int = 24) -> list:
                         outlet=outlet,
                         topic=topic,           # pre-assigned by feed category
                         relevance_score=0.75,  # RSS feeds are always on-topic
+                        is_paywalled=paywalled,
                         ingested_at=_now(),
                         dedup_hash=dedup,
                     )
@@ -1032,7 +1093,7 @@ Topics:
   other: Does not fit above topics
 
 SECTIONS — pick the ONE display bucket each story belongs in (use these EXACT names):
-  FCC News                                : {agency.short_name} leadership/commissioners, meetings, enforcement, votes, orders, general agency news
+  General                                 : {agency.short_name} leadership/commissioners, meetings, enforcement, votes, orders, general agency news
   Consumers                               : robocalls/TCPA, scams, accessibility, consumer protection, E-Rate, Lifeline
   Media & Broadcasting                    : TV, radio, cable, satellite TV/radio, broadcast licenses, media mergers
   Space Policy                            : satellites, NGSO/GSO, earth stations, space bureau, launch + spectrum
@@ -1115,7 +1176,7 @@ except Exception:
 
 # Map the boolean-spec topic keys -> our AGT_SECTIONS display names, in spec order.
 _BOOL_KEY_TO_SECTION = {
-    "FCC_NEWS":            "FCC News",
+    "FCC_NEWS":            "General",
     "CONSUMERS":           "Consumers",
     "MEDIA_BROADCASTING":  "Media & Broadcasting",
     "SPACE_POLICY":        "Space Policy",
@@ -1210,8 +1271,8 @@ def _section_of(art: "Article") -> str:
         return bs
     if art.section in AGT_SECTIONS:
         return art.section
-    sec = TOPIC_TO_SECTION.get(art.topic, "FCC News")
-    return sec if sec in AGT_SECTIONS else "FCC News"   # never drop a story
+    sec = TOPIC_TO_SECTION.get(art.topic, "General")
+    return sec if sec in AGT_SECTIONS else "General"   # never drop a story
 
 
 def _clean_headline(title: str) -> str:
@@ -1308,7 +1369,7 @@ def _collect_sections(clusters, summaries: Dict[str, str]):
         primary = members[0]
         sec = _section_of(primary)
         if sec not in by_section:
-            sec = "FCC News"
+            sec = "General"
         idx += 1
         by_section[sec].append({
             "source": (primary.outlet or primary.source or "NEWS").strip(),
@@ -2045,6 +2106,13 @@ async def run_daily_cycle(
     for r in gathered:
         if isinstance(r, list):
             all_articles.extend(r)
+
+    # Drop client-excluded outlets (e.g. techdirt.com) from EVERY source, not
+    # just RSS — GDELT/NewsAPI/Tavily can surface them too.
+    before = len(all_articles)
+    all_articles = [a for a in all_articles if not _is_excluded_domain(getattr(a, "url", ""))]
+    if before != len(all_articles):
+        logger.info(f"Excluded {before - len(all_articles)} article(s) from blocked domains")
 
     # Process pipeline
     unique = deduplicate(all_articles)
