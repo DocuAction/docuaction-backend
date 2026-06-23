@@ -518,13 +518,20 @@ _last_coverage: Dict[str, Dict[str, Any]] = {}
 
 
 def _build_coverage_report(agency_id, all_articles, unique, classified, briefing_arts) -> Dict[str, Any]:
-    """Daily source/coverage analytics (additive; never affects the briefing)."""
+    """Daily source/coverage analytics (additive; never affects the briefing).
+
+    Content stats (by_category/section, subscription, outlets) are computed on the
+    NEWS that actually renders — social posts are excluded here exactly as the
+    briefing renderer excludes them, so the report matches the delivered bulletin.
+    """
     from collections import Counter
+    news = [a for a in briefing_arts if (getattr(a, "source_type", "") or "") != "social"]
+    social_collected = sum(1 for a in all_articles if (getattr(a, "source_type", "") or "") == "social")
     sources_scanned = dict(Counter(getattr(a, "source", "?") or "?" for a in all_articles))
-    by_category = dict(Counter(fcc_category(a) for a in briefing_arts))
-    by_section = dict(Counter(_section_of(a) for a in briefing_arts))
-    subs = sum(1 for a in briefing_arts if getattr(a, "is_paywalled", False))
-    top_outlets = Counter((getattr(a, "outlet", "") or "?") for a in briefing_arts).most_common(10)
+    by_category = dict(Counter(fcc_category(a) for a in news))
+    by_section = dict(Counter(_section_of(a) for a in news))
+    subs = sum(1 for a in news if getattr(a, "is_paywalled", False))
+    top_outlets = Counter((getattr(a, "outlet", "") or "?") for a in news).most_common(10)
     expected = [r[0] for r in FCC_CATEGORY_RULES]
     missing = [c for c in expected if by_category.get(c, 0) == 0]
     return {
@@ -536,7 +543,8 @@ def _build_coverage_report(agency_id, all_articles, unique, classified, briefing
         "after_dedup": len(unique),
         "duplicates_removed": max(0, len(all_articles) - len(unique)),
         "classified": len(classified),
-        "in_briefing": len(briefing_arts),
+        "social_collected": social_collected,
+        "in_briefing": len(news),
         "rejected": max(0, len(classified) - len(briefing_arts)),
         "subscription_stories": subs,
         "by_category": by_category,
