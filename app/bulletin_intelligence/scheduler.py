@@ -370,3 +370,29 @@ def stop_scheduler():
     if _scheduler and _scheduler.running:
         _scheduler.shutdown()
         logger.info("Bulletin scheduler stopped")
+
+
+def scheduler_status() -> dict:
+    """Observable scheduler state for the /health endpoint.
+
+    Lets us confirm post-deploy that the scheduler (and the self-healing
+    watchdog) actually started — i.e. that ENABLE_SCHEDULER is set on this box —
+    without needing Railway access. `running: false` here means no morning
+    delivery and no self-heal will happen, regardless of this code.
+    """
+    running = bool(_scheduler and getattr(_scheduler, "running", False))
+    jobs = []
+    if running:
+        for j in _scheduler.get_jobs():
+            nrt = getattr(j, "next_run_time", None)
+            jobs.append({
+                "id": j.id,
+                "name": j.name,
+                "next_run": nrt.isoformat() if nrt else None,
+            })
+    return {
+        "running": running,
+        "run_hour_et": RUN_HOUR,
+        "alert_email": ALERT_EMAIL,
+        "jobs": jobs,
+    }

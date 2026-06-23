@@ -28,6 +28,11 @@ async def health():
         persisted = await bulletin_store.counts()
     except Exception:
         persisted = {"enabled": False}
+    try:
+        from app.bulletin_intelligence.scheduler import scheduler_status
+        scheduler = scheduler_status()
+    except Exception:
+        scheduler = {"running": False}
     return {
         "module": "bulletin_intelligence",
         "status": "active",
@@ -36,6 +41,7 @@ async def health():
         "articles_in_memory": len(_articles),
         "briefings_in_memory": len(_briefings),
         "persisted": persisted,
+        "scheduler": scheduler,
     }
 
 
