@@ -2167,9 +2167,21 @@ def search_archive(
                 continue
         results.append(art)
 
-    results.sort(key=lambda a: a.published_at, reverse=True)
+    # Robust sort: published_at can be None/empty/non-string for some sources, and
+    # mixing those in a sort key raises TypeError (None < str) → a 500 that breaks
+    # the whole article list. Coerce to a string so it always orders cleanly.
+    results.sort(key=lambda a: str(getattr(a, "published_at", "") or ""), reverse=True)
     total = len(results)
     start = (page - 1) * page_size
+
+    def _safe_dict(a):
+        try:
+            return asdict(a)
+        except Exception:
+            return {k: getattr(a, k, None) for k in (
+                "article_id", "agency_id", "title", "url", "outlet", "summary",
+                "topic", "source_type", "published_at", "relevance_score",
+                "is_paywalled", "broadcast_clip_url", "article_type")}
 
     return {
         "agency_id": agency_id,
@@ -2177,7 +2189,7 @@ def search_archive(
         "page": page,
         "page_size": page_size,
         "total_pages": max(1, (total + page_size - 1) // page_size),
-        "articles": [asdict(a) for a in results[start:start + page_size]],
+        "articles": [_safe_dict(a) for a in results[start:start + page_size]],
     }
 
 
@@ -2188,8 +2200,9 @@ def get_archive_stats(agency_id: str) -> Dict[str, Any]:
         by_topic[a.topic] = by_topic.get(a.topic, 0) + 1
         by_source[a.source_type] = by_source.get(a.source_type, 0) + 1
         by_type[a.article_type] = by_type.get(a.article_type, 0) + 1
-        month = a.published_at[:7]
-        monthly[month] = monthly.get(month, 0) + 1
+        month = (a.published_at or "")[:7]   # None/empty-safe
+        if month:
+            monthly[month] = monthly.get(month, 0) + 1
     return {
         "agency_id": agency_id,
         "total_articles": len(arts),
