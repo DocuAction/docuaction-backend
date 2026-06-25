@@ -15,21 +15,22 @@ logger = logging.getLogger(__name__)
 
 GDELT_TV_URL = "https://api.gdeltproject.org/api/v2/tv/tv"
 
-# FCC-relevant search queries
+# FCC-relevant search queries. Kept tight: each query is one HTTP call with a 2s
+# courtesy sleep, and this ingester runs concurrently with the rest of the cycle,
+# so the list is bounded to keep wall-clock well under the cycle lock TTL.
 FCC_TV_QUERIES = [
-    "FCC",
     '"Federal Communications Commission"',
     '"Brendan Carr"',
     '"spectrum auction"',
     '"net neutrality"',
-    '"broadband"',
-    '"robocall"',
     '"Emergency Alert System"',
 ]
 
-# National cable + DC broadcast affiliates
+# National cable (CNN/Fox/MSNBC/CSPAN/Bloomberg) already lives under "National".
+# The per-network affiliate fan-out multiplied request count ~4x for marginal gain,
+# so it's disabled by default to keep the cycle fast. Re-enable by listing networks.
 MARKETS = ["National"]
-NETWORKS = ["ABC", "CBS", "NBC"]
+NETWORKS: list = []
 
 
 @dataclass

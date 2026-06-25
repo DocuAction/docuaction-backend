@@ -406,6 +406,18 @@ MAJOR_OUTLET_FEEDS = [
     ("https://www.ftc.gov/feeds/press-release.xml",                         "FTC", False),
     ("https://www.gao.gov/rss/reports.xml",                                 "GAO", False),
     ("https://www.ustelecom.org/feed/",                                     "USTelecom", False),
+    # Legal / FCC-bar (free RSS) — broad, so FCC-relevance filtered. Closes the
+    # "no legal coverage" gap without any paid feed (Law360/Comm Daily stay paid).
+    ("https://www.commlawblog.com/feed/",                                   "CommLawBlog", False),
+    # National tech press (free RSS) — FCC-relevance filtered.
+    ("https://techcrunch.com/feed/",                                        "TechCrunch", False),
+    ("https://www.wired.com/feed/rss",                                      "Wired", False),
+    ("https://www.engadget.com/rss.xml",                                    "Engadget", False),
+    ("https://www.cnet.com/rss/news/",                                      "CNET", False),
+    ("https://feeds.npr.org/1019/rss.xml",                                  "NPR", False),
+    # Broadcast/radio trade (free RSS) — FCC-relevance filtered.
+    ("https://radioink.com/feed/",                                          "Radio Ink", False),
+    ("https://current.org/feed/",                                          "Current", False),
     # (Politico is already covered by politicopicks in FCC_RSS_FEEDS; its
     #  topic feeds 403 bot traffic, so they're not added here. NTIA / White House /
     #  House E&C / Senate Commerce / NAB / NCTA feeds were dead or empty on check.)
@@ -2241,6 +2253,40 @@ async def _ingest_reddit_articles(agency: AgencyConfig) -> List["Article"]:
         return []
 
 
+async def _ingest_primary_source_articles(agency: AgencyConfig) -> List["Article"]:
+    """FCC.gov daily digest/headlines + congressional hearing transcripts (govinfo).
+    Free, no paid key (govinfo uses DEMO_KEY). Each carries real description/snippet
+    text so the briefing's per-story summarizer has something concrete to work from."""
+    try:
+        from app.bulletin_intelligence.cspan_fcc_ingest import ingest_primary_sources
+        raw = await ingest_primary_sources()
+        out = [a for a in (_dict_to_article(d, agency.agency_id, "regulatory") for d in raw) if a]
+        if out:
+            logger.info(f"Primary sources → {len(out)} items for {agency.agency_id}")
+        return out
+    except Exception as e:
+        logger.warning(f"Primary-source ingest failed: {e}")
+        return []
+
+
+async def _ingest_broadcast_tv_articles(agency: AgencyConfig, lookback_hours: int) -> List["Article"]:
+    """GDELT TV 2.0 broadcast closed-caption clips (CNN/Fox/MSNBC/CSPAN/Bloomberg…).
+    Free, no key. Each clip's caption snippet becomes the article summary, giving the
+    briefing real broadcast coverage instead of the heuristic web_search guess only."""
+    if not agency.include_broadcast:
+        return []
+    try:
+        from app.bulletin_intelligence.gdelt_tv_ingest import ingest_broadcast_gdelt
+        raw = await ingest_broadcast_gdelt(lookback_hours)
+        out = [a for a in (_dict_to_article(d, agency.agency_id, "broadcast") for d in raw) if a]
+        if out:
+            logger.info(f"GDELT TV → {len(out)} broadcast clips for {agency.agency_id}")
+        return out
+    except Exception as e:
+        logger.warning(f"GDELT TV ingest failed: {e}")
+        return []
+
+
 # ── Master daily cycle ─────────────────────────────────────────────────────────
 async def run_daily_cycle(
     agency_id: str,
@@ -2283,6 +2329,12 @@ async def run_daily_cycle(
     # ── Free broad-coverage sources (no Claude cost; gather ignores failures) ──
     # GDELT DOC 2.0 — thousands of online outlets, free, no key
     tasks.append(_ingest_gdelt_doc_articles(agency, lookback_hours))
+    # Primary sources — FCC.gov daily digest/headlines + congressional hearing
+    # transcripts (govinfo). Free, no paid key.
+    tasks.append(_ingest_primary_source_articles(agency))
+    # GDELT TV — broadcast closed-caption transcripts (CNN/Fox/MSNBC/CSPAN/Bloomberg).
+    # Free, no key; auto-skips if agency.include_broadcast is False.
+    tasks.append(_ingest_broadcast_tv_articles(agency, lookback_hours))
     # BlueSky public search — free social, no key
     try:
         from app.bulletin_intelligence.bluesky_ingest import ingest_bluesky

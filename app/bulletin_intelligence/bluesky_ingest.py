@@ -34,6 +34,8 @@ BSKY_QUERIES = [
     "FCC",
     "Federal Communications Commission",
     "Brendan Carr FCC",
+    "spectrum auction",
+    "net neutrality FCC",
 ]
 
 

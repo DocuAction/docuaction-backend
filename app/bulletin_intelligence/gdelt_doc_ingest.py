@@ -21,6 +21,11 @@ FCC_QUERIES = [
     "robocall enforcement",
     "Emergency Alert System",
     "net neutrality",
+    # Added for fuller free coverage of common FCC actions/programs.
+    "FCC NPRM",
+    "FCC enforcement fine",
+    "BEAD broadband program",
+    "Universal Service Fund FCC",
 ]
 
 
