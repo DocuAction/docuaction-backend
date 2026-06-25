@@ -2278,9 +2278,15 @@ async def _ingest_broadcast_tv_articles(agency: AgencyConfig, lookback_hours: in
     try:
         from app.bulletin_intelligence.gdelt_tv_ingest import ingest_broadcast_gdelt
         raw = await ingest_broadcast_gdelt(lookback_hours)
+        # GDELT TV's clip matching is loose (it surfaces unrelated history/biz
+        # programming), so keep only clips that actually mention the FCC. Cheap,
+        # cuts the bulk of the noise, and saves Claude classification cost. Then
+        # cap to the most recent 50 (GDELT returns newest-first) so a heavy news
+        # day can't flood the classifier — the briefing only shows a handful anyway.
+        raw = [d for d in raw if _mentions_fcc(f"{d.get('title','')} {d.get('summary','')}")][:50]
         out = [a for a in (_dict_to_article(d, agency.agency_id, "broadcast") for d in raw) if a]
         if out:
-            logger.info(f"GDELT TV → {len(out)} broadcast clips for {agency.agency_id}")
+            logger.info(f"GDELT TV → {len(out)} FCC-relevant broadcast clips for {agency.agency_id}")
         return out
     except Exception as e:
         logger.warning(f"GDELT TV ingest failed: {e}")
