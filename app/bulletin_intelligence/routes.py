@@ -421,6 +421,9 @@ async def run_and_preview(agency_id: str, lookback_hours: int = 48):
 @router.get("/demo/{agency_id}")
 async def demo_cycle(agency_id: str = "fcc"):
     """Demo: run a mock daily cycle with simulated articles."""
+    import os
+    if os.environ.get("ENABLE_DEMO", "false").lower() != "true":
+        return {"status": "disabled", "message": "Demo mode disabled in production"}
     import random, uuid
     from datetime import datetime, timezone
     try:

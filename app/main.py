@@ -189,6 +189,9 @@ def safe_load(module_path: str, prefix: str):
 # ═══ CORE ROUTES ═══
 safe_load("app.api.routes", "core")
 
+# ═══ AUDIO (Whisper transcription) ═══
+safe_load("app.api.audio_routes", "audio")
+
 # ═══ ADMIN — USER & AREA ACCESS MANAGEMENT ═══
 safe_load("app.api.admin_users", "admin-users")
 

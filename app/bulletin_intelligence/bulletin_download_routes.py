@@ -19,7 +19,7 @@ except ImportError:
 logger = logging.getLogger("docuaction.bulletin.download")
 router = APIRouter(prefix="/api/v1/bulletin", tags=["Bulletin Downloads"])
 
-ALLOWED_DAYS = [1, 2, 3, 4, 5, 7, 30]
+ALLOWED_DAYS = [1, 2, 3, 4, 5, 7, 14, 30, 60, 90, 180]
 
 # Terms that signal a genuine FCC connection (agency + current leadership).
 # An article must mention one of these OR score highly with the classifier to be
