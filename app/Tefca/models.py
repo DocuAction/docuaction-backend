@@ -12,10 +12,13 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
-from sqlalchemy.ext.declarative import declarative_base
 import enum
 
-Base = declarative_base()
+# FIX 4: use the SHARED application Base so these tables register with the same
+# metadata that main.py's create_all and Alembic operate on. Previously this
+# module declared its own declarative_base(), so the TEFCA tables were invisible
+# to migrations and were never created in any database.
+from app.core.database import Base
 
 
 # ─── Enums ───────────────────────────────────────────────────────────────────
@@ -261,3 +264,45 @@ class TEFCAReport(Base):
     generated_by = Column(String(255))
     generated_at = Column(DateTime, default=datetime.utcnow)
     methodology_version = Column(String(20))
+
+
+class QueueStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    IN_REVIEW = "IN_REVIEW"
+    COMPLETE = "COMPLETE"
+
+
+class TEFCAAnalystQueue(Base):
+    """
+    Human-in-the-loop review queue. A queue item is created whenever an entity is
+    classified B2/B3/B4 or INDETERMINATE (a required source was unavailable), so
+    no finding is finalized without an analyst step. Tier-2 items are worked by
+    reviewers/senior_analysts; Tier-3 (Bucket-4 / hard escalations) by senior
+    analysts and above. (FIX 4)
+    """
+    __tablename__ = "tefca_analyst_queue"
+
+    queue_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    record_id = Column(UUID(as_uuid=True), ForeignKey("tefca_evidence_records.record_id"), nullable=False)
+    entity_id = Column(UUID(as_uuid=True), ForeignKey("tefca_entities.entity_id"))
+    cycle_id = Column(UUID(as_uuid=True), ForeignKey("tefca_review_cycles.cycle_id"))
+
+    tier = Column(Integer, nullable=False)                 # 2 or 3
+    assigned_role = Column(String(30), nullable=False)     # reviewer / senior_analyst / qalead
+    priority = Column(Integer, nullable=False, default=50) # higher = more urgent (B4=100 ... B2=40)
+    bucket_classification = Column(Enum(BucketClassification))
+    queue_reason = Column(Text)                            # e.g. "Source unavailable: PECOS"
+
+    status = Column(Enum(QueueStatus), default=QueueStatus.PENDING, nullable=False)
+    claimed_by = Column(String(255))
+    claimed_at = Column(DateTime)
+    completed_by = Column(String(255))
+    completed_at = Column(DateTime)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_queue_status_tier_priority", "status", "tier", "priority"),
+        Index("idx_queue_assigned_role", "assigned_role", "status"),
+    )

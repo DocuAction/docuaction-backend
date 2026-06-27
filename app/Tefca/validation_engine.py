@@ -155,6 +155,13 @@ class ValidationEngine:
     Takes entity + all source results → produces classification + findings.
     """
 
+    # Sources that must be VERIFIED (HTTP 200) for a result to be trustworthy.
+    # If any of these is unavailable for an entity, the result is INDETERMINATE:
+    # it can never be auto-classified (especially not as a clean B1) and must be
+    # routed to a human analyst. sam_entity and sam_exclusion are the same SAM
+    # probe; they collapse to one distinct source ("SAM_GOV") when reporting.
+    REQUIRED_SOURCE_KEYS = ("nppes", "leie_npi", "sam_entity", "sam_exclusion", "pecos")
+
     def __init__(self):
         self.normalizer = NameNormalizer()
 
@@ -270,8 +277,9 @@ class ValidationEngine:
                         "result": "MISMATCH",
                         "finding": FindingCode.ENTITY_TYPE_MISMATCH
                     })
-        elif nppes and not nppes.success:
-            deductions += 0.05  # Source unavailable penalty
+        # NOTE: the unavailable-source confidence penalty is applied exactly once
+        # per distinct source in the single availability pass below — it is NOT
+        # double-counted here (previously NPPES was penalized twice).
 
         # ── LEIE Validation ───────────────────────────────────────────────────
         leie_npi = source_results.get("leie_npi")
@@ -346,10 +354,18 @@ class ValidationEngine:
                 "finding": FindingCode.PECOS_PAYMENT_SUSPENSION
             })
 
-        # ── Source Availability Penalty ───────────────────────────────────────
-        for key, result in source_results.items():
-            if result and not result.success:
-                deductions += 0.05
+        # ── Source availability (fail-closed) ─────────────────────────────────
+        # Collect the DISTINCT authoritative sources that were unavailable
+        # (success=False or missing). One confidence penalty per distinct source
+        # — SAM's two keys collapse to one, so no double-counting.
+        unavailable_sources: list[str] = []
+        for key in self.REQUIRED_SOURCE_KEYS:
+            result = source_results.get(key)
+            if result is None or not result.success:
+                name = result.source_name if result is not None else key
+                if name not in unavailable_sources:
+                    unavailable_sources.append(name)
+        deductions += 0.05 * len(unavailable_sources)
 
         # ── Calculate Confidence Score ────────────────────────────────────────
         confidence = max(0.0, round(1.0 - deductions, 3))
@@ -360,14 +376,35 @@ class ValidationEngine:
         if not findings:
             findings.append(FindingCode.NO_DISCREPANCY)
 
+        # ── Indeterminate (fail-closed, NIST-defensible) ──────────────────────
+        # A required source being unavailable means the entity is NOT fully
+        # verified — a confirmed discrepancy from the sources that DID respond
+        # still stands, but a "clean" B1 cannot be trusted (a down LEIE/PECOS
+        # could be hiding an exclusion). Such records are never auto-classified
+        # and are always routed to a human analyst.
+        indeterminate = len(unavailable_sources) > 0
+        indeterminate_reason = (
+            "Source unavailable: " + ", ".join(unavailable_sources)
+            if indeterminate else None
+        )
+        auto_classify = (confidence >= 0.95 and bucket == 1 and not indeterminate)
+        tier = self._determine_tier(bucket, confidence, indeterminate)
+
         return {
             "bucket": bucket,
-            "bucket_label": label,
+            "bucket_label": (
+                "Indeterminate — Source Unavailable"
+                if (indeterminate and bucket == 1) else label
+            ),
             "confidence": confidence,
             "finding_codes": findings,
             "field_comparisons": field_comparisons,
-            "tier": self._determine_tier(bucket, confidence),
-            "auto_classify": confidence >= 0.95 and bucket == 1,
+            "tier": tier,
+            "auto_classify": auto_classify,
+            "indeterminate": indeterminate,
+            "indeterminate_reason": indeterminate_reason,
+            "unavailable_sources": unavailable_sources,
+            "classification_state": "INDETERMINATE" if indeterminate else "CLASSIFIED",
         }
 
     def _classify_name_similarity(
@@ -443,10 +480,12 @@ class ValidationEngine:
             return 2, "Minor or Administrative"
         return 1, "No Discrepancy"
 
-    def _determine_tier(self, bucket: int, confidence: float) -> int:
+    def _determine_tier(self, bucket: int, confidence: float, indeterminate: bool = False) -> int:
         """Route to correct review tier."""
         if bucket == 4:
             return 3
+        if indeterminate:
+            return 2  # missing source data — always analyst review, never auto
         if bucket == 3:
             return 2  # Tier 2 with escalation flag
         if bucket == 2:
@@ -517,7 +556,11 @@ class EvidenceRecordGenerator:
             "element_2": self._element_2(validation_result),
             "element_3": self._element_3(entity, validation_result, source_results),
             "element_4": self._element_4(source_results),
-            "element_5": self._element_5(bucket, findings, reviewer_id),
+            "element_5": self._element_5(
+                bucket, findings, reviewer_id,
+                indeterminate=validation_result.get("indeterminate", False),
+                indeterminate_reason=validation_result.get("indeterminate_reason"),
+            ),
         }
         return record
 
@@ -565,6 +608,10 @@ class EvidenceRecordGenerator:
             "tier_assigned": validation_result.get("tier", 1),
             "auto_classified": validation_result.get("auto_classify", False),
             "supervisor_review_required": bucket == 4,
+            "classification_state": validation_result.get("classification_state", "CLASSIFIED"),
+            "indeterminate": validation_result.get("indeterminate", False),
+            "indeterminate_reason": validation_result.get("indeterminate_reason"),
+            "unavailable_sources": validation_result.get("unavailable_sources", []),
         }
 
     def _element_3(
@@ -576,10 +623,16 @@ class EvidenceRecordGenerator:
         """Element 3 — Source Comparison."""
         comparisons = validation_result.get("field_comparisons", [])
 
-        nppes_data = source_results.get("nppes", SourceResult("NPPES", False)).data
-        leie_data = source_results.get("leie_npi", SourceResult("OIG_LEIE", False)).data
-        sam_data = source_results.get("sam_entity", SourceResult("SAM_GOV", False)).data
-        pecos_data = source_results.get("pecos", SourceResult("PECOS", False)).data
+        # None-safe: a fail-closed (unavailable) source carries data=None, so
+        # default to {} for the summary lookups below.
+        def _data(key: str) -> dict:
+            r = source_results.get(key)
+            return (r.data or {}) if r is not None else {}
+
+        nppes_data = _data("nppes")
+        leie_data = _data("leie_npi")
+        sam_data = _data("sam_entity")
+        pecos_data = _data("pecos")
 
         return {
             "field_comparisons": comparisons,
@@ -634,17 +687,28 @@ class EvidenceRecordGenerator:
         return {"citations": citations, "total_sources_queried": len(citations)}
 
     def _element_5(
-        self, bucket: int, findings: list[str], reviewer_id: str
+        self, bucket: int, findings: list[str], reviewer_id: str,
+        indeterminate: bool = False, indeterminate_reason: str | None = None,
     ) -> dict:
         """Element 5 — Disposition Recommendation."""
         # Escalate to ONC for the most serious violations
         needs_escalation = any(f in self.ESCALATE_CODES for f in findings)
-        if needs_escalation:
+        if indeterminate and not needs_escalation:
+            # A required source was unavailable — we cannot recommend "no action".
+            # The record must be re-run/verified by an analyst before disposition.
+            recommendation = "ANALYST_REVIEW_REQUIRED"
+        elif needs_escalation:
             recommendation = "ESCALATE_TO_ONC_REVIEW"
         else:
             recommendation = self.DISPOSITION_RULES.get(bucket, "QHIN_NOTIFICATION_MINOR")
 
         action_detail = self._get_action_detail(bucket, findings)
+        if indeterminate and not needs_escalation:
+            action_detail = (
+                f"Disposition cannot be finalized — {indeterminate_reason}. "
+                "Re-run validation once all authoritative sources are available, "
+                "then route to Tier-2 analyst review. Do NOT record as 'no action'."
+            )
         prevention = self._get_prevention(bucket, findings)
         deadline_days = {1: None, 2: 30, 3: 21, 4: 10}.get(bucket)
         deadline = None
@@ -657,6 +721,7 @@ class EvidenceRecordGenerator:
             "recommended_action_detail": action_detail,
             "recommended_deadline": deadline,
             "prevention_recommendation": prevention,
+            "indeterminate_reason": indeterminate_reason,
             "reviewer_id": reviewer_id,
             "review_notes": "",
             "agt_does_not_adjudicate": (
@@ -694,3 +759,9 @@ class EvidenceRecordGenerator:
             return ("QHIN should provide submission guidance to entities on legal name "
                    "format requirements and address standardization.")
         return "Continue current onboarding processes — no issues identified."
+
+
+# ── Backwards/contract-compatible alias ──────────────────────────────────────
+# The contract checklist imports the engine as TEFCAValidationEngine; the
+# implementation class is ValidationEngine. Expose both names.
+TEFCAValidationEngine = ValidationEngine

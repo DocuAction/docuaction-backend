@@ -25,7 +25,22 @@ ACCESS_EXPIRE_NORMAL = timedelta(minutes=15)
 ACCESS_EXPIRE_ADMIN = timedelta(hours=24)
 REFRESH_EXPIRE = timedelta(days=7)
 
-ROLE_HIERARCHY = {"admin": 4, "manager": 3, "contributor": 2, "viewer": 1}
+# Role hierarchy. The TEFCA contract (HHSAR 352.204-71, SOW C.3) review roles are
+# inserted as a ladder above the generic product roles. Only "admin" changed
+# numeric value (4 -> 8) to make room; the relative ordering of the pre-existing
+# viewer/contributor/manager roles is unchanged and admin remains the maximum, so
+# every existing require_role("admin") check behaves exactly as before.
+ROLE_HIERARCHY = {
+    "viewer": 1,
+    "contributor": 2,
+    "manager": 3,
+    # ── TEFCA contract roles (HHSAR 352.204-71 / FAR 52.212-4) ──
+    "reviewer": 4,         # Task 3/4/5 front-line reviewers
+    "senior_analyst": 5,   # + bucket overrides, Bucket-3 escalation queue, calibration
+    "qalead": 6,           # + methodology approval, D3.1 sign-off, view all queues
+    "program_manager": 7,  # + deliverable submission, full audit log, cycle management
+    "admin": 8,            # full access including user management
+}
 
 SAML_CONFIG = {
     "enabled": False,
@@ -89,10 +104,10 @@ async def get_current_user(
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(401, "User not found")
-    if user.email in ADMIN_EMAILS and user.role != "admin":
-        user.role = "admin"
-        user.plan = "enterprise"
-        await db.commit()
+    # REMOVED: email-based auto-admin escalation. Role/privilege assignment must
+    # happen only via database/admin action, never by email domain
+    # (HHSAR 352.204-71, FAR 52.212-4 — least privilege, authorized personnel only).
+    # Never reintroduce automatic role elevation based on email address.
     return user
 
 def require_role(minimum_role):

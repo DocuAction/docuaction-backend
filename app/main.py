@@ -2,9 +2,11 @@
 DocuAction AI — Application Entry Point
 v6.0.0 — Migration Intelligence Module Added
 """
+import time
 import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from sqlalchemy import text
 from app.core.config import settings
 from app.core.database import engine, Base
@@ -18,13 +20,31 @@ app = FastAPI(
     description="Enterprise Intelligence Operating System — Document, Voice, Healthcare, and Migration Intelligence with Decision-Grade Governance",
 )
 
+# ── CORS (FIX 8 — NIST SC-7). Wildcard removed; restricted to configured
+#    origins. Credentials are not needed (auth is via the Authorization bearer
+#    header, not cookies), and allow_credentials must never be True with a
+#    wildcard, so it is False. ──
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=settings.cors_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── Trusted Host (FIX 8 — NIST SC-7) — reject Host-header spoofing. ──
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.trusted_hosts)
+
+
+# ── Security response headers (FIX 8 — NIST SC-8 / SC-18). ──
+@app.middleware("http")
+async def security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Content-Security-Policy"] = "default-src 'self'"
+    return response
 
 
 @app.on_event("startup")
@@ -106,8 +126,34 @@ async def startup():
         logger.info("Bulletin scheduler DISABLED (set ENABLE_SCHEDULER=true to enable)")
 
 
+# Cached TEFCA connector probe. /health is polled frequently by load balancers,
+# so the live probe result is cached for 60s to avoid hammering the source APIs.
+_TEFCA_PROBE = {"ts": 0.0, "value": None}
+_TEFCA_PROBE_TTL = 60.0
+
+
+async def _probe_tefca():
+    """Real connector probe (cached). The TEFCA health status is DERIVED from a
+    live probe — never hardcoded (FIX 1). 'active' only when the core keyless
+    public sources (NPPES/LEIE/PECOS) actually respond."""
+    now = time.monotonic()
+    cached = _TEFCA_PROBE["value"]
+    if cached is not None and (now - _TEFCA_PROBE["ts"]) < _TEFCA_PROBE_TTL:
+        return cached
+    try:
+        from app.Tefca.connectors import SourceConnectorManager
+        probe = await SourceConnectorManager().health_check()
+        core_live = any(probe.get(s, {}).get("live") for s in ("NPPES", "OIG_LEIE", "PECOS"))
+        result = {"status": "active" if core_live else "degraded", "connectors": probe}
+    except Exception as e:
+        result = {"status": "import_failed", "connectors": {"error": str(e)}}
+    _TEFCA_PROBE.update(ts=now, value=result)
+    return result
+
+
 @app.get("/health")
 async def health():
+    tefca = await _probe_tefca()
     return {
         "status": "healthy",
         "version": "6.0.0",
@@ -120,10 +166,12 @@ async def health():
             "comparison": "active",
             "extraction": "active",
             "automation": "active",
-            "tefca_review_protocol": "active",
+            # Real probe result — "active" only if core connectors responded (FIX 1).
+            "tefca_review_protocol": tefca["status"],
             "case_management": "active",
             "bulletin_intelligence": "active",
         },
+        "tefca_connectors": tefca["connectors"],
     }
 
 
@@ -167,8 +215,15 @@ safe_load("app.api.wow_routes", "wow-features")
 # ═══ MIGRATION INTELLIGENCE ═══
 safe_load("app.api.migration_routes", "migration")
 
-# ═══ TEFCA REVIEW PROTOCOL (ONC Contract) ═══
-safe_load("app.Tefca", "tefca-review-protocol")
+# ═══ TEFCA REVIEW PROTOCOL (ONC Contract 7571MN26F80064) ═══
+# Core contract deliverable — registered UNCONDITIONALLY. If it cannot import,
+# the application MUST fail to start. We do NOT route it through safe_load, which
+# would swallow an import error and silently turn every /api/v1/tefca/* endpoint
+# into a 404 while /health falsely reported it "active". A broken TEFCA module is
+# a hard startup failure, by design.
+from app.Tefca import router as tefca_router  # noqa: E402  (fail-loud on import error)
+app.include_router(tefca_router)
+logger.info("Loaded: tefca-review-protocol (REQUIRED — unconditional registration)")
 
 # ═══ CASE MANAGEMENT ═══
 safe_load("app.case_management", "case-management")

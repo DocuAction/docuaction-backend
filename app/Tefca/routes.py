@@ -1,30 +1,56 @@
 """
-DocuAction TEFCA Review Protocol
-FastAPI Routes — Complete API surface
+DocuAction TEFCA Review Protocol — FastAPI Routes (production).
 
-Loaded via safe_load("app.Tefca", "tefca-review-protocol") in main.py
+ONC TEFCA Review Protocol — Alliance Global Tech, Inc. (AGT)
+Contract No. 7571MN26F80064 (HHS/ONC)
+
+Every route is authenticated and role-gated (FIX 2). Every state change is
+persisted to the database and written to the audit trail (FIX 4 / FIX 9). There
+are no stub returns and no fabricated source citations (FIX 5). Reports aggregate
+real, persisted evidence records (FIX 6). The retrospective sample size uses the
+finite-population correction (FIX 7).
 """
 
-import asyncio
-import uuid
 import math
+import uuid
+import logging
 from datetime import datetime, timedelta
 from typing import Optional
-from fastapi import APIRouter, BackgroundTasks, Query
-from pydantic import BaseModel
 
-from .connectors import SourceConnectorManager
+from fastapi import APIRouter, BackgroundTasks, Query, Depends, HTTPException, Request
+from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import get_db, async_session_maker
+from app.core.security import require_role, get_current_user
+from app.core.config import settings
+from app.services.audit import log_tefca_event
+
+from .connectors import SourceConnectorManager, SourceResult, _extract_npi, _entity_type_of
 from .validation_engine import ValidationEngine, EvidenceRecordGenerator
 from .mock_data import ALL_MOCK_ENTITIES, MOCK_STATS
+from .models import (
+    TEFCAEntity, TEFCAReviewCycle, TEFCAEvidenceRecord, TEFCASourceCache,
+    TEFCAPriorityCase, TEFCAReport, TEFCAAnalystQueue,
+    EntityType, EntityStatus, BucketClassification, BucketLabel,
+    CycleType, CycleStatus, RecordStatus, CaseStatus, CaseSeverity, QueueStatus,
+)
 
-# ─── Router — prefix and tag defined here so safe_load works ─────────────────
+logger = logging.getLogger("docuaction.tefca.routes")
+
+# ── Router — authenticated by default. require_role("reviewer") is the MINIMUM
+#    for any TEFCA endpoint; stricter roles are applied per-route. No endpoint is
+#    reachable without a valid JWT. (FIX 2 — HHSAR 352.204-71 / FAR 52.212-4) ──
 tefca_router = APIRouter(
     prefix="/api/v1/tefca",
-    tags=["TEFCA Review Protocol"]
+    tags=["TEFCA Review Protocol"],
+    dependencies=[Depends(require_role("reviewer"))],
 )
-router = tefca_router  # safe_load expects mod.router
+router = tefca_router  # safe_load / main.py expects mod.router
 
-# ─── Lazy initialization ──────────────────────────────────────────────────────
+
+# ─── Lazy singletons ─────────────────────────────────────────────────────────
 _connector_manager: Optional[SourceConnectorManager] = None
 _validation_engine: Optional[ValidationEngine] = None
 _evidence_generator: Optional[EvidenceRecordGenerator] = None
@@ -51,7 +77,7 @@ def get_evidence_generator() -> EvidenceRecordGenerator:
     return _evidence_generator
 
 
-# ─── Pydantic Schemas ─────────────────────────────────────────────────────────
+# ─── Request schemas ─────────────────────────────────────────────────────────
 
 class CycleCreateRequest(BaseModel):
     cycle_type: str
@@ -60,33 +86,21 @@ class CycleCreateRequest(BaseModel):
     cycle_number: Optional[int] = None
     sample_confidence_level: float = 0.95
     methodology_version: str = "1.0"
-    created_by: Optional[str] = None
 
 
 class AnalystOverrideRequest(BaseModel):
     bucket_classification: int
     override_reason: str
     review_notes: Optional[str] = None
-    reviewer_id: str
-
-
-class DispositionUpdateRequest(BaseModel):
-    recommendation: str
-    recommended_action_detail: str
-    prevention_recommendation: Optional[str] = None
-    review_notes: Optional[str] = None
-    reviewer_id: str
 
 
 class EscalateRequest(BaseModel):
     escalation_note: str
-    reviewer_id: str
 
 
 class PriorityCaseCreateRequest(BaseModel):
     cor_reference: str
     entity_rce_id: str
-    assigned_by: str
     deadline_date: Optional[str] = None
     issue_description: str
 
@@ -100,935 +114,1002 @@ class PriorityCaseUpdateRequest(BaseModel):
     recommendations: Optional[dict] = None
 
 
-# ─── Connector Health ─────────────────────────────────────────────────────────
+# ─── Sample size — finite population correction (FIX 7) ───────────────────────
 
-@tefca_router.get("/connectors/status",
-    summary="Health check all data source connectors")
-async def connector_health():
-    """
-    Returns live/mock/error status for all 6 data sources.
-    Use this to confirm which APIs are live vs mock before running reviews.
-    """
+def calculate_sample_size(N: int, confidence: float = 0.95, margin: float = 0.05) -> int:
+    """95% CI, ±5% margin, maximum-variance p=0.5, with finite population
+    correction. For N=94,231 this returns 383 (matching the contract)."""
+    z = 1.96  # 95% CI
+    p = 0.5
+    n_0 = (z ** 2 * p * (1 - p)) / (margin ** 2)
+    n = n_0 / (1 + (n_0 - 1) / N)
+    return math.ceil(n)
+
+
+# ─── Enum / helper mappers ───────────────────────────────────────────────────
+
+_BUCKET_CLASS = {
+    1: BucketClassification.BUCKET_1, 2: BucketClassification.BUCKET_2,
+    3: BucketClassification.BUCKET_3, 4: BucketClassification.BUCKET_4,
+}
+_BUCKET_LABEL = {
+    1: BucketLabel.NO_DISCREPANCY, 2: BucketLabel.MINOR_ADMINISTRATIVE,
+    3: BucketLabel.INEXPLICABLE, 4: BucketLabel.NON_COMPLIANT,
+}
+
+
+def _bucket_class_enum(bucket: int) -> BucketClassification:
+    return _BUCKET_CLASS.get(bucket, BucketClassification.BUCKET_1)
+
+
+def _bucket_label_enum(bucket: int) -> BucketLabel:
+    return _BUCKET_LABEL.get(bucket, BucketLabel.NO_DISCREPANCY)
+
+
+def _client_ip(request: Request) -> Optional[str]:
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else None
+
+
+def _assigned_role(tier: int, bucket: int) -> str:
+    if tier == 3 or bucket == 4:
+        return "senior_analyst"
+    if bucket == 3:
+        return "senior_analyst"  # Bucket-3 escalation queue is senior_analyst+
+    return "reviewer"
+
+
+def _queue_priority(bucket: int, indeterminate: bool) -> int:
+    if bucket == 4:
+        return 100
+    if bucket == 3:
+        return 80
+    if indeterminate:
+        return 70
+    if bucket == 2:
+        return 40
+    return 50
+
+
+# ─── Persistence helpers ─────────────────────────────────────────────────────
+
+async def _get_or_create_cycle(
+    db: AsyncSession,
+    cycle_id: Optional[str] = None,
+    cycle_type: CycleType = CycleType.TASK3_RETROSPECTIVE,
+    created_by: str = "SYSTEM",
+) -> TEFCAReviewCycle:
+    if cycle_id:
+        try:
+            cid = uuid.UUID(str(cycle_id))
+        except (ValueError, AttributeError, TypeError):
+            cid = None
+        if cid:
+            row = (await db.execute(
+                select(TEFCAReviewCycle).where(TEFCAReviewCycle.cycle_id == cid)
+            )).scalar_one_or_none()
+            if row:
+                return row
+    row = TEFCAReviewCycle(
+        cycle_type=cycle_type,
+        cycle_start_date=datetime.utcnow(),
+        cycle_status=CycleStatus.IN_PROGRESS,
+        created_by=created_by,
+    )
+    db.add(row)
+    await db.flush()
+    return row
+
+
+async def _upsert_entity(db: AsyncSession, org: dict) -> TEFCAEntity:
+    rce_id = org.get("id") or str(uuid.uuid4())
+    row = (await db.execute(
+        select(TEFCAEntity).where(TEFCAEntity.rce_organization_id == rce_id)
+    )).scalar_one_or_none()
+    npi = _extract_npi(org)
+    raw_type = _entity_type_of(org)
+    try:
+        etype = EntityType(raw_type)
+    except ValueError:
+        etype = EntityType.PARTICIPANT
+    if row is None:
+        row = TEFCAEntity(
+            rce_organization_id=rce_id,
+            qhin_name=org.get("_qhin", "Unknown QHIN"),
+            entity_type=etype,
+            legal_name_submitted=org.get("name", ""),
+            npi_submitted=(npi or None),
+            address_submitted=org.get("address"),
+            identifiers_submitted=org.get("identifier"),
+            endpoints_submitted=org.get("endpoint"),
+            fhir_resource_raw=org,
+        )
+        db.add(row)
+        await db.flush()
+    else:
+        row.legal_name_submitted = org.get("name", row.legal_name_submitted)
+        if npi:
+            row.npi_submitted = npi
+    return row
+
+
+async def _cached_or_query_sources(
+    db: AsyncSession,
+    manager: SourceConnectorManager,
+    org: dict,
+    entity_row: TEFCAEntity,
+    cycle_id,
+) -> tuple[dict, bool]:
+    """Return (source_results, from_cache). Reuses cached responses if every
+    required source was queried for this entity within the last 24h; otherwise
+    queries live and writes the cache (FIX 4 — caching + audit reproducibility)."""
+    cutoff = datetime.utcnow() - timedelta(hours=24)
+    rows = (await db.execute(
+        select(TEFCASourceCache).where(
+            TEFCASourceCache.entity_id == entity_row.entity_id,
+            TEFCASourceCache.query_timestamp >= cutoff,
+        )
+    )).scalars().all()
+    by_key = {r.source_name: r for r in rows}
+    needed = manager.REQUIRED_SOURCES
+    if all(k in by_key for k in needed):
+        results = {}
+        for k, r in by_key.items():
+            payload = r.response_data or {}
+            src_name = payload.get("_source_name", k)
+            results[k] = SourceResult(
+                source_name=src_name,
+                success=bool(r.query_success),
+                data=(payload if r.query_success else None),
+                error=r.error_message,
+                response_hash=r.response_hash,
+                api_version=r.api_version,
+                query_params=r.query_parameters or {},
+                query_timestamp=(r.query_timestamp.isoformat() if r.query_timestamp else datetime.utcnow().isoformat()),
+            )
+        return results, True
+
+    results = await manager.query_all_sources(org)
+    now = datetime.utcnow()
+    for k, res in results.items():
+        payload = dict(res.data) if res.data is not None else {}
+        payload["_source_name"] = res.source_name
+        db.add(TEFCASourceCache(
+            entity_id=entity_row.entity_id,
+            cycle_id=cycle_id,
+            source_name=k,
+            query_parameters=res.query_params,
+            response_data=payload,
+            response_hash=res.response_hash,
+            api_version=res.api_version,
+            query_success=res.success,
+            error_message=res.error,
+            query_timestamp=now,
+            cache_expires_at=now + timedelta(hours=24),
+        ))
+    return results, False
+
+
+async def _persist_evidence(
+    db: AsyncSession,
+    entity_row: TEFCAEntity,
+    cycle_row: TEFCAReviewCycle,
+    validation: dict,
+    evidence_record: dict,
+    reviewer_id: str,
+) -> TEFCAEvidenceRecord:
+    bucket = validation["bucket"]
+    try:
+        rid = uuid.UUID(str(evidence_record.get("record_id")))
+    except (ValueError, TypeError):
+        rid = uuid.uuid4()
+    row = TEFCAEvidenceRecord(
+        record_id=rid,
+        entity_id=entity_row.entity_id,
+        cycle_id=cycle_row.cycle_id,
+        tier_assigned=validation["tier"],
+        auto_classified=bool(validation["auto_classify"]),
+        bucket_classification=_bucket_class_enum(bucket),
+        bucket_label=_bucket_label_enum(bucket),
+        confidence_score=validation["confidence"],
+        finding_codes=validation["finding_codes"],
+        element_1_entity_identification=evidence_record.get("element_1"),
+        element_2_finding_classification=evidence_record.get("element_2"),
+        element_3_source_comparison=evidence_record.get("element_3"),
+        element_4_supporting_citations=evidence_record.get("element_4"),
+        element_5_disposition_recommendation=evidence_record.get("element_5"),
+        reviewer_id=reviewer_id,
+        reviewer_tier=1,
+        review_timestamp=(datetime.utcnow() if validation["auto_classify"] else None),
+        supervisor_review_required=(bucket == 4),
+        record_status=(RecordStatus.REVIEWED if validation["auto_classify"] else RecordStatus.PENDING_REVIEW),
+    )
+    db.add(row)
+    await db.flush()
+    return row
+
+
+async def _enqueue_if_needed(
+    db: AsyncSession,
+    record_row: TEFCAEvidenceRecord,
+    entity_row: TEFCAEntity,
+    cycle_row: TEFCAReviewCycle,
+    validation: dict,
+) -> Optional[TEFCAAnalystQueue]:
+    bucket = validation["bucket"]
+    indeterminate = bool(validation.get("indeterminate"))
+    # B1 + fully verified = auto-complete, no human queue item.
+    if bucket == 1 and not indeterminate:
+        return None
+    tier = validation["tier"]
+    item = TEFCAAnalystQueue(
+        record_id=record_row.record_id,
+        entity_id=entity_row.entity_id,
+        cycle_id=cycle_row.cycle_id,
+        tier=tier,
+        assigned_role=_assigned_role(tier, bucket),
+        priority=_queue_priority(bucket, indeterminate),
+        bucket_classification=_bucket_class_enum(bucket),
+        queue_reason=(validation.get("indeterminate_reason")
+                      or f"Bucket {bucket} requires analyst review"),
+        status=QueueStatus.PENDING,
+    )
+    db.add(item)
+    return item
+
+
+def _bump_cycle_counts(cycle: TEFCAReviewCycle, validation: dict) -> None:
+    bucket = validation["bucket"]
+    cycle.total_entities_completed = (cycle.total_entities_completed or 0) + 1
+    setattr(cycle, f"bucket_{bucket}_count", (getattr(cycle, f"bucket_{bucket}_count") or 0) + 1)
+    if validation["auto_classify"]:
+        cycle.auto_completed_count = (cycle.auto_completed_count or 0) + 1
+    if validation["tier"] == 2:
+        cycle.tier2_queue_count = (cycle.tier2_queue_count or 0) + 1
+    elif validation["tier"] == 3:
+        cycle.tier3_queue_count = (cycle.tier3_queue_count or 0) + 1
+
+
+async def _validate_and_persist(
+    db: AsyncSession, org: dict, cycle_row: TEFCAReviewCycle, reviewer_id: str, acting_user,
+    ip_address: Optional[str] = None,
+) -> tuple[TEFCAEvidenceRecord, dict, dict]:
+    """Full single-entity pipeline with persistence. Returns (record, validation,
+    evidence_dict). Does NOT commit — caller commits."""
+    manager = get_connector_manager()
+    engine = get_validation_engine()
+    evgen = get_evidence_generator()
+
+    entity_row = await _upsert_entity(db, org)
+    sources, from_cache = await _cached_or_query_sources(db, manager, org, entity_row, cycle_row.cycle_id)
+    validation = engine.validate(org, sources)
+    evidence = evgen.generate(org, str(cycle_row.cycle_id), validation, sources, reviewer_id)
+    record = await _persist_evidence(db, entity_row, cycle_row, validation, evidence, reviewer_id)
+    await _enqueue_if_needed(db, record, entity_row, cycle_row, validation)
+    _bump_cycle_counts(cycle_row, validation)
+
+    entity_row.latest_bucket = _bucket_class_enum(validation["bucket"])
+    entity_row.latest_confidence = validation["confidence"]
+    entity_row.current_status = (
+        EntityStatus.REVIEWED_COMPLETE if validation["auto_classify"] else EntityStatus.IN_REVIEW
+    )
+
+    await log_tefca_event(
+        db, user=acting_user, action="ENTITY_VALIDATED",
+        resource_type="tefca_evidence_record", resource_id=record.record_id,
+        ip_address=ip_address,
+        details={
+            "actor": reviewer_id,
+            "entity_rce_id": entity_row.rce_organization_id,
+            "bucket": validation["bucket"],
+            "confidence": validation["confidence"],
+            "tier": validation["tier"],
+            "indeterminate": validation.get("indeterminate"),
+            "unavailable_sources": validation.get("unavailable_sources"),
+            "sources_from_cache": from_cache,
+            "sources_queried": list(sources.keys()),
+        },
+    )
+    return record, validation, evidence
+
+
+# ─── Connector health ────────────────────────────────────────────────────────
+
+@tefca_router.get("/connectors/status", summary="Probe all data source connectors")
+async def connector_health(user=Depends(require_role("reviewer"))):
     manager = get_connector_manager()
     status = await manager.health_check()
-    live_count = sum(1 for s in status.values() if s.get("live"))
+    live = sum(1 for s in status.values() if s.get("live"))
     return {
         "checked_at": datetime.utcnow().isoformat(),
         "connectors": status,
-        "live_connector_count": live_count,
-        "mock_connector_count": len(status) - live_count,
-        "summary": f"{live_count}/{len(status)} connectors live",
-        "pending_actions": [
-            "SAM_GOV_API_KEY: set in .env (key already received)",
-            "RCE Directory: email sent to techsupport@sequoiaproject.org",
-            "IQVIA OneKey: pending contract award ODC",
-        ]
+        "live_connector_count": live,
+        "total_connectors": len(status),
+        "summary": f"{live}/{len(status)} connectors live",
     }
 
 
-# ─── Mock Data ────────────────────────────────────────────────────────────────
+# ─── Reference dataset (development data only) ───────────────────────────────
 
-@tefca_router.get("/mock/entities",
-    summary="View mock RCE Directory dataset")
+@tefca_router.get("/mock/entities", summary="View bundled RCE development dataset")
 async def get_mock_entities(
     bucket: Optional[int] = None,
-    qhin: Optional[str] = None
+    qhin: Optional[str] = None,
+    user=Depends(require_role("reviewer")),
 ):
-    """Returns the 30 mock RCE Directory entities for development and testing."""
     entities = ALL_MOCK_ENTITIES
     if bucket:
         entities = [e for e in entities if e.get("_expected_bucket") == bucket]
     if qhin:
         entities = [e for e in entities if e.get("_qhin") == qhin]
     return {
-        "total": len(entities),
-        "stats": MOCK_STATS,
-        "entities": entities,
-        "note": "MOCK DATA — RCE API key pending from techsupport@sequoiaproject.org"
+        "total": len(entities), "stats": MOCK_STATS, "entities": entities,
+        "note": "Bundled development dataset — flagged MOCK; never auto-finalized as B1.",
     }
 
 
-# ─── Review Cycles ────────────────────────────────────────────────────────────
+# ─── Review cycles ───────────────────────────────────────────────────────────
 
-@tefca_router.post("/cycles",
-    summary="Create new review cycle")
-async def create_cycle(request: CycleCreateRequest):
-    """Create Task 3 (retrospective), Task 4 (ongoing), or Task 5 (priority) cycle."""
-    cycle_id = str(uuid.uuid4())
-    return {
-        "cycle_id": cycle_id,
-        "cycle_type": request.cycle_type,
-        "cycle_start_date": request.cycle_start_date,
-        "cycle_status": "PLANNED",
-        "created_at": datetime.utcnow().isoformat(),
-        "message": f"Cycle {cycle_id} created. Use POST /validate/batch to start Tier 1 processing."
-    }
-
-
-@tefca_router.get("/cycles",
-    summary="List all review cycles")
-async def list_cycles():
-    """List all review cycles with status and bucket statistics."""
-    return {
-        "cycles": [],
-        "total": 0,
-        "message": "Wire to database for production use."
-    }
-
-
-# ─── Validation ───────────────────────────────────────────────────────────────
-
-@tefca_router.post("/validate/entity",
-    summary="Validate single RCE Directory entity")
-async def validate_single_entity(entity: dict):
-    """
-    Run Tier 1 automated validation against a single FHIR R4 Organization resource.
-    """
-    manager = get_connector_manager()
-    engine = get_validation_engine()
-    evidence_gen = get_evidence_generator()
-
-    source_results = await manager.query_all_sources(entity)
-    validation = engine.validate(entity, source_results)
-    cycle_id = str(uuid.uuid4())
-    evidence_record = evidence_gen.generate(
-        entity, cycle_id, validation, source_results, "SYSTEM_TIER1"
+@tefca_router.post("/cycles", summary="Create review cycle")
+async def create_cycle(
+    request: CycleCreateRequest, http: Request,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("program_manager")),
+):
+    try:
+        ctype = CycleType(request.cycle_type)
+    except ValueError:
+        raise HTTPException(400, f"Invalid cycle_type. Use one of: {[c.value for c in CycleType]}")
+    row = TEFCAReviewCycle(
+        cycle_type=ctype,
+        cycle_start_date=datetime.fromisoformat(request.cycle_start_date),
+        cycle_end_date=(datetime.fromisoformat(request.cycle_end_date) if request.cycle_end_date else None),
+        cycle_number=request.cycle_number,
+        sample_confidence_level=request.sample_confidence_level,
+        methodology_version=request.methodology_version,
+        cycle_status=CycleStatus.PLANNED,
+        created_by=str(user.email),
     )
-
+    db.add(row)
+    await db.flush()
+    await log_tefca_event(
+        db, user=user, action="CYCLE_CREATED", resource_type="tefca_review_cycle",
+        resource_id=row.cycle_id, ip_address=_client_ip(http),
+        details={"cycle_type": ctype.value, "methodology_version": request.methodology_version},
+    )
+    await db.commit()
     return {
-        "entity_id": entity.get("id"),
-        "entity_name": entity.get("name"),
-        "validation_result": validation,
-        "evidence_record": evidence_record,
-        "processing_time": "< 60 seconds (Tier 1 target)",
+        "cycle_id": str(row.cycle_id), "cycle_type": ctype.value,
+        "cycle_status": row.cycle_status.value, "created_at": row.created_at.isoformat(),
     }
 
 
-@tefca_router.post("/validate/batch",
-    summary="Run Tier 1 validation on full cycle batch")
+@tefca_router.get("/cycles", summary="List review cycles")
+async def list_cycles(db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
+    rows = (await db.execute(select(TEFCAReviewCycle).order_by(TEFCAReviewCycle.created_at.desc()))).scalars().all()
+    return {
+        "total": len(rows),
+        "cycles": [{
+            "cycle_id": str(c.cycle_id), "cycle_type": c.cycle_type.value if c.cycle_type else None,
+            "cycle_status": c.cycle_status.value if c.cycle_status else None,
+            "total_entities_completed": c.total_entities_completed,
+            "bucket_counts": {
+                "1": c.bucket_1_count, "2": c.bucket_2_count,
+                "3": c.bucket_3_count, "4": c.bucket_4_count,
+            },
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+        } for c in rows],
+    }
+
+
+# ─── Validation ──────────────────────────────────────────────────────────────
+
+@tefca_router.post("/validate/entity", summary="Validate one RCE entity (persisted)")
+async def validate_single_entity(
+    entity: dict, http: Request,
+    cycle_id: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("reviewer")),
+):
+    cycle = await _get_or_create_cycle(db, cycle_id, created_by=str(user.email))
+    record, validation, evidence = await _validate_and_persist(
+        db, entity, cycle, reviewer_id=str(user.email), acting_user=user, ip_address=_client_ip(http),
+    )
+    await db.commit()
+    return {
+        "record_id": str(record.record_id), "cycle_id": str(cycle.cycle_id),
+        "entity_name": entity.get("name"),
+        "bucket": validation["bucket"], "bucket_label": validation["bucket_label"],
+        "confidence": validation["confidence"], "tier": validation["tier"],
+        "auto_classify": validation["auto_classify"],
+        "classification_state": validation["classification_state"],
+        "indeterminate_reason": validation.get("indeterminate_reason"),
+        "finding_codes": validation["finding_codes"],
+        "evidence_record": evidence,
+    }
+
+
+@tefca_router.post("/evidence/generate", summary="Generate + persist 5-element evidence record")
+async def generate_evidence(
+    entity: dict, http: Request,
+    cycle_id: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("reviewer")),
+):
+    cycle = await _get_or_create_cycle(db, cycle_id, created_by=str(user.email))
+    record, validation, evidence = await _validate_and_persist(
+        db, entity, cycle, reviewer_id=str(user.email), acting_user=user, ip_address=_client_ip(http),
+    )
+    await db.commit()
+    return {
+        "record_id": str(record.record_id), "cycle_id": str(cycle.cycle_id),
+        "bucket": validation["bucket"], "classification_state": validation["classification_state"],
+        "evidence_record": evidence,
+    }
+
+
+@tefca_router.post("/validate/batch", summary="Run Tier-1 validation across a cycle (async, persisted)")
 async def validate_batch(
-    background_tasks: BackgroundTasks,
-    cycle_id: str = Query(..., description="Cycle ID to process"),
+    background_tasks: BackgroundTasks, http: Request,
+    cycle_id: str = Query(..., description="Existing cycle ID"),
     entity_type: Optional[str] = Query(None),
     qhin_name: Optional[str] = Query(None),
-    use_mock: bool = Query(True)
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("reviewer")),
 ):
-    """
-    Trigger Tier 1 automated validation for an entire review cycle.
-    Runs asynchronously. Monitor via GET /validate/status/{cycle_id}.
-    """
-    manager = get_connector_manager()
+    try:
+        cid = uuid.UUID(cycle_id)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "cycle_id must be a valid UUID")
+    cycle = (await db.execute(select(TEFCAReviewCycle).where(TEFCAReviewCycle.cycle_id == cid))).scalar_one_or_none()
+    if not cycle:
+        raise HTTPException(404, f"Cycle {cycle_id} not found — create it via POST /cycles first")
 
+    manager = get_connector_manager()
     rce_result = await manager.rce_directory.get_all_organizations(
-        entity_type=entity_type,
-        qhin_name=qhin_name,
-        limit=500
+        entity_type=entity_type, qhin_name=qhin_name, limit=100000,
     )
+    if not rce_result.success or not rce_result.data:
+        raise HTTPException(503, f"RCE Directory unavailable: {rce_result.error}")
     entities = rce_result.data.get("organizations", [])
     total = len(entities)
+    sample_size = calculate_sample_size(total) if total > 0 else 0
+    sample = entities[:sample_size]
 
-    if total > 100:
-        sample_size = min(total, math.ceil(
-            (1.96 ** 2 * 0.5 * 0.5) / (0.05 ** 2)
-        ))
-    else:
-        sample_size = total
-
-    background_tasks.add_task(
-        _run_batch_validation, entities[:sample_size], cycle_id, manager
+    cycle.total_entities_sampled = sample_size
+    cycle.cycle_status = CycleStatus.IN_PROGRESS
+    await log_tefca_event(
+        db, user=user, action="BATCH_VALIDATION_STARTED", resource_type="tefca_review_cycle",
+        resource_id=cycle.cycle_id, ip_address=_client_ip(http),
+        details={"population": total, "sample_size": sample_size,
+                 "data_source": rce_result.data.get("data_source"), "initiated_by": str(user.email)},
     )
+    await db.commit()
 
+    background_tasks.add_task(_run_batch_validation, sample, str(cid), str(user.email))
     return {
-        "cycle_id": cycle_id,
-        "total_entities_in_rce": total,
-        "sample_size": sample_size,
-        "confidence_level": 0.95,
-        "status": "PROCESSING",
-        "estimated_runtime_minutes": round(sample_size * 0.5),
+        "cycle_id": cycle_id, "population_size": total, "sample_size": sample_size,
+        "confidence_level": 0.95, "margin_of_error": 0.05,
+        "status": "PROCESSING", "data_source": rce_result.data.get("data_source"),
         "monitor_at": f"/api/v1/tefca/validate/status/{cycle_id}",
-        "data_source": "MOCK" if not manager.rce_directory._is_live() else "LIVE_RCE_DIRECTORY",
     }
 
 
-async def _run_batch_validation(
-    entities: list,
-    cycle_id: str,
-    manager: SourceConnectorManager
-):
-    """Background task: validate all entities in the batch."""
-    engine = get_validation_engine()
-    evidence_gen = get_evidence_generator()
-    results = []
-
-    for entity in entities:
-        try:
-            source_results = await manager.query_all_sources(entity)
-            validation = engine.validate(entity, source_results)
-            evidence_record = evidence_gen.generate(
-                entity, cycle_id, validation, source_results
-            )
-            results.append({
-                "entity_id": entity.get("id"),
-                "bucket": validation["bucket"],
-                "confidence": validation["confidence"],
-                "tier": validation["tier"],
-                "auto_classify": validation["auto_classify"],
-                "record_id": evidence_record["record_id"],
-            })
-        except Exception as e:
-            results.append({
-                "entity_id": entity.get("id"),
-                "error": str(e),
-                "bucket": None,
-            })
-
-    return results
-
-
-@tefca_router.get("/validate/status/{cycle_id}",
-    summary="Get batch validation progress")
-async def get_validation_status(cycle_id: str):
-    """Real-time progress for a running batch validation."""
-    return {
-        "cycle_id": cycle_id,
-        "status": "IN_PROGRESS",
-        "message": "Wire to database/cache for production progress tracking.",
-    }
-
-
-# ─── Evidence Records ─────────────────────────────────────────────────────────
-
-@tefca_router.post("/evidence/generate",
-    summary="Generate 5-element evidence record")
-async def generate_evidence(
-    entity: dict,
-    cycle_id: Optional[str] = None,
-    reviewer_id: str = "SYSTEM_TIER1"
-):
-    """Generate a complete 5-element evidence record for any entity."""
-    if not cycle_id:
-        cycle_id = str(uuid.uuid4())
-
+async def _run_batch_validation(entity_dicts: list, cycle_id_str: str, initiated_by: str):
+    """Background batch worker — own DB session, commits per entity for durability."""
     manager = get_connector_manager()
     engine = get_validation_engine()
-    evidence_gen = get_evidence_generator()
+    evgen = get_evidence_generator()
+    cid = uuid.UUID(cycle_id_str)
+    async with async_session_maker() as db:
+        cycle = (await db.execute(select(TEFCAReviewCycle).where(TEFCAReviewCycle.cycle_id == cid))).scalar_one_or_none()
+        if not cycle:
+            logger.error(f"batch: cycle {cycle_id_str} vanished")
+            return
+        for org in entity_dicts:
+            try:
+                entity_row = await _upsert_entity(db, org)
+                sources, from_cache = await _cached_or_query_sources(db, manager, org, entity_row, cycle.cycle_id)
+                validation = engine.validate(org, sources)
+                evidence = evgen.generate(org, cycle_id_str, validation, sources, "SYSTEM_TIER1")
+                record = await _persist_evidence(db, entity_row, cycle, validation, evidence, "SYSTEM_TIER1")
+                await _enqueue_if_needed(db, record, entity_row, cycle, validation)
+                _bump_cycle_counts(cycle, validation)
+                entity_row.latest_bucket = _bucket_class_enum(validation["bucket"])
+                entity_row.latest_confidence = validation["confidence"]
+                entity_row.current_status = (
+                    EntityStatus.REVIEWED_COMPLETE if validation["auto_classify"] else EntityStatus.IN_REVIEW
+                )
+                await log_tefca_event(
+                    db, user=None, action="ENTITY_VALIDATED",
+                    resource_type="tefca_evidence_record", resource_id=record.record_id,
+                    details={"actor": "SYSTEM_TIER1", "initiated_by": initiated_by,
+                             "entity_rce_id": entity_row.rce_organization_id,
+                             "bucket": validation["bucket"], "confidence": validation["confidence"],
+                             "tier": validation["tier"], "indeterminate": validation.get("indeterminate"),
+                             "sources_from_cache": from_cache},
+                )
+                await db.commit()
+            except Exception as e:
+                await db.rollback()
+                logger.exception(f"batch: failed entity {org.get('id')}: {e}")
+        cycle.cycle_status = CycleStatus.COMPLETE
+        cycle.completed_at = datetime.utcnow()
+        await db.commit()
 
-    source_results = await manager.query_all_sources(entity)
-    validation = engine.validate(entity, source_results)
-    evidence_record = evidence_gen.generate(
-        entity, cycle_id, validation, source_results, reviewer_id
-    )
 
-    bucket_labels = {
-        1: "No Discrepancy",
-        2: "Minor or Administrative",
-        3: "Inexplicable",
-        4: "Non-Compliant"
-    }
-
+@tefca_router.get("/validate/status/{cycle_id}", summary="Batch validation progress")
+async def get_validation_status(
+    cycle_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+):
+    try:
+        cid = uuid.UUID(cycle_id)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "cycle_id must be a valid UUID")
+    cycle = (await db.execute(select(TEFCAReviewCycle).where(TEFCAReviewCycle.cycle_id == cid))).scalar_one_or_none()
+    if not cycle:
+        raise HTTPException(404, "Cycle not found")
+    completed = (await db.execute(
+        select(TEFCAEvidenceRecord).where(TEFCAEvidenceRecord.cycle_id == cid)
+    )).scalars().all()
     return {
-        "record_id": evidence_record["record_id"],
-        "entity_name": entity.get("name"),
-        "bucket": validation["bucket"],
-        "bucket_label": bucket_labels[validation["bucket"]],
-        "confidence_score": validation["confidence"],
-        "tier_assigned": validation["tier"],
-        "finding_codes": validation["finding_codes"],
-        "evidence_record": evidence_record,
-        "generated_at": datetime.utcnow().isoformat(),
+        "cycle_id": cycle_id, "cycle_status": cycle.cycle_status.value if cycle.cycle_status else None,
+        "sample_size": cycle.total_entities_sampled, "completed": len(completed),
+        "bucket_counts": {"1": cycle.bucket_1_count, "2": cycle.bucket_2_count,
+                          "3": cycle.bucket_3_count, "4": cycle.bucket_4_count},
+        "auto_completed": cycle.auto_completed_count,
+        "tier2_queue": cycle.tier2_queue_count, "tier3_queue": cycle.tier3_queue_count,
     }
 
 
-# ─── Analyst Queue ────────────────────────────────────────────────────────────
+# ─── Analyst queues (human-in-the-loop) ──────────────────────────────────────
 
-@tefca_router.get("/queue/tier2",
-    summary="Get Tier 2 analyst review queue")
+def _queue_item_dto(q: TEFCAAnalystQueue) -> dict:
+    return {
+        "queue_id": str(q.queue_id), "record_id": str(q.record_id),
+        "tier": q.tier, "assigned_role": q.assigned_role, "priority": q.priority,
+        "bucket": int(q.bucket_classification.value) if q.bucket_classification else None,
+        "reason": q.queue_reason, "status": q.status.value if q.status else None,
+        "created_at": q.created_at.isoformat() if q.created_at else None,
+    }
+
+
+@tefca_router.get("/queue/tier2", summary="Tier-2 analyst queue")
 async def get_tier2_queue(
-    priority_only: bool = False,
-    qhin: Optional[str] = None,
-    limit: int = 50
+    limit: int = 100, db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
 ):
-    """Returns prioritized Tier 2 queue. Order: Bucket 4 → 3 → 2, confidence ASC."""
-    return {
-        "queue": [],
-        "total_pending": 0,
-        "bucket_4_count": 0,
-        "bucket_3_count": 0,
-        "bucket_2_count": 0,
-        "message": "Wire to database for production use.",
-    }
+    rows = (await db.execute(
+        select(TEFCAAnalystQueue).where(
+            TEFCAAnalystQueue.tier == 2,
+            TEFCAAnalystQueue.status != QueueStatus.COMPLETE,
+        ).order_by(TEFCAAnalystQueue.priority.desc(), TEFCAAnalystQueue.created_at.asc()).limit(limit)
+    )).scalars().all()
+    return {"total_pending": len(rows), "queue": [_queue_item_dto(q) for q in rows]}
 
 
-@tefca_router.get("/queue/tier3",
-    summary="Get Tier 3 SME escalation queue")
-async def get_tier3_queue():
-    """Returns all records escalated to Tier 3 SME review."""
-    return {
-        "queue": [],
-        "total_pending": 0,
-        "message": "Wire to database for production use.",
-    }
+@tefca_router.get("/queue/tier3", summary="Tier-3 SME escalation queue")
+async def get_tier3_queue(
+    limit: int = 100, db: AsyncSession = Depends(get_db), user=Depends(require_role("senior_analyst")),
+):
+    rows = (await db.execute(
+        select(TEFCAAnalystQueue).where(
+            TEFCAAnalystQueue.tier == 3,
+            TEFCAAnalystQueue.status != QueueStatus.COMPLETE,
+        ).order_by(TEFCAAnalystQueue.priority.desc(), TEFCAAnalystQueue.created_at.asc()).limit(limit)
+    )).scalars().all()
+    return {"total_pending": len(rows), "queue": [_queue_item_dto(q) for q in rows]}
 
 
-@tefca_router.patch("/queue/{record_id}/classify",
-    summary="Analyst override classification")
+@tefca_router.patch("/queue/{record_id}/classify", summary="Analyst override classification")
 async def override_classification(
-    record_id: str,
-    request: AnalystOverrideRequest
+    record_id: str, request: AnalystOverrideRequest, http: Request,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("senior_analyst")),
 ):
-    """Tier 2 analyst overrides the Tier 1 automated bucket classification."""
-    bucket_labels = {
-        1: "No Discrepancy",
-        2: "Minor or Administrative",
-        3: "Inexplicable",
-        4: "Non-Compliant"
-    }
+    if request.bucket_classification not in (1, 2, 3, 4):
+        raise HTTPException(400, "bucket_classification must be 1-4")
+    try:
+        rid = uuid.UUID(record_id)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "record_id must be a valid UUID")
+    record = (await db.execute(
+        select(TEFCAEvidenceRecord).where(TEFCAEvidenceRecord.record_id == rid)
+    )).scalar_one_or_none()
+    if not record:
+        raise HTTPException(404, "Evidence record not found")
+
+    previous_bucket = int(record.bucket_classification.value) if record.bucket_classification else None
+    new_bucket = request.bucket_classification
+
+    record.bucket_classification = _bucket_class_enum(new_bucket)
+    record.bucket_label = _bucket_label_enum(new_bucket)
+    record.auto_classified = False
+    record.reviewer_id = str(user.email)
+    record.reviewer_tier = 2
+    record.review_timestamp = datetime.utcnow()
+    record.review_notes = request.review_notes
+    record.analyst_override_reason = request.override_reason
+    record.supervisor_review_required = (new_bucket == 4)
+    record.record_status = RecordStatus.REVIEWED
+
+    # Close the queue item(s) for this record.
+    qitems = (await db.execute(
+        select(TEFCAAnalystQueue).where(TEFCAAnalystQueue.record_id == rid)
+    )).scalars().all()
+    for q in qitems:
+        q.status = QueueStatus.COMPLETE
+        q.completed_by = str(user.email)
+        q.completed_at = datetime.utcnow()
+
+    await log_tefca_event(
+        db, user=user, action="BUCKET_OVERRIDE", resource_type="tefca_evidence_record",
+        resource_id=rid, ip_address=_client_ip(http),
+        details={"analyst_id": str(user.email), "previous_bucket": previous_bucket,
+                 "new_bucket": new_bucket, "reason": request.override_reason},
+    )
+    await db.commit()
     return {
-        "record_id": record_id,
-        "new_bucket": request.bucket_classification,
-        "bucket_label": bucket_labels.get(request.bucket_classification),
-        "override_by": request.reviewer_id,
-        "override_reason": request.override_reason,
-        "override_timestamp": datetime.utcnow().isoformat(),
-        "supervisor_review_required": request.bucket_classification == 4,
+        "record_id": record_id, "previous_bucket": previous_bucket, "new_bucket": new_bucket,
+        "overridden_by": str(user.email), "supervisor_review_required": (new_bucket == 4),
         "status": "REVIEWED",
     }
 
 
-@tefca_router.patch("/queue/{record_id}/escalate",
-    summary="Escalate record to Tier 3")
+@tefca_router.patch("/queue/{record_id}/escalate", summary="Escalate record to Tier-3 SME")
 async def escalate_to_tier3(
-    record_id: str,
-    request: EscalateRequest
+    record_id: str, request: EscalateRequest, http: Request,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("reviewer")),
 ):
-    """Tier 2 analyst escalates a record to Tier 3 SME review."""
-    return {
-        "record_id": record_id,
-        "escalated_by": request.reviewer_id,
-        "escalation_note": request.escalation_note,
-        "new_tier": 3,
-        "escalated_at": datetime.utcnow().isoformat(),
-        "status": "ESCALATED",
-    }
+    try:
+        rid = uuid.UUID(record_id)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "record_id must be a valid UUID")
+    record = (await db.execute(
+        select(TEFCAEvidenceRecord).where(TEFCAEvidenceRecord.record_id == rid)
+    )).scalar_one_or_none()
+    if not record:
+        raise HTTPException(404, "Evidence record not found")
+    record.tier_assigned = 3
+    record.record_status = RecordStatus.PENDING_REVIEW
+
+    qitems = (await db.execute(
+        select(TEFCAAnalystQueue).where(TEFCAAnalystQueue.record_id == rid)
+    )).scalars().all()
+    if qitems:
+        for q in qitems:
+            q.tier = 3
+            q.assigned_role = "senior_analyst"
+            q.status = QueueStatus.PENDING
+            q.queue_reason = f"Escalated to Tier-3: {request.escalation_note}"
+    else:
+        db.add(TEFCAAnalystQueue(
+            record_id=rid, entity_id=record.entity_id, cycle_id=record.cycle_id,
+            tier=3, assigned_role="senior_analyst", priority=90,
+            bucket_classification=record.bucket_classification,
+            queue_reason=f"Escalated to Tier-3: {request.escalation_note}",
+            status=QueueStatus.PENDING,
+        ))
+
+    await log_tefca_event(
+        db, user=user, action="ESCALATED_TIER3", resource_type="tefca_evidence_record",
+        resource_id=rid, ip_address=_client_ip(http),
+        details={"escalated_by": str(user.email), "escalation_type": "TIER3_SME",
+                 "note": request.escalation_note},
+    )
+    await db.commit()
+    return {"record_id": record_id, "new_tier": 3, "escalated_by": str(user.email), "status": "ESCALATED"}
 
 
-# ─── Priority Cases (Task 5) ──────────────────────────────────────────────────
+# ─── Priority cases (Task 5) ─────────────────────────────────────────────────
 
-@tefca_router.post("/priority-cases",
-    summary="Create COR-directed priority case")
+@tefca_router.post("/priority-cases", summary="Create COR-directed priority case")
 async def create_priority_case(
-    request: PriorityCaseCreateRequest,
-    background_tasks: BackgroundTasks
+    request: PriorityCaseCreateRequest, http: Request,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("program_manager")),
 ):
-    """
-    Create a COR-directed priority review case (Task 5).
-    AGT does NOT self-initiate. COR communicates the referral.
-    """
-    case_id = str(uuid.uuid4())
-
     manager = get_connector_manager()
-    rce_result = await manager.rce_directory.get_organization_by_id(
-        request.entity_rce_id
+    org_res = await manager.rce_directory.get_organization_by_id(request.entity_rce_id)
+    entity_row = None
+    if org_res.success and org_res.data:
+        entity_row = await _upsert_entity(db, org_res.data)
+    case = TEFCAPriorityCase(
+        cor_reference=request.cor_reference,
+        entity_id=(entity_row.entity_id if entity_row else None),
+        assigned_by=str(user.email),
+        assigned_date=datetime.utcnow(),
+        deadline_date=(datetime.fromisoformat(request.deadline_date) if request.deadline_date else None),
+        issue_description=request.issue_description,
+        case_status=CaseStatus.ASSIGNED,
     )
-    entity = rce_result.data if rce_result.success else {}
-
-    if entity:
-        background_tasks.add_task(
-            _process_priority_case, case_id, entity, manager
-        )
-
+    db.add(case)
+    await db.flush()
+    await log_tefca_event(
+        db, user=user, action="PRIORITY_CASE_CREATED", resource_type="tefca_priority_case",
+        resource_id=case.case_id, ip_address=_client_ip(http),
+        details={"cor_reference": request.cor_reference, "entity_rce_id": request.entity_rce_id},
+    )
+    await db.commit()
     return {
-        "case_id": case_id,
-        "cor_reference": request.cor_reference,
-        "entity_rce_id": request.entity_rce_id,
-        "assigned_by": request.assigned_by,
-        "deadline_date": request.deadline_date,
-        "case_status": "IN_PROGRESS" if entity else "ASSIGNED_PENDING_DATA",
-        "created_at": datetime.utcnow().isoformat(),
-        "message": f"Priority case {case_id} created. AGT team notified.",
+        "case_id": str(case.case_id), "cor_reference": request.cor_reference,
+        "case_status": case.case_status.value, "entity_resolved": entity_row is not None,
+        "created_at": case.created_at.isoformat(),
     }
 
 
-async def _process_priority_case(
-    case_id: str,
-    entity: dict,
-    manager: SourceConnectorManager
+@tefca_router.get("/priority-cases", summary="List priority cases")
+async def list_priority_cases(
+    status: Optional[str] = None, db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
 ):
-    """Background: run deep validation for priority case."""
-    engine = get_validation_engine()
-    evidence_gen = get_evidence_generator()
-    source_results = await manager.query_all_sources(entity)
-    validation = engine.validate(entity, source_results)
-    evidence_gen.generate(
-        entity, case_id, validation, source_results, "PRIORITY_REVIEW"
-    )
-
-
-@tefca_router.get("/priority-cases",
-    summary="List all priority cases")
-async def list_priority_cases(status: Optional[str] = None):
-    """List all Task 5 priority cases with current status."""
+    q = select(TEFCAPriorityCase).order_by(TEFCAPriorityCase.created_at.desc())
+    if status:
+        try:
+            q = q.where(TEFCAPriorityCase.case_status == CaseStatus(status))
+        except ValueError:
+            raise HTTPException(400, f"Invalid status. Use one of: {[s.value for s in CaseStatus]}")
+    rows = (await db.execute(q)).scalars().all()
     return {
-        "cases": [],
-        "total": 0,
-        "open_count": 0,
-        "message": "Wire to database for production use.",
+        "total": len(rows),
+        "cases": [{
+            "case_id": str(c.case_id), "cor_reference": c.cor_reference,
+            "case_status": c.case_status.value if c.case_status else None,
+            "severity": c.severity.value if c.severity else None,
+            "deadline_date": c.deadline_date.isoformat() if c.deadline_date else None,
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+        } for c in rows],
     }
 
 
-@tefca_router.patch("/priority-cases/{case_id}",
-    summary="Update priority case")
+@tefca_router.patch("/priority-cases/{case_id}", summary="Update priority case")
 async def update_priority_case(
-    case_id: str,
-    request: PriorityCaseUpdateRequest
+    case_id: str, request: PriorityCaseUpdateRequest, http: Request,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("senior_analyst")),
 ):
-    """Update priority case with investigation findings and recommendations."""
+    try:
+        cid = uuid.UUID(case_id)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "case_id must be a valid UUID")
+    case = (await db.execute(select(TEFCAPriorityCase).where(TEFCAPriorityCase.case_id == cid))).scalar_one_or_none()
+    if not case:
+        raise HTTPException(404, "Priority case not found")
+    if request.case_status:
+        try:
+            case.case_status = CaseStatus(request.case_status)
+        except ValueError:
+            raise HTTPException(400, f"Invalid case_status. Use: {[s.value for s in CaseStatus]}")
+    if request.severity:
+        try:
+            case.severity = CaseSeverity(request.severity)
+        except ValueError:
+            raise HTTPException(400, f"Invalid severity. Use: {[s.value for s in CaseSeverity]}")
+    if request.root_cause_determination is not None:
+        case.root_cause_determination = request.root_cause_determination
+    if request.root_cause_description is not None:
+        case.root_cause_description = request.root_cause_description
+    if request.resolution_notes is not None:
+        case.resolution_notes = request.resolution_notes
+    if request.recommendations is not None:
+        case.recommendations = request.recommendations
+    case.assigned_reviewer_id = str(user.email)
+    await log_tefca_event(
+        db, user=user, action="PRIORITY_CASE_UPDATED", resource_type="tefca_priority_case",
+        resource_id=cid, ip_address=_client_ip(http),
+        details={"updated_fields": request.dict(exclude_none=True)},
+    )
+    await db.commit()
+    return {"case_id": case_id, "updated_by": str(user.email), "updated_at": datetime.utcnow().isoformat()}
+
+
+# ─── Report aggregation (reads ONLY persisted evidence records) ──────────────
+
+def _entity_line(r: TEFCAEvidenceRecord) -> dict:
+    e1 = r.element_1_entity_identification or {}
     return {
-        "case_id": case_id,
-        "updated_fields": request.dict(exclude_none=True),
-        "updated_at": datetime.utcnow().isoformat(),
+        "record_id": str(r.record_id),
+        "entity_rce_id": e1.get("entity_rce_id"),
+        "entity_legal_name": e1.get("entity_legal_name"),
+        "qhin_name": e1.get("qhin_name"),
+        "npi": e1.get("entity_npi"),
+        "bucket": int(r.bucket_classification.value) if r.bucket_classification else None,
+        "confidence": r.confidence_score,
+        "tier": r.tier_assigned,
+        "finding_codes": r.finding_codes,
+        "record_status": r.record_status.value if r.record_status else None,
     }
 
 
-# ─── Reports ─────────────────────────────────────────────────────────────────
-
-@tefca_router.post("/reports/weekly/{cycle_id}",
-    summary="Generate Task 3 weekly progress report")
-async def generate_weekly_report(cycle_id: str):
-    """Generate weekly progress report for Task 3 retrospective cycle."""
-    return _build_report(
-        report_type="WEEKLY_PROGRESS",
-        cycle_id=cycle_id,
-        title="TEFCA Review Protocol — Weekly Progress Report",
-        task="Task 3 — Retrospective Review",
-    )
-
-
-@tefca_router.post("/reports/biweekly/{cycle_id}",
-    summary="Generate Task 4 bi-weekly progress report")
-async def generate_biweekly_report(cycle_id: str):
-    """Generate bi-weekly progress report for Task 4 ongoing review."""
-    return _build_report(
-        report_type="BIWEEKLY_PROGRESS",
-        cycle_id=cycle_id,
-        title="TEFCA Review Protocol — Bi-Weekly Progress Report",
-        task="Task 4 — Ongoing Review",
-    )
-
-
-@tefca_router.post("/reports/quarterly",
-    summary="Generate quarterly aggregated report")
-async def generate_quarterly_report(
-    period_start: str = Query(..., description="ISO date YYYY-MM-DD"),
-    period_end: str = Query(..., description="ISO date YYYY-MM-DD")
-):
-    """Generate quarterly aggregated report (Tasks 4 and 5 deliverable)."""
-    return _build_report(
-        report_type="QUARTERLY_AGGREGATED",
-        cycle_id=None,
-        title="TEFCA Review Protocol — Quarterly Aggregated Report",
-        task="Task 4 & 5 — Quarterly Aggregation",
-        period_start=period_start,
-        period_end=period_end,
-    )
-
-
-@tefca_router.post("/reports/priority-case/{case_id}",
-    summary="Generate Task 5 priority case report")
-async def generate_priority_case_report(case_id: str):
-    """Generate status report for a specific COR-directed priority review."""
-    return _build_report(
-        report_type="PRIORITY_CASE_STATUS",
-        cycle_id=case_id,
-        title="TEFCA Review Protocol — Priority Review Status Report",
-        task="Task 5 — Priority Reviews",
-    )
-
-
-@tefca_router.post("/reports/closeout",
-    summary="Generate Task 6 contract closeout report")
-async def generate_closeout_report(
-    period_start: str = Query(..., description="ISO date YYYY-MM-DD"),
-    period_end: str = Query(..., description="ISO date YYYY-MM-DD")
-):
-    """Generate contract closeout report (Task 6 deliverable)."""
-    return _build_report(
-        report_type="CONTRACT_CLOSEOUT",
-        cycle_id=None,
-        title="TEFCA Review Protocol — Contract Closeout Report",
-        task="Task 6 — Contract Closeout",
-        period_start=period_start,
-        period_end=period_end,
-    )
-
-
-@tefca_router.get("/reports",
-    summary="List all generated reports")
-async def list_reports():
-    """List all generated reports with download links."""
+def _aggregate(records: list) -> dict:
+    buckets = {1: [], 2: [], 3: [], 4: []}
+    indeterminate = 0
+    for r in records:
+        b = int(r.bucket_classification.value) if r.bucket_classification else 1
+        buckets.setdefault(b, []).append(r)
+        e2 = r.element_2_finding_classification or {}
+        if e2.get("indeterminate"):
+            indeterminate += 1
+    confs = [r.confidence_score for r in records if r.confidence_score is not None]
     return {
-        "reports": [],
-        "total": 0,
-        "message": "Wire to database for production use.",
-    }
-
-
-def _build_report(
-    report_type: str,
-    cycle_id: Optional[str],
-    title: str,
-    task: str,
-    period_start: Optional[str] = None,
-    period_end: Optional[str] = None,
-) -> dict:
-    """Build report data structure — wire to real DB data for production."""
-    report_id = str(uuid.uuid4())
-    now = datetime.utcnow()
-    return {
-        "report_id": report_id,
-        "report_type": report_type,
-        "title": title,
-        "task": task,
-        "cycle_id": cycle_id,
-        "period_start": period_start,
-        "period_end": period_end,
-        "generated_at": now.isoformat(),
-        "generated_by": "DocuAction TEFCA Module",
-        "contractor": "Alliance Global Tech, Inc. (AGT)",
-        "contract_reference": "ONC TEFCA Review Protocol",
-        "agt_uei": "MP2FLV1MAW93",
-        "agt_cage": "8ERE8",
-        "methodology_version": "1.0",
-        "agt_does_not_adjudicate_note": (
-            "AGT produces findings and recommendations. "
-            "The ONC COR makes all final determinations."
-        ),
-        "report_structure": {
-            "section_1_executive_summary": "Wire to real data",
-            "section_2_bucket_statistics": {
-                "bucket_1_no_discrepancy": 0,
-                "bucket_2_minor_admin": 0,
-                "bucket_3_inexplicable": 0,
-                "bucket_4_non_compliant": 0,
-                "total_reviewed": 0,
-                "sample_confidence_level": 0.95,
-            },
-            "section_3_methodology_changes": [],
-            "section_4_entity_list": "Wire to real data",
+        "total_reviewed": len(records),
+        "bucket_1_no_discrepancy": len(buckets[1]),
+        "bucket_2_minor_admin": len(buckets[2]),
+        "bucket_3_inexplicable": len(buckets[3]),
+        "bucket_4_non_compliant": len(buckets[4]),
+        "indeterminate_pending_source": indeterminate,
+        "avg_confidence_score": (round(sum(confs) / len(confs), 3) if confs else None),
+        "sample_confidence_level": 0.95,
+        "stratified_entity_list": {
+            "no_discrepancy": [_entity_line(r) for r in buckets[1]],
+            "minor_or_administrative": [_entity_line(r) for r in buckets[2]],
+            "inexplicable": [_entity_line(r) for r in buckets[3]],
+            "non_compliant": [_entity_line(r) for r in buckets[4]],
         },
-        "download_formats": ["PDF", "DOCX"],
-        "status": "GENERATED",
     }
 
 
-# ─── Finding Descriptions (used by demo) ─────────────────────────────────────
-
-FINDING_DESCRIPTIONS_DEMO = {
-    "NO_DISCREPANCY":           "All validation checks passed — no issues found",
-    "NAME_DBA_VS_LEGAL":        "DBA name submitted vs legal name in NPPES — trade name variation",
-    "ADDRESS_UNIT_DIFF":        "Address difference attributable to suite/floor/unit only",
-    "NAME_ABBREVIATION_DIFF":   "Name difference attributable to abbreviation (St./Saint, Corp./Corporation)",
-    "PHONE_DISCREPANCY":        "Phone number differs from NPPES — likely data entry error",
-    "NAME_PUNCTUATION_DIFF":    "Name difference attributable to punctuation only",
-    "MINOR_CORP_SUFFIX_DIFF":   "Minor corporate suffix difference (LLC vs Group LLC)",
-    "ZIP_FORMAT_DIFF":          "ZIP code format difference (5-digit vs ZIP+4)",
-    "LEIE_HISTORICAL_RESOLVED": "Historical LEIE exclusion found — reinstatement confirmed",
-    "NAME_COMPLETELY_DIFFERENT":"NPI found under completely different organization name — cannot reconcile",
-    "ADDRESS_STATE_CONFLICT":   "Different state across two or more authoritative sources",
-    "ENTITY_TYPE_MISMATCH":     "Entity type mismatch — individual NPI-1 submitted as organization",
-    "NPI_MISSING":              "No NPI provided — cannot validate against NPPES",
-    "SAM_REGISTRATION_LAPSED":  "SAM.gov registration expired — no renewal on record",
-    "HIERARCHY_MISMATCH":       "Organization hierarchy conflicts with OneKey data",
-    "SOURCE_CONFLICT":          "Conflicting legal names across three or more authoritative sources",
-    "LEIE_ACTIVE_EXCLUSION":    "ACTIVE OIG LEIE exclusion — mandatory exclusion, no reinstatement",
-    "NPI_DEACTIVATED":          "NPI deactivated in NPPES — organization no longer enrolled",
-    "SAM_ACTIVE_DEBARMENT":     "Active SAM.gov debarment — excluded from federal programs",
-    "NPI_NOT_FOUND":            "NPI does not exist in NPPES registry — invalid NPI submitted",
-    "PECOS_PAYMENT_SUSPENSION": "Active CMS PECOS payment suspension — federal program integrity concern",
+_AGT_NOTE = ("AGT produces findings and recommendations. The ONC COR makes all "
+             "final determinations.")
+_CONTRACT_BLOCK = {
+    "contractor": "Alliance Global Tech, Inc. (AGT)",
+    "contract_reference": "ONC TEFCA Review Protocol — Contract No. 7571MN26F80064",
+    "uei": "MP2FLV1MAW93", "cage": "8ERE8",
 }
 
 
-def _get_demo_action(bucket: int, findings: list) -> str:
-    """Return action detail text for demo evidence records."""
-    if "LEIE_ACTIVE_EXCLUSION" in findings:
-        return (
-            "Active OIG LEIE exclusion confirmed. Recommend immediate "
-            "suspension of TEFCA Participant status pending COR determination."
-        )
-    if "SAM_ACTIVE_DEBARMENT" in findings:
-        return (
-            "Active SAM.gov debarment confirmed. Recommend immediate "
-            "suspension pending COR and ONC Legal determination."
-        )
-    if "PECOS_PAYMENT_SUSPENSION" in findings:
-        return (
-            "PECOS payment suspension active. CMS Program Integrity concern. "
-            "Recommend escalation to COR with notification to CMS CPI."
-        )
-    if "NPI_DEACTIVATED" in findings:
-        return (
-            "NPI deactivated. QHIN should require entity to submit valid "
-            "active NPI from NPPES or corrected enrollment documentation."
-        )
-    if "NPI_NOT_FOUND" in findings:
-        return (
-            "NPI does not exist in NPPES. QHIN must verify entity identity "
-            "and require valid NPI before TEFCA participation continues."
-        )
-    if bucket == 3:
-        return (
-            "Inexplicable discrepancy requires QHIN investigation. "
-            "QHIN should contact entity for clarifying documentation within 21 days."
-        )
-    if bucket == 2:
-        return (
-            "Administrative discrepancy. QHIN should notify entity and "
-            "request updated submission to correct minor data quality issues within 30 days."
-        )
-    return "No action required. Entity validated successfully against all authoritative sources."
+async def _records_for_cycle(db, cycle_id, period_start=None, period_end=None) -> list:
+    q = select(TEFCAEvidenceRecord).where(TEFCAEvidenceRecord.cycle_id == cycle_id)
+    if period_start:
+        q = q.where(TEFCAEvidenceRecord.created_at >= period_start)
+    if period_end:
+        q = q.where(TEFCAEvidenceRecord.created_at <= period_end)
+    return (await db.execute(q)).scalars().all()
 
 
-# ─── ONC Demo Endpoint ───────────────────────────────────────────────────────
+async def _persist_report(db, report_type, cycle_id, report_data, generated_by,
+                          period_start=None, period_end=None, methodology_version=None) -> TEFCAReport:
+    row = TEFCAReport(
+        report_type=report_type, cycle_id=cycle_id,
+        period_start=period_start, period_end=period_end,
+        report_data=report_data, generated_by=generated_by,
+        methodology_version=methodology_version,
+    )
+    db.add(row)
+    await db.flush()
+    return row
 
-@tefca_router.post("/demo/validate-all-mock",
-    summary="ONC Demo — validate all 30 mock entities")
-@tefca_router.get("/demo/validate-all-mock",
-    summary="ONC Demo — browser friendly GET version")
-async def demo_validate_all_mock():
-    """
-    ONC DEMO ENDPOINT — Simulated Validation Results.
 
-    Produces realistic, predictable 4-bucket distribution every time:
-      Bucket 1 (No Discrepancy):       10 entities — Tier 1 auto-complete
-      Bucket 2 (Minor/Administrative):  8 entities — Tier 2 analyst queue
-      Bucket 3 (Inexplicable):          7 entities — Tier 2/3 review
-      Bucket 4 (Non-Compliant):         5 entities — Tier 3 escalation
-
-    Uses simulated validation based on predefined test scenarios.
-    Does NOT call real NPPES/LEIE/SAM APIs in demo mode — uses expected
-    bucket classifications from mock_data.py test scenarios.
-
-    Production mode with live RCE Directory data activates automatically
-    when RCE_DIRECTORY_API_KEY is set (pending Sequoia Project key).
-    """
-
-    # ── Entity-specific finding codes from test scenarios ─────────────────────
-    ENTITY_FINDINGS = {
-        # Bucket 1 — No Discrepancy
-        "rce-org-b1-001": ["NO_DISCREPANCY"],
-        "rce-org-b1-002": ["NO_DISCREPANCY"],
-        "rce-org-b1-003": ["NO_DISCREPANCY"],
-        "rce-org-b1-004": ["NO_DISCREPANCY"],
-        "rce-org-b1-005": ["NO_DISCREPANCY"],
-        "rce-org-b1-006": ["NO_DISCREPANCY"],
-        "rce-org-b1-007": ["NO_DISCREPANCY"],
-        "rce-org-b1-008": ["NO_DISCREPANCY"],
-        "rce-org-b1-009": ["NO_DISCREPANCY"],
-        "rce-org-b1-010": ["NO_DISCREPANCY"],
-        # Bucket 2 — Minor / Administrative
-        "rce-org-b2-001": ["NAME_DBA_VS_LEGAL"],
-        "rce-org-b2-002": ["ADDRESS_UNIT_DIFF"],
-        "rce-org-b2-003": ["NAME_ABBREVIATION_DIFF"],
-        "rce-org-b2-004": ["PHONE_DISCREPANCY"],
-        "rce-org-b2-005": ["NAME_PUNCTUATION_DIFF"],
-        "rce-org-b2-006": ["MINOR_CORP_SUFFIX_DIFF"],
-        "rce-org-b2-007": ["ZIP_FORMAT_DIFF"],
-        "rce-org-b2-008": ["LEIE_HISTORICAL_RESOLVED"],
-        # Bucket 3 — Inexplicable
-        "rce-org-b3-001": ["NAME_COMPLETELY_DIFFERENT"],
-        "rce-org-b3-002": ["ADDRESS_STATE_CONFLICT"],
-        "rce-org-b3-003": ["ENTITY_TYPE_MISMATCH"],
-        "rce-org-b3-004": ["NPI_MISSING"],
-        "rce-org-b3-005": ["SAM_REGISTRATION_LAPSED"],
-        "rce-org-b3-006": ["HIERARCHY_MISMATCH"],
-        "rce-org-b3-007": ["SOURCE_CONFLICT"],
-        # Bucket 4 — Non-Compliant (each has its own specific violation)
-        "rce-org-b4-001": ["LEIE_ACTIVE_EXCLUSION"],
-        "rce-org-b4-002": ["NPI_DEACTIVATED"],
-        "rce-org-b4-003": ["SAM_ACTIVE_DEBARMENT"],
-        "rce-org-b4-004": ["NPI_NOT_FOUND"],
-        "rce-org-b4-005": ["PECOS_PAYMENT_SUSPENSION"],
-    }
-
-    # ── Confidence scores per bucket ──────────────────────────────────────────
-    BUCKET_CONFIDENCE = {
-        1: [0.99, 0.98, 0.97, 0.99, 0.96, 0.98, 0.97, 0.99, 0.96, 0.97],
-        2: [0.85, 0.82, 0.84, 0.80, 0.83, 0.81, 0.86, 0.79],
-        3: [0.58, 0.52, 0.48, 0.55, 0.50, 0.46, 0.53],
-        4: [0.20, 0.25, 0.18, 0.15, 0.22],
-    }
-
-    BUCKET_LABELS = {
-        1: "No Discrepancy",
-        2: "Minor or Administrative",
-        3: "Inexplicable",
-        4: "Non-Compliant",
-    }
-
-    BUCKET_TIER = {1: 1, 2: 2, 3: 2, 4: 3}
-
-    # These Bucket 3 findings escalate to Tier 3
-    TIER3_FINDINGS = {
-        "ENTITY_TYPE_MISMATCH", "SOURCE_CONFLICT",
-        "HIERARCHY_MISMATCH", "NPI_MISSING",
-    }
-
-    DISPOSITION = {
-        1: "NO_ACTION_REQUIRED",
-        2: "QHIN_NOTIFICATION_MINOR",
-        3: "QHIN_CORRECTIVE_ACTION_REQUIRED",
-        4: "QHIN_CORRECTIVE_ACTION_REQUIRED",
-    }
-
-    ESCALATE_FINDINGS = {
-        "LEIE_ACTIVE_EXCLUSION",
-        "SAM_ACTIVE_DEBARMENT",
-        "PECOS_PAYMENT_SUSPENSION",
-    }
-
-    DEADLINE_DAYS = {1: None, 2: 30, 3: 21, 4: 10}
-
-    # ── Build results ─────────────────────────────────────────────────────────
-    cycle_id = str(uuid.uuid4())
-    start = datetime.utcnow()
-    results = []
-    bucket_counts = {1: 0, 2: 0, 3: 0, 4: 0}
-    tier_counts = {1: 0, 2: 0, 3: 0}
-    bucket_indexes = {1: 0, 2: 0, 3: 0, 4: 0}
-
-    for entity in ALL_MOCK_ENTITIES:
-        entity_id = entity["id"]
-        expected_bucket = entity.get("_expected_bucket", 1)
-        finding_codes = ENTITY_FINDINGS.get(entity_id, ["NO_DISCREPANCY"])
-
-        # Get confidence score for this entity
-        idx = bucket_indexes[expected_bucket]
-        conf_list = BUCKET_CONFIDENCE[expected_bucket]
-        confidence = conf_list[idx % len(conf_list)]
-        bucket_indexes[expected_bucket] += 1
-
-        # Determine tier
-        tier = BUCKET_TIER[expected_bucket]
-        if any(f in TIER3_FINDINGS for f in finding_codes):
-            tier = 3
-
-        auto_classify = (expected_bucket == 1 and confidence >= 0.95)
-
-        # Determine disposition
-        if any(f in ESCALATE_FINDINGS for f in finding_codes):
-            disposition = "ESCALATE_TO_ONC_REVIEW"
-        else:
-            disposition = DISPOSITION[expected_bucket]
-
-        # Calculate deadline
-        days = DEADLINE_DAYS[expected_bucket]
-        deadline = (
-            (datetime.utcnow() + timedelta(days=days)).date().isoformat()
-            if days else None
-        )
-
-        # Extract NPI from identifiers
-        npi = next(
-            (i.get("value") for i in entity.get("identifier", [])
-             if i.get("system") == "http://hl7.org/fhir/sid/us-npi"),
-            None
-        )
-
-        # Extract entity type
-        entity_type = next(
-            (c.get("code") for t in entity.get("type", [])
-             for c in t.get("coding", [])), ""
-        )
-
-        # Build the 5-element evidence record
-        evidence_record = {
-            "record_id": str(uuid.uuid4()),
-            "cycle_id": cycle_id,
-            "entity_rce_id": entity_id,
-            "generated_at": datetime.utcnow().isoformat(),
-            "element_1_entity_identification": {
-                "qhin_name": entity.get("_qhin"),
-                "entity_type": entity_type,
-                "entity_legal_name": entity.get("name"),
-                "entity_aliases": entity.get("alias", []),
-                "entity_npi": npi,
-                "entity_rce_id": entity_id,
-                "addresses_submitted": entity.get("address", []),
-                "telecom_submitted": entity.get("telecom", []),
-                "review_date": datetime.utcnow().date().isoformat(),
-                "review_cycle_id": cycle_id,
-            },
-            "element_2_finding_classification": {
-                "bucket_classification": str(expected_bucket),
-                "bucket_label": BUCKET_LABELS[expected_bucket],
-                "confidence_score": confidence,
-                "finding_codes": finding_codes,
-                "finding_descriptions": [
-                    FINDING_DESCRIPTIONS_DEMO.get(code, code)
-                    for code in finding_codes
-                ],
-                "tier_assigned": tier,
-                "auto_classified": auto_classify,
-                "supervisor_review_required": expected_bucket == 4,
-            },
-            "element_3_source_comparison": {
-                "validation_summary": (
-                    f"Simulated demo validation — {BUCKET_LABELS[expected_bucket]}"
-                ),
-                "test_scenario": entity.get("_test_note"),
-                "submitted_name": entity.get("name"),
-                "submitted_npi": npi,
-                "sources_queried": [
-                    "NPPES", "OIG_LEIE", "SAM_GOV",
-                    "PECOS", "IQVIA_ONEKEY", "RCE_DIRECTORY",
-                ],
-            },
-            "element_4_supporting_citations": {
-                "citations": [
-                    {
-                        "source_name": "NPPES",
-                        "query_timestamp": datetime.utcnow().isoformat(),
-                        "query_success": True,
-                        "api_version": "2.1",
-                        "live": True,
-                    },
-                    {
-                        "source_name": "OIG_LEIE",
-                        "query_timestamp": datetime.utcnow().isoformat(),
-                        "query_success": True,
-                        "live": True,
-                    },
-                    {
-                        "source_name": "SAM_GOV",
-                        "query_timestamp": datetime.utcnow().isoformat(),
-                        "query_success": True,
-                        "live": True,
-                        "note": "SAM.gov key active — live validation",
-                    },
-                    {
-                        "source_name": "PECOS",
-                        "query_timestamp": datetime.utcnow().isoformat(),
-                        "query_success": True,
-                        "live": True,
-                    },
-                ],
-                "total_sources_queried": 4,
-                "demo_mode": True,
-                "demo_note": (
-                    "Results based on predefined test scenarios. "
-                    "Production mode uses live NPPES, LEIE, SAM.gov, PECOS APIs."
-                ),
-            },
-            "element_5_disposition_recommendation": {
-                "recommendation": disposition,
-                "recommended_action_detail": _get_demo_action(
-                    expected_bucket, finding_codes
-                ),
-                "recommended_deadline": deadline,
-                "prevention_recommendation": (
-                    "QHIN should implement pre-submission validation against "
-                    "NPPES, OIG LEIE, and SAM.gov before onboarding entities."
-                    if expected_bucket >= 3
-                    else "Continue current onboarding processes — no issues identified."
-                ),
-                "reviewer_id": "SYSTEM_TIER1_DEMO",
-                "agt_does_not_adjudicate": (
-                    "AGT produces this evidence record and disposition recommendation. "
-                    "The ONC COR makes all final determinations."
-                ),
-            },
-        }
-
-        bucket_counts[expected_bucket] += 1
-        tier_counts[tier] += 1
-
-        results.append({
-            "entity_id": entity_id,
-            "entity_name": entity.get("name"),
-            "qhin": entity.get("_qhin"),
-            "entity_type": entity_type,
-            "npi": npi,
-            "bucket": expected_bucket,
-            "bucket_label": BUCKET_LABELS[expected_bucket],
-            "confidence": confidence,
-            "tier": tier,
-            "auto_classify": auto_classify,
-            "finding_codes": finding_codes,
-            "finding_descriptions": [
-                FINDING_DESCRIPTIONS_DEMO.get(code, code)
-                for code in finding_codes
-            ],
-            "disposition": disposition,
-            "deadline": deadline,
-            "record_id": evidence_record["record_id"],
-            "expected_bucket": expected_bucket,
-            "test_note": entity.get("_test_note"),
-            "evidence_record": evidence_record,
-            "sources_queried": [
-                "NPPES", "OIG_LEIE", "SAM_GOV",
-                "PECOS", "IQVIA_ONEKEY", "RCE_DIRECTORY",
-            ],
-        })
-
-    elapsed = round((datetime.utcnow() - start).total_seconds(), 2)
-
+async def build_d3_1_weekly_report(db, cycle_id, week_number, period_start, period_end):
+    """D3.1 weekly progress report (SOW C.2 Task 3) — aggregates persisted
+    evidence records in the week window. Reads only from the database."""
+    cycle = (await db.execute(select(TEFCAReviewCycle).where(TEFCAReviewCycle.cycle_id == cycle_id))).scalar_one_or_none()
+    records = await _records_for_cycle(db, cycle_id, period_start, period_end)
     return {
-        "demo_cycle_id": cycle_id,
-        "processed_at": start.isoformat(),
-        "elapsed_seconds": elapsed,
-        "total_entities": len(results),
-        "data_source": "DEMO MODE — Simulated results based on test scenarios",
-        "demo_note": (
-            "Results use predefined test scenarios for reliable demo output. "
-            "Production mode activates automatically when RCE_DIRECTORY_API_KEY is set."
-        ),
-
-        "bucket_summary": {
-            "bucket_1_no_discrepancy":        bucket_counts[1],
-            "bucket_2_minor_or_administrative": bucket_counts[2],
-            "bucket_3_inexplicable":           bucket_counts[3],
-            "bucket_4_non_compliant":          bucket_counts[4],
-            "total_reviewed":                  len(results),
-        },
-
-        "tier_routing_summary": {
-            "tier_1_auto_complete":   tier_counts[1],
-            "tier_2_analyst_queue":   tier_counts[2],
-            "tier_3_sme_escalation":  tier_counts[3],
-        },
-
-        "accuracy_check": {
-            "all_30_entities_correctly_classified": True,
-            "bucket_1_correct": bucket_counts[1],
-            "bucket_2_correct": bucket_counts[2],
-            "bucket_3_correct": bucket_counts[3],
-            "bucket_4_correct": bucket_counts[4],
-        },
-
-        "agt_methodology": {
-            "tier_1_target":                     "< 60 seconds per entity",
-            "confidence_threshold_auto_complete": ">= 0.95 with Bucket 1",
-            "sample_confidence_level":           "95%",
-            "inter_rater_agreement_target":      ">= 98% on 5% of completed reviews",
-            "sources_validated_against": [
-                "NPPES — NPI status, legal name, address (LIVE)",
-                "OIG LEIE — exclusion status (LIVE)",
-                "SAM.gov — registration, debarment (LIVE — key active)",
-                "PECOS — enrollment, payment suspension (LIVE)",
-                "IQVIA OneKey — hierarchy (mock — pending contract award ODC)",
-                "RCE Directory — FHIR entities (mock — key pending Sequoia Project)",
-            ],
-            "five_element_evidence_record": "Generated for every entity",
-            "agt_does_not_adjudicate":      "AGT recommends — ONC COR determines",
-        },
-
-        "contract_info": {
-            "contractor":          "Alliance Global Tech, Inc. (AGT)",
-            "contract_reference":  "ONC TEFCA Review Protocol",
-            "uei":                 "MP2FLV1MAW93",
-            "cage":                "8ERE8",
-            "certifications":      "SBA 8(a) · GSA MAS 47QTCA21D003M · CMMI Level 3 · ISO 27001",
-        },
-
-        "entities": results,
+        "deliverable": "D3.1", "report_type": "WEEKLY_PROGRESS",
+        "task": "Task 3 — Retrospective Review", "week_number": week_number,
+        "cycle_id": str(cycle_id),
+        "period_start": period_start.isoformat() if period_start else None,
+        "period_end": period_end.isoformat() if period_end else None,
+        "methodology_version": (cycle.methodology_version if cycle else None),
+        "methodology_changes": [],  # sourced from a methodology-change log (future table)
+        "statistics": _aggregate(records),
+        "agt_does_not_adjudicate": _AGT_NOTE, "contract_info": _CONTRACT_BLOCK,
+        "generated_at": datetime.utcnow().isoformat(),
     }
+
+
+async def build_d3_2_final_report(db, cycle_id):
+    """D3.2 final report — aggregates ALL persisted evidence records across the
+    full cycle, stratified by bucket. Reads only from the database."""
+    cycle = (await db.execute(select(TEFCAReviewCycle).where(TEFCAReviewCycle.cycle_id == cycle_id))).scalar_one_or_none()
+    records = await _records_for_cycle(db, cycle_id)
+    return {
+        "deliverable": "D3.2", "report_type": "FINAL_REPORT",
+        "task": "Task 3 — Retrospective Review (Final)", "cycle_id": str(cycle_id),
+        "cycle_status": (cycle.cycle_status.value if cycle and cycle.cycle_status else None),
+        "methodology_version": (cycle.methodology_version if cycle else None),
+        "methodology_changes": [],
+        "statistics": _aggregate(records),
+        "agt_does_not_adjudicate": _AGT_NOTE, "contract_info": _CONTRACT_BLOCK,
+        "generated_at": datetime.utcnow().isoformat(),
+    }
+
+
+def _parse_uuid(s: str):
+    try:
+        return uuid.UUID(s)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "id must be a valid UUID")
+
+
+def _parse_date(s: str):
+    try:
+        return datetime.fromisoformat(s)
+    except (ValueError, TypeError):
+        raise HTTPException(400, f"Invalid date '{s}', expected ISO YYYY-MM-DD")
+
+
+@tefca_router.post("/reports/weekly/{cycle_id}", summary="Generate D3.1 weekly progress report")
+async def generate_weekly_report(
+    cycle_id: str, http: Request,
+    week_number: int = Query(...),
+    period_start: str = Query(...), period_end: str = Query(...),
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("qalead")),
+):
+    cid = _parse_uuid(cycle_id)
+    ps, pe = _parse_date(period_start), _parse_date(period_end)
+    data = await build_d3_1_weekly_report(db, cid, week_number, ps, pe)
+    row = await _persist_report(db, "D3.1_WEEKLY", cid, data, str(user.email), ps, pe,
+                                data.get("methodology_version"))
+    await log_tefca_event(db, user=user, action="REPORT_GENERATED", resource_type="tefca_report",
+                          resource_id=row.report_id, ip_address=_client_ip(http),
+                          details={"report_type": "D3.1_WEEKLY", "cycle_id": cycle_id, "week_number": week_number})
+    await db.commit()
+    return {"report_id": str(row.report_id), "report": data}
+
+
+@tefca_router.post("/reports/final/{cycle_id}", summary="Generate D3.2 final report")
+async def generate_final_report(
+    cycle_id: str, http: Request,
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("program_manager")),
+):
+    cid = _parse_uuid(cycle_id)
+    data = await build_d3_2_final_report(db, cid)
+    row = await _persist_report(db, "D3.2_FINAL", cid, data, str(user.email),
+                                methodology_version=data.get("methodology_version"))
+    await log_tefca_event(db, user=user, action="REPORT_GENERATED", resource_type="tefca_report",
+                          resource_id=row.report_id, ip_address=_client_ip(http),
+                          details={"report_type": "D3.2_FINAL", "cycle_id": cycle_id})
+    await db.commit()
+    return {"report_id": str(row.report_id), "report": data}
+
+
+@tefca_router.get("/reports", summary="List generated reports")
+async def list_reports(db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
+    rows = (await db.execute(select(TEFCAReport).order_by(TEFCAReport.generated_at.desc()))).scalars().all()
+    return {
+        "total": len(rows),
+        "reports": [{
+            "report_id": str(r.report_id), "report_type": r.report_type,
+            "cycle_id": str(r.cycle_id) if r.cycle_id else None,
+            "generated_by": r.generated_by,
+            "generated_at": r.generated_at.isoformat() if r.generated_at else None,
+            "period_start": r.period_start.isoformat() if r.period_start else None,
+            "period_end": r.period_end.isoformat() if r.period_end else None,
+        } for r in rows],
+    }
+
+
+# ─── REMOVED: fabricated demo citations — never reintroduce without real source calls ──
+# The previous /demo/validate-all-mock endpoint emitted evidence citations that
+# claimed live NPPES/LEIE/SAM/PECOS queries ("live": True, "query_success": True)
+# while making NO such calls. That is a fabricated audit trail and is deleted. A
+# development-only demo that runs the REAL pipeline against the bundled dataset is
+# registered below ONLY when ENVIRONMENT=development.
+
+if settings.is_development:
+    demo_router = APIRouter(prefix="/api/v1/tefca/demo", tags=["TEFCA Demo (dev only)"])
+
+    @demo_router.get("/validate-sample", summary="[dev] Validate N bundled entities via the REAL pipeline")
+    async def demo_validate_sample(
+        limit: int = 5, db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+    ):
+        """Development helper. Runs the genuine connector+engine pipeline (real API
+        calls, real citations) against the bundled dataset and persists results to
+        an ad-hoc cycle. Never available in production."""
+        cycle = await _get_or_create_cycle(db, None, created_by=str(user.email))
+        out = []
+        for org in ALL_MOCK_ENTITIES[:limit]:
+            record, validation, evidence = await _validate_and_persist(
+                db, org, cycle, reviewer_id=str(user.email), acting_user=user,
+            )
+            out.append({"entity_id": org.get("id"), "bucket": validation["bucket"],
+                        "classification_state": validation["classification_state"],
+                        "record_id": str(record.record_id)})
+        await db.commit()
+        return {"cycle_id": str(cycle.cycle_id), "validated": len(out), "results": out,
+                "note": "REAL pipeline — citations reflect actual source calls."}
+
+    tefca_router.include_router(demo_router)
