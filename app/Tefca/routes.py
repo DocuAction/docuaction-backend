@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Query, Depends, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +34,7 @@ from .mock_data import ALL_MOCK_ENTITIES, MOCK_STATS
 from .models import (
     TEFCAEntity, TEFCAReviewCycle, TEFCAEvidenceRecord, TEFCASourceCache,
     TEFCAPriorityCase, TEFCAReport, TEFCAAnalystQueue,
+    TEFCAConnectorLog, TEFCAReview, TEFCAFinding,
     EntityType, EntityStatus, BucketClassification, BucketLabel,
     CycleType, CycleStatus, RecordStatus, CaseStatus, CaseSeverity, QueueStatus,
 )
@@ -1113,3 +1115,194 @@ if settings.is_development:
                 "note": "REAL pipeline — citations reflect actual source calls."}
 
     tefca_router.include_router(demo_router)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# EXECUTIVE DASHBOARD  (mounted at /api/tefca to match the dashboard spec)
+#
+# summary + trends are aggregate (no PII) and PUBLIC so they can back a
+# read-only dashboard / be curl-checked. /reports/export carries npi/uei/
+# entity_name (PII) and is ROLE-GATED. All aggregate from the authoritative
+# TEFCAEvidenceRecord data (bucket -> status/risk mapping) so they show real
+# numbers as reviews run.
+# ═══════════════════════════════════════════════════════════════════════════
+
+tefca_dashboard_router = APIRouter(prefix="/api/tefca", tags=["TEFCA Dashboard"])
+
+_FINDING_REASON_LABELS = {
+    "LEIE_ACTIVE_EXCLUSION": "OIG LEIE active exclusion",
+    "SAM_ACTIVE_DEBARMENT": "SAM.gov debarment",
+    "PECOS_PAYMENT_SUSPENSION": "PECOS payment suspension",
+    "NPI_NOT_FOUND": "NPI not found in NPPES",
+    "NPI_DEACTIVATED": "NPI deactivated",
+    "NPI_INACTIVE": "NPI inactive",
+    "NAME_UNRESOLVABLE": "Legal name unresolvable",
+}
+
+
+def _status_of(rec: TEFCAEvidenceRecord) -> str:
+    e2 = rec.element_2_finding_classification or {}
+    if e2.get("indeterminate"):
+        return "indeterminate"
+    b = int(rec.bucket_classification.value) if rec.bucket_classification else 1
+    if b == 4:
+        return "fail"
+    if b in (1, 2):
+        return "pass"
+    return "pending"  # bucket 3 — inexplicable, under review
+
+
+def _risk_of(rec: TEFCAEvidenceRecord) -> str:
+    e2 = rec.element_2_finding_classification or {}
+    b = int(rec.bucket_classification.value) if rec.bucket_classification else 1
+    if b == 4:
+        return "critical"
+    if b == 3:
+        return "high"
+    if e2.get("indeterminate") or b == 2:
+        return "medium"
+    return "low"
+
+
+def _connector_health_snapshot(health: dict) -> dict:
+    def s(k):
+        return "available" if health.get(k, {}).get("live") else "unavailable"
+    return {"sam_gov": s("SAM_GOV"), "pecos": s("PECOS"), "leie": s("OIG_LEIE"), "nppes": s("NPPES")}
+
+
+@tefca_dashboard_router.get("/dashboard/summary", summary="Executive dashboard summary (aggregate, public)")
+async def dashboard_summary(db: AsyncSession = Depends(get_db)):
+    recs = (await db.execute(select(TEFCAEvidenceRecord))).scalars().all()
+    total = len(recs)
+    by_status = {"pass": 0, "fail": 0, "pending": 0, "indeterminate": 0}
+    by_risk = {"low": 0, "medium": 0, "high": 0, "critical": 0}
+    fail_reasons: dict = {}
+    review_times = []
+    by_month: dict = {}
+    now = datetime.utcnow()
+    reviews_this_month = 0
+    for r in recs:
+        st = _status_of(r)
+        by_status[st] += 1
+        by_risk[_risk_of(r)] += 1
+        if st == "fail":
+            for code in (r.finding_codes or []):
+                fail_reasons[code] = fail_reasons.get(code, 0) + 1
+        if r.review_timestamp and r.created_at:
+            review_times.append((r.review_timestamp - r.created_at).total_seconds() / 3600.0)
+        if r.created_at:
+            mk = r.created_at.strftime("%Y-%m")
+            m = by_month.setdefault(mk, {"count": 0, "pass": 0, "fail": 0})
+            m["count"] += 1
+            if st == "pass":
+                m["pass"] += 1
+            elif st == "fail":
+                m["fail"] += 1
+            if r.created_at.year == now.year and r.created_at.month == now.month:
+                reviews_this_month += 1
+    passed, failed = by_status["pass"], by_status["fail"]
+    pending = by_status["pending"] + by_status["indeterminate"]
+
+    def rate(n):
+        return round(n / total, 4) if total else 0.0
+
+    health = await get_connector_manager().health_check()
+    top = sorted(fail_reasons.items(), key=lambda x: -x[1])[:10]
+    return {
+        "total_reviews": total,
+        "pass_rate": rate(passed),
+        "fail_rate": rate(failed),
+        "pending_rate": rate(pending),
+        "avg_review_time_hours": round(sum(review_times) / len(review_times), 2) if review_times else 0,
+        "reviews_this_month": reviews_this_month,
+        "reviews_by_status": by_status,
+        "reviews_by_month": [{"month": k, "count": v["count"], "pass": v["pass"], "fail": v["fail"]}
+                             for k, v in sorted(by_month.items())],
+        "connector_health": _connector_health_snapshot(health),
+        "risk_distribution": by_risk,
+        "top_failure_reasons": [{"reason": _FINDING_REASON_LABELS.get(c, c), "count": n} for c, n in top],
+    }
+
+
+@tefca_dashboard_router.get("/dashboard/trends", summary="Monthly trends for charting (aggregate, public)")
+async def dashboard_trends(db: AsyncSession = Depends(get_db)):
+    recs = (await db.execute(select(TEFCAEvidenceRecord))).scalars().all()
+    by_month: dict = {}
+    for r in recs:
+        if not r.created_at:
+            continue
+        mk = r.created_at.strftime("%Y-%m")
+        m = by_month.setdefault(mk, {"total": 0, "passed": 0, "failed": 0, "times": []})
+        st = _status_of(r)
+        m["total"] += 1
+        if st == "pass":
+            m["passed"] += 1
+        elif st == "fail":
+            m["failed"] += 1
+        if r.review_timestamp and r.created_at:
+            m["times"].append((r.review_timestamp - r.created_at).total_seconds() / 3600.0)
+    monthly_reviews, monthly_avg_time, pass_rate_trend = [], [], []
+    for mk in sorted(by_month):
+        m = by_month[mk]
+        monthly_reviews.append({"month": mk, "total": m["total"], "passed": m["passed"], "failed": m["failed"]})
+        monthly_avg_time.append({"month": mk, "avg_hours": round(sum(m["times"]) / len(m["times"]), 2) if m["times"] else 0})
+        pass_rate_trend.append({"month": mk, "rate": round(m["passed"] / m["total"], 4) if m["total"] else 0})
+    logs = (await db.execute(select(TEFCAConnectorLog))).scalars().all()
+    agg: dict = {}
+    for l in logs:
+        a = agg.setdefault(l.connector_name, {"up": 0, "total": 0})
+        a["total"] += 1
+        if l.status == "available":
+            a["up"] += 1
+    connector_uptime = [{"connector": k.lower(), "uptime_pct": round(100 * v["up"] / v["total"], 1) if v["total"] else 0.0}
+                        for k, v in agg.items()]
+    if not connector_uptime:
+        health = await get_connector_manager().health_check()
+        connector_uptime = [{"connector": k.lower(), "uptime_pct": 100.0 if v.get("live") else 0.0}
+                            for k, v in health.items()]
+    return {
+        "monthly_reviews": monthly_reviews,
+        "monthly_avg_time": monthly_avg_time,
+        "pass_rate_trend": pass_rate_trend,
+        "connector_uptime": connector_uptime,
+    }
+
+
+@tefca_dashboard_router.get("/reports/export", summary="CSV export of reviews (role-gated — contains PII)")
+async def export_reviews(
+    format: str = Query("csv"),
+    start: Optional[str] = Query(None),
+    end: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("reviewer")),
+):
+    if format.lower() != "csv":
+        raise HTTPException(400, "Only format=csv is supported")
+    q = select(TEFCAEvidenceRecord)
+    if start:
+        q = q.where(TEFCAEvidenceRecord.created_at >= _parse_date(start))
+    if end:
+        q = q.where(TEFCAEvidenceRecord.created_at <= _parse_date(end))
+    recs = (await db.execute(q.order_by(TEFCAEvidenceRecord.created_at))).scalars().all()
+    import io as _io
+    import csv as _csv
+    buf = _io.StringIO()
+    w = _csv.writer(buf)
+    w.writerow(["review_id", "entity_name", "npi", "uei", "review_date", "status", "risk_level",
+                "sam_status", "pecos_status", "leie_status", "reviewer", "notes"])
+    for r in recs:
+        e1 = r.element_1_entity_identification or {}
+        e3 = r.element_3_source_comparison or {}
+        sam = e3.get("sam_summary") or {}
+        pecos = e3.get("pecos_summary") or {}
+        leie = e3.get("leie_summary") or {}
+        w.writerow([
+            str(r.record_id), e1.get("entity_legal_name") or "", e1.get("entity_npi") or "", "",
+            r.created_at.isoformat() if r.created_at else "", _status_of(r), _risk_of(r),
+            ("excluded" if sam.get("active_exclusion") else "ok") if sam else "n/a",
+            ("found" if pecos.get("found") else "not_found") if pecos else "n/a",
+            ("excluded" if leie.get("excluded") else "clear") if leie else "n/a",
+            r.reviewer_id or "", (r.review_notes or ""),
+        ])
+    return Response(content=buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": "attachment; filename=tefca_reviews.csv"})

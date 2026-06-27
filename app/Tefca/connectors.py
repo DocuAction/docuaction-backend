@@ -229,49 +229,111 @@ class NPPESConnector:
 
 # ─── OIG LEIE Exclusion Database (OIG/HHS) ───────────────────────────────────
 
+# Module-level LEIE index. The OIG publishes the full exclusions list as a free
+# CSV (no key, no JSON API). We download it once, index it by NPI and by name,
+# and refresh daily. The JSON "search API" only 302-redirects into ASP.NET cookie
+# detection, so the CSV is the reliable source of truth.
+_LEIE_CSV_URL = "https://oig.hhs.gov/exclusions/downloadables/UPDATED.csv"
+_LEIE_TTL_SECONDS = 86400
+_LEIE_CACHE: Dict[str, Any] = {"loaded_at": 0.0, "by_npi": {}, "by_name": {}, "row_count": 0}
+
+
+async def _ensure_leie_loaded() -> bool:
+    """Download + index the LEIE CSV if the cache is empty or stale. Returns
+    False (fail-closed) if the CSV cannot be retrieved."""
+    import time as _time
+    import csv as _csv
+    import io as _io
+    now = _time.time()
+    if _LEIE_CACHE["row_count"] > 0 and (now - _LEIE_CACHE["loaded_at"]) < _LEIE_TTL_SECONDS:
+        return True
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
+            resp = await client.get(_LEIE_CSV_URL, headers=HTTP_HEADERS)
+        if resp.status_code != 200:
+            return False
+        by_npi: Dict[str, list] = {}
+        by_name: Dict[tuple, list] = {}
+        count = 0
+        for row in _csv.DictReader(_io.StringIO(resp.text)):
+            count += 1
+            rec = {
+                "lastname": row.get("LASTNAME", ""), "firstname": row.get("FIRSTNAME", ""),
+                "busname": row.get("BUSNAME", ""), "exclusion_type": row.get("EXCLTYPE", ""),
+                "exclusion_date": row.get("EXCLDATE", ""), "reinstatement_date": row.get("REINDATE", ""),
+                "state": row.get("STATE", ""), "npi": (row.get("NPI") or "").strip(),
+            }
+            npi = rec["npi"]
+            if npi and npi != "0000000000":
+                by_npi.setdefault(npi, []).append(rec)
+            last = (row.get("LASTNAME") or "").strip().upper()
+            first = (row.get("FIRSTNAME") or "").strip().upper()
+            if last:
+                by_name.setdefault((last, first), []).append(rec)
+            bus = (row.get("BUSNAME") or "").strip().upper()
+            if bus:
+                by_name.setdefault((bus, ""), []).append(rec)
+        _LEIE_CACHE.update(loaded_at=now, by_npi=by_npi, by_name=by_name, row_count=count)
+        logger.info(f"LEIE index loaded: {count} exclusion rows")
+        return True
+    except Exception as e:
+        logger.warning(f"LEIE CSV load failed: {e}")
+        return False
+
+
 class OIGLEIEConnector:
-    BASE_URL = "https://exclusions.oig.hhs.gov/api/1.0/exclusions/"
-    API_VERSION = "1.0"
+    """OIG LEIE exclusion screening via the free public CSV (key-less)."""
+    API_VERSION = "CSV-UPDATED"
+
+    @staticmethod
+    def _reinstated(rec: dict) -> bool:
+        rd = (rec.get("reinstatement_date") or "").strip()
+        return rd not in ("", "00000000", "0")
+
+    def _build(self, matches: list, qp: dict) -> SourceResult:
+        active = [m for m in matches if not self._reinstated(m)]
+        historical = [m for m in matches if self._reinstated(m)]
+        data = {
+            "excluded": len(active) > 0,
+            "exclusion_found": len(matches) > 0,
+            "active_exclusions": active[:5],
+            "historical_exclusions": historical[:5],
+            "exclusion_count": len(matches),
+            # First active exclusion's headline fields, for evidence records.
+            "exclusion_date": (active[0]["exclusion_date"] if active else None),
+            "exclusion_type": (active[0]["exclusion_type"] if active else None),
+            "reinstatement_date": (historical[0]["reinstatement_date"] if historical else None),
+        }
+        return SourceResult.ok("OIG_LEIE", data, qp, self.API_VERSION, raw_for_hash={"matches": len(matches)})
 
     async def lookup_by_npi(self, npi: str) -> SourceResult:
         qp = {"npi": npi}
         if not npi:
-            return SourceResult.ok(
-                "OIG_LEIE",
-                {"excluded": False, "active_exclusions": [], "historical_exclusions": [],
-                 "reason": "no_npi_submitted"},
-                qp, self.API_VERSION,
-            )
-        try:
-            resp = await _get_with_retry(
-                self.BASE_URL,
-                params={"npi": npi, "format": "json"},
-                headers=HTTP_HEADERS,
-            )
-            if resp.status_code != 200:
-                # Outage must NOT read as "not excluded".
-                return SourceResult.unavailable("OIG_LEIE", f"HTTP {resp.status_code}", qp, self.API_VERSION)
-            payload = resp.json()
-            exclusions = payload.get("results", payload if isinstance(payload, list) else [])
-            active = [e for e in exclusions if not e.get("reinstatement_date")]
-            historical = [e for e in exclusions if e.get("reinstatement_date")]
-            data = {
-                "excluded": len(active) > 0,
-                "active_exclusions": active[:5],
-                "historical_exclusions": historical[:5],
-                "exclusion_count": len(exclusions),
-            }
-            return SourceResult.ok("OIG_LEIE", data, qp, self.API_VERSION, raw_for_hash=payload)
-        except Exception as e:
-            logger.warning(f"OIG LEIE unavailable for NPI {npi}: {e}")
-            return SourceResult.unavailable("OIG_LEIE", str(e), qp, self.API_VERSION)
+            # No NPI to match on — fall back to "no NPI-based exclusion found",
+            # which is a verified negative for the NPI dimension (name screening
+            # is a separate call). Not an outage.
+            if not await _ensure_leie_loaded():
+                return SourceResult.unavailable("OIG_LEIE", "exclusions CSV unavailable", qp, self.API_VERSION)
+            return self._build([], qp)
+        if not await _ensure_leie_loaded():
+            return SourceResult.unavailable("OIG_LEIE", "exclusions CSV unavailable", qp, self.API_VERSION)
+        matches = _LEIE_CACHE["by_npi"].get(npi.strip(), [])
+        return self._build(matches, qp)
+
+    async def lookup_by_name(self, last: str, first: str = "", org: str = "") -> SourceResult:
+        qp = {"last": last, "first": first, "org": org}
+        if not await _ensure_leie_loaded():
+            return SourceResult.unavailable("OIG_LEIE", "exclusions CSV unavailable", qp, self.API_VERSION)
+        if org:
+            matches = _LEIE_CACHE["by_name"].get((org.strip().upper(), ""), [])
+        else:
+            matches = _LEIE_CACHE["by_name"].get((last.strip().upper(), first.strip().upper()), [])
+        return self._build(matches, qp)
 
     async def probe(self) -> bool:
         try:
-            resp = await _get_with_retry(
-                self.BASE_URL, params={"npi": "1234567893", "format": "json"},
-                headers=HTTP_HEADERS, timeout=HEALTH_TIMEOUT_SECONDS,
-            )
+            async with httpx.AsyncClient(timeout=httpx.Timeout(HEALTH_TIMEOUT_SECONDS)) as client:
+                resp = await client.head(_LEIE_CSV_URL, headers=HTTP_HEADERS)
             return resp.status_code == 200
         except Exception:
             return False
@@ -285,30 +347,30 @@ class SAMGovConnector:
 
     def __init__(self):
         # Read the key at INSTANTIATION, not at class-definition/import time,
-        # so a key loaded after import (e.g. via .env) is honored.
+        # so a key loaded after import (e.g. via .env) is honored. NOTE: the
+        # SAM.gov entity API does NOT accept the public DEMO_KEY (returns 404) —
+        # a free but registered key from https://sam.gov is required.
         self.api_key = os.getenv("SAM_GOV_API_KEY", "")
 
-    async def lookup_by_npi(self, npi: str) -> SourceResult:
-        qp = {"npi": npi}
+    async def lookup_by_uei(self, uei: str) -> SourceResult:
+        """SAM.gov is keyed on UEI/CAGE, not NPI. Verify registration + exclusion
+        (debarment) status by UEI."""
+        qp = {"uei": uei}
         if not self.api_key:
-            # No key = we genuinely cannot verify. Fail closed (not "clean").
             return SourceResult.unavailable(
-                "SAM_GOV", "SAM_GOV_API_KEY not configured", qp, self.API_VERSION
+                "SAM_GOV", "SAM_GOV_API_KEY not set (register a free key at sam.gov)", qp, self.API_VERSION
             )
-        if not npi:
-            return SourceResult.ok(
-                "SAM_GOV",
-                {"found": False, "registration_current": None, "excluded": False,
-                 "reason": "no_npi_submitted"},
-                qp, self.API_VERSION,
+        if not uei:
+            return SourceResult.unavailable(
+                "SAM_GOV", "no UEI on entity (SAM.gov cannot be queried by NPI)", qp, self.API_VERSION
             )
         try:
             resp = await _get_with_retry(
                 self.BASE_URL,
                 params={
-                    "npi": npi,
-                    "includeSections": "entityRegistration,coreData",
                     "api_key": self.api_key,
+                    "ueiSAM": uei,
+                    "includeSections": "entityRegistration,coreData",
                 },
                 headers=HTTP_HEADERS,
             )
@@ -318,7 +380,7 @@ class SAMGovConnector:
             entities = payload.get("entityData", [])
             if not entities:
                 return SourceResult.ok(
-                    "SAM_GOV", {"found": False, "registration_current": None, "excluded": False},
+                    "SAM_GOV", {"found": False, "uei": uei, "registration_current": None, "excluded": False},
                     qp, self.API_VERSION, raw_for_hash=payload,
                 )
             reg = entities[0].get("entityRegistration", {})
@@ -334,8 +396,16 @@ class SAMGovConnector:
             }
             return SourceResult.ok("SAM_GOV", data, qp, self.API_VERSION, raw_for_hash=payload)
         except Exception as e:
-            logger.warning(f"SAM.gov unavailable for NPI {npi}: {e}")
+            logger.warning(f"SAM.gov unavailable for UEI {uei}: {e}")
             return SourceResult.unavailable("SAM_GOV", str(e), qp, self.API_VERSION)
+
+    async def lookup_by_npi(self, npi: str) -> SourceResult:
+        # The SAM.gov entity API has no NPI index. Callers should pass UEI via
+        # lookup_by_uei; querying by NPI cannot verify SAM and fails closed.
+        return SourceResult.unavailable(
+            "SAM_GOV", "SAM.gov has no NPI lookup; provide entity UEI + SAM_GOV_API_KEY",
+            {"npi": npi}, self.API_VERSION,
+        )
 
     async def probe(self) -> bool:
         if not self.api_key:
@@ -343,8 +413,7 @@ class SAMGovConnector:
         try:
             resp = await _get_with_retry(
                 self.BASE_URL,
-                params={"includeSections": "entityRegistration", "api_key": self.api_key,
-                        "samRegistrationStatus": "A"},
+                params={"api_key": self.api_key, "samRegistrationStatus": "A", "page": 0, "size": 1},
                 headers=HTTP_HEADERS, timeout=HEALTH_TIMEOUT_SECONDS,
             )
             return resp.status_code == 200
@@ -356,14 +425,14 @@ class SAMGovConnector:
 
 class PECOSConnector:
     """
-    Public CMS provider enrollment data. Enhanced real-time PECOS access
-    (payment suspension flags) is provided by the ONC COR at contract award.
-    The public dataset does not expose suspension flags, so payment_suspension
-    is reported only when the enhanced feed is available; absence is recorded
-    honestly as "not available from this source", never as a verified clean.
+    Provider enrollment verification via the free, key-less CMS NPPES NPI
+    Registry. Confirms enrollment/identity (provider name, taxonomy/provider
+    type, address, enumeration date, status). The PECOS payment-suspension feed
+    requires COR provisioning, so payment_suspension is reported as None
+    ("not provided by this free source") — never a fabricated clean value.
     """
-    DATASET_URL = "https://data.cms.gov/provider-data/api/1/datastore/query/mj5m-pzi6"
-    API_VERSION = "1.0"
+    BASE_URL = "https://npiregistry.cms.hhs.gov/api/"
+    API_VERSION = "2.1"
 
     async def lookup_by_npi(self, npi: str) -> SourceResult:
         qp = {"npi": npi}
@@ -375,13 +444,8 @@ class PECOSConnector:
             )
         try:
             resp = await _get_with_retry(
-                self.DATASET_URL,
-                params={
-                    "conditions[0][property]": "NPI",
-                    "conditions[0][value]": npi,
-                    "conditions[0][operator]": "=",
-                    "limit": 1,
-                },
+                self.BASE_URL,
+                params={"version": self.API_VERSION, "number": npi},
                 headers=HTTP_HEADERS,
             )
             if resp.status_code != 200:
@@ -392,31 +456,41 @@ class PECOSConnector:
                 return SourceResult.ok(
                     "PECOS",
                     {"found": False, "npi": npi, "payment_suspension": None,
-                     "note": "NPI not present in public PECOS enrollment dataset."},
+                     "note": "NPI not enrolled / not found in NPPES (PECOS source)."},
                     qp, self.API_VERSION, raw_for_hash=payload,
                 )
             r = results[0]
+            basic = r.get("basic", {})
+            taxonomies = r.get("taxonomies", []) or []
+            primary_tax = next((t for t in taxonomies if t.get("primary")), (taxonomies[0] if taxonomies else {}))
+            loc = next((a for a in r.get("addresses", []) if a.get("address_purpose") == "LOCATION"), {})
+            provider_name = basic.get("organization_name") or (
+                f"{basic.get('first_name', '')} {basic.get('last_name', '')}".strip()
+            )
             data = {
                 "found": True,
-                "npi": r.get("NPI"),
-                "provider_last_name": r.get("Lst_Nm"),
-                "provider_first_name": r.get("Frst_Nm"),
-                "provider_type": r.get("Rndrng_Prvdr_Type"),
-                "state": r.get("Rndrng_Prvdr_State_Abrvtn"),
-                # Public dataset has no suspension flag — None = "not provided by
-                # this source", distinct from False ("verified not suspended").
+                "npi": str(r.get("number", npi)),
+                "enumeration_type": r.get("enumeration_type"),
+                "provider_name": provider_name,
+                "status": basic.get("status"),
+                "enumeration_date": basic.get("enumeration_date"),
+                "taxonomy": primary_tax.get("desc"),
+                "taxonomy_code": primary_tax.get("code"),
+                "provider_type": primary_tax.get("desc"),
+                "city": loc.get("city"),
+                "state": loc.get("state"),
                 "payment_suspension": None,
-                "note": "Public PECOS data. Suspension flags require COR-provisioned feed.",
+                "note": "Enrollment verified via NPPES. Payment-suspension flag requires COR-provisioned feed.",
             }
             return SourceResult.ok("PECOS", data, qp, self.API_VERSION, raw_for_hash=payload)
         except Exception as e:
-            logger.warning(f"PECOS unavailable for NPI {npi}: {e}")
+            logger.warning(f"PECOS/NPPES unavailable for NPI {npi}: {e}")
             return SourceResult.unavailable("PECOS", str(e), qp, self.API_VERSION)
 
     async def probe(self) -> bool:
         try:
             resp = await _get_with_retry(
-                self.DATASET_URL, params={"limit": 1},
+                self.BASE_URL, params={"version": self.API_VERSION, "number": "1234567893"},
                 headers=HTTP_HEADERS, timeout=HEALTH_TIMEOUT_SECONDS,
             )
             return resp.status_code == 200
@@ -608,6 +682,16 @@ def _extract_npi(entity: dict) -> str:
     return ""
 
 
+def _extract_uei(entity: dict) -> str:
+    """SAM.gov UEI from a FHIR-ish entity. UEI has no standard FHIR system, so we
+    accept any identifier whose system mentions uei/sam.gov, plus common keys."""
+    for ident in entity.get("identifier", []) or []:
+        sysid = (ident.get("system") or "").lower()
+        if "uei" in sysid or "sam.gov" in sysid or "sam-uei" in sysid:
+            return ident.get("value", "")
+    return entity.get("uei") or entity.get("uei_submitted") or entity.get("_uei") or ""
+
+
 # ─── Source Connector Manager ────────────────────────────────────────────────
 
 class SourceConnectorManager:
@@ -635,10 +719,11 @@ class SourceConnectorManager:
         (sam_entity) and the debarment check (sam_exclusion).
         """
         npi = _extract_npi(entity)
+        uei = _extract_uei(entity)
         nppes_r, leie_r, sam_r, pecos_r = await asyncio.gather(
             self.nppes.lookup_by_npi(npi),
             self.leie.lookup_by_npi(npi),
-            self.sam.lookup_by_npi(npi),
+            self.sam.lookup_by_uei(uei),   # SAM.gov is keyed on UEI, not NPI
             self.pecos.lookup_by_npi(npi),
             return_exceptions=False,
         )

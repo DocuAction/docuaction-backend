@@ -306,3 +306,50 @@ class TEFCAAnalystQueue(Base):
         Index("idx_queue_status_tier_priority", "status", "tier", "priority"),
         Index("idx_queue_assigned_role", "assigned_role", "status"),
     )
+
+
+# ─── Dashboard / connector-log tables ────────────────────────────────────────
+# Lightweight, denormalized tables requested for the executive dashboard. The
+# authoritative review data lives in TEFCAEvidenceRecord (rich 5-element model);
+# the dashboard aggregates from there. TEFCAConnectorLog is actively written on
+# every connector probe to power uptime/availability trends.
+
+class TEFCAConnectorLog(Base):
+    """One row per connector health probe — powers connector_uptime trends."""
+    __tablename__ = "tefca_connector_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    connector_name = Column(String(50), nullable=False, index=True)
+    status = Column(String(20), nullable=False)        # available / unavailable
+    response_time_ms = Column(Integer)
+    checked_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class TEFCAReview(Base):
+    """Denormalized one-row-per-review summary (entity + outcome). Mirrors the
+    authoritative TEFCAEvidenceRecord; provided for the requested dashboard
+    schema and lighter reporting queries."""
+    __tablename__ = "tefca_reviews"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    entity_name = Column(String(500))
+    npi = Column(String(10), index=True)
+    uei = Column(String(12))
+    status = Column(String(20), index=True)            # pass / fail / pending / indeterminate
+    risk_level = Column(String(20))                    # low / medium / high / critical
+    reviewer_id = Column(String(255))
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TEFCAFinding(Base):
+    """Per-connector finding attached to a review (denormalized companion to the
+    finding_codes / element_3 stored on TEFCAEvidenceRecord)."""
+    __tablename__ = "tefca_findings"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    review_id = Column(UUID(as_uuid=True), ForeignKey("tefca_reviews.id"), index=True)
+    connector = Column(String(50))                     # nppes / leie / sam_gov / pecos
+    finding_type = Column(String(100))
+    detail = Column(Text)
+    severity = Column(String(20))                      # low / medium / high / critical

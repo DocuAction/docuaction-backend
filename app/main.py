@@ -225,8 +225,10 @@ safe_load("app.api.migration_routes", "migration")
 # into a 404 while /health falsely reported it "active". A broken TEFCA module is
 # a hard startup failure, by design.
 from app.Tefca import router as tefca_router  # noqa: E402  (fail-loud on import error)
+from app.Tefca.routes import tefca_dashboard_router  # noqa: E402
 app.include_router(tefca_router)
-logger.info("Loaded: tefca-review-protocol (REQUIRED — unconditional registration)")
+app.include_router(tefca_dashboard_router)  # executive dashboard at /api/tefca/*
+logger.info("Loaded: tefca-review-protocol + dashboard (REQUIRED — unconditional registration)")
 
 # ═══ CASE MANAGEMENT ═══
 safe_load("app.case_management", "case-management")
