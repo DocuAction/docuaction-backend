@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     # ── CORS / Trusted hosts (FIX 8 — NIST SC-7) ──────────────────────────────
     # Comma-separated. No wildcard default. Override per environment.
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:5173,https://app.docuaction.io"
-    ALLOWED_HOSTS: str = "api.docuaction.io,localhost,127.0.0.1"
+    ALLOWED_HOSTS: str = "api.docuaction.io,api-prod.docuaction.io,healthcheck.railway.app,*.railway.app,*.up.railway.app,localhost,127.0.0.1"
 
     # ── Storage ───────────────────────────────────────────────────────────────
     STORAGE_PROVIDER: str = "local"
