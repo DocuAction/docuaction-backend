@@ -20,7 +20,7 @@ from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, Query, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db, async_session_maker
@@ -1306,3 +1306,111 @@ async def export_reviews(
         ])
     return Response(content=buf.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": "attachment; filename=tefca_reviews.csv"})
+
+
+# ─── Admin: seed mock data (idempotent, admin-gated) ─────────────────────────
+# Applies the additive RFQ columns to tefca_reviews and seeds mock review data
+# so the executive dashboard has content before real QHIN data arrives from the
+# COR. Idempotent: ALTERs use IF NOT EXISTS; the mock insert is skipped if
+# tefca_reviews already has rows. Run once per environment (dev + prod).
+
+_QHINS = [
+    "eHealth Exchange", "Epic Nexus", "Health Gorilla", "KONZA", "MedAllies",
+    "CommonWell", "Kno2", "eClinicalWorks", "Netsmart", "Surescripts", "Oracle Health",
+]
+
+_SEED_REVIEWS_SQL = """
+INSERT INTO tefca_reviews
+  (id, entity_name, npi, uei, status, risk_level, reviewer_id, qhin, is_mock_data, created_at, updated_at)
+SELECT
+  gen_random_uuid(),
+  'MOCK Participant ' || g,
+  lpad((1000000000 + g)::text, 10, '0'),
+  'MOCKUEI' || lpad(g::text, 5, '0'),
+  CASE WHEN g <= 30 THEN 'no_discrepancy'
+       WHEN g <= 43 THEN 'minor_administrative'
+       WHEN g <= 48 THEN 'inexplicable'
+       ELSE 'non_compliant' END,
+  CASE WHEN g <= 30 THEN 'low'
+       WHEN g <= 43 THEN 'medium'
+       WHEN g <= 48 THEN 'high'
+       ELSE 'critical' END,
+  'MOCK_REVIEWER',
+  (ARRAY['eHealth Exchange','Epic Nexus','Health Gorilla','KONZA','MedAllies',
+         'CommonWell','Kno2','eClinicalWorks','Netsmart','Surescripts',
+         'Oracle Health'])[1 + (g % 11)],
+  true,
+  now() - (g || ' days')::interval,
+  now()
+FROM generate_series(1,50) AS g
+"""
+
+_SEED_FINDINGS_SQL = """
+INSERT INTO tefca_findings (id, review_id, connector, finding_type, detail, severity)
+SELECT
+  gen_random_uuid(),
+  r.id,
+  (ARRAY['nppes','leie','pecos','sam_gov'])[1 + ((row_number() OVER ())::int % 4)],
+  CASE r.status
+    WHEN 'non_compliant'        THEN 'LEIE_ACTIVE_EXCLUSION'
+    WHEN 'inexplicable'         THEN 'SOURCE_CONFLICT'
+    WHEN 'minor_administrative' THEN 'NAME_MISMATCH'
+    ELSE 'NO_DISCREPANCY' END,
+  'MOCK finding for ' || r.entity_name || ' (' || r.qhin || ')',
+  r.risk_level
+FROM tefca_reviews r, generate_series(1,2) gs
+WHERE r.is_mock_data = true
+"""
+
+_SEED_LOGS_SQL = """
+INSERT INTO tefca_connector_logs (id, connector_name, status, response_time_ms, checked_at)
+SELECT
+  gen_random_uuid(),
+  c.name,
+  CASE WHEN c.name IN ('nppes','oig_leie','pecos') THEN 'available' ELSE 'unavailable' END,
+  (50 + floor(random()*200))::int,
+  now() - (g || ' hours')::interval
+FROM (VALUES ('nppes'),('oig_leie'),('pecos'),('sam_gov'),
+             ('rce_directory'),('iqvia_onekey')) AS c(name),
+     generate_series(1,5) AS g
+"""
+
+
+@tefca_dashboard_router.post("/admin/seed-mock-data",
+                             summary="[admin] Apply RFQ columns + seed mock review data (idempotent)")
+async def seed_mock_data(db: AsyncSession = Depends(get_db), user=Depends(require_role("admin"))):
+    out = {"alters": [], "mock_data": None, "actions": []}
+
+    # 1 + 2: additive columns (IF NOT EXISTS — safe to re-run)
+    await db.execute(text("ALTER TABLE tefca_reviews ADD COLUMN IF NOT EXISTS qhin VARCHAR(100)"))
+    await db.execute(text("ALTER TABLE tefca_reviews ADD COLUMN IF NOT EXISTS is_mock_data BOOLEAN DEFAULT false"))
+    await db.commit()
+    out["alters"] = ["qhin VARCHAR(100)", "is_mock_data BOOLEAN DEFAULT false"]
+
+    # 3: guarded mock insert — skip entirely if reviews already exist
+    existing = int((await db.execute(text("SELECT COUNT(*) FROM tefca_reviews"))).scalar() or 0)
+    if existing > 0:
+        out["mock_data"] = "already existed"
+        out["reviews_count"] = existing
+        out["actions"].append(f"skipped mock insert — tefca_reviews already has {existing} rows")
+        return out
+
+    await db.execute(text(_SEED_REVIEWS_SQL))
+    await db.execute(text(_SEED_FINDINGS_SQL))
+    await db.execute(text(_SEED_LOGS_SQL))
+    await db.commit()
+
+    reviews = int((await db.execute(text("SELECT COUNT(*) FROM tefca_reviews WHERE is_mock_data = true"))).scalar() or 0)
+    findings = int((await db.execute(text("SELECT COUNT(*) FROM tefca_findings"))).scalar() or 0)
+    logs = int((await db.execute(text("SELECT COUNT(*) FROM tefca_connector_logs"))).scalar() or 0)
+    dist_rows = (await db.execute(text(
+        "SELECT status, count(*) FROM tefca_reviews WHERE is_mock_data = true GROUP BY status"
+    ))).fetchall()
+    out["mock_data"] = "inserted"
+    out["reviews_count"] = reviews
+    out["findings_count"] = findings
+    out["connector_logs_count"] = logs
+    out["distribution"] = {r[0]: int(r[1]) for r in dist_rows}
+    out["qhins_covered"] = len(_QHINS)
+    out["actions"].append("inserted 50 mock reviews, 100 findings, 30 connector logs across 11 QHINs")
+    return out
