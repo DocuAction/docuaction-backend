@@ -786,3 +786,78 @@ class SourceConnectorManager:
         """List form of health_check() — one probed entry per source."""
         hc = await self.health_check()
         return [{"name": name, **info} for name, info in hc.items()]
+
+
+# ─── check_* connector wrappers (TEFCA Task 2) ───────────────────────────────
+# Thin functions with a 10s per-source timeout, error handling, and per-call
+# logging to tefca_connector_logs. Each logs via its OWN short-lived DB session
+# so concurrent calls (check_all_connectors) never share a session.
+
+_CHECK_TIMEOUT_SECONDS = 10.0
+_check_manager_singleton = None
+
+
+def _check_manager() -> "SourceConnectorManager":
+    global _check_manager_singleton
+    if _check_manager_singleton is None:
+        _check_manager_singleton = SourceConnectorManager()
+    return _check_manager_singleton
+
+
+async def _log_connector_check(connector_name: str, status: str, response_ms: int) -> None:
+    """Best-effort insert into tefca_connector_logs (own session, never raises)."""
+    try:
+        from app.core.database import async_session_maker
+        from sqlalchemy import text as _sql_text
+        async with async_session_maker() as s:
+            await s.execute(_sql_text(
+                "INSERT INTO tefca_connector_logs (id, connector_name, status, response_time_ms, checked_at) "
+                "VALUES (gen_random_uuid(), :n, :st, :ms, now())"
+            ), {"n": connector_name, "st": status, "ms": response_ms})
+            await s.commit()
+    except Exception as e:
+        logger.warning(f"tefca_connector_logs insert failed for {connector_name}: {e}")
+
+
+async def _timed_connector_check(coro, connector_name: str) -> SourceResult:
+    import time as _time
+    t0 = _time.monotonic()
+    try:
+        result = await asyncio.wait_for(coro, timeout=_CHECK_TIMEOUT_SECONDS)
+        ms = int((_time.monotonic() - t0) * 1000)
+        await _log_connector_check(connector_name, "available" if result.success else "unavailable", ms)
+        return result
+    except Exception as e:
+        ms = int((_time.monotonic() - t0) * 1000)
+        await _log_connector_check(connector_name, "unavailable", ms)
+        return SourceResult.unavailable(connector_name, f"{type(e).__name__}: {e}", {}, None)
+
+
+async def check_nppes(npi: str) -> SourceResult:
+    return await _timed_connector_check(_check_manager().nppes.lookup_by_npi(npi), "NPPES")
+
+
+async def check_pecos(npi: str) -> SourceResult:
+    return await _timed_connector_check(_check_manager().pecos.lookup_by_npi(npi), "PECOS")
+
+
+async def check_sam(uei: str) -> SourceResult:
+    return await _timed_connector_check(_check_manager().sam.lookup_by_uei(uei), "SAM_GOV")
+
+
+async def check_leie(name: str = "", npi: str = "") -> SourceResult:
+    mgr = _check_manager()
+    coro = mgr.leie.lookup_by_npi(npi) if npi else mgr.leie.lookup_by_name(last=name)
+    return await _timed_connector_check(coro, "OIG_LEIE")
+
+
+async def check_all_connectors(entity: dict, db=None) -> dict:
+    """Run NPPES/PECOS/SAM/LEIE concurrently for one entity. `db` is accepted for
+    API symmetry; logging uses each check's own session (concurrency-safe)."""
+    npi = _extract_npi(entity)
+    uei = _extract_uei(entity)
+    name = entity.get("name", "")
+    nppes_r, pecos_r, sam_r, leie_r = await asyncio.gather(
+        check_nppes(npi), check_pecos(npi), check_sam(uei), check_leie(name, npi),
+    )
+    return {"nppes": nppes_r, "pecos": pecos_r, "sam": sam_r, "leie": leie_r}

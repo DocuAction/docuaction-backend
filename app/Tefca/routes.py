@@ -31,6 +31,7 @@ from app.services.audit import log_tefca_event
 from .connectors import SourceConnectorManager, SourceResult, _extract_npi, _entity_type_of
 from .validation_engine import ValidationEngine, EvidenceRecordGenerator
 from .mock_data import ALL_MOCK_ENTITIES, MOCK_STATS
+from . import review_engine
 from .models import (
     TEFCAEntity, TEFCAReviewCycle, TEFCAEvidenceRecord, TEFCASourceCache,
     TEFCAPriorityCase, TEFCAReport, TEFCAAnalystQueue,
@@ -1422,3 +1423,136 @@ async def seed_mock_data(db: AsyncSession = Depends(get_db), user=Depends(get_cu
     out["qhins_covered"] = len(_QHINS)
     out["actions"].append("inserted 50 mock reviews, 100 findings, 30 connector logs across 11 QHINs")
     return out
+
+
+# ─── Review engine: sampling, methodology, taxonomy, execution (TEFCA Task 2) ─
+# methodology + discrepancy-taxonomy are reference data (public, like the
+# dashboard). run-sample / execute / sampling-runs are operations (role-gated).
+
+@tefca_dashboard_router.get("/methodology", summary="Review methodology / control framework (reference)")
+async def get_methodology():
+    return review_engine.generate_control_framework()
+
+
+@tefca_dashboard_router.get("/discrepancy-taxonomy", summary="Discrepancy taxonomy (reference)")
+async def get_discrepancy_taxonomy():
+    return {
+        "buckets": list(review_engine.DISCREPANCY_TAXONOMY.keys()),
+        "taxonomy": review_engine.DISCREPANCY_TAXONOMY,
+    }
+
+
+class RunSampleRequest(BaseModel):
+    population_size: Optional[int] = None
+    confidence: float = 0.95
+    margin: float = 0.05
+    seed: int = 42
+
+
+@tefca_dashboard_router.post("/reviews/run-sample", summary="Compute + record a stratified sampling run")
+async def run_sample(
+    request: RunSampleRequest, http: Request,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("reviewer")),
+):
+    entities = list(ALL_MOCK_ENTITIES)
+    N = request.population_size or 94231
+    sample_size = review_engine.calculate_sample_size(N, request.confidence, request.margin)
+    sample = review_engine.select_stratified_sample(entities, min(sample_size, len(entities)), seed=request.seed)
+    per_qhin: dict = {}
+    for e in sample:
+        q = e.get("_qhin") or "Unknown"
+        per_qhin[q] = per_qhin.get(q, 0) + 1
+    # Record the sampling run in tefca_review_cycles (accepted as the sampling-runs table).
+    cycle = TEFCAReviewCycle(
+        cycle_type=CycleType.TASK3_RETROSPECTIVE,
+        cycle_start_date=datetime.utcnow(),
+        sample_confidence_level=request.confidence,
+        sample_method="COCHRAN_STRATIFIED_FPC",
+        total_entities_sampled=sample_size,
+        cycle_status=CycleStatus.PLANNED,
+        created_by=str(user.email),
+    )
+    db.add(cycle)
+    await db.flush()
+    await log_tefca_event(
+        db, user=user, action="SAMPLING_RUN_CREATED", resource_type="tefca_review_cycle",
+        resource_id=cycle.cycle_id, ip_address=_client_ip(http),
+        details={"population": N, "sample_size": sample_size, "seed": request.seed},
+    )
+    await db.commit()
+    return {
+        "sampling_run_id": str(cycle.cycle_id),
+        "population_size": N,
+        "sample_size": sample_size,
+        "method": "Cochran + finite population correction, stratified by QHIN",
+        "confidence_level": request.confidence,
+        "margin_of_error": request.margin,
+        "seed": request.seed,
+        "selected_count": len(sample),
+        "per_qhin_allocation": per_qhin,
+        "sample_preview": [e.get("id") for e in sample[:10]],
+    }
+
+
+@tefca_dashboard_router.post("/reviews/{review_id}/execute", summary="Execute a review against live connectors")
+async def execute_review(
+    review_id: str, http: Request,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("reviewer")),
+):
+    try:
+        rid = uuid.UUID(review_id)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "review_id must be a valid UUID")
+    review = (await db.execute(select(TEFCAReview).where(TEFCAReview.id == rid))).scalar_one_or_none()
+    if not review:
+        raise HTTPException(404, "Review not found")
+    entity = {
+        "id": str(review.id),
+        "name": review.entity_name,
+        "identifier": ([{"system": "http://hl7.org/fhir/sid/us-npi", "value": review.npi}] if review.npi else []),
+        "uei": review.uei,
+        "_qhin": review.qhin,
+    }
+    result = await review_engine.run_entity_review(entity, db=db)
+    # Preserve seeded demo data: only persist the new outcome for non-mock reviews.
+    persisted = False
+    if not review.is_mock_data:
+        review.status = result["status"]
+        review.risk_level = result["risk_level"]
+        review.reviewer_id = str(user.email)
+        persisted = True
+    await log_tefca_event(
+        db, user=user, action="REVIEW_EXECUTED", resource_type="tefca_review",
+        resource_id=rid, ip_address=_client_ip(http),
+        details={"bucket": result["bucket"], "status": result["status"],
+                 "persisted": persisted, "is_mock_data": review.is_mock_data},
+    )
+    await db.commit()
+    return {
+        "review_id": review_id,
+        "persisted": persisted,
+        "note": ("mock review — computed but not persisted (demo data preserved)"
+                 if not persisted else "persisted"),
+        "result": result,
+    }
+
+
+@tefca_dashboard_router.get("/sampling-runs", summary="List sampling runs")
+async def list_sampling_runs(db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
+    rows = (await db.execute(
+        select(TEFCAReviewCycle).order_by(TEFCAReviewCycle.created_at.desc())
+    )).scalars().all()
+    return {
+        "total": len(rows),
+        "sampling_runs": [{
+            "id": str(c.cycle_id),
+            "method": c.sample_method,
+            "confidence_level": c.sample_confidence_level,
+            "sample_size": c.total_entities_sampled,
+            "status": c.cycle_status.value if c.cycle_status else None,
+            "created_by": c.created_by,
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+        } for c in rows],
+    }
