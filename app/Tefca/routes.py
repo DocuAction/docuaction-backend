@@ -1663,3 +1663,57 @@ async def get_tefca_report_csv(
     csv_text = await reporting.generate_csv_export(db, rid)
     return Response(content=csv_text, media_type="text/csv",
                     headers={"Content-Disposition": f"attachment; filename=tefca_report_{report_id}.csv"})
+
+
+# ─── Bi-weekly + quarterly reports, new-submissions (TEFCA Task 4) ───────────
+
+@tefca_dashboard_router.post("/reports/biweekly", summary="Generate a bi-weekly ongoing review (SOW Task 4)")
+async def create_biweekly_report(
+    request: FinalReportRequest, http: Request,
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("qalead")),
+):
+    start = _parse_date(request.period_start) if request.period_start else None
+    end = _parse_date(request.period_end) if request.period_end else None
+    report = await reporting.generate_biweekly_report(db, start, end, generated_by=str(user.email))
+    await log_tefca_event(
+        db, user=user, action="BIWEEKLY_REPORT_GENERATED", resource_type="tefca_report",
+        resource_id=report["report_id"], ip_address=_client_ip(http),
+        details={"new_submissions": report["new_submissions_reviewed"]},
+    )
+    await db.commit()
+    return report
+
+
+@tefca_dashboard_router.post("/reports/quarterly", summary="Generate a quarterly report (SOW Task 4)")
+async def create_quarterly_report(
+    request: FinalReportRequest, http: Request,
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("program_manager")),
+):
+    start = _parse_date(request.period_start) if request.period_start else None
+    end = _parse_date(request.period_end) if request.period_end else None
+    report = await reporting.generate_quarterly_report(db, start, end, generated_by=str(user.email))
+    await log_tefca_event(
+        db, user=user, action="QUARTERLY_REPORT_GENERATED", resource_type="tefca_report",
+        resource_id=report["report_id"], ip_address=_client_ip(http),
+        details={"total_reviews": report["total_reviews"]},
+    )
+    await db.commit()
+    return report
+
+
+@tefca_dashboard_router.get("/reviews/new-submissions", summary="List new submissions since a date")
+async def list_new_submissions(
+    since: str = Query(..., description="ISO date YYYY-MM-DD"),
+    qhin: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+):
+    since_dt = _parse_date(since)
+    rows = await reporting.get_new_submissions(db, qhin, since_dt)
+    return {
+        "since": since, "qhin": qhin, "count": len(rows),
+        "submissions": [{
+            "review_id": str(r.id), "entity_name": r.entity_name, "qhin": r.qhin,
+            "npi": r.npi, "status": r.status, "risk_level": r.risk_level,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        } for r in rows],
+    }
