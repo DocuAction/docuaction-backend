@@ -338,6 +338,8 @@ class TEFCAReview(Base):
     status = Column(String(20), index=True)            # pass / fail / pending / indeterminate
     risk_level = Column(String(20))                    # low / medium / high / critical
     reviewer_id = Column(String(255))
+    qhin = Column(String(100))                         # QHIN attribution (RFQ Task 1)
+    is_mock_data = Column(Boolean, default=False)      # MOCK rows: replace with real COR data
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
