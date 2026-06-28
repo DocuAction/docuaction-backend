@@ -1382,6 +1382,78 @@ FROM (VALUES ('nppes'),('oig_leie'),('pecos'),('sam_gov'),
 """
 
 
+@tefca_dashboard_router.post("/demo/run-cycle",
+                             summary="[admin] Run one QA validation cycle on a mock review (demo)")
+async def demo_run_cycle(db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
+    """Admin demo. Picks one mock review, probes the live source connectors, runs
+    the REAL QA gate ladder (intake -> connectors -> findings -> QA score) via
+    qa_engine.validate_review, and returns the entity, connector health, findings,
+    QA score and the actual state transitions the review moved through. Read-only
+    on report content; appends to the immutable tefca_qa_audit trail only."""
+    if user.email not in ADMIN_EMAILS:
+        raise HTTPException(403, f"Admin allowlist required; {user.email} not authorized")
+
+    # 1) pick one mock review (prefer flagged mock data; else most-recent review)
+    review = (await db.execute(
+        select(TEFCAReview).where(TEFCAReview.is_mock_data == True)  # noqa: E712
+        .order_by(TEFCAReview.created_at.desc()).limit(1)
+    )).scalar_one_or_none()
+    if review is None:
+        review = (await db.execute(
+            select(TEFCAReview).order_by(TEFCAReview.created_at.desc()).limit(1)
+        )).scalar_one_or_none()
+    if review is None:
+        raise HTTPException(404, "no reviews available to demo (seed mock data first)")
+
+    # 2) connectors called — real availability probe (logs to QA audit + connector log)
+    health = await qa_engine.ConnectorHealthCheck().check_all_connectors(db)
+
+    # 3) run the REAL QA gate ladder (logs every gate transition to tefca_qa_audit)
+    verdict = await qa_engine.validate_review(db, review.id, triggered_by="demo")
+
+    # 4) findings attached to this review
+    findings = (await db.execute(
+        select(TEFCAFinding).where(TEFCAFinding.review_id == review.id)
+    )).scalars().all()
+
+    # 5) actual state transitions from THIS run's audit rows (most recent gates first → reorder)
+    rows = (await db.execute(text(
+        "SELECT gate_name, old_state, new_state, passed, score, created_at "
+        "FROM tefca_qa_audit WHERE review_id = :rid AND triggered_by = 'demo' "
+        "ORDER BY created_at DESC LIMIT 5"
+    ), {"rid": str(review.id)})).mappings().all()
+    transitions = [
+        {"gate": r["gate_name"], "from": r["old_state"], "to": r["new_state"],
+         "passed": r["passed"], "score": float(r["score"]) if r["score"] is not None else None}
+        for r in reversed(rows)
+    ]
+
+    return {
+        "entity_name": review.entity_name,
+        "qhin": getattr(review, "qhin", None),
+        "npi": review.npi,
+        "entity_type": getattr(review, "entity_type", None),
+        "review_status": review.status,
+        "risk_level": review.risk_level,
+        "connectors_called": {
+            name: {"available": c["available"], "health_score": c["health_score"],
+                   "response_time_ms": c["response_time_ms"]}
+            for name, c in health["connectors"].items()
+        },
+        "connector_overall_health": health["overall_health"],
+        "findings": [{"connector": f.connector, "finding_type": f.finding_type,
+                      "severity": f.severity, "detail": f.detail} for f in findings],
+        "qa_score": verdict.get("qa_score"),
+        "qa_passed": verdict.get("passed"),
+        "final_state": verdict.get("final_state"),
+        "recommended_status": verdict.get("recommended_status"),
+        "state_transitions": transitions,
+        "intake": verdict.get("intake"),
+        "processed_at": datetime.utcnow().isoformat(),
+        "note": "REAL QA pipeline — connector probes + gate ladder against seeded review.",
+    }
+
+
 @tefca_dashboard_router.post("/admin/seed-mock-data",
                              summary="[admin] Apply RFQ columns + seed mock review data (idempotent)")
 async def seed_mock_data(db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
