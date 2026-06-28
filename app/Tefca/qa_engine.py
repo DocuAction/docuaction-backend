@@ -779,3 +779,106 @@ async def run_golden_regression(db=None, triggered_by="automatic") -> Dict[str, 
                            details={"total": total, "passed": passed, "failed": failed}, triggered_by=triggered_by)
         await db.commit()
     return summary
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# QA Task 5 — Continuous monitoring, threshold alerts, priority-review SLA.
+# A QA sweep aggregates every gate, emits threshold alerts, and tracks priority
+# SLAs — all appended to the immutable tefca_qa_audit trail. Additive.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# SLA targets (calendar days, request->resolution) by COR severity.
+SLA_TARGETS = {"critical": 2, "high": 5, "medium": 10, "low": 21}
+QA_OVERALL_ALERT_THRESHOLD = 70.0
+
+
+async def check_priority_sla(db, triggered_by="automatic") -> Dict[str, Any]:
+    """Track priority-review SLA compliance; flag breaches. Logged to the trail."""
+    from .models import TEFCAPriorityCase
+    now = datetime.utcnow()
+    cases = (await db.execute(select(TEFCAPriorityCase))).scalars().all()
+    rows, breaches = [], []
+    for c in cases:
+        sev = (c.severity.value if c.severity else "LOW").lower()
+        target = SLA_TARGETS.get(sev, 21)
+        status = c.case_status.value if c.case_status else ""
+        completed = status in ("RESOLVED_ACTION", "RESOLVED_NO_ACTION")
+        row = {"case_id": str(c.case_id), "qhin": c.qhin, "severity": sev,
+               "sla_target_days": target, "status": status}
+        if completed and c.completed_date and c.assigned_date:
+            res_days = (c.completed_date - c.assigned_date).days
+            met = res_days <= target
+            row.update({"phase": "completed", "resolution_days": res_days, "met_sla": met})
+            if not met:
+                breaches.append(str(c.case_id))
+        else:
+            days_open = (now - c.assigned_date).days if c.assigned_date else None
+            past_deadline = bool(c.deadline_date and c.deadline_date < now)
+            breached = (days_open is not None and days_open > target) or past_deadline
+            row.update({"phase": "open", "days_open": days_open, "past_deadline": past_deadline, "breached": breached})
+            if breached:
+                breaches.append(str(c.case_id))
+        rows.append(row)
+    total = len(cases)
+    compliance = round(100.0 * (total - len(breaches)) / total, 1) if total else 100.0
+    result = {"total_cases": total, "breaches": len(breaches), "breaching_case_ids": breaches,
+              "sla_compliance_pct": compliance, "sla_targets_days": SLA_TARGETS, "cases": rows,
+              "checked_at": now.isoformat()}
+    await log_qa_audit(db, gate_name="priority_review_sla", gate_type="sla",
+                       passed=len(breaches) == 0, score=compliance, threshold=100.0,
+                       failures=breaches, details={"total": total, "breaches": len(breaches)},
+                       triggered_by=triggered_by)
+    await db.commit()
+    return result
+
+
+def _generate_alerts(readiness, connectors, golden, evidence, sla) -> List[dict]:
+    alerts = []
+    if not readiness.get("ready"):
+        alerts.append({"level": "high", "source": "platform", "message": "platform not ready"})
+    if connectors.get("overall_health", 100) < 50:
+        alerts.append({"level": "high", "source": "connectors", "message": f"overall connector health {connectors.get('overall_health')}"})
+    for name, c in (connectors.get("connectors") or {}).items():
+        if not c.get("available") and name != "SAM_GOV":
+            alerts.append({"level": "medium", "source": f"connector:{name}", "message": "unavailable"})
+    if golden.get("drift_detected"):
+        alerts.append({"level": "critical", "source": "regression", "message": f"classification drift: {golden.get('failing_cases')}"})
+    if not evidence.get("gate_open"):
+        alerts.append({"level": "high", "source": "evidence", "message": f"report gate closed; {evidence.get('failing')} failing"})
+    if sla.get("breaches", 0) > 0:
+        alerts.append({"level": "medium", "source": "sla", "message": f"{sla['breaches']} priority SLA breaches"})
+    return alerts
+
+
+async def run_qa_sweep(db, triggered_by="scheduled") -> Dict[str, Any]:
+    """Full QA sweep: every gate + threshold alerts + SLA, all logged."""
+    readiness = await PlatformReadinessCheck().run(db, skip_http=True)
+    connectors = await ConnectorHealthCheck().check_all_connectors(db=db)
+    golden = await run_golden_regression(db, triggered_by=triggered_by)
+    evidence = await evidence_gate(db, triggered_by=triggered_by)
+    sla = await check_priority_sla(db, triggered_by=triggered_by)
+
+    dims = [readiness["score"], connectors["overall_health"], golden["pass_rate"],
+            evidence["evidence_score"], sla["sla_compliance_pct"]]
+    overall = round(sum(dims) / len(dims), 1)
+    alerts = _generate_alerts(readiness, connectors, golden, evidence, sla)
+    if overall < QA_OVERALL_ALERT_THRESHOLD:
+        alerts.append({"level": "high", "source": "overall", "message": f"overall QA score {overall} < {QA_OVERALL_ALERT_THRESHOLD}"})
+
+    for a in alerts:
+        await log_qa_audit(db, gate_name=f"alert:{a['source']}", gate_type="alert", passed=False,
+                           score=None, threshold=None, failures=[a["level"]], details=a, triggered_by=triggered_by)
+    await log_qa_audit(db, gate_name="qa_sweep", gate_type="monitor", passed=len(alerts) == 0,
+                       score=overall, threshold=QA_OVERALL_ALERT_THRESHOLD,
+                       failures=[a["source"] for a in alerts],
+                       details={"alerts": len(alerts), "overall": overall}, triggered_by=triggered_by)
+    await db.commit()
+
+    return {
+        "overall_qa_score": overall, "alert_count": len(alerts), "alerts": alerts,
+        "dimensions": {"platform_readiness": readiness["score"], "connector_health": connectors["overall_health"],
+                       "golden_regression": golden["pass_rate"], "evidence_gate": evidence["evidence_score"],
+                       "sla_compliance": sla["sla_compliance_pct"]},
+        "drift_detected": golden["drift_detected"], "sla": {"breaches": sla["breaches"], "compliance_pct": sla["sla_compliance_pct"]},
+        "swept_at": datetime.utcnow().isoformat(),
+    }

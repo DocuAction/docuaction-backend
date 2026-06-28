@@ -1971,3 +1971,26 @@ async def qa_golden_records(user=Depends(require_role("reviewer"))):
 @tefca_dashboard_router.get("/qa/regression", summary="Run golden-record regression; detect classification drift")
 async def qa_regression(db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
     return await qa_engine.run_golden_regression(db, triggered_by="manual")
+
+
+# ─── QA monitoring, SLA & alert endpoints (QA Task 5) ────────────────────────
+
+@tefca_dashboard_router.get("/qa/sla", summary="Priority-review SLA tracking")
+async def qa_sla(db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
+    return await qa_engine.check_priority_sla(db, triggered_by="manual")
+
+
+@tefca_dashboard_router.get("/qa/sweep", summary="Run a full QA sweep (all gates + alerts + SLA)")
+async def qa_sweep(db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
+    return await qa_engine.run_qa_sweep(db, triggered_by="manual")
+
+
+@tefca_dashboard_router.get("/qa/alerts", summary="Recent QA threshold alerts")
+async def qa_alerts(limit: int = Query(50), db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
+    rows = (await db.execute(text(
+        "SELECT id, gate_name, gate_type, details, triggered_by, created_at FROM tefca_qa_audit "
+        "WHERE gate_type = 'alert' ORDER BY created_at DESC LIMIT :lim"), {"lim": min(max(limit, 1), 200)})).mappings().all()
+    return {"total": len(rows), "alerts": [
+        {"id": str(r["id"]), "source": r["gate_name"], "details": r["details"],
+         "triggered_by": r["triggered_by"], "created_at": r["created_at"].isoformat() if r["created_at"] else None}
+        for r in rows]}

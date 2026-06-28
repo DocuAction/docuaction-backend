@@ -116,6 +116,9 @@ async def startup():
             logger.error(f"TEFCA QA GOLDEN-RECORD DRIFT DETECTED: {_golden['failing_cases']}")
         else:
             logger.info(f"TEFCA QA golden regression: {_golden['passed']}/{_golden['total']} passed (no drift)")
+        # Continuous QA monitor (separate scheduler; gated by ENABLE_QA_MONITOR, default off).
+        from app.Tefca.qa_monitor import start_qa_monitor
+        start_qa_monitor()
     except Exception as e:
         logger.warning(f"TEFCA QA startup check skipped: {e}")
 
