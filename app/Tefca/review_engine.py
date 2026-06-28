@@ -272,3 +272,12 @@ async def execute_priority_review(db, case) -> dict:
         "severity": severity, "root_cause": root_cause,
         "assessed_from": source, "finding_codes": finding_codes,
     }
+
+
+# ─── Post-review QA hook (QA Task 1) ─────────────────────────────────────────
+# Automatic QA validation that runs AFTER run_entity_review, without modifying
+# run_entity_review itself. Returns the QA verdict; callers set the review to
+# 'needs_review' when passed is False.
+async def run_post_review_qa(db, review_id):
+    from . import qa_engine
+    return await qa_engine.validate_review(db, review_id, triggered_by="automatic")

@@ -33,6 +33,7 @@ from .validation_engine import ValidationEngine, EvidenceRecordGenerator
 from .mock_data import ALL_MOCK_ENTITIES, MOCK_STATS
 from . import review_engine
 from . import reporting
+from . import qa_engine
 from .models import (
     TEFCAEntity, TEFCAReviewCycle, TEFCAEvidenceRecord, TEFCASourceCache,
     TEFCAPriorityCase, TEFCAReport, TEFCAAnalystQueue,
@@ -1524,11 +1525,16 @@ async def execute_review(
         review.risk_level = result["risk_level"]
         review.reviewer_id = str(user.email)
         persisted = True
+    # Automatic post-review QA gate (QA Task 1). On QA failure, route to needs_review.
+    qa_verdict = await review_engine.run_post_review_qa(db, review.id)
+    if not qa_verdict.get("passed") and persisted:
+        review.status = "needs_review"
     await log_tefca_event(
         db, user=user, action="REVIEW_EXECUTED", resource_type="tefca_review",
         resource_id=rid, ip_address=_client_ip(http),
         details={"bucket": result["bucket"], "status": result["status"],
-                 "persisted": persisted, "is_mock_data": review.is_mock_data},
+                 "persisted": persisted, "is_mock_data": review.is_mock_data,
+                 "qa_passed": qa_verdict.get("passed"), "qa_score": qa_verdict.get("qa_score")},
     )
     await db.commit()
     return {
@@ -1537,6 +1543,7 @@ async def execute_review(
         "note": ("mock review — computed but not persisted (demo data preserved)"
                  if not persisted else "persisted"),
         "result": result,
+        "qa": qa_verdict,
     }
 
 
@@ -1854,3 +1861,51 @@ async def priority_quarterly(
                           details={"total": report["total_priority_reviews"]})
     await db.commit()
     return report
+
+
+# ─── QA framework endpoints (QA Task 1) ──────────────────────────────────────
+
+@tefca_dashboard_router.get("/qa/health", summary="Platform readiness check (public — monitoring)")
+async def qa_platform_health(db: AsyncSession = Depends(get_db)):
+    return await qa_engine.PlatformReadinessCheck().run(db)
+
+
+@tefca_dashboard_router.get("/qa/connector-health", summary="Connector health scores")
+async def qa_connector_health(db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
+    return await qa_engine.ConnectorHealthCheck().check_all_connectors(db=db)
+
+
+@tefca_dashboard_router.get("/qa/audit", summary="QA audit trail (filters: review_id, gate_name, gate_type, passed)")
+async def qa_audit_trail(
+    review_id: Optional[str] = Query(None), gate_name: Optional[str] = Query(None),
+    gate_type: Optional[str] = Query(None), passed: Optional[bool] = Query(None),
+    limit: int = Query(100),
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+):
+    clauses, params = [], {"lim": min(max(limit, 1), 500)}
+    if review_id:
+        clauses.append("review_id = :rid"); params["rid"] = review_id
+    if gate_name:
+        clauses.append("gate_name = :gn"); params["gn"] = gate_name
+    if gate_type:
+        clauses.append("gate_type = :gt"); params["gt"] = gate_type
+    if passed is not None:
+        clauses.append("passed = :p"); params["p"] = passed
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    rows = (await db.execute(text(
+        "SELECT id, review_id, gate_name, gate_type, old_state, new_state, passed, score, "
+        "threshold, failures, triggered_by, created_at FROM tefca_qa_audit" + where +
+        " ORDER BY created_at DESC LIMIT :lim"), params)).mappings().all()
+    return {"total": len(rows), "audit": [
+        {**dict(r), "id": str(r["id"]), "review_id": str(r["review_id"]) if r["review_id"] else None,
+         "created_at": r["created_at"].isoformat() if r["created_at"] else None} for r in rows]}
+
+
+@tefca_dashboard_router.post("/qa/validate-review/{review_id}", summary="Trigger full QA validation on a review")
+async def qa_validate_review(review_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
+    return await qa_engine.validate_review(db, review_id, triggered_by="manual")
+
+
+@tefca_dashboard_router.get("/qa/score", summary="Overall QA score across all dimensions")
+async def qa_overall_score(db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
+    return await qa_engine.overall_qa_score(db)

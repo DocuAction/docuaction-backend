@@ -100,6 +100,20 @@ async def startup():
     else:
         logger.error("DB schema setup FAILED after retries — User queries/login may 500 until fixed")
 
+    # TEFCA QA framework — ensure audit table + run platform readiness check.
+    # Non-blocking: a failed check logs a warning and startup continues (skip_http
+    # avoids self-calling the API before this process is serving).
+    try:
+        from app.Tefca import qa_engine
+        from app.core.database import async_session_maker as _qa_sm
+        async with _qa_sm() as _qa_s:
+            await qa_engine.ensure_qa_table(_qa_s)
+            _readiness = await qa_engine.PlatformReadinessCheck().run(_qa_s, skip_http=True)
+        logger.info(f"TEFCA QA readiness: ready={_readiness['ready']} score={_readiness['score']} "
+                    + ", ".join(f"{c['name']}={'ok' if c['passed'] else 'FAIL'}" for c in _readiness['checks']))
+    except Exception as e:
+        logger.warning(f"TEFCA QA startup check skipped: {e}")
+
     # Bulletin Intelligence — durable store + restore prior state across restarts
     try:
         from app.bulletin_intelligence.bulletin_store import init_store
