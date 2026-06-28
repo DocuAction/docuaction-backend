@@ -230,6 +230,7 @@ class TEFCAPriorityCase(Base):
 
     case_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     cor_reference = Column(String(100), nullable=False)
+    qhin = Column(String(100))                         # QHIN attribution (Task 5)
     entity_id = Column(UUID(as_uuid=True), ForeignKey("tefca_entities.entity_id"))
     assigned_by = Column(String(255), nullable=False)
     assigned_date = Column(DateTime, nullable=False)

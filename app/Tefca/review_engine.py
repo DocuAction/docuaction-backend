@@ -175,3 +175,100 @@ def generate_control_framework() -> Dict[str, Any]:
         "fail_closed": "A required source being unavailable yields INDETERMINATE (never a clean Bucket-1 auto-complete).",
         "agt_does_not_adjudicate": "AGT produces findings and recommendations; the ONC COR makes all final determinations.",
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TEFCA Task 5 — COR-directed priority reviews (~20/month). Additive.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# CaseStatus enum value -> COR-friendly status name
+PRIORITY_STATUS_FRIENDLY = {
+    "ASSIGNED": "queued", "IN_PROGRESS": "in_progress", "PENDING_COR": "pending_cor",
+    "RESOLVED_ACTION": "completed", "RESOLVED_NO_ACTION": "completed", "ESCALATED": "escalated",
+}
+
+_BUCKET_SEVERITY = {1: "LOW", 2: "MEDIUM", 3: "HIGH", 4: "CRITICAL"}
+
+
+def severity_from_issue(text: str) -> str:
+    t = (text or "").lower()
+    if any(k in t for k in ("exclusion", "debarment", "suspension")):
+        return "CRITICAL"
+    if any(k in t for k in ("npi mismatch", "unresolvable", "lapsed", "deactivated", "invalid npi")):
+        return "HIGH"
+    if any(k in t for k in ("discrepancy", "conflict", "duplicate", "mismatch")):
+        return "MEDIUM"
+    return "LOW"
+
+
+def root_cause_from_issue(text: str) -> str:
+    t = (text or "").lower()
+    if "exclusion" in t:
+        return "LEIE_ACTIVE_EXCLUSION"
+    if "suspension" in t:
+        return "PECOS_PAYMENT_SUSPENSION"
+    if "enrollment" in t:
+        return "PECOS_ENROLLMENT_DISCREPANCY"
+    if "npi" in t:
+        return "NPI_MISMATCH"
+    if "address" in t or "state" in t:
+        return "ADDRESS_STATE_CONFLICT"
+    if "name" in t:
+        return "NAME_MISMATCH"
+    return "UNDETERMINED"
+
+
+async def create_priority_review(db, cor_reference: str, issue_description: str,
+                                 qhin: str = None, deadline_date=None,
+                                 assigned_by: str = "COR", entity_id=None):
+    """Create a COR-directed priority case (Task 5). Returns the ORM row."""
+    from .models import TEFCAPriorityCase, CaseStatus
+    case = TEFCAPriorityCase(
+        cor_reference=cor_reference,
+        qhin=qhin,
+        entity_id=entity_id,
+        assigned_by=assigned_by,
+        assigned_date=datetime.utcnow(),
+        deadline_date=deadline_date,
+        issue_description=issue_description,
+        case_status=CaseStatus.ASSIGNED,
+    )
+    db.add(case)
+    await db.flush()
+    return case
+
+
+async def execute_priority_review(db, case) -> dict:
+    """Run connectors for the case's linked entity if an NPI is resolvable;
+    otherwise assess from the issue text. Determines root cause + severity and
+    moves the case to in-progress. Returns a summary dict."""
+    from sqlalchemy import select as _select
+    from .models import TEFCAEntity, CaseStatus, CaseSeverity
+    finding_codes = []
+    npi = None
+    if case.entity_id:
+        ent = (await db.execute(_select(TEFCAEntity).where(TEFCAEntity.entity_id == case.entity_id))).scalar_one_or_none()
+        npi = ent.npi_submitted if ent else None
+
+    if npi:
+        entity = {"id": str(case.entity_id), "name": "",
+                  "identifier": [{"system": "http://hl7.org/fhir/sid/us-npi", "value": npi}],
+                  "_qhin": case.qhin}
+        result = await run_entity_review(entity, db=db)
+        finding_codes = result["finding_codes"]
+        severity = _BUCKET_SEVERITY.get(result["bucket"], "MEDIUM")
+        root_cause = finding_codes[0] if finding_codes else "NO_DISCREPANCY"
+        source = "connectors"
+    else:
+        severity = severity_from_issue(case.issue_description)
+        root_cause = root_cause_from_issue(case.issue_description)
+        source = "issue_assessment"
+
+    case.case_status = CaseStatus.IN_PROGRESS
+    case.severity = CaseSeverity[severity]
+    case.root_cause_determination = root_cause
+    return {
+        "case_id": str(case.case_id), "status": "in_progress",
+        "severity": severity, "root_cause": root_cause,
+        "assessed_from": source, "finding_codes": finding_codes,
+    }

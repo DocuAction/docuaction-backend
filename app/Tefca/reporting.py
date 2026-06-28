@@ -459,3 +459,118 @@ async def generate_quarterly_report(db, period_start: Optional[datetime] = None,
     }
     rid = await _persist(db, "quarterly", report_data, period_start, period_end, generated_by)
     return {"report_id": str(rid), **report_data}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TEFCA Task 5 — priority review status + quarterly reports. Additive.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_PRIORITY_STATUS_FRIENDLY = {
+    "ASSIGNED": "queued", "IN_PROGRESS": "in_progress", "PENDING_COR": "pending_cor",
+    "RESOLVED_ACTION": "completed", "RESOLVED_NO_ACTION": "completed", "ESCALATED": "escalated",
+}
+_IMPACT_BY_SEVERITY = {
+    "CRITICAL": "Disqualifying — entity participation should be suspended pending COR determination.",
+    "HIGH": "Material — QHIN corrective action required.",
+    "MEDIUM": "Moderate — administrative correction recommended.",
+    "LOW": "Minor — monitor; no immediate action.",
+}
+_FRAMEWORK_CHANGE_BY_ROOT_CAUSE = {
+    "LEIE_ACTIVE_EXCLUSION": "Mandatory OIG LEIE screening at QHIN onboarding.",
+    "PECOS_PAYMENT_SUSPENSION": "Add CMS PECOS suspension check to pre-submission validation.",
+    "PECOS_ENROLLMENT_DISCREPANCY": "Reconcile PECOS enrollment at submission.",
+    "NPI_MISMATCH": "Require NPPES verification before TEFCA submission.",
+    "ADDRESS_STATE_CONFLICT": "Add cross-source address/state validation.",
+    "NAME_MISMATCH": "Add DBA/legal-name alias resolution.",
+}
+
+
+def _framework_changes_for(root_cause):
+    return _FRAMEWORK_CHANGE_BY_ROOT_CAUSE.get(root_cause, "Review framework controls for the recurring root cause.")
+
+
+async def generate_priority_status_report(db, case_id) -> Optional[dict]:
+    """Per-review COR status report (formatted view; not persisted)."""
+    from .models import TEFCAPriorityCase
+    case = (await db.execute(
+        select(TEFCAPriorityCase).where(TEFCAPriorityCase.case_id == case_id)
+    )).scalar_one_or_none()
+    if not case:
+        return None
+    status = _PRIORITY_STATUS_FRIENDLY.get(case.case_status.value if case.case_status else None,
+                                           case.case_status.value if case.case_status else None)
+    sev = case.severity.value if case.severity else None
+    return {
+        "report_type": "priority_status",
+        "task": "SOW Task 5 — Priority Review Status Report (for COR)",
+        "case_id": str(case.case_id),
+        "cor_reference": case.cor_reference,
+        "qhin": case.qhin,
+        "identified_issue": case.issue_description,
+        "root_cause": case.root_cause_determination,
+        "root_cause_detail": case.root_cause_description,
+        "severity": sev,
+        "impact_assessment": _IMPACT_BY_SEVERITY.get(sev, "Assessment pending."),
+        "recommendations": case.recommendations or [
+            {"recommendation": "QHIN to verify and correct the flagged data, then resubmit to the RCE Directory."}],
+        "prevention_recommendation": case.prevention_recommendation,
+        "resolution_status": status,
+        "resolution_notes": case.resolution_notes,
+        "suggested_framework_changes": _framework_changes_for(case.root_cause_determination),
+        "assigned_date": case.assigned_date.isoformat() if case.assigned_date else None,
+        "deadline_date": case.deadline_date.isoformat() if case.deadline_date else None,
+        "completed_date": case.completed_date.isoformat() if case.completed_date else None,
+        "contract_info": _CONTRACT,
+        "agt_does_not_adjudicate": _AGT_NOTE,
+        "generated_at": datetime.utcnow().isoformat(),
+    }
+
+
+async def generate_priority_quarterly_report(db, period_start=None, period_end=None,
+                                             generated_by: str = "SYSTEM") -> dict:
+    from .models import TEFCAPriorityCase
+    period_end = period_end or datetime.utcnow()
+    period_start = period_start or (period_end - timedelta(days=90))
+    cases = (await db.execute(
+        select(TEFCAPriorityCase).where(
+            TEFCAPriorityCase.assigned_date >= period_start,
+            TEFCAPriorityCase.assigned_date <= period_end,
+        )
+    )).scalars().all()
+    total = len(cases)
+
+    completed = [c for c in cases if c.completed_date and c.assigned_date]
+    avg_days = (round(sum((c.completed_date - c.assigned_date).days for c in completed) / len(completed), 1)
+                if completed else None)
+
+    by_sev = {"LOW": 0, "MEDIUM": 0, "HIGH": 0, "CRITICAL": 0}
+    by_qhin: dict = {}
+    rc: dict = {}
+    for c in cases:
+        s = c.severity.value if c.severity else None
+        if s in by_sev:
+            by_sev[s] += 1
+        by_qhin[c.qhin or "Unknown"] = by_qhin.get(c.qhin or "Unknown", 0) + 1
+        if c.root_cause_determination:
+            rc[c.root_cause_determination] = rc.get(c.root_cause_determination, 0) + 1
+
+    common_root_causes = [{"root_cause": k, "count": v} for k, v in sorted(rc.items(), key=lambda x: -x[1])]
+    methodology_updates = sorted({_framework_changes_for(k) for k in rc})
+
+    report_data = {
+        "report_type": "priority_quarterly",
+        "task": "SOW Task 5 — Priority Reviews Quarterly Aggregation",
+        "period_start": period_start.isoformat(),
+        "period_end": period_end.isoformat(),
+        "total_priority_reviews": total,
+        "average_response_time_days": avg_days,
+        "distribution_by_severity": by_sev,
+        "distribution_by_qhin": by_qhin,
+        "common_root_causes": common_root_causes,
+        "methodology_updates": methodology_updates,
+        "contract_info": _CONTRACT,
+        "agt_does_not_adjudicate": _AGT_NOTE,
+        "generated_at": datetime.utcnow().isoformat(),
+    }
+    rid = await _persist(db, "priority_quarterly", report_data, period_start, period_end, generated_by)
+    return {"report_id": str(rid), **report_data}

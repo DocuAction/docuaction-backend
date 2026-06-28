@@ -1717,3 +1717,140 @@ async def list_new_submissions(
             "created_at": r.created_at.isoformat() if r.created_at else None,
         } for r in rows],
     }
+
+
+# ─── Priority review queue (SOW Task 5, COR-directed) ────────────────────────
+
+_PRIORITY_FRIENDLY = {
+    "ASSIGNED": "queued", "IN_PROGRESS": "in_progress", "PENDING_COR": "pending_cor",
+    "RESOLVED_ACTION": "completed", "RESOLVED_NO_ACTION": "completed", "ESCALATED": "escalated",
+}
+
+
+def _priority_case_dto(c: TEFCAPriorityCase) -> dict:
+    return {
+        "case_id": str(c.case_id),
+        "cor_reference": c.cor_reference,
+        "qhin": c.qhin,
+        "issue_description": c.issue_description,
+        "status": _PRIORITY_FRIENDLY.get(c.case_status.value if c.case_status else None,
+                                         c.case_status.value if c.case_status else None),
+        "severity": c.severity.value if c.severity else None,
+        "root_cause": c.root_cause_determination,
+        "assigned_by": c.assigned_by,
+        "assigned_date": c.assigned_date.isoformat() if c.assigned_date else None,
+        "deadline_date": c.deadline_date.isoformat() if c.deadline_date else None,
+        "completed_date": c.completed_date.isoformat() if c.completed_date else None,
+    }
+
+
+class PriorityCreateRequest(BaseModel):
+    cor_reference: str
+    issue_description: str
+    qhin: Optional[str] = None
+    deadline_date: Optional[str] = None
+
+
+@tefca_dashboard_router.post("/priority/create", summary="Create a COR-directed priority review (admin only)")
+async def priority_create(
+    request: PriorityCreateRequest, http: Request,
+    db: AsyncSession = Depends(get_db), user=Depends(get_current_user),
+):
+    if user.email not in ADMIN_EMAILS:
+        raise HTTPException(403, f"Admin allowlist required; {user.email} not authorized")
+    case = await review_engine.create_priority_review(
+        db, cor_reference=request.cor_reference, issue_description=request.issue_description,
+        qhin=request.qhin,
+        deadline_date=(_parse_date(request.deadline_date) if request.deadline_date else None),
+        assigned_by=str(user.email),
+    )
+    await log_tefca_event(db, user=user, action="PRIORITY_CASE_CREATED", resource_type="tefca_priority_case",
+                          resource_id=case.case_id, ip_address=_client_ip(http),
+                          details={"cor_reference": request.cor_reference, "qhin": request.qhin})
+    await db.commit()
+    return _priority_case_dto(case)
+
+
+@tefca_dashboard_router.post("/priority/{case_id}/execute", summary="Execute a priority review")
+async def priority_execute(
+    case_id: str, http: Request,
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+):
+    cid = _parse_uuid(case_id)
+    case = (await db.execute(select(TEFCAPriorityCase).where(TEFCAPriorityCase.case_id == cid))).scalar_one_or_none()
+    if not case:
+        raise HTTPException(404, "Priority case not found")
+    result = await review_engine.execute_priority_review(db, case)
+    case.assigned_reviewer_id = str(user.email)
+    await log_tefca_event(db, user=user, action="PRIORITY_CASE_EXECUTED", resource_type="tefca_priority_case",
+                          resource_id=cid, ip_address=_client_ip(http),
+                          details={"severity": result["severity"], "root_cause": result["root_cause"]})
+    await db.commit()
+    return result
+
+
+@tefca_dashboard_router.get("/priority", summary="List priority cases (filters: status, qhin, date range)")
+async def priority_list(
+    status: Optional[str] = Query(None), qhin: Optional[str] = Query(None),
+    start: Optional[str] = Query(None), end: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+):
+    q = select(TEFCAPriorityCase).order_by(TEFCAPriorityCase.assigned_date.desc())
+    if qhin:
+        q = q.where(TEFCAPriorityCase.qhin == qhin)
+    if start:
+        q = q.where(TEFCAPriorityCase.assigned_date >= _parse_date(start))
+    if end:
+        q = q.where(TEFCAPriorityCase.assigned_date <= _parse_date(end))
+    if status:
+        try:
+            q = q.where(TEFCAPriorityCase.case_status == CaseStatus(status))
+        except ValueError:
+            pass  # unknown status filter ignored
+    rows = (await db.execute(q)).scalars().all()
+    return {"total": len(rows), "cases": [_priority_case_dto(c) for c in rows]}
+
+
+@tefca_dashboard_router.get("/priority/{case_id}", summary="Priority case detail")
+async def priority_detail(
+    case_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+):
+    cid = _parse_uuid(case_id)
+    c = (await db.execute(select(TEFCAPriorityCase).where(TEFCAPriorityCase.case_id == cid))).scalar_one_or_none()
+    if not c:
+        raise HTTPException(404, "Priority case not found")
+    dto = _priority_case_dto(c)
+    dto.update({
+        "root_cause_description": c.root_cause_description,
+        "recommendations": c.recommendations,
+        "prevention_recommendation": c.prevention_recommendation,
+        "resolution_notes": c.resolution_notes,
+        "assigned_reviewer_id": c.assigned_reviewer_id,
+    })
+    return dto
+
+
+@tefca_dashboard_router.get("/priority/{case_id}/report", summary="Formatted COR status report")
+async def priority_report(
+    case_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+):
+    cid = _parse_uuid(case_id)
+    report = await reporting.generate_priority_status_report(db, cid)
+    if report is None:
+        raise HTTPException(404, "Priority case not found")
+    return report
+
+
+@tefca_dashboard_router.post("/priority/quarterly-report", summary="Generate priority quarterly aggregation")
+async def priority_quarterly(
+    request: FinalReportRequest, http: Request,
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("program_manager")),
+):
+    start = _parse_date(request.period_start) if request.period_start else None
+    end = _parse_date(request.period_end) if request.period_end else None
+    report = await reporting.generate_priority_quarterly_report(db, start, end, generated_by=str(user.email))
+    await log_tefca_event(db, user=user, action="PRIORITY_QUARTERLY_GENERATED", resource_type="tefca_report",
+                          resource_id=report["report_id"], ip_address=_client_ip(http),
+                          details={"total": report["total_priority_reviews"]})
+    await db.commit()
+    return report
