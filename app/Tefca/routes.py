@@ -1994,3 +1994,22 @@ async def qa_alerts(limit: int = Query(50), db: AsyncSession = Depends(get_db), 
         {"id": str(r["id"]), "source": r["gate_name"], "details": r["details"],
          "triggered_by": r["triggered_by"], "created_at": r["created_at"].isoformat() if r["created_at"] else None}
         for r in rows]}
+
+
+# ─── QA report + audit export endpoints (QA Task 6) ──────────────────────────
+
+@tefca_dashboard_router.post("/qa/report", summary="Generate a QA scorecard report (report_type='qa')")
+async def qa_generate_report(db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
+    return await qa_engine.generate_qa_report(db, triggered_by=str(user.email))
+
+
+@tefca_dashboard_router.get("/qa/audit/export", summary="Export the QA audit trail as CSV")
+async def qa_audit_export(
+    format: str = Query("csv"), limit: int = Query(5000),
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+):
+    if format.lower() != "csv":
+        raise HTTPException(400, "Only format=csv is supported")
+    csv_text = await qa_engine.export_audit_csv(db, limit)
+    return Response(content=csv_text, media_type="text/csv",
+                    headers={"Content-Disposition": "attachment; filename=tefca_qa_audit.csv"})

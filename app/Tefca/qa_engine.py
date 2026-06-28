@@ -882,3 +882,72 @@ async def run_qa_sweep(db, triggered_by="scheduled") -> Dict[str, Any]:
         "drift_detected": golden["drift_detected"], "sla": {"breaches": sla["breaches"], "compliance_pct": sla["sla_compliance_pct"]},
         "swept_at": datetime.utcnow().isoformat(),
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# QA Task 6 — QA reporting (report_type='qa') + audit export. Additive.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_QA_CONTRACT = {"contract": "7571MN26F80064", "contractor": "Alliance Global Tech, Inc. (AGT)"}
+_QA_AGT_NOTE = "AGT produces findings and recommendations; the ONC COR makes all final determinations."
+
+
+async def generate_qa_report(db, triggered_by="manual") -> Dict[str, Any]:
+    """Compile a comprehensive QA scorecard across all six framework dimensions
+    and persist it to tefca_reports with report_type='qa'."""
+    import uuid as _uuid
+    from .models import TEFCAReport
+    sweep = await run_qa_sweep(db, triggered_by=triggered_by)
+    stats = await statistical_qa(db, triggered_by=triggered_by)
+    total = (await db.execute(text("SELECT count(*) FROM tefca_qa_audit"))).scalar() or 0
+    passed = (await db.execute(text("SELECT count(*) FROM tefca_qa_audit WHERE passed"))).scalar() or 0
+    audit_rate = round(100.0 * passed / total, 1) if total else None
+
+    report_data = {
+        "report_type": "qa",
+        "task": "QA Framework — Quality Scorecard (Tasks 1–6)",
+        "overall_qa_score": sweep["overall_qa_score"],
+        "dimensions": sweep["dimensions"],
+        "golden_regression": {"drift_detected": sweep["drift_detected"]},
+        "sla": sweep["sla"],
+        "alerts": sweep["alerts"],
+        "statistical_qa": {
+            "meets_expected_sample": stats["sampling_validation"]["meets_expected_sample"],
+            "expected_sample_size": stats["sampling_validation"]["expected_sample_size"],
+            "inter_rater_kappa": stats["inter_rater_reliability"]["cohens_kappa"],
+            "non_compliance_95_ci": stats["confidence_interval"]["wilson_95_ci"],
+        },
+        "audit_pass_rate": audit_rate, "audit_gates_total": total,
+        "contract_info": _QA_CONTRACT, "agt_does_not_adjudicate": _QA_AGT_NOTE,
+        "generated_at": datetime.utcnow().isoformat(),
+    }
+    rid = _uuid.uuid4()
+    db.add(TEFCAReport(report_id=rid, report_type="qa", report_data=report_data,
+                       generated_by=triggered_by, generated_at=datetime.utcnow(), methodology_version="1.0"))
+    await db.flush()
+    await log_qa_audit(db, gate_name="qa_report_generated", gate_type="report", passed=True,
+                       score=sweep["overall_qa_score"], threshold=QA_OVERALL_ALERT_THRESHOLD,
+                       details={"report_id": str(rid)}, triggered_by=triggered_by)
+    await db.commit()
+    return {"report_id": str(rid), **report_data}
+
+
+async def export_audit_csv(db, limit=5000) -> str:
+    """Render the immutable QA audit trail as CSV."""
+    import io as _io
+    import csv as _csv
+    rows = (await db.execute(text(
+        "SELECT id, review_id, gate_name, gate_type, old_state, new_state, passed, score, "
+        "threshold, triggered_by, created_at FROM tefca_qa_audit ORDER BY created_at DESC LIMIT :lim"),
+        {"lim": min(max(limit, 1), 50000)})).mappings().all()
+    buf = _io.StringIO()
+    w = _csv.writer(buf)
+    cols = ["id", "review_id", "gate_name", "gate_type", "old_state", "new_state",
+            "passed", "score", "threshold", "triggered_by", "created_at"]
+    w.writerow(cols)
+    for r in rows:
+        w.writerow([str(r["id"]), str(r["review_id"]) if r["review_id"] else "", r["gate_name"],
+                    r["gate_type"], r["old_state"] or "", r["new_state"] or "", r["passed"],
+                    r["score"] if r["score"] is not None else "", r["threshold"] if r["threshold"] is not None else "",
+                    r["triggered_by"], r["created_at"].isoformat() if r["created_at"] else ""])
+    return buf.getvalue()
