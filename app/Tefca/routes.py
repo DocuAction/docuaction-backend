@@ -24,7 +24,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db, async_session_maker
-from app.core.security import require_role, get_current_user
+from app.core.security import require_role, get_current_user, ADMIN_EMAILS
 from app.core.config import settings
 from app.services.audit import log_tefca_event
 
@@ -1378,7 +1378,12 @@ FROM (VALUES ('nppes'),('oig_leie'),('pecos'),('sam_gov'),
 
 @tefca_dashboard_router.post("/admin/seed-mock-data",
                              summary="[admin] Apply RFQ columns + seed mock review data (idempotent)")
-async def seed_mock_data(db: AsyncSession = Depends(get_db), user=Depends(require_role("admin"))):
+async def seed_mock_data(db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
+    # Gated by the ADMIN_EMAILS allowlist (email-based), not role, so an existing
+    # token for an allowlisted admin works without changing the DB role. The email
+    # is loaded from the DB by get_current_user, not trusted from the token.
+    if user.email not in ADMIN_EMAILS:
+        raise HTTPException(403, f"Admin allowlist required; {user.email} not authorized")
     out = {"alters": [], "mock_data": None, "actions": []}
 
     # 1 + 2: additive columns (IF NOT EXISTS — safe to re-run)
