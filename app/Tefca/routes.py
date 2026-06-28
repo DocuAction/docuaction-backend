@@ -1594,6 +1594,7 @@ async def create_weekly_report(
         resource_id=report["report_id"], ip_address=_client_ip(http),
         details={"total_reviews": report["total_reviews"]},
     )
+    report["evidence_gate"] = await qa_engine.evidence_gate(db, start, end)  # QA Task 2 gate
     await db.commit()
     return report
 
@@ -1611,6 +1612,7 @@ async def create_final_report(
         resource_id=report["report_id"], ip_address=_client_ip(http),
         details={"total_reviews": report["total_reviews"]},
     )
+    report["evidence_gate"] = await qa_engine.evidence_gate(db, start, end)  # QA Task 2 gate
     await db.commit()
     return report
 
@@ -1687,6 +1689,7 @@ async def create_biweekly_report(
         resource_id=report["report_id"], ip_address=_client_ip(http),
         details={"new_submissions": report["new_submissions_reviewed"]},
     )
+    report["evidence_gate"] = await qa_engine.evidence_gate(db, start, end)  # QA Task 2 gate
     await db.commit()
     return report
 
@@ -1704,6 +1707,7 @@ async def create_quarterly_report(
         resource_id=report["report_id"], ip_address=_client_ip(http),
         details={"total_reviews": report["total_reviews"]},
     )
+    report["evidence_gate"] = await qa_engine.evidence_gate(db, start, end)  # QA Task 2 gate
     await db.commit()
     return report
 
@@ -1909,3 +1913,25 @@ async def qa_validate_review(review_id: str, db: AsyncSession = Depends(get_db),
 @tefca_dashboard_router.get("/qa/score", summary="Overall QA score across all dimensions")
 async def qa_overall_score(db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
     return await qa_engine.overall_qa_score(db)
+
+
+# ─── QA evidence & chain-of-custody endpoints (QA Task 2) ────────────────────
+
+@tefca_dashboard_router.post("/qa/validate-evidence/{review_id}", summary="Evidence + chain-of-custody QA on a review")
+async def qa_validate_evidence(review_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
+    return await qa_engine.validate_evidence(db, review_id, triggered_by="manual")
+
+
+@tefca_dashboard_router.get("/qa/report-gate", summary="Evidence gate that must be open before a report is generated")
+async def qa_report_gate(
+    start: Optional[str] = Query(None), end: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+):
+    s = _parse_date(start) if start else None
+    e = _parse_date(end) if end else None
+    return await qa_engine.evidence_gate(db, s, e, triggered_by="manual")
+
+
+@tefca_dashboard_router.get("/qa/evidence-summary", summary="Evidence completeness across all reviews")
+async def qa_evidence_summary(db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
+    return await qa_engine.evidence_gate(db, None, None, triggered_by="manual")

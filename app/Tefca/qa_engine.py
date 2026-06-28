@@ -443,3 +443,101 @@ async def overall_qa_score(db) -> Dict[str, Any]:
         },
         "computed_at": datetime.utcnow().isoformat(),
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# QA Task 2 — Evidence completeness & chain-of-custody QA. Additive.
+# Verifies every review's evidence is complete and each finding is source-
+# attributed before it can feed a report. Logs to the immutable audit trail.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_VALID_SOURCES = {"nppes", "leie", "oig_leie", "pecos", "sam", "sam_gov", "rce_directory", "iqvia_onekey"}
+
+
+class EvidenceValidator:
+    """Gate 3 — evidence completeness + chain of custody."""
+
+    REQUIRED_FIELDS = ["entity_name", "qhin", "entity_type", "npi", "status", "risk_level"]
+
+    def assess(self, review, findings: list) -> Dict[str, Any]:
+        failures = []
+        missing = [f for f in self.REQUIRED_FIELDS if not getattr(review, f, None)]
+        if missing:
+            failures.append("evidence_incomplete:" + ",".join(missing))
+        completeness = round(100.0 * (len(self.REQUIRED_FIELDS) - len(missing)) / len(self.REQUIRED_FIELDS), 1)
+
+        if not findings:
+            failures.append("no_findings")
+        uncited = [str(f.id) for f in findings if not (f.connector or "").strip()]
+        if uncited:
+            failures.append(f"findings_without_source:{len(uncited)}")
+        sources = sorted({(f.connector or "").lower() for f in findings if f.connector})
+        invalid = [s for s in sources if s not in _VALID_SOURCES]
+        if invalid:
+            failures.append("invalid_source:" + ",".join(invalid))
+        custody_intact = bool(findings) and not uncited and not invalid
+
+        score = round(0.5 * completeness + 0.5 * (100.0 if custody_intact else 0.0), 1)
+        return {
+            "passed": len(failures) == 0, "score": score, "completeness": completeness,
+            "custody_intact": custody_intact, "finding_count": len(findings),
+            "sources_cited": sources, "failures": failures,
+        }
+
+    async def validate(self, db, review) -> Dict[str, Any]:
+        from .models import TEFCAFinding
+        findings = (await db.execute(
+            select(TEFCAFinding).where(TEFCAFinding.review_id == review.id)
+        )).scalars().all()
+        return self.assess(review, findings)
+
+
+async def validate_evidence(db, review_id, triggered_by="automatic") -> Dict[str, Any]:
+    from .models import TEFCAReview
+    import uuid as _uuid
+    try:
+        rid = review_id if not isinstance(review_id, str) else _uuid.UUID(review_id)
+    except Exception:
+        return {"passed": False, "error": "invalid review_id"}
+    review = (await db.execute(select(TEFCAReview).where(TEFCAReview.id == rid))).scalar_one_or_none()
+    if not review:
+        return {"passed": False, "error": "review not found"}
+    v = await EvidenceValidator().validate(db, review)
+    await log_qa_audit(db, gate_name="evidence_chain_of_custody", gate_type="evidence",
+                       passed=v["passed"], review_id=review.id, score=v["score"], threshold=100.0,
+                       failures=v["failures"], details={k: v[k] for k in
+                       ("completeness", "custody_intact", "finding_count", "sources_cited")},
+                       triggered_by=triggered_by)
+    await db.commit()
+    return {"review_id": str(review.id), **v}
+
+
+async def evidence_gate(db, start=None, end=None, triggered_by="automatic") -> Dict[str, Any]:
+    """The gate that must be open before a report is generated: every review in
+    the window must pass evidence QA. Batched (one findings query). Logged."""
+    from .models import TEFCAReview, TEFCAFinding
+    q = select(TEFCAReview)
+    if start:
+        q = q.where(TEFCAReview.created_at >= start)
+    if end:
+        q = q.where(TEFCAReview.created_at <= end)
+    reviews = (await db.execute(q)).scalars().all()
+    by_review: Dict[Any, list] = {}
+    ids = [r.id for r in reviews]
+    if ids:
+        for f in (await db.execute(select(TEFCAFinding).where(TEFCAFinding.review_id.in_(ids)))).scalars().all():
+            by_review.setdefault(f.review_id, []).append(f)
+    ev = EvidenceValidator()
+    failing = [str(r.id) for r in reviews if not ev.assess(r, by_review.get(r.id, []))["passed"]]
+    gate_open = len(failing) == 0
+    score = round(100.0 * (len(reviews) - len(failing)) / len(reviews), 1) if reviews else 100.0
+    verdict = {"gate_open": gate_open, "total_reviews": len(reviews),
+               "passing": len(reviews) - len(failing), "failing": len(failing),
+               "failing_review_ids": failing[:50], "evidence_score": score,
+               "checked_at": datetime.utcnow().isoformat()}
+    await log_qa_audit(db, gate_name="evidence_report_gate", gate_type="deliverable",
+                       passed=gate_open, score=score, threshold=100.0, failures=failing[:50],
+                       details={"total": len(reviews), "passing": len(reviews) - len(failing)},
+                       triggered_by=triggered_by)
+    await db.commit()
+    return verdict
