@@ -217,9 +217,8 @@ CSV_COLUMNS = ["QHIN", "Entity Name", "Entity Type", "NPI", "UEI", "State",
 
 
 async def generate_csv_export(db, report_id) -> str:
-    """Render the reviews behind a report as a 12-column CSV. Note: tefca_reviews
-    does not store Entity Type or State, so those columns are best-effort
-    ('Participant' / '')."""
+    """Render the reviews behind a report as a 12-column CSV. Entity Type and
+    State come from the tefca_reviews.entity_type / entity_state columns."""
     report = (await db.execute(
         select(TEFCAReport).where(TEFCAReport.report_id == report_id)
     )).scalar_one_or_none()
@@ -242,7 +241,8 @@ async def generate_csv_export(db, report_id) -> str:
         fs = findings_by_review.get(r.id, [])
         connector_results = "; ".join(f"{(f.connector or '').lower()}={f.finding_type}" for f in fs)
         w.writerow([
-            r.qhin or "", r.entity_name or "", "Participant", r.npi or "", r.uei or "", "",
+            r.qhin or "", r.entity_name or "", (r.entity_type or ""), r.npi or "", r.uei or "",
+            (r.entity_state or ""),
             r.created_at.date().isoformat() if r.created_at else "",
             r.status or "", r.risk_level or "",
             len(fs), connector_results, _STATUS_MAP.get((r.status or "").lower(), "pending"),

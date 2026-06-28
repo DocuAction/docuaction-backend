@@ -340,6 +340,8 @@ class TEFCAReview(Base):
     reviewer_id = Column(String(255))
     qhin = Column(String(100))                         # QHIN attribution (RFQ Task 1)
     is_mock_data = Column(Boolean, default=False)      # MOCK rows: replace with real COR data
+    entity_type = Column(String(50))                   # participant / subparticipant
+    entity_state = Column(String(2))                   # 2-letter state code
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
