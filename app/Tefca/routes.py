@@ -32,6 +32,7 @@ from .connectors import SourceConnectorManager, SourceResult, _extract_npi, _ent
 from .validation_engine import ValidationEngine, EvidenceRecordGenerator
 from .mock_data import ALL_MOCK_ENTITIES, MOCK_STATS
 from . import review_engine
+from . import reporting
 from .models import (
     TEFCAEntity, TEFCAReviewCycle, TEFCAEvidenceRecord, TEFCASourceCache,
     TEFCAPriorityCase, TEFCAReport, TEFCAAnalystQueue,
@@ -1556,3 +1557,109 @@ async def list_sampling_runs(db: AsyncSession = Depends(get_db), user=Depends(re
             "created_at": c.created_at.isoformat() if c.created_at else None,
         } for c in rows],
     }
+
+
+# ─── Reporting: weekly + final reports, list, detail, CSV (TEFCA Task 3) ─────
+# Mounted at /api/tefca/reports/* on the dashboard router. Distinct from the
+# legacy /api/v1/tefca/reports/{cycle_id} D3.1/D3.2 endpoints (which aggregate
+# tefca_evidence_records). These aggregate tefca_reviews via the reporting module.
+
+class WeeklyReportRequest(BaseModel):
+    week_start: Optional[str] = None
+    week_end: Optional[str] = None
+
+
+class FinalReportRequest(BaseModel):
+    period_start: Optional[str] = None
+    period_end: Optional[str] = None
+
+
+@tefca_dashboard_router.post("/reports/weekly", summary="Generate a weekly progress report (SOW Task 3)")
+async def create_weekly_report(
+    request: WeeklyReportRequest, http: Request,
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("qalead")),
+):
+    end = _parse_date(request.week_end) if request.week_end else datetime.utcnow()
+    start = _parse_date(request.week_start) if request.week_start else (end - timedelta(days=7))
+    report = await reporting.generate_weekly_report(db, start, end, generated_by=str(user.email))
+    await log_tefca_event(
+        db, user=user, action="WEEKLY_REPORT_GENERATED", resource_type="tefca_report",
+        resource_id=report["report_id"], ip_address=_client_ip(http),
+        details={"total_reviews": report["total_reviews"]},
+    )
+    await db.commit()
+    return report
+
+
+@tefca_dashboard_router.post("/reports/final", summary="Generate the final retrospective report (SOW Task 3)")
+async def create_final_report(
+    request: FinalReportRequest, http: Request,
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("program_manager")),
+):
+    end = _parse_date(request.period_end) if request.period_end else datetime.utcnow()
+    start = _parse_date(request.period_start) if request.period_start else (end - timedelta(days=120))
+    report = await reporting.generate_final_report(db, start, end, generated_by=str(user.email))
+    await log_tefca_event(
+        db, user=user, action="FINAL_REPORT_GENERATED", resource_type="tefca_report",
+        resource_id=report["report_id"], ip_address=_client_ip(http),
+        details={"total_reviews": report["total_reviews"]},
+    )
+    await db.commit()
+    return report
+
+
+@tefca_dashboard_router.get("/reports", summary="List reports (filters: type, start, end)")
+async def list_tefca_reports(
+    type: Optional[str] = Query(None), start: Optional[str] = Query(None), end: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+):
+    q = select(TEFCAReport).order_by(TEFCAReport.generated_at.desc())
+    if type:
+        q = q.where(TEFCAReport.report_type == type)
+    if start:
+        q = q.where(TEFCAReport.generated_at >= _parse_date(start))
+    if end:
+        q = q.where(TEFCAReport.generated_at <= _parse_date(end))
+    rows = (await db.execute(q)).scalars().all()
+    return {
+        "total": len(rows),
+        "reports": [{
+            "report_id": str(r.report_id), "report_type": r.report_type,
+            "period_start": r.period_start.isoformat() if r.period_start else None,
+            "period_end": r.period_end.isoformat() if r.period_end else None,
+            "generated_by": r.generated_by,
+            "generated_at": r.generated_at.isoformat() if r.generated_at else None,
+            "total_reviews": (r.report_data or {}).get("total_reviews"),
+        } for r in rows],
+    }
+
+
+@tefca_dashboard_router.get("/reports/{report_id}", summary="Full report detail")
+async def get_tefca_report(
+    report_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+):
+    rid = _parse_uuid(report_id)
+    r = (await db.execute(select(TEFCAReport).where(TEFCAReport.report_id == rid))).scalar_one_or_none()
+    if not r:
+        raise HTTPException(404, "Report not found")
+    return {
+        "report_id": str(r.report_id), "report_type": r.report_type,
+        "period_start": r.period_start.isoformat() if r.period_start else None,
+        "period_end": r.period_end.isoformat() if r.period_end else None,
+        "generated_by": r.generated_by,
+        "generated_at": r.generated_at.isoformat() if r.generated_at else None,
+        "report_data": r.report_data,
+    }
+
+
+@tefca_dashboard_router.get("/reports/{report_id}/csv", summary="Download report as 12-column CSV")
+async def get_tefca_report_csv(
+    report_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+):
+    rid = _parse_uuid(report_id)
+    r = (await db.execute(select(TEFCAReport).where(TEFCAReport.report_id == rid))).scalar_one_or_none()
+    if not r:
+        raise HTTPException(404, "Report not found")
+    csv_text = await reporting.generate_csv_export(db, rid)
+    return Response(content=csv_text, media_type="text/csv",
+                    headers={"Content-Disposition": f"attachment; filename=tefca_report_{report_id}.csv"})
