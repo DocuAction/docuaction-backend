@@ -1382,45 +1382,6 @@ FROM (VALUES ('nppes'),('oig_leie'),('pecos'),('sam_gov'),
 """
 
 
-@tefca_dashboard_router.get("/debug/sam-test", summary="[TEMP DIAGNOSTIC] raw SAM.gov key probe")
-async def debug_sam_test():
-    """TEMPORARY diagnostic — remove after SAM connector is verified. Hits the raw
-    SAM.gov API from the prod process to isolate key/entitlement vs param issues."""
-    import os
-    import httpx
-    key = os.getenv("SAM_GOV_API_KEY", "")
-    results: dict = {}
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            r = await client.get(
-                f"https://api.sam.gov/entity-information/v3/entities?api_key={key}"
-                "&samRegistered=Yes&registrationStatus=A&limit=1"
-            )
-            results["entity_v3"] = {"status": r.status_code, "body": r.text[:300]}
-    except Exception as e:
-        results["entity_v3"] = {"error": str(e)}
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            r = await client.get(
-                f"https://api.sam.gov/entity-information/v2/exclusions?api_key={key}&limit=1"
-            )
-            results["exclusions_v2"] = {"status": r.status_code, "body": r.text[:300]}
-    except Exception as e:
-        results["exclusions_v2"] = {"error": str(e)}
-    # Also test the exact params the connector probe() uses today.
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            r = await client.get(
-                "https://api.sam.gov/entity-information/v3/entities",
-                params={"api_key": key, "samRegistrationStatus": "A", "page": 0, "size": 1},
-            )
-            results["entity_v3_probe_params"] = {"status": r.status_code, "body": r.text[:300]}
-    except Exception as e:
-        results["entity_v3_probe_params"] = {"error": str(e)}
-    results["key_info"] = {"length": len(key), "prefix": key[:8] if key else "EMPTY"}
-    return results
-
-
 @tefca_dashboard_router.post("/demo/run-cycle",
                              summary="[admin] Run one QA validation cycle on a mock review (demo)")
 async def demo_run_cycle(db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
