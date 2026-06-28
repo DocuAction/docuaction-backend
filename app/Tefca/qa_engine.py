@@ -687,3 +687,95 @@ async def statistical_qa(db, triggered_by="manual"):
           "within_target_margin": ((hi - lo) / 2 <= 0.05) if total else True}
     return {"sampling_validation": sampling, "inter_rater_reliability": irr,
             "confidence_interval": ci, "computed_at": datetime.utcnow().isoformat()}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# QA Task 4 — Regression / golden-record testing. Additive.
+# Known-answer cases with CONTROLLED source results exercise the 4-bucket
+# classification logic deterministically; any mismatch = classification drift.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _golden_cases():
+    from .connectors import SourceResult
+
+    def entity(name="Acme Health System", npi="1234567893", state="OH", with_npi=True):
+        ident = [{"system": "http://hl7.org/fhir/sid/us-npi", "value": npi}] if with_npi else []
+        return {"id": "golden", "name": name, "identifier": ident,
+                "address": [{"state": state, "postalCode": "43004", "line": ["1 Main St"]}],
+                "type": [{"coding": [{"code": "PARTICIPANT"}]}]}
+
+    def clean_sources(name="Acme Health System", state="OH"):
+        return {
+            "nppes": SourceResult.ok("NPPES", {"found": True, "status": "ACTIVE", "legal_name": name,
+                "enumeration_type": "NPI-2", "addresses": [{"address_purpose": "LOCATION", "state": state,
+                "postal_code": "43004", "address_1": "1 Main St"}]}, {}),
+            "leie_npi": SourceResult.ok("OIG_LEIE", {"excluded": False, "active_exclusions": [], "historical_exclusions": []}, {}),
+            "sam_entity": SourceResult.ok("SAM_GOV", {"found": True, "registration_current": True, "excluded": False}, {}),
+            "sam_exclusion": SourceResult.ok("SAM_GOV", {"found": True, "registration_current": True, "excluded": False}, {}),
+            "pecos": SourceResult.ok("PECOS", {"found": True, "payment_suspension": None}, {}),
+        }
+
+    cases = []
+    # B1 — clean
+    cases.append(("clean_no_discrepancy", entity(), clean_sources(), 1))
+    # B2 — historical (resolved) LEIE exclusion
+    e, sr = entity(), clean_sources()
+    sr["leie_npi"] = SourceResult.ok("OIG_LEIE", {"excluded": False, "active_exclusions": [], "historical_exclusions": [{"x": 1}]}, {})
+    cases.append(("leie_historical_resolved", e, sr, 2))
+    # B3 — address state conflict (submitted OH vs NPPES NY)
+    e, sr = entity(state="OH"), clean_sources(state="NY")
+    cases.append(("address_state_conflict", e, sr, 3))
+    # B3 — NPI missing
+    cases.append(("npi_missing", entity(with_npi=False), clean_sources(), 3))
+    # B4 — active OIG LEIE exclusion
+    e, sr = entity(), clean_sources()
+    sr["leie_npi"] = SourceResult.ok("OIG_LEIE", {"excluded": True, "active_exclusions": [{"x": 1}], "historical_exclusions": []}, {})
+    cases.append(("leie_active_exclusion", e, sr, 4))
+    # B4 — NPI not found in NPPES
+    e, sr = entity(), clean_sources()
+    sr["nppes"] = SourceResult.ok("NPPES", {"found": False}, {})
+    cases.append(("npi_not_found", e, sr, 4))
+    # B4 — PECOS payment suspension
+    e, sr = entity(), clean_sources()
+    sr["pecos"] = SourceResult.ok("PECOS", {"found": True, "payment_suspension": True}, {})
+    cases.append(("pecos_payment_suspension", e, sr, 4))
+    # B4 — SAM.gov active debarment
+    e, sr = entity(), clean_sources()
+    deb = SourceResult.ok("SAM_GOV", {"found": True, "registration_current": True, "excluded": True}, {})
+    sr["sam_entity"], sr["sam_exclusion"] = deb, deb
+    cases.append(("sam_active_debarment", e, sr, 4))
+    return cases
+
+
+def golden_record_count():
+    return len(_golden_cases())
+
+
+async def run_golden_regression(db=None, triggered_by="automatic") -> Dict[str, Any]:
+    """Run all golden known-answer cases through the live ValidationEngine and
+    compare to the expected bucket. Any mismatch = classification drift."""
+    from .validation_engine import ValidationEngine
+    eng = ValidationEngine()
+    results = []
+    for name, ent, sr, expected in _golden_cases():
+        v = eng.validate(ent, sr)
+        actual = v["bucket"]
+        ok = (actual == expected) and not v.get("indeterminate")
+        results.append({"case": name, "expected_bucket": expected, "actual_bucket": actual,
+                        "passed": ok, "finding_codes": v["finding_codes"],
+                        "indeterminate": bool(v.get("indeterminate"))})
+    total = len(results)
+    passed = sum(1 for r in results if r["passed"])
+    failed = total - passed
+    drift = failed > 0
+    summary = {"total": total, "passed": passed, "failed": failed, "drift_detected": drift,
+               "pass_rate": round(100.0 * passed / total, 1) if total else 0.0,
+               "failing_cases": [r["case"] for r in results if not r["passed"]], "cases": results,
+               "checked_at": datetime.utcnow().isoformat()}
+    if db is not None:
+        await log_qa_audit(db, gate_name="golden_record_regression", gate_type="regression",
+                           passed=not drift, score=summary["pass_rate"], threshold=100.0,
+                           failures=summary["failing_cases"],
+                           details={"total": total, "passed": passed, "failed": failed}, triggered_by=triggered_by)
+        await db.commit()
+    return summary

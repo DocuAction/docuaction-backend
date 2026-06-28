@@ -109,8 +109,13 @@ async def startup():
         async with _qa_sm() as _qa_s:
             await qa_engine.ensure_qa_table(_qa_s)
             _readiness = await qa_engine.PlatformReadinessCheck().run(_qa_s, skip_http=True)
+            _golden = await qa_engine.run_golden_regression(_qa_s)
         logger.info(f"TEFCA QA readiness: ready={_readiness['ready']} score={_readiness['score']} "
                     + ", ".join(f"{c['name']}={'ok' if c['passed'] else 'FAIL'}" for c in _readiness['checks']))
+        if _golden['drift_detected']:
+            logger.error(f"TEFCA QA GOLDEN-RECORD DRIFT DETECTED: {_golden['failing_cases']}")
+        else:
+            logger.info(f"TEFCA QA golden regression: {_golden['passed']}/{_golden['total']} passed (no drift)")
     except Exception as e:
         logger.warning(f"TEFCA QA startup check skipped: {e}")
 

@@ -1958,3 +1958,16 @@ async def qa_inter_rater(
 @tefca_dashboard_router.get("/qa/statistical", summary="Combined statistical QA (sampling + IRR + CI)")
 async def qa_statistical(db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
     return await qa_engine.statistical_qa(db, triggered_by="manual")
+
+
+# ─── QA regression / golden-record endpoints (QA Task 4) ─────────────────────
+
+@tefca_dashboard_router.get("/qa/golden-records", summary="List the golden known-answer test cases")
+async def qa_golden_records(user=Depends(require_role("reviewer"))):
+    cases = [{"case": name, "expected_bucket": expected} for (name, _e, _sr, expected) in qa_engine._golden_cases()]
+    return {"total": len(cases), "golden_records": cases}
+
+
+@tefca_dashboard_router.get("/qa/regression", summary="Run golden-record regression; detect classification drift")
+async def qa_regression(db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
+    return await qa_engine.run_golden_regression(db, triggered_by="manual")
