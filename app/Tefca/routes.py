@@ -1935,3 +1935,26 @@ async def qa_report_gate(
 @tefca_dashboard_router.get("/qa/evidence-summary", summary="Evidence completeness across all reviews")
 async def qa_evidence_summary(db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
     return await qa_engine.evidence_gate(db, None, None, triggered_by="manual")
+
+
+# ─── QA statistical endpoints (QA Task 3) ────────────────────────────────────
+
+@tefca_dashboard_router.get("/qa/sampling-validation", summary="Sampling validation vs Cochran @95% CI")
+async def qa_sampling_validation(
+    population: int = Query(94231), confidence: float = Query(0.95), margin: float = Query(0.05),
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+):
+    return await qa_engine.validate_sampling(db, population, confidence, margin, triggered_by="manual")
+
+
+@tefca_dashboard_router.get("/qa/inter-rater", summary="Inter-rater reliability (Cohen's kappa)")
+async def qa_inter_rater(
+    sample_size: int = Query(20), seed: int = Query(42),
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+):
+    return await qa_engine.inter_rater_reliability(db, sample_size, seed, triggered_by="manual")
+
+
+@tefca_dashboard_router.get("/qa/statistical", summary="Combined statistical QA (sampling + IRR + CI)")
+async def qa_statistical(db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
+    return await qa_engine.statistical_qa(db, triggered_by="manual")

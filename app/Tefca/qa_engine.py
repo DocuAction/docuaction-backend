@@ -541,3 +541,149 @@ async def evidence_gate(db, start=None, end=None, triggered_by="automatic") -> D
                        triggered_by=triggered_by)
     await db.commit()
     return verdict
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# QA Task 3 — Statistical QA: sampling validation (vs Cochran @95% CI),
+# inter-rater reliability (Cohen's kappa), confidence-interval checks. Additive.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_STAT_CATS = ["no_discrepancy", "minor_administrative", "inexplicable", "non_compliant"]
+_SEVERITY_TO_CATEGORY = {"critical": "non_compliant", "high": "inexplicable",
+                         "medium": "minor_administrative", "low": "no_discrepancy"}
+
+
+def _z_for(confidence):
+    return 2.576 if confidence >= 0.99 else 1.96 if confidence >= 0.95 else 1.645
+
+
+def cochran_n(N, confidence=0.95, margin=0.05):
+    import math
+    if N <= 0:
+        return 0
+    z, p = _z_for(confidence), 0.5
+    n0 = (z * z * p * (1 - p)) / (margin * margin)
+    return min(N, math.ceil(n0 / (1 + (n0 - 1) / N)))
+
+
+def achieved_margin(n, N, confidence=0.95, p=0.5):
+    """Invert Cochran: the margin of error actually achieved by a sample of n from N."""
+    import math
+    if n <= 0 or N <= 0:
+        return None
+    if n >= N:
+        return 0.0
+    z = _z_for(confidence)
+    n0 = n * (N - 1) / (N - n)
+    if n0 <= 0:
+        return None
+    return round(math.sqrt((z * z * p * (1 - p)) / n0), 4)
+
+
+def wilson_ci(successes, n, confidence=0.95):
+    import math
+    if n == 0:
+        return [0.0, 0.0]
+    z, p = _z_for(confidence), successes / n
+    denom = 1 + z * z / n
+    centre = (p + z * z / (2 * n)) / denom
+    half = (z * math.sqrt((p * (1 - p) + z * z / (4 * n)) / n)) / denom
+    return [round(max(0.0, centre - half), 4), round(min(1.0, centre + half), 4)]
+
+
+def cohens_kappa(matrix, categories):
+    """Cohen's kappa from a confusion matrix dict[(primary, secondary)] -> count."""
+    n = sum(matrix.values())
+    if n == 0:
+        return None
+    po = sum(matrix.get((c, c), 0) for c in categories) / n
+    row = {c: sum(matrix.get((c, c2), 0) for c2 in categories) for c in categories}
+    col = {c: sum(matrix.get((c2, c), 0) for c2 in categories) for c in categories}
+    pe = sum((row[c] / n) * (col[c] / n) for c in categories)
+    if pe >= 1.0:
+        return 1.0
+    return round((po - pe) / (1 - pe), 4)
+
+
+async def validate_sampling(db, population=94231, confidence=0.95, margin=0.05, triggered_by="automatic"):
+    from .models import TEFCAReview, TEFCAReviewCycle
+    from sqlalchemy import func
+    actual = (await db.execute(select(func.count()).select_from(TEFCAReview))).scalar() or 0
+    expected = cochran_n(population, confidence, margin)
+    runs = (await db.execute(select(TEFCAReviewCycle))).scalars().all()
+    run_results = [{"id": str(r.cycle_id), "sample_size": r.total_entities_sampled or 0,
+                    "expected": expected, "meets_expected": (r.total_entities_sampled or 0) >= expected,
+                    "confidence": r.sample_confidence_level} for r in runs]
+    meets = actual >= expected
+    result = {
+        "population": population, "confidence_level": confidence, "target_margin": margin,
+        "expected_sample_size": expected, "actual_reviews": actual, "meets_expected_sample": meets,
+        "achieved_margin_of_error": achieved_margin(actual, population, confidence),
+        "total_sampling_runs": len(runs), "sampling_runs_validated": run_results,
+        "note": "Mock dataset is a subset; a production run targets the full 383 sample.",
+    }
+    await log_qa_audit(db, gate_name="sampling_validation", gate_type="statistical", passed=meets,
+                       score=round(min(100.0, 100.0 * actual / expected), 1) if expected else 100.0,
+                       threshold=100.0, failures=[] if meets else ["sample_below_expected"],
+                       details=result, triggered_by=triggered_by)
+    await db.commit()
+    return result
+
+
+def _secondary_rating(findings):
+    """Independent 'second rater' disposition derived from finding severities."""
+    order = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+    if not findings:
+        return "no_discrepancy"
+    worst = max(findings, key=lambda f: order.get((f.severity or "low").lower(), 0))
+    return _SEVERITY_TO_CATEGORY.get((worst.severity or "low").lower(), "no_discrepancy")
+
+
+async def inter_rater_reliability(db, sample_size=20, seed=42, triggered_by="automatic"):
+    import random
+    from .models import TEFCAReview, TEFCAFinding
+    reviews = (await db.execute(select(TEFCAReview))).scalars().all()
+    rng = random.Random(seed)
+    subset = reviews if len(reviews) <= sample_size else rng.sample(reviews, sample_size)
+    ids = [r.id for r in subset]
+    by_review = {}
+    if ids:
+        for f in (await db.execute(select(TEFCAFinding).where(TEFCAFinding.review_id.in_(ids)))).scalars().all():
+            by_review.setdefault(f.review_id, []).append(f)
+    matrix, agree = {}, 0
+    for r in subset:
+        primary = (r.status or "").lower()
+        if primary not in _STAT_CATS:
+            primary = "no_discrepancy"
+        secondary = _secondary_rating(by_review.get(r.id, []))
+        matrix[(primary, secondary)] = matrix.get((primary, secondary), 0) + 1
+        if primary == secondary:
+            agree += 1
+    n = len(subset)
+    kappa = cohens_kappa(matrix, _STAT_CATS)
+    interp = ("almost perfect" if kappa and kappa >= 0.81 else "substantial" if kappa and kappa >= 0.61
+              else "moderate" if kappa and kappa >= 0.41 else "fair" if kappa and kappa >= 0.21 else "slight/poor")
+    result = {"sample_size": n, "percent_agreement": round(100.0 * agree / n, 1) if n else None,
+              "cohens_kappa": kappa, "interpretation": interp, "target_kappa": 0.80,
+              "meets_target": bool(kappa is not None and kappa >= 0.80), "seed": seed}
+    await log_qa_audit(db, gate_name="inter_rater_reliability", gate_type="statistical",
+                       passed=result["meets_target"], score=(round(kappa * 100, 1) if kappa else 0.0),
+                       threshold=80.0, failures=[] if result["meets_target"] else ["kappa_below_target"],
+                       details=result, triggered_by=triggered_by)
+    await db.commit()
+    return result
+
+
+async def statistical_qa(db, triggered_by="manual"):
+    from .models import TEFCAReview
+    from sqlalchemy import func
+    sampling = await validate_sampling(db, triggered_by=triggered_by)
+    irr = await inter_rater_reliability(db, triggered_by=triggered_by)
+    total = (await db.execute(select(func.count()).select_from(TEFCAReview))).scalar() or 0
+    nc = (await db.execute(select(func.count()).select_from(TEFCAReview).where(TEFCAReview.status == "non_compliant"))).scalar() or 0
+    lo, hi = wilson_ci(nc, total)
+    ci = {"metric": "non_compliance_rate", "point_estimate": round(nc / total, 4) if total else 0.0,
+          "n": total, "wilson_95_ci": [lo, hi], "ci_half_width": round((hi - lo) / 2, 4),
+          "within_target_margin": ((hi - lo) / 2 <= 0.05) if total else True}
+    return {"sampling_validation": sampling, "inter_rater_reliability": irr,
+            "confidence_interval": ci, "computed_at": datetime.utcnow().isoformat()}
