@@ -413,7 +413,7 @@ class SAMGovConnector:
         try:
             resp = await _get_with_retry(
                 self.BASE_URL,
-                params={"api_key": self.api_key, "samRegistrationStatus": "A", "page": 0, "size": 1},
+                params={"api_key": self.api_key, "registrationStatus": "A", "page": 0, "size": 1},
                 headers=HTTP_HEADERS, timeout=HEALTH_TIMEOUT_SECONDS,
             )
             return resp.status_code == 200
