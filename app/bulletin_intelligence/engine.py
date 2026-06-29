@@ -415,6 +415,15 @@ MAJOR_OUTLET_FEEDS = [
     ("https://www.engadget.com/rss.xml",                                    "Engadget", False),
     ("https://www.cnet.com/rss/news/",                                      "CNET", False),
     ("https://feeds.npr.org/1019/rss.xml",                                  "NPR", False),
+    # Added 2026-06-29 for higher volume — broad sources, so FCC-relevance gated
+    # (same _mentions_fcc filter as the other major-outlet feeds; non-FCC items dropped).
+    ("https://www.techmeme.com/feed.xml",                                   "Techmeme", False),
+    ("https://news.google.com/rss/search?q=FCC+OR+%22Federal+Communications+Commission%22&hl=en-US&gl=US&ceid=US:en", "Google News", False),
+    ("https://news.google.com/rss/search?q=FCC+broadband+OR+spectrum+OR+telecommunications&hl=en-US&gl=US&ceid=US:en", "Google News", False),
+    ("https://news.google.com/rss/search?q=FCC+5G+OR+wireless+OR+spectrum+auction&hl=en-US&gl=US&ceid=US:en", "Google News", False),
+    ("https://news.google.com/rss/search?q=%22Federal+Communications+Commission%22+regulation+OR+policy&hl=en-US&gl=US&ceid=US:en", "Google News", False),
+    ("https://news.google.com/rss/search?q=FCC+commissioner+OR+Carr+OR+Starks&hl=en-US&gl=US&ceid=US:en", "Google News", False),
+    ("https://hnrss.org/newest?q=FCC",                                      "Hacker News", False),
     # Broadcast/radio trade (free RSS) — FCC-relevance filtered.
     ("https://radioink.com/feed/",                                          "Radio Ink", False),
     ("https://current.org/feed/",                                          "Current", False),
@@ -575,6 +584,9 @@ FCC_RSS_FEEDS = {
     "wireless_mobile": [
         ("https://www.fiercewireless.com/rss/xml", "FierceWireless"),
         ("https://www.rcrwireless.com/feed", "RCR Wireless"),
+        # Added 2026-06-29 for higher volume — telecom-trade feeds (free, no key).
+        ("https://www.fierce-network.com/rss/xml", "Fierce Network"),
+        ("https://insidetowers.com/feed/", "Inside Towers"),
     ],
     "media_broadcasting": [
         ("https://www.radioworld.com/feed", "Radio World"),
