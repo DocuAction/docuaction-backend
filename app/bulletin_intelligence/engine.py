@@ -369,12 +369,29 @@ def _is_excluded_domain(url: str) -> bool:
 _FCC_RELEVANCE_TERMS = (
     "fcc", "federal communications commission", "f.c.c.",
     "brendan carr", "anna gomez", "olivia trusty", "geoffrey starks", "nathan simington",
+    # Expanded 2026-06-29 for broader FCC coverage from Google News / broad outlet
+    # feeds. Substring-matched (safe because each is specific enough on its own).
+    "lifeline", "affordable connectivity", "universal service fund",
+    "rip and replace", "huawei", "spectrum auction", "space bureau",
+    "ngso", "earth station", "data breach", "spectrum pipeline", "digital equity",
+    "e-rate", "robocall", "spoofing", "media ownership", "broadcast",
+    "tower siting", "small cell", "atsc", "nextgen tv", "emergency alert",
+    "tcpa", "pole attachment", "cable franchise",
 )
+
+# Short abbreviations matched as WHOLE WORDS only — naive substring matching would
+# false-positive (e.g. "eas" in "release"/"season", "acp" in "backpack", "bead" in
+# "beads", "usf" in "useful") and effectively disable the gate. Same terms the
+# client asked for (EAS, ACP, USF, BEAD, ZTE), just boundary-safe.
+_FCC_RELEVANCE_WORD_TERMS = ("eas", "acp", "usf", "bead", "zte")
+_FCC_WORD_RE = re.compile(r"\b(?:" + "|".join(_FCC_RELEVANCE_WORD_TERMS) + r")\b")
 
 
 def _mentions_fcc(text: str) -> bool:
     t = (text or "").lower()
-    return any(term in t for term in _FCC_RELEVANCE_TERMS)
+    if any(term in t for term in _FCC_RELEVANCE_TERMS):
+        return True
+    return bool(_FCC_WORD_RE.search(t))
 
 
 # Major national outlets the client wants represented on big FCC stories (e.g. the
