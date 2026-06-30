@@ -485,6 +485,97 @@ async def download_bulletin_excel(
     )
 
 
+@router.get("/briefings/{briefing_id}/excel")
+async def download_briefing_excel(briefing_id: str):
+    """Download a past briefing (from Run History) as the SAME QA Excel sheet as the
+    Daily Briefing — identical columns: #, Category, Story Group, Relationship,
+    Title, Summary, Source, Subscription Required, Relevance, URL.
+
+    The briefing only stores its rendered HTML, so we rehydrate each story's full
+    metadata from the archive by matching the URLs in that HTML. Falls back to the
+    agency's current top articles if an old briefing's stories have aged out, so the
+    sheet is never empty.
+    """
+    try:
+        from app.bulletin_intelligence.engine import (
+            get_briefing, get_briefing_html, _articles, _agencies,
+            _cluster_stories, _section_of, AGT_SECTIONS,
+        )
+    except ImportError:
+        raise HTTPException(500, "Bulletin engine not available")
+
+    briefing = get_briefing(briefing_id)
+    if not briefing:
+        raise HTTPException(404, f"Briefing {briefing_id} not found")
+    agency_id = briefing.get("agency_id")
+    agency = _agencies.get(agency_id)
+    if not agency:
+        raise HTTPException(404, f"Agency {agency_id} not found")
+
+    # 1) Extract the story URLs from the stored briefing HTML, in document order.
+    html = get_briefing_html(briefing_id) or ""
+    seen, ordered_urls = set(), []
+    for u in re.findall(r'href="(https?://[^"#]+)"', html):
+        if "agtbi.com" in u:            # skip the footer/brand link
+            continue
+        if u in seen:
+            continue
+        seen.add(u)
+        ordered_urls.append(u)
+
+    # 2) Rehydrate full metadata from the archive by URL.
+    by_url = {}
+    for a in _articles.values():
+        if getattr(a, "agency_id", None) == agency_id and getattr(a, "url", ""):
+            by_url.setdefault(a.url, a)
+    arts = [by_url[u] for u in ordered_urls if u in by_url]
+
+    # 3) Fallback for old briefings whose stories have aged out of the archive.
+    if not arts:
+        cap = max(int(briefing.get("article_count") or 0), 50)
+        arts = sorted(
+            [a for a in _articles.values()
+             if a.agency_id == agency_id and _is_valid_article(a)],
+            key=lambda a: getattr(a, "relevance_score", 0) or 0, reverse=True,
+        )[:cap]
+    if not arts:
+        raise HTTPException(404, "No articles available to export for this briefing")
+
+    # 4) Same clustering + ordering + render as the Daily Briefing Excel.
+    section_index = {s: i for i, s in enumerate(AGT_SECTIONS)}
+
+    def _sec(a):
+        try:
+            return _section_of(a)
+        except Exception:
+            return "General"
+
+    ordered = sorted(arts, key=lambda a: getattr(a, "relevance_score", 0) or 0, reverse=True)
+    try:
+        clusters = _cluster_stories(ordered)
+    except Exception as e:
+        logger.warning(f"Briefing Excel clustering unavailable, flat list: {e}")
+        clusters = [[a] for a in ordered]
+    clusters.sort(key=lambda m: (section_index.get(_sec(m[0]), 99),
+                                 -(getattr(m[0], "relevance_score", 0) or 0)))
+
+    try:
+        buffer = _render_excel_workbook(agency, clusters, _sec)
+    except ImportError:
+        raise HTTPException(500, "openpyxl not installed. Add 'openpyxl' to requirements.txt")
+
+    date_tag = re.sub(r"[^0-9A-Za-z]+", "", str(briefing.get("briefing_date", "") or ""))[:16]
+    fname = f"FCC_Briefing_QA_{date_tag or briefing_id}.xlsx"
+    total = sum(len(m) for m in clusters)
+    logger.info(f"Briefing Excel: id={briefing_id} rows={total} groups={len(clusters)}")
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={fname}"},
+    )
+
+
 def _render_excel_workbook(agency, clusters, sec_of):
     """Build the QA spreadsheet from clustered articles. Each cluster = one primary
     story plus its similar/duplicate coverage, kept adjacent and sharing a Story
