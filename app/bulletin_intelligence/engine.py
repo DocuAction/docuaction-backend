@@ -752,12 +752,19 @@ async def ingest_rss(agency: AgencyConfig, lookback_hours: int = 24) -> list:
     for url, outlet, paywalled in MAJOR_OUTLET_FEEDS:
         all_feeds.append((url, outlet, "other", True, paywalled))
 
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        for feed_url, outlet, topic, relevance_required, paywalled in all_feeds:
+    # Fetch all feeds CONCURRENTLY (bounded). Sequential fetching over 100+ feeds at
+    # a 30s timeout meant one slow/dead feed stalled the whole cycle for minutes;
+    # with the expanded source list that pushed cycles past 15 min. asyncio is
+    # single-threaded so the shared `seen`/`articles` updates below stay atomic
+    # (no await between the dedup check and the append).
+    sem = asyncio.Semaphore(12)
+
+    async def _process_feed(client, feed_url, outlet, topic, relevance_required, paywalled):
+        async with sem:
             try:
-                resp = await client.get(feed_url, headers=HTTP_HEADERS, follow_redirects=True)
+                resp = await client.get(feed_url, headers=HTTP_HEADERS, follow_redirects=True, timeout=12.0)
                 if resp.status_code != 200:
-                    continue
+                    return
 
                 root = ET.fromstring(resp.text)
                 ns = {"atom": "http://www.w3.org/2005/Atom"}
@@ -857,6 +864,12 @@ async def ingest_rss(agency: AgencyConfig, lookback_hours: int = 24) -> list:
 
             except Exception as e:
                 logger.error(f"RSS error {feed_url}: {e}")
+
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        await asyncio.gather(*[
+            _process_feed(client, u, o, t, rr, pw)
+            for (u, o, t, rr, pw) in all_feeds
+        ])
 
     logger.info(f"RSS: {len(articles)} articles for {agency.agency_id}")
     return articles
