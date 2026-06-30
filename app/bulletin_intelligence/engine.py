@@ -720,7 +720,7 @@ async def _resolve_google_news_url(client, url: str) -> str:
     if "news.google.com" not in (url or ""):
         return url
     try:
-        r = await client.head(url, headers=HTTP_HEADERS, follow_redirects=True, timeout=8.0)
+        r = await client.head(url, headers=HTTP_HEADERS, follow_redirects=True, timeout=5.0)
         final = str(r.url)
         if final and "news.google.com" not in final:
             return final
@@ -763,9 +763,24 @@ async def ingest_rss(agency: AgencyConfig, lookback_hours: int = 24) -> list:
                 ns = {"atom": "http://www.w3.org/2005/Atom"}
 
                 # Handle both RSS and Atom feeds
-                items = root.findall(".//item") or root.findall(".//atom:entry", ns)
+                items = (root.findall(".//item") or root.findall(".//atom:entry", ns))[:10]
 
-                for item in items[:10]:
+                # Pre-resolve Google News redirect links CONCURRENTLY (not per-item
+                # sequentially — that serialized ~170 HEAD calls and made each cycle
+                # take 15-20+ min). Bounded to ~one HEAD timeout per feed. Non-Google
+                # feeds skip this entirely (helper returns instantly).
+                _raw_links = []
+                for item in items:
+                    _raw_links.append((
+                        getattr(item.find("link"), "text", "") or
+                        (item.find("atom:link", ns).get("href") if item.find("atom:link", ns) is not None else "") or ""
+                    ).strip())
+                _link_map = {}
+                if any("news.google.com" in (lk or "") for lk in _raw_links):
+                    _resolved = await asyncio.gather(*[_resolve_google_news_url(client, lk) for lk in _raw_links])
+                    _link_map = {raw: res for raw, res in zip(_raw_links, _resolved)}
+
+                for item in items:
                     # Extract fields handling both RSS and Atom
                     title = (
                         getattr(item.find("title"), "text", "") or
@@ -791,9 +806,9 @@ async def ingest_rss(agency: AgencyConfig, lookback_hours: int = 24) -> list:
                     if not title or not link:
                         continue
 
-                    # Resolve Google News redirect links to the real article URL so
+                    # Use the pre-resolved real article URL for Google News links so
                     # cross-feed dedup works (same story via Google News + direct feed).
-                    link = await _resolve_google_news_url(client, link)
+                    link = _link_map.get(link, link)
 
                     # Client-excluded outlets (e.g. techdirt.com) never enter.
                     if _is_excluded_domain(link):
