@@ -377,13 +377,20 @@ _FCC_RELEVANCE_TERMS = (
     "e-rate", "robocall", "spoofing", "media ownership", "broadcast",
     "tower siting", "small cell", "atsc", "nextgen tv", "emergency alert",
     "tcpa", "pole attachment", "cable franchise",
+    # Expanded 2026-06-30 (URGENT volume push) — broaden the gate so more FCC-adjacent
+    # stories from the broad outlet / Google News feeds pass. ADD-only; existing kept.
+    "spectrum", "broadband", "telecom", "telecommunications", "wireless", "5g", "6g",
+    "net neutrality", "open internet", "universal service", "pirate radio",
+    "enforcement action", "section 230", "content moderation", "ng911", "satellite",
+    "starlink", "spacex", "commissioner", "gomez", "c-band", "cbrs",
 )
 
 # Short abbreviations matched as WHOLE WORDS only — naive substring matching would
 # false-positive (e.g. "eas" in "release"/"season", "acp" in "backpack", "bead" in
-# "beads", "usf" in "useful") and effectively disable the gate. Same terms the
-# client asked for (EAS, ACP, USF, BEAD, ZTE), just boundary-safe.
-_FCC_RELEVANCE_WORD_TERMS = ("eas", "acp", "usf", "bead", "zte")
+# "beads", "usf" in "useful", "carr" in "carrier"/"carry") and effectively disable
+# the gate. Same terms the client asked for (EAS, ACP, USF, BEAD, ZTE, Carr),
+# just boundary-safe.
+_FCC_RELEVANCE_WORD_TERMS = ("eas", "acp", "usf", "bead", "zte", "carr")
 _FCC_WORD_RE = re.compile(r"\b(?:" + "|".join(_FCC_RELEVANCE_WORD_TERMS) + r")\b")
 
 
@@ -447,6 +454,51 @@ MAJOR_OUTLET_FEEDS = [
     # (Politico is already covered by politicopicks in FCC_RSS_FEEDS; its
     #  topic feeds 403 bot traffic, so they're not added here. NTIA / White House /
     #  House E&C / Senate Commerce / NAB / NCTA feeds were dead or empty on check.)
+    # ── Added 2026-06-30 (URGENT volume push → target 100+/day) ────────────────────
+    # All gated (FCC-relevance filtered). Skipped as already present above / in
+    # FCC_RSS_FEEDS: Fierce Wireless, CommLawBlog, TVNewsCheck, RadioInk, Radio World,
+    # Current, GAO, The Hill Tech, WaPo Tech, NYT Tech.
+    # Google News boolean searches (free, no key, high volume).
+    ("https://news.google.com/rss/search?q=%22Federal+Communications+Commission%22+OR+FCC+regulation+OR+policy&hl=en-US&gl=US&ceid=US:en", "Google News", False),
+    ("https://news.google.com/rss/search?q=FCC+spectrum+OR+auction+OR+5G+OR+wireless&hl=en-US&gl=US&ceid=US:en", "Google News", False),
+    ("https://news.google.com/rss/search?q=FCC+broadband+OR+%22digital+equity%22+OR+BEAD&hl=en-US&gl=US&ceid=US:en", "Google News", False),
+    ("https://news.google.com/rss/search?q=FCC+enforcement+OR+fine+OR+forfeiture+OR+%22pirate+radio%22&hl=en-US&gl=US&ceid=US:en", "Google News", False),
+    ("https://news.google.com/rss/search?q=FCC+%22net+neutrality%22+OR+%22open+internet%22+OR+%22Section+230%22&hl=en-US&gl=US&ceid=US:en", "Google News", False),
+    ("https://news.google.com/rss/search?q=FCC+broadcast+OR+%22media+ownership%22+OR+television+OR+radio+license&hl=en-US&gl=US&ceid=US:en", "Google News", False),
+    ("https://news.google.com/rss/search?q=FCC+satellite+OR+%22Space+Bureau%22+OR+SpaceX+OR+Starlink+OR+NGSO&hl=en-US&gl=US&ceid=US:en", "Google News", False),
+    ("https://news.google.com/rss/search?q=FCC+robocall+OR+TCPA+OR+spoofing+OR+%22consumer+protection%22&hl=en-US&gl=US&ceid=US:en", "Google News", False),
+    ("https://news.google.com/rss/search?q=FCC+Carr+OR+Gomez+commissioner&hl=en-US&gl=US&ceid=US:en", "Google News", False),
+    ("https://news.google.com/rss/search?q=FCC+%22E-Rate%22+OR+%22universal+service%22+OR+USF+OR+Lifeline&hl=en-US&gl=US&ceid=US:en", "Google News", False),
+    ("https://news.google.com/rss/search?q=FCC+%22emergency+alert%22+OR+EAS+OR+NG911+OR+%22public+safety%22&hl=en-US&gl=US&ceid=US:en", "Google News", False),
+    ("https://news.google.com/rss/search?q=FCC+AI+OR+%22artificial+intelligence%22+OR+%22tower+siting%22+OR+%22pole+attachment%22&hl=en-US&gl=US&ceid=US:en", "Google News", False),
+    # Telecom trade publications.
+    ("https://www.telecompaper.com/rss",                                    "Telecompaper", False),
+    ("https://www.telecoms.com/feed",                                       "Telecoms.com", False),
+    ("https://www.totaltele.com/feed",                                      "Total Telecom", False),
+    ("https://www.mobileworldlive.com/feed",                               "Mobile World Live", False),
+    ("https://www.telecomramblings.com/feed",                              "Telecom Ramblings", False),
+    # Policy / advocacy.
+    ("https://www.benton.org/rss",                                          "Benton Institute", False),
+    ("https://publicknowledge.org/feed/",                                  "Public Knowledge", False),
+    ("https://www.freepress.net/feed",                                      "Free Press", False),
+    ("https://www.eff.org/rss/updates.xml",                                 "EFF", False),
+    # Broadcasting.
+    ("https://www.mediapost.com/publications/feed/",                       "MediaPost", False),
+    ("https://thedesk.net/feed/",                                           "The Desk", False),
+    ("https://www.mediaite.com/feed/",                                      "Mediaite", False),
+    # Satellite / space.
+    ("https://spacenews.com/feed/",                                         "SpaceNews", False),
+    ("https://www.satellitetoday.com/feed/",                               "Via Satellite", False),
+    # Mainstream (high volume, FCC-gated).
+    ("https://thehill.com/regulation/feed/",                               "The Hill Regulation", False),
+    ("https://rss.politico.com/morningtech.xml",                           "Politico Morning Tech", False),
+    ("https://feeds.reuters.com/reuters/technologyNews",                   "Reuters Tech", False),
+    ("https://www.cnbc.com/id/19854910/device/rss/rss.html",               "CNBC Tech", False),
+    # Government / regulatory.
+    ("https://www.federalregister.gov/api/v1/documents.rss?conditions%5Bagencies%5D%5B%5D=federal-communications-commission", "Federal Register FCC", False),
+    ("https://www.congress.gov/rss/search-results.xml?query=%7B%22source%22%3A%22all%22%2C%22search%22%3A%22Federal+Communications+Commission%22%7D", "Congress.gov FCC", False),
+    # State / local.
+    ("https://www.route-fifty.com/rss/technology/",                        "Route Fifty Tech", False),
 ]
 
 
@@ -597,6 +649,31 @@ FCC_RSS_FEEDS = {
     "fcc_news_events": [
         ("https://www.fcc.gov/news-events/rss", "FCC"),
         ("https://www.fcc.gov/rss/headlines", "FCC"),
+        # FCC.gov official feeds — added 2026-06-30 (URGENT volume push). Always
+        # on-topic (FCC source) so ungated. Free, no key. Any IDs that 404 are
+        # skipped gracefully by ingest_rss (non-200 → continue).
+        ("https://www.fcc.gov/news-events/headlines/rss.xml", "FCC Headlines"),
+        ("https://www.fcc.gov/news-events/rss-feed/37521", "FCC Daily Digest"),
+        ("https://www.fcc.gov/news-events/rss-feed/37516", "FCC News Releases"),
+        ("https://www.fcc.gov/news-events/rss-feed/37511", "FCC Orders"),
+        ("https://www.fcc.gov/news-events/rss-feed/37506", "FCC Public Notices"),
+        ("https://www.fcc.gov/news-events/rss-feed/37496", "FCC NOPRs"),
+        ("https://www.fcc.gov/news-events/rss-feed/37486", "FCC Citations"),
+        ("https://www.fcc.gov/news-events/rss-feed/37476", "FCC Reports"),
+        ("https://www.fcc.gov/news-events/rss-feed/47491", "FCC Enforcement"),
+        ("https://www.fcc.gov/news-events/rss-feed/47496", "FCC Media Bureau"),
+        ("https://www.fcc.gov/news-events/rss-feed/47501", "FCC Wireless Bureau"),
+        ("https://www.fcc.gov/news-events/rss-feed/47506", "FCC Wireline Bureau"),
+        ("https://www.fcc.gov/news-events/rss-feed/47511", "FCC Public Safety Bureau"),
+        ("https://www.fcc.gov/news-events/rss-feed/47516", "FCC Space Bureau"),
+        ("https://www.fcc.gov/news-events/rss-feed/47521", "FCC International"),
+        ("https://www.fcc.gov/news-events/rss-feed/47526", "FCC Engineering"),
+        ("https://www.fcc.gov/news-events/rss-feed/47531", "FCC Economics"),
+        ("https://www.fcc.gov/news-events/rss-feed/47536", "FCC General Counsel"),
+        ("https://www.fcc.gov/news-events/rss-feed/47476", "FCC Consumer Affairs"),
+        ("https://www.fcc.gov/news-events/rss-feed/45291", "FCC Commissioner Statements"),
+        ("https://www.fcc.gov/news-events/rss-feed/37541", "FCC Broadcast Actions"),
+        ("https://www.fcc.gov/news-events/rss-feed/37546", "FCC Broadcast Applications"),
     ],
     "wireless_mobile": [
         ("https://www.fiercewireless.com/rss/xml", "FierceWireless"),
@@ -608,7 +685,7 @@ FCC_RSS_FEEDS = {
     "media_broadcasting": [
         ("https://www.radioworld.com/feed", "Radio World"),
         ("https://www.tvtechnology.com/rss/all", "TV Technology"),
-        ("https://www.multichannel.com/rss/all", "Multichannel News"),
+        # ("https://www.multichannel.com/rss/all", "Multichannel News"),  # CEASED PUBLICATION Sept 2024
         ("https://rbr.com/feed/", "RBR"),
     ],
     "consumers_advocacy": [
@@ -633,6 +710,24 @@ FCC_RSS_FEEDS = {
         ("https://thehill.com/policy/technology/feed/", "The Hill"),
     ],
 }
+
+async def _resolve_google_news_url(client, url: str) -> str:
+    """Google News RSS items link to a news.google.com redirect, not the publisher.
+    Follow it so dedup keys off the REAL article URL — otherwise the same story
+    counts twice (once via a Google News query, once via its direct feed). Falls
+    back to the original URL on any failure (incl. Google's JS interstitial, which
+    returns 200 without an HTTP redirect — in that case the link stays as-is)."""
+    if "news.google.com" not in (url or ""):
+        return url
+    try:
+        r = await client.head(url, headers=HTTP_HEADERS, follow_redirects=True, timeout=8.0)
+        final = str(r.url)
+        if final and "news.google.com" not in final:
+            return final
+    except Exception:
+        pass
+    return url
+
 
 async def ingest_rss(agency: AgencyConfig, lookback_hours: int = 24) -> list:
     """
@@ -695,6 +790,10 @@ async def ingest_rss(agency: AgencyConfig, lookback_hours: int = 24) -> list:
 
                     if not title or not link:
                         continue
+
+                    # Resolve Google News redirect links to the real article URL so
+                    # cross-feed dedup works (same story via Google News + direct feed).
+                    link = await _resolve_google_news_url(client, link)
 
                     # Client-excluded outlets (e.g. techdirt.com) never enter.
                     if _is_excluded_domain(link):

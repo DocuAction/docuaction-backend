@@ -50,7 +50,7 @@ WIRES = [
 TRADES = [
     "Ad Age",
     "Atlantic",
-    "Broadcasting & Cable",
+    # "Broadcasting & Cable",  # CEASED PUBLICATION Sept 2024
     "CNET",
     "Daily Beast",
     "Economist",
@@ -62,7 +62,7 @@ TRADES = [
     "The Hill",
     "Hollywood Reporter",
     "Morning Consult",
-    "Multichannel News",
+    # "Multichannel News",  # CEASED PUBLICATION Sept 2024
     "National Journal",
     "NPR",
     "Politico",
