@@ -2570,11 +2570,12 @@ async def run_daily_cycle(
     for art in classified:
         _articles[art.article_id] = art
 
-    # Filter for briefing
+    # Filter for briefing. Cap raised 80 -> 150 (2026-06-30) so the delivered
+    # briefing can actually carry the higher collection volume (client wants 100+/day).
     briefing_arts = sorted(
         [a for a in classified if not (a.topic == "other" and a.relevance_score < 0.4)],
         key=lambda a: (a.topic != "other", a.relevance_score), reverse=True
-    )[:80]
+    )[:150]
     logger.info(f"Briefing: {len(briefing_arts)} articles from {len(classified)} classified")
 
     # Coverage analytics (additive; surfaced at GET /coverage/{agency_id}).
