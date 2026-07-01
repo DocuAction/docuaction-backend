@@ -52,7 +52,8 @@ logger = logging.getLogger(__name__)
 _scheduler = None
 
 # ── Tunables ────────────────────────────────────────────────────────────────
-RUN_HOUR = 1                       # 1 AM ET delivery (large buffer before team needs it)
+RUN_HOUR = 0                       # 12 AM ET (delivery fires at RUN_HOUR:RUN_MINUTE)
+RUN_MINUTE = 1                     # :01 → 12:01 AM ET daily delivery
 PREVIEW_HOUR = 20                  # Sunday 8 PM ET preview
 MAX_CYCLE_ATTEMPTS = 3             # retries per cycle before alerting
 RETRY_BACKOFF_S = 90               # wait between cycle retries
@@ -260,7 +261,7 @@ async def ensure_todays_briefing(*, source: str = "watchdog"):
     plan = _todays_delivery_plan(now_et)
     if plan is None:
         return  # Sunday — nothing to deliver in the morning
-    if now_et.hour < RUN_HOUR:
+    if (now_et.hour, now_et.minute) < (RUN_HOUR, RUN_MINUTE):
         return  # too early — the scheduled job hasn't been due yet
 
     label, lookback = plan
@@ -318,21 +319,21 @@ def start_scheduler():
             **job_defaults,
         )
 
-        # Monday 1 AM ET — weekend rollup (72h) + deliver
+        # Monday 12:01 AM ET — weekend rollup (72h) + deliver
         _scheduler.add_job(
             lambda: trigger_all_agencies("monday"),
-            CronTrigger(day_of_week="mon", hour=RUN_HOUR, minute=0, timezone=ET),
+            CronTrigger(day_of_week="mon", hour=RUN_HOUR, minute=RUN_MINUTE, timezone=ET),
             id="monday_delivery",
-            name=f"Monday {RUN_HOUR}:00 ET — Weekend Rollup + Delivery",
+            name=f"Monday {RUN_HOUR:02d}:{RUN_MINUTE:02d} ET — Weekend Rollup + Delivery",
             **job_defaults,
         )
 
-        # Tuesday–Saturday 1 AM ET — daily 24h briefing + deliver
+        # Tuesday–Saturday 12:01 AM ET — daily 24h briefing + deliver
         _scheduler.add_job(
             lambda: trigger_all_agencies("weekday"),
-            CronTrigger(day_of_week="tue,wed,thu,fri,sat", hour=RUN_HOUR, minute=0, timezone=ET),
+            CronTrigger(day_of_week="tue,wed,thu,fri,sat", hour=RUN_HOUR, minute=RUN_MINUTE, timezone=ET),
             id="weekday_delivery",
-            name=f"Tue-Sat {RUN_HOUR}:00 ET — Daily Briefing + Delivery",
+            name=f"Tue-Sat {RUN_HOUR:02d}:{RUN_MINUTE:02d} ET — Daily Briefing + Delivery",
             **job_defaults,
         )
 
@@ -349,7 +350,7 @@ def start_scheduler():
         _scheduler.start()
         logger.info(
             f"Bulletin scheduler started — Sun {PREVIEW_HOUR}:00 preview + "
-            f"Mon-Sat {RUN_HOUR}:00 delivery; hourly self-heal watchdog active; "
+            f"Mon-Sat {RUN_HOUR:02d}:{RUN_MINUTE:02d} delivery; hourly self-heal watchdog active; "
             f"alerts → {ALERT_EMAIL}"
         )
 
@@ -394,6 +395,8 @@ def scheduler_status() -> dict:
     return {
         "running": running,
         "run_hour_et": RUN_HOUR,
+        "run_minute_et": RUN_MINUTE,
+        "run_time_et": f"{RUN_HOUR:02d}:{RUN_MINUTE:02d}",
         "alert_email": ALERT_EMAIL,
         "jobs": jobs,
     }
