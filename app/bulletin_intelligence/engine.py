@@ -36,6 +36,17 @@ from dataclasses import dataclass, asdict, field
 import httpx
 from anthropic import AsyncAnthropic
 
+# Extended feed + keyword lists (ADD-only companion modules; optional at runtime).
+try:
+    from app.bulletin_intelligence.fcc_feeds_extended import EXTENDED_FCC_OFFICIAL, EXTENDED_OUTLET_FEEDS
+    from app.bulletin_intelligence.fcc_keywords_extended import EXTENDED_FCC_KEYWORDS, EXTENDED_FCC_OFFICIALS, EXTENDED_FCC_CORE_PHRASES
+except ImportError:
+    EXTENDED_FCC_OFFICIAL = []
+    EXTENDED_OUTLET_FEEDS = []
+    EXTENDED_FCC_KEYWORDS = []
+    EXTENDED_FCC_OFFICIALS = []
+    EXTENDED_FCC_CORE_PHRASES = []
+
 logger = logging.getLogger(__name__)
 
 ANTHROPIC_KEY   = os.getenv("ANTHROPIC_API_KEY", "")
@@ -393,6 +404,18 @@ _FCC_RELEVANCE_TERMS = (
 _FCC_RELEVANCE_WORD_TERMS = ("eas", "acp", "usf", "bead", "zte", "carr")
 _FCC_WORD_RE = re.compile(r"\b(?:" + "|".join(_FCC_RELEVANCE_WORD_TERMS) + r")\b")
 
+# Merge the client's extended keyword/official lists into the substring gate — ADD
+# only, existing kept. Skip short/ambiguous tokens (<4 chars, e.g. "usf", "fcc")
+# that are already handled safely as whole-word terms above; substring-matching them
+# would false-positive and effectively disable the gate.
+_EXTENDED_GATE_TERMS = tuple(sorted({
+    k.lower().strip()
+    for k in (list(EXTENDED_FCC_KEYWORDS) + list(EXTENDED_FCC_OFFICIALS))
+    if len(k.strip()) >= 4 and k.lower().strip() not in _FCC_RELEVANCE_TERMS
+}))
+if _EXTENDED_GATE_TERMS:
+    _FCC_RELEVANCE_TERMS = _FCC_RELEVANCE_TERMS + _EXTENDED_GATE_TERMS
+
 
 def _mentions_fcc(text: str) -> bool:
     t = (text or "").lower()
@@ -711,6 +734,39 @@ FCC_RSS_FEEDS = {
     ],
 }
 
+# ── Extended feeds (ADD-only) ─────────────────────────────────────────────────
+# Merge the client's extended source list in, deduplicated by URL against every
+# feed already configured above so nothing is fetched twice. Ungated FCC.gov feeds
+# join FCC_RSS_FEEDS; everything else joins the FCC-relevance-gated MAJOR_OUTLET_FEEDS.
+_existing_feed_urls = set()
+for _flist in FCC_RSS_FEEDS.values():
+    for _it in _flist:
+        if isinstance(_it, tuple) and _it:
+            _existing_feed_urls.add(_it[0])
+for _it in MAJOR_OUTLET_FEEDS:
+    if isinstance(_it, tuple) and _it:
+        _existing_feed_urls.add(_it[0])
+
+if EXTENDED_FCC_OFFICIAL:
+    _new_official = [(u, n) for (u, n) in EXTENDED_FCC_OFFICIAL if u not in _existing_feed_urls]
+    for u, _n in _new_official:
+        _existing_feed_urls.add(u)
+    if _new_official:
+        FCC_RSS_FEEDS.setdefault("extended_official", []).extend(_new_official)
+
+if EXTENDED_OUTLET_FEEDS:
+    _new_outlet = [f for f in EXTENDED_OUTLET_FEEDS if f[0] not in _existing_feed_urls]
+    for f in _new_outlet:
+        _existing_feed_urls.add(f[0])
+    MAJOR_OUTLET_FEEDS.extend(_new_outlet)
+
+logger.info(
+    "Extended feeds merged: +%d official, +%d outlet",
+    len(FCC_RSS_FEEDS.get("extended_official", [])),
+    len([f for f in MAJOR_OUTLET_FEEDS if f[0] in {x[0] for x in EXTENDED_OUTLET_FEEDS}]),
+)
+
+
 async def _resolve_google_news_url(client, url: str) -> str:
     """Google News RSS items link to a news.google.com redirect, not the publisher.
     Follow it so dedup keys off the REAL article URL — otherwise the same story
@@ -757,12 +813,12 @@ async def ingest_rss(agency: AgencyConfig, lookback_hours: int = 24) -> list:
     # with the expanded source list that pushed cycles past 15 min. asyncio is
     # single-threaded so the shared `seen`/`articles` updates below stay atomic
     # (no await between the dedup check and the append).
-    sem = asyncio.Semaphore(12)
+    sem = asyncio.Semaphore(30)   # raised 12 -> 30 for the expanded (100s of) feed list
 
     async def _process_feed(client, feed_url, outlet, topic, relevance_required, paywalled):
         async with sem:
             try:
-                resp = await client.get(feed_url, headers=HTTP_HEADERS, follow_redirects=True, timeout=12.0)
+                resp = await client.get(feed_url, headers=HTTP_HEADERS, follow_redirects=True, timeout=10.0)
                 if resp.status_code != 200:
                     return
 
@@ -2538,8 +2594,22 @@ async def run_daily_cycle(
 
     # Process pipeline
     unique = deduplicate(all_articles)
+
+    # Safety cap (ADD-only): the extended source list can surface far more unique
+    # articles per cycle, and classify_articles makes one LLM call per 8 of them,
+    # sequentially — so cost/time scale with volume. Cap what we hand the classifier
+    # (highest cheap-relevance first) so a large fetch can't blow up cost or push the
+    # cycle past the scheduler window. Override with BULLETIN_MAX_CLASSIFY.
+    _max_classify = int(os.getenv("BULLETIN_MAX_CLASSIFY", "600"))
+    to_classify = unique
+    if len(unique) > _max_classify:
+        to_classify = sorted(
+            unique, key=lambda a: getattr(a, "relevance_score", 0) or 0, reverse=True
+        )[:_max_classify]
+        logger.warning(f"Classify cap: {len(unique)} unique -> {_max_classify} (BULLETIN_MAX_CLASSIFY)")
+
     try:
-        classified = await classify_articles(unique, agency)
+        classified = await classify_articles(to_classify, agency)
     except Exception as classify_err:
         logger.error(f"Classification failed: {classify_err}")
         for art in unique:

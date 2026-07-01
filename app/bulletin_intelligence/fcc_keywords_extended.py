@@ -1,0 +1,75 @@
+"""
+FCC Bulletin — extended keyword/officials/phrases (ADD-only companion).
+Copied verbatim from the client's fcc_daily_news.py.
+"""
+
+EXTENDED_FCC_KEYWORDS = [
+    'fcc',
+    'federal communications commission',
+    'chairman carr',
+    'brendan carr',
+    'anna gomez',
+    'olivia trusty',
+    'fcc commissioner',
+    'fcc chairman',
+    'fcc ruling',
+    'fcc order',
+    'fcc vote',
+    'fcc approved',
+    'fcc proposed',
+    'fcc fined',
+    'fcc enforcement',
+    'fcc regulation',
+    'fcc license',
+    'broadband',
+    'spectrum auction',
+    'net neutrality',
+    'robocall',
+    'stir/shaken',
+    'universal service fund',
+    'usf',
+    'e-rate',
+    'lifeline program',
+    'connect america',
+    'open internet',
+    'digital equity',
+    'broadband map',
+    '5g spectrum',
+    '6g spectrum',
+    'c-band',
+    '6 ghz',
+    'media ownership',
+    'broadcast license',
+    'fcc docket',
+    'rip and replace',
+    'huawei ban',
+    'covered list',
+    'cable merger',
+    'telecom merger',
+    'fcc approval',
+    'fcc statement',
+    'fcc press release',
+]
+
+EXTENDED_FCC_OFFICIALS = [
+    'brendan carr',
+    'anna gomez',
+    'olivia trusty',
+    'fcc chairman',
+    'fcc commissioner',
+    'fcc chairwoman',
+    'wireline competition bureau',
+    'wireless bureau',
+    'media bureau',
+    'enforcement bureau',
+    'public safety bureau',
+    'office of economics',
+]
+
+EXTENDED_FCC_CORE_PHRASES = [
+    'fcc',
+    'federal communications commission',
+    'federal communications commission (fcc)',
+    '(fcc)',
+]
+
