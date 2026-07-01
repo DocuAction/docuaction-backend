@@ -176,10 +176,18 @@ async def _probe_tefca():
 @app.get("/health")
 async def health():
     tefca = await _probe_tefca()
+    # Bulletin scheduler observability — confirms whether ENABLE_SCHEDULER is set and
+    # the daily/self-heal jobs actually started on this box. Never breaks /health.
+    try:
+        from app.bulletin_intelligence.scheduler import scheduler_status
+        scheduler = scheduler_status()
+    except Exception as e:
+        scheduler = {"running": False, "error": str(e)}
     return {
         "status": "healthy",
         "version": "6.0.0",
         "platform": "DocuAction AI",
+        "scheduler": scheduler,
         "modules": {
             "documents": "active",
             "audio": "active",
