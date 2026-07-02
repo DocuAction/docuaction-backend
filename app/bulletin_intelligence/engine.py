@@ -209,18 +209,30 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _normalize_pub(s: str) -> str:
-    """Normalize a publish date to ISO 8601. Handles ISO, GDELT (YYYYMMDDTHHMMSSZ),
-    and RFC 2822 (RSS). Falls back to now() if unparseable."""
+def _parse_pub_dt(s: str) -> Optional[datetime]:
+    """Parse a feed publish date to an aware UTC datetime, or None if it cannot be
+    parsed. Handles ISO-8601 (Atom), GDELT (YYYYMMDDTHHMMSSZ), Unix epoch, and
+    RFC-2822 (RSS).
+
+    Returns None (NOT now()) on failure so callers can treat an unverifiable date
+    as STALE rather than silently fresh. This is the crux of the stale-article fix:
+    Atom/ISO dates used to fail the RFC-2822-only parser and get stamped now(),
+    letting weeks-old items pass every freshness cutoff."""
     s = (s or "").strip()
     if not s:
-        return _now()
+        return None
+
+    def _aware(dt: datetime) -> datetime:
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+    # ISO-8601 (Atom feeds, and our own stored dates). Handles date-only too.
     try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00")).isoformat()
+        return _aware(datetime.fromisoformat(s.replace("Z", "+00:00")))
     except Exception:
         pass
+    # GDELT compact form.
     try:
-        return datetime.strptime(s, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc).isoformat()
+        return datetime.strptime(s, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
     except Exception:
         pass
     # Unix epoch seconds (Reddit created_utc), guarded to year 2001+ to avoid
@@ -228,14 +240,23 @@ def _normalize_pub(s: str) -> str:
     try:
         v = float(s)
         if v >= 1_000_000_000:
-            return datetime.fromtimestamp(v, tz=timezone.utc).isoformat()
+            return datetime.fromtimestamp(v, tz=timezone.utc)
     except Exception:
         pass
+    # RFC-2822 (RSS pubDate).
     try:
         from email.utils import parsedate_to_datetime
-        return parsedate_to_datetime(s).isoformat()
+        return _aware(parsedate_to_datetime(s))
     except Exception:
-        return _now()
+        return None
+
+
+def _normalize_pub(s: str) -> str:
+    """Normalize a publish date to ISO 8601 for storage/display. Falls back to
+    now() when unparseable (fine for display); callers that must gate on FRESHNESS
+    should use _parse_pub_dt and treat None as stale."""
+    dt = _parse_pub_dt(s)
+    return dt.isoformat() if dt else _now()
 
 
 def _dict_to_article(d: dict, agency_id: str, default_source_type: str = "news") -> Optional["Article"]:
@@ -860,7 +881,6 @@ async def ingest_rss(agency: AgencyConfig, lookback_hours: int = 24) -> list:
     FREE — no API key required.
     """
     import xml.etree.ElementTree as ET
-    from email.utils import parsedate_to_datetime
 
     articles = []
     cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
@@ -972,16 +992,13 @@ async def ingest_rss(agency: AgencyConfig, lookback_hours: int = 24) -> list:
                         continue
                     seen.add(dedup)
 
-                    # Date filter
-                    try:
-                        pub_dt = parsedate_to_datetime(pub_date)
-                        if pub_dt.tzinfo is None:
-                            pub_dt = pub_dt.replace(tzinfo=timezone.utc)
-                        if pub_dt < cutoff:
-                            continue
-                        pub_iso = pub_dt.isoformat()
-                    except Exception:
-                        pub_iso = _now()
+                    # Date filter — require a VERIFIABLE recent date. An unparseable
+                    # or missing date is treated as stale (skipped), never stamped with
+                    # now(): that fallback was letting weeks-old Atom/ISO-dated items in.
+                    pub_dt = _parse_pub_dt(pub_date)
+                    if pub_dt is None or pub_dt < cutoff:
+                        continue
+                    pub_iso = pub_dt.isoformat()
 
                     art = Article(
                         article_id=f"{agency.agency_id}_rss_{dedup}",
@@ -1867,19 +1884,18 @@ async def _prepare_briefing_sections(agency: AgencyConfig, articles: List[Articl
     # the last 72h, so the briefing reflects full recent coverage across all
     # sections — not just one cycle's fresh pull (which made sections look empty).
     cutoff = datetime.now(timezone.utc) - timedelta(hours=72)
-    pool = {a.article_id: a for a in articles}
+    def _is_recent(a) -> bool:
+        # Fail-closed: an unparseable/missing date is treated as STALE (excluded),
+        # never rendered as if fresh. Applies to this cycle AND the archive so no
+        # source can leak weeks-old items into the briefing.
+        pub = _parse_pub_dt(a.published_at or "")
+        return pub is not None and pub >= cutoff
+
+    pool = {a.article_id: a for a in articles if _is_recent(a)}
     for a in _articles.values():
         if a.agency_id != agency.agency_id or a.article_id in pool:
             continue
-        recent = True
-        try:
-            pub = datetime.fromisoformat((a.published_at or "").replace("Z", "+00:00"))
-            if pub.tzinfo is None:                      # coerce naive -> UTC so the
-                pub = pub.replace(tzinfo=timezone.utc)  # comparison can't raise
-            recent = pub >= cutoff
-        except Exception:
-            recent = True   # unparseable date -> include rather than crash
-        if recent:
+        if _is_recent(a):
             pool[a.article_id] = a
 
     # Label known subscription outlets so the briefing shows [SUBSCRIPTION REQUIRED]
