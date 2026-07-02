@@ -60,6 +60,14 @@ GEMINI_KEY      = os.getenv("GEMINI_API_KEY", "")
 
 TIMEOUT = httpx.Timeout(30.0)
 HTTP_HEADERS = {"User-Agent": "DocuAction-BulletinIntelligence/1.0 (Alliance Global Tech)"}
+# Fallback UA for hosts (notably fcc.gov) that block non-browser/cloud clients with
+# a 403 or a hung connection. Only used as a retry when the default UA fails.
+_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+}
 
 # ── Topic taxonomy ─────────────────────────────────────────────────────────────
 FCC_TOPICS = [
@@ -817,16 +825,33 @@ async def ingest_rss(agency: AgencyConfig, lookback_hours: int = 24) -> list:
 
     async def _process_feed(client, feed_url, outlet, topic, relevance_required, paywalled):
         async with sem:
-            try:
-                resp = await client.get(feed_url, headers=HTTP_HEADERS, follow_redirects=True, timeout=10.0)
-                if resp.status_code != 200:
-                    return
+            # fcc.gov aggressively blocks non-browser/cloud clients (403 or a hung
+            # connection), so give it a longer timeout and one retry with a browser UA.
+            # Dead feeds are logged (not silently dropped) so the source list can be pruned.
+            is_fccgov = "fcc.gov" in feed_url
+            feed_timeout = 20.0 if is_fccgov else 10.0
+            ua_attempts = [HTTP_HEADERS] + ([_BROWSER_HEADERS] if is_fccgov else [])
+            resp = None
+            drop_reason = "no response"
+            for _hdrs in ua_attempts:
+                try:
+                    r = await client.get(feed_url, headers=_hdrs, follow_redirects=True, timeout=feed_timeout)
+                    if r.status_code == 200:
+                        resp = r
+                        break
+                    drop_reason = f"HTTP {r.status_code}"
+                except Exception as e:
+                    drop_reason = f"{type(e).__name__}: {str(e)[:60]}"
+            if resp is None:
+                logger.debug(f"Feed dropped [{outlet}] {drop_reason}: {feed_url[:80]}")
+                return
 
+            try:
                 root = ET.fromstring(resp.text)
                 ns = {"atom": "http://www.w3.org/2005/Atom"}
 
                 # Handle both RSS and Atom feeds
-                items = (root.findall(".//item") or root.findall(".//atom:entry", ns))[:10]
+                items = (root.findall(".//item") or root.findall(".//atom:entry", ns))[:25]
 
                 # Pre-resolve Google News redirect links CONCURRENTLY (not per-item
                 # sequentially — that serialized ~170 HEAD calls and made each cycle
@@ -919,7 +944,7 @@ async def ingest_rss(agency: AgencyConfig, lookback_hours: int = 24) -> list:
                     articles.append(art)
 
             except Exception as e:
-                logger.error(f"RSS error {feed_url}: {e}")
+                logger.debug(f"RSS parse error [{outlet}] {feed_url[:80]}: {e}")
 
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         await asyncio.gather(*[
@@ -1728,15 +1753,15 @@ async def _prepare_briefing_sections(agency: AgencyConfig, articles: List[Articl
     # both consume this order, so the most authoritative stories lead each cluster.
     news.sort(key=_final_score, reverse=True)
 
-    # Cap fcc.gov to 2 (client gets FCC.gov directly) and total stories to 60.
+    # Cap fcc.gov to 10 (client gets FCC.gov directly) and total stories to 200.
     capped, fcc_gov = [], 0
     for a in news:
         if "fcc.gov" in (a.url or "").lower():
-            if fcc_gov >= 2:
+            if fcc_gov >= 10:
                 continue
             fcc_gov += 1
         capped.append(a)
-        if len(capped) >= 60:
+        if len(capped) >= 200:
             break
 
     # Cluster same-story-different-outlet into one primary + 'Similar Stories',
@@ -1769,7 +1794,11 @@ def _cluster_stories(articles: List[Article]) -> List[List[Article]]:
             ct = cl["toks"]
             denom = min(len(tk), len(ct)) if tk and ct else 0
             inter = len(tk & ct) if denom else 0
-            if denom and inter >= 3 and (inter / denom) >= 0.6:
+            # Stricter than before (was inter>=3, ratio>=0.6): only cluster near-identical
+            # headlines so genuinely distinct stories stay separate primaries and remain
+            # visible. Truly-duplicate cross-outlet coverage still collapses to one primary
+            # + its Similar Stories list; merely topically-related stories no longer merge.
+            if denom and inter >= 4 and (inter / denom) >= 0.75:
                 cl["members"].append(a)
                 cl["toks"] = ct | tk
                 placed = True
