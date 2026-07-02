@@ -13,7 +13,7 @@ from app.bulletin_intelligence.engine import (
     get_editorial_queue, get_briefing, get_briefing_html,
     search_archive, get_archive_stats, run_llm_visibility_check,
     register_agency, get_agency, list_agencies, get_briefing_history,
-    _articles, _briefings,
+    _articles, _briefings, _last_window_stats,
 )
 
 logger = logging.getLogger(__name__)
@@ -223,6 +223,17 @@ async def purge_articles(confirm: str = Query("")):
         deleted = -1
     logger.info(f"Article archive purged: memory={mem}, durable_deleted={deleted}")
     return {"status": "purged", "memory_cleared": mem, "durable_deleted": deleted}
+
+
+@router.get("/admin/last-window/{agency_id}")
+async def last_window(agency_id: str):
+    """Report the freshness window + in/out-of-window counts from the most recent
+    run for this agency (observability for the date-window filter)."""
+    stats = _last_window_stats.get(agency_id)
+    if not stats:
+        return {"agency_id": agency_id, "available": False,
+                "detail": "no run recorded since process start"}
+    return {"agency_id": agency_id, "available": True, **stats}
 
 
 # ── Editorial Queue ────────────────────────────────────────────────────────────

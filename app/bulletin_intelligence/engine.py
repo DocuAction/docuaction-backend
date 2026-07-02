@@ -1947,12 +1947,18 @@ async def _prepare_briefing_sections(agency: AgencyConfig, articles: List[Articl
 
     pool = {a.article_id: a for a in candidates if _in_window(a)}
     excluded = len(candidates) - len(pool)
+    # Actual publish-date range of what was admitted — proves everything sits
+    # inside the window (no manual date inspection needed).
+    _pub_dts = [d for d in (_parse_pub_dt(a.published_at or "") for a in pool.values()) if d]
     _last_window_stats[agency.agency_id] = {
         "window_start_et": win_start.isoformat(),
         "window_end_et": win_end.isoformat(),
         "candidates": len(candidates),
         "in_window": len(pool),
         "excluded_out_of_window": excluded,
+        "pool_pub_min": min(_pub_dts).isoformat() if _pub_dts else None,
+        "pool_pub_max": max(_pub_dts).isoformat() if _pub_dts else None,
+        "computed_at": _now(),
     }
     logger.info(
         f"Briefing window (ET) {win_start.isoformat()} .. {win_end.isoformat()}: "
