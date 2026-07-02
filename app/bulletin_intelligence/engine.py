@@ -98,11 +98,13 @@ AGT_SECTIONS = [
     "General",            # client's Appendix A label for FCC_NEWS; always first
     "Consumers",
     "Media & Broadcasting",
-    "Space Policy",
     "Public Safety / Cybersecurity / Privacy",
     "Wireless & Spectrum",
-    "AI / Machine Learning",
+    "Broadband & Infrastructure",   # added 2026-07-02 (FCC-org structure)
+    "Space Policy",
     "Business & Tech",
+    "Enforcement & Consumer",        # added 2026-07-02 (FCC-org structure)
+    "AI / Machine Learning",
     "International",
 ]
 
@@ -119,7 +121,8 @@ TOPIC_TO_SECTION = {
     "space_communications":     "Space Policy",
     "spectrum_policy":          "Wireless & Spectrum",
     # extra topic names the classifier sometimes emits — map them too so nothing drops
-    "broadband_infrastructure": "Wireless & Spectrum",
+    "broadband_infrastructure": "Broadband & Infrastructure",
+    "enforcement":              "Enforcement & Consumer",
     "equipment_authorization":  "General",
     "cybersecurity_privacy":    "Public Safety / Cybersecurity / Privacy",
     "other":                    "General",
@@ -425,11 +428,64 @@ if _EXTENDED_GATE_TERMS:
     _FCC_RELEVANCE_TERMS = _FCC_RELEVANCE_TERMS + _EXTENDED_GATE_TERMS
 
 
-def _mentions_fcc(text: str) -> bool:
+def _mentions_fcc_legacy(text: str) -> bool:
+    """Flat substring/word gate. Superseded by _is_fcc_relevant_v2; kept for
+    rollback (flip the call sites back to this name)."""
     t = (text or "").lower()
     if any(term in t for term in _FCC_RELEVANCE_TERMS):
         return True
     return bool(_FCC_WORD_RE.search(t))
+
+
+# ── 3-tier FCC relevance filter (2026-07-02) ─────────────────────────────────
+# Replaces the flat gate above. Generic tech words (broadband, 5g, wireless,
+# satellite) no longer pass on their own — they need an explicit FCC signal —
+# which cuts the general-tech noise that made the briefing read like an RSS dump.
+_FCC_TIER1_EXPLICIT = (
+    "federal communications commission",
+    "fcc chairman", "fcc commissioner", "fcc chairwoman",
+    "fcc ruling", "fcc order", "fcc vote", "fcc fine", "fcc enforcement",
+    "fcc license", "fcc approval", "fcc regulation", "fcc docket", "fcc action",
+    "fcc proposes", "fcc approves", "fcc adopts", "fcc notice", "fcc proposal",
+)
+# Bare 'fcc' / 'f.c.c.' as a whole word (avoids matching inside other tokens).
+_FCC_TIER1_RE = re.compile(r"\bf\.?c\.?c\.?\b")
+
+_FCC_TIER2_OFFICIALS = (
+    "brendan carr", "chairman carr", "olivia trusty", "anna gomez",
+    "commissioner gomez", "commissioner trusty", "commissioner carr",
+    "wireline competition bureau", "wireless telecommunications bureau",
+    "media bureau", "enforcement bureau", "public safety bureau",
+    "space bureau", "office of economics and analytics",
+    "consumer and governmental affairs bureau", "international bureau",
+)
+
+# Tier 3 must appear in the TITLE (not just the summary) to pass — these are
+# FCC-specific proceedings, so a title match is a strong on-topic signal.
+_FCC_TIER3_PROGRAMS_TITLE = (
+    "e-rate", "lifeline program", "connect america fund",
+    "robocall mitigation database", "rip and replace", "covered list",
+    "stir/shaken", "stir-shaken", "universal service fund", "net neutrality",
+    "spectrum auction", "retransmission consent", "next generation 911",
+    "ng911", "pirate radio", "pole attachment", "huawei ban", "zte ban",
+)
+
+
+def _is_fcc_relevant_v2(title: str, summary: str = "") -> bool:
+    """3-tier FCC relevance gate.
+      Tier 1  explicit FCC mention (title OR summary) -> pass
+      Tier 2  named FCC official / bureau (title OR summary) -> pass
+      Tier 3  FCC-specific program/proceeding, TITLE ONLY -> pass
+    Generic tech terms (broadband/5g/wireless/satellite) never pass alone."""
+    t = (title or "").lower()
+    blob = f"{title} {summary}".lower()
+    if _FCC_TIER1_RE.search(blob) or any(term in blob for term in _FCC_TIER1_EXPLICIT):
+        return True
+    if any(term in blob for term in _FCC_TIER2_OFFICIALS):
+        return True
+    if any(term in t for term in _FCC_TIER3_PROGRAMS_TITLE):
+        return True
+    return False
 
 
 # Major national outlets the client wants represented on big FCC stories (e.g. the
@@ -555,8 +611,12 @@ def _fcc_blob(art) -> str:
 
 def _has_fcc_mention(art) -> bool:
     """True if FCC / Federal Communications Commission / a commissioner appears
-    anywhere in the article's text (headline, summary, body, outlet)."""
-    return _mentions_fcc(_fcc_blob(art))
+    anywhere in the article's text (headline, summary, body, outlet). Uses the
+    3-tier gate: title is the Article title; summary carries the rest of the text
+    so Tier-3 (title-only) programs are still judged against the real headline."""
+    title = getattr(art, "title", "") or ""
+    rest = " ".join([getattr(art, "summary", "") or "", getattr(art, "full_text", "") or ""])
+    return _is_fcc_relevant_v2(title, rest)
 
 
 def fcc_relevance_points(art) -> int:
@@ -903,7 +963,7 @@ async def ingest_rss(agency: AgencyConfig, lookback_hours: int = 24) -> list:
                         continue
 
                     # Broad major-outlet feeds: keep only genuine FCC stories.
-                    if relevance_required and not _mentions_fcc(f"{title} {description}"):
+                    if relevance_required and not _is_fcc_relevant_v2(title, description):
                         continue
 
                     # Skip duplicates
@@ -1523,9 +1583,11 @@ SECTIONS — pick the ONE display bucket each story belongs in (use these EXACT 
   Media & Broadcasting                    : TV, radio, cable, satellite TV/radio, broadcast licenses, media mergers
   Space Policy                            : satellites, NGSO/GSO, earth stations, space bureau, launch + spectrum
   Public Safety / Cybersecurity / Privacy : 911/E911, emergency alerts, outages, cybersecurity, data breaches, privacy
-  Wireless & Spectrum                     : spectrum, auctions, 5G, broadband, wireless/mobile carriers, cell towers
+  Wireless & Spectrum                     : spectrum, auctions, 5G, wireless/mobile carriers, cell towers, small cells
+  Broadband & Infrastructure              : fiber/broadband deployment, BEAD, USF, pole attachments, Connect America, digital equity
   AI / Machine Learning                   : artificial intelligence, machine learning, emerging tech
-  Business & Tech                         : net neutrality, internet policy, telecom industry/markets, big tech
+  Business & Tech                         : net neutrality, internet policy, telecom industry/markets, big tech, mergers
+  Enforcement & Consumer                  : FCC fines/forfeitures, penalties, pirate radio, consent decrees, enforcement actions
   International                           : foreign telecom, undersea/subsea cables, ITU, treaties, {agency.short_name} international affairs
 
 Articles:
@@ -1688,9 +1750,100 @@ def _boolean_section(title: str, summary: str):
     return None
 
 
+# ── FCC-org category classifier (2026-07-02) ─────────────────────────────────
+# Assigns a story to one AGT section by FCC org structure. General signals
+# (governance, courts, leadership) win over sector keywords, so e.g. "SCOTUS FCC
+# fine ruling" lands in General, not Enforcement. Returns None when nothing
+# strong matches, so the client's boolean spec still handles the remainder.
+_CAT_GENERAL = ("scotus", "supreme court", "appeals court", "d.c. circuit", "court ruling",
+    "lawsuit", "litigation", "chairman", "chairwoman", "commissioner", "brendan carr",
+    "anna gomez", "olivia trusty", "nomination", "confirmation", "oversight hearing",
+    "general counsel", "inspector general", "gao report", "reorganization", "governance",
+    "resign", "sworn in", "testimony", "agency budget")
+_CAT_ENFORCEMENT = ("forfeiture", "notice of apparent liability", "consent decree",
+    "fine", "penalty", "pirate radio", "enforcement action", "monetary penalty",
+    "cease and desist")
+_CAT_PUBLIC_SAFETY = ("911", "e911", "ng911", "next generation 911", "emergency alert",
+    "wireless emergency alert", "network outage", "cybersecurity", "data breach",
+    "privacy", "psap", "public safety")
+_CAT_SPACE = ("satellite", "ngso", "gso", "earth station", "space bureau", "starlink",
+    "spacex", "low earth orbit", "leo constellation", "orbital", "amazon kuiper")
+_CAT_MEDIA = ("broadcast", "television", " tv ", "radio station", "cable ", "retransmission",
+    "media ownership", "indecency", "license renewal", "sinclair", "nexstar", "atsc", "nextgen tv")
+_CAT_CONSUMERS = ("robocall", "tcpa", "scam", "accessibility", "lifeline", "e-rate",
+    "spoofing", "disability access", "consumer protection")
+_CAT_BROADBAND = ("broadband", "fiber", "bead", "pole attachment", "connect america",
+    "digital equity", "rural broadband", "affordable connectivity", "universal service")
+_CAT_WIRELESS = ("spectrum auction", "spectrum", "5g", "6g", "cell tower", "small cell",
+    "c-band", "cbrs", "aws-3", "mid-band", "wireless carrier", "millimeter wave")
+_CAT_AI = ("artificial intelligence", "machine learning", " ai ", "generative ai", "deepfake")
+_CAT_INTL = ("undersea cable", "subsea cable", "submarine cable", "itu ", "treaty",
+    "foreign carrier", "team telecom")
+_CAT_BUSINESS = ("net neutrality", "merger", "acquisition", "section 230", "big tech",
+    "open internet", "antitrust")
+
+
+def get_category(title: str, summary: str = "") -> Optional[str]:
+    """Best FCC-org section for a story, General-first. None => defer to the
+    client's boolean spec / model section downstream."""
+    text = f" {title} {summary} ".lower()
+    if any(k in text for k in _CAT_GENERAL):
+        return "General"
+    for terms, section in (
+        (_CAT_ENFORCEMENT, "Enforcement & Consumer"),
+        (_CAT_PUBLIC_SAFETY, "Public Safety / Cybersecurity / Privacy"),
+        (_CAT_SPACE, "Space Policy"),
+        (_CAT_MEDIA, "Media & Broadcasting"),
+        (_CAT_CONSUMERS, "Consumers"),
+        (_CAT_BROADBAND, "Broadband & Infrastructure"),
+        (_CAT_WIRELESS, "Wireless & Spectrum"),
+        (_CAT_AI, "AI / Machine Learning"),
+        (_CAT_INTL, "International"),
+        (_CAT_BUSINESS, "Business & Tech"),
+    ):
+        if any(k in text for k in terms):
+            return section
+    return None
+
+
+# ── Chairman / Commissioner activity tagging (2026-07-02) ────────────────────
+_LEADERSHIP_PREFIXES = (
+    ("chairman carr", "CHAIRMAN CARR"), ("brendan carr", "CHAIRMAN CARR"),
+    ("commissioner gomez", "COMMISSIONER GOMEZ"), ("anna gomez", "COMMISSIONER GOMEZ"),
+    ("commissioner trusty", "COMMISSIONER TRUSTY"), ("olivia trusty", "COMMISSIONER TRUSTY"),
+)
+
+
+def _leadership_prefix(art) -> str:
+    """'CHAIRMAN CARR' / 'COMMISSIONER GOMEZ' / 'COMMISSIONER TRUSTY' when a named
+    FCC official appears in the story, else ''. Surfaces leadership activity at the
+    top of the General section with a distinguishing headline prefix."""
+    blob = f"{getattr(art, 'title', '')} {getattr(art, 'summary', '')}".lower()
+    for needle, label in _LEADERSHIP_PREFIXES:
+        if needle in blob:
+            return label
+    return ""
+
+
+# ── Paywall / subscription detection (2026-07-02) ────────────────────────────
+# Rendered as "SUBSCRIPTION REQUIRED" in the TOC + story body (see _render_agt_*).
+PAYWALL_DOMAINS = (
+    "wsj.com", "bloomberg.com", "ft.com", "nytimes.com", "law360.com",
+    "washingtonpost.com", "politicopro.com", "theinformation.com", "economist.com",
+)
+
+
+def _is_paywalled_url(url: str) -> bool:
+    u = (url or "").lower()
+    return any(dom in u for dom in PAYWALL_DOMAINS)
+
+
 def _section_of(art: "Article") -> str:
-    # The client's boolean spec drives sectioning; fall back to the model's
-    # section, then the topic map. Never returns an invalid section.
+    # FCC-org category (General-first) leads; then the client's boolean spec, the
+    # model's section, and the topic map. Never returns an invalid section.
+    cat = get_category(art.title or "", art.summary or "")
+    if cat in AGT_SECTIONS:
+        return cat
     bs = _boolean_section(art.title or "", art.summary or "")
     if bs in AGT_SECTIONS:
         return bs
@@ -1792,13 +1945,13 @@ def _cluster_stories(articles: List[Article]) -> List[List[Article]]:
         placed = False
         for cl in clusters:
             ct = cl["toks"]
-            denom = min(len(tk), len(ct)) if tk and ct else 0
-            inter = len(tk & ct) if denom else 0
-            # Stricter than before (was inter>=3, ratio>=0.6): only cluster near-identical
-            # headlines so genuinely distinct stories stay separate primaries and remain
-            # visible. Truly-duplicate cross-outlet coverage still collapses to one primary
-            # + its Similar Stories list; merely topically-related stories no longer merge.
-            if denom and inter >= 4 and (inter / denom) >= 0.75:
+            union = len(tk | ct) if (tk and ct) else 0
+            inter = len(tk & ct) if union else 0
+            # Related-story clustering (Jaccard overlap >= 0.30, min 2 shared tokens).
+            # Groups multi-outlet coverage of one story into a single primary + its
+            # RELATED list, so ~60 items render as ~25-30 story clusters. (Loosens the
+            # prior 0.75 gate per the 2026-07-02 "related story clustering" spec.)
+            if union and inter >= 2 and (inter / union) >= 0.30:
                 cl["members"].append(a)
                 cl["toks"] = ct | tk
                 placed = True
@@ -1809,8 +1962,9 @@ def _cluster_stories(articles: List[Article]) -> List[List[Article]]:
 
 
 def _collect_sections(clusters, summaries: Dict[str, str]):
-    """Build all 9 sections (always present). Each cluster -> one primary story
-    plus its Similar Stories. Empty section headers are kept per client spec."""
+    """Build all sections (always present). Each cluster -> one primary story plus
+    its RELATED coverage. Named-leadership items are prefixed (e.g. 'CHAIRMAN CARR:')
+    and floated to the top of the General section. Empty section headers are kept."""
     idx = 0
     by_section = {s: [] for s in AGT_SECTIONS}
     for members in clusters:
@@ -1819,20 +1973,28 @@ def _collect_sections(clusters, summaries: Dict[str, str]):
         if sec not in by_section:
             sec = "General"
         idx += 1
+        prefix = _leadership_prefix(primary)
+        headline = _clean_headline(primary.title)
+        # Surface chairman/commissioner activity with a headline prefix (General only).
+        if prefix and sec == "General":
+            headline = f"{prefix}: {headline}"
         by_section[sec].append({
             "source": (primary.outlet or primary.source or "NEWS").strip(),
-            "headline": _clean_headline(primary.title),
+            "headline": headline,
             "url": (primary.url or "").strip(),
             "anchor": f"story_{idx}",
             "summary": (summaries.get(primary.article_id) or primary.summary or "").strip(),
-            "is_paywalled": bool(primary.is_paywalled),
+            "is_paywalled": bool(primary.is_paywalled) or _is_paywalled_url(primary.url),
+            "_leader": bool(prefix and sec == "General"),
             "similar": [{
                 "source": (m.outlet or m.source or "NEWS").strip(),
                 "headline": _clean_headline(m.title),
                 "url": (m.url or "").strip(),
-                "is_paywalled": bool(m.is_paywalled),
+                "is_paywalled": bool(m.is_paywalled) or _is_paywalled_url(m.url),
             } for m in members[1:]],
         })
+    # Float leadership activity to the top of General (stable order otherwise).
+    by_section["General"].sort(key=lambda s: not s.get("_leader"))
     return [(sec, by_section[sec]) for sec in AGT_SECTIONS]
 
 
@@ -1926,13 +2088,13 @@ def _render_agt_html(agency: AgencyConfig, briefing_date: str, sections) -> str:
             if s.get("similar"):
                 items = "".join(
                     '<div style="font-size:12px;line-height:1.5;margin-bottom:4px">'
-                    f'<span style="{S_SRC}">{esc(x["source"])}:</span> '
+                    f'<span style="{S_SRC}">RELATED &mdash; {esc(x["source"])}:</span> '
                     f'{extlink(x["url"], x["headline"])}{SUB if x.get("is_paywalled") else ""}</div>'
                     for x in s["similar"]
                 )
                 similar = ('<div style="background:#f5f8fd;border-left:4px solid #003087;padding:10px 12px;'
                            'margin-top:12px"><div style="font-size:10px;font-weight:bold;color:#003087;'
-                           'letter-spacing:1.2px;text-transform:uppercase;margin-bottom:6px">Similar Stories</div>'
+                           'letter-spacing:1.2px;text-transform:uppercase;margin-bottom:6px">Related Coverage</div>'
                            f'{items}</div>')
             body.append(
                 f'<div id="{esc(s["anchor"])}" style="padding:16px 30px 12px;border-bottom:1px solid #e4e9f2">'
@@ -2054,8 +2216,7 @@ def _render_agt_docx(agency: AgencyConfig, briefing_date: str, sections) -> byte
             if st["summary"]:
                 doc.add_paragraph(st["summary"])
             for sim in st.get("similar", []):
-                heading("Similar Stories")
-                src_headline(sim.get("source", ""), sim.get("headline", ""),
+                src_headline("RELATED — " + sim.get("source", ""), sim.get("headline", ""),
                              sim.get("url", ""), sim.get("is_paywalled", False))
             doc.add_paragraph("Back to Top")
 
@@ -2524,7 +2685,7 @@ async def _ingest_broadcast_tv_articles(agency: AgencyConfig, lookback_hours: in
         # cuts the bulk of the noise, and saves Claude classification cost. Then
         # cap to the most recent 50 (GDELT returns newest-first) so a heavy news
         # day can't flood the classifier — the briefing only shows a handful anyway.
-        raw = [d for d in raw if _mentions_fcc(f"{d.get('title','')} {d.get('summary','')}")][:50]
+        raw = [d for d in raw if _is_fcc_relevant_v2(d.get('title',''), d.get('summary',''))][:50]
         out = [a for a in (_dict_to_article(d, agency.agency_id, "broadcast") for d in raw) if a]
         if out:
             logger.info(f"GDELT TV → {len(out)} FCC-relevant broadcast clips for {agency.agency_id}")
