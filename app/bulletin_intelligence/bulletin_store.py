@@ -125,6 +125,21 @@ async def save_articles(articles: List[Dict[str, Any]]) -> int:
     return saved
 
 
+async def clear_articles() -> int:
+    """Delete ALL persisted article rows (the rolling archive cache). Returns the
+    number of rows removed, or -1 on error. The archive rebuilds on the next run."""
+    if not _enabled:
+        return 0
+    try:
+        async with async_session_maker() as s:
+            res = await s.execute(text("DELETE FROM bulletin_articles"))
+            await s.commit()
+            return res.rowcount if res.rowcount is not None else 0
+    except Exception as e:
+        logger.warning(f"clear_articles failed: {e}")
+        return -1
+
+
 async def save_briefing(briefing: Dict[str, Any]) -> bool:
     if not _enabled:
         return False

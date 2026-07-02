@@ -259,6 +259,49 @@ def _normalize_pub(s: str) -> str:
     return dt.isoformat() if dt else _now()
 
 
+# FCC operates on US Eastern time; EST/EDT is handled automatically by the tz db
+# (never hardcode an offset). Same mechanism the scheduler uses.
+try:
+    from zoneinfo import ZoneInfo   # Python 3.9+ stdlib
+    _ET = ZoneInfo("America/New_York")
+except Exception:                    # pragma: no cover
+    import pytz
+    _ET = pytz.timezone("America/New_York")
+
+
+def get_briefing_window():
+    """Freshness window for a briefing: the PREVIOUS BUSINESS DAY(S) in US Eastern
+    time, not a rolling 72h. Returns (start, end) as aware ET datetimes; an article
+    is in-window iff start <= published < end (end = last midnight ET, so today's
+    items are excluded).
+
+      Tue-Sat  -> previous day only            (1 day)
+      Monday   -> Fri 00:00 .. Mon 00:00 ET     (Fri+Sat+Sun)
+      Sunday   -> Fri 00:00 .. Sat 00:00 ET     (shouldn't run)
+
+    Comparisons are between timezone-AWARE datetimes, so a UTC article date is
+    compared as the same instant — no manual offset conversion needed."""
+    now = datetime.now(_ET)
+    today = now.date()
+    weekday = today.weekday()  # 0=Monday
+    if weekday == 0:            # Monday — cover Fri+Sat+Sun
+        start = today - timedelta(days=3)
+    elif weekday == 6:         # Sunday — shouldn't run
+        start = today - timedelta(days=2)
+    else:                      # Tue-Sat — previous day only
+        start = today - timedelta(days=1)
+    end = today                # up to midnight last night ET
+    return (
+        datetime.combine(start, datetime.min.time(), tzinfo=_ET),
+        datetime.combine(end, datetime.min.time(), tzinfo=_ET),
+    )
+
+
+# Last briefing window + in/out-of-window counts per agency, surfaced in the
+# run_daily_cycle result so a run can report exactly what the window admitted.
+_last_window_stats: Dict[str, Dict[str, Any]] = {}
+
+
 def _dict_to_article(d: dict, agency_id: str, default_source_type: str = "news") -> Optional["Article"]:
     """Convert a raw ingester dict (GDELT, Reddit, etc.) into an Article. Returns
     None for unusable rows (no url/title)."""
@@ -883,7 +926,11 @@ async def ingest_rss(agency: AgencyConfig, lookback_hours: int = 24) -> list:
     import xml.etree.ElementTree as ET
 
     articles = []
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+    # Collect anything at/after the business-day window start (ET). The precise
+    # [start, end) window — including dropping today's items — is enforced in the
+    # render pool (_prepare_briefing_sections), which also counts in/out-of-window.
+    _win_start, _ = get_briefing_window()
+    cutoff = _win_start
     seen = set()
 
     # Each feed: (url, outlet, topic, relevance_required, paywalled).
@@ -1880,23 +1927,37 @@ def _clean_headline(title: str) -> str:
 
 
 async def _prepare_briefing_sections(agency: AgencyConfig, articles: List[Article]):
-    # Aggregate THIS cycle's articles with everything collected for this agency in
-    # the last 72h, so the briefing reflects full recent coverage across all
-    # sections — not just one cycle's fresh pull (which made sections look empty).
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=72)
-    def _is_recent(a) -> bool:
-        # Fail-closed: an unparseable/missing date is treated as STALE (excluded),
-        # never rendered as if fresh. Applies to this cycle AND the archive so no
-        # source can leak weeks-old items into the briefing.
-        pub = _parse_pub_dt(a.published_at or "")
-        return pub is not None and pub >= cutoff
+    # Aggregate THIS cycle's articles with everything collected for this agency,
+    # then keep only what falls inside the PREVIOUS-BUSINESS-DAY window (ET).
+    win_start, win_end = get_briefing_window()
 
-    pool = {a.article_id: a for a in articles if _is_recent(a)}
+    def _in_window(a) -> bool:
+        # Fail-closed: an unparseable/missing date is treated as out-of-window
+        # (excluded), never rendered as if fresh. Aware-datetime comparison, so a
+        # UTC article date is judged as the same instant as the ET boundaries.
+        pub = _parse_pub_dt(a.published_at or "")
+        return pub is not None and win_start <= pub < win_end
+
+    # Candidate set = this cycle + everything else stored for this agency.
+    candidates = list(articles)
+    _have = {a.article_id for a in articles}
     for a in _articles.values():
-        if a.agency_id != agency.agency_id or a.article_id in pool:
-            continue
-        if _is_recent(a):
-            pool[a.article_id] = a
+        if a.agency_id == agency.agency_id and a.article_id not in _have:
+            candidates.append(a)
+
+    pool = {a.article_id: a for a in candidates if _in_window(a)}
+    excluded = len(candidates) - len(pool)
+    _last_window_stats[agency.agency_id] = {
+        "window_start_et": win_start.isoformat(),
+        "window_end_et": win_end.isoformat(),
+        "candidates": len(candidates),
+        "in_window": len(pool),
+        "excluded_out_of_window": excluded,
+    }
+    logger.info(
+        f"Briefing window (ET) {win_start.isoformat()} .. {win_end.isoformat()}: "
+        f"{len(pool)} in-window, {excluded} excluded of {len(candidates)} candidates"
+    )
 
     # Label known subscription outlets so the briefing shows [SUBSCRIPTION REQUIRED]
     # (deterministic pre-pass; safe no-op if the module is unavailable).
@@ -2918,6 +2979,7 @@ async def run_daily_cycle(
         "after_dedup": len(unique),
         "in_briefing": len(briefing_arts),
         "topic_counts": topic_counts,
+        "window": _last_window_stats.get(agency_id, {}),
         "delivery": delivery,
         "coverage_report": coverage,
         "message": f"Briefing ready. Approve at POST /api/v1/bulletin/briefings/{briefing_id}/approve"

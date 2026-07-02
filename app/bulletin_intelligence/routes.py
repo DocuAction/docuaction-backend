@@ -200,6 +200,31 @@ async def trigger_daily_cycle_sync(
     return result
 
 
+# ── Admin: purge the article archive ────────────────────────────────────────────
+@router.post("/admin/purge-articles")
+async def purge_articles(confirm: str = Query("")):
+    """Clear the rolling article archive — in-memory cache AND the durable store —
+    so the next run rebuilds a clean archive from scratch. Guarded by a confirm
+    token to prevent accidental calls. The archive is a rebuildable cache, so the
+    blast radius is limited to a one-cycle rebuild.
+
+    Use: POST /api/v1/bulletin/admin/purge-articles?confirm=PURGE_ARCHIVE
+    """
+    if confirm != "PURGE_ARCHIVE":
+        raise HTTPException(status_code=400,
+                            detail="pass ?confirm=PURGE_ARCHIVE to purge the article archive")
+    mem = len(_articles)
+    _articles.clear()
+    try:
+        from app.bulletin_intelligence import bulletin_store
+        deleted = await bulletin_store.clear_articles()
+    except Exception as e:
+        logger.warning(f"purge_articles durable clear failed: {e}")
+        deleted = -1
+    logger.info(f"Article archive purged: memory={mem}, durable_deleted={deleted}")
+    return {"status": "purged", "memory_cleared": mem, "durable_deleted": deleted}
+
+
 # ── Editorial Queue ────────────────────────────────────────────────────────────
 @router.get("/queue/{agency_id}")
 async def get_queue(agency_id: str):
