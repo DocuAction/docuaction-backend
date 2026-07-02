@@ -66,6 +66,43 @@ class RetryableHTTPError(Exception):
     """Raised for HTTP 429/5xx so tenacity retries; 4xx is terminal."""
 
 
+# ─── Verification helpers (NPI / name / address cross-reference) ──────────────
+# Small, dependency-free comparators used by the enhanced NPPES and SAM checks
+# to cross-reference a submitted entity against its authoritative registration.
+
+def _name_similarity(name1: str, name2: str) -> float:
+    words1 = set(name1.lower().split()) - {"inc","llc","ltd","corp","co","the","of","and","&","dba","pllc","pc","pa","md","do"}
+    words2 = set(name2.lower().split()) - {"inc","llc","ltd","corp","co","the","of","and","&","dba","pllc","pc","pa","md","do"}
+    if not words1 or not words2:
+        return 0.0
+    return len(words1 & words2) / max(len(words1), len(words2))
+
+
+def _compare_addresses(submitted: dict, registered: dict) -> dict:
+    result = {"match": False, "level": None, "details": []}
+    sub_state = (submitted.get("state") or "").upper().strip()
+    reg_state = (registered.get("state") or "").upper().strip()
+    sub_city = (submitted.get("city") or "").lower().strip()
+    reg_city = (registered.get("city") or "").lower().strip()
+    sub_zip = (submitted.get("postal_code") or submitted.get("zip") or "")[:5]
+    reg_zip = (registered.get("postal_code") or "")[:5]
+    if sub_state and reg_state and sub_state != reg_state:
+        result["level"] = "major"
+        result["details"].append(f"STATE MISMATCH: submitted '{sub_state}' vs registered '{reg_state}'")
+        return result
+    if sub_city and reg_city and sub_city != reg_city:
+        result["level"] = "major"
+        result["details"].append(f"City mismatch: '{sub_city}' vs '{reg_city}'")
+        return result
+    if sub_zip and reg_zip and sub_zip != reg_zip:
+        result["level"] = "minor"
+        result["details"].append(f"ZIP mismatch: '{sub_zip}' vs '{reg_zip}'")
+    if not result["level"]:
+        result["match"] = True
+        result["details"].append("Address verified")
+    return result
+
+
 # ─── Source Result ───────────────────────────────────────────────────────────
 
 @dataclass
@@ -86,6 +123,13 @@ class SourceResult:
     query_timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
     response_hash: Optional[str] = None
     api_version: Optional[str] = None
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Dict-style read of .data so an enriched result can be consumed as a
+        mapping (r.get("npi_valid")) without callers reaching into .data. Reads
+        from data only — fail-closed unavailable results (data=None) yield the
+        default, never a fabricated clean value."""
+        return (self.data or {}).get(key, default)
 
     @staticmethod
     def hash_payload(payload: Any) -> str:
@@ -169,6 +213,35 @@ class NPPESConnector:
     BASE_URL = "https://npiregistry.cms.hhs.gov/api"
     API_VERSION = "2.1"
 
+    @staticmethod
+    def _shape(r: dict, npi_fallback: str) -> Dict[str, Any]:
+        """Normalize one NPPES result row into our provider data dict. Shared by
+        lookup_by_npi and lookup_by_name so the enriched fields (taxonomy,
+        enumeration_date) are extracted in exactly one place."""
+        basic = r.get("basic", {})
+        org_name = basic.get("organization_name") or (
+            f"{basic.get('first_name', '')} {basic.get('last_name', '')}".strip()
+        )
+        taxonomies = r.get("taxonomies", []) or []
+        primary_tax = next((t for t in taxonomies if t.get("primary")), (taxonomies[0] if taxonomies else {}))
+        return {
+            "found": True,
+            "npi": str(r.get("number", npi_fallback)),
+            "enumeration_type": r.get("enumeration_type"),  # NPI-1 / NPI-2
+            "status": (basic.get("status") or "ACTIVE"),
+            "legal_name": org_name,
+            "organization_name": basic.get("organization_name"),
+            "credential": basic.get("credential"),
+            "addresses": r.get("addresses", []),
+            "deactivation_date": basic.get("deactivation_date"),
+            "reactivation_date": basic.get("reactivation_date"),
+            # Enriched fields (additive — consumed by the enhanced check_nppes):
+            "enumeration_date": basic.get("enumeration_date"),
+            "taxonomy": primary_tax.get("desc"),
+            "taxonomy_code": primary_tax.get("code"),
+            "taxonomies": taxonomies,
+        }
+
     async def lookup_by_npi(self, npi: str) -> SourceResult:
         qp = {"npi": npi}
         if not npi:
@@ -192,26 +265,37 @@ class NPPESConnector:
                 return SourceResult.ok(
                     "NPPES", {"found": False, "npi": npi}, qp, self.API_VERSION, raw_for_hash=payload,
                 )
-            r = results[0]
-            basic = r.get("basic", {})
-            org_name = basic.get("organization_name") or (
-                f"{basic.get('first_name', '')} {basic.get('last_name', '')}".strip()
-            )
-            data = {
-                "found": True,
-                "npi": str(r.get("number", npi)),
-                "enumeration_type": r.get("enumeration_type"),  # NPI-1 / NPI-2
-                "status": (basic.get("status") or "ACTIVE"),
-                "legal_name": org_name,
-                "organization_name": basic.get("organization_name"),
-                "credential": basic.get("credential"),
-                "addresses": r.get("addresses", []),
-                "deactivation_date": basic.get("deactivation_date"),
-                "reactivation_date": basic.get("reactivation_date"),
-            }
-            return SourceResult.ok("NPPES", data, qp, self.API_VERSION, raw_for_hash=payload)
+            return SourceResult.ok("NPPES", self._shape(results[0], npi), qp, self.API_VERSION, raw_for_hash=payload)
         except Exception as e:
             logger.warning(f"NPPES unavailable for NPI {npi}: {e}")
+            return SourceResult.unavailable("NPPES", str(e), qp, self.API_VERSION)
+
+    async def lookup_by_name(self, organization_name: str) -> SourceResult:
+        """Resolve a provider by organization name (used when no NPI is on the
+        entity). Same fail-closed contract as lookup_by_npi."""
+        qp = {"organization_name": organization_name}
+        if not organization_name:
+            return SourceResult.ok(
+                "NPPES", {"found": False, "reason": "no_name_submitted"}, qp, self.API_VERSION,
+            )
+        try:
+            resp = await _get_with_retry(
+                f"{self.BASE_URL}/",
+                params={"organization_name": organization_name, "version": self.API_VERSION, "limit": 1},
+                headers=HTTP_HEADERS,
+            )
+            if resp.status_code != 200:
+                return SourceResult.unavailable("NPPES", f"HTTP {resp.status_code}", qp, self.API_VERSION)
+            payload = resp.json()
+            results = payload.get("results", [])
+            if not results:
+                return SourceResult.ok(
+                    "NPPES", {"found": False, "organization_name": organization_name},
+                    qp, self.API_VERSION, raw_for_hash=payload,
+                )
+            return SourceResult.ok("NPPES", self._shape(results[0], ""), qp, self.API_VERSION, raw_for_hash=payload)
+        except Exception as e:
+            logger.warning(f"NPPES unavailable for name '{organization_name}': {e}")
             return SourceResult.unavailable("NPPES", str(e), qp, self.API_VERSION)
 
     async def probe(self) -> bool:
@@ -385,6 +469,15 @@ class SAMGovConnector:
                 )
             reg = entities[0].get("entityRegistration", {})
             status = (reg.get("registrationStatus") or "").upper()
+            # coreData.physicalAddress is requested via includeSections; normalize
+            # it to our {city, state, postal_code} shape for address cross-reference.
+            phys = (entities[0].get("coreData", {}) or {}).get("physicalAddress", {}) or {}
+            registered_address = {
+                "address_1": phys.get("addressLine1"),
+                "city": phys.get("city"),
+                "state": phys.get("stateOrProvinceCode"),
+                "postal_code": phys.get("zipCode"),
+            }
             data = {
                 "found": True,
                 "uei": reg.get("ueiSAM"),
@@ -393,6 +486,7 @@ class SAMGovConnector:
                 "registration_current": status == "ACTIVE",
                 "registration_expiry": reg.get("registrationExpirationDate"),
                 "excluded": reg.get("exclusionStatusFlag") == "Y",
+                "registered_address": registered_address,
             }
             return SourceResult.ok("SAM_GOV", data, qp, self.API_VERSION, raw_for_hash=payload)
         except Exception as e:
@@ -833,16 +927,169 @@ async def _timed_connector_check(coro, connector_name: str) -> SourceResult:
         return SourceResult.unavailable(connector_name, f"{type(e).__name__}: {e}", {}, None)
 
 
-async def check_nppes(npi: str) -> SourceResult:
-    return await _timed_connector_check(_check_manager().nppes.lookup_by_npi(npi), "NPPES")
+# ─── Discrepancy severity (shared with review_engine.generate_verification_summary) ─
+# Ascending severity — mirrors the review_engine 4-bucket taxonomy status names.
+DISCREPANCY_LEVELS = ("no_discrepancy", "minor_administrative", "inexplicable", "non_compliant")
+
+
+def max_discrepancy_level(*levels: Optional[str]) -> str:
+    """Return the most severe of the given discrepancy levels (ignoring None/
+    unknown values). Empty/all-unknown input yields 'no_discrepancy'."""
+    worst = 0
+    for lv in levels:
+        if lv in DISCREPANCY_LEVELS:
+            worst = max(worst, DISCREPANCY_LEVELS.index(lv))
+    return DISCREPANCY_LEVELS[worst]
+
+
+def _extract_address(entity: dict) -> dict:
+    """Normalize a submitted entity's primary address to {address_1, city, state,
+    postal_code}. Handles the FHIR `address` list (mock/RCE org shape) and a flat
+    dict. Returns {} when no usable address is present."""
+    addr = entity.get("address")
+    if isinstance(addr, list) and addr:
+        addr = addr[0]
+    if not isinstance(addr, dict):
+        addr = {}
+    line = addr.get("line")
+    if isinstance(line, list):
+        line = line[0] if line else None
+    out = {
+        "address_1": line or addr.get("address_1"),
+        "city": addr.get("city"),
+        "state": addr.get("state"),
+        "postal_code": addr.get("postalCode") or addr.get("postal_code") or addr.get("zip"),
+    }
+    return out if _has_address(out) else {}
+
+
+def _has_address(a: dict) -> bool:
+    """True only if the address carries a matchable field (state/city/ZIP), so an
+    all-empty dict never scores a spurious 'Address verified'."""
+    return bool(a) and any(a.get(k) for k in ("state", "city", "postal_code"))
+
+
+def _enrich_nppes(result: SourceResult, submitted_name: str, submitted_address: Optional[dict]) -> SourceResult:
+    """Cross-reference a submitted name/address against an NPPES SourceResult and
+    fold the verification fields into result.data. Fail-closed: an unavailable
+    result (data=None) is returned untouched — never enriched into a clean value."""
+    if not result.success or not result.data:
+        return result
+    d = result.data
+    details: List[str] = []
+
+    found = bool(d.get("found"))
+    status = (d.get("status") or "ACTIVE").upper()
+    enum_type = d.get("enumeration_type") or ""
+    deactivated = bool(d.get("deactivation_date")) and not d.get("reactivation_date")
+
+    npi_valid = found
+    npi_active = found and not deactivated and status in ("ACTIVE", "A", "")
+
+    if enum_type == "NPI-1":
+        npi_type = "Type 1 (Individual)"
+    elif enum_type == "NPI-2":
+        npi_type = "Type 2 (Organization)"
+    else:
+        npi_type = enum_type or None
+
+    # Name/address cross-reference only makes sense against a real found record —
+    # a not-found result echoes the *submitted* name back, which must never be
+    # scored as a registered-name match.
+    reg_addr: Dict[str, Any] = {}
+    registered_name = ""
+    name_match_score: Optional[float] = None
+    addr_cmp: Optional[dict] = None
+    if found:
+        addrs = d.get("addresses", []) or []
+        reg_addr = next((a for a in addrs if a.get("address_purpose") == "LOCATION"), (addrs[0] if addrs else {}))
+        registered_name = d.get("legal_name") or d.get("organization_name") or ""
+        if submitted_name and registered_name:
+            name_match_score = _name_similarity(submitted_name, registered_name)
+        if _has_address(submitted_address or {}):
+            addr_cmp = _compare_addresses(submitted_address, reg_addr)
+    name_match = name_match_score is not None and name_match_score >= 0.5
+
+    # Overall discrepancy level for this source.
+    if not npi_valid:
+        level = "non_compliant"
+        details.append("NPI not found / not valid in NPPES")
+    elif not npi_active:
+        level = "non_compliant"
+        details.append(f"NPI not active (status={status or 'UNKNOWN'}, deactivation_date={d.get('deactivation_date')})")
+    else:
+        level = "no_discrepancy"
+        if name_match_score is not None:
+            if name_match_score >= 0.85:
+                details.append(f"Name verified ({name_match_score:.0%}): '{registered_name}'")
+            elif name_match_score >= 0.5:
+                level = max_discrepancy_level(level, "minor_administrative")
+                details.append(f"Partial name match ({name_match_score:.0%}): '{submitted_name}' vs '{registered_name}'")
+            else:
+                level = max_discrepancy_level(level, "inexplicable")
+                details.append(f"NAME MISMATCH ({name_match_score:.0%}): '{submitted_name}' vs '{registered_name}'")
+        if addr_cmp:
+            details.extend(addr_cmp["details"])
+            if addr_cmp["level"] == "major":
+                level = max_discrepancy_level(level, "inexplicable")
+            elif addr_cmp["level"] == "minor":
+                level = max_discrepancy_level(level, "minor_administrative")
+
+    d.update({
+        "npi_valid": npi_valid,
+        "npi_active": npi_active,
+        "npi_type": npi_type,
+        "name_match": name_match,
+        "name_match_score": (round(name_match_score, 3) if name_match_score is not None else None),
+        "address_match": (addr_cmp["match"] if addr_cmp else None),
+        "address_discrepancy": (addr_cmp["level"] if addr_cmp else None),
+        "taxonomy": d.get("taxonomy"),
+        "taxonomy_code": d.get("taxonomy_code"),
+        "enumeration_date": d.get("enumeration_date"),
+        "registered_address": reg_addr,
+        "discrepancy_level": level,
+        "details": details,
+    })
+    return result
+
+
+async def check_nppes(name: str = "", npi: str = "", address: Optional[dict] = None) -> SourceResult:
+    """Enhanced NPI verification.
+
+    Looks the provider up in NPPES — by NPI, or by organization name when no NPI
+    is available — then cross-references the submitted name and address against
+    the registered record. Returns a SourceResult whose .data carries the
+    verification fields (npi_valid, npi_active, npi_type, name_match[_score],
+    address_match, address_discrepancy, taxonomy, enumeration_date,
+    registered_address, discrepancy_level, details[]). SourceResult.get() exposes
+    them dict-style (r.get("npi_valid")).
+
+    Back-compat: a lone positional 10-digit value — check_nppes("1234567893"),
+    as the QA health probe and legacy callers invoke it — is treated as the NPI.
+    """
+    if not npi and name and name.isdigit() and len(name) == 10:
+        npi, name = name, ""
+    mgr = _check_manager()
+    coro = mgr.nppes.lookup_by_npi(npi) if npi else mgr.nppes.lookup_by_name(name)
+    result = await _timed_connector_check(coro, "NPPES")
+    return _enrich_nppes(result, name, address)
 
 
 async def check_pecos(npi: str) -> SourceResult:
     return await _timed_connector_check(_check_manager().pecos.lookup_by_npi(npi), "PECOS")
 
 
-async def check_sam(uei: str) -> SourceResult:
-    return await _timed_connector_check(_check_manager().sam.lookup_by_uei(uei), "SAM_GOV")
+async def check_sam(uei: str = "", address: Optional[dict] = None) -> SourceResult:
+    """SAM.gov registration/exclusion by UEI. When `address` is supplied and the
+    entity is found, cross-reference it against SAM's registered physical address
+    (additive fields: address_match, address_discrepancy, details)."""
+    result = await _timed_connector_check(_check_manager().sam.lookup_by_uei(uei), "SAM_GOV")
+    if _has_address(address or {}) and result.success and result.data and result.data.get("found"):
+        cmp = _compare_addresses(address, result.data.get("registered_address") or {})
+        result.data["address_match"] = cmp["match"]
+        result.data["address_discrepancy"] = cmp["level"]
+        result.data.setdefault("details", []).extend(cmp["details"])
+    return result
 
 
 async def check_leie(name: str = "", npi: str = "") -> SourceResult:
@@ -853,11 +1100,16 @@ async def check_leie(name: str = "", npi: str = "") -> SourceResult:
 
 async def check_all_connectors(entity: dict, db=None) -> dict:
     """Run NPPES/PECOS/SAM/LEIE concurrently for one entity. `db` is accepted for
-    API symmetry; logging uses each check's own session (concurrency-safe)."""
+    API symmetry; logging uses each check's own session (concurrency-safe).
+
+    Submitted name + address are threaded into the NPPES and SAM checks so their
+    results carry the name/address cross-reference used by the verification
+    summary."""
     npi = _extract_npi(entity)
     uei = _extract_uei(entity)
     name = entity.get("name", "")
+    address = _extract_address(entity)
     nppes_r, pecos_r, sam_r, leie_r = await asyncio.gather(
-        check_nppes(npi), check_pecos(npi), check_sam(uei), check_leie(name, npi),
+        check_nppes(name, npi, address), check_pecos(npi), check_sam(uei, address), check_leie(name, npi),
     )
     return {"nppes": nppes_r, "pecos": pecos_r, "sam": sam_r, "leie": leie_r}

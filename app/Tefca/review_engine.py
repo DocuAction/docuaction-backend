@@ -143,6 +143,80 @@ async def run_entity_review(entity: dict, db=None) -> Dict[str, Any]:
         "indeterminate": validation.get("indeterminate"),
         "finding_codes": validation["finding_codes"],
         "sources_checked": list(results.keys()),
+        # NPI/name/address cross-reference consolidated across all four sources.
+        "verification_summary": generate_verification_summary(results),
+    }
+
+
+def generate_verification_summary(results: Dict[str, Any]) -> Dict[str, Any]:
+    """Consolidate the four connector results (nppes/sam/pecos/leie) into one
+    overall discrepancy level plus per-source detail.
+
+    `results` is the dict returned by connectors.check_all_connectors; each value
+    is a SourceResult whose .get() exposes its data. Fail-closed: any source that
+    is unavailable makes the summary INDETERMINATE rather than clean — an outage
+    must never read as no_discrepancy.
+    """
+    nppes = results.get("nppes")
+    sam = results.get("sam")
+    pecos = results.get("pecos")
+    leie = results.get("leie")
+
+    details: List[str] = []
+    levels: List[str] = []
+    unavailable: List[str] = []
+
+    # NPPES — carries its own discrepancy_level from the enhanced check_nppes.
+    if nppes is not None and getattr(nppes, "success", False):
+        levels.append(nppes.get("discrepancy_level") or "no_discrepancy")
+        details.extend(f"NPPES: {d}" for d in (nppes.get("details") or []))
+    else:
+        unavailable.append("NPPES")
+
+    # LEIE — an active exclusion is disqualifying; a resolved one is administrative.
+    if leie is not None and getattr(leie, "success", False):
+        if leie.get("excluded"):
+            levels.append("non_compliant")
+            details.append("LEIE: ACTIVE exclusion on file")
+        elif leie.get("historical_exclusions"):
+            levels.append("minor_administrative")
+            details.append("LEIE: historical (resolved) exclusion")
+        else:
+            details.append("LEIE: no exclusion found")
+    else:
+        unavailable.append("OIG_LEIE")
+
+    # SAM — debarment is non_compliant; lapsed registration / address conflict escalate.
+    if sam is not None and getattr(sam, "success", False):
+        if sam.get("excluded"):
+            levels.append("non_compliant")
+            details.append("SAM.gov: active debarment/exclusion")
+        elif sam.get("found") and sam.get("registration_current") is False:
+            levels.append("inexplicable")
+            details.append("SAM.gov: registration lapsed/expired")
+        if sam.get("address_discrepancy") == "major":
+            levels.append("inexplicable")
+            details.append("SAM.gov: registered address state/city mismatch")
+        elif sam.get("address_discrepancy") == "minor":
+            levels.append("minor_administrative")
+            details.append("SAM.gov: registered address ZIP mismatch")
+    else:
+        unavailable.append("SAM_GOV")
+
+    # PECOS — an active payment suspension is disqualifying.
+    if pecos is not None and getattr(pecos, "success", False):
+        if pecos.get("payment_suspension"):
+            levels.append("non_compliant")
+            details.append("PECOS: active payment suspension")
+    else:
+        unavailable.append("PECOS")
+
+    return {
+        "overall_discrepancy_level": connectors.max_discrepancy_level(*levels),
+        "indeterminate": bool(unavailable),
+        "unavailable_sources": unavailable,
+        "sources_evaluated": [k for k in ("nppes", "sam", "pecos", "leie") if results.get(k) is not None],
+        "details": details,
     }
 
 
