@@ -13,6 +13,8 @@ from app.bulletin_intelligence.engine import (
     get_editorial_queue, get_briefing, get_briefing_html,
     search_archive, get_archive_stats, run_llm_visibility_check,
     register_agency, get_agency, list_agencies, get_briefing_history,
+    get_latest_briefing, get_today_briefing, send_briefing_email,
+    _briefing_preview_url, _latest_preview_url,
     _articles, _briefings, _last_window_stats,
 )
 
@@ -234,6 +236,129 @@ async def last_window(agency_id: str):
         return {"agency_id": agency_id, "available": False,
                 "detail": "no run recorded since process start"}
     return {"agency_id": agency_id, "available": True, **stats}
+
+
+# ── Live Feed: always-available briefings ───────────────────────────────────────
+# Live-feed model: whatever has been collected is immediately available. No
+# approval gate, no waiting for a schedule. These endpoints are the public
+# surface FCC contacts can bookmark.
+
+def _briefing_summary(b: dict) -> dict:
+    """Shape a briefing dict (already HTML-stripped) into the live-feed payload."""
+    return {
+        "briefing_id": b["briefing_id"],
+        "agency_id": b.get("agency_id"),
+        "briefing_date": b.get("briefing_date"),
+        "status": b.get("status"),
+        "generated_at": b.get("generated_at"),
+        "delivered_at": b.get("delivered_at", ""),
+        "article_count": b.get("article_count", 0),
+        "topic_counts": b.get("topic_counts", {}),
+        "preview_url": _briefing_preview_url(b["briefing_id"]),
+    }
+
+
+@router.get("/latest/{agency_id}")
+async def latest_briefing(agency_id: str):
+    """Metadata for the MOST RECENT briefing — the 'what's available right now'
+    endpoint. Any status counts; a briefing is live the moment it's generated."""
+    b = get_latest_briefing(agency_id)
+    if not b:
+        raise HTTPException(status_code=404,
+                            detail=f"No briefing available yet for {agency_id}. "
+                                   f"Trigger one: POST /api/v1/bulletin/collect/{agency_id}")
+    return _briefing_summary(b)
+
+
+@router.get("/latest/{agency_id}/preview")
+async def latest_briefing_preview(agency_id: str):
+    """Redirect to the newest briefing's full preview. This is the stable URL to
+    share/bookmark — it always lands on the latest briefing."""
+    from fastapi.responses import RedirectResponse
+    b = get_latest_briefing(agency_id)
+    if not b:
+        raise HTTPException(status_code=404,
+                            detail=f"No briefing available yet for {agency_id}.")
+    # 307 keeps method/semantics; browsers follow it to the current newest preview.
+    return RedirectResponse(url=f"/api/v1/bulletin/briefings/{b['briefing_id']}/preview",
+                            status_code=307)
+
+
+@router.get("/today/{agency_id}")
+async def today_briefing(agency_id: str, lookback_hours: int = 72):
+    """Today's briefing — the 'always works' endpoint. If one exists for today it's
+    returned; otherwise a collection runs now and its result is returned. Never
+    empty (unless collection itself fails)."""
+    agency = get_agency(agency_id)
+    if not agency:
+        raise HTTPException(status_code=404, detail=f"Agency {agency_id} not found")
+
+    b = get_today_briefing(agency_id)
+    created_now = False
+    if not b:
+        result = await run_daily_cycle(agency_id, auto_deliver=False,
+                                       lookback_hours=lookback_hours)
+        if result.get("status") == "already_running":
+            # A cycle is mid-flight — hand back the latest we have rather than error.
+            b = get_latest_briefing(agency_id)
+            if not b:
+                raise HTTPException(status_code=503,
+                                    detail="Collection in progress — retry in a moment.")
+        elif result.get("error"):
+            raise HTTPException(status_code=500, detail=result["error"])
+        else:
+            created_now = True
+            b = get_today_briefing(agency_id) or get_latest_briefing(agency_id)
+
+    if not b:
+        raise HTTPException(status_code=500, detail="Failed to produce a briefing")
+    return {**_briefing_summary(b), "created_now": created_now}
+
+
+@router.post("/collect/{agency_id}")
+async def collect_now(agency_id: str, lookback_hours: int = 72):
+    """Trigger a fresh collection cycle NOW (synchronous) and return the resulting
+    briefing. The briefing is live immediately (status=delivered); email is a
+    separate step (POST /send/{agency_id}/{briefing_id})."""
+    agency = get_agency(agency_id)
+    if not agency:
+        raise HTTPException(status_code=404, detail=f"Agency {agency_id} not found")
+
+    result = await run_daily_cycle(agency_id, auto_deliver=False,
+                                   lookback_hours=lookback_hours)
+    if result.get("status") == "already_running":
+        latest = get_latest_briefing(agency_id)
+        return {
+            "status": "already_running",
+            "message": "A collection cycle is already in progress; returning the latest available.",
+            "latest": _briefing_summary(latest) if latest else None,
+        }
+    if result.get("error"):
+        raise HTTPException(status_code=500, detail=result["error"])
+
+    bid = result.get("briefing_id")
+    return {
+        "status": "collected",
+        "briefing_id": bid,
+        "briefing_date": result.get("briefing_date"),
+        "article_count": result.get("in_briefing", 0),
+        "preview_url": _briefing_preview_url(bid) if bid else None,
+        "window": result.get("window", {}),
+    }
+
+
+@router.post("/send/{agency_id}/{briefing_id}")
+async def send_briefing(agency_id: str, briefing_id: str):
+    """Email the summary (short summary + VIEW FULL BRIEFING button) for a specific
+    briefing to the agency's distribution list. Separate from collection."""
+    b = get_briefing(briefing_id)
+    if not b or b.get("agency_id") != agency_id:
+        raise HTTPException(status_code=404,
+                            detail=f"Briefing {briefing_id} not found for {agency_id}")
+    result = await send_briefing_email(briefing_id)
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return {"briefing_id": briefing_id, **result}
 
 
 # ── Editorial Queue ────────────────────────────────────────────────────────────

@@ -350,8 +350,25 @@ async def hydrate_from_store() -> Dict[str, int]:
                 _briefings[d["briefing_id"]] = Briefing(**{k: v for k, v in d.items() if k in brief_fields})
             except Exception:
                 pass
+        # ── One-time migration to the LIVE-FEED model ──────────────────────────
+        # The old flow parked briefings in "pending_approval" behind an approval
+        # gate that we've removed. Any such briefing is really just a live briefing
+        # that never got clicked through — mark it "delivered" (i.e. live/viewable)
+        # so it shows up in latest/today/history immediately. Idempotent: only
+        # touches pending_approval rows, and re-persists just those.
+        migrated = 0
+        for b in _briefings.values():
+            if b.status == "pending_approval":
+                b.status = "delivered"
+                migrated += 1
+                try:
+                    await bulletin_store.save_briefing(asdict(b))
+                except Exception as e:
+                    logger.warning(f"Migration persist failed for {b.briefing_id}: {e}")
+        if migrated:
+            logger.info(f"Bulletin hydrate: migrated {migrated} pending_approval -> delivered (live-feed model)")
         logger.info(f"Bulletin hydrate: {len(_articles)} articles, {len(_briefings)} briefings restored")
-        return {"articles": len(_articles), "briefings": len(_briefings)}
+        return {"articles": len(_articles), "briefings": len(_briefings), "migrated_to_live": migrated}
     except Exception as e:
         logger.warning(f"Bulletin hydrate failed: {e}")
         return {"articles": 0, "briefings": 0}
@@ -2944,13 +2961,20 @@ async def run_daily_cycle(
     for art in briefing_arts:
         topic_counts[art.topic] = topic_counts.get(art.topic, 0) + 1
 
-    # Deliver if auto_deliver
+    # LIVE-FEED MODEL: every briefing is immediately available the moment it is
+    # built — there is NO approval gate. status="delivered" here means "live /
+    # viewable", not "emailed". Email is a separate, optional action (see
+    # send_briefing_email / POST /send). auto_deliver still exists for the
+    # scheduler and also emails the briefing, but an email failure NEVER makes the
+    # briefing unavailable — it stays live regardless.
     delivery = {}
-    status = "pending_approval"
+    delivered_at = ""
     if auto_deliver:
         delivery = await deliver_briefing(agency, html, briefing_date)
-        status = "delivered" if delivery.get("status") in ("delivered", "dry_run") else "error"
+        if delivery.get("status") in ("delivered", "dry_run"):
+            delivered_at = _now()
 
+    status = "delivered"
     briefing = Briefing(
         briefing_id=briefing_id,
         agency_id=agency_id,
@@ -2960,6 +2984,7 @@ async def run_daily_cycle(
         article_count=len(briefing_arts),
         topic_counts=topic_counts,
         generated_at=_now(),
+        delivered_at=delivered_at,
         delivery_recipients=len(agency.distribution_list),
         docx_b64=docx_b64,
     )
@@ -2988,7 +3013,8 @@ async def run_daily_cycle(
         "window": _last_window_stats.get(agency_id, {}),
         "delivery": delivery,
         "coverage_report": coverage,
-        "message": f"Briefing ready. Approve at POST /api/v1/bulletin/briefings/{briefing_id}/approve"
+        "preview_url": _briefing_preview_url(briefing_id),
+        "message": f"Briefing LIVE now — view at {_briefing_preview_url(briefing_id)}"
     }
 
 
@@ -3039,6 +3065,143 @@ def get_briefing_history(agency_id: str) -> List[Dict]:
         d.pop("html_content", None)
         history.append(d)
     return history
+
+
+# ── Live-feed access + summary email ───────────────────────────────────────────
+# Public base URL used to build absolute preview links (in API responses and in
+# the "VIEW FULL BRIEFING" email button). Override per-environment if needed.
+PUBLIC_BASE_URL = os.getenv("BULLETIN_PUBLIC_BASE_URL", "https://api-prod.docuaction.io").rstrip("/")
+# From-address for the summary send (Step 10). Must be a SendGrid-verified sender.
+SEND_FROM_EMAIL = os.getenv("BULLETIN_SEND_FROM", "news@agtbi.com")
+
+
+def _briefing_preview_url(briefing_id: str) -> str:
+    """Absolute URL to the full HTML preview of a specific briefing."""
+    return f"{PUBLIC_BASE_URL}/api/v1/bulletin/briefings/{briefing_id}/preview"
+
+
+def _latest_preview_url(agency_id: str) -> str:
+    """Stable, bookmarkable URL that always redirects to the newest briefing."""
+    return f"{PUBLIC_BASE_URL}/api/v1/bulletin/latest/{agency_id}/preview"
+
+
+def get_latest_briefing(agency_id: str) -> Optional[Dict]:
+    """Most recent briefing for an agency (any status), without the HTML payload."""
+    items = [b for b in _briefings.values() if b.agency_id == agency_id]
+    if not items:
+        return None
+    items.sort(key=lambda b: (b.generated_at or "", b.briefing_id), reverse=True)
+    d = asdict(items[0])
+    d.pop("html_content", None)
+    return d
+
+
+def get_today_briefing(agency_id: str) -> Optional[Dict]:
+    """Newest briefing generated *today* (matches briefing_id date prefix, the
+    same clock the scheduler/watchdog use), or None if none exists yet."""
+    today = datetime.now().strftime("%Y%m%d")
+    prefix = f"{agency_id}_{today}"
+    todays = [b for b in _briefings.values()
+              if b.agency_id == agency_id and b.briefing_id.startswith(prefix)]
+    if not todays:
+        return None
+    todays.sort(key=lambda b: (b.generated_at or "", b.briefing_id), reverse=True)
+    d = asdict(todays[0])
+    d.pop("html_content", None)
+    return d
+
+
+def _build_summary_email_html(agency: AgencyConfig, briefing: Briefing, preview_url: str) -> str:
+    """Compact summary email: headline count + top topics + a 'VIEW FULL BRIEFING'
+    button that links to the full hosted preview. Intentionally lightweight so it
+    renders in any mail client; the full report lives at preview_url."""
+    color = agency.primary_color or "#0B3C5D"
+    tc = briefing.topic_counts or {}
+    top = sorted(tc.items(), key=lambda kv: kv[1], reverse=True)[:6]
+    rows = "".join(
+        f'<li style="margin:4px 0;color:#333;font-size:14px">'
+        f'{k.replace("_", " ").title()} — <strong>{v}</strong></li>'
+        for k, v in top
+    ) or '<li style="color:#666">See the full briefing for today\'s coverage.</li>'
+    return f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#f4f5f7;font-family:Arial,Helvetica,sans-serif">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f7;padding:24px 0">
+<tr><td align="center">
+<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border-radius:8px;overflow:hidden;border:1px solid #e5e7eb">
+<tr><td style="background:{color};padding:20px 28px">
+<div style="color:#ffffff;font-size:20px;font-weight:bold">{agency.name}</div>
+<div style="color:#cbd5e1;font-size:14px;margin-top:2px">Daily Intelligence Briefing — {briefing.briefing_date}</div>
+</td></tr>
+<tr><td style="padding:24px 28px">
+<p style="margin:0 0 12px;color:#111;font-size:16px">
+<strong>{briefing.article_count}</strong> stories in today's briefing.</p>
+<ul style="margin:0 0 20px;padding-left:20px">{rows}</ul>
+<table role="presentation" cellpadding="0" cellspacing="0"><tr><td align="center"
+style="border-radius:6px;background:{color}">
+<a href="{preview_url}" target="_blank"
+style="display:inline-block;padding:14px 32px;color:#ffffff;font-size:16px;font-weight:bold;text-decoration:none;border-radius:6px">
+VIEW FULL BRIEFING →</a>
+</td></tr></table>
+<p style="margin:20px 0 0;color:#888;font-size:12px">
+Or open it directly: <a href="{preview_url}" style="color:{color}">{preview_url}</a></p>
+</td></tr>
+<tr><td style="padding:16px 28px;background:#f9fafb;border-top:1px solid #e5e7eb;color:#9ca3af;font-size:12px">
+Generated by DocuAction AI — Alliance Global Tech, Inc.</td></tr>
+</table></td></tr></table></body></html>"""
+
+
+async def send_briefing_email(briefing_id: str, *,
+                              recipients: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Email a summary of one briefing (short summary + VIEW FULL BRIEFING button)
+    from SEND_FROM_EMAIL to the agency's distribution list. SEPARATE from
+    collection — collection makes a briefing live; this is an explicit send.
+    Records delivered_at/recipients and re-persists on success."""
+    briefing = _briefings.get(briefing_id)
+    if not briefing:
+        return {"error": "Briefing not found"}
+    agency = get_agency(briefing.agency_id)
+    if not agency:
+        return {"error": "Agency not found"}
+
+    to_list = recipients if recipients else list(agency.distribution_list)
+    if not to_list:
+        return {"error": "No recipients configured for this agency"}
+
+    preview_url = _briefing_preview_url(briefing_id)
+    html = _build_summary_email_html(agency, briefing, preview_url)
+    subject = f"{agency.short_name} Daily Briefing — {briefing.briefing_date}"
+
+    if not SENDGRID_KEY:
+        logger.warning("SENDGRID_API_KEY not set — send_briefing_email dry run")
+        return {"status": "dry_run", "recipients": len(to_list), "preview_url": preview_url,
+                "subject": subject, "from": SEND_FROM_EMAIL}
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            resp = await client.post(
+                "https://api.sendgrid.com/v3/mail/send",
+                headers={"Authorization": f"Bearer {SENDGRID_KEY}", "Content-Type": "application/json"},
+                json={
+                    "personalizations": [{"to": [{"email": e} for e in to_list]}],
+                    "from": {"email": SEND_FROM_EMAIL, "name": f"{agency.short_name} Daily Briefing"},
+                    "subject": subject,
+                    "content": [{"type": "text/html", "value": html}],
+                },
+            )
+            resp.raise_for_status()
+    except Exception as e:
+        logger.error(f"send_briefing_email SendGrid error: {e}")
+        return {"status": "error", "error": str(e), "preview_url": preview_url}
+
+    briefing.delivered_at = _now()
+    briefing.delivery_recipients = len(to_list)
+    try:
+        from app.bulletin_intelligence import bulletin_store
+        await bulletin_store.save_briefing(asdict(briefing))
+    except Exception as e:
+        logger.warning(f"Persist after send failed: {e}")
+    return {"status": "delivered", "recipients": len(to_list), "preview_url": preview_url,
+            "subject": subject, "from": SEND_FROM_EMAIL}
 
 
 # ── Pre-register FCC ───────────────────────────────────────────────────────────
