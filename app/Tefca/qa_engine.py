@@ -962,12 +962,13 @@ def _generate_alerts(readiness, connectors, golden, evidence, sla) -> List[dict]
 #   2. Set SENDGRID_API_KEY for email delivery (else alerts are logged only).
 #   3. Recipients default to the platform ADMIN_EMAILS allowlist; override with
 #      TEFCA_ALERT_RECIPIENTS="a@x.com,b@y.com".
-#   NOTE: the sender (TEFCA_ALERT_FROM, default alerts@agtbi.com) MUST be a
-#   SendGrid-verified sender or the send returns 403.
+#   NOTE: the sender (TEFCA_ALERT_FROM, default intelligence@docuaction.io — the
+#   already-verified docuaction.io sender) MUST be a SendGrid-verified sender or
+#   the send returns 403.
 # Implemented with httpx (NOT the `sendgrid` lib, which is not a dependency) to
 # match the platform's proven SendGrid pattern.
 SENDGRID_KEY = os.getenv("SENDGRID_API_KEY", "")
-TEFCA_ALERT_FROM = os.getenv("TEFCA_ALERT_FROM", "alerts@agtbi.com")
+TEFCA_ALERT_FROM = os.getenv("TEFCA_ALERT_FROM", "intelligence@docuaction.io")
 QA_EMAIL_ALERT_THRESHOLD = 85.0  # overall QA score below this triggers an email
 
 # De-dupe: at most one email per (UTC-date, breach-signature) so a persistent
@@ -1111,9 +1112,11 @@ async def generate_qa_report(db, triggered_by="manual") -> Dict[str, Any]:
     passed = (await db.execute(text("SELECT count(*) FROM tefca_qa_audit WHERE passed"))).scalar() or 0
     audit_rate = round(100.0 * passed / total, 1) if total else None
 
+    from app.Tefca.connectors import data_source_labels
     report_data = {
         "report_type": "qa",
         "task": "QA Framework — Quality Scorecard (Tasks 1–6)",
+        **data_source_labels(),   # honest MOCK/PRODUCTION label (parity with weekly/final reports)
         "overall_qa_score": sweep["overall_qa_score"],
         "dimensions": sweep["dimensions"],
         "golden_regression": {"drift_detected": sweep["drift_detected"]},
