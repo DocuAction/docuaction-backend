@@ -13,7 +13,7 @@ import os
 import time
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 
 from sqlalchemy import text, select
@@ -286,10 +286,41 @@ class PlatformReadinessCheck:
         except Exception as e:
             return {"name": "auth", "passed": False, "detail": str(e)[:120]}
 
-    def check_scheduler(self) -> Dict[str, Any]:
-        enabled = os.getenv("ENABLE_SCHEDULER", "false").strip().lower() == "true"
-        return {"name": "scheduler", "passed": True,
-                "detail": "enabled" if enabled else "disabled (ENABLE_SCHEDULER not true) — not required"}
+    async def check_scheduler(self, db=None) -> Dict[str, Any]:
+        """Real freshness check: has the continuous QA monitor actually run
+        recently? Based on the last 'qa_sweep' row in the immutable audit trail
+        (behavior, not just the env flag). PASS within 24h, WARN 24–48h, FAIL if
+        the monitor hasn't run in 48h+ (or never)."""
+        enabled = os.getenv("ENABLE_QA_MONITOR", "false").strip().lower() == "true"
+        if db is None:
+            # No DB handle — can't verify freshness; report config only, non-failing.
+            return {"name": "scheduler", "passed": True,
+                    "detail": f"QA monitor {'enabled' if enabled else 'disabled'}; freshness not checked (no db)"}
+        try:
+            last = (await db.execute(
+                text("SELECT max(created_at) FROM tefca_qa_audit WHERE gate_name = 'qa_sweep'")
+            )).scalar()
+        except Exception as e:
+            return {"name": "scheduler", "passed": False, "detail": f"audit query failed: {str(e)[:80]}"}
+        if not last:
+            return {"name": "scheduler", "passed": False,
+                    "detail": f"QA monitor has never run (ENABLE_QA_MONITOR={'true' if enabled else 'false'})"}
+        if isinstance(last, str):
+            try:
+                last = datetime.fromisoformat(last)
+            except Exception:
+                return {"name": "scheduler", "passed": True, "detail": f"last QA sweep at {last}"}
+        if last.tzinfo is not None:
+            last = last.replace(tzinfo=None)
+        age_h = (datetime.utcnow() - last).total_seconds() / 3600.0
+        if age_h <= 24:
+            return {"name": "scheduler", "passed": True, "detail": f"last QA sweep {age_h:.1f}h ago"}
+        if age_h <= 48:
+            return {"name": "scheduler", "passed": True,
+                    "detail": f"WARN: last QA sweep {age_h:.1f}h ago (>24h) — monitor may be lagging"}
+        return {"name": "scheduler", "passed": False,
+                "detail": f"STALE: last QA sweep {age_h:.1f}h ago (>48h) — QA monitor not running "
+                          f"(set ENABLE_QA_MONITOR=true on one instance)"}
 
     def check_required_config(self) -> Dict[str, Any]:
         missing = [k for k in ("DATABASE_URL", "SECRET_KEY") if not os.getenv(k)]
@@ -305,7 +336,7 @@ class PlatformReadinessCheck:
         if not skip_http:
             checks.append(await self.check_api_endpoints())
         checks.append(self.check_auth())
-        checks.append(self.check_scheduler())
+        checks.append(await self.check_scheduler(db))
         checks.append(self.check_required_config())
         passed = sum(1 for c in checks if c["passed"])
         score = round(100.0 * passed / len(checks), 1) if checks else 0.0
@@ -358,6 +389,40 @@ def _evidence_completeness(review) -> float:
     return round(100.0 * present / len(fields), 1)
 
 
+# Required authoritative sources for a valid review. PECOS is OPTIONAL — it
+# proxies NPPES and carries no independent signal (no payment-suspension feed).
+_REQUIRED_CONNECTORS = ("NPPES", "SAM_GOV", "OIG_LEIE")
+
+
+async def _required_connectors_ran(db, window_hours: int = 24) -> Dict[str, Any]:
+    """Real backing for the 'connectors_attempted' gate: did each REQUIRED
+    authoritative source actually run and respond (status 'available') within the
+    recent window? Reads tefca_connector_logs, which is written on every connector
+    probe. Case-insensitive on connector_name. FAIL if any required source has no
+    recent successful probe (e.g. SAM.gov with no API key surfaces here honestly).
+    """
+    since = datetime.utcnow() - timedelta(hours=window_hours)
+    try:
+        rows = (await db.execute(text(
+            "SELECT upper(connector_name) AS n, status FROM tefca_connector_logs "
+            "WHERE checked_at >= :since ORDER BY checked_at DESC"
+        ), {"since": since})).fetchall()
+    except Exception as e:
+        return {"passed": False, "missing": list(_REQUIRED_CONNECTORS),
+                "detail": f"connector-log query failed: {str(e)[:80]}", "window_hours": window_hours}
+    latest: Dict[str, str] = {}
+    for n, status in rows:
+        if n not in latest:              # rows are newest-first → first seen is latest
+            latest[n] = status
+    missing = [c for c in _REQUIRED_CONNECTORS if latest.get(c) != "available"]
+    return {
+        "passed": len(missing) == 0,
+        "missing": missing,
+        "window_hours": window_hours,
+        "latest": {c: latest.get(c, "no_recent_probe") for c in _REQUIRED_CONNECTORS},
+    }
+
+
 async def validate_review(db, review_id, triggered_by="automatic") -> Dict[str, Any]:
     """Run the full automated QA gate ladder on a persisted review. Logs every
     gate to tefca_qa_audit. Returns a verdict + recommended status."""
@@ -375,11 +440,18 @@ async def validate_review(db, review_id, triggered_by="automatic") -> Dict[str, 
     classified = bool(review.status)
     qa_score = round(0.5 * intake["score"] + 0.5 * evidence_pct, 1)
 
+    # Real gate (was hardcoded pass): confirm the required authoritative sources
+    # actually ran and responded recently. A missing/unavailable required source
+    # fails the gate and routes the review to needs_review.
+    conn = await _required_connectors_ran(db)
+
     sm = ReviewStateMachine()
     # Each gate is paired with its state-machine transition (contiguous path).
     gates = [
         ("intake", "intake", intake["passed"], intake["score"], 100.0, intake["failures"], sm.advance_intake),
-        ("connectors_attempted", "connector", True, 100.0, 0.0, [], sm.advance_connectors),
+        ("connectors_attempted", "connector", conn["passed"],
+         100.0 if conn["passed"] else 0.0, 100.0,
+         [f"connector_missing:{c}" for c in conn["missing"]], sm.advance_connectors),
         ("findings_generated", "evidence", classified, 100.0 if classified else 0.0, 100.0,
          [] if classified else ["not_classified"], sm.advance_findings),
         ("evidence_complete", "evidence", evidence_pct >= 100.0, evidence_pct, 100.0,
@@ -545,7 +617,13 @@ async def evidence_gate(db, start=None, end=None, triggered_by="automatic") -> D
 
 # ═══════════════════════════════════════════════════════════════════════════
 # QA Task 3 — Statistical QA: sampling validation (vs Cochran @95% CI),
-# inter-rater reliability (Cohen's kappa), confidence-interval checks. Additive.
+# internal consistency (self-consistency of the classification pipeline), and
+# confidence-interval checks. Additive.
+#
+# HONESTY NOTE: the "internal consistency" metric is NOT inter-rater reliability.
+# There is no independent second reviewer; both ratings are derived from the same
+# review. It is honestly labeled as an internal consistency score. True IRR needs
+# double-review sampling — see internal_consistency_check's TODO.
 # ═══════════════════════════════════════════════════════════════════════════
 
 _STAT_CATS = ["no_discrepancy", "minor_administrative", "inexplicable", "non_compliant"]
@@ -630,8 +708,9 @@ async def validate_sampling(db, population=94231, confidence=0.95, margin=0.05, 
     return result
 
 
-def _secondary_rating(findings):
-    """Independent 'second rater' disposition derived from finding severities."""
+def _consistency_second_pass(findings):
+    """Second-pass category derived from a review's OWN finding severities. Used
+    only for the internal-consistency check — this is NOT an independent rater."""
     order = {"low": 0, "medium": 1, "high": 2, "critical": 3}
     if not findings:
         return "no_discrepancy"
@@ -639,7 +718,19 @@ def _secondary_rating(findings):
     return _SEVERITY_TO_CATEGORY.get((worst.severity or "low").lower(), "no_discrepancy")
 
 
-async def inter_rater_reliability(db, sample_size=20, seed=42, triggered_by="automatic"):
+async def internal_consistency_check(db, sample_size=20, seed=42, triggered_by="automatic"):
+    """Internal consistency of the classification pipeline: agreement between a
+    review's stored status and the category implied by its own finding severities.
+
+    NOTE: This is an INTERNAL CONSISTENCY check, not a true inter-rater
+      reliability measure. Both ratings are derived from the SAME review data
+      (there is no independent second reviewer), so the score measures pipeline
+      self-consistency, not IRR.
+    TODO(SOW T2): Implement real inter-rater reliability via double-review
+      sampling — select ~10% of completed reviews, assign each to a DIFFERENT
+      reviewer through tefca_analyst_queue, and compute Cohen's kappa between the
+      two INDEPENDENT ratings. Only then may this be reported as IRR.
+    """
     import random
     from .models import TEFCAReview, TEFCAFinding
     reviews = (await db.execute(select(TEFCAReview))).scalars().all()
@@ -655,37 +746,52 @@ async def inter_rater_reliability(db, sample_size=20, seed=42, triggered_by="aut
         primary = (r.status or "").lower()
         if primary not in _STAT_CATS:
             primary = "no_discrepancy"
-        secondary = _secondary_rating(by_review.get(r.id, []))
+        secondary = _consistency_second_pass(by_review.get(r.id, []))
         matrix[(primary, secondary)] = matrix.get((primary, secondary), 0) + 1
         if primary == secondary:
             agree += 1
     n = len(subset)
-    kappa = cohens_kappa(matrix, _STAT_CATS)
-    interp = ("almost perfect" if kappa and kappa >= 0.81 else "substantial" if kappa and kappa >= 0.61
-              else "moderate" if kappa and kappa >= 0.41 else "fair" if kappa and kappa >= 0.21 else "slight/poor")
-    result = {"sample_size": n, "percent_agreement": round(100.0 * agree / n, 1) if n else None,
-              "cohens_kappa": kappa, "interpretation": interp, "target_kappa": 0.80,
-              "meets_target": bool(kappa is not None and kappa >= 0.80), "seed": seed}
-    await log_qa_audit(db, gate_name="inter_rater_reliability", gate_type="statistical",
-                       passed=result["meets_target"], score=(round(kappa * 100, 1) if kappa else 0.0),
-                       threshold=80.0, failures=[] if result["meets_target"] else ["kappa_below_target"],
+    # kappa formula applied as a self-consistency score (see NOTE — not IRR).
+    score = cohens_kappa(matrix, _STAT_CATS)
+    interp = ("almost perfect" if score and score >= 0.81 else "substantial" if score and score >= 0.61
+              else "moderate" if score and score >= 0.41 else "fair" if score and score >= 0.21 else "slight/poor")
+    result = {
+        "metric": "internal_consistency_score",
+        "sample_size": n,
+        "percent_agreement": round(100.0 * agree / n, 1) if n else None,
+        "internal_consistency_score": score,
+        "interpretation": interp,
+        "target_score": 0.80,
+        "meets_target": bool(score is not None and score >= 0.80),
+        "seed": seed,
+        "disclaimer": ("Internal consistency check, NOT a true inter-rater reliability "
+                       "measure. Real IRR requires independent double-review sampling (SOW T2)."),
+    }
+    await log_qa_audit(db, gate_name="internal_consistency", gate_type="statistical",
+                       passed=result["meets_target"], score=(round(score * 100, 1) if score else 0.0),
+                       threshold=80.0, failures=[] if result["meets_target"] else ["consistency_below_target"],
                        details=result, triggered_by=triggered_by)
     await db.commit()
     return result
+
+
+# Backward-compat alias so any external caller keeps working. This is NOT
+# inter-rater reliability — see internal_consistency_check's NOTE.
+inter_rater_reliability = internal_consistency_check
 
 
 async def statistical_qa(db, triggered_by="manual"):
     from .models import TEFCAReview
     from sqlalchemy import func
     sampling = await validate_sampling(db, triggered_by=triggered_by)
-    irr = await inter_rater_reliability(db, triggered_by=triggered_by)
+    consistency = await internal_consistency_check(db, triggered_by=triggered_by)
     total = (await db.execute(select(func.count()).select_from(TEFCAReview))).scalar() or 0
     nc = (await db.execute(select(func.count()).select_from(TEFCAReview).where(TEFCAReview.status == "non_compliant"))).scalar() or 0
     lo, hi = wilson_ci(nc, total)
     ci = {"metric": "non_compliance_rate", "point_estimate": round(nc / total, 4) if total else 0.0,
           "n": total, "wilson_95_ci": [lo, hi], "ci_half_width": round((hi - lo) / 2, 4),
           "within_target_margin": ((hi - lo) / 2 <= 0.05) if total else True}
-    return {"sampling_validation": sampling, "inter_rater_reliability": irr,
+    return {"sampling_validation": sampling, "internal_consistency": consistency,
             "confidence_interval": ci, "computed_at": datetime.utcnow().isoformat()}
 
 
@@ -914,7 +1020,8 @@ async def generate_qa_report(db, triggered_by="manual") -> Dict[str, Any]:
         "statistical_qa": {
             "meets_expected_sample": stats["sampling_validation"]["meets_expected_sample"],
             "expected_sample_size": stats["sampling_validation"]["expected_sample_size"],
-            "inter_rater_kappa": stats["inter_rater_reliability"]["cohens_kappa"],
+            "internal_consistency_score": stats["internal_consistency"]["internal_consistency_score"],
+            "internal_consistency_note": stats["internal_consistency"]["disclaimer"],
             "non_compliance_95_ci": stats["confidence_interval"]["wilson_95_ci"],
         },
         "audit_pass_rate": audit_rate, "audit_gates_total": total,

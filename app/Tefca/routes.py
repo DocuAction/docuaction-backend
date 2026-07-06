@@ -2039,15 +2039,27 @@ async def qa_sampling_validation(
     return await qa_engine.validate_sampling(db, population, confidence, margin, triggered_by="manual")
 
 
-@tefca_dashboard_router.get("/qa/inter-rater", summary="Inter-rater reliability (Cohen's kappa)")
+@tefca_dashboard_router.get("/qa/internal-consistency",
+                            summary="Internal consistency score (pipeline self-consistency — NOT inter-rater reliability)")
+async def qa_internal_consistency(
+    sample_size: int = Query(20), seed: int = Query(42),
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+):
+    return await qa_engine.internal_consistency_check(db, sample_size, seed, triggered_by="manual")
+
+
+@tefca_dashboard_router.get("/qa/inter-rater",
+                            summary="[deprecated alias] Internal consistency score — NOT true inter-rater reliability")
 async def qa_inter_rater(
     sample_size: int = Query(20), seed: int = Query(42),
     db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
 ):
-    return await qa_engine.inter_rater_reliability(db, sample_size, seed, triggered_by="manual")
+    # Backward-compatible path; returns the honestly-labeled internal consistency
+    # score (real IRR requires double-review sampling — see qa_engine TODO).
+    return await qa_engine.internal_consistency_check(db, sample_size, seed, triggered_by="manual")
 
 
-@tefca_dashboard_router.get("/qa/statistical", summary="Combined statistical QA (sampling + IRR + CI)")
+@tefca_dashboard_router.get("/qa/statistical", summary="Combined statistical QA (sampling + internal consistency + CI)")
 async def qa_statistical(db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
     return await qa_engine.statistical_qa(db, triggered_by="manual")
 
