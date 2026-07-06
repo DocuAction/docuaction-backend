@@ -36,19 +36,23 @@ class FindingCode:
     ENTITY_TYPE_MISMATCH       = "ENTITY_TYPE_MISMATCH"
     NPI_MISSING                = "NPI_MISSING"
     SAM_REGISTRATION_LAPSED    = "SAM_REGISTRATION_LAPSED"
-    SOURCE_CONFLICT            = "SOURCE_CONFLICT"
-    HIERARCHY_MISMATCH         = "HIERARCHY_MISMATCH"
+    # Removed: SOURCE_CONFLICT — no detection logic implemented (would need
+    #   cross-source name-conflict / tie-break rules). Add back when the COR
+    #   provides an authoritative precedence data source.
+    # Removed: HIERARCHY_MISMATCH — depends on IQVIA OneKey, which is not live
+    #   (pending federal ODC). Add back when the OneKey feed is provisioned.
 
     # Bucket 2 — Minor/Administrative
     NAME_ABBREVIATION_DIFF     = "NAME_ABBREVIATION_DIFF"
     NAME_PUNCTUATION_DIFF      = "NAME_PUNCTUATION_DIFF"
     NAME_DBA_VS_LEGAL          = "NAME_DBA_VS_LEGAL"
-    ADDRESS_UNIT_DIFF          = "ADDRESS_UNIT_DIFF"
     ADDRESS_FORMAT_DIFF        = "ADDRESS_FORMAT_DIFF"
-    PHONE_DISCREPANCY          = "PHONE_DISCREPANCY"
-    ZIP_FORMAT_DIFF            = "ZIP_FORMAT_DIFF"
     LEIE_HISTORICAL_RESOLVED   = "LEIE_HISTORICAL_RESOLVED"
-    MINOR_CORP_SUFFIX_DIFF     = "MINOR_CORP_SUFFIX_DIFF"
+    # Removed: ADDRESS_UNIT_DIFF, PHONE_DISCREPANCY, ZIP_FORMAT_DIFF,
+    #   MINOR_CORP_SUFFIX_DIFF — defined but never emitted by validate() (no
+    #   suite/unit, phone, ZIP-format, or corporate-suffix detection is
+    #   implemented). Removed so the taxonomy never claims coverage it doesn't
+    #   deliver; add back together with real detection logic when warranted.
 
     # Bucket 1 — No Discrepancy
     NO_DISCREPANCY             = "NO_DISCREPANCY"
@@ -67,17 +71,11 @@ FINDING_DESCRIPTIONS = {
     FindingCode.ENTITY_TYPE_MISMATCH: "Submitted entity type does not match NPPES taxonomy classification",
     FindingCode.NPI_MISSING: "No NPI provided in RCE Directory submission",
     FindingCode.SAM_REGISTRATION_LAPSED: "SAM.gov registration expired without renewal on record",
-    FindingCode.SOURCE_CONFLICT: "Conflicting legal names across three or more authoritative sources",
-    FindingCode.HIERARCHY_MISMATCH: "Organizational hierarchy in submission conflicts with OneKey data",
     FindingCode.NAME_ABBREVIATION_DIFF: "Name difference attributable to abbreviation (St./Saint, Corp./Corporation)",
     FindingCode.NAME_PUNCTUATION_DIFF: "Name difference attributable to punctuation only",
     FindingCode.NAME_DBA_VS_LEGAL: "DBA name submitted vs legal name in NPPES — trade name variation",
-    FindingCode.ADDRESS_UNIT_DIFF: "Address difference attributable to suite/floor/unit number only",
     FindingCode.ADDRESS_FORMAT_DIFF: "Address formatting difference — same location, different format",
-    FindingCode.PHONE_DISCREPANCY: "Phone number differs from NPPES — likely data entry error",
-    FindingCode.ZIP_FORMAT_DIFF: "ZIP code format difference (5-digit vs ZIP+4)",
     FindingCode.LEIE_HISTORICAL_RESOLVED: "Historical LEIE exclusion found but reinstatement confirmed",
-    FindingCode.MINOR_CORP_SUFFIX_DIFF: "Minor corporate suffix difference (LLC vs Group LLC)",
     FindingCode.NO_DISCREPANCY: "All validation checks passed within tolerance thresholds",
 }
 
@@ -461,15 +459,12 @@ class ValidationEngine:
         bucket3_codes = {
             FindingCode.NAME_COMPLETELY_DIFFERENT, FindingCode.ADDRESS_STATE_CONFLICT,
             FindingCode.ENTITY_TYPE_MISMATCH, FindingCode.NPI_MISSING,
-            FindingCode.SAM_REGISTRATION_LAPSED, FindingCode.SOURCE_CONFLICT,
-            FindingCode.HIERARCHY_MISMATCH,
+            FindingCode.SAM_REGISTRATION_LAPSED,
         }
         bucket2_codes = {
             FindingCode.NAME_ABBREVIATION_DIFF, FindingCode.NAME_PUNCTUATION_DIFF,
-            FindingCode.NAME_DBA_VS_LEGAL, FindingCode.ADDRESS_UNIT_DIFF,
-            FindingCode.ADDRESS_FORMAT_DIFF, FindingCode.PHONE_DISCREPANCY,
-            FindingCode.ZIP_FORMAT_DIFF, FindingCode.LEIE_HISTORICAL_RESOLVED,
-            FindingCode.MINOR_CORP_SUFFIX_DIFF,
+            FindingCode.NAME_DBA_VS_LEGAL, FindingCode.ADDRESS_FORMAT_DIFF,
+            FindingCode.LEIE_HISTORICAL_RESOLVED,
         }
 
         if any(f in bucket4_codes for f in findings):

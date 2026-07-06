@@ -16,6 +16,7 @@ from typing import Dict, Any, List, Optional
 from sqlalchemy import select, text
 
 from .models import TEFCAReview, TEFCAFinding, TEFCAReport
+from .connectors import data_source_labels
 
 # The four SOW discrepancy categories (== tefca_reviews.status values).
 CATEGORIES = ["no_discrepancy", "minor_administrative", "inexplicable", "non_compliant"]
@@ -109,6 +110,10 @@ def _suggest_methodology_changes(finding_type_counts: Dict[str, int]) -> List[di
 
 
 async def _persist(db, report_type: str, report_data: dict, period_start, period_end, generated_by) -> uuid.UUID:
+    # Honest labeling: stamp data provenance on EVERY persisted report so mock
+    # output is never mistaken for a production review. Mutates report_data in
+    # place so the caller's returned dict carries the same fields.
+    report_data.update(data_source_labels())
     rid = uuid.uuid4()
     db.add(TEFCAReport(
         report_id=rid, report_type=report_type,
@@ -503,6 +508,7 @@ async def generate_priority_status_report(db, case_id) -> Optional[dict]:
     return {
         "report_type": "priority_status",
         "task": "SOW Task 5 — Priority Review Status Report (for COR)",
+        **data_source_labels(),   # honest provenance (this report is not persisted)
         "case_id": str(case.case_id),
         "cor_reference": case.cor_reference,
         "qhin": case.qhin,

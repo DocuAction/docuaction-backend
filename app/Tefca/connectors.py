@@ -50,6 +50,30 @@ SOURCE_TIMEOUT_SECONDS = 30.0
 HEALTH_TIMEOUT_SECONDS = 5.0
 RETRY_ATTEMPTS = 3
 
+
+# ─── Data-provenance honesty ─────────────────────────────────────────────────
+# The RCE Directory (Sequoia FHIR) is the source of the entities under review.
+# Until RCE_DIRECTORY_API_KEY is provisioned (pending Sequoia Case #00055525) the
+# connector serves the bundled development dataset, so the ENTIRE review pipeline
+# is running on demonstration data. These helpers give every API/report payload a
+# single, honest provenance label so mock output can never be mistaken for a
+# production review.
+def is_running_mock() -> bool:
+    """True if the module is serving MOCK entity data (RCE Directory key unset)."""
+    return not bool(os.getenv("RCE_DIRECTORY_API_KEY", "").strip())
+
+
+def data_source_labels() -> Dict[str, Any]:
+    """Provenance fields to stamp on every dashboard/report/status response.
+    Single source of truth — imported by reporting.py and routes.py."""
+    if is_running_mock():
+        return {
+            "data_source": "MOCK — demonstration data only",
+            "mock_data_warning": ("This report uses synthetic demonstration data. "
+                                  "Do not use for operational decisions."),
+        }
+    return {"data_source": "PRODUCTION", "mock_data_warning": None}
+
 HTTP_HEADERS = {
     "User-Agent": (
         "DocuAction-TEFCA/6.0 "

@@ -28,7 +28,10 @@ from app.core.security import require_role, get_current_user, ADMIN_EMAILS
 from app.core.config import settings
 from app.services.audit import log_tefca_event
 
-from .connectors import SourceConnectorManager, SourceResult, _extract_npi, _entity_type_of
+from .connectors import (
+    SourceConnectorManager, SourceResult, _extract_npi, _entity_type_of,
+    is_running_mock, data_source_labels,
+)
 from .validation_engine import ValidationEngine, EvidenceRecordGenerator
 from .mock_data import ALL_MOCK_ENTITIES, MOCK_STATS
 from . import review_engine
@@ -1224,6 +1227,7 @@ async def dashboard_summary(db: AsyncSession = Depends(get_db)):
         "connector_health": _connector_health_snapshot(health),
         "risk_distribution": by_risk,
         "top_failure_reasons": [{"reason": _FINDING_REASON_LABELS.get(c, c), "count": n} for c, n in top],
+        **data_source_labels(),
     }
 
 
@@ -1268,6 +1272,22 @@ async def dashboard_trends(db: AsyncSession = Depends(get_db)):
         "monthly_avg_time": monthly_avg_time,
         "pass_rate_trend": pass_rate_trend,
         "connector_uptime": connector_uptime,
+        **data_source_labels(),
+    }
+
+
+@tefca_dashboard_router.get("/status", summary="Module status + data provenance (public)")
+async def tefca_status():
+    """Lightweight public status: whether TEFCA is serving MOCK or PRODUCTION data,
+    plus live connector health. The honest 'are we on mock data?' endpoint."""
+    health = await get_connector_manager().health_check()
+    return {
+        "module": "tefca_arc",
+        "status": "active",
+        "contract": "7571MN26F80064",
+        "rce_directory_live": not is_running_mock(),
+        "connector_health": _connector_health_snapshot(health),
+        **data_source_labels(),
     }
 
 

@@ -34,23 +34,27 @@ DISCREPANCY_TAXONOMY: Dict[str, Dict[str, Any]] = {
         "bucket": 2, "label": "Minor / Administrative", "status": "minor_administrative",
         "risk_level": "medium",
         "description": "Cosmetic/administrative differences (abbreviation, suffix, ZIP format, DBA name, resolved historical exclusion).",
+        # Pruned to only codes validate() actually emits — removed ADDRESS_UNIT_DIFF,
+        # PHONE_DISCREPANCY, ZIP_FORMAT_DIFF, MINOR_CORP_SUFFIX_DIFF (no detection
+        # logic implemented; see validation_engine.FindingCode). The published
+        # taxonomy must not claim coverage the engine doesn't deliver.
         "finding_codes": [
             FindingCode.NAME_ABBREVIATION_DIFF, FindingCode.NAME_PUNCTUATION_DIFF,
-            FindingCode.NAME_DBA_VS_LEGAL, FindingCode.ADDRESS_UNIT_DIFF,
-            FindingCode.ADDRESS_FORMAT_DIFF, FindingCode.PHONE_DISCREPANCY,
-            FindingCode.ZIP_FORMAT_DIFF, FindingCode.LEIE_HISTORICAL_RESOLVED,
-            FindingCode.MINOR_CORP_SUFFIX_DIFF,
+            FindingCode.NAME_DBA_VS_LEGAL, FindingCode.ADDRESS_FORMAT_DIFF,
+            FindingCode.LEIE_HISTORICAL_RESOLVED,
         ],
     },
     "B3": {
         "bucket": 3, "label": "Inexplicable", "status": "inexplicable",
         "risk_level": "high",
         "description": "Material discrepancy requiring QHIN investigation (name mismatch, state conflict, entity-type mismatch, lapsed SAM registration, missing NPI).",
+        # Pruned — removed SOURCE_CONFLICT (no cross-source tie-break logic) and
+        # HIERARCHY_MISMATCH (depends on IQVIA OneKey, not live). Restore with the
+        # detection logic / data source when available.
         "finding_codes": [
             FindingCode.NAME_COMPLETELY_DIFFERENT, FindingCode.ADDRESS_STATE_CONFLICT,
             FindingCode.ENTITY_TYPE_MISMATCH, FindingCode.NPI_MISSING,
-            FindingCode.SAM_REGISTRATION_LAPSED, FindingCode.SOURCE_CONFLICT,
-            FindingCode.HIERARCHY_MISMATCH,
+            FindingCode.SAM_REGISTRATION_LAPSED,
         ],
     },
     "B4": {
