@@ -956,6 +956,95 @@ def _generate_alerts(readiness, connectors, golden, evidence, sla) -> List[dict]
     return alerts
 
 
+# ─── Email notification on threshold breach ──────────────────────────────────
+# To enable continuous QA monitoring WITH email alerts:
+#   1. Set ENABLE_QA_MONITOR=true on ONE Railway instance (starts qa_monitor).
+#   2. Set SENDGRID_API_KEY for email delivery (else alerts are logged only).
+#   3. Recipients default to the platform ADMIN_EMAILS allowlist; override with
+#      TEFCA_ALERT_RECIPIENTS="a@x.com,b@y.com".
+#   NOTE: the sender (TEFCA_ALERT_FROM, default alerts@agtbi.com) MUST be a
+#   SendGrid-verified sender or the send returns 403.
+# Implemented with httpx (NOT the `sendgrid` lib, which is not a dependency) to
+# match the platform's proven SendGrid pattern.
+SENDGRID_KEY = os.getenv("SENDGRID_API_KEY", "")
+TEFCA_ALERT_FROM = os.getenv("TEFCA_ALERT_FROM", "alerts@agtbi.com")
+QA_EMAIL_ALERT_THRESHOLD = 85.0  # overall QA score below this triggers an email
+
+# De-dupe: at most one email per (UTC-date, breach-signature) so a persistent
+# breach doesn't email on every hourly sweep.
+_qa_alerted = set()
+
+
+def _alert_recipients() -> List[str]:
+    env = os.getenv("TEFCA_ALERT_RECIPIENTS", "").strip()
+    if env:
+        return [e.strip() for e in env.split(",") if e.strip()]
+    try:
+        from app.core.security import ADMIN_EMAILS
+        return sorted(ADMIN_EMAILS)
+    except Exception:
+        return []
+
+
+async def send_qa_alert(alert_type: str, details: dict) -> Dict[str, Any]:
+    """Email a QA threshold-breach alert to the admin team via SendGrid.
+    Best-effort: never raises; always returns a status dict and logs the outcome."""
+    import json as _json
+    recipients = _alert_recipients()
+    if not SENDGRID_KEY:
+        logger.warning(f"[QA ALERT — no SENDGRID_API_KEY, logged only] {alert_type}: {details}")
+        return {"sent": False, "reason": "no_sendgrid_key", "recipients": recipients}
+    if not recipients:
+        logger.warning(f"[QA ALERT — no recipients configured] {alert_type}")
+        return {"sent": False, "reason": "no_recipients"}
+    subject = f"TEFCA QA ALERT: {alert_type}"
+    body = (
+        "TEFCA QA Threshold Breach Detected\n\n"
+        f"Alert Type: {alert_type}\n"
+        f"Time (UTC): {datetime.utcnow().isoformat()}\n\n"
+        f"Details:\n{_json.dumps(details, indent=2, default=str)}\n\n"
+        "Action Required: review the QA dashboard at\n"
+        "https://app.docuaction.io/tefca-dashboard\n\n"
+        "— DocuAction TEFCA ARC Automated QA Monitor"
+    )
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=httpx.Timeout(20.0)) as client:
+            resp = await client.post(
+                "https://api.sendgrid.com/v3/mail/send",
+                headers={"Authorization": f"Bearer {SENDGRID_KEY}", "Content-Type": "application/json"},
+                json={
+                    "personalizations": [{"to": [{"email": e} for e in recipients]}],
+                    "from": {"email": TEFCA_ALERT_FROM, "name": "DocuAction TEFCA QA Monitor"},
+                    "subject": subject,
+                    "content": [{"type": "text/plain", "value": body}],
+                },
+            )
+            resp.raise_for_status()
+        logger.info(f"QA alert emailed: {alert_type} -> {recipients}")
+        return {"sent": True, "recipients": recipients, "alert_type": alert_type}
+    except Exception as e:
+        logger.error(f"QA alert email failed ({alert_type}): {e}")
+        return {"sent": False, "reason": str(e)[:160], "recipients": recipients}
+
+
+async def _maybe_email_alerts(overall: float, alerts: List[dict]) -> Dict[str, Any]:
+    """Send ONE consolidated alert email if the sweep breached — de-duped per UTC
+    day per breach signature so a persistent condition doesn't spam the inbox."""
+    if overall >= QA_EMAIL_ALERT_THRESHOLD and not alerts:
+        return {"sent": False, "reason": "no_breach"}
+    day = datetime.utcnow().strftime("%Y-%m-%d")
+    sig = (day, overall < QA_EMAIL_ALERT_THRESHOLD, tuple(sorted(a["source"] for a in alerts)))
+    if sig in _qa_alerted:
+        return {"sent": False, "reason": "deduped_today"}
+    _qa_alerted.add(sig)
+    return await send_qa_alert(
+        alert_type=f"QA sweep breach — overall score {overall}",
+        details={"overall_qa_score": overall, "email_threshold": QA_EMAIL_ALERT_THRESHOLD,
+                 "alert_count": len(alerts), "alerts": alerts},
+    )
+
+
 async def run_qa_sweep(db, triggered_by="scheduled") -> Dict[str, Any]:
     """Full QA sweep: every gate + threshold alerts + SLA, all logged."""
     readiness = await PlatformReadinessCheck().run(db, skip_http=True)
@@ -970,6 +1059,15 @@ async def run_qa_sweep(db, triggered_by="scheduled") -> Dict[str, Any]:
     alerts = _generate_alerts(readiness, connectors, golden, evidence, sla)
     if overall < QA_OVERALL_ALERT_THRESHOLD:
         alerts.append({"level": "high", "source": "overall", "message": f"overall QA score {overall} < {QA_OVERALL_ALERT_THRESHOLD}"})
+    # >10% non_compliant reviews -> alert.
+    from sqlalchemy import func as _func
+    from .models import TEFCAReview as _TR
+    total_rev = (await db.execute(select(_func.count()).select_from(_TR))).scalar() or 0
+    nc_rev = (await db.execute(select(_func.count()).select_from(_TR).where(_TR.status == "non_compliant"))).scalar() or 0
+    nc_rate = (nc_rev / total_rev) if total_rev else 0.0
+    if nc_rate > 0.10:
+        alerts.append({"level": "high", "source": "non_compliance_rate",
+                       "message": f"{nc_rate:.1%} of reviews non_compliant (>10%)"})
 
     for a in alerts:
         await log_qa_audit(db, gate_name=f"alert:{a['source']}", gate_type="alert", passed=False,
@@ -980,8 +1078,12 @@ async def run_qa_sweep(db, triggered_by="scheduled") -> Dict[str, Any]:
                        details={"alerts": len(alerts), "overall": overall}, triggered_by=triggered_by)
     await db.commit()
 
+    # Email admins on breach (best-effort; de-duped; no-op without SENDGRID_API_KEY).
+    email_status = await _maybe_email_alerts(overall, alerts)
+
     return {
         "overall_qa_score": overall, "alert_count": len(alerts), "alerts": alerts,
+        "email_alert": email_status,
         "dimensions": {"platform_readiness": readiness["score"], "connector_health": connectors["overall_health"],
                        "golden_regression": golden["pass_rate"], "evidence_gate": evidence["evidence_score"],
                        "sla_compliance": sla["sla_compliance_pct"]},

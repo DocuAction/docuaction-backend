@@ -2100,6 +2100,18 @@ async def qa_alerts(limit: int = Query(50), db: AsyncSession = Depends(get_db), 
         for r in rows]}
 
 
+@tefca_dashboard_router.post("/qa/alerts/test", summary="Send a test QA alert email (verify delivery)")
+async def qa_alerts_test(user=Depends(require_role("qalead"))):
+    """Send a test QA alert to the configured recipients to verify email delivery.
+    No-op (logged only) if SENDGRID_API_KEY is unset."""
+    result = await qa_engine.send_qa_alert(
+        "TEST ALERT",
+        {"note": "This is a test QA alert to verify email delivery.",
+         "requested_by": str(user.email)},
+    )
+    return {"status": "attempted", **result}
+
+
 # ─── QA report + audit export endpoints (QA Task 6) ──────────────────────────
 
 @tefca_dashboard_router.post("/qa/report", summary="Generate a QA scorecard report (report_type='qa')")
