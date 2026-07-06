@@ -115,11 +115,15 @@ async def _persist(db, report_type: str, report_data: dict, period_start, period
     # place so the caller's returned dict carries the same fields.
     report_data.update(data_source_labels())
     rid = uuid.uuid4()
+    # Reports render on demand (Railway disk is ephemeral) — store the download
+    # ENDPOINTS in file_path_* so the columns point at where each format is served.
     db.add(TEFCAReport(
         report_id=rid, report_type=report_type,
         period_start=period_start, period_end=period_end,
         report_data=report_data, generated_by=generated_by,
         generated_at=datetime.utcnow(), methodology_version="1.0",
+        file_path_pdf=f"/api/tefca/reports/{rid}/pdf",
+        file_path_docx=f"/api/tefca/reports/{rid}/docx",
     ))
     await db.flush()
     return rid

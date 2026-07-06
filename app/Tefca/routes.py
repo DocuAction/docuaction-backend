@@ -37,6 +37,7 @@ from .mock_data import ALL_MOCK_ENTITIES, MOCK_STATS
 from . import review_engine
 from . import reporting
 from . import qa_engine
+from . import report_renderer
 from .models import (
     TEFCAEntity, TEFCAReviewCycle, TEFCAEvidenceRecord, TEFCASourceCache,
     TEFCAPriorityCase, TEFCAReport, TEFCAAnalystQueue,
@@ -1764,6 +1765,51 @@ async def get_tefca_report_csv(
     csv_text = await reporting.generate_csv_export(db, rid)
     return Response(content=csv_text, media_type="text/csv",
                     headers={"Content-Disposition": f"attachment; filename=tefca_report_{report_id}.csv"})
+
+
+async def _load_report_or_404(report_id: str, db: AsyncSession) -> TEFCAReport:
+    rid = _parse_uuid(report_id)
+    r = (await db.execute(select(TEFCAReport).where(TEFCAReport.report_id == rid))).scalar_one_or_none()
+    if not r:
+        raise HTTPException(404, "Report not found")
+    return r
+
+
+@tefca_dashboard_router.get("/reports/{report_id}/pdf", summary="Download report as branded PDF")
+async def get_tefca_report_pdf(
+    report_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+):
+    """Render a persisted report as an AGT-branded PDF (contains PII — role-gated,
+    like the CSV export). MOCK reports carry a prominent MOCK-DATA banner."""
+    r = await _load_report_or_404(report_id, db)
+    try:
+        pdf_bytes = report_renderer.render_report_pdf(r.report_data or {})
+    except Exception as e:
+        logger.error(f"PDF render failed for {report_id}: {e}")
+        raise HTTPException(500, f"PDF rendering failed: {str(e)[:120]}")
+    fname = f"TEFCA_{(r.report_type or 'report')}_{report_id}.pdf"
+    return Response(content=pdf_bytes, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@tefca_dashboard_router.get("/reports/{report_id}/docx", summary="Download report as branded DOCX")
+async def get_tefca_report_docx(
+    report_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+):
+    """Render a persisted report as an AGT-branded editable Word document (PII —
+    role-gated). MOCK reports carry a prominent MOCK-DATA banner."""
+    r = await _load_report_or_404(report_id, db)
+    try:
+        docx_bytes = report_renderer.render_report_docx(r.report_data or {})
+    except Exception as e:
+        logger.error(f"DOCX render failed for {report_id}: {e}")
+        raise HTTPException(500, f"DOCX rendering failed: {str(e)[:120]}")
+    fname = f"TEFCA_{(r.report_type or 'report')}_{report_id}.docx"
+    return Response(
+        content=docx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 
 # ─── Bi-weekly + quarterly reports, new-submissions (TEFCA Task 4) ───────────
