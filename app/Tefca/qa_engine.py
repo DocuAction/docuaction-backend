@@ -962,13 +962,13 @@ def _generate_alerts(readiness, connectors, golden, evidence, sla) -> List[dict]
 #   2. Set SENDGRID_API_KEY for email delivery (else alerts are logged only).
 #   3. Recipients default to admin@docuaction.io only (for now); override with
 #      TEFCA_ALERT_RECIPIENTS="a@x.com,b@y.com" to broaden.
-#   NOTE: the sender (TEFCA_ALERT_FROM, default intelligence@docuaction.io — the
-#   already-verified docuaction.io sender) MUST be a SendGrid-verified sender or
-#   the send returns 403.
+#   NOTE: the sender (TEFCA_ALERT_FROM, default imran@agtbi.com) MUST be a
+#   SendGrid-verified sender or the send returns 403 (agtbi.com domain sends have
+#   403'd before — verify imran@agtbi.com as a Single Sender in SendGrid).
 # Implemented with httpx (NOT the `sendgrid` lib, which is not a dependency) to
 # match the platform's proven SendGrid pattern.
 SENDGRID_KEY = os.getenv("SENDGRID_API_KEY", "")
-TEFCA_ALERT_FROM = os.getenv("TEFCA_ALERT_FROM", "intelligence@docuaction.io")
+TEFCA_ALERT_FROM = os.getenv("TEFCA_ALERT_FROM", "imran@agtbi.com")
 QA_EMAIL_ALERT_THRESHOLD = 85.0  # overall QA score below this triggers an email
 
 # De-dupe: at most one email per (UTC-date, breach-signature) so a persistent
