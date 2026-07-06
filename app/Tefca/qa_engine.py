@@ -960,8 +960,8 @@ def _generate_alerts(readiness, connectors, golden, evidence, sla) -> List[dict]
 # To enable continuous QA monitoring WITH email alerts:
 #   1. Set ENABLE_QA_MONITOR=true on ONE Railway instance (starts qa_monitor).
 #   2. Set SENDGRID_API_KEY for email delivery (else alerts are logged only).
-#   3. Recipients default to the platform ADMIN_EMAILS allowlist; override with
-#      TEFCA_ALERT_RECIPIENTS="a@x.com,b@y.com".
+#   3. Recipients default to admin@docuaction.io only (for now); override with
+#      TEFCA_ALERT_RECIPIENTS="a@x.com,b@y.com" to broaden.
 #   NOTE: the sender (TEFCA_ALERT_FROM, default intelligence@docuaction.io — the
 #   already-verified docuaction.io sender) MUST be a SendGrid-verified sender or
 #   the send returns 403.
@@ -980,11 +980,9 @@ def _alert_recipients() -> List[str]:
     env = os.getenv("TEFCA_ALERT_RECIPIENTS", "").strip()
     if env:
         return [e.strip() for e in env.split(",") if e.strip()]
-    try:
-        from app.core.security import ADMIN_EMAILS
-        return sorted(ADMIN_EMAILS)
-    except Exception:
-        return []
+    # For now, alerts go to admin@docuaction.io only. Broaden later by setting
+    # TEFCA_ALERT_RECIPIENTS="a@x.com,b@y.com" (e.g. back to the full ADMIN_EMAILS).
+    return ["admin@docuaction.io"]
 
 
 async def send_qa_alert(alert_type: str, details: dict) -> Dict[str, Any]:
