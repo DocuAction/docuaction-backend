@@ -1285,10 +1285,106 @@ async def tefca_status():
     return {
         "module": "tefca_arc",
         "status": "active",
-        "contract": "7571MN26F80064",
         "rce_directory_live": not is_running_mock(),
         "connector_health": _connector_health_snapshot(health),
         **data_source_labels(),
+    }
+
+
+@tefca_dashboard_router.get("/search", summary="Global entity search (NPI, name, QHIN) with live NPPES lookup")
+async def tefca_search(
+    q: str = Query("", description="NPI (10 digits), entity name, or QHIN"),
+    type: str = Query("all", description="all | npi | name | qhin"),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("reviewer")),
+):
+    """Search reviews/entities/findings by NPI, name, or QHIN. A 10-digit query is
+    treated as an NPI (exact) and triggers a live NPPES lookup; otherwise it is a
+    fuzzy ILIKE name/QHIN match. Capped at 50 results per collection."""
+    from sqlalchemy import or_
+    term = (q or "").strip()
+    if not term:
+        return {"query": "", "type": type, "is_npi": False,
+                "counts": {"reviews": 0, "entities": 0, "findings": 0},
+                "reviews": [], "entities": [], "findings": [], "nppes": None}
+    is_npi = term.isdigit() and len(term) == 10
+    LIMIT = 50
+    like = f"%{term}%"
+
+    # Reviews (denormalized dashboard data).
+    rq = select(TEFCAReview)
+    if type == "npi" or (type == "all" and is_npi):
+        rq = rq.where(TEFCAReview.npi == term)
+    elif type == "qhin":
+        rq = rq.where(TEFCAReview.qhin.ilike(like))
+    elif type == "name":
+        rq = rq.where(TEFCAReview.entity_name.ilike(like))
+    else:
+        rq = rq.where(or_(
+            TEFCAReview.entity_name.ilike(like), TEFCAReview.qhin.ilike(like),
+            TEFCAReview.npi.ilike(like), TEFCAReview.entity_type.ilike(like),
+        ))
+    reviews = (await db.execute(rq.limit(LIMIT))).scalars().all()
+    reviews_out = [{
+        "id": str(r.id), "entity_name": r.entity_name, "npi": r.npi, "uei": r.uei,
+        "qhin": r.qhin, "entity_type": r.entity_type, "status": r.status,
+        "risk_level": r.risk_level, "is_mock_data": r.is_mock_data,
+    } for r in reviews]
+
+    # Findings attached to matched reviews.
+    findings_out = []
+    if reviews:
+        ids = [r.id for r in reviews]
+        frows = (await db.execute(
+            select(TEFCAFinding).where(TEFCAFinding.review_id.in_(ids)).limit(LIMIT)
+        )).scalars().all()
+        findings_out = [{
+            "id": str(f.id), "review_id": str(f.review_id), "connector": f.connector,
+            "finding_type": f.finding_type, "severity": f.severity, "detail": f.detail,
+        } for f in frows]
+
+    # Authoritative entity master.
+    entities_out = []
+    try:
+        eq = select(TEFCAEntity)
+        if is_npi and type in ("all", "npi"):
+            eq = eq.where(TEFCAEntity.npi_submitted == term)
+        elif type == "qhin":
+            eq = eq.where(TEFCAEntity.qhin_name.ilike(like))
+        else:
+            eq = eq.where(or_(
+                TEFCAEntity.legal_name_submitted.ilike(like),
+                TEFCAEntity.qhin_name.ilike(like),
+                TEFCAEntity.npi_submitted.ilike(like),
+            ))
+        erows = (await db.execute(eq.limit(LIMIT))).scalars().all()
+        entities_out = [{
+            "entity_id": str(e.entity_id), "qhin": e.qhin_name,
+            "legal_name": e.legal_name_submitted, "npi": e.npi_submitted,
+            "entity_type": e.entity_type.value if e.entity_type else None,
+            "status": e.current_status.value if e.current_status else None,
+        } for e in erows]
+    except Exception as e:
+        logger.warning(f"tefca_search entities failed: {e}")
+
+    # Live NPPES lookup (NPI searches only).
+    nppes = None
+    if is_npi and type in ("all", "npi"):
+        try:
+            from .connectors import check_nppes
+            res = await check_nppes(npi=term)
+            if res is not None and getattr(res, "success", False):
+                nppes = getattr(res, "data", None)
+            else:
+                nppes = {"found": False, "unavailable": True}
+        except Exception as e:
+            logger.warning(f"tefca_search NPPES lookup failed: {e}")
+            nppes = {"error": str(e)[:120]}
+
+    return {
+        "query": term, "type": type, "is_npi": is_npi,
+        "counts": {"reviews": len(reviews_out), "entities": len(entities_out), "findings": len(findings_out)},
+        "reviews": reviews_out, "entities": entities_out, "findings": findings_out, "nppes": nppes,
     }
 
 
