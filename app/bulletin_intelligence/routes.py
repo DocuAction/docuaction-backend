@@ -3,10 +3,13 @@ DocuAction Bulletin Intelligence — API Routes
 Registers as /api/v1/bulletin on the main FastAPI app
 """
 
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Depends, Request
 from pydantic import BaseModel
 from typing import Optional, List
 import logging
+
+# Phase 2 — flag-gated auth (default OFF -> no-op, no behavior change).
+from .auth import guard, rate_limit
 
 from app.bulletin_intelligence.engine import (
     AgencyConfig, run_daily_cycle, approve_and_deliver,
@@ -65,7 +68,7 @@ async def coverage_report(agency_id: str):
 
 
 # ── Refresh cache from the durable store ───────────────────────────────────────
-@router.post("/refresh/{agency_id}")
+@router.post("/refresh/{agency_id}", dependencies=guard("contributor"))
 async def refresh_cache(agency_id: str):
     """Reload the in-memory article/briefing cache from the shared database, so the
     dashboard reflects everything collected — including by the 1 AM scheduler box,
@@ -104,7 +107,7 @@ class AgencyCreateRequest(BaseModel):
     archive_months: int = 12
 
 
-@router.post("/agencies")
+@router.post("/agencies", dependencies=guard("admin"))
 async def create_agency(req: AgencyCreateRequest):
     # The request model calls it `boolean_queries`; AgencyConfig's field is
     # `search_queries`. Map it across so AgencyConfig(**...) doesn't raise.
@@ -162,7 +165,7 @@ async def get_agency_endpoint(agency_id: str):
 
 
 # ── Daily Cycle ────────────────────────────────────────────────────────────────
-@router.post("/run/{agency_id}")
+@router.post("/run/{agency_id}", dependencies=guard("contributor"))
 async def trigger_daily_cycle(
     agency_id: str,
     background_tasks: BackgroundTasks,
@@ -188,7 +191,7 @@ async def trigger_daily_cycle(
     }
 
 
-@router.post("/run/{agency_id}/sync")
+@router.post("/run/{agency_id}/sync", dependencies=guard("contributor"))
 async def trigger_daily_cycle_sync(
     agency_id: str,
     auto_deliver: bool = False,
@@ -203,7 +206,7 @@ async def trigger_daily_cycle_sync(
 
 
 # ── Admin: purge the article archive ────────────────────────────────────────────
-@router.post("/admin/purge-articles")
+@router.post("/admin/purge-articles", dependencies=guard("admin"))
 async def purge_articles(confirm: str = Query("")):
     """Clear the rolling article archive — in-memory cache AND the durable store —
     so the next run rebuilds a clean archive from scratch. Guarded by a confirm
@@ -315,7 +318,7 @@ async def today_briefing(agency_id: str, lookback_hours: int = 72):
     return {**_briefing_summary(b), "created_now": created_now}
 
 
-@router.post("/collect/{agency_id}")
+@router.post("/collect/{agency_id}", dependencies=guard("contributor") + [Depends(rate_limit)])
 async def collect_now(agency_id: str, lookback_hours: int = 72):
     """Trigger a fresh collection cycle NOW (synchronous) and return the resulting
     briefing. The briefing is live immediately (status=delivered); email is a
@@ -347,7 +350,7 @@ async def collect_now(agency_id: str, lookback_hours: int = 72):
     }
 
 
-@router.post("/send/{agency_id}/{briefing_id}")
+@router.post("/send/{agency_id}/{briefing_id}", dependencies=guard("qalead") + [Depends(rate_limit)])
 async def send_briefing(agency_id: str, briefing_id: str):
     """Email the summary (short summary + VIEW FULL BRIEFING button) for a specific
     briefing to the agency's distribution list. Separate from collection."""
@@ -394,7 +397,7 @@ async def briefing_history(agency_id: str):
     }
 
 
-@router.post("/briefings/{briefing_id}/approve")
+@router.post("/briefings/{briefing_id}/approve", dependencies=guard("qalead"))
 async def approve_briefing(briefing_id: str):
     """Editor approves briefing and triggers email delivery."""
     result = await approve_and_deliver(briefing_id)
@@ -513,7 +516,7 @@ async def get_broadcast_clips(
 
 
 # ── LLM Visibility Tracker ─────────────────────────────────────────────────────
-@router.post("/llm-visibility/{agency_id}")
+@router.post("/llm-visibility/{agency_id}", dependencies=guard("contributor"))
 async def llm_visibility_check(agency_id: str):
     """Run LLM visibility check — query Claude on what it knows about the agency."""
     agency = get_agency(agency_id)
