@@ -1,0 +1,24 @@
+company,newsroom_url,rss_feed,official_api,segment,fcc_relevance,reliability_score,authority_score,notes
+AT&T,about.att.com/newsroom,verify,no,Carrier,High,8,7,Wireless/fiber; FCC-regulated
+Verizon,verizon.com/about/news,verify,no,Carrier,High,8,7,Wireless/fiber; FCC-regulated
+T-Mobile,t-mobile.com/news,verify,no,Carrier,High,8,7,Wireless/5G; FCC-regulated
+Comcast,corporate.comcast.com/news-information,verify,no,Cable/Broadband,High,8,7,Cable/broadband; FCC-regulated
+Charter (Spectrum),corporate.charter.com/newsroom,verify,no,Cable/Broadband,High,8,7,Cable/broadband; FCC-regulated
+Lumen Technologies,news.lumen.com,verify,no,Carrier,Medium,7,6,Fiber/enterprise
+DISH / EchoStar,about.dish.com,verify,no,Carrier/Satellite,High,7,7,Wireless buildout + satellite; heavy FCC docket presence
+SpaceX / Starlink,spacex.com/updates,verify,no,Satellite,High,8,8,FCC satellite licensing (Ku/Ka/E-band); high docket activity
+Amazon (Project Kuiper),aboutamazon.com/news,verify,no,Satellite,Medium,8,6,FCC NGSO satellite constellation
+Qualcomm,qualcomm.com/news,verify,no,Vendor/Chipset,Medium,7,6,5G/spectrum devices
+Ericsson,ericsson.com/en/news,verify,no,Vendor/Equipment,Low,7,5,RAN/5G
+Nokia,nokia.com/about-us/news,verify,no,Vendor/Equipment,Low,7,5,Networks/5G
+Samsung,news.samsung.com,verify,no,Vendor/Device,Low,7,4,5G/devices
+Cisco,newsroom.cisco.com,verify,no,Vendor/Networking,Low,7,5,Networking
+Juniper Networks,juniper.net/us/en/company/press-center,verify,no,Vendor/Networking,Low,7,4,Networking
+Dell Technologies,dell.com/en-us/dt/corporate/newsroom,verify,no,Vendor/IT,Low,6,3,Enterprise IT (tangential)
+Intel,newsroom.intel.com,verify,no,Vendor/Chipset,Low,7,4,Chipsets
+Broadcom,broadcom.com/company/news,verify,no,Vendor/Chipset,Low,7,4,Chipsets
+Motorola Solutions,motorolasolutions.com/newsroom,verify,no,Public Safety,Medium,7,6,Land-mobile/public-safety comms; FCC-relevant
+Apple,apple.com/newsroom,verify,no,Device,Low,8,4,Devices (equipment auth)
+Google,blog.google,verify,no,Platform/Tech,Low,7,5,Spectrum/Wi-Fi; occasional FCC
+Meta (newsroom only),about.fb.com/news,verify,no,Platform/Tech,Low,7,4,Connectivity/spectrum (official newsroom only)
+Microsoft,news.microsoft.com,verify,no,Platform/Tech,Low,7,4,Airband rural broadband; TVWS

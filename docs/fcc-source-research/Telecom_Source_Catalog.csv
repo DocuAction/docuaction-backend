@@ -1,0 +1,36 @@
+publication_name,website,rss_feed,official_api,fcc_relevance,reliability_score,authority_score,category,notes
+Communications Daily,communicationsdaily.com,verify,no,High,10,10,Telecommunications,Gold-standard FCC beat; licensed/paid
+TR Daily,trdaily.com,verify,no,High,9,10,Telecommunications,Licensed/paid FCC beat
+Broadband Breakfast,broadbandbreakfast.com,yes,no,High,9,9,Broadband,High FCC/BEAD signal
+Telecompetitor,telecompetitor.com,yes,no,High,8,9,Broadband,Rural/fiber/FCC funding
+Fierce Network,fierce-network.com,yes,no,High,8,9,Telecommunications,Merged Fierce brands
+Light Reading,lightreading.com,yes,no,Medium,8,8,Telecommunications,Networks/5G/fiber
+RCR Wireless News,rcrwireless.com,yes,no,High,8,8,Wireless,5G/spectrum/IoT
+Mobile World Live,mobileworldlive.com,yes,no,Medium,7,6,Wireless,GSMA; global
+Inside Towers,insidetowers.com,yes,no,High,7,8,Wireless,Towers/siting/FCC
+Wireless Estimator,wirelessestimator.com,yes,no,Medium,6,6,Wireless,Tower industry/safety
+Multichannel News / Next TV,nexttv.com,yes,no,High,8,9,Television,Cable/media/broadcast/FCC
+TVNewsCheck,tvnewscheck.com,yes,no,High,8,8,Television,Broadcast/retrans/FCC
+TV Technology,tvtechnology.com,yes,no,Medium,7,7,Television,ATSC 3.0/engineering
+Cablefax,cablefax.com,yes,no,Medium,7,7,Television,Cable/FCC
+Radio World,radioworld.com,yes,no,High,7,8,Radio,Radio/broadcast/FCC
+Radio Ink,radioink.com,yes,no,Medium,7,7,Radio,Radio/FCC
+Inside Radio,insideradio.com,verify,no,High,7,8,Radio,Radio/FCC; metered
+Via Satellite,satellitetoday.com,yes,no,High,7,8,Satellite,Satellite/spectrum/space
+SpaceNews,spacenews.com,yes,no,High,8,8,Satellite,Satellite/space/FCC licensing
+PolicyTracker,policytracker.com,verify,no,High,8,8,Spectrum,Spectrum policy specialist; paid
+Urgent Communications,urgentcomm.com,yes,no,High,7,8,Public Safety Comms,Land-mobile/911/spectrum
+Broadband Communities,bbcmag.com,verify,no,Medium,7,7,Broadband,Fiber deployment/BEAD
+Telecom Ramblings,telecomramblings.com,yes,no,Medium,7,6,Telecommunications,Fiber/datacenter/networks
+Telecoms.com,telecoms.com,yes,no,Low,7,6,Telecommunications,Global telecom
+Total Telecom,totaltele.com,yes,no,Low,7,6,Telecommunications,Global telecom
+Ars Technica,arstechnica.com,yes,no,High,8,8,Technology,Strong FCC policy coverage
+The Verge,theverge.com,yes,no,High,8,8,Technology,FCC/broadband policy
+Wired,wired.com,yes,no,Medium,7,7,Technology,Privacy/policy
+CNET,cnet.com,yes,no,Low,6,6,Technology,Consumer/broadband
+InCompliance Magazine,incompliancemag.com,verify,no,Medium,6,7,Technology,FCC equipment authorization/Part 15/EMC
+MediaPost,mediapost.com,yes,no,Low,6,6,Technology,Media/advertising policy
+Law360 Telecom,law360.com,verify,yes,High,8,8,Legal,Telecom litigation/FCC; licensed
+CommLawBlog,commlawblog.com,yes,no,High,8,9,Legal,FCC-law firm blog
+Wiley Connect,wileyconnect.com,yes,no,High,8,8,Legal,FCC-law firm blog
+Kelley Drye CommLaw Monitor,commlawmonitor.com,yes,no,High,8,8,Legal,FCC-law firm blog

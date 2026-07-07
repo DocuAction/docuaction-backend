@@ -1,0 +1,8 @@
+publication_name,website,rss_feed,official_api,fcc_relevance,reliability_score,authority_score,duplicate_risk,notes
+PR Newswire,prnewswire.com,yes,partial,Medium,6,6,High,Filter by Telecommunications/Broadcast industry feeds; primary-source announcements before media pickup
+Business Wire,businesswire.com,yes,partial,Medium,6,6,High,Filter by industry; Berkshire Hathaway
+GlobeNewswire,globenewswire.com,yes,partial,Medium,6,6,High,Filter by industry; Notified
+AccessWire (ACCESS Newswire),accesswire.com,yes,no,Low,5,5,High,Smaller-cap issuers
+Newswire,newswire.com,verify,no,Low,5,5,High,SMB press releases
+Official agency press pages,see Government_Source_Catalog.csv,varies,varies,High,10,9,None,FCC/DOJ/FTC press = authoritative primary releases
+Official company newsrooms,see Company_Newsroom_Catalog.csv,varies,no,Medium/High,7,7,Low,Carrier/vendor first-party announcements

@@ -1,0 +1,27 @@
+publication_name,website,rss_feed,official_api,fcc_relevance,reliability_score,authority_score,notes
+FCC Daily Digest,fcc.gov/news-events/daily-digest,verify,yes,High,10,10,Primary; every FCC release; developers portal
+FCC News Releases,fcc.gov/news-events/headlines,verify,yes,High,10,10,Primary press
+FCC ECFS (filings),fcc.gov/ecfs,no,yes,High,10,9,Public filing/docket API
+FCC LMS (licensing),fcc.gov/media/lms,no,partial,High,10,8,TV/radio licensing DB (station enumeration)
+FCC Auctions,fcc.gov/auctions,verify,partial,High,10,8,Spectrum auction announcements/results
+FCC Consumer Alerts,fcc.gov/consumers,verify,no,Medium,10,6,Robocalls/scams/consumer guidance
+Federal Register,federalregister.gov,yes,yes,High,10,9,FCC rules/NPRMs; free API
+Regulations.gov,regulations.gov,no,yes,High,10,8,Dockets/comments; free API key
+Congress.gov,congress.gov,verify,yes,High,10,8,Telecom legislation/hearings; free API
+House Energy & Commerce,energycommerce.house.gov,yes,no,High,10,8,FCC oversight/Comms & Tech subcommittee
+Senate Commerce Committee,commerce.senate.gov,yes,no,High,10,8,FCC oversight/nominations
+NTIA,ntia.gov,yes,no,High,10,8,Spectrum/BEAD/broadband policy
+FTC,ftc.gov,yes,no,Medium,10,7,Privacy/robocalls/competition
+DOJ Antitrust Division,justice.gov/atr,yes,no,Medium,10,7,Telecom mergers/antitrust
+NIST,nist.gov,yes,partial,Low,9,4,Standards/spectrum research
+CISA,cisa.gov,yes,no,Medium,10,6,Comms resilience/911/cyber
+DHS,dhs.gov,yes,no,Low,9,4,Emergency comms
+Commerce Department,commerce.gov,yes,no,Medium,9,6,Parent of NTIA/NIST
+GAO,gao.gov,yes,partial,Medium,10,6,Spectrum/broadband oversight reports
+CRS,crsreports.congress.gov,verify,no,Medium,10,6,Nonpartisan telecom policy analysis
+White House,whitehouse.gov,yes,no,Medium,10,6,Executive actions/nominations
+OMB / OIRA,whitehouse.gov/omb,verify,no,Low,10,5,Reviews FCC rules before publication
+GovInfo,govinfo.gov,verify,yes,Medium,9,7,CFR/hearings/documents; free API
+USAC,usac.org,verify,no,High,9,7,USF/E-Rate/ACP/RDOF/Lifeline programs
+ITU,itu.int,verify,no,Medium,9,6,International spectrum/WRC/standards
+State Public Utility Commissions (51),see State_By_State_Inventory.md,varies,varies,Medium,9,6,Intrastate telecom/broadband dockets; enumerated separately
