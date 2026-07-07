@@ -12,6 +12,8 @@ import logging
 from .auth import guard, rate_limit
 # Phase 3 — flag-gated audit logging (default OFF -> no-op, best-effort).
 from .audit import audit
+# PWS coverage foundation (additive): source classification + honest aggregation.
+from .pws import SOURCE_CLASSIFICATIONS, CLASSIFICATION_LABELS, build_pws_coverage
 
 from app.bulletin_intelligence.engine import (
     AgencyConfig, run_daily_cycle, approve_and_deliver,
@@ -509,6 +511,25 @@ async def coverage_assurance(agency_id: str):
         result["coverage_confidence"] = round(100.0 * wcov / wtot, 1) if wtot else None
         result["status"] = "measured"
     return result
+
+
+# ── PWS coverage foundation (additive) ───────────────────────────────────────
+@router.get("/source-classifications")
+async def source_classifications():
+    """The PWS source-classification taxonomy (for registry editors / dashboard)."""
+    return {"classifications": [{"id": c, "label": CLASSIFICATION_LABELS[c]} for c in SOURCE_CLASSIFICATIONS]}
+
+
+@router.get("/pws-coverage/{agency_id}", dependencies=guard("contributor"))
+async def pws_coverage(agency_id: str):
+    """Internal PWS coverage picture (honest): totals, source distribution by
+    classification, required-source coverage (pending until Appendix A is loaded),
+    category gaps, and editor suggestions. Never fabricates a % or compliance status."""
+    try:
+        return await build_pws_coverage(agency_id)
+    except Exception as e:
+        logger.warning(f"pws_coverage failed: {e}")
+        raise HTTPException(status_code=500, detail="pws coverage aggregation failed")
 
 
 @router.post("/briefings/{briefing_id}/approve", dependencies=guard("qalead"))
