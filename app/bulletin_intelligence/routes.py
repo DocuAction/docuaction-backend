@@ -10,6 +10,8 @@ import logging
 
 # Phase 2 — flag-gated auth (default OFF -> no-op, no behavior change).
 from .auth import guard, rate_limit
+# Phase 3 — flag-gated audit logging (default OFF -> no-op, best-effort).
+from .audit import audit
 
 from app.bulletin_intelligence.engine import (
     AgencyConfig, run_daily_cycle, approve_and_deliver,
@@ -227,6 +229,8 @@ async def purge_articles(confirm: str = Query("")):
         logger.warning(f"purge_articles durable clear failed: {e}")
         deleted = -1
     logger.info(f"Article archive purged: memory={mem}, durable_deleted={deleted}")
+    await audit("manual", entity_type="archive", action="purge",
+                details={"memory_cleared": mem, "durable_deleted": deleted})
     return {"status": "purged", "memory_cleared": mem, "durable_deleted": deleted}
 
 
@@ -340,6 +344,9 @@ async def collect_now(agency_id: str, lookback_hours: int = 72):
         raise HTTPException(status_code=500, detail=result["error"])
 
     bid = result.get("briefing_id")
+    await audit("collection", entity_type="briefing", entity_id=bid, action="collect",
+                details={"in_briefing": result.get("in_briefing"), "ingested": result.get("ingested"),
+                         "after_dedup": result.get("after_dedup")})
     return {
         "status": "collected",
         "briefing_id": bid,
@@ -360,7 +367,11 @@ async def send_briefing(agency_id: str, briefing_id: str):
                             detail=f"Briefing {briefing_id} not found for {agency_id}")
     result = await send_briefing_email(briefing_id)
     if result.get("error"):
+        await audit("delivery", entity_type="briefing", entity_id=briefing_id, action="send",
+                    result="error", details={"error": result["error"]})
         raise HTTPException(status_code=400, detail=result["error"])
+    await audit("delivery", entity_type="briefing", entity_id=briefing_id, action="send",
+                details={"recipients": result.get("recipients"), "sent": result.get("status")})
     return {"briefing_id": briefing_id, **result}
 
 
@@ -395,6 +406,19 @@ async def briefing_history(agency_id: str):
         "count": len(history),
         "briefings": history,
     }
+
+
+@router.get("/audit/{agency_id}", dependencies=guard("contributor"))
+async def get_audit(agency_id: str, event_type: str = Query(""), limit: int = Query(200)):
+    """Phase 3 — recent bulletin audit events (newest first). Empty list unless
+    BULLETIN_AUDIT_ENABLED wrote rows. Optional event_type filter."""
+    from app.bulletin_intelligence import bulletin_store
+    try:
+        rows = await bulletin_store.load_audit(event_type=event_type or "", limit=limit)
+    except Exception as e:
+        logger.warning(f"get_audit failed: {e}")
+        rows = []
+    return {"agency_id": agency_id, "count": len(rows), "events": rows}
 
 
 @router.post("/briefings/{briefing_id}/approve", dependencies=guard("qalead"))

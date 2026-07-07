@@ -280,3 +280,64 @@ async def load_all() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     except Exception as e:
         logger.warning(f"load_all failed: {e}")
         return [], []
+
+
+# ── Phase 3: audit log (append-only) ─────────────────────────────────────────
+async def save_audit(row: Dict[str, Any]) -> bool:
+    """Append one immutable row to bulletin_audit_log. Best-effort; never raises."""
+    if not _enabled:
+        return False
+    try:
+        async with async_session_maker() as s:
+            await s.execute(
+                text(
+                    "INSERT INTO bulletin_audit_log "
+                    "(id, ts, actor, event_type, entity_type, entity_id, action, details_json, result) "
+                    "VALUES (:id, :ts, :actor, :event_type, :entity_type, :entity_id, :action, :details, :result)"
+                ),
+                {
+                    "id": row.get("id"), "ts": row.get("ts"),
+                    "actor": row.get("actor", ""), "event_type": row.get("event_type", ""),
+                    "entity_type": row.get("entity_type", ""), "entity_id": row.get("entity_id", ""),
+                    "action": row.get("action", ""), "details": json.dumps(row.get("details") or {}),
+                    "result": row.get("result", "ok"),
+                },
+            )
+            await s.commit()
+        return True
+    except Exception as e:
+        logger.warning(f"save_audit failed: {e}")
+        return False
+
+
+async def load_audit(event_type: str = "", limit: int = 200) -> List[Dict[str, Any]]:
+    """Read recent audit rows, newest first (optional event_type filter)."""
+    if not _enabled:
+        return []
+    try:
+        q = ("SELECT id, ts, actor, event_type, entity_type, entity_id, action, details_json, result "
+             "FROM bulletin_audit_log")
+        params: Dict[str, Any] = {}
+        if event_type:
+            q += " WHERE event_type = :event_type"; params["event_type"] = event_type
+        q += " ORDER BY ts DESC LIMIT :lim"
+        params["lim"] = max(1, min(int(limit), 1000))
+        async with async_session_maker() as s:
+            rows = (await s.execute(text(q), params)).fetchall()
+        out = []
+        for r in rows:
+            details = r[7]
+            if isinstance(details, str):
+                try:
+                    details = json.loads(details)
+                except Exception:
+                    details = {}
+            out.append({
+                "id": str(r[0]), "ts": r[1], "actor": r[2], "event_type": r[3],
+                "entity_type": r[4], "entity_id": r[5], "action": r[6],
+                "details": details, "result": r[8],
+            })
+        return out
+    except Exception as e:
+        logger.warning(f"load_audit failed: {e}")
+        return []
