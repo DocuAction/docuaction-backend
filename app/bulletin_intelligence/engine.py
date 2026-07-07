@@ -2998,6 +2998,24 @@ async def run_daily_cycle(
     except Exception as e:
         logger.warning(f"Persist after daily cycle failed: {e}")
 
+    # Phase 4 — best-effort, flag-gated run instrumentation (never breaks the cycle).
+    try:
+        from app.bulletin_intelligence.instrumentation import record_run
+        _fin = datetime.now(timezone.utc)
+        await record_run(
+            agency_id, run_id=briefing_id, trigger="cycle",
+            started_at=datetime.fromtimestamp(now_ts, timezone.utc).isoformat(),
+            finished_at=_fin.isoformat(),
+            duration_ms=int((_fin.timestamp() - now_ts) * 1000),
+            ingested=len(all_articles), after_dedup=len(unique),
+            in_briefing=len(briefing_arts), rejected=max(0, len(classified) - len(briefing_arts)),
+            dupes_removed=max(0, len(all_articles) - len(unique)),
+            coverage=coverage, sources_scanned=(coverage or {}).get("sources_scanned"),
+            status="completed",
+        )
+    except Exception:
+        pass
+
     # Release the cost guard so a fresh cycle can run once this one is done.
     _running_cycles.pop(agency_id, None)
 

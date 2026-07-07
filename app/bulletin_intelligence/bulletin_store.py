@@ -341,3 +341,106 @@ async def load_audit(event_type: str = "", limit: int = 200) -> List[Dict[str, A
     except Exception as e:
         logger.warning(f"load_audit failed: {e}")
         return []
+
+
+# ── Phase 4: run log + per-source outcomes ───────────────────────────────────
+async def save_run_log(row: Dict[str, Any]) -> bool:
+    if not _enabled:
+        return False
+    try:
+        async with async_session_maker() as s:
+            await s.execute(
+                text(
+                    "INSERT INTO bulletin_run_log (run_id, agency_id, trigger, started_at, finished_at, "
+                    "duration_ms, ingested, after_dedup, in_briefing, rejected, dupes_removed, cluster_count, "
+                    "status, error, coverage_json) VALUES (:run_id, :agency_id, :trigger, :started_at, :finished_at, "
+                    ":duration_ms, :ingested, :after_dedup, :in_briefing, :rejected, :dupes_removed, :cluster_count, "
+                    ":status, :error, :coverage_json) "
+                    "ON CONFLICT (run_id) DO UPDATE SET finished_at=EXCLUDED.finished_at, "
+                    "duration_ms=EXCLUDED.duration_ms, status=EXCLUDED.status, coverage_json=EXCLUDED.coverage_json"
+                ),
+                {**{k: row.get(k) for k in (
+                    "run_id", "agency_id", "trigger", "started_at", "finished_at", "duration_ms",
+                    "ingested", "after_dedup", "in_briefing", "rejected", "dupes_removed", "cluster_count",
+                    "status", "error")},
+                 "coverage_json": json.dumps(row.get("coverage") or {})},
+            )
+            await s.commit()
+        return True
+    except Exception as e:
+        logger.warning(f"save_run_log failed: {e}")
+        return False
+
+
+async def save_source_outcomes(rows: List[Dict[str, Any]]) -> int:
+    if not _enabled or not rows:
+        return 0
+    n = 0
+    try:
+        async with async_session_maker() as s:
+            for r in rows:
+                await s.execute(
+                    text("INSERT INTO bulletin_source_outcome (id, run_id, source, type, tier, attempted, "
+                         "succeeded, items, http_status, error, response_ms, retries) VALUES (:id, :run_id, "
+                         ":source, :type, :tier, :attempted, :succeeded, :items, :http_status, :error, "
+                         ":response_ms, :retries)"),
+                    {"id": r.get("id"), "run_id": r.get("run_id"), "source": r.get("source"),
+                     "type": r.get("type"), "tier": r.get("tier"), "attempted": r.get("attempted", True),
+                     "succeeded": r.get("succeeded", True), "items": r.get("items"),
+                     "http_status": r.get("http_status"), "error": r.get("error"),
+                     "response_ms": r.get("response_ms"), "retries": r.get("retries", 0)},
+                )
+                n += 1
+            await s.commit()
+    except Exception as e:
+        logger.warning(f"save_source_outcomes failed: {e}")
+        return 0
+    return n
+
+
+async def load_run_logs(agency_id: str = "", limit: int = 50) -> List[Dict[str, Any]]:
+    if not _enabled:
+        return []
+    try:
+        q = ("SELECT run_id, agency_id, trigger, started_at, finished_at, duration_ms, ingested, "
+             "after_dedup, in_briefing, rejected, dupes_removed, cluster_count, status, error, coverage_json "
+             "FROM bulletin_run_log")
+        params: Dict[str, Any] = {}
+        if agency_id:
+            q += " WHERE agency_id = :ag"; params["ag"] = agency_id
+        q += " ORDER BY started_at DESC LIMIT :lim"; params["lim"] = max(1, min(int(limit), 500))
+        cols = ["run_id", "agency_id", "trigger", "started_at", "finished_at", "duration_ms", "ingested",
+                "after_dedup", "in_briefing", "rejected", "dupes_removed", "cluster_count", "status", "error"]
+        async with async_session_maker() as s:
+            rows = (await s.execute(text(q), params)).fetchall()
+        out = []
+        for r in rows:
+            d = {c: r[i] for i, c in enumerate(cols)}
+            cj = r[14]
+            if isinstance(cj, str):
+                try:
+                    cj = json.loads(cj)
+                except Exception:
+                    cj = {}
+            d["coverage"] = cj
+            out.append(d)
+        return out
+    except Exception as e:
+        logger.warning(f"load_run_logs failed: {e}")
+        return []
+
+
+async def load_source_outcomes(run_id: str) -> List[Dict[str, Any]]:
+    if not _enabled:
+        return []
+    try:
+        async with async_session_maker() as s:
+            rows = (await s.execute(text(
+                "SELECT source, type, tier, attempted, succeeded, items, http_status, error, response_ms, retries "
+                "FROM bulletin_source_outcome WHERE run_id = :r ORDER BY source"), {"r": run_id})).fetchall()
+        cols = ["source", "type", "tier", "attempted", "succeeded", "items", "http_status", "error",
+                "response_ms", "retries"]
+        return [{c: r[i] for i, c in enumerate(cols)} for r in rows]
+    except Exception as e:
+        logger.warning(f"load_source_outcomes failed: {e}")
+        return []

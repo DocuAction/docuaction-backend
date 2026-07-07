@@ -421,6 +421,35 @@ async def get_audit(agency_id: str, event_type: str = Query(""), limit: int = Qu
     return {"agency_id": agency_id, "count": len(rows), "events": rows}
 
 
+@router.get("/runs/{agency_id}", dependencies=guard("contributor"))
+async def get_runs(agency_id: str, limit: int = Query(50)):
+    """Phase 4 — persisted run log (funnel + timing), newest first. Empty unless
+    BULLETIN_INSTRUMENT_ENABLED recorded runs."""
+    from app.bulletin_intelligence import bulletin_store
+    try:
+        runs = await bulletin_store.load_run_logs(agency_id=agency_id, limit=limit)
+    except Exception as e:
+        logger.warning(f"get_runs failed: {e}")
+        runs = []
+    return {"agency_id": agency_id, "count": len(runs), "runs": runs}
+
+
+@router.get("/runs/{agency_id}/{run_id}", dependencies=guard("contributor"))
+async def get_run_detail(agency_id: str, run_id: str):
+    """Phase 4 — single run detail + per-source outcomes."""
+    from app.bulletin_intelligence import bulletin_store
+    try:
+        runs = await bulletin_store.load_run_logs(agency_id=agency_id, limit=500)
+        run = next((r for r in runs if r.get("run_id") == run_id), None)
+        outcomes = await bulletin_store.load_source_outcomes(run_id)
+    except Exception as e:
+        logger.warning(f"get_run_detail failed: {e}")
+        run, outcomes = None, []
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return {"run": run, "source_outcomes": outcomes}
+
+
 @router.post("/briefings/{briefing_id}/approve", dependencies=guard("qalead"))
 async def approve_briefing(briefing_id: str):
     """Editor approves briefing and triggers email delivery."""
