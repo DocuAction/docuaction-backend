@@ -44,6 +44,81 @@ _DDL = [
          data         TEXT
        )""",
     "CREATE INDEX IF NOT EXISTS ix_bulletin_briefings_agency ON bulletin_briefings(agency_id)",
+
+    # ── Phase 0 additive tables (INERT: created if missing, no reader/writer yet) ──
+    # These back later phases (run instrumentation, coverage assurance, delivery
+    # log, audit). Creating them now is a no-op for current behavior. All TEXT ids
+    # are app-supplied UUIDs, matching the existing bulletin_* convention.
+    """CREATE TABLE IF NOT EXISTS bulletin_run_log (
+         run_id        TEXT PRIMARY KEY,
+         agency_id     TEXT,
+         trigger       TEXT,
+         started_at    TEXT,
+         finished_at   TEXT,
+         duration_ms   INTEGER,
+         ingested      INTEGER,
+         after_dedup   INTEGER,
+         in_briefing   INTEGER,
+         rejected      INTEGER,
+         dupes_removed INTEGER,
+         cluster_count INTEGER,
+         status        TEXT,
+         error         TEXT,
+         coverage_json TEXT
+       )""",
+    "CREATE INDEX IF NOT EXISTS ix_bulletin_run_log_agency ON bulletin_run_log(agency_id)",
+    """CREATE TABLE IF NOT EXISTS bulletin_source_outcome (
+         id           TEXT PRIMARY KEY,
+         run_id       TEXT,
+         source       TEXT,
+         type         TEXT,
+         tier         TEXT,
+         attempted    BOOLEAN,
+         succeeded    BOOLEAN,
+         items        INTEGER,
+         http_status  INTEGER,
+         error        TEXT,
+         response_ms  INTEGER,
+         retries      INTEGER
+       )""",
+    "CREATE INDEX IF NOT EXISTS ix_bulletin_source_outcome_run ON bulletin_source_outcome(run_id)",
+    """CREATE TABLE IF NOT EXISTS bulletin_source_registry (
+         source_id         TEXT PRIMARY KEY,
+         name              TEXT,
+         type              TEXT,
+         tier              TEXT,
+         importance_weight REAL,
+         enabled           BOOLEAN DEFAULT TRUE,
+         method            TEXT,
+         url               TEXT,
+         notes             TEXT
+       )""",
+    """CREATE TABLE IF NOT EXISTS bulletin_delivery_log (
+         id                  TEXT PRIMARY KEY,
+         briefing_id         TEXT,
+         agency_id           TEXT,
+         sent_by             TEXT,
+         sent_at             TEXT,
+         recipients_json     TEXT,
+         subject             TEXT,
+         sendgrid_message_id TEXT,
+         result              TEXT,
+         per_recipient_json  TEXT
+       )""",
+    "CREATE INDEX IF NOT EXISTS ix_bulletin_delivery_log_briefing ON bulletin_delivery_log(briefing_id)",
+    """CREATE TABLE IF NOT EXISTS bulletin_audit_log (
+         id           TEXT PRIMARY KEY,
+         ts           TEXT,
+         actor        TEXT,
+         event_type   TEXT,
+         entity_type  TEXT,
+         entity_id    TEXT,
+         action       TEXT,
+         details_json TEXT,
+         result       TEXT
+       )""",
+    "CREATE INDEX IF NOT EXISTS ix_bulletin_audit_log_entity ON bulletin_audit_log(entity_type, entity_id)",
+    "CREATE INDEX IF NOT EXISTS ix_bulletin_audit_log_event ON bulletin_audit_log(event_type)",
 ]
 
 # Flipped to True once init_store() succeeds; gates write attempts so we don't
