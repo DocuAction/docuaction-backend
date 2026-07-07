@@ -6,3 +6,6 @@ uploads/
 .venv/
 venv/
 .pytest_cache/
+
+# One-off generated FCC briefing HTML preview (not source; release docs stay tracked)
+pv.html
