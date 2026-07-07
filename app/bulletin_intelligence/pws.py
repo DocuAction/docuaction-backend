@@ -15,8 +15,13 @@ HONESTY GUARANTEES:
   * No Coverage % is invented. Editorial confidence is reported as null until a
     real per-article confidence signal is instrumented.
 """
+import os
 import re
 from typing import Any, Dict, List
+
+# Minimum story target (contractual intent). Configurable; NEVER used to force or
+# dilute stories — only to flag "Coverage Below Target" for editor review.
+PWS_MIN_TARGET = int(os.getenv("BULLETIN_PWS_MIN_TARGET", "60"))
 
 # The 10 PWS source classifications (from the Final Engineering Directive).
 SOURCE_CLASSIFICATIONS = [
@@ -121,11 +126,39 @@ async def build_pws_coverage(agency_id: str) -> Dict[str, Any]:
         }
 
     missing = cov.get("missing_category_warnings") or []
+    accepted = run.get("in_briefing") if run else None
+    suggestions = _suggest(dist, missing, run is not None)
+
+    # Minimum target (contractual intent) — flag below-target, NEVER force stories.
+    target = {
+        "minimum": PWS_MIN_TARGET,
+        "accepted": accepted,
+        "meets_target": (accepted is not None and accepted >= PWS_MIN_TARGET),
+        "shortfall": (max(0, PWS_MIN_TARGET - accepted) if accepted is not None else None),
+        "status": ("no_run" if accepted is None else ("meets_target" if accepted >= PWS_MIN_TARGET else "below_target")),
+        "note": ("If fewer legitimate FCC stories exist than the target, return fewer and flag "
+                 "for editor review — never pad with unrelated news to reach the number."),
+    }
+
+    # Editor-assistance signals — real counts where available; honest pending otherwise.
+    editor_assistance = {
+        "rejected_stories": run.get("rejected") if run else None,
+        "duplicate_stories": run.get("dupes_removed") if run else None,
+        "subscription_articles": cov.get("subscription_stories"),
+        "missing_categories": missing,
+        "source_distribution": "see source_distribution",
+        "coverage_suggestions": suggestions,
+        "low_confidence_stories": None,     # pending per-article confidence instrumentation
+        "potential_missing_stories": None,  # pending Talkwalker comparison
+    }
+
     return {
         "agency_id": agency_id,
         "has_run": run is not None,
         "run_id": run["run_id"] if run else None,
         "generated_from": "latest_run",
+        "target": target,
+        "editor_assistance": editor_assistance,
         "totals": {
             "collected": run.get("ingested") if run else None,
             "duplicates_removed": run.get("dupes_removed") if run else None,
@@ -143,7 +176,7 @@ async def build_pws_coverage(agency_id: str) -> Dict[str, Any]:
         },
         "editorial_confidence": None,  # honest: no per-article confidence signal instrumented yet
         "coverage_status": ("review_gaps" if missing else ("ok" if run else "no_run")),
-        "suggestions": _suggest(dist, missing, run is not None),
+        "suggestions": suggestions,
         "notes": ("PWS-topic compliance and required-source coverage require the "
                   "Appendix A source list loaded into the registry. Classifications "
                   "marked 'heuristic' are non-authoritative hints — assign authoritative "
