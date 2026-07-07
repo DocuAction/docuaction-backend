@@ -1,108 +1,195 @@
-source_name,rss_url,domain,category,tier,tier_label,authority,reachability,already_in_docuaction
-TR Daily,https://trdaily.com/feed/,trdaily.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,active,False
-Broadband World News,https://www.broadbandworldnews.com/rss.xml,broadbandworldnews.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,active,False
-TIA Online,https://tiaonline.org/feed/,tiaonline.org,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,active,False
-All Access,https://www.allaccess.com/merge/archive/rss.xml,allaccess.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
-Federal News Network,https://federalnewsnetwork.com/feed/,federalnewsnetwork.com,Government,1,Tier 1 FCC/Government,95,active,False
-GovTech,https://www.govtech.com/rss,govtech.com,Government,1,Tier 1 FCC/Government,95,active,False
-SCOTUSblog,https://www.scotusblog.com/feed/,scotusblog.com,Government,1,Tier 1 FCC/Government,95,active,False
-Yale JREG,https://www.yalejreg.com/feed/,yalejreg.com,Government,1,Tier 1 FCC/Government,95,active,False
-AEI,https://www.aei.org/feed/,aei.org,Government,1,Tier 1 FCC/Government,95,active,False
-CSIS,https://www.csis.org/rss.xml,csis.org,Government,1,Tier 1 FCC/Government,95,active,False
-Nextgov,https://www.nextgov.com/rss/all/,nextgov.com,Government,1,Tier 1 FCC/Government,95,active,False
-TechDirt,https://www.techdirt.com/feed/,techdirt.com,Technology,4,Tier 4 Technology Publications,76,active,False
-Gizmodo,https://gizmodo.com/feed/,gizmodo.com,Technology,4,Tier 4 Technology Publications,76,active,False
-ZDNet,https://www.zdnet.com/news/rss.xml,zdnet.com,Technology,4,Tier 4 Technology Publications,76,active,False
-VentureBeat,https://venturebeat.com/feed/,venturebeat.com,Technology,4,Tier 4 Technology Publications,76,active,False
-Digital Trends,https://www.digitaltrends.com/feed/,digitaltrends.com,Technology,4,Tier 4 Technology Publications,76,active,False
-Slashdot,https://rss.slashdot.org/Slashdot/slashdotMain,rss.slashdot.org,Technology,4,Tier 4 Technology Publications,76,active,False
-Mashable,https://mashable.com/feeds/rss/all,mashable.com,Technology,4,Tier 4 Technology Publications,76,active,False
-eWeek,https://www.eweek.com/rss.xml,eweek.com,Technology,4,Tier 4 Technology Publications,76,active,False
-Bloomberg Technology,https://feeds.bloomberg.com/technology/news.rss,feeds.bloomberg.com,Major News/Wire,2,Tier 2 National Media,92,active,False
-Bloomberg Politics,https://feeds.bloomberg.com/politics/news.rss,feeds.bloomberg.com,Major News/Wire,2,Tier 2 National Media,92,active,False
-CBS News Tech,https://www.cbsnews.com/latest/rss/tech,cbsnews.com,Major News/Wire,2,Tier 2 National Media,92,active,False
-NBC News Tech,https://feeds.nbcnews.com/nbcnews/public/tech,feeds.nbcnews.com,Major News/Wire,2,Tier 2 National Media,92,active,False
-ABC News Tech,https://abcnews.go.com/abcnews/technologyheadlines,abcnews.go.com,Major News/Wire,2,Tier 2 National Media,92,active,False
-Fox Business,https://moxie.foxbusiness.com/google-publisher/technology.xml,moxie.foxbusiness.com,Major News/Wire,2,Tier 2 National Media,92,active,False
-USA Today Tech,https://rssfeeds.usatoday.com/UsatodaycomTech-TopStories,rssfeeds.usatoday.com,Major News/Wire,2,Tier 2 National Media,92,active,False
-Forbes Tech,https://www.forbes.com/innovation/feed/,forbes.com,Major News/Wire,2,Tier 2 National Media,92,active,False
-Fortune,https://fortune.com/feed/,fortune.com,Major News/Wire,2,Tier 2 National Media,92,active,False
-MarketWatch,https://feeds.content.dowjones.io/public/rss/mw_topstories,feeds.content.dowjones.io,Major News/Wire,2,Tier 2 National Media,92,active,False
-Dark Reading,https://www.darkreading.com/rss.xml,darkreading.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
-Security Week,https://www.securityweek.com/feed/,securityweek.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
-Cybersecurity Dive,https://www.cybersecuritydive.com/feeds/news/,cybersecuritydive.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
-SC Magazine,https://www.scmagazine.com/feed/,scmagazine.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
-JD Supra - Broadband,https://www.jdsupra.com/topics/broadband/rss/,jdsupra.com,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,active,False
-JD Supra - Net Neutrality,https://www.jdsupra.com/topics/net-neutrality/rss/,jdsupra.com,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,active,False
-JD Supra - Media Law,https://www.jdsupra.com/topics/media-law/rss/,jdsupra.com,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,active,False
-Competitive Enterprise Inst,https://cei.org/feed/,cei.org,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,active,False
-Bipartisan Policy Center,https://bipartisanpolicy.org/feed/,bipartisanpolicy.org,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,active,False
-R Street Institute,https://www.rstreet.org/feed/,rstreet.org,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,active,False
-Anandtech,https://www.anandtech.com/rss/,anandtech.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,active,False
-StateScoop,https://statescoop.com/feed/,statescoop.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,active,False
-EdScoop,https://edscoop.com/feed/,edscoop.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,active,False
-CyberScoop,https://cyberscoop.com/feed/,cyberscoop.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,active,False
-FedScoop,https://fedscoop.com/feed/,fedscoop.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,active,False
-GSMA News,https://www.gsma.com/newsroom/feed/,gsma.com,Major News/Wire,2,Tier 2 National Media,92,active,False
-WIA Tower,https://wia.org/feed/,wia.org,Major News/Wire,2,Tier 2 National Media,92,active,False
-Spectrum Policy News,https://spectropolis.blogspot.com/feeds/posts/default,spectropolis.blogspot.com,Major News/Wire,2,Tier 2 National Media,92,active,False
-Sasha Javid Spectrum,https://www.spectrumfutures.org/feed/,spectrumfutures.org,Major News/Wire,2,Tier 2 National Media,92,active,False
-VentureBeat AI,https://venturebeat.com/category/ai/feed/,venturebeat.com,AI/ML,4,Tier 4 Technology Publications,76,active,False
-AI Now Institute,https://ainowinstitute.org/feed/,ainowinstitute.org,AI/ML,4,Tier 4 Technology Publications,76,active,False
-Partnership on AI,https://partnershiponai.org/feed/,partnershiponai.org,AI/ML,4,Tier 4 Technology Publications,76,active,False
-Brookings AI,https://www.brookings.edu/topic/artificial-intelligence/feed/,brookings.edu,AI/ML,4,Tier 4 Technology Publications,76,active,False
-Stanford HAI,https://hai.stanford.edu/news/rss.xml,hai.stanford.edu,AI/ML,4,Tier 4 Technology Publications,76,active,False
-Future of Life Institute,https://futureoflife.org/feed/,futureoflife.org,AI/ML,4,Tier 4 Technology Publications,76,active,False
-Algorithm Watch,https://algorithmwatch.org/en/feed/,algorithmwatch.org,AI/ML,4,Tier 4 Technology Publications,76,active,False
-Consumer Reports Policy,https://advocacy.consumerreports.org/feed/,advocacy.consumerreports.org,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,active,False
-INCOMPAS,https://www.incompas.org/news/feed/,incompas.org,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,active,False
-NCTA Internet,https://www.ncta.com/feed,ncta.com,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,active,False
-MeriTalk,https://www.meritalk.com/feed/,meritalk.com,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,active,False
-GovLoop,https://www.govloop.com/feed/,govloop.com,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,active,False
-Columbia Journalism Review,https://www.cjr.org/feed,cjr.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
-Nieman Lab,https://www.niemanlab.org/feed/,niemanlab.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
-Business Wire - Telecom,https://feed.businesswire.com/rss/home/?rss=G1&category=Telecommunications,feed.businesswire.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
-Globe Newswire - Telecom,https://www.globenewswire.com/RssFeed/industry/9621-Telecommunications,globenewswire.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
-5G Technology World,https://www.5gtechnologyworld.com/feed/,5gtechnologyworld.com,Major News/Wire,2,Tier 2 National Media,92,active,False
-INCOMPAS,https://www.incompas.org/feed/,incompas.org,Major News/Wire,2,Tier 2 National Media,92,active,False
-ACA Connects,https://acaconnects.org/feed/,acaconnects.org,Major News/Wire,2,Tier 2 National Media,92,active,False
-WTA Telecom,https://www.wtaonline.org/feed/,wtaonline.org,Major News/Wire,2,Tier 2 National Media,92,active,False
-Financial Times - Tech,https://www.ft.com/technology?format=rss,ft.com,Major News/Wire,2,Tier 2 National Media,92,active,False
-BBC - Tech,https://feeds.bbci.co.uk/news/technology/rss.xml,feeds.bbci.co.uk,Major News/Wire,2,Tier 2 National Media,92,active,False
-Harvard Berkman Center,https://cyber.harvard.edu/feeds/news,cyber.harvard.edu,Major News/Wire,2,Tier 2 National Media,92,active,False
-Georgetown Law Tech,https://www.law.georgetown.edu/news/feed/,law.georgetown.edu,Major News/Wire,2,Tier 2 National Media,92,active,False
-TV - WGN Chicago,https://wgntv.com/feed/,wgntv.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
-TV - WFAA Dallas,https://www.wfaa.com/feeds/syndication/rss/news,wfaa.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
-TV - KUSA Denver,https://www.9news.com/feeds/syndication/rss/news,9news.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
-TV - KHOU Houston,https://www.khou.com/feeds/syndication/rss/news,khou.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
-TV - WTHR Indianapolis,https://www.wthr.com/rss,wthr.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
-TV - WNBC New York,https://www.nbcnewyork.com/news/local/feed/,nbcnewyork.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
-TV - KOIN Portland,https://www.koin.com/feed/,koin.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
-TV - KCRA Sacramento,https://www.kcra.com/rss,kcra.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
-TV - KSAT San Antonio,https://www.ksat.com/rss,ksat.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
-TV - KGO San Francisco,https://abc7news.com/feed/,abc7news.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
-TV - KARE Minneapolis,https://www.kare11.com/feeds/syndication/rss/news,kare11.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
-TV - WPLG Miami,https://www.local10.com/rss,local10.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
-TV - WCNC Charlotte,https://www.wcnc.com/feeds/syndication/rss/news,wcnc.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
-TV - WAVY Norfolk,https://www.wavy.com/feed/,wavy.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
-Radio - WAMU Washington DC,https://wamu.org/feed/news,wamu.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
-Radio - WNYC New York,https://www.wnyc.org/feed/,wnyc.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
-Radio - WBUR Boston,https://www.wbur.org/rss/,wbur.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
-Radio - WDET Detroit,https://wdet.org/feed/,wdet.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
-Radio - WPLN Nashville,https://wpln.org/feed/,wpln.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
-Radio - KCUR Kansas City,https://www.kcur.org/feed,kcur.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
-Radio - WFPL Louisville,https://wfpl.org/feed/,wfpl.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
-CISA Alerts,https://www.cisa.gov/uscert/ncas/alerts.xml,cisa.gov,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
-CISA News,https://www.cisa.gov/news.xml,cisa.gov,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
-SecurityWeek,https://feeds.feedburner.com/securityweek,feeds.feedburner.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
-APCO International,https://www.apcointl.org/feed/,apcointl.org,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
-Broadcast Law Blog,https://www.broadcastlawblog.com/feed/,broadcastlawblog.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
-Law360 Telecom,https://www.law360.com/telecom/rss,law360.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
-Skadden Telecom Blog,https://www.skadden.com/insights/rss,skadden.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
-Wiley Telecom,https://www.wileyrein.com/rss/,wileyrein.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
-Covington Telecom,https://www.cov.com/en/rss,cov.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
-New America OTI,https://www.newamerica.org/feed/,newamerica.org,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
-Georgetown Law Tech,https://www.georgetownlawtechreview.org/feed/,georgetownlawtechreview.org,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
-TheGrio Media,https://thegrio.com/feed/,thegrio.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
-NY Post Media,https://nypost.com/media/feed/,nypost.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
-Washington Examiner Media,https://www.washingtonexaminer.com/tag/media/rss,washingtonexaminer.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
+name,rss_url,domain,category,tier,authority,reason
+Federal Register - FCC,https://www.federalregister.gov/documents/search.rss?conditions%5Bagencies%5D%5B%5D=federal-communications-commission,federalregister.gov,Government,1,100.0,Tier 1 Government — retained for resilient pipeline (RSS/official complements API)
+Broadband Breakfast,https://broadbandbreakfast.com/feed/,broadbandbreakfast.com,Telecom Trade,3,82.0,Tier 3 Telecom Trade — retained for resilient pipeline (RSS/official complements API)
+Light Reading,https://www.lightreading.com/rss.xml,lightreading.com,Telecom Trade,3,82.0,Tier 3 Telecom Trade — retained for resilient pipeline (RSS/official complements API)
+Fierce Network,https://www.fierce-network.com/rss/xml,fierce-network.com,Telecom Trade,3,82.0,Tier 3 Telecom Trade — retained for resilient pipeline (RSS/official complements API)
+Fierce Wireless,https://www.fiercewireless.com/rss/xml,fiercewireless.com,Telecom Trade,3,82.0,Tier 3 Telecom Trade — retained for resilient pipeline (RSS/official complements API)
+RCR Wireless,https://www.rcrwireless.com/feed,rcrwireless.com,Telecom Trade,3,82.0,Tier 3 Telecom Trade — retained for resilient pipeline (RSS/official complements API)
+TR Daily,https://trdaily.com/feed/,trdaily.com,Telecom Trade,3,82.0,Tier 3 Telecom Trade — retained for resilient pipeline (RSS/official complements API)
+Telecompaper,https://www.telecompaper.com/rss/news,telecompaper.com,Telecom Trade,3,82.0,Tier 3 Telecom Trade — retained for resilient pipeline (RSS/official complements API)
+Total Tele,https://www.totaltele.com/rss.xml,totaltele.com,Telecom Trade,3,82.0,Tier 3 Telecom Trade — retained for resilient pipeline (RSS/official complements API)
+Telecoms,https://telecoms.com/feed/,telecoms.com,Telecom Trade,3,82.0,Tier 3 Telecom Trade — retained for resilient pipeline (RSS/official complements API)
+Telecom Reseller,https://telecomreseller.com/feed/,telecomreseller.com,Telecom Trade,3,82.0,Tier 3 Telecom Trade — retained for resilient pipeline (RSS/official complements API)
+Broadband World News,https://www.broadbandworldnews.com/rss.xml,broadbandworldnews.com,Telecom Trade,3,82.0,Tier 3 Telecom Trade — retained for resilient pipeline (RSS/official complements API)
+Inside Towers,https://insidetowers.com/feed/,insidetowers.com,Telecom Trade,3,82.0,Tier 3 Telecom Trade — retained for resilient pipeline (RSS/official complements API)
+Mobile World Live,https://www.mobileworldlive.com/feed/,mobileworldlive.com,Telecom Trade,3,82.0,Tier 3 Telecom Trade — retained for resilient pipeline (RSS/official complements API)
+SDxCentral,https://www.sdxcentral.com/feed/,sdxcentral.com,Telecom Trade,3,82.0,Tier 3 Telecom Trade — retained for resilient pipeline (RSS/official complements API)
+TIA Online,https://tiaonline.org/feed/,tiaonline.org,Telecom Trade,3,82.0,Tier 3 Telecom Trade — retained for resilient pipeline (RSS/official complements API)
+Radio World,https://www.radioworld.com/feed/,radioworld.com,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+TVNewsCheck,https://tvnewscheck.com/feed/,tvnewscheck.com,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+RBR,https://www.rbr.com/feed/,rbr.com,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+All Access,https://www.allaccess.com/merge/archive/rss.xml,allaccess.com,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+Radio Ink,https://radioink.com/feed/,radioink.com,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+The Desk,https://thedesk.net/feed/,thedesk.net,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+FCC Data,https://fccdata.org/feed/,fccdata.org,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+Benton Institute,https://www.benton.org/rss.xml,benton.org,Government,1,95.0,Tier 1 Government — retained for resilient pipeline (RSS/official complements API)
+Public Knowledge,https://publicknowledge.org/feed/,publicknowledge.org,Government,1,95.0,Tier 1 Government — retained for resilient pipeline (RSS/official complements API)
+Federal News Network,https://federalnewsnetwork.com/feed/,federalnewsnetwork.com,Government,1,95.0,Tier 1 Government — retained for resilient pipeline (RSS/official complements API)
+GovTech,https://www.govtech.com/rss,govtech.com,Government,1,95.0,Tier 1 Government — retained for resilient pipeline (RSS/official complements API)
+SCOTUSblog,https://www.scotusblog.com/feed/,scotusblog.com,Government,1,95.0,Tier 1 Government — retained for resilient pipeline (RSS/official complements API)
+Brookings TechTank,https://www.brookings.edu/topic/technology-innovation/feed/,brookings.edu,Government,1,95.0,Tier 1 Government — retained for resilient pipeline (RSS/official complements API)
+AEI,https://www.aei.org/feed/,aei.org,Government,1,95.0,Tier 1 Government — retained for resilient pipeline (RSS/official complements API)
+Nextgov,https://www.nextgov.com/rss/all/,nextgov.com,Government,1,95.0,Tier 1 Government — retained for resilient pipeline (RSS/official complements API)
+Bloomberg Law,https://www.bloomberglaw.com/feed,bloomberglaw.com,Government,1,95.0,Tier 1 Government — retained for resilient pipeline (RSS/official complements API)
+Ars Technica,https://feeds.arstechnica.com/arstechnica/index,feeds.arstechnica.com,Technology,4,76.0,Tier 4 Technology — retained for resilient pipeline (RSS/official complements API)
+TechCrunch,https://techcrunch.com/feed/,techcrunch.com,Technology,4,76.0,Tier 4 Technology — retained for resilient pipeline (RSS/official complements API)
+TechDirt,https://www.techdirt.com/feed/,techdirt.com,Technology,4,76.0,Tier 4 Technology — retained for resilient pipeline (RSS/official complements API)
+Wired,https://www.wired.com/feed/rss,wired.com,Technology,4,76.0,Tier 4 Technology — retained for resilient pipeline (RSS/official complements API)
+Engadget,https://www.engadget.com/rss.xml,engadget.com,Technology,4,76.0,Tier 4 Technology — retained for resilient pipeline (RSS/official complements API)
+Gizmodo,https://gizmodo.com/feed/,gizmodo.com,Technology,4,76.0,Tier 4 Technology — retained for resilient pipeline (RSS/official complements API)
+CNET,https://www.cnet.com/rss/news/,cnet.com,Technology,4,76.0,Tier 4 Technology — retained for resilient pipeline (RSS/official complements API)
+ZDNet,https://www.zdnet.com/news/rss.xml,zdnet.com,Technology,4,76.0,Tier 4 Technology — retained for resilient pipeline (RSS/official complements API)
+VentureBeat,https://venturebeat.com/feed/,venturebeat.com,Technology,4,76.0,Tier 4 Technology — retained for resilient pipeline (RSS/official complements API)
+Digital Trends,https://www.digitaltrends.com/feed/,digitaltrends.com,Technology,4,76.0,Tier 4 Technology — retained for resilient pipeline (RSS/official complements API)
+Slashdot,https://rss.slashdot.org/Slashdot/slashdotMain,rss.slashdot.org,Technology,4,76.0,Tier 4 Technology — retained for resilient pipeline (RSS/official complements API)
+Mashable,https://mashable.com/feeds/rss/all,mashable.com,Technology,4,76.0,Tier 4 Technology — retained for resilient pipeline (RSS/official complements API)
+eWeek,https://www.eweek.com/rss.xml,eweek.com,Technology,4,76.0,Tier 4 Technology — retained for resilient pipeline (RSS/official complements API)
+CIO,https://www.cio.com/feed/,cio.com,Technology,4,76.0,Tier 4 Technology — retained for resilient pipeline (RSS/official complements API)
+AP News Technology,https://rsshub.app/apnews/topics/technology,rsshub.app,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+AP News Politics,https://rsshub.app/apnews/topics/politics,rsshub.app,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+Bloomberg Technology,https://feeds.bloomberg.com/technology/news.rss,feeds.bloomberg.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+Bloomberg Politics,https://feeds.bloomberg.com/politics/news.rss,feeds.bloomberg.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+New York Times Tech,https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml,rss.nytimes.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+New York Times Politics,https://rss.nytimes.com/services/xml/rss/nyt/Politics.xml,rss.nytimes.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+The Hill,https://thehill.com/feed/,thehill.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+Axios,https://api.axios.com/feed/,api.axios.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+CBS News Tech,https://www.cbsnews.com/latest/rss/tech,cbsnews.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+NBC News Tech,https://feeds.nbcnews.com/nbcnews/public/tech,feeds.nbcnews.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+ABC News Tech,https://abcnews.go.com/abcnews/technologyheadlines,abcnews.go.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+Fox Business,https://moxie.foxbusiness.com/google-publisher/technology.xml,moxie.foxbusiness.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+USA Today Tech,https://rssfeeds.usatoday.com/UsatodaycomTech-TopStories,rssfeeds.usatoday.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+NPR Technology,https://feeds.npr.org/1019/rss.xml,feeds.npr.org,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+NPR Business,https://feeds.npr.org/1006/rss.xml,feeds.npr.org,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+Forbes Tech,https://www.forbes.com/innovation/feed/,forbes.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+Fortune,https://fortune.com/feed/,fortune.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+MarketWatch,https://feeds.content.dowjones.io/public/rss/mw_topstories,feeds.content.dowjones.io,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+CNBC Tech,https://www.cnbc.com/id/19854910/device/rss/rss.html,cnbc.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+CNBC Telecom,https://www.cnbc.com/id/10000108/device/rss/rss.html,cnbc.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+Dark Reading,https://www.darkreading.com/rss.xml,darkreading.com,Cybersecurity,4,74.0,Tier 4 Cybersecurity — retained for resilient pipeline (RSS/official complements API)
+Security Week,https://www.securityweek.com/feed/,securityweek.com,Cybersecurity,4,74.0,Tier 4 Cybersecurity — retained for resilient pipeline (RSS/official complements API)
+Cybersecurity Dive,https://www.cybersecuritydive.com/feeds/news/,cybersecuritydive.com,Cybersecurity,4,74.0,Tier 4 Cybersecurity — retained for resilient pipeline (RSS/official complements API)
+SC Magazine,https://www.scmagazine.com/feed/,scmagazine.com,Cybersecurity,4,74.0,Tier 4 Cybersecurity — retained for resilient pipeline (RSS/official complements API)
+Cyber Defense Magazine,https://www.cyberdefensemagazine.com/feed/,cyberdefensemagazine.com,Cybersecurity,4,74.0,Tier 4 Cybersecurity — retained for resilient pipeline (RSS/official complements API)
+JD Supra - Broadband,https://www.jdsupra.com/topics/broadband/rss/,jdsupra.com,Policy/Legal,3,80.0,Tier 3 Policy/Legal — retained for resilient pipeline (RSS/official complements API)
+JD Supra - Net Neutrality,https://www.jdsupra.com/topics/net-neutrality/rss/,jdsupra.com,Policy/Legal,3,80.0,Tier 3 Policy/Legal — retained for resilient pipeline (RSS/official complements API)
+JD Supra - Media Law,https://www.jdsupra.com/topics/media-law/rss/,jdsupra.com,Policy/Legal,3,80.0,Tier 3 Policy/Legal — retained for resilient pipeline (RSS/official complements API)
+Competitive Enterprise Inst,https://cei.org/feed/,cei.org,Policy/Legal,3,80.0,Tier 3 Policy/Legal — retained for resilient pipeline (RSS/official complements API)
+Heritage Foundation Tech,https://www.heritage.org/technology/rss,heritage.org,Policy/Legal,3,80.0,Tier 3 Policy/Legal — retained for resilient pipeline (RSS/official complements API)
+Mercatus Center Tech,https://www.mercatus.org/rss/technology,mercatus.org,Policy/Legal,3,80.0,Tier 3 Policy/Legal — retained for resilient pipeline (RSS/official complements API)
+Bipartisan Policy Center,https://bipartisanpolicy.org/feed/,bipartisanpolicy.org,Policy/Legal,3,80.0,Tier 3 Policy/Legal — retained for resilient pipeline (RSS/official complements API)
+R Street Institute,https://www.rstreet.org/feed/,rstreet.org,Policy/Legal,3,80.0,Tier 3 Policy/Legal — retained for resilient pipeline (RSS/official complements API)
+Government Accountability Office,https://www.gao.gov/rss/reports.xml,gao.gov,Government,1,95.0,Tier 1 Government — retained for resilient pipeline (RSS/official complements API)
+Anandtech,https://www.anandtech.com/rss/,anandtech.com,Telecom Trade,3,82.0,Tier 3 Telecom Trade — retained for resilient pipeline (RSS/official complements API)
+StateScoop,https://statescoop.com/feed/,statescoop.com,Telecom Trade,3,82.0,Tier 3 Telecom Trade — retained for resilient pipeline (RSS/official complements API)
+EdScoop,https://edscoop.com/feed/,edscoop.com,Telecom Trade,3,82.0,Tier 3 Telecom Trade — retained for resilient pipeline (RSS/official complements API)
+CyberScoop,https://cyberscoop.com/feed/,cyberscoop.com,Telecom Trade,3,82.0,Tier 3 Telecom Trade — retained for resilient pipeline (RSS/official complements API)
+FedScoop,https://fedscoop.com/feed/,fedscoop.com,Telecom Trade,3,82.0,Tier 3 Telecom Trade — retained for resilient pipeline (RSS/official complements API)
+5G Americas,https://www.5gamericas.org/feed/,5gamericas.org,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+GSMA News,https://www.gsma.com/newsroom/feed/,gsma.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+WIA Tower,https://wia.org/feed/,wia.org,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+VentureBeat AI,https://venturebeat.com/category/ai/feed/,venturebeat.com,AI/ML,4,76.0,Tier 4 AI/ML — retained for resilient pipeline (RSS/official complements API)
+AI Now Institute,https://ainowinstitute.org/feed/,ainowinstitute.org,AI/ML,4,76.0,Tier 4 AI/ML — retained for resilient pipeline (RSS/official complements API)
+Partnership on AI,https://partnershiponai.org/feed/,partnershiponai.org,AI/ML,4,76.0,Tier 4 AI/ML — retained for resilient pipeline (RSS/official complements API)
+Brookings AI,https://www.brookings.edu/topic/artificial-intelligence/feed/,brookings.edu,AI/ML,4,76.0,Tier 4 AI/ML — retained for resilient pipeline (RSS/official complements API)
+Stanford HAI,https://hai.stanford.edu/news/rss.xml,hai.stanford.edu,AI/ML,4,76.0,Tier 4 AI/ML — retained for resilient pipeline (RSS/official complements API)
+Future of Life Institute,https://futureoflife.org/feed/,futureoflife.org,AI/ML,4,76.0,Tier 4 AI/ML — retained for resilient pipeline (RSS/official complements API)
+AI Policy Weekly,https://aipolicyweekly.substack.com/feed,aipolicyweekly.substack.com,AI/ML,4,76.0,Tier 4 AI/ML — retained for resilient pipeline (RSS/official complements API)
+Algorithm Watch,https://algorithmwatch.org/en/feed/,algorithmwatch.org,AI/ML,4,76.0,Tier 4 AI/ML — retained for resilient pipeline (RSS/official complements API)
+Government AI,https://www.govloop.com/topic/artificial-intelligence/feed/,govloop.com,AI/ML,4,76.0,Tier 4 AI/ML — retained for resilient pipeline (RSS/official complements API)
+Consumer Reports Policy,https://advocacy.consumerreports.org/feed/,advocacy.consumerreports.org,Policy/Legal,3,80.0,Tier 3 Policy/Legal — retained for resilient pipeline (RSS/official complements API)
+INCOMPAS,https://www.incompas.org/news/feed/,incompas.org,Policy/Legal,3,80.0,Tier 3 Policy/Legal — retained for resilient pipeline (RSS/official complements API)
+USTelecom Blog,https://www.ustelecom.org/feed/,ustelecom.org,Policy/Legal,3,80.0,Tier 3 Policy/Legal — retained for resilient pipeline (RSS/official complements API)
+NCTA Internet,https://www.ncta.com/feed,ncta.com,Policy/Legal,3,80.0,Tier 3 Policy/Legal — retained for resilient pipeline (RSS/official complements API)
+Wired Business,https://www.wired.com/feed/category/business/latest/rss,wired.com,Policy/Legal,3,80.0,Tier 3 Policy/Legal — retained for resilient pipeline (RSS/official complements API)
+The Information,https://www.theinformation.com/feed,theinformation.com,Policy/Legal,3,80.0,Tier 3 Policy/Legal — retained for resilient pipeline (RSS/official complements API)
+Wall Street Journal Tech,https://feeds.a.dj.com/rss/RSSWSJD.xml,feeds.a.dj.com,Policy/Legal,3,80.0,Tier 3 Policy/Legal — retained for resilient pipeline (RSS/official complements API)
+MeriTalk,https://www.meritalk.com/feed/,meritalk.com,Policy/Legal,3,80.0,Tier 3 Policy/Legal — retained for resilient pipeline (RSS/official complements API)
+GovLoop,https://www.govloop.com/feed/,govloop.com,Policy/Legal,3,80.0,Tier 3 Policy/Legal — retained for resilient pipeline (RSS/official complements API)
+Current - Public Media,https://current.org/feed/,current.org,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+RadioInfo,https://www.radioinfo.com.au/rss.xml,radioinfo.com.au,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+RAIN News - Audio/Radio,https://rainnews.com/feed/,rainnews.com,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+Jacobin - Media,https://jacobin.com/feed/,jacobin.com,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+Columbia Journalism Review,https://www.cjr.org/feed,cjr.org,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+Nieman Lab,https://www.niemanlab.org/feed/,niemanlab.org,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+Poynter,https://www.poynter.org/feed/,poynter.org,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+PR Newswire - Telecom,https://www.prnewswire.com/rss/news-releases-list.rss?tagABCSIC=5700000000,prnewswire.com,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+Business Wire - Telecom,https://feed.businesswire.com/rss/home/?rss=G1&category=Telecommunications,feed.businesswire.com,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+Globe Newswire - Telecom,https://www.globenewswire.com/RssFeed/industry/9621-Telecommunications,globenewswire.com,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+RCR Wireless 5G,https://www.rcrwireless.com/category/5g/feed,rcrwireless.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+FierceWireless 5G,https://www.fiercewireless.com/rss/5g-xml,fiercewireless.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+Light Reading 5G,https://www.lightreading.com/5g/rss.xml,lightreading.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+Ericsson Blog,https://www.ericsson.com/en/blog/rss,ericsson.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+T-Mobile Newsroom,https://www.t-mobile.com/news/rss.xml,t-mobile.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+AT&T Newsroom,https://about.att.com/innovation/rss,about.att.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+INCOMPAS,https://www.incompas.org/feed/,incompas.org,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+ACA Connects,https://acaconnects.org/feed/,acaconnects.org,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+WTA Telecom,https://www.wtaonline.org/feed/,wtaonline.org,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+NATE Tower Association,https://www.natehome.com/feed/,natehome.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+AP - Science Tech,https://rsshub.app/apnews/topics/science,rsshub.app,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+Financial Times - Tech,https://www.ft.com/technology?format=rss,ft.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+The Guardian - Tech,https://www.theguardian.com/technology/rss,theguardian.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+BBC - Tech,https://feeds.bbci.co.uk/news/technology/rss.xml,feeds.bbci.co.uk,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+Politico - Media,https://www.politico.com/rss/media.xml,politico.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+Politico - Congress,https://www.politico.com/rss/congress.xml,politico.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+Ars Technica - Policy,https://feeds.arstechnica.com/arstechnica/tech-policy,feeds.arstechnica.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+The Verge - Policy,https://www.theverge.com/rss/policy/index.xml,theverge.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+TechCrunch - Government,https://techcrunch.com/tag/government/feed/,techcrunch.com,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+Pew Research - Tech,https://www.pewresearch.org/internet/feed/,pewresearch.org,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+Harvard Berkman Center,https://cyber.harvard.edu/feeds/news,cyber.harvard.edu,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+Georgetown Law Tech,https://www.law.georgetown.edu/news/feed/,law.georgetown.edu,Major News/Wire,2,92.0,Tier 2 Major News/Wire — retained for resilient pipeline (RSS/official complements API)
+CA - Los Angeles Times,https://www.latimes.com/rss2.0.xml,latimes.com,Regional,6,50.0,major-metro regional daily — geographic value
+CA - San Jose Mercury News,https://www.mercurynews.com/feed/,mercurynews.com,Regional,6,50.0,major-metro regional daily — geographic value
+CA - San Diego Union-Tribune,https://www.sandiegouniontribune.com/rss/,sandiegouniontribune.com,Regional,6,50.0,major-metro regional daily — geographic value
+CO - Denver Post,https://www.denverpost.com/feed/,denverpost.com,Regional,6,50.0,major-metro regional daily — geographic value
+FL - Orlando Sentinel,https://www.orlandosentinel.com/arcio/rss/,orlandosentinel.com,Regional,6,50.0,major-metro regional daily — geographic value
+FL - South Florida Sun-Sentinel,https://www.sun-sentinel.com/arcio/rss/,sun-sentinel.com,Regional,6,50.0,major-metro regional daily — geographic value
+IL - Chicago Tribune,https://www.chicagotribune.com/arcio/rss/,chicagotribune.com,Regional,6,50.0,major-metro regional daily — geographic value
+LA - Times-Picayune New Orleans,https://www.nola.com/search/?f=rss&t=article&l=50,nola.com,Regional,6,50.0,major-metro regional daily — geographic value
+MO - St. Louis Post-Dispatch,https://www.stltoday.com/search/?f=rss&t=article&l=50,stltoday.com,Regional,6,50.0,major-metro regional daily — geographic value
+NY - NY Daily News,https://www.nydailynews.com/arcio/rss/,nydailynews.com,Regional,6,50.0,major-metro regional daily — geographic value
+NY - Buffalo News,https://buffalonews.com/search/?f=rss&t=article&l=50,buffalonews.com,Regional,6,50.0,major-metro regional daily — geographic value
+OH - Columbus Dispatch,https://www.dispatch.com/search/?f=rss&t=article&l=50,dispatch.com,Regional,6,50.0,major-metro regional daily — geographic value
+SC - Post and Courier Charleston,https://www.postandcourier.com/feed/,postandcourier.com,Regional,6,50.0,major-metro regional daily — geographic value
+TV - WGN Chicago,https://wgntv.com/feed/,wgntv.com,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+TV - WFAA Dallas,https://www.wfaa.com/feeds/syndication/rss/news,wfaa.com,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+TV - KUSA Denver,https://www.9news.com/feeds/syndication/rss/news,9news.com,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+TV - KHOU Houston,https://www.khou.com/feeds/syndication/rss/news,khou.com,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+TV - WTHR Indianapolis,https://www.wthr.com/rss,wthr.com,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+TV - WDSU New Orleans,https://www.wdsu.com/rss,wdsu.com,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+TV - WNBC New York,https://www.nbcnewyork.com/news/local/feed/,nbcnewyork.com,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+TV - KOIN Portland,https://www.koin.com/feed/,koin.com,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+TV - KCRA Sacramento,https://www.kcra.com/rss,kcra.com,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+TV - KSAT San Antonio,https://www.ksat.com/rss,ksat.com,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+TV - KGO San Francisco,https://abc7news.com/feed/,abc7news.com,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+TV - KARE Minneapolis,https://www.kare11.com/feeds/syndication/rss/news,kare11.com,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+TV - WESH Orlando,https://www.wesh.com/rss,wesh.com,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+TV - WCNC Charlotte,https://www.wcnc.com/feeds/syndication/rss/news,wcnc.com,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+TV - WAVY Norfolk,https://www.wavy.com/feed/,wavy.com,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+Radio - WAMU Washington DC,https://wamu.org/feed/news,wamu.org,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+Radio - WNYC New York,https://www.wnyc.org/feed/,wnyc.org,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+Radio - WBUR Boston,https://www.wbur.org/rss/,wbur.org,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+Radio - WDET Detroit,https://wdet.org/feed/,wdet.org,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+Radio - WPLN Nashville,https://wpln.org/feed/,wpln.org,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+Radio - KCUR Kansas City,https://www.kcur.org/feed,kcur.org,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+Radio - WFPL Louisville,https://wfpl.org/feed/,wfpl.org,Broadcast/Radio,5,72.0,Tier 5 Broadcast/Radio — retained for resilient pipeline (RSS/official complements API)
+CISA Alerts,https://www.cisa.gov/uscert/ncas/alerts.xml,cisa.gov,Cybersecurity,4,74.0,Tier 4 Cybersecurity — retained for resilient pipeline (RSS/official complements API)
+CISA News,https://www.cisa.gov/news.xml,cisa.gov,Cybersecurity,4,74.0,Tier 4 Cybersecurity — retained for resilient pipeline (RSS/official complements API)
+SecurityWeek,https://feeds.feedburner.com/securityweek,feeds.feedburner.com,Cybersecurity,4,74.0,Tier 4 Cybersecurity — retained for resilient pipeline (RSS/official complements API)
+APCO International,https://www.apcointl.org/feed/,apcointl.org,Cybersecurity,4,74.0,Tier 4 Cybersecurity — retained for resilient pipeline (RSS/official complements API)
+NENA 911,https://www.nena.org/feed/,nena.org,Cybersecurity,4,74.0,Tier 4 Cybersecurity — retained for resilient pipeline (RSS/official complements API)
+Urgent Communications,https://urgentcomm.com/feed/,urgentcomm.com,Cybersecurity,4,74.0,Tier 4 Cybersecurity — retained for resilient pipeline (RSS/official complements API)
+Broadcast Law Blog,https://www.broadcastlawblog.com/feed/,broadcastlawblog.com,Cybersecurity,4,74.0,Tier 4 Cybersecurity — retained for resilient pipeline (RSS/official complements API)
+CommLaw Blog,https://www.commlawblog.com/feed/,commlawblog.com,Cybersecurity,4,74.0,Tier 4 Cybersecurity — retained for resilient pipeline (RSS/official complements API)
+FierceVideo,https://www.fiercevideo.com/rss/xml,fiercevideo.com,Cybersecurity,4,74.0,Tier 4 Cybersecurity — retained for resilient pipeline (RSS/official complements API)
+Inside Radio,https://www.insideradio.com/feed/,insideradio.com,Cybersecurity,4,74.0,Tier 4 Cybersecurity — retained for resilient pipeline (RSS/official complements API)
+Law360 Telecom,https://www.law360.com/telecom/rss,law360.com,Cybersecurity,4,74.0,Tier 4 Cybersecurity — retained for resilient pipeline (RSS/official complements API)
+Skadden Telecom Blog,https://www.skadden.com/insights/rss,skadden.com,Cybersecurity,4,74.0,Tier 4 Cybersecurity — retained for resilient pipeline (RSS/official complements API)
+Wiley Telecom,https://www.wileyrein.com/rss/,wileyrein.com,Cybersecurity,4,74.0,Tier 4 Cybersecurity — retained for resilient pipeline (RSS/official complements API)
+Covington Telecom,https://www.cov.com/en/rss,cov.com,Cybersecurity,4,74.0,Tier 4 Cybersecurity — retained for resilient pipeline (RSS/official complements API)
+DOJ Antitrust,https://www.justice.gov/rss/atr.xml,justice.gov,Cybersecurity,4,74.0,Tier 4 Cybersecurity — retained for resilient pipeline (RSS/official complements API)
+New America OTI,https://www.newamerica.org/feed/,newamerica.org,Cybersecurity,4,74.0,Tier 4 Cybersecurity — retained for resilient pipeline (RSS/official complements API)
+Georgetown Law Tech,https://www.georgetownlawtechreview.org/feed/,georgetownlawtechreview.org,Cybersecurity,4,74.0,Tier 4 Cybersecurity — retained for resilient pipeline (RSS/official complements API)
+TheGrio Media,https://thegrio.com/feed/,thegrio.com,Cybersecurity,4,74.0,Tier 4 Cybersecurity — retained for resilient pipeline (RSS/official complements API)
+Mediaite,https://www.mediaite.com/feed/,mediaite.com,Cybersecurity,4,74.0,Tier 4 Cybersecurity — retained for resilient pipeline (RSS/official complements API)
+NY Post Media,https://nypost.com/media/feed/,nypost.com,Cybersecurity,4,74.0,Tier 4 Cybersecurity — retained for resilient pipeline (RSS/official complements API)
+Washington Examiner Media,https://www.washingtonexaminer.com/tag/media/rss,washingtonexaminer.com,Cybersecurity,4,74.0,Tier 4 Cybersecurity — retained for resilient pipeline (RSS/official complements API)
