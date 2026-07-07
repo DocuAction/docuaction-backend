@@ -1,0 +1,803 @@
+name,url,status,classification
+Vanilla Plus,https://www.vanillaplus.com/feed/,ConnectError,dead
+TeleGeography,https://www.telegeography.com/feed/,404,dead
+Inside Radio,https://www.insideradio.com/rss.xml,404,dead
+Comms Update,https://www.commsupdate.com/feed/,404,dead
+Developing Telecoms,https://developingtelecoms.com/feed,404,dead
+ITIF,https://itif.org/feed/,404,dead
+Network World,https://www.networkworld.com/index.rss,404,dead
+PCMag,https://www.pcmag.com/feeds/latest,404,dead
+Law360,https://www.law360.com/rss/articles,404,dead
+Wall Street Journal Tech,https://feeds.content.dowjones.io/public/rss/mw_technology,404,dead
+CRN,https://www.crn.com/rss,404,dead
+CNN Tech,https://rss.cnn.com/rss/cnn_tech.rss,ConnectError,dead
+Oped News Telecom,https://www.opednews.com/populum/rss_telecom.php,404,dead
+Protocol,https://www.protocol.com/feeds/feed.rss,404,dead
+Morning Consult Tech,https://morningconsult.com/feed/,404,dead
+Multichannel News,https://www.nexttv.com/rss/multichannel,404,dead
+InfoWorld,https://www.infoworld.com/index.rss,404,dead
+Telco Magazine,https://www.telcomagazine.com/feed/,ConnectTimeout,dead
+Talkers,https://talkers.com/feed/,ConnectTimeout,dead
+TechFreedom,https://techfreedom.org/feed/,ConnectTimeout,dead
+FCC.gov - News Releases,https://www.fcc.gov/rss/news-releases,ReadTimeout,dead
+FCC.gov - Headlines,https://www.fcc.gov/rss/headlines,ReadTimeout,dead
+EFF,https://www.eff.org/rss/updates.xml,ConnectTimeout,dead
+National Law Review,https://www.natlawreview.com/recent/feed,ConnectTimeout,dead
+Yale JREG,https://www.yalejreg.com/feed/,ConnectTimeout,dead
+IT World Canada,https://www.itworldcanada.com/blog/feed,404,dead
+CSIS,https://www.csis.org/rss.xml,ConnectTimeout,dead
+Politico,https://www.politico.com/rss/technology.xml,ConnectTimeout,dead
+NextTV,https://www.nexttv.com/rss.xml,ConnectTimeout,dead
+TV Technology,https://www.tvtechnology.com/rss.xml,ConnectTimeout,dead
+Wireless Week,https://www.wirelessweek.com/rss.xml,404,dead
+The Verge,https://www.theverge.com/rss/index.xml,ConnectTimeout,dead
+CSO Online,https://www.csoonline.com/index.rss,404,dead
+TechRadar,https://www.techradar.com/feeds/,ConnectTimeout,dead
+Free Press,https://freepress.net/rss.xml,404,dead
+Reuters Technology,https://feeds.reuters.com/reuters/technologyNews,ConnectTimeout,dead
+Reuters Business,https://feeds.reuters.com/reuters/businessNews,ConnectTimeout,dead
+DOJ Press,https://www.justice.gov/feeds/opa/justice-news.xml,404,dead
+Broadcasting & Cable,https://www.nexttv.com/rss/broadcasting-cable,404,dead
+Washington Post Tech,https://feeds.washingtonpost.com/rss/business/technology,ReadTimeout,dead
+IAPP News,https://iapp.org/news/rss/,404,dead
+Reason Tech,https://reason.com/tag/technology/feed/,404,dead
+Slate Tech,https://slate.com/technology.rss,404,dead
+FCC Watch,https://fccwatch.com/feed/,404,dead
+Computerworld,https://www.computerworld.com/index.rss,404,dead
+NTIA,https://www.ntia.gov/rss.xml,ConnectError,dead
+The American Prospect,https://prospect.org/feeds/rss/,404,dead
+Mondaq Telecom,https://www.mondaq.com/rss/telecommunications/,404,dead
+IP Watch,https://www.ip-watch.org/feed/,ConnectTimeout,dead
+The Nation,https://www.thenation.com/subject/tech/feed/,404,dead
+Broadband Communities,https://www.bbcmag.com/rss/,ConnectTimeout,dead
+House Energy Commerce Comm,https://energycommerce.house.gov/rss.xml,404,dead
+MacNewsWorld,https://www.macnewsworld.com/rss-feed/,ConnectTimeout,dead
+Congressional Research Service,https://www.everycrsreport.com/feeds/all.rss,404,dead
+FTC Business,https://www.ftc.gov/feeds/business-guidance.xml,404,dead
+Nextgov - IT,https://www.nextgov.com/rss/technology/,404,dead
+CTIA Blog,https://api.ctia.org/news/feed/,404,dead
+Cord Cutters News,https://cordcuttersnews.com/feed/,ReadTimeout,dead
+ZD Net UK,https://www.zdnet.com/topic/networking/rss.xml,ConnectTimeout,dead
+Senate Commerce Committee,https://www.commerce.senate.gov/rss/feeds/?type=news,404,dead
+Federal Computer Week,https://fcw.com/rss/rss.ashx,ConnectTimeout,dead
+NTIA Spectrum,https://www.ntia.gov/category/spectrum/feed,ConnectError,dead
+Krebs on Security,https://krebsonsecurity.com/feed/,ConnectTimeout,dead
+Above the Law,https://abovethelaw.com/feed/,ConnectTimeout,dead
+NIST AI,https://www.nist.gov/artificial-intelligence/rss.xml,404,dead
+FTC News,https://www.ftc.gov/feeds/press-release-rss.xml,ConnectTimeout,dead
+Communications Lawyer,https://communicationslawyer.net/feed/,ConnectTimeout,dead
+Center for AI Safety,https://www.safe.ai/feed,404,dead
+Defense One AI,https://www.defenseone.com/topic/artificial-intelligence/rss/,404,dead
+Nextgov AI,https://www.nextgov.com/artificial-intelligence/rss,404,dead
+FCC - Commissioner Statements,https://www.fcc.gov/rss/commissioner-statements,ReadTimeout,dead
+Recode Vox,https://www.vox.com/recode/rss/index.xml,404,dead
+FCC - Orders,https://www.fcc.gov/rss/orders,ReadTimeout,dead
+FCW AI,https://fcw.com/artificial-intelligence/rss,404,dead
+FCC - Notices of Proposed Rules,https://www.fcc.gov/rss/nprm,ReadTimeout,dead
+FCC - Reports,https://www.fcc.gov/rss/reports,ReadTimeout,dead
+TechTarget Networking,https://www.techtarget.com/rss/SearchNetworking-News.xml,404,dead
+Open Technology Institute,https://www.newamerica.org/oti/feed/,404,dead
+SearchEnterpriseAI,https://www.techtarget.com/rss/SearchEnterpriseAI-News.xml,404,dead
+FCC - Enforcement Bureau,https://www.fcc.gov/rss/enforcement-bureau,ReadTimeout,dead
+TechTarget Telecom,https://www.techtarget.com/rss/SearchTelecom-News.xml,404,dead
+FCC - Wireless Bureau,https://www.fcc.gov/rss/wireless-telecommunications-bureau,ReadTimeout,dead
+FCC - Consumer Affairs Bureau,https://www.fcc.gov/rss/consumer-governmental-affairs-bureau,ConnectTimeout,dead
+FCC - Commissioner Speeches,https://www.fcc.gov/rss/speeches,ReadTimeout,dead
+MediaPost,https://www.mediapost.com/rss/,404,dead
+FCC - Space Bureau,https://www.fcc.gov/rss/space-bureau,ReadTimeout,dead
+Nokia Bell Labs Blog,https://www.bell-labs.com/institute/feed/,410,dead
+FCC - Public Safety Bureau,https://www.fcc.gov/rss/public-safety-homeland-security-bureau,ReadTimeout,dead
+The Markup AI,https://themarkup.org/series/automated-influence/feed/,404,dead
+FCC - Media Bureau,https://www.fcc.gov/rss/media-bureau,ReadTimeout,dead
+FCC - General Counsel,https://www.fcc.gov/rss/office-general-counsel,ReadTimeout,dead
+FCC - Wireline Bureau,https://www.fcc.gov/rss/wireline-competition-bureau,ReadTimeout,dead
+Multichannel News,https://www.nexttv.com/rss/multichannel-news,404,dead
+Bloomberg - Telecom,https://feeds.bloomberg.com/industries/TelecommunicationsServices.rss,404,dead
+FCC - Broadcast Actions,https://www.fcc.gov/rss/broadcast-actions,ReadTimeout,dead
+FCC - Broadcast Applications,https://www.fcc.gov/rss/broadcast-applications,ReadTimeout,dead
+NTCA Rural Broadband,https://www.ntca.org/feed/,404,dead
+FCC - Fact Sheets,https://www.fcc.gov/rss/fact-sheets,ReadTimeout,dead
+Verizon News,https://www.verizon.com/about/news/rss,404,dead
+FCC - Office of Engineering,https://www.fcc.gov/rss/office-engineering-technology,ReadTimeout,dead
+FCC - Office of Economics,https://www.fcc.gov/rss/office-economics-analytics,ReadTimeout,dead
+FCC - Inspector General,https://www.fcc.gov/rss/office-inspector-general,ReadTimeout,dead
+Ars Technica - Telecom,https://feeds.arstechnica.com/arstechnica/telecom,404,dead
+WISPA Wireless ISP,https://www.wispa.org/feed/,404,dead
+CTIA Wireless,https://www.ctia.org/rss/,ConnectError,dead
+NCTA Cable,https://www.ncta.com/rss.xml,404,dead
+FCC - Public Notices,https://www.fcc.gov/rss/public-notices,ReadTimeout,dead
+Wall Street Journal - Media,https://feeds.content.dowjones.io/public/rss/mw_media,404,dead
+FCC - Notices of Liability,https://www.fcc.gov/rss/notices-apparent-liability,ReadTimeout,dead
+TechTarget Security,https://www.techtarget.com/rss/SearchSecurity-News.xml,404,dead
+FCC - Court Filings,https://www.fcc.gov/rss/court-filings,ReadTimeout,dead
+Axios - Media Trends,https://api.axios.com/feed/axios/media-trends,404,dead
+American University Law,https://www.wcl.american.edu/impact/rss/,404,dead
+Yale Law - Tech,https://law.yale.edu/rss/news,404,dead
+Philadelphia Inquirer,https://www.inquirer.com/arcio/rss/,404,dead
+Spectrum Policy News,https://spectropolis.blogspot.com/feeds/posts/default,ConnectTimeout,dead
+FCC Wireless Bureau,https://www.fcc.gov/wireless-bureau/rss,ReadTimeout,dead
+Atlanta Journal-Constitution,https://www.ajc.com/news/rss.xml,404,dead
+SF Gate,https://www.sfgate.com/default/feed/SFGate-Latest-News-2960713.php,404,dead
+FCC - International Bureau,https://www.fcc.gov/rss/international-bureau,ReadTimeout,dead
+Boston Globe,https://www.bostonglobe.com/rss/homepage,404,dead
+Charter Communications,https://corporate.charter.com/newsroom/rss,404,dead
+AP News (Top),https://feeds.apnews.com/rss/topnews,ConnectError,dead
+Dallas Morning News,https://www.dallasnews.com/arc/outboundfeeds/rss/,404,dead
+Tampa Bay Times,https://www.tampabay.com/feed/,404,dead
+Arizona Republic,https://www.azcentral.com/arc/outboundfeeds/rss/,404,dead
+Houston Chronicle,https://www.houstonchronicle.com/arc/outboundfeeds/rss/,404,dead
+Axios - Technology,https://api.axios.com/feed/axios/technology,404,dead
+Daily Beast,https://feeds.thedailybeast.com/rss/articles,ConnectError,dead
+FCC - All Recent Releases,https://www.fcc.gov/rss/releases,ReadTimeout,dead
+National Journal,https://www.nationaljournal.com/rss,410,dead
+Business Insider Tech,https://feeds.businessinsider.com/custom/tech,404,dead
+Ad Age,https://adage.com/rss/technology,404,dead
+AL - Montgomery Advertiser,https://www.montgomeryadvertiser.com/rss/,404,dead
+AL - Tuscaloosa News,https://www.tuscaloosanews.com/rss/,404,dead
+AK - Anchorage Daily News,https://www.adn.com/feed/,404,dead
+AL - Huntsville Times,https://www.al.com/news/huntsville/index.ssf/rss2.0.xml,404,dead
+Sasha Javid Spectrum,https://www.spectrumfutures.org/feed/,ConnectTimeout,dead
+AZ - Arizona Republic,https://www.azcentral.com/rss/,404,dead
+AL - Mobile Press-Register,https://www.al.com/news/mobile/index.ssf/rss2.0.xml,404,dead
+5G Technology World,https://www.5gtechnologyworld.com/feed/,ConnectTimeout,dead
+AL - Birmingham News,https://www.al.com/news/birmingham/index.ssf/rss2.0.xml,404,dead
+AR - Arkansas Democrat-Gazette,https://www.arkansasonline.com/syndication/rss/,404,dead
+Qualcomm Blog,https://www.qualcomm.com/news/blog/rss,ConnectTimeout,dead
+AR - Northwest Arkansas Democrat,https://www.nwaonline.com/syndication/rss/,404,dead
+Comcast Newsroom,https://corporate.comcast.com/news-information/news-feed/rss,ReadTimeout,dead
+Reuters - Media,https://feeds.reuters.com/reuters/mediaNews,ConnectTimeout,dead
+AK - Sitka Sentinel,https://www.sitkasentinel.com/feed/,404,dead
+Stanford Internet Observatory,https://stacks.stanford.edu/feed,404,dead
+Duke Law Tech,https://law.duke.edu/news/rss/,404,dead
+George Washington Law,https://www.law.gwu.edu/news/rss,404,dead
+Axios - Login,https://api.axios.com/feed/axios/login,ConnectTimeout,dead
+CA - Ventura County Star,https://www.vcstar.com/rss/,404,dead
+Chicago Tribune,https://www.chicagotribune.com/feed/,ConnectTimeout,dead
+CA - Stockton Record,https://www.recordnet.com/rss/,404,dead
+Austin American-Statesman,https://www.statesman.com/arc/outboundfeeds/rss/,404,dead
+CA - Visalia Times-Delta,https://www.visaliatimesdelta.com/rss/,404,dead
+AZ - Kingman Daily Miner,https://www.kingmandailyminer.com/feed/,404,dead
+CA - Redding Record Searchlight,https://www.redding.com/rss/,404,dead
+CO - Fort Collins Coloradoan,https://www.coloradoan.com/rss/,404,dead
+Boston Herald,https://www.bostonherald.com/feed/,ConnectTimeout,dead
+Detroit Free Press,https://www.freep.com/arcio/rss/,ConnectTimeout,dead
+CT - Connecticut Post,https://www.ctpost.com/feed/,404,dead
+Kansas City Star,https://www.kansascity.com/arc/outboundfeeds/rss/,ReadTimeout,dead
+Pittsburgh Post-Gazette,https://www.post-gazette.com/rss/homepage,ConnectTimeout,dead
+CT - Stamford Advocate,https://www.stamfordadvocate.com/feed/,404,dead
+FL - Tallahassee Democrat,https://www.tallahassee.com/rss/,404,dead
+Vice Motherboard,https://www.vice.com/en/section/tech/rss,404,dead
+FL - Pensacola News Journal,https://www.pnj.com/rss/,404,dead
+FL - Lakeland Ledger,https://www.theledger.com/rss/,404,dead
+CT - Norwich Bulletin,https://www.norwichbulletin.com/rss/,404,dead
+FL - Melbourne Florida Today,https://www.floridatoday.com/rss/,404,dead
+FL - Fort Myers News-Press,https://www.news-press.com/rss/,404,dead
+FL - Stuart News,https://www.tcpalm.com/rss/,404,dead
+FL - Daytona Beach News-Journal,https://www.news-journalonline.com/rss/,404,dead
+GA - Atlanta Journal-Constitution,https://www.ajc.com/feed/,404,dead
+DE - Cape Gazette,https://www.capegazette.com/rss,404,dead
+AL - Gadsden Times,https://www.gadsdentimes.com/search/?f=rss&t=article&l=50&s=start_time&sd=desc,ConnectTimeout,dead
+FL - Gainesville Sun,https://www.gainesville.com/rss/,404,dead
+GA - Augusta Chronicle,https://www.augustachronicle.com/rss/,404,dead
+GA - Dalton Daily Citizen,https://www.daltondailycitizen.com/search/?f=rss,ConnectError,dead
+GA - Athens Banner-Herald,https://www.onlineathens.com/rss/,404,dead
+HI - Maui News,https://www.mauinews.com/feed/,404,dead
+Miami Herald,https://www.miamiherald.com/arc/outboundfeeds/rss/,ReadTimeout,dead
+GA - Savannah Morning News,https://www.savannahnow.com/rss/,404,dead
+CA - San Francisco Chronicle,https://www.sfgate.com/rss/feed/SFGate-Latest-News-2960713.php,404,dead
+IL - Rockford Register Star,https://www.rrstar.com/rss/,404,dead
+IL - Springfield State Journal-Reg,https://www.sj-r.com/rss/,404,dead
+FL - Palm Beach Post,https://www.palmbeachpost.com/rss/,404,dead
+FL - Naples Daily News,https://www.naplesnews.com/rss/,404,dead
+FL - Florida Times-Union,https://www.jacksonville.com/arcio/rss/,404,dead
+AR - El Dorado News-Times,https://www.eldoradonews.com/search/?f=rss&t=article&l=50,ReadTimeout,dead
+FL - Ocala Star-Banner,https://www.ocala.com/rss/,404,dead
+IL - Peoria Journal Star,https://www.pjstar.com/rss/,404,dead
+CA - Sacramento Bee,https://www.sacbee.com/news/local/rss,ReadTimeout,dead
+IL - Chicago Business,https://www.chicagobusiness.com/feeds/news/rss/,404,dead
+IN - Evansville Courier & Press,https://www.courierpress.com/rss/,404,dead
+CA - Fresno Bee,https://www.fresnobee.com/news/local/rss,ReadTimeout,dead
+CA - Riverside Press-Enterprise,https://www.pe.com/feed/,404,dead
+IN - Lafayette Journal & Courier,https://www.jconline.com/rss/,404,dead
+CA - Santa Cruz Sentinel,https://www.santacruzsentinel.com/feed/,ConnectTimeout,dead
+CA - Monterey Herald,https://www.montereyherald.com/feed/,ConnectTimeout,dead
+CA - Modesto Bee,https://www.modbee.com/news/local/rss,ReadTimeout,dead
+IN - Muncie Star Press,https://www.thestarpress.com/rss/,404,dead
+IA - Des Moines Register,https://www.desmoinesregister.com/rss/,404,dead
+Washington Post (National),https://feeds.washingtonpost.com/rss/national,ReadTimeout,dead
+IA - Iowa City Press-Citizen,https://www.press-citizen.com/rss/,404,dead
+KS - Topeka Capital-Journal,https://www.cjonline.com/rss/,404,dead
+IN - Indianapolis Star,https://www.indystar.com/rss/,404,dead
+CA - Chico Enterprise-Record,https://www.chicoer.com/feed/,ConnectTimeout,dead
+LA - Lafayette Advertiser,https://www.theadvertiser.com/rss/,404,dead
+CO - Boulder Daily Camera,https://www.dailycamera.com/feed/,ConnectTimeout,dead
+CT - Greenwich Time,https://www.greenwichtime.com/feed/,404,dead
+CO - Greeley Tribune,https://www.greeleytribune.com/feed/,ConnectTimeout,dead
+CT - Danbury News-Times,https://www.newstimes.com/feed/,404,dead
+KY - Courier-Journal Louisville,https://www.courier-journal.com/rss/,404,dead
+CT - New Haven Register,https://www.nhregister.com/feed/,404,dead
+LA - Monroe News-Star,https://www.thenewsstar.com/rss/,404,dead
+DE - Delaware Online/News Journal,https://www.delawareonline.com/rss/,ConnectTimeout,dead
+DE - Delaware State News,https://delawarestatesnews.com/feed/,ConnectTimeout,dead
+FL - Sarasota Herald-Tribune,https://www.heraldtribune.com/rss/,404,dead
+LA - Alexandria Town Talk,https://www.thetowntalk.com/rss/,404,dead
+FL - Miami Herald,https://www.miamiherald.com/news/rss,ReadTimeout,dead
+MA - Boston Globe,https://www.bostonglobe.com/rss/,404,dead
+MA - Berkshire Eagle,https://www.berkshireeagle.com/feed/,404,dead
+MD - Salisbury Daily Times,https://www.delmarvanow.com/rss/,404,dead
+MI - Grand Rapids Press,https://www.mlive.com/grand-rapids/index.ssf/rss2.0.xml,404,dead
+MA - Patriot Ledger,https://www.patriotledger.com/feed/,404,dead
+MI - Detroit News,https://www.detroitnews.com/arcio/rss/,404,dead
+MI - Flint Journal,https://www.mlive.com/flint/index.ssf/rss2.0.xml,404,dead
+MI - Ann Arbor News,https://www.mlive.com/ann-arbor/index.ssf/rss2.0.xml,404,dead
+MI - Detroit Business,https://www.crainsdetroit.com/rss/,404,dead
+LA - Shreveport Times,https://www.shreveporttimes.com/rss/,404,dead
+GA - Brunswick News,https://thebrunswicknews.com/search/?f=rss&t=article&l=50,ConnectTimeout,dead
+MI - Bay City Times,https://www.mlive.com/bay-city/index.ssf/rss2.0.xml,404,dead
+GA - Macon Telegraph,https://www.macon.com/news/local/rss,ReadTimeout,dead
+GA - Columbus Ledger-Enquirer,https://www.ledger-enquirer.com/news/local/rss,ReadTimeout,dead
+MN - Duluth News Tribune,https://www.duluthnewstribune.com/feed/,404,dead
+MI - Muskegon Chronicle,https://www.mlive.com/muskegon/index.ssf/rss2.0.xml,404,dead
+MI - Saginaw News,https://www.mlive.com/saginaw/index.ssf/rss2.0.xml,404,dead
+ID - Idaho Statesman,https://www.idahostatesman.com/news/local/rss,ReadTimeout,dead
+MA - Cape Cod Times,https://www.capecodtimes.com/arcio/rss/,404,dead
+MN - Minneapolis Star Tribune,https://www.startribune.com/feeds/,404,dead
+IL - Naperville Sun,https://www.chicagotribune.com/suburbs/naperville-sun/rss2.0.xml,404,dead
+MT - Great Falls Tribune,https://www.greatfallstribune.com/rss/,404,dead
+IL - Daily Herald Suburbs,https://www.dailyherald.com/rss/,ConnectTimeout,dead
+IN - Fort Wayne Journal Gazette,https://www.journalgazette.net/search/?f=rss&t=article&l=50,ConnectTimeout,dead
+IA - Cedar Rapids Gazette,https://www.thegazette.com/feed/,404,dead
+MI - Kalamazoo Gazette,https://www.mlive.com/kalamazoo/index.ssf/rss2.0.xml,404,dead
+NV - Las Vegas Sun,https://lasvegassun.com/feed/,404,dead
+IL - Aurora Beacon-News,https://www.chicagotribune.com/suburbs/aurora-beacon-news/rss2.0.xml,ConnectTimeout,dead
+KY - Lexington Herald-Leader,https://www.kentucky.com/news/local/rss,ReadTimeout,dead
+KY - Frankfort State Journal,https://www.state-journal.com/search/?f=rss&t=article&l=50,ConnectTimeout,dead
+NJ - Bergen Record,https://www.northjersey.com/arcio/rss/,404,dead
+NJ - Asbury Park Press,https://www.app.com/rss/,404,dead
+NJ - Courier-Post Cherry Hill,https://www.courierpostonline.com/rss/,404,dead
+ID - Moscow-Pullman Daily News,https://dnews.com/search/?f=rss&t=article&l=50,ConnectTimeout,dead
+NJ - Burlington County Times,https://www.burlingtoncountytimes.com/rss/,404,dead
+NV - Reno Gazette-Journal,https://www.rgj.com/rss/,404,dead
+KS - Wichita Eagle,https://www.kansas.com/news/local/rss,ReadTimeout,dead
+NJ - NJ.com / Star-Ledger,https://www.nj.com/arcio/rss/,404,dead
+NY - Newsday Long Island,https://www.newsday.com/rss,404,dead
+NY - Syracuse Post-Standard,https://www.syracuse.com/arcio/rss/,404,dead
+ME - Lewiston Sun Journal,https://www.sunjournal.com/feed/,ConnectTimeout,dead
+MD - Washington Post (MD),https://feeds.washingtonpost.com/rss/local/maryland,ReadTimeout,dead
+NY - City & State NY,https://www.cityandstateny.com/feed/,404,dead
+MD - Frederick News-Post,https://www.fredericknewspost.com/search/?f=rss&t=article&l=50,ConnectTimeout,dead
+MA - Worcester Telegram & Gazette,https://www.telegram.com/arcio/rss/,404,dead
+NM - Albuquerque Journal,https://www.abqjournal.com/feed/,404,dead
+MD - Hagerstown Herald-Mail,https://www.heraldmailmedia.com/search/?f=rss&t=article&l=50,ConnectTimeout,dead
+NM - Las Cruces Sun-News,https://www.lcsun-news.com/rss/,404,dead
+NC - Asheville Citizen-Times,https://www.citizen-times.com/rss/,404,dead
+NY - Rochester Democrat & Chronicle,https://www.democratandchronicle.com/rss/,404,dead
+NY - Staten Island Advance,https://www.silive.com/arcio/rss/,404,dead
+MA - New Bedford Standard-Times,https://www.southcoasttoday.com/search/?f=rss&t=article&l=50,ConnectTimeout,dead
+NY - Poughkeepsie Journal,https://www.poughkeepsiejournal.com/rss/,404,dead
+NY - Journal News Westchester,https://www.lohud.com/arcio/rss/,404,dead
+OH - Cleveland Plain Dealer,https://www.cleveland.com/arcio/rss/,404,dead
+MI - Lansing State Journal,https://www.lansingstatejournal.com/rss/,ConnectTimeout,dead
+NJ - Home News Tribune,https://www.mycentraljersey.com/rss/,404,dead
+OH - Cleveland Business,https://www.crainscleveland.com/rss/,404,dead
+MN - St. Cloud Times,https://www.sctimes.com/rss/,404,dead
+MS - Hattiesburg American,https://www.hattiesburgamerican.com/rss/,404,dead
+OH - Springfield News-Sun,https://www.springfieldnewssun.com/rss/,404,dead
+MS - Clarion-Ledger Jackson,https://www.clarionledger.com/rss/,ConnectTimeout,dead
+OK - Oklahoman,https://www.oklahoman.com/rss/,404,dead
+MS - Sun Herald Biloxi,https://www.sunherald.com/news/local/rss,ReadTimeout,dead
+OR - Oregonian Portland,https://www.oregonlive.com/arcio/rss/,404,dead
+MO - Springfield News-Leader,https://www.news-leader.com/rss/,ConnectTimeout,dead
+MO - Joplin Globe,https://www.joplinglobe.com/search/?f=rss&t=article&l=50,ConnectTimeout,dead
+MO - St. Joseph News-Press,https://www.newspressnow.com/search/?f=rss&t=article&l=50,ConnectTimeout,dead
+PA - Harrisburg Patriot-News,https://www.pennlive.com/arcio/rss/,404,dead
+MS - Commercial Dispatch Columbus,https://www.cdispatch.com/search/?f=rss&t=article&l=50,ConnectTimeout,dead
+NY - Binghamton Press & Sun-Bull,https://www.pressconnects.com/rss/,404,dead
+ND - Minot Daily News,https://www.minotdailynews.com/feed/,404,dead
+PA - Spotlight PA,https://www.spotlightpa.org/feed/,404,dead
+RI - Providence Journal,https://www.providencejournal.com/arcio/rss/,404,dead
+MO - Kansas City Star,https://www.kansascity.com/news/local/rss,ReadTimeout,dead
+OR - Willamette Week,https://www.wweek.com/feed/,404,dead
+NV - Las Vegas Weekly,https://lasvegasweekly.com/feed/,ConnectTimeout,dead
+SC - Greenville News,https://www.greenvilleonline.com/rss/,404,dead
+NM - Farmington Daily Times,https://www.daily-times.com/rss/,404,dead
+TN - Jackson Sun,https://www.jacksonsun.com/rss/,404,dead
+OR - Salem Statesman Journal,https://www.statesmanjournal.com/rss/,404,dead
+NJ - Times of Trenton,https://www.nj.com/times-of-trenton/index.ssf/rss2.0.xml,404,dead
+TX - Austin American-Statesman,https://www.statesman.com/arcio/rss/,404,dead
+TX - El Paso Times,https://www.elpasotimes.com/rss/,404,dead
+NC - Charlotte Observer,https://www.charlotteobserver.com/news/local/rss,ConnectTimeout,dead
+TN - Clarksville Leaf-Chronicle,https://www.theleafchronicle.com/rss/,404,dead
+NC - Fayetteville Observer,https://www.fayobserver.com/rss/,ConnectTimeout,dead
+TX - Abilene Reporter-News,https://www.reporternews.com/rss/,404,dead
+NC - Wilmington Star-News,https://www.starnewsonline.com/rss/,ConnectTimeout,dead
+TX - San Antonio Express-News,https://www.mysanantonio.com/arcio/rss/,404,dead
+TX - Lubbock Avalanche-Journal,https://www.lubbockonline.com/rss/,404,dead
+SC - Anderson Independent Mail,https://www.independentmail.com/rss/,404,dead
+OH - Cincinnati Enquirer,https://www.cincinnati.com/rss/,ConnectTimeout,dead
+OH - Dayton Daily News,https://www.daytondailynews.com/rss/,ConnectTimeout,dead
+OH - Mansfield News Journal,https://www.mansfieldnewsjournal.com/rss/,ConnectTimeout,dead
+TN - Knoxville News Sentinel,https://www.knoxnews.com/rss/,404,dead
+UT - St. George Spectrum,https://www.thespectrum.com/rss/,404,dead
+UT - Ogden Standard-Examiner,https://www.standard.net/search/?f=rss&t=article&l=50,404,dead
+UT - Salt Lake Tribune,https://www.sltrib.com/feed/,404,dead
+UT - Deseret News,https://www.deseret.com/rss,404,dead
+UT - Provo Daily Herald,https://www.heraldextra.com/search/?f=rss&t=article&l=50,404,dead
+OR - Eugene Register-Guard,https://www.registerguard.com/search/?f=rss&t=article&l=50,ConnectTimeout,dead
+OR - Oregon Public Broadcasting,https://www.opb.org/rss/news/,404,dead
+WA - Seattle Post-Intelligencer,https://www.seattlepi.com/seattlenews/feed/,404,dead
+OR - Medford Mail Tribune,https://www.mailtribune.com/search/?f=rss&t=article&l=50,ConnectTimeout,dead
+VA - Staunton News Leader,https://www.newsleader.com/rss/,404,dead
+WA - Spokane Spokesman-Review,https://www.spokesman.com/feed/,404,dead
+PA - Wilkes-Barre Citizens Voice,https://www.citizensvoice.com/search/?f=rss&t=article&l=50,ConnectTimeout,dead
+DC - DCist,https://dcist.com/feed,404,dead
+WV - Wheeling Intelligencer,https://www.theintelligencer.net/search/?f=rss&t=article&l=50,404,dead
+SD - Argus Leader Sioux Falls,https://www.argusleader.com/rss/,404,dead
+SC - Myrtle Beach Sun News,https://www.myrtlebeachonline.com/news/local/rss,ConnectTimeout,dead
+SC - Spartanburg Herald-Journal,https://www.goupstate.com/search/?f=rss&t=article&l=50,ConnectTimeout,dead
+SD - Aberdeen American News,https://www.aberdeennews.com/search/?f=rss&t=article&l=50,ConnectTimeout,dead
+WI - Appleton Post-Crescent,https://www.postcrescent.com/rss/,404,dead
+WI - Green Bay Press-Gazette,https://www.greenbaypressgazette.com/rss/,404,dead
+WI - Wausau Daily Herald,https://www.wausaudailyherald.com/rss/,404,dead
+TN - Tennessean Nashville,https://www.tennessean.com/rss/,ConnectTimeout,dead
+TN - Memphis Commercial Appeal,https://www.commercialappeal.com/rss/,ConnectTimeout,dead
+VT - Burlington Free Press,https://www.burlingtonfreepress.com/rss/,404,dead
+WI - Milwaukee Journal Sentinel,https://www.jsonline.com/arcio/rss/,404,dead
+TX - Dallas Morning News,https://www.dallasnews.com/arcio/rss/,ConnectTimeout,dead
+WI - Sheboygan Press,https://www.sheboyganpress.com/rss/,404,dead
+TX - Houston Chronicle,https://www.houstonchronicle.com/arcio/rss/,ConnectTimeout,dead
+National - New Republic,https://newrepublic.com/feed,404,dead
+TX - Corpus Christi Caller-Times,https://www.caller.com/rss/,ConnectTimeout,dead
+NC - Durham Herald-Sun,https://www.heraldsun.com/news/local/rss,ReadTimeout,dead
+NC - News & Observer Raleigh,https://www.newsobserver.com/news/local/rss,ReadTimeout,dead
+National - BuzzFeed News,https://www.buzzfeednews.com/rss,404,dead
+TV - WBAL Baltimore,https://www.wbaltv.com/news/rss,404,dead
+National - Governing,https://www.governing.com/rss/all/,404,dead
+TX - Fort Worth Star-Telegram,https://www.star-telegram.com/news/local/rss,ReadTimeout,dead
+TX - Beaumont Enterprise,https://www.beaumontenterprise.com/arcio/rss/,ConnectTimeout,dead
+TV - WXYZ Detroit,https://www.wxyz.com/rss,404,dead
+SC - Rock Hill Herald,https://www.heraldonline.com/news/local/rss,ReadTimeout,dead
+TV - WEWS Cleveland,https://www.news5cleveland.com/rss,404,dead
+TV - KOMO Seattle,https://komonews.com/feed/,404,dead
+TX - Austin Business Journal,https://www.bizjournals.com/austin/feed/latest/,ConnectTimeout,dead
+TV - KGTV San Diego,https://www.10news.com/rss,404,dead
+National - The Markup,https://themarkup.org/feed/,404,dead
+TV - WTTG Washington DC,https://www.fox5dc.com/rss,404,dead
+TX - Midland Reporter-Telegram,https://www.mrt.com/search/?f=rss&t=article&l=50,ConnectTimeout,dead
+WI - Stevens Point Journal,https://www.stevenspointjournal.com/rss/,404,dead
+TV - WRAL Raleigh,https://www.wral.com/rss/,404,dead
+TV - WTMJ Milwaukee,https://www.tmj4.com/rss,404,dead
+VA - Richmond Times-Dispatch,https://richmond.com/search/?f=rss&t=article&l=50,ConnectTimeout,dead
+Radio - KQED San Francisco,https://www.kqed.org/news/feed,404,dead
+Radio - WBEZ Chicago,https://www.wbez.org/feed/news,404,dead
+TV - WSB Atlanta,https://www.wsbtv.com/rss,404,dead
+VA - Winchester Star,https://www.winchesterstar.com/search/?f=rss&t=article&l=50,ConnectTimeout,dead
+TV - WFTS Tampa,https://www.abcactionnews.com/rss,404,dead
+Radio - WWNO New Orleans,https://www.wwno.org/rss,404,dead
+WA - Yakima Herald-Republic,https://www.yakimaherald.com/search/?f=rss&t=article&l=50,ConnectTimeout,dead
+TV - WPXI Pittsburgh,https://www.wpxi.com/rss,404,dead
+WA - Olympian,https://www.theolympian.com/news/local/rss,ReadTimeout,dead
+VA - Washington Post (VA),https://feeds.washingtonpost.com/rss/local/virginia,ReadTimeout,dead
+WA - Tri-City Herald,https://www.tri-cityherald.com/news/local/rss,ReadTimeout,dead
+WA - Tacoma News Tribune,https://www.thenewstribune.com/news/local/rss,ReadTimeout,dead
+Radio - KPCC Los Angeles,https://www.kpcc.org/rss/news/latest,404,dead
+Radio - WESA Pittsburgh,https://www.wesa.fm/feed,404,dead
+WA - Crosscut,https://crosscut.com/feed,ConnectTimeout,dead
+TV - KPHO Phoenix,https://www.azfamily.com/rss,404,dead
+DC - Politico,https://www.politico.com/rss/politicopicks.xml,ConnectTimeout,dead
+SC - State Columbia,https://www.thestate.com/news/local/rss,ReadTimeout,dead
+Radio - WOSU Columbus,https://radio.wosu.org/term/news/feed,404,dead
+AL - Troy Messenger,https://www.troymessenger.com/feed/,404,dead
+Radio - KUER Salt Lake City,https://www.kuer.org/feed,404,dead
+AL - Selma Times-Journal,https://www.selmatimesjournal.com/feed/,404,dead
+Radio - KPBS San Diego,https://www.kpbs.org/rss,404,dead
+Radio - KUOW Seattle,https://www.kuow.org/rss,404,dead
+Radio - KJZZ Phoenix,https://kjzz.org/rss.xml,404,dead
+WA - Bellingham Herald,https://www.bellinghamherald.com/news/local/rss,ReadTimeout,dead
+Radio - KBIA Columbia MO,https://www.kbia.org/feed,404,dead
+AK - Alaska Public Media,https://alaskapublic.org/feed/,404,dead
+WI - Fond du Lac Reporter,https://www.fdlreporter.com/rss/,404,dead
+Radio - WUSF Tampa,https://wusfnews.wusf.usf.edu/feed,404,dead
+Radio - WFIT Melbourne FL,https://www.wfit.org/rss,404,dead
+AL - AL.com Statewide,https://www.al.com/news/index.ssf/rss2.0.xml,404,dead
+WI - Oshkosh Northwestern,https://www.thenorthwestern.com/rss/,ConnectTimeout,dead
+WI - La Crosse Tribune,https://lacrossetribune.com/search/?f=rss&t=article&l=50,ConnectTimeout,dead
+WI - Milwaukee Business Journal,https://www.bizjournals.com/milwaukee/feed/latest/,ConnectTimeout,dead
+AR - Texarkana Gazette,https://www.texarkanagazette.com/news/arkansas/rss,404,dead
+WY - WyoFile,https://wyofile.com/feed/,ConnectTimeout,dead
+AR - Mountain Home Baxter Bulletin,https://www.baxterbulletin.com/rss/,404,dead
+National - Vox,https://www.vox.com/rss/index.xml,ConnectTimeout,dead
+CA - Victorville Daily Press,https://www.vvdailypress.com/feed/,404,dead
+CA - Barstow Desert Dispatch,https://www.desertsun.com/rss/,404,dead
+AL - Brewton Standard,https://www.brewtonstandard.com/feed/,404,dead
+CA - LAist,https://laist.com/feed,404,dead
+TV - WBZ Boston,https://www.cbsnews.com/boston/latest/rss/,ConnectTimeout,dead
+CO - Colorado Springs Indy,https://www.csindy.com/feed/,404,dead
+CT - Middletown Press,https://www.middletownpress.com/feed/,404,dead
+CA - Davis Enterprise,https://www.davisenterprise.com/feed/,404,dead
+CT - New Haven Independent,https://www.newhavenindependent.org/atom.xml,404,dead
+TV - WLWT Cincinnati,https://www.wlwt.com/rss,ConnectTimeout,dead
+FL - FLHealthNews,https://health.wusf.usf.edu/feed,ConnectError,dead
+GA - LaGrange Daily News,https://www.lagrangenews.com/feed/,404,dead
+TV - WPLG Miami,https://www.local10.com/rss,ConnectTimeout,dead
+FL - St. Augustine Record,https://www.staugustine.com/arcio/rss/,404,dead
+FL - Florida Trend,https://www.floridatrend.com/rss,404,dead
+GA - Statesboro Herald,https://www.statesboroherald.com/feed/,404,dead
+IL - Waukegan News-Sun,https://www.chicagotribune.com/suburbs/waukegan-lake-county-news-sun/rss2.0.xml,404,dead
+IL - Elgin Courier-News,https://www.chicagotribune.com/suburbs/elgin-courier-news/rss2.0.xml,404,dead
+AL - Cullman Times,https://www.cullmantimes.com/feed/,ConnectTimeout,dead
+AK - Ketchikan Daily News,https://www.ketchikandailynews.com/search/?f=rss,ConnectTimeout,dead
+IL - Kankakee Daily Journal,https://www.daily-journal.com/search/?f=rss,404,dead
+IA - Iowa Public Radio,https://www.iowapublicradio.org/rss/,404,dead
+IN - Richmond Palladium-Item,https://www.pal-item.com/rss/,404,dead
+CA - San Francisco Examiner,https://www.sfexaminer.com/feed/,404,dead
+AZ - Arizona Luminaria,https://arizluminaria.com/feed/,ConnectTimeout,dead
+AZ - Nogales International,https://www.nogalesinternational.com/search/?f=rss,ConnectTimeout,dead
+AZ - Show Low Independent,https://www.showlowindependent.com/feed/,ConnectTimeout,dead
+AZ - Wickenburg Sun,https://www.wickenburgsun.com/feed/,ConnectTimeout,dead
+AR - Harrison Daily Times,https://www.harrisondaily.com/search/?f=rss,ConnectTimeout,dead
+KS - Garden City Telegram,https://www.gctelegram.com/search/?f=rss,404,dead
+CA - Petaluma Argus-Courier,https://www.petaluma360.com/search/?f=rss,ConnectTimeout,dead
+MD - Montgomery County Sentinel,https://www.thesentinel.com/feed/,404,dead
+CA - Vacaville Reporter,https://www.thereporter.com/feed/,ConnectTimeout,dead
+IL - Joliet Herald-News,https://www.chicagotribune.com/suburbs/joliet-herald-news/rss2.0.xml,404,dead
+KS - Leavenworth Times,https://www.leavenworthtimes.com/search/?f=rss,404,dead
+CA - Merced Sun-Star,https://www.mercedsunstar.com/news/local/rss,ReadTimeout,dead
+CA - SF Weekly,https://www.sfweekly.com/feed/,404,dead
+MA - Fall River Herald News,https://www.heraldnews.com/feed/,404,dead
+MA - Taunton Gazette,https://www.tauntongazette.com/feed/,404,dead
+IL - Ottawa Times,https://www.mywebtimes.com/search/?f=rss,404,dead
+MA - MetroWest Daily News,https://www.metrowestdailynews.com/feed/,404,dead
+MI - Traverse City Ticker,https://www.traverseticker.com/feed/,404,dead
+MA - Boston.com,https://www.boston.com/tag/news/feed/,404,dead
+MI - Battle Creek Enquirer,https://www.battlecreekenquirer.com/rss/,404,dead
+MI - Alpena News,https://www.thealpenanews.com/feed/,404,dead
+MA - Milford Daily News,https://www.milforddailynews.com/feed/,404,dead
+CT - Register Citizen Torrington,https://www.registercitizen.com/feed/,ConnectTimeout,dead
+MN - Duluth Reader,https://duluthreader.com/feed/,404,dead
+FL - Bradenton Herald,https://www.bradenton.com/news/local/rss,ReadTimeout,dead
+MS - Natchez Democrat,https://www.natchezdemocrat.com/feed/,404,dead
+FL - Palatka Daily News,https://www.palatka-daily-news.com/search/?f=rss,ConnectTimeout,dead
+FL - Homestead Miami Villager,https://www.miamitimesonline.com/feed/,ConnectTimeout,dead
+CT - CT Insider,https://www.ctinsider.com/search/?f=rss,ConnectTimeout,dead
+CA - San Luis Obispo Tribune,https://www.sanluisobispo.com/news/local/rss,ReadTimeout,dead
+MO - Cape Girardeau SE Missourian,https://www.semissourian.com/rss/,404,dead
+IL - Lake County News-Sun,https://www.chicagotribune.com/suburbs/lake-county-news-sun/rss2.0.xml,404,dead
+GA - Georgia Virtue,https://georgiavirtu.com/feed/,ConnectTimeout,dead
+MT - Montana Public Radio,https://www.mtpr.org/rss,404,dead
+IL - Illinois Newsroom,https://illinoisnewsroom.org/feed/,ConnectTimeout,dead
+IN - Kokomo Tribune,https://www.kokomotribune.com/search/?f=rss,ConnectTimeout,dead
+LA - St. Tammany Farmer,https://www.sttammanyfarmer.net/search/?f=rss,404,dead
+IN - Anderson Herald Bulletin,https://www.heraldbulletin.com/search/?f=rss,ConnectTimeout,dead
+IN - Logansport Pharos-Tribune,https://www.pharostribune.com/search/?f=rss,ConnectTimeout,dead
+KS - Dodge City Daily Globe,https://www.dodgeglobeplus.com/search/?f=rss,ConnectTimeout,dead
+NY - Queens Daily Eagle,https://queenseagle.com/feed/,404,dead
+NJ - Morristown Daily Record,https://www.dailyrecord.com/rss/,404,dead
+LA - Natchitoches Times,https://www.natchitochestimes.com/search/?f=rss,ConnectTimeout,dead
+LA - Gambit New Orleans,https://www.nola.com/gambit/rss,ConnectTimeout,dead
+GA - Moultrie Observer,https://www.moultrieobserver.com/feed/,ConnectTimeout,dead
+ME - Ellsworth American,https://www.ellsworthamerican.com/feed/,ConnectTimeout,dead
+OH - Chillicothe Gazette,https://www.chillicothegazette.com/rss/,404,dead
+MD - Prince George Sentinel,https://pgsentinel.com/feed/,ConnectTimeout,dead
+MA - Brockton Enterprise,https://www.enterprisenews.com/feed/,ConnectTimeout,dead
+OH - Zanesville Times Recorder,https://www.zanesvilletimesrecorder.com/rss/,404,dead
+GA - Douglas Enterprise,https://www.douglasenterprise.net/feed/,ConnectError,dead
+MA - Haverhill Gazette,https://www.eagletribune.com/haverhill_gazette/rss,ConnectTimeout,dead
+ND - Prairie Public Radio,https://www.prairiepublic.org/rss,404,dead
+MI - Jackson Citizen Patriot,https://www.mlive.com/jackson/index.ssf/rss2.0.xml,ConnectTimeout,dead
+OH - Fremont News-Messenger,https://www.thenews-messenger.com/rss/,404,dead
+OH - Lancaster Eagle-Gazette,https://www.lancastereaglegazette.com/rss/,404,dead
+RI - East Bay Media,https://www.eastbayri.com/feed/,404,dead
+MS - Laurel Leader-Call,https://www.laurelleadercall.com/search/?f=rss,ConnectTimeout,dead
+PA - York Daily Record,https://www.ydr.com/rss/,404,dead
+PA - Lebanon Daily News,https://www.ldnews.com/rss/,404,dead
+NE - NET Nebraska,https://netnebraska.org/feed,ConnectError,dead
+OH - Marion Star,https://www.marionstar.com/rss/,404,dead
+TX - Texarkana Gazette,https://www.texarkanagazette.com/news/texas/rss,404,dead
+NV - Reno News & Review,https://www.newsreview.com/reno/rss/,ConnectTimeout,dead
+PA - Chambersburg Public Opinion,https://www.publicopiniononline.com/rss/,404,dead
+TX - San Angelo Standard-Times,https://www.gosanangelo.com/rss/,404,dead
+NJ - Vineland Daily Journal,https://www.thedailyjournal.com/rss/,404,dead
+SD - Brookings Register,https://www.brookingsregister.com/search/?f=rss,404,dead
+NM - Silver City Daily Press,https://www.scdailypress.com/feed/,ConnectTimeout,dead
+NM - Clovis Media,https://www.clovisnews.com/search/?f=rss,ConnectTimeout,dead
+NY - Ithaca Journal,https://www.ithacajournal.com/rss/,ConnectTimeout,dead
+NY - Elmira Star-Gazette,https://www.stargazette.com/rss/,ConnectTimeout,dead
+NY - Plattsburgh Press-Republican,https://www.pressrepublican.com/search/?f=rss,ConnectTimeout,dead
+NY - Watertown Daily Times,https://www.watertowndailytimes.com/search/?f=rss,ConnectTimeout,dead
+VA - Virginia Public Media,https://www.wvtf.org/rss,404,dead
+WV - WV Watch,https://wvwatch.com/feed/,ConnectError,dead
+NY - The Indypendent,https://indypendent.org/feed/,ConnectTimeout,dead
+WI - Two Rivers Herald Times Reporter,https://www.htrnews.com/rss/,404,dead
+PA - Altoona Mirror,https://www.altoonamirror.com/feed/,404,dead
+Spanish - Al Dia Dallas,https://aldiatx.com/feed/,404,dead
+Spanish - El Vocero Puerto Rico,https://www.elvocero.com/feed/,404,dead
+SD - Huron Plainsman,https://www.plainsman.com/search/?f=rss,404,dead
+OH - Sandusky Register,https://www.sanduskyregister.com/search/?f=rss,ConnectTimeout,dead
+OK - Bartlesville Examiner-Enterprise,https://www.examiner-enterprise.com/search/?f=rss,ConnectTimeout,dead
+WA - Spokane Journal of Business,https://www.spokanejournal.com/feed/,404,dead
+OR - Ashland Tidings,https://www.dailytidings.com/search/?f=rss,ConnectTimeout,dead
+OK - Ponca City News,https://www.poncacitynews.com/search/?f=rss,ConnectTimeout,dead
+Spanish - Univision News,https://www.univision.com/noticias/rss,404,dead
+Spanish - Hoy Chicago,https://www.chicagotribune.com/hoy/rss2.0.xml,404,dead
+Ethnic - Carolina Peacemaker,https://www.carolinapeacemaker.com/feed/,ConnectError,dead
+WA - InvestigateWest,https://www.invw.org/feed/,404,dead
+WA - Tacoma Weekly,https://tacomaweekly.com/feed/,404,dead
+PA - Centre Daily Times,https://www.centredaily.com/news/local/rss,ReadTimeout,dead
+Wire - AP Technology,https://feeds.apnews.com/rss/Technology,ConnectError,dead
+Wire - AP Politics,https://feeds.apnews.com/rss/Politics,ConnectError,dead
+Wire - AP Business,https://feeds.apnews.com/rss/Business,ConnectError,dead
+Wire - AP Washington,https://feeds.apnews.com/rss/Washington,ConnectError,dead
+RI - Cranston Herald,https://www.cranstononline.com/feed/,ConnectTimeout,dead
+Spanish - NBC Latino,https://www.nbcnews.com/id/46380265/device/rss/rss.xml,404,dead
+WI - Rhinelander Daily News,https://www.rhinelanderdailynews.com/search/?f=rss,404,dead
+Ethnic - Dallas Examiner,https://dallasexaminer.com/feed/,404,dead
+Ethnic - World Journal Chinese,https://www.worldjournal.com/feed/,404,dead
+WY - Wyoming Public Media,https://wyomingpublicmedia.org/feed,ConnectError,dead
+TN - Murfreesboro Daily News Journal,https://www.dnj.com/rss/,ConnectTimeout,dead
+TN - Columbia Daily Herald,https://www.columbiadailyherald.com/search/?f=rss,ConnectTimeout,dead
+Wire - Gannett Tracker,https://www.usatoday.com/rss/,404,dead
+Cable - C-SPAN,https://www.c-span.org/feed/?type=video,404,dead
+Cable - CNN Politics,https://rss.cnn.com/rss/cnn_allpolitics.rss,ConnectError,dead
+TX - Marshall News Messenger,https://www.marshallnewsmessenger.com/search/?f=rss,ConnectTimeout,dead
+TX - Lufkin Daily News,https://lufkindailynews.com/search/?f=rss,ConnectTimeout,dead
+Spanish - Latina Magazine,https://www.latina.com/feed/,ConnectError,dead
+TX - Temple Daily Telegram,https://www.tdtnews.com/search/?f=rss,ConnectTimeout,dead
+SC - Beaufort Gazette,https://www.islandpacket.com/news/local/rss,ReadTimeout,dead
+Trade - Ad Age,https://adage.com/rss,404,dead
+TX - Plainview Daily Herald,https://www.myplainview.com/search/?f=rss,ConnectTimeout,dead
+TX - McKinney Courier-Gazette,https://www.courier-gazette.com/search/?f=rss,ConnectTimeout,dead
+WA - Bellingham Business Journal,https://www.bbjtoday.com/feed/,ConnectError,dead
+Ethnic - Charlotte Post,https://thecharlottepost.com/feed/,404,dead
+Watch - Alaska Public Interest Res,https://www.alaskareport.com/feed/,404,dead
+Ethnic - Houston Forward Times,https://forwardtimes.com/feed/,404,dead
+Ethnic - Korea Daily USA,https://www.koreadaily.com/rss/,404,dead
+Watch - Delaware Public Media,https://www.delawarepublic.org/rss,404,dead
+WV - Clarksburg Exponent Telegram,https://www.exponenttelegram.com/search/?f=rss,ConnectTimeout,dead
+WI - Marshfield News-Herald,https://www.marshfieldnewsherald.com/rss/,404,dead
+Watch - Florida Center Investigative,https://fcir.org/feed/,ConnectError,dead
+Watch - Boise State Public Radio,https://www.boisestatepublicradio.org/rss,404,dead
+Watch - IndyStar Watchdog,https://www.indystar.com/news/watchdog/rss,404,dead
+WY - Riverton Ranger,https://www.riverton-ranger.com/search/?f=rss,ConnectTimeout,dead
+TV - WPTV West Palm Beach,https://www.wptv.com/rss,404,dead
+Spanish - El Nuevo Herald Miami,https://www.elnuevoherald.com/latest-news/rss,ReadTimeout,dead
+Watch - Colorado Independent,https://www.coloradoindependent.com/feed/,404,dead
+TV - KRIV Houston,https://www.fox26houston.com/feed/,404,dead
+Spanish - Impacto Latin News,https://impactolatin.news/feed/,ConnectTimeout,dead
+TV - WFTV Orlando,https://www.wftv.com/rss,404,dead
+Ethnic - New Pittsburgh Courier,https://newpittsburghcourier.com/feed/,ConnectTimeout,dead
+Ethnic - Chicago Defender,https://chicagodefender.com/feed/,ConnectTimeout,dead
+TV - KTVU San Francisco,https://www.ktvu.com/feed/,404,dead
+TV - WGCL Atlanta,https://www.cbs46.com/rss,404,dead
+TV - WOAI San Antonio,https://news4sanantonio.com/feed/,404,dead
+Ethnic - Asian American Press,https://www.asianamericanpress.com/feed/,ConnectTimeout,dead
+Ethnic - India Abroad,https://www.indiaabroad-digital.com/feed/,ConnectTimeout,dead
+Wire - Reuters Top News,https://feeds.reuters.com/reuters/topNews,ConnectTimeout,dead
+Wire - Reuters US,https://feeds.reuters.com/reuters/domesticNews,ConnectTimeout,dead
+TV - KATU Portland,https://katu.com/feed/,404,dead
+Wire - McClatchy DC,https://www.mcclatchydc.com/rss,ReadTimeout,dead
+Wire - UPI Top News,https://www.upi.com/rss/Top_News/,ConnectTimeout,dead
+Wire - Lee Enterprises,https://leeenterprise.com/feed/,ConnectTimeout,dead
+Watch - Hawaii News Now,https://www.hawaiinewsnow.com/rss,404,dead
+TV - KUTV Salt Lake City,https://kutv.com/feed/,404,dead
+Fox News National,https://moxie.foxnews.com/google-publisher/national.xml,ConnectTimeout,dead
+TV - WVLT Knoxville,https://www.wvlt.tv/feed/,404,dead
+TV - LEX18 Lexington,https://www.lex18.com/feed/,404,dead
+TV - WVUE New Orleans,https://www.fox8live.com/feed/,404,dead
+TV - WTVF Nashville,https://www.newschannel5.com/feed/,404,dead
+TV - WTVC Chattanooga,https://newschannel9.com/feed/,404,dead
+Trade - Media Play News,https://www.mediaplaynews.com/feed/,ConnectTimeout,dead
+TV - WALA Mobile,https://www.fox10tv.com/feed/,404,dead
+TV - WKYT Lexington,https://www.wkyt.com/rss,404,dead
+Trade - Nieman Reports,https://niemanreports.org/feed/,ConnectTimeout,dead
+TV - WCTV Tallahassee,https://www.wctv.tv/feed/,404,dead
+TV - WEAR Pensacola,https://weartv.com/feed/,404,dead
+Watch - Arkansas Investigative News,https://arkinvestigative.org/feed/,ConnectTimeout,dead
+Trade - TVSpy,https://www.adweek.com/tvspy/feed/,ConnectTimeout,dead
+TV - WMC Memphis,https://www.wmcactionnews5.com/rss,404,dead
+Watch - DC Line,https://thedcline.org/feed/,ConnectTimeout,dead
+Watch - Georgia Health News,https://georgiahealthnews.com/feed/,ConnectTimeout,dead
+TV - KTVT Dallas,https://www.cbsdfw.com/rss,404,dead
+TV - WTVR Richmond,https://www.wtvr.com/feed/,404,dead
+Watch - Kansas News Service,https://www.kansasnewsservice.org/feed,ConnectTimeout,dead
+TV - WSMV Nashville,https://www.wsmv.com/rss,404,dead
+TV - WBTV Charlotte,https://www.wbtv.com/rss,404,dead
+TV - WSLS Roanoke,https://www.wsls.com/feed/,404,dead
+TV - WFLD Chicago,https://www.fox32chicago.com/feed/,404,dead
+TV - WAFF Huntsville,https://www.waff.com/rss,404,dead
+TV - WTKR Norfolk,https://www.wtkr.com/feed/,404,dead
+TV - WALB Albany GA,https://www.walb.com/rss,404,dead
+Cable - Newsmax,https://www.newsmax.com/rss/Newsfront/1,ReadTimeout,dead
+TV - WMBF Myrtle Beach,https://www.wmbfnews.com/rss,404,dead
+TV - WMAR Baltimore,https://www.abc2news.com/feed/,ConnectError,dead
+TV - WDBJ Roanoke,https://www.wdbj7.com/feed/,404,dead
+TV - WIS Columbia SC,https://www.wistv.com/rss,404,dead
+TV - WJZ Baltimore,https://www.cbsnews.com/baltimore/latest/rss/,404,dead
+TV - WBBM Chicago,https://www.cbschicago.com/rss/,ConnectTimeout,dead
+TV - WJLA Washington DC,https://wjla.com/feed/,404,dead
+TV - KYW Philadelphia,https://www.cbsnews.com/philadelphia/latest/rss/,404,dead
+TV - WECT Wilmington NC,https://www.wect.com/rss,404,dead
+TV - WBFF Baltimore,https://foxbaltimore.com/feed/,404,dead
+TV - KIRO Seattle,https://www.kirotv.com/feed/,404,dead
+TV - KPIX San Francisco,https://www.cbsnews.com/sanfrancisco/latest/rss/,ConnectTimeout,dead
+TV - WHSV Harrisonburg,https://www.whsv.com/rss,404,dead
+Ethnic - Black Press USA,https://www.blackpressusa.com/feed/,ReadTimeout,dead
+TV - KCAL Los Angeles,https://www.cbsnews.com/losangeles/latest/rss/,ConnectTimeout,dead
+TV - KDKA Pittsburgh,https://www.cbsnews.com/pittsburgh/latest/rss/,404,dead
+TV - WKBW Buffalo,https://www.wkbw.com/feed/,404,dead
+TV - WGME Portland ME,https://wgme.com/feed/,404,dead
+TV - WSET Lynchburg,https://wset.com/feed/,404,dead
+TV - KSL Salt Lake City,https://ksltv.com/feed/,ConnectTimeout,dead
+TV - WTIC Hartford,https://www.fox61.com/feed/,404,dead
+TV - WJAR Providence,https://turnto10.com/feed/,404,dead
+TV - WFSB Hartford,https://www.wfsb.com/rss,404,dead
+TV - WAVE Louisville,https://www.wave3.com/feeds/syndication/rss/news,ConnectTimeout,dead
+TV - WTOC Savannah,https://www.wtoc.com/rss,404,dead
+TV - WDRB Louisville,https://www.wdrb.com/rss/,ConnectTimeout,dead
+TV - WBAY Green Bay,https://www.wbay.com/feed/,404,dead
+TV - WLKY Louisville,https://www.wlky.com/rss,ConnectTimeout,dead
+TV - WSAW Wausau,https://www.wsaw.com/feed/,404,dead
+TV - KMSP Minneapolis,https://www.fox9.com/feed/,404,dead
+TV - KMTV Omaha,https://www.3newsnow.com/feed/,404,dead
+TV - WIAT Birmingham,https://www.wiat.com/feed/,ConnectTimeout,dead
+TV - WRCB Chattanooga,https://www.wrcbtv.com/feed/,ConnectTimeout,dead
+TV - WSFA Montgomery,https://www.wsfa.com/rss,404,dead
+TV - WOWT Omaha,https://www.wowt.com/feed/,404,dead
+TV - KOKH Oklahoma City,https://www.fox25.com/feed/,ConnectError,dead
+TV - KGAN Cedar Rapids,https://www.cbs2iowa.com/feed/,404,dead
+TV - KOLN Lincoln,https://www.1011now.com/feed/,404,dead
+TV - KWCH Wichita,https://www.kwch.com/feed/,404,dead
+TV - WITI Milwaukee,https://fox6now.com/feed/,404,dead
+TV - KTIV Sioux City,https://www.ktiv.com/feed/,404,dead
+TV - WINK Fort Myers,https://winknews.com/feed/,ConnectTimeout,dead
+TV - WSOC Charlotte,https://www.wsoctv.com/rss,ConnectTimeout,dead
+TV - KCTV Kansas City,https://www.kctv5.com/rss,404,dead
+TV - KJRH Tulsa,https://www.kjrh.com/feed/,404,dead
+TV - KCRG Cedar Rapids,https://www.kcrg.com/rss,404,dead
+TV - KSHB Kansas City,https://www.kshb.com/feed/,404,dead
+TV - WWJ Detroit,https://www.cbsdetroit.com/rss/,ConnectTimeout,dead
+TV - KDBC El Paso,https://www.kdbc.com/feed/,404,dead
+TV - KWES Midland TX,https://www.newswest9.com/feed/,404,dead
+TV - WJXT Jacksonville,https://www.news4jax.com/rss,ConnectTimeout,dead
+TV - KMOV St Louis,https://www.kmov.com/rss,404,dead
+TV - WCSC Charleston SC,https://www.live5news.com/rss,ConnectTimeout,dead
+TV - KXXV Waco,https://www.kxxv.com/feed/,404,dead
+TV - WSTM Syracuse,https://www.cnycentral.com/feed/,404,dead
+TV - KERA Dallas,https://www.keranews.org/rss,404,dead
+TV - WPDE Myrtle Beach,https://wpde.com/feed/,404,dead
+TV - KLTV Tyler TX,https://www.kltv.com/rss,404,dead
+TV - KSBY San Luis Obispo,https://www.ksby.com/feed/,404,dead
+TV - KIII Corpus Christi,https://www.kiiitv.com/feed/,404,dead
+TV - KWTX Waco,https://www.kwtx.com/rss,404,dead
+TV - KDFW Dallas,https://www.fox4news.com/feed/,404,dead
+TV - KCBD Lubbock,https://www.kcbd.com/rss,404,dead
+TV - WBRC Birmingham,https://www.wbrc.com/rss,ConnectTimeout,dead
+TV - KKTV Colorado Springs,https://www.kktv.com/feed/,404,dead
+TV - KOAA Colorado Springs,https://www.koaa.com/rss,404,dead
+TV - WTXF Philadelphia,https://www.fox29.com/feed/,ConnectTimeout,dead
+TV - KFOX El Paso,https://kfoxtv.com/feed/,404,dead
+TV - WXII Greensboro,https://www.wxii12.com/rss,ConnectTimeout,dead
+TV - KBZK Bozeman MT,https://www.kbzk.com/feed/,404,dead
+TV - WENY Elmira,https://www.weny.com/feed/,ConnectTimeout,dead
+TV - KVVU Las Vegas,https://www.fox5vegas.com/feed/,404,dead
+TV - KABB San Antonio,https://www.foxsanantonio.com/feed/,404,dead
+TV - KECI Missoula MT,https://nbcmontana.com/feed/,404,dead
+TV - KATH Anchorage,https://www.alaskasnewssource.com/feed/,404,dead
+TV - KATV Little Rock,https://katv.com/feed/,404,dead
+TV - WGAL Lancaster PA,https://www.wgal.com/rss,ConnectTimeout,dead
+TV - WHAM Rochester,https://13wham.com/feed/,404,dead
+TV - KTVQ Billings MT,https://www.ktvq.com/feed/,404,dead
+TV - WCAX Burlington VT,https://www.wcax.com/rss,ConnectTimeout,dead
+TV - KOVR Sacramento,https://www.cbsnews.com/sacramento/latest/rss/,404,dead
+TV - WMUR Manchester NH,https://www.wmur.com/rss,ConnectTimeout,dead
+TV - WABI Bangor ME,https://www.wabi.tv/feed/,ConnectTimeout,dead
+TV - WHDH Boston,https://www.whdh.com/feed/,ConnectTimeout,dead
+TV - KSNV Las Vegas,https://news3lv.com/feed/,404,dead
+TV - KVLY Fargo,https://www.valleynewslive.com/feed/,404,dead
+TV - WBOC Salisbury MD,https://www.wboc.com/rss,ConnectTimeout,dead
+TV - WKOW Madison WI,https://www.wkow.com/feed/,ConnectTimeout,dead
+TV - KOLO Reno,https://www.kolotv.com/rss,404,dead
+TV - WCCO Minneapolis,https://www.cbsnews.com/minnesota/latest/rss/,404,dead
+TV - KRNV Reno,https://www.mynews4.com/feed/,404,dead
+TV - WSYX Columbus,https://www.abc6onyourside.com/feed/,404,dead
+TV - WCPO Cincinnati,https://www.wcpo.com/rss,404,dead
+TV - WTVG Toledo,https://13abc.com/feed/,404,dead
+TV - WXIX Cincinnati,https://www.fox19.com/feed/,404,dead
+TV - WRTV Indianapolis,https://www.theindychannel.com/rss,404,dead
+Radio - WLRN Miami,https://www.wlrn.org/rss,404,dead
+Radio - WGBH Boston,https://www.wgbh.org/news/rss,404,dead
+TV - KETV Omaha,https://www.ketv.com/rss,ConnectTimeout,dead
+Radio - WAMC Albany,https://www.wamc.org/rss,404,dead
+Radio - WFAE Charlotte,https://www.wfae.org/rss,404,dead
+TV - WNDU South Bend,https://www.wndu.com/rss,404,dead
+Radio - WCPN Cleveland,https://www.ideastream.org/rss,404,dead
+TV - KMBC Kansas City,https://www.kmbc.com/rss,ConnectTimeout,dead
+Radio - WRVO Syracuse,https://www.wrvo.org/rss,404,dead
+TV - KOCO Oklahoma City,https://www.koco.com/rss,ConnectTimeout,dead
+Radio - WUNC Chapel Hill,https://www.wunc.org/rss,404,dead
+TV - KDLT Sioux Falls SD,https://www.kdlt.com/feed/,404,dead
+Radio - WFDD Winston-Salem,https://www.wfdd.org/rss,404,dead
+Radio - WGCU Fort Myers,https://news.wgcu.org/rss,404,dead
+TV - WYFF Greenville SC,https://www.wyff4.com/rss,ConnectTimeout,dead
+Radio - WVXU Cincinnati,https://www.wvxu.org/rss,404,dead
+Radio - KWGS Tulsa,https://www.publicradiotulsa.org/rss,404,dead
+TV - KSLA Shreveport,https://www.ksla.com/rss,ConnectTimeout,dead
+Radio - WFSU Tallahassee,https://news.wfsu.org/rss,404,dead
+TV - WKRC Cincinnati,https://local12.com/feed/,404,dead
+Radio - Capital Public Radio,https://www.capradio.org/rss,404,dead
+Radio - WMHT Albany,https://www.wmht.org/feed/,404,dead
+Radio - WEMU Ypsilanti MI,https://www.wemu.org/rss,404,dead
+Radio - WMUK Kalamazoo,https://www.wmuk.org/rss,404,dead
+TV - WTVM Columbus GA,https://www.wtvm.com/rss,ConnectTimeout,dead
+Radio - KNAU Flagstaff,https://www.knau.org/rss,404,dead
+Radio - Michigan Radio,https://www.michiganradio.org/rss,404,dead
+Radio - WMFE Orlando,https://www.wmfe.org/feed/,404,dead
+TV - WAFB Baton Rouge,https://www.wafb.com/rss,ConnectTimeout,dead
+Radio - KPLU Tacoma,https://www.knkx.org/rss,404,dead
+Radio - KUNC Greeley CO,https://www.kunc.org/rss,404,dead
+Radio - KVPR Fresno,https://www.kvpr.org/rss,404,dead
+Radio - WKNO Memphis,https://www.wkno.org/rss,404,dead
+Radio - WUTC Chattanooga,https://www.wutc.org/rss,404,dead
+Radio - South Carolina Public,https://www.southcarolinapublicradio.org/rss,404,dead
+TV - KEYT Santa Barbara,https://www.keyt.com/feed/,ConnectTimeout,dead
+TV - KCNC Denver,https://www.cbsnews.com/colorado/latest/rss/,ConnectTimeout,dead
+Radio - WNCW Spindale NC,https://www.wncw.org/rss,404,dead
+Radio - Maine Public,https://www.mainepublic.org/rss,404,dead
+Radio - Minnesota Public Radio,https://www.mprnews.org/rss,404,dead
+Radio - WYPR Baltimore,https://www.wypr.org/rss,404,dead
+Radio - KMUW Wichita,https://www.kmuw.org/rss,404,dead
+TV - KRDO Colorado Springs,https://krdo.com/feed/,ConnectTimeout,dead
+TV - WTAE Pittsburgh,https://www.wtae.com/rss,ConnectTimeout,dead
+Radio - KSTX San Antonio,https://tpr.org/feed/,ConnectError,dead
+Radio - NHPR Concord,https://www.nhpr.org/rss,404,dead
+TV - WPTZ Burlington VT,https://www.wptz.com/rss,ConnectTimeout,dead
+TV - KGWN Cheyenne WY,https://www.kgwn.tv/feed/,ConnectTimeout,dead
+TV - KPAX Missoula MT,https://www.kpax.com/feed/,404,dead
+Radio - WVIA Scranton,https://www.wvia.org/rss,404,dead
+TV - KULR Billings MT,https://www.kulr8.com/feed/,ConnectTimeout,dead
+Radio - GPB Georgia,https://www.gpb.org/news/rss,404,dead
+Radio - South Dakota Public,https://www.sdpb.org/rss,404,dead
+National - Grid News,https://www.grid.news/feed/,410,dead
+Radio - KCPT Kansas City,https://kcpt.org/feed/,404,dead
+Radio - WGVU Grand Rapids,https://www.wgvu.org/rss,404,dead
+Radio - Connecticut Public,https://www.ctpublic.org/rss,404,dead
+TV - KITV Honolulu,https://www.kitv.com/rss,ConnectTimeout,dead
+National - Rand Corporation,https://www.rand.org/rss/rss_all.xml,404,dead
+Radio - Hawaii Public Radio,https://www.hawaiipublicradio.org/rss,404,dead
+TV - KFYR Bismarck,https://www.kfyrtv.com/feed/,ConnectTimeout,dead
+National - Urban Institute,https://www.urban.org/rss,404,dead
+TV - KOTA Rapid City SD,https://www.kotatv.com/feed/,ConnectTimeout,dead
+Radio - WGTE Toledo,https://www.wgte.org/rss,404,dead
+TV - WTOL Toledo,https://www.wtol.com/feeds/syndication/rss/news,ConnectTimeout,dead
+TV - WFMJ Youngstown,https://www.wfmj.com/feed/,ConnectTimeout,dead
+Radio - WUOT Knoxville,https://wuot.org/rss,ConnectError,dead
+TV - WSBT South Bend,https://www.wsbt.com/feed/,404,dead
+Radio - WJCT Jacksonville,https://www.wjct.org/feed/,ConnectTimeout,dead
+Radio - WBFO Buffalo,https://www.wbfo.org/feed/,404,dead
+Radio - KCRW Santa Monica,https://www.kcrw.com/rss,ConnectTimeout,dead
+Police1 911 Tech,https://www.police1.com/rss/topics/911-technology/,404,dead
+TV - KVIA El Paso,https://www.kvia.com/feed/,ConnectTimeout,dead
+Radio - Colorado Public Radio,https://www.cpr.org/feed/,ConnectTimeout,dead
+C4ISRNET Space,https://www.c4isrnet.com/rss/space/,404,dead
+Radio - Nevada Public Radio,https://www.nevadapublicradio.org/rss,ConnectTimeout,dead
+Radio - WYSU Youngstown,https://www.wysu.org/rss,404,dead
+Radio - KRCC Colorado Springs,https://www.krcc.org/rss,ConnectTimeout,dead
+FTC News,https://www.ftc.gov/rss.xml,404,dead
+The Daily Beast Media,https://feeds.thedailybeast.com/rss/articles/media,ConnectError,dead
+Defense News Space,https://www.defensenews.com/rss/space/,404,dead
+Radio - Wisconsin Public Radio,https://www.wpr.org/feed/,ConnectTimeout,dead
+NOAA News,https://www.noaa.gov/news-features/rss,404,dead
+Radio - KVNO Omaha,https://www.kvno.org/rss,ConnectTimeout,dead
+Radio - St Louis Public Radio,https://news.stlpublicradio.org/rss,404,dead
+Communications Daily,https://www.communicationsdaily.com/rss,ConnectError,dead
+Radio - WITF Harrisburg,https://www.witf.org/rss,ConnectTimeout,dead
+Radio - VPR Vermont,https://www.vpr.org/rss,ConnectTimeout,dead
+TV - KTUU Anchorage,https://www.ktuu.com/rss,404,dead
+FTI Consulting Telecom,https://www.fticonsulting.com/insights/rss,404,dead
+National - Semafor,https://www.semafor.com/feed,ConnectTimeout,dead
+National - Open Tech Institute,https://feed.newamerica.org/oti,ConnectTimeout,dead
+Biz - Phoenix Business Jrnl,https://www.bizjournals.com/phoenix/feed/latest/,ConnectTimeout,dead
+Space Policy Institute,https://spacepolicy.gwu.edu/feed/,ConnectTimeout,dead
+SatelliteObservation,https://www.satobs.org/rss.xml,404,dead
+FEMA Alerts,https://www.fema.gov/rss/alerts.rss,404,dead
+FEMA News,https://www.fema.gov/rss/news-releases.rss,404,dead

@@ -1,0 +1,1739 @@
+name,rss_url,domain,category,already_in_docuaction
+FCC.gov - News Releases,https://www.fcc.gov/rss/news-releases,fcc.gov,Government,True
+FCC.gov - Headlines,https://www.fcc.gov/rss/headlines,fcc.gov,Government,True
+Federal Register - FCC,https://www.federalregister.gov/documents/search.rss?conditions%5Bagencies%5D%5B%5D=federal-communications-commission,federalregister.gov,Government,True
+Broadband Breakfast,https://broadbandbreakfast.com/feed/,broadbandbreakfast.com,Telecom Trade,True
+Light Reading,https://www.lightreading.com/rss.xml,lightreading.com,Telecom Trade,True
+Fierce Network,https://www.fierce-network.com/rss/xml,fierce-network.com,Telecom Trade,True
+Fierce Wireless,https://www.fiercewireless.com/rss/xml,fiercewireless.com,Telecom Trade,True
+RCR Wireless,https://www.rcrwireless.com/feed,rcrwireless.com,Telecom Trade,True
+TR Daily,https://trdaily.com/feed/,trdaily.com,Telecom Trade,False
+Telecompaper,https://www.telecompaper.com/rss/news,telecompaper.com,Telecom Trade,True
+Total Tele,https://www.totaltele.com/rss.xml,totaltele.com,Telecom Trade,True
+Telecoms,https://telecoms.com/feed/,telecoms.com,Telecom Trade,True
+Telecom Reseller,https://telecomreseller.com/feed/,telecomreseller.com,Telecom Trade,False
+Telco Magazine,https://www.telcomagazine.com/feed/,telcomagazine.com,Telecom Trade,False
+Broadband World News,https://www.broadbandworldnews.com/rss.xml,broadbandworldnews.com,Telecom Trade,False
+Inside Towers,https://insidetowers.com/feed/,insidetowers.com,Telecom Trade,True
+Wireless Week,https://www.wirelessweek.com/rss.xml,wirelessweek.com,Telecom Trade,False
+TeleGeography,https://www.telegeography.com/feed/,telegeography.com,Telecom Trade,True
+Vanilla Plus,https://www.vanillaplus.com/feed/,vanillaplus.com,Telecom Trade,False
+Developing Telecoms,https://developingtelecoms.com/feed,developingtelecoms.com,Telecom Trade,False
+Mobile World Live,https://www.mobileworldlive.com/feed/,mobileworldlive.com,Telecom Trade,True
+Comms Update,https://www.commsupdate.com/feed/,commsupdate.com,Telecom Trade,False
+SDxCentral,https://www.sdxcentral.com/feed/,sdxcentral.com,Telecom Trade,False
+Network World,https://www.networkworld.com/index.rss,networkworld.com,Telecom Trade,False
+TIA Online,https://tiaonline.org/feed/,tiaonline.org,Telecom Trade,False
+TV Technology,https://www.tvtechnology.com/rss.xml,tvtechnology.com,Broadcast/Radio,True
+NextTV,https://www.nexttv.com/rss.xml,nexttv.com,Broadcast/Radio,False
+Radio World,https://www.radioworld.com/feed/,radioworld.com,Broadcast/Radio,True
+TVNewsCheck,https://tvnewscheck.com/feed/,tvnewscheck.com,Broadcast/Radio,True
+RBR,https://www.rbr.com/feed/,rbr.com,Broadcast/Radio,True
+Inside Radio,https://www.insideradio.com/rss.xml,insideradio.com,Broadcast/Radio,False
+All Access,https://www.allaccess.com/merge/archive/rss.xml,allaccess.com,Broadcast/Radio,False
+Talkers,https://talkers.com/feed/,talkers.com,Broadcast/Radio,False
+Radio Ink,https://radioink.com/feed/,radioink.com,Broadcast/Radio,True
+The Desk,https://thedesk.net/feed/,thedesk.net,Broadcast/Radio,True
+Cord Cutters News,https://cordcuttersnews.com/feed/,cordcuttersnews.com,Broadcast/Radio,False
+FCC Data,https://fccdata.org/feed/,fccdata.org,Broadcast/Radio,False
+Benton Institute,https://www.benton.org/rss.xml,benton.org,Government,True
+Public Knowledge,https://publicknowledge.org/feed/,publicknowledge.org,Government,True
+TechFreedom,https://techfreedom.org/feed/,techfreedom.org,Government,False
+EFF,https://www.eff.org/rss/updates.xml,eff.org,Government,True
+Law360,https://www.law360.com/rss/articles,law360.com,Government,False
+Federal News Network,https://federalnewsnetwork.com/feed/,federalnewsnetwork.com,Government,False
+GovTech,https://www.govtech.com/rss,govtech.com,Government,False
+National Law Review,https://www.natlawreview.com/recent/feed,natlawreview.com,Government,False
+SCOTUSblog,https://www.scotusblog.com/feed/,scotusblog.com,Government,False
+Yale JREG,https://www.yalejreg.com/feed/,yalejreg.com,Government,False
+Brookings TechTank,https://www.brookings.edu/topic/technology-innovation/feed/,brookings.edu,Government,False
+ITIF,https://itif.org/feed/,itif.org,Government,False
+AEI,https://www.aei.org/feed/,aei.org,Government,False
+CSIS,https://www.csis.org/rss.xml,csis.org,Government,False
+Politico,https://www.politico.com/rss/technology.xml,politico.com,Government,True
+Nextgov,https://www.nextgov.com/rss/all/,nextgov.com,Government,False
+Bloomberg Law,https://www.bloomberglaw.com/feed,bloomberglaw.com,Government,False
+Ars Technica,https://feeds.arstechnica.com/arstechnica/index,feeds.arstechnica.com,Technology,True
+The Verge,https://www.theverge.com/rss/index.xml,theverge.com,Technology,True
+TechCrunch,https://techcrunch.com/feed/,techcrunch.com,Technology,True
+TechDirt,https://www.techdirt.com/feed/,techdirt.com,Technology,False
+Wired,https://www.wired.com/feed/rss,wired.com,Technology,True
+Engadget,https://www.engadget.com/rss.xml,engadget.com,Technology,True
+Gizmodo,https://gizmodo.com/feed/,gizmodo.com,Technology,False
+CNET,https://www.cnet.com/rss/news/,cnet.com,Technology,True
+ZDNet,https://www.zdnet.com/news/rss.xml,zdnet.com,Technology,False
+VentureBeat,https://venturebeat.com/feed/,venturebeat.com,Technology,False
+Digital Trends,https://www.digitaltrends.com/feed/,digitaltrends.com,Technology,False
+TechRadar,https://www.techradar.com/feeds/,techradar.com,Technology,False
+PCMag,https://www.pcmag.com/feeds/latest,pcmag.com,Technology,False
+Slashdot,https://rss.slashdot.org/Slashdot/slashdotMain,rss.slashdot.org,Technology,False
+Mashable,https://mashable.com/feeds/rss/all,mashable.com,Technology,False
+eWeek,https://www.eweek.com/rss.xml,eweek.com,Technology,False
+CRN,https://www.crn.com/rss,crn.com,Technology,False
+CIO,https://www.cio.com/feed/,cio.com,Technology,False
+Reuters Technology,https://feeds.reuters.com/reuters/technologyNews,feeds.reuters.com,Major News/Wire,True
+Reuters Business,https://feeds.reuters.com/reuters/businessNews,feeds.reuters.com,Major News/Wire,True
+AP News Technology,https://rsshub.app/apnews/topics/technology,rsshub.app,Major News/Wire,False
+AP News Politics,https://rsshub.app/apnews/topics/politics,rsshub.app,Major News/Wire,False
+Bloomberg Technology,https://feeds.bloomberg.com/technology/news.rss,feeds.bloomberg.com,Major News/Wire,False
+Bloomberg Politics,https://feeds.bloomberg.com/politics/news.rss,feeds.bloomberg.com,Major News/Wire,False
+Wall Street Journal Tech,https://feeds.content.dowjones.io/public/rss/mw_technology,feeds.content.dowjones.io,Major News/Wire,False
+New York Times Tech,https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml,rss.nytimes.com,Major News/Wire,True
+New York Times Politics,https://rss.nytimes.com/services/xml/rss/nyt/Politics.xml,rss.nytimes.com,Major News/Wire,True
+Washington Post Tech,https://feeds.washingtonpost.com/rss/business/technology,feeds.washingtonpost.com,Major News/Wire,True
+The Hill,https://thehill.com/feed/,thehill.com,Major News/Wire,True
+Axios,https://api.axios.com/feed/,api.axios.com,Major News/Wire,True
+CNN Tech,https://rss.cnn.com/rss/cnn_tech.rss,rss.cnn.com,Major News/Wire,False
+CBS News Tech,https://www.cbsnews.com/latest/rss/tech,cbsnews.com,Major News/Wire,False
+NBC News Tech,https://feeds.nbcnews.com/nbcnews/public/tech,feeds.nbcnews.com,Major News/Wire,False
+ABC News Tech,https://abcnews.go.com/abcnews/technologyheadlines,abcnews.go.com,Major News/Wire,False
+Fox Business,https://moxie.foxbusiness.com/google-publisher/technology.xml,moxie.foxbusiness.com,Major News/Wire,False
+USA Today Tech,https://rssfeeds.usatoday.com/UsatodaycomTech-TopStories,rssfeeds.usatoday.com,Major News/Wire,False
+NPR Technology,https://feeds.npr.org/1019/rss.xml,feeds.npr.org,Major News/Wire,True
+NPR Business,https://feeds.npr.org/1006/rss.xml,feeds.npr.org,Major News/Wire,True
+Forbes Tech,https://www.forbes.com/innovation/feed/,forbes.com,Major News/Wire,False
+Fortune,https://fortune.com/feed/,fortune.com,Major News/Wire,False
+MarketWatch,https://feeds.content.dowjones.io/public/rss/mw_topstories,feeds.content.dowjones.io,Major News/Wire,False
+CNBC Tech,https://www.cnbc.com/id/19854910/device/rss/rss.html,cnbc.com,Major News/Wire,True
+CNBC Telecom,https://www.cnbc.com/id/10000108/device/rss/rss.html,cnbc.com,Major News/Wire,True
+Dark Reading,https://www.darkreading.com/rss.xml,darkreading.com,Cybersecurity,False
+Security Week,https://www.securityweek.com/feed/,securityweek.com,Cybersecurity,False
+Cybersecurity Dive,https://www.cybersecuritydive.com/feeds/news/,cybersecuritydive.com,Cybersecurity,False
+SC Magazine,https://www.scmagazine.com/feed/,scmagazine.com,Cybersecurity,False
+Cyber Defense Magazine,https://www.cyberdefensemagazine.com/feed/,cyberdefensemagazine.com,Cybersecurity,False
+Multichannel News,https://www.nexttv.com/rss/multichannel,nexttv.com,General,False
+Broadcasting & Cable,https://www.nexttv.com/rss/broadcasting-cable,nexttv.com,General,False
+Communications Daily,https://communicationsdaily.com/feed/,communicationsdaily.com,General,False
+IEEE Spectrum,https://spectrum.ieee.org/feeds/feed.rss,spectrum.ieee.org,General,False
+MIT Tech Review,https://www.technologyreview.com/feed/,technologyreview.com,General,False
+Oped News Telecom,https://www.opednews.com/populum/rss_telecom.php,opednews.com,General,False
+Tech Policy Press,https://techpolicy.press/feed/,techpolicy.press,General,False
+Protocol,https://www.protocol.com/feeds/feed.rss,protocol.com,General,False
+Morning Consult Tech,https://morningconsult.com/feed/,morningconsult.com,General,False
+Pew Research Tech,https://www.pewresearch.org/feed/,pewresearch.org,General,False
+Government Executive,https://www.govexec.com/rss/all/,govexec.com,General,False
+Federal Computer Week,https://fcw.com/rss/rss.ashx,fcw.com,General,False
+Defense One Tech,https://www.defenseone.com/rss/technology/,defenseone.com,General,False
+Inside Cybersecurity,https://insidecybersecurity.com/rss.xml,insidecybersecurity.com,General,False
+Access Intelligence,https://www.accessintel.com/feed/,accessintel.com,General,False
+Telecom Ramblings,https://www.telecomramblings.com/feed/,telecomramblings.com,General,True
+CircleID,https://www.circleid.com/rss/posts/,circleid.com,General,False
+IP Watch,https://www.ip-watch.org/feed/,ip-watch.org,General,False
+Multichannel Merchant,https://multichannelmerchant.com/feed/,multichannelmerchant.com,General,False
+Satellite Today,https://www.satellitetoday.com/feed/,satellitetoday.com,General,True
+Via Satellite,https://www.satellitetoday.com/via-satellite/feed/,satellitetoday.com,General,True
+Space News,https://spacenews.com/feed/,spacenews.com,General,True
+Broadband Communities,https://www.bbcmag.com/rss/,bbcmag.com,General,False
+ISP Review UK,https://www.ispreview.co.uk/index.php/feed,ispreview.co.uk,General,False
+Telecom Asia,https://www.telecomasia.net/rss.xml,telecomasia.net,General,False
+Telecom Lead,https://www.telecomlead.com/feed,telecomlead.com,General,False
+Enterprise Networking Planet,https://www.enterprisenetworkingplanet.com/feed/,enterprisenetworkingplanet.com,General,False
+Data Center Knowledge,https://www.datacenterknowledge.com/rss.xml,datacenterknowledge.com,General,False
+Fierce Healthcare IT,https://www.fiercehealthcare.com/rss/xml,fiercehealthcare.com,General,False
+Fierce Education,https://www.fierceeducation.com/rss/xml,fierceeducation.com,General,False
+E-Commerce Times,https://www.ecommercetimes.com/rss-feed/,ecommercetimes.com,General,False
+LinuxInsider,https://linuxinsider.com/rss-feed/,linuxinsider.com,General,False
+TechNewsWorld,https://www.technewsworld.com/rss-feed/,technewsworld.com,General,False
+MacNewsWorld,https://www.macnewsworld.com/rss-feed/,macnewsworld.com,General,False
+Tech Republic,https://www.techrepublic.com/rssfeeds/articles/,techrepublic.com,General,False
+InformationWeek,https://www.informationweek.com/rss_simple.asp,informationweek.com,General,False
+Computerworld,https://www.computerworld.com/index.rss,computerworld.com,General,False
+InfoWorld,https://www.infoworld.com/index.rss,infoworld.com,General,False
+CSO Online,https://www.csoonline.com/index.rss,csoonline.com,General,False
+IT World Canada,https://www.itworldcanada.com/blog/feed,itworldcanada.com,General,False
+ZD Net UK,https://www.zdnet.com/topic/networking/rss.xml,zdnet.com,General,False
+The Register,https://www.theregister.com/headlines.atom,theregister.com,General,False
+Ars UK,https://arstechnica.co.uk/feed/,arstechnica.co.uk,General,False
+Hot Hardware,https://hothardware.com/rss/news.aspx,hothardware.com,General,False
+Extreme Tech,https://www.extremetech.com/feed,extremetech.com,General,False
+Hack Read,https://www.hackread.com/feed/,hackread.com,General,False
+Bleeping Computer,https://www.bleepingcomputer.com/feed/,bleepingcomputer.com,General,False
+Krebs on Security,https://krebsonsecurity.com/feed/,krebsonsecurity.com,General,False
+Threatpost,https://threatpost.com/feed/,threatpost.com,General,False
+The Record,https://therecord.media/feed,therecord.media,General,False
+CyberWire,https://thecyberwire.com/feeds/rss.xml,thecyberwire.com,General,False
+Lawfare,https://www.lawfaremedia.org/feed,lawfaremedia.org,General,False
+Just Security,https://www.justsecurity.org/feed/,justsecurity.org,General,False
+Above the Law,https://abovethelaw.com/feed/,abovethelaw.com,General,False
+JD Supra Telecom,https://www.jdsupra.com/topics/telecommunications/rss/,jdsupra.com,General,False
+JD Supra FCC,https://www.jdsupra.com/topics/fcc/rss/,jdsupra.com,General,False
+Lexology Telecom,https://www.lexology.com/rss/latest?topic=telecom,lexology.com,General,False
+Mondaq Telecom,https://www.mondaq.com/rss/telecommunications/,mondaq.com,General,False
+Inside Privacy,https://www.insideprivacy.com/feed/,insideprivacy.com,General,False
+IAPP News,https://iapp.org/news/rss/,iapp.org,General,False
+Future of Privacy Forum,https://fpf.org/feed/,fpf.org,General,False
+CDT,https://cdt.org/feed/,cdt.org,General,False
+Free Press,https://freepress.net/rss.xml,freepress.net,General,True
+Media Alliance,https://www.media-alliance.org/feed/,media-alliance.org,General,False
+Common Cause,https://www.commoncause.org/feed/,commoncause.org,General,False
+Consumer Reports Tech,https://www.consumerreports.org/cro/news/index.htm,consumerreports.org,General,False
+FTC News,https://www.ftc.gov/feeds/press-release-rss.xml,ftc.gov,General,True
+DOJ Press,https://www.justice.gov/feeds/opa/justice-news.xml,justice.gov,General,False
+FTC Business,https://www.ftc.gov/feeds/business-guidance.xml,ftc.gov,General,True
+NTIA,https://www.ntia.gov/rss.xml,ntia.gov,General,False
+USAC,https://www.usac.org/rss/,usac.org,General,False
+RUS USDA,https://www.rd.usda.gov/rss/updates,rd.usda.gov,General,False
+FCC Watch,https://fccwatch.com/feed/,fccwatch.com,General,False
+Communications Lawyer,https://communicationslawyer.net/feed/,communicationslawyer.net,General,False
+Telecom Policy,https://telepolicyblog.wordpress.com/feed/,telepolicyblog.wordpress.com,General,False
+Technology Liberation Front,https://techliberation.com/feed/,techliberation.com,General,False
+Truth on the Market,https://truthonthemarket.com/feed/,truthonthemarket.com,General,False
+Competition Policy Intl,https://www.competitionpolicyinternational.com/feed/,competitionpolicyinternational.com,General,False
+Reason Tech,https://reason.com/tag/technology/feed/,reason.com,General,False
+The American Prospect,https://prospect.org/feeds/rss/,prospect.org,General,False
+The Atlantic Tech,https://www.theatlantic.com/feed/channel/technology/,theatlantic.com,General,False
+The Nation,https://www.thenation.com/subject/tech/feed/,thenation.com,General,False
+Salon Tech,https://www.salon.com/topic/tech/feed,salon.com,General,False
+Slate Tech,https://slate.com/technology.rss,slate.com,General,False
+Vox Tech,https://www.vox.com/rss/technology/index.xml,vox.com,General,False
+Medium Tech Policy,https://medium.com/feed/topic/technology,medium.com,General,False
+Substack Broadband,https://broadbandbreakfast.substack.com/feed,broadbandbreakfast.substack.com,General,False
+FCC - All Recent Releases,https://www.fcc.gov/rss/releases,fcc.gov,Government,True
+FCC - Commissioner Statements,https://www.fcc.gov/rss/commissioner-statements,fcc.gov,Government,True
+FCC - Commissioner Speeches,https://www.fcc.gov/rss/speeches,fcc.gov,Government,True
+FCC - Orders,https://www.fcc.gov/rss/orders,fcc.gov,Government,True
+FCC - Public Notices,https://www.fcc.gov/rss/public-notices,fcc.gov,Government,True
+FCC - Notices of Proposed Rules,https://www.fcc.gov/rss/nprm,fcc.gov,Government,True
+FCC - Reports,https://www.fcc.gov/rss/reports,fcc.gov,Government,True
+FCC - Enforcement Bureau,https://www.fcc.gov/rss/enforcement-bureau,fcc.gov,Government,True
+FCC - Media Bureau,https://www.fcc.gov/rss/media-bureau,fcc.gov,Government,True
+FCC - Wireless Bureau,https://www.fcc.gov/rss/wireless-telecommunications-bureau,fcc.gov,Government,True
+FCC - Wireline Bureau,https://www.fcc.gov/rss/wireline-competition-bureau,fcc.gov,Government,True
+FCC - Consumer Affairs Bureau,https://www.fcc.gov/rss/consumer-governmental-affairs-bureau,fcc.gov,Government,True
+FCC - Space Bureau,https://www.fcc.gov/rss/space-bureau,fcc.gov,Government,True
+FCC - Public Safety Bureau,https://www.fcc.gov/rss/public-safety-homeland-security-bureau,fcc.gov,Government,True
+FCC - Office of Engineering,https://www.fcc.gov/rss/office-engineering-technology,fcc.gov,Government,True
+FCC - Office of Economics,https://www.fcc.gov/rss/office-economics-analytics,fcc.gov,Government,True
+FCC - General Counsel,https://www.fcc.gov/rss/office-general-counsel,fcc.gov,Government,True
+FCC - Inspector General,https://www.fcc.gov/rss/office-inspector-general,fcc.gov,Government,True
+FCC - Broadcast Actions,https://www.fcc.gov/rss/broadcast-actions,fcc.gov,Government,True
+FCC - Broadcast Applications,https://www.fcc.gov/rss/broadcast-applications,fcc.gov,Government,True
+FCC - Notices of Liability,https://www.fcc.gov/rss/notices-apparent-liability,fcc.gov,Government,True
+FCC - Fact Sheets,https://www.fcc.gov/rss/fact-sheets,fcc.gov,Government,True
+FCC - Court Filings,https://www.fcc.gov/rss/court-filings,fcc.gov,Government,True
+FCC - International Bureau,https://www.fcc.gov/rss/international-bureau,fcc.gov,Government,True
+JD Supra - Broadband,https://www.jdsupra.com/topics/broadband/rss/,jdsupra.com,Policy/Legal,False
+JD Supra - Net Neutrality,https://www.jdsupra.com/topics/net-neutrality/rss/,jdsupra.com,Policy/Legal,False
+JD Supra - Media Law,https://www.jdsupra.com/topics/media-law/rss/,jdsupra.com,Policy/Legal,False
+Competitive Enterprise Inst,https://cei.org/feed/,cei.org,Policy/Legal,False
+Heritage Foundation Tech,https://www.heritage.org/technology/rss,heritage.org,Policy/Legal,False
+Mercatus Center Tech,https://www.mercatus.org/rss/technology,mercatus.org,Policy/Legal,False
+Bipartisan Policy Center,https://bipartisanpolicy.org/feed/,bipartisanpolicy.org,Policy/Legal,False
+R Street Institute,https://www.rstreet.org/feed/,rstreet.org,Policy/Legal,False
+Government Accountability Office,https://www.gao.gov/rss/reports.xml,gao.gov,Government,True
+Senate Commerce Committee,https://www.commerce.senate.gov/rss/feeds/?type=news,commerce.senate.gov,Government,False
+House Energy Commerce Comm,https://energycommerce.house.gov/rss.xml,energycommerce.house.gov,Government,False
+Congressional Research Service,https://www.everycrsreport.com/feeds/all.rss,everycrsreport.com,Government,False
+Anandtech,https://www.anandtech.com/rss/,anandtech.com,Telecom Trade,False
+Nextgov - IT,https://www.nextgov.com/rss/technology/,nextgov.com,Telecom Trade,False
+StateScoop,https://statescoop.com/feed/,statescoop.com,Telecom Trade,False
+EdScoop,https://edscoop.com/feed/,edscoop.com,Telecom Trade,False
+CyberScoop,https://cyberscoop.com/feed/,cyberscoop.com,Telecom Trade,False
+FedScoop,https://fedscoop.com/feed/,fedscoop.com,Telecom Trade,False
+5G Americas,https://www.5gamericas.org/feed/,5gamericas.org,Major News/Wire,False
+GSMA News,https://www.gsma.com/newsroom/feed/,gsma.com,Major News/Wire,False
+CTIA Blog,https://api.ctia.org/news/feed/,api.ctia.org,Major News/Wire,False
+WIA Tower,https://wia.org/feed/,wia.org,Major News/Wire,False
+FCC Wireless Bureau,https://www.fcc.gov/wireless-bureau/rss,fcc.gov,Major News/Wire,True
+Spectrum Policy News,https://spectropolis.blogspot.com/feeds/posts/default,spectropolis.blogspot.com,Major News/Wire,False
+Sasha Javid Spectrum,https://www.spectrumfutures.org/feed/,spectrumfutures.org,Major News/Wire,False
+NTIA Spectrum,https://www.ntia.gov/category/spectrum/feed,ntia.gov,Major News/Wire,False
+VentureBeat AI,https://venturebeat.com/category/ai/feed/,venturebeat.com,AI/ML,False
+AI Now Institute,https://ainowinstitute.org/feed/,ainowinstitute.org,AI/ML,False
+Partnership on AI,https://partnershiponai.org/feed/,partnershiponai.org,AI/ML,False
+Brookings AI,https://www.brookings.edu/topic/artificial-intelligence/feed/,brookings.edu,AI/ML,False
+Stanford HAI,https://hai.stanford.edu/news/rss.xml,hai.stanford.edu,AI/ML,False
+NIST AI,https://www.nist.gov/artificial-intelligence/rss.xml,nist.gov,AI/ML,False
+Future of Life Institute,https://futureoflife.org/feed/,futureoflife.org,AI/ML,False
+Center for AI Safety,https://www.safe.ai/feed,safe.ai,AI/ML,False
+AI Policy Weekly,https://aipolicyweekly.substack.com/feed,aipolicyweekly.substack.com,AI/ML,False
+Algorithm Watch,https://algorithmwatch.org/en/feed/,algorithmwatch.org,AI/ML,False
+The Markup AI,https://themarkup.org/series/automated-influence/feed/,themarkup.org,AI/ML,False
+Government AI,https://www.govloop.com/topic/artificial-intelligence/feed/,govloop.com,AI/ML,False
+FCW AI,https://fcw.com/artificial-intelligence/rss,fcw.com,AI/ML,False
+Nextgov AI,https://www.nextgov.com/artificial-intelligence/rss,nextgov.com,AI/ML,False
+Defense One AI,https://www.defenseone.com/topic/artificial-intelligence/rss/,defenseone.com,AI/ML,False
+Open Technology Institute,https://www.newamerica.org/oti/feed/,newamerica.org,Policy/Legal,False
+Consumer Reports Policy,https://advocacy.consumerreports.org/feed/,advocacy.consumerreports.org,Policy/Legal,False
+INCOMPAS,https://www.incompas.org/news/feed/,incompas.org,Policy/Legal,False
+USTelecom Blog,https://www.ustelecom.org/feed/,ustelecom.org,Policy/Legal,True
+NCTA Internet,https://www.ncta.com/feed,ncta.com,Policy/Legal,False
+Multichannel News,https://www.nexttv.com/rss/multichannel-news,nexttv.com,Policy/Legal,False
+Wired Business,https://www.wired.com/feed/category/business/latest/rss,wired.com,Policy/Legal,True
+The Information,https://www.theinformation.com/feed,theinformation.com,Policy/Legal,False
+Recode Vox,https://www.vox.com/recode/rss/index.xml,vox.com,Policy/Legal,False
+Business Insider Tech,https://feeds.businessinsider.com/custom/tech,feeds.businessinsider.com,Policy/Legal,False
+Wall Street Journal Tech,https://feeds.a.dj.com/rss/RSSWSJD.xml,feeds.a.dj.com,Policy/Legal,True
+MeriTalk,https://www.meritalk.com/feed/,meritalk.com,Policy/Legal,False
+GovLoop,https://www.govloop.com/feed/,govloop.com,Policy/Legal,False
+TechTarget Networking,https://www.techtarget.com/rss/SearchNetworking-News.xml,techtarget.com,Policy/Legal,False
+TechTarget Telecom,https://www.techtarget.com/rss/SearchTelecom-News.xml,techtarget.com,Policy/Legal,False
+TechTarget Security,https://www.techtarget.com/rss/SearchSecurity-News.xml,techtarget.com,Policy/Legal,False
+SearchEnterpriseAI,https://www.techtarget.com/rss/SearchEnterpriseAI-News.xml,techtarget.com,Policy/Legal,False
+Current - Public Media,https://current.org/feed/,current.org,Broadcast/Radio,True
+RadioInfo,https://www.radioinfo.com.au/rss.xml,radioinfo.com.au,Broadcast/Radio,False
+RAIN News - Audio/Radio,https://rainnews.com/feed/,rainnews.com,Broadcast/Radio,False
+Jacobin - Media,https://jacobin.com/feed/,jacobin.com,Broadcast/Radio,False
+Columbia Journalism Review,https://www.cjr.org/feed,cjr.org,Broadcast/Radio,False
+Nieman Lab,https://www.niemanlab.org/feed/,niemanlab.org,Broadcast/Radio,False
+Poynter,https://www.poynter.org/feed/,poynter.org,Broadcast/Radio,False
+MediaPost,https://www.mediapost.com/rss/,mediapost.com,Broadcast/Radio,True
+PR Newswire - Telecom,https://www.prnewswire.com/rss/news-releases-list.rss?tagABCSIC=5700000000,prnewswire.com,Broadcast/Radio,False
+Business Wire - Telecom,https://feed.businesswire.com/rss/home/?rss=G1&category=Telecommunications,feed.businesswire.com,Broadcast/Radio,False
+Globe Newswire - Telecom,https://www.globenewswire.com/RssFeed/industry/9621-Telecommunications,globenewswire.com,Broadcast/Radio,False
+5G Technology World,https://www.5gtechnologyworld.com/feed/,5gtechnologyworld.com,Major News/Wire,False
+RCR Wireless 5G,https://www.rcrwireless.com/category/5g/feed,rcrwireless.com,Major News/Wire,True
+FierceWireless 5G,https://www.fiercewireless.com/rss/5g-xml,fiercewireless.com,Major News/Wire,True
+Light Reading 5G,https://www.lightreading.com/5g/rss.xml,lightreading.com,Major News/Wire,True
+Nokia Bell Labs Blog,https://www.bell-labs.com/institute/feed/,bell-labs.com,Major News/Wire,False
+Ericsson Blog,https://www.ericsson.com/en/blog/rss,ericsson.com,Major News/Wire,False
+Qualcomm Blog,https://www.qualcomm.com/news/blog/rss,qualcomm.com,Major News/Wire,False
+T-Mobile Newsroom,https://www.t-mobile.com/news/rss.xml,t-mobile.com,Major News/Wire,False
+Verizon News,https://www.verizon.com/about/news/rss,verizon.com,Major News/Wire,False
+AT&T Newsroom,https://about.att.com/innovation/rss,about.att.com,Major News/Wire,False
+Comcast Newsroom,https://corporate.comcast.com/news-information/news-feed/rss,corporate.comcast.com,Major News/Wire,False
+Charter Communications,https://corporate.charter.com/newsroom/rss,corporate.charter.com,Major News/Wire,False
+CTIA Wireless,https://www.ctia.org/rss/,ctia.org,Major News/Wire,False
+NCTA Cable,https://www.ncta.com/rss.xml,ncta.com,Major News/Wire,False
+INCOMPAS,https://www.incompas.org/feed/,incompas.org,Major News/Wire,False
+ACA Connects,https://acaconnects.org/feed/,acaconnects.org,Major News/Wire,False
+WTA Telecom,https://www.wtaonline.org/feed/,wtaonline.org,Major News/Wire,False
+NTCA Rural Broadband,https://www.ntca.org/feed/,ntca.org,Major News/Wire,False
+WISPA Wireless ISP,https://www.wispa.org/feed/,wispa.org,Major News/Wire,False
+NATE Tower Association,https://www.natehome.com/feed/,natehome.com,Major News/Wire,False
+Reuters - Media,https://feeds.reuters.com/reuters/mediaNews,feeds.reuters.com,Major News/Wire,True
+AP - Science Tech,https://rsshub.app/apnews/topics/science,rsshub.app,Major News/Wire,False
+Bloomberg - Telecom,https://feeds.bloomberg.com/industries/TelecommunicationsServices.rss,feeds.bloomberg.com,Major News/Wire,False
+Wall Street Journal - Media,https://feeds.content.dowjones.io/public/rss/mw_media,feeds.content.dowjones.io,Major News/Wire,False
+Financial Times - Tech,https://www.ft.com/technology?format=rss,ft.com,Major News/Wire,False
+The Guardian - Tech,https://www.theguardian.com/technology/rss,theguardian.com,Major News/Wire,False
+BBC - Tech,https://feeds.bbci.co.uk/news/technology/rss.xml,feeds.bbci.co.uk,Major News/Wire,False
+Politico - Media,https://www.politico.com/rss/media.xml,politico.com,Major News/Wire,True
+Politico - Congress,https://www.politico.com/rss/congress.xml,politico.com,Major News/Wire,True
+Ars Technica - Policy,https://feeds.arstechnica.com/arstechnica/tech-policy,feeds.arstechnica.com,Major News/Wire,True
+Ars Technica - Telecom,https://feeds.arstechnica.com/arstechnica/telecom,feeds.arstechnica.com,Major News/Wire,True
+The Verge - Policy,https://www.theverge.com/rss/policy/index.xml,theverge.com,Major News/Wire,True
+TechCrunch - Government,https://techcrunch.com/tag/government/feed/,techcrunch.com,Major News/Wire,True
+Axios - Media Trends,https://api.axios.com/feed/axios/media-trends,api.axios.com,Major News/Wire,True
+Axios - Technology,https://api.axios.com/feed/axios/technology,api.axios.com,Major News/Wire,True
+Axios - Login,https://api.axios.com/feed/axios/login,api.axios.com,Major News/Wire,True
+Pew Research - Tech,https://www.pewresearch.org/internet/feed/,pewresearch.org,Major News/Wire,False
+Harvard Berkman Center,https://cyber.harvard.edu/feeds/news,cyber.harvard.edu,Major News/Wire,False
+Stanford Internet Observatory,https://stacks.stanford.edu/feed,stacks.stanford.edu,Major News/Wire,False
+Georgetown Law Tech,https://www.law.georgetown.edu/news/feed/,law.georgetown.edu,Major News/Wire,False
+Duke Law Tech,https://law.duke.edu/news/rss/,law.duke.edu,Major News/Wire,False
+Yale Law - Tech,https://law.yale.edu/rss/news,law.yale.edu,Major News/Wire,False
+George Washington Law,https://www.law.gwu.edu/news/rss,law.gwu.edu,Major News/Wire,False
+American University Law,https://www.wcl.american.edu/impact/rss/,wcl.american.edu,Major News/Wire,False
+Chicago Tribune,https://www.chicagotribune.com/feed/,chicagotribune.com,General,False
+Los Angeles Times,https://www.latimes.com/local/rss2.0.xml,latimes.com,General,False
+New York Times (Home),https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml,rss.nytimes.com,General,True
+Philadelphia Inquirer,https://www.inquirer.com/arcio/rss/,inquirer.com,General,False
+SF Gate,https://www.sfgate.com/default/feed/SFGate-Latest-News-2960713.php,sfgate.com,General,False
+USA Today (Top Stories),https://rssfeeds.usatoday.com/usatoday-NewsTopStories,rssfeeds.usatoday.com,General,False
+Washington Post (National),https://feeds.washingtonpost.com/rss/national,feeds.washingtonpost.com,General,True
+Atlanta Journal-Constitution,https://www.ajc.com/news/rss.xml,ajc.com,General,False
+Austin American-Statesman,https://www.statesman.com/arc/outboundfeeds/rss/,statesman.com,General,False
+Baltimore Sun,https://www.baltimoresun.com/arcio/rss/,baltimoresun.com,General,False
+Boston Globe,https://www.bostonglobe.com/rss/homepage,bostonglobe.com,General,False
+Boston Herald,https://www.bostonherald.com/feed/,bostonherald.com,General,False
+Chicago Sun-Times,https://chicago.suntimes.com/rss/index.xml,chicago.suntimes.com,General,False
+Cleveland Plain Dealer,https://www.cleveland.com/arc/outboundfeeds/rss/,cleveland.com,General,False
+Dallas Morning News,https://www.dallasnews.com/arc/outboundfeeds/rss/,dallasnews.com,General,False
+Detroit Free Press,https://www.freep.com/arcio/rss/,freep.com,General,False
+Houston Chronicle,https://www.houstonchronicle.com/arc/outboundfeeds/rss/,houstonchronicle.com,General,False
+Kansas City Star,https://www.kansascity.com/arc/outboundfeeds/rss/,kansascity.com,General,False
+Miami Herald,https://www.miamiherald.com/arc/outboundfeeds/rss/,miamiherald.com,General,False
+Minneapolis Star Tribune,https://www.startribune.com/local/rss,startribune.com,General,False
+NY Daily News,https://www.nydailynews.com/arc/outboundfeeds/rss/,nydailynews.com,General,False
+New York Post,https://nypost.com/feed/,nypost.com,General,False
+NJ.com,https://www.nj.com/arc/outboundfeeds/rss/,nj.com,General,False
+Oregonian,https://www.oregonlive.com/arc/outboundfeeds/rss/,oregonlive.com,General,False
+Pittsburgh Post-Gazette,https://www.post-gazette.com/rss/homepage,post-gazette.com,General,False
+San Jose Mercury News,https://www.mercurynews.com/arc/outboundfeeds/rss/,mercurynews.com,General,False
+Seattle Times,https://www.seattletimes.com/feed/,seattletimes.com,General,False
+Tampa Bay Times,https://www.tampabay.com/feed/,tampabay.com,General,False
+Arizona Republic,https://www.azcentral.com/arc/outboundfeeds/rss/,azcentral.com,General,False
+Washington Times,https://www.washingtontimes.com/rss/headlines/news/,washingtontimes.com,General,False
+AP News (Top),https://feeds.apnews.com/rss/topnews,feeds.apnews.com,General,False
+Ad Age,https://adage.com/rss/technology,adage.com,General,False
+Daily Beast,https://feeds.thedailybeast.com/rss/articles,feeds.thedailybeast.com,General,False
+Economist Tech,https://www.economist.com/technology/rss.xml,economist.com,General,False
+Fierce Cable,https://www.fiercecable.com/rss/xml,fiercecable.com,General,False
+Fierce Telecom,https://www.fiercetelecom.com/rss/xml,fiercetelecom.com,General,False
+Hollywood Reporter,https://www.hollywoodreporter.com/feed/,hollywoodreporter.com,General,False
+Roll Call,https://rollcall.com/feed/,rollcall.com,General,False
+Variety,https://variety.com/feed/,variety.com,General,False
+The Wrap,https://www.thewrap.com/feed/,thewrap.com,General,False
+Fast Company,https://www.fastcompany.com/latest/rss?x=1,fastcompany.com,General,False
+HuffPost,https://www.huffpost.com/section/front-page/feed,huffpost.com,General,False
+Vice Motherboard,https://www.vice.com/en/section/tech/rss,vice.com,General,False
+Telecompetitor,https://www.telecompetitor.com/feed/,telecompetitor.com,General,True
+Awful Announcing,https://awfulannouncing.com/feed/,awfulannouncing.com,General,False
+Democracy Now,https://www.democracynow.org/democracynow.rss,democracynow.org,General,False
+NPR Homepage,https://feeds.npr.org/1001/rss.xml,feeds.npr.org,General,True
+National Journal,https://www.nationaljournal.com/rss,nationaljournal.com,General,False
+DSLReports,https://www.dslreports.com/rss,dslreports.com,General,False
+AL - Anniston Star,https://www.annistonstar.com/search/?f=rss&t=article&l=50&s=start_time&sd=desc,annistonstar.com,Regional,False
+AL - Birmingham News,https://www.al.com/news/birmingham/index.ssf/rss2.0.xml,al.com,Regional,False
+AL - Decatur Daily,https://www.decaturdaily.com/search/?f=rss&t=article&l=50&s=start_time&sd=desc,decaturdaily.com,Regional,False
+AL - Dothan Eagle,https://www.dothaneagle.com/search/?f=rss&t=article&l=50&s=start_time&sd=desc,dothaneagle.com,Regional,False
+AL - Gadsden Times,https://www.gadsdentimes.com/search/?f=rss&t=article&l=50&s=start_time&sd=desc,gadsdentimes.com,Regional,False
+AL - Huntsville Times,https://www.al.com/news/huntsville/index.ssf/rss2.0.xml,al.com,Regional,False
+AL - Mobile Press-Register,https://www.al.com/news/mobile/index.ssf/rss2.0.xml,al.com,Regional,False
+AL - Montgomery Advertiser,https://www.montgomeryadvertiser.com/rss/,montgomeryadvertiser.com,Regional,False
+AL - Tuscaloosa News,https://www.tuscaloosanews.com/rss/,tuscaloosanews.com,Regional,False
+AL - Florence Times Daily,https://www.timesdaily.com/search/?f=rss&t=article&l=50&s=start_time&sd=desc,timesdaily.com,Regional,False
+AK - Anchorage Daily News,https://www.adn.com/feed/,adn.com,Regional,False
+AK - Fairbanks Daily News-Miner,https://www.newsminer.com/search/?f=rss&t=article&l=50&s=start_time&sd=desc,newsminer.com,Regional,False
+AK - Juneau Empire,https://www.juneauempire.com/feed/,juneauempire.com,Regional,False
+AK - Kodiak Daily Mirror,https://www.kodiakdailymirror.com/search/?f=rss&t=article&l=50,kodiakdailymirror.com,Regional,False
+AK - Sitka Sentinel,https://www.sitkasentinel.com/feed/,sitkasentinel.com,Regional,False
+AZ - Arizona Republic,https://www.azcentral.com/rss/,azcentral.com,Regional,False
+AZ - Arizona Daily Star,https://tucson.com/search/?f=rss&t=article&l=50&s=start_time&sd=desc,tucson.com,Regional,False
+AZ - East Valley Tribune,https://www.eastvalleytribune.com/feed/,eastvalleytribune.com,Regional,False
+AZ - Arizona Daily Sun,https://azdailysun.com/search/?f=rss&t=article&l=50,azdailysun.com,Regional,False
+AZ - Yuma Sun,https://www.yumasun.com/search/?f=rss&t=article&l=50,yumasun.com,Regional,False
+AZ - Casa Grande Dispatch,https://www.pinalcentral.com/search/?f=rss&t=article&l=50,pinalcentral.com,Regional,False
+AZ - Prescott Daily Courier,https://www.dcourier.com/feed/,dcourier.com,Regional,False
+AZ - Kingman Daily Miner,https://www.kingmandailyminer.com/feed/,kingmandailyminer.com,Regional,False
+AZ - Arizona Capitol Times,https://azcapitoltimes.com/feed/,azcapitoltimes.com,Regional,False
+AR - Arkansas Democrat-Gazette,https://www.arkansasonline.com/syndication/rss/,arkansasonline.com,Regional,False
+AR - Northwest Arkansas Democrat,https://www.nwaonline.com/syndication/rss/,nwaonline.com,Regional,False
+AR - Jonesboro Sun,https://www.jonesborosun.com/search/?f=rss&t=article&l=50,jonesborosun.com,Regional,False
+AR - Arkansas Times,https://arktimes.com/feed/,arktimes.com,Regional,False
+AR - El Dorado News-Times,https://www.eldoradonews.com/search/?f=rss&t=article&l=50,eldoradonews.com,Regional,False
+AR - Fort Smith Times Record,https://www.swtimes.com/search/?f=rss&t=article&l=50,swtimes.com,Regional,False
+AR - Pine Bluff Commercial,https://www.pbcommercial.com/search/?f=rss&t=article&l=50,pbcommercial.com,Regional,False
+CA - Los Angeles Times,https://www.latimes.com/rss2.0.xml,latimes.com,Regional,False
+CA - San Francisco Chronicle,https://www.sfgate.com/rss/feed/SFGate-Latest-News-2960713.php,sfgate.com,Regional,False
+CA - San Jose Mercury News,https://www.mercurynews.com/feed/,mercurynews.com,Regional,False
+CA - Sacramento Bee,https://www.sacbee.com/news/local/rss,sacbee.com,Regional,False
+CA - San Diego Union-Tribune,https://www.sandiegouniontribune.com/rss/,sandiegouniontribune.com,Regional,False
+CA - Orange County Register,https://www.ocregister.com/feed/,ocregister.com,Regional,False
+CA - Fresno Bee,https://www.fresnobee.com/news/local/rss,fresnobee.com,Regional,False
+CA - Long Beach Press-Telegram,https://www.presstelegram.com/feed/,presstelegram.com,Regional,False
+CA - Riverside Press-Enterprise,https://www.pe.com/feed/,pe.com,Regional,False
+CA - San Bernardino Sun,https://www.sbsun.com/feed/,sbsun.com,Regional,False
+CA - Pasadena Star-News,https://www.pasadenastarnews.com/feed/,pasadenastarnews.com,Regional,False
+CA - Ventura County Star,https://www.vcstar.com/rss/,vcstar.com,Regional,False
+CA - Modesto Bee,https://www.modbee.com/news/local/rss,modbee.com,Regional,False
+CA - Stockton Record,https://www.recordnet.com/rss/,recordnet.com,Regional,False
+CA - Bakersfield Californian,https://www.bakersfield.com/search/?f=rss&t=article&l=50,bakersfield.com,Regional,False
+CA - Santa Barbara News-Press,https://newspress.com/feed/,newspress.com,Regional,False
+CA - Santa Cruz Sentinel,https://www.santacruzsentinel.com/feed/,santacruzsentinel.com,Regional,False
+CA - Monterey Herald,https://www.montereyherald.com/feed/,montereyherald.com,Regional,False
+CA - Marin Independent Journal,https://www.marinij.com/feed/,marinij.com,Regional,False
+CA - Redding Record Searchlight,https://www.redding.com/rss/,redding.com,Regional,False
+CA - Daily Breeze,https://www.dailybreeze.com/feed/,dailybreeze.com,Regional,False
+CA - San Gabriel Valley Tribune,https://www.sgvtribune.com/feed/,sgvtribune.com,Regional,False
+CA - Daily Bulletin Ontario,https://www.dailybulletin.com/feed/,dailybulletin.com,Regional,False
+CA - Whittier Daily News,https://www.whittierdailynews.com/feed/,whittierdailynews.com,Regional,False
+CA - San Mateo Daily Journal,https://www.smdailyjournal.com/search/?f=rss,smdailyjournal.com,Regional,False
+CA - Chico Enterprise-Record,https://www.chicoer.com/feed/,chicoer.com,Regional,False
+CA - Visalia Times-Delta,https://www.visaliatimesdelta.com/rss/,visaliatimesdelta.com,Regional,False
+CA - Lodi News-Sentinel,https://www.lodinews.com/search/?f=rss,lodinews.com,Regional,False
+CA - Ukiah Daily Journal,https://www.ukiahdailyjournal.com/feed/,ukiahdailyjournal.com,Regional,False
+CA - Times of San Diego,https://timesofsandiego.com/feed/,timesofsandiego.com,Regional,False
+CA - LA Daily News,https://www.dailynews.com/feed/,dailynews.com,Regional,False
+CO - Denver Post,https://www.denverpost.com/feed/,denverpost.com,Regional,False
+CO - Colorado Springs Gazette,https://gazette.com/search/?f=rss&t=article&l=50,gazette.com,Regional,False
+CO - Fort Collins Coloradoan,https://www.coloradoan.com/rss/,coloradoan.com,Regional,False
+CO - Boulder Daily Camera,https://www.dailycamera.com/feed/,dailycamera.com,Regional,False
+CO - Pueblo Chieftain,https://www.chieftain.com/search/?f=rss&t=article&l=50,chieftain.com,Regional,False
+CO - Greeley Tribune,https://www.greeleytribune.com/feed/,greeleytribune.com,Regional,False
+CO - Grand Junction Sentinel,https://www.gjsentinel.com/search/?f=rss&t=article&l=50,gjsentinel.com,Regional,False
+CO - Durango Herald,https://durangoherald.com/feed/,durangoherald.com,Regional,False
+CO - Aspen Times,https://www.aspentimes.com/feed/,aspentimes.com,Regional,False
+CO - Vail Daily,https://www.vaildaily.com/feed/,vaildaily.com,Regional,False
+CO - Denver Business Journal,https://www.bizjournals.com/denver/feed/latest/,bizjournals.com,Regional,False
+CT - Hartford Courant,https://www.courant.com/arcio/rss/,courant.com,Regional,False
+CT - New Haven Register,https://www.nhregister.com/feed/,nhregister.com,Regional,False
+CT - Stamford Advocate,https://www.stamfordadvocate.com/feed/,stamfordadvocate.com,Regional,False
+CT - Connecticut Post,https://www.ctpost.com/feed/,ctpost.com,Regional,False
+CT - Waterbury Republican-Am,https://www.rep-am.com/feed/,rep-am.com,Regional,False
+CT - Norwich Bulletin,https://www.norwichbulletin.com/rss/,norwichbulletin.com,Regional,False
+CT - Greenwich Time,https://www.greenwichtime.com/feed/,greenwichtime.com,Regional,False
+CT - Danbury News-Times,https://www.newstimes.com/feed/,newstimes.com,Regional,False
+DE - Delaware Online/News Journal,https://www.delawareonline.com/rss/,delawareonline.com,Regional,False
+DE - Delaware State News,https://delawarestatesnews.com/feed/,delawarestatesnews.com,Regional,False
+DE - Cape Gazette,https://www.capegazette.com/rss,capegazette.com,Regional,False
+FL - Miami Herald,https://www.miamiherald.com/news/rss,miamiherald.com,Regional,False
+FL - Orlando Sentinel,https://www.orlandosentinel.com/arcio/rss/,orlandosentinel.com,Regional,False
+FL - South Florida Sun-Sentinel,https://www.sun-sentinel.com/arcio/rss/,sun-sentinel.com,Regional,False
+FL - Florida Times-Union,https://www.jacksonville.com/arcio/rss/,jacksonville.com,Regional,False
+FL - Tallahassee Democrat,https://www.tallahassee.com/rss/,tallahassee.com,Regional,False
+FL - Palm Beach Post,https://www.palmbeachpost.com/rss/,palmbeachpost.com,Regional,False
+FL - Sarasota Herald-Tribune,https://www.heraldtribune.com/rss/,heraldtribune.com,Regional,False
+FL - Naples Daily News,https://www.naplesnews.com/rss/,naplesnews.com,Regional,False
+FL - Pensacola News Journal,https://www.pnj.com/rss/,pnj.com,Regional,False
+FL - Daytona Beach News-Journal,https://www.news-journalonline.com/rss/,news-journalonline.com,Regional,False
+FL - Gainesville Sun,https://www.gainesville.com/rss/,gainesville.com,Regional,False
+FL - Ocala Star-Banner,https://www.ocala.com/rss/,ocala.com,Regional,False
+FL - Lakeland Ledger,https://www.theledger.com/rss/,theledger.com,Regional,False
+FL - Melbourne Florida Today,https://www.floridatoday.com/rss/,floridatoday.com,Regional,False
+FL - Fort Myers News-Press,https://www.news-press.com/rss/,news-press.com,Regional,False
+FL - Stuart News,https://www.tcpalm.com/rss/,tcpalm.com,Regional,False
+FL - Key West Citizen,https://www.keysnews.com/search/?f=rss&t=article&l=50,keysnews.com,Regional,False
+FL - Panama City News Herald,https://www.newsherald.com/search/?f=rss&t=article&l=50,newsherald.com,Regional,False
+FL - Miami New Times,https://www.miaminewtimes.com/feed/,miaminewtimes.com,Regional,False
+FL - Tampa Bay Business Journal,https://www.bizjournals.com/tampabay/feed/latest/,bizjournals.com,Regional,False
+FL - South Florida Business Jrnl,https://www.bizjournals.com/southflorida/feed/latest/,bizjournals.com,Regional,False
+FL - Jacksonville Business Jrnl,https://www.bizjournals.com/jacksonville/feed/latest/,bizjournals.com,Regional,False
+FL - Orlando Business Journal,https://www.bizjournals.com/orlando/feed/latest/,bizjournals.com,Regional,False
+GA - Atlanta Journal-Constitution,https://www.ajc.com/feed/,ajc.com,Regional,False
+GA - Savannah Morning News,https://www.savannahnow.com/rss/,savannahnow.com,Regional,False
+GA - Augusta Chronicle,https://www.augustachronicle.com/rss/,augustachronicle.com,Regional,False
+GA - Macon Telegraph,https://www.macon.com/news/local/rss,macon.com,Regional,False
+GA - Columbus Ledger-Enquirer,https://www.ledger-enquirer.com/news/local/rss,ledger-enquirer.com,Regional,False
+GA - Athens Banner-Herald,https://www.onlineathens.com/rss/,onlineathens.com,Regional,False
+GA - Rome News-Tribune,https://www.northwestgeorgianews.com/romenews/search/?f=rss,northwestgeorgianews.com,Regional,False
+GA - Brunswick News,https://thebrunswicknews.com/search/?f=rss&t=article&l=50,thebrunswicknews.com,Regional,False
+GA - Dalton Daily Citizen,https://www.daltondailycitizen.com/search/?f=rss,daltondailycitizen.com,Regional,False
+GA - Atlanta Business Chronicle,https://www.bizjournals.com/atlanta/feed/latest/,bizjournals.com,Regional,False
+HI - Honolulu Star-Advertiser,https://www.staradvertiser.com/feed/,staradvertiser.com,Regional,False
+HI - Maui News,https://www.mauinews.com/feed/,mauinews.com,Regional,False
+HI - Hawaii Tribune-Herald,https://www.hawaiitribune-herald.com/feed/,hawaiitribune-herald.com,Regional,False
+HI - West Hawaii Today,https://www.westhawaiitoday.com/feed/,westhawaiitoday.com,Regional,False
+HI - Garden Island (Kauai),https://www.thegardenisland.com/feed/,thegardenisland.com,Regional,False
+HI - Civil Beat,https://www.civilbeat.org/feed/,civilbeat.org,Regional,False
+ID - Idaho Statesman,https://www.idahostatesman.com/news/local/rss,idahostatesman.com,Regional,False
+ID - Idaho Press-Tribune,https://www.idahopress.com/search/?f=rss&t=article&l=50,idahopress.com,Regional,False
+ID - Post Register,https://www.postregister.com/search/?f=rss&t=article&l=50,postregister.com,Regional,False
+ID - Lewiston Tribune,https://lmtribune.com/search/?f=rss&t=article&l=50,lmtribune.com,Regional,False
+ID - Moscow-Pullman Daily News,https://dnews.com/search/?f=rss&t=article&l=50,dnews.com,Regional,False
+ID - Twin Falls Times-News,https://magicvalley.com/search/?f=rss&t=article&l=50,magicvalley.com,Regional,False
+IL - Chicago Tribune,https://www.chicagotribune.com/arcio/rss/,chicagotribune.com,Regional,False
+IL - Rockford Register Star,https://www.rrstar.com/rss/,rrstar.com,Regional,False
+IL - Springfield State Journal-Reg,https://www.sj-r.com/rss/,sj-r.com,Regional,False
+IL - Peoria Journal Star,https://www.pjstar.com/rss/,pjstar.com,Regional,False
+IL - Champaign News-Gazette,https://www.news-gazette.com/search/?f=rss&t=article&l=50,news-gazette.com,Regional,False
+IL - Quad-City Times,https://qctimes.com/search/?f=rss&t=article&l=50,qctimes.com,Regional,False
+IL - Bloomington Pantagraph,https://pantagraph.com/search/?f=rss&t=article&l=50,pantagraph.com,Regional,False
+IL - Decatur Herald & Review,https://herald-review.com/search/?f=rss&t=article&l=50,herald-review.com,Regional,False
+IL - Aurora Beacon-News,https://www.chicagotribune.com/suburbs/aurora-beacon-news/rss2.0.xml,chicagotribune.com,Regional,False
+IL - Naperville Sun,https://www.chicagotribune.com/suburbs/naperville-sun/rss2.0.xml,chicagotribune.com,Regional,False
+IL - Daily Herald Suburbs,https://www.dailyherald.com/rss/,dailyherald.com,Regional,False
+IL - Chicago Business,https://www.chicagobusiness.com/feeds/news/rss/,chicagobusiness.com,Regional,False
+IL - Chicago Reporter,https://www.chicagoreporter.com/feed/,chicagoreporter.com,Regional,False
+IN - Indianapolis Star,https://www.indystar.com/rss/,indystar.com,Regional,False
+IN - Fort Wayne Journal Gazette,https://www.journalgazette.net/search/?f=rss&t=article&l=50,journalgazette.net,Regional,False
+IN - Fort Wayne News-Sentinel,https://www.news-sentinel.com/search/?f=rss&t=article&l=50,news-sentinel.com,Regional,False
+IN - South Bend Tribune,https://www.southbendtribune.com/search/?f=rss&t=article&l=50,southbendtribune.com,Regional,False
+IN - Evansville Courier & Press,https://www.courierpress.com/rss/,courierpress.com,Regional,False
+IN - Lafayette Journal & Courier,https://www.jconline.com/rss/,jconline.com,Regional,False
+IN - Muncie Star Press,https://www.thestarpress.com/rss/,thestarpress.com,Regional,False
+IN - Terre Haute Tribune-Star,https://www.tribstar.com/search/?f=rss&t=article&l=50,tribstar.com,Regional,False
+IN - Columbus Republic,https://www.therepublic.com/search/?f=rss&t=article&l=50,therepublic.com,Regional,False
+IN - Indianapolis Business Jrnl,https://www.bizjournals.com/indianapolis/feed/latest/,bizjournals.com,Regional,False
+IA - Des Moines Register,https://www.desmoinesregister.com/rss/,desmoinesregister.com,Regional,False
+IA - Cedar Rapids Gazette,https://www.thegazette.com/feed/,thegazette.com,Regional,False
+IA - Iowa City Press-Citizen,https://www.press-citizen.com/rss/,press-citizen.com,Regional,False
+IA - Sioux City Journal,https://siouxcityjournal.com/search/?f=rss&t=article&l=50,siouxcityjournal.com,Regional,False
+IA - Waterloo Cedar Falls Courier,https://wcfcourier.com/search/?f=rss&t=article&l=50,wcfcourier.com,Regional,False
+IA - Dubuque Telegraph Herald,https://www.telegraphherald.com/search/?f=rss&t=article&l=50,telegraphherald.com,Regional,False
+KS - Wichita Eagle,https://www.kansas.com/news/local/rss,kansas.com,Regional,False
+KS - Topeka Capital-Journal,https://www.cjonline.com/rss/,cjonline.com,Regional,False
+KS - Salina Journal,https://www.salina.com/search/?f=rss&t=article&l=50,salina.com,Regional,False
+KS - Lawrence Journal-World,https://www2.ljworld.com/rss/,www2.ljworld.com,Regional,False
+KS - Hutchinson News,https://www.hutchnews.com/search/?f=rss&t=article&l=50,hutchnews.com,Regional,False
+KS - Manhattan Mercury,https://www.themercury.com/search/?f=rss&t=article&l=50,themercury.com,Regional,False
+KS - Hays Daily News,https://www.hdnews.net/search/?f=rss&t=article&l=50,hdnews.net,Regional,False
+KY - Courier-Journal Louisville,https://www.courier-journal.com/rss/,courier-journal.com,Regional,False
+KY - Lexington Herald-Leader,https://www.kentucky.com/news/local/rss,kentucky.com,Regional,False
+KY - Bowling Green Daily News,https://www.bgdailynews.com/search/?f=rss&t=article&l=50,bgdailynews.com,Regional,False
+KY - Owensboro Messenger-Inquirer,https://www.messenger-inquirer.com/search/?f=rss&t=article&l=50,messenger-inquirer.com,Regional,False
+KY - Frankfort State Journal,https://www.state-journal.com/search/?f=rss&t=article&l=50,state-journal.com,Regional,False
+KY - Paducah Sun,https://www.paducahsun.com/search/?f=rss&t=article&l=50,paducahsun.com,Regional,False
+LA - Times-Picayune New Orleans,https://www.nola.com/search/?f=rss&t=article&l=50,nola.com,Regional,False
+LA - Baton Rouge Advocate,https://www.theadvocate.com/baton_rouge/rss,theadvocate.com,Regional,False
+LA - Shreveport Times,https://www.shreveporttimes.com/rss/,shreveporttimes.com,Regional,False
+LA - Monroe News-Star,https://www.thenewsstar.com/rss/,thenewsstar.com,Regional,False
+LA - Lafayette Advertiser,https://www.theadvertiser.com/rss/,theadvertiser.com,Regional,False
+LA - Alexandria Town Talk,https://www.thetowntalk.com/rss/,thetowntalk.com,Regional,False
+LA - Lake Charles American Press,https://www.americanpress.com/search/?f=rss&t=article&l=50,americanpress.com,Regional,False
+LA - Houma Courier,https://www.houmatoday.com/search/?f=rss&t=article&l=50,houmatoday.com,Regional,False
+LA - New Orleans Business Jrnl,https://www.bizjournals.com/neworleans/feed/latest/,bizjournals.com,Regional,False
+ME - Portland Press Herald,https://www.pressherald.com/feed/,pressherald.com,Regional,False
+ME - Bangor Daily News,https://bangordailynews.com/feed/,bangordailynews.com,Regional,False
+ME - Kennebec Journal,https://www.centralmaine.com/feed/,centralmaine.com,Regional,False
+ME - Lewiston Sun Journal,https://www.sunjournal.com/feed/,sunjournal.com,Regional,False
+MD - Washington Post (MD),https://feeds.washingtonpost.com/rss/local/maryland,feeds.washingtonpost.com,Regional,True
+MD - Capital Gazette Annapolis,https://www.capitalgazette.com/arcio/rss/,capitalgazette.com,Regional,False
+MD - Frederick News-Post,https://www.fredericknewspost.com/search/?f=rss&t=article&l=50,fredericknewspost.com,Regional,False
+MD - Hagerstown Herald-Mail,https://www.heraldmailmedia.com/search/?f=rss&t=article&l=50,heraldmailmedia.com,Regional,False
+MD - Salisbury Daily Times,https://www.delmarvanow.com/rss/,delmarvanow.com,Regional,False
+MD - Cumberland Times-News,https://www.times-news.com/search/?f=rss&t=article&l=50,times-news.com,Regional,False
+MD - Baltimore Business Journal,https://www.bizjournals.com/baltimore/feed/latest/,bizjournals.com,Regional,False
+MD - Maryland Reporter,https://marylandreporter.com/feed/,marylandreporter.com,Regional,False
+MA - Boston Globe,https://www.bostonglobe.com/rss/,bostonglobe.com,Regional,False
+MA - Worcester Telegram & Gazette,https://www.telegram.com/arcio/rss/,telegram.com,Regional,False
+MA - Springfield Republican,https://www.masslive.com/rss/,masslive.com,Regional,False
+MA - Lowell Sun,https://www.lowellsun.com/feed/,lowellsun.com,Regional,False
+MA - Patriot Ledger,https://www.patriotledger.com/feed/,patriotledger.com,Regional,False
+MA - Cape Cod Times,https://www.capecodtimes.com/arcio/rss/,capecodtimes.com,Regional,False
+MA - New Bedford Standard-Times,https://www.southcoasttoday.com/search/?f=rss&t=article&l=50,southcoasttoday.com,Regional,False
+MA - Berkshire Eagle,https://www.berkshireeagle.com/feed/,berkshireeagle.com,Regional,False
+MA - Gloucester Daily Times,https://www.gloucestertimes.com/feed/,gloucestertimes.com,Regional,False
+MA - Boston Business Journal,https://www.bizjournals.com/boston/feed/latest/,bizjournals.com,Regional,False
+MA - CommonWealth Magazine,https://commonwealthbeacon.org/feed/,commonwealthbeacon.org,Regional,False
+MI - Detroit News,https://www.detroitnews.com/arcio/rss/,detroitnews.com,Regional,False
+MI - Grand Rapids Press,https://www.mlive.com/grand-rapids/index.ssf/rss2.0.xml,mlive.com,Regional,False
+MI - Lansing State Journal,https://www.lansingstatejournal.com/rss/,lansingstatejournal.com,Regional,False
+MI - Flint Journal,https://www.mlive.com/flint/index.ssf/rss2.0.xml,mlive.com,Regional,False
+MI - Kalamazoo Gazette,https://www.mlive.com/kalamazoo/index.ssf/rss2.0.xml,mlive.com,Regional,False
+MI - Ann Arbor News,https://www.mlive.com/ann-arbor/index.ssf/rss2.0.xml,mlive.com,Regional,False
+MI - Bay City Times,https://www.mlive.com/bay-city/index.ssf/rss2.0.xml,mlive.com,Regional,False
+MI - Saginaw News,https://www.mlive.com/saginaw/index.ssf/rss2.0.xml,mlive.com,Regional,False
+MI - Traverse City Record-Eagle,https://www.record-eagle.com/search/?f=rss&t=article&l=50,record-eagle.com,Regional,False
+MI - Muskegon Chronicle,https://www.mlive.com/muskegon/index.ssf/rss2.0.xml,mlive.com,Regional,False
+MI - Detroit Business,https://www.crainsdetroit.com/rss/,crainsdetroit.com,Regional,False
+MI - Bridge Michigan,https://bridgemi.com/feed/,bridgemi.com,Regional,False
+MN - Minneapolis Star Tribune,https://www.startribune.com/feeds/,startribune.com,Regional,False
+MN - St. Paul Pioneer Press,https://www.twincities.com/feed/,twincities.com,Regional,False
+MN - Duluth News Tribune,https://www.duluthnewstribune.com/feed/,duluthnewstribune.com,Regional,False
+MN - Rochester Post-Bulletin,https://www.postbulletin.com/search/?f=rss&t=article&l=50,postbulletin.com,Regional,False
+MN - St. Cloud Times,https://www.sctimes.com/rss/,sctimes.com,Regional,False
+MN - Mankato Free Press,https://www.mankatofreepress.com/search/?f=rss&t=article&l=50,mankatofreepress.com,Regional,False
+MN - Brainerd Dispatch,https://www.brainerddispatch.com/search/?f=rss&t=article&l=50,brainerddispatch.com,Regional,False
+MN - Minneapolis Business Journal,https://www.bizjournals.com/twincities/feed/latest/,bizjournals.com,Regional,False
+MN - MinnPost,https://www.minnpost.com/feed/,minnpost.com,Regional,False
+MS - Clarion-Ledger Jackson,https://www.clarionledger.com/rss/,clarionledger.com,Regional,False
+MS - Sun Herald Biloxi,https://www.sunherald.com/news/local/rss,sunherald.com,Regional,False
+MS - Commercial Dispatch Columbus,https://www.cdispatch.com/search/?f=rss&t=article&l=50,cdispatch.com,Regional,False
+MS - Hattiesburg American,https://www.hattiesburgamerican.com/rss/,hattiesburgamerican.com,Regional,False
+MS - Vicksburg Post,https://www.vicksburgpost.com/search/?f=rss&t=article&l=50,vicksburgpost.com,Regional,False
+MS - Meridian Star,https://www.meridianstar.com/search/?f=rss&t=article&l=50,meridianstar.com,Regional,False
+MS - Mississippi Today,https://mississippitoday.org/feed/,mississippitoday.org,Regional,False
+MO - St. Louis Post-Dispatch,https://www.stltoday.com/search/?f=rss&t=article&l=50,stltoday.com,Regional,False
+MO - Kansas City Star,https://www.kansascity.com/news/local/rss,kansascity.com,Regional,False
+MO - Springfield News-Leader,https://www.news-leader.com/rss/,news-leader.com,Regional,False
+MO - Columbia Missourian,https://www.columbiamissourian.com/search/?f=rss&t=article&l=50,columbiamissourian.com,Regional,False
+MO - Joplin Globe,https://www.joplinglobe.com/search/?f=rss&t=article&l=50,joplinglobe.com,Regional,False
+MO - St. Joseph News-Press,https://www.newspressnow.com/search/?f=rss&t=article&l=50,newspressnow.com,Regional,False
+MO - Columbia Tribune,https://www.columbiatribune.com/search/?f=rss&t=article&l=50,columbiatribune.com,Regional,False
+MO - Kansas City Business Journal,https://www.bizjournals.com/kansascity/feed/latest/,bizjournals.com,Regional,False
+MO - St. Louis Business Journal,https://www.bizjournals.com/stlouis/feed/latest/,bizjournals.com,Regional,False
+MT - Missoulian,https://missoulian.com/search/?f=rss&t=article&l=50,missoulian.com,Regional,False
+MT - Billings Gazette,https://billingsgazette.com/search/?f=rss&t=article&l=50,billingsgazette.com,Regional,False
+MT - Great Falls Tribune,https://www.greatfallstribune.com/rss/,greatfallstribune.com,Regional,False
+MT - Helena Independent Record,https://helenair.com/search/?f=rss&t=article&l=50,helenair.com,Regional,False
+MT - Bozeman Daily Chronicle,https://www.bozemandailychronicle.com/search/?f=rss&t=article&l=50,bozemandailychronicle.com,Regional,False
+MT - Flathead Beacon,https://flatheadbeacon.com/feed/,flatheadbeacon.com,Regional,False
+MT - Montana Free Press,https://montanafreepress.org/feed/,montanafreepress.org,Regional,False
+NE - Omaha World-Herald,https://omaha.com/search/?f=rss&t=article&l=50,omaha.com,Regional,False
+NE - Lincoln Journal Star,https://journalstar.com/search/?f=rss&t=article&l=50,journalstar.com,Regional,False
+NE - Fremont Tribune,https://www.fremonttribune.com/search/?f=rss&t=article&l=50,fremonttribune.com,Regional,False
+NE - Kearney Hub,https://www.kearneyhub.com/search/?f=rss&t=article&l=50,kearneyhub.com,Regional,False
+NE - Grand Island Independent,https://www.theindependent.com/search/?f=rss&t=article&l=50,theindependent.com,Regional,False
+NE - Scottsbluff Star-Herald,https://www.starherald.com/search/?f=rss&t=article&l=50,starherald.com,Regional,False
+NE - Norfolk Daily News,https://www.norfolkdailynews.com/search/?f=rss&t=article&l=50,norfolkdailynews.com,Regional,False
+NV - Las Vegas Review-Journal,https://www.reviewjournal.com/feed/,reviewjournal.com,Regional,False
+NV - Las Vegas Sun,https://lasvegassun.com/feed/,lasvegassun.com,Regional,False
+NV - Reno Gazette-Journal,https://www.rgj.com/rss/,rgj.com,Regional,False
+NV - Nevada Independent,https://thenevadaindependent.com/feed/,thenevadaindependent.com,Regional,False
+NV - Las Vegas Weekly,https://lasvegasweekly.com/feed/,lasvegasweekly.com,Regional,False
+NV - Las Vegas Business Press,https://www.bizjournals.com/lasvegas/feed/latest/,bizjournals.com,Regional,False
+NH - Union Leader Manchester,https://www.unionleader.com/search/?f=rss&t=article&l=50,unionleader.com,Regional,False
+NH - Concord Monitor,https://www.concordmonitor.com/feed/,concordmonitor.com,Regional,False
+NH - Keene Sentinel,https://www.sentinelsource.com/search/?f=rss&t=article&l=50,sentinelsource.com,Regional,False
+NH - Laconia Daily Sun,https://laconiadailysun.com/feed/,laconiadailysun.com,Regional,False
+NJ - NJ.com / Star-Ledger,https://www.nj.com/arcio/rss/,nj.com,Regional,False
+NJ - Bergen Record,https://www.northjersey.com/arcio/rss/,northjersey.com,Regional,False
+NJ - Asbury Park Press,https://www.app.com/rss/,app.com,Regional,False
+NJ - Courier-Post Cherry Hill,https://www.courierpostonline.com/rss/,courierpostonline.com,Regional,False
+NJ - Burlington County Times,https://www.burlingtoncountytimes.com/rss/,burlingtoncountytimes.com,Regional,False
+NJ - Home News Tribune,https://www.mycentraljersey.com/rss/,mycentraljersey.com,Regional,False
+NJ - Times of Trenton,https://www.nj.com/times-of-trenton/index.ssf/rss2.0.xml,nj.com,Regional,False
+NJ - New Jersey Business Jrnl,https://www.bizjournals.com/newjersey/feed/latest/,bizjournals.com,Regional,False
+NJ - NJ Spotlight News,https://www.njspotlightnews.org/feed/,njspotlightnews.org,Regional,False
+NM - Albuquerque Journal,https://www.abqjournal.com/feed/,abqjournal.com,Regional,False
+NM - Santa Fe New Mexican,https://www.santafenewmexican.com/search/?f=rss&t=article&l=50,santafenewmexican.com,Regional,False
+NM - Las Cruces Sun-News,https://www.lcsun-news.com/rss/,lcsun-news.com,Regional,False
+NM - Roswell Daily Record,https://www.rdrnews.com/search/?f=rss&t=article&l=50,rdrnews.com,Regional,False
+NM - Farmington Daily Times,https://www.daily-times.com/rss/,daily-times.com,Regional,False
+NM - New Mexico Political Report,https://nmpoliticalreport.com/feed/,nmpoliticalreport.com,Regional,False
+NY - NY Daily News,https://www.nydailynews.com/arcio/rss/,nydailynews.com,Regional,False
+NY - Newsday Long Island,https://www.newsday.com/rss,newsday.com,Regional,False
+NY - Buffalo News,https://buffalonews.com/search/?f=rss&t=article&l=50,buffalonews.com,Regional,False
+NY - Rochester Democrat & Chronicle,https://www.democratandchronicle.com/rss/,democratandchronicle.com,Regional,False
+NY - Albany Times-Union,https://www.timesunion.com/search/?f=rss&t=article&l=50,timesunion.com,Regional,False
+NY - Syracuse Post-Standard,https://www.syracuse.com/arcio/rss/,syracuse.com,Regional,False
+NY - Binghamton Press & Sun-Bull,https://www.pressconnects.com/rss/,pressconnects.com,Regional,False
+NY - Utica Observer-Dispatch,https://www.uticaod.com/search/?f=rss&t=article&l=50,uticaod.com,Regional,False
+NY - Poughkeepsie Journal,https://www.poughkeepsiejournal.com/rss/,poughkeepsiejournal.com,Regional,False
+NY - Journal News Westchester,https://www.lohud.com/arcio/rss/,lohud.com,Regional,False
+NY - Staten Island Advance,https://www.silive.com/arcio/rss/,silive.com,Regional,False
+NY - New York Business Journal,https://www.bizjournals.com/newyork/feed/latest/,bizjournals.com,Regional,False
+NY - City & State NY,https://www.cityandstateny.com/feed/,cityandstateny.com,Regional,False
+NY - Gothamist,https://gothamist.com/feed,gothamist.com,Regional,False
+NY - The City NYC,https://www.thecity.nyc/feed/,thecity.nyc,Regional,False
+NY - Observer NY,https://observer.com/feed/,observer.com,Regional,False
+NC - Charlotte Observer,https://www.charlotteobserver.com/news/local/rss,charlotteobserver.com,Regional,False
+NC - News & Observer Raleigh,https://www.newsobserver.com/news/local/rss,newsobserver.com,Regional,False
+NC - Winston-Salem Journal,https://www.journalnow.com/search/?f=rss&t=article&l=50,journalnow.com,Regional,False
+NC - Greensboro News & Record,https://greensboro.com/search/?f=rss&t=article&l=50,greensboro.com,Regional,False
+NC - Durham Herald-Sun,https://www.heraldsun.com/news/local/rss,heraldsun.com,Regional,False
+NC - Fayetteville Observer,https://www.fayobserver.com/rss/,fayobserver.com,Regional,False
+NC - Wilmington Star-News,https://www.starnewsonline.com/rss/,starnewsonline.com,Regional,False
+NC - Asheville Citizen-Times,https://www.citizen-times.com/rss/,citizen-times.com,Regional,False
+NC - Statesville Record Landmark,https://www.statesville.com/search/?f=rss&t=article&l=50,statesville.com,Regional,False
+NC - High Point Enterprise,https://www.hpenews.com/search/?f=rss&t=article&l=50,hpenews.com,Regional,False
+NC - Rocky Mount Telegram,https://www.rockymounttelegram.com/search/?f=rss&t=article&l=50,rockymounttelegram.com,Regional,False
+NC - Charlotte Business Journal,https://www.bizjournals.com/charlotte/feed/latest/,bizjournals.com,Regional,False
+NC - NC Policy Watch,https://ncpolicywatch.com/feed/,ncpolicywatch.com,Regional,False
+NC - Carolina Public Press,https://carolinapublicpress.org/feed/,carolinapublicpress.org,Regional,False
+ND - Bismarck Tribune,https://bismarcktribune.com/search/?f=rss&t=article&l=50,bismarcktribune.com,Regional,False
+ND - Fargo Forum,https://www.inforum.com/search/?f=rss&t=article&l=50,inforum.com,Regional,False
+ND - Grand Forks Herald,https://www.grandforksherald.com/search/?f=rss&t=article&l=50,grandforksherald.com,Regional,False
+ND - Minot Daily News,https://www.minotdailynews.com/feed/,minotdailynews.com,Regional,False
+ND - Dickinson Press,https://www.thedickinsonpress.com/search/?f=rss&t=article&l=50,thedickinsonpress.com,Regional,False
+OH - Cleveland Plain Dealer,https://www.cleveland.com/arcio/rss/,cleveland.com,Regional,False
+OH - Columbus Dispatch,https://www.dispatch.com/search/?f=rss&t=article&l=50,dispatch.com,Regional,False
+OH - Cincinnati Enquirer,https://www.cincinnati.com/rss/,cincinnati.com,Regional,False
+OH - Toledo Blade,https://www.toledoblade.com/search/?f=rss&t=article&l=50,toledoblade.com,Regional,False
+OH - Akron Beacon Journal,https://www.beaconjournal.com/search/?f=rss&t=article&l=50,beaconjournal.com,Regional,False
+OH - Dayton Daily News,https://www.daytondailynews.com/rss/,daytondailynews.com,Regional,False
+OH - Youngstown Vindicator,https://www.vindy.com/rss/news/,vindy.com,Regional,False
+OH - Canton Repository,https://www.cantonrep.com/search/?f=rss&t=article&l=50,cantonrep.com,Regional,False
+OH - Springfield News-Sun,https://www.springfieldnewssun.com/rss/,springfieldnewssun.com,Regional,False
+OH - Mansfield News Journal,https://www.mansfieldnewsjournal.com/rss/,mansfieldnewsjournal.com,Regional,False
+OH - Cleveland Business,https://www.crainscleveland.com/rss/,crainscleveland.com,Regional,False
+OH - Columbus Business First,https://www.bizjournals.com/columbus/feed/latest/,bizjournals.com,Regional,False
+OH - Cincinnati Business Courier,https://www.bizjournals.com/cincinnati/feed/latest/,bizjournals.com,Regional,False
+OH - Ohio Capital Journal,https://ohiocapitaljournal.com/feed/,ohiocapitaljournal.com,Regional,False
+OK - Oklahoman,https://www.oklahoman.com/rss/,oklahoman.com,Regional,False
+OK - Tulsa World,https://tulsaworld.com/search/?f=rss&t=article&l=50,tulsaworld.com,Regional,False
+OK - Lawton Constitution,https://www.swoknews.com/search/?f=rss&t=article&l=50,swoknews.com,Regional,False
+OK - Enid News & Eagle,https://www.enidnews.com/search/?f=rss&t=article&l=50,enidnews.com,Regional,False
+OK - Muskogee Phoenix,https://www.muskogeephoenix.com/search/?f=rss&t=article&l=50,muskogeephoenix.com,Regional,False
+OK - Oklahoma Watch,https://oklahomawatch.org/feed/,oklahomawatch.org,Regional,False
+OR - Oregonian Portland,https://www.oregonlive.com/arcio/rss/,oregonlive.com,Regional,False
+OR - Eugene Register-Guard,https://www.registerguard.com/search/?f=rss&t=article&l=50,registerguard.com,Regional,False
+OR - Salem Statesman Journal,https://www.statesmanjournal.com/rss/,statesmanjournal.com,Regional,False
+OR - Medford Mail Tribune,https://www.mailtribune.com/search/?f=rss&t=article&l=50,mailtribune.com,Regional,False
+OR - Bend Bulletin,https://www.bendbulletin.com/search/?f=rss&t=article&l=50,bendbulletin.com,Regional,False
+OR - Corvallis Gazette-Times,https://www.gazettetimes.com/search/?f=rss&t=article&l=50,gazettetimes.com,Regional,False
+OR - Albany Democrat-Herald,https://democratherald.com/search/?f=rss&t=article&l=50,democratherald.com,Regional,False
+OR - Portland Business Journal,https://www.bizjournals.com/portland/feed/latest/,bizjournals.com,Regional,False
+OR - Willamette Week,https://www.wweek.com/feed/,wweek.com,Regional,False
+OR - Oregon Public Broadcasting,https://www.opb.org/rss/news/,opb.org,Regional,False
+PA - Harrisburg Patriot-News,https://www.pennlive.com/arcio/rss/,pennlive.com,Regional,False
+PA - Pittsburgh Tribune-Review,https://triblive.com/feed/,triblive.com,Regional,False
+PA - Allentown Morning Call,https://www.mcall.com/arcio/rss/,mcall.com,Regional,False
+PA - Reading Eagle,https://www.readingeagle.com/search/?f=rss&t=article&l=50,readingeagle.com,Regional,False
+PA - Lancaster Intelligencer Jrnl,https://lancasteronline.com/search/?f=rss&t=article&l=50,lancasteronline.com,Regional,False
+PA - Scranton Times-Tribune,https://www.thetimes-tribune.com/search/?f=rss&t=article&l=50,thetimes-tribune.com,Regional,False
+PA - Erie Times-News,https://www.goerie.com/search/?f=rss&t=article&l=50,goerie.com,Regional,False
+PA - Wilkes-Barre Citizens Voice,https://www.citizensvoice.com/search/?f=rss&t=article&l=50,citizensvoice.com,Regional,False
+PA - Pittsburgh Business Times,https://www.bizjournals.com/pittsburgh/feed/latest/,bizjournals.com,Regional,False
+PA - Philadelphia Business Jrnl,https://www.bizjournals.com/philadelphia/feed/latest/,bizjournals.com,Regional,False
+PA - Spotlight PA,https://www.spotlightpa.org/feed/,spotlightpa.org,Regional,False
+PA - Pennsylvania Capital-Star,https://www.penncapital-star.com/feed/,penncapital-star.com,Regional,False
+RI - Providence Journal,https://www.providencejournal.com/arcio/rss/,providencejournal.com,Regional,False
+RI - Woonsocket Call,https://www.woonsocketcall.com/search/?f=rss&t=article&l=50,woonsocketcall.com,Regional,False
+RI - Newport Daily News,https://www.newportri.com/search/?f=rss&t=article&l=50,newportri.com,Regional,False
+RI - Rhode Island Current,https://rhodeislandcurrent.com/feed/,rhodeislandcurrent.com,Regional,False
+SC - State Columbia,https://www.thestate.com/news/local/rss,thestate.com,Regional,False
+SC - Greenville News,https://www.greenvilleonline.com/rss/,greenvilleonline.com,Regional,False
+SC - Post and Courier Charleston,https://www.postandcourier.com/feed/,postandcourier.com,Regional,False
+SC - Myrtle Beach Sun News,https://www.myrtlebeachonline.com/news/local/rss,myrtlebeachonline.com,Regional,False
+SC - Rock Hill Herald,https://www.heraldonline.com/news/local/rss,heraldonline.com,Regional,False
+SC - Anderson Independent Mail,https://www.independentmail.com/rss/,independentmail.com,Regional,False
+SC - Spartanburg Herald-Journal,https://www.goupstate.com/search/?f=rss&t=article&l=50,goupstate.com,Regional,False
+SD - Argus Leader Sioux Falls,https://www.argusleader.com/rss/,argusleader.com,Regional,False
+SD - Rapid City Journal,https://rapidcityjournal.com/search/?f=rss&t=article&l=50,rapidcityjournal.com,Regional,False
+SD - Aberdeen American News,https://www.aberdeennews.com/search/?f=rss&t=article&l=50,aberdeennews.com,Regional,False
+SD - Watertown Public Opinion,https://www.thepublicopinion.com/search/?f=rss&t=article&l=50,thepublicopinion.com,Regional,False
+SD - South Dakota Searchlight,https://southdakotasearchlight.com/feed/,southdakotasearchlight.com,Regional,False
+TN - Tennessean Nashville,https://www.tennessean.com/rss/,tennessean.com,Regional,False
+TN - Memphis Commercial Appeal,https://www.commercialappeal.com/rss/,commercialappeal.com,Regional,False
+TN - Knoxville News Sentinel,https://www.knoxnews.com/rss/,knoxnews.com,Regional,False
+TN - Chattanooga Times Free Press,https://www.timesfreepress.com/search/?f=rss&t=article&l=50,timesfreepress.com,Regional,False
+TN - Jackson Sun,https://www.jacksonsun.com/rss/,jacksonsun.com,Regional,False
+TN - Clarksville Leaf-Chronicle,https://www.theleafchronicle.com/rss/,theleafchronicle.com,Regional,False
+TN - Johnson City Press,https://www.johnsoncitypress.com/search/?f=rss&t=article&l=50,johnsoncitypress.com,Regional,False
+TN - Nashville Business Journal,https://www.bizjournals.com/nashville/feed/latest/,bizjournals.com,Regional,False
+TN - Tennessee Lookout,https://tennesseelookout.com/feed/,tennesseelookout.com,Regional,False
+TX - Dallas Morning News,https://www.dallasnews.com/arcio/rss/,dallasnews.com,Regional,False
+TX - Houston Chronicle,https://www.houstonchronicle.com/arcio/rss/,houstonchronicle.com,Regional,False
+TX - San Antonio Express-News,https://www.mysanantonio.com/arcio/rss/,mysanantonio.com,Regional,False
+TX - Austin American-Statesman,https://www.statesman.com/arcio/rss/,statesman.com,Regional,False
+TX - Fort Worth Star-Telegram,https://www.star-telegram.com/news/local/rss,star-telegram.com,Regional,False
+TX - El Paso Times,https://www.elpasotimes.com/rss/,elpasotimes.com,Regional,False
+TX - Corpus Christi Caller-Times,https://www.caller.com/rss/,caller.com,Regional,False
+TX - Lubbock Avalanche-Journal,https://www.lubbockonline.com/rss/,lubbockonline.com,Regional,False
+TX - Waco Tribune-Herald,https://wacotrib.com/search/?f=rss&t=article&l=50,wacotrib.com,Regional,False
+TX - Amarillo Globe-News,https://www.amarillo.com/search/?f=rss&t=article&l=50,amarillo.com,Regional,False
+TX - Abilene Reporter-News,https://www.reporternews.com/rss/,reporternews.com,Regional,False
+TX - Beaumont Enterprise,https://www.beaumontenterprise.com/arcio/rss/,beaumontenterprise.com,Regional,False
+TX - Laredo Morning Times,https://www.lmtonline.com/search/?f=rss&t=article&l=50,lmtonline.com,Regional,False
+TX - Midland Reporter-Telegram,https://www.mrt.com/search/?f=rss&t=article&l=50,mrt.com,Regional,False
+TX - McAllen Monitor,https://www.themonitor.com/search/?f=rss&t=article&l=50,themonitor.com,Regional,False
+TX - Tyler Morning Telegraph,https://tylerpaper.com/search/?f=rss&t=article&l=50,tylerpaper.com,Regional,False
+TX - Odessa American,https://www.oaoa.com/search/?f=rss&t=article&l=50,oaoa.com,Regional,False
+TX - Longview News-Journal,https://www.news-journal.com/search/?f=rss&t=article&l=50,news-journal.com,Regional,False
+TX - Houston Business Journal,https://www.bizjournals.com/houston/feed/latest/,bizjournals.com,Regional,False
+TX - Dallas Business Journal,https://www.bizjournals.com/dallas/feed/latest/,bizjournals.com,Regional,False
+TX - San Antonio Business Jrnl,https://www.bizjournals.com/sanantonio/feed/latest/,bizjournals.com,Regional,False
+TX - Austin Business Journal,https://www.bizjournals.com/austin/feed/latest/,bizjournals.com,Regional,False
+TX - Texas Tribune,https://www.texastribune.org/feed/,texastribune.org,Regional,False
+TX - Dallas Observer,https://www.dallasobserver.com/feed/,dallasobserver.com,Regional,False
+TX - Houston Press,https://www.houstonpress.com/feed/,houstonpress.com,Regional,False
+UT - Salt Lake Tribune,https://www.sltrib.com/feed/,sltrib.com,Regional,False
+UT - Deseret News,https://www.deseret.com/rss,deseret.com,Regional,False
+UT - Provo Daily Herald,https://www.heraldextra.com/search/?f=rss&t=article&l=50,heraldextra.com,Regional,False
+UT - St. George Spectrum,https://www.thespectrum.com/rss/,thespectrum.com,Regional,False
+UT - Ogden Standard-Examiner,https://www.standard.net/search/?f=rss&t=article&l=50,standard.net,Regional,False
+UT - Cache Valley Daily,https://www.cachevalleydaily.com/search/?f=rss&t=article&l=50,cachevalleydaily.com,Regional,False
+VT - Burlington Free Press,https://www.burlingtonfreepress.com/rss/,burlingtonfreepress.com,Regional,False
+VT - Barre Times Argus,https://www.timesargus.com/search/?f=rss&t=article&l=50,timesargus.com,Regional,False
+VT - Brattleboro Reformer,https://www.reformer.com/search/?f=rss&t=article&l=50,reformer.com,Regional,False
+VT - Rutland Herald,https://www.rutlandherald.com/search/?f=rss&t=article&l=50,rutlandherald.com,Regional,False
+VT - VTDigger,https://vtdigger.org/feed/,vtdigger.org,Regional,False
+VA - Richmond Times-Dispatch,https://richmond.com/search/?f=rss&t=article&l=50,richmond.com,Regional,False
+VA - Virginian-Pilot Norfolk,https://www.pilotonline.com/arcio/rss/,pilotonline.com,Regional,False
+VA - Washington Post (VA),https://feeds.washingtonpost.com/rss/local/virginia,feeds.washingtonpost.com,Regional,True
+VA - Roanoke Times,https://roanoke.com/search/?f=rss&t=article&l=50,roanoke.com,Regional,False
+VA - Daily Press Newport News,https://www.dailypress.com/arcio/rss/,dailypress.com,Regional,False
+VA - Fredericksburg Free Lance-Star,https://www.fredericksburg.com/search/?f=rss&t=article&l=50,fredericksburg.com,Regional,False
+VA - Lynchburg News & Advance,https://newsadvance.com/search/?f=rss&t=article&l=50,newsadvance.com,Regional,False
+VA - Charlottesville Daily Progress,https://dailyprogress.com/search/?f=rss&t=article&l=50,dailyprogress.com,Regional,False
+VA - Staunton News Leader,https://www.newsleader.com/rss/,newsleader.com,Regional,False
+VA - Winchester Star,https://www.winchesterstar.com/search/?f=rss&t=article&l=50,winchesterstar.com,Regional,False
+VA - Virginia Business Journal,https://www.bizjournals.com/virginia/feed/latest/,bizjournals.com,Regional,False
+VA - Virginia Mercury,https://virginiamercury.com/feed/,virginiamercury.com,Regional,False
+WA - Seattle Post-Intelligencer,https://www.seattlepi.com/seattlenews/feed/,seattlepi.com,Regional,False
+WA - Spokane Spokesman-Review,https://www.spokesman.com/feed/,spokesman.com,Regional,False
+WA - Tacoma News Tribune,https://www.thenewstribune.com/news/local/rss,thenewstribune.com,Regional,False
+WA - Bellingham Herald,https://www.bellinghamherald.com/news/local/rss,bellinghamherald.com,Regional,False
+WA - Olympian,https://www.theolympian.com/news/local/rss,theolympian.com,Regional,False
+WA - Tri-City Herald,https://www.tri-cityherald.com/news/local/rss,tri-cityherald.com,Regional,False
+WA - Wenatchee World,https://www.wenatcheeworld.com/search/?f=rss&t=article&l=50,wenatcheeworld.com,Regional,False
+WA - Yakima Herald-Republic,https://www.yakimaherald.com/search/?f=rss&t=article&l=50,yakimaherald.com,Regional,False
+WA - Seattle Business Journal,https://www.bizjournals.com/seattle/feed/latest/,bizjournals.com,Regional,False
+WA - Crosscut,https://crosscut.com/feed,crosscut.com,Regional,False
+DC - Politico,https://www.politico.com/rss/politicopicks.xml,politico.com,General,True
+DC - DCist,https://dcist.com/feed,dcist.com,General,False
+DC - Washington City Paper,https://washingtoncitypaper.com/feed/,washingtoncitypaper.com,General,False
+DC - Washington Business Journal,https://www.bizjournals.com/washington/feed/latest/,bizjournals.com,General,False
+WV - Charleston Gazette-Mail,https://www.wvgazettemail.com/search/?f=rss&t=article&l=50,wvgazettemail.com,Regional,False
+WV - Huntington Herald-Dispatch,https://www.herald-dispatch.com/search/?f=rss&t=article&l=50,herald-dispatch.com,Regional,False
+WV - Parkersburg News & Sentinel,https://www.newsandsentinel.com/search/?f=rss&t=article&l=50,newsandsentinel.com,Regional,False
+WV - Wheeling Intelligencer,https://www.theintelligencer.net/search/?f=rss&t=article&l=50,theintelligencer.net,Regional,False
+WV - West Virginia MetroNews,https://wvmetronews.com/feed/,wvmetronews.com,Regional,False
+WV - Mountain State Spotlight,https://mountainstatespotlight.org/feed/,mountainstatespotlight.org,Regional,False
+WI - Milwaukee Journal Sentinel,https://www.jsonline.com/arcio/rss/,jsonline.com,Regional,False
+WI - Madison Wisconsin State Journal,https://madison.com/wsj/search/?f=rss&t=article&l=50,madison.com,Regional,False
+WI - Green Bay Press-Gazette,https://www.greenbaypressgazette.com/rss/,greenbaypressgazette.com,Regional,False
+WI - Appleton Post-Crescent,https://www.postcrescent.com/rss/,postcrescent.com,Regional,False
+WI - Racine Journal Times,https://journaltimes.com/search/?f=rss&t=article&l=50,journaltimes.com,Regional,False
+WI - Sheboygan Press,https://www.sheboyganpress.com/rss/,sheboyganpress.com,Regional,False
+WI - Oshkosh Northwestern,https://www.thenorthwestern.com/rss/,thenorthwestern.com,Regional,False
+WI - Fond du Lac Reporter,https://www.fdlreporter.com/rss/,fdlreporter.com,Regional,False
+WI - Wausau Daily Herald,https://www.wausaudailyherald.com/rss/,wausaudailyherald.com,Regional,False
+WI - Stevens Point Journal,https://www.stevenspointjournal.com/rss/,stevenspointjournal.com,Regional,False
+WI - La Crosse Tribune,https://lacrossetribune.com/search/?f=rss&t=article&l=50,lacrossetribune.com,Regional,False
+WI - Milwaukee Business Journal,https://www.bizjournals.com/milwaukee/feed/latest/,bizjournals.com,Regional,False
+WI - Wisconsin Watch,https://wisconsinwatch.org/feed/,wisconsinwatch.org,Regional,False
+WI - WisContext,https://www.wiscontext.org/feed/,wiscontext.org,Regional,False
+WY - Wyoming Tribune Eagle,https://www.wyomingnews.com/search/?f=rss&t=article&l=50,wyomingnews.com,Regional,False
+WY - Casper Star-Tribune,https://trib.com/search/?f=rss&t=article&l=50,trib.com,Regional,False
+WY - Laramie Boomerang,https://www.laramieboomerang.com/search/?f=rss&t=article&l=50,laramieboomerang.com,Regional,False
+WY - Gillette News Record,https://www.gillettenewsrecord.com/search/?f=rss&t=article&l=50,gillettenewsrecord.com,Regional,False
+WY - WyoFile,https://wyofile.com/feed/,wyofile.com,Regional,False
+National - ProPublica,https://feeds.propublica.org/propublica/main,feeds.propublica.org,General,False
+National - The Intercept,https://theintercept.com/feed/?rss,theintercept.com,General,False
+National - Mother Jones,https://www.motherjones.com/feed/,motherjones.com,General,False
+National - The Atlantic,https://www.theatlantic.com/feed/all/,theatlantic.com,General,False
+National - Vox,https://www.vox.com/rss/index.xml,vox.com,General,False
+National - Slate,https://slate.com/feeds/all.rss,slate.com,General,False
+National - Quartz,https://qz.com/feed,qz.com,General,False
+National - BuzzFeed News,https://www.buzzfeednews.com/rss,buzzfeednews.com,General,False
+National - Salon,https://www.salon.com/feed,salon.com,General,False
+National - Truthdig,https://www.truthdig.com/feed/,truthdig.com,General,False
+National - The Nation,https://www.thenation.com/feed/?post-type=article,thenation.com,General,False
+National - New Republic,https://newrepublic.com/feed,newrepublic.com,General,False
+National - In These Times,https://inthesetimes.com/feed,inthesetimes.com,General,False
+National - Grist,https://grist.org/feed/,grist.org,General,False
+National - Governing,https://www.governing.com/rss/all/,governing.com,General,False
+National - Pew Stateline,https://stateline.org/feed/,stateline.org,General,False
+National - Pulitzer Center,https://pulitzercenter.org/feed,pulitzercenter.org,General,False
+National - OpenSecrets,https://www.opensecrets.org/news/feed,opensecrets.org,General,False
+National - The Markup,https://themarkup.org/feed/,themarkup.org,General,False
+National - Rest of World,https://restofworld.org/feed/,restofworld.org,General,False
+TV - WBAL Baltimore,https://www.wbaltv.com/news/rss,wbaltv.com,Broadcast/Radio,False
+TV - WBZ Boston,https://www.cbsnews.com/boston/latest/rss/,cbsnews.com,Broadcast/Radio,False
+TV - WGN Chicago,https://wgntv.com/feed/,wgntv.com,Broadcast/Radio,False
+TV - WEWS Cleveland,https://www.news5cleveland.com/rss,news5cleveland.com,Broadcast/Radio,False
+TV - WFAA Dallas,https://www.wfaa.com/feeds/syndication/rss/news,wfaa.com,Broadcast/Radio,False
+TV - KUSA Denver,https://www.9news.com/feeds/syndication/rss/news,9news.com,Broadcast/Radio,False
+TV - WXYZ Detroit,https://www.wxyz.com/rss,wxyz.com,Broadcast/Radio,False
+TV - KHOU Houston,https://www.khou.com/feeds/syndication/rss/news,khou.com,Broadcast/Radio,False
+TV - WTHR Indianapolis,https://www.wthr.com/rss,wthr.com,Broadcast/Radio,False
+TV - WDSU New Orleans,https://www.wdsu.com/rss,wdsu.com,Broadcast/Radio,False
+TV - WNBC New York,https://www.nbcnewyork.com/news/local/feed/,nbcnewyork.com,Broadcast/Radio,False
+TV - KPHO Phoenix,https://www.azfamily.com/rss,azfamily.com,Broadcast/Radio,False
+TV - WPXI Pittsburgh,https://www.wpxi.com/rss,wpxi.com,Broadcast/Radio,False
+TV - KOIN Portland,https://www.koin.com/feed/,koin.com,Broadcast/Radio,False
+TV - KCRA Sacramento,https://www.kcra.com/rss,kcra.com,Broadcast/Radio,False
+TV - KSAT San Antonio,https://www.ksat.com/rss,ksat.com,Broadcast/Radio,False
+TV - KGTV San Diego,https://www.10news.com/rss,10news.com,Broadcast/Radio,False
+TV - KGO San Francisco,https://abc7news.com/feed/,abc7news.com,Broadcast/Radio,False
+TV - KOMO Seattle,https://komonews.com/feed/,komonews.com,Broadcast/Radio,False
+TV - WTTG Washington DC,https://www.fox5dc.com/rss,fox5dc.com,Broadcast/Radio,False
+TV - WTMJ Milwaukee,https://www.tmj4.com/rss,tmj4.com,Broadcast/Radio,False
+TV - KARE Minneapolis,https://www.kare11.com/feeds/syndication/rss/news,kare11.com,Broadcast/Radio,False
+TV - WESH Orlando,https://www.wesh.com/rss,wesh.com,Broadcast/Radio,False
+TV - WFTS Tampa,https://www.abcactionnews.com/rss,abcactionnews.com,Broadcast/Radio,False
+TV - WPLG Miami,https://www.local10.com/rss,local10.com,Broadcast/Radio,False
+TV - WSB Atlanta,https://www.wsbtv.com/rss,wsbtv.com,Broadcast/Radio,False
+TV - WRAL Raleigh,https://www.wral.com/rss/,wral.com,Broadcast/Radio,False
+TV - WCNC Charlotte,https://www.wcnc.com/feeds/syndication/rss/news,wcnc.com,Broadcast/Radio,False
+TV - WAVY Norfolk,https://www.wavy.com/feed/,wavy.com,Broadcast/Radio,False
+TV - WLWT Cincinnati,https://www.wlwt.com/rss,wlwt.com,Broadcast/Radio,False
+Radio - WBEZ Chicago,https://www.wbez.org/feed/news,wbez.org,Broadcast/Radio,False
+Radio - WAMU Washington DC,https://wamu.org/feed/news,wamu.org,Broadcast/Radio,False
+Radio - KQED San Francisco,https://www.kqed.org/news/feed,kqed.org,Broadcast/Radio,False
+Radio - WNYC New York,https://www.wnyc.org/feed/,wnyc.org,Broadcast/Radio,False
+Radio - KPCC Los Angeles,https://www.kpcc.org/rss/news/latest,kpcc.org,Broadcast/Radio,False
+Radio - WBUR Boston,https://www.wbur.org/rss/,wbur.org,Broadcast/Radio,False
+Radio - WDET Detroit,https://wdet.org/feed/,wdet.org,Broadcast/Radio,False
+Radio - KPBS San Diego,https://www.kpbs.org/rss,kpbs.org,Broadcast/Radio,False
+Radio - WOSU Columbus,https://radio.wosu.org/term/news/feed,radio.wosu.org,Broadcast/Radio,False
+Radio - WUSF Tampa,https://wusfnews.wusf.usf.edu/feed,wusfnews.wusf.usf.edu,Broadcast/Radio,False
+Radio - WESA Pittsburgh,https://www.wesa.fm/feed,wesa.fm,Broadcast/Radio,False
+Radio - KJZZ Phoenix,https://kjzz.org/rss.xml,kjzz.org,Broadcast/Radio,False
+Radio - KUOW Seattle,https://www.kuow.org/rss,kuow.org,Broadcast/Radio,False
+Radio - WPLN Nashville,https://wpln.org/feed/,wpln.org,Broadcast/Radio,False
+Radio - WWNO New Orleans,https://www.wwno.org/rss,wwno.org,Broadcast/Radio,False
+Radio - KCUR Kansas City,https://www.kcur.org/feed,kcur.org,Broadcast/Radio,False
+Radio - KUER Salt Lake City,https://www.kuer.org/feed,kuer.org,Broadcast/Radio,False
+Radio - WFIT Melbourne FL,https://www.wfit.org/rss,wfit.org,Broadcast/Radio,False
+Radio - WFPL Louisville,https://wfpl.org/feed/,wfpl.org,Broadcast/Radio,False
+Radio - KBIA Columbia MO,https://www.kbia.org/feed,kbia.org,Broadcast/Radio,False
+AL - Opelika Auburn News,https://www.oanow.com/search/?f=rss&t=article&l=50,oanow.com,General,False
+AL - Selma Times-Journal,https://www.selmatimesjournal.com/feed/,selmatimesjournal.com,General,False
+AL - Talladega Daily Home,https://www.dailyhome.com/search/?f=rss&t=article&l=50,dailyhome.com,General,False
+AL - Troy Messenger,https://www.troymessenger.com/feed/,troymessenger.com,General,False
+AL - Alexander City Outlook,https://www.alexcityoutlook.com/feed/,alexcityoutlook.com,General,False
+AL - Brewton Standard,https://www.brewtonstandard.com/feed/,brewtonstandard.com,General,False
+AL - Cullman Times,https://www.cullmantimes.com/feed/,cullmantimes.com,General,False
+AL - AL.com Statewide,https://www.al.com/news/index.ssf/rss2.0.xml,al.com,General,False
+AK - Homer News,https://homernews.com/feed/,homernews.com,General,False
+AK - Kenai Peninsula Clarion,https://www.peninsulaclarion.com/feed/,peninsulaclarion.com,General,False
+AK - Ketchikan Daily News,https://www.ketchikandailynews.com/search/?f=rss,ketchikandailynews.com,General,False
+AK - Alaska Beacon,https://alaskabeacon.com/feed/,alaskabeacon.com,General,False
+AK - Alaska Public Media,https://alaskapublic.org/feed/,alaskapublic.org,General,False
+AZ - Tucson Sentinel,https://www.tucsonsentinel.com/feed/rss/,tucsonsentinel.com,General,False
+AZ - AZ Mirror,https://azmirror.com/feed/,azmirror.com,General,False
+AZ - Arizona Luminaria,https://arizluminaria.com/feed/,arizluminaria.com,General,False
+AZ - Nogales International,https://www.nogalesinternational.com/search/?f=rss,nogalesinternational.com,General,False
+AZ - Show Low Independent,https://www.showlowindependent.com/feed/,showlowindependent.com,General,False
+AZ - Wickenburg Sun,https://www.wickenburgsun.com/feed/,wickenburgsun.com,General,False
+AZ - Arizona Business Gazette,https://azbigmedia.com/feed/,azbigmedia.com,General,False
+AZ - Cronkite News,https://cronkitenews.azpbs.org/feed/,cronkitenews.azpbs.org,General,False
+AR - Hot Springs Sentinel-Record,https://www.hotsr.com/search/?f=rss&t=article&l=50,hotsr.com,General,False
+AR - Texarkana Gazette,https://www.texarkanagazette.com/news/arkansas/rss,texarkanagazette.com,General,False
+AR - Harrison Daily Times,https://www.harrisondaily.com/search/?f=rss,harrisondaily.com,General,False
+AR - Mountain Home Baxter Bulletin,https://www.baxterbulletin.com/rss/,baxterbulletin.com,General,False
+AR - Arkansas Advocate,https://www.arkansasadvocate.com/feed/,arkansasadvocate.com,General,False
+CA - East Bay Times,https://www.eastbaytimes.com/feed/,eastbaytimes.com,General,False
+CA - LA Downtown News,https://www.ladowntownnews.com/feed/,ladowntownnews.com,General,False
+CA - San Francisco Examiner,https://www.sfexaminer.com/feed/,sfexaminer.com,General,False
+CA - Napa Valley Register,https://napavalleyregister.com/search/?f=rss,napavalleyregister.com,General,False
+CA - Sonoma Press Democrat,https://www.pressdemocrat.com/feed/,pressdemocrat.com,General,False
+CA - Petaluma Argus-Courier,https://www.petaluma360.com/search/?f=rss,petaluma360.com,General,False
+CA - Vallejo Times-Herald,https://www.timesheraldonline.com/feed/,timesheraldonline.com,General,False
+CA - Fairfield Daily Republic,https://www.dailyrepublic.com/search/?f=rss,dailyrepublic.com,General,False
+CA - Vacaville Reporter,https://www.thereporter.com/feed/,thereporter.com,General,False
+CA - Davis Enterprise,https://www.davisenterprise.com/feed/,davisenterprise.com,General,False
+CA - Woodland Democrat,https://www.dailydemocrat.com/feed/,dailydemocrat.com,General,False
+CA - San Luis Obispo Tribune,https://www.sanluisobispo.com/news/local/rss,sanluisobispo.com,General,False
+CA - Merced Sun-Star,https://www.mercedsunstar.com/news/local/rss,mercedsunstar.com,General,False
+CA - Hanford Sentinel,https://www.hanfordsentinel.com/search/?f=rss,hanfordsentinel.com,General,False
+CA - Madera Tribune,https://www.maderatribune.com/search/?f=rss,maderatribune.com,General,False
+CA - Porterville Recorder,https://www.recorderonline.com/search/?f=rss,recorderonline.com,General,False
+CA - Lompoc Record,https://lompocrecord.com/search/?f=rss,lompocrecord.com,General,False
+CA - Santa Maria Times,https://santamariatimes.com/search/?f=rss,santamariatimes.com,General,False
+CA - Antelope Valley Press,https://www.avpress.com/search/?f=rss,avpress.com,General,False
+CA - Victorville Daily Press,https://www.vvdailypress.com/feed/,vvdailypress.com,General,False
+CA - Barstow Desert Dispatch,https://www.desertsun.com/rss/,desertsun.com,General,False
+CA - Cal Matters,https://calmatters.org/feed/,calmatters.org,General,False
+CA - LAist,https://laist.com/feed,laist.com,General,False
+CA - SF Weekly,https://www.sfweekly.com/feed/,sfweekly.com,General,False
+CA - LA Weekly,https://www.laweekly.com/feed/,laweekly.com,General,False
+CO - Colorado Sun,https://coloradosun.com/feed/,coloradosun.com,General,False
+CO - Colorado Politics,https://www.coloradopolitics.com/search/?f=rss,coloradopolitics.com,General,False
+CO - Loveland Reporter-Herald,https://www.reporterherald.com/feed/,reporterherald.com,General,False
+CO - Longmont Times-Call,https://www.timescall.com/feed/,timescall.com,General,False
+CO - Steamboat Pilot & Today,https://www.steamboatpilot.com/feed/,steamboatpilot.com,General,False
+CO - Telluride Daily Planet,https://www.telluridenews.com/feed/,telluridenews.com,General,False
+CO - Glenwood Post Independent,https://www.postindependent.com/feed/,postindependent.com,General,False
+CO - Colorado Springs Indy,https://www.csindy.com/feed/,csindy.com,General,False
+CO - Westword Denver,https://www.westword.com/feed/,westword.com,General,False
+CT - CT Mirror,https://ctmirror.org/feed/,ctmirror.org,General,False
+CT - CT Insider,https://www.ctinsider.com/search/?f=rss,ctinsider.com,General,False
+CT - New Haven Independent,https://www.newhavenindependent.org/atom.xml,newhavenindependent.org,General,False
+CT - Middletown Press,https://www.middletownpress.com/feed/,middletownpress.com,General,False
+CT - Register Citizen Torrington,https://www.registercitizen.com/feed/,registercitizen.com,General,False
+CT - Journal Inquirer Manchester,https://www.journalinquirer.com/search/?f=rss,journalinquirer.com,General,False
+FL - Tallahassee Reports,https://tallahasseereports.com/feed/,tallahasseereports.com,General,False
+FL - Bradenton Herald,https://www.bradenton.com/news/local/rss,bradenton.com,General,False
+FL - Punta Gorda Charlotte Sun,https://www.yoursun.com/search/?f=rss,yoursun.com,General,False
+FL - Sebring News-Sun,https://www.newssun.com/search/?f=rss,newssun.com,General,False
+FL - Leesburg Daily Commercial,https://www.dailycommercial.com/search/?f=rss,dailycommercial.com,General,False
+FL - Inverness Citrus County Chron,https://www.chronicleonline.com/search/?f=rss,chronicleonline.com,General,False
+FL - St. Augustine Record,https://www.staugustine.com/arcio/rss/,staugustine.com,General,False
+FL - Palatka Daily News,https://www.palatka-daily-news.com/search/?f=rss,palatka-daily-news.com,General,False
+FL - Homestead Miami Villager,https://www.miamitimesonline.com/feed/,miamitimesonline.com,General,False
+FL - Florida Trend,https://www.floridatrend.com/rss,floridatrend.com,General,False
+FL - Florida Politics,https://floridapolitics.com/feed/,floridapolitics.com,General,False
+FL - Florida Phoenix,https://www.floridaphoenix.com/feed/,floridaphoenix.com,General,False
+FL - FLHealthNews,https://health.wusf.usf.edu/feed,health.wusf.usf.edu,General,False
+GA - Valdosta Daily Times,https://www.valdostadailytimes.com/search/?f=rss,valdostadailytimes.com,General,False
+GA - Statesboro Herald,https://www.statesboroherald.com/feed/,statesboroherald.com,General,False
+GA - Gainesville Times,https://www.gainesvilletimes.com/search/?f=rss,gainesvilletimes.com,General,False
+GA - LaGrange Daily News,https://www.lagrangenews.com/feed/,lagrangenews.com,General,False
+GA - Albany Herald,https://www.albanyherald.com/search/?f=rss,albanyherald.com,General,False
+GA - Douglas Enterprise,https://www.douglasenterprise.net/feed/,douglasenterprise.net,General,False
+GA - Moultrie Observer,https://www.moultrieobserver.com/feed/,moultrieobserver.com,General,False
+GA - Georgia Recorder,https://georgiarecorder.com/feed/,georgiarecorder.com,General,False
+GA - Georgia Virtue,https://georgiavirtu.com/feed/,georgiavirtu.com,General,False
+ID - Pocatello Idaho State Journal,https://www.idahostatejournal.com/search/?f=rss,idahostatejournal.com,General,False
+ID - Sandpoint Reader,https://www.sandpointreader.com/feed/,sandpointreader.com,General,False
+ID - Idaho Capital Sun,https://idahocapitalsun.com/feed/,idahocapitalsun.com,General,False
+IL - Elgin Courier-News,https://www.chicagotribune.com/suburbs/elgin-courier-news/rss2.0.xml,chicagotribune.com,General,False
+IL - Joliet Herald-News,https://www.chicagotribune.com/suburbs/joliet-herald-news/rss2.0.xml,chicagotribune.com,General,False
+IL - Lake County News-Sun,https://www.chicagotribune.com/suburbs/lake-county-news-sun/rss2.0.xml,chicagotribune.com,General,False
+IL - Waukegan News-Sun,https://www.chicagotribune.com/suburbs/waukegan-lake-county-news-sun/rss2.0.xml,chicagotribune.com,General,False
+IL - Galesburg Register-Mail,https://www.galesburg.com/search/?f=rss,galesburg.com,General,False
+IL - Kankakee Daily Journal,https://www.daily-journal.com/search/?f=rss,daily-journal.com,General,False
+IL - Ottawa Times,https://www.mywebtimes.com/search/?f=rss,mywebtimes.com,General,False
+IL - Freeport Journal-Standard,https://www.journalstandard.com/search/?f=rss,journalstandard.com,General,False
+IL - Illinois Times,https://illinoistimes.com/feed/,illinoistimes.com,General,False
+IL - Illinois Newsroom,https://illinoisnewsroom.org/feed/,illinoisnewsroom.org,General,False
+IL - Capitol News Illinois,https://capitolnewsillinois.com/feed/,capitolnewsillinois.com,General,False
+IN - Kokomo Tribune,https://www.kokomotribune.com/search/?f=rss,kokomotribune.com,General,False
+IN - Richmond Palladium-Item,https://www.pal-item.com/rss/,pal-item.com,General,False
+IN - Anderson Herald Bulletin,https://www.heraldbulletin.com/search/?f=rss,heraldbulletin.com,General,False
+IN - Logansport Pharos-Tribune,https://www.pharostribune.com/search/?f=rss,pharostribune.com,General,False
+IN - Marion Chronicle-Tribune,https://www.chronicle-tribune.com/search/?f=rss,chronicle-tribune.com,General,False
+IN - Indiana Capital Chronicle,https://indianacapitalchronicle.com/feed/,indianacapitalchronicle.com,General,False
+IA - Mason City Globe Gazette,https://www.globegazette.com/search/?f=rss,globegazette.com,General,False
+IA - Ottumwa Courier,https://www.ottumwacourier.com/search/?f=rss,ottumwacourier.com,General,False
+IA - Marshalltown Times-Republican,https://www.timesrepublican.com/search/?f=rss,timesrepublican.com,General,False
+IA - Fort Dodge Messenger,https://www.messengernews.net/search/?f=rss,messengernews.net,General,False
+IA - Iowa Capital Dispatch,https://iowacapitaldispatch.com/feed/,iowacapitaldispatch.com,General,False
+IA - Iowa Public Radio,https://www.iowapublicradio.org/rss/,iowapublicradio.org,General,False
+KS - Garden City Telegram,https://www.gctelegram.com/search/?f=rss,gctelegram.com,General,False
+KS - Dodge City Daily Globe,https://www.dodgeglobeplus.com/search/?f=rss,dodgeglobeplus.com,General,False
+KS - Leavenworth Times,https://www.leavenworthtimes.com/search/?f=rss,leavenworthtimes.com,General,False
+KS - Ottawa Herald,https://www.ottawaherald.com/search/?f=rss,ottawaherald.com,General,False
+KS - Kansas Reflector,https://kansasreflector.com/feed/,kansasreflector.com,General,False
+KY - Elizabethtown News-Enterprise,https://www.thenewsenterprise.com/search/?f=rss,thenewsenterprise.com,General,False
+KY - Richmond Register,https://www.richmondregister.com/search/?f=rss,richmondregister.com,General,False
+KY - Danville Advocate-Messenger,https://www.amnews.com/search/?f=rss,amnews.com,General,False
+KY - Murray Ledger & Times,https://www.murrayledger.com/search/?f=rss,murrayledger.com,General,False
+KY - Kentucky Lantern,https://kentuckylantern.com/feed/,kentuckylantern.com,General,False
+KY - Kentucky Public Radio,https://www.wkyu.org/rss,wkyu.org,General,False
+LA - Baton Rouge Business Report,https://www.businessreport.com/feed/,businessreport.com,General,False
+LA - Acadiana Advocate,https://www.theadvocate.com/acadiana/rss,theadvocate.com,General,False
+LA - St. Tammany Farmer,https://www.sttammanyfarmer.net/search/?f=rss,sttammanyfarmer.net,General,False
+LA - Natchitoches Times,https://www.natchitochestimes.com/search/?f=rss,natchitochestimes.com,General,False
+LA - Louisiana Illuminator,https://lailluminator.com/feed/,lailluminator.com,General,False
+LA - Gambit New Orleans,https://www.nola.com/gambit/rss,nola.com,General,False
+ME - Portland Phoenix,https://www.portlandphoenix.me/feed/,portlandphoenix.me,General,False
+ME - Maine Beacon,https://mainebeacon.com/feed/,mainebeacon.com,General,False
+ME - Maine Morning Star,https://mainemorningstar.com/feed/,mainemorningstar.com,General,False
+ME - Ellsworth American,https://www.ellsworthamerican.com/feed/,ellsworthamerican.com,General,False
+ME - Mount Desert Islander,https://www.mdislander.com/feed/,mdislander.com,General,False
+MD - Maryland Matters,https://www.marylandmatters.org/feed/,marylandmatters.org,General,False
+MD - Bay Journal,https://www.bayjournal.com/feed/,bayjournal.com,General,False
+MD - Montgomery County Sentinel,https://www.thesentinel.com/feed/,thesentinel.com,General,False
+MD - Prince George Sentinel,https://pgsentinel.com/feed/,pgsentinel.com,General,False
+MD - Southern Maryland Online,https://somd.com/feed/,somd.com,General,False
+MA - Brockton Enterprise,https://www.enterprisenews.com/feed/,enterprisenews.com,General,False
+MA - Taunton Gazette,https://www.tauntongazette.com/feed/,tauntongazette.com,General,False
+MA - Fall River Herald News,https://www.heraldnews.com/feed/,heraldnews.com,General,False
+MA - Attleboro Sun Chronicle,https://www.thesunchronicle.com/search/?f=rss,thesunchronicle.com,General,False
+MA - Milford Daily News,https://www.milforddailynews.com/feed/,milforddailynews.com,General,False
+MA - MetroWest Daily News,https://www.metrowestdailynews.com/feed/,metrowestdailynews.com,General,False
+MA - North Adams Transcript,https://www.thetranscript.com/search/?f=rss,thetranscript.com,General,False
+MA - Fitchburg Sentinel & Enterprise,https://www.sentinelandenterprise.com/feed/,sentinelandenterprise.com,General,False
+MA - Haverhill Gazette,https://www.eagletribune.com/haverhill_gazette/rss,eagletribune.com,General,False
+MA - Eagle Tribune Lawrence,https://www.eagletribune.com/rss,eagletribune.com,General,False
+MA - Boston.com,https://www.boston.com/tag/news/feed/,boston.com,General,False
+MI - Traverse City Ticker,https://www.traverseticker.com/feed/,traverseticker.com,General,False
+MI - Holland Sentinel,https://www.hollandsentinel.com/search/?f=rss,hollandsentinel.com,General,False
+MI - Midland Daily News,https://www.ourmidland.com/search/?f=rss,ourmidland.com,General,False
+MI - Monroe News,https://www.monroenews.com/search/?f=rss,monroenews.com,General,False
+MI - Battle Creek Enquirer,https://www.battlecreekenquirer.com/rss/,battlecreekenquirer.com,General,False
+MI - Jackson Citizen Patriot,https://www.mlive.com/jackson/index.ssf/rss2.0.xml,mlive.com,General,False
+MI - Alpena News,https://www.thealpenanews.com/feed/,thealpenanews.com,General,False
+MI - Petoskey News-Review,https://www.petoskeynews.com/search/?f=rss,petoskeynews.com,General,False
+MI - Michigan Advance,https://michiganadvance.com/feed/,michiganadvance.com,General,False
+MN - Bemidji Pioneer,https://www.bemidjipioneer.com/search/?f=rss,bemidjipioneer.com,General,False
+MN - Duluth Reader,https://duluthreader.com/feed/,duluthreader.com,General,False
+MN - Worthington Daily Globe,https://www.dglobe.com/search/?f=rss,dglobe.com,General,False
+MN - Willmar West Central Tribune,https://www.wctrib.com/search/?f=rss,wctrib.com,General,False
+MN - Fergus Falls Daily Journal,https://www.fergusfallsjournal.com/search/?f=rss,fergusfallsjournal.com,General,False
+MN - Minnesota Reformer,https://minnesotareformer.com/feed/,minnesotareformer.com,General,False
+MN - Sahan Journal,https://sahanjournal.com/feed/,sahanjournal.com,General,False
+MS - Greenwood Commonwealth,https://www.gwcommonwealth.com/search/?f=rss,gwcommonwealth.com,General,False
+MS - Natchez Democrat,https://www.natchezdemocrat.com/feed/,natchezdemocrat.com,General,False
+MS - Laurel Leader-Call,https://www.laurelleadercall.com/search/?f=rss,laurelleadercall.com,General,False
+MS - Tupelo Daily Journal,https://www.djournal.com/search/?f=rss,djournal.com,General,False
+MS - Picayune Item,https://www.picayuneitem.com/search/?f=rss,picayuneitem.com,General,False
+MS - Mississippi Free Press,https://www.mississippifreepress.org/feed/,mississippifreepress.org,General,False
+MO - Rolla Daily News,https://www.therolladailynews.com/search/?f=rss,therolladailynews.com,General,False
+MO - Sikeston Standard Democrat,https://www.standard-democrat.com/search/?f=rss,standard-democrat.com,General,False
+MO - Cape Girardeau SE Missourian,https://www.semissourian.com/rss/,semissourian.com,General,False
+MO - Hannibal Courier-Post,https://www.hannibal.net/search/?f=rss,hannibal.net,General,False
+MO - Independence Examiner,https://www.examiner.net/search/?f=rss,examiner.net,General,False
+MO - Missouri Independent,https://missouriindependent.com/feed/,missouriindependent.com,General,False
+MO - Riverfront Times St Louis,https://www.riverfronttimes.com/feed/,riverfronttimes.com,General,False
+MT - Havre Daily News,https://www.havredailynews.com/search/?f=rss,havredailynews.com,General,False
+MT - Miles City Star,https://www.milescitystar.com/search/?f=rss,milescitystar.com,General,False
+MT - Montana Standard Butte,https://mtstandard.com/search/?f=rss,mtstandard.com,General,False
+MT - Livingston Enterprise,https://www.livingstonenterprise.com/search/?f=rss,livingstonenterprise.com,General,False
+MT - Montana Public Radio,https://www.mtpr.org/rss,mtpr.org,General,False
+NE - Columbus Telegram,https://www.columbustelegram.com/search/?f=rss,columbustelegram.com,General,False
+NE - Hastings Tribune,https://www.hastingstribune.com/search/?f=rss,hastingstribune.com,General,False
+NE - York News-Times,https://www.yorknewstimes.com/search/?f=rss,yorknewstimes.com,General,False
+NE - North Platte Telegraph,https://www.nptelegraph.com/search/?f=rss,nptelegraph.com,General,False
+NE - Nebraska Examiner,https://nebraskaexaminer.com/feed/,nebraskaexaminer.com,General,False
+NE - NET Nebraska,https://netnebraska.org/feed,netnebraska.org,General,False
+NV - Elko Daily Free Press,https://www.elkodaily.com/search/?f=rss,elkodaily.com,General,False
+NV - Reno News & Review,https://www.newsreview.com/reno/rss/,newsreview.com,General,False
+NV - Nevada Current,https://nevadacurrent.com/feed/,nevadacurrent.com,General,False
+NV - Nevada Appeal Carson City,https://www.nevadaappeal.com/search/?f=rss,nevadaappeal.com,General,False
+NH - Portsmouth Herald,https://www.seacoastonline.com/search/?f=rss,seacoastonline.com,General,False
+NH - Nashua Telegraph,https://www.nashuatelegraph.com/search/?f=rss,nashuatelegraph.com,General,False
+NH - NH Bulletin,https://newhampshirebulletin.com/feed/,newhampshirebulletin.com,General,False
+NH - InDepthNH,https://indepthnh.org/feed/,indepthnh.org,General,False
+NJ - Trentonian,https://www.trentonian.com/feed/,trentonian.com,General,False
+NJ - Atlantic City Press,https://www.pressofatlanticcity.com/search/?f=rss,pressofatlanticcity.com,General,False
+NJ - Vineland Daily Journal,https://www.thedailyjournal.com/rss/,thedailyjournal.com,General,False
+NJ - Morristown Daily Record,https://www.dailyrecord.com/rss/,dailyrecord.com,General,False
+NJ - New Jersey Monitor,https://newjerseymonitor.com/feed/,newjerseymonitor.com,General,False
+NM - Silver City Daily Press,https://www.scdailypress.com/feed/,scdailypress.com,General,False
+NM - Clovis Media,https://www.clovisnews.com/search/?f=rss,clovisnews.com,General,False
+NM - Taos News,https://www.taosnews.com/search/?f=rss,taosnews.com,General,False
+NM - Source New Mexico,https://sourcenm.com/feed/,sourcenm.com,General,False
+NY - Ithaca Journal,https://www.ithacajournal.com/rss/,ithacajournal.com,General,False
+NY - Elmira Star-Gazette,https://www.stargazette.com/rss/,stargazette.com,General,False
+NY - Plattsburgh Press-Republican,https://www.pressrepublican.com/search/?f=rss,pressrepublican.com,General,False
+NY - Glens Falls Post-Star,https://poststar.com/search/?f=rss,poststar.com,General,False
+NY - Watertown Daily Times,https://www.watertowndailytimes.com/search/?f=rss,watertowndailytimes.com,General,False
+NY - Kingston Daily Freeman,https://www.dailyfreeman.com/search/?f=rss,dailyfreeman.com,General,False
+NY - Middletown Times Herald-Record,https://www.recordonline.com/search/?f=rss,recordonline.com,General,False
+NY - New York Focus,https://www.nysfocus.com/feed/,nysfocus.com,General,False
+NY - City Limits,https://citylimits.org/feed/,citylimits.org,General,False
+NY - The Indypendent,https://indypendent.org/feed/,indypendent.org,General,False
+NY - Queens Daily Eagle,https://queenseagle.com/feed/,queenseagle.com,General,False
+NY - Brooklyn Eagle,https://brooklyneagle.com/feed/,brooklyneagle.com,General,False
+NY - Bronx Times,https://www.bxtimes.com/feed/,bxtimes.com,General,False
+NC - Hickory Daily Record,https://www.hickoryrecord.com/search/?f=rss,hickoryrecord.com,General,False
+NC - Morganton News Herald,https://www.morganton.com/search/?f=rss,morganton.com,General,False
+NC - Burlington Times-News,https://www.thetimesnews.com/search/?f=rss,thetimesnews.com,General,False
+NC - Sanford Herald,https://www.sanfordherald.com/search/?f=rss,sanfordherald.com,General,False
+NC - Wilson Times,https://www.wilsontimes.com/search/?f=rss,wilsontimes.com,General,False
+NC - Kinston Free Press,https://www.kinston.com/search/?f=rss,kinston.com,General,False
+NC - NC Health News,https://www.northcarolinahealthnews.org/feed/,northcarolinahealthnews.org,General,False
+NC - Cardinal & Pine,https://cardinalpine.com/feed/,cardinalpine.com,General,False
+ND - Wahpeton Daily News,https://www.wahpetondailynews.com/search/?f=rss,wahpetondailynews.com,General,False
+ND - Williston Daily Herald,https://www.willistonherald.com/search/?f=rss,willistonherald.com,General,False
+ND - ND Monitor,https://ndmonitor.com/feed/,ndmonitor.com,General,False
+ND - Prairie Public Radio,https://www.prairiepublic.org/rss,prairiepublic.org,General,False
+OH - Portsmouth Daily Times,https://www.portsmouth-dailytimes.com/search/?f=rss,portsmouth-dailytimes.com,General,False
+OH - Chillicothe Gazette,https://www.chillicothegazette.com/rss/,chillicothegazette.com,General,False
+OH - Zanesville Times Recorder,https://www.zanesvilletimesrecorder.com/rss/,zanesvilletimesrecorder.com,General,False
+OH - Lancaster Eagle-Gazette,https://www.lancastereaglegazette.com/rss/,lancastereaglegazette.com,General,False
+OH - Fremont News-Messenger,https://www.thenews-messenger.com/rss/,thenews-messenger.com,General,False
+OH - Sandusky Register,https://www.sanduskyregister.com/search/?f=rss,sanduskyregister.com,General,False
+OH - Lima News,https://www.limaohio.com/search/?f=rss,limaohio.com,General,False
+OH - Defiance Crescent-News,https://www.crescent-news.com/search/?f=rss,crescent-news.com,General,False
+OH - Marion Star,https://www.marionstar.com/rss/,marionstar.com,General,False
+OH - Signal Cleveland,https://signalcleveland.org/feed/,signalcleveland.org,General,False
+OK - Bartlesville Examiner-Enterprise,https://www.examiner-enterprise.com/search/?f=rss,examiner-enterprise.com,General,False
+OK - Ponca City News,https://www.poncacitynews.com/search/?f=rss,poncacitynews.com,General,False
+OK - Shawnee News-Star,https://www.news-star.com/search/?f=rss,news-star.com,General,False
+OK - Chickasha Express-Star,https://www.chickashanews.com/search/?f=rss,chickashanews.com,General,False
+OK - Oklahoma Voice,https://oklahomavoice.com/feed/,oklahomavoice.com,General,False
+OR - Ashland Tidings,https://www.dailytidings.com/search/?f=rss,dailytidings.com,General,False
+OR - Klamath Falls Herald News,https://www.heraldandnews.com/search/?f=rss,heraldandnews.com,General,False
+OR - Roseburg News-Review,https://www.nrtoday.com/search/?f=rss,nrtoday.com,General,False
+OR - The Lund Report,https://www.lundreport.org/feed/,lundreport.org,General,False
+OR - Oregon Capital Chronicle,https://oregoncapitalchronicle.com/feed/,oregoncapitalchronicle.com,General,False
+OR - Street Roots Portland,https://www.streetroots.org/feed/,streetroots.org,General,False
+PA - Altoona Mirror,https://www.altoonamirror.com/feed/,altoonamirror.com,General,False
+PA - Johnstown Tribune-Democrat,https://www.tribdem.com/search/?f=rss,tribdem.com,General,False
+PA - Greensburg Tribune-Review,https://triblive.com/local/westmoreland/feed/,triblive.com,General,False
+PA - Beaver County Times,https://www.timesonline.com/search/?f=rss,timesonline.com,General,False
+PA - Butler Eagle,https://www.butlereagle.com/search/?f=rss,butlereagle.com,General,False
+PA - New Castle News,https://www.ncnewsonline.com/search/?f=rss,ncnewsonline.com,General,False
+PA - Lebanon Daily News,https://www.ldnews.com/rss/,ldnews.com,General,False
+PA - York Daily Record,https://www.ydr.com/rss/,ydr.com,General,False
+PA - Chambersburg Public Opinion,https://www.publicopiniononline.com/rss/,publicopiniononline.com,General,False
+PA - Centre Daily Times,https://www.centredaily.com/news/local/rss,centredaily.com,General,False
+PA - Broad + Liberty,https://broadandliberty.com/feed/,broadandliberty.com,General,False
+RI - East Bay Media,https://www.eastbayri.com/feed/,eastbayri.com,General,False
+RI - Cranston Herald,https://www.cranstononline.com/feed/,cranstononline.com,General,False
+SC - Aiken Standard,https://www.aikenstandard.com/search/?f=rss,aikenstandard.com,General,False
+SC - Florence Morning News,https://www.scnow.com/search/?f=rss,scnow.com,General,False
+SC - Orangeburg Times & Democrat,https://thetandd.com/search/?f=rss,thetandd.com,General,False
+SC - Beaufort Gazette,https://www.islandpacket.com/news/local/rss,islandpacket.com,General,False
+SC - SC Daily Gazette,https://scdailygazette.com/feed/,scdailygazette.com,General,False
+SD - Brookings Register,https://www.brookingsregister.com/search/?f=rss,brookingsregister.com,General,False
+SD - Huron Plainsman,https://www.plainsman.com/search/?f=rss,plainsman.com,General,False
+SD - Mitchell Daily Republic,https://www.mitchellrepublic.com/search/?f=rss,mitchellrepublic.com,General,False
+TN - Murfreesboro Daily News Journal,https://www.dnj.com/rss/,dnj.com,General,False
+TN - Cookeville Herald-Citizen,https://www.herald-citizen.com/search/?f=rss,herald-citizen.com,General,False
+TN - Columbia Daily Herald,https://www.columbiadailyherald.com/search/?f=rss,columbiadailyherald.com,General,False
+TN - Kingsport Times-News,https://www.timesnews.net/search/?f=rss,timesnews.net,General,False
+TN - Bristol Herald Courier,https://heraldcourier.com/search/?f=rss,heraldcourier.com,General,False
+TN - Nashville Scene,https://www.nashvillescene.com/feed/,nashvillescene.com,General,False
+TX - Paris News,https://www.theparisNews.com/search/?f=rss,theparisnews.com,General,False
+TX - Marshall News Messenger,https://www.marshallnewsmessenger.com/search/?f=rss,marshallnewsmessenger.com,General,False
+TX - Lufkin Daily News,https://lufkindailynews.com/search/?f=rss,lufkindailynews.com,General,False
+TX - Texarkana Gazette,https://www.texarkanagazette.com/news/texas/rss,texarkanagazette.com,General,False
+TX - Bryan-College Station Eagle,https://www.theeagle.com/search/?f=rss,theeagle.com,General,False
+TX - Killeen Daily Herald,https://kdhnews.com/search/?f=rss,kdhnews.com,General,False
+TX - Temple Daily Telegram,https://www.tdtnews.com/search/?f=rss,tdtnews.com,General,False
+TX - Victoria Advocate,https://www.victoriaadvocate.com/search/?f=rss,victoriaadvocate.com,General,False
+TX - San Angelo Standard-Times,https://www.gosanangelo.com/rss/,gosanangelo.com,General,False
+TX - Big Spring Herald,https://www.bigspringherald.com/search/?f=rss,bigspringherald.com,General,False
+TX - Plainview Daily Herald,https://www.myplainview.com/search/?f=rss,myplainview.com,General,False
+TX - Denton Record-Chronicle,https://www.dentonrc.com/search/?f=rss,dentonrc.com,General,False
+TX - Garland News,https://www.garlandnews.com/search/?f=rss,garlandnews.com,General,False
+TX - McKinney Courier-Gazette,https://www.courier-gazette.com/search/?f=rss,courier-gazette.com,General,False
+TX - Texas Observer,https://www.texasobserver.org/feed/,texasobserver.org,General,False
+TX - Texas Monthly,https://www.texasmonthly.com/feed/,texasmonthly.com,General,False
+TX - The Texas Signal,https://texassignal.com/feed/,texassignal.com,General,False
+UT - Summit Daily Newpark City,https://www.summitdaily.com/feed/,summitdaily.com,General,False
+UT - Moab Times-Independent,https://www.moabtimes.com/feed/,moabtimes.com,General,False
+UT - Utah Policy,https://utahpolicy.com/feed/,utahpolicy.com,General,False
+UT - Utah News Dispatch,https://utahnewsdispatch.com/feed/,utahnewsdispatch.com,General,False
+VT - St. Albans Messenger,https://www.samessenger.com/search/?f=rss,samessenger.com,General,False
+VT - Addison County Independent,https://www.addisonindependent.com/search/?f=rss,addisonindependent.com,General,False
+VT - Seven Days VT,https://www.sevendaysvt.com/feed/,sevendaysvt.com,General,False
+VA - Martinsville Bulletin,https://www.martinsvillebulletin.com/search/?f=rss,martinsvillebulletin.com,General,False
+VA - Danville Register & Bee,https://www.registerbee.com/search/?f=rss,registerbee.com,General,False
+VA - Waynesboro News Virginian,https://www.newsvirginian.com/search/?f=rss,newsvirginian.com,General,False
+VA - Harrisonburg DNR,https://www.dnronline.com/search/?f=rss,dnronline.com,General,False
+VA - Virginia Public Media,https://www.wvtf.org/rss,wvtf.org,General,False
+VA - Cardinal News,https://cardinalnews.org/feed/,cardinalnews.org,General,False
+WA - Walla Walla Union-Bulletin,https://www.union-bulletin.com/search/?f=rss,union-bulletin.com,General,False
+WA - Bellingham Business Journal,https://www.bbjtoday.com/feed/,bbjtoday.com,General,False
+WA - Tacoma Weekly,https://tacomaweekly.com/feed/,tacomaweekly.com,General,False
+WA - Spokane Journal of Business,https://www.spokanejournal.com/feed/,spokanejournal.com,General,False
+WA - Washington State Standard,https://washingtonstatestandard.com/feed/,washingtonstatestandard.com,General,False
+WA - InvestigateWest,https://www.invw.org/feed/,invw.org,General,False
+WV - Bluefield Daily Telegraph,https://www.bdtonline.com/search/?f=rss,bdtonline.com,General,False
+WV - Clarksburg Exponent Telegram,https://www.exponenttelegram.com/search/?f=rss,exponenttelegram.com,General,False
+WV - Beckley Register-Herald,https://www.register-herald.com/search/?f=rss,register-herald.com,General,False
+WV - WV Public Broadcasting,https://wvpublic.org/feed,wvpublic.org,General,False
+WV - WV Watch,https://wvwatch.com/feed/,wvwatch.com,General,False
+WI - Eau Claire Leader-Telegram,https://www.leadertelegram.com/search/?f=rss,leadertelegram.com,General,False
+WI - Superior Telegram,https://www.superiortelegram.com/search/?f=rss,superiortelegram.com,General,False
+WI - Rhinelander Daily News,https://www.rhinelanderdailynews.com/search/?f=rss,rhinelanderdailynews.com,General,False
+WI - Marshfield News-Herald,https://www.marshfieldnewsherald.com/rss/,marshfieldnewsherald.com,General,False
+WI - Two Rivers Herald Times Reporter,https://www.htrnews.com/rss/,htrnews.com,General,False
+WI - Janesville Gazette,https://www.gazettextra.com/search/?f=rss,gazettextra.com,General,False
+WI - Beloit Daily News,https://www.beloitdailynews.com/search/?f=rss,beloitdailynews.com,General,False
+WI - Kenosha News,https://www.kenoshanews.com/search/?f=rss,kenoshanews.com,General,False
+WI - Wisconsin Examiner,https://wisconsinexaminer.com/feed/,wisconsinexaminer.com,General,False
+WI - Milwaukee Independent,https://milwaukeeindependent.com/feed/,milwaukeeindependent.com,General,False
+WY - Sheridan Press,https://www.thesheridanpress.com/search/?f=rss,thesheridanpress.com,General,False
+WY - Riverton Ranger,https://www.riverton-ranger.com/search/?f=rss,riverton-ranger.com,General,False
+WY - Powell Tribune,https://www.powelltribune.com/search/?f=rss,powelltribune.com,General,False
+WY - Douglas Budget,https://www.douglas-budget.com/search/?f=rss,douglas-budget.com,General,False
+WY - Wyoming Public Media,https://wyomingpublicmedia.org/feed,wyomingpublicmedia.org,General,False
+Spanish - La Opinion LA,https://laopinion.com/feed/,laopinion.com,General,False
+Spanish - El Nuevo Herald Miami,https://www.elnuevoherald.com/latest-news/rss,elnuevoherald.com,General,False
+Spanish - Al Dia Dallas,https://aldiatx.com/feed/,aldiatx.com,General,False
+Spanish - Rumbo de Valle TX,https://www.rumbonews.com/feed/,rumbonews.com,General,False
+Spanish - El Vocero Puerto Rico,https://www.elvocero.com/feed/,elvocero.com,General,False
+Spanish - Hoy Chicago,https://www.chicagotribune.com/hoy/rss2.0.xml,chicagotribune.com,General,False
+Spanish - Impacto Latin News,https://impactolatin.news/feed/,impactolatin.news,General,False
+Spanish - Univision News,https://www.univision.com/noticias/rss,univision.com,General,False
+Spanish - Telemundo News,https://www.telemundo.com/noticias/rss,telemundo.com,General,False
+Spanish - Voz de America Spanish,https://www.voanews.com/api/zmpqemprmo,voanews.com,General,False
+Spanish - NBC Latino,https://www.nbcnews.com/id/46380265/device/rss/rss.xml,nbcnews.com,General,False
+Spanish - Latin Times,https://www.latintimes.com/rss,latintimes.com,General,False
+Spanish - Latina Magazine,https://www.latina.com/feed/,latina.com,General,False
+Ethnic - Black Press USA,https://www.blackpressusa.com/feed/,blackpressusa.com,General,False
+Ethnic - Afro American,https://afro.com/feed/,afro.com,General,False
+Ethnic - New Pittsburgh Courier,https://newpittsburghcourier.com/feed/,newpittsburghcourier.com,General,False
+Ethnic - Los Angeles Sentinel,https://lasentinel.net/feed/,lasentinel.net,General,False
+Ethnic - Chicago Defender,https://chicagodefender.com/feed/,chicagodefender.com,General,False
+Ethnic - Atlanta Voice,https://theatlantavoice.com/feed/,theatlantavoice.com,General,False
+Ethnic - Amsterdam News NY,https://amsterdamnews.com/feed/,amsterdamnews.com,General,False
+Ethnic - Dallas Examiner,https://dallasexaminer.com/feed/,dallasexaminer.com,General,False
+Ethnic - Houston Forward Times,https://forwardtimes.com/feed/,forwardtimes.com,General,False
+Ethnic - Charlotte Post,https://thecharlottepost.com/feed/,thecharlottepost.com,General,False
+Ethnic - Carolina Peacemaker,https://www.carolinapeacemaker.com/feed/,carolinapeacemaker.com,General,False
+Ethnic - Arab American News,https://www.arabamericannews.com/feed/,arabamericannews.com,General,False
+Ethnic - Asian American Press,https://www.asianamericanpress.com/feed/,asianamericanpress.com,General,False
+Ethnic - India Abroad,https://www.indiaabroad-digital.com/feed/,indiaabroad-digital.com,General,False
+Ethnic - Korea Daily USA,https://www.koreadaily.com/rss/,koreadaily.com,General,False
+Ethnic - World Journal Chinese,https://www.worldjournal.com/feed/,worldjournal.com,General,False
+Wire - AP Technology,https://feeds.apnews.com/rss/Technology,feeds.apnews.com,General,False
+Wire - AP Business,https://feeds.apnews.com/rss/Business,feeds.apnews.com,General,False
+Wire - AP Politics,https://feeds.apnews.com/rss/Politics,feeds.apnews.com,General,False
+Wire - AP Washington,https://feeds.apnews.com/rss/Washington,feeds.apnews.com,General,False
+Wire - Reuters Top News,https://feeds.reuters.com/reuters/topNews,feeds.reuters.com,General,True
+Wire - Reuters US,https://feeds.reuters.com/reuters/domesticNews,feeds.reuters.com,General,True
+Wire - UPI Technology,https://www.upi.com/rss/Technology/,upi.com,General,False
+Wire - UPI Top News,https://www.upi.com/rss/Top_News/,upi.com,General,False
+Wire - McClatchy DC,https://www.mcclatchydc.com/rss,mcclatchydc.com,General,False
+Wire - States Newsroom,https://statesnewsroom.com/feed/,statesnewsroom.com,General,False
+Wire - Lee Enterprises,https://leeenterprise.com/feed/,leeenterprise.com,General,False
+Wire - Gannett Tracker,https://www.usatoday.com/rss/,usatoday.com,General,False
+Cable - C-SPAN,https://www.c-span.org/feed/?type=video,c-span.org,General,False
+Cable - PBS NewsHour,https://www.pbs.org/newshour/feeds/rss/headlines,pbs.org,General,False
+Cable - MSNBC,https://www.msnbc.com/feeds/latest,msnbc.com,General,False
+Fox News,https://moxie.foxnews.com/google-publisher/latest.xml,moxie.foxnews.com,General,False
+Fox News Latest,https://feeds.foxnews.com/foxnews/latest,feeds.foxnews.com,General,False
+Fox News National,https://moxie.foxnews.com/google-publisher/national.xml,moxie.foxnews.com,General,False
+Cable - Fox News Politics,https://moxie.foxnews.com/google-publisher/politics.xml,moxie.foxnews.com,General,False
+Cable - Fox News Tech,https://moxie.foxnews.com/google-publisher/tech.xml,moxie.foxnews.com,General,False
+Cable - CNN Politics,https://rss.cnn.com/rss/cnn_allpolitics.rss,rss.cnn.com,General,False
+Cable - ABC News Politics,https://abcnews.go.com/abcnews/politicsheadlines,abcnews.go.com,General,False
+Cable - CBS News Politics,https://www.cbsnews.com/latest/rss/politics,cbsnews.com,General,False
+Cable - NBC News Politics,https://feeds.nbcnews.com/nbcnews/public/politics,feeds.nbcnews.com,General,False
+Cable - Newsmax,https://www.newsmax.com/rss/Newsfront/1,newsmax.com,General,False
+Cable - OAN,https://www.oann.com/feed/,oann.com,General,False
+Cable - Sinclair Broadcast Group,https://sbgi.net/feed/,sbgi.net,General,False
+Cable - Nexstar Media,https://www.nexstar.tv/feed/,nexstar.tv,General,False
+Trade - Ad Age,https://adage.com/rss,adage.com,General,False
+Trade - Adweek,https://www.adweek.com/feed/,adweek.com,General,False
+Trade - Sound & Vision,https://www.soundandvision.com/rss.xml,soundandvision.com,General,False
+Trade - Deadline Hollywood,https://deadline.com/feed/,deadline.com,General,False
+Trade - Media Play News,https://www.mediaplaynews.com/feed/,mediaplaynews.com,General,False
+Trade - Lost Remote,https://lostremote.com/feed/,lostremote.com,General,False
+Trade - TVSpy,https://www.adweek.com/tvspy/feed/,adweek.com,General,False
+Trade - Nieman Reports,https://niemanreports.org/feed/,niemanreports.org,General,False
+Trade - American Journalism Rev,https://ajr.org/feed/,ajr.org,General,False
+Trade - Editor & Publisher,https://www.editorandpublisher.com/feed/,editorandpublisher.com,General,False
+Trade - Press Gazette UK,https://pressgazette.co.uk/feed/,pressgazette.co.uk,General,False
+Trade - Digiday,https://digiday.com/feed/,digiday.com,General,False
+Trade - Puck News,https://puck.news/feed/,puck.news,General,False
+Watch - Alabama Political Reporter,https://www.alreporter.com/feed/,alreporter.com,General,False
+Watch - Alaska Public Interest Res,https://www.alaskareport.com/feed/,alaskareport.com,General,False
+Watch - AZ Center for Investigative,https://azcir.org/feed/,azcir.org,General,False
+Watch - Arkansas Investigative News,https://arkinvestigative.org/feed/,arkinvestigative.org,General,False
+Watch - California Healthline,https://californiahealthline.org/feed/,californiahealthline.org,General,False
+Watch - Colorado Independent,https://www.coloradoindependent.com/feed/,coloradoindependent.com,General,False
+Watch - CT Health Investigative,https://c-hit.org/feed/,c-hit.org,General,False
+Watch - DC Line,https://thedcline.org/feed/,thedcline.org,General,False
+Watch - Delaware Public Media,https://www.delawarepublic.org/rss,delawarepublic.org,General,False
+Watch - Florida Center Investigative,https://fcir.org/feed/,fcir.org,General,False
+Watch - Georgia Health News,https://georgiahealthnews.com/feed/,georgiahealthnews.com,General,False
+Watch - Hawaii News Now,https://www.hawaiinewsnow.com/rss,hawaiinewsnow.com,General,False
+Watch - Boise State Public Radio,https://www.boisestatepublicradio.org/rss,boisestatepublicradio.org,General,False
+Watch - IL Answers Project,https://illinoisanswers.org/feed/,illinoisanswers.org,General,False
+Watch - IndyStar Watchdog,https://www.indystar.com/news/watchdog/rss,indystar.com,General,False
+Watch - Kansas News Service,https://www.kansasnewsservice.org/feed,kansasnewsservice.org,General,False
+Watch - KY Health News,https://kyhealthnews.org/feed/,kyhealthnews.org,General,False
+TV - KXAN Austin,https://www.kxan.com/feed/,kxan.com,General,False
+TV - KVUE Austin,https://www.kvue.com/feeds/syndication/rss/news,kvue.com,General,False
+TV - KPRC Houston,https://www.click2houston.com/rss,click2houston.com,General,False
+TV - KTVT Dallas,https://www.cbsdfw.com/rss,cbsdfw.com,General,False
+TV - KXAS Dallas,https://www.nbcdfw.com/feed/,nbcdfw.com,General,False
+TV - KRIV Houston,https://www.fox26houston.com/feed/,fox26houston.com,General,False
+TV - WFLD Chicago,https://www.fox32chicago.com/feed/,fox32chicago.com,General,False
+TV - WLS Chicago,https://abc7chicago.com/feed/,abc7chicago.com,General,False
+TV - WMAQ Chicago,https://www.nbcchicago.com/feed/,nbcchicago.com,General,False
+TV - WBBM Chicago,https://www.cbschicago.com/rss/,cbschicago.com,General,False
+TV - WXIA Atlanta,https://www.11alive.com/feeds/syndication/rss/news,11alive.com,General,False
+TV - WGCL Atlanta,https://www.cbs46.com/rss,cbs46.com,General,False
+TV - WPTV West Palm Beach,https://www.wptv.com/rss,wptv.com,General,False
+TV - WTSP Tampa,https://www.wtsp.com/feeds/syndication/rss/news,wtsp.com,General,False
+TV - WKMG Orlando,https://www.clickorlando.com/rss,clickorlando.com,General,False
+TV - WFTV Orlando,https://www.wftv.com/rss,wftv.com,General,False
+TV - WSVN Miami,https://wsvn.com/feed/,wsvn.com,General,False
+TV - WFOR Miami,https://www.cbsmiami.com/rss/,cbsmiami.com,General,False
+TV - WDIV Detroit,https://www.clickondetroit.com/rss,clickondetroit.com,General,False
+TV - WWJ Detroit,https://www.cbsdetroit.com/rss/,cbsdetroit.com,General,False
+TV - KING Seattle,https://www.king5.com/feeds/syndication/rss/news,king5.com,General,False
+TV - KIRO Seattle,https://www.kirotv.com/feed/,kirotv.com,General,False
+TV - KGW Portland,https://www.kgw.com/feeds/syndication/rss/news,kgw.com,General,False
+TV - KATU Portland,https://katu.com/feed/,katu.com,General,False
+TV - KTVU San Francisco,https://www.ktvu.com/feed/,ktvu.com,General,False
+TV - KPIX San Francisco,https://www.cbsnews.com/sanfrancisco/latest/rss/,cbsnews.com,General,False
+TV - KNBC Los Angeles,https://www.nbclosangeles.com/feed/,nbclosangeles.com,General,False
+TV - KABC Los Angeles,https://abc7.com/feed/,abc7.com,General,False
+TV - KCAL Los Angeles,https://www.cbsnews.com/losangeles/latest/rss/,cbsnews.com,General,False
+TV - KFMB San Diego,https://www.cbs8.com/rss,cbs8.com,General,False
+TV - KNSD San Diego,https://www.nbcsandiego.com/feed/,nbcsandiego.com,General,False
+TV - WOAI San Antonio,https://news4sanantonio.com/feed/,news4sanantonio.com,General,False
+TV - KENS San Antonio,https://www.kens5.com/feeds/syndication/rss/news,kens5.com,General,False
+TV - KOAT Albuquerque,https://www.koat.com/rss,koat.com,General,False
+TV - KRQE Albuquerque,https://www.krqe.com/feed/,krqe.com,General,False
+TV - KSL Salt Lake City,https://ksltv.com/feed/,ksltv.com,General,False
+TV - KUTV Salt Lake City,https://kutv.com/feed/,kutv.com,General,False
+TV - KTVB Boise,https://www.ktvb.com/feeds/syndication/rss/news,ktvb.com,General,False
+TV - KREM Spokane,https://www.krem.com/feeds/syndication/rss/news,krem.com,General,False
+TV - KXLY Spokane,https://www.kxly.com/feed/,kxly.com,General,False
+TV - WWL New Orleans,https://www.wwltv.com/feeds/syndication/rss/news,wwltv.com,General,False
+TV - WVUE New Orleans,https://www.fox8live.com/feed/,fox8live.com,General,False
+TV - WAVE Louisville,https://www.wave3.com/feeds/syndication/rss/news,wave3.com,General,False
+TV - WLKY Louisville,https://www.wlky.com/rss,wlky.com,General,False
+TV - WDRB Louisville,https://www.wdrb.com/rss/,wdrb.com,General,False
+TV - LEX18 Lexington,https://www.lex18.com/feed/,lex18.com,General,False
+TV - WKYT Lexington,https://www.wkyt.com/rss,wkyt.com,General,False
+TV - WSMV Nashville,https://www.wsmv.com/rss,wsmv.com,General,False
+TV - WTVF Nashville,https://www.newschannel5.com/feed/,newschannel5.com,General,False
+TV - WKRN Nashville,https://www.wkrn.com/feed/,wkrn.com,General,False
+TV - WREG Memphis,https://wreg.com/feed/,wreg.com,General,False
+TV - WMC Memphis,https://www.wmcactionnews5.com/rss,wmcactionnews5.com,General,False
+TV - WHBQ Memphis,https://www.fox13memphis.com/feed/,fox13memphis.com,General,False
+TV - WATE Knoxville,https://www.wate.com/feed/,wate.com,General,False
+TV - WVLT Knoxville,https://www.wvlt.tv/feed/,wvlt.tv,General,False
+TV - WRCB Chattanooga,https://www.wrcbtv.com/feed/,wrcbtv.com,General,False
+TV - WTVC Chattanooga,https://newschannel9.com/feed/,newschannel9.com,General,False
+TV - WHNT Huntsville,https://whnt.com/feed/,whnt.com,General,False
+TV - WAFF Huntsville,https://www.waff.com/rss,waff.com,General,False
+TV - WIAT Birmingham,https://www.wiat.com/feed/,wiat.com,General,False
+TV - WBRC Birmingham,https://www.wbrc.com/rss,wbrc.com,General,False
+TV - WSFA Montgomery,https://www.wsfa.com/rss,wsfa.com,General,False
+TV - WKRG Mobile,https://www.wkrg.com/feed/,wkrg.com,General,False
+TV - WALA Mobile,https://www.fox10tv.com/feed/,fox10tv.com,General,False
+TV - WEAR Pensacola,https://weartv.com/feed/,weartv.com,General,False
+TV - WJXT Jacksonville,https://www.news4jax.com/rss,news4jax.com,General,False
+TV - WTLV Jacksonville,https://www.firstcoastnews.com/feeds/syndication/rss/news,firstcoastnews.com,General,False
+TV - WINK Fort Myers,https://winknews.com/feed/,winknews.com,General,False
+TV - WCTV Tallahassee,https://www.wctv.tv/feed/,wctv.tv,General,False
+TV - WSOC Charlotte,https://www.wsoctv.com/rss,wsoctv.com,General,False
+TV - WBTV Charlotte,https://www.wbtv.com/rss,wbtv.com,General,False
+TV - WXII Greensboro,https://www.wxii12.com/rss,wxii12.com,General,False
+TV - WGHP Greensboro,https://myfox8.com/feed/,myfox8.com,General,False
+TV - WTVD Raleigh,https://abc11.com/feed/,abc11.com,General,False
+TV - WNCN Raleigh,https://www.cbs17.com/feed/,cbs17.com,General,False
+TV - WECT Wilmington NC,https://www.wect.com/rss,wect.com,General,False
+TV - WYFF Greenville SC,https://www.wyff4.com/rss,wyff4.com,General,False
+TV - WSPA Greenville SC,https://www.wspa.com/feed/,wspa.com,General,False
+TV - WIS Columbia SC,https://www.wistv.com/rss,wistv.com,General,False
+TV - WLTX Columbia SC,https://www.wltx.com/feeds/syndication/rss/news,wltx.com,General,False
+TV - WCSC Charleston SC,https://www.live5news.com/rss,live5news.com,General,False
+TV - WCBD Charleston SC,https://www.counton2.com/feed/,counton2.com,General,False
+TV - WSAV Savannah,https://www.wsav.com/feed/,wsav.com,General,False
+TV - WTOC Savannah,https://www.wtoc.com/rss,wtoc.com,General,False
+TV - WALB Albany GA,https://www.walb.com/rss,walb.com,General,False
+TV - WMAZ Macon,https://www.13wmaz.com/feeds/syndication/rss/news,13wmaz.com,General,False
+TV - WTVM Columbus GA,https://www.wtvm.com/rss,wtvm.com,General,False
+TV - WMBF Myrtle Beach,https://www.wmbfnews.com/rss,wmbfnews.com,General,False
+TV - WPDE Myrtle Beach,https://wpde.com/feed/,wpde.com,General,False
+TV - WVEC Norfolk,https://www.13newsnow.com/feeds/syndication/rss/news,13newsnow.com,General,False
+TV - WTKR Norfolk,https://www.wtkr.com/feed/,wtkr.com,General,False
+TV - WRIC Richmond,https://www.wric.com/feed/,wric.com,General,False
+TV - WTVR Richmond,https://www.wtvr.com/feed/,wtvr.com,General,False
+TV - WSET Lynchburg,https://wset.com/feed/,wset.com,General,False
+TV - WSLS Roanoke,https://www.wsls.com/feed/,wsls.com,General,False
+TV - WDBJ Roanoke,https://www.wdbj7.com/feed/,wdbj7.com,General,False
+TV - WHSV Harrisonburg,https://www.whsv.com/rss,whsv.com,General,False
+TV - WUSA Washington DC,https://www.wusa9.com/feeds/syndication/rss/news,wusa9.com,General,False
+TV - WRC Washington DC,https://www.nbcwashington.com/feed/,nbcwashington.com,General,False
+TV - WJLA Washington DC,https://wjla.com/feed/,wjla.com,General,False
+TV - WMAR Baltimore,https://www.abc2news.com/feed/,abc2news.com,General,False
+TV - WJZ Baltimore,https://www.cbsnews.com/baltimore/latest/rss/,cbsnews.com,General,False
+TV - WBFF Baltimore,https://foxbaltimore.com/feed/,foxbaltimore.com,General,False
+TV - WGAL Lancaster PA,https://www.wgal.com/rss,wgal.com,General,False
+TV - WNEP Scranton,https://www.wnep.com/feeds/syndication/rss/news,wnep.com,General,False
+TV - WJET Erie PA,https://www.yourerie.com/feed/,yourerie.com,General,False
+TV - WTAJ Altoona,https://www.wearecentralpa.com/feed/,wearecentralpa.com,General,False
+TV - WHTM Harrisburg,https://www.abc27.com/feed/,abc27.com,General,False
+TV - WHP Harrisburg,https://local21news.com/feed/,local21news.com,General,False
+TV - WCAU Philadelphia,https://www.nbcphiladelphia.com/feed/,nbcphiladelphia.com,General,False
+TV - WPVI Philadelphia,https://6abc.com/feed/,6abc.com,General,False
+TV - KYW Philadelphia,https://www.cbsnews.com/philadelphia/latest/rss/,cbsnews.com,General,False
+TV - WTXF Philadelphia,https://www.fox29.com/feed/,fox29.com,General,False
+TV - WTAE Pittsburgh,https://www.wtae.com/rss,wtae.com,General,False
+TV - KDKA Pittsburgh,https://www.cbsnews.com/pittsburgh/latest/rss/,cbsnews.com,General,False
+TV - WENY Elmira,https://www.weny.com/feed/,weny.com,General,False
+TV - WSTM Syracuse,https://www.cnycentral.com/feed/,cnycentral.com,General,False
+TV - WROC Rochester,https://www.rochesterfirst.com/feed/,rochesterfirst.com,General,False
+TV - WHAM Rochester,https://13wham.com/feed/,13wham.com,General,False
+TV - WGRZ Buffalo,https://www.wgrz.com/feeds/syndication/rss/news,wgrz.com,General,False
+TV - WKBW Buffalo,https://www.wkbw.com/feed/,wkbw.com,General,False
+TV - WIVB Buffalo,https://www.wivb.com/feed/,wivb.com,General,False
+TV - WPTZ Burlington VT,https://www.wptz.com/rss,wptz.com,General,False
+TV - WCAX Burlington VT,https://www.wcax.com/rss,wcax.com,General,False
+TV - WMUR Manchester NH,https://www.wmur.com/rss,wmur.com,General,False
+TV - WGME Portland ME,https://wgme.com/feed/,wgme.com,General,False
+TV - WCSH Portland ME,https://www.newscentermaine.com/feeds/syndication/rss/news,newscentermaine.com,General,False
+TV - WABI Bangor ME,https://www.wabi.tv/feed/,wabi.tv,General,False
+TV - WHDH Boston,https://www.whdh.com/feed/,whdh.com,General,False
+TV - WCVB Boston,https://www.wcvb.com/rss,wcvb.com,General,False
+TV - WJAR Providence,https://turnto10.com/feed/,turnto10.com,General,False
+TV - WPRI Providence,https://www.wpri.com/feed/,wpri.com,General,False
+TV - WFSB Hartford,https://www.wfsb.com/rss,wfsb.com,General,False
+TV - WVIT Hartford,https://www.nbcconnecticut.com/feed/,nbcconnecticut.com,General,False
+TV - WTNH New Haven,https://www.wtnh.com/feed/,wtnh.com,General,False
+TV - WTIC Hartford,https://www.fox61.com/feed/,fox61.com,General,False
+TV - WBOC Salisbury MD,https://www.wboc.com/rss,wboc.com,General,False
+TV - WKOW Madison WI,https://www.wkow.com/feed/,wkow.com,General,False
+TV - WSAW Wausau,https://www.wsaw.com/feed/,wsaw.com,General,False
+TV - WBAY Green Bay,https://www.wbay.com/feed/,wbay.com,General,False
+TV - WFRV Green Bay,https://www.wearegreenbay.com/feed/,wearegreenbay.com,General,False
+TV - WISN Milwaukee,https://www.wisn.com/rss,wisn.com,General,False
+TV - WITI Milwaukee,https://fox6now.com/feed/,fox6now.com,General,False
+TV - WDIO Duluth,https://www.wdio.com/feed/,wdio.com,General,False
+TV - KSTP Minneapolis,https://kstp.com/feed/,kstp.com,General,False
+TV - WCCO Minneapolis,https://www.cbsnews.com/minnesota/latest/rss/,cbsnews.com,General,False
+TV - KMSP Minneapolis,https://www.fox9.com/feed/,fox9.com,General,False
+TV - KGAN Cedar Rapids,https://www.cbs2iowa.com/feed/,cbs2iowa.com,General,False
+TV - KCRG Cedar Rapids,https://www.kcrg.com/rss,kcrg.com,General,False
+TV - WHO Des Moines,https://who13.com/feed/,who13.com,General,False
+TV - KCCI Des Moines,https://www.kcci.com/rss,kcci.com,General,False
+TV - KTIV Sioux City,https://www.ktiv.com/feed/,ktiv.com,General,False
+TV - KMTV Omaha,https://www.3newsnow.com/feed/,3newsnow.com,General,False
+TV - KETV Omaha,https://www.ketv.com/rss,ketv.com,General,False
+TV - WOWT Omaha,https://www.wowt.com/feed/,wowt.com,General,False
+TV - KOLN Lincoln,https://www.1011now.com/feed/,1011now.com,General,False
+TV - KSNW Wichita,https://www.ksn.com/feed/,ksn.com,General,False
+TV - KWCH Wichita,https://www.kwch.com/feed/,kwch.com,General,False
+TV - KFOR Oklahoma City,https://kfor.com/feed/,kfor.com,General,False
+TV - KOCO Oklahoma City,https://www.koco.com/rss,koco.com,General,False
+TV - KOKH Oklahoma City,https://www.fox25.com/feed/,fox25.com,General,False
+TV - KJRH Tulsa,https://www.kjrh.com/feed/,kjrh.com,General,False
+TV - KTUL Tulsa,https://ktul.com/feed/,ktul.com,General,False
+TV - KCTV Kansas City,https://www.kctv5.com/rss,kctv5.com,General,False
+TV - KMBC Kansas City,https://www.kmbc.com/rss,kmbc.com,General,False
+TV - KSHB Kansas City,https://www.kshb.com/feed/,kshb.com,General,False
+TV - KSDK St Louis,https://www.ksdk.com/feeds/syndication/rss/news,ksdk.com,General,False
+TV - KMOV St Louis,https://www.kmov.com/rss,kmov.com,General,False
+TV - KTVI St Louis,https://fox2now.com/feed/,fox2now.com,General,False
+TV - KARK Little Rock,https://www.kark.com/feed/,kark.com,General,False
+TV - KATV Little Rock,https://katv.com/feed/,katv.com,General,False
+TV - KSLA Shreveport,https://www.ksla.com/rss,ksla.com,General,False
+TV - KLFY Lafayette LA,https://www.klfy.com/feed/,klfy.com,General,False
+TV - WAFB Baton Rouge,https://www.wafb.com/rss,wafb.com,General,False
+TV - KLTV Tyler TX,https://www.kltv.com/rss,kltv.com,General,False
+TV - KTRK Houston,https://abc13.com/feed/,abc13.com,General,False
+TV - KABB San Antonio,https://www.foxsanantonio.com/feed/,foxsanantonio.com,General,False
+TV - KIII Corpus Christi,https://www.kiiitv.com/feed/,kiiitv.com,General,False
+TV - KDBC El Paso,https://www.kdbc.com/feed/,kdbc.com,General,False
+TV - KFOX El Paso,https://kfoxtv.com/feed/,kfoxtv.com,General,False
+TV - KVIA El Paso,https://www.kvia.com/feed/,kvia.com,General,False
+TV - KWES Midland TX,https://www.newswest9.com/feed/,newswest9.com,General,False
+TV - KAMC Lubbock,https://www.everythinglubbock.com/feed/,everythinglubbock.com,General,False
+TV - KCBD Lubbock,https://www.kcbd.com/rss,kcbd.com,General,False
+TV - KAMR Amarillo,https://www.myhighplains.com/feed/,myhighplains.com,General,False
+TV - KXXV Waco,https://www.kxxv.com/feed/,kxxv.com,General,False
+TV - KWTX Waco,https://www.kwtx.com/rss,kwtx.com,General,False
+TV - KDFW Dallas,https://www.fox4news.com/feed/,fox4news.com,General,False
+TV - KERA Dallas,https://www.keranews.org/rss,keranews.org,General,False
+TV - KOVR Sacramento,https://www.cbsnews.com/sacramento/latest/rss/,cbsnews.com,General,False
+TV - KXTV Sacramento,https://www.abc10.com/feeds/syndication/rss/news,abc10.com,General,False
+TV - KFSN Fresno,https://abc30.com/feed/,abc30.com,General,False
+TV - KSEE Fresno,https://www.yourcentralvalley.com/feed/,yourcentralvalley.com,General,False
+TV - KGET Bakersfield,https://www.kget.com/feed/,kget.com,General,False
+TV - KEYT Santa Barbara,https://www.keyt.com/feed/,keyt.com,General,False
+TV - KSBY San Luis Obispo,https://www.ksby.com/feed/,ksby.com,General,False
+TV - KNTV San Jose,https://www.nbcbayarea.com/feed/,nbcbayarea.com,General,False
+TV - KDVR Denver,https://kdvr.com/feed/,kdvr.com,General,False
+TV - KCNC Denver,https://www.cbsnews.com/colorado/latest/rss/,cbsnews.com,General,False
+TV - KOAA Colorado Springs,https://www.koaa.com/rss,koaa.com,General,False
+TV - KKTV Colorado Springs,https://www.kktv.com/feed/,kktv.com,General,False
+TV - KRDO Colorado Springs,https://krdo.com/feed/,krdo.com,General,False
+TV - KCWY Casper WY,https://www.kcwy13.com/feed/,kcwy13.com,General,False
+TV - KGWN Cheyenne WY,https://www.kgwn.tv/feed/,kgwn.tv,General,False
+TV - KULR Billings MT,https://www.kulr8.com/feed/,kulr8.com,General,False
+TV - KTVQ Billings MT,https://www.ktvq.com/feed/,ktvq.com,General,False
+TV - KPAX Missoula MT,https://www.kpax.com/feed/,kpax.com,General,False
+TV - KECI Missoula MT,https://nbcmontana.com/feed/,nbcmontana.com,General,False
+TV - KBZK Bozeman MT,https://www.kbzk.com/feed/,kbzk.com,General,False
+TV - KOLO Reno,https://www.kolotv.com/rss,kolotv.com,General,False
+TV - KRNV Reno,https://www.mynews4.com/feed/,mynews4.com,General,False
+TV - KVVU Las Vegas,https://www.fox5vegas.com/feed/,fox5vegas.com,General,False
+TV - KSNV Las Vegas,https://news3lv.com/feed/,news3lv.com,General,False
+TV - KLAS Las Vegas,https://www.8newsnow.com/feed/,8newsnow.com,General,False
+TV - KITV Honolulu,https://www.kitv.com/rss,kitv.com,General,False
+TV - KHON Honolulu,https://www.khon2.com/feed/,khon2.com,General,False
+TV - KTUU Anchorage,https://www.ktuu.com/rss,ktuu.com,General,False
+TV - KATH Anchorage,https://www.alaskasnewssource.com/feed/,alaskasnewssource.com,General,False
+TV - KVLY Fargo,https://www.valleynewslive.com/feed/,valleynewslive.com,General,False
+TV - KFYR Bismarck,https://www.kfyrtv.com/feed/,kfyrtv.com,General,False
+TV - KXMB Bismarck,https://www.kxnet.com/feed/,kxnet.com,General,False
+TV - KOTA Rapid City SD,https://www.kotatv.com/feed/,kotatv.com,General,False
+TV - KDLT Sioux Falls SD,https://www.kdlt.com/feed/,kdlt.com,General,False
+TV - WLNS Lansing MI,https://www.wlns.com/feed/,wlns.com,General,False
+TV - WOOD Grand Rapids,https://www.woodtv.com/feed/,woodtv.com,General,False
+TV - WZZM Grand Rapids,https://www.wzzm13.com/feeds/syndication/rss/news,wzzm13.com,General,False
+TV - WTOL Toledo,https://www.wtol.com/feeds/syndication/rss/news,wtol.com,General,False
+TV - WTVG Toledo,https://13abc.com/feed/,13abc.com,General,False
+TV - WKYC Cleveland,https://www.wkyc.com/feeds/syndication/rss/news,wkyc.com,General,False
+TV - WJW Cleveland,https://fox8.com/feed/,fox8.com,General,False
+TV - WKBN Youngstown,https://www.wkbn.com/feed/,wkbn.com,General,False
+TV - WFMJ Youngstown,https://www.wfmj.com/feed/,wfmj.com,General,False
+TV - WSYX Columbus,https://www.abc6onyourside.com/feed/,abc6onyourside.com,General,False
+TV - WCMH Columbus,https://www.nbc4i.com/feed/,nbc4i.com,General,False
+TV - WBNS Columbus,https://www.10tv.com/feeds/syndication/rss/news,10tv.com,General,False
+TV - WXIX Cincinnati,https://www.fox19.com/feed/,fox19.com,General,False
+TV - WCPO Cincinnati,https://www.wcpo.com/rss,wcpo.com,General,False
+TV - WKRC Cincinnati,https://local12.com/feed/,local12.com,General,False
+TV - WRTV Indianapolis,https://www.theindychannel.com/rss,theindychannel.com,General,False
+TV - WISH Indianapolis,https://www.wishtv.com/feed/,wishtv.com,General,False
+TV - WXIN Indianapolis,https://fox59.com/feed/,fox59.com,General,False
+TV - WNDU South Bend,https://www.wndu.com/rss,wndu.com,General,False
+TV - WSBT South Bend,https://www.wsbt.com/feed/,wsbt.com,General,False
+TV - WANE Fort Wayne,https://www.wane.com/feed/,wane.com,General,False
+TV - WEHT Evansville,https://www.tristatehomepage.com/feed/,tristatehomepage.com,General,False
+Radio - WHYY Philadelphia,https://whyy.org/feed/,whyy.org,General,False
+Radio - WGBH Boston,https://www.wgbh.org/news/rss,wgbh.org,General,False
+Radio - WVXU Cincinnati,https://www.wvxu.org/rss,wvxu.org,General,False
+Radio - WCPN Cleveland,https://www.ideastream.org/rss,ideastream.org,General,False
+Radio - WMFE Orlando,https://www.wmfe.org/feed/,wmfe.org,General,False
+Radio - WLRN Miami,https://www.wlrn.org/rss,wlrn.org,General,False
+Radio - WJCT Jacksonville,https://www.wjct.org/feed/,wjct.org,General,False
+Radio - WFSU Tallahassee,https://news.wfsu.org/rss,news.wfsu.org,General,False
+Radio - WGCU Fort Myers,https://news.wgcu.org/rss,news.wgcu.org,General,False
+Radio - WBFO Buffalo,https://www.wbfo.org/feed/,wbfo.org,General,False
+Radio - WMHT Albany,https://www.wmht.org/feed/,wmht.org,General,False
+Radio - WRVO Syracuse,https://www.wrvo.org/rss,wrvo.org,General,False
+Radio - WXXI Rochester,https://www.wxxi.org/rss,wxxi.org,General,False
+Radio - WAMC Albany,https://www.wamc.org/rss,wamc.org,General,False
+Radio - WUNC Chapel Hill,https://www.wunc.org/rss,wunc.org,General,False
+Radio - WFAE Charlotte,https://www.wfae.org/rss,wfae.org,General,False
+Radio - WFDD Winston-Salem,https://www.wfdd.org/rss,wfdd.org,General,False
+Radio - KPLU Tacoma,https://www.knkx.org/rss,knkx.org,General,False
+Radio - KOSU Oklahoma City,https://www.kosu.org/rss,kosu.org,General,False
+Radio - KWGS Tulsa,https://www.publicradiotulsa.org/rss,publicradiotulsa.org,General,False
+Radio - KUT Austin,https://www.kut.org/rss,kut.org,General,False
+Radio - Houston Public Media,https://www.houstonpublicmedia.org/feed/,houstonpublicmedia.org,General,False
+Radio - KSTX San Antonio,https://tpr.org/feed/,tpr.org,General,False
+Radio - KNAU Flagstaff,https://www.knau.org/rss,knau.org,General,False
+Radio - KCRW Santa Monica,https://www.kcrw.com/rss,kcrw.com,General,False
+Radio - KVPR Fresno,https://www.kvpr.org/rss,kvpr.org,General,False
+Radio - Capital Public Radio,https://www.capradio.org/rss,capradio.org,General,False
+Radio - Colorado Public Radio,https://www.cpr.org/feed/,cpr.org,General,False
+Radio - KUNC Greeley CO,https://www.kunc.org/rss,kunc.org,General,False
+Radio - KRCC Colorado Springs,https://www.krcc.org/rss,krcc.org,General,False
+Radio - Nevada Public Radio,https://www.nevadapublicradio.org/rss,nevadapublicradio.org,General,False
+Radio - Michigan Radio,https://www.michiganradio.org/rss,michiganradio.org,General,False
+Radio - WEMU Ypsilanti MI,https://www.wemu.org/rss,wemu.org,General,False
+Radio - WMUK Kalamazoo,https://www.wmuk.org/rss,wmuk.org,General,False
+Radio - WGVU Grand Rapids,https://www.wgvu.org/rss,wgvu.org,General,False
+Radio - WGTE Toledo,https://www.wgte.org/rss,wgte.org,General,False
+Radio - WYSU Youngstown,https://www.wysu.org/rss,wysu.org,General,False
+Radio - WKNO Memphis,https://www.wkno.org/rss,wkno.org,General,False
+Radio - WUOT Knoxville,https://wuot.org/rss,wuot.org,General,False
+Radio - WUTC Chattanooga,https://www.wutc.org/rss,wutc.org,General,False
+Radio - Wisconsin Public Radio,https://www.wpr.org/feed/,wpr.org,General,False
+Radio - Minnesota Public Radio,https://www.mprnews.org/rss,mprnews.org,General,False
+Radio - St Louis Public Radio,https://news.stlpublicradio.org/rss,news.stlpublicradio.org,General,False
+Radio - KCPT Kansas City,https://kcpt.org/feed/,kcpt.org,General,False
+Radio - KMUW Wichita,https://www.kmuw.org/rss,kmuw.org,General,False
+Radio - KVNO Omaha,https://www.kvno.org/rss,kvno.org,General,False
+Radio - GPB Georgia,https://www.gpb.org/news/rss,gpb.org,General,False
+Radio - WABE Atlanta,https://www.wabe.org/rss,wabe.org,General,False
+Radio - South Carolina Public,https://www.southcarolinapublicradio.org/rss,southcarolinapublicradio.org,General,False
+Radio - WNCW Spindale NC,https://www.wncw.org/rss,wncw.org,General,False
+Radio - VPR Vermont,https://www.vpr.org/rss,vpr.org,General,False
+Radio - NHPR Concord,https://www.nhpr.org/rss,nhpr.org,General,False
+Radio - Maine Public,https://www.mainepublic.org/rss,mainepublic.org,General,False
+Radio - Connecticut Public,https://www.ctpublic.org/rss,ctpublic.org,General,False
+Radio - WYPR Baltimore,https://www.wypr.org/rss,wypr.org,General,False
+Radio - WITF Harrisburg,https://www.witf.org/rss,witf.org,General,False
+Radio - WVIA Scranton,https://www.wvia.org/rss,wvia.org,General,False
+Radio - WQED Pittsburgh,https://www.wqed.org/rss,wqed.org,General,False
+Radio - Hawaii Public Radio,https://www.hawaiipublicradio.org/rss,hawaiipublicradio.org,General,False
+Radio - South Dakota Public,https://www.sdpb.org/rss,sdpb.org,General,False
+National - The Dispatch,https://thedispatch.com/feed/,thedispatch.com,General,False
+National - The Bulwark,https://www.thebulwark.com/feed/,thebulwark.com,General,False
+National - National Review,https://www.nationalreview.com/feed/,nationalreview.com,General,False
+National - Washington Examiner,https://www.washingtonexaminer.com/rss,washingtonexaminer.com,General,False
+National - Daily Caller,https://dailycaller.com/feed/,dailycaller.com,General,False
+National - The Free Press,https://www.thefp.com/feed,thefp.com,General,False
+National - Semafor,https://www.semafor.com/feed,semafor.com,General,False
+National - Grid News,https://www.grid.news/feed/,grid.news,General,False
+National - The 19th News,https://19thnews.org/feed/,19thnews.org,General,False
+National - Capital B News,https://capitalbnews.org/feed/,capitalbnews.org,General,False
+National - Word in Black,https://wordinblack.com/feed/,wordinblack.com,General,False
+National - The Appeal,https://theappeal.org/feed/,theappeal.org,General,False
+National - Courthouse News,https://www.courthousenews.com/feed/,courthousenews.com,General,False
+National - Rand Corporation,https://www.rand.org/rss/rss_all.xml,rand.org,General,False
+National - Urban Institute,https://www.urban.org/rss,urban.org,General,False
+National - Next Century Cities,https://nextcenturycities.org/feed/,nextcenturycities.org,General,False
+National - Open Tech Institute,https://feed.newamerica.org/oti,feed.newamerica.org,General,False
+Biz - Memphis Business Jrnl,https://www.bizjournals.com/memphis/feed/latest/,bizjournals.com,General,False
+Biz - Raleigh Business Jrnl,https://www.bizjournals.com/triangle/feed/latest/,bizjournals.com,General,False
+Biz - Triad Business Jrnl,https://www.bizjournals.com/triad/feed/latest/,bizjournals.com,General,False
+Biz - Birmingham Business Jrnl,https://www.bizjournals.com/birmingham/feed/latest/,bizjournals.com,General,False
+Biz - Louisville Business Jrnl,https://www.bizjournals.com/louisville/feed/latest/,bizjournals.com,General,False
+Biz - Albany Business Review,https://www.bizjournals.com/albany/feed/latest/,bizjournals.com,General,False
+Biz - Buffalo Business Jrnl,https://www.bizjournals.com/buffalo/feed/latest/,bizjournals.com,General,False
+Biz - Hartford Business Jrnl,https://www.bizjournals.com/hartford/feed/latest/,bizjournals.com,General,False
+Biz - Providence Business News,https://www.bizjournals.com/providence/feed/latest/,bizjournals.com,General,False
+Biz - Albuquerque Business Jrnl,https://www.bizjournals.com/albuquerque/feed/latest/,bizjournals.com,General,False
+Biz - Phoenix Business Jrnl,https://www.bizjournals.com/phoenix/feed/latest/,bizjournals.com,General,False
+Biz - Sacramento Business Jrnl,https://www.bizjournals.com/sacramento/feed/latest/,bizjournals.com,General,False
+Biz - SF Bay Area Biz Times,https://www.bizjournals.com/sanfrancisco/feed/latest/,bizjournals.com,General,False
+Biz - Silicon Valley Biz Jrnl,https://www.bizjournals.com/sanjose/feed/latest/,bizjournals.com,General,False
+Biz - Los Angeles Biz Jrnl,https://www.bizjournals.com/losangeles/feed/latest/,bizjournals.com,General,False
+Biz - San Diego Biz Jrnl,https://www.bizjournals.com/sandiego/feed/latest/,bizjournals.com,General,False
+Biz - Wichita Biz Jrnl,https://www.bizjournals.com/wichita/feed/latest/,bizjournals.com,General,False
+Biz - Oklahoma City Biz Jrnl,https://www.bizjournals.com/oklahomacity/feed/latest/,bizjournals.com,General,False
+Biz - Tulsa Biz Jrnl,https://www.bizjournals.com/tulsa/feed/latest/,bizjournals.com,General,False
+Biz - Omaha Biz Jrnl,https://www.bizjournals.com/omaha/feed/latest/,bizjournals.com,General,False
+Biz - Des Moines Biz Jrnl,https://www.bizjournals.com/desmoines/feed/latest/,bizjournals.com,General,False
+Biz - Dayton Biz Jrnl,https://www.bizjournals.com/dayton/feed/latest/,bizjournals.com,General,False
+Biz - Honolulu Biz Jrnl,https://www.bizjournals.com/pacific/feed/latest/,bizjournals.com,General,False
+Biz - Boise Biz Jrnl,https://www.bizjournals.com/boise/feed/latest/,bizjournals.com,General,False
+Biz - Spokane Biz Jrnl,https://www.bizjournals.com/spokane/feed/latest/,bizjournals.com,General,False
+Google News - FCC General,https://news.google.com/rss/search?q=FCC+federal+communications+commission&hl=en-US&gl=US&ceid=US:en,news.google.com,General,True
+Space Policy Institute,https://spacepolicy.gwu.edu/feed/,spacepolicy.gwu.edu,General,False
+Payload Space,https://payloadspace.com/feed/,payloadspace.com,General,False
+Space Intel Report,https://www.spaceintelreport.com/feed/,spaceintelreport.com,General,False
+NASASpaceFlight,https://www.nasaspaceflight.com/feed/,nasaspaceflight.com,General,False
+Ars Technica Space,https://arstechnica.com/space/feed/,arstechnica.com,General,False
+The Verge Space,https://www.theverge.com/rss/space/index.xml,theverge.com,General,True
+SpaceflightNow,https://spaceflightnow.com/feed/,spaceflightnow.com,General,False
+SpaceRef,https://spaceref.com/feed/,spaceref.com,General,False
+Teslarati Space,https://www.teslarati.com/feed/,teslarati.com,General,False
+SatelliteObservation,https://www.satobs.org/rss.xml,satobs.org,General,False
+Defense News Space,https://www.defensenews.com/rss/space/,defensenews.com,General,False
+C4ISRNET Space,https://www.c4isrnet.com/rss/space/,c4isrnet.com,General,False
+CISA Alerts,https://www.cisa.gov/uscert/ncas/alerts.xml,cisa.gov,Cybersecurity,False
+CISA News,https://www.cisa.gov/news.xml,cisa.gov,Cybersecurity,False
+SecurityWeek,https://feeds.feedburner.com/securityweek,feeds.feedburner.com,Cybersecurity,False
+APCO International,https://www.apcointl.org/feed/,apcointl.org,Cybersecurity,False
+NENA 911,https://www.nena.org/feed/,nena.org,Cybersecurity,False
+Police1 911 Tech,https://www.police1.com/rss/topics/911-technology/,police1.com,Cybersecurity,False
+Urgent Communications,https://urgentcomm.com/feed/,urgentcomm.com,Cybersecurity,False
+Broadcast Law Blog,https://www.broadcastlawblog.com/feed/,broadcastlawblog.com,Cybersecurity,False
+CommLaw Blog,https://www.commlawblog.com/feed/,commlawblog.com,Cybersecurity,True
+FierceVideo,https://www.fiercevideo.com/rss/xml,fiercevideo.com,Cybersecurity,False
+Communications Daily,https://www.communicationsdaily.com/rss,communicationsdaily.com,Cybersecurity,False
+Inside Radio,https://www.insideradio.com/feed/,insideradio.com,Cybersecurity,False
+Law360 Telecom,https://www.law360.com/telecom/rss,law360.com,Cybersecurity,False
+Skadden Telecom Blog,https://www.skadden.com/insights/rss,skadden.com,Cybersecurity,False
+Wiley Telecom,https://www.wileyrein.com/rss/,wileyrein.com,Cybersecurity,False
+Covington Telecom,https://www.cov.com/en/rss,cov.com,Cybersecurity,False
+FTI Consulting Telecom,https://www.fticonsulting.com/insights/rss,fticonsulting.com,Cybersecurity,False
+FTC News,https://www.ftc.gov/rss.xml,ftc.gov,Cybersecurity,True
+DOJ Antitrust,https://www.justice.gov/rss/atr.xml,justice.gov,Cybersecurity,False
+New America OTI,https://www.newamerica.org/feed/,newamerica.org,Cybersecurity,False
+Georgetown Law Tech,https://www.georgetownlawtechreview.org/feed/,georgetownlawtechreview.org,Cybersecurity,False
+TheGrio Media,https://thegrio.com/feed/,thegrio.com,Cybersecurity,False
+Mediaite,https://www.mediaite.com/feed/,mediaite.com,Cybersecurity,True
+The Daily Beast Media,https://feeds.thedailybeast.com/rss/articles/media,feeds.thedailybeast.com,Cybersecurity,False
+NY Post Media,https://nypost.com/media/feed/,nypost.com,Cybersecurity,False
+Washington Examiner Media,https://www.washingtonexaminer.com/tag/media/rss,washingtonexaminer.com,Cybersecurity,False
+Wall Street Journal - Tech,https://wsj.com/xml/rss/3_7455.xml,wsj.com,General,False
+Wall Street Journal - US News,https://wsj.com/xml/rss/3_7085.xml,wsj.com,General,False
+Wall Street Journal - Markets,https://feeds.a.dj.com/rss/RSSMarketsMain.xml,feeds.a.dj.com,General,True
+Wall Street Journal - Politics,https://wsj.com/xml/rss/3_7036.xml,wsj.com,General,False
+BuzzFeed News,https://www.buzzfeed.com/index.xml,buzzfeed.com,General,False
+BuzzFeed Tech,https://www.buzzfeed.com/tech.xml,buzzfeed.com,General,False
+Motherboard Vice Tech,https://www.vice.com/en/rss,vice.com,General,False
+Consumer Reports,https://www.consumerreports.org/media-room/feed/,consumerreports.org,General,False
+CFPB News,https://www.consumerfinance.gov/about-us/newsroom/feed/,consumerfinance.gov,General,False
+CFPB Blog,https://www.consumerfinance.gov/about-us/blog/feed/,consumerfinance.gov,General,False
+FEMA News,https://www.fema.gov/rss/news-releases.rss,fema.gov,General,False
+FEMA Alerts,https://www.fema.gov/rss/alerts.rss,fema.gov,General,False
+NWS News,https://www.weather.gov/rss/news.php,weather.gov,General,False
+NOAA News,https://www.noaa.gov/news-features/rss,noaa.gov,General,False

@@ -1,0 +1,108 @@
+source_name,rss_url,domain,category,tier,tier_label,authority,reachability,already_in_docuaction
+TR Daily,https://trdaily.com/feed/,trdaily.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,active,False
+Broadband World News,https://www.broadbandworldnews.com/rss.xml,broadbandworldnews.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,active,False
+TIA Online,https://tiaonline.org/feed/,tiaonline.org,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,active,False
+All Access,https://www.allaccess.com/merge/archive/rss.xml,allaccess.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
+Federal News Network,https://federalnewsnetwork.com/feed/,federalnewsnetwork.com,Government,1,Tier 1 FCC/Government,95,active,False
+GovTech,https://www.govtech.com/rss,govtech.com,Government,1,Tier 1 FCC/Government,95,active,False
+SCOTUSblog,https://www.scotusblog.com/feed/,scotusblog.com,Government,1,Tier 1 FCC/Government,95,active,False
+Yale JREG,https://www.yalejreg.com/feed/,yalejreg.com,Government,1,Tier 1 FCC/Government,95,active,False
+AEI,https://www.aei.org/feed/,aei.org,Government,1,Tier 1 FCC/Government,95,active,False
+CSIS,https://www.csis.org/rss.xml,csis.org,Government,1,Tier 1 FCC/Government,95,active,False
+Nextgov,https://www.nextgov.com/rss/all/,nextgov.com,Government,1,Tier 1 FCC/Government,95,active,False
+TechDirt,https://www.techdirt.com/feed/,techdirt.com,Technology,4,Tier 4 Technology Publications,76,active,False
+Gizmodo,https://gizmodo.com/feed/,gizmodo.com,Technology,4,Tier 4 Technology Publications,76,active,False
+ZDNet,https://www.zdnet.com/news/rss.xml,zdnet.com,Technology,4,Tier 4 Technology Publications,76,active,False
+VentureBeat,https://venturebeat.com/feed/,venturebeat.com,Technology,4,Tier 4 Technology Publications,76,active,False
+Digital Trends,https://www.digitaltrends.com/feed/,digitaltrends.com,Technology,4,Tier 4 Technology Publications,76,active,False
+Slashdot,https://rss.slashdot.org/Slashdot/slashdotMain,rss.slashdot.org,Technology,4,Tier 4 Technology Publications,76,active,False
+Mashable,https://mashable.com/feeds/rss/all,mashable.com,Technology,4,Tier 4 Technology Publications,76,active,False
+eWeek,https://www.eweek.com/rss.xml,eweek.com,Technology,4,Tier 4 Technology Publications,76,active,False
+Bloomberg Technology,https://feeds.bloomberg.com/technology/news.rss,feeds.bloomberg.com,Major News/Wire,2,Tier 2 National Media,92,active,False
+Bloomberg Politics,https://feeds.bloomberg.com/politics/news.rss,feeds.bloomberg.com,Major News/Wire,2,Tier 2 National Media,92,active,False
+CBS News Tech,https://www.cbsnews.com/latest/rss/tech,cbsnews.com,Major News/Wire,2,Tier 2 National Media,92,active,False
+NBC News Tech,https://feeds.nbcnews.com/nbcnews/public/tech,feeds.nbcnews.com,Major News/Wire,2,Tier 2 National Media,92,active,False
+ABC News Tech,https://abcnews.go.com/abcnews/technologyheadlines,abcnews.go.com,Major News/Wire,2,Tier 2 National Media,92,active,False
+Fox Business,https://moxie.foxbusiness.com/google-publisher/technology.xml,moxie.foxbusiness.com,Major News/Wire,2,Tier 2 National Media,92,active,False
+USA Today Tech,https://rssfeeds.usatoday.com/UsatodaycomTech-TopStories,rssfeeds.usatoday.com,Major News/Wire,2,Tier 2 National Media,92,active,False
+Forbes Tech,https://www.forbes.com/innovation/feed/,forbes.com,Major News/Wire,2,Tier 2 National Media,92,active,False
+Fortune,https://fortune.com/feed/,fortune.com,Major News/Wire,2,Tier 2 National Media,92,active,False
+MarketWatch,https://feeds.content.dowjones.io/public/rss/mw_topstories,feeds.content.dowjones.io,Major News/Wire,2,Tier 2 National Media,92,active,False
+Dark Reading,https://www.darkreading.com/rss.xml,darkreading.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
+Security Week,https://www.securityweek.com/feed/,securityweek.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
+Cybersecurity Dive,https://www.cybersecuritydive.com/feeds/news/,cybersecuritydive.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
+SC Magazine,https://www.scmagazine.com/feed/,scmagazine.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
+JD Supra - Broadband,https://www.jdsupra.com/topics/broadband/rss/,jdsupra.com,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,active,False
+JD Supra - Net Neutrality,https://www.jdsupra.com/topics/net-neutrality/rss/,jdsupra.com,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,active,False
+JD Supra - Media Law,https://www.jdsupra.com/topics/media-law/rss/,jdsupra.com,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,active,False
+Competitive Enterprise Inst,https://cei.org/feed/,cei.org,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,active,False
+Bipartisan Policy Center,https://bipartisanpolicy.org/feed/,bipartisanpolicy.org,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,active,False
+R Street Institute,https://www.rstreet.org/feed/,rstreet.org,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,active,False
+Anandtech,https://www.anandtech.com/rss/,anandtech.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,active,False
+StateScoop,https://statescoop.com/feed/,statescoop.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,active,False
+EdScoop,https://edscoop.com/feed/,edscoop.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,active,False
+CyberScoop,https://cyberscoop.com/feed/,cyberscoop.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,active,False
+FedScoop,https://fedscoop.com/feed/,fedscoop.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,active,False
+GSMA News,https://www.gsma.com/newsroom/feed/,gsma.com,Major News/Wire,2,Tier 2 National Media,92,active,False
+WIA Tower,https://wia.org/feed/,wia.org,Major News/Wire,2,Tier 2 National Media,92,active,False
+Spectrum Policy News,https://spectropolis.blogspot.com/feeds/posts/default,spectropolis.blogspot.com,Major News/Wire,2,Tier 2 National Media,92,active,False
+Sasha Javid Spectrum,https://www.spectrumfutures.org/feed/,spectrumfutures.org,Major News/Wire,2,Tier 2 National Media,92,active,False
+VentureBeat AI,https://venturebeat.com/category/ai/feed/,venturebeat.com,AI/ML,4,Tier 4 Technology Publications,76,active,False
+AI Now Institute,https://ainowinstitute.org/feed/,ainowinstitute.org,AI/ML,4,Tier 4 Technology Publications,76,active,False
+Partnership on AI,https://partnershiponai.org/feed/,partnershiponai.org,AI/ML,4,Tier 4 Technology Publications,76,active,False
+Brookings AI,https://www.brookings.edu/topic/artificial-intelligence/feed/,brookings.edu,AI/ML,4,Tier 4 Technology Publications,76,active,False
+Stanford HAI,https://hai.stanford.edu/news/rss.xml,hai.stanford.edu,AI/ML,4,Tier 4 Technology Publications,76,active,False
+Future of Life Institute,https://futureoflife.org/feed/,futureoflife.org,AI/ML,4,Tier 4 Technology Publications,76,active,False
+Algorithm Watch,https://algorithmwatch.org/en/feed/,algorithmwatch.org,AI/ML,4,Tier 4 Technology Publications,76,active,False
+Consumer Reports Policy,https://advocacy.consumerreports.org/feed/,advocacy.consumerreports.org,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,active,False
+INCOMPAS,https://www.incompas.org/news/feed/,incompas.org,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,active,False
+NCTA Internet,https://www.ncta.com/feed,ncta.com,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,active,False
+MeriTalk,https://www.meritalk.com/feed/,meritalk.com,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,active,False
+GovLoop,https://www.govloop.com/feed/,govloop.com,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,active,False
+Columbia Journalism Review,https://www.cjr.org/feed,cjr.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
+Nieman Lab,https://www.niemanlab.org/feed/,niemanlab.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
+Business Wire - Telecom,https://feed.businesswire.com/rss/home/?rss=G1&category=Telecommunications,feed.businesswire.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
+Globe Newswire - Telecom,https://www.globenewswire.com/RssFeed/industry/9621-Telecommunications,globenewswire.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
+5G Technology World,https://www.5gtechnologyworld.com/feed/,5gtechnologyworld.com,Major News/Wire,2,Tier 2 National Media,92,active,False
+INCOMPAS,https://www.incompas.org/feed/,incompas.org,Major News/Wire,2,Tier 2 National Media,92,active,False
+ACA Connects,https://acaconnects.org/feed/,acaconnects.org,Major News/Wire,2,Tier 2 National Media,92,active,False
+WTA Telecom,https://www.wtaonline.org/feed/,wtaonline.org,Major News/Wire,2,Tier 2 National Media,92,active,False
+Financial Times - Tech,https://www.ft.com/technology?format=rss,ft.com,Major News/Wire,2,Tier 2 National Media,92,active,False
+BBC - Tech,https://feeds.bbci.co.uk/news/technology/rss.xml,feeds.bbci.co.uk,Major News/Wire,2,Tier 2 National Media,92,active,False
+Harvard Berkman Center,https://cyber.harvard.edu/feeds/news,cyber.harvard.edu,Major News/Wire,2,Tier 2 National Media,92,active,False
+Georgetown Law Tech,https://www.law.georgetown.edu/news/feed/,law.georgetown.edu,Major News/Wire,2,Tier 2 National Media,92,active,False
+TV - WGN Chicago,https://wgntv.com/feed/,wgntv.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
+TV - WFAA Dallas,https://www.wfaa.com/feeds/syndication/rss/news,wfaa.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
+TV - KUSA Denver,https://www.9news.com/feeds/syndication/rss/news,9news.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
+TV - KHOU Houston,https://www.khou.com/feeds/syndication/rss/news,khou.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
+TV - WTHR Indianapolis,https://www.wthr.com/rss,wthr.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
+TV - WNBC New York,https://www.nbcnewyork.com/news/local/feed/,nbcnewyork.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
+TV - KOIN Portland,https://www.koin.com/feed/,koin.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
+TV - KCRA Sacramento,https://www.kcra.com/rss,kcra.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
+TV - KSAT San Antonio,https://www.ksat.com/rss,ksat.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
+TV - KGO San Francisco,https://abc7news.com/feed/,abc7news.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
+TV - KARE Minneapolis,https://www.kare11.com/feeds/syndication/rss/news,kare11.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
+TV - WPLG Miami,https://www.local10.com/rss,local10.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
+TV - WCNC Charlotte,https://www.wcnc.com/feeds/syndication/rss/news,wcnc.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
+TV - WAVY Norfolk,https://www.wavy.com/feed/,wavy.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
+Radio - WAMU Washington DC,https://wamu.org/feed/news,wamu.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
+Radio - WNYC New York,https://www.wnyc.org/feed/,wnyc.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
+Radio - WBUR Boston,https://www.wbur.org/rss/,wbur.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
+Radio - WDET Detroit,https://wdet.org/feed/,wdet.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
+Radio - WPLN Nashville,https://wpln.org/feed/,wpln.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
+Radio - KCUR Kansas City,https://www.kcur.org/feed,kcur.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
+Radio - WFPL Louisville,https://wfpl.org/feed/,wfpl.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,False
+CISA Alerts,https://www.cisa.gov/uscert/ncas/alerts.xml,cisa.gov,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
+CISA News,https://www.cisa.gov/news.xml,cisa.gov,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
+SecurityWeek,https://feeds.feedburner.com/securityweek,feeds.feedburner.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
+APCO International,https://www.apcointl.org/feed/,apcointl.org,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
+Broadcast Law Blog,https://www.broadcastlawblog.com/feed/,broadcastlawblog.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
+Law360 Telecom,https://www.law360.com/telecom/rss,law360.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
+Skadden Telecom Blog,https://www.skadden.com/insights/rss,skadden.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
+Wiley Telecom,https://www.wileyrein.com/rss/,wileyrein.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
+Covington Telecom,https://www.cov.com/en/rss,cov.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
+New America OTI,https://www.newamerica.org/feed/,newamerica.org,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
+Georgetown Law Tech,https://www.georgetownlawtechreview.org/feed/,georgetownlawtechreview.org,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
+TheGrio Media,https://thegrio.com/feed/,thegrio.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
+NY Post Media,https://nypost.com/media/feed/,nypost.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,False
+Washington Examiner Media,https://www.washingtonexaminer.com/tag/media/rss,washingtonexaminer.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,False

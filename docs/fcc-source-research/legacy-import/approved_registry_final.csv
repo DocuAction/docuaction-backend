@@ -1,0 +1,108 @@
+source_id,name,type,tier,authority_score,enabled,method,rss_url,notes
+leg_a0008,AEI,government,tier1,95.0,True,rss,https://www.aei.org/feed/,legacy-import approved; Government
+leg_a0009,CSIS,government,tier1,95.0,True,rss,https://www.csis.org/rss.xml,legacy-import approved; Government
+leg_a0004,Federal News Network,government,tier1,95.0,True,rss,https://federalnewsnetwork.com/feed/,legacy-import approved; Government
+leg_a0005,GovTech,government,tier1,95.0,True,rss,https://www.govtech.com/rss,legacy-import approved; Government
+leg_a0010,Nextgov,government,tier1,95.0,True,rss,https://www.nextgov.com/rss/all/,legacy-import approved; Government
+leg_a0006,SCOTUSblog,government,tier1,95.0,True,rss,https://www.scotusblog.com/feed/,legacy-import approved; Government
+leg_a0007,Yale JREG,government,tier1,95.0,True,rss,https://www.yalejreg.com/feed/,legacy-import approved; Government
+leg_a0064,5G Technology World,wire_service,tier2,92.0,True,rss,https://www.5gtechnologyworld.com/feed/,legacy-import approved; Major News/Wire
+leg_a0023,ABC News Tech,wire_service,tier2,92.0,True,rss,https://abcnews.go.com/abcnews/technologyheadlines,legacy-import approved; Major News/Wire
+leg_a0066,ACA Connects,wire_service,tier2,92.0,True,rss,https://acaconnects.org/feed/,legacy-import approved; Major News/Wire
+leg_a0069,BBC - Tech,wire_service,tier2,92.0,True,rss,https://feeds.bbci.co.uk/news/technology/rss.xml,legacy-import approved; Major News/Wire
+leg_a0020,Bloomberg Politics,wire_service,tier2,92.0,True,rss,https://feeds.bloomberg.com/politics/news.rss,legacy-import approved; Major News/Wire
+leg_a0019,Bloomberg Technology,wire_service,tier2,92.0,True,rss,https://feeds.bloomberg.com/technology/news.rss,legacy-import approved; Major News/Wire
+leg_a0021,CBS News Tech,wire_service,tier2,92.0,True,rss,https://www.cbsnews.com/latest/rss/tech,legacy-import approved; Major News/Wire
+leg_a0068,Financial Times - Tech,wire_service,tier2,92.0,True,rss,https://www.ft.com/technology?format=rss,legacy-import approved; Major News/Wire
+leg_a0026,Forbes Tech,wire_service,tier2,92.0,True,rss,https://www.forbes.com/innovation/feed/,legacy-import approved; Major News/Wire
+leg_a0027,Fortune,wire_service,tier2,92.0,True,rss,https://fortune.com/feed/,legacy-import approved; Major News/Wire
+leg_a0024,Fox Business,wire_service,tier2,92.0,True,rss,https://moxie.foxbusiness.com/google-publisher/technology.xml,legacy-import approved; Major News/Wire
+leg_a0071,Georgetown Law Tech (law.georgetown.edu),wire_service,tier2,92.0,True,rss,https://www.law.georgetown.edu/news/feed/,legacy-import approved; Major News/Wire
+leg_a0044,GSMA News,wire_service,tier2,92.0,True,rss,https://www.gsma.com/newsroom/feed/,legacy-import approved; Major News/Wire
+leg_a0070,Harvard Berkman Center,wire_service,tier2,92.0,True,rss,https://cyber.harvard.edu/feeds/news,legacy-import approved; Major News/Wire
+leg_a0065,INCOMPAS (incompas.org) #2,wire_service,tier2,92.0,True,rss,https://www.incompas.org/feed/,legacy-import approved; Major News/Wire
+leg_a0028,MarketWatch,wire_service,tier2,92.0,True,rss,https://feeds.content.dowjones.io/public/rss/mw_topstories,legacy-import approved; Major News/Wire
+leg_a0022,NBC News Tech,wire_service,tier2,92.0,True,rss,https://feeds.nbcnews.com/nbcnews/public/tech,legacy-import approved; Major News/Wire
+leg_a0047,Sasha Javid Spectrum,wire_service,tier2,92.0,True,rss,https://www.spectrumfutures.org/feed/,legacy-import approved; Major News/Wire
+leg_a0046,Spectrum Policy News,wire_service,tier2,92.0,True,rss,https://spectropolis.blogspot.com/feeds/posts/default,legacy-import approved; Major News/Wire
+leg_a0025,USA Today Tech,wire_service,tier2,92.0,True,rss,https://rssfeeds.usatoday.com/UsatodaycomTech-TopStories,legacy-import approved; Major News/Wire
+leg_a0045,WIA Tower,wire_service,tier2,92.0,True,rss,https://wia.org/feed/,legacy-import approved; Major News/Wire
+leg_a0067,WTA Telecom,wire_service,tier2,92.0,True,rss,https://www.wtaonline.org/feed/,legacy-import approved; Major News/Wire
+leg_a0039,Anandtech,trade_publication,tier3,82.0,True,rss,https://www.anandtech.com/rss/,legacy-import approved; Telecom Trade
+leg_a0037,Bipartisan Policy Center,trade_publication,tier3,80.0,True,rss,https://bipartisanpolicy.org/feed/,legacy-import approved; Policy/Legal
+leg_a0001,Broadband World News,trade_publication,tier3,82.0,True,rss,https://www.broadbandworldnews.com/rss.xml,legacy-import approved; Telecom Trade
+leg_a0036,Competitive Enterprise Inst,trade_publication,tier3,80.0,True,rss,https://cei.org/feed/,legacy-import approved; Policy/Legal
+leg_a0055,Consumer Reports Policy,trade_publication,tier3,80.0,True,rss,https://advocacy.consumerreports.org/feed/,legacy-import approved; Policy/Legal
+leg_a0042,CyberScoop,trade_publication,tier3,82.0,True,rss,https://cyberscoop.com/feed/,legacy-import approved; Telecom Trade
+leg_a0041,EdScoop,trade_publication,tier3,82.0,True,rss,https://edscoop.com/feed/,legacy-import approved; Telecom Trade
+leg_a0043,FedScoop,trade_publication,tier3,82.0,True,rss,https://fedscoop.com/feed/,legacy-import approved; Telecom Trade
+leg_a0059,GovLoop,trade_publication,tier3,80.0,True,rss,https://www.govloop.com/feed/,legacy-import approved; Policy/Legal
+leg_a0056,INCOMPAS (incompas.org) #1,trade_publication,tier3,80.0,True,rss,https://www.incompas.org/news/feed/,legacy-import approved; Policy/Legal
+leg_a0033,JD Supra - Broadband,trade_publication,tier3,80.0,True,rss,https://www.jdsupra.com/topics/broadband/rss/,legacy-import approved; Policy/Legal
+leg_a0035,JD Supra - Media Law,trade_publication,tier3,80.0,True,rss,https://www.jdsupra.com/topics/media-law/rss/,legacy-import approved; Policy/Legal
+leg_a0034,JD Supra - Net Neutrality,trade_publication,tier3,80.0,True,rss,https://www.jdsupra.com/topics/net-neutrality/rss/,legacy-import approved; Policy/Legal
+leg_a0058,MeriTalk,trade_publication,tier3,80.0,True,rss,https://www.meritalk.com/feed/,legacy-import approved; Policy/Legal
+leg_a0057,NCTA Internet,trade_publication,tier3,80.0,True,rss,https://www.ncta.com/feed,legacy-import approved; Policy/Legal
+leg_a0038,R Street Institute,trade_publication,tier3,80.0,True,rss,https://www.rstreet.org/feed/,legacy-import approved; Policy/Legal
+leg_a0040,StateScoop,trade_publication,tier3,82.0,True,rss,https://statescoop.com/feed/,legacy-import approved; Telecom Trade
+leg_a0002,TIA Online,trade_publication,tier3,82.0,True,rss,https://tiaonline.org/feed/,legacy-import approved; Telecom Trade
+leg_a0000,TR Daily,trade_publication,tier3,82.0,True,rss,https://trdaily.com/feed/,legacy-import approved; Telecom Trade
+leg_a0049,AI Now Institute,technology_publication,tier4,76.0,True,rss,https://ainowinstitute.org/feed/,legacy-import approved; AI/ML
+leg_a0054,Algorithm Watch,technology_publication,tier4,76.0,True,rss,https://algorithmwatch.org/en/feed/,legacy-import approved; AI/ML
+leg_a0096,APCO International,technology_publication,tier4,74.0,True,rss,https://www.apcointl.org/feed/,legacy-import approved; Cybersecurity
+leg_a0097,Broadcast Law Blog,technology_publication,tier4,74.0,True,rss,https://www.broadcastlawblog.com/feed/,legacy-import approved; Cybersecurity
+leg_a0051,Brookings AI,technology_publication,tier4,76.0,True,rss,https://www.brookings.edu/topic/artificial-intelligence/feed/,legacy-import approved; AI/ML
+leg_a0093,CISA Alerts,technology_publication,tier4,74.0,True,rss,https://www.cisa.gov/uscert/ncas/alerts.xml,legacy-import approved; Cybersecurity
+leg_a0094,CISA News,technology_publication,tier4,74.0,True,rss,https://www.cisa.gov/news.xml,legacy-import approved; Cybersecurity
+leg_a0101,Covington Telecom,technology_publication,tier4,74.0,True,rss,https://www.cov.com/en/rss,legacy-import approved; Cybersecurity
+leg_a0031,Cybersecurity Dive,technology_publication,tier4,74.0,True,rss,https://www.cybersecuritydive.com/feeds/news/,legacy-import approved; Cybersecurity
+leg_a0029,Dark Reading,technology_publication,tier4,74.0,True,rss,https://www.darkreading.com/rss.xml,legacy-import approved; Cybersecurity
+leg_a0015,Digital Trends,technology_publication,tier4,76.0,True,rss,https://www.digitaltrends.com/feed/,legacy-import approved; Technology
+leg_a0018,eWeek,technology_publication,tier4,76.0,True,rss,https://www.eweek.com/rss.xml,legacy-import approved; Technology
+leg_a0053,Future of Life Institute,technology_publication,tier4,76.0,True,rss,https://futureoflife.org/feed/,legacy-import approved; AI/ML
+leg_a0103,Georgetown Law Tech (georgetownlawtechreview.org),technology_publication,tier4,74.0,True,rss,https://www.georgetownlawtechreview.org/feed/,legacy-import approved; Cybersecurity
+leg_a0012,Gizmodo,technology_publication,tier4,76.0,True,rss,https://gizmodo.com/feed/,legacy-import approved; Technology
+leg_a0098,Law360 Telecom,technology_publication,tier4,74.0,True,rss,https://www.law360.com/telecom/rss,legacy-import approved; Cybersecurity
+leg_a0017,Mashable,technology_publication,tier4,76.0,True,rss,https://mashable.com/feeds/rss/all,legacy-import approved; Technology
+leg_a0102,New America OTI,technology_publication,tier4,74.0,True,rss,https://www.newamerica.org/feed/,legacy-import approved; Cybersecurity
+leg_a0105,NY Post Media,technology_publication,tier4,74.0,True,rss,https://nypost.com/media/feed/,legacy-import approved; Cybersecurity
+leg_a0050,Partnership on AI,technology_publication,tier4,76.0,True,rss,https://partnershiponai.org/feed/,legacy-import approved; AI/ML
+leg_a0032,SC Magazine,technology_publication,tier4,74.0,True,rss,https://www.scmagazine.com/feed/,legacy-import approved; Cybersecurity
+leg_a0030,Security Week,technology_publication,tier4,74.0,True,rss,https://www.securityweek.com/feed/,legacy-import approved; Cybersecurity
+leg_a0095,SecurityWeek,technology_publication,tier4,74.0,True,rss,https://feeds.feedburner.com/securityweek,legacy-import approved; Cybersecurity
+leg_a0099,Skadden Telecom Blog,technology_publication,tier4,74.0,True,rss,https://www.skadden.com/insights/rss,legacy-import approved; Cybersecurity
+leg_a0016,Slashdot,technology_publication,tier4,76.0,True,rss,https://rss.slashdot.org/Slashdot/slashdotMain,legacy-import approved; Technology
+leg_a0052,Stanford HAI,technology_publication,tier4,76.0,True,rss,https://hai.stanford.edu/news/rss.xml,legacy-import approved; AI/ML
+leg_a0011,TechDirt,technology_publication,tier4,76.0,True,rss,https://www.techdirt.com/feed/,legacy-import approved; Technology
+leg_a0104,TheGrio Media,technology_publication,tier4,74.0,True,rss,https://thegrio.com/feed/,legacy-import approved; Cybersecurity
+leg_a0014,VentureBeat,technology_publication,tier4,76.0,True,rss,https://venturebeat.com/feed/,legacy-import approved; Technology
+leg_a0048,VentureBeat AI,technology_publication,tier4,76.0,True,rss,https://venturebeat.com/category/ai/feed/,legacy-import approved; AI/ML
+leg_a0106,Washington Examiner Media,technology_publication,tier4,74.0,True,rss,https://www.washingtonexaminer.com/tag/media/rss,legacy-import approved; Cybersecurity
+leg_a0100,Wiley Telecom,technology_publication,tier4,74.0,True,rss,https://www.wileyrein.com/rss/,legacy-import approved; Cybersecurity
+leg_a0013,ZDNet,technology_publication,tier4,76.0,True,rss,https://www.zdnet.com/news/rss.xml,legacy-import approved; Technology
+leg_a0003,All Access,broadcast,tier5,72.0,True,rss,https://www.allaccess.com/merge/archive/rss.xml,legacy-import approved; Broadcast/Radio
+leg_a0062,Business Wire - Telecom,broadcast,tier5,72.0,True,rss,https://feed.businesswire.com/rss/home/?rss=G1&category=Telecommunications,legacy-import approved; Broadcast/Radio
+leg_a0060,Columbia Journalism Review,broadcast,tier5,72.0,True,rss,https://www.cjr.org/feed,legacy-import approved; Broadcast/Radio
+leg_a0063,Globe Newswire - Telecom,broadcast,tier5,72.0,True,rss,https://www.globenewswire.com/RssFeed/industry/9621-Telecommunications,legacy-import approved; Broadcast/Radio
+leg_a0061,Nieman Lab,broadcast,tier5,72.0,True,rss,https://www.niemanlab.org/feed/,legacy-import approved; Broadcast/Radio
+leg_a0091,Radio - KCUR Kansas City,broadcast,tier5,72.0,True,rss,https://www.kcur.org/feed,legacy-import approved; Broadcast/Radio
+leg_a0086,Radio - WAMU Washington DC,broadcast,tier5,72.0,True,rss,https://wamu.org/feed/news,legacy-import approved; Broadcast/Radio
+leg_a0088,Radio - WBUR Boston,broadcast,tier5,72.0,True,rss,https://www.wbur.org/rss/,legacy-import approved; Broadcast/Radio
+leg_a0089,Radio - WDET Detroit,broadcast,tier5,72.0,True,rss,https://wdet.org/feed/,legacy-import approved; Broadcast/Radio
+leg_a0092,Radio - WFPL Louisville,broadcast,tier5,72.0,True,rss,https://wfpl.org/feed/,legacy-import approved; Broadcast/Radio
+leg_a0087,Radio - WNYC New York,broadcast,tier5,72.0,True,rss,https://www.wnyc.org/feed/,legacy-import approved; Broadcast/Radio
+leg_a0090,Radio - WPLN Nashville,broadcast,tier5,72.0,True,rss,https://wpln.org/feed/,legacy-import approved; Broadcast/Radio
+leg_a0082,TV - KARE Minneapolis,broadcast,tier5,72.0,True,rss,https://www.kare11.com/feeds/syndication/rss/news,legacy-import approved; Broadcast/Radio
+leg_a0079,TV - KCRA Sacramento,broadcast,tier5,72.0,True,rss,https://www.kcra.com/rss,legacy-import approved; Broadcast/Radio
+leg_a0081,TV - KGO San Francisco,broadcast,tier5,72.0,True,rss,https://abc7news.com/feed/,legacy-import approved; Broadcast/Radio
+leg_a0075,TV - KHOU Houston,broadcast,tier5,72.0,True,rss,https://www.khou.com/feeds/syndication/rss/news,legacy-import approved; Broadcast/Radio
+leg_a0078,TV - KOIN Portland,broadcast,tier5,72.0,True,rss,https://www.koin.com/feed/,legacy-import approved; Broadcast/Radio
+leg_a0080,TV - KSAT San Antonio,broadcast,tier5,72.0,True,rss,https://www.ksat.com/rss,legacy-import approved; Broadcast/Radio
+leg_a0074,TV - KUSA Denver,broadcast,tier5,72.0,True,rss,https://www.9news.com/feeds/syndication/rss/news,legacy-import approved; Broadcast/Radio
+leg_a0085,TV - WAVY Norfolk,broadcast,tier5,72.0,True,rss,https://www.wavy.com/feed/,legacy-import approved; Broadcast/Radio
+leg_a0084,TV - WCNC Charlotte,broadcast,tier5,72.0,True,rss,https://www.wcnc.com/feeds/syndication/rss/news,legacy-import approved; Broadcast/Radio
+leg_a0073,TV - WFAA Dallas,broadcast,tier5,72.0,True,rss,https://www.wfaa.com/feeds/syndication/rss/news,legacy-import approved; Broadcast/Radio
+leg_a0072,TV - WGN Chicago,broadcast,tier5,72.0,True,rss,https://wgntv.com/feed/,legacy-import approved; Broadcast/Radio
+leg_a0077,TV - WNBC New York,broadcast,tier5,72.0,True,rss,https://www.nbcnewyork.com/news/local/feed/,legacy-import approved; Broadcast/Radio
+leg_a0083,TV - WPLG Miami,broadcast,tier5,72.0,True,rss,https://www.local10.com/rss,legacy-import approved; Broadcast/Radio
+leg_a0076,TV - WTHR Indianapolis,broadcast,tier5,72.0,True,rss,https://www.wthr.com/rss,legacy-import approved; Broadcast/Radio

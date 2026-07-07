@@ -1,0 +1,865 @@
+source_name,rss_url,domain,category,tier,tier_label,authority,reachability,already_in_docuaction,reason
+FCC.gov - News Releases,https://www.fcc.gov/rss/news-releases,fcc.gov,Government,1,Tier 1 FCC/Government,100,dead,True,dead/unreachable feed
+FCC.gov - Headlines,https://www.fcc.gov/rss/headlines,fcc.gov,Government,1,Tier 1 FCC/Government,100,dead,True,dead/unreachable feed
+Federal Register - FCC,https://www.federalregister.gov/documents/search.rss?conditions%5Bagencies%5D%5B%5D=federal-communications-commission,federalregister.gov,Government,1,Tier 1 FCC/Government,100,other,True,duplicate coverage (already in DocuAction)
+Broadband Breakfast,https://broadbandbreakfast.com/feed/,broadbandbreakfast.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,active,True,duplicate coverage (already in DocuAction)
+Light Reading,https://www.lightreading.com/rss.xml,lightreading.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,active,True,duplicate coverage (already in DocuAction)
+Fierce Network,https://www.fierce-network.com/rss/xml,fierce-network.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,active,True,duplicate coverage (already in DocuAction)
+Fierce Wireless,https://www.fiercewireless.com/rss/xml,fiercewireless.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,blocked,True,duplicate coverage (already in DocuAction)
+RCR Wireless,https://www.rcrwireless.com/feed,rcrwireless.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,active,True,duplicate coverage (already in DocuAction)
+Telecompaper,https://www.telecompaper.com/rss/news,telecompaper.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,active,True,duplicate coverage (already in DocuAction)
+Total Tele,https://www.totaltele.com/rss.xml,totaltele.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,active,True,duplicate coverage (already in DocuAction)
+Telecoms,https://telecoms.com/feed/,telecoms.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,blocked,True,duplicate coverage (already in DocuAction)
+Telco Magazine,https://www.telcomagazine.com/feed/,telcomagazine.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,dead,False,dead/unreachable feed
+Inside Towers,https://insidetowers.com/feed/,insidetowers.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,active,True,duplicate coverage (already in DocuAction)
+Wireless Week,https://www.wirelessweek.com/rss.xml,wirelessweek.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,dead,False,dead/unreachable feed
+TeleGeography,https://www.telegeography.com/feed/,telegeography.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,dead,True,dead/unreachable feed
+Vanilla Plus,https://www.vanillaplus.com/feed/,vanillaplus.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,dead,False,dead/unreachable feed
+Developing Telecoms,https://developingtelecoms.com/feed,developingtelecoms.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,dead,False,dead/unreachable feed
+Mobile World Live,https://www.mobileworldlive.com/feed/,mobileworldlive.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,active,True,duplicate coverage (already in DocuAction)
+Comms Update,https://www.commsupdate.com/feed/,commsupdate.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,dead,False,dead/unreachable feed
+Network World,https://www.networkworld.com/index.rss,networkworld.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,dead,False,dead/unreachable feed
+TV Technology,https://www.tvtechnology.com/rss.xml,tvtechnology.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,True,dead/unreachable feed
+NextTV,https://www.nexttv.com/rss.xml,nexttv.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+Radio World,https://www.radioworld.com/feed/,radioworld.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,True,dead/unreachable feed
+TVNewsCheck,https://tvnewscheck.com/feed/,tvnewscheck.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,True,dead/unreachable feed
+RBR,https://www.rbr.com/feed/,rbr.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,True,duplicate coverage (already in DocuAction)
+Talkers,https://talkers.com/feed/,talkers.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+Radio Ink,https://radioink.com/feed/,radioink.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,True,dead/unreachable feed
+The Desk,https://thedesk.net/feed/,thedesk.net,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,True,dead/unreachable feed
+Cord Cutters News,https://cordcuttersnews.com/feed/,cordcuttersnews.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+FCC Data,https://fccdata.org/feed/,fccdata.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+Benton Institute,https://www.benton.org/rss.xml,benton.org,Government,1,Tier 1 FCC/Government,95,dead,True,dead/unreachable feed
+Public Knowledge,https://publicknowledge.org/feed/,publicknowledge.org,Government,1,Tier 1 FCC/Government,95,dead,True,dead/unreachable feed
+TechFreedom,https://techfreedom.org/feed/,techfreedom.org,Government,1,Tier 1 FCC/Government,95,dead,False,dead/unreachable feed
+EFF,https://www.eff.org/rss/updates.xml,eff.org,Government,1,Tier 1 FCC/Government,95,active,True,duplicate coverage (already in DocuAction)
+Law360,https://www.law360.com/rss/articles,law360.com,Government,1,Tier 1 FCC/Government,95,dead,False,dead/unreachable feed
+National Law Review,https://www.natlawreview.com/recent/feed,natlawreview.com,Government,1,Tier 1 FCC/Government,95,dead,False,dead/unreachable feed
+Brookings TechTank,https://www.brookings.edu/topic/technology-innovation/feed/,brookings.edu,Government,1,Tier 1 FCC/Government,95,dead,False,dead/unreachable feed
+ITIF,https://itif.org/feed/,itif.org,Government,1,Tier 1 FCC/Government,95,dead,False,dead/unreachable feed
+Politico,https://www.politico.com/rss/technology.xml,politico.com,Government,1,Tier 1 FCC/Government,95,blocked,True,duplicate coverage (already in DocuAction)
+Bloomberg Law,https://www.bloomberglaw.com/feed,bloomberglaw.com,Government,1,Tier 1 FCC/Government,95,dead,False,dead/unreachable feed
+Ars Technica,https://feeds.arstechnica.com/arstechnica/index,feeds.arstechnica.com,Technology,4,Tier 4 Technology Publications,76,active,True,duplicate coverage (already in DocuAction)
+The Verge,https://www.theverge.com/rss/index.xml,theverge.com,Technology,4,Tier 4 Technology Publications,76,active,True,duplicate coverage (already in DocuAction)
+TechCrunch,https://techcrunch.com/feed/,techcrunch.com,Technology,4,Tier 4 Technology Publications,76,active,True,duplicate coverage (already in DocuAction)
+Wired,https://www.wired.com/feed/rss,wired.com,Technology,4,Tier 4 Technology Publications,76,active,True,duplicate coverage (already in DocuAction)
+Engadget,https://www.engadget.com/rss.xml,engadget.com,Technology,4,Tier 4 Technology Publications,76,active,True,duplicate coverage (already in DocuAction)
+CNET,https://www.cnet.com/rss/news/,cnet.com,Technology,4,Tier 4 Technology Publications,76,active,True,duplicate coverage (already in DocuAction)
+TechRadar,https://www.techradar.com/feeds/,techradar.com,Technology,4,Tier 4 Technology Publications,76,dead,False,dead/unreachable feed
+PCMag,https://www.pcmag.com/feeds/latest,pcmag.com,Technology,4,Tier 4 Technology Publications,76,dead,False,dead/unreachable feed
+CRN,https://www.crn.com/rss,crn.com,Technology,4,Tier 4 Technology Publications,76,dead,False,dead/unreachable feed
+CIO,https://www.cio.com/feed/,cio.com,Technology,4,Tier 4 Technology Publications,76,dead,False,dead/unreachable feed
+Reuters Technology,https://feeds.reuters.com/reuters/technologyNews,feeds.reuters.com,Major News/Wire,2,Tier 2 National Media,92,dead,True,dead/unreachable feed
+Reuters Business,https://feeds.reuters.com/reuters/businessNews,feeds.reuters.com,Major News/Wire,2,Tier 2 National Media,92,dead,True,dead/unreachable feed
+Wall Street Journal Tech,https://feeds.content.dowjones.io/public/rss/mw_technology,feeds.content.dowjones.io,Major News/Wire,2,Tier 2 National Media,92,dead,False,dead/unreachable feed
+New York Times Tech,https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml,rss.nytimes.com,Major News/Wire,2,Tier 2 National Media,92,active,True,duplicate coverage (already in DocuAction)
+New York Times Politics,https://rss.nytimes.com/services/xml/rss/nyt/Politics.xml,rss.nytimes.com,Major News/Wire,2,Tier 2 National Media,92,dead,True,dead/unreachable feed
+Washington Post Tech,https://feeds.washingtonpost.com/rss/business/technology,feeds.washingtonpost.com,Major News/Wire,2,Tier 2 National Media,92,dead,True,dead/unreachable feed
+The Hill,https://thehill.com/feed/,thehill.com,Major News/Wire,2,Tier 2 National Media,92,active,True,duplicate coverage (already in DocuAction)
+Axios,https://api.axios.com/feed/,api.axios.com,Major News/Wire,2,Tier 2 National Media,92,active,True,duplicate coverage (already in DocuAction)
+CNN Tech,https://rss.cnn.com/rss/cnn_tech.rss,rss.cnn.com,Major News/Wire,2,Tier 2 National Media,92,dead,False,dead/unreachable feed
+NPR Technology,https://feeds.npr.org/1019/rss.xml,feeds.npr.org,Major News/Wire,2,Tier 2 National Media,92,active,True,duplicate coverage (already in DocuAction)
+NPR Business,https://feeds.npr.org/1006/rss.xml,feeds.npr.org,Major News/Wire,2,Tier 2 National Media,92,active,True,duplicate coverage (already in DocuAction)
+CNBC Tech,https://www.cnbc.com/id/19854910/device/rss/rss.html,cnbc.com,Major News/Wire,2,Tier 2 National Media,92,active,True,duplicate coverage (already in DocuAction)
+CNBC Telecom,https://www.cnbc.com/id/10000108/device/rss/rss.html,cnbc.com,Major News/Wire,2,Tier 2 National Media,92,active,True,duplicate coverage (already in DocuAction)
+Multichannel News,https://www.nexttv.com/rss/multichannel,nexttv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Broadcasting & Cable,https://www.nexttv.com/rss/broadcasting-cable,nexttv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Communications Daily,https://communicationsdaily.com/feed/,communicationsdaily.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Oped News Telecom,https://www.opednews.com/populum/rss_telecom.php,opednews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Protocol,https://www.protocol.com/feeds/feed.rss,protocol.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Morning Consult Tech,https://morningconsult.com/feed/,morningconsult.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Federal Computer Week,https://fcw.com/rss/rss.ashx,fcw.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Telecom Ramblings,https://www.telecomramblings.com/feed/,telecomramblings.com,General,8,Tier 8 Unknown/Low Value,40,active,True,duplicate coverage (already in DocuAction)
+IP Watch,https://www.ip-watch.org/feed/,ip-watch.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Satellite Today,https://www.satellitetoday.com/feed/,satellitetoday.com,General,8,Tier 8 Unknown/Low Value,40,active,True,duplicate coverage (already in DocuAction)
+Via Satellite,https://www.satellitetoday.com/via-satellite/feed/,satellitetoday.com,General,8,Tier 8 Unknown/Low Value,40,dead,True,dead/unreachable feed
+Space News,https://spacenews.com/feed/,spacenews.com,General,8,Tier 8 Unknown/Low Value,40,active,True,duplicate coverage (already in DocuAction)
+MacNewsWorld,https://www.macnewsworld.com/rss-feed/,macnewsworld.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Computerworld,https://www.computerworld.com/index.rss,computerworld.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+InfoWorld,https://www.infoworld.com/index.rss,infoworld.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+CSO Online,https://www.csoonline.com/index.rss,csoonline.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+IT World Canada,https://www.itworldcanada.com/blog/feed,itworldcanada.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Hack Read,https://www.hackread.com/feed/,hackread.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Just Security,https://www.justsecurity.org/feed/,justsecurity.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+JD Supra Telecom,https://www.jdsupra.com/topics/telecommunications/rss/,jdsupra.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Mondaq Telecom,https://www.mondaq.com/rss/telecommunications/,mondaq.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+IAPP News,https://iapp.org/news/rss/,iapp.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Free Press,https://freepress.net/rss.xml,freepress.net,General,8,Tier 8 Unknown/Low Value,40,dead,True,dead/unreachable feed
+FTC News,https://www.ftc.gov/feeds/press-release-rss.xml,ftc.gov,General,8,Tier 8 Unknown/Low Value,40,dead,True,dead/unreachable feed
+DOJ Press,https://www.justice.gov/feeds/opa/justice-news.xml,justice.gov,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+FTC Business,https://www.ftc.gov/feeds/business-guidance.xml,ftc.gov,General,8,Tier 8 Unknown/Low Value,40,dead,True,dead/unreachable feed
+NTIA,https://www.ntia.gov/rss.xml,ntia.gov,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+FCC Watch,https://fccwatch.com/feed/,fccwatch.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Communications Lawyer,https://communicationslawyer.net/feed/,communicationslawyer.net,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Reason Tech,https://reason.com/tag/technology/feed/,reason.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+The American Prospect,https://prospect.org/feeds/rss/,prospect.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+The Nation,https://www.thenation.com/subject/tech/feed/,thenation.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Slate Tech,https://slate.com/technology.rss,slate.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+FCC - All Recent Releases,https://www.fcc.gov/rss/releases,fcc.gov,Government,1,Tier 1 FCC/Government,100,dead,True,dead/unreachable feed
+FCC - Commissioner Statements,https://www.fcc.gov/rss/commissioner-statements,fcc.gov,Government,1,Tier 1 FCC/Government,100,dead,True,dead/unreachable feed
+FCC - Commissioner Speeches,https://www.fcc.gov/rss/speeches,fcc.gov,Government,1,Tier 1 FCC/Government,100,dead,True,dead/unreachable feed
+FCC - Orders,https://www.fcc.gov/rss/orders,fcc.gov,Government,1,Tier 1 FCC/Government,100,dead,True,dead/unreachable feed
+FCC - Public Notices,https://www.fcc.gov/rss/public-notices,fcc.gov,Government,1,Tier 1 FCC/Government,100,dead,True,dead/unreachable feed
+FCC - Notices of Proposed Rules,https://www.fcc.gov/rss/nprm,fcc.gov,Government,1,Tier 1 FCC/Government,100,dead,True,dead/unreachable feed
+FCC - Reports,https://www.fcc.gov/rss/reports,fcc.gov,Government,1,Tier 1 FCC/Government,100,dead,True,dead/unreachable feed
+FCC - Enforcement Bureau,https://www.fcc.gov/rss/enforcement-bureau,fcc.gov,Government,1,Tier 1 FCC/Government,100,dead,True,dead/unreachable feed
+FCC - Media Bureau,https://www.fcc.gov/rss/media-bureau,fcc.gov,Government,1,Tier 1 FCC/Government,100,dead,True,dead/unreachable feed
+FCC - Wireless Bureau,https://www.fcc.gov/rss/wireless-telecommunications-bureau,fcc.gov,Government,1,Tier 1 FCC/Government,100,dead,True,dead/unreachable feed
+FCC - Wireline Bureau,https://www.fcc.gov/rss/wireline-competition-bureau,fcc.gov,Government,1,Tier 1 FCC/Government,100,dead,True,dead/unreachable feed
+FCC - Consumer Affairs Bureau,https://www.fcc.gov/rss/consumer-governmental-affairs-bureau,fcc.gov,Government,1,Tier 1 FCC/Government,100,dead,True,dead/unreachable feed
+FCC - Space Bureau,https://www.fcc.gov/rss/space-bureau,fcc.gov,Government,1,Tier 1 FCC/Government,100,dead,True,dead/unreachable feed
+FCC - Public Safety Bureau,https://www.fcc.gov/rss/public-safety-homeland-security-bureau,fcc.gov,Government,1,Tier 1 FCC/Government,100,dead,True,dead/unreachable feed
+FCC - Office of Engineering,https://www.fcc.gov/rss/office-engineering-technology,fcc.gov,Government,1,Tier 1 FCC/Government,100,dead,True,dead/unreachable feed
+FCC - Office of Economics,https://www.fcc.gov/rss/office-economics-analytics,fcc.gov,Government,1,Tier 1 FCC/Government,100,dead,True,dead/unreachable feed
+FCC - General Counsel,https://www.fcc.gov/rss/office-general-counsel,fcc.gov,Government,1,Tier 1 FCC/Government,100,dead,True,dead/unreachable feed
+FCC - Inspector General,https://www.fcc.gov/rss/office-inspector-general,fcc.gov,Government,1,Tier 1 FCC/Government,100,dead,True,dead/unreachable feed
+FCC - Broadcast Actions,https://www.fcc.gov/rss/broadcast-actions,fcc.gov,Government,1,Tier 1 FCC/Government,100,dead,True,dead/unreachable feed
+FCC - Broadcast Applications,https://www.fcc.gov/rss/broadcast-applications,fcc.gov,Government,1,Tier 1 FCC/Government,100,dead,True,dead/unreachable feed
+FCC - Notices of Liability,https://www.fcc.gov/rss/notices-apparent-liability,fcc.gov,Government,1,Tier 1 FCC/Government,100,dead,True,dead/unreachable feed
+FCC - Fact Sheets,https://www.fcc.gov/rss/fact-sheets,fcc.gov,Government,1,Tier 1 FCC/Government,100,dead,True,dead/unreachable feed
+FCC - Court Filings,https://www.fcc.gov/rss/court-filings,fcc.gov,Government,1,Tier 1 FCC/Government,100,dead,True,dead/unreachable feed
+FCC - International Bureau,https://www.fcc.gov/rss/international-bureau,fcc.gov,Government,1,Tier 1 FCC/Government,100,dead,True,dead/unreachable feed
+Government Accountability Office,https://www.gao.gov/rss/reports.xml,gao.gov,Government,1,Tier 1 FCC/Government,95,active,True,duplicate coverage (already in DocuAction)
+Senate Commerce Committee,https://www.commerce.senate.gov/rss/feeds/?type=news,commerce.senate.gov,Government,1,Tier 1 FCC/Government,95,dead,False,dead/unreachable feed
+House Energy Commerce Comm,https://energycommerce.house.gov/rss.xml,energycommerce.house.gov,Government,1,Tier 1 FCC/Government,95,dead,False,dead/unreachable feed
+Congressional Research Service,https://www.everycrsreport.com/feeds/all.rss,everycrsreport.com,Government,1,Tier 1 FCC/Government,95,dead,False,dead/unreachable feed
+Nextgov - IT,https://www.nextgov.com/rss/technology/,nextgov.com,Telecom Trade,3,Tier 3 Telecom/Broadband/Wireless Trade,82,dead,False,dead/unreachable feed
+CTIA Blog,https://api.ctia.org/news/feed/,api.ctia.org,Major News/Wire,2,Tier 2 National Media,92,dead,False,dead/unreachable feed
+FCC Wireless Bureau,https://www.fcc.gov/wireless-bureau/rss,fcc.gov,Major News/Wire,2,Tier 2 National Media,92,dead,True,dead/unreachable feed
+NTIA Spectrum,https://www.ntia.gov/category/spectrum/feed,ntia.gov,Major News/Wire,2,Tier 2 National Media,92,dead,False,dead/unreachable feed
+NIST AI,https://www.nist.gov/artificial-intelligence/rss.xml,nist.gov,AI/ML,4,Tier 4 Technology Publications,76,dead,False,dead/unreachable feed
+Center for AI Safety,https://www.safe.ai/feed,safe.ai,AI/ML,4,Tier 4 Technology Publications,76,dead,False,dead/unreachable feed
+The Markup AI,https://themarkup.org/series/automated-influence/feed/,themarkup.org,AI/ML,4,Tier 4 Technology Publications,76,dead,False,dead/unreachable feed
+FCW AI,https://fcw.com/artificial-intelligence/rss,fcw.com,AI/ML,4,Tier 4 Technology Publications,76,dead,False,dead/unreachable feed
+Nextgov AI,https://www.nextgov.com/artificial-intelligence/rss,nextgov.com,AI/ML,4,Tier 4 Technology Publications,76,dead,False,dead/unreachable feed
+Defense One AI,https://www.defenseone.com/topic/artificial-intelligence/rss/,defenseone.com,AI/ML,4,Tier 4 Technology Publications,76,dead,False,dead/unreachable feed
+Open Technology Institute,https://www.newamerica.org/oti/feed/,newamerica.org,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,dead,False,dead/unreachable feed
+USTelecom Blog,https://www.ustelecom.org/feed/,ustelecom.org,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,active,True,duplicate coverage (already in DocuAction)
+Multichannel News,https://www.nexttv.com/rss/multichannel-news,nexttv.com,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,dead,False,dead/unreachable feed
+Wired Business,https://www.wired.com/feed/category/business/latest/rss,wired.com,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,active,True,duplicate coverage (already in DocuAction)
+Recode Vox,https://www.vox.com/recode/rss/index.xml,vox.com,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,dead,False,dead/unreachable feed
+Business Insider Tech,https://feeds.businessinsider.com/custom/tech,feeds.businessinsider.com,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,dead,False,dead/unreachable feed
+Wall Street Journal Tech,https://feeds.a.dj.com/rss/RSSWSJD.xml,feeds.a.dj.com,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,active,True,duplicate coverage (already in DocuAction)
+TechTarget Networking,https://www.techtarget.com/rss/SearchNetworking-News.xml,techtarget.com,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,dead,False,dead/unreachable feed
+TechTarget Telecom,https://www.techtarget.com/rss/SearchTelecom-News.xml,techtarget.com,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,dead,False,dead/unreachable feed
+TechTarget Security,https://www.techtarget.com/rss/SearchSecurity-News.xml,techtarget.com,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,dead,False,dead/unreachable feed
+SearchEnterpriseAI,https://www.techtarget.com/rss/SearchEnterpriseAI-News.xml,techtarget.com,Policy/Legal,3,Tier 3 Telecom/Broadband/Wireless Trade,80,dead,False,dead/unreachable feed
+Current - Public Media,https://current.org/feed/,current.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,active,True,duplicate coverage (already in DocuAction)
+RAIN News - Audio/Radio,https://rainnews.com/feed/,rainnews.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+Jacobin - Media,https://jacobin.com/feed/,jacobin.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+Poynter,https://www.poynter.org/feed/,poynter.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+MediaPost,https://www.mediapost.com/rss/,mediapost.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,True,dead/unreachable feed
+PR Newswire - Telecom,https://www.prnewswire.com/rss/news-releases-list.rss?tagABCSIC=5700000000,prnewswire.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+RCR Wireless 5G,https://www.rcrwireless.com/category/5g/feed,rcrwireless.com,Major News/Wire,2,Tier 2 National Media,92,active,True,duplicate coverage (already in DocuAction)
+FierceWireless 5G,https://www.fiercewireless.com/rss/5g-xml,fiercewireless.com,Major News/Wire,2,Tier 2 National Media,92,blocked,True,duplicate coverage (already in DocuAction)
+Light Reading 5G,https://www.lightreading.com/5g/rss.xml,lightreading.com,Major News/Wire,2,Tier 2 National Media,92,blocked,True,duplicate coverage (already in DocuAction)
+Nokia Bell Labs Blog,https://www.bell-labs.com/institute/feed/,bell-labs.com,Major News/Wire,2,Tier 2 National Media,92,dead,False,dead/unreachable feed
+Qualcomm Blog,https://www.qualcomm.com/news/blog/rss,qualcomm.com,Major News/Wire,2,Tier 2 National Media,92,dead,False,dead/unreachable feed
+Verizon News,https://www.verizon.com/about/news/rss,verizon.com,Major News/Wire,2,Tier 2 National Media,92,dead,False,dead/unreachable feed
+Comcast Newsroom,https://corporate.comcast.com/news-information/news-feed/rss,corporate.comcast.com,Major News/Wire,2,Tier 2 National Media,92,dead,False,dead/unreachable feed
+Charter Communications,https://corporate.charter.com/newsroom/rss,corporate.charter.com,Major News/Wire,2,Tier 2 National Media,92,dead,False,dead/unreachable feed
+CTIA Wireless,https://www.ctia.org/rss/,ctia.org,Major News/Wire,2,Tier 2 National Media,92,dead,False,dead/unreachable feed
+NCTA Cable,https://www.ncta.com/rss.xml,ncta.com,Major News/Wire,2,Tier 2 National Media,92,dead,False,dead/unreachable feed
+NTCA Rural Broadband,https://www.ntca.org/feed/,ntca.org,Major News/Wire,2,Tier 2 National Media,92,dead,False,dead/unreachable feed
+WISPA Wireless ISP,https://www.wispa.org/feed/,wispa.org,Major News/Wire,2,Tier 2 National Media,92,dead,False,dead/unreachable feed
+Reuters - Media,https://feeds.reuters.com/reuters/mediaNews,feeds.reuters.com,Major News/Wire,2,Tier 2 National Media,92,dead,True,dead/unreachable feed
+Bloomberg - Telecom,https://feeds.bloomberg.com/industries/TelecommunicationsServices.rss,feeds.bloomberg.com,Major News/Wire,2,Tier 2 National Media,92,dead,False,dead/unreachable feed
+Wall Street Journal - Media,https://feeds.content.dowjones.io/public/rss/mw_media,feeds.content.dowjones.io,Major News/Wire,2,Tier 2 National Media,92,dead,False,dead/unreachable feed
+The Guardian - Tech,https://www.theguardian.com/technology/rss,theguardian.com,Major News/Wire,2,Tier 2 National Media,92,dead,False,dead/unreachable feed
+Politico - Media,https://www.politico.com/rss/media.xml,politico.com,Major News/Wire,2,Tier 2 National Media,92,blocked,True,duplicate coverage (already in DocuAction)
+Politico - Congress,https://www.politico.com/rss/congress.xml,politico.com,Major News/Wire,2,Tier 2 National Media,92,blocked,True,duplicate coverage (already in DocuAction)
+Ars Technica - Policy,https://feeds.arstechnica.com/arstechnica/tech-policy,feeds.arstechnica.com,Major News/Wire,2,Tier 2 National Media,92,active,True,duplicate coverage (already in DocuAction)
+Ars Technica - Telecom,https://feeds.arstechnica.com/arstechnica/telecom,feeds.arstechnica.com,Major News/Wire,2,Tier 2 National Media,92,dead,True,dead/unreachable feed
+The Verge - Policy,https://www.theverge.com/rss/policy/index.xml,theverge.com,Major News/Wire,2,Tier 2 National Media,92,active,True,duplicate coverage (already in DocuAction)
+TechCrunch - Government,https://techcrunch.com/tag/government/feed/,techcrunch.com,Major News/Wire,2,Tier 2 National Media,92,active,True,duplicate coverage (already in DocuAction)
+Axios - Media Trends,https://api.axios.com/feed/axios/media-trends,api.axios.com,Major News/Wire,2,Tier 2 National Media,92,dead,True,dead/unreachable feed
+Axios - Technology,https://api.axios.com/feed/axios/technology,api.axios.com,Major News/Wire,2,Tier 2 National Media,92,dead,True,dead/unreachable feed
+Axios - Login,https://api.axios.com/feed/axios/login,api.axios.com,Major News/Wire,2,Tier 2 National Media,92,dead,True,dead/unreachable feed
+Pew Research - Tech,https://www.pewresearch.org/internet/feed/,pewresearch.org,Major News/Wire,2,Tier 2 National Media,92,dead,False,dead/unreachable feed
+Stanford Internet Observatory,https://stacks.stanford.edu/feed,stacks.stanford.edu,Major News/Wire,2,Tier 2 National Media,92,dead,False,dead/unreachable feed
+Duke Law Tech,https://law.duke.edu/news/rss/,law.duke.edu,Major News/Wire,2,Tier 2 National Media,92,dead,False,dead/unreachable feed
+Yale Law - Tech,https://law.yale.edu/rss/news,law.yale.edu,Major News/Wire,2,Tier 2 National Media,92,dead,False,dead/unreachable feed
+George Washington Law,https://www.law.gwu.edu/news/rss,law.gwu.edu,Major News/Wire,2,Tier 2 National Media,92,dead,False,dead/unreachable feed
+American University Law,https://www.wcl.american.edu/impact/rss/,wcl.american.edu,Major News/Wire,2,Tier 2 National Media,92,dead,False,dead/unreachable feed
+New York Times (Home),https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml,rss.nytimes.com,General,8,Tier 8 Unknown/Low Value,40,active,True,duplicate coverage (already in DocuAction)
+Philadelphia Inquirer,https://www.inquirer.com/arcio/rss/,inquirer.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+SF Gate,https://www.sfgate.com/default/feed/SFGate-Latest-News-2960713.php,sfgate.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Washington Post (National),https://feeds.washingtonpost.com/rss/national,feeds.washingtonpost.com,General,8,Tier 8 Unknown/Low Value,40,dead,True,dead/unreachable feed
+Atlanta Journal-Constitution,https://www.ajc.com/news/rss.xml,ajc.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Austin American-Statesman,https://www.statesman.com/arc/outboundfeeds/rss/,statesman.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Boston Globe,https://www.bostonglobe.com/rss/homepage,bostonglobe.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Dallas Morning News,https://www.dallasnews.com/arc/outboundfeeds/rss/,dallasnews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Detroit Free Press,https://www.freep.com/arcio/rss/,freep.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Houston Chronicle,https://www.houstonchronicle.com/arc/outboundfeeds/rss/,houstonchronicle.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Kansas City Star,https://www.kansascity.com/arc/outboundfeeds/rss/,kansascity.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Miami Herald,https://www.miamiherald.com/arc/outboundfeeds/rss/,miamiherald.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Tampa Bay Times,https://www.tampabay.com/feed/,tampabay.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Arizona Republic,https://www.azcentral.com/arc/outboundfeeds/rss/,azcentral.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+AP News (Top),https://feeds.apnews.com/rss/topnews,feeds.apnews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Ad Age,https://adage.com/rss/technology,adage.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Daily Beast,https://feeds.thedailybeast.com/rss/articles,feeds.thedailybeast.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Variety,https://variety.com/feed/,variety.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+HuffPost,https://www.huffpost.com/section/front-page/feed,huffpost.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Vice Motherboard,https://www.vice.com/en/section/tech/rss,vice.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Telecompetitor,https://www.telecompetitor.com/feed/,telecompetitor.com,General,8,Tier 8 Unknown/Low Value,40,active,True,duplicate coverage (already in DocuAction)
+Awful Announcing,https://awfulannouncing.com/feed/,awfulannouncing.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+NPR Homepage,https://feeds.npr.org/1001/rss.xml,feeds.npr.org,General,8,Tier 8 Unknown/Low Value,40,active,True,duplicate coverage (already in DocuAction)
+National Journal,https://www.nationaljournal.com/rss,nationaljournal.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+AL - Birmingham News,https://www.al.com/news/birmingham/index.ssf/rss2.0.xml,al.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+AL - Huntsville Times,https://www.al.com/news/huntsville/index.ssf/rss2.0.xml,al.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+AL - Mobile Press-Register,https://www.al.com/news/mobile/index.ssf/rss2.0.xml,al.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+AL - Montgomery Advertiser,https://www.montgomeryadvertiser.com/rss/,montgomeryadvertiser.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+AL - Tuscaloosa News,https://www.tuscaloosanews.com/rss/,tuscaloosanews.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+AK - Anchorage Daily News,https://www.adn.com/feed/,adn.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+AK - Juneau Empire,https://www.juneauempire.com/feed/,juneauempire.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+AK - Sitka Sentinel,https://www.sitkasentinel.com/feed/,sitkasentinel.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+AZ - Arizona Republic,https://www.azcentral.com/rss/,azcentral.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+AZ - East Valley Tribune,https://www.eastvalleytribune.com/feed/,eastvalleytribune.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+AZ - Prescott Daily Courier,https://www.dcourier.com/feed/,dcourier.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+AZ - Kingman Daily Miner,https://www.kingmandailyminer.com/feed/,kingmandailyminer.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+AR - Arkansas Democrat-Gazette,https://www.arkansasonline.com/syndication/rss/,arkansasonline.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+AR - Northwest Arkansas Democrat,https://www.nwaonline.com/syndication/rss/,nwaonline.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+CA - San Francisco Chronicle,https://www.sfgate.com/rss/feed/SFGate-Latest-News-2960713.php,sfgate.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+CA - Sacramento Bee,https://www.sacbee.com/news/local/rss,sacbee.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+CA - Fresno Bee,https://www.fresnobee.com/news/local/rss,fresnobee.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+CA - Riverside Press-Enterprise,https://www.pe.com/feed/,pe.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+CA - Ventura County Star,https://www.vcstar.com/rss/,vcstar.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+CA - Modesto Bee,https://www.modbee.com/news/local/rss,modbee.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+CA - Stockton Record,https://www.recordnet.com/rss/,recordnet.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+CA - Santa Barbara News-Press,https://newspress.com/feed/,newspress.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+CA - Marin Independent Journal,https://www.marinij.com/feed/,marinij.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+CA - Redding Record Searchlight,https://www.redding.com/rss/,redding.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+CA - Visalia Times-Delta,https://www.visaliatimesdelta.com/rss/,visaliatimesdelta.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+CO - Fort Collins Coloradoan,https://www.coloradoan.com/rss/,coloradoan.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+CT - New Haven Register,https://www.nhregister.com/feed/,nhregister.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+CT - Stamford Advocate,https://www.stamfordadvocate.com/feed/,stamfordadvocate.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+CT - Connecticut Post,https://www.ctpost.com/feed/,ctpost.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+CT - Norwich Bulletin,https://www.norwichbulletin.com/rss/,norwichbulletin.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+CT - Greenwich Time,https://www.greenwichtime.com/feed/,greenwichtime.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+CT - Danbury News-Times,https://www.newstimes.com/feed/,newstimes.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+DE - Delaware Online/News Journal,https://www.delawareonline.com/rss/,delawareonline.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+DE - Delaware State News,https://delawarestatesnews.com/feed/,delawarestatesnews.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+DE - Cape Gazette,https://www.capegazette.com/rss,capegazette.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+FL - Miami Herald,https://www.miamiherald.com/news/rss,miamiherald.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+FL - Florida Times-Union,https://www.jacksonville.com/arcio/rss/,jacksonville.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+FL - Tallahassee Democrat,https://www.tallahassee.com/rss/,tallahassee.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+FL - Palm Beach Post,https://www.palmbeachpost.com/rss/,palmbeachpost.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+FL - Sarasota Herald-Tribune,https://www.heraldtribune.com/rss/,heraldtribune.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+FL - Naples Daily News,https://www.naplesnews.com/rss/,naplesnews.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+FL - Pensacola News Journal,https://www.pnj.com/rss/,pnj.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+FL - Daytona Beach News-Journal,https://www.news-journalonline.com/rss/,news-journalonline.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+FL - Gainesville Sun,https://www.gainesville.com/rss/,gainesville.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+FL - Ocala Star-Banner,https://www.ocala.com/rss/,ocala.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+FL - Lakeland Ledger,https://www.theledger.com/rss/,theledger.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+FL - Melbourne Florida Today,https://www.floridatoday.com/rss/,floridatoday.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+FL - Fort Myers News-Press,https://www.news-press.com/rss/,news-press.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+FL - Stuart News,https://www.tcpalm.com/rss/,tcpalm.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+GA - Atlanta Journal-Constitution,https://www.ajc.com/feed/,ajc.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+GA - Savannah Morning News,https://www.savannahnow.com/rss/,savannahnow.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+GA - Augusta Chronicle,https://www.augustachronicle.com/rss/,augustachronicle.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+GA - Macon Telegraph,https://www.macon.com/news/local/rss,macon.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+GA - Columbus Ledger-Enquirer,https://www.ledger-enquirer.com/news/local/rss,ledger-enquirer.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+GA - Athens Banner-Herald,https://www.onlineathens.com/rss/,onlineathens.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+GA - Dalton Daily Citizen,https://www.daltondailycitizen.com/search/?f=rss,daltondailycitizen.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+HI - Maui News,https://www.mauinews.com/feed/,mauinews.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+ID - Idaho Statesman,https://www.idahostatesman.com/news/local/rss,idahostatesman.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+IL - Rockford Register Star,https://www.rrstar.com/rss/,rrstar.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+IL - Springfield State Journal-Reg,https://www.sj-r.com/rss/,sj-r.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+IL - Peoria Journal Star,https://www.pjstar.com/rss/,pjstar.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+IL - Aurora Beacon-News,https://www.chicagotribune.com/suburbs/aurora-beacon-news/rss2.0.xml,chicagotribune.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+IL - Naperville Sun,https://www.chicagotribune.com/suburbs/naperville-sun/rss2.0.xml,chicagotribune.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+IL - Daily Herald Suburbs,https://www.dailyherald.com/rss/,dailyherald.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+IL - Chicago Business,https://www.chicagobusiness.com/feeds/news/rss/,chicagobusiness.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+IN - Indianapolis Star,https://www.indystar.com/rss/,indystar.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+IN - Evansville Courier & Press,https://www.courierpress.com/rss/,courierpress.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+IN - Lafayette Journal & Courier,https://www.jconline.com/rss/,jconline.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+IN - Muncie Star Press,https://www.thestarpress.com/rss/,thestarpress.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+IN - Terre Haute Tribune-Star,https://www.tribstar.com/search/?f=rss&t=article&l=50,tribstar.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+IA - Des Moines Register,https://www.desmoinesregister.com/rss/,desmoinesregister.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+IA - Cedar Rapids Gazette,https://www.thegazette.com/feed/,thegazette.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+IA - Iowa City Press-Citizen,https://www.press-citizen.com/rss/,press-citizen.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+IA - Dubuque Telegraph Herald,https://www.telegraphherald.com/search/?f=rss&t=article&l=50,telegraphherald.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+KS - Wichita Eagle,https://www.kansas.com/news/local/rss,kansas.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+KS - Topeka Capital-Journal,https://www.cjonline.com/rss/,cjonline.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+KS - Hutchinson News,https://www.hutchnews.com/search/?f=rss&t=article&l=50,hutchnews.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+KY - Courier-Journal Louisville,https://www.courier-journal.com/rss/,courier-journal.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+KY - Lexington Herald-Leader,https://www.kentucky.com/news/local/rss,kentucky.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+KY - Paducah Sun,https://www.paducahsun.com/search/?f=rss&t=article&l=50,paducahsun.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+LA - Shreveport Times,https://www.shreveporttimes.com/rss/,shreveporttimes.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+LA - Monroe News-Star,https://www.thenewsstar.com/rss/,thenewsstar.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+LA - Lafayette Advertiser,https://www.theadvertiser.com/rss/,theadvertiser.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+LA - Alexandria Town Talk,https://www.thetowntalk.com/rss/,thetowntalk.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MD - Washington Post (MD),https://feeds.washingtonpost.com/rss/local/maryland,feeds.washingtonpost.com,Regional,6,Tier 6 Regional Newspapers,50,dead,True,dead/unreachable feed
+MD - Salisbury Daily Times,https://www.delmarvanow.com/rss/,delmarvanow.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MD - Cumberland Times-News,https://www.times-news.com/search/?f=rss&t=article&l=50,times-news.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MA - Boston Globe,https://www.bostonglobe.com/rss/,bostonglobe.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MA - Worcester Telegram & Gazette,https://www.telegram.com/arcio/rss/,telegram.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MA - Patriot Ledger,https://www.patriotledger.com/feed/,patriotledger.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MA - Cape Cod Times,https://www.capecodtimes.com/arcio/rss/,capecodtimes.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MA - Berkshire Eagle,https://www.berkshireeagle.com/feed/,berkshireeagle.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MI - Detroit News,https://www.detroitnews.com/arcio/rss/,detroitnews.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MI - Grand Rapids Press,https://www.mlive.com/grand-rapids/index.ssf/rss2.0.xml,mlive.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MI - Lansing State Journal,https://www.lansingstatejournal.com/rss/,lansingstatejournal.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MI - Flint Journal,https://www.mlive.com/flint/index.ssf/rss2.0.xml,mlive.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MI - Kalamazoo Gazette,https://www.mlive.com/kalamazoo/index.ssf/rss2.0.xml,mlive.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MI - Ann Arbor News,https://www.mlive.com/ann-arbor/index.ssf/rss2.0.xml,mlive.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MI - Bay City Times,https://www.mlive.com/bay-city/index.ssf/rss2.0.xml,mlive.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MI - Saginaw News,https://www.mlive.com/saginaw/index.ssf/rss2.0.xml,mlive.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MI - Traverse City Record-Eagle,https://www.record-eagle.com/search/?f=rss&t=article&l=50,record-eagle.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MI - Muskegon Chronicle,https://www.mlive.com/muskegon/index.ssf/rss2.0.xml,mlive.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MI - Detroit Business,https://www.crainsdetroit.com/rss/,crainsdetroit.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MN - Minneapolis Star Tribune,https://www.startribune.com/feeds/,startribune.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MN - St. Paul Pioneer Press,https://www.twincities.com/feed/,twincities.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MN - Duluth News Tribune,https://www.duluthnewstribune.com/feed/,duluthnewstribune.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MN - St. Cloud Times,https://www.sctimes.com/rss/,sctimes.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MS - Clarion-Ledger Jackson,https://www.clarionledger.com/rss/,clarionledger.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MS - Sun Herald Biloxi,https://www.sunherald.com/news/local/rss,sunherald.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MS - Hattiesburg American,https://www.hattiesburgamerican.com/rss/,hattiesburgamerican.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MS - Meridian Star,https://www.meridianstar.com/search/?f=rss&t=article&l=50,meridianstar.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MO - Kansas City Star,https://www.kansascity.com/news/local/rss,kansascity.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MO - Springfield News-Leader,https://www.news-leader.com/rss/,news-leader.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MO - Joplin Globe,https://www.joplinglobe.com/search/?f=rss&t=article&l=50,joplinglobe.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MO - St. Joseph News-Press,https://www.newspressnow.com/search/?f=rss&t=article&l=50,newspressnow.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MO - Columbia Tribune,https://www.columbiatribune.com/search/?f=rss&t=article&l=50,columbiatribune.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MT - Missoulian,https://missoulian.com/search/?f=rss&t=article&l=50,missoulian.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+MT - Great Falls Tribune,https://www.greatfallstribune.com/rss/,greatfallstribune.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NV - Las Vegas Sun,https://lasvegassun.com/feed/,lasvegassun.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NV - Reno Gazette-Journal,https://www.rgj.com/rss/,rgj.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NV - Las Vegas Weekly,https://lasvegasweekly.com/feed/,lasvegasweekly.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NJ - NJ.com / Star-Ledger,https://www.nj.com/arcio/rss/,nj.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NJ - Bergen Record,https://www.northjersey.com/arcio/rss/,northjersey.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NJ - Asbury Park Press,https://www.app.com/rss/,app.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NJ - Courier-Post Cherry Hill,https://www.courierpostonline.com/rss/,courierpostonline.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NJ - Burlington County Times,https://www.burlingtoncountytimes.com/rss/,burlingtoncountytimes.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NJ - Home News Tribune,https://www.mycentraljersey.com/rss/,mycentraljersey.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NJ - Times of Trenton,https://www.nj.com/times-of-trenton/index.ssf/rss2.0.xml,nj.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NM - Albuquerque Journal,https://www.abqjournal.com/feed/,abqjournal.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NM - Las Cruces Sun-News,https://www.lcsun-news.com/rss/,lcsun-news.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NM - Farmington Daily Times,https://www.daily-times.com/rss/,daily-times.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NY - Newsday Long Island,https://www.newsday.com/rss,newsday.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NY - Rochester Democrat & Chronicle,https://www.democratandchronicle.com/rss/,democratandchronicle.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NY - Syracuse Post-Standard,https://www.syracuse.com/arcio/rss/,syracuse.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NY - Binghamton Press & Sun-Bull,https://www.pressconnects.com/rss/,pressconnects.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NY - Poughkeepsie Journal,https://www.poughkeepsiejournal.com/rss/,poughkeepsiejournal.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NY - Journal News Westchester,https://www.lohud.com/arcio/rss/,lohud.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NY - Staten Island Advance,https://www.silive.com/arcio/rss/,silive.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NY - City & State NY,https://www.cityandstateny.com/feed/,cityandstateny.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NC - Charlotte Observer,https://www.charlotteobserver.com/news/local/rss,charlotteobserver.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NC - News & Observer Raleigh,https://www.newsobserver.com/news/local/rss,newsobserver.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NC - Winston-Salem Journal,https://www.journalnow.com/search/?f=rss&t=article&l=50,journalnow.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NC - Durham Herald-Sun,https://www.heraldsun.com/news/local/rss,heraldsun.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NC - Fayetteville Observer,https://www.fayobserver.com/rss/,fayobserver.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NC - Wilmington Star-News,https://www.starnewsonline.com/rss/,starnewsonline.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NC - Asheville Citizen-Times,https://www.citizen-times.com/rss/,citizen-times.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NC - High Point Enterprise,https://www.hpenews.com/search/?f=rss&t=article&l=50,hpenews.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+NC - Rocky Mount Telegram,https://www.rockymounttelegram.com/search/?f=rss&t=article&l=50,rockymounttelegram.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+ND - Minot Daily News,https://www.minotdailynews.com/feed/,minotdailynews.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+OH - Cleveland Plain Dealer,https://www.cleveland.com/arcio/rss/,cleveland.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+OH - Cincinnati Enquirer,https://www.cincinnati.com/rss/,cincinnati.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+OH - Akron Beacon Journal,https://www.beaconjournal.com/search/?f=rss&t=article&l=50,beaconjournal.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+OH - Dayton Daily News,https://www.daytondailynews.com/rss/,daytondailynews.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+OH - Canton Repository,https://www.cantonrep.com/search/?f=rss&t=article&l=50,cantonrep.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+OH - Springfield News-Sun,https://www.springfieldnewssun.com/rss/,springfieldnewssun.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+OH - Mansfield News Journal,https://www.mansfieldnewsjournal.com/rss/,mansfieldnewsjournal.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+OH - Cleveland Business,https://www.crainscleveland.com/rss/,crainscleveland.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+OK - Oklahoman,https://www.oklahoman.com/rss/,oklahoman.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+OK - Enid News & Eagle,https://www.enidnews.com/search/?f=rss&t=article&l=50,enidnews.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+OK - Muskogee Phoenix,https://www.muskogeephoenix.com/search/?f=rss&t=article&l=50,muskogeephoenix.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+OR - Oregonian Portland,https://www.oregonlive.com/arcio/rss/,oregonlive.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+OR - Salem Statesman Journal,https://www.statesmanjournal.com/rss/,statesmanjournal.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+OR - Medford Mail Tribune,https://www.mailtribune.com/search/?f=rss&t=article&l=50,mailtribune.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+OR - Bend Bulletin,https://www.bendbulletin.com/search/?f=rss&t=article&l=50,bendbulletin.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+OR - Willamette Week,https://www.wweek.com/feed/,wweek.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+OR - Oregon Public Broadcasting,https://www.opb.org/rss/news/,opb.org,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+PA - Harrisburg Patriot-News,https://www.pennlive.com/arcio/rss/,pennlive.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+PA - Wilkes-Barre Citizens Voice,https://www.citizensvoice.com/search/?f=rss&t=article&l=50,citizensvoice.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+PA - Pittsburgh Business Times,https://www.bizjournals.com/pittsburgh/feed/latest/,bizjournals.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+PA - Spotlight PA,https://www.spotlightpa.org/feed/,spotlightpa.org,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+RI - Providence Journal,https://www.providencejournal.com/arcio/rss/,providencejournal.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+SC - State Columbia,https://www.thestate.com/news/local/rss,thestate.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+SC - Greenville News,https://www.greenvilleonline.com/rss/,greenvilleonline.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+SC - Myrtle Beach Sun News,https://www.myrtlebeachonline.com/news/local/rss,myrtlebeachonline.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+SC - Rock Hill Herald,https://www.heraldonline.com/news/local/rss,heraldonline.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+SC - Anderson Independent Mail,https://www.independentmail.com/rss/,independentmail.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+SD - Argus Leader Sioux Falls,https://www.argusleader.com/rss/,argusleader.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+TN - Tennessean Nashville,https://www.tennessean.com/rss/,tennessean.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+TN - Memphis Commercial Appeal,https://www.commercialappeal.com/rss/,commercialappeal.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+TN - Knoxville News Sentinel,https://www.knoxnews.com/rss/,knoxnews.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+TN - Jackson Sun,https://www.jacksonsun.com/rss/,jacksonsun.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+TN - Clarksville Leaf-Chronicle,https://www.theleafchronicle.com/rss/,theleafchronicle.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+TX - Dallas Morning News,https://www.dallasnews.com/arcio/rss/,dallasnews.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+TX - Houston Chronicle,https://www.houstonchronicle.com/arcio/rss/,houstonchronicle.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+TX - San Antonio Express-News,https://www.mysanantonio.com/arcio/rss/,mysanantonio.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+TX - Austin American-Statesman,https://www.statesman.com/arcio/rss/,statesman.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+TX - Fort Worth Star-Telegram,https://www.star-telegram.com/news/local/rss,star-telegram.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+TX - El Paso Times,https://www.elpasotimes.com/rss/,elpasotimes.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+TX - Corpus Christi Caller-Times,https://www.caller.com/rss/,caller.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+TX - Lubbock Avalanche-Journal,https://www.lubbockonline.com/rss/,lubbockonline.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+TX - Abilene Reporter-News,https://www.reporternews.com/rss/,reporternews.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+TX - Beaumont Enterprise,https://www.beaumontenterprise.com/arcio/rss/,beaumontenterprise.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+TX - Midland Reporter-Telegram,https://www.mrt.com/search/?f=rss&t=article&l=50,mrt.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+TX - Odessa American,https://www.oaoa.com/search/?f=rss&t=article&l=50,oaoa.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+TX - Dallas Observer,https://www.dallasobserver.com/feed/,dallasobserver.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+UT - Salt Lake Tribune,https://www.sltrib.com/feed/,sltrib.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+UT - Deseret News,https://www.deseret.com/rss,deseret.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+UT - Provo Daily Herald,https://www.heraldextra.com/search/?f=rss&t=article&l=50,heraldextra.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+UT - St. George Spectrum,https://www.thespectrum.com/rss/,thespectrum.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+UT - Ogden Standard-Examiner,https://www.standard.net/search/?f=rss&t=article&l=50,standard.net,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+VT - Burlington Free Press,https://www.burlingtonfreepress.com/rss/,burlingtonfreepress.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+VA - Virginian-Pilot Norfolk,https://www.pilotonline.com/arcio/rss/,pilotonline.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+VA - Washington Post (VA),https://feeds.washingtonpost.com/rss/local/virginia,feeds.washingtonpost.com,Regional,6,Tier 6 Regional Newspapers,50,dead,True,dead/unreachable feed
+VA - Staunton News Leader,https://www.newsleader.com/rss/,newsleader.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+WA - Seattle Post-Intelligencer,https://www.seattlepi.com/seattlenews/feed/,seattlepi.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+WA - Spokane Spokesman-Review,https://www.spokesman.com/feed/,spokesman.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+WA - Tacoma News Tribune,https://www.thenewstribune.com/news/local/rss,thenewstribune.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+WA - Bellingham Herald,https://www.bellinghamherald.com/news/local/rss,bellinghamherald.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+WA - Olympian,https://www.theolympian.com/news/local/rss,theolympian.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+WA - Tri-City Herald,https://www.tri-cityherald.com/news/local/rss,tri-cityherald.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+WA - Crosscut,https://crosscut.com/feed,crosscut.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+DC - Politico,https://www.politico.com/rss/politicopicks.xml,politico.com,General,8,Tier 8 Unknown/Low Value,40,blocked,True,duplicate coverage (already in DocuAction)
+DC - DCist,https://dcist.com/feed,dcist.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+WV - Huntington Herald-Dispatch,https://www.herald-dispatch.com/search/?f=rss&t=article&l=50,herald-dispatch.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+WV - Wheeling Intelligencer,https://www.theintelligencer.net/search/?f=rss&t=article&l=50,theintelligencer.net,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+WI - Milwaukee Journal Sentinel,https://www.jsonline.com/arcio/rss/,jsonline.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+WI - Green Bay Press-Gazette,https://www.greenbaypressgazette.com/rss/,greenbaypressgazette.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+WI - Appleton Post-Crescent,https://www.postcrescent.com/rss/,postcrescent.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+WI - Sheboygan Press,https://www.sheboyganpress.com/rss/,sheboyganpress.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+WI - Oshkosh Northwestern,https://www.thenorthwestern.com/rss/,thenorthwestern.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+WI - Fond du Lac Reporter,https://www.fdlreporter.com/rss/,fdlreporter.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+WI - Wausau Daily Herald,https://www.wausaudailyherald.com/rss/,wausaudailyherald.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+WI - Stevens Point Journal,https://www.stevenspointjournal.com/rss/,stevenspointjournal.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+WI - WisContext,https://www.wiscontext.org/feed/,wiscontext.org,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+WY - Casper Star-Tribune,https://trib.com/search/?f=rss&t=article&l=50,trib.com,Regional,6,Tier 6 Regional Newspapers,50,dead,False,dead/unreachable feed
+National - The Intercept,https://theintercept.com/feed/?rss,theintercept.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+National - Vox,https://www.vox.com/rss/index.xml,vox.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+National - BuzzFeed News,https://www.buzzfeednews.com/rss,buzzfeednews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+National - New Republic,https://newrepublic.com/feed,newrepublic.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+National - Governing,https://www.governing.com/rss/all/,governing.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+National - The Markup,https://themarkup.org/feed/,themarkup.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+National - Rest of World,https://restofworld.org/feed/,restofworld.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WBAL Baltimore,https://www.wbaltv.com/news/rss,wbaltv.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+TV - WBZ Boston,https://www.cbsnews.com/boston/latest/rss/,cbsnews.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+TV - WEWS Cleveland,https://www.news5cleveland.com/rss,news5cleveland.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+TV - WXYZ Detroit,https://www.wxyz.com/rss,wxyz.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+TV - WDSU New Orleans,https://www.wdsu.com/rss,wdsu.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+TV - KPHO Phoenix,https://www.azfamily.com/rss,azfamily.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+TV - WPXI Pittsburgh,https://www.wpxi.com/rss,wpxi.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+TV - KGTV San Diego,https://www.10news.com/rss,10news.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+TV - KOMO Seattle,https://komonews.com/feed/,komonews.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+TV - WTTG Washington DC,https://www.fox5dc.com/rss,fox5dc.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+TV - WTMJ Milwaukee,https://www.tmj4.com/rss,tmj4.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+TV - WESH Orlando,https://www.wesh.com/rss,wesh.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+TV - WFTS Tampa,https://www.abcactionnews.com/rss,abcactionnews.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+TV - WSB Atlanta,https://www.wsbtv.com/rss,wsbtv.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+TV - WRAL Raleigh,https://www.wral.com/rss/,wral.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+TV - WLWT Cincinnati,https://www.wlwt.com/rss,wlwt.com,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+Radio - WBEZ Chicago,https://www.wbez.org/feed/news,wbez.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+Radio - KQED San Francisco,https://www.kqed.org/news/feed,kqed.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+Radio - KPCC Los Angeles,https://www.kpcc.org/rss/news/latest,kpcc.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+Radio - KPBS San Diego,https://www.kpbs.org/rss,kpbs.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+Radio - WOSU Columbus,https://radio.wosu.org/term/news/feed,radio.wosu.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+Radio - WUSF Tampa,https://wusfnews.wusf.usf.edu/feed,wusfnews.wusf.usf.edu,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+Radio - WESA Pittsburgh,https://www.wesa.fm/feed,wesa.fm,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+Radio - KJZZ Phoenix,https://kjzz.org/rss.xml,kjzz.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+Radio - KUOW Seattle,https://www.kuow.org/rss,kuow.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+Radio - WWNO New Orleans,https://www.wwno.org/rss,wwno.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+Radio - KUER Salt Lake City,https://www.kuer.org/feed,kuer.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+Radio - WFIT Melbourne FL,https://www.wfit.org/rss,wfit.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+Radio - KBIA Columbia MO,https://www.kbia.org/feed,kbia.org,Broadcast/Radio,5,Tier 5 Broadcast News Websites,72,dead,False,dead/unreachable feed
+AL - Selma Times-Journal,https://www.selmatimesjournal.com/feed/,selmatimesjournal.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+AL - Troy Messenger,https://www.troymessenger.com/feed/,troymessenger.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+AL - Brewton Standard,https://www.brewtonstandard.com/feed/,brewtonstandard.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+AL - AL.com Statewide,https://www.al.com/news/index.ssf/rss2.0.xml,al.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+AK - Alaska Public Media,https://alaskapublic.org/feed/,alaskapublic.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+AZ - Arizona Luminaria,https://arizluminaria.com/feed/,arizluminaria.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+AZ - Show Low Independent,https://www.showlowindependent.com/feed/,showlowindependent.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+AR - Texarkana Gazette,https://www.texarkanagazette.com/news/arkansas/rss,texarkanagazette.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+AR - Harrison Daily Times,https://www.harrisondaily.com/search/?f=rss,harrisondaily.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+AR - Mountain Home Baxter Bulletin,https://www.baxterbulletin.com/rss/,baxterbulletin.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+CA - San Francisco Examiner,https://www.sfexaminer.com/feed/,sfexaminer.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+CA - Petaluma Argus-Courier,https://www.petaluma360.com/search/?f=rss,petaluma360.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+CA - Vallejo Times-Herald,https://www.timesheraldonline.com/feed/,timesheraldonline.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+CA - Davis Enterprise,https://www.davisenterprise.com/feed/,davisenterprise.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+CA - San Luis Obispo Tribune,https://www.sanluisobispo.com/news/local/rss,sanluisobispo.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+CA - Merced Sun-Star,https://www.mercedsunstar.com/news/local/rss,mercedsunstar.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+CA - Hanford Sentinel,https://www.hanfordsentinel.com/search/?f=rss,hanfordsentinel.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+CA - Victorville Daily Press,https://www.vvdailypress.com/feed/,vvdailypress.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+CA - Barstow Desert Dispatch,https://www.desertsun.com/rss/,desertsun.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+CA - LAist,https://laist.com/feed,laist.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+CA - SF Weekly,https://www.sfweekly.com/feed/,sfweekly.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+CO - Telluride Daily Planet,https://www.telluridenews.com/feed/,telluridenews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+CO - Colorado Springs Indy,https://www.csindy.com/feed/,csindy.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+CT - New Haven Independent,https://www.newhavenindependent.org/atom.xml,newhavenindependent.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+CT - Middletown Press,https://www.middletownpress.com/feed/,middletownpress.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+CT - Register Citizen Torrington,https://www.registercitizen.com/feed/,registercitizen.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+FL - Bradenton Herald,https://www.bradenton.com/news/local/rss,bradenton.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+FL - Leesburg Daily Commercial,https://www.dailycommercial.com/search/?f=rss,dailycommercial.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+FL - St. Augustine Record,https://www.staugustine.com/arcio/rss/,staugustine.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+FL - Palatka Daily News,https://www.palatka-daily-news.com/search/?f=rss,palatka-daily-news.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+FL - Florida Trend,https://www.floridatrend.com/rss,floridatrend.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+FL - FLHealthNews,https://health.wusf.usf.edu/feed,health.wusf.usf.edu,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+GA - Valdosta Daily Times,https://www.valdostadailytimes.com/search/?f=rss,valdostadailytimes.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+GA - Statesboro Herald,https://www.statesboroherald.com/feed/,statesboroherald.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+GA - LaGrange Daily News,https://www.lagrangenews.com/feed/,lagrangenews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+GA - Douglas Enterprise,https://www.douglasenterprise.net/feed/,douglasenterprise.net,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+GA - Georgia Virtue,https://georgiavirtu.com/feed/,georgiavirtu.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+IL - Elgin Courier-News,https://www.chicagotribune.com/suburbs/elgin-courier-news/rss2.0.xml,chicagotribune.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+IL - Joliet Herald-News,https://www.chicagotribune.com/suburbs/joliet-herald-news/rss2.0.xml,chicagotribune.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+IL - Lake County News-Sun,https://www.chicagotribune.com/suburbs/lake-county-news-sun/rss2.0.xml,chicagotribune.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+IL - Waukegan News-Sun,https://www.chicagotribune.com/suburbs/waukegan-lake-county-news-sun/rss2.0.xml,chicagotribune.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+IL - Kankakee Daily Journal,https://www.daily-journal.com/search/?f=rss,daily-journal.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+IL - Ottawa Times,https://www.mywebtimes.com/search/?f=rss,mywebtimes.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+IL - Illinois Newsroom,https://illinoisnewsroom.org/feed/,illinoisnewsroom.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+IN - Richmond Palladium-Item,https://www.pal-item.com/rss/,pal-item.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+IN - Logansport Pharos-Tribune,https://www.pharostribune.com/search/?f=rss,pharostribune.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+IA - Iowa Public Radio,https://www.iowapublicradio.org/rss/,iowapublicradio.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+KS - Garden City Telegram,https://www.gctelegram.com/search/?f=rss,gctelegram.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+KS - Dodge City Daily Globe,https://www.dodgeglobeplus.com/search/?f=rss,dodgeglobeplus.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+KS - Leavenworth Times,https://www.leavenworthtimes.com/search/?f=rss,leavenworthtimes.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+LA - St. Tammany Farmer,https://www.sttammanyfarmer.net/search/?f=rss,sttammanyfarmer.net,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+LA - Natchitoches Times,https://www.natchitochestimes.com/search/?f=rss,natchitochestimes.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+ME - Maine Beacon,https://mainebeacon.com/feed/,mainebeacon.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+ME - Ellsworth American,https://www.ellsworthamerican.com/feed/,ellsworthamerican.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+ME - Mount Desert Islander,https://www.mdislander.com/feed/,mdislander.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+MD - Bay Journal,https://www.bayjournal.com/feed/,bayjournal.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+MD - Montgomery County Sentinel,https://www.thesentinel.com/feed/,thesentinel.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+MD - Prince George Sentinel,https://pgsentinel.com/feed/,pgsentinel.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+MA - Brockton Enterprise,https://www.enterprisenews.com/feed/,enterprisenews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+MA - Taunton Gazette,https://www.tauntongazette.com/feed/,tauntongazette.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+MA - Fall River Herald News,https://www.heraldnews.com/feed/,heraldnews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+MA - Milford Daily News,https://www.milforddailynews.com/feed/,milforddailynews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+MA - MetroWest Daily News,https://www.metrowestdailynews.com/feed/,metrowestdailynews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+MA - Boston.com,https://www.boston.com/tag/news/feed/,boston.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+MI - Traverse City Ticker,https://www.traverseticker.com/feed/,traverseticker.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+MI - Monroe News,https://www.monroenews.com/search/?f=rss,monroenews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+MI - Battle Creek Enquirer,https://www.battlecreekenquirer.com/rss/,battlecreekenquirer.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+MI - Jackson Citizen Patriot,https://www.mlive.com/jackson/index.ssf/rss2.0.xml,mlive.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+MI - Alpena News,https://www.thealpenanews.com/feed/,thealpenanews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+MN - Duluth Reader,https://duluthreader.com/feed/,duluthreader.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+MS - Natchez Democrat,https://www.natchezdemocrat.com/feed/,natchezdemocrat.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+MS - Laurel Leader-Call,https://www.laurelleadercall.com/search/?f=rss,laurelleadercall.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+MS - Picayune Item,https://www.picayuneitem.com/search/?f=rss,picayuneitem.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+MO - Rolla Daily News,https://www.therolladailynews.com/search/?f=rss,therolladailynews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+MO - Cape Girardeau SE Missourian,https://www.semissourian.com/rss/,semissourian.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+MO - Hannibal Courier-Post,https://www.hannibal.net/search/?f=rss,hannibal.net,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+MT - Montana Public Radio,https://www.mtpr.org/rss,mtpr.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+NE - NET Nebraska,https://netnebraska.org/feed,netnebraska.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+NV - Reno News & Review,https://www.newsreview.com/reno/rss/,newsreview.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+NJ - Vineland Daily Journal,https://www.thedailyjournal.com/rss/,thedailyjournal.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+NJ - Morristown Daily Record,https://www.dailyrecord.com/rss/,dailyrecord.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+NM - Clovis Media,https://www.clovisnews.com/search/?f=rss,clovisnews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+NY - Ithaca Journal,https://www.ithacajournal.com/rss/,ithacajournal.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+NY - Elmira Star-Gazette,https://www.stargazette.com/rss/,stargazette.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+NY - Plattsburgh Press-Republican,https://www.pressrepublican.com/search/?f=rss,pressrepublican.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+NY - Watertown Daily Times,https://www.watertowndailytimes.com/search/?f=rss,watertowndailytimes.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+NY - Queens Daily Eagle,https://queenseagle.com/feed/,queenseagle.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+NC - Burlington Times-News,https://www.thetimesnews.com/search/?f=rss,thetimesnews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+NC - NC Health News,https://www.northcarolinahealthnews.org/feed/,northcarolinahealthnews.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+ND - Prairie Public Radio,https://www.prairiepublic.org/rss,prairiepublic.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+OH - Chillicothe Gazette,https://www.chillicothegazette.com/rss/,chillicothegazette.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+OH - Zanesville Times Recorder,https://www.zanesvilletimesrecorder.com/rss/,zanesvilletimesrecorder.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+OH - Lancaster Eagle-Gazette,https://www.lancastereaglegazette.com/rss/,lancastereaglegazette.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+OH - Fremont News-Messenger,https://www.thenews-messenger.com/rss/,thenews-messenger.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+OH - Sandusky Register,https://www.sanduskyregister.com/search/?f=rss,sanduskyregister.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+OH - Marion Star,https://www.marionstar.com/rss/,marionstar.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+OK - Chickasha Express-Star,https://www.chickashanews.com/search/?f=rss,chickashanews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+OR - Ashland Tidings,https://www.dailytidings.com/search/?f=rss,dailytidings.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+OR - The Lund Report,https://www.lundreport.org/feed/,lundreport.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+OR - Oregon Capital Chronicle,https://oregoncapitalchronicle.com/feed/,oregoncapitalchronicle.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+PA - Altoona Mirror,https://www.altoonamirror.com/feed/,altoonamirror.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+PA - New Castle News,https://www.ncnewsonline.com/search/?f=rss,ncnewsonline.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+PA - Lebanon Daily News,https://www.ldnews.com/rss/,ldnews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+PA - York Daily Record,https://www.ydr.com/rss/,ydr.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+PA - Chambersburg Public Opinion,https://www.publicopiniononline.com/rss/,publicopiniononline.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+PA - Centre Daily Times,https://www.centredaily.com/news/local/rss,centredaily.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+RI - East Bay Media,https://www.eastbayri.com/feed/,eastbayri.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+RI - Cranston Herald,https://www.cranstononline.com/feed/,cranstononline.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+SC - Beaufort Gazette,https://www.islandpacket.com/news/local/rss,islandpacket.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+SD - Brookings Register,https://www.brookingsregister.com/search/?f=rss,brookingsregister.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+SD - Huron Plainsman,https://www.plainsman.com/search/?f=rss,plainsman.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TN - Murfreesboro Daily News Journal,https://www.dnj.com/rss/,dnj.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TX - Lufkin Daily News,https://lufkindailynews.com/search/?f=rss,lufkindailynews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TX - Texarkana Gazette,https://www.texarkanagazette.com/news/texas/rss,texarkanagazette.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TX - Victoria Advocate,https://www.victoriaadvocate.com/search/?f=rss,victoriaadvocate.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TX - San Angelo Standard-Times,https://www.gosanangelo.com/rss/,gosanangelo.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TX - Denton Record-Chronicle,https://www.dentonrc.com/search/?f=rss,dentonrc.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TX - McKinney Courier-Gazette,https://www.courier-gazette.com/search/?f=rss,courier-gazette.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+VA - Virginia Public Media,https://www.wvtf.org/rss,wvtf.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+WA - Bellingham Business Journal,https://www.bbjtoday.com/feed/,bbjtoday.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+WA - Tacoma Weekly,https://tacomaweekly.com/feed/,tacomaweekly.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+WA - Spokane Journal of Business,https://www.spokanejournal.com/feed/,spokanejournal.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+WA - InvestigateWest,https://www.invw.org/feed/,invw.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+WV - Clarksburg Exponent Telegram,https://www.exponenttelegram.com/search/?f=rss,exponenttelegram.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+WV - WV Watch,https://wvwatch.com/feed/,wvwatch.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+WI - Rhinelander Daily News,https://www.rhinelanderdailynews.com/search/?f=rss,rhinelanderdailynews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+WI - Marshfield News-Herald,https://www.marshfieldnewsherald.com/rss/,marshfieldnewsherald.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+WI - Two Rivers Herald Times Reporter,https://www.htrnews.com/rss/,htrnews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+WI - Milwaukee Independent,https://milwaukeeindependent.com/feed/,milwaukeeindependent.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+WY - Sheridan Press,https://www.thesheridanpress.com/search/?f=rss,thesheridanpress.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+WY - Riverton Ranger,https://www.riverton-ranger.com/search/?f=rss,riverton-ranger.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+WY - Wyoming Public Media,https://wyomingpublicmedia.org/feed,wyomingpublicmedia.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Spanish - El Nuevo Herald Miami,https://www.elnuevoherald.com/latest-news/rss,elnuevoherald.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Spanish - Al Dia Dallas,https://aldiatx.com/feed/,aldiatx.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Spanish - Hoy Chicago,https://www.chicagotribune.com/hoy/rss2.0.xml,chicagotribune.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Spanish - Impacto Latin News,https://impactolatin.news/feed/,impactolatin.news,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Spanish - Univision News,https://www.univision.com/noticias/rss,univision.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Spanish - NBC Latino,https://www.nbcnews.com/id/46380265/device/rss/rss.xml,nbcnews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Spanish - Latina Magazine,https://www.latina.com/feed/,latina.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Ethnic - Black Press USA,https://www.blackpressusa.com/feed/,blackpressusa.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Ethnic - Chicago Defender,https://chicagodefender.com/feed/,chicagodefender.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Ethnic - Dallas Examiner,https://dallasexaminer.com/feed/,dallasexaminer.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Ethnic - Houston Forward Times,https://forwardtimes.com/feed/,forwardtimes.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Ethnic - Charlotte Post,https://thecharlottepost.com/feed/,thecharlottepost.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Ethnic - Carolina Peacemaker,https://www.carolinapeacemaker.com/feed/,carolinapeacemaker.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Ethnic - Arab American News,https://www.arabamericannews.com/feed/,arabamericannews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Ethnic - Asian American Press,https://www.asianamericanpress.com/feed/,asianamericanpress.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Ethnic - India Abroad,https://www.indiaabroad-digital.com/feed/,indiaabroad-digital.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Ethnic - Korea Daily USA,https://www.koreadaily.com/rss/,koreadaily.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Ethnic - World Journal Chinese,https://www.worldjournal.com/feed/,worldjournal.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Wire - AP Technology,https://feeds.apnews.com/rss/Technology,feeds.apnews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Wire - AP Business,https://feeds.apnews.com/rss/Business,feeds.apnews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Wire - AP Politics,https://feeds.apnews.com/rss/Politics,feeds.apnews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Wire - AP Washington,https://feeds.apnews.com/rss/Washington,feeds.apnews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Wire - Reuters Top News,https://feeds.reuters.com/reuters/topNews,feeds.reuters.com,General,8,Tier 8 Unknown/Low Value,40,dead,True,dead/unreachable feed
+Wire - Reuters US,https://feeds.reuters.com/reuters/domesticNews,feeds.reuters.com,General,8,Tier 8 Unknown/Low Value,40,dead,True,dead/unreachable feed
+Wire - UPI Top News,https://www.upi.com/rss/Top_News/,upi.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Wire - McClatchy DC,https://www.mcclatchydc.com/rss,mcclatchydc.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Wire - Lee Enterprises,https://leeenterprise.com/feed/,leeenterprise.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Wire - Gannett Tracker,https://www.usatoday.com/rss/,usatoday.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Cable - C-SPAN,https://www.c-span.org/feed/?type=video,c-span.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Fox News Latest,https://feeds.foxnews.com/foxnews/latest,feeds.foxnews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Cable - CNN Politics,https://rss.cnn.com/rss/cnn_allpolitics.rss,rss.cnn.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Cable - Newsmax,https://www.newsmax.com/rss/Newsfront/1,newsmax.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Trade - Ad Age,https://adage.com/rss,adage.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Trade - Media Play News,https://www.mediaplaynews.com/feed/,mediaplaynews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Trade - TVSpy,https://www.adweek.com/tvspy/feed/,adweek.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Watch - Alaska Public Interest Res,https://www.alaskareport.com/feed/,alaskareport.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Watch - Arkansas Investigative News,https://arkinvestigative.org/feed/,arkinvestigative.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Watch - Colorado Independent,https://www.coloradoindependent.com/feed/,coloradoindependent.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Watch - Delaware Public Media,https://www.delawarepublic.org/rss,delawarepublic.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Watch - Florida Center Investigative,https://fcir.org/feed/,fcir.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Watch - Hawaii News Now,https://www.hawaiinewsnow.com/rss,hawaiinewsnow.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Watch - Boise State Public Radio,https://www.boisestatepublicradio.org/rss,boisestatepublicradio.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Watch - IndyStar Watchdog,https://www.indystar.com/news/watchdog/rss,indystar.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Watch - Kansas News Service,https://www.kansasnewsservice.org/feed,kansasnewsservice.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KTVT Dallas,https://www.cbsdfw.com/rss,cbsdfw.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KRIV Houston,https://www.fox26houston.com/feed/,fox26houston.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WFLD Chicago,https://www.fox32chicago.com/feed/,fox32chicago.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WGCL Atlanta,https://www.cbs46.com/rss,cbs46.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WPTV West Palm Beach,https://www.wptv.com/rss,wptv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WFTV Orlando,https://www.wftv.com/rss,wftv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WSVN Miami,https://wsvn.com/feed/,wsvn.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WFOR Miami,https://www.cbsmiami.com/rss/,cbsmiami.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KIRO Seattle,https://www.kirotv.com/feed/,kirotv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KATU Portland,https://katu.com/feed/,katu.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KTVU San Francisco,https://www.ktvu.com/feed/,ktvu.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KPIX San Francisco,https://www.cbsnews.com/sanfrancisco/latest/rss/,cbsnews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KCAL Los Angeles,https://www.cbsnews.com/losangeles/latest/rss/,cbsnews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KFMB San Diego,https://www.cbs8.com/rss,cbs8.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KNSD San Diego,https://www.nbcsandiego.com/feed/,nbcsandiego.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WOAI San Antonio,https://news4sanantonio.com/feed/,news4sanantonio.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KENS San Antonio,https://www.kens5.com/feeds/syndication/rss/news,kens5.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KOAT Albuquerque,https://www.koat.com/rss,koat.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KSL Salt Lake City,https://ksltv.com/feed/,ksltv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KUTV Salt Lake City,https://kutv.com/feed/,kutv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KXLY Spokane,https://www.kxly.com/feed/,kxly.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WVUE New Orleans,https://www.fox8live.com/feed/,fox8live.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WAVE Louisville,https://www.wave3.com/feeds/syndication/rss/news,wave3.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WLKY Louisville,https://www.wlky.com/rss,wlky.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - LEX18 Lexington,https://www.lex18.com/feed/,lex18.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WKYT Lexington,https://www.wkyt.com/rss,wkyt.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WSMV Nashville,https://www.wsmv.com/rss,wsmv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WTVF Nashville,https://www.newschannel5.com/feed/,newschannel5.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WMC Memphis,https://www.wmcactionnews5.com/rss,wmcactionnews5.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WHBQ Memphis,https://www.fox13memphis.com/feed/,fox13memphis.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WVLT Knoxville,https://www.wvlt.tv/feed/,wvlt.tv,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WRCB Chattanooga,https://www.wrcbtv.com/feed/,wrcbtv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WTVC Chattanooga,https://newschannel9.com/feed/,newschannel9.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WAFF Huntsville,https://www.waff.com/rss,waff.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WIAT Birmingham,https://www.wiat.com/feed/,wiat.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WBRC Birmingham,https://www.wbrc.com/rss,wbrc.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WSFA Montgomery,https://www.wsfa.com/rss,wsfa.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WALA Mobile,https://www.fox10tv.com/feed/,fox10tv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WEAR Pensacola,https://weartv.com/feed/,weartv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WTLV Jacksonville,https://www.firstcoastnews.com/feeds/syndication/rss/news,firstcoastnews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WINK Fort Myers,https://winknews.com/feed/,winknews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WCTV Tallahassee,https://www.wctv.tv/feed/,wctv.tv,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WSOC Charlotte,https://www.wsoctv.com/rss,wsoctv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WBTV Charlotte,https://www.wbtv.com/rss,wbtv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WXII Greensboro,https://www.wxii12.com/rss,wxii12.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WECT Wilmington NC,https://www.wect.com/rss,wect.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WIS Columbia SC,https://www.wistv.com/rss,wistv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WCSC Charleston SC,https://www.live5news.com/rss,live5news.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WTOC Savannah,https://www.wtoc.com/rss,wtoc.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WALB Albany GA,https://www.walb.com/rss,walb.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WTVM Columbus GA,https://www.wtvm.com/rss,wtvm.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WMBF Myrtle Beach,https://www.wmbfnews.com/rss,wmbfnews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WPDE Myrtle Beach,https://wpde.com/feed/,wpde.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WTKR Norfolk,https://www.wtkr.com/feed/,wtkr.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WTVR Richmond,https://www.wtvr.com/feed/,wtvr.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WSET Lynchburg,https://wset.com/feed/,wset.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WSLS Roanoke,https://www.wsls.com/feed/,wsls.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WDBJ Roanoke,https://www.wdbj7.com/feed/,wdbj7.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WHSV Harrisonburg,https://www.whsv.com/rss,whsv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WJLA Washington DC,https://wjla.com/feed/,wjla.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WMAR Baltimore,https://www.abc2news.com/feed/,abc2news.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WJZ Baltimore,https://www.cbsnews.com/baltimore/latest/rss/,cbsnews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WBFF Baltimore,https://foxbaltimore.com/feed/,foxbaltimore.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KYW Philadelphia,https://www.cbsnews.com/philadelphia/latest/rss/,cbsnews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WTXF Philadelphia,https://www.fox29.com/feed/,fox29.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KDKA Pittsburgh,https://www.cbsnews.com/pittsburgh/latest/rss/,cbsnews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WENY Elmira,https://www.weny.com/feed/,weny.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WSTM Syracuse,https://www.cnycentral.com/feed/,cnycentral.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WHAM Rochester,https://13wham.com/feed/,13wham.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WKBW Buffalo,https://www.wkbw.com/feed/,wkbw.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WCAX Burlington VT,https://www.wcax.com/rss,wcax.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WMUR Manchester NH,https://www.wmur.com/rss,wmur.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WGME Portland ME,https://wgme.com/feed/,wgme.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WCSH Portland ME,https://www.newscentermaine.com/feeds/syndication/rss/news,newscentermaine.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WABI Bangor ME,https://www.wabi.tv/feed/,wabi.tv,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WHDH Boston,https://www.whdh.com/feed/,whdh.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WJAR Providence,https://turnto10.com/feed/,turnto10.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WFSB Hartford,https://www.wfsb.com/rss,wfsb.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WVIT Hartford,https://www.nbcconnecticut.com/feed/,nbcconnecticut.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WTIC Hartford,https://www.fox61.com/feed/,fox61.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WKOW Madison WI,https://www.wkow.com/feed/,wkow.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WSAW Wausau,https://www.wsaw.com/feed/,wsaw.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WBAY Green Bay,https://www.wbay.com/feed/,wbay.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WITI Milwaukee,https://fox6now.com/feed/,fox6now.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WCCO Minneapolis,https://www.cbsnews.com/minnesota/latest/rss/,cbsnews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KMSP Minneapolis,https://www.fox9.com/feed/,fox9.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KGAN Cedar Rapids,https://www.cbs2iowa.com/feed/,cbs2iowa.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KCRG Cedar Rapids,https://www.kcrg.com/rss,kcrg.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KTIV Sioux City,https://www.ktiv.com/feed/,ktiv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KMTV Omaha,https://www.3newsnow.com/feed/,3newsnow.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KETV Omaha,https://www.ketv.com/rss,ketv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WOWT Omaha,https://www.wowt.com/feed/,wowt.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KOLN Lincoln,https://www.1011now.com/feed/,1011now.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KWCH Wichita,https://www.kwch.com/feed/,kwch.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KOKH Oklahoma City,https://www.fox25.com/feed/,fox25.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KJRH Tulsa,https://www.kjrh.com/feed/,kjrh.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KCTV Kansas City,https://www.kctv5.com/rss,kctv5.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KSHB Kansas City,https://www.kshb.com/feed/,kshb.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KMOV St Louis,https://www.kmov.com/rss,kmov.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KATV Little Rock,https://katv.com/feed/,katv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KSLA Shreveport,https://www.ksla.com/rss,ksla.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WAFB Baton Rouge,https://www.wafb.com/rss,wafb.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KLTV Tyler TX,https://www.kltv.com/rss,kltv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KABB San Antonio,https://www.foxsanantonio.com/feed/,foxsanantonio.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KIII Corpus Christi,https://www.kiiitv.com/feed/,kiiitv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KDBC El Paso,https://www.kdbc.com/feed/,kdbc.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KFOX El Paso,https://kfoxtv.com/feed/,kfoxtv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KVIA El Paso,https://www.kvia.com/feed/,kvia.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KWES Midland TX,https://www.newswest9.com/feed/,newswest9.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KCBD Lubbock,https://www.kcbd.com/rss,kcbd.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KXXV Waco,https://www.kxxv.com/feed/,kxxv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KWTX Waco,https://www.kwtx.com/rss,kwtx.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KDFW Dallas,https://www.fox4news.com/feed/,fox4news.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KERA Dallas,https://www.keranews.org/rss,keranews.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KOVR Sacramento,https://www.cbsnews.com/sacramento/latest/rss/,cbsnews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KEYT Santa Barbara,https://www.keyt.com/feed/,keyt.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KSBY San Luis Obispo,https://www.ksby.com/feed/,ksby.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KNTV San Jose,https://www.nbcbayarea.com/feed/,nbcbayarea.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KCNC Denver,https://www.cbsnews.com/colorado/latest/rss/,cbsnews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KOAA Colorado Springs,https://www.koaa.com/rss,koaa.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KKTV Colorado Springs,https://www.kktv.com/feed/,kktv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KCWY Casper WY,https://www.kcwy13.com/feed/,kcwy13.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KGWN Cheyenne WY,https://www.kgwn.tv/feed/,kgwn.tv,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KULR Billings MT,https://www.kulr8.com/feed/,kulr8.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KTVQ Billings MT,https://www.ktvq.com/feed/,ktvq.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KPAX Missoula MT,https://www.kpax.com/feed/,kpax.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KECI Missoula MT,https://nbcmontana.com/feed/,nbcmontana.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KBZK Bozeman MT,https://www.kbzk.com/feed/,kbzk.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KOLO Reno,https://www.kolotv.com/rss,kolotv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KRNV Reno,https://www.mynews4.com/feed/,mynews4.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KVVU Las Vegas,https://www.fox5vegas.com/feed/,fox5vegas.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KSNV Las Vegas,https://news3lv.com/feed/,news3lv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KTUU Anchorage,https://www.ktuu.com/rss,ktuu.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KATH Anchorage,https://www.alaskasnewssource.com/feed/,alaskasnewssource.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KVLY Fargo,https://www.valleynewslive.com/feed/,valleynewslive.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KFYR Bismarck,https://www.kfyrtv.com/feed/,kfyrtv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KOTA Rapid City SD,https://www.kotatv.com/feed/,kotatv.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - KDLT Sioux Falls SD,https://www.kdlt.com/feed/,kdlt.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WTOL Toledo,https://www.wtol.com/feeds/syndication/rss/news,wtol.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WTVG Toledo,https://13abc.com/feed/,13abc.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WFMJ Youngstown,https://www.wfmj.com/feed/,wfmj.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WSYX Columbus,https://www.abc6onyourside.com/feed/,abc6onyourside.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WXIX Cincinnati,https://www.fox19.com/feed/,fox19.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WCPO Cincinnati,https://www.wcpo.com/rss,wcpo.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WKRC Cincinnati,https://local12.com/feed/,local12.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WRTV Indianapolis,https://www.theindychannel.com/rss,theindychannel.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WNDU South Bend,https://www.wndu.com/rss,wndu.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+TV - WSBT South Bend,https://www.wsbt.com/feed/,wsbt.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - WGBH Boston,https://www.wgbh.org/news/rss,wgbh.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - WVXU Cincinnati,https://www.wvxu.org/rss,wvxu.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - WCPN Cleveland,https://www.ideastream.org/rss,ideastream.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - WMFE Orlando,https://www.wmfe.org/feed/,wmfe.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - WLRN Miami,https://www.wlrn.org/rss,wlrn.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - WFSU Tallahassee,https://news.wfsu.org/rss,news.wfsu.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - WGCU Fort Myers,https://news.wgcu.org/rss,news.wgcu.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - WBFO Buffalo,https://www.wbfo.org/feed/,wbfo.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - WMHT Albany,https://www.wmht.org/feed/,wmht.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - WRVO Syracuse,https://www.wrvo.org/rss,wrvo.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - WAMC Albany,https://www.wamc.org/rss,wamc.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - WUNC Chapel Hill,https://www.wunc.org/rss,wunc.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - WFAE Charlotte,https://www.wfae.org/rss,wfae.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - WFDD Winston-Salem,https://www.wfdd.org/rss,wfdd.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - KPLU Tacoma,https://www.knkx.org/rss,knkx.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - KWGS Tulsa,https://www.publicradiotulsa.org/rss,publicradiotulsa.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - KUT Austin,https://www.kut.org/rss,kut.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - KSTX San Antonio,https://tpr.org/feed/,tpr.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - KNAU Flagstaff,https://www.knau.org/rss,knau.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - KVPR Fresno,https://www.kvpr.org/rss,kvpr.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - Capital Public Radio,https://www.capradio.org/rss,capradio.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - KUNC Greeley CO,https://www.kunc.org/rss,kunc.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - KRCC Colorado Springs,https://www.krcc.org/rss,krcc.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - Nevada Public Radio,https://www.nevadapublicradio.org/rss,nevadapublicradio.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - Michigan Radio,https://www.michiganradio.org/rss,michiganradio.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - WEMU Ypsilanti MI,https://www.wemu.org/rss,wemu.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - WMUK Kalamazoo,https://www.wmuk.org/rss,wmuk.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - WGVU Grand Rapids,https://www.wgvu.org/rss,wgvu.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - WGTE Toledo,https://www.wgte.org/rss,wgte.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - WYSU Youngstown,https://www.wysu.org/rss,wysu.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - WKNO Memphis,https://www.wkno.org/rss,wkno.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - WUOT Knoxville,https://wuot.org/rss,wuot.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - WUTC Chattanooga,https://www.wutc.org/rss,wutc.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - Minnesota Public Radio,https://www.mprnews.org/rss,mprnews.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - St Louis Public Radio,https://news.stlpublicradio.org/rss,news.stlpublicradio.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - KCPT Kansas City,https://kcpt.org/feed/,kcpt.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - KMUW Wichita,https://www.kmuw.org/rss,kmuw.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - KVNO Omaha,https://www.kvno.org/rss,kvno.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - GPB Georgia,https://www.gpb.org/news/rss,gpb.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - South Carolina Public,https://www.southcarolinapublicradio.org/rss,southcarolinapublicradio.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - WNCW Spindale NC,https://www.wncw.org/rss,wncw.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - VPR Vermont,https://www.vpr.org/rss,vpr.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - NHPR Concord,https://www.nhpr.org/rss,nhpr.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - Maine Public,https://www.mainepublic.org/rss,mainepublic.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - Connecticut Public,https://www.ctpublic.org/rss,ctpublic.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - WYPR Baltimore,https://www.wypr.org/rss,wypr.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - WVIA Scranton,https://www.wvia.org/rss,wvia.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - WQED Pittsburgh,https://www.wqed.org/rss,wqed.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - Hawaii Public Radio,https://www.hawaiipublicradio.org/rss,hawaiipublicradio.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Radio - South Dakota Public,https://www.sdpb.org/rss,sdpb.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+National - The Bulwark,https://www.thebulwark.com/feed/,thebulwark.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+National - Semafor,https://www.semafor.com/feed,semafor.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+National - Grid News,https://www.grid.news/feed/,grid.news,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+National - Rand Corporation,https://www.rand.org/rss/rss_all.xml,rand.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+National - Urban Institute,https://www.urban.org/rss,urban.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+National - Open Tech Institute,https://feed.newamerica.org/oti,feed.newamerica.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Google News - FCC General,https://news.google.com/rss/search?q=FCC+federal+communications+commission&hl=en-US&gl=US&ceid=US:en,news.google.com,General,8,Tier 8 Unknown/Low Value,40,active,True,duplicate coverage (already in DocuAction)
+Space Policy Institute,https://spacepolicy.gwu.edu/feed/,spacepolicy.gwu.edu,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+The Verge Space,https://www.theverge.com/rss/space/index.xml,theverge.com,General,8,Tier 8 Unknown/Low Value,40,active,True,duplicate coverage (already in DocuAction)
+SatelliteObservation,https://www.satobs.org/rss.xml,satobs.org,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Defense News Space,https://www.defensenews.com/rss/space/,defensenews.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+C4ISRNET Space,https://www.c4isrnet.com/rss/space/,c4isrnet.com,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+Police1 911 Tech,https://www.police1.com/rss/topics/911-technology/,police1.com,Cybersecurity,4,Tier 4 Technology Publications,74,dead,False,dead/unreachable feed
+CommLaw Blog,https://www.commlawblog.com/feed/,commlawblog.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,True,duplicate coverage (already in DocuAction)
+Communications Daily,https://www.communicationsdaily.com/rss,communicationsdaily.com,Cybersecurity,4,Tier 4 Technology Publications,74,dead,False,dead/unreachable feed
+FTI Consulting Telecom,https://www.fticonsulting.com/insights/rss,fticonsulting.com,Cybersecurity,4,Tier 4 Technology Publications,74,dead,False,dead/unreachable feed
+FTC News,https://www.ftc.gov/rss.xml,ftc.gov,Cybersecurity,4,Tier 4 Technology Publications,74,dead,True,dead/unreachable feed
+Mediaite,https://www.mediaite.com/feed/,mediaite.com,Cybersecurity,4,Tier 4 Technology Publications,74,active,True,duplicate coverage (already in DocuAction)
+The Daily Beast Media,https://feeds.thedailybeast.com/rss/articles/media,feeds.thedailybeast.com,Cybersecurity,4,Tier 4 Technology Publications,74,dead,False,dead/unreachable feed
+Wall Street Journal - Markets,https://feeds.a.dj.com/rss/RSSMarketsMain.xml,feeds.a.dj.com,General,8,Tier 8 Unknown/Low Value,40,active,True,duplicate coverage (already in DocuAction)
+FEMA News,https://www.fema.gov/rss/news-releases.rss,fema.gov,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+FEMA Alerts,https://www.fema.gov/rss/alerts.rss,fema.gov,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed
+NOAA News,https://www.noaa.gov/news-features/rss,noaa.gov,General,8,Tier 8 Unknown/Low Value,40,dead,False,dead/unreachable feed

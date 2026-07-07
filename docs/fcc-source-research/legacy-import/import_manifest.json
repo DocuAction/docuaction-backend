@@ -1,0 +1,43 @@
+{
+  "generated_from": "Legacy_FCC_Collector/fcc_daily_news.py + fcc_launcher.py (data only; no code copied)",
+  "legacy_feed_tuples_parsed": 1855,
+  "unique_feeds": 1738,
+  "duplicate_feeds_removed": 117,
+  "already_in_docuaction": 107,
+  "new_sources": 1631,
+  "keyword_topics": 9,
+  "total_keywords": 187,
+  "boolean_searches": 132,
+  "fcc_officials": 12,
+  "core_phrases": 545,
+  "api_keys_found_in_legacy_REDACTED": [
+    "NEWSDATA_API_KEY",
+    "GNEWS_API_KEY",
+    "CURRENTS_API_KEY"
+  ],
+  "output_files": [
+    "source_registry.csv",
+    "source_registry.json",
+    "rss_feeds.csv",
+    "rss_feeds.json",
+    "keyword_library.json",
+    "boolean_library.json",
+    "category_mapping.json",
+    "authority_scores.json",
+    "duplicate_sources.csv",
+    "dead_sources.csv",
+    "import_manifest.json",
+    "coverage_report.md"
+  ],
+  "honesty": "authority scores are heuristic-by-category (labeled); dead-feed liveness NOT yet validated; API keys redacted and NOT propagated.",
+  "validation": {
+    "reachable_ok": 597,
+    "blocked_bot_protection": 333,
+    "dead_unreachable": 802,
+    "other": 6,
+    "new_total": 1631,
+    "new_dead": 751,
+    "new_usable": 880,
+    "note": "blocked (403/429) are likely alive but block bots; verify with a feed reader. dead = DNS/conn/timeout/404/410."
+  }
+}
