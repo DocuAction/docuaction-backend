@@ -450,6 +450,67 @@ async def get_run_detail(agency_id: str, run_id: str):
     return {"run": run, "source_outcomes": outcomes}
 
 
+# ── Phase 6: expected-source registry + HONEST coverage assurance ────────────
+class SourceRegistryItem(BaseModel):
+    source_id: str
+    name: str
+    type: str = ""
+    tier: str = ""
+    importance_weight: float = 1.0
+    enabled: bool = True
+    method: str = ""
+    url: str = ""
+    notes: str = ""
+
+
+@router.get("/sources/{agency_id}", dependencies=guard("contributor"))
+async def list_sources(agency_id: str):
+    """Expected-source registry (Coverage % denominator). Empty until seeded."""
+    from app.bulletin_intelligence import bulletin_store
+    return {"agency_id": agency_id, "sources": await bulletin_store.load_source_registry()}
+
+
+@router.post("/sources/{agency_id}", dependencies=guard("admin"))
+async def upsert_sources(agency_id: str, items: List[SourceRegistryItem]):
+    """Seed / update the expected-source registry (admin)."""
+    from app.bulletin_intelligence import bulletin_store
+    n = await bulletin_store.save_source_registry([i.dict() for i in items])
+    return {"agency_id": agency_id, "upserted": n}
+
+
+@router.get("/coverage-assurance/{agency_id}")
+async def coverage_assurance(agency_id: str):
+    """Phase 6 — HONEST coverage assurance. Coverage % is computed ONLY when an
+    expected-source registry AND per-source outcomes both exist; otherwise it is
+    `null` with status `pending_instrumentation` — never estimated or fabricated."""
+    from app.bulletin_intelligence import bulletin_store
+    registry = await bulletin_store.load_source_registry()
+    expected = [r for r in registry if r.get("enabled")]
+    runs = await bulletin_store.load_run_logs(agency_id=agency_id, limit=1)
+    outcomes = await bulletin_store.load_source_outcomes(runs[0]["run_id"]) if runs else []
+
+    result = {
+        "agency_id": agency_id,
+        "expected_sources": len(expected),
+        "sources_with_outcome": len(outcomes),
+        "coverage_pct": None,
+        "coverage_confidence": None,
+        "status": "pending_instrumentation",
+        "note": ("Coverage % is shown only when an expected-source registry AND per-source "
+                 "outcomes both exist. Until then it is not computed (no estimate). "
+                 "Primary-source backstop: FCC.gov is always collected."),
+    }
+    if expected and outcomes:
+        succeeded = {o.get("source") for o in outcomes if o.get("succeeded")}
+        covered = [r for r in expected if r.get("name") in succeeded]
+        result["coverage_pct"] = round(100.0 * len(covered) / len(expected), 1)
+        wtot = sum((r.get("importance_weight") or 1.0) for r in expected)
+        wcov = sum((r.get("importance_weight") or 1.0) for r in covered)
+        result["coverage_confidence"] = round(100.0 * wcov / wtot, 1) if wtot else None
+        result["status"] = "measured"
+    return result
+
+
 @router.post("/briefings/{briefing_id}/approve", dependencies=guard("qalead"))
 async def approve_briefing(briefing_id: str):
     """Editor approves briefing and triggers email delivery."""

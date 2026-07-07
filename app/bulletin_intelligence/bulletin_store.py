@@ -444,3 +444,45 @@ async def load_source_outcomes(run_id: str) -> List[Dict[str, Any]]:
     except Exception as e:
         logger.warning(f"load_source_outcomes failed: {e}")
         return []
+
+
+# ── Phase 6: expected-source registry (Coverage % denominator) ───────────────
+async def save_source_registry(rows: List[Dict[str, Any]]) -> int:
+    if not _enabled or not rows:
+        return 0
+    n = 0
+    try:
+        async with async_session_maker() as s:
+            for r in rows:
+                await s.execute(
+                    text("INSERT INTO bulletin_source_registry (source_id, name, type, tier, importance_weight, "
+                         "enabled, method, url, notes) VALUES (:source_id, :name, :type, :tier, :importance_weight, "
+                         ":enabled, :method, :url, :notes) ON CONFLICT (source_id) DO UPDATE SET name=EXCLUDED.name, "
+                         "type=EXCLUDED.type, tier=EXCLUDED.tier, importance_weight=EXCLUDED.importance_weight, "
+                         "enabled=EXCLUDED.enabled, method=EXCLUDED.method, url=EXCLUDED.url, notes=EXCLUDED.notes"),
+                    {"source_id": r.get("source_id"), "name": r.get("name"), "type": r.get("type"),
+                     "tier": r.get("tier"), "importance_weight": r.get("importance_weight"),
+                     "enabled": r.get("enabled", True), "method": r.get("method"), "url": r.get("url"),
+                     "notes": r.get("notes")},
+                )
+                n += 1
+            await s.commit()
+    except Exception as e:
+        logger.warning(f"save_source_registry failed: {e}")
+        return 0
+    return n
+
+
+async def load_source_registry() -> List[Dict[str, Any]]:
+    if not _enabled:
+        return []
+    try:
+        async with async_session_maker() as s:
+            rows = (await s.execute(text(
+                "SELECT source_id, name, type, tier, importance_weight, enabled, method, url, notes "
+                "FROM bulletin_source_registry ORDER BY name"))).fetchall()
+        cols = ["source_id", "name", "type", "tier", "importance_weight", "enabled", "method", "url", "notes"]
+        return [{c: r[i] for i, c in enumerate(cols)} for r in rows]
+    except Exception as e:
+        logger.warning(f"load_source_registry failed: {e}")
+        return []
