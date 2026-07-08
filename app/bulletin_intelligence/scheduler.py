@@ -50,6 +50,7 @@ except Exception:  # pragma: no cover — fallback if tzdata missing
 
 logger = logging.getLogger(__name__)
 _scheduler = None
+_startup_task = None   # keeps a strong ref to the boot catch-up task (avoids GC)
 
 # ── Tunables ────────────────────────────────────────────────────────────────
 RUN_HOUR = 0                       # 12 AM ET (delivery fires at RUN_HOUR:RUN_MINUTE)
@@ -195,21 +196,44 @@ async def run_weekend_collection(agency_id: str):
                                 auto_deliver=False, lookback_hours=48)
 
 
-def trigger_all_agencies(mode: str):
-    """Trigger the correct cycle for all registered agencies."""
+async def trigger_all_agencies(mode: str):
+    """Trigger the correct cycle for all registered agencies.
+
+    Coroutine job: AsyncIOScheduler awaits it directly on the scheduler's event
+    loop, so it never runs in a worker thread and never calls get_event_loop()
+    (the source of the 'no current event loop in thread ThreadPoolExecutor' error).
+    Per-agency failures are isolated via return_exceptions so one bad agency can't
+    abort the others."""
     try:
         from app.bulletin_intelligence.engine import list_agencies
         agencies = list_agencies()
-        loop = asyncio.get_event_loop()
+        coros = []
         for agency in agencies:
             if mode == "weekday":
-                loop.create_task(run_weekday_delivery(agency.agency_id))
+                coros.append(run_weekday_delivery(agency.agency_id))
             elif mode == "monday":
-                loop.create_task(run_monday_delivery(agency.agency_id))
+                coros.append(run_monday_delivery(agency.agency_id))
             elif mode == "preview":
-                loop.create_task(run_weekend_collection(agency.agency_id))
+                coros.append(run_weekend_collection(agency.agency_id))
+        if coros:
+            await asyncio.gather(*coros, return_exceptions=True)
     except Exception as e:
         logger.error(f"Scheduler trigger error: {e}")
+
+
+# Named coroutine wrappers so AsyncIOScheduler unambiguously detects each job as a
+# coroutine (awaited on the loop), replacing the old sync lambdas that were
+# dispatched to a thread pool.
+async def _job_preview():
+    await trigger_all_agencies("preview")
+
+
+async def _job_monday():
+    await trigger_all_agencies("monday")
+
+
+async def _job_weekday():
+    await trigger_all_agencies("weekday")
 
 
 # ── Self-healing catch-up watchdog ───────────────────────────────────────────
@@ -277,9 +301,14 @@ async def ensure_todays_briefing(*, source: str = "watchdog"):
         )
 
 
-def _watchdog_tick():
+async def _watchdog_tick():
+    """Hourly self-heal. Coroutine job: awaited on the scheduler's event loop, so
+    there is no get_event_loop()/thread-pool involvement. This is the fix for the
+    'Watchdog tick error: There is no current event loop in thread
+    ThreadPoolExecutor-0_0' — a sync job was being run in a worker thread that has
+    no event loop."""
     try:
-        asyncio.get_event_loop().create_task(ensure_todays_briefing(source="watchdog"))
+        await ensure_todays_briefing(source="watchdog")
     except Exception as e:
         logger.error(f"Watchdog tick error: {e}")
 
@@ -312,7 +341,7 @@ def start_scheduler():
 
         # Sunday 8 PM ET — preview run (generate but do NOT auto-deliver)
         _scheduler.add_job(
-            lambda: trigger_all_agencies("preview"),
+            _job_preview,
             CronTrigger(day_of_week="sun", hour=PREVIEW_HOUR, minute=0, timezone=ET),
             id="sunday_preview",
             name=f"Sunday {PREVIEW_HOUR}:00 ET — Preview for review (no auto-send)",
@@ -321,7 +350,7 @@ def start_scheduler():
 
         # Monday 12:01 AM ET — weekend rollup (72h) + deliver
         _scheduler.add_job(
-            lambda: trigger_all_agencies("monday"),
+            _job_monday,
             CronTrigger(day_of_week="mon", hour=RUN_HOUR, minute=RUN_MINUTE, timezone=ET),
             id="monday_delivery",
             name=f"Monday {RUN_HOUR:02d}:{RUN_MINUTE:02d} ET — Weekend Rollup + Delivery",
@@ -330,7 +359,7 @@ def start_scheduler():
 
         # Tuesday–Saturday 12:01 AM ET — daily 24h briefing + deliver
         _scheduler.add_job(
-            lambda: trigger_all_agencies("weekday"),
+            _job_weekday,
             CronTrigger(day_of_week="tue,wed,thu,fri,sat", hour=RUN_HOUR, minute=RUN_MINUTE, timezone=ET),
             id="weekday_delivery",
             name=f"Tue-Sat {RUN_HOUR:02d}:{RUN_MINUTE:02d} ET — Daily Briefing + Delivery",
@@ -356,8 +385,18 @@ def start_scheduler():
 
         # Kick a one-shot catch-up after boot in case this start happened AFTER
         # today's scheduled time (the exact failure that dropped a morning).
+        # Use get_running_loop() (start_scheduler runs inside the app's running
+        # loop) instead of get_event_loop(), which raises on 3.10+ when no loop is
+        # current. Keep a strong ref so the task isn't garbage-collected.
         try:
-            asyncio.get_event_loop().create_task(_startup_catchup())
+            global _startup_task
+            _startup_task = asyncio.get_running_loop().create_task(_startup_catchup())
+        except RuntimeError:
+            # No running loop yet — fall back to a one-shot scheduler job so the
+            # catch-up still fires without touching get_event_loop().
+            from apscheduler.triggers.date import DateTrigger
+            _scheduler.add_job(_startup_catchup, DateTrigger(run_date=None),
+                               id="startup_catchup", replace_existing=True)
         except Exception as e:
             logger.warning(f"Startup catch-up not scheduled: {e}")
 
