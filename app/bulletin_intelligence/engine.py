@@ -54,6 +54,9 @@ SENDGRID_KEY    = os.getenv("SENDGRID_API_KEY", "")
 CONGRESS_KEY    = os.getenv("CONGRESS_API_KEY", "")
 TAVILY_KEY      = os.getenv("TAVILY_API_KEY", "")
 NEWSAPI_KEY     = os.getenv("NEWSAPI_KEY", "")
+# NewsAPI.ai (Event Registry) — additive collector. Auto-detected: present = on,
+# absent = skipped gracefully (no crash). Distinct from NEWSAPI_KEY (newsapi.org).
+NEWSAPI_AI_KEY  = os.getenv("NEWSAPI_AI_KEY", "")
 OPENAI_KEY      = os.getenv("OPENAI_API_KEY", "")
 PERPLEXITY_KEY  = os.getenv("PERPLEXITY_API_KEY", "")
 GEMINI_KEY      = os.getenv("GEMINI_API_KEY", "")
@@ -170,6 +173,14 @@ class Article:
     broadcast_clip_url: str = ""
     ingested_at: str = ""
     dedup_hash: str = ""
+    # ── Provider tracking (additive; defaults keep older stored rows valid) ──────
+    # Which collector surfaced this article, so per-provider analytics + the
+    # provider column in exports can be computed from real data (never guessed).
+    provider: str = ""            # e.g. "NewsAPI.ai", "GDELT", "RSS", "Federal Register"
+    provider_url: str = ""        # provider/API canonical URL
+    source_name: str = ""         # human outlet name (mirrors `outlet` when unset)
+    collection_method: str = ""   # rss | news_api | search_api | news_index | gov_api
+    collection_time: str = ""     # ISO-8601 UTC time this article was collected
 
 
 @dataclass
@@ -207,6 +218,24 @@ def _hash(url: str, title: str) -> str:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _us_date(dt) -> str:
+    """US long date with NO leading zero on the day: 'July 7, 2026' (never
+    'July 07, 2026' or '7 July 2026'). Portable across OSes (avoids the
+    non-portable %-d / %#d strftime flags)."""
+    try:
+        return f"{dt.strftime('%B')} {dt.day}, {dt.year}"
+    except Exception:
+        return str(dt)
+
+
+def _us_date_short(dt) -> str:
+    """US month+day, no year, no leading zero: 'July 7' (for range starts)."""
+    try:
+        return f"{dt.strftime('%B')} {dt.day}"
+    except Exception:
+        return str(dt)
 
 
 def _parse_pub_dt(s: str) -> Optional[datetime]:
@@ -619,6 +648,10 @@ MAJOR_OUTLET_FEEDS = [
     # Broadcast/radio trade (free RSS) — FCC-relevance filtered.
     ("https://radioink.com/feed/",                                          "Radio Ink", False),
     ("https://current.org/feed/",                                          "Current", False),
+    # Inside Radio (UAT missing-source fix): its direct feed is 429/bot-blocked and
+    # paywalled, so there is no reliable free feed. Add a FCC-gated Google News
+    # site-scoped fallback so its FCC stories can still surface (metadata/headline).
+    ("https://news.google.com/rss/search?q=site:insideradio.com+FCC+OR+%22Federal+Communications+Commission%22&hl=en-US&gl=US&ceid=US:en", "Inside Radio", False),
     # (Politico is already covered by politicopicks in FCC_RSS_FEEDS; its
     #  topic feeds 403 bot traffic, so they're not added here. NTIA / White House /
     #  House E&C / Senate Commerce / NAB / NCTA feeds were dead or empty on check.)
@@ -796,6 +829,14 @@ def _build_coverage_report(agency_id, all_articles, unique, classified, briefing
     top_outlets = Counter((getattr(a, "outlet", "") or "?") for a in news).most_common(10)
     expected = [r[0] for r in FCC_CATEGORY_RULES]
     missing = [c for c in expected if by_category.get(c, 0) == 0]
+    provider_analytics = _build_provider_analytics(all_articles, unique, briefing_arts)
+    # NewsAPI.ai vs other providers — real unique/duplicate/additional-FCC counts.
+    try:
+        from app.bulletin_intelligence.provider_analysis import compare_provider_coverage
+        provider_coverage = compare_provider_coverage(all_articles, target_provider="NewsAPI.ai")
+    except Exception as _e:
+        logger.debug(f"provider coverage comparison skipped: {_e}")
+        provider_coverage = None
     return {
         "generated_at": _now(),
         "agency_id": agency_id,
@@ -814,7 +855,48 @@ def _build_coverage_report(agency_id, all_articles, unique, classified, briefing
         "missing_category_warnings": missing,
         "top_outlets": top_outlets,
         "strict_fcc_gate": STRICT_FCC_GATE,
+        "provider_analytics": provider_analytics,
+        "provider_coverage_comparison": provider_coverage,
     }
+
+
+def _build_provider_analytics(all_articles, unique, briefing_arts) -> Dict[str, Any]:
+    """Per-provider stats for the Operations Dashboard, computed from REAL stamped
+    provider data. Response time is reported as null (pending per-provider timing
+    instrumentation) — never fabricated. Additive; never affects the briefing."""
+    from collections import Counter
+
+    def _prov(a) -> str:
+        return (getattr(a, "provider", "") or "").strip() or "Unknown"
+
+    unique_ids = {getattr(a, "article_id", id(a)) for a in unique}
+    briefing_ids = {getattr(a, "article_id", id(a)) for a in briefing_arts}
+
+    collected = Counter(_prov(a) for a in all_articles)
+    uniq = Counter(_prov(a) for a in all_articles if getattr(a, "article_id", id(a)) in unique_ids)
+    accepted = Counter(_prov(a) for a in briefing_arts)
+    # Sum relevance of accepted articles per provider for a real average.
+    rel_sum: Dict[str, float] = {}
+    for a in briefing_arts:
+        p = _prov(a)
+        rel_sum[p] = rel_sum.get(p, 0.0) + float(getattr(a, "relevance_score", 0.0) or 0.0)
+
+    out: Dict[str, Any] = {}
+    for prov in collected:
+        c = collected[prov]
+        u = uniq.get(prov, 0)
+        acc = accepted.get(prov, 0)
+        out[prov] = {
+            "articles_collected": c,
+            "unique": u,
+            "duplicates": max(0, c - u),
+            "accepted": acc,
+            "rejected": max(0, u - acc),
+            "average_relevance": round(rel_sum.get(prov, 0.0) / acc, 3) if acc else None,
+            "unique_pct": round(100.0 * u / c, 1) if c else None,
+            "response_time_ms": None,   # honest: per-provider timing not yet instrumented
+        }
+    return out
 
 
 FCC_RSS_FEEDS = {
@@ -859,6 +941,9 @@ FCC_RSS_FEEDS = {
         ("https://www.tvtechnology.com/rss/all", "TV Technology"),
         # ("https://www.multichannel.com/rss/all", "Multichannel News"),  # CEASED PUBLICATION Sept 2024
         ("https://rbr.com/feed/", "RBR"),
+        # Added 2026-07-08 (UAT missing-source fix): Radio Insight was never wired
+        # into any feed list — its feed is live (200/valid RSS). Ungated broadcast.
+        ("https://radioinsight.com/feed/", "Radio Insight"),
     ],
     "consumers_advocacy": [
         ("https://broadbandbreakfast.com/feed/", "Broadband Breakfast"),
@@ -1266,6 +1351,148 @@ async def ingest_newsapi(agency: AgencyConfig, lookback_hours: int = 24) -> List
         logger.error(f"NewsAPI error: {e}")
 
     logger.info(f"NewsAPI: {len(articles)} articles for {agency.agency_id}")
+    return articles
+
+
+# ── INGESTION: NewsAPI.ai (Event Registry) — additive collector ──────────────
+# Auto-detected via NEWSAPI_AI_KEY. Absent → returns [] (graceful skip, no crash).
+# Flows through the SAME pipeline as every other source (normalize → boolean →
+# AI relevance → dedup → editorial → category). It never bypasses any gate.
+
+# Provider metadata registry — maps an Article.source value to (provider label,
+# provider URL, collection method) so per-provider analytics + the export provider
+# column are computed from REAL stamped data, not inferred at report time.
+PROVIDER_REGISTRY = {
+    "rss":              ("RSS",              "",                                 "rss"),
+    "gdelt":            ("GDELT",            "https://www.gdeltproject.org",     "news_index"),
+    "gdelt_doc":        ("GDELT",            "https://www.gdeltproject.org",     "news_index"),
+    "gdelt_tv":         ("GDELT TV",         "https://www.gdeltproject.org",     "news_index"),
+    "tavily":           ("Tavily",           "https://tavily.com",               "search_api"),
+    "newsapi":          ("NewsAPI.org",      "https://newsapi.org",              "news_api"),
+    "newsapi_ai":       ("NewsAPI.ai",       "https://newsapi.ai",               "news_api"),
+    "federal_register": ("Federal Register", "https://www.federalregister.gov",  "gov_api"),
+    "congress_gov":     ("Congress.gov",     "https://www.congress.gov",         "gov_api"),
+    "primary":          ("Primary Sources",  "https://www.fcc.gov",              "gov_api"),
+    "govinfo":          ("GovInfo",          "https://www.govinfo.gov",          "gov_api"),
+    "social":           ("Social",           "",                                 "social"),
+    "bluesky":          ("BlueSky",          "https://bsky.app",                 "social"),
+    "reddit":           ("Reddit",           "https://www.reddit.com",           "social"),
+    "youtube":          ("YouTube",          "https://www.youtube.com",          "social"),
+}
+
+
+def stamp_providers(articles: List["Article"]) -> None:
+    """Stamp provider tracking fields on every collected article (in place).
+
+    Idempotent and additive: only fills blank fields, so an ingester that already
+    set richer provider data wins. Unknown sources fall back to a title-cased
+    label so nothing is left unattributed. Never raises."""
+    for a in articles:
+        try:
+            src = (getattr(a, "source", "") or "").strip().lower()
+            label, url, method = PROVIDER_REGISTRY.get(
+                src, (src.replace("_", " ").title() if src else "Unknown", "", "")
+            )
+            if not getattr(a, "provider", ""):
+                a.provider = label
+            if not getattr(a, "provider_url", ""):
+                a.provider_url = url
+            if not getattr(a, "collection_method", ""):
+                a.collection_method = method or (src or "unknown")
+            if not getattr(a, "source_name", ""):
+                a.source_name = getattr(a, "outlet", "") or label
+            if not getattr(a, "collection_time", ""):
+                a.collection_time = getattr(a, "ingested_at", "") or _now()
+        except Exception:
+            continue
+
+
+async def ingest_newsapi_ai(agency: AgencyConfig, lookback_hours: int = 24) -> List["Article"]:
+    """NewsAPI.ai / Event Registry — additive news-index collector.
+
+    Detects NEWSAPI_AI_KEY automatically. If the key is missing the function
+    returns [] immediately (graceful skip — the cycle proceeds with all other
+    providers, no exception). Results are returned as standard Article objects so
+    they pass through the identical downstream pipeline.
+    """
+    if not NEWSAPI_AI_KEY:
+        return []
+
+    articles: List["Article"] = []
+    # Build a keyword query from the agency's own search terms (same terms the
+    # other collectors use). Event Registry treats a list as OR by default.
+    keywords = []
+    for q in (agency.search_queries or [])[:3]:
+        kw = (q or "").strip()
+        if kw:
+            keywords.append(kw)
+    if not keywords:
+        keywords = ["Federal Communications Commission", "FCC"]
+
+    date_start = (datetime.now(timezone.utc) - timedelta(hours=min(lookback_hours, 48))).strftime("%Y-%m-%d")
+    payload = {
+        "apiKey": NEWSAPI_AI_KEY,
+        "keyword": keywords,
+        "keywordOper": "or",
+        "lang": "eng",
+        "dateStart": date_start,
+        "articlesSortBy": "date",
+        "articlesCount": 50,
+        "resultType": "articles",
+        "dataType": ["news", "pr"],
+        "includeArticleImage": False,
+        "includeArticleCategories": False,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            resp = await client.post(
+                "https://eventregistry.org/api/v1/article/getArticles",
+                headers={"Content-Type": "application/json"},
+                json=payload,
+            )
+            if resp.status_code != 200:
+                logger.warning(f"NewsAPI.ai HTTP {resp.status_code}: {resp.text[:160]}")
+                return []
+            data = resp.json()
+            results = ((data or {}).get("articles") or {}).get("results") or []
+            for r in results:
+                url = (r.get("url") or "").strip()
+                title = (r.get("title") or "").strip()
+                if not url or not title:
+                    continue
+                dedup = _hash(url, title)
+                outlet = ((r.get("source") or {}).get("title")) or "NewsAPI.ai"
+                authors = r.get("authors") or []
+                author = ", ".join(a.get("name", "") for a in authors if isinstance(a, dict))[:200]
+                body = (r.get("body") or "")[:800]
+                art = Article(
+                    article_id=f"{agency.agency_id}_newsapiai_{dedup}",
+                    agency_id=agency.agency_id,
+                    source="newsapi_ai",
+                    source_type="news",
+                    title=title,
+                    url=url,
+                    published_at=_normalize_pub(r.get("dateTimePub") or r.get("dateTime") or r.get("date") or ""),
+                    summary=(body[:400] or title),
+                    full_text=body or title,
+                    author=author,
+                    outlet=outlet,
+                    relevance_score=0.7,   # neutral prior; AI relevance decides, same as peers
+                    ingested_at=_now(),
+                    dedup_hash=dedup,
+                    provider="NewsAPI.ai",
+                    provider_url="https://newsapi.ai",
+                    source_name=outlet,
+                    collection_method="news_api",
+                    collection_time=_now(),
+                )
+                articles.append(art)
+    except Exception as e:
+        logger.error(f"NewsAPI.ai error: {e}")
+        return []
+
+    logger.info(f"NewsAPI.ai: {len(articles)} articles for {agency.agency_id}")
     return articles
 
 
@@ -2359,8 +2586,8 @@ SUMMARY: {art.summary[:300]}
     # Coverage window
     from datetime import datetime as _dt, timedelta as _td
     _today = _dt.now()
-    _start = (_today - _td(days=3)).strftime("%B %d")
-    _window = f"{_start} - {_today.strftime('%B %d, %Y')}"
+    _start = _us_date_short(_today - _td(days=3))
+    _window = f"{_start} - {_us_date(_today)}"
 
     # Real social posts only (BlueSky/Reddit/YouTube) — passed separately so the
     # social summary is built from actual data, never fabricated platforms/numbers.
@@ -2819,7 +3046,7 @@ async def run_daily_cycle(
         }
     _running_cycles[agency_id] = now_ts
 
-    briefing_date = datetime.now().strftime("%B %d, %Y")
+    briefing_date = _us_date(datetime.now())
     briefing_id = f"{agency_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     logger.info(f"Daily cycle starting: {agency.name}")
 
@@ -2831,6 +3058,10 @@ async def run_daily_cycle(
     # Tavily for additional FCC coverage
     if TAVILY_KEY:
         tasks.append(ingest_tavily(agency, lookback_hours))
+    # NewsAPI.ai (Event Registry) — additive collector. Auto-detected: runs only
+    # when NEWSAPI_AI_KEY is set, otherwise skipped gracefully. Same pipeline.
+    if NEWSAPI_AI_KEY:
+        tasks.append(ingest_newsapi_ai(agency, lookback_hours))
     # Claude web_search ingest_news disabled — too noisy/expensive
     # tasks.append(ingest_news(agency, lookback_hours))
 
@@ -2875,6 +3106,11 @@ async def run_daily_cycle(
         if isinstance(r, list):
             all_articles.extend(r)
 
+    # Stamp provider tracking on every article (idempotent; only fills blanks) so
+    # per-provider analytics, coverage comparison, and the export provider column
+    # are computed from real stamped data. Additive — no article is filtered here.
+    stamp_providers(all_articles)
+
     # Drop client-excluded outlets (e.g. techdirt.com) from EVERY source, not
     # just RSS — GDELT/NewsAPI/Tavily can surface them too.
     before = len(all_articles)
@@ -2917,6 +3153,19 @@ async def run_daily_cycle(
         logger.debug(f"flag_subscriptions skipped: {_e}")
     # 2) Boost relevance for clear FCC signals (commissioners, dockets, enforcement).
     boosted = apply_fcc_relevance_boost(classified)
+    # 2b) Reject corporate-announcement noise (UAT false-positive fix, e.g. a
+    #     "T-Mobile executive appointment") unless it has a real FCC nexus.
+    #     Flag-reversible (BULLETIN_EDITORIAL_STRICT=false). Rejected items stay
+    #     archived upstream; only the briefing set is trimmed.
+    corp_rejected = 0
+    try:
+        from app.bulletin_intelligence.editorial_rules import filter_corporate_noise
+        classified, _corp = filter_corporate_noise(classified)
+        corp_rejected = len(_corp)
+        if corp_rejected:
+            logger.info(f"Editorial: rejected {corp_rejected} corporate-noise story(ies)")
+    except Exception as _e:
+        logger.debug(f"filter_corporate_noise skipped: {_e}")
     # 3) Optional STRICT FCC gate — OFF by default so the minimum-volume floor is
     #    never at risk. When BULLETIN_STRICT_FCC_GATE=true, drop any story with no
     #    explicit FCC mention anywhere in its text.
@@ -2951,6 +3200,20 @@ async def run_daily_cycle(
     except Exception as _e:
         coverage = None
         logger.warning(f"Coverage report failed: {_e}")
+
+    # New Source Discovery → Editorial Queue: compare NewsAPI.ai-discovered outlets
+    # against the 194-source registry and classify. Advisory only — NEVER auto-imports.
+    # Best-effort: registry may be empty (pending Appendix A) → skipped gracefully.
+    if coverage is not None and NEWSAPI_AI_KEY:
+        try:
+            from app.bulletin_intelligence import bulletin_store
+            from app.bulletin_intelligence.provider_analysis import compare_against_registry
+            registry = await bulletin_store.load_source_registry()
+            coverage["registry_editorial_queue"] = compare_against_registry(
+                all_articles, registry, target_provider="NewsAPI.ai"
+            )
+        except Exception as _e:
+            logger.debug(f"registry editorial queue skipped: {_e}")
 
     # Generate briefing — HTML + editable Word (.docx), built from the same sections
     html, docx_bytes = await build_briefing_outputs(agency, briefing_arts, briefing_date)

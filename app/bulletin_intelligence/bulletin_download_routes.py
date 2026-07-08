@@ -21,6 +21,23 @@ router = APIRouter(prefix="/api/v1/bulletin", tags=["Bulletin Downloads"])
 
 ALLOWED_DAYS = [1, 2, 3, 4, 5, 7, 14, 30, 60, 90, 180]
 
+
+def _us_date(dt) -> str:
+    """US long date, no leading zero on the day: 'July 7, 2026' (never 'July 07'
+    or '7 July 2026'). Portable — avoids non-portable %-d / %#d flags."""
+    try:
+        return f"{dt.strftime('%B')} {dt.day}, {dt.year}"
+    except Exception:
+        return str(dt)
+
+
+def _us_date_short(dt) -> str:
+    """US month + day, no year, no leading zero: 'July 7'."""
+    try:
+        return f"{dt.strftime('%B')} {dt.day}"
+    except Exception:
+        return str(dt)
+
 # Terms that signal a genuine FCC connection (agency + current leadership).
 # An article must mention one of these OR score highly with the classifier to be
 # shown — this filters out tangential tech/telecom news that never involves the FCC.
@@ -220,10 +237,10 @@ async def download_bulletin(
     date_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
     now = datetime.now(timezone.utc)
     if days == 1:
-        date_text = f"{now.strftime('%B %d, %Y')} | Last 24 Hours"
+        date_text = f"{_us_date(now)} | Last 24 Hours"
     else:
-        start = (now - timedelta(days=days)).strftime('%B %d')
-        end = now.strftime('%B %d, %Y')
+        start = _us_date_short(now - timedelta(days=days))
+        end = _us_date(now)
         date_text = f"{start} — {end} | Last {days} Days"
     run3 = date_para.add_run(date_text)
     run3.font.size = Pt(10)
@@ -317,7 +334,7 @@ async def download_bulletin(
                     try:
                         if 'T' in str(pub_date):
                             dt = datetime.fromisoformat(str(pub_date).replace('Z', '+00:00'))
-                            source_text += f" | {dt.strftime('%b %d, %Y')}"
+                            source_text += f" | {_us_date(dt)}"
                         else:
                             source_text += f" | {pub_date}"
                     except Exception:
@@ -590,8 +607,10 @@ def _render_excel_workbook(agency, clusters, sec_of):
     ws = wb.active
     ws.title = "FCC Bulletin QA"
 
+    # Provider column (col 11) is appended LAST so every existing column index
+    # (and its styling) is unchanged — additive, backward-compatible.
     headers = ["#", "Category", "Story Group", "Relationship", "Title", "Summary",
-               "Source", "Subscription Required", "Relevance", "URL"]
+               "Source", "Subscription Required", "Relevance", "URL", "Provider"]
     ws.append(headers)
     header_fill = PatternFill("solid", fgColor="0F172A")
     header_font = Font(bold=True, color="FFFFFF", size=11)
@@ -618,8 +637,9 @@ def _render_excel_workbook(agency, clusters, sec_of):
             rel = getattr(art, "relevance_score", 0) or 0
             paywalled = bool(getattr(art, "is_paywalled", False))
             relationship = "Primary" if mi == 0 else "Similar"
+            provider = getattr(art, "provider", "") or getattr(art, "source", "") or ""
             ws.append([num, sec_of(art), gi, relationship, title, summary, outlet,
-                       "Yes" if paywalled else "No", f"{int(rel * 100)}%", url])
+                       "Yes" if paywalled else "No", f"{int(rel * 100)}%", url, provider])
 
             if url:
                 uc = ws.cell(row=row, column=10)
@@ -634,7 +654,7 @@ def _render_excel_workbook(agency, clusters, sec_of):
                 ws.cell(row=row, column=3).fill = group_fill
             row += 1
 
-    widths = [5, 24, 11, 12, 50, 72, 22, 18, 10, 42]
+    widths = [5, 24, 11, 12, 50, 72, 22, 18, 10, 42, 16]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
     for r in range(2, row):

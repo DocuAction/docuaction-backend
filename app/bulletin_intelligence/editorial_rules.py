@@ -14,9 +14,10 @@ Pure stdlib. Operates on Article-like objects (attrs: outlet, url, title,
 published_at, is_paywalled, summary, source_type, topic).
 """
 
+import os
 import re
 from datetime import datetime, timezone, timedelta
-from typing import List, Any
+from typing import List, Any, Tuple
 
 # Outlets that are subscription-only — show headline + [SUBSCRIPTION REQUIRED].
 # Substring-matched against the outlet name (case-insensitive), so "The New York
@@ -133,10 +134,103 @@ def enforce_freshness(articles: List[Any], lookback_hours: int = 24,
     return kept
 
 
+# ── Corporate-announcement filter (UAT false-positive fix) ────────────────────
+# UAT example: "T-Mobile executive appointment" must NOT appear. A corporate
+# announcement (personnel move, earnings, product/plan launch, generic marketing
+# partnership) is NOT FCC news UNLESS it is directly tied to an FCC nexus below.
+# Reversible via BULLETIN_EDITORIAL_STRICT=false (default on — this is a UAT fix).
+EDITORIAL_STRICT = os.getenv("BULLETIN_EDITORIAL_STRICT", "true").strip().lower() == "true"
+
+# Markers that a story is a corporate/business announcement rather than policy news.
+_CORP_ANNOUNCE_MARKERS = (
+    # personnel / leadership moves
+    "appoint", "appoints", "appointed", "names ", " named ", "hires", "hired",
+    "promotes", "promoted", "joins as", "to lead", "steps down", "resigns",
+    "retires", "new ceo", "new cfo", "new cto", "new coo", "chief executive",
+    "chief financial", "chief technology", "chief operating", "board of directors",
+    "appointment", "executive appointment", "elevates", "taps ",
+    # Added 2026-07-08 (validation-run finding): exec-move phrasings that slipped
+    # through, e.g. "T-Mobile Bringing on Former AT&T Exec Chris Sambar".
+    "bringing on", "brings on", "onboards", "poaches", "recruits", " joins ",
+    "exec ", " exec", "chief revenue", "chief marketing", "chief commercial",
+    "general manager", "managing director", "svp", "evp", " vp ", "vp for",
+    "rises to", "regional vp", "welcomes", "rejoins",
+    # earnings / financial results
+    "quarterly earnings", "quarterly results", "q1 results", "q2 results",
+    "q3 results", "q4 results", "earnings report", "reports revenue",
+    "beats estimates", "misses estimates", "dividend", "stock buyback",
+    "share repurchase", "guidance", "posts profit", "posts loss",
+    # product / marketing announcements
+    "unveils", "launches new", "new plan", "new pricing", "rolls out",
+    "introduces", "now available", "expands service", "customer growth",
+    "loyalty program", "rebrand", "sponsorship",
+)
+
+# FCC-nexus signals that KEEP an otherwise-corporate story (the client's allowed
+# hooks: FCC, spectrum, licensing, rulemaking, enforcement, mergers requiring FCC
+# approval, broadcast ownership, telecommunications regulation).
+_FCC_NEXUS_SIGNALS = (
+    "fcc", "federal communications commission", "f.c.c.",
+    "spectrum", "auction", "license", "licensing", "licensed",
+    "rulemaking", "nprm", "notice of proposed", "docket", "part 15", "part 25",
+    "rule", "regulation", "regulatory", "regulator",
+    "enforcement", "forfeiture", "consent decree", "notice of apparent liability",
+    "merger", "acquisition review", "deal review", "transfer of control",
+    "broadcast ownership", "ownership cap", "retransmission", "must-carry",
+    "net neutrality", "title ii", "universal service", "usf", "e-rate",
+    "robocall", "tcpa", "stir-shaken", "earth station", "ngso",
+    "commissioner", "brendan carr", "anna gomez", "olivia trusty",
+    "wireless bureau", "wireline", "media bureau", "space bureau",
+)
+
+
+def _blob(a: Any) -> str:
+    return " ".join([
+        (getattr(a, "title", "") or ""),
+        (getattr(a, "summary", "") or ""),
+        (getattr(a, "full_text", "") or ""),
+    ]).lower()
+
+
+def is_corporate_noise(a: Any) -> bool:
+    """True if the article is a corporate announcement with NO FCC nexus.
+
+    Conservative by design: it only rejects when a corporate marker is present
+    AND no FCC-nexus signal appears anywhere in the text — so a genuine FCC story
+    that happens to mention a company (e.g. 'FCC approves T-Mobile spectrum
+    transfer') is always kept."""
+    blob = _blob(a)
+    if not blob.strip():
+        return False
+    has_corp = any(m in blob for m in _CORP_ANNOUNCE_MARKERS)
+    if not has_corp:
+        return False
+    has_nexus = any(s in blob for s in _FCC_NEXUS_SIGNALS)
+    return not has_nexus
+
+
+def filter_corporate_noise(articles: List[Any]) -> Tuple[List[Any], List[Any]]:
+    """Split into (kept, rejected_corporate). No-op passthrough when the flag is
+    off. Never raises."""
+    if not EDITORIAL_STRICT:
+        return list(articles), []
+    kept, rejected = [], []
+    for a in articles:
+        try:
+            if is_corporate_noise(a):
+                rejected.append(a)
+            else:
+                kept.append(a)
+        except Exception:
+            kept.append(a)
+    return kept, rejected
+
+
 def apply_editorial_rules(articles: List[Any], lookback_hours: int = 24,
                           now: datetime = None) -> List[Any]:
     """Run all deterministic editorial rules in order. Returns filtered list."""
     flag_subscriptions(articles)
     fresh = enforce_freshness(articles, lookback_hours, now)
     capped = enforce_fccgov_cap(fresh)
-    return capped
+    kept, _rejected = filter_corporate_noise(capped)
+    return kept
