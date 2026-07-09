@@ -58,7 +58,19 @@ async def log_tefca_event(
     actions (e.g. background batch validation), which are recorded with a null
     user_id and an explicit actor in `details`.
     """
-    payload = {"result": result}
+    # Correlation enrichment (NIST AU-3(1) — additional audit content; AU-10 —
+    # non-repudiation). request_id / correlation_id / session_id / duration_ms are
+    # merged from the request context into the EXISTING details JSON column — no
+    # new tables, no schema change. Absent for background/system actions (empty
+    # context), so those records are byte-for-byte unchanged. Explicit caller
+    # `details` always win on key collisions.
+    payload = {}
+    try:
+        from app.core.request_context import audit_context
+        payload.update(audit_context())
+    except Exception:
+        pass
+    payload["result"] = result
     if details:
         payload.update(details)
     entry = _CanonicalAuditLog(
