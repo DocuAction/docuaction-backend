@@ -2,11 +2,19 @@
 Enterprise IAM — Admin accounts get 24h tokens, unlimited access
 Admin emails: admin@docuaction.io, imran@docuaction.io, imran@agtbi.com
 """
+import os
 import time
 import uuid
 import bcrypt
 import logging
 from datetime import datetime, timedelta
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)).strip())
+    except (ValueError, AttributeError):
+        return default
 from jose import JWTError, jwt
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -22,9 +30,13 @@ ALGORITHM = "HS256"
 
 ADMIN_EMAILS = {"admin@docuaction.io", "imran@docuaction.io", "imran@agtbi.com"}
 
-ACCESS_EXPIRE_NORMAL = timedelta(minutes=15)
-ACCESS_EXPIRE_ADMIN = timedelta(hours=24)
-REFRESH_EXPIRE = timedelta(days=7)
+# Session lifetimes (NIST AC-12 — session termination). Environment-configurable
+# to support per-deployment idle/absolute timeout policy (e.g. tighter FedRAMP
+# baselines) without a code change. Defaults are UNCHANGED from prior behavior:
+#   access (idle) = 15 min, admin access = 24 h, refresh (absolute) = 7 days.
+ACCESS_EXPIRE_NORMAL = timedelta(minutes=_env_int("ACCESS_TOKEN_MINUTES", 15))
+ACCESS_EXPIRE_ADMIN = timedelta(hours=_env_int("ADMIN_TOKEN_HOURS", 24))
+REFRESH_EXPIRE = timedelta(days=_env_int("REFRESH_TOKEN_DAYS", 7))
 
 # Role hierarchy. The TEFCA contract (HHSAR 352.204-71, SOW C.3) review roles are
 # inserted as a ladder above the generic product roles. Only "admin" changed
