@@ -26,6 +26,18 @@ from app.models.database import User, AuditLog, Document, Output, AudioFile, Tra
 router = APIRouter(prefix="/api/admin", tags=["Admin — Users"])
 logger = logging.getLogger("docuaction.admin.users")
 
+
+async def _revoke_tokens(user_id, reason: str):
+    """Force re-authentication by revoking all of a user's existing tokens
+    (NIST AC-12 / IA-11). Best-effort and non-fatal — a revocation-store hiccup
+    must never block the administrative action that already succeeded."""
+    try:
+        from app.core.token_revocation import revoke_all_user_tokens
+        await revoke_all_user_tokens(str(user_id))
+        logger.info(f"tokens revoked for user {user_id} (reason={reason})")
+    except Exception as e:
+        logger.warning(f"token revocation ({reason}) failed (non-fatal): {e}")
+
 # Canonical 15 modules, grouped (ids = the DB field names stored in allowed_modules).
 MODULES = [
     {"id": "action_center",         "label": "Action Center",         "group": "Operations"},
@@ -217,6 +229,9 @@ async def set_role(user_id: str, req: RoleReq, admin=Depends(require_admin), db:
     old = target.role
     target.role = new_role
     await db.commit(); await db.refresh(target)
+    # Role change → revoke existing tokens so the new (esp. reduced) privilege
+    # takes effect immediately rather than at token expiry.
+    await _revoke_tokens(target.id, "role_changed")
     await _audit(db, admin, "role_changed", str(target.id), target.email, {"from": old, "to": new_role})
     return _serialize(target)
 
@@ -234,6 +249,9 @@ async def set_permissions(user_id: str, req: PermissionsReq, admin=Depends(requi
     cleaned = _clean_modules(req.permissions)
     target.allowed_modules = cleaned
     await db.commit(); await db.refresh(target)
+    # Privilege (module access) change → revoke existing tokens so the new
+    # permission set is enforced immediately.
+    await _revoke_tokens(target.id, "permissions_changed")
     await _audit(db, admin, "permissions_changed", str(target.id), target.email, {"permissions": cleaned})
     return _serialize(target)
 
@@ -245,6 +263,7 @@ async def update_user(user_id: str, payload: dict, admin=Depends(require_admin),
     target = result.scalar_one_or_none()
     if not target:
         raise HTTPException(404, "User not found")
+    revoke_needed = False  # any security-relevant change forces re-auth (AC-12)
     if "role" in payload:
         nr = str(payload["role"]).lower()
         if nr not in VALID_ROLES:
@@ -254,6 +273,7 @@ async def update_user(user_id: str, payload: dict, admin=Depends(require_admin),
         if (nr == "admin" or is_admin_account(target)) and not is_super_admin(admin):
             raise HTTPException(403, "Only a super admin can change admin roles")
         target.role = nr
+        revoke_needed = True
     if "is_active" in payload:
         if str(target.id) == str(admin.id) and not payload["is_active"]:
             raise HTTPException(400, "You cannot deactivate your own account")
@@ -261,16 +281,13 @@ async def update_user(user_id: str, payload: dict, admin=Depends(require_admin),
             raise HTTPException(403, "Only a super admin can deactivate an admin")
         target.is_active = bool(payload["is_active"])
         if not target.is_active:
-            # Account disable → also revoke refresh tokens (access already blocked
-            # by the is_active check in the auth dependency). NIST AC-12.
-            try:
-                from app.core.token_revocation import revoke_all_user_tokens
-                await revoke_all_user_tokens(str(target.id))
-            except Exception as e:
-                logger.warning(f"token revocation on deactivate failed (non-fatal): {e}")
+            revoke_needed = True  # account disable → also revoke refresh tokens
     if "permissions" in payload or "allowed_modules" in payload:
         target.allowed_modules = _clean_modules(payload.get("permissions", payload.get("allowed_modules")) or [])
+        revoke_needed = True
     await db.commit(); await db.refresh(target)
+    if revoke_needed:
+        await _revoke_tokens(target.id, "user_updated")
     await _audit(db, admin, "user_updated", str(target.id), target.email)
     return _serialize(target)
 
@@ -292,11 +309,7 @@ async def set_password(user_id: str, req: SetPasswordReq, admin=Depends(require_
     target.password_hash = hash_password(req.new_password)
     await db.commit()
     # Force re-auth: revoke all of the target's existing tokens (NIST AC-12/IA-11).
-    try:
-        from app.core.token_revocation import revoke_all_user_tokens
-        await revoke_all_user_tokens(str(target.id))
-    except Exception as e:
-        logger.warning(f"token revocation after set-password failed (non-fatal): {e}")
+    await _revoke_tokens(target.id, "password_reset_by_admin")
     await _audit(db, admin, "password_reset_by_admin", str(target.id), target.email)
     return {"status": "password_set", "email": target.email}
 

@@ -33,6 +33,16 @@ logger = logging.getLogger("docuaction.revocation")
 REVOCATION_ENABLED = os.getenv("TOKEN_REVOCATION_ENABLED", "true").strip().lower() != "false"
 _REDIS_URL = os.getenv("REDIS_URL", "").strip()
 
+# Fail-closed policy for the revocation CHECK when the store is unreachable.
+#   false (default) → fail OPEN: allow the request and log a warning. Preserves
+#                     availability (a cache blip must not 401 the whole API) and
+#                     keeps current/production behavior unchanged.
+#   true            → fail CLOSED: deny authentication, emit a SECURITY log with
+#                     request_id/correlation_id. For high-assurance deployments.
+# With the default in-memory store this path is unreachable (its operations do
+# not perform I/O and cannot fail); the flag matters only with a remote backend.
+REVOCATION_FAIL_CLOSED = os.getenv("REVOCATION_FAIL_CLOSED", "false").strip().lower() == "true"
+
 # Safety ceiling so a revocation entry cannot outlive any conceivable token.
 _MAX_TTL_SECONDS = int(os.getenv("TOKEN_REVOCATION_MAX_TTL", str(7 * 24 * 3600)))
 

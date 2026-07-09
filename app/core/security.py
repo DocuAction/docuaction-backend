@@ -127,8 +127,25 @@ async def _enforce_session(payload, user):
             raise HTTPException(401, "Token has been revoked")
     except HTTPException:
         raise
-    except Exception as e:  # never fail-open on an unexpected store error path
-        logger.warning(f"Revocation check error (allowing, logged): {e}")
+    except Exception as e:
+        # Revocation store unreachable. Policy is governed by REVOCATION_FAIL_CLOSED:
+        #   default false → FAIL OPEN: allow + warn (availability-preserving; a
+        #                   cache blip must not 401 the entire API).
+        #   true          → FAIL CLOSED: deny + SECURITY log w/ request/correlation id.
+        from app.core import token_revocation as _tr
+        if getattr(_tr, "REVOCATION_FAIL_CLOSED", False):
+            rid = cid = None
+            try:
+                from app.core.request_context import get_request_id, get_correlation_id
+                rid, cid = get_request_id(), get_correlation_id()
+            except Exception:
+                pass
+            logger.error(
+                "SECURITY: revocation store unreachable — DENYING (fail-closed). "
+                f"request_id={rid} correlation_id={cid} error={e}"
+            )
+            raise HTTPException(401, "Authorization temporarily unavailable")
+        logger.warning(f"Revocation check error (fail-open, allowing; logged): {e}")
     try:
         from app.core.request_context import set_session_id
         set_session_id(payload.get("jti"))
