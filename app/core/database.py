@@ -23,13 +23,41 @@ def _normalize_url(url):
     rest = parts[1]
     return "postgresql+asyncpg://" + rest
 
+def _ssl_connect_args():
+    """Optional transport encryption for the DB connection (NIST SC-8 / SC-13),
+    configured by ENV only — no schema/migration/URL change.
+
+    DATABASE_SSL accepts libpq-style modes, passed straight to asyncpg:
+      unset / "disable" / "off"  → no change (default; identical to prior behavior)
+      "require" (or "true")      → encrypt; no certificate verification (works with
+                                    managed Postgres self-signed certs, e.g. Railway)
+      "verify-ca" / "verify-full"→ encrypt + verify server certificate (FedRAMP /
+                                    NIST SC-8(1); relies on the platform's FIPS-
+                                    validated OpenSSL module — FIPS 140-3 ready)
+
+    If DATABASE_URL already encodes sslmode, leave DATABASE_SSL unset and that
+    setting continues to govern.
+    """
+    mode = os.getenv("DATABASE_SSL", "").strip().lower()
+    if not mode or mode in ("disable", "false", "off", "0", "none"):
+        return {}
+    if mode in ("true", "on", "1", "enable", "enabled"):
+        mode = "require"
+    return {"ssl": mode}
+
+
 def _get_engine():
     global _engine
     if _engine is None:
         raw = os.getenv("DATABASE_URL", "")
         db_url = _normalize_url(raw)
-        logger.info(f"Creating DB engine: {db_url[:35]}...")
-        _engine = create_async_engine(db_url, echo=False, pool_size=5, max_overflow=10, pool_pre_ping=True)
+        connect_args = _ssl_connect_args()
+        ssl_desc = connect_args.get("ssl", "off (default)")
+        logger.info(f"Creating DB engine: {db_url[:35]}... (SSL={ssl_desc})")
+        _engine = create_async_engine(
+            db_url, echo=False, pool_size=5, max_overflow=10, pool_pre_ping=True,
+            connect_args=connect_args,
+        )
     return _engine
 
 def _get_session_maker():
