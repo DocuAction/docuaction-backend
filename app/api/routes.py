@@ -14,7 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.security import hash_password, verify_password, create_token, create_token_pair, get_current_user, ADMIN_EMAILS
+from app.core.security import hash_password, verify_password, create_token, create_token_pair, get_current_user, ADMIN_EMAILS, decode_token, security as bearer_scheme
+from fastapi.security import HTTPAuthorizationCredentials
 from app.models.database import User, Document, Output, AudioFile, Transcript
 from app.models.schemas import (
     SignupRequest, LoginRequest, TokenResponse, UserResponse,
@@ -63,6 +64,18 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
 @router.get("/api/auth/me", response_model=UserResponse, tags=["Auth"])
 async def get_profile(user=Depends(get_current_user)):
     return UserResponse.model_validate(user)
+@router.post("/api/auth/logout", tags=["Auth"])
+async def logout(creds: HTTPAuthorizationCredentials = Depends(bearer_scheme)):
+    """Revoke the presented access token immediately (NIST AC-12 session
+    termination). Idempotent and always succeeds — an already-invalid/expired
+    token is simply treated as logged out. No stored data is modified."""
+    from app.core.token_revocation import revoke_current_token
+    try:
+        payload = decode_token(creds.credentials)
+        await revoke_current_token(payload)
+    except HTTPException:
+        pass  # invalid/expired token — effectively already logged out
+    return {"status": "logged_out"}
 # ═══════════════════════════════════════════════════════
 # PROCESS ENDPOINT (AI ENGINE — TEXT INPUT)
 # ═══════════════════════════════════════════════════════

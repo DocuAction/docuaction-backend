@@ -221,6 +221,13 @@ async def reset_password(
     user.updated_at = datetime.utcnow()
     await db.commit()
 
+    # Force re-auth everywhere: revoke all of the user's existing tokens (AC-12/IA-11).
+    try:
+        from app.core.token_revocation import revoke_all_user_tokens
+        await revoke_all_user_tokens(str(user.id))
+    except Exception as e:
+        logger.warning(f"token revocation after password reset failed (non-fatal): {e}")
+
     await _log_reset_event(db, str(user.id), ip, "success", f"Password reset for {email}")
 
     return {

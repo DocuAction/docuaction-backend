@@ -2,6 +2,7 @@
 Enterprise IAM — Admin accounts get 24h tokens, unlimited access
 Admin emails: admin@docuaction.io, imran@docuaction.io, imran@agtbi.com
 """
+import time
 import uuid
 import bcrypt
 import logging
@@ -57,15 +58,23 @@ def verify_password(pw, hashed):
 
 def create_access_token(data, is_admin=False):
     payload = data.copy()
+    now = datetime.utcnow()
     expire = ACCESS_EXPIRE_ADMIN if is_admin else ACCESS_EXPIRE_NORMAL
-    payload["exp"] = datetime.utcnow() + expire
+    payload["exp"] = now + expire
+    # iat enables user-level revocation cutoffs (password change / forced re-auth).
+    # Additive claim: existing decoders ignore it; legacy tokens without it still
+    # validate. Uses the UTC epoch clock (time.time()) so it aligns with the
+    # revocation cutoff, which also uses time.time().
+    payload["iat"] = int(time.time())
     payload["type"] = "access"
     payload["jti"] = str(uuid.uuid4())
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=ALGORITHM)
 
 def create_refresh_token(data):
     payload = data.copy()
-    payload["exp"] = datetime.utcnow() + REFRESH_EXPIRE
+    now = datetime.utcnow()
+    payload["exp"] = now + REFRESH_EXPIRE
+    payload["iat"] = int(time.time())
     payload["type"] = "refresh"
     payload["jti"] = str(uuid.uuid4())
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=ALGORITHM)
@@ -91,6 +100,30 @@ def decode_token(token):
     except JWTError:
         raise HTTPException(401, "Invalid or expired token")
 
+async def _enforce_session(payload, user):
+    """Post-authentication session guards (NIST AC-12 / IA-11), all additive:
+      • account disable → immediate 401 for every token (DB is_active flag)
+      • logout / password-change → 401 if the token has been revoked
+      • stamp session_id (jti) for audit correlation
+    No-ops by default (nothing revoked; is_active defaults True), so active
+    sessions are unaffected."""
+    if user is not None and not getattr(user, "is_active", True):
+        raise HTTPException(401, "Account disabled")
+    try:
+        from app.core import token_revocation
+        if await token_revocation.is_revoked(payload):
+            raise HTTPException(401, "Token has been revoked")
+    except HTTPException:
+        raise
+    except Exception as e:  # never fail-open on an unexpected store error path
+        logger.warning(f"Revocation check error (allowing, logged): {e}")
+    try:
+        from app.core.request_context import set_session_id
+        set_session_id(payload.get("jti"))
+    except Exception:
+        pass
+
+
 async def get_current_user(
     creds: HTTPAuthorizationCredentials = Depends(security),
     db: AsyncSession = Depends(get_db),
@@ -108,6 +141,7 @@ async def get_current_user(
     # happen only via database/admin action, never by email domain
     # (HHSAR 352.204-71, FAR 52.212-4 — least privilege, authorized personnel only).
     # Never reintroduce automatic role elevation based on email address.
+    await _enforce_session(payload, user)
     return user
 
 def require_role(minimum_role):
@@ -127,6 +161,7 @@ def require_role(minimum_role):
         user = result.scalar_one_or_none()
         if not user:
             raise HTTPException(401, "User not found")
+        await _enforce_session(payload, user)
         return user
     return role_checker
 

@@ -9,6 +9,7 @@ Tiers:
 Module permissions are stored in users.allowed_modules (JSON list of MODULE ids).
 Every mutating action is audit-logged for the per-user activity trail.
 """
+import logging
 import secrets
 import string
 from datetime import datetime
@@ -23,6 +24,7 @@ from app.core.security import get_current_user, ADMIN_EMAILS, hash_password
 from app.models.database import User, AuditLog, Document, Output, AudioFile, Transcript
 
 router = APIRouter(prefix="/api/admin", tags=["Admin — Users"])
+logger = logging.getLogger("docuaction.admin.users")
 
 # Canonical 15 modules, grouped (ids = the DB field names stored in allowed_modules).
 MODULES = [
@@ -258,6 +260,14 @@ async def update_user(user_id: str, payload: dict, admin=Depends(require_admin),
         if is_admin_account(target) and not is_super_admin(admin) and not payload["is_active"]:
             raise HTTPException(403, "Only a super admin can deactivate an admin")
         target.is_active = bool(payload["is_active"])
+        if not target.is_active:
+            # Account disable → also revoke refresh tokens (access already blocked
+            # by the is_active check in the auth dependency). NIST AC-12.
+            try:
+                from app.core.token_revocation import revoke_all_user_tokens
+                await revoke_all_user_tokens(str(target.id))
+            except Exception as e:
+                logger.warning(f"token revocation on deactivate failed (non-fatal): {e}")
     if "permissions" in payload or "allowed_modules" in payload:
         target.allowed_modules = _clean_modules(payload.get("permissions", payload.get("allowed_modules")) or [])
     await db.commit(); await db.refresh(target)
@@ -281,6 +291,12 @@ async def set_password(user_id: str, req: SetPasswordReq, admin=Depends(require_
         raise HTTPException(403, "Only a super admin can reset an admin's password")
     target.password_hash = hash_password(req.new_password)
     await db.commit()
+    # Force re-auth: revoke all of the target's existing tokens (NIST AC-12/IA-11).
+    try:
+        from app.core.token_revocation import revoke_all_user_tokens
+        await revoke_all_user_tokens(str(target.id))
+    except Exception as e:
+        logger.warning(f"token revocation after set-password failed (non-fatal): {e}")
     await _audit(db, admin, "password_reset_by_admin", str(target.id), target.email)
     return {"status": "password_set", "email": target.email}
 
