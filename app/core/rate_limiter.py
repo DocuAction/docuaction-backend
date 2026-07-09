@@ -2,7 +2,19 @@
 API Rate Limiting & Burst Protection
 Tier-based limits: Free=60/min, Pro=200/min, Business=500/min, Enterprise=unlimited
 In-memory sliding window counter (no Redis dependency for MVP).
+
+SECURITY HARDENING (NIST 800-53 SC-5 — Denial-of-Service protection):
+By default the middleware runs in SCOPED mode and enforces a strict brute-force
+limit ONLY on sensitive authentication endpoints (login / signup / refresh /
+password reset & change). Every other endpoint passes through untouched, so
+existing traffic — TEFCA data endpoints, health checks, and internal scheduler
+jobs (which never traverse HTTP) — is unaffected. All limits and the sensitive
+path set are environment-configurable, so tightening is a config change (no code
+change) — FedRAMP-ready. Set RATE_LIMIT_SCOPE=all to also apply tier limits
+globally; RATE_LIMIT_ENABLED=false disables entirely.
 """
+import os
+import re
 import time
 import logging
 from collections import defaultdict
@@ -10,6 +22,34 @@ from fastapi import Request, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
 logger = logging.getLogger("docuaction.ratelimit")
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)).strip())
+    except (ValueError, AttributeError):
+        return default
+
+
+# ── Environment-configurable knobs (safe defaults; no behavior change for
+#    non-sensitive traffic) ────────────────────────────────────────────────
+RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").strip().lower() != "false"
+RATE_LIMIT_SCOPE = os.getenv("RATE_LIMIT_SCOPE", "sensitive").strip().lower()  # "sensitive" | "all"
+AUTH_RATE_PER_MINUTE = _env_int("RATE_LIMIT_AUTH_PER_MINUTE", 10)
+AUTH_RATE_BURST = _env_int("RATE_LIMIT_AUTH_BURST", 5)
+
+# Sensitive endpoints (brute-force / credential-stuffing surface). Matched by URL
+# path substring, so it is independent of which router serves them. Override with
+# a comma-separated RATE_LIMIT_SENSITIVE_PATHS to add e.g. TEFCA high-risk routes.
+_DEFAULT_SENSITIVE = (
+    "/api/auth/login,/api/auth/signup,/api/auth/register,/api/auth/refresh,"
+    "/api/auth/forgot-password,/api/auth/reset-password,/api/auth/change-password,"
+    "/api/auth/emergency-reset,/auth/login,/auth/register,/auth/reset-password,"
+    "/auth/change-password,/set-password"
+)
+SENSITIVE_PATHS = [
+    p.strip() for p in os.getenv("RATE_LIMIT_SENSITIVE_PATHS", _DEFAULT_SENSITIVE).split(",") if p.strip()
+]
 
 # ═══ RATE LIMIT TIERS ═══
 RATE_LIMITS = {
@@ -19,6 +59,8 @@ RATE_LIMITS = {
     "enterprise": {"requests_per_minute": 10000, "burst_max": 500},
     "admin": {"requests_per_minute": 10000, "burst_max": 500},
     "default": {"requests_per_minute": 60, "burst_max": 10},
+    # Strict brute-force ceiling for authentication endpoints (per client IP).
+    "auth": {"requests_per_minute": AUTH_RATE_PER_MINUTE, "burst_max": AUTH_RATE_BURST},
 }
 
 # Sliding window storage: {user_key: [timestamp, timestamp, ...]}
@@ -81,14 +123,31 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     EXEMPT_PATHS = {"/", "/health", "/docs", "/redoc", "/openapi.json"}
 
     async def dispatch(self, request: Request, call_next):
+        # Master switch — disabled → transparent pass-through.
+        if not RATE_LIMIT_ENABLED:
+            return await call_next(request)
+
         path = request.url.path
 
-        # Skip rate limiting for health checks and docs
+        # Skip rate limiting for health checks and docs. (Internal scheduler jobs
+        # never traverse HTTP, so they are inherently exempt.)
         if path in self.EXEMPT_PATHS or path.startswith("/docs") or path.startswith("/redoc"):
             return await call_next(request)
 
-        # Determine user key and tier
-        user_key, tier = self._extract_identity(request)
+        is_sensitive = any(p in path for p in SENSITIVE_PATHS)
+
+        # SCOPED (default) mode: only sensitive auth endpoints are throttled;
+        # every other path passes through exactly as before (no regression).
+        if RATE_LIMIT_SCOPE != "all" and not is_sensitive:
+            return await call_next(request)
+
+        # Sensitive endpoints are keyed per client IP (login is pre-auth) with the
+        # strict "auth" ceiling; other paths (scope=all) use the tier model.
+        if is_sensitive:
+            client_ip = request.client.host if request.client else "unknown"
+            user_key, tier = f"auth:{client_ip}:{path}", "auth"
+        else:
+            user_key, tier = self._extract_identity(request)
 
         # Check rate limit
         result = check_rate_limit(user_key, tier)

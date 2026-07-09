@@ -35,6 +35,13 @@ app.add_middleware(
 # ── Trusted Host (FIX 8 — NIST SC-7) — reject Host-header spoofing. ──
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.trusted_hosts)
 
+# ── Rate limiting (NIST SC-5) — SCOPED by default to sensitive authentication
+#    endpoints only (login/signup/refresh/password). Non-sensitive traffic,
+#    health checks, and internal scheduler jobs are unaffected. All limits are
+#    environment-configurable (RATE_LIMIT_* — see app/core/rate_limiter.py). ──
+from app.core.rate_limiter import RateLimitMiddleware  # noqa: E402
+app.add_middleware(RateLimitMiddleware)
+
 
 # ── Security response headers (FIX 8 — NIST SC-8 / SC-18). ──
 @app.middleware("http")
