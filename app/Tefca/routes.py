@@ -1381,6 +1381,15 @@ async def tefca_search(
             logger.warning(f"tefca_search NPPES lookup failed: {e}")
             nppes = {"error": str(e)[:120]}
 
+    # Presentation-layer PII minimization (NIST AC-3): no-op for reviewer+ (all
+    # current TEFCA callers) and thus fully backward compatible; masks entity
+    # name / NPI only if a lower-privilege role is ever granted access. Stored
+    # data and the result set are unchanged.
+    from app.core.pii_presentation import mask_records
+    _role = getattr(user, "role", None)
+    reviews_out = mask_records(reviews_out, _role, fields=["entity_name", "npi"])
+    entities_out = mask_records(entities_out, _role, fields=["legal_name", "npi"])
+
     return {
         "query": term, "type": type, "is_npi": is_npi,
         "counts": {"reviews": len(reviews_out), "entities": len(entities_out), "findings": len(findings_out)},
