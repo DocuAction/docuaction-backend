@@ -42,6 +42,23 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.trusted_hosts)
 from app.core.rate_limiter import RateLimitMiddleware  # noqa: E402
 app.add_middleware(RateLimitMiddleware)
 
+# ── Standardized error handling (NIST SI-11 — error handling; AU-3 — audit
+#    content). ErrorHandlerMiddleware guarantees unhandled exceptions return a
+#    safe JSON body (NO stack traces) and are logged internally with a request
+#    id. RequestContextMiddleware stamps request/correlation ids on every
+#    request/response (added last → outermost, so ids exist for all layers).
+#    The response-SHAPE-changing exception handlers (which would replace the
+#    FastAPI {"detail": ...} body) are OPT-IN via STANDARDIZED_ERROR_ENVELOPE
+#    to preserve 100% backward compatibility for existing clients. ──
+import os as _os  # noqa: E402
+from app.core.error_handler import ErrorHandlerMiddleware, register_exception_handlers  # noqa: E402
+from app.core.request_context import RequestContextMiddleware  # noqa: E402
+app.add_middleware(ErrorHandlerMiddleware)
+if _os.getenv("STANDARDIZED_ERROR_ENVELOPE", "false").strip().lower() == "true":
+    register_exception_handlers(app)
+    logger.info("Standardized error envelope ENABLED (STANDARDIZED_ERROR_ENVELOPE=true)")
+app.add_middleware(RequestContextMiddleware)
+
 
 # ── Security response headers (FIX 8 — NIST SC-8 / SC-18). ──
 @app.middleware("http")

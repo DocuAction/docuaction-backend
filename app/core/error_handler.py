@@ -48,13 +48,19 @@ class ErrorHandlerMiddleware(BaseHTTPMiddleware):
     NEVER exposes internal stack traces to the client.
     """
     async def dispatch(self, request: Request, call_next):
-        request_id = str(uuid.uuid4())
+        # Reuse the correlation id stamped by RequestContextMiddleware so the id
+        # in the response header, the internal log, and any error body all match.
+        try:
+            from app.core.request_context import get_request_id
+            request_id = get_request_id() or str(uuid.uuid4())
+        except Exception:
+            request_id = str(uuid.uuid4())
 
         try:
             response = await call_next(request)
 
-            # Add request ID to all responses
-            response.headers["X-Request-ID"] = request_id
+            # Ensure a request ID is present (idempotent with RequestContextMiddleware)
+            response.headers.setdefault("X-Request-ID", request_id)
             return response
 
         except Exception as e:
