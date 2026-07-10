@@ -3118,8 +3118,15 @@ async def run_daily_cycle(
     if before != len(all_articles):
         logger.info(f"Excluded {before - len(all_articles)} article(s) from blocked domains")
 
-    # Process pipeline
-    unique = deduplicate(all_articles)
+    # Process pipeline. Dedup: opt-in stronger URL+fingerprint pass wraps the
+    # existing deduplicate (BULLETIN_BETTER_DEDUP; default OFF → identical
+    # behavior). Never removes unique stories; falls back on any error.
+    try:
+        from app.bulletin_intelligence.coverage_hotfix import better_deduplicate
+        unique = better_deduplicate(all_articles, deduplicate)
+    except Exception as _e:
+        logger.debug(f"better_deduplicate wrapper skipped: {_e}")
+        unique = deduplicate(all_articles)
 
     # Safety cap (ADD-only): the extended source list can surface far more unique
     # articles per cycle, and classify_articles makes one LLM call per 8 of them,
@@ -3158,6 +3165,7 @@ async def run_daily_cycle(
     #     Flag-reversible (BULLETIN_EDITORIAL_STRICT=false). Rejected items stay
     #     archived upstream; only the briefing set is trimmed.
     corp_rejected = 0
+    _corp = []
     try:
         from app.bulletin_intelligence.editorial_rules import filter_corporate_noise
         classified, _corp = filter_corporate_noise(classified)
@@ -3166,6 +3174,16 @@ async def run_daily_cycle(
             logger.info(f"Editorial: rejected {corp_rejected} corporate-noise story(ies)")
     except Exception as _e:
         logger.debug(f"filter_corporate_noise skipped: {_e}")
+    # ── Coverage hotfix: re-admit any HIGH-PRIORITY story an editorial filter
+    #    rejected (AT&T/Robocall/TCPA/… never dropped on low confidence alone).
+    #    Additive + flagged (BULLETIN_PRIORITY_PROTECT) + fail-safe. ──
+    try:
+        from app.bulletin_intelligence.coverage_hotfix import reclaim_priority
+        _reclaimed = reclaim_priority(_corp)
+        if _reclaimed:
+            classified = classified + _reclaimed
+    except Exception as _e:
+        logger.debug(f"priority reclaim skipped: {_e}")
     # 3) Optional STRICT FCC gate — OFF by default so the minimum-volume floor is
     #    never at risk. When BULLETIN_STRICT_FCC_GATE=true, drop any story with no
     #    explicit FCC mention anywhere in its text.
@@ -3181,8 +3199,15 @@ async def run_daily_cycle(
 
     # Filter for briefing. Cap raised 80 -> 150 (2026-06-30) so the delivered
     # briefing can actually carry the higher collection volume (client wants 100+/day).
+    # Coverage hotfix: high-priority stories survive the "other + low score"
+    # cutoff (additive — only widens the briefing set). Fail-safe.
+    try:
+        from app.bulletin_intelligence.coverage_hotfix import briefing_keep_ids
+        _prio_keep = briefing_keep_ids(classified)
+    except Exception:
+        _prio_keep = set()
     briefing_arts = sorted(
-        [a for a in classified if not (a.topic == "other" and a.relevance_score < 0.4)],
+        [a for a in classified if (getattr(a, "article_id", None) in _prio_keep) or not (a.topic == "other" and a.relevance_score < 0.4)],
         key=lambda a: (a.topic != "other", a.relevance_score), reverse=True
     )[:150]
     logger.info(f"Briefing: {len(briefing_arts)} articles from {len(classified)} classified")
@@ -3200,6 +3225,22 @@ async def run_daily_cycle(
     except Exception as _e:
         coverage = None
         logger.warning(f"Coverage report failed: {_e}")
+
+    # ── Coverage hotfix: append gap detection + editorial-review queue to the
+    #    coverage report and log. Advisory only — flags, never rejects. Fail-safe. ──
+    try:
+        from app.bulletin_intelligence.coverage_hotfix import build_coverage_extra
+        _extra = build_coverage_extra(all_articles, unique, briefing_arts)
+        if isinstance(coverage, dict):
+            coverage["coverage_hotfix"] = _extra
+            _last_coverage[agency_id] = coverage
+        logger.info(
+            f"Coverage hotfix: {_extra['priority_in_briefing']} priority-protected in briefing, "
+            f"{_extra['coverage_gap_count']} coverage gap(s), "
+            f"{_extra['editorial_review_count']} flagged for editorial review"
+        )
+    except Exception as _e:
+        logger.warning(f"Coverage hotfix analytics skipped: {_e}")
 
     # New Source Discovery → Editorial Queue: compare NewsAPI.ai-discovered outlets
     # against the 194-source registry and classify. Advisory only — NEVER auto-imports.
