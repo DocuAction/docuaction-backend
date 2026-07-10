@@ -3114,6 +3114,8 @@ async def run_daily_cycle(
     # Drop client-excluded outlets (e.g. techdirt.com) from EVERY source, not
     # just RSS — GDELT/NewsAPI/Tavily can surface them too.
     before = len(all_articles)
+    # Reporting only: retain the blocked-domain articles for the editor audit.
+    _excluded_domain_arts = [a for a in all_articles if _is_excluded_domain(getattr(a, "url", ""))]
     all_articles = [a for a in all_articles if not _is_excluded_domain(getattr(a, "url", ""))]
     if before != len(all_articles):
         logger.info(f"Excluded {before - len(all_articles)} article(s) from blocked domains")
@@ -3301,6 +3303,24 @@ async def run_daily_cycle(
         await bulletin_store.save_briefing(asdict(briefing))
     except Exception as e:
         logger.warning(f"Persist after daily cycle failed: {e}")
+
+    # ── Editor audit (REPORTING ONLY): after the bulletin is finalized, render the
+    #    collect / remove-with-reason / high-priority / coverage-gap / editorial-queue
+    #    breakdown to FCC_BULLETIN_EDITOR_AUDIT_YYYYMMDD.log. Reads artifacts only —
+    #    no filtering/collection/AI change. Fail-safe — never affects the briefing. ──
+    try:
+        from app.bulletin_intelligence.editor_audit import write_editor_audit
+        _uniq_ids = {getattr(a, "article_id", id(a)) for a in unique}
+        _brief_ids = {getattr(a, "article_id", id(a)) for a in briefing_arts}
+        _removed = {
+            "Duplicate": [a for a in all_articles if getattr(a, "article_id", id(a)) not in _uniq_ids],
+            "Corporate Noise": list(_corp),
+            "Low Confidence": [a for a in classified if getattr(a, "article_id", id(a)) not in _brief_ids],
+            "Non-FCC (blocked domain)": list(_excluded_domain_arts),
+        }
+        write_editor_audit(agency_id, all_articles, unique, classified, briefing_arts, _removed)
+    except Exception as _e:
+        logger.warning(f"Editor audit skipped: {_e}")
 
     # Phase 4 — best-effort, flag-gated run instrumentation (never breaks the cycle).
     try:
