@@ -11,13 +11,15 @@ real, persisted evidence records (FIX 6). The retrospective sample size uses the
 finite-population correction (FIX 7).
 """
 
-import math
+import csv
+import io as _io
+import json
 import uuid
 import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Query, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Query, Depends, HTTPException, Request, UploadFile, File
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import select, text
@@ -41,7 +43,7 @@ from . import report_renderer
 from .models import (
     TEFCAEntity, TEFCAReviewCycle, TEFCAEvidenceRecord, TEFCASourceCache,
     TEFCAPriorityCase, TEFCAReport, TEFCAAnalystQueue,
-    TEFCAConnectorLog, TEFCAReview, TEFCAFinding,
+    TEFCAConnectorLog, TEFCAReview, TEFCAFinding, TEFCAImportHistory,
     EntityType, EntityStatus, BucketClassification, BucketLabel,
     CycleType, CycleStatus, RecordStatus, CaseStatus, CaseSeverity, QueueStatus,
 )
@@ -126,13 +128,11 @@ class PriorityCaseUpdateRequest(BaseModel):
 # ─── Sample size — finite population correction (FIX 7) ───────────────────────
 
 def calculate_sample_size(N: int, confidence: float = 0.95, margin: float = 0.05) -> int:
-    """95% CI, ±5% margin, maximum-variance p=0.5, with finite population
-    correction. For N=94,231 this returns 383 (matching the contract)."""
-    z = 1.96  # 95% CI
-    p = 0.5
-    n_0 = (z ** 2 * p * (1 - p)) / (margin ** 2)
-    n = n_0 / (1 + (n_0 - 1) / N)
-    return math.ceil(n)
+    """Cochran sample size with finite-population correction. Delegates to the
+    single shared implementation in review_engine so the batch sampler, the
+    sampling-run endpoint, and reporting can never drift. For N=94,231 @95% CI /
+    ±5% margin this returns 383 (matching the contract)."""
+    return review_engine.calculate_sample_size(N, confidence, margin)
 
 
 # ─── Enum / helper mappers ───────────────────────────────────────────────────
@@ -2271,3 +2271,582 @@ async def qa_audit_export(
     csv_text = await qa_engine.export_audit_csv(db, limit)
     return Response(content=csv_text, media_type="text/csv",
                     headers={"Content-Disposition": "attachment; filename=tefca_qa_audit.csv"})
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ENTITY REVIEWS, FINDINGS, ENTITY IMPORT — the endpoints the frontend was 404ing on
+#
+# Every field below is backed by a real column or an explicitly-labelled
+# derivation. Where the schema has no column for something the UI asked for, the
+# API returns null and says so. It does not invent a value to fill the shape.
+#
+# THE RULE THAT SHAPES ALL OF THIS (P5): ABSENCE OF EVIDENCE IS NOT AGREEMENT.
+#
+# A review that has never been executed has not "passed" its four sources — it has
+# checked none of them. So `evidence_agreement.verified` is false, `agreeing` is 0
+# (never 4), and `discrepancy_level` is null (never "No Discrepancy"). Returning
+# 4/4 for an unchecked entity would hand the UI a clean bill of health for work
+# that nobody did.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+CORE_SOURCES = ["nppes", "sam_gov", "leie", "pecos"]
+
+_BUCKET_TO_LABEL = {
+    "1": "No Discrepancy",
+    "2": "Minor or Administrative",
+    "3": "Inexplicable",
+    "4": "Non-Compliant",
+}
+
+
+def _review_executed(review: TEFCAReview) -> bool:
+    """Has validation actually run against this review?
+
+    `pending` means queued, not clean. Anything else (pass / fail / indeterminate)
+    means the pipeline ran and produced an outcome.
+    """
+    return bool(review.status) and str(review.status).lower() != "pending"
+
+
+def _verification_results(review: TEFCAReview, findings: list) -> dict:
+    """Per-source outcome across the four authoritative sources.
+
+    not_checked    — no validation has run. NOT the same as clean.
+    discrepancy    — this source produced a finding.
+    no_discrepancy — validation ran and this source raised nothing.
+    """
+    executed = _review_executed(review)
+    out = {}
+    for src in CORE_SOURCES:
+        hits = [f for f in findings if (f.connector or "").lower() == src]
+        if hits:
+            out[src] = {
+                "status": "discrepancy",
+                "findings": [h.finding_type for h in hits],
+                "severity": max((h.severity or "low") for h in hits),
+            }
+        elif executed:
+            out[src] = {"status": "no_discrepancy", "findings": [], "severity": None}
+        else:
+            out[src] = {"status": "not_checked", "findings": [], "severity": None}
+    return out
+
+
+def _evidence_agreement(review: TEFCAReview, findings: list) -> dict:
+    """Counts, never a percentage. An unchecked source never counts as agreeing."""
+    if not _review_executed(review):
+        return {"agreeing": 0, "total": len(CORE_SOURCES), "verified": False}
+    disagreeing = {
+        (f.connector or "").lower()
+        for f in findings
+        if (f.connector or "").lower() in CORE_SOURCES
+    }
+    return {
+        "agreeing": len(CORE_SOURCES) - len(disagreeing),
+        "total": len(CORE_SOURCES),
+        "verified": True,
+    }
+
+
+def _days_open(review: TEFCAReview):
+    if not review.created_at:
+        return None
+    return max(0, (datetime.utcnow() - review.created_at).days)
+
+
+async def _bucket_by_npi(db: AsyncSession, npis: list) -> dict:
+    """Authoritative discrepancy level per NPI, from TEFCAEntity.latest_bucket.
+
+    This is the classification the pipeline actually recorded. It is deliberately
+    NOT derived from finding severity — deriving a bucket from severity would
+    manufacture a determination that no reviewer ever made.
+    """
+    clean = [n for n in npis if n]
+    if not clean:
+        return {}
+    rows = (await db.execute(
+        select(TEFCAEntity.npi_submitted, TEFCAEntity.latest_bucket)
+        .where(TEFCAEntity.npi_submitted.in_(clean))
+    )).all()
+    out = {}
+    for npi, bucket in rows:
+        if bucket is not None:
+            key = str(bucket.value if hasattr(bucket, "value") else bucket)
+            out[npi] = _BUCKET_TO_LABEL.get(key)
+    return out
+
+
+def _serialize_review(review: TEFCAReview, findings: list, bucket_label) -> dict:
+    return {
+        "id": str(review.id),
+        "entity_name": review.entity_name,
+        "npi": review.npi,
+        "uei": review.uei,
+        "qhin": review.qhin,
+        "entity_type": review.entity_type,
+        "entity_state": review.entity_state,
+        "status": review.status,
+        "risk_level": review.risk_level,
+        # Null when the pipeline never classified this entity. Never guessed.
+        "discrepancy_level": bucket_label,
+        "evidence_agreement": _evidence_agreement(review, findings),
+        "reviewer": review.reviewer_id,
+        "days_open": _days_open(review),
+        "is_mock_data": bool(review.is_mock_data),
+        "created_at": review.created_at.isoformat() if review.created_at else None,
+        "updated_at": review.updated_at.isoformat() if review.updated_at else None,
+    }
+
+
+async def _latest_evidence_for_npi(db: AsyncSession, npi):
+    """The authoritative evidence record for an NPI, or None. Never synthesised."""
+    if not npi:
+        return None
+    entity = (await db.execute(
+        select(TEFCAEntity).where(TEFCAEntity.npi_submitted == npi)
+    )).scalars().first()
+    if not entity:
+        return None
+    return (await db.execute(
+        select(TEFCAEvidenceRecord)
+        .where(TEFCAEvidenceRecord.entity_id == entity.entity_id)
+        .order_by(TEFCAEvidenceRecord.created_at.desc())
+    )).scalars().first()
+
+
+@tefca_dashboard_router.get("/reviews", summary="List entity reviews (filters: status, qhin)")
+async def list_entity_reviews(
+    status: Optional[str] = Query(None),
+    qhin: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("reviewer")),
+):
+    """The reviewer queue. Returns an empty list when there is nothing — not an error."""
+    q = select(TEFCAReview).order_by(TEFCAReview.created_at.desc())
+    if status:
+        q = q.where(TEFCAReview.status == status)
+    if qhin:
+        q = q.where(TEFCAReview.qhin == qhin)
+
+    total = len((await db.execute(q)).scalars().all())
+    rows = (await db.execute(q.limit(limit).offset(offset))).scalars().all()
+    if not rows:
+        return {"total": 0, "limit": limit, "offset": offset, "reviews": []}
+
+    findings = (await db.execute(
+        select(TEFCAFinding).where(TEFCAFinding.review_id.in_([r.id for r in rows]))
+    )).scalars().all()
+    by_review = {}
+    for f in findings:
+        by_review.setdefault(f.review_id, []).append(f)
+
+    buckets = await _bucket_by_npi(db, [r.npi for r in rows])
+
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "reviews": [
+            _serialize_review(r, by_review.get(r.id, []), buckets.get(r.npi))
+            for r in rows
+        ],
+    }
+
+
+@tefca_dashboard_router.get("/reviews/{review_id}", summary="Single review detail with evidence")
+async def get_entity_review(
+    review_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("reviewer")),
+):
+    rid = _parse_uuid(review_id)
+    review = (await db.execute(
+        select(TEFCAReview).where(TEFCAReview.id == rid)
+    )).scalar_one_or_none()
+    if not review:
+        raise HTTPException(404, f"No review exists with id {review_id}")
+
+    findings = (await db.execute(
+        select(TEFCAFinding).where(TEFCAFinding.review_id == rid)
+    )).scalars().all()
+
+    buckets = await _bucket_by_npi(db, [review.npi])
+    base = _serialize_review(review, findings, buckets.get(review.npi))
+
+    evidence = await _latest_evidence_for_npi(db, review.npi)
+
+    audit_trail = []
+    if evidence:
+        if evidence.created_at:
+            audit_trail.append({
+                "event": "evidence_record_created",
+                "actor": "system",
+                "timestamp": evidence.created_at.isoformat(),
+                "outcome": str(evidence.record_status.value) if evidence.record_status else None,
+            })
+        if evidence.review_timestamp:
+            audit_trail.append({
+                "event": "reviewed",
+                "actor": evidence.reviewer_id,
+                "timestamp": evidence.review_timestamp.isoformat(),
+                "outcome": str(evidence.bucket_label.value) if evidence.bucket_label else None,
+            })
+        if evidence.supervisor_review_timestamp:
+            audit_trail.append({
+                "event": "supervisor_review",
+                "actor": evidence.supervisor_reviewer_id,
+                "timestamp": evidence.supervisor_review_timestamp.isoformat(),
+                "outcome": "approved",
+            })
+
+    base.update({
+        "verification_results": _verification_results(review, findings),
+        "findings": [{
+            "id": str(f.id),
+            "connector": f.connector,
+            "finding_code": f.finding_type,
+            "detail": f.detail,
+            "severity": f.severity,
+        } for f in findings],
+        "audit_trail": audit_trail,
+        # Straight from the evidence record. Null when the pipeline produced none —
+        # we do not synthesise a recommendation or an evidence chain.
+        "recommendation": (evidence.element_5_disposition_recommendation if evidence else None),
+        "classification_rationale": (evidence.element_2_finding_classification if evidence else None),
+        "evidence_chain": (evidence.element_4_supporting_citations if evidence else None),
+        "confidence_score": (evidence.confidence_score if evidence else None),
+    })
+    return base
+
+
+@tefca_dashboard_router.get("/findings", summary="List findings across all entities")
+async def list_findings(
+    level: Optional[str] = Query(None, description="severity: low|medium|high|critical"),
+    entity_id: Optional[str] = Query(None, description="review id"),
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("reviewer")),
+):
+    """Findings register. Returns an empty list when there are none — not an error."""
+    q = select(TEFCAFinding, TEFCAReview).join(
+        TEFCAReview, TEFCAFinding.review_id == TEFCAReview.id, isouter=True
+    )
+    if level:
+        q = q.where(TEFCAFinding.severity == level)
+    if entity_id:
+        q = q.where(TEFCAFinding.review_id == _parse_uuid(entity_id))
+
+    total = len((await db.execute(q)).all())
+    rows = (await db.execute(q.limit(limit).offset(offset))).all()
+
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "findings": [{
+            "id": str(f.id),
+            "entity_id": str(f.review_id) if f.review_id else None,
+            "entity_name": (r.entity_name if r else None),
+            "npi": (r.npi if r else None),
+            "qhin": (r.qhin if r else None),
+            "finding_code": f.finding_type,
+            "source": f.connector,
+            "severity": f.severity,
+            "evidence_summary": f.detail,
+            # tefca_findings has NO created_at and NO status column. Rather than
+            # relabel the parent review's timestamp as the finding's own, these are
+            # null, and the review's timestamp is exposed under its own name.
+            "created_at": None,
+            "status": None,
+            "review_status": (r.status if r else None),
+            "review_created_at": (r.created_at.isoformat() if r and r.created_at else None),
+        } for f, r in rows],
+    }
+
+
+@tefca_dashboard_router.get("/findings/{finding_id}", summary="Single finding with evidence chain")
+async def get_finding(
+    finding_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("reviewer")),
+):
+    fid = _parse_uuid(finding_id)
+    row = (await db.execute(
+        select(TEFCAFinding, TEFCAReview)
+        .join(TEFCAReview, TEFCAFinding.review_id == TEFCAReview.id, isouter=True)
+        .where(TEFCAFinding.id == fid)
+    )).first()
+    if not row:
+        raise HTTPException(404, f"No finding exists with id {finding_id}")
+    f, r = row
+
+    evidence = await _latest_evidence_for_npi(db, r.npi if r else None)
+
+    return {
+        "id": str(f.id),
+        "entity_id": str(f.review_id) if f.review_id else None,
+        "entity_name": (r.entity_name if r else None),
+        "finding_code": f.finding_type,
+        "source": f.connector,
+        "severity": f.severity,
+        "evidence_summary": f.detail,
+        "created_at": None,   # no column on tefca_findings
+        "status": None,       # no column on tefca_findings
+        # SHA-256 hashed citations, straight from the evidence record. Null when
+        # the pipeline produced no evidence record for this entity.
+        "evidence_chain": (evidence.element_4_supporting_citations if evidence else None),
+        "classification_rationale": (evidence.element_2_finding_classification if evidence else None),
+        "audit_trail": ([{
+            "event": "evidence_record_created",
+            "actor": "system",
+            "timestamp": evidence.created_at.isoformat() if evidence.created_at else None,
+            "outcome": str(evidence.bucket_label.value) if evidence.bucket_label else None,
+        }] if evidence else []),
+    }
+
+
+# ─── Entity import ────────────────────────────────────────────────────────────
+
+def _valid_npi(npi) -> bool:
+    """Exactly ten digits. Nothing else is an NPI."""
+    return bool(npi) and str(npi).strip().isdigit() and len(str(npi).strip()) == 10
+
+
+def _parse_upload(filename: str, raw: bytes):
+    """Parse CSV or JSON into a list of dicts. Raises HTTPException(400) on failure.
+
+    A file we cannot parse is a 400. It is never a 200 with an empty success
+    payload — that would report an import that never happened (P5).
+    """
+    name = (filename or "").lower()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(400, "The file is not valid UTF-8 text. Nothing was imported.")
+
+    if name.endswith(".json"):
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as e:
+            raise HTTPException(400, f"The file is not valid JSON ({e.msg}). Nothing was imported.")
+        if isinstance(data, dict):
+            data = data.get("entities") or data.get("rows") or data.get("data") or []
+        if not isinstance(data, list):
+            raise HTTPException(400, "JSON must be a list of entities. Nothing was imported.")
+        return data
+
+    if name.endswith(".csv"):
+        try:
+            reader = csv.DictReader(_io.StringIO(text))
+            rows = [dict(r) for r in reader]
+        except csv.Error as e:
+            raise HTTPException(400, f"The file is not valid CSV ({e}). Nothing was imported.")
+
+        # A file that yields no rows, or whose header carries none of the required
+        # columns, was not parsed - it was merely read. Returning 200 with
+        # "imported: 0" would report an import that never happened, which is the
+        # fake success P5 forbids. It is a 400.
+        if not rows:
+            raise HTTPException(400, "No data rows were found in the file. Nothing was imported.")
+        header = {(k or "").strip().lower() for k in (rows[0] or {}).keys()}
+        if not header & {"entity_name", "legal_name", "npi", "qhin"}:
+            raise HTTPException(
+                400,
+                "The file does not look like an entity import: none of the required columns "
+                "(entity_name, npi, qhin) are present. Nothing was imported.",
+            )
+        return rows
+
+    raise HTTPException(400, "Unsupported file type. Upload a .csv or .json file.")
+
+
+@tefca_dashboard_router.post("/entities/upload", summary="Import entities from CSV or JSON")
+async def upload_entities(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("reviewer")),
+):
+    """Import QHIN participant entities.
+
+    Every row is validated before anything is written. Invalid rows are rejected
+    individually and reported with the row number, the field and the reason —
+    they are never silently dropped, and they never fail the whole file.
+
+    An import that imports nothing still writes a history record. "Nothing was
+    imported" is a fact the reviewer needs to be able to see afterwards (P2, P7).
+    """
+    raw = await file.read()
+
+    # An unparseable file is a 400 — but it is STILL an import attempt, and the
+    # audit trail must show it. Recording only the imports that parsed would make
+    # the history a highlight reel. Write the failure, then fail (P2 + P5).
+    try:
+        rows = _parse_upload(file.filename, raw)
+    except HTTPException as exc:
+        db.add(TEFCAImportHistory(
+            filename=file.filename,
+            record_count=0,
+            imported_count=0,
+            rejected_count=0,
+            uploaded_by=getattr(user, "email", None) or str(user),
+            status="failed",
+            errors=[{"row": None, "field": "file", "reason": str(exc.detail)}],
+        ))
+        await db.commit()
+        raise
+
+    errors = []
+    accepted = []
+
+    for i, row in enumerate(rows, start=1):
+        norm = {(k or "").strip().lower(): (str(v).strip() if v is not None else "") for k, v in row.items()}
+        entity_name = norm.get("entity_name") or norm.get("legal_name") or ""
+        npi = norm.get("npi") or ""
+        qhin = norm.get("qhin") or ""
+
+        row_errors = []
+        if not entity_name:
+            row_errors.append({"row": i, "field": "entity_name", "reason": "required field is empty"})
+        if not _valid_npi(npi):
+            row_errors.append({"row": i, "field": "npi", "reason": "invalid format - must be exactly 10 digits"})
+        if not qhin:
+            row_errors.append({"row": i, "field": "qhin", "reason": "required field is empty"})
+
+        if row_errors:
+            errors.extend(row_errors)
+            continue
+
+        accepted.append({
+            "entity_name": entity_name,
+            "npi": npi,
+            "qhin": qhin,
+            "entity_type": (norm.get("entity_type") or "PARTICIPANT").upper(),
+            "uei": norm.get("uei") or None,
+            "address": norm.get("address") or None,
+            "contact": norm.get("contact") or None,
+        })
+
+    imported = 0
+    for a in accepted:
+        etype = a["entity_type"]
+        if etype not in ("QHIN", "PARTICIPANT", "SUBPARTICIPANT"):
+            etype = "PARTICIPANT"
+
+        # rce_organization_id is unique and NOT NULL. A re-import of the same NPI
+        # updates the existing row rather than raising a unique violation.
+        rce_id = f"import-{a['npi']}"
+        existing = (await db.execute(
+            select(TEFCAEntity).where(TEFCAEntity.rce_organization_id == rce_id)
+        )).scalar_one_or_none()
+
+        if existing:
+            existing.legal_name_submitted = a["entity_name"]
+            existing.qhin_name = a["qhin"]
+            existing.npi_submitted = a["npi"]
+            existing.uei_submitted = a["uei"]
+            existing.date_last_updated = datetime.utcnow()
+        else:
+            db.add(TEFCAEntity(
+                rce_organization_id=rce_id,
+                qhin_name=a["qhin"],
+                entity_type=EntityType(etype),
+                legal_name_submitted=a["entity_name"],
+                npi_submitted=a["npi"],
+                uei_submitted=a["uei"],
+                address_submitted={"raw": a["address"]} if a["address"] else None,
+                # PENDING_REVIEW, not reviewed. An imported entity has been checked
+                # against nothing.
+                current_status=EntityStatus.PENDING_REVIEW,
+            ))
+        imported += 1
+
+    status = "completed" if imported and not errors else ("partial" if imported else "failed")
+
+    db.add(TEFCAImportHistory(
+        filename=file.filename,
+        record_count=len(rows),
+        imported_count=imported,
+        rejected_count=len(rows) - imported,
+        uploaded_by=getattr(user, "email", None) or str(user),
+        status=status,
+        errors=errors[:200],
+    ))
+    await db.commit()
+
+    return {
+        "imported": imported,
+        "rejected": len(rows) - imported,
+        "total": len(rows),
+        "status": status,
+        "errors": errors,
+    }
+
+
+@tefca_dashboard_router.get("/import/history", summary="Entity import history")
+async def import_history(
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("reviewer")),
+):
+    """Every import attempt, including the ones that imported nothing."""
+    q = select(TEFCAImportHistory).order_by(TEFCAImportHistory.uploaded_at.desc())
+    total = len((await db.execute(q)).scalars().all())
+    rows = (await db.execute(q.limit(limit).offset(offset))).scalars().all()
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "imports": [{
+            "id": str(r.id),
+            "filename": r.filename,
+            "record_count": r.record_count,
+            "imported_count": r.imported_count,
+            "rejected_count": r.rejected_count,
+            "uploaded_by": r.uploaded_by,
+            "uploaded_at": r.uploaded_at.isoformat() if r.uploaded_at else None,
+            "status": r.status,
+            "errors": r.errors or [],
+        } for r in rows],
+    }
+
+
+@tefca_dashboard_router.get("/reports/{report_id}/download", summary="Download a report (pdf|docx)")
+async def download_report(
+    report_id: str,
+    format: str = Query("pdf", description="pdf | docx"),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("reviewer")),
+):
+    """Generic download. Delegates to the existing renderers rather than
+    duplicating them — one renderer, one output, no second implementation to
+    drift."""
+    r = await _load_report_or_404(report_id, db)
+    fmt = (format or "pdf").lower()
+
+    if fmt == "pdf":
+        try:
+            content = report_renderer.render_report_pdf(r.report_data or {})
+        except Exception as e:
+            logger.error(f"PDF render failed for {report_id}: {e}")
+            raise HTTPException(500, f"PDF rendering failed: {str(e)[:120]}")
+        media = "application/pdf"
+    elif fmt == "docx":
+        try:
+            content = report_renderer.render_report_docx(r.report_data or {})
+        except Exception as e:
+            logger.error(f"DOCX render failed for {report_id}: {e}")
+            raise HTTPException(500, f"DOCX rendering failed: {str(e)[:120]}")
+        media = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    else:
+        raise HTTPException(400, "format must be pdf or docx")
+
+    fname = f"TEFCA_{(r.report_type or 'report')}_{report_id}.{fmt}"
+    return Response(
+        content=content,
+        media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
