@@ -358,3 +358,26 @@ class TEFCAFinding(Base):
     finding_type = Column(String(100))
     detail = Column(Text)
     severity = Column(String(20))                      # low / medium / high / critical
+
+
+class TEFCAImportHistory(Base):
+    """Audit record for every entity-import attempt.
+
+    Written on EVERY upload — including rejected and failed ones. An import that
+    imported nothing still produced a record, because "nothing happened" is a
+    fact a reviewer needs to be able to see. Storing only successes would make
+    the history a highlight reel rather than an audit trail (P2, P7).
+
+    The table is created automatically at startup by Base.metadata.create_all.
+    """
+    __tablename__ = "tefca_import_history"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    filename = Column(String(500))
+    record_count = Column(Integer, default=0)      # rows parsed from the file
+    imported_count = Column(Integer, default=0)    # rows accepted and inserted
+    rejected_count = Column(Integer, default=0)    # rows that failed validation
+    uploaded_by = Column(String(255), index=True)
+    uploaded_at = Column(DateTime, default=datetime.utcnow, index=True)
+    status = Column(String(20), index=True)        # completed / partial / failed
+    errors = Column(JSONB, default=list)           # [{row, field, reason}]
