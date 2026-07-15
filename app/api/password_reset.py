@@ -10,6 +10,7 @@ Security:
 - Bcrypt password hashing
 - Full audit logging (success, failure, expired)
 """
+import os
 import uuid
 import time
 import logging
@@ -25,6 +26,7 @@ from jose import jwt, JWTError
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import hash_password
+from app.core.email import send_email
 from app.models.database import User, AuditLog
 from app.services.audit_logger import log_ai_request
 
@@ -153,13 +155,30 @@ async def forgot_password(
         # Generate reset token
         reset_token = _create_reset_token(str(user.id), user.email)
 
-        # In production: send email with reset link
-        # For now: log the token (replace with actual email service)
-        reset_url = f"https://app.docuaction.io/reset-password?token={reset_token}"
-        logger.info(f"RESET LINK GENERATED | email={user.email} | url={reset_url}")
+        base = os.getenv("APP_BASE_URL", "https://app.docuaction.io").rstrip("/")
+        reset_url = f"{base}/reset-password?token={reset_token}"
+        logger.info(f"RESET LINK GENERATED | email={user.email}")
 
-        # TODO: Integrate email service (SendGrid, SES, Resend)
-        # await send_reset_email(user.email, reset_url)
+        # Send the reset link via the platform's SendGrid sender. Best-effort:
+        # send_email never raises and is a no-op dry-run when SENDGRID_API_KEY is
+        # unset, so email problems never change the generic response below (and so
+        # never become an account-enumeration oracle).
+        reset_text = (
+            "We received a request to reset your DocuAction password.\n\n"
+            f"Reset your password (link valid for 30 minutes, single use):\n{reset_url}\n\n"
+            "If you did not request this, you can safely ignore this email — your "
+            "password will not change.\n\n— DocuAction"
+        )
+        reset_html = (
+            "<p>We received a request to reset your DocuAction password.</p>"
+            f"<p><a href=\"{reset_url}\">Reset your password</a> "
+            "(link valid for 30 minutes, single use).</p>"
+            "<p>If you did not request this, you can safely ignore this email — your "
+            "password will not change.</p><p>— DocuAction</p>"
+        )
+        await send_email(
+            user.email, "Reset your DocuAction password", text=reset_text, html=reset_html
+        )
 
         await _log_reset_event(db, str(user.id), ip, "link_sent", f"email={user.email}")
     else:
