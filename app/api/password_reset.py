@@ -4,7 +4,8 @@ POST /api/auth/forgot-password — sends reset link
 POST /api/auth/reset-password — validates token and resets password
 
 Security:
-- Single-use JWT reset tokens (30-min expiry)
+- Single-use JWT reset tokens (1-hour expiry; single-use enforced by password
+  fingerprint — a token stops working the moment the password changes)
 - Rate limited (3 requests per 15 minutes per IP)
 - NEVER reveals whether email exists
 - Bcrypt password hashing
@@ -13,6 +14,7 @@ Security:
 import os
 import uuid
 import time
+import hashlib
 import logging
 import re
 from datetime import datetime, timedelta
@@ -26,14 +28,17 @@ from jose import jwt, JWTError
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import hash_password
-from app.core.email import send_email
+from app.core.email import (
+    send_email, send_password_reset_email, send_password_changed_email, app_url,
+)
 from app.models.database import User, AuditLog
 from app.services.audit_logger import log_ai_request
 
 logger = logging.getLogger("docuaction.auth.reset")
 router = APIRouter(prefix="/api/auth", tags=["Auth — Password Reset"])
 
-RESET_TOKEN_EXPIRE = timedelta(minutes=30)
+RESET_TOKEN_EXPIRE = timedelta(hours=1)     # password-reset links: 1 hour
+INVITE_TOKEN_EXPIRE = timedelta(hours=72)   # invitation set-password links: 3 days
 ALGORITHM = "HS256"
 
 # Rate limiting: {ip: [timestamp, ...]}
@@ -67,14 +72,32 @@ def _check_rate_limit(ip: str) -> bool:
     return False
 
 
-def _create_reset_token(user_id: str, email: str) -> str:
-    """Create a single-use JWT reset token (30-min expiry)."""
+def _pw_fingerprint(password_hash: str) -> str:
+    """Short, non-reversible fingerprint of the CURRENT password hash.
+
+    Embedded in the reset token and re-checked at reset time. Because the fingerprint
+    changes the instant the password changes, a token is single-use — once it (or any
+    other outstanding token) resets the password, every token minted against the old
+    hash stops matching. No storage / migration needed; works across workers/restarts.
+    """
+    return hashlib.sha256((password_hash or "").encode()).hexdigest()[:16]
+
+
+def _create_reset_token(user_id: str, email: str, password_hash: str = "",
+                        expires: timedelta = None) -> str:
+    """Create a single-use JWT reset/set-password token.
+
+    Single-use is enforced by binding the token to the current password fingerprint
+    (see _pw_fingerprint), not just the jti. `expires` defaults to the 1-hour reset
+    window; invitations pass INVITE_TOKEN_EXPIRE.
+    """
     payload = {
         "sub": user_id,
         "email": email,
         "type": "password_reset",
-        "jti": str(uuid.uuid4()),  # unique ID prevents reuse
-        "exp": datetime.utcnow() + RESET_TOKEN_EXPIRE,
+        "jti": str(uuid.uuid4()),
+        "pwf": _pw_fingerprint(password_hash),
+        "exp": datetime.utcnow() + (expires or RESET_TOKEN_EXPIRE),
     }
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=ALGORITHM)
 
@@ -135,7 +158,7 @@ async def forgot_password(
     Security:
     - Rate limited: 3 requests per 15 minutes per IP
     - NEVER reveals whether email exists (always returns success message)
-    - Generates single-use JWT reset token (30-min expiry)
+    - Generates single-use JWT reset token (1-hour expiry)
     """
     ip = request.client.host if request.client else "unknown"
 
@@ -152,33 +175,16 @@ async def forgot_password(
     user = result.scalar_one_or_none()
 
     if user:
-        # Generate reset token
-        reset_token = _create_reset_token(str(user.id), user.email)
+        # Bind the token to the current password fingerprint (single-use).
+        reset_token = _create_reset_token(str(user.id), user.email, user.password_hash)
 
-        base = os.getenv("APP_BASE_URL", "https://app.docuaction.io").rstrip("/")
-        reset_url = f"{base}/reset-password?token={reset_token}"
+        reset_url = f"{app_url()}/reset-password?token={reset_token}"
         logger.info(f"RESET LINK GENERATED | email={user.email}")
 
-        # Send the reset link via the platform's SendGrid sender. Best-effort:
-        # send_email never raises and is a no-op dry-run when SENDGRID_API_KEY is
-        # unset, so email problems never change the generic response below (and so
-        # never become an account-enumeration oracle).
-        reset_text = (
-            "We received a request to reset your DocuAction password.\n\n"
-            f"Reset your password (link valid for 30 minutes, single use):\n{reset_url}\n\n"
-            "If you did not request this, you can safely ignore this email — your "
-            "password will not change.\n\n— DocuAction"
-        )
-        reset_html = (
-            "<p>We received a request to reset your DocuAction password.</p>"
-            f"<p><a href=\"{reset_url}\">Reset your password</a> "
-            "(link valid for 30 minutes, single use).</p>"
-            "<p>If you did not request this, you can safely ignore this email — your "
-            "password will not change.</p><p>— DocuAction</p>"
-        )
-        await send_email(
-            user.email, "Reset your DocuAction password", text=reset_text, html=reset_html
-        )
+        # Send via the platform's SendGrid sender. Best-effort: send_email never raises
+        # and is a no-op dry-run when SENDGRID_API_KEY is unset, so email problems never
+        # change the generic response below (so it never becomes an enumeration oracle).
+        await send_password_reset_email(user.email, reset_url)
 
         await _log_reset_event(db, str(user.id), ip, "link_sent", f"email={user.email}")
     else:
@@ -202,7 +208,7 @@ async def reset_password(
     
     Security:
     - Token must be valid JWT with type=password_reset
-    - Token must not be expired (30-min window)
+    - Token must not be expired (1-hour window)
     - Strong password validation enforced
     - Full audit logging
     """
@@ -235,12 +241,25 @@ async def reset_password(
         await _log_reset_event(db, user_id, ip, "user_not_found")
         raise HTTPException(400, "Invalid or expired reset token")
 
+    # SINGLE-USE: the token's password fingerprint must match the user's CURRENT
+    # password hash. Once this (or any other outstanding) token resets the password,
+    # the hash — and therefore the fingerprint — changes, so the token can never be
+    # replayed. Tokens minted before this change (older code) have no "pwf" and are
+    # also rejected here, which is safe (they can request a fresh link).
+    if payload.get("pwf") != _pw_fingerprint(user.password_hash):
+        await _log_reset_event(db, str(user.id), ip, "token_already_used",
+                               "reset token fingerprint mismatch")
+        raise HTTPException(400, "Invalid or expired reset token")
+
     # Update password
     user.password_hash = hash_password(data.new_password)
     user.updated_at = datetime.utcnow()
     await db.commit()
 
     await _log_reset_event(db, str(user.id), ip, "success", f"Password reset for {email}")
+
+    # Confirmation email (best-effort — never blocks the successful reset).
+    await send_password_changed_email(user.email)
 
     return {
         "message": "Password has been reset successfully. You can now log in with your new password.",

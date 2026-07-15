@@ -9,7 +9,6 @@ Tiers:
 Module permissions are stored in users.allowed_modules (JSON list of MODULE ids).
 Every mutating action is audit-logged for the per-user activity trail.
 """
-import os
 import secrets
 import string
 from datetime import datetime
@@ -21,7 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import get_current_user, ADMIN_EMAILS, hash_password
-from app.core.email import send_email
+from app.core.email import send_invitation_email, app_url
+from app.api.password_reset import _create_reset_token, INVITE_TOKEN_EXPIRE
 from app.models.database import User, AuditLog, Document, Output, AudioFile, Transcript
 
 router = APIRouter(prefix="/api/admin", tags=["Admin — Users"])
@@ -173,36 +173,21 @@ async def _create(req_email, full_name, role, permissions, admin, db):
     await db.refresh(user)
     await _audit(db, admin, "user_invited", str(user.id), user.email, {"role": role})
 
-    # Send the invitation email via the platform's SendGrid sender (best-effort:
-    # send_email never raises and is a no-op dry-run when SENDGRID_API_KEY is unset,
-    # so a delivery problem never blocks account creation). The temp password is
-    # still returned below so an admin can share it manually if delivery is off.
-    login_url = os.getenv("APP_BASE_URL", "https://app.docuaction.io").rstrip("/") + "/login"
-    greeting = f" {full_name}" if (full_name or "").strip() else ""
-    email_text = (
-        f"Hello{greeting},\n\n"
-        f"An administrator has created a DocuAction account for you.\n\n"
-        f"Sign in here: {login_url}\n"
-        f"Email: {email}\n"
-        f"Temporary password: {temp}\n\n"
-        f"For your security, please sign in and change your password right away.\n\n"
-        f"— DocuAction"
+    # Send the invitation as a SECURE SET-PASSWORD LINK — never the password in
+    # plaintext (security requirement). We mint a set-password token bound to the
+    # account's current (random) password hash so the user chooses their own password
+    # via the link. Best-effort: send_invitation_email never raises and is a no-op
+    # dry-run without SENDGRID_API_KEY, so delivery problems never block creation.
+    set_password_token = _create_reset_token(
+        str(user.id), user.email, user.password_hash, INVITE_TOKEN_EXPIRE
     )
-    email_html = (
-        f"<p>Hello{greeting},</p>"
-        f"<p>An administrator has created a DocuAction account for you.</p>"
-        f"<p><a href=\"{login_url}\">Sign in to DocuAction</a></p>"
-        f"<p><strong>Email:</strong> {email}<br>"
-        f"<strong>Temporary password:</strong> {temp}</p>"
-        f"<p>For your security, please sign in and change your password right away.</p>"
-        f"<p>— DocuAction</p>"
-    )
-    invite_email = await send_email(
-        email, "You've been invited to DocuAction", text=email_text, html=email_html
-    )
+    set_password_url = f"{app_url()}/reset-password?token={set_password_token}"
+    invite_email = await send_invitation_email(email, full_name, set_password_url)
 
     out = _serialize(user)
-    out["temp_password"] = temp  # returned so an admin can share it if email is off
+    # Fallback ONLY for when email delivery is off (dry-run): lets the admin get the
+    # user in. Returned over the authenticated admin channel, never emailed.
+    out["temp_password"] = temp
     out["invite_email"] = invite_email  # {"sent": bool, ...} — delivery status
     return out
 
