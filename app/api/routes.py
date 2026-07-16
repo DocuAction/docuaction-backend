@@ -5,19 +5,25 @@ Updated: proper document text extraction for PDF, DOCX, XLSX, images, TXT
 Updated: Context Box fix — Intelligence Mode focus instructions now reach AI engine
 """
 import os
+import re
 import uuid
 import time
+import hashlib
 import logging
+from collections import defaultdict
+from datetime import datetime, timedelta
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request, Query  # ← CONTEXT FIX: added Request, Query
+from jose import jwt, JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import hash_password, verify_password, create_token, create_token_pair, get_current_user, ADMIN_EMAILS
-from app.models.database import User, Document, Output, AudioFile, Transcript
+from app.core.email import send_verification_email, app_url
+from app.models.database import User, Document, Output, AudioFile, Transcript, AuditLog
 from app.models.schemas import (
-    SignupRequest, LoginRequest, TokenResponse, UserResponse,
+    SignupRequest, LoginRequest, VerifyEmailRequest, TokenResponse, UserResponse,
     ProcessRequest, ProcessResponse,
     DocumentResponse, OutputResponse,
     TranscribeResponse,
@@ -33,33 +39,329 @@ ALLOWED_AUDIO = {".mp3", ".wav", ".m4a", ".webm", ".ogg"}
 # ═══════════════════════════════════════════════════════
 # AUTH ENDPOINTS
 # ═══════════════════════════════════════════════════════
-@router.post("/api/auth/signup", response_model=TokenResponse, status_code=201, tags=["Auth"])
-async def signup(data: SignupRequest, db: AsyncSession = Depends(get_db)):
+# P1 SECURITY FIX — Self-registration no longer produces a login-able account.
+# Flow: signup -> (email not verified, status='pending_verification', role='pending',
+# inactive) -> user clicks emailed link -> verify-email -> 'pending_approval' (or
+# activated directly if REQUIRE_ADMIN_APPROVAL is disabled) -> admin approves &
+# activates (app/api/admin_users.py) -> only THEN can the user log in.
+VERIFICATION_TOKEN_EXPIRE = timedelta(hours=24)
+
+# ── Brute-force / abuse protection (in-memory sliding windows) ───────────────────
+# Mirrors the pattern already used by app/api/password_reset.py. Per-process only:
+# a multi-worker / HA deployment should back these with Redis. This is an accepted,
+# documented limitation for the current single-process deployment — see the ENTERPRISE
+# SECURITY REVIEW report. All windows are best-effort and never persist secrets.
+_login_fail_by_account = defaultdict(list)   # normalized email -> [failure timestamps]
+_login_attempts_by_ip = defaultdict(list)    # ip -> [attempt timestamps]
+_signup_by_ip = defaultdict(list)            # ip -> [signup timestamps]
+
+ACCOUNT_LOCK_THRESHOLD = 5      # failed logins per account before temporary lockout
+ACCOUNT_LOCK_WINDOW = 900       # 15 minutes
+IP_LOGIN_THRESHOLD = 20         # login attempts per IP per window
+IP_LOGIN_WINDOW = 900           # 15 minutes
+SIGNUP_IP_THRESHOLD = 5         # registrations per IP per window (email-bomb guard)
+SIGNUP_IP_WINDOW = 3600         # 1 hour
+
+# Pre-computed bcrypt hash used to equalize login response time when the email does
+# not exist — defeats the user-enumeration timing oracle (always run one bcrypt op).
+_DUMMY_PW_HASH = hash_password("docuaction-constant-time-login-equalizer")
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+# Optional server-side disposable-email blocking (anti-abuse). Enforced server-side so
+# it cannot be bypassed by calling the API directly (the frontend check is advisory).
+# Toggle with BLOCK_DISPOSABLE_EMAILS=false. Curated list of well-known throwaway
+# providers — intentionally conservative to avoid blocking legitimate corporate mail.
+_BLOCK_DISPOSABLE = os.getenv("BLOCK_DISPOSABLE_EMAILS", "true").strip().lower() in ("1", "true", "yes", "on")
+_DISPOSABLE_EMAIL_DOMAINS = {
+    "mailinator.com", "guerrillamail.com", "guerrillamail.net", "10minutemail.com",
+    "temp-mail.org", "tempmail.com", "throwawaymail.com", "yopmail.com", "getnada.com",
+    "trashmail.com", "sharklasers.com", "dispostable.com", "maildrop.cc", "fakeinbox.com",
+    "mailnesia.com", "mohmal.com", "emailondeck.com", "spamgourmet.com", "mytemp.email",
+}
+
+
+def _normalize_email(raw: str) -> str:
+    return (raw or "").strip().lower()
+
+
+def _is_disposable_email(email: str) -> bool:
+    domain = email.rsplit("@", 1)[-1] if "@" in email else ""
+    return _BLOCK_DISPOSABLE and domain in _DISPOSABLE_EMAIL_DOMAINS
+
+
+def _prune(bucket: list, window: int) -> list:
+    cutoff = time.time() - window
+    return [t for t in bucket if t > cutoff]
+
+
+def _account_locked(email: str) -> bool:
+    _login_fail_by_account[email] = _prune(_login_fail_by_account[email], ACCOUNT_LOCK_WINDOW)
+    return len(_login_fail_by_account[email]) >= ACCOUNT_LOCK_THRESHOLD
+
+
+def _ip_login_throttled(ip: str) -> bool:
+    _login_attempts_by_ip[ip] = _prune(_login_attempts_by_ip[ip], IP_LOGIN_WINDOW)
+    if len(_login_attempts_by_ip[ip]) >= IP_LOGIN_THRESHOLD:
+        return True
+    _login_attempts_by_ip[ip].append(time.time())
+    return False
+
+
+def _record_login_failure(email: str):
+    _login_fail_by_account[email].append(time.time())
+
+
+def _clear_login_failures(email: str):
+    _login_fail_by_account.pop(email, None)
+
+
+def _signup_throttled(ip: str) -> bool:
+    _signup_by_ip[ip] = _prune(_signup_by_ip[ip], SIGNUP_IP_WINDOW)
+    if len(_signup_by_ip[ip]) >= SIGNUP_IP_THRESHOLD:
+        return True
+    _signup_by_ip[ip].append(time.time())
+    return False
+
+
+def _verification_fingerprint(user_id: str, password_hash: str, is_verified: bool) -> str:
+    """State fingerprint embedded in the verification token to make it SINGLE-USE.
+
+    Bound to (user, password hash, verified-flag). The token is minted while the
+    account is unverified; the instant it is consumed (is_verified flips to True) the
+    recomputed fingerprint no longer matches, so the same link cannot be replayed.
+    An admin password reset also changes the hash and thus REVOKES any outstanding
+    verification token. No server-side token storage required."""
+    raw = f"{user_id}:{password_hash}:{bool(is_verified)}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _create_verification_token(user_id: str, email: str, password_hash: str) -> str:
+    """Signed, expiring, single-use email-verification token (JWT)."""
+    payload = {
+        "sub": user_id,
+        "email": email,
+        "type": "email_verification",
+        "jti": str(uuid.uuid4()),
+        "vfp": _verification_fingerprint(user_id, password_hash, False),
+        "exp": datetime.utcnow() + VERIFICATION_TOKEN_EXPIRE,
+    }
+    return jwt.encode(payload, settings.SECRET_KEY, algorithm="HS256")
+
+
+async def _audit_auth(db, user_id, action, details=None, request=None, correlation_id=None):
+    """Write an enterprise auth audit row. Records timestamp, correlation id, user id,
+    email/reason/result (in details), IP address, and user agent. Best-effort — an
+    audit-log failure must never break the auth operation."""
+    ip = None
+    ua = None
+    if request is not None:
+        ip = request.client.host if request.client else None
+        ua = request.headers.get("user-agent")
+    try:
+        db.add(AuditLog(
+            tenant_id="default",
+            user_id=str(user_id) if user_id else None,
+            action=action,                       # result (e.g. login_success/login_failed)
+            resource_type="auth",
+            details={
+                "correlation_id": correlation_id or str(uuid.uuid4()),
+                "user_agent": ua,
+                **(details or {}),               # carries email + reason
+                "at": datetime.utcnow().isoformat() + "Z",   # timestamp
+            },
+            ip_address=ip,
+        ))
+        await db.commit()
+    except Exception:
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+
+
+@router.post("/api/auth/signup", status_code=201, tags=["Auth"])
+async def signup(data: SignupRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    cid = str(uuid.uuid4())
+    ip = request.client.host if request.client else None
+    email = _normalize_email(data.email)
+
+    # Registration throttling — cap self-registrations per IP so the endpoint can't be
+    # used to mass-create accounts or bomb the SendGrid sender.
+    if _signup_throttled(ip):
+        await _audit_auth(db, None, "signup_throttled", {"email": email, "reason": "ip_rate_limited"}, request, cid)
+        raise HTTPException(429, "Too many registration attempts. Please try again later.")
+
+    # Server-side input validation (never trust the client).
+    if not _EMAIL_RE.match(email):
+        raise HTTPException(400, "Please enter a valid email address")
+    if _is_disposable_email(email):
+        await _audit_auth(db, None, "signup_rejected", {"email": email, "reason": "disposable_email"}, request, cid)
+        raise HTTPException(400, "Disposable email addresses are not allowed. Please use a permanent email address.")
     if len(data.password) < 8:
         raise HTTPException(400, "Password must be at least 8 characters")
-    existing = await db.execute(select(User).where(User.email == data.email))
+
+    # Duplicate protection — case-insensitive so Foo@x.com and foo@x.com collide.
+    existing = await db.execute(select(User).where(func.lower(User.email) == email))
     if existing.scalar_one_or_none():
         raise HTTPException(400, "Email already registered")
+
+    # SECURITY: create the account in the PENDING state — NOT active, NOT a real role.
+    # role/is_active/status are hard-coded server-side; SignupRequest does not accept
+    # them, so a public registrant can never self-assign a role or activate.
     user = User(
-        email=data.email,
+        email=email,
         password_hash=hash_password(data.password),
         full_name=data.full_name,
         company=data.company,
-        plan=getattr(data, 'plan', 'free') or 'free',
+        # HARDENING: a public registrant must not self-assign a paid entitlement.
+        # Plan is forced to 'free' server-side regardless of the request body; an
+        # administrator assigns the real plan/role during approval.
+        plan="free",
+        role="pending",
+        is_verified=False,
+        is_active=False,
+        status="pending_verification",
     )
     db.add(user)
     await db.commit()
     await db.refresh(user)
-    tokens = create_token_pair(str(user.id), user.role, user.email)
-    return TokenResponse(access_token=tokens["access_token"], user=UserResponse.model_validate(user))
-@router.post("/api/auth/login", response_model=TokenResponse, tags=["Auth"])
-async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.email == data.email))
+
+    # Generate a secure, single-use verification token and email a verification link
+    # via the existing SendGrid integration. NO token is returned; user is NOT signed in.
+    token = _create_verification_token(str(user.id), user.email, user.password_hash)
+    verify_url = f"{app_url()}/verify-email?token={token}"
+    email_result = await send_verification_email(user.email, user.full_name or "", verify_url)
+
+    await _audit_auth(db, user.id, "user_registered",
+                      {"email": user.email, "reason": "self_registration",
+                       "email_sent": email_result.get("sent", False)}, request, cid)
+
+    return {
+        "status": "pending_verification",
+        "message": "Account created. Please check your email and click the verification "
+                   "link to continue. After verifying, an administrator must approve and "
+                   "activate your account before you can sign in.",
+    }
+
+
+@router.post("/api/auth/verify-email", tags=["Auth"])
+async def verify_email(data: VerifyEmailRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    """Validate the emailed verification token and mark the email verified.
+
+    The token is single-use and replay-protected via a state fingerprint (see
+    _verification_fingerprint). On success the account moves to 'pending_approval'
+    (awaiting an administrator), or straight to 'active' when REQUIRE_ADMIN_APPROVAL
+    is disabled via config."""
+    cid = str(uuid.uuid4())
+    token = (data.token or "").strip()
+    if not token:
+        raise HTTPException(400, "Verification token is required")
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
+        if payload.get("type") != "email_verification":
+            raise HTTPException(400, "Invalid verification token")
+        user_id = payload.get("sub")
+    except JWTError:
+        # Covers expired, tampered, and malformed tokens.
+        await _audit_auth(db, None, "email_verification_failed",
+                          {"reason": "invalid_or_expired"}, request, cid)
+        raise HTTPException(400, "Invalid or expired verification token")
+
+    result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
-    if not user or not verify_password(data.password, user.password_hash):
+    if not user:
+        raise HTTPException(400, "Invalid or expired verification token")
+
+    # SINGLE-USE / REPLAY / REVOCATION: the token's fingerprint must match the account's
+    # CURRENT state. Once consumed (is_verified True) or after a password reset, the
+    # fingerprint changes and the token is rejected — it can never be replayed.
+    expected = _verification_fingerprint(str(user.id), user.password_hash, user.is_verified)
+    if payload.get("vfp") != expected:
+        await _audit_auth(db, user.id, "email_verification_failed",
+                          {"email": user.email, "reason": "token_used_or_revoked"}, request, cid)
+        raise HTTPException(400, "This verification link has already been used or is no longer valid.")
+
+    user.is_verified = True
+    if settings.REQUIRE_ADMIN_APPROVAL:
+        user.status = "pending_approval"
+        user.is_active = False
+        message = ("Email verified. Your account is now awaiting administrator approval. "
+                   "You'll be able to sign in once an administrator activates it.")
+    else:
+        # Approval disabled by configuration — verification alone activates the account.
+        user.status = "active"
+        user.is_active = True
+        if (user.role or "pending") == "pending":
+            user.role = "contributor"
+        message = "Email verified. Your account is active — you can now sign in."
+    await db.commit()
+    await _audit_auth(db, user.id, "email_verified",
+                      {"email": user.email, "reason": "token_valid", "new_status": user.status}, request, cid)
+    return {"status": user.status, "message": message}
+
+
+@router.post("/api/auth/login", response_model=TokenResponse, tags=["Auth"])
+async def login(data: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    cid = str(uuid.uuid4())
+    email = _normalize_email(data.email)
+
+    # Brute-force protection: throttle per IP, and temporarily lock an account after
+    # repeated failures. Both return 429 without confirming whether the email exists.
+    if _ip_login_throttled(request.client.host if request.client else None):
+        await _audit_auth(db, None, "login_throttled", {"email": email, "reason": "ip_rate_limited"}, request, cid)
+        raise HTTPException(429, "Too many login attempts. Please try again later.")
+    if _account_locked(email):
+        await _audit_auth(db, None, "login_blocked", {"email": email, "reason": "account_locked"}, request, cid)
+        raise HTTPException(429, "Account temporarily locked due to repeated failed logins. Try again later.")
+
+    # Case-insensitive lookup so existing rows stored with any casing still resolve.
+    result = await db.execute(select(User).where(func.lower(User.email) == email))
+    user = result.scalar_one_or_none()
+
+    # TIMING-ATTACK / ENUMERATION MITIGATION: always perform exactly one bcrypt
+    # comparison, even when the email is unknown, so response time cannot reveal
+    # whether an account exists.
+    password_ok = verify_password(data.password, user.password_hash) if user else verify_password(data.password, _DUMMY_PW_HASH)
+    if not user or not password_ok:
+        _record_login_failure(email)
+        await _audit_auth(db, user.id if user else None, "login_failed",
+                          {"email": email, "reason": "invalid_credentials"}, request, cid)
         raise HTTPException(401, "Invalid email or password")
+
+    # SECURITY GATES — order matters (verification -> approval -> disabled). Existing
+    # accounts are grandfathered (is_verified/status default to verified/active), so
+    # these blocks only affect accounts moving through the new registration flow.
+    # These are valid-credential outcomes and do NOT count toward account lockout.
+    if not getattr(user, "is_verified", True):
+        await _audit_auth(db, user.id, "login_blocked", {"email": user.email, "reason": "email_not_verified"}, request, cid)
+        raise HTTPException(403, "Please verify your email before signing in.")
+
+    status = (getattr(user, "status", "active") or "active")
+    if status == "pending_approval" and not user.is_active:
+        await _audit_auth(db, user.id, "login_blocked", {"email": user.email, "reason": "pending_approval"}, request, cid)
+        raise HTTPException(403, "Your account is awaiting administrator approval.")
+
+    if not user.is_active or status == "disabled":
+        await _audit_auth(db, user.id, "login_blocked", {"email": user.email, "reason": "disabled"}, request, cid)
+        raise HTTPException(403, "Your account has been disabled. Contact your administrator.")
+
+    _clear_login_failures(email)
+    await _audit_auth(db, user.id, "login_success", {"email": user.email, "reason": "credentials_valid"}, request, cid)
     tokens = create_token_pair(str(user.id), user.role, user.email)
     return TokenResponse(access_token=tokens["access_token"], user=UserResponse.model_validate(user))
+
+
+@router.post("/api/auth/logout", tags=["Auth"])
+async def logout(request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Server-side session invalidation. Stamps the user's revocation epoch so every
+    outstanding access/refresh token (which carry an issued-at) is rejected on its next
+    use — a real logout, not just a client-side token discard."""
+    cid = str(uuid.uuid4())
+    user.tokens_revoked_at = datetime.utcnow()
+    await db.commit()
+    await _audit_auth(db, user.id, "logout", {"email": user.email, "reason": "user_logout"}, request, cid)
+    return {"status": "logged_out"}
 @router.get("/api/auth/me", response_model=UserResponse, tags=["Auth"])
 async def get_profile(user=Depends(get_current_user)):
     return UserResponse.model_validate(user)

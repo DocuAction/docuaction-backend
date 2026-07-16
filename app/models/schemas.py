@@ -18,6 +18,11 @@ class LoginRequest(BaseModel):
     email: str
     password: str
 
+class VerifyEmailRequest(BaseModel):
+    # Typed body for POST /api/auth/verify-email — explicit field avoids accepting
+    # arbitrary keys (mass-assignment hardening). Only the token is ever read.
+    token: str
+
 class UserResponse(BaseModel):
     id: UUID
     email: str

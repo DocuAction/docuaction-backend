@@ -74,6 +74,15 @@ async def startup():
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'contributor'",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS plan VARCHAR(20) DEFAULT 'free'",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true",
+        # Registration-security columns (P1 fix). DEFAULT true / 'active' GRANDFATHERS
+        # every pre-existing account as already verified & active, so this fix never
+        # locks out current users. New public signups are set to the pending state
+        # explicitly by the signup endpoint (ORM), overriding these DB defaults.
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT true",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR(30) DEFAULT 'active'",
+        # Session-invalidation epoch (enterprise hardening). No default => NULL for every
+        # existing row, i.e. "never revoked", so current sessions are unaffected.
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS tokens_revoked_at TIMESTAMP",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMP DEFAULT now()",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT now()",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT now()",

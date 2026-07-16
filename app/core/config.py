@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     #    opted into via ENVIRONMENT=development. ─────────────────────────────────
     ENVIRONMENT: str = "production"
 
+    # ── Registration security (P1 fix) ────────────────────────────────────────
+    # When True (default), a self-registered user who verifies their email lands in
+    # 'pending_approval' and an administrator must assign a role and activate the
+    # account before it can log in. Set REQUIRE_ADMIN_APPROVAL=false to let email
+    # verification alone activate the account ("Verified" per the security spec).
+    REQUIRE_ADMIN_APPROVAL: bool = True
+
     # ── AI ───────────────────────────────────────────────────────────────────
     AI_PROVIDER: str = "anthropic"
     ANTHROPIC_API_KEY: str = ""
