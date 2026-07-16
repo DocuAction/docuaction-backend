@@ -21,6 +21,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import hash_password, verify_password, create_token, create_token_pair, get_current_user, ADMIN_EMAILS
 from app.core.email import send_verification_email, app_url
+from app.core.upload_security import safe_upload_path
 from app.models.database import User, Document, Output, AudioFile, Transcript, AuditLog
 from app.models.schemas import (
     SignupRequest, LoginRequest, VerifyEmailRequest, TokenResponse, UserResponse,
@@ -404,19 +405,16 @@ async def process_file(
     Supports: PDF, DOCX, XLSX, TXT, CSV, images
     Returns: structured AI output
     """
-    ext = "." + file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
-    if ext not in ALLOWED_DOCS:
-        raise HTTPException(400, f"Unsupported file type: {ext}. Allowed: {', '.join(ALLOWED_DOCS)}")
+    # Validate extension and build a traversal-safe UUID storage path BEFORE reading
+    # the body (client filename never touches the path — see app/core/upload_security).
+    fpath, ext = safe_upload_path(UPLOAD_DIR / "documents", file.filename, allowed=ALLOWED_DOCS)
     content = await file.read()
     if len(content) > 50 * 1024 * 1024:
         raise HTTPException(400, "File too large (max 50MB)")
-    # Save file
-    fname = f"{uuid.uuid4().hex}_{file.filename}"
-    fpath = UPLOAD_DIR / "documents" / fname
     fpath.write_bytes(content)
-    # Save to database
+    # Save to database — keep the ORIGINAL filename only as (basename) metadata.
     doc = Document(
-        user_id=user.id, filename=file.filename, file_path=str(fpath),
+        user_id=user.id, filename=os.path.basename(file.filename or "upload"), file_path=str(fpath),
         file_type=ext.replace(".", ""), file_size_bytes=len(content), status="processing",
     )
     db.add(doc)
@@ -483,20 +481,18 @@ async def transcribe_audio(
     user=Depends(get_current_user),
 ):
     """Upload audio file and transcribe using OpenAI Whisper."""
-    ext = "." + file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
-    if ext not in ALLOWED_AUDIO:
-        raise HTTPException(400, f"Unsupported format. Allowed: {', '.join(ALLOWED_AUDIO)}")
+    # Validate extension and build a traversal-safe UUID storage path (see
+    # app/core/upload_security) — the client filename is never used to build the path.
+    fpath, ext = safe_upload_path(UPLOAD_DIR / "audio", file.filename, allowed=ALLOWED_AUDIO)
     content = await file.read()
     if len(content) > 25 * 1024 * 1024:
         raise HTTPException(400, "Audio file too large. Maximum 25MB.")
     # Check transcription plan limits
     from app.services.plan_enforcement import check_transcription_limit
     await check_transcription_limit(db, user.id, getattr(user, 'plan', 'free'))
-    fname = f"{uuid.uuid4().hex}_{file.filename}"
-    fpath = UPLOAD_DIR / "audio" / fname
     fpath.write_bytes(content)
     audio = AudioFile(
-        user_id=user.id, filename=file.filename, file_path=str(fpath),
+        user_id=user.id, filename=os.path.basename(file.filename or "audio"), file_path=str(fpath),
         file_size_bytes=len(content), file_type=ext.replace(".", ""), status="transcribing",
     )
     db.add(audio)
@@ -538,17 +534,15 @@ async def upload_document(
     user=Depends(get_current_user),
 ):
     """Upload a document for AI processing."""
-    ext = "." + file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
-    if ext not in ALLOWED_DOCS and ext not in ALLOWED_AUDIO:
-        raise HTTPException(400, f"Unsupported file type: {ext}")
+    # Validate extension and build a traversal-safe UUID storage path (see
+    # app/core/upload_security) — the client filename is never used to build the path.
+    fpath, ext = safe_upload_path(UPLOAD_DIR / "documents", file.filename, allowed=(ALLOWED_DOCS | ALLOWED_AUDIO))
     content = await file.read()
     if len(content) > 50 * 1024 * 1024:
         raise HTTPException(400, "File too large (max 50MB)")
-    fname = f"{uuid.uuid4().hex}_{file.filename}"
-    fpath = UPLOAD_DIR / "documents" / fname
     fpath.write_bytes(content)
     doc = Document(
-        user_id=user.id, filename=file.filename, file_path=str(fpath),
+        user_id=user.id, filename=os.path.basename(file.filename or "upload"), file_path=str(fpath),
         file_type=ext.replace(".", ""), file_size_bytes=len(content), status="uploaded",
     )
     db.add(doc)

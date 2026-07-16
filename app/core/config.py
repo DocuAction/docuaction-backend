@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     # verification alone activate the account ("Verified" per the security spec).
     REQUIRE_ADMIN_APPROVAL: bool = True
 
+    # ── Interactive API docs. OFF by default (also implicitly on in development).
+    #    Set ENABLE_DOCS=true to expose /docs, /redoc, /openapi.json in production. ──
+    ENABLE_DOCS: bool = False
+
     # ── AI ───────────────────────────────────────────────────────────────────
     AI_PROVIDER: str = "anthropic"
     ANTHROPIC_API_KEY: str = ""
@@ -82,3 +86,15 @@ except ValidationError as e:
         "the application.\n"
         f"Underlying validation error: {e}"
     ) from e
+
+# ── SECRET_KEY minimum entropy (NIST SP 800-131A / IA-5). HS256 needs a >=256-bit
+#    (>=32-char) key. Refuse to start on a weak key rather than sign JWTs with one.
+#    A properly generated production key (64+ chars) is well above this floor. ──
+_MIN_SECRET_KEY_LEN = 32
+if len(settings.SECRET_KEY or "") < _MIN_SECRET_KEY_LEN:
+    raise RuntimeError(
+        f"FATAL: SECRET_KEY is too weak — it must be at least {_MIN_SECRET_KEY_LEN} "
+        "characters of high-entropy random data (64+ recommended). Generate one with "
+        "e.g. `python -c \"import secrets; print(secrets.token_urlsafe(64))\"` and set "
+        "it in the environment before starting the application."
+    )

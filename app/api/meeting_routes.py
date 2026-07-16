@@ -18,6 +18,7 @@ from pathlib import Path
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.core.config import settings
+from app.core.upload_security import safe_extension
 
 logger = logging.getLogger("docuaction.meeting")
 router = APIRouter(prefix="/api/meetings", tags=["Meeting Intelligence"])
@@ -50,7 +51,10 @@ async def process_meeting(
         raise HTTPException(400, "File is empty")
 
     filename = file.filename or "meeting.mp3"
-    ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ".mp3"
+    # Sanitize the client-derived extension (alphanumerics only) so it cannot inject
+    # path separators / traversal into the storage path. The base name is a
+    # server-generated UUID (meeting_id), so the filename never escapes upload_dir.
+    ext = safe_extension(filename, default=".mp3")
 
     upload_dir = os.path.join(os.getenv("UPLOAD_DIR", "./uploads"), "meetings")
     os.makedirs(upload_dir, exist_ok=True)

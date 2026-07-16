@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import get_current_user
+from app.core.upload_security import safe_upload_path
 from app.models.database import AudioFile, Transcript
 from app.services.audio_processor import ALL_FORMATS, convert_to_standard
 from app.services.audio_service import transcribe_audio_file
@@ -54,11 +55,12 @@ async def transcribe_audio(
     if len(content) > 100 * 1024 * 1024:
         raise HTTPException(400, "File too large. Maximum 100MB.")
 
-    # Save to disk
+    # Save to disk under a traversal-safe UUID name (client filename never used to
+    # build the path — see app/core/upload_security). No allowlist here: audio accepts
+    # many formats, so the extension is sanitized rather than restricted.
     audio_dir = os.path.join(UPLOAD_DIR, "audio")
-    os.makedirs(audio_dir, exist_ok=True)
-    saved_name = f"{uuid.uuid4().hex}_{filename}"
-    saved_path = os.path.join(audio_dir, saved_name)
+    saved_path_obj, _saved_ext = safe_upload_path(audio_dir, filename, default_ext=".wav")
+    saved_path = str(saved_path_obj)
 
     with open(saved_path, 'wb') as f:
         f.write(content)
