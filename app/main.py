@@ -17,7 +17,11 @@ logger = logging.getLogger("docuaction")
 # Interactive API docs are disabled in production (info-disclosure hardening) unless
 # ENABLE_DOCS=true; they remain on in development. Disabling docs_url also disables the
 # Swagger UI, ReDoc, and the OpenAPI schema endpoint.
-_docs_enabled = settings.is_development or getattr(settings, "ENABLE_DOCS", False)
+_docs_enabled = (
+    settings.is_development
+    or getattr(settings, "ENABLE_DOCS", False)
+    or getattr(settings, "ENABLE_OPENAPI", False)
+)
 app = FastAPI(
     title="DocuAction AI",
     version="6.0.0",
@@ -250,6 +254,9 @@ def safe_load(module_path: str, prefix: str):
 
 # ═══ CORE ROUTES ═══
 safe_load("app.api.routes", "core")
+
+# ═══ MICROSOFT ENTRA ID SSO (additional login option; email/password unaffected) ═══
+safe_load("app.api.azure_auth_routes", "azure-auth")
 
 # ═══ AUDIO (Whisper transcription) ═══
 safe_load("app.api.audio_routes", "audio")
