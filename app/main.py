@@ -219,6 +219,9 @@ def safe_load(module_path: str, prefix: str):
 # ═══ CORE ROUTES ═══
 safe_load("app.api.routes", "core")
 
+# ═══ MICROSOFT ENTRA ID SSO (additional login option; email/password unaffected) ═══
+safe_load("app.api.azure_auth_routes", "azure-auth")
+
 # ═══ AUDIO (Whisper transcription) ═══
 safe_load("app.api.audio_routes", "audio")
 
