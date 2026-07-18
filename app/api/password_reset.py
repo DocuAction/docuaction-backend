@@ -254,6 +254,12 @@ async def reset_password(
     # Update password
     user.password_hash = hash_password(data.new_password)
     user.updated_at = datetime.utcnow()
+    # Terminate existing sessions on credential change (NIST 800-63B / OWASP ASVS
+    # session termination). Any token issued before now is rejected after this reset.
+    try:
+        user.tokens_revoked_at = datetime.utcnow()
+    except Exception:
+        pass  # column absent on a not-yet-migrated DB — reset itself must still succeed
     await db.commit()
 
     await _log_reset_event(db, str(user.id), ip, "success", f"Password reset for {email}")

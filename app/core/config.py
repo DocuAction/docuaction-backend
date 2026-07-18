@@ -19,6 +19,20 @@ class Settings(BaseSettings):
     #    opted into via ENVIRONMENT=development. ─────────────────────────────────
     ENVIRONMENT: str = "production"
 
+    # ── Registration security (P1 fix) ────────────────────────────────────────
+    # When True (default), a self-registered user who verifies their email lands in
+    # 'pending_approval' and an administrator must assign a role and activate the
+    # account before it can log in. Set REQUIRE_ADMIN_APPROVAL=false to let email
+    # verification alone activate the account ("Verified" per the security spec).
+    REQUIRE_ADMIN_APPROVAL: bool = True
+
+    # ── Interactive API docs. OFF by default (also implicitly on in development).
+    #    Set ENABLE_DOCS=true (or ENABLE_OPENAPI=true) to expose /docs, /redoc, and
+    #    /openapi.json in production. ──
+    ENABLE_DOCS: bool = False
+    # Alias flag (Task 2.6) — either flag being true exposes the OpenAPI surfaces.
+    ENABLE_OPENAPI: bool = False
+
     # ── AI ───────────────────────────────────────────────────────────────────
     AI_PROVIDER: str = "anthropic"
     ANTHROPIC_API_KEY: str = ""
@@ -75,3 +89,15 @@ except ValidationError as e:
         "the application.\n"
         f"Underlying validation error: {e}"
     ) from e
+
+# ── SECRET_KEY minimum entropy (NIST SP 800-131A / IA-5). Policy requires a 64+
+#    character high-entropy key; refuse to start on anything weaker rather than sign
+#    JWTs with a low-entropy key. ──
+_MIN_SECRET_KEY_LEN = 64
+if len(settings.SECRET_KEY or "") < _MIN_SECRET_KEY_LEN:
+    raise RuntimeError(
+        f"FATAL: SECRET_KEY is too weak — it must be at least {_MIN_SECRET_KEY_LEN} "
+        "characters of high-entropy random data. Generate one with e.g. "
+        "`python -c \"import secrets; print(secrets.token_urlsafe(64))\"` and set it "
+        "in the environment before starting the application."
+    )

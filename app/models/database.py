@@ -23,6 +23,23 @@ class User(Base):
     # Admins ignore this and see everything. Empty = no areas granted yet.
     allowed_modules = Column(JSON, default=list)
     is_active = Column(Boolean, default=True)
+    # ── Registration security (P1 security fix) ─────────────────────────────────
+    # Account lifecycle gate. Public self-registration (POST /api/auth/signup) must
+    # NOT produce a login-able account: a self-registered user starts unverified and
+    # inactive and only becomes usable after email verification + admin approval &
+    # activation. The MODEL defaults below are the SAFE-FOR-EXISTING-PATHS values
+    # (verified/active): admin-created/invited users (app/api/admin_users.py) and every
+    # pre-existing row keep working unchanged. ONLY the public signup endpoint
+    # explicitly overrides them to the pending state. See app/api/routes.py:signup.
+    is_verified = Column(Boolean, default=True)  # email ownership confirmed
+    # status: 'pending_verification' -> 'pending_approval' -> 'active' | 'disabled'
+    status = Column(String(30), default="active")
+    # ── Session invalidation / logout (enterprise hardening) ────────────────────
+    # Token-epoch revocation: any access/refresh token whose issued-at (iat) predates
+    # this timestamp is rejected. Logout, admin-disable, and admin password reset stamp
+    # it, invalidating all outstanding tokens for the user without a per-token denylist.
+    # NULL (default) means "never revoked" — existing users' current tokens keep working.
+    tokens_revoked_at = Column(DateTime, nullable=True)
     last_active_at = Column(DateTime, default=datetime.utcnow)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

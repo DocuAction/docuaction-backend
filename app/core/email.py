@@ -140,6 +140,36 @@ async def send_invitation_email(to: str, full_name: str, set_password_url: str) 
     return await send_email(to, "DocuAction — You've been invited", text=text, html=html)
 
 
+async def send_verification_email(to: str, full_name: str, verify_url: str) -> Dict[str, Any]:
+    """Email-ownership verification for a new self-registered account.
+
+    Contains ONLY a secure verification link (a signed, expiring token) — never a
+    password or raw credentials. Best-effort like every sender here: never raises,
+    and a no-op dry-run when SENDGRID_API_KEY is unset, so a delivery problem never
+    breaks account creation."""
+    greeting = f" {full_name}" if (full_name or "").strip() else ""
+    text = (
+        f"Hello{greeting},\n\n"
+        f"Thanks for registering for DocuAction. Please confirm your email address to "
+        f"continue (link expires in 24 hours):\n{verify_url}\n\n"
+        f"After you verify, an administrator will review and activate your account "
+        f"before you can sign in.\n\n"
+        f"If you did not create this account, you can safely ignore this email.\n\n"
+        f"— DocuAction Security"
+    )
+    html = (
+        f"<p>Hello{greeting},</p>"
+        f"<p>Thanks for registering for <strong>DocuAction</strong>. Please "
+        f"<a href=\"{verify_url}\">confirm your email address</a> to continue "
+        f"(link expires in 24 hours).</p>"
+        f"<p>After you verify, an administrator will review and activate your account "
+        f"before you can sign in.</p>"
+        f"<p>If you did not create this account, you can safely ignore this email.</p>"
+        f"<p>— DocuAction Security</p>"
+    )
+    return await send_email(to, "DocuAction — Verify your email", text=text, html=html)
+
+
 async def send_password_reset_email(to: str, reset_url: str) -> Dict[str, Any]:
     """Password reset: secure reset link + expiry + security notice."""
     text = (

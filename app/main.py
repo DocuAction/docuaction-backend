@@ -14,10 +14,21 @@ from app.core.database import engine, Base
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("docuaction")
 
+# Interactive API docs are disabled in production (info-disclosure hardening) unless
+# ENABLE_DOCS=true; they remain on in development. Disabling docs_url also disables the
+# Swagger UI, ReDoc, and the OpenAPI schema endpoint.
+_docs_enabled = (
+    settings.is_development
+    or getattr(settings, "ENABLE_DOCS", False)
+    or getattr(settings, "ENABLE_OPENAPI", False)
+)
 app = FastAPI(
     title="DocuAction AI",
     version="6.0.0",
     description="Enterprise Intelligence Operating System — Document, Voice, Healthcare, and Migration Intelligence with Decision-Grade Governance",
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
 )
 
 # ── CORS (FIX 8 — NIST SC-7). Wildcard removed; restricted to configured
@@ -35,6 +46,13 @@ app.add_middleware(
 # ── Trusted Host (FIX 8 — NIST SC-7) — reject Host-header spoofing. ──
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.trusted_hosts)
 
+# ── Global API rate limiting (NIST SC-5 / DoS + third-party AI cost abuse). Uses the
+#    existing in-memory tiered limiter (Free 60/min .. Enterprise high; identity from
+#    the JWT, else client IP). Health/docs are exempt inside the middleware. This
+#    complements the stricter, dedicated limits already on the auth endpoints. ──
+from app.core.rate_limiter import RateLimitMiddleware  # noqa: E402
+app.add_middleware(RateLimitMiddleware)
+
 
 # ── Security response headers (FIX 8 — NIST SC-8 / SC-18). ──
 @app.middleware("http")
@@ -44,7 +62,16 @@ async def security_headers(request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Content-Security-Policy"] = "default-src 'self'"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
     return response
+
+
+# ── Global exception handlers — production never leaks stack traces, DB errors,
+#    filesystem paths, or raw Python exceptions; the full error is logged internally
+#    and a generic message is returned (NIST SI-11 / OWASP A05). ──
+from app.core.error_handler import register_exception_handlers  # noqa: E402
+register_exception_handlers(app)
 
 
 @app.on_event("startup")
@@ -74,6 +101,15 @@ async def startup():
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'contributor'",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS plan VARCHAR(20) DEFAULT 'free'",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true",
+        # Registration-security columns (P1 fix). DEFAULT true / 'active' GRANDFATHERS
+        # every pre-existing account as already verified & active, so this fix never
+        # locks out current users. New public signups are set to the pending state
+        # explicitly by the signup endpoint (ORM), overriding these DB defaults.
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT true",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR(30) DEFAULT 'active'",
+        # Session-invalidation epoch (enterprise hardening). No default => NULL for every
+        # existing row, i.e. "never revoked", so current sessions are unaffected.
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS tokens_revoked_at TIMESTAMP",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMP DEFAULT now()",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT now()",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT now()",

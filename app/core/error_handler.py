@@ -83,9 +83,21 @@ def register_exception_handlers(app):
     async def http_exception_handler(request: Request, exc: StarletteHTTPException):
         request_id = str(uuid.uuid4())
         code = ERROR_CODES.get(exc.status_code, "ERROR")
+        # 5xx details can carry internal specifics (raw exception text, DB errors,
+        # filesystem paths). Log the real detail internally but NEVER return it to the
+        # client — replace 5xx bodies with a generic message. 4xx details are
+        # intentional, user-facing validation messages and are preserved.
+        if exc.status_code >= 500:
+            logger.error(
+                f"5xx | request_id={request_id} | path={request.url.path} | "
+                f"status={exc.status_code} | detail={exc.detail}"
+            )
+            safe_detail = "An internal error occurred. Please try again or contact support."
+        else:
+            safe_detail = str(exc.detail)
         return create_error_response(
             status_code=exc.status_code,
-            error=str(exc.detail),
+            error=safe_detail,
             code=code,
             request_id=request_id,
         )

@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import get_current_user, ADMIN_EMAILS, hash_password
-from app.core.email import send_invitation_email, app_url
+from app.core.email import send_invitation_email, send_verification_email, app_url
 from app.api.password_reset import _create_reset_token, INVITE_TOKEN_EXPIRE
 from app.models.database import User, AuditLog, Document, Output, AudioFile, Transcript
 
@@ -90,6 +90,10 @@ def _serialize(u: User) -> dict:
         "role": u.role,
         "plan": getattr(u, "plan", "free"),
         "is_active": bool(u.is_active),
+        # Registration-security lifecycle (P1 fix) — lets the admin UI surface
+        # accounts awaiting verification/approval.
+        "status": getattr(u, "status", "active") or "active",
+        "is_verified": bool(getattr(u, "is_verified", True)),
         "is_super_admin": u.email in ADMIN_EMAILS,
         "permissions": _normalize_stored(u.allowed_modules),
         "allowed_modules": _normalize_stored(u.allowed_modules),  # alias
@@ -236,6 +240,95 @@ async def set_role(user_id: str, req: RoleReq, admin=Depends(require_admin), db:
     return _serialize(target)
 
 
+class ApproveReq(BaseModel):
+    role: Optional[str] = None                 # role to assign on approval (optional)
+    permissions: Optional[List[str]] = None    # modules to grant on approval (optional)
+
+
+@router.post("/users/{user_id}/approve")
+async def approve_user(user_id: str, req: ApproveReq, admin=Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    """P1 registration security — approve & ACTIVATE a self-registered account.
+
+    Assigns the role the admin chooses, marks the account verified/active, and lets
+    the user log in. Requires the email to have been verified first (the user clicked
+    their verification link) unless a super admin overrides."""
+    result = await db.execute(select(User).where(User.id == user_id))
+    target = result.scalar_one_or_none()
+    if not target:
+        raise HTTPException(404, "User not found")
+
+    # Assign a role if provided; otherwise a still-'pending' account gets the default.
+    if req.role is not None:
+        new_role = req.role.lower()
+        if new_role not in VALID_ROLES:
+            raise HTTPException(400, "Invalid role")
+        if new_role == "admin" and not is_super_admin(admin):
+            raise HTTPException(403, "Only a super admin can grant the admin role")
+        target.role = new_role
+    elif (target.role or "pending") == "pending":
+        target.role = "contributor"
+
+    if req.permissions is not None:
+        target.allowed_modules = _clean_modules(req.permissions)
+
+    target.is_verified = True
+    target.is_active = True
+    target.status = "active"
+    await db.commit(); await db.refresh(target)
+    await _audit(db, admin, "account_approved", str(target.id), target.email, {"role": target.role})
+    return _serialize(target)
+
+
+@router.post("/users/{user_id}/reject")
+async def reject_user(user_id: str, admin=Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    """Reject a pending self-registered account: deactivate and disable it. The user
+    keeps no access and cannot log in. (Use DELETE to remove entirely.)"""
+    result = await db.execute(select(User).where(User.id == user_id))
+    target = result.scalar_one_or_none()
+    if not target:
+        raise HTTPException(404, "User not found")
+    if is_admin_account(target):
+        raise HTTPException(403, "Cannot reject an administrator account")
+    target.is_active = False
+    target.status = "disabled"
+    target.tokens_revoked_at = datetime.utcnow()
+    await db.commit(); await db.refresh(target)
+    await _audit(db, admin, "account_rejected", str(target.id), target.email)
+    return _serialize(target)
+
+
+@router.post("/users/{user_id}/resend-verification")
+async def resend_verification(user_id: str, admin=Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    """Re-send the email-verification link to a user still awaiting verification.
+    Mints a fresh single-use token (invalidating any previous one via the fingerprint)
+    and sends it through the existing SendGrid integration."""
+    result = await db.execute(select(User).where(User.id == user_id))
+    target = result.scalar_one_or_none()
+    if not target:
+        raise HTTPException(404, "User not found")
+    if getattr(target, "is_verified", True):
+        raise HTTPException(400, "This account's email is already verified")
+    # Reuse the single source of truth for verification tokens (lazy import avoids a
+    # module-load cycle; app.api.routes does not import this module).
+    from app.api.routes import _create_verification_token
+    token = _create_verification_token(str(target.id), target.email, target.password_hash)
+    verify_url = f"{app_url()}/verify-email?token={token}"
+    email_result = await send_verification_email(target.email, target.full_name or "", verify_url)
+    await _audit(db, admin, "verification_resent", str(target.id), target.email,
+                 {"email_sent": email_result.get("sent", False)})
+    return {"status": "verification_resent", "email": target.email, "email_sent": email_result.get("sent", False)}
+
+
+@router.get("/users/pending")
+async def list_pending_users(_admin=Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    """Administrator pending-user queue — accounts awaiting verification or approval."""
+    result = await db.execute(
+        select(User).where(User.status.in_(["pending_verification", "pending_approval"]))
+        .order_by(desc(User.created_at))
+    )
+    return [_serialize(u) for u in result.scalars().all()]
+
+
 class PermissionsReq(BaseModel):
     permissions: List[str]
 
@@ -274,7 +367,20 @@ async def update_user(user_id: str, payload: dict, admin=Depends(require_admin),
             raise HTTPException(400, "You cannot deactivate your own account")
         if is_admin_account(target) and not is_super_admin(admin) and not payload["is_active"]:
             raise HTTPException(403, "Only a super admin can deactivate an admin")
-        target.is_active = bool(payload["is_active"])
+        active = bool(payload["is_active"])
+        target.is_active = active
+        # Keep the lifecycle status coherent with the activation toggle so the login
+        # gates (P1 fix) stay consistent: activating clears any pending state and
+        # marks the account verified; deactivating disables it.
+        if active:
+            target.status = "active"
+            target.is_verified = True
+        else:
+            target.status = "disabled"
+            # Session invalidation: disabling an account revokes its outstanding
+            # tokens immediately (belt-and-suspenders with the is_active login gate,
+            # and it prevents old tokens from working again after any reactivation).
+            target.tokens_revoked_at = datetime.utcnow()
     if "permissions" in payload or "allowed_modules" in payload:
         target.allowed_modules = _clean_modules(payload.get("permissions", payload.get("allowed_modules")) or [])
     await db.commit(); await db.refresh(target)
@@ -297,6 +403,9 @@ async def set_password(user_id: str, req: SetPasswordReq, admin=Depends(require_
     if is_admin_account(target) and not is_super_admin(admin) and str(target.id) != str(admin.id):
         raise HTTPException(403, "Only a super admin can reset an admin's password")
     target.password_hash = hash_password(req.new_password)
+    # A credential change invalidates existing sessions (NIST 800-63B / OWASP ASVS
+    # session termination on password change).
+    target.tokens_revoked_at = datetime.utcnow()
     await db.commit()
     await _audit(db, admin, "password_reset_by_admin", str(target.id), target.email)
     return {"status": "password_set", "email": target.email}
