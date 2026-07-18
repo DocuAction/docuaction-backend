@@ -1,147 +1,202 @@
-# DocuAction AI — Backend API
+# DocuAction AI — Backend
 
-Enterprise Document & Voice Intelligence Platform.
+**DocuAction AI** is an enterprise document, voice & healthcare intelligence
+platform. The backend is a high-performance, asynchronous FastAPI service that
+powers document processing, audio transcription, healthcare claims and TEFCA
+review, data comparison and extraction, automation, and intelligence reporting
+across roughly **261 API endpoints**.
 
-## Architecture
+The healthcare/TEFCA module suite is delivered as **DocuAction TEFCA ARC**.
 
-```
-app/
-├── main.py                    ← FastAPI entry point
-├── core/
-│   ├── config.py              ← Settings from .env
-│   ├── database.py            ← Async PostgreSQL
-│   └── security.py            ← JWT auth + bcrypt
-├── api/
-│   └── routes.py              ← All API endpoints
-├── models/
-│   ├── database.py            ← SQLAlchemy tables (7 tables)
-│   └── schemas.py             ← Pydantic request/response
-└── services/
-    ├── ai_engine.py           ← Main AI pipeline (routing, fallback, JSON)
-    ├── json_repair.py         ← 5-stage JSON extraction + Haiku cleanup
-    ├── pii_masking.py         ← 12-pattern PII redaction
-    ├── text_chunker.py        ← Long document chunking (20K+ words)
-    ├── model_router.py        ← Complexity-based Haiku/Sonnet routing
-    ├── audit_logger.py        ← Enterprise audit trail
-    └── audio_service.py       ← OpenAI Whisper transcription
-```
+**Platform version:** 6.0.0
 
-## API Endpoints
+---
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/auth/signup` | Create account |
-| POST | `/api/auth/login` | Get JWT token |
-| GET | `/api/auth/me` | Current user profile |
-| **POST** | **`/api/process`** | **Process text through AI engine** |
-| **POST** | **`/api/transcribe`** | **Transcribe audio via Whisper** |
-| POST | `/api/documents/upload` | Upload document file |
-| GET | `/api/documents` | List documents |
-| DELETE | `/api/documents/{id}` | Delete document |
-| POST | `/api/outputs/generate/{doc_id}` | Generate AI output from document |
-| GET | `/api/outputs` | List AI outputs |
-| GET | `/api/outputs/{id}` | Get specific output |
-| GET | `/health` | Health check |
-| GET | `/docs` | Swagger UI |
+## Organization
 
-## Quick Start (Local)
+Developed and maintained by **Alliance Global Tech, Inc. ("AGT")** — a
+government-focused technology firm operating under a mature, certified
+engineering and quality program:
 
-### 1. Prerequisites
-- Python 3.11+
-- PostgreSQL 14+
+- **CMMI Level 3**
+- **ISO 27001** (Information Security Management)
+- **ISO 9001** (Quality Management)
 
-### 2. Setup Database
+Copyright © 2024–2026 Alliance Global Tech, Inc. All rights reserved.
+
+---
+
+## Technology Stack
+
+| Area              | Technology                                                        |
+| ----------------- | ----------------------------------------------------------------- |
+| Language           | Python 3.12                                                       |
+| Web framework      | FastAPI 0.115.0                                                   |
+| ASGI server        | Uvicorn 0.30.6 (with gunicorn workers in production)             |
+| ORM / DB driver    | SQLAlchemy 2.0.35 (async) + asyncpg 0.29.0                        |
+| Migrations         | Alembic 1.13.2                                                    |
+| Validation         | Pydantic 2.9.2 + pydantic-settings 2.5.2                          |
+| Auth / JWT         | python-jose[cryptography] 3.4.0 (HS256); passlib + bcrypt 4.0.1   |
+| HTTP client        | httpx 0.27.2                                                      |
+| AI                 | Anthropic SDK 0.39.0                                              |
+| Scheduling         | APScheduler 3.10.4                                                |
+| Documents / export | reportlab 4.2.5, WeasyPrint, python-docx 1.1.2, pdfplumber 0.11.4, openpyxl 3.1.5 |
+| Data quality       | pandera 0.32.0                                                    |
+| Reliability        | tenacity 9.0.0, python-statemachine 3.2.0                        |
+| Uploads            | python-multipart 0.0.18                                           |
+
+---
+
+## Architecture Overview
+
+DocuAction backend is a layered, fully asynchronous FastAPI application backed by
+PostgreSQL via SQLAlchemy 2.0 (async) and asyncpg, with Alembic-managed schema
+migrations. Application code is organized under the `app/` package with clear
+separation between API routing, domain modules, services, and data access.
+
+**Core modules:**
+
+- Documents
+- Audio (OpenAI Whisper transcription)
+- Healthcare Claims
+- Data Systems
+- Comparison
+- Extraction
+- Automation
+- TEFCA Review Protocol (**DocuAction TEFCA ARC**)
+- Case Management
+- Bulletin Intelligence
+
+**Plus enterprise capabilities:** enterprise administration, validation, decision
+intelligence, export, templates, meetings, SLA, and plans.
+
+The service exposes approximately **261 endpoints** and integrates with external
+healthcare and procurement data sources through the TEFCA connectors.
+
+**TEFCA connectors:**
+
+| Connector                         | Status              |
+| --------------------------------- | ------------------- |
+| NPPES                             | Live                |
+| PECOS                             | Live                |
+| OIG LEIE                          | Live                |
+| SAM.gov                           | API key required    |
+| RCE Directory / Sequoia Project   | Pending             |
+| IQVIA OneKey                      | Pending             |
+
+---
+
+## Security Posture
+
+Security is a first-class concern. See **[SECURITY.md](SECURITY.md)** for the
+vulnerability disclosure policy and supported versions.
+
+- **Authentication:** JWT access + refresh token pair (HS256) issued by **both**
+  password login and **Microsoft Entra ID SSO** (OAuth 2.0 authorization-code,
+  confidential client). Downstream authorization is identical regardless of
+  sign-in method.
+- **Authorization:** an **8-level RBAC hierarchy** — viewer (1), contributor (2),
+  manager (3), reviewer (4), senior_analyst (5), qalead (6), program_manager (7),
+  admin (8). TEFCA contract roles align to HHSAR 352.204-71 / FAR 52.212-4.
+- **Password security:** bcrypt hashing via passlib; administrator approval for
+  new accounts.
+- **Session & token controls:** JWT revocation and session management.
+- **Platform protection:** **Microsoft Defender for Cloud (Standard tier)** across
+  the Azure estate.
+- **Request hardening:** global rate limiting, upload safety (content-type and
+  size enforcement), centralized error handling, and TrustedHost / strict CORS
+  enforcement with required security configuration validated at startup.
+
+---
+
+## Compliance
+
+DocuAction's engineering practices align with:
+
+- **NIST SP 800-53** — security and privacy controls
+- **OWASP** — Top 10 / ASVS secure development
+- **HIPAA** — protected health information handling for the TEFCA ARC modules
+- **Section 508 / WCAG 2.2 AA** — accessibility
+
+---
+
+## Azure Deployment Status
+
+DocuAction backend is **live in production on Microsoft Azure**:
+
+- **Backend:** Azure App Service (Linux, Python 3.12, gunicorn + uvicorn workers)
+  at **https://api-prod.docuaction.io**
+- **Database:** Azure Database for PostgreSQL Flexible Server
+- **Frontend:** **https://app.docuaction.io**
+- **Threat protection:** Microsoft Defender for Cloud (Standard tier)
+- **Identity:** Microsoft Entra ID SSO + password authentication
+
+The platform was **migrated from Railway to Microsoft Azure** as part of the
+6.0.0 release.
+
+---
+
+## Local Development
+
+**Prerequisites:** Python 3.12 and PostgreSQL 14+.
+
 ```bash
-createdb docuaction
-# Or use Railway/Neon for hosted PostgreSQL
-```
+# 1. Create and activate a virtual environment
+python -m venv .venv
+# Windows:
+.venv\Scripts\activate
+# macOS / Linux:
+source .venv/bin/activate
 
-### 3. Install Dependencies
-```bash
+# 2. Install dependencies
 pip install -r requirements.txt
-```
 
-### 4. Configure Environment
-```bash
+# 3. Configure environment
 cp .env.example .env
-# Edit .env with your API keys:
-#   ANTHROPIC_API_KEY=sk-ant-...
-#   OPENAI_API_KEY=sk-...
-#   DATABASE_URL=postgresql://user:pass@localhost:5432/docuaction
-#   SECRET_KEY=your-random-64-char-string
-```
+# Edit .env and set at least DATABASE_URL and SECRET_KEY
 
-### 5. Run
-```bash
+# 4. Run the development server
 uvicorn app.main:app --reload --port 8000
 ```
 
-### 6. Test
-- Health: http://localhost:8000/health
-- Swagger: http://localhost:8000/docs
-- Sign up: POST to /api/auth/signup
-- Process: POST to /api/process with JWT token
+- **Health check:** http://localhost:8000/health
+- **Interactive API docs:** http://localhost:8000/docs
 
-## Deploy to Railway
+See **[CONTRIBUTING.md](CONTRIBUTING.md)** for branch strategy, conventional
+commits, linting/formatting (ruff), tests (pytest), and the pre-commit hooks.
 
-### 1. Push to GitHub
-```bash
-git init && git add . && git commit -m "DocuAction AI backend"
-git remote add origin https://github.com/YOU/docuaction-backend.git
-git push -u origin main
-```
+---
 
-### 2. Create Railway Project
-- Go to railway.app → New Project → Deploy from GitHub
-- Select your repo
+## Governance & Documentation
 
-### 3. Add PostgreSQL
-- Click New → Database → PostgreSQL
-- Railway auto-creates DATABASE_URL
+Project governance and operational documentation live under the [`docs/`](docs/)
+directory, including:
 
-### 4. Set Environment Variables
-```
-SECRET_KEY=random-64-chars
-ANTHROPIC_API_KEY=sk-ant-...
-ANTHROPIC_SONNET_MODEL=claude-sonnet-4-20250514
-OPENAI_API_KEY=sk-...
-ALLOWED_ORIGINS=https://app.docuaction.io
-```
+- **Architecture** — system design and module structure
+- **Security** — controls, hardening, and posture
+- **Compliance** — NIST 800-53, OWASP, HIPAA, Section 508 mappings
+- **Deployment** — Azure App Service + PostgreSQL Flexible Server procedures
+- **Runbooks** — operational and incident response procedures
+- **API** — endpoint reference
 
-### 5. Add Custom Domain
-- Settings → Custom Domain → api.docuaction.io
-- Add CNAME in your DNS
+Repository governance files:
 
-### 6. Verify
-```
-https://api.docuaction.io/health → {"status":"healthy"}
-https://api.docuaction.io/docs → Swagger UI
-```
+- [SECURITY.md](SECURITY.md) — vulnerability disclosure policy
+- [CONTRIBUTING.md](CONTRIBUTING.md) — contribution guidelines
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — community standards
+- [CHANGELOG.md](CHANGELOG.md) — release history
+- [LICENSE](LICENSE) — proprietary license & U.S. Government rights
+- [NOTICE](NOTICE) — third-party attributions
 
-## AI Pipeline
+---
 
-```
-Request → PII Masking (12 patterns)
-       → Context Check (chunk if >20K words)
-       → Complexity Router
-           → Simple → Haiku ($0.005/doc)
-           → Complex → Sonnet ($0.04/doc)
-       → AI Generation (15s timeout + retry)
-       → JSON Repair (5-stage + Haiku cleanup)
-       → Audit Log
-       → Structured JSON Response
-```
+## License & Copyright
 
-## Cost Estimate
+DocuAction AI is **proprietary software** of Alliance Global Tech, Inc.
+Unauthorized use, reproduction, or distribution is prohibited. See
+[LICENSE](LICENSE) for the full terms, including the U.S. Government Rights
+clause (FAR 52.227-14).
 
-| Component | Monthly Cost |
-|-----------|-------------|
-| Railway (backend + DB) | $5-10 |
-| Claude Haiku (70% of requests) | $1-2 |
-| Claude Sonnet (30% of requests) | $1-3 |
-| Whisper (audio) | $5-10 |
-| **Total** | **$12-25** |
+Copyright © 2024–2026 Alliance Global Tech, Inc. All rights reserved.
 
-## License
-
-Proprietary — Alliance Global Tech, Inc.
+**Contact:** general — imran@agtbi.com · security — security@agtbi.com

@@ -1,0 +1,16 @@
+# CODEOWNERS — DocuAction AI Backend
+# Alliance Global Tech, Inc. (AGT) — Copyright (c) 2024-2026
+#
+# This file designates code ownership for the DocuAction AI backend repository.
+# The owners listed below are automatically requested for review when a pull
+# request modifies matching files. At least one owner review is required to
+# merge, in accordance with AGT's secure software development lifecycle
+# (NIST SP 800-53 SA-15) and the repository branch-protection policy.
+#
+# CMMI Level 3 | ISO 27001 | ISO 9001 certified
+# Security contact: security@agtbi.com
+#
+# Order matters: the last matching pattern takes precedence.
+
+# Default owner for the entire repository
+* @imran-agt
