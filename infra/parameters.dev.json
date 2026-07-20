@@ -1,0 +1,58 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": { "value": "eastus2" },
+    "tags": {
+      "value": {
+        "environment": "dev",
+        "application": "docuaction"
+      }
+    },
+    "alertEmail": { "value": "imran@agtbi.com" },
+
+    "appServiceName": { "value": "docuaction-dev" },
+    "appServicePlanName": { "value": "asp-docuaction-dev" },
+    "appServicePlanSkuName": { "value": "P0v3" },
+    "appServicePlanSkuTier": { "value": "Premium0V3" },
+    "linuxFxVersion": { "value": "PYTHON|3.12" },
+    "healthCheckPath": { "value": "/health" },
+    "appUrl": { "value": "https://witty-tree-0a448a70f.7.azurestaticapps.net" },
+    "allowedHosts": { "value": "*.azurewebsites.net,localhost,127.0.0.1" },
+    "allowedOrigins": { "value": "https://witty-tree-0a448a70f.7.azurestaticapps.net" },
+    "azureAdClientId": { "value": "5bc1591f-e086-44e1-b2b3-24872a8bc77d" },
+    "azureAdTenantId": { "value": "067477bc-8f49-45ae-ad38-a55e01c44db0" },
+
+    "postgresServerName": { "value": "docuaction-db-dev" },
+    "postgresVersion": { "value": "16" },
+    "postgresSkuName": { "value": "Standard_B1ms" },
+    "postgresSkuTier": { "value": "Burstable" },
+    "postgresStorageSizeGB": { "value": 32 },
+    "postgresBackupRetentionDays": { "value": 7 },
+    "postgresAvailabilityZone": { "value": "1" },
+    "postgresAdminLogin": { "value": "pgadmin" },
+    "postgresAdminPassword": { "value": "REPLACE_ME" },
+
+    "keyVaultName": { "value": "docuaction-kv-dev" },
+    "keyVaultPublicNetworkAccess": { "value": "Enabled" },
+    "createKeyVaultSecrets": { "value": true },
+    "secretKey": { "value": "REPLACE_ME" },
+    "anthropicApiKey": { "value": "REPLACE_ME" },
+    "azureAdClientSecret": { "value": "REPLACE_ME" },
+    "sendGridApiKey": { "value": "REPLACE_ME" },
+
+    "logAnalyticsName": { "value": "docuaction-logs-dev" },
+    "appInsightsName": { "value": "docuaction-appinsights-dev" },
+    "actionGroupName": { "value": "docuaction-alerts-dev" },
+    "monitoringRetentionDays": { "value": 90 },
+
+    "deployNetworking": { "value": false },
+    "vnetName": { "value": "docuaction-vnet-dev" },
+    "vnetAddressPrefix": { "value": "10.1.0.0/16" },
+    "privateEndpointSubnetPrefix": { "value": "10.1.1.0/24" },
+
+    "staticWebAppName": { "value": "docuaction-frontend-dev" },
+    "staticWebAppLocation": { "value": "eastus2" },
+    "staticWebAppSku": { "value": "Free" }
+  }
+}
