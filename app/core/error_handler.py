@@ -95,6 +95,34 @@ def register_exception_handlers(app):
             safe_detail = "An internal error occurred. Please try again or contact support."
         else:
             safe_detail = str(exc.detail)
+        # NIST AU-2 — capture Failed Authorization (403) events in the audit
+        # trail. Centralized here so every 403 (require_role denials, disabled
+        # accounts, area-access blocks) is recorded in one place without touching
+        # the auth hot paths. Best-effort: a short-lived session, fully wrapped, so
+        # an audit failure can NEVER alter or break the error response.
+        if exc.status_code == 403:
+            try:
+                from app.core.database import async_session_maker
+                from app.models.database import AuditLog
+                from datetime import datetime
+                _ip = request.client.host if request.client else None
+                async with async_session_maker() as _db:
+                    _db.add(AuditLog(
+                        tenant_id="default",
+                        action="authorization_denied",
+                        resource_type="authz",
+                        ip_address=_ip,
+                        details={
+                            "path": request.url.path,
+                            "method": request.method,
+                            "reason": str(exc.detail)[:200],
+                            "request_id": request_id,
+                            "at": datetime.utcnow().isoformat() + "Z",
+                        },
+                    ))
+                    await _db.commit()
+            except Exception:
+                logger.debug(f"403 audit write skipped | request_id={request_id}")
         return create_error_response(
             status_code=exc.status_code,
             error=safe_detail,
