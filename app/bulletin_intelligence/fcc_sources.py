@@ -107,6 +107,22 @@ FCC_SPECIFIC = [
     "Inside Radio",
     "SpaceNews",
     "Submarine Networks",
+    # Coverage hardening 2026-07-20 — requested sources not previously registered.
+    # (Registry only: recognises the outlet for tier/priority classification. The
+    #  feeds that actually INGEST these live in engine.py MAJOR_OUTLET_FEEDS /
+    #  FCC_RSS_FEEDS — new feeds for several of these were added there too.)
+    "Broadcast Law Blog",
+    "National Law Review",
+    "Mondaq",
+    "Via Satellite",
+    "SatNews",
+    "TV Technology",
+    "Radio World",
+    "TMZ",
+    "Cord Cutters News",
+    "NewscastStudio",
+    "Western Journal",
+    "Multichannel News",  # ceased in print 2024; FCC coverage continues via nexttv.com
 ]
 
 # Subscription sources that require labeling

@@ -7,16 +7,25 @@ FCC_SEARCH_TOPICS = {
     "FCC_NEWS": {
         "label": "General",
         "boolean": """
-        ("Brendan Carr" OR "Olivia Trusty" OR "Anna Gomez")
+        (FCC OR "Federal Communications Commission")
         AND
         (
-            FCC OR "Federal Communications Commission"
-            OR "FCC Chairman"
+            "FCC Chairman"
             OR "FCC Commissioner"
             OR "FCC Acting Chairman"
             OR "Federal Communications Commission Chairman"
             OR "Federal Communications Commission Commissioner"
+            OR "Brendan Carr"
+            OR "Olivia Trusty"
+            OR "Anna Gomez"
             OR Enforcement
+            OR "ownership cap"
+            OR "national cap"
+            OR "39 percent"
+            OR USAC
+            OR "Universal Service"
+            OR "open meeting"
+            OR "tentative agenda"
         )
         """,
 
@@ -65,6 +74,11 @@ FCC_SEARCH_TOPICS = {
         OR "phone unlocking"
         OR porting
         OR "port out scam"
+        OR "Robocall Mitigation Database"
+        OR RMD
+        OR "Know Your Upstream"
+        OR "broadband label"
+        OR "CALM Act"
         """,
 
         "keywords": [
@@ -105,6 +119,18 @@ FCC_SEARCH_TOPICS = {
             OR (antenna AND rescan)
             OR "CALM Act"
             OR "loud commercials"
+            OR "The View"
+            OR "bona fide news"
+            OR "equal time"
+            OR "license revocation"
+            OR "broadcast license"
+            OR Disney
+            OR ABC
+            OR iHeartMedia
+            OR payola
+            OR "station totals"
+            OR "ownership cap"
+            OR "national cap"
         )
         """,
 
@@ -136,6 +162,15 @@ FCC_SEARCH_TOPICS = {
             OR "earth station"
             OR "space station"
             OR ("space bureau" AND FCC)
+            OR Gen3
+            OR "100,000 satellites"
+            OR "Part 100"
+            OR "licensing assembly line"
+            OR "direct-to-device"
+            OR D2D
+            OR SpaceMobile
+            OR "W-band"
+            OR "D-band"
         )
         """,
 
@@ -198,6 +233,15 @@ FCC_SEARCH_TOPICS = {
             OR "broadband privacy"
             OR "data sharing"
             OR "personally identifiable information"
+            OR "covered equipment"
+            OR "covered list"
+            OR "drone import"
+            OR "surveillance equipment"
+            OR "DA 26-742"
+            OR Typhoon
+            OR hurricane
+            OR "disaster report"
+            OR NG911
         )
         """,
 
@@ -231,6 +275,11 @@ FCC_SEARCH_TOPICS = {
             OR "cell tower"
             OR 5G
             OR "small cells"
+            OR "Upper C-Band"
+            OR "3.98 GHz"
+            OR "spectrum pipeline"
+            OR "mid-band"
+            OR NEPA
         )
         """,
 
@@ -297,7 +346,9 @@ FCC_SEARCH_TOPICS = {
             "white house ai policy",
             "ai telecommunications",
             "artificial intelligence",
-            "machine learning"
+            "machine learning",
+            "ai disclosure",
+            "ai-generated calls"
         ]
     },
 
@@ -323,6 +374,9 @@ FCC_SEARCH_TOPICS = {
             OR "telecom jobs"
             OR "communications industry"
             OR "telecom industry"
+            OR "USF contribution"
+            OR "E-Rate"
+            OR "rural health care"
         )
         """,
 
@@ -369,6 +423,9 @@ FCC_SEARCH_TOPICS = {
             OR ITU
             OR "World Radiocommunication Conference"
             OR ("Office of International Affairs" AND FCC)
+            OR "submarine cable"
+            OR "landing license"
+            OR SLTE
         )
         """
     }

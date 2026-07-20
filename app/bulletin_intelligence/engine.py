@@ -578,6 +578,11 @@ _FCC_TIER3_PROGRAMS_TITLE = (
     "stir/shaken", "stir-shaken", "universal service fund", "net neutrality",
     "spectrum auction", "retransmission consent", "next generation 911",
     "ng911", "pirate radio", "pole attachment", "huawei ban", "zte ban",
+    # Coverage hardening 2026-07-20 — FCC-specific proceedings whose titles are
+    # unambiguous on their own (precise; will not admit general tech noise).
+    "national tv ownership cap", "ownership cap", "upper c-band",
+    "da 26-742", "covered equipment", "usac", "know your upstream",
+    "cable landing license", "submarine cable security",
 )
 
 
@@ -700,6 +705,22 @@ MAJOR_OUTLET_FEEDS = [
     ("https://www.congress.gov/rss/search-results.xml?query=%7B%22source%22%3A%22all%22%2C%22search%22%3A%22Federal+Communications+Commission%22%7D", "Congress.gov FCC", False),
     # State / local.
     ("https://www.route-fifty.com/rss/technology/",                        "Route Fifty Tech", False),
+    # ── Coverage hardening 2026-07-20 — sources requested that were NOT yet wired.
+    # All FCC-relevance-gated (relevance_required=True on the MAJOR_OUTLET path),
+    # so non-FCC items are dropped — precision preserved.
+    ("https://www.broadcastlawblog.com/feed/",                             "Broadcast Law Blog", False),
+    ("https://natlawreview.com/rss.xml",                                    "National Law Review", False),
+    ("https://news.satnews.com/rss",                                        "SatNews", False),
+    ("https://www.cordcuttersnews.com/feed/",                              "Cord Cutters News", False),
+    ("https://www.newscaststudio.com/feed/",                              "NewscastStudio", False),
+    # No free RSS (paywalled / bot-blocked): FCC-scoped Google News fallbacks so
+    # their FCC headlines still surface. Bloomberg carried the "The View"/ABC-license
+    # story; AP/Washington Times/Communications Daily/Multichannel are Appendix-B wires.
+    ("https://news.google.com/rss/search?q=site:bloomberg.com+FCC+OR+%22Federal+Communications+Commission%22&hl=en-US&gl=US&ceid=US:en", "Bloomberg", False),
+    ("https://news.google.com/rss/search?q=site:apnews.com+FCC+OR+%22Federal+Communications+Commission%22&hl=en-US&gl=US&ceid=US:en", "Associated Press", False),
+    ("https://news.google.com/rss/search?q=site:washingtontimes.com+FCC&hl=en-US&gl=US&ceid=US:en", "Washington Times", False),
+    ("https://news.google.com/rss/search?q=%22Communications+Daily%22+FCC&hl=en-US&gl=US&ceid=US:en", "Communications Daily", False),
+    ("https://news.google.com/rss/search?q=site:nexttv.com+FCC+OR+broadcast&hl=en-US&gl=US&ceid=US:en", "Multichannel News", False),
 ]
 
 
@@ -2073,22 +2094,49 @@ _CAT_ENFORCEMENT = ("forfeiture", "notice of apparent liability", "consent decre
     "cease and desist")
 _CAT_PUBLIC_SAFETY = ("911", "e911", "ng911", "next generation 911", "emergency alert",
     "wireless emergency alert", "network outage", "cybersecurity", "data breach",
-    "privacy", "psap", "public safety")
+    "privacy", "psap", "public safety",
+    # Coverage hardening 2026-07-20: covered-list / surveillance-equipment actions
+    # (drone import ban DA 26-742) and FCC disaster reporting (DIRS) events.
+    "covered list", "covered equipment", "surveillance equipment", "drone import",
+    "da 26-742", "disaster report", "disaster information reporting", "dirs",
+    "hurricane", "typhoon", "outage report")
 _CAT_SPACE = ("satellite", "ngso", "gso", "earth station", "space bureau", "starlink",
-    "spacex", "low earth orbit", "leo constellation", "orbital", "amazon kuiper")
-_CAT_MEDIA = ("broadcast", "television", " tv ", "radio station", "cable ", "retransmission",
-    "media ownership", "indecency", "license renewal", "sinclair", "nexstar", "atsc", "nextgen tv")
+    "spacex", "low earth orbit", "leo constellation", "orbital", "amazon kuiper",
+    # Coverage hardening 2026-07-20: SpaceX Gen3 / 100k filing + direct-to-device.
+    "gen3", "direct-to-device", "d2d", "spacemobile", "part 100",
+    "licensing assembly line", "100,000 satellites")
+# Coverage hardening 2026-07-20: bare "cable " was too greedy — it grabbed
+# "submarine cable" before _CAT_INTL could, misfiling the subsea-cable order as
+# Media. Narrowed to the media senses of "cable"; INTL keeps submarine/undersea.
+_CAT_MEDIA = ("broadcast", "television", " tv ", "radio station", "cable tv",
+    "cable operator", "cable company", "cable franchise", "cable news",
+    "retransmission", "media ownership", "ownership cap", "national cap",
+    "broadcast license", "license revocation", "equal time", "bona fide news",
+    "the view", "disney", "iheartmedia", "payola", "station totals",
+    "indecency", "license renewal", "sinclair", "nexstar", "atsc", "nextgen tv")
 _CAT_CONSUMERS = ("robocall", "tcpa", "scam", "accessibility", "lifeline", "e-rate",
-    "spoofing", "disability access", "consumer protection")
+    "spoofing", "disability access", "consumer protection",
+    # Coverage hardening 2026-07-20: RMD FNPRM + broadband label.
+    "robocall mitigation database", "rmd", "know your upstream", "broadband label")
 _CAT_BROADBAND = ("broadband", "fiber", "bead", "pole attachment", "connect america",
-    "digital equity", "rural broadband", "affordable connectivity", "universal service")
+    "digital equity", "rural broadband", "affordable connectivity", "universal service",
+    # Coverage hardening 2026-07-20: USF/USAC review NPRM + rural health care.
+    "usac", "rural health care")
 _CAT_WIRELESS = ("spectrum auction", "spectrum", "5g", "6g", "cell tower", "small cell",
-    "c-band", "cbrs", "aws-3", "mid-band", "wireless carrier", "millimeter wave")
-_CAT_AI = ("artificial intelligence", "machine learning", " ai ", "generative ai", "deepfake")
+    "c-band", "cbrs", "aws-3", "mid-band", "wireless carrier", "millimeter wave",
+    # Coverage hardening 2026-07-20: Upper C-Band auction rules.
+    "upper c-band", "3.98 ghz", "spectrum pipeline")
+_CAT_AI = ("artificial intelligence", "machine learning", " ai ", "generative ai", "deepfake",
+    # Coverage hardening 2026-07-20.
+    "ai disclosure", "ai-generated", "ai-generated calls")
 _CAT_INTL = ("undersea cable", "subsea cable", "submarine cable", "itu ", "treaty",
-    "foreign carrier", "team telecom")
+    "foreign carrier", "team telecom",
+    # Coverage hardening 2026-07-20: subsea-cable security order specifics.
+    "landing license", "cable landing", "slte")
 _CAT_BUSINESS = ("net neutrality", "merger", "acquisition", "section 230", "big tech",
-    "open internet", "antitrust")
+    "open internet", "antitrust",
+    # Coverage hardening 2026-07-20.
+    "usf contribution")
 
 
 def get_category(title: str, summary: str = "") -> Optional[str]:
