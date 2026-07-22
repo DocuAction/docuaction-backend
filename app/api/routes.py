@@ -22,6 +22,8 @@ from app.core.database import get_db
 from app.core.security import hash_password, verify_password, create_token, create_token_pair, get_current_user, ADMIN_EMAILS
 from app.core.email import send_verification_email, app_url
 from app.core.upload_security import safe_upload_path
+from app.services.file_scanner import FileScanner
+from app.services.audit import log_audit_event
 from app.models.database import User, Document, Output, AudioFile, Transcript, AuditLog
 from app.models.schemas import (
     SignupRequest, LoginRequest, VerifyEmailRequest, TokenResponse, UserResponse,
@@ -37,6 +39,39 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 (UPLOAD_DIR / "audio").mkdir(exist_ok=True)
 ALLOWED_DOCS = {".pdf", ".docx", ".doc", ".txt", ".xlsx", ".xls", ".csv", ".png", ".jpg", ".jpeg", ".tiff", ".bmp"}
 ALLOWED_AUDIO = {".mp3", ".wav", ".m4a", ".webm", ".ogg"}
+
+
+def _client_ip(request: Request | None) -> str | None:
+    """Best-effort client IP (honours X-Forwarded-For behind the proxy)."""
+    if request is None:
+        return None
+    fwd = request.headers.get("x-forwarded-for", "")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else None
+
+
+async def _scan_upload_or_reject(db, user, request, content, filename, ext, resource_type):
+    """Multi-layer upload security scan (SSP §4.2 Stage 2) run BEFORE the file is
+    written to disk or processed. Records a `file_scan` audit event (pass/fail
+    with the SHA-256 checksum) and, on failure, raises a GENERIC 422 that never
+    discloses which check tripped. Returns the SHA-256 checksum on success."""
+    result = FileScanner().scan(content, filename, ext, max_size=50 * 1024 * 1024)
+    await log_audit_event(
+        db, user=user, action="file_scan", resource_type=resource_type,
+        result="pass" if result.ok else "fail", ip_address=_client_ip(request),
+        details={
+            "filename": os.path.basename(filename or "upload"),
+            "claimed_type": ext,
+            "size_bytes": len(content),
+            "sha256": result.sha256,
+            "findings": result.findings,
+        },
+    )
+    await db.commit()  # persist the audit record even when the upload is rejected
+    if not result.ok:
+        raise HTTPException(422, "File rejected: security validation failed")
+    return result.sha256
 # ═══════════════════════════════════════════════════════
 # AUTH ENDPOINTS
 # ═══════════════════════════════════════════════════════
@@ -395,6 +430,7 @@ async def process_text(request: ProcessRequest, user=Depends(get_current_user)):
 # ═══════════════════════════════════════════════════════
 @router.post("/api/process-file", tags=["AI Engine"])
 async def process_file(
+    request: Request,
     file: UploadFile = File(...),
     action_type: str = "summary",
     db: AsyncSession = Depends(get_db),
@@ -411,11 +447,13 @@ async def process_file(
     content = await file.read()
     if len(content) > 50 * 1024 * 1024:
         raise HTTPException(400, "File too large (max 50MB)")
+    # Malware/file security scan (SSP §4.2 Stage 2) — BEFORE writing or processing.
+    checksum = await _scan_upload_or_reject(db, user, request, content, file.filename, ext.replace(".", ""), "document")
     fpath.write_bytes(content)
     # Save to database — keep the ORIGINAL filename only as (basename) metadata.
     doc = Document(
         user_id=user.id, filename=os.path.basename(file.filename or "upload"), file_path=str(fpath),
-        file_type=ext.replace(".", ""), file_size_bytes=len(content), status="processing",
+        file_type=ext.replace(".", ""), file_size_bytes=len(content), checksum_sha256=checksum, status="processing",
     )
     db.add(doc)
     await db.commit()
@@ -529,6 +567,7 @@ async def transcribe_audio(
 # ═══════════════════════════════════════════════════════
 @router.post("/api/documents/upload", response_model=DocumentResponse, status_code=201, tags=["Documents"])
 async def upload_document(
+    request: Request,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     user=Depends(get_current_user),
@@ -540,10 +579,12 @@ async def upload_document(
     content = await file.read()
     if len(content) > 50 * 1024 * 1024:
         raise HTTPException(400, "File too large (max 50MB)")
+    # Malware/file security scan (SSP §4.2 Stage 2) — BEFORE writing to disk.
+    checksum = await _scan_upload_or_reject(db, user, request, content, file.filename, ext.replace(".", ""), "document")
     fpath.write_bytes(content)
     doc = Document(
         user_id=user.id, filename=os.path.basename(file.filename or "upload"), file_path=str(fpath),
-        file_type=ext.replace(".", ""), file_size_bytes=len(content), status="uploaded",
+        file_type=ext.replace(".", ""), file_size_bytes=len(content), checksum_sha256=checksum, status="uploaded",
     )
     db.add(doc)
     await db.commit()

@@ -54,6 +54,9 @@ class Document(Base):
     file_path = Column(String(1000), nullable=False)
     file_type = Column(String(10))
     file_size_bytes = Column(Integer)
+    # SHA-256 of the uploaded bytes (upload security scan / integrity + forensics).
+    # Nullable so pre-existing document rows are grandfathered unchanged.
+    checksum_sha256 = Column(String(64), index=True)
     status = Column(String(20), default="uploaded")
     language = Column(String(10), default="en")
     created_at = Column(DateTime, default=datetime.utcnow)

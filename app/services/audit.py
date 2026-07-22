@@ -71,3 +71,33 @@ async def log_tefca_event(
     )
     db.add(entry)
     return entry
+
+
+async def log_audit_event(
+    db: AsyncSession,
+    *,
+    user=None,
+    action: str,
+    resource_type: str,
+    resource_id=None,
+    result: str = "success",
+    ip_address: str | None = None,
+    details: dict | None = None,
+):
+    """Generic audit-trail writer for the canonical AuditLog table.
+
+    Identical shape/semantics to log_tefca_event but named for non-TEFCA
+    events (e.g. upload malware/file scans, event_type "file_scan"). `result`
+    ("pass"/"fail"/…) and any extra context land in the `details` JSON column.
+    Caller is responsible for committing the session.
+    """
+    return await log_tefca_event(
+        db,
+        user=user,
+        action=action,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        result=result,
+        ip_address=ip_address,
+        details=details,
+    )

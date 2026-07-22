@@ -121,6 +121,9 @@ async def startup():
         "ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS details JSON",
         "ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS ip_address VARCHAR(50)",
         "ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT now()",
+        # Upload security scan — SHA-256 checksum of uploaded document bytes.
+        # NULL for pre-existing rows (grandfathered); populated on new uploads.
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS checksum_sha256 VARCHAR(64)",
     ]
     for attempt in range(1, 8):
         try:
