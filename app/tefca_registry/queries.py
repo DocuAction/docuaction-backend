@@ -32,7 +32,41 @@ def entity_summary(e: reg.TefcaRegEntity) -> dict:
         "state": e.state,
         "is_active": e.is_active,
         "current_version": e.current_version,
+        # Populated by _attach_identifiers for list/tree rows (None until attached).
+        "npi": None,
+        "tefcaid": None,
     }
+
+
+async def _attach_identifiers(session: AsyncSession, summaries: list[dict]) -> list[dict]:
+    """Batch-load each entity's primary active NPI + TEFCAID onto its summary dict.
+
+    One query for the whole page of rows (no N+1). is_primary wins when an entity
+    has more than one identifier of a type.
+    """
+    ids = [s["id"] for s in summaries if s.get("id")]
+    if not ids:
+        return summaries
+    rows = (await session.execute(
+        select(
+            reg.TefcaEntityIdentifier.entity_id,
+            reg.TefcaEntityIdentifier.identifier_type,
+            reg.TefcaEntityIdentifier.identifier_value,
+            reg.TefcaEntityIdentifier.is_primary,
+        ).where(
+            reg.TefcaEntityIdentifier.entity_id.in_(ids),
+            reg.TefcaEntityIdentifier.identifier_type.in_(("npi", "tefcaid")),
+            reg.TefcaEntityIdentifier.identifier_status == "active",
+        ))).all()
+    npi, tef = {}, {}
+    for eid, itype, val, is_primary in rows:
+        target = npi if itype == "npi" else tef
+        if eid not in target or is_primary:
+            target[eid] = val
+    for s in summaries:
+        s["npi"] = npi.get(s["id"])
+        s["tefcaid"] = tef.get(s["id"])
+    return summaries
 
 
 def entity_full(e: reg.TefcaRegEntity) -> dict:
@@ -95,8 +129,9 @@ async def list_entities(session: AsyncSession, *, entity_level=None, entity_type
     rows = (await session.execute(
         base.order_by(reg.TefcaRegEntity.entity_level, reg.TefcaRegEntity.name)
         .limit(limit).offset(offset))).scalars().all()
+    items = await _attach_identifiers(session, [entity_summary(e) for e in rows])
     return {
-        "items": [entity_summary(e) for e in rows],
+        "items": items,
         "total": int(total or 0), "limit": limit, "offset": offset,
     }
 
@@ -182,7 +217,7 @@ async def list_qhins(session: AsyncSession) -> list[dict]:
         d["participant_count"] = await _child_count(session, q.id)
         d["designation_date"] = q.designation_date
         out.append(d)
-    return out
+    return await _attach_identifiers(session, out)
 
 
 async def list_participants(session: AsyncSession, *, qhin_id=None,
@@ -206,6 +241,7 @@ async def list_participants(session: AsyncSession, *, qhin_id=None,
         d = entity_summary(p)
         d["sub_participant_count"] = await _child_count(session, p.id)
         out.append(d)
+    out = await _attach_identifiers(session, out)
     return {"items": out, "count": len(out)}
 
 
@@ -232,7 +268,7 @@ async def get_children(session: AsyncSession, parent_id: uuid.UUID) -> list[dict
         d["relationship_type"] = rtype
         d["child_count"] = await _child_count(session, child.id)
         out.append(d)
-    return out
+    return await _attach_identifiers(session, out)
 
 
 async def get_subtree(session: AsyncSession, root_id: uuid.UUID, *, max_depth=3) -> Optional[dict]:
@@ -275,7 +311,8 @@ async def search(session: AsyncSession, q: str, *, limit=25) -> dict:
         seen.setdefault(e.id, {**entity_summary(e),
                                "matched_on": f"identifier:{i.identifier_type}",
                                "matched_value": i.identifier_value})
-    return {"query": q, "results": list(seen.values()), "count": len(seen)}
+    results = await _attach_identifiers(session, list(seen.values()))
+    return {"query": q, "results": results, "count": len(results)}
 
 
 # ── findings ──────────────────────────────────────────────────────────────────
