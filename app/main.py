@@ -310,6 +310,13 @@ app.include_router(tefca_router)
 app.include_router(tefca_dashboard_router)  # executive dashboard at /api/tefca/*
 logger.info("Loaded: tefca-review-protocol + dashboard (REQUIRED — unconditional registration)")
 
+# ═══ TEFCA REGISTRY (Phase 2A) — new normalized entity registry + verification ═══
+# Read/query + verification API at /api/tefca/registry/*, separate from the legacy
+# TEFCA routers above. Over the tefca_reg_* tables (Phase 1B).
+from app.tefca_registry.routes import router as tefca_registry_router  # noqa: E402
+app.include_router(tefca_registry_router)
+logger.info("Loaded: tefca-registry (Phase 2A — /api/tefca/registry/*)")
+
 # ═══ CASE MANAGEMENT ═══
 safe_load("app.case_management", "case-management")
 
