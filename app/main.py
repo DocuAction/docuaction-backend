@@ -86,6 +86,14 @@ async def startup():
     except Exception:
         all_areas = "[]"
 
+    # Register the Phase 1A platform configuration tables on the shared Base so
+    # the create_all below creates them (idempotent — checkfirst / IF NOT EXISTS).
+    # The Alembic migration 20260725_platform_config creates the same set.
+    import app.platform_config  # noqa: F401  (registration side effect)
+    # Register the Phase 1B TEFCA registry tables (tefca_reg_* / tefca_entity_*),
+    # separate from the legacy app.Tefca tables. Migration: 20260725_tefca_registry.
+    import app.tefca_registry  # noqa: F401  (registration side effect)
+
     # Ensure every column the User model expects exists on the live DB. create_all()
     # never adds columns to existing tables, so older/drifted databases can be
     # missing columns — and ANY missing column makes every User query (login/
