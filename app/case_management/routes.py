@@ -682,6 +682,7 @@ async def generate_meeting_minutes(
         pt_ctx = {}
 
     from .services.ccm_engine import _call_claude, HAIKU_MODEL
+    from .services.phi_deidentify import build_phi_map
 
     system = """You are a clinical documentation specialist generating care team meeting minutes.
 Structure and document all decisions and action items clearly."""
@@ -706,7 +707,12 @@ Generate structured minutes:
 6. NEXT MEETING DATE/AGENDA
 7. DOCUMENTATION ATTESTATION"""
 
-    minutes_body = await _call_claude(system, user, model=HAIKU_MODEL, max_tokens=1500)
+    # DP-02: this endpoint bypasses the engine wrappers and calls _call_claude
+    # directly, so it must supply its own phi_map.
+    minutes_body = await _call_claude(
+        system, user, model=HAIKU_MODEL, max_tokens=1500,
+        phi_map=build_phi_map(pt_ctx),
+    )
 
     return {
         "minutes_body": minutes_body,
