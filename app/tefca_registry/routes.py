@@ -6,10 +6,12 @@ and ``/api/v1/tefca/*`` routers. Router-gated with ``require_role("reviewer")``.
 """
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -194,3 +196,98 @@ async def verify_bulk(req: BulkVerifyRequest = BulkVerifyRequest(),
     return await v.verify_entities(
         db, ids, include_external=req.include_external, trigger_type=req.trigger_type,
         actor_id=getattr(user, "id", None), actor_email=getattr(user, "email", None))
+
+
+# ── import (uploads) ──────────────────────────────────────────────────────────
+# New in the import-engine phase. Uploads are security-scanned by the existing
+# platform scanner (_scan_upload_or_reject) before parsing. All four routes
+# inherit the router's require_role("reviewer") gate (>= viewer for the reads).
+
+def _ext_of(filename: str, default: str) -> str:
+    name = filename or ""
+    return name.rsplit(".", 1)[-1].lower() if "." in name else default
+
+
+def _client_ip(request: Request):
+    return request.client.host if request.client else None
+
+
+@router.post("/import/fhir-bundle")
+async def import_fhir_bundle_route(
+    request: Request,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("reviewer")),
+):
+    content = await file.read()
+    # Existing platform upload scanner (lazy import — avoids import-order coupling).
+    from app.api.routes import _scan_upload_or_reject
+    checksum = await _scan_upload_or_reject(
+        db, user, request, content, file.filename, _ext_of(file.filename, "json"),
+        "tefca_registry_import")
+    try:
+        bundle = json.loads(content.decode("utf-8"))
+    except Exception:
+        raise HTTPException(400, "Invalid JSON payload")
+    from app.tefca_registry.fhir_import import import_fhir_bundle
+    try:
+        return await import_fhir_bundle(
+            db, bundle, filename=file.filename, file_checksum=checksum,
+            file_size=len(content), actor_id=getattr(user, "id", None),
+            actor_email=getattr(user, "email", None), ip_address=_client_ip(request))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/import/csv")
+async def import_csv_route(
+    request: Request,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("reviewer")),
+):
+    content = await file.read()
+    from app.api.routes import _scan_upload_or_reject
+    checksum = await _scan_upload_or_reject(
+        db, user, request, content, file.filename, _ext_of(file.filename, "csv"),
+        "tefca_registry_import")
+    try:
+        text = content.decode("utf-8-sig")
+    except Exception:
+        raise HTTPException(400, "Invalid CSV encoding (expected UTF-8)")
+    from app.tefca_registry.csv_import import import_csv
+    return await import_csv(
+        db, text, filename=file.filename, file_checksum=checksum,
+        file_size=len(content), actor_id=getattr(user, "id", None),
+        actor_email=getattr(user, "email", None), ip_address=_client_ip(request))
+
+
+def _batch_summary(b: reg.TefcaImportBatch) -> dict:
+    return {
+        "id": b.id, "source_type": b.source_type, "filename": b.filename,
+        "status": b.status, "total_records": b.total_records,
+        "imported_count": b.imported_count, "skipped_count": b.skipped_count,
+        "error_count": b.error_count, "duration_ms": b.duration_ms,
+        "started_at": b.started_at, "completed_at": b.completed_at,
+        "created_at": b.created_at,
+    }
+
+
+@router.get("/import/history")
+async def import_history(limit: int = Query(50, ge=1, le=500),
+                         db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(
+        select(reg.TefcaImportBatch)
+        .order_by(reg.TefcaImportBatch.created_at.desc()).limit(limit))).scalars().all()
+    return {"items": [_batch_summary(b) for b in rows]}
+
+
+@router.get("/import/{batch_id}")
+async def import_detail(batch_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    b = await db.get(reg.TefcaImportBatch, batch_id)
+    if not b:
+        raise HTTPException(404, "Import batch not found")
+    d = _batch_summary(b)
+    d.update({"file_checksum": b.file_checksum, "file_size_bytes": b.file_size_bytes,
+              "updated_count": b.updated_count, "errors": b.errors})
+    return d
