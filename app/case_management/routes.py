@@ -10,8 +10,10 @@ import uuid
 import logging
 from datetime import datetime, date
 from typing import Optional, List
-from fastapi import APIRouter, UploadFile, File, Form, Query, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, Query, HTTPException, Depends
 from pydantic import BaseModel
+
+from app.core.security import get_current_user
 
 from .services.ccm_engine import (
     voice_to_ccm_note,
@@ -31,9 +33,20 @@ from .services.discharge_engine import (
 
 logger = logging.getLogger("docuaction.case_management.routes")
 
+# SECURITY (AUTHZ-01): authentication is enforced at the ROUTER level, so every
+# endpoint below — present and future — requires a valid bearer token. This module
+# accepts PHI in request bodies (patient names, MRNs, DOBs, clinical transcripts)
+# and forwards it to the Anthropic API; before this gate it was reachable
+# anonymously, which is an unauthenticated PHI disclosure under HIPAA
+# §164.502 and an unmetered LLM-cost abuse vector.
+#
+# Do NOT move this to per-endpoint decorators: a router-level dependency cannot be
+# forgotten when a new route is added. get_current_user also enforces account
+# disable / pending-approval / session-revocation state on every request.
 cm_router = APIRouter(
     prefix="/api/v1/case-management",
-    tags=["Case Management"]
+    tags=["Case Management"],
+    dependencies=[Depends(get_current_user)],
 )
 router = cm_router  # safe_load expects mod.router
 
