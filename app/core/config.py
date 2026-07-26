@@ -90,6 +90,66 @@ except ValidationError as e:
         f"Underlying validation error: {e}"
     ) from e
 
+# ── Unresolved Azure Key Vault reference guard (SEC-01, NIST IA-5 / SC-12) ──────
+#    Secrets reach this app as plain environment variables. On Azure App Service the
+#    sensitive ones are Key Vault REFERENCES — app settings of the form
+#    "@Microsoft.KeyVault(VaultName=...;SecretName=...)" that the platform resolves
+#    with the site's managed identity before the process starts.
+#
+#    When resolution FAILS (managed identity loses Key Vault Secrets User, vault
+#    firewall change, secret renamed/disabled/expired, vault outage), App Service
+#    does NOT fail the start — it injects the LITERAL reference string as the value.
+#
+#    That is silently dangerous for SECRET_KEY, because the literal string is long
+#    enough to satisfy the entropy floor below:
+#        "@Microsoft.KeyVault(VaultName=docuaction-kv-prod;SecretName=SECRET-KEY)"
+#        -> 71 characters, and the floor is 64.
+#    So without this guard the app boots and signs every JWT with a value anyone who
+#    knows the vault and secret name can reconstruct — i.e. forge admin tokens.
+#    Order matters: this check MUST run before the length check for that reason.
+#
+#    Fail loudly instead. A deploy that cannot reach its secrets must not serve
+#    traffic on a predictable signing key.
+_KV_REFERENCE_PREFIX = "@Microsoft.KeyVault("
+
+
+def _assert_resolved(name: str, value: str) -> None:
+    if (value or "").strip().startswith(_KV_REFERENCE_PREFIX):
+        raise RuntimeError(
+            f"FATAL: {name} is an UNRESOLVED Azure Key Vault reference — the platform "
+            "passed the literal '@Microsoft.KeyVault(...)' string through instead of "
+            "the secret value. The application is refusing to start rather than run "
+            f"with {name} set to a publicly derivable constant.\n"
+            "Check, in this order: (1) the site's managed identity still holds the "
+            "'Key Vault Secrets User' role on the vault; (2) the secret exists, is "
+            "enabled, and has not expired; (3) the vault firewall still permits the "
+            "site (trusted service or private endpoint); (4) the SecretName in the "
+            "app setting matches the vault exactly (it is case-sensitive).\n"
+            "Azure reports per-setting status via: az rest --method get --uri "
+            "'/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Web/sites/"
+            "<site>/config/configreferences/appsettings?api-version=2022-03-01'"
+        )
+
+
+# Required settings: an unresolved reference is a hard startup failure.
+_assert_resolved("SECRET_KEY", settings.SECRET_KEY)
+_assert_resolved("DATABASE_URL", settings.DATABASE_URL)
+
+# Optional secret-bearing settings: warn rather than fail, so an unrelated
+# integration's misconfiguration cannot take the whole application down. The
+# feature that consumes the value will fail on its own, and this makes the reason
+# obvious in the startup log instead of surfacing as a confusing upstream 401.
+for _optional in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+    _value = getattr(settings, _optional, "") or ""
+    if _value.strip().startswith(_KV_REFERENCE_PREFIX):
+        import logging as _logging
+
+        _logging.getLogger("docuaction.config").error(
+            "%s is an UNRESOLVED Key Vault reference — features depending on it will "
+            "fail. See the SECRET_KEY guidance in app/core/config.py.",
+            _optional,
+        )
+
 # ── SECRET_KEY minimum entropy (NIST SP 800-131A / IA-5). Policy requires a 64+
 #    character high-entropy key; refuse to start on anything weaker rather than sign
 #    JWTs with a low-entropy key. ──

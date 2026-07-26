@@ -430,8 +430,22 @@ async def delete_user(user_id: str, admin=Depends(require_admin), db: AsyncSessi
     await db.execute(sa_delete(Transcript).where(Transcript.user_id == target_id))
     await db.execute(sa_delete(Document).where(Document.user_id == target_id))
     await db.execute(sa_delete(AudioFile).where(AudioFile.user_id == target_id))
-    await db.execute(sa_update(AuditLog).where(AuditLog.user_id == target_id).values(user_id=None))
+    # AUDIT-MUT / NIST AU-9: audit rows are DETACHED, never deleted. Nulling user_id
+    # is also structurally required — audit_logs.user_id has a NO ACTION foreign key
+    # to users.id, so the user row cannot be removed while any audit row still
+    # references it. The audit records themselves (action, resource, details,
+    # timestamp) are preserved in full, so the security timeline survives the account.
+    # Do NOT change this to sa_delete: that would destroy audit history, breach the
+    # HIPAA §164.316(b)(2) six-year retention obligation, and silently erase the
+    # evidence of any prior attack against the deleted account.
+    detach = await db.execute(
+        sa_update(AuditLog).where(AuditLog.user_id == target_id).values(user_id=None)
+    )
     await db.delete(target)
     await db.commit()
-    await _audit(db, admin, "user_deleted", None, email, {"deleted_email": email})
+    # Record how many audit rows lost attribution, so the trail explains its own gap.
+    await _audit(
+        db, admin, "user_deleted", None, email,
+        {"deleted_email": email, "audit_rows_detached": detach.rowcount},
+    )
     return {"status": "deleted", "email": email}

@@ -11,7 +11,15 @@ import json
 import time
 import logging
 from datetime import datetime, date
+from typing import Optional
 import httpx
+
+from .phi_deidentify import (
+    build_phi_map,
+    redact as redact_phi,
+    restore as restore_phi,
+    log_masked as log_phi_masked,
+)
 
 logger = logging.getLogger("docuaction.case_management.discharge")
 
@@ -29,7 +37,27 @@ HEADERS = {
 }
 
 
-async def _call_claude(system: str, user: str, model: str = SONNET_MODEL, max_tokens: int = 2500) -> str:
+async def _call_claude(
+    system: str,
+    user: str,
+    model: str = SONNET_MODEL,
+    max_tokens: int = 2500,
+    phi_map: Optional[dict] = None,
+) -> str:
+    """
+    DP-02: the only egress point in this module, so PHI de-identification happens
+    here rather than at each call site — a new call site cannot forget it. Pass
+    phi_map=build_phi_map(patient_context) to strip the patient's direct
+    identifiers before egress and restore them in the returned text.
+
+    The clinical narrative is still sent in full and is still PHI; see
+    phi_deidentify.py for what this does and does not cover.
+    """
+    if phi_map:
+        system, sys_n = redact_phi(system, phi_map)
+        user, user_n = redact_phi(user, phi_map)
+        log_phi_masked(max(sys_n, user_n), "discharge_engine")
+
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         resp = await client.post(
             ANTHROPIC_BASE,
@@ -42,7 +70,8 @@ async def _call_claude(system: str, user: str, model: str = SONNET_MODEL, max_to
             },
         )
         resp.raise_for_status()
-        return resp.json()["content"][0]["text"]
+        text = resp.json()["content"][0]["text"]
+        return restore_phi(text, phi_map) if phi_map else text
 
 
 # ─── Discharge Summary Generator ─────────────────────────────────────────────
@@ -97,7 +126,13 @@ Return JSON:
   "pending_results": ["any pending tests"]
 }}"""
 
-    clinical_facts_raw = await _call_claude(extraction_system, extraction_user, model=HAIKU_MODEL, max_tokens=1000)
+    # DP-02: built once and reused across all three egress calls in this function.
+    phi_map = build_phi_map(patient_context)
+
+    clinical_facts_raw = await _call_claude(
+        extraction_system, extraction_user, model=HAIKU_MODEL, max_tokens=1000,
+        phi_map=phi_map,
+    )
     try:
         clean = clinical_facts_raw.strip()
         if clean.startswith("```"):
@@ -155,7 +190,10 @@ Generate complete discharge summary with:
 12. PHYSICIAN SIGNATURE LINE"""
 
     start_time = time.time()
-    summary_body = await _call_claude(summary_system, summary_user, model=SONNET_MODEL, max_tokens=3000)
+    summary_body = await _call_claude(
+        summary_system, summary_user, model=SONNET_MODEL, max_tokens=3000,
+        phi_map=phi_map,
+    )
     gen_time_summary = round(time.time() - start_time, 2)
 
     # Step 3: Generate patient-friendly instructions (Haiku)
@@ -180,7 +218,10 @@ Write these sections in plain language (6th grade):
 Keep each section to 3-5 sentences maximum.
 Use a warm, supportive tone."""
 
-        patient_instructions = await _call_claude(pi_system, pi_user, model=HAIKU_MODEL, max_tokens=1000)
+        patient_instructions = await _call_claude(
+            pi_system, pi_user, model=HAIKU_MODEL, max_tokens=1000,
+            phi_map=phi_map,
+        )
 
     discharge_date = discharge_info.get("discharge_date", date.today().isoformat())
 
@@ -315,6 +356,10 @@ Generate the complete document with:
 Be specific with regulation citations. Use formal government document style."""
 
     start_time = time.time()
+    # DP-02: no phi_map here — this function takes case_facts, not patient_context,
+    # so there is no known set of identifier values to substitute. Exact-value
+    # replacement needs the values up front; free-form case_facts does not supply
+    # them. Tracked as an open item in docs/compliance/AI_EGRESS_PHI.md.
     case_body = await _call_claude(system, user, model=config["model"], max_tokens=3000)
     gen_time = round(time.time() - start_time, 2)
 
@@ -388,7 +433,10 @@ Generate:
 Use objective, professional language. Be specific about resources referred."""
 
     start_time = time.time()
-    assessment_body = await _call_claude(system, user, model=HAIKU_MODEL, max_tokens=1200)
+    assessment_body = await _call_claude(
+        system, user, model=HAIKU_MODEL, max_tokens=1200,
+        phi_map=build_phi_map(patient_context),
+    )
     gen_time = round(time.time() - start_time, 2)
 
     sdoh_flags = []
