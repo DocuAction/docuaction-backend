@@ -1963,21 +1963,24 @@ async def generate_briefing_html(agency: AgencyConfig, articles: List[Article], 
 
 async def build_briefing_outputs(agency: AgencyConfig, articles: List[Article], briefing_date: str):
     """Build the briefing sections ONCE and render BOTH the HTML and the editable
-    .docx from them (so summaries aren't generated twice). Returns (html, docx_bytes).
-    docx_bytes is b'' if the Word render fails — HTML is always returned. Never
+    .docx from them (so summaries aren't generated twice). Returns
+    (html, docx_bytes, sections). `sections` is what actually rendered, so the caller
+    can report a story count that matches the document instead of the pre-render
+    candidate count; it is [] when the AGT render failed and the simple fallback was
+    used. docx_bytes is b'' if the Word render fails — HTML is always returned. Never
     raises: any failure falls back to a simple HTML so the cycle can't crash."""
     try:
         sections = await _prepare_briefing_sections(agency, articles)
         html = _render_agt_html(agency, briefing_date, sections)
     except Exception as e:
         logger.error(f"AGT briefing build failed; using simple HTML: {e}")
-        return _simple_html(agency, articles, briefing_date), b""
+        return _simple_html(agency, articles, briefing_date), b"", []
     try:
         docx_bytes = _render_agt_docx(agency, briefing_date, sections)
     except Exception as e:
         logger.warning(f"DOCX render failed: {e}")
         docx_bytes = b""
-    return html, docx_bytes
+    return html, docx_bytes, sections
 
 
 # ── Boolean section matching (the client's Appendix A spec) ────────────────────
@@ -2367,6 +2370,10 @@ def _collect_sections(clusters, summaries: Dict[str, str]):
             "headline": headline,
             "url": (primary.url or "").strip(),
             "anchor": f"story_{idx}",
+            # Private (leading underscore, like _leader): carried so the caller can
+            # build topic_counts from what actually rendered. Renderers read keys
+            # explicitly, so an extra key is inert.
+            "_topic": getattr(primary, "topic", "other") or "other",
             "summary": (summaries.get(primary.article_id) or primary.summary or "").strip(),
             "is_paywalled": bool(primary.is_paywalled) or _is_paywalled_url(primary.url),
             "_leader": bool(prefix and sec == "General"),
@@ -3347,13 +3354,38 @@ async def run_daily_cycle(
             logger.debug(f"registry editorial queue skipped: {_e}")
 
     # Generate briefing — HTML + editable Word (.docx), built from the same sections
-    html, docx_bytes = await build_briefing_outputs(agency, briefing_arts, briefing_date)
+    html, docx_bytes, sections = await build_briefing_outputs(agency, briefing_arts, briefing_date)
     import base64 as _b64
     docx_b64 = _b64.b64encode(docx_bytes).decode() if docx_bytes else ""
 
-    topic_counts = {}
-    for art in briefing_arts:
-        topic_counts[art.topic] = topic_counts.get(art.topic, 0) + 1
+    # Report what the reader can actually see. article_count/topic_counts used to be
+    # taken from briefing_arts (the pre-render candidate set), which is a superset of
+    # what _prepare_briefing_sections renders — the header claimed 146 stories over a
+    # document containing 41. Count the rendered stories instead. One rendered story =
+    # one cluster primary; its RELATED links are additional coverage of that same
+    # story, so they are deliberately not counted again here.
+    rendered = [s for _sec_name, _stories in sections for s in _stories]
+    # Test `sections`, not `rendered`: _collect_sections always returns all nine
+    # section tuples (empty headers included), so a truthy `sections` means the AGT
+    # render ran. Only the fallback returns []. A successful render with zero stories
+    # must therefore report 0, not fall back to the candidate count.
+    if sections:
+        article_count = len(rendered)
+        topic_counts = {}
+        for s in rendered:
+            _t = s.get("_topic") or "other"
+            topic_counts[_t] = topic_counts.get(_t, 0) + 1
+    else:
+        # AGT render failed -> _simple_html, which lists every briefing article, so
+        # briefing_arts IS the visible set on that path.
+        article_count = len(briefing_arts)
+        topic_counts = {}
+        for art in briefing_arts:
+            topic_counts[art.topic] = topic_counts.get(art.topic, 0) + 1
+    logger.info(
+        f"Briefing counts: {article_count} rendered stories "
+        f"(from {len(briefing_arts)} briefing candidates)"
+    )
 
     # LIVE-FEED MODEL: every briefing is immediately available the moment it is
     # built — there is NO approval gate. status="delivered" here means "live /
@@ -3375,7 +3407,7 @@ async def run_daily_cycle(
         briefing_date=briefing_date,
         status=status,
         html_content=html,
-        article_count=len(briefing_arts),
+        article_count=article_count,
         topic_counts=topic_counts,
         generated_at=_now(),
         delivered_at=delivered_at,
