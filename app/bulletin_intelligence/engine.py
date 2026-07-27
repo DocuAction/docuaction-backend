@@ -2021,8 +2021,24 @@ def _phrase_in(phrase: str, text: str) -> bool:
 
 
 def _boolean_matches(expr: str, text: str) -> bool:
-    """Evaluate a boolean expression (AND/OR/parentheses/quoted phrases/title:) of
-    the client's spec against an article's lowercased text."""
+    """Evaluate a boolean expression against an article's lowercased text.
+
+    Grammar (Phase 2 — NOT added; precedence NOT > AND > OR):
+        or   := and (OR and)*
+        and  := not_ (AND not_)*
+        not_ := (NOT | !) not_ | atom
+        atom := "(" or ")" | token
+
+    NOT binds tighter than AND, so `a AND NOT b` parses as `a AND (NOT b)` and
+    `NOT a OR b` as `(NOT a) OR b` — standard Boolean precedence, and what an editor
+    writing `spectrum AND NOT sports` expects. Without negation there was no way to
+    exclude a false-positive class, which is why the US/FCC-focus requirement needed
+    this.
+
+    Backward compatible: an expression containing no NOT/! token takes exactly the
+    same path as before. A bare unquoted `not` in a query is now an operator — quote
+    it ("not") to match it as a literal word.
+    """
     import re
     if not expr:
         return False
@@ -2039,10 +2055,17 @@ def _boolean_matches(expr: str, text: str) -> bool:
         tok = tokens[pos]
         return _phrase_in(tok, text), pos + 1
 
+    def _not(pos):
+        # Right-associative so `NOT NOT x` folds correctly back to `x`.
+        if pos < len(tokens) and (tokens[pos].upper() == "NOT" or tokens[pos] == "!"):
+            val, pos = _not(pos + 1)
+            return (not val), pos
+        return atom(pos)
+
     def _and(pos):
-        val, pos = atom(pos)
+        val, pos = _not(pos)
         while pos < len(tokens) and tokens[pos].upper() == "AND":
-            rhs, pos = atom(pos + 1)
+            rhs, pos = _not(pos + 1)
             val = val and rhs
         return val, pos
 
@@ -2052,6 +2075,7 @@ def _boolean_matches(expr: str, text: str) -> bool:
             rhs, pos = _and(pos + 1)
             val = val or rhs
         return val, pos
+
 
     try:
         return bool(_or(0)[0])
