@@ -764,9 +764,16 @@ async def download_briefing_pdf(briefing_id: str):
         )
 
 
-@router.get("/run/{agency_id}/preview")
+@router.get("/run/{agency_id}/preview", dependencies=guard("contributor"))
 async def run_and_preview(agency_id: str, lookback_hours: int = 48):
-    """Run full cycle and return HTML briefing directly in browser."""
+    """Run full cycle and return HTML briefing directly in browser.
+
+    Auth added 2026-07-27: this endpoint calls run_daily_cycle(), i.e. a full
+    collection cycle that spends Anthropic API budget. It was the only trigger in the
+    module without a guard — /run, /run/sync, /collect and /refresh are all
+    guard("contributor") — which left an unauthenticated cost-amplification vector
+    open to anyone on the internet. Matched to its siblings.
+    """
     from fastapi.responses import HTMLResponse
     result = await run_daily_cycle(agency_id, auto_deliver=False, lookback_hours=lookback_hours)
     if "error" in result:
