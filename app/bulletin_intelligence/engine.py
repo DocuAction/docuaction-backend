@@ -3129,6 +3129,19 @@ async def run_daily_cycle(
     # when NEWSAPI_AI_KEY is set, otherwise skipped gracefully. Same pipeline.
     if NEWSAPI_AI_KEY:
         tasks.append(ingest_newsapi_ai(agency, lookback_hours))
+    # Perigon (Phase 3) — Boolean-native news API. Auto-skips when PERIGON_API_KEY
+    # is unset, exactly like the other optional collectors, so this is inert until a
+    # key is configured. Queries the Phase 2 Boolean profiles verbatim (Perigon
+    # speaks the same AND/OR/NOT/quoted-phrase dialect) with language=en&country=us
+    # applied server-side, plus a NOT-exclusion for the FC Cincinnati sense of "FCC".
+    try:
+        from app.bulletin_intelligence.providers.perigon import (
+            PERIGON_ENABLED as _PERIGON_ON, ingest_perigon,
+        )
+        if _PERIGON_ON:
+            tasks.append(ingest_perigon(agency, lookback_hours))
+    except Exception as e:
+        logger.warning(f"Perigon source unavailable: {e}")
     # Claude web_search ingest_news disabled — too noisy/expensive
     # tasks.append(ingest_news(agency, lookback_hours))
 
