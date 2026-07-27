@@ -422,6 +422,20 @@ def _get_client() -> AsyncAnthropic:
     return AsyncAnthropic(api_key=ANTHROPIC_KEY)
 
 
+async def _record_llm_cost(resp, *, operation: str, model: str) -> None:
+    """Phase 1 cost tracking shim — records tokens/cost for one Claude response.
+
+    Imported lazily and fully swallowed so that neither a missing costs package nor
+    a DB problem can affect a bulletin run. No-op unless
+    BULLETIN_COST_TRACKING_ENABLED=true. Records only; changes no behaviour.
+    """
+    try:
+        from app.bulletin_intelligence.costs.cost_tracker import record_usage
+        await record_usage(resp, operation=operation, model=model)
+    except Exception:
+        pass
+
+
 def _extract_text(content) -> str:
     """Extract plain text from Anthropic message content blocks."""
     parts = []
@@ -1909,6 +1923,9 @@ Return ONLY the JSON array."""
                 max_tokens=1500,
                 messages=[{"role": "user", "content": prompt}]
             )
+            # Phase 1 cost tracking — best-effort, never raises, no-op unless
+            # BULLETIN_COST_TRACKING_ENABLED=true. Does not alter classification.
+            await _record_llm_cost(resp, operation="classify_articles", model="claude-haiku-4-5")
             results = _parse_json_safe(_extract_text(resp.content))
             rmap = {r["id"]: r for r in (results if isinstance(results, list) else [])}
 
@@ -2349,6 +2366,9 @@ async def _summaries_for(articles: List[Article], agency: AgencyConfig) -> Dict[
                 model="claude-haiku-4-5", max_tokens=2400,
                 messages=[{"role": "user", "content": prompt}],
             )
+            # Phase 1 cost tracking — best-effort, never raises, no-op unless
+            # BULLETIN_COST_TRACKING_ENABLED=true. Does not alter summaries.
+            await _record_llm_cost(resp, operation="summaries", model="claude-haiku-4-5")
             for r in (_parse_json_safe(_extract_text(resp.content)) or []):
                 if isinstance(r, dict) and r.get("id") and (r.get("summary") or "").strip():
                     res[r["id"]] = r["summary"].strip()
@@ -3048,6 +3068,14 @@ async def run_daily_cycle(
 
     briefing_date = _us_date(datetime.now())
     briefing_id = f"{agency_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    # Phase 1: tag this task's Claude calls with the run id so cost rows attribute to
+    # this cycle. Same id instrumentation.record_run() uses, so cost and run history
+    # join on run_id. Best-effort; never blocks the cycle.
+    try:
+        from app.bulletin_intelligence.costs.cost_tracker import set_run_context
+        set_run_context(briefing_id, agency_id)
+    except Exception:
+        pass
     logger.info(f"Daily cycle starting: {agency.name}")
 
     # RSS ONLY — Appendix B sources, always FCC-relevant

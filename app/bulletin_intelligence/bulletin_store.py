@@ -20,6 +20,7 @@ Design notes:
 
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Tuple
 
 from sqlalchemy import text
@@ -119,6 +120,25 @@ _DDL = [
        )""",
     "CREATE INDEX IF NOT EXISTS ix_bulletin_audit_log_entity ON bulletin_audit_log(entity_type, entity_id)",
     "CREATE INDEX IF NOT EXISTS ix_bulletin_audit_log_event ON bulletin_audit_log(event_type)",
+    # ── Claude API cost tracking (Phase 1) ──────────────────────────────────────
+    # Additive: no existing table is altered. tokens_in/tokens_out are stored raw
+    # alongside cost_usd so historical rows can be re-priced if Anthropic pricing
+    # changes (cost_usd is only as good as the rate table in costs/cost_tracker.py).
+    """CREATE TABLE IF NOT EXISTS bulletin_cost_logs (
+         id          TEXT PRIMARY KEY,
+         run_id      TEXT,
+         agency_id   TEXT,
+         operation   TEXT,
+         provider    TEXT,
+         model       TEXT,
+         tokens_in   INTEGER,
+         tokens_out  INTEGER,
+         api_calls   INTEGER,
+         cost_usd    DOUBLE PRECISION,
+         created_at  TEXT
+       )""",
+    "CREATE INDEX IF NOT EXISTS ix_bulletin_cost_logs_run ON bulletin_cost_logs(run_id)",
+    "CREATE INDEX IF NOT EXISTS ix_bulletin_cost_logs_created ON bulletin_cost_logs(created_at)",
 ]
 
 # Flipped to True once init_store() succeeds; gates write attempts so we don't
@@ -370,6 +390,90 @@ async def save_run_log(row: Dict[str, Any]) -> bool:
     except Exception as e:
         logger.warning(f"save_run_log failed: {e}")
         return False
+
+
+async def save_cost_log(row: Dict[str, Any]) -> bool:
+    """Persist one Claude API call's token usage + computed cost (Phase 1).
+
+    Best-effort like every other writer here: returns False rather than raising, so
+    a cost-logging problem can never fail a bulletin run.
+    """
+    if not _enabled:
+        return False
+    try:
+        async with async_session_maker() as s:
+            await s.execute(
+                text(
+                    "INSERT INTO bulletin_cost_logs (id, run_id, agency_id, operation, provider, "
+                    "model, tokens_in, tokens_out, api_calls, cost_usd, created_at) "
+                    "VALUES (:id, :run_id, :agency_id, :operation, :provider, :model, "
+                    ":tokens_in, :tokens_out, :api_calls, :cost_usd, :created_at) "
+                    "ON CONFLICT (id) DO NOTHING"
+                ),
+                {k: row.get(k) for k in (
+                    "id", "run_id", "agency_id", "operation", "provider", "model",
+                    "tokens_in", "tokens_out", "api_calls", "cost_usd", "created_at")},
+            )
+            await s.commit()
+        return True
+    except Exception as e:
+        logger.warning(f"save_cost_log failed: {e}")
+        return False
+
+
+async def fetch_cost_summary(agency_id: str = None, days: int = 30) -> Dict[str, Any]:
+    """Aggregate cost rows for GET /api/v1/bulletin/costs. Read-only."""
+    if not _enabled:
+        return {"enabled": False, "reason": "bulletin store not initialised"}
+    try:
+        where = "WHERE created_at >= :since"
+        params: Dict[str, Any] = {
+            "since": (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        }
+        if agency_id:
+            where += " AND agency_id = :agency_id"
+            params["agency_id"] = agency_id
+
+        async with async_session_maker() as s:
+            totals = (await s.execute(text(
+                f"SELECT COALESCE(SUM(cost_usd),0) AS cost, COALESCE(SUM(tokens_in),0) AS tin, "
+                f"COALESCE(SUM(tokens_out),0) AS tout, COALESCE(SUM(api_calls),0) AS calls, "
+                f"COUNT(DISTINCT run_id) AS runs FROM bulletin_cost_logs {where}"
+            ), params)).mappings().first()
+
+            by_op = (await s.execute(text(
+                f"SELECT operation, COALESCE(SUM(cost_usd),0) AS cost, "
+                f"COALESCE(SUM(api_calls),0) AS calls FROM bulletin_cost_logs {where} "
+                f"GROUP BY operation ORDER BY cost DESC"
+            ), params)).mappings().all()
+
+            by_run = (await s.execute(text(
+                f"SELECT run_id, agency_id, COALESCE(SUM(cost_usd),0) AS cost, "
+                f"COALESCE(SUM(api_calls),0) AS calls, MIN(created_at) AS started "
+                f"FROM bulletin_cost_logs {where} GROUP BY run_id, agency_id "
+                f"ORDER BY started DESC LIMIT 20"
+            ), params)).mappings().all()
+
+        runs = int(totals["runs"] or 0)
+        total_cost = float(totals["cost"] or 0.0)
+        return {
+            "enabled": True,
+            "window_days": days,
+            "agency_id": agency_id,
+            "totals": {
+                "cost_usd": round(total_cost, 6),
+                "tokens_in": int(totals["tin"] or 0),
+                "tokens_out": int(totals["tout"] or 0),
+                "api_calls": int(totals["calls"] or 0),
+                "runs": runs,
+                "avg_cost_per_run": round(total_cost / runs, 6) if runs else None,
+            },
+            "by_operation": [dict(r) for r in by_op],
+            "recent_runs": [dict(r) for r in by_run],
+        }
+    except Exception as e:
+        logger.warning(f"fetch_cost_summary failed: {e}")
+        return {"enabled": False, "error": str(e)[:200]}
 
 
 async def save_source_outcomes(rows: List[Dict[str, Any]]) -> int:

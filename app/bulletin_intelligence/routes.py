@@ -54,6 +54,30 @@ async def health():
     }
 
 
+# ── Claude API cost tracking (Phase 1) ─────────────────────────────────────────
+@router.get("/costs")
+async def bulletin_costs(
+    agency_id: str = Query(None, description="Filter to one agency; omit for all"),
+    days: int = Query(30, ge=1, le=365, description="Look-back window in days"),
+):
+    """Claude API token usage and cost for bulletin runs.
+
+    Read-only aggregate over `bulletin_cost_logs`. Returns `enabled: false` when
+    cost tracking has never written (BULLETIN_COST_TRACKING_ENABLED unset, or the
+    bulletin store is unavailable) rather than failing — an empty cost history is a
+    valid state, not an error.
+
+    `cost_usd` is computed from the point-in-time rate table in
+    costs/cost_tracker.py; `tokens_in`/`tokens_out` are the raw measured values and
+    are authoritative if rates later change.
+    """
+    try:
+        from app.bulletin_intelligence import bulletin_store
+        return await bulletin_store.fetch_cost_summary(agency_id=agency_id, days=days)
+    except Exception as e:
+        return {"enabled": False, "error": str(e)[:200]}
+
+
 # ── Source Coverage Report ─────────────────────────────────────────────────────
 @router.get("/coverage/{agency_id}")
 async def coverage_report(agency_id: str):
