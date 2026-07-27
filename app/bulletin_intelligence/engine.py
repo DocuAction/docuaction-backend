@@ -2267,7 +2267,15 @@ async def _prepare_briefing_sections(agency: AgencyConfig, articles: List[Articl
         logger.debug(f"flag_subscriptions skipped: {_e}")
 
     # NEWS only — relevant, non-social — then drop duplicate stories across cycles.
-    news = [a for a in pool.values() if a.relevance_score >= 0.4 and a.source_type != "social"]
+    # Relevance gate matches the briefing filter in run_daily_cycle: an article that
+    # the classifier gave a real topic is kept regardless of score, and only untyped
+    # ("other") items must clear 0.4. This used to require >= 0.4 unconditionally,
+    # so a classified-but-low-scoring story was counted in article_count yet never
+    # rendered — the cause of the reported-vs-visible gap (146 reported / 41 shown).
+    news = [
+        a for a in pool.values()
+        if (a.topic != "other" or a.relevance_score >= 0.4) and a.source_type != "social"
+    ]
 
     # Lenient spam/junk removal (press releases, malformed URLs, listicles). Uses a
     # LOW threshold so only clear junk is dropped — volume is preserved.
