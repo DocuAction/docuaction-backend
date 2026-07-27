@@ -1982,9 +1982,17 @@ async def build_briefing_outputs(agency: AgencyConfig, articles: List[Article], 
 
 # ── Boolean section matching (the client's Appendix A spec) ────────────────────
 try:
-    from app.bulletin_intelligence.fcc_boolean_search import FCC_SEARCH_TOPICS as _FCC_BOOL
+    # Phase 2: bound to the profiles cache, which is itself seeded verbatim from
+    # fcc_boolean_search.FCC_SEARCH_TOPICS. Same object identity is retained across
+    # refresh_from_db() (it mutates in place), so _boolean_section below needs no
+    # change and picks up DB-driven queries automatically. Falls back to the
+    # hardcoded constants whenever the table is empty or the flag is off.
+    from app.bulletin_intelligence.profiles.boolean_profiles import PROFILES as _FCC_BOOL
 except Exception:
-    _FCC_BOOL = {}
+    try:
+        from app.bulletin_intelligence.fcc_boolean_search import FCC_SEARCH_TOPICS as _FCC_BOOL
+    except Exception:
+        _FCC_BOOL = {}
 
 # Map the boolean-spec topic keys -> our AGT_SECTIONS display names, in spec order.
 _BOOL_KEY_TO_SECTION = {
@@ -3074,6 +3082,13 @@ async def run_daily_cycle(
     try:
         from app.bulletin_intelligence.costs.cost_tracker import set_run_context
         set_run_context(briefing_id, agency_id)
+    except Exception:
+        pass
+    # Phase 2: pick up any operator edits to the Boolean profiles for this cycle.
+    # No-op unless BULLETIN_PROFILES_DB_ENABLED=true and the table has rows.
+    try:
+        from app.bulletin_intelligence.profiles.boolean_profiles import refresh_from_db
+        await refresh_from_db(agency_id)
     except Exception:
         pass
     logger.info(f"Daily cycle starting: {agency.name}")

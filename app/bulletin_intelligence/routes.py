@@ -78,6 +78,41 @@ async def bulletin_costs(
         return {"enabled": False, "error": str(e)[:200]}
 
 
+# ── Boolean search profiles (Phase 2) ──────────────────────────────────────────
+@router.get("/profiles")
+async def list_search_profiles(agency_id: str = Query("fcc")):
+    """Boolean search profiles plus which source is currently live.
+
+    `active_source` is "hardcoded" until BULLETIN_PROFILES_DB_ENABLED=true AND the
+    table has rows — an empty table is a valid state that falls back to the
+    fcc_boolean_search constants, so matching behaviour never depends on this table
+    existing.
+    """
+    try:
+        from app.bulletin_intelligence.profiles.boolean_profiles import profiles_status
+        status = profiles_status()
+    except Exception as e:
+        return {"error": str(e)[:200]}
+    try:
+        from app.bulletin_intelligence import bulletin_store
+        db_rows = await bulletin_store.fetch_search_profiles(agency_id, enabled_only=False)
+    except Exception:
+        db_rows = []
+    return {**status, "agency_id": agency_id, "db_rows": len(db_rows), "profiles": db_rows}
+
+
+@router.post("/profiles/seed", dependencies=guard("admin"))
+async def seed_search_profiles_endpoint(agency_id: str = Query("fcc")):
+    """Seed the profile table from the hardcoded constants. Idempotent — existing
+    rows are never overwritten, so operator edits survive re-seeding."""
+    try:
+        from app.bulletin_intelligence.profiles.boolean_profiles import seed_defaults
+        inserted = await seed_defaults(agency_id)
+        return {"agency_id": agency_id, "inserted": inserted}
+    except Exception as e:
+        raise HTTPException(500, f"seed failed: {str(e)[:200]}")
+
+
 # ── Source Coverage Report ─────────────────────────────────────────────────────
 @router.get("/coverage/{agency_id}")
 async def coverage_report(agency_id: str):

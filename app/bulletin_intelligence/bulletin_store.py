@@ -139,6 +139,27 @@ _DDL = [
        )""",
     "CREATE INDEX IF NOT EXISTS ix_bulletin_cost_logs_run ON bulletin_cost_logs(run_id)",
     "CREATE INDEX IF NOT EXISTS ix_bulletin_cost_logs_created ON bulletin_cost_logs(created_at)",
+    # ── Boolean search profiles (Phase 2) ───────────────────────────────────────
+    # Additive. Seeded verbatim from fcc_boolean_search.FCC_SEARCH_TOPICS so the DB
+    # starts byte-identical to the hardcoded queries; the code falls back to those
+    # constants whenever this table is empty or unreachable, so an empty table is a
+    # valid state, not a failure.
+    """CREATE TABLE IF NOT EXISTS bulletin_search_profiles (
+         id            TEXT PRIMARY KEY,
+         agency_id     TEXT,
+         profile_key   TEXT,
+         name          TEXT,
+         boolean_query TEXT,
+         description   TEXT,
+         enabled       BOOLEAN DEFAULT TRUE,
+         priority      INTEGER DEFAULT 100,
+         created_at    TEXT,
+         updated_at    TEXT
+       )""",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_bulletin_search_profiles_key "
+    "ON bulletin_search_profiles(agency_id, profile_key)",
+    "CREATE INDEX IF NOT EXISTS ix_bulletin_search_profiles_enabled "
+    "ON bulletin_search_profiles(agency_id, enabled)",
 ]
 
 # Flipped to True once init_store() succeeds; gates write attempts so we don't
@@ -474,6 +495,52 @@ async def fetch_cost_summary(agency_id: str = None, days: int = 30) -> Dict[str,
     except Exception as e:
         logger.warning(f"fetch_cost_summary failed: {e}")
         return {"enabled": False, "error": str(e)[:200]}
+
+
+async def fetch_search_profiles(agency_id: str = "fcc", enabled_only: bool = True) -> List[Dict[str, Any]]:
+    """Read Boolean search profiles. Returns [] when the store is unavailable or the
+    table is empty — callers treat that as 'use the hardcoded fallback'."""
+    if not _enabled:
+        return []
+    try:
+        sql = ("SELECT id, agency_id, profile_key, name, boolean_query, description, "
+               "enabled, priority FROM bulletin_search_profiles WHERE agency_id = :aid")
+        if enabled_only:
+            sql += " AND enabled = TRUE"
+        sql += " ORDER BY priority ASC, profile_key ASC"
+        async with async_session_maker() as s:
+            rows = (await s.execute(text(sql), {"aid": agency_id})).mappings().all()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.warning(f"fetch_search_profiles failed: {e}")
+        return []
+
+
+async def seed_search_profiles(rows: List[Dict[str, Any]]) -> int:
+    """Insert seed profiles. Idempotent: existing (agency_id, profile_key) rows are
+    left untouched, so an operator's edits are never overwritten by a redeploy."""
+    if not _enabled or not rows:
+        return 0
+    n = 0
+    try:
+        async with async_session_maker() as s:
+            for r in rows:
+                res = await s.execute(
+                    text(
+                        "INSERT INTO bulletin_search_profiles (id, agency_id, profile_key, name, "
+                        "boolean_query, description, enabled, priority, created_at, updated_at) "
+                        "VALUES (:id, :agency_id, :profile_key, :name, :boolean_query, :description, "
+                        ":enabled, :priority, :created_at, :updated_at) "
+                        "ON CONFLICT (agency_id, profile_key) DO NOTHING"
+                    ),
+                    r,
+                )
+                n += int(res.rowcount or 0)
+            await s.commit()
+        return n
+    except Exception as e:
+        logger.warning(f"seed_search_profiles failed: {e}")
+        return 0
 
 
 async def save_source_outcomes(rows: List[Dict[str, Any]]) -> int:
