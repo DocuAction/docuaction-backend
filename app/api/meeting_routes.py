@@ -66,7 +66,12 @@ async def process_meeting(
     phases[-1]["details"] = f"Ingested {len(content)//1024}KB, format: {ext}"
 
     # ─── PHASE 2: TRANSCRIPTION + MASKING ───
-    phases.append({"phase": 2, "name": "Transcription & PHI Masking", "status": "running", "timestamp": datetime.utcnow().isoformat(), "masking": f"Pre-processing redaction: {domain} mode"})
+    # NOTE: no redaction is performed on the audio before transcription - it cannot be:
+    # PHI cannot be removed from raw audio without first transcribing it. The audio is
+    # sent to the transcription provider verbatim. This label previously read
+    # "Transcription & PHI Masking" with a "Pre-processing redaction" string, which
+    # described work that never happened.
+    phases.append({"phase": 2, "name": "Transcription", "status": "running", "timestamp": datetime.utcnow().isoformat(), "masking": "none - audio is sent to the transcription provider unredacted"})
 
     transcript_text = ""
     duration = 0
@@ -184,7 +189,11 @@ async def process_meeting(
             "action_matrix": [],
             "kpi_signals": [],
             "risk_indicator": {"overall_score": 0, "factors": []},
-            "masking_verification": {"categories_checked": 15, "entities_found": 0, "entities_redacted": 0, "verification_status": "partial"},
+            # Previously hardcoded {"categories_checked": 15, "entities_found": 0,
+            # "entities_redacted": 0} - literals that asserted a PHI check had run and
+            # found nothing, on the path taken when processing FAILED. That is a false
+            # assurance, not a missing control. Report the truth instead.
+            "masking_verification": {"verification_status": "not_performed", "reason": "intelligence extraction produced no output; no PHI masking or verification was carried out"},
         }
 
     # ─── PHASE 4: HITL ROUTING ───
