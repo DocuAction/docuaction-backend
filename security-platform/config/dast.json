@@ -1,0 +1,22 @@
+{
+  "_comment": "DAST target configuration. The production guard in dast/config.py is NOT configurable - never_test can only ADD forbidden patterns, and ALLOWED_HOSTS is a frozen constant in code.",
+  "dast": {
+    "target_url": "http://localhost:8000",
+    "dev_url": "https://docuaction-dev.azurewebsites.net",
+    "never_test": [
+      "https://api-prod.docuaction.io",
+      "https://app.docuaction.io",
+      "prod"
+    ],
+    "rate_limit": {
+      "max_requests_per_window": 8,
+      "window_seconds": 6
+    },
+    "timeout_seconds": 45,
+    "evidence_dir": "evidence",
+    "allow_write_tests": true,
+    "test_account_prefix": "agt-dast-",
+    "_credentials_note": "Add role tokens here to execute the RBAC matrix (AUTHZ-002..013). Without them those tests report SKIP, never PASS.",
+    "credentials": {}
+  }
+}

@@ -1,0 +1,16 @@
+# Runtime artifacts and regenerable output - never committed.
+data/*.db
+data/
+evidence/
+reports/
+
+# Vendored scanner binaries and the platform venv (hundreds of MB).
+.venv/
+tools/
+
+__pycache__/
+*.pyc
+*.pyo
+
+*.log
+
