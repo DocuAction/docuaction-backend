@@ -31,8 +31,33 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("docuaction.bulletin.sources")
 
-CATALOG_PATH = (Path(__file__).resolve().parents[2]
-                / "docs" / "fcc-source-research" / "Master_Source_Catalog.csv")
+# The packaged copy under app/ is the RUNTIME source of truth, and it has to be:
+# the deployment zip ships app/, alembic/, alembic.ini, requirements.txt and
+# Procfile only. docs/ is not in the artifact, so the original docs-relative path
+# resolved to nothing in every deployed environment and load-catalog answered
+# {"loaded": false, "reason": "catalogue empty or missing"} while working
+# perfectly on a developer machine.
+#
+# docs/fcc-source-research/ remains the research home of the catalogue and is
+# checked as a fallback so a locally-edited CSV is still picked up before it has
+# been synced. Keep the two copies in step - _CATALOG_CANDIDATES order means the
+# packaged file wins wherever both exist.
+_PACKAGED_CATALOG = Path(__file__).resolve().parent / "data" / "Master_Source_Catalog.csv"
+_DOCS_CATALOG = (Path(__file__).resolve().parents[2]
+                 / "docs" / "fcc-source-research" / "Master_Source_Catalog.csv")
+_CATALOG_CANDIDATES = (_PACKAGED_CATALOG, _DOCS_CATALOG)
+
+
+def _resolve_catalog() -> Path:
+    """First existing candidate; the packaged path if none exist, so the warning
+    names the location that actually matters in production."""
+    for candidate in _CATALOG_CANDIDATES:
+        if candidate.is_file():
+            return candidate
+    return _PACKAGED_CATALOG
+
+
+CATALOG_PATH = _resolve_catalog()
 
 # Sources that syndicate heavily; duplicate_risk High is the catalogue's own signal.
 _WIRE_HINTS = ("wire", "syndicat", "newswire")
@@ -94,9 +119,13 @@ def _country_state(coverage_area: str) -> Tuple[Optional[str], Optional[str]]:
 
 def read_catalog(path: Optional[Path] = None) -> List[Dict[str, Any]]:
     """Parse Master_Source_Catalog.csv into normalised registry rows."""
-    p = Path(path or CATALOG_PATH)
+    # Re-resolve per call rather than trusting the import-time constant, so a
+    # catalogue that lands after the process started is still found.
+    p = Path(path) if path else _resolve_catalog()
     if not p.exists():
-        logger.warning(f"Source catalogue not found at {p}")
+        logger.warning(
+            f"Source catalogue not found at {p} (checked: "
+            f"{', '.join(str(c) for c in _CATALOG_CANDIDATES)})")
         return []
     out: List[Dict[str, Any]] = []
     # utf-8-sig: the catalogue is Excel-exported and carries a BOM, which would
