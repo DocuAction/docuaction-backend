@@ -1,5 +1,10 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
+# Required by the Azure App Service startup command
+# (python -m gunicorn app.main:app -k uvicorn.workers.UvicornWorker).
+# The platform image does NOT supply it, so pydeps builds must vendor it -
+# it was previously added out-of-band and undocumented.
+gunicorn==22.0.0
 sqlalchemy[asyncio]==2.0.35
 asyncpg==0.29.0
 alembic==1.13.2
