@@ -227,6 +227,37 @@ az webapp deploy   --resource-group rg-docuaction-prod   --name Docuaction   --s
 > **Rule: `--clean true` on prod, plain deploy on dev.** The correct flag depends on
 > the build mode, not on preference.
 
+> ### Never re-run a deploy just to capture its error output
+>
+> `az webapp deploy` frequently ends with:
+>
+> ```
+> Raw Error : ('Connection aborted.', RemoteDisconnected('Remote end closed
+>             connection without response'))
+> ```
+>
+> **This does not mean the deployment failed.** It means the CLI lost the
+> connection it was polling on. The server keeps building. On dev, an Oryx build
+> runs for several minutes after the CLI has already given up and printed a
+> failure banner.
+>
+> Re-running the command to get a cleaner error starts a **second concurrent
+> build on the same app**, and the two collide. Observed 2026-07-28: the first
+> deploy (05:45:17) succeeded and became active; the duplicate (05:47:47) was
+> recorded as status 3 - a failure caused entirely by the retry.
+>
+> When the CLI reports a connection error, **query the server instead**:
+>
+> ```bash
+> az webapp log deployment list -n <app> -g <rg> \
+>   --query "[0:3].{time:received_time,status:status,active:active}" -o tsv
+> ```
+>
+> Status codes: `0` pending, `1` building, `3` failed, `4` success. Only `active:
+> True` on a `4` means the code is live. Confirm with an endpoint that exists only
+> in the new build - a 404 turning into a 200 is proof; `/health` is not, because
+> it answers 200 from the old code throughout.
+
 ### Why `--clean` is mandatory on PROD
 
 `az webapp deploy --type zip` **overlays** the archive onto the existing
