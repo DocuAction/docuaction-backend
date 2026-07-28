@@ -208,7 +208,26 @@ Deploy the zip using the modern one-deploy endpoint. **Always pass `--clean true
 az webapp deploy   --resource-group rg-docuaction-prod   --name Docuaction   --src-path deploy.zip   --type zip   --clean true   --restart true
 ```
 
-### Why `--clean` is mandatory, not optional
+> ### CRITICAL: `--clean` behaviour differs by environment
+>
+> | Environment | Build mode | Use `--clean true`? |
+> |---|---|---|
+> | **PROD** (`Docuaction`) | `ENABLE_ORYX_BUILD=false`, pre-built `pydeps/` | **YES** - safely replaces wwwroot |
+> | **DEV** (`docuaction-dev`) | `SCM_DO_BUILD_DURING_DEPLOYMENT=true`, Oryx builds | **NO - NEVER** |
+>
+> On an Oryx-build app, `--clean` deletes `oryx-manifest.toml` along with the rest of
+> wwwroot. The manifest is what tells the startup script how to locate and extract
+> the built application, and the incoming zip does not contain one - Oryx writes it
+> during the build. The result is a crash loop: `Container exited with exit code 1`
+> and HTTP 503 on every request.
+>
+> Observed 2026-07-28: dev was taken down this way and recovered only by redeploying
+> the identical zip **without** `--clean`.
+>
+> **Rule: `--clean true` on prod, plain deploy on dev.** The correct flag depends on
+> the build mode, not on preference.
+
+### Why `--clean` is mandatory on PROD
 
 `az webapp deploy --type zip` **overlays** the archive onto the existing
 `/home/site/wwwroot`; it does **not** replace it. Any file present from an earlier
@@ -238,8 +257,9 @@ directories, leaving exactly one `.dist-info` per package.
 
 **Implication for this app:** every zip deploy before this date accumulated orphaned
 files. Anything ever deployed and later removed from the repository is likely still
-in `wwwroot`. Treat `--clean true` as the default for prod and dev alike, and expect
-the first clean deploy after a long gap to remove more than you anticipate.
+in `wwwroot`. Treat `--clean true` as the default **for prod only** (see the warning
+above - it breaks Oryx-build environments), and expect the first clean deploy after a
+long gap to remove more than you anticipate.
 
 `--restart true` is paired with it so the worker starts from the cleaned tree rather
 than a warm process still holding references to deleted files.
