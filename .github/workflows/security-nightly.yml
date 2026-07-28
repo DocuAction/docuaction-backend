@@ -1,0 +1,124 @@
+name: Nightly Security Scan
+
+on:
+  schedule:
+    - cron: '17 6 * * *'  # 6:17 UTC daily
+  workflow_dispatch:
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Optional. The frontend is a separate repo, so without a token the nightly
+      # scans backend only - which is a smaller scope than the local scan, not a
+      # cleaner codebase. The generated CI config below drops the frontend target
+      # when this step does not produce a directory, so the run stays honest.
+      - name: Checkout frontend (optional second target)
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          repository: DocuAction/docuaction-frontend
+          token: ${{ secrets.FRONTEND_REPO_TOKEN }}
+          path: _frontend
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install security platform
+        run: |
+          pip install -r requirements.txt
+          if [ -f security-platform/requirements.txt ]; then
+            pip install -r security-platform/requirements.txt
+          fi
+          pip install semgrep bandit pip-audit
+
+      - name: Install Gitleaks
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz | tar xz
+          sudo mv gitleaks /usr/local/bin/
+
+      - name: Generate CI project config
+        run: |
+          # config/projects/docuaction.json pins absolute Windows paths
+          # ("C:/Imran_Coding projects/..."). On a Linux runner those resolve to
+          # nothing, and the scan would report a beautifully clean zero-file result.
+          # A security scan that silently scans nothing is worse than no scan, so
+          # derive a CI variant with runner paths and leave the committed config
+          # untouched.
+          python - <<'PY'
+          import json, os, pathlib
+          src = pathlib.Path("security-platform/config/projects/docuaction.json")
+          cfg = json.loads(src.read_text(encoding="utf-8"))
+          ws = os.environ["GITHUB_WORKSPACE"]
+          fe = pathlib.Path(ws, "_frontend")
+          targets = []
+          for t in cfg.get("targets", []):
+              if t.get("name") == "backend":
+                  t["path"] = ws
+                  targets.append(t)
+              elif t.get("name") == "frontend":
+                  if fe.is_dir():
+                      t["path"] = str(fe)
+                      targets.append(t)
+                  else:
+                      print("frontend checkout absent - dropping that target")
+              else:
+                  targets.append(t)
+          cfg["targets"] = targets
+          cfg["name"] = "docuaction-ci"
+          cfg["display_name"] = cfg.get("display_name", "DocuAction") + " (CI)"
+          out = src.with_name("docuaction-ci.json")
+          out.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+          print("targets in CI config:", [(t["name"], t["path"]) for t in targets])
+          PY
+
+      - name: Run full security scan
+        run: |
+          cd security-platform
+          set -o pipefail   # without this the exit code below is tee's, always 0
+          python cli.py -p docuaction-ci full --all 2>&1 | tee scan-output.txt
+          echo "Exit code: ${PIPESTATUS[0]}"
+        continue-on-error: true
+
+      - name: Assert the scan actually scanned something
+        run: |
+          # Guards against the failure mode the CI config exists to prevent: a run
+          # that completes successfully having examined zero files. A green tick on
+          # an empty scan is a false assurance, so fail loudly instead.
+          cd security-platform
+          if ! grep -qE "Findings \([0-9]+ active\)" scan-output.txt; then
+            echo "ERROR: scan produced no findings summary - it likely scanned nothing"
+            exit 1
+          fi
+          if grep -qE "Findings \(0 active\)" scan-output.txt; then
+            echo "ERROR: zero findings across every scanner. Treating as a broken"
+            echo "scan, not a clean codebase - verify target paths resolved."
+            exit 1
+          fi
+          grep -E "Findings \(|Security score|RESULT" scan-output.txt || true
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-scan-${{ github.run_number }}
+          path: |
+            security-platform/reports/
+            security-platform/dashboard/
+            security-platform/scan-output.txt
+          retention-days: 90
+
+      - name: Upload SBOMs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ github.run_number }}
+          # Glob the project dir: reports are written under the project name, which
+          # is docuaction-ci here, not docuaction.
+          path: security-platform/reports/*/sbom-*.json
+          retention-days: 365

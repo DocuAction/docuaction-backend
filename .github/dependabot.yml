@@ -1,0 +1,65 @@
+# Dependabot configuration — DocuAction AI Backend
+# Alliance Global Tech, Inc. (AGT) — Copyright (c) 2024-2026
+#
+# Automated dependency-update policy supporting NIST SP 800-53 (SI-2, RA-5)
+# flaw-remediation and vulnerability-management controls. All updates are
+# delivered as pull requests subject to the standard review + CI gates.
+version: 2
+
+updates:
+  # ---------------------------------------------------------------------------
+  # Python application dependencies (pip / requirements.txt)
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "python"
+      - "security"
+    reviewers:
+      - "imran-agt"
+    # Group low-risk minor/patch bumps into a single PR to reduce review load,
+    # while allowing major upgrades to arrive as individual, reviewable PRs.
+    groups:
+      python-minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
+
+  # ---------------------------------------------------------------------------
+  # GitHub Actions workflow dependencies
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(ci)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "github-actions"
+      - "ci"
+    reviewers:
+      - "imran-agt"
+    groups:
+      actions-minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
