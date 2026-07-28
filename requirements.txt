@@ -1,4 +1,12 @@
-fastapi==0.115.0
+# fastapi <0.135 pinned starlette <0.39/<0.51, which made every starlette
+# advisory unfixable. 0.135+ drops the ceiling (starlette>=0.46.0), so the
+# framework upgrade is what unblocks the transitive fix - not a starlette pin.
+# Verified: app.openapi() is byte-identical across the two stacks,
+# 255 paths / 266 operations, no route added or lost.
+fastapi==0.140.13
+# Pinned explicitly, not left transitive: this is the package the advisories
+# were filed against, so its version must be visible in the manifest.
+starlette==1.3.1
 uvicorn[standard]==0.30.6
 # Required by the Azure App Service startup command
 # (python -m gunicorn app.main:app -k uvicorn.workers.UvicornWorker).
@@ -10,7 +18,9 @@ asyncpg==0.29.0
 alembic==1.13.2
 pydantic==2.9.2
 pydantic-settings==2.5.2
-python-multipart==0.0.22
+# 0.0.22 carried 5 High CVEs (2026-40347/42561/53538/53539/53540); 0.0.31 is the
+# first release that closes all five.
+python-multipart==0.0.31
 python-jose[cryptography]==3.5.0
 passlib[bcrypt]==1.7.4
 httpx==0.27.2
@@ -25,4 +35,6 @@ tenacity==9.0.0
 python-statemachine==3.2.0
 pandera==0.32.0
 weasyprint
-pyasn1==0.6.3
+# 0.6.3 -> 0.6.4 closes CVE-2026-59884/59885/59886. Transitive via python-jose,
+# pinned here so the fixed version is explicit rather than resolver-dependent.
+pyasn1==0.6.4

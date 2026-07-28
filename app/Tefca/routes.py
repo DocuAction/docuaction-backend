@@ -1166,7 +1166,7 @@ def _connector_health_snapshot(health: dict) -> dict:
     return {"sam_gov": s("SAM_GOV"), "pecos": s("PECOS"), "leie": s("OIG_LEIE"), "nppes": s("NPPES")}
 
 
-@tefca_dashboard_router.get("/dashboard/summary", summary="Executive dashboard summary (aggregate, public)")
+@tefca_dashboard_router.get("/dashboard/summary", summary="Executive dashboard summary (aggregate, viewer role required)", dependencies=[Depends(require_role("viewer"))])
 async def dashboard_summary(db: AsyncSession = Depends(get_db)):
     reviews = (await db.execute(select(TEFCAReview))).scalars().all()
     total = len(reviews)
@@ -1232,7 +1232,7 @@ async def dashboard_summary(db: AsyncSession = Depends(get_db)):
     }
 
 
-@tefca_dashboard_router.get("/dashboard/trends", summary="Monthly trends for charting (aggregate, public)")
+@tefca_dashboard_router.get("/dashboard/trends", summary="Monthly trends for charting (aggregate, viewer role required)", dependencies=[Depends(require_role("viewer"))])
 async def dashboard_trends(db: AsyncSession = Depends(get_db)):
     reviews = (await db.execute(select(TEFCAReview))).scalars().all()
     by_month: dict = {}

@@ -55,7 +55,9 @@ async def health():
 
 
 # ── Claude API cost tracking (Phase 1) ─────────────────────────────────────────
-@router.get("/costs")
+# guard(): spend and token counts let an unauthenticated caller measure the cost
+# of each request and size an amplification attack. Not public.
+@router.get("/costs", dependencies=guard("contributor"))
 async def bulletin_costs(
     agency_id: str = Query(None, description="Filter to one agency; omit for all"),
     days: int = Query(30, ge=1, le=365, description="Look-back window in days"),
@@ -295,7 +297,7 @@ async def purge_articles(confirm: str = Query("")):
     return {"status": "purged", "memory_cleared": mem, "durable_deleted": deleted}
 
 
-@router.get("/admin/last-window/{agency_id}")
+@router.get("/admin/last-window/{agency_id}", dependencies=guard("contributor"))
 async def last_window(agency_id: str):
     """Report the freshness window + in/out-of-window counts from the most recent
     run for this agency (observability for the date-window filter)."""
@@ -661,7 +663,7 @@ async def preview_briefing(briefing_id: str):
     return HTMLResponse(content=html)
 
 
-@router.get("/briefings/{briefing_id}/docx")
+@router.get("/briefings/{briefing_id}/docx", dependencies=guard("viewer"))
 async def download_briefing_docx(briefing_id: str):
     """Download the editable Word (.docx) version of a briefing — open in Word,
     tweak, then run it through fcc_digest.py to produce the final email."""
@@ -684,7 +686,7 @@ async def download_briefing_docx(briefing_id: str):
 
 
 # ── Archive ────────────────────────────────────────────────────────────────────
-@router.get("/archive/{agency_id}")
+@router.get("/archive/{agency_id}", dependencies=guard("viewer"))
 async def archive_search(
     agency_id: str,
     keyword: Optional[str] = Query(None),
@@ -717,7 +719,7 @@ async def archive_search(
     )
 
 
-@router.get("/archive/{agency_id}/stats")
+@router.get("/archive/{agency_id}/stats", dependencies=guard("viewer"))
 async def archive_statistics(agency_id: str):
     """Get 12-month archive statistics — volume by topic, source type, and month."""
     agency = get_agency(agency_id)
@@ -726,7 +728,7 @@ async def archive_statistics(agency_id: str):
     return get_archive_stats(agency_id)
 
 
-@router.get("/archive/{agency_id}/clips")
+@router.get("/archive/{agency_id}/clips", dependencies=guard("viewer"))
 async def get_broadcast_clips(
     agency_id: str,
     topic: Optional[str] = Query(None),
@@ -764,7 +766,7 @@ async def llm_visibility_check(agency_id: str):
 # ── Demo Endpoint ──────────────────────────────────────────────────────────────
 
 
-@router.get("/briefings/{briefing_id}/pdf")
+@router.get("/briefings/{briefing_id}/pdf", dependencies=guard("viewer"))
 async def download_briefing_pdf(briefing_id: str):
     """Download briefing as PDF."""
     from fastapi.responses import Response
