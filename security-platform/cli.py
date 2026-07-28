@@ -123,7 +123,12 @@ def _external_suites(args):
     from core.models import ToolStatus
     findings, tools = [], []
 
-    if getattr(args, "dast", False):
+    # --all is shorthand for --dast --azure. Kept opt-in: DAST needs a guarded live
+    # target and Azure needs cloud credentials, so neither belongs in the default
+    # fast path that CI runs on every push.
+    run_all = getattr(args, "all", False)
+
+    if getattr(args, "dast", False) or run_all:
         from dast.config import DastConfig
         from dast.runner import run_dast
         res = run_dast(DastConfig.load(), verbose=args.verbose)
@@ -137,7 +142,23 @@ def _external_suites(args):
         print(f"  [dast] target {run.target}: "
               f"{len(run.executed())} executed, {len(res['findings'])} findings")
 
-    if getattr(args, "azure", False):
+    # NOT included in --all: it costs money per run. Always explicit.
+    if getattr(args, "ai_review", False):
+        from ai_review.ai_reviewer import run_ai_review
+        res = run_ai_review(getattr(args, "files", None), verbose=args.verbose)
+        if not res.get("available"):
+            print(f"  [ai_review] SKIPPED: {res.get('reason')}")
+            tools.append(ToolStatus(name="ai_review", available=False,
+                                    skipped_reason=res.get("reason", "")))
+        else:
+            findings += res["findings"]
+            tools.append(ToolStatus(name="ai_review", available=True, ran=True,
+                                    findings_count=len(res["findings"]),
+                                    version=res.get("model", "")))
+            print(f"  [ai_review] {res['files']} file(s) reviewed, "
+                  f"{res['finding_count']} finding(s); skipped {len(res['skipped'])}")
+
+    if getattr(args, "azure", False) or run_all:
         import pathlib as _p
         from dast.azure.azure_scanner import AzureScanner
         from dast.results import EvidenceWriter, Outcome, TestRun
@@ -270,7 +291,9 @@ def cmd_full(args) -> int:
     eng = _engine(args)
     cats = _categories(args)
     _hr(f"FULL PIPELINE - {eng.project.display_name}")
-    result = eng.full(cats, args.format or None)
+    extra_f, extra_t = _external_suites(args)
+    result = eng.full(cats, args.format or None,
+                      extra_findings=extra_f, extra_tools=extra_t)
     scan = result["scan"]
 
     d = result["discovery"]
@@ -501,6 +524,14 @@ def build_parser() -> argparse.ArgumentParser:
                         help="also run the DAST suite (guarded non-prod target only)")
         sp.add_argument("--azure", action="store_true",
                         help="also run read-only Azure infrastructure checks")
+        sp.add_argument("--ai-review", dest="ai_review", action="store_true",
+                        help="AI-assisted review via Claude (needs ANTHROPIC_API_KEY; "
+                             "costs money - never runs automatically)")
+        sp.add_argument("--files", action="append",
+                        help="limit --ai-review to these files (repeatable)")
+        sp.add_argument("--all", action="store_true",
+                        help="run EVERYTHING: Phase 1 scanners + DAST + Azure "
+                             "(slower; default is Phase 1 only)")
         sp.add_argument("--check", metavar="FAMILY",
                         help="limit --azure to one family: AZ-APP, AZ-DB, AZ-KV, "
                              "AZ-NET, AZ-ID, AZ-MON")

@@ -288,13 +288,16 @@ class SecurityEngine:
     # ── full pipeline ────────────────────────────────────────────────────────
 
     def full(self, categories: Optional[List[Category]] = None,
-             formats: Optional[List[str]] = None) -> Dict[str, Any]:
+             formats: Optional[List[str]] = None,
+             extra_findings: Optional[List[Finding]] = None,
+             extra_tools: Optional[List[ToolStatus]] = None) -> Dict[str, Any]:
         """discovery -> scan -> compliance -> gate -> reports. Returns a summary."""
         from core.deliverables import (write_dashboard, write_executive_summary,
                                        write_technical_report)
 
         discovery = self.discover()
-        scan = self.scan(categories)
+        scan = self.scan(categories, extra_findings=extra_findings,
+                         extra_tools=extra_tools)
 
         # Score is density-normalised, so it needs the codebase size that discovery
         # just measured. Recomputed here rather than inside scan().
