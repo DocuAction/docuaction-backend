@@ -202,15 +202,52 @@ Adjust `--workers` to the App Service plan sizing. Ensure `--bind` port matches 
 
 ## 7. Deploy the Artifact
 
-Deploy the zip using the modern one-deploy endpoint:
+Deploy the zip using the modern one-deploy endpoint. **Always pass `--clean true`:**
 
 ```bash
-az webapp deploy \
-  --resource-group rg-docuaction-prod \
-  --name Docuaction \
-  --src-path deploy.zip \
-  --type zip
+az webapp deploy   --resource-group rg-docuaction-prod   --name Docuaction   --src-path deploy.zip   --type zip   --clean true   --restart true
 ```
+
+### Why `--clean` is mandatory, not optional
+
+`az webapp deploy --type zip` **overlays** the archive onto the existing
+`/home/site/wwwroot`; it does **not** replace it. Any file present from an earlier
+deployment that is absent from the new zip simply stays there, indefinitely.
+
+Found on 2026-07-28 after the Sprint 1.1 deploy. Production `pydeps/` held **87**
+`.dist-info` directories while the artifact contained **75** - twelve stale
+leftovers, including *pre-upgrade* metadata for four packages that had just been
+upgraded to resolve CVEs:
+
+```
+python_jose-3.4.0.dist-info       alongside  python_jose-3.5.0.dist-info
+python_multipart-0.0.18.dist-info alongside  python_multipart-0.0.22.dist-info
+pyasn1-0.4.8.dist-info            alongside  pyasn1-0.6.3.dist-info
+pdfminer.six-20231228.dist-info   alongside  pdfminer_six-20260107.dist-info
+```
+
+The running code was correct - only the metadata was stale - but that is exactly
+what breaks the artefacts auditors read:
+
+* **pip-audit** resolves installed versions from `.dist-info`, so it reported the
+  old vulnerable versions as still present and the CVE fixes as unapplied.
+* **CycloneDX SBOM** enumerated phantom vulnerable packages that were not running.
+
+Redeploying the identical artifact with `--clean true` took prod from 87 to 75
+directories, leaving exactly one `.dist-info` per package.
+
+**Implication for this app:** every zip deploy before this date accumulated orphaned
+files. Anything ever deployed and later removed from the repository is likely still
+in `wwwroot`. Treat `--clean true` as the default for prod and dev alike, and expect
+the first clean deploy after a long gap to remove more than you anticipate.
+
+`--restart true` is paired with it so the worker starts from the cleaned tree rather
+than a warm process still holding references to deleted files.
+
+> **Ordering caution.** `--clean` wipes `wwwroot` *before* unpacking, so a zip that
+> fails validation takes the site down rather than merely failing to improve it. Run
+> the artifact gates first, and do not `--clean` with an artifact that has never
+> deployed successfully.
 
 Monitor the deployment and startup logs:
 
