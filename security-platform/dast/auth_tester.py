@@ -120,8 +120,8 @@ class AuthTester:
             request_summary={"email": "[REDACTED]", "password": "[REDACTED]"},
             expected="200/201 creating the account",
             outcome=Outcome.PASS if created else
-                    (Outcome.SKIP if r.status in (403, 404, 405, 429) else Outcome.WARN),
-            finding="" if created or r.status in (403, 404, 405, 429) else
+                    (Outcome.SKIP if r.status in (401, 403, 404, 405, 429) else Outcome.WARN),
+            finding="" if created or r.status in (401, 403, 404, 405, 429) else
                     f"Signup returned HTTP {r.status} for a well-formed request.",
             severity="low", owasp=A07, cwe=["287"], nist=["IA-2"],
             notes=("Creates a record in the DEV database only." if created else

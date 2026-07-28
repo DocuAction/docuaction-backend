@@ -89,7 +89,7 @@ class RateLimitTester:
             "RATE-004", CAT, "Rate limiting / lockout on the authentication endpoint",
             method="POST", endpoint=LOGIN,
             request_summary={"burst_size": len(codes), "status_sequence": codes},
-            expected="429 (rate limited) or 423/403 (account lockout) during a burst of "
+            expected="429 (rate limited) or 423/403/401 (account lockout) during a burst of "
                      "failed logins",
             observed=f"429 seen: {limited}; lockout-style status seen: {locked}",
             outcome=Outcome.PASS if (limited or locked) else Outcome.WARN,

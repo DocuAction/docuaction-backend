@@ -25,7 +25,8 @@ HIPAA_AC = ["164.312(a)(1)", "164.312(d)"]
 
 # (path, method, label) - endpoints that must never serve an anonymous caller.
 PROTECTED: List[Tuple[str, str, str]] = [
-    # Verified present on the dev target (403 anonymously).
+    # Verified present on the dev target (401 anonymously since the FastAPI
+    # 0.140 upgrade; 403 before it).
     ("/api/auth/me", "GET", "Current-user profile"),
     ("/api/documents", "GET", "Document store"),
     ("/api/admin/users", "GET", "Admin user management"),
@@ -64,6 +65,10 @@ class AuthzTester:
         for i, (path, method, label) in enumerate(PROTECTED, start=1):
             r = await self.t.request(method, path)
             missing = r.status == 404
+            # FastAPI 0.140+ returns 401 for missing credentials (was 403 in
+            # 0.115). Accept both for compatibility: 401 means no credential was
+            # presented, 403 means one was and the role was refused. Either is a
+            # correctly gated endpoint.
             blocked = r.status in (401, 403)
             # A transport error or our own 429 is NOT evidence that the endpoint served
             # an anonymous caller. Previously status 0 (ReadTimeout) was scored as a
@@ -168,7 +173,7 @@ class AuthzTester:
                 self.t.generate_evidence(
                     tid, CAT, name, method="POST",
                     endpoint="/api/v1/tefca/registry/entities", response=r,
-                    expected="403 for a viewer-level token",
+                    expected="401 or 403 for a viewer-level token (FastAPI 0.140+ returns 401 for a missing credential; 403 is role refusal)",
                     outcome=Outcome.PASS if ok else Outcome.FAIL,
                     finding="" if ok else
                             f"A low-privilege token was able to attempt a registry write "
@@ -184,7 +189,7 @@ class AuthzTester:
                 self.t.generate_evidence(
                     tid, CAT, name, method="GET", endpoint="/api/admin/users",
                     response=r,
-                    expected="403" if expect_block else "200",
+                    expected=("401 or 403" if expect_block else "200"),
                     outcome=Outcome.PASS if good else Outcome.FAIL,
                     finding="" if good else
                             f"Role '{need}' got HTTP {r.status} where "
