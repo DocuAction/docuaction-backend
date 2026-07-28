@@ -85,3 +85,47 @@ Phase 0 DP-01 named `password_reset.py:182` and `connectors.py:300,611`; the Pha
 - `AGT-AUTHZ-001` [high] Endpoint 'GET /today/{agency_id}' has no authentication dependency
 - `AGT-AUTHZ-001` [high] Endpoint 'GET /queue/{agency_id}' has no authentication dependency
 - `AGT-AUTHZ-001` [high] Endpoint 'GET /history/{agency_id}' has no authentication dependency
+---
+
+## Audit-control cross-reference (2026-07-28, hardening sprint Day 5)
+
+Re-verified this report against the code rather than against the previous
+revision of this report.
+
+**Closed.** PHI access on the case-management surface had **no audit trail at
+all**: `app/services/audit.py` exposed `log_tefca_event()` and the TEFCA module
+used it, but no case-management handler called it. HIPAA 164.312(b) requires
+audit controls over systems containing ePHI, and this surface had none.
+`app/case_management/phi_audit.py` now records every request through a
+router-level dependency (`Depends(audit_phi_access)`), alongside the existing
+`Depends(get_current_user)`. Router-level, not per-handler, so an endpoint added
+tomorrow is audited by construction.
+
+Recorded: user id, method, route template, timestamp, client IP (from
+X-Forwarded-For, since App Service terminates TLS upstream). **Not** recorded:
+query strings and request bodies - they carry the PHI this control exists to
+protect. Audit writes never raise; a failure is logged at ERROR and swallowed,
+because an audit outage must not stop a discharge summary being generated. That
+ERROR line is the only signal that the trail has a gap.
+
+**Correction to the exposure model.** Line 15 above lists
+`POST /api/v1/case-management/*` as a PHI ingress/egress surface. Verified
+2026-07-28: of 22 endpoints, **5 are stubs** returning literal
+`{"patients": [], "note": "Wire to database for production use."}` - including
+`GET /patients` and `GET /patients/{patient_id}`, the two that read most like
+bulk PHI reads. They return no PHI because they are not implemented.
+
+The 17 real endpoints (`/notes/generate`, `/care-plans/generate`,
+`/discharge/generate`, `/sdoh/assess`, ...) do process clinical text and are
+genuine PHI surfaces. The distinction matters for scoping: a reviewer reading
+this report previously would have assumed patient records flow through
+`GET /patients`. They do not, today. That will change the moment those stubs are
+wired, which is precisely why the audit control is attached to the router and not
+to the handlers that happen to be real right now.
+
+**Unchanged and still open:** `TEFCA-AUD-003b` - the audit log has no
+tamper-evidence (no hash chain). An audit trail that a database-level compromise
+can rewrite is weaker evidence than it appears. Not addressed in this sprint.
+
+**Verified separately:** the production `DATABASE_URL` carries `?ssl=require`,
+so PHI in transit to Postgres is encrypted (164.312(e)(1)).

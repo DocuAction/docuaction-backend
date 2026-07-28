@@ -14,6 +14,7 @@ from fastapi import APIRouter, UploadFile, File, Form, Query, HTTPException, Dep
 from pydantic import BaseModel
 
 from app.core.security import get_current_user
+from .phi_audit import audit_phi_access
 
 from .services.ccm_engine import (
     voice_to_ccm_note,
@@ -46,7 +47,10 @@ logger = logging.getLogger("docuaction.case_management.routes")
 cm_router = APIRouter(
     prefix="/api/v1/case-management",
     tags=["Case Management"],
-    dependencies=[Depends(get_current_user)],
+    # audit_phi_access is router-level for the same reason get_current_user is:
+    # a control attached to individual handlers is a control that route 23
+    # will be missing. HIPAA 164.312(b).
+    dependencies=[Depends(get_current_user), Depends(audit_phi_access)],
 )
 router = cm_router  # safe_load expects mod.router
 
