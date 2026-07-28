@@ -1,0 +1,72 @@
+DocuAction AI — Backend
+Copyright © 2024–2026 Alliance Global Tech, Inc. ("AGT"). All rights reserved.
+
+================================================================================
+THIRD-PARTY NOTICES
+================================================================================
+
+DocuAction AI is proprietary software of Alliance Global Tech, Inc. (see the
+LICENSE file). This NOTICE file is provided for attribution purposes only.
+
+The DocuAction backend incorporates or depends upon the third-party open-source
+components listed below. These components are the property of their respective
+authors and are licensed under their respective licenses, which govern their use.
+The inclusion of these components does not alter the proprietary nature of
+DocuAction AI itself. Each component remains subject solely to its own upstream
+license; refer to the upstream project for the authoritative and complete
+license text and any additional attributions.
+
+--------------------------------------------------------------------------------
+Component                    License                    Attribution
+--------------------------------------------------------------------------------
+FastAPI                      MIT                         © Sebastián Ramírez and
+                                                         contributors
+Starlette                    BSD-3-Clause                © Encode OSS Ltd. and
+                                                         contributors
+Uvicorn                      BSD-3-Clause                © Encode OSS Ltd. and
+                                                         contributors
+SQLAlchemy                   MIT                         © Michael Bayer and
+                                                         SQLAlchemy contributors
+asyncpg                      Apache-2.0                  © the asyncpg authors
+                                                         (MagicStack Inc.)
+Alembic                      MIT                         © Michael Bayer and
+                                                         contributors
+Pydantic                     MIT                         © Pydantic Services Inc.
+                                                         and contributors
+pydantic-settings            MIT                         © Pydantic Services Inc.
+                                                         and contributors
+python-jose                  MIT                         © Michael Davis and
+                                                         contributors
+passlib                      BSD (BSD-2-Clause)          © Assurance Technologies
+                                                         / Eli Collins
+bcrypt                       Apache-2.0                  © The Python Cryptographic
+                                                         Authority and contributors
+httpx                        BSD-3-Clause                © Encode OSS Ltd. and
+                                                         contributors
+Anthropic Python SDK         MIT                         © Anthropic, PBC
+APScheduler                  MIT                         © Alex Grönholm
+reportlab                    BSD (BSD-3-Clause)          © ReportLab Europe Ltd.
+WeasyPrint                   BSD-3-Clause                © Kozea and contributors
+python-docx                  MIT                         © Steve Canny and
+                                                         contributors
+pdfplumber                   MIT                         © Jeremy Singer-Vine and
+                                                         contributors
+openpyxl                     MIT                         © Eric Gazoni, Charlie
+                                                         Clark and contributors
+pandera                      MIT                         © Niels Bantilan and
+                                                         contributors
+tenacity                     Apache-2.0                  © Julien Danjou and
+                                                         contributors
+--------------------------------------------------------------------------------
+
+Additional runtime dependencies (direct and transitive) not itemized above are
+distributed under their own licenses; refer to each upstream project for its
+authoritative license text. Where a license is uncertain or a component is not
+listed, consult the upstream project of record for the definitive terms.
+
+For questions regarding third-party attributions in this distribution, contact:
+  imran@agtbi.com
+
+================================================================================
+END OF THIRD-PARTY NOTICES
+================================================================================

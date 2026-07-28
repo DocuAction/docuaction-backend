@@ -1,0 +1,57 @@
+# .dockerignore — DocuAction AI backend
+# Copyright © 2024–2026 Alliance Global Tech, Inc. All rights reserved.
+# Keep build context small and secret-free.
+
+# Version control & CI
+.git
+.gitignore
+.github
+
+# Python bytecode & caches
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Virtual environments (all common names, including the Azure "antenv")
+.venv/
+venv/
+antenv/
+env/
+
+# Secrets & environment files — NEVER copy real secrets into the image.
+.env
+.env.*
+# NOTE: .env.example is intentionally excluded from the image as well; it is a
+# template only and is not needed at runtime.
+
+# Frontend / node artifacts (not part of the backend image)
+node_modules/
+
+# Runtime-generated & user content
+uploads/
+
+# Documentation (not needed at runtime)
+docs/
+
+# Tests (not shipped in the runtime image)
+tests/
+
+# Editor / IDE / OS cruft
+.editorconfig
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Tooling & agent config
+.pre-commit-config.yaml
+.secrets.baseline
+.claude/
+
+# Keep Alembic migration versions IN the image (do NOT ignore alembic/versions).

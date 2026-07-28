@@ -1,0 +1,83 @@
+# pyproject.toml — DocuAction AI backend
+# Copyright © 2024–2026 Alliance Global Tech, Inc. All rights reserved.
+#
+# NOTE: This file is used ONLY for project metadata and for linting, formatting,
+# and test tooling configuration (ruff, pytest). It intentionally does NOT
+# declare a build system and does NOT list runtime dependencies. The single
+# source of truth for runtime dependencies remains `requirements.txt`.
+
+[project]
+name = "docuaction-backend"
+version = "6.0.0"
+description = "DocuAction AI — enterprise document, voice & healthcare intelligence platform (backend API), including the DocuAction TEFCA ARC module suite."
+requires-python = ">=3.12"
+readme = "README.md"
+license = { text = "Proprietary — © 2024–2026 Alliance Global Tech, Inc. All rights reserved." }
+authors = [
+    { name = "Alliance Global Tech, Inc.", email = "imran@agtbi.com" },
+]
+maintainers = [
+    { name = "Alliance Global Tech, Inc.", email = "security@agtbi.com" },
+]
+keywords = ["docuaction", "tefca", "healthcare", "fastapi", "document-intelligence"]
+
+# Runtime dependencies are intentionally omitted here.
+# See requirements.txt — it is the authoritative dependency manifest.
+
+# --------------------------------------------------------------------------- #
+# Ruff — linter & formatter
+# --------------------------------------------------------------------------- #
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["app"]
+extend-exclude = [
+    ".venv",
+    "venv",
+    "antenv",
+    "env",
+    "build",
+    "dist",
+    "__pycache__",
+    "alembic/versions",
+]
+
+[tool.ruff.lint]
+# E/W  : pycodestyle
+# F    : pyflakes
+# I    : isort (import ordering)
+# B    : flake8-bugbear
+# UP   : pyupgrade
+# S    : flake8-bandit (security)
+select = ["E", "F", "I", "B", "UP", "S"]
+ignore = [
+    "E501",  # line length is enforced by the formatter
+    "B008",  # function calls in argument defaults (FastAPI Depends() pattern)
+    "S101",  # assert used (permitted in tests; see per-file ignores)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests may use assert and hardcoded test values.
+"tests/*" = ["S101", "S105", "S106", "S311"]
+# Alembic migrations are generated and follow their own conventions.
+"alembic/*" = ["E", "F", "I", "UP"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+skip-magic-trailing-comma = false
+
+# --------------------------------------------------------------------------- #
+# Pytest
+# --------------------------------------------------------------------------- #
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers --strict-config"

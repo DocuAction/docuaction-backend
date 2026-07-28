@@ -1,0 +1,27 @@
+# EditorConfig — https://editorconfig.org
+# DocuAction AI backend
+# Copyright © 2024–2026 Alliance Global Tech, Inc. All rights reserved.
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.py]
+indent_style = space
+indent_size = 4
+
+[*.{js,jsx,ts,tsx,json,yml,yaml,md}]
+indent_size = 2
+
+[Makefile]
+indent_style = tab
+
+# Preserve trailing whitespace in Markdown (line breaks are significant)
+[*.md]
+trim_trailing_whitespace = false
