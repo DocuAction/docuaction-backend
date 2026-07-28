@@ -234,7 +234,7 @@ jobs:
           # Case management auth gate
           HTTP=$(curl -s -o /dev/null -w "%{http_code}" https://api-prod.docuaction.io/api/v1/case-management/patients)
           echo "case-mgmt (no auth): $HTTP"
-          [ "$HTTP" = "403" ] || echo "WARNING: expected 403"
+          [ "$HTTP" = "401" ] || echo "WARNING: expected 401 (FastAPI 0.140 returns 401, not 403 - see docs/deployment/BREAKING_401_vs_403.md)"
           # Bulletin
           HTTP=$(curl -s -o /dev/null -w "%{http_code}" https://api-prod.docuaction.io/api/v1/bulletin/health)
           echo "bulletin: $HTTP"
