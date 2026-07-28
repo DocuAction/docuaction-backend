@@ -3309,6 +3309,20 @@ async def run_daily_cycle(
     )[:150]
     logger.info(f"Briefing: {len(briefing_arts)} articles from {len(classified)} classified")
 
+    # Phase 5 quality gate. Runs after collection and BEFORE render, and is
+    # WARN-ONLY - it can never prevent a briefing from being produced. A thin
+    # briefing carrying an honest warning beats no briefing at all.
+    try:
+        from app.bulletin_intelligence.quality_gate import run_quality_gate
+        _qg = await run_quality_gate(
+            agency_id, all_articles, unique, briefing_arts,
+            window=get_briefing_window())
+        if _qg.get("warnings"):
+            logger.warning(f"Quality gate [{agency_id}] score {_qg['score']}: "
+                           + "; ".join(_qg["warnings"][:5]))
+    except Exception as _e:
+        logger.debug(f"quality gate skipped: {_e}")
+
     # Coverage analytics (additive; surfaced at GET /coverage/{agency_id}).
     try:
         coverage = _build_coverage_report(agency_id, all_articles, unique, classified, briefing_arts)

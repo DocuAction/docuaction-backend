@@ -526,6 +526,13 @@ class SourceRegistryItem(BaseModel):
 
 # ── Phase 4: source registry ─────────────────────────────────────────────────
 
+@router.get("/quality/latest")
+async def quality_latest(agency_id: str = "fcc"):
+    """Quality-gate result from the most recent bulletin run for this agency."""
+    from app.bulletin_intelligence.quality_gate import last_quality
+    return last_quality(agency_id)
+
+
 @router.get("/sources")
 async def list_sources(enabled_only: bool = False, limit: int = Query(500, ge=1, le=2000)):
     """All registry sources with their catalogue metadata.
