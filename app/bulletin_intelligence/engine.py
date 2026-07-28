@@ -3355,6 +3355,18 @@ async def run_daily_cycle(
 
     # Generate briefing — HTML + editable Word (.docx), built from the same sections
     html, docx_bytes, sections = await build_briefing_outputs(agency, briefing_arts, briefing_date)
+
+    # Phase 4: record which sources actually produced content this cycle. Additive
+    # and fail-soft, and placed AFTER the briefing is built - source bookkeeping must
+    # never be able to fail a briefing.
+    try:
+        from app.bulletin_intelligence.source_registry import record_source_activity
+        _sa = await record_source_activity(briefing_arts)
+        if _sa.get("updated"):
+            logger.info(f"Source activity: {_sa['updated']} registry row(s) updated "
+                        f"across {_sa.get('domains', 0)} domain(s)")
+    except Exception as _e:
+        logger.debug(f"source activity tracking skipped: {_e}")
     import base64 as _b64
     docx_b64 = _b64.b64encode(docx_bytes).decode() if docx_bytes else ""
 

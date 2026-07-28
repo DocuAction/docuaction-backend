@@ -94,6 +94,32 @@ _DDL = [
          url               TEXT,
          notes             TEXT
        )""",
+    # ── Phase 4: source registry enrichment ──────────────────────────────────
+    # ADD COLUMN IF NOT EXISTS is idempotent, so these run safely on every boot and
+    # are additive only: every column is nullable and nothing existing is modified or
+    # dropped. The 194 rows already in this table keep working untouched; the new
+    # fields simply stay NULL until the Master_Source_Catalog load populates them.
+    """ALTER TABLE bulletin_source_registry
+         ADD COLUMN IF NOT EXISTS domain            TEXT,
+         ADD COLUMN IF NOT EXISTS country           TEXT,
+         ADD COLUMN IF NOT EXISTS state             TEXT,
+         ADD COLUMN IF NOT EXISTS language          TEXT,
+         ADD COLUMN IF NOT EXISTS media_type        TEXT,
+         ADD COLUMN IF NOT EXISTS category          TEXT,
+         ADD COLUMN IF NOT EXISTS reliability_score REAL,
+         ADD COLUMN IF NOT EXISTS authority_score   REAL,
+         ADD COLUMN IF NOT EXISTS duplicate_risk    TEXT,
+         ADD COLUMN IF NOT EXISTS wire_service      BOOLEAN,
+         ADD COLUMN IF NOT EXISTS first_seen        TEXT,
+         ADD COLUMN IF NOT EXISTS last_seen         TEXT,
+         ADD COLUMN IF NOT EXISTS article_count     INTEGER DEFAULT 0,
+         ADD COLUMN IF NOT EXISTS health_status     TEXT,
+         ADD COLUMN IF NOT EXISTS coverage_type     TEXT,
+         ADD COLUMN IF NOT EXISTS fcc_relevance     TEXT,
+         ADD COLUMN IF NOT EXISTS rss_feed          TEXT,
+         ADD COLUMN IF NOT EXISTS catalog_loaded_at TEXT""",
+    """CREATE INDEX IF NOT EXISTS idx_bsr_domain ON bulletin_source_registry(domain)""",
+    """CREATE INDEX IF NOT EXISTS idx_bsr_health ON bulletin_source_registry(health_status)""",
     """CREATE TABLE IF NOT EXISTS bulletin_delivery_log (
          id                  TEXT PRIMARY KEY,
          briefing_id         TEXT,

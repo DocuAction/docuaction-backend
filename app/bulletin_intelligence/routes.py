@@ -524,6 +524,41 @@ class SourceRegistryItem(BaseModel):
     notes: str = ""
 
 
+# ── Phase 4: source registry ─────────────────────────────────────────────────
+
+@router.get("/sources")
+async def list_sources(enabled_only: bool = False, limit: int = Query(500, ge=1, le=2000)):
+    """All registry sources with their catalogue metadata.
+
+    Public read, consistent with the other bulletin read endpoints. Returns no
+    credentials and no PHI - only publication metadata and production counts.
+    """
+    from app.bulletin_intelligence.source_registry import fetch_sources
+    rows = await fetch_sources(enabled_only=enabled_only, limit=limit)
+    return {"count": len(rows), "enabled_only": enabled_only, "sources": rows}
+
+
+@router.get("/sources/health")
+async def sources_health():
+    """Aggregate source health: producing, silent, or never seen."""
+    from app.bulletin_intelligence.source_registry import source_health
+    return await source_health()
+
+
+@router.get("/sources/missing")
+async def sources_missing(hours: int = Query(24, ge=1, le=168)):
+    """Sources with a production history that have gone quiet."""
+    from app.bulletin_intelligence.source_registry import missing_sources
+    return await missing_sources(hours=hours)
+
+
+@router.post("/sources/load-catalog", dependencies=guard("admin"))
+async def load_source_catalog():
+    """Merge Master_Source_Catalog.csv into the registry. Idempotent."""
+    from app.bulletin_intelligence.source_registry import load_catalog
+    return await load_catalog()
+
+
 @router.get("/sources/{agency_id}", dependencies=guard("contributor"))
 async def list_sources(agency_id: str):
     """Expected-source registry (Coverage % denominator). Empty until seeded."""
