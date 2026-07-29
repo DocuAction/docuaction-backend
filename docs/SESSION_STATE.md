@@ -1,4 +1,4 @@
-# Session State — 2026-07-28
+# Session State — 2026-07-28 / 2026-07-29 sprint
 
 Rolling checkpoint for seamless continuation after interruption.
 Updated at each significant milestone.
@@ -96,6 +96,37 @@ and pulled instances out of rotation.
 | Tracked runtime log dirties tree | Low | `logs/FCC_BULLETIN_EDITOR_AUDIT_*.log` blocks branch switches |
 
 ---
+
+## Sprint 2026-07-29 — Blocks 1-3
+
+| Task | Outcome | Status |
+|---|---|---|
+| 1.1 preview public | **No change needed.** Verified 200 without auth on prod; Day 3 guarded /docx and /pdf, never /preview | VERIFIED |
+| 1.1b policy audit | One real mismatch found and fixed: `GET /profiles` was public, policy requires guarded | VERIFIED |
+| 1.2 .claude deletion | Deleted (held 5 postgres URIs with passwords); never tracked in git; `.claude/` gitignored | VERIFIED |
+| 1.3 IQVIA | Document not in either repo (0/5 phrases). Edits written to `docs/IQVIA_REMOVAL_EDITS.md` | VERIFIED |
+| 2.1 sources | 4 added, not 18 — 13 already present; AP and Reuters URLs were dead, replaced via Google News | VERIFIED |
+| 2.2 Talkwalker | Endpoint returns 404 for all 12 queries; no public query-to-RSS exists. Module reads `TALKWALKER_FEED_URLS` | BLOCKED, documented |
+| 2.3 Google News QA | Live: 132 found, 94 added, 9 rejected by relevance gate, 29 deduped | VERIFIED |
+| 2.4/2.5 profiles | Commissioners into 8 of 9 profiles, keywords into 7 | VERIFIED |
+| 2.6 pipeline wiring | collect → classify → QA → generate; failure leaves briefing unchanged | VERIFIED |
+| 2.7 QA cost tracking | `qa_verification` at $0.00 with feed count | VERIFIED |
+| 3.3 NPI Luhn | Canonical module; agrees with existing IntakeValidator on all cases | VERIFIED |
+| 3.2 TEFCA state machine | Built over existing `operational_status`; no schema change | VERIFIED |
+| 3.4 tests | 27 → 66 | see final run |
+
+### Decisions logged
+
+- **One deployment, not two.** Block 2 and Block 3 code shipped together to halve
+  the number of production changes.
+- **Feeds added to `engine.py`, not `fcc_sources.py`.** The latter is imported by
+  nothing; adding URLs there would have changed no behaviour.
+- **IQVIA references left in the codebase.** All 26 backend and 13 frontend hits
+  are `IQVIA OneKey`, a pending connector with a class name and an env var. A
+  global replace would rename a class and break config while fixing nothing.
+- **Task 3.1 (guard remaining Highs) not attempted.** The previous pass
+  established that most remaining AGT-AUTHZ-001 findings are intentional public
+  reads whose disposition is a product judgement, not a mechanical fix.
 
 ## Next recommended action
 
