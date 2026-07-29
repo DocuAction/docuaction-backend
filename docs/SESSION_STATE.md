@@ -10,8 +10,8 @@ Updated at each significant milestone.
 | Field | Value |
 |---|---|
 | Branch | `main` |
-| Latest commit | `68b1595` — Merge security hardening + DevOps + compliance |
-| Unpushed commits | 0 (`origin/main` = `68b1595`, verified by fetch) |
+| Latest commit | `fd09e96` — docs: session report, rolling checkpoint, platform packaging |
+| Unpushed commits | 0 (`origin/main` = `fd09e96`, verified) |
 | Working tree | clean at time of writing |
 | Production | `/health` 200 · 8/8 endpoint sweep · scheduler running, 4 jobs |
 | Development | `/health` 200 · 6/6 endpoint sweep when paced |
@@ -36,8 +36,11 @@ Updated at each significant milestone.
 | 11 | Test suite on merged tree | 27 passed, 5 skipped, 0 failed (304s) | VERIFIED |
 | 12 | `config/projects/template.json` | Valid JSON; synced to both platform copies | VERIFIED |
 | 13 | Security platform README rewrite | Replaced stale version claiming 1B–1G "Not started" | VERIFIED |
-| 14 | Full security scan (authoritative) | Running from LIVE platform | IN PROGRESS |
-| 15 | Session report | Pending | NOT STARTED |
+| 14 | Full security scan (authoritative) | Last completed `full --all`: 58.7 / gate WARN (21:42). Post-merge re-scan launched, no record written yet | PARTIAL |
+| 15 | Session report | `docs/SESSION_REPORT_2026-07-28.md`, commit `fd09e96` | VERIFIED |
+| 16 | Platform README + template.json | commit `fd09e96`, synced to both copies | VERIFIED |
+| 17 | Platform copy drift audit | 163 files differ, only 2 real (rest CRLF); both reconciled | VERIFIED |
+| 18 | CI workflow validation | All 5 workflows parse; job graphs intact | VERIFIED |
 
 ---
 
