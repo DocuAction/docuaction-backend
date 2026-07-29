@@ -36,7 +36,8 @@ Updated at each significant milestone.
 | 11 | Test suite on merged tree | 27 passed, 5 skipped, 0 failed (304s) | VERIFIED |
 | 12 | `config/projects/template.json` | Valid JSON; synced to both platform copies | VERIFIED |
 | 13 | Security platform README rewrite | Replaced stale version claiming 1B–1G "Not started" | VERIFIED |
-| 14 | Full security scan (authoritative) | Last completed `full --all`: 58.7 / gate WARN (21:42). Post-merge re-scan launched, no record written yet | PARTIAL |
+| 14 | Full security scan (post-merge, authoritative) | **59.2 / gate WARN** · 203 findings [C:0 H:40 M:45 L:116] · SBOM 2 artefacts | VERIFIED |
+| 19 | Gate FAIL investigated and resolved | Blocker was a gitleaks false positive on a public Azure role GUID; suppressed with 1-year expiry; gate back to WARN | VERIFIED |
 | 15 | Session report | `docs/SESSION_REPORT_2026-07-28.md`, commit `fd09e96` | VERIFIED |
 | 16 | Platform README + template.json | commit `fd09e96`, synced to both copies | VERIFIED |
 | 17 | Platform copy drift audit | 163 files differ, only 2 real (rest CRLF); both reconciled | VERIFIED |

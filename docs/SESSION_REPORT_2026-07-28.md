@@ -8,8 +8,8 @@
 
 ## Executive summary
 
-- **Security posture roughly halved the defect surface**: score 38.0 → 58.7,
-  Criticals 6 → 0, Highs 119 → 39, total findings 309 → 203. About half the High
+- **Security posture roughly halved the defect surface**: score 38.0 → 59.2,
+  Criticals 6 → 0, Highs 119 → 40, total findings 309 → 203. About half the High
   reduction is suppression with expiry rather than repair, and that distinction is
   stated wherever the number appears.
 - **Two production deployments, both verified**, plus two frontend Static Web App
@@ -43,13 +43,35 @@
 
 | Metric | Before | After |
 |---|--:|--:|
-| Score | 38.0 | 58.7 |
-| Gate | FAIL | WARN |
-| Critical | 6 | 0 |
-| High | 119 | 39 |
+| Score | 38.0 | **59.2** |
+| Gate | FAIL | **WARN** |
+| Critical | 6 | **0** |
+| High | 119 | 40 |
 | Medium | 50 | 45 |
-| Low | 132 | 117 |
+| Low | 132 | 116 |
 | **Total active** | **309** | **203** |
+
+Final figures are from a post-merge `full --all` on the live platform, so they
+include the TEFCA Registry code that main brought in. Highs are 40 rather than the
+39 measured pre-merge — the merged registry code contributes one.
+
+### A gate FAIL that was investigated, not accepted
+
+The post-merge scan initially returned **gate FAIL**: one secret detected, policy
+`block_on_secrets=true`. The flagged value was
+`infra/modules/appService.bicep:140` — the Azure **built-in role definition GUID**
+for "Key Vault Secrets User". That constant is public, Microsoft-documented, and
+identical in every Azure tenant on earth; the declaring line's own comment names
+the role. It is an identifier, not a credential. Gitleaks matched it on entropy
+and GUID shape alone.
+
+Suppressed with that reasoning and a one-year expiry, and the scan re-run. Gate
+returned to WARN at 59.2.
+
+Worth separating from the other gate failure this session, which had a completely
+different cause: a scan accidentally run from the repo copy of the platform
+reported 44.5 / FAIL / 5 Criticals purely because that copy has no suppression
+history and is missing four scanners.
 
 ### CVEs resolved — 15
 
