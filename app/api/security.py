@@ -1,6 +1,47 @@
 """
 2026 Compliance Layer — Security & Data Residency
 API endpoint providing security posture, data residency, and no-training guarantees.
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  DO NOT MOUNT THIS ROUTER. It is deliberately NOT registered in app/main.py. ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+Verified 2026-07-26 (finding DP-02). This module makes public compliance
+attestations that are NOT TRUE of the current codebase. Because it is unmounted,
+they are dead code rather than a live misrepresentation — mounting it would
+publish false compliance claims to anyone who can reach /api/security/*, on an
+endpoint whose own docstring advertises "no auth required for transparency."
+
+Unverified / false claims, each needing evidence before this router is exposed:
+
+  * "pii_masking_active": True and
+    "HIPAA": "BAA available, PHI/PII masking before AI processing"
+        FALSE as a general statement. mask_pii() has exactly ONE call site in the
+        whole application (app/services/ai_engine.py) and is not applied on the
+        Anthropic egress paths in app/api/meeting_routes.py. The case_management
+        engines now strip DIRECT patient identifiers before egress
+        (app/case_management/services/phi_deidentify.py), but the clinical
+        narrative is still transmitted in full — that is not "PHI masking before
+        AI processing" in the sense a reader would take from this string.
+
+  * "data_retention_by_ai_providers": "Zero retention — ..." / "no_training_data"
+        NOT BACKED BY ANY CODE-LEVEL CONTROL, and it cannot be: zero data
+        retention is an ORGANISATION-level setting on the Anthropic account, not
+        a per-request API header — there is no header to send. These claims are
+        therefore purely contractual and require the signed BAA / zero-retention
+        addendum as evidence before being published.
+
+  * "data_residency" / "provider": "Railway.app on Google Cloud Platform"
+        STALE. The platform migrated to Azure. Left as-is deliberately — out of
+        scope for this security fix, tracked as a separate documentation item.
+
+  * SOC 2 / FedRAMP / GDPR / CCPA / state-AI-act rows
+        Unverified against any audit artefact.
+
+Before mounting: verify each claim against evidence, correct or delete the ones
+that do not hold, and add authentication — an unauthenticated endpoint that
+enumerates security posture is itself an information-disclosure surface.
+See docs/compliance/AI_EGRESS_PHI.md.
 """
 from fastapi import APIRouter
 from datetime import datetime

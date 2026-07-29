@@ -9,6 +9,8 @@ import re
 import logging
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException, Query
+
+from .auth import guard
 from fastapi.responses import StreamingResponse
 
 try:
@@ -134,7 +136,7 @@ def _published_within(art, cutoff):
     return art_date >= cutoff
 
 
-@router.get("/download/{agency_id}")
+@router.get("/download/{agency_id}", dependencies=guard("viewer"))
 async def download_bulletin(
     agency_id: str,
     days: int = Query(1, description="Number of days: 1, 2, 3, 4, 5, 7, or 30"),
@@ -385,7 +387,7 @@ async def download_bulletin(
     )
 
 
-@router.get("/download-options/{agency_id}")
+@router.get("/download-options/{agency_id}", dependencies=guard("viewer"))
 async def download_options(agency_id: str):
     """Show available download options with article counts per time period."""
     try:
@@ -428,7 +430,7 @@ async def download_options(agency_id: str):
     }
 
 
-@router.get("/download-excel/{agency_id}")
+@router.get("/download-excel/{agency_id}", dependencies=guard("viewer"))
 async def download_bulletin_excel(
     agency_id: str,
     days: int = Query(1, description="Number of days: 1, 2, 3, 4, 5, 7, or 30"),
@@ -502,7 +504,7 @@ async def download_bulletin_excel(
     )
 
 
-@router.get("/briefings/{briefing_id}/excel")
+@router.get("/briefings/{briefing_id}/excel", dependencies=guard("viewer"))
 async def download_briefing_excel(briefing_id: str):
     """Download a past briefing (from Run History) as the SAME QA Excel sheet as the
     Daily Briefing — identical columns: #, Category, Story Group, Relationship,

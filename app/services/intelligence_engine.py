@@ -123,10 +123,8 @@ OUTPUTS REQUIRED (return as JSON):
     "estimated_value": "Description of value delivered"
   },
   "masking_verification": {
-    "categories_checked": 15,
-    "entities_found": 0,
-    "entities_redacted": 0,
-    "verification_status": "complete"
+    "entities_found": "<integer: PII/PHI entities you masked in YOUR OWN output; use 0 only if there genuinely were none>",
+    "verification_status": "self_reported"
   }
 }"""
 
@@ -229,10 +227,8 @@ OUTPUTS REQUIRED (return as JSON):
     "risks_detected": 2
   },
   "masking_verification": {
-    "categories_checked": 15,
-    "entities_found": 0,
-    "entities_redacted": 0,
-    "verification_status": "complete"
+    "entities_found": "<integer: PII/PHI entities you masked in YOUR OWN output; use 0 only if there genuinely were none>",
+    "verification_status": "self_reported"
   }
 }"""
 
@@ -381,12 +377,10 @@ OUTPUTS REQUIRED (return as JSON):
     "compliance_items": 6
   },
   "masking_verification": {
-    "categories_checked": 15,
     "phi_categories_checked": ["Patient Name", "MRN", "DOB", "SSN", "Address", "Phone", "Email", "Health Plan ID"],
-    "entities_found": 0,
-    "entities_redacted": 0,
-    "hipaa_compliance_status": "verified",
-    "verification_status": "complete"
+    "entities_found": "<integer: PII/PHI entities you masked in YOUR OWN output; use 0 only if there genuinely were none>",
+    "hipaa_compliance_status": "<do NOT assert compliance; report only what you masked>",
+    "verification_status": "self_reported"
   }
 }"""
 
@@ -509,10 +503,8 @@ OUTPUTS REQUIRED (return as JSON):
     "privilege_segments_flagged": 2
   },
   "masking_verification": {
-    "categories_checked": 15,
-    "entities_found": 0,
-    "entities_redacted": 0,
-    "verification_status": "complete"
+    "entities_found": "<integer: PII/PHI entities you masked in YOUR OWN output; use 0 only if there genuinely were none>",
+    "verification_status": "self_reported"
   }
 }"""
 
@@ -636,6 +628,18 @@ def should_auto_queue_hitl(domain: str, confidence: float, outputs: dict) -> dic
     # Rule 3: Healthcare with PHI concerns
     if domain == "healthcare":
         masking = outputs.get("masking_verification", {})
+        # FAIL-SAFE. entities_found is SELF-REPORTED by the model, not measured, and
+        # the prompt schema used to pre-fill it with 0 - so this rule almost never
+        # fired and healthcare audio silently skipped human review. Absence of a
+        # reported entity is not evidence that none were present, so anything other
+        # than a positive, verified zero now escalates.
+        status = str(masking.get("verification_status", "")).lower()
+        if status in ("", "not_performed", "self_reported", "partial"):
+            should_queue = True
+            risk_level = "critical" if risk_level != "critical" else risk_level
+            reasons.append(
+                f"PHI masking not independently verified (status: "
+                f"{status or 'absent'}) - routed to human review")
         if masking.get("entities_found", 0) > 0:
             should_queue = True
             risk_level = "critical"

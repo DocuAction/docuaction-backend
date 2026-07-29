@@ -202,15 +202,103 @@ Adjust `--workers` to the App Service plan sizing. Ensure `--bind` port matches 
 
 ## 7. Deploy the Artifact
 
-Deploy the zip using the modern one-deploy endpoint:
+Deploy the zip using the modern one-deploy endpoint. **Always pass `--clean true`:**
 
 ```bash
-az webapp deploy \
-  --resource-group rg-docuaction-prod \
-  --name Docuaction \
-  --src-path deploy.zip \
-  --type zip
+az webapp deploy   --resource-group rg-docuaction-prod   --name Docuaction   --src-path deploy.zip   --type zip   --clean true   --restart true
 ```
+
+> ### CRITICAL: `--clean` behaviour differs by environment
+>
+> | Environment | Build mode | Use `--clean true`? |
+> |---|---|---|
+> | **PROD** (`Docuaction`) | `ENABLE_ORYX_BUILD=false`, pre-built `pydeps/` | **YES** - safely replaces wwwroot |
+> | **DEV** (`docuaction-dev`) | `SCM_DO_BUILD_DURING_DEPLOYMENT=true`, Oryx builds | **NO - NEVER** |
+>
+> On an Oryx-build app, `--clean` deletes `oryx-manifest.toml` along with the rest of
+> wwwroot. The manifest is what tells the startup script how to locate and extract
+> the built application, and the incoming zip does not contain one - Oryx writes it
+> during the build. The result is a crash loop: `Container exited with exit code 1`
+> and HTTP 503 on every request.
+>
+> Observed 2026-07-28: dev was taken down this way and recovered only by redeploying
+> the identical zip **without** `--clean`.
+>
+> **Rule: `--clean true` on prod, plain deploy on dev.** The correct flag depends on
+> the build mode, not on preference.
+
+> ### Never re-run a deploy just to capture its error output
+>
+> `az webapp deploy` frequently ends with:
+>
+> ```
+> Raw Error : ('Connection aborted.', RemoteDisconnected('Remote end closed
+>             connection without response'))
+> ```
+>
+> **This does not mean the deployment failed.** It means the CLI lost the
+> connection it was polling on. The server keeps building. On dev, an Oryx build
+> runs for several minutes after the CLI has already given up and printed a
+> failure banner.
+>
+> Re-running the command to get a cleaner error starts a **second concurrent
+> build on the same app**, and the two collide. Observed 2026-07-28: the first
+> deploy (05:45:17) succeeded and became active; the duplicate (05:47:47) was
+> recorded as status 3 - a failure caused entirely by the retry.
+>
+> When the CLI reports a connection error, **query the server instead**:
+>
+> ```bash
+> az webapp log deployment list -n <app> -g <rg> \
+>   --query "[0:3].{time:received_time,status:status,active:active}" -o tsv
+> ```
+>
+> Status codes: `0` pending, `1` building, `3` failed, `4` success. Only `active:
+> True` on a `4` means the code is live. Confirm with an endpoint that exists only
+> in the new build - a 404 turning into a 200 is proof; `/health` is not, because
+> it answers 200 from the old code throughout.
+
+### Why `--clean` is mandatory on PROD
+
+`az webapp deploy --type zip` **overlays** the archive onto the existing
+`/home/site/wwwroot`; it does **not** replace it. Any file present from an earlier
+deployment that is absent from the new zip simply stays there, indefinitely.
+
+Found on 2026-07-28 after the Sprint 1.1 deploy. Production `pydeps/` held **87**
+`.dist-info` directories while the artifact contained **75** - twelve stale
+leftovers, including *pre-upgrade* metadata for four packages that had just been
+upgraded to resolve CVEs:
+
+```
+python_jose-3.4.0.dist-info       alongside  python_jose-3.5.0.dist-info
+python_multipart-0.0.18.dist-info alongside  python_multipart-0.0.22.dist-info
+pyasn1-0.4.8.dist-info            alongside  pyasn1-0.6.3.dist-info
+pdfminer.six-20231228.dist-info   alongside  pdfminer_six-20260107.dist-info
+```
+
+The running code was correct - only the metadata was stale - but that is exactly
+what breaks the artefacts auditors read:
+
+* **pip-audit** resolves installed versions from `.dist-info`, so it reported the
+  old vulnerable versions as still present and the CVE fixes as unapplied.
+* **CycloneDX SBOM** enumerated phantom vulnerable packages that were not running.
+
+Redeploying the identical artifact with `--clean true` took prod from 87 to 75
+directories, leaving exactly one `.dist-info` per package.
+
+**Implication for this app:** every zip deploy before this date accumulated orphaned
+files. Anything ever deployed and later removed from the repository is likely still
+in `wwwroot`. Treat `--clean true` as the default **for prod only** (see the warning
+above - it breaks Oryx-build environments), and expect the first clean deploy after a
+long gap to remove more than you anticipate.
+
+`--restart true` is paired with it so the worker starts from the cleaned tree rather
+than a warm process still holding references to deleted files.
+
+> **Ordering caution.** `--clean` wipes `wwwroot` *before* unpacking, so a zip that
+> fails validation takes the site down rather than merely failing to improve it. Run
+> the artifact gates first, and do not `--clean` with an artifact that has never
+> deployed successfully.
 
 Monitor the deployment and startup logs:
 
@@ -325,7 +413,155 @@ and re-attempt in a controlled window.
 
 ---
 
-## 13. Change Record
+## 13. Frontend Deployment (Azure Static Web Apps)
+
+> **Status of this section.** Added 2026-07-26 to close a documented gap: prior to this,
+> no frontend deployment procedure existed in any repository document or CI workflow.
+> The resource facts below were read live from Azure. **The deploy commands themselves
+> have NOT yet been executed against these resources by the author of this section** —
+> treat the first run as a validation run, ideally against dev, and correct this section
+> from what actually happens.
+
+### 13.1 Resources
+
+| | Production | Development |
+|---|---|---|
+| Static Web App | `docuaction-frontend` | `docuaction-frontend-dev` |
+| Resource group | `rg-docuaction-prod` | `rg-docuaction-dev` |
+| Default hostname | `witty-tree-0a448a70f.7.azurestaticapps.net` | `witty-dune-0dd70870f.7.azurestaticapps.net` |
+| Custom domain | **`app.docuaction.io`** (live) | none |
+| SKU | **Free** | **Free** |
+| Linked repo / branch | **none** | **none** |
+
+Two consequences of that last row, both load-bearing:
+
+- **There is no GitHub Actions CI for the frontend.** `.github/workflows/` contains only
+  `codeql.yml`, `dependency-review.yml`, and `security-scan.yml`. Deployment is manual
+  via the SWA CLI, and nothing deploys on push.
+- **Free SKU keeps no deployment history and offers no environment rollback.** There is
+  no "previous version" to promote. Rollback means rebuilding from an earlier commit and
+  redeploying — see §13.5.
+
+### 13.2 Build
+
+The app is a Next.js static export (`output: 'export'` in `next.config.mjs`), so the
+build produces a plain directory of static assets in `out/`.
+
+```bash
+cd "C:/Imran_Coding projects/DocuAction/frontend"
+npm ci                 # use ci, not install, for a reproducible tree
+npm run build          # -> next build -> static export into ./out
+```
+
+Expected: **exit 0**. Three warnings are expected and benign — the `redirects` /
+`rewrites` / `headers` notices, which do not apply under `output: 'export'`:
+
+```
+⚠ Specified "redirects" will not automatically work with "output: export".   (x2)
+⚠ rewrites, redirects, and headers are not applied when exporting your application
+```
+
+Anything beyond those three is a new warning and should be investigated.
+
+### 13.3 Deployment tokens
+
+Each Static Web App has its own deployment token. Retrieve it at deploy time; **do not
+commit it, paste it into a ticket, or echo it into a shell transcript.**
+
+```bash
+# Production
+az staticwebapp secrets list --name docuaction-frontend \
+  --resource-group rg-docuaction-prod --query "properties.apiKey" -o tsv
+
+# Development
+az staticwebapp secrets list --name docuaction-frontend-dev \
+  --resource-group rg-docuaction-dev --query "properties.apiKey" -o tsv
+```
+
+Also available in the Azure Portal under the Static Web App → **Overview → Manage
+deployment token**. Prefer piping the token into an environment variable over passing it
+as a literal argument, so it does not land in shell history:
+
+```bash
+export SWA_DEPLOYMENT_TOKEN=$(az staticwebapp secrets list --name docuaction-frontend \
+  --resource-group rg-docuaction-prod --query "properties.apiKey" -o tsv)
+```
+
+If a token is ever exposed, rotate it: `az staticwebapp secrets reset-api-key`.
+
+### 13.4 Deploy
+
+Deploy **dev first**, validate, then production.
+
+```bash
+# --- DEV ---
+npx @azure/static-web-apps-cli deploy ./out \
+  --deployment-token "$SWA_DEV_DEPLOYMENT_TOKEN" \
+  --env production
+
+# --- PRODUCTION ---
+npx @azure/static-web-apps-cli deploy ./out \
+  --deployment-token "$SWA_DEPLOYMENT_TOKEN" \
+  --env production
+```
+
+`--env production` is correct for **both**: it names the environment *within* each Static
+Web App, not the deployment tier. On the Free SKU it is the only available environment.
+
+`staticwebapp.config.json` lives in `public/` and is copied into `out/` by the export, so
+routing and header rules ship with the artifact — no separate step.
+
+### 13.5 Rollback
+
+There is no deployment history to roll back to on the Free SKU. Rollback is
+**rebuild-and-redeploy from a known-good commit**:
+
+```bash
+cd "C:/Imran_Coding projects/DocuAction/frontend"
+git checkout <last-known-good-tag-or-sha>     # e.g. the previous release tag
+npm ci && npm run build
+npx @azure/static-web-apps-cli deploy ./out \
+  --deployment-token "$SWA_DEPLOYMENT_TOKEN" --env production
+git checkout main                              # restore your working branch
+```
+
+Alternatively revert the offending commit on `main`, then rebuild and redeploy:
+
+```bash
+git revert <sha> && npm ci && npm run build && <deploy command above>
+```
+
+**Tag every frontend release** so a known-good build is always addressable by name. Keep
+the previous release tag identified in the release ticket *before* deploying.
+
+### 13.6 Verification
+
+1. **Default host** loads: `https://witty-tree-0a448a70f.7.azurestaticapps.net`
+2. **Custom domain** loads: `https://app.docuaction.io`
+3. **Login** succeeds and stores a token under the `token` localStorage key.
+4. **Authenticated API calls carry the bearer token** — open DevTools → Network on
+   `/case-management` and confirm `Authorization: Bearer …` is present on requests to
+   `/api/v1/case-management/*`, and that they return **200**, not 403.
+5. **TEFCA Registry pages** load: `/tefca-registry`, `/tefca-registry/entities`,
+   `/tefca-registry/issues`, `/tefca-registry/verification`.
+6. **No CORS errors** in the console — the API's `ALLOWED_ORIGINS` must include the host
+   being served.
+7. **Hard-refresh** (Ctrl-F5) at least one page to confirm you are not validating a
+   cached bundle.
+
+### 13.7 Ordering constraint — read before deploying
+
+**Never deploy the frontend ahead of a backend release that the frontend depends on.**
+As of Sprint 1 the `/case-management` page sends an `Authorization` header that the
+backend auth gate must be in place to accept.
+
+- Backend first, or both together → safe.
+- Frontend-only against an older backend → the header is simply ignored; harmless.
+- **Backend-only without the frontend → `/case-management` returns 403 for every user.**
+
+---
+
+## 14. Change Record
 
 | Field | Value |
 |-------|-------|
@@ -333,3 +569,4 @@ and re-attempt in a controlled window.
 | Applies to | DocuAction backend v6.0.0 |
 | Review cadence | Each release or quarterly, whichever is sooner |
 | Security contact | security@agtbi.com |
+| 2026-07-26 | Added §13 Frontend Deployment (Azure Static Web Apps) — closes the gap identified in the Sprint 1 pre-merge review. Commands not yet executed against these resources; validate on dev and correct. |

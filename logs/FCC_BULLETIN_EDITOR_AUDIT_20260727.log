@@ -1,0 +1,554 @@
+========================================================================
+FCC BULLETIN — EDITOR AUDIT   agency=fcc   2026-07-27T00:57:33
+========================================================================
+
+SECTION 1 — ARTICLES COLLECTED
+  Total collected (post domain-exclusion): 220
+  Unique after dedup: 201   Classified: 195   In briefing: 150
+  Provider breakdown:
+    Talkwalker       0
+    NewsAPI.ai       0
+    Event Registry   0
+    RSS              94
+    Government       0
+    GDELT            0
+    Other            126
+
+SECTION 2 — ARTICLES REMOVED
+  Total removed: 70
+  [Duplicate] — 19
+    - Tempers flare after Columbus Crew defeat FCC, next up Inter Miami CF marquee match up - myfox28columbus.com  | provider=RSS | reason=Duplicate
+    - Information Collection Being Reviewed by the Federal Communications Commission  | provider=RSS | reason=Duplicate
+    - Review of Submarine Cable Landing License Rules and Procedures To Assess Evolving National Security, Law Enforcement, Foreign Policy, and Trade Policy Risks  | provider=RSS | reason=Duplicate
+    - FCC Proposes Opening Unlicensed Bluetooth and Wi-Fi Bands for Space-Based Communications  | provider=RSS | reason=Duplicate
+    - Brendan Carr Lobs More Empty Threats At ABC For Not Airing Trump’s Election Fraud Lies  | provider=RSS | reason=Duplicate
+    - [CSPAN] Federalist Society Previews Supreme Court Term Part 1: delegation something we should consider. the inspector general's office has aske...  | provider=Cspan | reason=Duplicate
+    - [CSPAN] Federalist Society Previews Supreme Court Term Part 1: has asked for a search warrant in that case. there are a bunch of cases involvin...  | provider=Cspan | reason=Duplicate
+    - [CSPAN] Federalist Society Previews Supreme Court Term: delegation something we should consider. the inspector general's office has aske...  | provider=Cspan | reason=Duplicate
+    - [CSPAN2] FCC Commissioner  Others Testify on Biden Administration Policies: okay. today were joined by excellent witnesses and the honorable senior republic...  | provider=Cspan2 | reason=Duplicate
+    - [CSPAN3] Discussion on Emerging AI Technologies: media attack new media and try to use regulation to deal with that. it is really...  | provider=Cspan3 | reason=Duplicate
+    - [CSPAN3] Discussion on Emerging AI Technologies: to use regulation to deal with that. it is really because of newspapers lobbying...  | provider=Cspan3 | reason=Duplicate
+    - [CSPAN] U.S. House of Representatives U.S. House of Representatives: sector. the fact act will require the federal communications commission to publi...  | provider=Cspan | reason=Duplicate
+    - [CSPAN] U.S. House of Representatives U.S. House of Representatives: magnifies this target. this helps address these concerns. this would require the...  | provider=Cspan | reason=Duplicate
+    - [CSPAN] U.S. House of Representatives U.S. House of Representatives: h.r. 820. a bill to direct the federal communications commission to publish a li...  | provider=Cspan | reason=Duplicate
+    - [CSPAN] U.S. House of Representatives U.S. House of Representatives: recognized as the equipment and services used in their drones to the federal com...  | provider=Cspan | reason=Duplicate
+    - [CSPAN3] Nixon Administration 1970s Womens Initiatives: summary was urging the appointment of a woman to the federal communications comm...  | provider=Cspan3 | reason=Duplicate
+    - [CSPAN3] Nixon Administration 1970s Womens Initiatives: nixon. this is an item in his news summary was urging the appointment of a woman...  | provider=Cspan3 | reason=Duplicate
+    - [CSPAN] NTSB Chair and Others Discuss New Vehicle Technology and Safety Standards: yet, there is more work to be done. the federal communications commission wil  | provider=Cspan | reason=Duplicate
+    - newrepublic.com/post/213087/...  | provider=BlueSky | reason=Duplicate
+  [Corporate Noise] — 6
+    - Thursday (telco diary) | Telco pieces in the AI jigsaw  | provider=RSS | reason=Corporate Noise
+    - Murphy Leaves Riverfront For DRG Media Role  | provider=RSS | reason=Corporate Noise
+    - A Q2 Earnings Win For Rogers, Clouded By Closures  | provider=RSS | reason=Corporate Noise
+    - Crown Castle Repositions as a Pure Play U.S. Towerco  | provider=RSS | reason=Corporate Noise
+    - Tino Cochino Radio Rises To Afternoons At KLUC  | provider=RSS | reason=Corporate Noise
+    - Femi Ayanbadejo Joins 105.7 The Fan Baltimore  | provider=RSS | reason=Corporate Noise
+  [Low Confidence] — 45
+    - Pralhad Joshi assume Ministério da Educao da Índia após crise do NEET  | provider=Brasil247.Com | reason=Low Confidence
+    - Vanguard FTSE All - World : TER auf 0 , 14 % ab 28 . Juli , Big - Tech - Zahlen folgen  | provider=Boerse-Express.Com | reason=Low Confidence
+    - Τεχνητή Νοημοσύνη και αγορά εργασίας : Ποιο είναι το « Ελληνικό Παράδοξο »  | provider=In.Gr | reason=Low Confidence
+    - LCOY Korea 2026 puts youth at center of climate action  | provider=Koreatimes.Co.Kr | reason=Low Confidence
+    - OK忠訓工作mobiel01信用不好銀行小額貸款 - 富邦銀行新手買房ptt , 第一銀行紓困貸款率利 2020 , 澎湖西嶼鄉房屋增貸  | provider=Blog.Udn.Com | reason=Low Confidence
+    - Piano di Sviluppo Aeroportuale , i sindaci :  La sostenibilità prima della crescita . I nodi degli impatti acustici e ambientali  | provider=Bergamonews.It | reason=Low Confidence
+    - Northern Youth Council Seeks NASU Intervention In WAEC Dispute  | provider=Leadership.Ng | reason=Low Confidence
+    - Vi racconto la cattura delle élite occidentali nella strategia tecnologica cinese  | provider=Formiche.Net | reason=Low Confidence
+    - Быстрее новостей : как Пауль Рейтер изменил рынок информации  | provider=Vedomosti.Ru | reason=Low Confidence
+    - « Des carences graves »: la Russie fait la leçon à la Suisse sur le respect des droits de lHomme  | provider=Letemps.Ch | reason=Low Confidence
+    - 8位AI Infra高管复盘WAIC ： 当堆砌 「 暴力美学 」 触顶 ， AI Infra如何求变 ？  | provider=163.Com | reason=Low Confidence
+    - La democrazia degli scarafaggi , disarmati e pericolosi  | provider=Internazionale.It | reason=Low Confidence
+    - Leah On QVC Weight Gain : The Real Story Behind The Style Evolution And Audience Curiosity  | provider=Unitaid.Eu | reason=Low Confidence
+    - [FOX Business] Kudlow: well know. i mean, do you know this story, perhaps, but the federal communicatio...  | provider=Fox Business | reason=Low Confidence
+    - [CSPAN3] Nixon Administration 1970s Womens Initiatives: nixon. this is an item in his news summary was urging the appointment of a woman...  | provider=Cspan3 | reason=Low Confidence
+    - [CSPAN3] Stacy Schiff The Revolutionary - Samuel Adams: summary, a group called american in television and radio urged nixon. this is an...  | provider=Cspan3 | reason=Low Confidence
+    - [CSPAN3] Nixon Administration 1970s Womens Initiatives: summary was urging the appointment of a woman to the federal communications comm...  | provider=Cspan3 | reason=Low Confidence
+    - [CSPAN3] Nixon Administration 1970s Womens Initiatives: is just a summary -- was urging the appointment of a woman to the federal commun...  | provider=Cspan3 | reason=Low Confidence
+    - [FOX Business] Mornings With Maria Bartiromo: less lag, better gaming! i'm gonna need to charge you for three people. . maria:...  | provider=Fox Business | reason=Low Confidence
+    - [CSPAN] Federalist Society Previews Supreme Court Term Part 1: has asked for a search warrant in that case. there are a bunch of cases involvin...  | provider=Cspan | reason=Low Confidence
+    - [CSPAN2] Book TV: not allowed to own stocks that are regulated by the federal communications commi...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] Author Discussion on Journalism: not allowed to own stocks that are regulated by the federal communications commi...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] Book TV: stacks, trading forms. and we thought, you know how the heck we're going to go t...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] Author Discussion on Journalism: stacks, trading forms. and we thought, you know how the heck we're going to go t...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] Author Discussion on Journalism: that. and the idea was my my dad worked for the federal communications commissio...  | provider=Cspan2 | reason=Low Confidence
+    - [MSNBC] Velshi: distort of tony him from a nuclear reactor? you know, you want a scientist doing...  | provider=Msnbc | reason=Low Confidence
+    - [CSPAN] Federalist Society Previews Supreme Court Term: delegation something we should consider. the inspector general's office has aske...  | provider=Cspan | reason=Low Confidence
+    - [FOX News] Special Report With Bret Baier: services. the debt exchange deal includes payment of $1 and the assumption of ar...  | provider=Fox News | reason=Low Confidence
+    - [MSNBC] Katy Tur Reports: recover. in addition to fema, that includes the federal communications commissio...  | provider=Msnbc | reason=Low Confidence
+    - [CNN] Inside Politics With Dana Bash: available resources fast as possible. well to your communities. the rescue, reco...  | provider=Cnn | reason=Low Confidence
+    - [MSNBC] Jose Diaz-Balart Reports: he said that fema administrator is still on the ground there. he also talked abo...  | provider=Msnbc | reason=Low Confidence
+    - [CNN] CNN Newsroom With Pamela Brown: every every available resources fast as possible to your communities. the rescue...  | provider=Cnn | reason=Low Confidence
+    - [MSNBC] Jose Diaz-Balart Reports: every available resource as fast as possible to your communities, to rescue, rec...  | provider=Msnbc | reason=Low Confidence
+    - [CSPAN2] U.S. Senate U.S. Senate: it's been more than 1500 days since the last federal communications commission h...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN] U.S. House of Representatives U.S. House of Representatives: federal communications commission to establish a task force to be known as a 6-g...  | provider=Cspan | reason=Low Confidence
+    - [CSPAN3] Discussion on Emerging AI Technologies: media attack new media and try to use regulation to deal with that. it is really...  | provider=Cspan3 | reason=Low Confidence
+    - [CSPAN3] Discussion on Emerging AI Technologies: to use regulation to deal with that. it is really because of newspapers lobbying...  | provider=Cspan3 | reason=Low Confidence
+    - [CSPAN2] U.S. Senate U.S. Senate: the presiding officer: the clerk will read the title of the bill for the second ...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] U.S. Senate U.S. Senate: -- an act to direct the federal communications commission to publish a list of e...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] The Civil War Tom Wheeler Mr. Lincolns T-Mails: read out the list of his accomplishments. a few highlights include his service a...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] The Civil War Tom Wheeler Mr. Lincolns T-Mails: businessman, an author and a public figure. i'm not even going to try and read o...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] Nixon Administration 1970s Womens Initiatives: federal communications commission. nixon, scrawled in the margin, why not? so, y...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] American History TV: nixon. this is an item in his news summary was urging the appointment of a woman...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN] NTSB Chair and Others Discuss New Vehicle Technology and Safety Standards: technology, in vehicles on roadways. i will say, as i mentioned in my remarks  | provider=Cspan | reason=Low Confidence
+    - [FOX Business] Cavuto Coast to Coast: service is the new frontier of connectivity. neil: right now providing that for ...  | provider=Fox Business | reason=Low Confidence
+  [Non-FCC (blocked domain)] — 0
+
+SECTION 3 — HIGH PRIORITY ARTICLES
+    [INCLUDED] term=AT&T | Duke Energy Asks FCC to Stay AT&T Pole Rate Complaint Pending Arbitration | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Spectrum | Spectrum supercycle – US opens floodgates; UK shares it out | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Spectrum | USSI Global: Geared Up For Upper C-Band Spectrum Transition | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=AT&T | Rural Stakeholders Oppose AT&T Petitions that Threaten Universal Telephone Service | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Wireless | Joel Thayer and Ethan Tun: Stop Making Americans Pay for Yesterday’s Phone Network | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Spectrum | A Mid-Missouri Noncomm Successfully Upgrades Its Transmitter | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=AT&T | AT&T says its network is already built for the agentic AI wave | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=AT&T | AT&T and Ericsson use network sensing to spot drones with ordinary 5G towers | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Cybersecurity | OpenAI’s breach of Hugging Face stokes fears about what’s next for AI | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | Confirmed: Gray Media Grabs ABC Affiliation In St. Louis | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Wireless | NWSA Seeks Onsite Leaders and Foremen for Job Task Analysis Survey | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Spectrum | [Federal Register] Sunshine Act Meeting; Open Commission Meeting Wednesday, July 22, 2026 | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Space | FCC Filings Show Eutelsat is Working on a New 528-sat Constellation Beyond OneWeb - Payload Space | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Satellite | LTN Reaches 3,000 Satellite-to-IP Migrations as FCC Votes on C-Band Auction - Sports Video Group | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | FCC Chairman Carr: ABC decision to skip Trump speech will factor into license review - IMDb | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Space | FCC Proposes Opening Unlicensed Bluetooth and Wi-Fi Bands for Space-Based Communications - satnews.com | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Satellite | New FCC rule will make Starlink satellite internet faster and cheaper - Mashable | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | EDITORIAL | Danger Ahead: Conservative groups recognize peril of FCC's threat to ABC - Texarkana Gazette | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | Conservative groups urge FCC to back off ABC license review, warning it could hurt right-leaning media - Fox News | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=AT&T | California House Democrats and Republicans urge FCC to stop AT&T landline plan - Sacramento Bee | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | Mob boss Trump has his FCC henchman, Brendan Carr, threaten ABC because they didn't carry Dear Leader's Voter Suppressio | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Spectrum | FCC approves satellite spectrum license streamlining | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | Brendan Carr’s latest threat against ABC looks weak in court and useful everywhere else. Karl Bode explains how the FCC | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Space | 50,000 of these are set to be deployed by 2035, but the FCC says any potential damage to us is a small price to pay comp | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | FCC FINES ABC AND NBC $25 MILLION EACH FOR SKIPPING TRUMP’S ADDRESS — CBS HIT WITH $10 MILLION FOR CUTTING OUT EARLY!
+Th | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | Brendan Carr Lobs More Empty Threats At ABC For Not Airing Trump’s Election Fraud Lies #media
+www.techdirt.com/2026/07/2 | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | Brendan Carr Says ABC's Refusal To Air a Trump Speech Could Affect Renewal of Its Broadcast Licenses www.yahoo.com/news/ | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Satellite | www.propublica.org/article/adak...
+
+Not a single one told us they subscribe to the island’s subsidized internet service. | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Satellite | Daylight Saving Time 24/7…. Class action lawsuit on behalf of 8.3 billion people? 
+
+“The satellite … would be the first | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Satellite | hashem.alghaili
+The U.S. just approved a satellite that will beam light to Earth at night. 
+The Federal Communications C | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Satellite | The United States has approved a satellite designed to beam light down to Earth at night.
+
+The Federal Communications Co | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Satellite | [FOX Business] Cavuto Coast to Coast: people couldn't make cell phone calls to say nothing of electricity but looks li... | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | Let's hope we get no false alerts like Hawaii did 
+www.abc.net.au/news/2018-01...
+#AusAlert | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | trendingpoliticsnews.com/just-in-abc-...
+
+A new liw... | reason=kept in briefing (priority-protected)
+    [REJECTED] term=Space | FCC Proposes Opening Unlicensed Bluetooth and Wi-Fi Bands for Space-Based Communications | reason=Duplicate
+    [REJECTED] term=ABC | Brendan Carr Lobs More Empty Threats At ABC For Not Airing Trump’s Election Fraud Lies | reason=Duplicate
+    [REJECTED] term=Wireless | [CSPAN] U.S. House of Representatives U.S. House of Representatives: magnifies this target. this helps address these concerns. this would require the... | reason=Duplicate
+    [REJECTED] term=Foreign Ownership | [CSPAN] U.S. House of Representatives U.S. House of Representatives: h.r. 820. a bill to direct the federal communications commission to publish a li... | reason=Duplicate
+    [REJECTED] term=AT&T | [CSPAN2] Book TV: not allowed to own stocks that are regulated by the federal communications commi... | reason=Low Confidence
+    [REJECTED] term=AT&T | [CSPAN2] Author Discussion on Journalism: not allowed to own stocks that are regulated by the federal communications commi... | reason=Low Confidence
+    [REJECTED] term=AT&T | [CSPAN2] Author Discussion on Journalism: that. and the idea was my my dad worked for the federal communications commissio... | reason=Low Confidence
+    [REJECTED] term=Foreign Ownership | [CSPAN2] U.S. Senate U.S. Senate: -- an act to direct the federal communications commission to publish a list of e... | reason=Low Confidence
+
+SECTION 4 — COVERAGE GAP
+  Coverage gaps flagged: 150
+    - Duke Energy Asks FCC to Stay AT&T Pole Rate Complaint Pending Arbitration | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - New Mexico proposes rules for $10M broadband affordability program | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Virginia Study on Groundwater and Data Centers Calls for Tighter Water Regulations | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - SpaceX Launches Starship on Another Test Flight, This Time With the Most Advanced Starlink Satellites | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Spectrum supercycle – US opens floodgates; UK shares it out | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Cancels California LPFM’s License | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Report 7/26: Can A Commercial Station Feed A Non-Commercial Translator? | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - USSI Global: Geared Up For Upper C-Band Spectrum Transition | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Brad Ventura: As Maui's Fire Chief, Don't Use Wildfires for Commercial Self-Interest | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Why throwing money at broadband speeds isn’t fixing America’s internet (Reader Forum) | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Rural Stakeholders Oppose AT&T Petitions that Threaten Universal Telephone Service | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Dish Seeking to Freeze Tower Suits | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Verizon Inks $1 Billion Fiber Deal with Google | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Trump Expands a Voluntary Pledge to Protect Consumers From High Utility Bills From AI Data Centers | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Charter Down 172,000 Broadband Subs | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Joel Thayer and Ethan Tun: Stop Making Americans Pay for Yesterday’s Phone Network | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Questions Remain After NTIA’s Review of Billions in Broadband Grants, GAO Says | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Charter Reports Weak Second Quarter, Dropping 172,000 Broadband Customers | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Upstream use outpaced downstream again in 2Q26: OVBI Report | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Matanuska Telecom Association confirms BEAD award | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - A Mid-Missouri Noncomm Successfully Upgrades Its Transmitter | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Federal Judge Extends Paramount/WBD Restraining Order | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Elon Musk says he backs 'normal people'  when asked about support for 'far right' | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Musk on his involvement in politics: 'I got carried away' | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Station Sales Week Of 7/24 | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - So You Have an LPFM Station. Now What Do You Do With It? | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Univision Splits DFW's LatinoMix In An Act Of Amor | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - AT&T says its network is already built for the agentic AI wave | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Alabama Broadcasters Take to the Road | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Using AI to Offer a Big-Market Sound on a Small-Market Budget | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Letter: How to Haul Large Transmitters | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Our Conversation With Bob Orban, Part 6 | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Q&A: EBU’s Vincent Sneed on the Digital Networks Act | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Kalshi accuses Netflix of ‘misleading’ viewers in new prediction market documentary | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Paramount/WBD Merger Delay Could Reach Until Mid-2027 | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - AT&T and Ericsson use network sensing to spot drones with ordinary 5G towers | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Huawei sees Mobile AI driving new wave of uplink network investment | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - altafiber forms public-private partnership with Westerville, Ohio for fiber build | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - When It Comes to Air Chains, Less Is More | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Radio Gazeta Upgrades With Calrec Type R | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Letter: In 2026, Land Is Worth More Than an Aging Transmitter Site | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Trump fires back at EU over Google's $1B fine, launches probe | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Deadline to file claim in $2.5B settlement over Amazon Prime coming soon | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - OpenAI’s breach of Hugging Face stokes fears about what’s next for AI | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - ‘HI’ Radio Hosts Ignite Protests Over New Hawaii Driver’s Licenses | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - ‘K103’ Iconic Air Talent Craig Walker Dies | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Entry Window Opens For New York Festivals TV, Film Honors | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Suburban D.C. AM Sold To William Tucker’s WOOK | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Confirmed: Gray Media Grabs ABC Affiliation In St. Louis | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - K-LOVE Competes Its ‘Big’ Deal SE Connecticut | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Tower Worker Killed in Minnesota After Being Struck By a Cable | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - T-Mobile Hitting Its Numbers | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - NWSA Seeks Onsite Leaders and Foremen for Job Task Analysis Survey | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Bowling Green's Point Spinning Wheel Of Formats | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Nielsen Spring & June 2026 Ratings Releases 7/24 | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Broadcast Pioneers Of Philadelphia Sets 2026 Hall of Fame Class | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - “Car Radio” in 1984 … and Now | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - [Federal Register] Sunshine Act Meeting; Open Commission Meeting Wednesday, July 22, 2026 | provider=Federal Register | why=Surfaced by a single provider (would be missed without it)
+    - [Federal Register] Information Collection Being Reviewed by the Federal Communications Commission | provider=Federal Register | why=Surfaced by a single provider (would be missed without it)
+    - FCC Filings Show Eutelsat is Working on a New 528-sat Constellation Beyond OneWeb - Payload Space | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - LTN Reaches 3,000 Satellite-to-IP Migrations as FCC Votes on C-Band Auction - Sports Video Group | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Chairman Carr: ABC decision to skip Trump speech will factor into license review - IMDb | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC commissioner Brendan Carr may have reshaped Texas Senate race - Washington Examiner | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Tell HN: Protect Privacy, Leave FCC Comment, Deadline Tomorrow | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Proposes Opening Unlicensed Bluetooth and Wi-Fi Bands for Space-Based Communications - satnews.com | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - New FCC rule will make Starlink satellite internet faster and cheaper - Mashable | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Information Collections Being Reviewed by the Federal Communications Commission Under Delegated Authority | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Information Collection Being Reviewed by the Federal Communications Commission Delegated Authority | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Review of Submarine Cable Landing License Rules and Procedures To Assess Evolving National Security, Law Enforcement, Foreign Policy, and Trade Policy Risks | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - EDITORIAL | Danger Ahead: Conservative groups recognize peril of FCC's threat to ABC - Texarkana Gazette | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC To Unleash An Economic Boom, Thanks To Trump Tax Bill - RealClearPolicy | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Advances Second C-Band Auction - GSMA | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Tempers flare after Columbus Crew defeat FCC, next up Inter Miami CF marquee match up - WSYX | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FAA to require 5G-tolerant radio altimeters as FCC clears C-band auction - AeroTime | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Conservative groups urge FCC to back off ABC license review, warning it could hurt right-leaning media - Fox News | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Former FCC Leaders Tell Court To Ignore Media Bureau’s News Distortion Dismissal. - Insideradio.com | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Cancels California LPFM’s License - radioworld.com | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - ACA Urges FCC to Drop Duplicative Offshore Call Center Proposal - ACA International | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Deadline fast approaching for public feedback on ABC11’s FCC license fight - Raleigh News & Observer | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - California House Democrats and Republicans urge FCC to stop AT&T landline plan - Sacramento Bee | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - What Singapore’s $913M Scam Problem Says About FCC SIM ID Plans | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - This Week in Regulation for Broadcasters: July 20, 2026 to July 24, 2026 | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Xtra suddenly cancels preorders for its clone of banned DJI Osmo Pocket 4 Pro camera | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - STI-GA Selects Numeracle to Develop Global Vetting Framework for Cross-Border STIR/SHAKEN Governance | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Information Collection Being Submitted for Review and Approval to Office of Management and Budget | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Mob boss Trump has his FCC henchman, Brendan Carr, threaten ABC because they didn't carry Dear Leader's Voter Suppressio | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - FCC approves satellite spectrum license streamlining | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - FOX News is a **cable channel**, not a broadcast station. 
+Brendan Carr and the FCC have ZERO oversight over cable chann | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - FCC Chairman Brendan Carr suggests that the next FIFA soccer tournament (to be held in 2030) should be made available on | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - Obviously Brendan Carr of the FCC has no issue with the lies, fear mongering and divisive rhetoric spewed on Fox News on | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - Brendan Carr’s latest threat against ABC looks weak in court and useful everywhere else. Karl Bode explains how the FCC  | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - The reporters at that abomination last night, like Ed O'Keefe pictured here, were partying with totalitarian FCC Commiss | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - #Brendan Carr   #FCC   #review
+🌐 www.newsmart.ch | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - The company behind the Xtra Muse 2 Pro has cancelled preorders for the camera. Is an FCC investigation the reason why? | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - 50,000 of these are set to be deployed by 2035, but the FCC says any potential damage to us is a small price to pay comp | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - Statistical validation of template-based parameter extraction from toy thrust distributions for future FCC-ee studies
+ht | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - Each atom in an FCC lattice has 𝟷𝟸 equidistant nearest neighbors. | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - (FCC) Face-Centered-Cubics
+Why choose (FCC) for easy phase transitions?
+
+Let’s look at heat:
+
+These crystal structures f | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - This kind of crazy talk gets people killed. Where is the FCC? Oh that’s right, never mind. | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - .. each got hit with $25 million. CBS received a $10 million fine for cutting out early.
+Agency insiders say the FCC has | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - Given a choice between POLITICS (Congress LEGISLATIVE Branch + EXECUTIVE Branch -DoJ, SEC, FBI, FTC, FCC, etc) or LAW (J | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - FCC FINES ABC AND NBC $25 MILLION EACH FOR SKIPPING TRUMP’S ADDRESS — CBS HIT WITH $10 MILLION FOR CUTTING OUT EARLY!
+Th | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - This admin is messing with our environment in another way
+
+www.astronomy.com/science/fcc-... | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - You can file with the FCC. You can tell Paramount and its Nickelodeon-owning boss David Ellison exactly what you think o | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - ｢DJI Osmo 360 II｣の試作機の写真をFCCが公開 ｰ バッテリー容量の増量を確認
+ taisy0.com/2026/07/27/2... | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - BREAKING: Trump is reportedly demanding the FCC ban on-air references to his throat vagina, diaper bulge, urine smell, f | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - "Broadcast Hoaxes: Under Federal Communications Commission rules (47 C.F.R. § 73.1217), it is illegal for over-the-air b | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - FCC To Say Only Broadcast Reporting Not Embarrassing to Trump?
+
+No critical war reporting or airing of late-night comedi | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - We let Rupert Murdoch in to the USA’s media ecosystem.
+
+www.editorandpublisher.com/stories/fcc-... | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - FCC Officials Took Pricey Gifts From Paramount as the Company Needed Approval for Billion-Dollar Deals www.propublica.or | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - FCC Proposes Ban on Imports of Foreign Military-Grade Drones Citing National Security Risks | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - A Morning Consult poll of 2,202 adults found 63% oppose the labels, and 65% say they should decide what their kids watch | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - Brendan Carr Lobs More Empty Threats At ABC For Not Airing Trump’s Election Fraud Lies #media
+www.techdirt.com/2026/07/2 | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - Brendan Carr Says ABC's Refusal To Air a Trump Speech Could Affect Renewal of Its Broadcast Licenses www.yahoo.com/news/ | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - Conservative media groups go after Brendan Carr to stop politicizing broadcast licenses. Making it very clear that his v | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - [CSPAN2] FCC Commissioner  Others Testify on Biden Administration Policies: senior republican commissioner on the federal communications commission he's bee... | provider=Cspan2 | why=Surfaced by a single provider (would be missed without it)
+    - [CSPAN3] FCC Commissioner  Others Testify on Biden Administration Policies: excellent witnesses, brandon carr is a commissioner on the federal communication... | provider=Cspan3 | why=Surfaced by a single provider (would be missed without it)
+    - www.propublica.org/article/adak...
+
+Not a single one told us they subscribe to the island’s subsidized internet service. | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - Daylight Saving Time 24/7…. Class action lawsuit on behalf of 8.3 billion people? 
+
+“The satellite … would be the first  | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - hashem.alghaili
+The U.S. just approved a satellite that will beam light to Earth at night. 
+The Federal Communications C | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - The United States has approved a satellite designed to beam light down to Earth at night.
+
+The Federal Communications Co | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - [FOX Business] Cavuto Coast to Coast: people couldn't make cell phone calls to say nothing of electricity but looks li... | provider=Fox Business | why=Surfaced by a single provider (would be missed without it)
+    - Hey so just a reminder to the convention attendees
+
+You are allowed to use your personal mobile Hotspot. If your connect | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - newrepublic.com/post/213087/... | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - Yes we know…. Now what? The corrupt mainstream media is his mouthpiece and the corrupt SCOTUS has his back.. he controls | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - Most of the comments supporting LGBTQ+ warning labels were copied while almost everyone opposing them wrote their own. T | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - I think it’s worse than that. They know they’re insulting our intelligence daily and simply don’t care. They don’t care. | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - 📶 Faster Wi-Fi doesn't automatically mean easier certification.
+
+Wi-Fi 6E products must navigate different 6 GHz regulat | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - Also, we can do this!
+
+We have made rules and laws to structure markets and improve competition, and to structure the ma | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - I was referring to their stance on the Dominion (defamation) Lawsuit - ergo Entertainment - I will remember your comment | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - Look at past NON monopoly merger failures as compared to SCOTUS disclosed trades & campaign donations = where the proof  | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - Let's hope we get no false alerts like Hawaii did 
+www.abc.net.au/news/2018-01...
+#AusAlert | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - Here is the picture the Trump crowd did not want you to see: 33,739 public comments filed with the Federal Communication | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - ❓️Why? For what end does Earth need sunlight mirrored back at night? ❓️⁉️ #Pinks
+
+"The American Astronomical Society (AA | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - No, SpongeDon DementiaPants. It would have been fraud if @nbcnews.com and @abc7.bsky.social broadcasted your whinefest b | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - www.instagram.com/p/DbP6UjeD3N1/
+
+🚨🧪 | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - This cause is close to my heart - please sign: sign.moveon.org/petitions/fc... | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - The money being wasted is yours. 
+
+It comes from a fee added to nearly every American’s phone bill as part of a Federal  | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - www.instagram.com/p/DbP6UjeD3N1/
+
+This is a destructive plan!!! | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - I get that they're fucking morons, but HOW do they not realize how pathetic this makes them look? | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - Trump said nothing new during his Presidential address, he is just still angry that 74 mill disease lovers are not more  | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - share.google/KGQDxIVYp9jY... | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - The names were changed but the indictment of racial prejudice was intact, until network sponsor US Steel got a hold of t | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - trendingpoliticsnews.com/just-in-abc-...
+
+A new liw... | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - USA: Immer mehr nichtkommerzielle UKW-Sender
+
+Die Zahl der nichtkommerziellen UKW-Sender in den Vereinigten Staaten wäch | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - Trump administrations wants warning labels on LGBTQ+ TV shows | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - When you know that your side is built on lies. www.yahoo.com/news/politic... | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - www.techdirt.com/2026/07/24/b...
+
+#faragenews | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - [FOX News] The Faulkner Focus: rebuilding. in addition to fema including the federal communications commission ... | provider=Fox News | why=Surfaced by a single provider (would be missed without it)
+    - [CSPAN2] Hearing on Oversight of FBIs Security Clearances for Whistleblowers: s. 275, a bill to require the federal communications commission to establish a v.. | provider=Cspan2 | why=Surfaced by a single provider (would be missed without it)
+
+SECTION 5 — EDITORIAL QUEUE (requires human review)
+  Items requiring review: 150
+    - Duke Energy Asks FCC to Stay AT&T Pole Rate Complaint Pending Arbitration | Surfaced by a single provider (would be missed without it)
+    - New Mexico proposes rules for $10M broadband affordability program | Surfaced by a single provider (would be missed without it)
+    - Virginia Study on Groundwater and Data Centers Calls for Tighter Water Regulations | Surfaced by a single provider (would be missed without it)
+    - SpaceX Launches Starship on Another Test Flight, This Time With the Most Advanced Starlink Satellites | Surfaced by a single provider (would be missed without it)
+    - Spectrum supercycle – US opens floodgates; UK shares it out | Surfaced by a single provider (would be missed without it)
+    - FCC Cancels California LPFM’s License | Surfaced by a single provider (would be missed without it)
+    - FCC Report 7/26: Can A Commercial Station Feed A Non-Commercial Translator? | Surfaced by a single provider (would be missed without it)
+    - USSI Global: Geared Up For Upper C-Band Spectrum Transition | Surfaced by a single provider (would be missed without it)
+    - Brad Ventura: As Maui's Fire Chief, Don't Use Wildfires for Commercial Self-Interest | Surfaced by a single provider (would be missed without it)
+    - Why throwing money at broadband speeds isn’t fixing America’s internet (Reader Forum) | Surfaced by a single provider (would be missed without it)
+    - Rural Stakeholders Oppose AT&T Petitions that Threaten Universal Telephone Service | Surfaced by a single provider (would be missed without it)
+    - Dish Seeking to Freeze Tower Suits | Surfaced by a single provider (would be missed without it)
+    - Verizon Inks $1 Billion Fiber Deal with Google | Surfaced by a single provider (would be missed without it)
+    - Trump Expands a Voluntary Pledge to Protect Consumers From High Utility Bills From AI Data Centers | Surfaced by a single provider (would be missed without it)
+    - Charter Down 172,000 Broadband Subs | Surfaced by a single provider (would be missed without it)
+    - Joel Thayer and Ethan Tun: Stop Making Americans Pay for Yesterday’s Phone Network | Surfaced by a single provider (would be missed without it)
+    - Questions Remain After NTIA’s Review of Billions in Broadband Grants, GAO Says | Surfaced by a single provider (would be missed without it)
+    - Charter Reports Weak Second Quarter, Dropping 172,000 Broadband Customers | Surfaced by a single provider (would be missed without it)
+    - Upstream use outpaced downstream again in 2Q26: OVBI Report | Surfaced by a single provider (would be missed without it)
+    - Matanuska Telecom Association confirms BEAD award | Surfaced by a single provider (would be missed without it)
+    - A Mid-Missouri Noncomm Successfully Upgrades Its Transmitter | Surfaced by a single provider (would be missed without it)
+    - Federal Judge Extends Paramount/WBD Restraining Order | Surfaced by a single provider (would be missed without it)
+    - Elon Musk says he backs 'normal people'  when asked about support for 'far right' | Surfaced by a single provider (would be missed without it)
+    - Musk on his involvement in politics: 'I got carried away' | Surfaced by a single provider (would be missed without it)
+    - Station Sales Week Of 7/24 | Surfaced by a single provider (would be missed without it)
+    - So You Have an LPFM Station. Now What Do You Do With It? | Surfaced by a single provider (would be missed without it)
+    - Univision Splits DFW's LatinoMix In An Act Of Amor | Surfaced by a single provider (would be missed without it)
+    - AT&T says its network is already built for the agentic AI wave | Surfaced by a single provider (would be missed without it)
+    - Alabama Broadcasters Take to the Road | Surfaced by a single provider (would be missed without it)
+    - Using AI to Offer a Big-Market Sound on a Small-Market Budget | Surfaced by a single provider (would be missed without it)
+    - Letter: How to Haul Large Transmitters | Surfaced by a single provider (would be missed without it)
+    - Our Conversation With Bob Orban, Part 6 | Surfaced by a single provider (would be missed without it)
+    - Q&A: EBU’s Vincent Sneed on the Digital Networks Act | Surfaced by a single provider (would be missed without it)
+    - Kalshi accuses Netflix of ‘misleading’ viewers in new prediction market documentary | Surfaced by a single provider (would be missed without it)
+    - Paramount/WBD Merger Delay Could Reach Until Mid-2027 | Surfaced by a single provider (would be missed without it)
+    - AT&T and Ericsson use network sensing to spot drones with ordinary 5G towers | Surfaced by a single provider (would be missed without it)
+    - Huawei sees Mobile AI driving new wave of uplink network investment | Surfaced by a single provider (would be missed without it)
+    - altafiber forms public-private partnership with Westerville, Ohio for fiber build | Surfaced by a single provider (would be missed without it)
+    - When It Comes to Air Chains, Less Is More | Surfaced by a single provider (would be missed without it)
+    - Radio Gazeta Upgrades With Calrec Type R | Surfaced by a single provider (would be missed without it)
+    - Letter: In 2026, Land Is Worth More Than an Aging Transmitter Site | Surfaced by a single provider (would be missed without it)
+    - Trump fires back at EU over Google's $1B fine, launches probe | Surfaced by a single provider (would be missed without it)
+    - Deadline to file claim in $2.5B settlement over Amazon Prime coming soon | Surfaced by a single provider (would be missed without it)
+    - OpenAI’s breach of Hugging Face stokes fears about what’s next for AI | Surfaced by a single provider (would be missed without it)
+    - ‘HI’ Radio Hosts Ignite Protests Over New Hawaii Driver’s Licenses | Surfaced by a single provider (would be missed without it)
+    - ‘K103’ Iconic Air Talent Craig Walker Dies | Surfaced by a single provider (would be missed without it)
+    - Entry Window Opens For New York Festivals TV, Film Honors | Surfaced by a single provider (would be missed without it)
+    - Suburban D.C. AM Sold To William Tucker’s WOOK | Surfaced by a single provider (would be missed without it)
+    - Confirmed: Gray Media Grabs ABC Affiliation In St. Louis | Surfaced by a single provider (would be missed without it)
+    - K-LOVE Competes Its ‘Big’ Deal SE Connecticut | Surfaced by a single provider (would be missed without it)
+    - Tower Worker Killed in Minnesota After Being Struck By a Cable | Surfaced by a single provider (would be missed without it)
+    - T-Mobile Hitting Its Numbers | Surfaced by a single provider (would be missed without it)
+    - NWSA Seeks Onsite Leaders and Foremen for Job Task Analysis Survey | Surfaced by a single provider (would be missed without it)
+    - Bowling Green's Point Spinning Wheel Of Formats | Surfaced by a single provider (would be missed without it)
+    - Nielsen Spring & June 2026 Ratings Releases 7/24 | Surfaced by a single provider (would be missed without it)
+    - Broadcast Pioneers Of Philadelphia Sets 2026 Hall of Fame Class | Surfaced by a single provider (would be missed without it)
+    - “Car Radio” in 1984 … and Now | Surfaced by a single provider (would be missed without it)
+    - [Federal Register] Sunshine Act Meeting; Open Commission Meeting Wednesday, July 22, 2026 | Surfaced by a single provider (would be missed without it)
+    - [Federal Register] Information Collection Being Reviewed by the Federal Communications Commission | Surfaced by a single provider (would be missed without it)
+    - FCC Filings Show Eutelsat is Working on a New 528-sat Constellation Beyond OneWeb - Payload Space | Surfaced by a single provider (would be missed without it)
+    - LTN Reaches 3,000 Satellite-to-IP Migrations as FCC Votes on C-Band Auction - Sports Video Group | Surfaced by a single provider (would be missed without it)
+    - FCC Chairman Carr: ABC decision to skip Trump speech will factor into license review - IMDb | Surfaced by a single provider (would be missed without it)
+    - FCC commissioner Brendan Carr may have reshaped Texas Senate race - Washington Examiner | Surfaced by a single provider (would be missed without it)
+    - Tell HN: Protect Privacy, Leave FCC Comment, Deadline Tomorrow | Surfaced by a single provider (would be missed without it)
+    - FCC Proposes Opening Unlicensed Bluetooth and Wi-Fi Bands for Space-Based Communications - satnews.com | Surfaced by a single provider (would be missed without it)
+    - New FCC rule will make Starlink satellite internet faster and cheaper - Mashable | Surfaced by a single provider (would be missed without it)
+    - Information Collections Being Reviewed by the Federal Communications Commission Under Delegated Authority | Surfaced by a single provider (would be missed without it)
+    - Information Collection Being Reviewed by the Federal Communications Commission Delegated Authority | Surfaced by a single provider (would be missed without it)
+    - Review of Submarine Cable Landing License Rules and Procedures To Assess Evolving National Security, Law Enforcement, Foreign Policy, and Trade Policy Risks | Surfaced by a single provider (would be missed without it)
+    - EDITORIAL | Danger Ahead: Conservative groups recognize peril of FCC's threat to ABC - Texarkana Gazette | Surfaced by a single provider (would be missed without it)
+    - FCC To Unleash An Economic Boom, Thanks To Trump Tax Bill - RealClearPolicy | Surfaced by a single provider (would be missed without it)
+    - FCC Advances Second C-Band Auction - GSMA | Surfaced by a single provider (would be missed without it)
+    - Tempers flare after Columbus Crew defeat FCC, next up Inter Miami CF marquee match up - WSYX | Surfaced by a single provider (would be missed without it)
+    - FAA to require 5G-tolerant radio altimeters as FCC clears C-band auction - AeroTime | Surfaced by a single provider (would be missed without it)
+    - Conservative groups urge FCC to back off ABC license review, warning it could hurt right-leaning media - Fox News | Surfaced by a single provider (would be missed without it)
+    - Former FCC Leaders Tell Court To Ignore Media Bureau’s News Distortion Dismissal. - Insideradio.com | Surfaced by a single provider (would be missed without it)
+    - FCC Cancels California LPFM’s License - radioworld.com | Surfaced by a single provider (would be missed without it)
+    - ACA Urges FCC to Drop Duplicative Offshore Call Center Proposal - ACA International | Surfaced by a single provider (would be missed without it)
+    - Deadline fast approaching for public feedback on ABC11’s FCC license fight - Raleigh News & Observer | Surfaced by a single provider (would be missed without it)
+    - California House Democrats and Republicans urge FCC to stop AT&T landline plan - Sacramento Bee | Surfaced by a single provider (would be missed without it)
+    - What Singapore’s $913M Scam Problem Says About FCC SIM ID Plans | Surfaced by a single provider (would be missed without it)
+    - This Week in Regulation for Broadcasters: July 20, 2026 to July 24, 2026 | Surfaced by a single provider (would be missed without it)
+    - Xtra suddenly cancels preorders for its clone of banned DJI Osmo Pocket 4 Pro camera | Surfaced by a single provider (would be missed without it)
+    - STI-GA Selects Numeracle to Develop Global Vetting Framework for Cross-Border STIR/SHAKEN Governance | Surfaced by a single provider (would be missed without it)
+    - Information Collection Being Submitted for Review and Approval to Office of Management and Budget | Surfaced by a single provider (would be missed without it)
+    - Mob boss Trump has his FCC henchman, Brendan Carr, threaten ABC because they didn't carry Dear Leader's Voter Suppressio | Surfaced by a single provider (would be missed without it)
+    - FCC approves satellite spectrum license streamlining | Surfaced by a single provider (would be missed without it)
+    - FOX News is a **cable channel**, not a broadcast station. 
+Brendan Carr and the FCC have ZERO oversight over cable chann | Surfaced by a single provider (would be missed without it)
+    - FCC Chairman Brendan Carr suggests that the next FIFA soccer tournament (to be held in 2030) should be made available on | Surfaced by a single provider (would be missed without it)
+    - Obviously Brendan Carr of the FCC has no issue with the lies, fear mongering and divisive rhetoric spewed on Fox News on | Surfaced by a single provider (would be missed without it)
+    - Brendan Carr’s latest threat against ABC looks weak in court and useful everywhere else. Karl Bode explains how the FCC  | Surfaced by a single provider (would be missed without it)
+    - The reporters at that abomination last night, like Ed O'Keefe pictured here, were partying with totalitarian FCC Commiss | Surfaced by a single provider (would be missed without it)
+    - #Brendan Carr   #FCC   #review
+🌐 www.newsmart.ch | Surfaced by a single provider (would be missed without it)
+    - The company behind the Xtra Muse 2 Pro has cancelled preorders for the camera. Is an FCC investigation the reason why? | Surfaced by a single provider (would be missed without it)
+    - 50,000 of these are set to be deployed by 2035, but the FCC says any potential damage to us is a small price to pay comp | Surfaced by a single provider (would be missed without it)
+    - Statistical validation of template-based parameter extraction from toy thrust distributions for future FCC-ee studies
+ht | Surfaced by a single provider (would be missed without it)
+    - Each atom in an FCC lattice has 𝟷𝟸 equidistant nearest neighbors. | Surfaced by a single provider (would be missed without it)
+    - (FCC) Face-Centered-Cubics
+Why choose (FCC) for easy phase transitions?
+
+Let’s look at heat:
+
+These crystal structures f | Surfaced by a single provider (would be missed without it)
+    - This kind of crazy talk gets people killed. Where is the FCC? Oh that’s right, never mind. | Surfaced by a single provider (would be missed without it)
+    - .. each got hit with $25 million. CBS received a $10 million fine for cutting out early.
+Agency insiders say the FCC has | Surfaced by a single provider (would be missed without it)
+    - Given a choice between POLITICS (Congress LEGISLATIVE Branch + EXECUTIVE Branch -DoJ, SEC, FBI, FTC, FCC, etc) or LAW (J | Surfaced by a single provider (would be missed without it)
+    - FCC FINES ABC AND NBC $25 MILLION EACH FOR SKIPPING TRUMP’S ADDRESS — CBS HIT WITH $10 MILLION FOR CUTTING OUT EARLY!
+Th | Surfaced by a single provider (would be missed without it)
+    - This admin is messing with our environment in another way
+
+www.astronomy.com/science/fcc-... | Surfaced by a single provider (would be missed without it)
+    - You can file with the FCC. You can tell Paramount and its Nickelodeon-owning boss David Ellison exactly what you think o | Surfaced by a single provider (would be missed without it)
+    - ｢DJI Osmo 360 II｣の試作機の写真をFCCが公開 ｰ バッテリー容量の増量を確認
+ taisy0.com/2026/07/27/2... | Surfaced by a single provider (would be missed without it)
+    - BREAKING: Trump is reportedly demanding the FCC ban on-air references to his throat vagina, diaper bulge, urine smell, f | Surfaced by a single provider (would be missed without it)
+    - "Broadcast Hoaxes: Under Federal Communications Commission rules (47 C.F.R. § 73.1217), it is illegal for over-the-air b | Surfaced by a single provider (would be missed without it)
+    - FCC To Say Only Broadcast Reporting Not Embarrassing to Trump?
+
+No critical war reporting or airing of late-night comedi | Surfaced by a single provider (would be missed without it)
+    - We let Rupert Murdoch in to the USA’s media ecosystem.
+
+www.editorandpublisher.com/stories/fcc-... | Surfaced by a single provider (would be missed without it)
+    - FCC Officials Took Pricey Gifts From Paramount as the Company Needed Approval for Billion-Dollar Deals www.propublica.or | Surfaced by a single provider (would be missed without it)
+    - FCC Proposes Ban on Imports of Foreign Military-Grade Drones Citing National Security Risks | Surfaced by a single provider (would be missed without it)
+    - A Morning Consult poll of 2,202 adults found 63% oppose the labels, and 65% say they should decide what their kids watch | Surfaced by a single provider (would be missed without it)
+    - Brendan Carr Lobs More Empty Threats At ABC For Not Airing Trump’s Election Fraud Lies #media
+www.techdirt.com/2026/07/2 | Surfaced by a single provider (would be missed without it)
+    - Brendan Carr Says ABC's Refusal To Air a Trump Speech Could Affect Renewal of Its Broadcast Licenses www.yahoo.com/news/ | Surfaced by a single provider (would be missed without it)
+    - Conservative media groups go after Brendan Carr to stop politicizing broadcast licenses. Making it very clear that his v | Surfaced by a single provider (would be missed without it)
+    - [CSPAN2] FCC Commissioner  Others Testify on Biden Administration Policies: senior republican commissioner on the federal communications commission he's bee... | Surfaced by a single provider (would be missed without it)
+    - [CSPAN3] FCC Commissioner  Others Testify on Biden Administration Policies: excellent witnesses, brandon carr is a commissioner on the federal communication... | Surfaced by a single provider (would be missed without it)
+    - www.propublica.org/article/adak...
+
+Not a single one told us they subscribe to the island’s subsidized internet service. | Surfaced by a single provider (would be missed without it)
+    - Daylight Saving Time 24/7…. Class action lawsuit on behalf of 8.3 billion people? 
+
+“The satellite … would be the first  | Surfaced by a single provider (would be missed without it)
+    - hashem.alghaili
+The U.S. just approved a satellite that will beam light to Earth at night. 
+The Federal Communications C | Surfaced by a single provider (would be missed without it)
+    - The United States has approved a satellite designed to beam light down to Earth at night.
+
+The Federal Communications Co | Surfaced by a single provider (would be missed without it)
+    - [FOX Business] Cavuto Coast to Coast: people couldn't make cell phone calls to say nothing of electricity but looks li... | Surfaced by a single provider (would be missed without it)
+    - Hey so just a reminder to the convention attendees
+
+You are allowed to use your personal mobile Hotspot. If your connect | Surfaced by a single provider (would be missed without it)
+    - newrepublic.com/post/213087/... | Surfaced by a single provider (would be missed without it)
+    - Yes we know…. Now what? The corrupt mainstream media is his mouthpiece and the corrupt SCOTUS has his back.. he controls | Surfaced by a single provider (would be missed without it)
+    - Most of the comments supporting LGBTQ+ warning labels were copied while almost everyone opposing them wrote their own. T | Surfaced by a single provider (would be missed without it)
+    - I think it’s worse than that. They know they’re insulting our intelligence daily and simply don’t care. They don’t care. | Surfaced by a single provider (would be missed without it)
+    - 📶 Faster Wi-Fi doesn't automatically mean easier certification.
+
+Wi-Fi 6E products must navigate different 6 GHz regulat | Surfaced by a single provider (would be missed without it)
+    - Also, we can do this!
+
+We have made rules and laws to structure markets and improve competition, and to structure the ma | Surfaced by a single provider (would be missed without it)
+    - I was referring to their stance on the Dominion (defamation) Lawsuit - ergo Entertainment - I will remember your comment | Surfaced by a single provider (would be missed without it)
+    - Look at past NON monopoly merger failures as compared to SCOTUS disclosed trades & campaign donations = where the proof  | Surfaced by a single provider (would be missed without it)
+    - Let's hope we get no false alerts like Hawaii did 
+www.abc.net.au/news/2018-01...
+#AusAlert | Surfaced by a single provider (would be missed without it)
+    - Here is the picture the Trump crowd did not want you to see: 33,739 public comments filed with the Federal Communication | Surfaced by a single provider (would be missed without it)
+    - ❓️Why? For what end does Earth need sunlight mirrored back at night? ❓️⁉️ #Pinks
+
+"The American Astronomical Society (AA | Surfaced by a single provider (would be missed without it)
+    - No, SpongeDon DementiaPants. It would have been fraud if @nbcnews.com and @abc7.bsky.social broadcasted your whinefest b | Surfaced by a single provider (would be missed without it)
+    - www.instagram.com/p/DbP6UjeD3N1/
+
+🚨🧪 | Surfaced by a single provider (would be missed without it)
+    - This cause is close to my heart - please sign: sign.moveon.org/petitions/fc... | Surfaced by a single provider (would be missed without it)
+    - The money being wasted is yours. 
+
+It comes from a fee added to nearly every American’s phone bill as part of a Federal  | Surfaced by a single provider (would be missed without it)
+    - www.instagram.com/p/DbP6UjeD3N1/
+
+This is a destructive plan!!! | Surfaced by a single provider (would be missed without it)
+    - I get that they're fucking morons, but HOW do they not realize how pathetic this makes them look? | Surfaced by a single provider (would be missed without it)
+    - Trump said nothing new during his Presidential address, he is just still angry that 74 mill disease lovers are not more  | Surfaced by a single provider (would be missed without it)
+    - share.google/KGQDxIVYp9jY... | Surfaced by a single provider (would be missed without it)
+    - The names were changed but the indictment of racial prejudice was intact, until network sponsor US Steel got a hold of t | Surfaced by a single provider (would be missed without it)
+    - trendingpoliticsnews.com/just-in-abc-...
+
+A new liw... | Surfaced by a single provider (would be missed without it)
+    - USA: Immer mehr nichtkommerzielle UKW-Sender
+
+Die Zahl der nichtkommerziellen UKW-Sender in den Vereinigten Staaten wäch | Surfaced by a single provider (would be missed without it)
+    - Trump administrations wants warning labels on LGBTQ+ TV shows | Surfaced by a single provider (would be missed without it)
+    - When you know that your side is built on lies. www.yahoo.com/news/politic... | Surfaced by a single provider (would be missed without it)
+    - www.techdirt.com/2026/07/24/b...
+
+#faragenews | Surfaced by a single provider (would be missed without it)
+    - [FOX News] The Faulkner Focus: rebuilding. in addition to fema including the federal communications commission ... | Surfaced by a single provider (would be missed without it)
+    - [CSPAN2] Hearing on Oversight of FBIs Security Clearances for Whistleblowers: s. 275, a bill to require the federal communications commission to establish a v.. | Surfaced by a single provider (would be missed without it)
+
+========================================================================

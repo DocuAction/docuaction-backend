@@ -18,6 +18,13 @@ from datetime import datetime, date
 from typing import Optional
 import httpx
 
+from .phi_deidentify import (
+    build_phi_map,
+    redact as redact_phi,
+    restore as restore_phi,
+    log_masked as log_phi_masked,
+)
+
 logger = logging.getLogger("docuaction.case_management")
 
 # ─── API config ──────────────────────────────────────────────────────────────
@@ -159,8 +166,24 @@ async def _call_claude(
     user: str,
     model: str = SONNET_MODEL,
     max_tokens: int = 2000,
+    phi_map: Optional[dict] = None,
 ) -> str:
-    """Single Claude API call with error handling."""
+    """
+    Single Claude API call with error handling.
+
+    DP-02: this is the ONLY egress point in this module, so PHI de-identification
+    happens here rather than at each of the six call sites — a new call site cannot
+    forget it. Pass phi_map=build_phi_map(patient_context) to strip the patient's
+    direct identifiers before egress and restore them in the returned text.
+
+    The clinical narrative is still sent in full and is still PHI; see
+    phi_deidentify.py for what this does and does not cover.
+    """
+    if phi_map:
+        system, sys_n = redact_phi(system, phi_map)
+        user, user_n = redact_phi(user, phi_map)
+        log_phi_masked(max(sys_n, user_n), "ccm_engine")
+
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         resp = await client.post(
             ANTHROPIC_BASE,
@@ -174,7 +197,8 @@ async def _call_claude(
         )
         resp.raise_for_status()
         data = resp.json()
-        return data["content"][0]["text"]
+        text = data["content"][0]["text"]
+        return restore_phi(text, phi_map) if phi_map else text
 
 
 # ─── Step 1: Clinical Fact Extraction ────────────────────────────────────────
@@ -232,7 +256,10 @@ Extract and return JSON with these fields (use null if not mentioned):
   "follow_up_plan": "follow up plan if mentioned"
 }}"""
 
-    result = await _call_claude(system, user, model=HAIKU_MODEL, max_tokens=1500)
+    result = await _call_claude(
+        system, user, model=HAIKU_MODEL, max_tokens=1500,
+        phi_map=build_phi_map(patient_context),
+    )
     try:
         clean = result.strip()
         if clean.startswith("```"):
@@ -393,8 +420,14 @@ Generate the complete note with these sections:
 Write in clinical documentation style. Be specific about minutes and activities.
 This note must be billable and audit-defensible."""
 
+    # DP-02: built once and reused for both egress calls below — the self-critique
+    # re-sends the whole generated note, so it needs the same de-identification.
+    phi_map = build_phi_map(patient_context)
+
     start_time = time.time()
-    note_body = await _call_claude(system, user, model=SONNET_MODEL, max_tokens=2500)
+    note_body = await _call_claude(
+        system, user, model=SONNET_MODEL, max_tokens=2500, phi_map=phi_map,
+    )
     gen_time = round(time.time() - start_time, 2)
 
     # Step 5: Self-critique for compliance gaps
@@ -418,7 +451,10 @@ Return JSON:
 }}"""
 
     try:
-        critique_result = await _call_claude(critique_system, critique_user, model=HAIKU_MODEL, max_tokens=500)
+        critique_result = await _call_claude(
+            critique_system, critique_user, model=HAIKU_MODEL, max_tokens=500,
+            phi_map=phi_map,
+        )
         clean = critique_result.strip()
         if clean.startswith("```"):
             clean = clean.split("```")[1]
@@ -507,7 +543,10 @@ Generate the complete note with:
 Must document that face-to-face occurred within {'7' if cpt_code == '99496' else '14'} days."""
 
     start_time = time.time()
-    note_body = await _call_claude(system, user, model=SONNET_MODEL, max_tokens=2500)
+    note_body = await _call_claude(
+        system, user, model=SONNET_MODEL, max_tokens=2500,
+        phi_map=build_phi_map(patient_context),
+    )
     gen_time = round(time.time() - start_time, 2)
 
     billing_info = {
@@ -630,7 +669,10 @@ Create a complete care plan including:
 Write in clear, professional language. Use plain language for patient-facing sections."""
 
     start_time = time.time()
-    plan_body = await _call_claude(system, user, model=model, max_tokens=3000)
+    plan_body = await _call_claude(
+        system, user, model=model, max_tokens=3000,
+        phi_map=build_phi_map(patient_context),
+    )
     gen_time = round(time.time() - start_time, 2)
 
     return {
@@ -696,7 +738,10 @@ Use a warm, encouraging tone.
 Format for easy reading (short paragraphs, bullet points)."""
 
     start_time = time.time()
-    education_body = await _call_claude(system, user, model=HAIKU_MODEL, max_tokens=1500)
+    education_body = await _call_claude(
+        system, user, model=HAIKU_MODEL, max_tokens=1500,
+        phi_map=build_phi_map(patient_context),
+    )
     gen_time = round(time.time() - start_time, 2)
 
     return {

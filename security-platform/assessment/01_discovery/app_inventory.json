@@ -1,0 +1,162 @@
+{
+  "assessment_meta": {
+    "phase": "Phase 0 — Part 1 Discovery",
+    "mode": "READ-ONLY",
+    "generated": "2026-07-26",
+    "targets": {
+      "backend": "C:/Imran_Coding projects/DocuAction/backend",
+      "frontend": "C:/Imran_Coding projects/DocuAction/frontend"
+    },
+    "data_sources": {
+      "code": "static read of source tree",
+      "database": "LOCAL dev PostgreSQL (localhost/docuaction-db) — SELECT only",
+      "azure": "az CLI read-only (subscription AGT-DocuAction)"
+    }
+  },
+  "backend": {
+    "framework": "FastAPI 0.115.0 (ASGI)",
+    "language": "Python",
+    "runtime": {"docker_base": "python:3.12-slim", "prod_appservice": "PYTHON|3.12 (Oryx, 3.12.13)", "local_dev": "3.13"},
+    "server": "gunicorn + uvicorn.workers.UvicornWorker (prod); uvicorn (docker CMD)",
+    "orm": "SQLAlchemy 2.0.35 (async, asyncpg 0.29.0)",
+    "migrations": "Alembic 1.13.2 (present; runtime create_all is the primary table-creation path)",
+    "validation": "Pydantic 2.9.2 + pydantic-settings 2.5.2",
+    "counts": {
+      "python_files_under_app": 163,
+      "total_app_loc": 52483,
+      "api_endpoint_decorators": 411,
+      "endpoints_by_method": {"get": 232, "post": 143, "patch": 27, "delete": 9},
+      "files_defining_endpoints": 52,
+      "declared_sqlalchemy_models": 113,
+      "tables_materialized_in_local_db": 51,
+      "files_with_file_uploads": 17,
+      "raw_sql_text_calls": 149,
+      "endpoints_with_require_role": 80,
+      "endpoints_with_get_current_user": 225,
+      "routers_with_router_level_auth": 2
+    },
+    "subpackages": [
+      "Tefca (legacy TEFCA Review Protocol)",
+      "tefca_registry (new normalized registry — Phase 1/2A/import)",
+      "platform_config (platform_* config tables)",
+      "bulletin_intelligence (FCC daily news)",
+      "case_management (CCM/CM engines)",
+      "api (auth, admin, routes, migration, enterprise, azure SSO)",
+      "routers (ATS, staffing, opportunities, ats_agent)",
+      "services (healthcare_claims, governance, intelligence, comparison, migration, ...)",
+      "core (config, database, security, error_handler, rate_limiter, email)",
+      "middleware",
+      "models (procurement/ERP/ATS/migration on app.database.Base; + core on app.core.database.Base)",
+      "schemas"
+    ],
+    "largest_files_loc": {
+      "app/bulletin_intelligence/engine.py": 3618,
+      "app/Tefca/routes.py": 2852,
+      "app/Tefca/qa_engine.py": 1163,
+      "app/Tefca/connectors.py": 1145,
+      "app/models/__init__.py": 1142,
+      "app/tefca_registry/seed.py": 1004
+    },
+    "middleware": [
+      "TrustedHostMiddleware (ALLOWED_HOSTS)",
+      "RateLimitMiddleware (in-memory tiered, per-JWT/IP)",
+      "CORSMiddleware (ALLOWED_ORIGINS, allow_credentials=False)",
+      "@app.middleware security headers (HSTS, X-Frame-Options, X-Content-Type-Options, CSP, Referrer-Policy, Permissions-Policy)"
+    ],
+    "external_apis": [
+      {"name": "Anthropic", "hosts": ["api.anthropic.com/v1/messages", "/v1/models"], "use": "LLM (classification, extraction, agents)"},
+      {"name": "OpenAI", "hosts": ["api.openai.com/v1/audio/transcriptions", "/v1/chat/completions"], "use": "Whisper transcription + chat"},
+      {"name": "NPPES (CMS)", "hosts": ["npiregistry.cms.hhs.gov/api"], "use": "NPI verification (TEFCA)"},
+      {"name": "OIG LEIE", "hosts": ["oig.hhs.gov/exclusions"], "use": "exclusion screening (TEFCA)"},
+      {"name": "PECOS (CMS)", "hosts": ["data.cms.gov/provider-data"], "use": "Medicare enrollment (TEFCA)"},
+      {"name": "SAM.gov", "hosts": ["api.sam.gov/entity-information", "/opportunities"], "use": "entity/exclusion + opportunities"},
+      {"name": "RCE / Sequoia", "hosts": ["rce.sequoiaproject.org/fhir"], "use": "TEFCA FHIR directory + identifier system"},
+      {"name": "SendGrid", "hosts": ["api.sendgrid.com/v3/mail/send"], "use": "transactional email"}
+    ],
+    "background_jobs": [
+      "APScheduler bulletin scheduler (1 AM ET daily; ENABLE_SCHEDULER=true on prod) — app/bulletin_intelligence/scheduler.py",
+      "TEFCA QA monitor (app/Tefca/qa_monitor.py)",
+      "startup schema/QA hooks (app/main.py)"
+    ],
+    "uploads": "17 modules use FastAPI UploadFile; upload security scanner app/services/file_scanner.py (_scan_upload_or_reject in app/api/routes.py)",
+    "email": "SendGrid via app/core/email.py (+ 9 callers)",
+    "ai": "Anthropic + OpenAI across ~15 modules (bulletin, case_mgmt, migration, meeting, security, routes)"
+  },
+  "frontend": {
+    "framework": "Next.js ^16.2.9 (App Router, static export output:'export', Turbopack)",
+    "react": "^18.3.1",
+    "language": "mixed JS (.js, platform + TEFCA modules) + TypeScript (.tsx/.ts, GovCon pages + shared libs)",
+    "styling": "Tailwind ^3.4 (layout only) + azure-tokens.css CSS variables + JS design tokens (src/platform/tokens.js, inline styles for color/type/spacing)",
+    "state": "React hooks + AuthProvider context (src/lib/auth.tsx); no Redux/Zustand",
+    "counts": {
+      "page_routes": 75,
+      "layout_files": 2,
+      "component_files": 63,
+      "total_src_files": 182,
+      "total_src_loc": 29609,
+      "pages_referencing_auth": 44
+    },
+    "top_level_route_areas": [
+      "login/signup/register/forgot-password/reset-password/verify-email/auth (auth)",
+      "dashboard/actions-inbox/analytics/decisions/validation/intelligence/intel (workspace)",
+      "rfqs/quotes/bom/products/suppliers/deal/deal-tracker/pricing/compare/proposal-library (procurement)",
+      "ats/ats-agent/staffing/bench-sales/opportunities (ATS/staffing)",
+      "finance/invoices/contracts (ERP)",
+      "healthcare (claims)",
+      "case-management",
+      "bulletin (FCC intelligence)",
+      "tefca-arc (legacy TEFCA, 21 sub-routes)",
+      "tefca-dashboard (redirect stub)",
+      "tefca-registry (NEW — overview/entities/entity/verification/issues)",
+      "admin/manage-users/manage-customers/manage-products/manage-suppliers/settings/support/trust"
+    ],
+    "key_libraries": {
+      "@tanstack/react-table": "^8.21.3 (present; NOTE: not used in src — platform DataTable is hand-rolled)",
+      "recharts": "^3.9.0 (charts)",
+      "lucide-react": "^1.23.0 (icons — NOTE: unusual major version, verify)",
+      "date-fns": "^4.4.0",
+      "jspdf + html2canvas-pro + docx + file-saver": "client-side export",
+      "xlsx": "pinned to a CDN tarball URL (https://cdn.sheetjs.com/...) — NOT npm registry (supply-chain note)"
+    },
+    "api_clients": ["src/lib/api.ts (general, govcon_token)", "src/lib/auth.tsx", "src/app/tefca-arc/lib/api.js", "src/app/tefca-registry/lib/api.js"]
+  },
+  "auth": {
+    "jwt": {"algorithm": "HS256", "access_normal": "15m", "access_admin": "24h", "refresh": "7d", "secret_source": "SECRET_KEY app setting (Key Vault reference on prod)"},
+    "password_hash": "bcrypt (bcrypt.hashpw + gensalt)",
+    "rbac": {"model": "linear ROLE_HIERARCHY levels", "roles": {"viewer":1,"contributor":2,"manager":3,"reviewer":4,"senior_analyst":5,"qalead":6,"program_manager":7,"admin":8}},
+    "sso": "Microsoft Entra ID (app/api/azure_auth_routes.py, same JWT issued)",
+    "protections": "in-memory account lockout + IP throttling + signup throttling; token-epoch revocation (tokens_revoked_at)"
+  },
+  "database": {
+    "engine": "PostgreSQL 16 (Azure Flexible Server, Burstable, geo-redundant backups)",
+    "local_dev_snapshot": {
+      "public_tables": 51,
+      "fk_constraints": 41,
+      "indexes": 151,
+      "fk_columns_without_leading_index": 15
+    },
+    "declared_models_total": 113,
+    "note": "113 models declared in code across TWO Bases; only 51 tables exist in the local dev DB (core + platform_config + tefca_registry + legacy tefca_*). The ~62 procurement/ERP/ATS/migration/case_management models (on app.database.Base) are not materialized in this DB.",
+    "table_categories_local": {
+      "core (users/documents/outputs/audio/transcripts/audit_logs)": 6,
+      "platform_config (platform_*)": 13,
+      "tefca_registry (tefca_reg_*/tefca_entity_*/tefca_verification_*/import_batches)": 10,
+      "tefca_legacy (tefca_*)": 13,
+      "other/misc": 9
+    }
+  },
+  "infrastructure": {
+    "subscription": "AGT-DocuAction",
+    "prod_rg": "rg-docuaction-prod",
+    "dev_rg": "rg-docuaction-dev",
+    "app_service": {"name": "Docuaction", "plan": "P0v3 (Premium0V3), capacity 1", "os": "Linux Python 3.12", "custom_domain": "api-prod.docuaction.io", "basic_auth_scm": "disabled (AAD only)"},
+    "postgres": {"active": "docuaction-db-geo (PG16, Burstable, 32GB, 14d backup, geo-redundant, HA disabled)", "second_server": "docuaction-db (possibly legacy/unused — review)"},
+    "static_web_apps": {"prod": "docuaction-frontend (app.docuaction.io / witty-tree)", "dev": "docuaction-frontend-dev (witty-dune)"},
+    "key_vault": {"prod": "docuaction-kv-prod (PRIVATE ENDPOINT + private DNS + VNet)", "dev": "docuaction-kv-dev"},
+    "identity": "Managed Identity (Key Vault references for secrets)",
+    "monitoring": ["App Insights (docuaction-appinsights)", "Log Analytics (docuaction-logs)", "4 metric alerts (availability, 5xx, high-cpu, db-availability)", "action group docuaction-alerts", "App Insights Smart Detection"],
+    "network": ["docuaction-vnet", "private endpoint for Key Vault"],
+    "app_settings_count": 22,
+    "ci_cd": {"workflows": ["codeql.yml", "dependency-review.yml", "security-scan.yml"], "note": "security-focused GitHub Actions; deployment currently manual (Kudu VFS + SWA CLI observed)"}
+  }
+}

@@ -54,6 +54,67 @@ async def health():
     }
 
 
+# ── Claude API cost tracking (Phase 1) ─────────────────────────────────────────
+# guard(): spend and token counts let an unauthenticated caller measure the cost
+# of each request and size an amplification attack. Not public.
+@router.get("/costs", dependencies=guard("contributor"))
+async def bulletin_costs(
+    agency_id: str = Query(None, description="Filter to one agency; omit for all"),
+    days: int = Query(30, ge=1, le=365, description="Look-back window in days"),
+):
+    """Claude API token usage and cost for bulletin runs.
+
+    Read-only aggregate over `bulletin_cost_logs`. Returns `enabled: false` when
+    cost tracking has never written (BULLETIN_COST_TRACKING_ENABLED unset, or the
+    bulletin store is unavailable) rather than failing — an empty cost history is a
+    valid state, not an error.
+
+    `cost_usd` is computed from the point-in-time rate table in
+    costs/cost_tracker.py; `tokens_in`/`tokens_out` are the raw measured values and
+    are authoritative if rates later change.
+    """
+    try:
+        from app.bulletin_intelligence import bulletin_store
+        return await bulletin_store.fetch_cost_summary(agency_id=agency_id, days=days)
+    except Exception as e:
+        return {"enabled": False, "error": str(e)[:200]}
+
+
+# ── Boolean search profiles (Phase 2) ──────────────────────────────────────────
+@router.get("/profiles")
+async def list_search_profiles(agency_id: str = Query("fcc")):
+    """Boolean search profiles plus which source is currently live.
+
+    `active_source` is "hardcoded" until BULLETIN_PROFILES_DB_ENABLED=true AND the
+    table has rows — an empty table is a valid state that falls back to the
+    fcc_boolean_search constants, so matching behaviour never depends on this table
+    existing.
+    """
+    try:
+        from app.bulletin_intelligence.profiles.boolean_profiles import profiles_status
+        status = profiles_status()
+    except Exception as e:
+        return {"error": str(e)[:200]}
+    try:
+        from app.bulletin_intelligence import bulletin_store
+        db_rows = await bulletin_store.fetch_search_profiles(agency_id, enabled_only=False)
+    except Exception:
+        db_rows = []
+    return {**status, "agency_id": agency_id, "db_rows": len(db_rows), "profiles": db_rows}
+
+
+@router.post("/profiles/seed", dependencies=guard("admin"))
+async def seed_search_profiles_endpoint(agency_id: str = Query("fcc")):
+    """Seed the profile table from the hardcoded constants. Idempotent — existing
+    rows are never overwritten, so operator edits survive re-seeding."""
+    try:
+        from app.bulletin_intelligence.profiles.boolean_profiles import seed_defaults
+        inserted = await seed_defaults(agency_id)
+        return {"agency_id": agency_id, "inserted": inserted}
+    except Exception as e:
+        raise HTTPException(500, f"seed failed: {str(e)[:200]}")
+
+
 # ── Source Coverage Report ─────────────────────────────────────────────────────
 @router.get("/coverage/{agency_id}")
 async def coverage_report(agency_id: str):
@@ -236,7 +297,7 @@ async def purge_articles(confirm: str = Query("")):
     return {"status": "purged", "memory_cleared": mem, "durable_deleted": deleted}
 
 
-@router.get("/admin/last-window/{agency_id}")
+@router.get("/admin/last-window/{agency_id}", dependencies=guard("contributor"))
 async def last_window(agency_id: str):
     """Report the freshness window + in/out-of-window counts from the most recent
     run for this agency (observability for the date-window filter)."""
@@ -465,6 +526,48 @@ class SourceRegistryItem(BaseModel):
     notes: str = ""
 
 
+# ── Phase 4: source registry ─────────────────────────────────────────────────
+
+@router.get("/quality/latest")
+async def quality_latest(agency_id: str = "fcc"):
+    """Quality-gate result from the most recent bulletin run for this agency."""
+    from app.bulletin_intelligence.quality_gate import last_quality
+    return last_quality(agency_id)
+
+
+@router.get("/sources")
+async def list_sources(enabled_only: bool = False, limit: int = Query(500, ge=1, le=2000)):
+    """All registry sources with their catalogue metadata.
+
+    Public read, consistent with the other bulletin read endpoints. Returns no
+    credentials and no PHI - only publication metadata and production counts.
+    """
+    from app.bulletin_intelligence.source_registry import fetch_sources
+    rows = await fetch_sources(enabled_only=enabled_only, limit=limit)
+    return {"count": len(rows), "enabled_only": enabled_only, "sources": rows}
+
+
+@router.get("/sources/health")
+async def sources_health():
+    """Aggregate source health: producing, silent, or never seen."""
+    from app.bulletin_intelligence.source_registry import source_health
+    return await source_health()
+
+
+@router.get("/sources/missing")
+async def sources_missing(hours: int = Query(24, ge=1, le=168)):
+    """Sources with a production history that have gone quiet."""
+    from app.bulletin_intelligence.source_registry import missing_sources
+    return await missing_sources(hours=hours)
+
+
+@router.post("/sources/load-catalog", dependencies=guard("admin"))
+async def load_source_catalog():
+    """Merge Master_Source_Catalog.csv into the registry. Idempotent."""
+    from app.bulletin_intelligence.source_registry import load_catalog
+    return await load_catalog()
+
+
 @router.get("/sources/{agency_id}", dependencies=guard("contributor"))
 async def list_sources(agency_id: str):
     """Expected-source registry (Coverage % denominator). Empty until seeded."""
@@ -560,7 +663,7 @@ async def preview_briefing(briefing_id: str):
     return HTMLResponse(content=html)
 
 
-@router.get("/briefings/{briefing_id}/docx")
+@router.get("/briefings/{briefing_id}/docx", dependencies=guard("viewer"))
 async def download_briefing_docx(briefing_id: str):
     """Download the editable Word (.docx) version of a briefing — open in Word,
     tweak, then run it through fcc_digest.py to produce the final email."""
@@ -583,7 +686,7 @@ async def download_briefing_docx(briefing_id: str):
 
 
 # ── Archive ────────────────────────────────────────────────────────────────────
-@router.get("/archive/{agency_id}")
+@router.get("/archive/{agency_id}", dependencies=guard("viewer"))
 async def archive_search(
     agency_id: str,
     keyword: Optional[str] = Query(None),
@@ -616,7 +719,7 @@ async def archive_search(
     )
 
 
-@router.get("/archive/{agency_id}/stats")
+@router.get("/archive/{agency_id}/stats", dependencies=guard("viewer"))
 async def archive_statistics(agency_id: str):
     """Get 12-month archive statistics — volume by topic, source type, and month."""
     agency = get_agency(agency_id)
@@ -625,7 +728,7 @@ async def archive_statistics(agency_id: str):
     return get_archive_stats(agency_id)
 
 
-@router.get("/archive/{agency_id}/clips")
+@router.get("/archive/{agency_id}/clips", dependencies=guard("viewer"))
 async def get_broadcast_clips(
     agency_id: str,
     topic: Optional[str] = Query(None),
@@ -663,7 +766,7 @@ async def llm_visibility_check(agency_id: str):
 # ── Demo Endpoint ──────────────────────────────────────────────────────────────
 
 
-@router.get("/briefings/{briefing_id}/pdf")
+@router.get("/briefings/{briefing_id}/pdf", dependencies=guard("viewer"))
 async def download_briefing_pdf(briefing_id: str):
     """Download briefing as PDF."""
     from fastapi.responses import Response
@@ -705,9 +808,16 @@ async def download_briefing_pdf(briefing_id: str):
         )
 
 
-@router.get("/run/{agency_id}/preview")
+@router.get("/run/{agency_id}/preview", dependencies=guard("contributor"))
 async def run_and_preview(agency_id: str, lookback_hours: int = 48):
-    """Run full cycle and return HTML briefing directly in browser."""
+    """Run full cycle and return HTML briefing directly in browser.
+
+    Auth added 2026-07-27: this endpoint calls run_daily_cycle(), i.e. a full
+    collection cycle that spends Anthropic API budget. It was the only trigger in the
+    module without a guard — /run, /run/sync, /collect and /refresh are all
+    guard("contributor") — which left an unauthenticated cost-amplification vector
+    open to anyone on the internet. Matched to its siblings.
+    """
     from fastapi.responses import HTMLResponse
     result = await run_daily_cycle(agency_id, auto_deliver=False, lookback_hours=lookback_hours)
     if "error" in result:

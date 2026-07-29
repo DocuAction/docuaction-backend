@@ -1,0 +1,25 @@
+{
+  "_comment": "Shared default release policy. A project's own gate_policy block in config/projects/<name>.json overrides any key here. Calibrated for a FIRST BASELINE - see _rationale.",
+
+  "block_on_critical": true,
+  "block_on_high": false,
+  "min_security_score": 30,
+  "max_critical_cves": 0,
+  "max_high_cves": 5,
+  "require_sbom": true,
+  "block_on_secrets": true,
+  "require_at_least_one_scanner": true,
+  "require_owasp_coverage": 80,
+  "warn_only": false,
+  "fail_on_tool_error": false,
+  "required_tools": [],
+
+  "_rationale": {
+    "block_on_high": "false for the first baseline only. 115 High findings exist, many in dormant modules, so blocking on High would make the gate permanently red and therefore ignored. Tighten to true once the High backlog is triaged.",
+    "min_security_score": "30 against the v2.0 density-normalised model. The v1 linear model saturated at 0 and could not discriminate.",
+    "max_high_cves": "5. There are currently 25 High dependency advisories, so this WILL fail until dependencies are upgraded - deliberately, because 26 of 27 have a published fix and are therefore actionable today.",
+    "require_sbom": "true. The SBOM is a supply-chain deliverable (EO 14028 / NIST SSDF) and is verified by artefact existence, not by the plugin reporting success.",
+    "block_on_critical": "true and non-negotiable. Criticals are hardcoded credentials and unsafe deserialization.",
+    "require_owasp_coverage": "80 refers to DETECTION coverage - the share of OWASP Top 10 categories the loaded ruleset can detect. It is an assurance statement about the tooling, not about the code."
+  }
+}

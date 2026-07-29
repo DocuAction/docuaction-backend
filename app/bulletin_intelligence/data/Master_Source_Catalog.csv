@@ -1,0 +1,123 @@
+publication_name,website,rss_feed,official_api,coverage_type,coverage_area,editorial_focus,publisher,content_frequency,fcc_relevance,subscription_required,free_or_paid,reliability_score,authority_score,primary_topics,duplicate_risk,search_capability,notes
+Reuters,reuters.com,yes,partial,National Newspaper,US/Global,policy|business|tech,Thomson Reuters,continuous,Medium,metered,Paid,10,10,telecom|policy|business,High,yes,Wire; often syndicated
+Associated Press,apnews.com,partial,partial,National Newspaper,US/Global,policy|business,Associated Press,continuous,Medium,no,Free,10,10,telecom|policy|business,High,yes,Wire; heavy syndication
+Bloomberg,bloomberg.com,yes,yes,National Newspaper,US/Global,markets|business|tech,Bloomberg LP,continuous,Medium,yes,Paid,10,10,telecom|business|markets,Medium,yes,API paid
+Bloomberg Government,about.bgov.com,verify,yes,Government Publication,US,regulation|congress,Bloomberg LP,daily,High,yes,Paid,10,10,fcc|congress|regulation,Low,yes,Licensed; strong FCC/Hill coverage
+Wall Street Journal,wsj.com,yes,no,National Newspaper,US,business|tech|policy,Dow Jones,continuous,Medium,yes,Paid,9,9,telecom|business|policy,Medium,yes,Paywall
+New York Times,nytimes.com,yes,yes,National Newspaper,US,policy|tech|business,NYT Company,continuous,Medium,metered,Paid,9,9,telecom|policy|tech,Medium,yes,Free NYT API
+Washington Post,washingtonpost.com,yes,no,National Newspaper,US,policy|tech,Nash Holdings,continuous,Medium,yes,Paid,9,9,telecom|policy,Medium,yes,DC policy angle
+USA Today,usatoday.com,yes,no,National Newspaper,US,general|tech|consumer,Gannett,continuous,Low,metered,Paid,8,7,consumer|tech,High,yes,Gannett network syndication
+CNBC,cnbc.com,yes,no,National Newspaper,US,business|markets|tech,NBCUniversal,continuous,Medium,no,Free,8,8,telecom|business,Medium,yes,
+Fox Business,foxbusiness.com,yes,no,National Newspaper,US,business|policy,Fox Corp,continuous,Low,no,Free,7,7,business|policy,Medium,yes,
+ABC News,abcnews.go.com,yes,no,National Newspaper,US,general|policy,Disney,continuous,Low,no,Free,8,7,policy|consumer,High,yes,
+NBC News,nbcnews.com,yes,no,National Newspaper,US,general|tech|policy,NBCUniversal,continuous,Low,no,Free,8,7,policy|tech,High,yes,
+CBS News,cbsnews.com,yes,no,National Newspaper,US,general|policy,Paramount,continuous,Low,no,Free,8,7,policy|consumer,High,yes,
+CNN,cnn.com,yes,no,National Newspaper,US,general|business|tech,Warner Bros Discovery,continuous,Low,no,Free,8,7,policy|business,High,yes,
+NPR,npr.org,yes,yes,National Newspaper,US,general|tech|policy,NPR,continuous,Medium,no,Free,9,8,telecom|policy,Medium,yes,Free API
+PBS NewsHour,pbs.org/newshour,yes,no,National Newspaper,US,policy|general,PBS,daily,Low,no,Free,9,7,policy,Low,yes,
+Los Angeles Times,latimes.com,yes,no,Regional Newspaper,US-West,general|tech|media,LA Times,continuous,Low,yes,Paid,8,7,media|tech,Medium,yes,
+Politico,politico.com,yes,partial,National Newspaper,US,congress|regulation|policy,Axel Springer,continuous,High,no,Free,9,9,fcc|congress|regulation,Low,yes,Strong FCC/Hill
+Politico Pro Technology,politico.com/pro,verify,yes,Telecommunications Publication,US,telecom-policy|spectrum,Axel Springer,daily,High,yes,Paid,9,10,fcc|spectrum|regulation,Low,yes,Licensed premium
+Axios,axios.com,yes,no,National Newspaper,US,policy|tech|business,Cox,continuous,Medium,no,Free,8,8,policy|tech,Medium,yes,Axios Pro paid tier
+The Hill,thehill.com,yes,no,National Newspaper,US,congress|policy|tech,Nexstar,continuous,High,no,Free,7,8,fcc|congress|policy,Medium,yes,
+Communications Daily,communicationsdaily.com,verify,no,Telecommunications Publication,US,fcc|telecom-policy,Warren Communications News,daily,High,yes,Paid,10,10,fcc|spectrum|media-policy,Low,yes,Gold-standard FCC beat; licensed
+TR Daily,trdaily.com,verify,no,Telecommunications Publication,US,fcc|telecom-policy,Telecommunications Reports,daily,High,yes,Paid,9,10,fcc|regulation,Low,yes,Licensed
+Broadband Breakfast,broadbandbreakfast.com,yes,no,Broadband Publication,US,broadband|fcc|bead,Breakfast Media,daily,High,metered,Paid,9,9,broadband|fcc|bead|spectrum,Low,yes,High FCC signal
+Telecompetitor,telecompetitor.com,yes,no,Broadband Publication,US,broadband|rural|fcc,Pivot Media,daily,High,no,Free,8,9,broadband|rural|fiber|fcc,Low,yes,
+Fierce Network,fierce-network.com,yes,no,Telecommunications Publication,US,wireless|telecom|5g,Questex,continuous,High,no,Free,8,9,wireless|5g|broadband|video,Low,yes,Merged Fierce brands
+Light Reading,lightreading.com,yes,no,Telecommunications Publication,US,telecom|fiber|networking,Informa,daily,Medium,no,Free,8,8,telecom|5g|fiber,Low,yes,
+RCR Wireless News,rcrwireless.com,yes,no,Wireless Publication,US,wireless|5g|spectrum,RCR Wireless,daily,High,no,Free,8,8,wireless|5g|spectrum|iot,Low,yes,
+Multichannel News / Next TV,nexttv.com,yes,no,Television Industry Publication,US,cable|media|broadcast,Future US,daily,High,no,Free,8,9,cable|media|broadcast|fcc,Low,yes,
+TVNewsCheck,tvnewscheck.com,yes,no,Television Industry Publication,US,broadcast|tv,NewsCheckMedia,daily,High,metered,Paid,8,8,broadcast|tv|fcc|retrans,Low,yes,
+TV Technology,tvtechnology.com,yes,no,Television Industry Publication,US,broadcast|engineering,Future US,daily,Medium,no,Free,7,7,broadcast|atsc3,Low,yes,
+Radio World,radioworld.com,yes,no,Radio Publication,US,radio|broadcast,Future US,daily,High,no,Free,7,8,radio|broadcast|fcc,Low,yes,
+Radio Ink,radioink.com,yes,no,Radio Publication,US,radio|broadcast,Streamline Publishing,daily,Medium,no,Free,7,7,radio|fcc,Low,yes,
+Inside Radio,insideradio.com,verify,no,Radio Publication,US,radio|broadcast,Inside Radio,daily,High,metered,Paid,7,8,radio|fcc,Low,yes,
+Cablefax,cablefax.com,yes,no,Television Industry Publication,US,cable|media,Access Intelligence,daily,Medium,metered,Paid,7,7,cable|fcc,Low,yes,
+Telecoms.com,telecoms.com,yes,no,Telecommunications Publication,Global,telecom|5g,Informa,daily,Low,no,Free,7,6,telecom|5g,Medium,yes,Global focus
+Mobile World Live,mobileworldlive.com,yes,no,Wireless Publication,Global,wireless|5g|mobile,GSMA,daily,Medium,no,Free,7,6,wireless|5g|spectrum,Medium,yes,
+Total Telecom,totaltele.com,yes,no,Telecommunications Publication,Global,telecom|broadband,Terrapinn,daily,Low,no,Free,7,6,telecom|broadband,Medium,yes,
+Via Satellite,satellitetoday.com,yes,no,Satellite Publication,US/Global,satellite|spectrum,Access Intelligence,daily,High,no,Free,7,8,satellite|spectrum|space,Low,yes,
+SpaceNews,spacenews.com,yes,no,Satellite Publication,US/Global,satellite|space|spectrum,SpaceNews,daily,High,metered,Paid,8,8,satellite|space|spectrum|fcc,Low,yes,
+Urgent Communications,urgentcomm.com,yes,no,Public Safety Communications,US,public-safety|land-mobile,Informa,daily,High,no,Free,7,8,public-safety|spectrum|911,Low,yes,
+Inside Towers,insidetowers.com,yes,no,Wireless Publication,US,wireless-infrastructure|towers,Inside Towers,daily,High,metered,Paid,7,8,towers|siting|fcc,Low,yes,
+Wireless Estimator,wirelessestimator.com,yes,no,Wireless Publication,US,tower-industry|safety,Wireless Estimator,daily,Medium,no,Free,6,6,towers|infrastructure,Low,yes,
+Broadband Communities,bbcmag.com,verify,no,Broadband Publication,US,broadband|fiber|deployment,BBC Magazine,weekly,Medium,no,Free,7,7,broadband|fiber|bead,Low,yes,
+Telecom Ramblings,telecomramblings.com,yes,no,Telecommunications Publication,US,telecom|fiber|datacenter,Rob Powell,daily,Medium,no,Free,7,6,telecom|fiber|networks,Low,yes,
+Ars Technica,arstechnica.com,yes,no,Technology Publication,US,tech|policy,Conde Nast,continuous,High,no,Free,8,8,tech|fcc|broadband|policy,Low,yes,Strong FCC policy coverage
+The Verge,theverge.com,yes,no,Technology Publication,US,tech|policy,Vox Media,continuous,High,no,Free,8,8,tech|fcc|broadband,Medium,yes,
+Wired,wired.com,yes,no,Technology Publication,US,tech|policy|privacy,Conde Nast,daily,Medium,yes,Paid,7,7,tech|privacy|policy,Medium,yes,
+CNET,cnet.com,yes,no,Technology Publication,US,consumer-tech|broadband,Ziff Davis,continuous,Low,no,Free,6,6,consumer|broadband,High,yes,
+InCompliance Magazine,incompliancemag.com,verify,no,Technology Publication,US,emc|equipment-authorization,Same Page Publishing,monthly,Medium,no,Free,6,7,equipment-authorization|emc|fcc-part15,Low,yes,FCC equipment-auth niche
+PolicyTracker,policytracker.com,verify,no,Spectrum Publication,Global,spectrum-policy,PolicyTracker,weekly,High,yes,Paid,8,8,spectrum|policy|international,Low,yes,Licensed spectrum specialist
+MediaPost,mediapost.com,yes,no,Technology Publication,US,media|advertising|policy,MediaPost,daily,Low,no,Free,6,6,media|policy,Medium,yes,
+CommLawBlog,commlawblog.com,yes,no,Legal Publication,US,fcc-law|licensing,Fletcher Heald & Hildreth,weekly,High,no,Free,8,9,fcc-law|licensing|enforcement,Low,yes,Law-firm blog; high signal
+Wiley Connect,wileyconnect.com,yes,no,Legal Publication,US,fcc-law|spectrum,Wiley Rein,weekly,High,no,Free,8,8,fcc-law|spectrum|privacy,Low,yes,
+Kelley Drye CommLaw Monitor,commlawmonitor.com,yes,no,Legal Publication,US,fcc-law|regulation,Kelley Drye,weekly,High,no,Free,8,8,fcc-law|enforcement,Low,yes,
+JD Supra,jdsupra.com,yes,partial,Legal Publication,US,legal-analysis,JD Supra,continuous,Medium,no,Free,7,7,fcc|telecom|tcpa,Medium,yes,Aggregates law-firm posts
+National Law Review,natlawreview.com,yes,no,Legal Publication,US,legal-analysis,National Law Review,daily,Medium,no,Free,6,6,fcc|privacy|tcpa,Medium,yes,
+Law360 Telecom,law360.com,verify,yes,Legal Publication,US,telecom-litigation,LexisNexis,daily,High,yes,Paid,8,8,telecom-litigation|fcc,Low,yes,Licensed
+SCOTUSblog,scotusblog.com,yes,no,Court Decisions,US,supreme-court|admin-law,SCOTUSblog,daily,Medium,no,Free,9,7,scotus|chevron|admin-law,Low,yes,Key for FCC appeals
+FCC Daily Digest,fcc.gov/news-events/daily-digest,verify,yes,Federal Agency,US,fcc-releases,FCC,daily,High,no,Free,10,10,fcc|orders|releases|dockets,None,yes,Primary; developers portal
+FCC News Releases,fcc.gov/news-events/headlines,verify,yes,Federal Agency,US,fcc-press,FCC,daily,High,no,Free,10,10,fcc|press-releases,None,yes,Primary
+FCC ECFS,fcc.gov/ecfs,no,yes,Federal Agency,US,fcc-filings,FCC,continuous,High,no,Free,10,9,fcc-filings|dockets|comments,None,yes,Public API
+FCC LMS,fcc.gov/media/lms,no,partial,Federal Agency,US,licensing|stations,FCC,continuous,High,no,Free,10,8,licensing|tv|radio,None,yes,Station licensing DB
+FCC Auctions,fcc.gov/auctions,verify,partial,Federal Agency,US,spectrum-auctions,FCC,event,High,no,Free,10,8,spectrum-auctions,None,yes,
+FCC Consumer Alerts,fcc.gov/consumers,verify,no,Federal Agency,US,consumer|robocalls,FCC,weekly,Medium,no,Free,10,6,consumer|robocalls|scams,None,yes,
+Federal Register,federalregister.gov,yes,yes,Federal Agency,US,rules|notices,NARA/GPO,daily,High,no,Free,10,9,rules|proposed-rules|fcc,None,yes,Free API
+Regulations.gov,regulations.gov,no,yes,Federal Agency,US,dockets|comments,GSA,continuous,High,no,Free,10,8,dockets|rulemaking,None,yes,Free API key
+Congress.gov,congress.gov,verify,yes,Congressional Publication,US,legislation|hearings,Library of Congress,daily,High,no,Free,10,8,telecom-bills|hearings,None,yes,Free API
+House Energy & Commerce,energycommerce.house.gov,yes,no,Congressional Publication,US,telecom-legislation,U.S. House,weekly,High,no,Free,10,8,fcc-oversight|hearings,None,yes,
+Senate Commerce Committee,commerce.senate.gov,yes,no,Congressional Publication,US,telecom-legislation,U.S. Senate,weekly,High,no,Free,10,8,fcc-oversight|nominations,None,yes,
+NTIA,ntia.gov,yes,no,Federal Agency,US,spectrum|broadband|bead,Dept of Commerce,weekly,High,no,Free,10,8,spectrum|broadband|bead,None,yes,
+FTC,ftc.gov,yes,no,Federal Agency,US,privacy|competition|robocalls,FTC,daily,Medium,no,Free,10,7,privacy|robocalls|competition,None,yes,
+DOJ Antitrust,justice.gov/atr,yes,no,Federal Agency,US,antitrust|mergers,DOJ,weekly,Medium,no,Free,10,7,antitrust|telecom-deals,None,yes,
+NIST,nist.gov,yes,partial,Federal Agency,US,standards|cybersecurity,Dept of Commerce,weekly,Low,no,Free,9,4,standards|spectrum-research,None,yes,
+CISA,cisa.gov,yes,no,Federal Agency,US,cybersecurity|comms-resilience,DHS,daily,Medium,no,Free,10,6,cybersecurity|911|resilience,None,yes,
+DHS,dhs.gov,yes,no,Federal Agency,US,homeland-security|emergency-comms,DHS,daily,Low,no,Free,9,4,emergency-comms,None,yes,
+Commerce Department,commerce.gov,yes,no,Federal Agency,US,commerce|spectrum-policy,US DOC,weekly,Medium,no,Free,9,6,spectrum|broadband|policy,Medium,yes,Parent of NTIA/NIST
+GAO,gao.gov,yes,partial,Federal Agency,US,oversight|reports,GAO,daily,Medium,no,Free,10,6,spectrum|broadband|oversight,None,yes,
+CRS,crsreports.congress.gov,verify,no,Congressional Publication,US,policy-analysis,Library of Congress,weekly,Medium,no,Free,10,6,telecom-policy|analysis,None,yes,
+White House,whitehouse.gov,yes,no,Federal Agency,US,executive-actions,EOP,daily,Medium,no,Free,10,6,executive-actions|nominations,None,yes,
+OMB,whitehouse.gov/omb,verify,no,Federal Agency,US,budget|oira-review,EOP,weekly,Low,no,Free,10,5,oira|rule-review|budget,None,yes,OIRA reviews FCC rules
+GovInfo,govinfo.gov,verify,yes,Federal Agency,US,federal-documents,GPO,daily,Medium,no,Free,9,7,cfr|hearings|documents,Low,yes,Free API
+USAC,usac.org,verify,no,Federal Agency,US,usf|e-rate|acp,USAC,weekly,High,no,Free,9,7,usf|e-rate|acp|rdof|lifeline,None,yes,
+ITU,itu.int,verify,no,Government Publication,Global,international-spectrum,United Nations,weekly,Medium,partial,Freemium,9,6,spectrum|wrc|standards,Low,yes,
+CTIA,ctia.org,verify,no,Company Newsroom,US,wireless-policy,CTIA,weekly,High,no,Free,7,8,wireless|5g|spectrum|policy,Medium,yes,Wireless trade assoc
+NAB,nab.org,verify,no,Company Newsroom,US,broadcast-policy,NAB,weekly,High,no,Free,7,8,broadcast|tv|radio|policy,Medium,yes,Broadcasters trade assoc
+NCTA,ncta.com,verify,no,Company Newsroom,US,cable-policy,NCTA,weekly,High,no,Free,7,8,cable|broadband|policy,Medium,yes,Cable trade assoc
+USTelecom,ustelecom.org,verify,no,Company Newsroom,US,broadband-policy,USTelecom,weekly,High,no,Free,7,8,broadband|fiber|bead|policy,Medium,yes,
+INCOMPAS,incompas.org,verify,no,Company Newsroom,US,competitive-telecom,INCOMPAS,weekly,Medium,no,Free,7,7,competitive-telecom|policy,Medium,yes,
+WISPA,wispa.org,verify,no,Company Newsroom,US,fixed-wireless,WISPA,weekly,Medium,no,Free,6,7,fixed-wireless|rural|spectrum,Medium,yes,
+Satellite Industry Association,sia.org,verify,no,Company Newsroom,US,satellite-policy,SIA,weekly,Medium,no,Free,6,7,satellite|spectrum,Medium,yes,
+Public Knowledge,publicknowledge.org,yes,no,Company Newsroom,US,consumer-policy,Public Knowledge,weekly,High,no,Free,7,8,net-neutrality|competition|fcc,Medium,yes,Public-interest group
+Free Press,freepress.net,yes,no,Company Newsroom,US,media-policy,Free Press,weekly,Medium,no,Free,7,7,net-neutrality|media-ownership,Medium,yes,
+Benton Institute,benton.org,yes,no,Company Newsroom,US,broadband-policy,Benton Institute,daily,High,no,Free,8,8,broadband|digital-equity|fcc,Low,yes,Curated FCC-relevant digest
+ITIF,itif.org,yes,no,Company Newsroom,US,tech-policy,ITIF,weekly,Medium,no,Free,8,7,tech-policy|broadband,Medium,yes,
+American City Business Journals,bizjournals.com,yes,no,Business Journal,US,local-business,ACBJ,daily,Medium,yes,Paid,7,5,local-business|telecom|broadband,Medium,yes,44 metro editions
+AT&T Newsroom,about.att.com/newsroom,verify,no,Company Newsroom,US,att-corporate,AT&T,weekly,High,no,Free,8,7,wireless|fiber|corporate,Low,yes,Official newsroom only
+Verizon News,verizon.com/about/news,verify,no,Company Newsroom,US,verizon-corporate,Verizon,weekly,High,no,Free,8,7,wireless|fiber|corporate,Low,yes,
+T-Mobile Newsroom,t-mobile.com/news,verify,no,Company Newsroom,US,tmobile-corporate,T-Mobile,weekly,High,no,Free,8,7,wireless|5g|corporate,Low,yes,
+Comcast Newsroom,corporate.comcast.com/news-information,verify,no,Company Newsroom,US,comcast-corporate,Comcast,weekly,High,no,Free,8,7,cable|broadband|corporate,Low,yes,
+Charter Newsroom,corporate.charter.com/newsroom,verify,no,Company Newsroom,US,charter-corporate,Charter,weekly,High,no,Free,8,7,cable|broadband|corporate,Low,yes,
+Lumen Newsroom,news.lumen.com,verify,no,Company Newsroom,US,lumen-corporate,Lumen,weekly,Medium,no,Free,7,6,fiber|enterprise|corporate,Low,yes,
+DISH/EchoStar Newsroom,about.dish.com,verify,no,Company Newsroom,US,dish-corporate,EchoStar,weekly,High,no,Free,7,7,wireless|satellite|corporate,Low,yes,
+SpaceX/Starlink Updates,spacex.com/updates,verify,no,Company Newsroom,US/Global,spacex-corporate,SpaceX,weekly,High,no,Free,8,8,satellite|spectrum|launch,Low,partial,FCC satellite licensing relevance
+Amazon (Project Kuiper),aboutamazon.com/news,verify,no,Company Newsroom,US,kuiper-corporate,Amazon,weekly,Medium,no,Free,8,6,satellite|broadband|corporate,Low,yes,
+Qualcomm Newsroom,qualcomm.com/news,verify,no,Company Newsroom,US,qualcomm-corporate,Qualcomm,weekly,Medium,no,Free,7,6,5g|chipsets|spectrum,Low,yes,
+Ericsson News,ericsson.com/en/news,verify,no,Company Newsroom,Global,ericsson-corporate,Ericsson,weekly,Low,no,Free,7,5,5g|ran|corporate,Low,yes,
+Nokia News,nokia.com/about-us/news,verify,no,Company Newsroom,Global,nokia-corporate,Nokia,weekly,Low,no,Free,7,5,5g|networks|corporate,Low,yes,
+Cisco Newsroom,newsroom.cisco.com,verify,no,Company Newsroom,US,cisco-corporate,Cisco,weekly,Low,no,Free,7,5,networking|corporate,Low,yes,
+Intel Newsroom,newsroom.intel.com,verify,no,Company Newsroom,US,intel-corporate,Intel,weekly,Low,no,Free,7,4,chipsets|corporate,Low,yes,
+Broadcom News,broadcom.com/company/news,verify,no,Company Newsroom,US,broadcom-corporate,Broadcom,weekly,Low,no,Free,7,4,chipsets|corporate,Low,yes,
+Motorola Solutions Newsroom,motorolasolutions.com/newsroom,verify,no,Company Newsroom,US,motorola-corporate,Motorola Solutions,weekly,Medium,no,Free,7,6,public-safety|land-mobile|corporate,Low,yes,
+Apple Newsroom,apple.com/newsroom,verify,no,Company Newsroom,US,apple-corporate,Apple,weekly,Low,no,Free,8,4,devices|corporate,Low,yes,
+Google (The Keyword),blog.google,verify,no,Company Newsroom,US,google-corporate,Google,weekly,Low,no,Free,7,5,tech|spectrum|corporate,Low,yes,
+Microsoft News,news.microsoft.com,verify,no,Company Newsroom,US,microsoft-corporate,Microsoft,weekly,Low,no,Free,7,4,broadband|airband|corporate,Low,yes,Airband rural broadband
+Samsung Newsroom,news.samsung.com,verify,no,Company Newsroom,Global,samsung-corporate,Samsung,weekly,Low,no,Free,7,4,5g|devices|corporate,Low,yes,
+PR Newswire,prnewswire.com,yes,partial,Press Release Service,US/Global,press-releases,Cision,continuous,Medium,no,Freemium,6,6,company-announcements|telecom,High,yes,Filter by industry
+Business Wire,businesswire.com,yes,partial,Press Release Service,US/Global,press-releases,Berkshire Hathaway,continuous,Medium,no,Freemium,6,6,company-announcements|telecom,High,yes,
+GlobeNewswire,globenewswire.com,yes,partial,Press Release Service,US/Global,press-releases,Notified,continuous,Medium,no,Freemium,6,6,company-announcements,High,yes,
+AccessWire,accesswire.com,yes,no,Press Release Service,US,press-releases,ACCESS Newswire,continuous,Low,no,Freemium,5,5,company-announcements,High,yes,
+Newswire,newswire.com,verify,no,Press Release Service,US,press-releases,Newswire,continuous,Low,no,Freemium,5,5,company-announcements,High,yes,
+GDELT DOC 2.0,gdeltproject.org,no,yes,Technology Publication,US/Global,news-index,GDELT Project,continuous,Medium,no,Free,7,7,fcc-mentions|global-index,High,yes,Discovery aggregator (indexes editorial only)

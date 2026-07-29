@@ -422,6 +422,20 @@ def _get_client() -> AsyncAnthropic:
     return AsyncAnthropic(api_key=ANTHROPIC_KEY)
 
 
+async def _record_llm_cost(resp, *, operation: str, model: str) -> None:
+    """Phase 1 cost tracking shim — records tokens/cost for one Claude response.
+
+    Imported lazily and fully swallowed so that neither a missing costs package nor
+    a DB problem can affect a bulletin run. No-op unless
+    BULLETIN_COST_TRACKING_ENABLED=true. Records only; changes no behaviour.
+    """
+    try:
+        from app.bulletin_intelligence.costs.cost_tracker import record_usage
+        await record_usage(resp, operation=operation, model=model)
+    except Exception:
+        pass
+
+
 def _extract_text(content) -> str:
     """Extract plain text from Anthropic message content blocks."""
     parts = []
@@ -1930,6 +1944,9 @@ Return ONLY the JSON array."""
                 max_tokens=1500,
                 messages=[{"role": "user", "content": prompt}]
             )
+            # Phase 1 cost tracking — best-effort, never raises, no-op unless
+            # BULLETIN_COST_TRACKING_ENABLED=true. Does not alter classification.
+            await _record_llm_cost(resp, operation="classify_articles", model="claude-haiku-4-5")
             results = _parse_json_safe(_extract_text(resp.content))
             rmap = {r["id"]: r for r in (results if isinstance(results, list) else [])}
 
@@ -1967,28 +1984,39 @@ async def generate_briefing_html(agency: AgencyConfig, articles: List[Article], 
 
 async def build_briefing_outputs(agency: AgencyConfig, articles: List[Article], briefing_date: str):
     """Build the briefing sections ONCE and render BOTH the HTML and the editable
-    .docx from them (so summaries aren't generated twice). Returns (html, docx_bytes).
-    docx_bytes is b'' if the Word render fails — HTML is always returned. Never
+    .docx from them (so summaries aren't generated twice). Returns
+    (html, docx_bytes, sections). `sections` is what actually rendered, so the caller
+    can report a story count that matches the document instead of the pre-render
+    candidate count; it is [] when the AGT render failed and the simple fallback was
+    used. docx_bytes is b'' if the Word render fails — HTML is always returned. Never
     raises: any failure falls back to a simple HTML so the cycle can't crash."""
     try:
         sections = await _prepare_briefing_sections(agency, articles)
         html = _render_agt_html(agency, briefing_date, sections)
     except Exception as e:
         logger.error(f"AGT briefing build failed; using simple HTML: {e}")
-        return _simple_html(agency, articles, briefing_date), b""
+        return _simple_html(agency, articles, briefing_date), b"", []
     try:
         docx_bytes = _render_agt_docx(agency, briefing_date, sections)
     except Exception as e:
         logger.warning(f"DOCX render failed: {e}")
         docx_bytes = b""
-    return html, docx_bytes
+    return html, docx_bytes, sections
 
 
 # ── Boolean section matching (the client's Appendix A spec) ────────────────────
 try:
-    from app.bulletin_intelligence.fcc_boolean_search import FCC_SEARCH_TOPICS as _FCC_BOOL
+    # Phase 2: bound to the profiles cache, which is itself seeded verbatim from
+    # fcc_boolean_search.FCC_SEARCH_TOPICS. Same object identity is retained across
+    # refresh_from_db() (it mutates in place), so _boolean_section below needs no
+    # change and picks up DB-driven queries automatically. Falls back to the
+    # hardcoded constants whenever the table is empty or the flag is off.
+    from app.bulletin_intelligence.profiles.boolean_profiles import PROFILES as _FCC_BOOL
 except Exception:
-    _FCC_BOOL = {}
+    try:
+        from app.bulletin_intelligence.fcc_boolean_search import FCC_SEARCH_TOPICS as _FCC_BOOL
+    except Exception:
+        _FCC_BOOL = {}
 
 # Map the boolean-spec topic keys -> our AGT_SECTIONS display names, in spec order.
 _BOOL_KEY_TO_SECTION = {
@@ -2017,8 +2045,24 @@ def _phrase_in(phrase: str, text: str) -> bool:
 
 
 def _boolean_matches(expr: str, text: str) -> bool:
-    """Evaluate a boolean expression (AND/OR/parentheses/quoted phrases/title:) of
-    the client's spec against an article's lowercased text."""
+    """Evaluate a boolean expression against an article's lowercased text.
+
+    Grammar (Phase 2 — NOT added; precedence NOT > AND > OR):
+        or   := and (OR and)*
+        and  := not_ (AND not_)*
+        not_ := (NOT | !) not_ | atom
+        atom := "(" or ")" | token
+
+    NOT binds tighter than AND, so `a AND NOT b` parses as `a AND (NOT b)` and
+    `NOT a OR b` as `(NOT a) OR b` — standard Boolean precedence, and what an editor
+    writing `spectrum AND NOT sports` expects. Without negation there was no way to
+    exclude a false-positive class, which is why the US/FCC-focus requirement needed
+    this.
+
+    Backward compatible: an expression containing no NOT/! token takes exactly the
+    same path as before. A bare unquoted `not` in a query is now an operator — quote
+    it ("not") to match it as a literal word.
+    """
     import re
     if not expr:
         return False
@@ -2035,10 +2079,17 @@ def _boolean_matches(expr: str, text: str) -> bool:
         tok = tokens[pos]
         return _phrase_in(tok, text), pos + 1
 
+    def _not(pos):
+        # Right-associative so `NOT NOT x` folds correctly back to `x`.
+        if pos < len(tokens) and (tokens[pos].upper() == "NOT" or tokens[pos] == "!"):
+            val, pos = _not(pos + 1)
+            return (not val), pos
+        return atom(pos)
+
     def _and(pos):
-        val, pos = atom(pos)
+        val, pos = _not(pos)
         while pos < len(tokens) and tokens[pos].upper() == "AND":
-            rhs, pos = atom(pos + 1)
+            rhs, pos = _not(pos + 1)
             val = val and rhs
         return val, pos
 
@@ -2048,6 +2099,7 @@ def _boolean_matches(expr: str, text: str) -> bool:
             rhs, pos = _and(pos + 1)
             val = val or rhs
         return val, pos
+
 
     try:
         return bool(_or(0)[0])
@@ -2266,7 +2318,15 @@ async def _prepare_briefing_sections(agency: AgencyConfig, articles: List[Articl
         logger.debug(f"flag_subscriptions skipped: {_e}")
 
     # NEWS only — relevant, non-social — then drop duplicate stories across cycles.
-    news = [a for a in pool.values() if a.relevance_score >= 0.4 and a.source_type != "social"]
+    # Relevance gate matches the briefing filter in run_daily_cycle: an article that
+    # the classifier gave a real topic is kept regardless of score, and only untyped
+    # ("other") items must clear 0.4. This used to require >= 0.4 unconditionally,
+    # so a classified-but-low-scoring story was counted in article_count yet never
+    # rendered — the cause of the reported-vs-visible gap (146 reported / 41 shown).
+    news = [
+        a for a in pool.values()
+        if (a.topic != "other" or a.relevance_score >= 0.4) and a.source_type != "social"
+    ]
 
     # Lenient spam/junk removal (press releases, malformed URLs, listicles). Uses a
     # LOW threshold so only clear junk is dropped — volume is preserved.
@@ -2358,6 +2418,10 @@ def _collect_sections(clusters, summaries: Dict[str, str]):
             "headline": headline,
             "url": (primary.url or "").strip(),
             "anchor": f"story_{idx}",
+            # Private (leading underscore, like _leader): carried so the caller can
+            # build topic_counts from what actually rendered. Renderers read keys
+            # explicitly, so an extra key is inert.
+            "_topic": getattr(primary, "topic", "other") or "other",
             "summary": (summaries.get(primary.article_id) or primary.summary or "").strip(),
             "is_paywalled": bool(primary.is_paywalled) or _is_paywalled_url(primary.url),
             "_leader": bool(prefix and sec == "General"),
@@ -2397,6 +2461,9 @@ async def _summaries_for(articles: List[Article], agency: AgencyConfig) -> Dict[
                 model="claude-haiku-4-5", max_tokens=2400,
                 messages=[{"role": "user", "content": prompt}],
             )
+            # Phase 1 cost tracking — best-effort, never raises, no-op unless
+            # BULLETIN_COST_TRACKING_ENABLED=true. Does not alter summaries.
+            await _record_llm_cost(resp, operation="summaries", model="claude-haiku-4-5")
             for r in (_parse_json_safe(_extract_text(resp.content)) or []):
                 if isinstance(r, dict) and r.get("id") and (r.get("summary") or "").strip():
                     res[r["id"]] = r["summary"].strip()
@@ -3096,6 +3163,21 @@ async def run_daily_cycle(
 
     briefing_date = _us_date(datetime.now())
     briefing_id = f"{agency_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    # Phase 1: tag this task's Claude calls with the run id so cost rows attribute to
+    # this cycle. Same id instrumentation.record_run() uses, so cost and run history
+    # join on run_id. Best-effort; never blocks the cycle.
+    try:
+        from app.bulletin_intelligence.costs.cost_tracker import set_run_context
+        set_run_context(briefing_id, agency_id)
+    except Exception:
+        pass
+    # Phase 2: pick up any operator edits to the Boolean profiles for this cycle.
+    # No-op unless BULLETIN_PROFILES_DB_ENABLED=true and the table has rows.
+    try:
+        from app.bulletin_intelligence.profiles.boolean_profiles import refresh_from_db
+        await refresh_from_db(agency_id)
+    except Exception:
+        pass
     logger.info(f"Daily cycle starting: {agency.name}")
 
     # RSS ONLY — Appendix B sources, always FCC-relevant
@@ -3110,6 +3192,19 @@ async def run_daily_cycle(
     # when NEWSAPI_AI_KEY is set, otherwise skipped gracefully. Same pipeline.
     if NEWSAPI_AI_KEY:
         tasks.append(ingest_newsapi_ai(agency, lookback_hours))
+    # Perigon (Phase 3) — Boolean-native news API. Auto-skips when PERIGON_API_KEY
+    # is unset, exactly like the other optional collectors, so this is inert until a
+    # key is configured. Queries the Phase 2 Boolean profiles verbatim (Perigon
+    # speaks the same AND/OR/NOT/quoted-phrase dialect) with language=en&country=us
+    # applied server-side, plus a NOT-exclusion for the FC Cincinnati sense of "FCC".
+    try:
+        from app.bulletin_intelligence.providers.perigon import (
+            PERIGON_ENABLED as _PERIGON_ON, ingest_perigon,
+        )
+        if _PERIGON_ON:
+            tasks.append(ingest_perigon(agency, lookback_hours))
+    except Exception as e:
+        logger.warning(f"Perigon source unavailable: {e}")
     # Claude web_search ingest_news disabled — too noisy/expensive
     # tasks.append(ingest_news(agency, lookback_hours))
 
@@ -3262,6 +3357,20 @@ async def run_daily_cycle(
     )[:150]
     logger.info(f"Briefing: {len(briefing_arts)} articles from {len(classified)} classified")
 
+    # Phase 5 quality gate. Runs after collection and BEFORE render, and is
+    # WARN-ONLY - it can never prevent a briefing from being produced. A thin
+    # briefing carrying an honest warning beats no briefing at all.
+    try:
+        from app.bulletin_intelligence.quality_gate import run_quality_gate
+        _qg = await run_quality_gate(
+            agency_id, all_articles, unique, briefing_arts,
+            window=get_briefing_window())
+        if _qg.get("warnings"):
+            logger.warning(f"Quality gate [{agency_id}] score {_qg['score']}: "
+                           + "; ".join(_qg["warnings"][:5]))
+    except Exception as _e:
+        logger.debug(f"quality gate skipped: {_e}")
+
     # Coverage analytics (additive; surfaced at GET /coverage/{agency_id}).
     try:
         coverage = _build_coverage_report(agency_id, all_articles, unique, classified, briefing_arts)
@@ -3307,13 +3416,50 @@ async def run_daily_cycle(
             logger.debug(f"registry editorial queue skipped: {_e}")
 
     # Generate briefing — HTML + editable Word (.docx), built from the same sections
-    html, docx_bytes = await build_briefing_outputs(agency, briefing_arts, briefing_date)
+    html, docx_bytes, sections = await build_briefing_outputs(agency, briefing_arts, briefing_date)
+
+    # Phase 4: record which sources actually produced content this cycle. Additive
+    # and fail-soft, and placed AFTER the briefing is built - source bookkeeping must
+    # never be able to fail a briefing.
+    try:
+        from app.bulletin_intelligence.source_registry import record_source_activity
+        _sa = await record_source_activity(briefing_arts)
+        if _sa.get("updated"):
+            logger.info(f"Source activity: {_sa['updated']} registry row(s) updated "
+                        f"across {_sa.get('domains', 0)} domain(s)")
+    except Exception as _e:
+        logger.debug(f"source activity tracking skipped: {_e}")
     import base64 as _b64
     docx_b64 = _b64.b64encode(docx_bytes).decode() if docx_bytes else ""
 
-    topic_counts = {}
-    for art in briefing_arts:
-        topic_counts[art.topic] = topic_counts.get(art.topic, 0) + 1
+    # Report what the reader can actually see. article_count/topic_counts used to be
+    # taken from briefing_arts (the pre-render candidate set), which is a superset of
+    # what _prepare_briefing_sections renders — the header claimed 146 stories over a
+    # document containing 41. Count the rendered stories instead. One rendered story =
+    # one cluster primary; its RELATED links are additional coverage of that same
+    # story, so they are deliberately not counted again here.
+    rendered = [s for _sec_name, _stories in sections for s in _stories]
+    # Test `sections`, not `rendered`: _collect_sections always returns all nine
+    # section tuples (empty headers included), so a truthy `sections` means the AGT
+    # render ran. Only the fallback returns []. A successful render with zero stories
+    # must therefore report 0, not fall back to the candidate count.
+    if sections:
+        article_count = len(rendered)
+        topic_counts = {}
+        for s in rendered:
+            _t = s.get("_topic") or "other"
+            topic_counts[_t] = topic_counts.get(_t, 0) + 1
+    else:
+        # AGT render failed -> _simple_html, which lists every briefing article, so
+        # briefing_arts IS the visible set on that path.
+        article_count = len(briefing_arts)
+        topic_counts = {}
+        for art in briefing_arts:
+            topic_counts[art.topic] = topic_counts.get(art.topic, 0) + 1
+    logger.info(
+        f"Briefing counts: {article_count} rendered stories "
+        f"(from {len(briefing_arts)} briefing candidates)"
+    )
 
     # LIVE-FEED MODEL: every briefing is immediately available the moment it is
     # built — there is NO approval gate. status="delivered" here means "live /
@@ -3335,7 +3481,7 @@ async def run_daily_cycle(
         briefing_date=briefing_date,
         status=status,
         html_content=html,
-        article_count=len(briefing_arts),
+        article_count=article_count,
         topic_counts=topic_counts,
         generated_at=_now(),
         delivered_at=delivered_at,

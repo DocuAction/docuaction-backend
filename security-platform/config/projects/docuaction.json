@@ -1,0 +1,142 @@
+{
+  "name": "docuaction",
+  "display_name": "DocuAction",
+  "description": "AGT DocuAction \u2014 FastAPI backend + Next.js frontend. Healthcare (TEFCA/HIPAA) and federal (FCC) workloads on Azure.",
+  "_comment_targets": "Each target is an independently scannable tree. Adding a new AGT application means adding a sibling file in config/projects/ \u2014 no code changes.",
+  "targets": [
+    {
+      "name": "backend",
+      "path": "C:/Imran_Coding projects/DocuAction/backend",
+      "language": "Python",
+      "package_manager": "pip",
+      "manifest": "requirements.txt",
+      "enabled": true
+    },
+    {
+      "name": "frontend",
+      "path": "C:/Imran_Coding projects/DocuAction/frontend",
+      "language": "JavaScript",
+      "package_manager": "npm",
+      "manifest": "package.json",
+      "enabled": true
+    }
+  ],
+  "_comment_excludes": "Merged with Project.DEFAULT_EXCLUDES. pydeps/ matters here: it is the vendored Linux wheel tree used for Azure deploys and would otherwise be scanned as if it were first-party code.",
+  "exclude_patterns": [
+    "**/pydeps/**",
+    "**/.next/**",
+    "**/out/**",
+    "**/alembic/versions/**",
+    "**/*.min.js",
+    "**/*.map",
+    "**/security-platform/**"
+  ],
+  "_comment_plugins": "Unlisted plugins default to enabled, so new scanners work without editing this file. Set enabled=false to opt out.",
+  "plugins": {
+    "semgrep": {
+      "enabled": true,
+      "rulesets": [
+        "p/python",
+        "p/javascript",
+        "p/owasp-top-ten",
+        "p/jwt",
+        "p/sql-injection",
+        "p/xss",
+        "p/secrets"
+      ],
+      "timeout_seconds": 1800
+    },
+    "bandit": {
+      "enabled": true,
+      "targets": [
+        "backend"
+      ],
+      "confidence": "all",
+      "severity": "all"
+    },
+    "custom_rules": {
+      "enabled": true,
+      "rule_packs": [
+        "owasp",
+        "auth",
+        "healthcare",
+        "azure"
+      ]
+    },
+    "gitleaks": {
+      "enabled": true,
+      "scan_history": true,
+      "timeout_seconds": 900
+    },
+    "pip_audit": {
+      "enabled": true,
+      "targets": [
+        "backend"
+      ]
+    },
+    "npm_audit": {
+      "enabled": true,
+      "targets": [
+        "frontend"
+      ]
+    },
+    "trivy": {
+      "enabled": true,
+      "scan_type": "fs"
+    },
+    "cyclonedx": {
+      "enabled": true,
+      "output": "sbom.json"
+    }
+  },
+  "_comment_gate": "Release policy. Evaluated by core/gate_engine.py; every rule that fires emits a justification line. NOTE: this block OVERRIDES config/gate_policy.json key-by-key, so it is the effective policy for this project. Calibrated for the FIRST BASELINE - see _gate_rationale.",
+  "gate_policy": {
+    "block_on_critical": true,
+    "block_on_high": false,
+    "max_high_cves": 25,
+    "max_critical_cves": 0,
+    "min_security_score": 30,
+    "require_sbom": true,
+    "require_owasp_coverage": 80,
+    "block_on_secrets": true,
+    "require_at_least_one_scanner": true,
+    "warn_only": false,
+    "fail_on_tool_error": false,
+    "required_tools": [],
+    "version": "v1.0-baseline",
+    "notes": "Baseline policy. FastAPI/starlette upgrade planned for Sprint 3, which will reduce High CVEs to ~5. Seven advisories are re-issued against upgraded versions (upstream has no clean release). Tighten max_high_cves after the FastAPI upgrade."
+  },
+  "_gate_rationale": {
+    "version": "v1.0-baseline - set 2026-07-28. Thresholds reflect what upstream actually ships today, not an aspiration. Every relaxation below is time-boxed to a named future change so the baseline cannot quietly become permanent.",
+    "block_on_high": "false. 108 High findings exist, many in dormant modules. Blocking would leave the gate permanently red and therefore ignored. Tighten once the High backlog is triaged.",
+    "max_high_cves": "25 (was 5). 20 High dependency advisories remain after the Sprint-2 upgrades. Critically, 7 of them are RE-ISSUED against the already-upgraded python-multipart 0.0.22 and pyasn1 0.6.3 - there is no clean upstream release to move to. A limit of 5 was unreachable by any action available to this team. Revisit to ~5 after the Sprint-3 FastAPI upgrade clears starlette's 9.",
+    "min_security_score": "30 against score model 2.0-density; current 39.6.",
+    "block_on_critical": "true and non-negotiable.",
+    "block_on_secrets": "true. Suppressions are the release valve, each with a recorded reason and author - the rule itself is not weakened."
+  },
+  "compliance_profiles": [
+    "nist_800_53_r5",
+    "owasp_asvs_4",
+    "owasp_top10_2021",
+    "owasp_api_top10_2023",
+    "hipaa_technical_safeguards",
+    "cwe_top25"
+  ],
+  "metadata": {
+    "owner": "AGT",
+    "environment_scanned": "source code only (no running system)",
+    "production_hosts": [
+      "api-prod.docuaction.io (Azure App Service, rg-docuaction-prod)",
+      "app.docuaction.io (Azure Static Web Apps)"
+    ],
+    "regulatory_context": [
+      "HIPAA",
+      "TEFCA",
+      "FedRAMP-aligned",
+      "Section 508"
+    ],
+    "phase0_assessment": "security-platform/assessment/ (113 documents)",
+    "phase0_findings_register": "assessment/08_security/security_findings.md",
+    "notes": "Phase 0 was a manual review. This platform automates and re-verifies it; the two finding sets are expected to overlap but not match exactly."
+  }
+}

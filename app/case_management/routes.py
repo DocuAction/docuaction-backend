@@ -10,8 +10,11 @@ import uuid
 import logging
 from datetime import datetime, date
 from typing import Optional, List
-from fastapi import APIRouter, UploadFile, File, Form, Query, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, Query, HTTPException, Depends
 from pydantic import BaseModel
+
+from app.core.security import get_current_user
+from .phi_audit import audit_phi_access
 
 from .services.ccm_engine import (
     voice_to_ccm_note,
@@ -31,9 +34,23 @@ from .services.discharge_engine import (
 
 logger = logging.getLogger("docuaction.case_management.routes")
 
+# SECURITY (AUTHZ-01): authentication is enforced at the ROUTER level, so every
+# endpoint below — present and future — requires a valid bearer token. This module
+# accepts PHI in request bodies (patient names, MRNs, DOBs, clinical transcripts)
+# and forwards it to the Anthropic API; before this gate it was reachable
+# anonymously, which is an unauthenticated PHI disclosure under HIPAA
+# §164.502 and an unmetered LLM-cost abuse vector.
+#
+# Do NOT move this to per-endpoint decorators: a router-level dependency cannot be
+# forgotten when a new route is added. get_current_user also enforces account
+# disable / pending-approval / session-revocation state on every request.
 cm_router = APIRouter(
     prefix="/api/v1/case-management",
-    tags=["Case Management"]
+    tags=["Case Management"],
+    # audit_phi_access is router-level for the same reason get_current_user is:
+    # a control attached to individual handlers is a control that route 23
+    # will be missing. HIPAA 164.312(b).
+    dependencies=[Depends(get_current_user), Depends(audit_phi_access)],
 )
 router = cm_router  # safe_load expects mod.router
 
@@ -669,6 +686,7 @@ async def generate_meeting_minutes(
         pt_ctx = {}
 
     from .services.ccm_engine import _call_claude, HAIKU_MODEL
+    from .services.phi_deidentify import build_phi_map
 
     system = """You are a clinical documentation specialist generating care team meeting minutes.
 Structure and document all decisions and action items clearly."""
@@ -693,7 +711,12 @@ Generate structured minutes:
 6. NEXT MEETING DATE/AGENDA
 7. DOCUMENTATION ATTESTATION"""
 
-    minutes_body = await _call_claude(system, user, model=HAIKU_MODEL, max_tokens=1500)
+    # DP-02: this endpoint bypasses the engine wrappers and calls _call_claude
+    # directly, so it must supply its own phi_map.
+    minutes_body = await _call_claude(
+        system, user, model=HAIKU_MODEL, max_tokens=1500,
+        phi_map=build_phi_map(pt_ctx),
+    )
 
     return {
         "minutes_body": minutes_body,

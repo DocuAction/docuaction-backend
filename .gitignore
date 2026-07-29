@@ -9,3 +9,8 @@ venv/
 
 # One-off generated FCC briefing HTML preview (not source; release docs stay tracked)
 pv.html
+
+# Deployment artifacts - built, never committed
+dev-deploy.zip
+deploy.zip
+pydeps/

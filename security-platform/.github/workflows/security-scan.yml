@@ -1,0 +1,192 @@
+name: Security Scan
+
+# AGT Security Assurance Platform - CI entrypoint.
+#
+# Runs on Linux, where Semgrep DOES work. Locally on Windows semgrep is skipped
+# (semgrep-core has no Windows build), so this workflow is the only place the full
+# seven-scanner set actually executes. Expect MORE findings here than from a local
+# run - that is the workflow doing its job, not a regression.
+#
+# Copy this file to .github/workflows/ in the application repository. It checks out
+# the app repo and the security platform side by side and points the platform's
+# project config at the checkout via the AGT_* path overrides.
+
+on:
+  workflow_dispatch:
+    inputs:
+      fail_on_gate:
+        description: "Fail the job when the release gate fails"
+        type: boolean
+        default: true
+  schedule:
+    - cron: "17 6 * * *"          # 06:17 UTC nightly (off the hour to avoid contention)
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write          # required only if SARIF upload is enabled below
+
+concurrency:
+  group: security-scan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    name: SAST · Secrets · Dependencies · SBOM
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out application repository
+        uses: actions/checkout@v4
+        with:
+          path: app
+          # Full history is REQUIRED: gitleaks' history scan is what answers
+          # "was this secret ever committed?". With the default shallow clone it
+          # would report a clean history it never actually examined.
+          fetch-depth: 0
+
+      - name: Check out security platform
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SECURITY_PLATFORM_REPO || github.repository }}
+          path: security-platform
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Set up Node (for npm audit and the JS SBOM)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install platform dependencies
+        working-directory: security-platform
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          # Semgrep works on Linux - this is the run where it actually contributes.
+          python -m pip install semgrep
+
+      - name: Install gitleaks
+        run: |
+          GL_VERSION=8.30.1
+          curl -sSL -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GL_VERSION}/gitleaks_${GL_VERSION}_linux_x64.tar.gz"
+          mkdir -p security-platform/tools
+          tar -xzf /tmp/gitleaks.tar.gz -C security-platform/tools gitleaks
+          chmod +x security-platform/tools/gitleaks
+          security-platform/tools/gitleaks version
+
+      - name: Install CycloneDX for npm
+        working-directory: security-platform
+        run: npm install --prefix tools/npm @cyclonedx/cyclonedx-npm
+
+      - name: Point the project config at this checkout
+        working-directory: security-platform
+        run: |
+          python - <<'PY'
+          import json, os, pathlib
+          cfg = pathlib.Path("config/projects/docuaction.json")
+          data = json.loads(cfg.read_text(encoding="utf-8"))
+          root = pathlib.Path(os.environ["GITHUB_WORKSPACE"]) / "app"
+          # The committed config carries absolute Windows dev paths; rewrite them to
+          # the CI checkout so discovery finds real files instead of silently
+          # scanning nothing.
+          for t in data["targets"]:
+              t["path"] = str(root / ("" if t["name"] == "backend" else t["name"]))
+          # Adjust if the repo layout differs (e.g. a monorepo with backend/ + frontend/).
+          for t in data["targets"]:
+              cand = root / t["name"]
+              t["path"] = str(cand if cand.is_dir() else root)
+              t["enabled"] = (root / t["name"]).is_dir() or t["name"] == "backend"
+          cfg.write_text(json.dumps(data, indent=2), encoding="utf-8")
+          print(json.dumps([{k: t[k] for k in ("name", "path", "enabled")} for t in data["targets"]], indent=2))
+          PY
+
+      - name: Run full scan
+        id: scan
+        working-directory: security-platform
+        continue-on-error: true          # capture the gate result without losing artefacts
+        run: |
+          set +e
+          python -u cli.py full
+          echo "gate_exit=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Job summary
+        if: always()
+        working-directory: security-platform
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, pathlib
+          p = pathlib.Path("reports/docuaction/latest.json")
+          if not p.exists():
+              print("## Security Scan\n\n**No report produced** - the scan did not complete.")
+              raise SystemExit(0)
+          d = json.loads(p.read_text(encoding="utf-8"))
+          s = d["scan"]; c = s["counts"]["by_severity"]
+          gate = (s.get("gate_result") or "n/a").upper()
+          icon = {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌"}.get(gate, "❔")
+          print(f"## {icon} Security Scan - gate {gate}\n")
+          print(f"**Score:** {s.get('security_score')}/100  ")
+          print(f"**Scan:** `{s.get('scan_id')}`  ")
+          print(f"**Duration:** {s.get('duration_seconds')}s\n")
+          print("| Critical | High | Medium | Low |")
+          print("|--:|--:|--:|--:|")
+          print(f"| {c.get('critical',0)} | {c.get('high',0)} | {c.get('medium',0)} | {c.get('low',0)} |\n")
+          print("### Scanner coverage\n")
+          print("| Scanner | Status | Findings |")
+          print("|---|---|--:|")
+          for t in s.get("tools", []):
+              st = "ran" if t["ran"] else ("error" if t.get("error") else "SKIPPED")
+              print(f"| {t['name']} | {st} | {t.get('findings_count',0)} |")
+          skipped = [t["name"] for t in s.get("tools", []) if not t["ran"]]
+          if skipped:
+              print(f"\n> **Reduced coverage** - did not run: {', '.join(skipped)}\n")
+          print("\n### Release gate\n")
+          for r in s.get("gate_reasons", []):
+              print(f"- {r}")
+          PY
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports-${{ github.run_number }}
+          path: |
+            security-platform/reports/
+            security-platform/dashboard/
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: Upload SBOM
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ github.run_number }}
+          path: security-platform/reports/docuaction/sbom-*.json
+          retention-days: 365          # SBOMs are a retained supply-chain record
+          if-no-files-found: warn
+
+      - name: Enforce release gate
+        if: always() && (github.event_name != 'workflow_dispatch' || inputs.fail_on_gate)
+        run: |
+          code="${{ steps.scan.outputs.gate_exit }}"
+          echo "cli.py full exited with ${code}"
+          # 0 = pass, 1 = gate FAIL, 2 = WARN with --strict, 3 = config error.
+          # A config error must fail loudly: it means nothing was actually scanned.
+          if [ "${code}" = "3" ]; then
+            echo "::error::Configuration error - the scan did not run."; exit 1
+          fi
+          if [ "${code}" != "0" ]; then
+            echo "::error::Release gate did not pass (exit ${code}). See the job summary."
+            exit 1
+          fi
+          echo "Release gate passed."

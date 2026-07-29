@@ -66,7 +66,12 @@ async def process_meeting(
     phases[-1]["details"] = f"Ingested {len(content)//1024}KB, format: {ext}"
 
     # ─── PHASE 2: TRANSCRIPTION + MASKING ───
-    phases.append({"phase": 2, "name": "Transcription & PHI Masking", "status": "running", "timestamp": datetime.utcnow().isoformat(), "masking": f"Pre-processing redaction: {domain} mode"})
+    # NOTE: no redaction is performed on the audio before transcription - it cannot be:
+    # PHI cannot be removed from raw audio without first transcribing it. The audio is
+    # sent to the transcription provider verbatim. This label previously read
+    # "Transcription & PHI Masking" with a "Pre-processing redaction" string, which
+    # described work that never happened.
+    phases.append({"phase": 2, "name": "Transcription", "status": "running", "timestamp": datetime.utcnow().isoformat(), "masking": "none - audio is sent to the transcription provider unredacted"})
 
     transcript_text = ""
     duration = 0
@@ -117,7 +122,9 @@ async def process_meeting(
 
     phases[-1]["status"] = "complete"
     phases[-1]["details"] = f"{len(transcript_text.split())} words, {duration:.0f}s"
-    phases[-1]["pii_categories_checked"] = 15
+    # Previously set pii_categories_checked = 15 here. Nothing checks 15 PII
+    # categories on this path - the audio is transcribed by a third party and no
+    # scanning runs before or after. Removed rather than left asserting a number.
 
     # ─── PHASE 3: DOMAIN INTELLIGENCE ───
     phases.append({"phase": 3, "name": f"Domain Intelligence ({domain.title()})", "status": "running", "timestamp": datetime.utcnow().isoformat()})
@@ -184,7 +191,11 @@ async def process_meeting(
             "action_matrix": [],
             "kpi_signals": [],
             "risk_indicator": {"overall_score": 0, "factors": []},
-            "masking_verification": {"categories_checked": 15, "entities_found": 0, "entities_redacted": 0, "verification_status": "partial"},
+            # Previously hardcoded {"categories_checked": 15, "entities_found": 0,
+            # "entities_redacted": 0} - literals that asserted a PHI check had run and
+            # found nothing, on the path taken when processing FAILED. That is a false
+            # assurance, not a missing control. Report the truth instead.
+            "masking_verification": {"verification_status": "not_performed", "reason": "intelligence extraction produced no output; no PHI masking or verification was carried out"},
         }
 
     # ─── PHASE 4: HITL ROUTING ───
@@ -243,7 +254,11 @@ async def process_meeting(
             "confidence_percent": round(confidence * 100),
             "correlation_id": correlation_id,
             "domain_mode": domain,
-            "pii_categories_checked": 15,
+            # pii_categories_checked was hardcoded 15 in this disclosure block, which
+            # sits next to compliance_references (Utah SB 149 / Colorado SB 205 /
+            # EU AI Act Art. 50). Asserting a PII scan count inside a regulatory
+            # disclosure that never ran is the worst place for a fabricated number.
+            "pii_categories_checked": None,
             "masking_verification": intelligence.get("masking_verification", {}),
             "compliance_references": ["Utah AI Policy Act (SB 149)", "Colorado AI Act (SB 205)", "EU AI Act Article 50"],
             "removable": False,

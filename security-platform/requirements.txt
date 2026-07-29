@@ -1,0 +1,29 @@
+# AGT Security Assurance Platform - dependencies
+#
+# LICENSING POLICY: open source only, zero commercial licensing cost.
+#
+# The CORE has NO required third-party dependency. core/ and cli.py import on a
+# bare Python 3.10+ so the platform can always report that a scanner is missing
+# rather than crash before it gets the chance.
+#
+# Everything below is OPTIONAL. Each scanner degrades to a SKIPPED row in the
+# report if absent; the run continues and the reduced coverage is stated plainly.
+
+# --- reporting (optional; a built-in renderer is used when absent) -----------
+jinja2>=3.1.0
+
+# --- SAST (Phase 1B) ---------------------------------------------------------
+semgrep>=1.60.0            # LGPL-2.1, free rulesets (p/python, p/owasp-top-ten, ...)
+bandit>=1.7.5              # Apache-2.0, Python-specific
+
+# --- secrets (Phase 1C) ------------------------------------------------------
+# gitleaks is a Go binary, not a pip package. Install separately and place it on
+# PATH or in security-platform/tools/. MIT licensed.
+
+# --- dependencies / SCA + SBOM (Phase 1D) ------------------------------------
+pip-audit>=2.7.0           # Apache-2.0, PyPI advisory database
+cyclonedx-bom>=4.0.0       # Apache-2.0, SBOM generation
+# npm audit ships with npm. trivy is a Go binary (Apache-2.0) - install separately.
+
+# Install:  python -m pip install -r requirements.txt
+# All tool binaries must be installed inside security-platform/ (tools/) or on PATH.
