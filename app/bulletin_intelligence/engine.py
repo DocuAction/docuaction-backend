@@ -642,6 +642,18 @@ MAJOR_OUTLET_FEEDS = [
     ("https://www.cablefax.com/feed",                                       "Cablefax", False),
     ("https://wirelessestimator.com/feed/",                                 "Wireless Estimator", False),
     ("https://tvnewscheck.com/feed/",                                       "TVNewsCheck", False),
+    # Phase 5.5 source expansion (2026-07-29). Verified live before adding:
+    # each returned HTTP 200 with a non-empty <item> list. Ungated (False)
+    # because they are broad-coverage outlets, so FCC relevance filtering
+    # applies - the same treatment as Axios and The Hill above.
+    # 13 of the 17 candidates in the Phase 5.5 brief were already present in
+    # this list (AP, Reuters, CNBC, Axios, Fierce, Light Reading, Multichannel,
+    # TV Technology, TVNewsCheck, NextTV, TechCrunch, CNET, Ars Technica);
+    # only these four were genuinely missing.
+    ("https://moxie.foxbusiness.com/google-publisher/technology.xml",       "Fox Business", False),
+    ("https://www.nextgov.com/rss/all/",                                   "Nextgov", False),
+    ("https://www.govexec.com/rss/all/",                                   "Government Executive", False),
+    ("https://statescoop.com/feed/",                                       "StateScoop", False),
     # Regulatory + industry associations (Tier 3/4) — FCC-relevance filtered.
     ("https://www.ftc.gov/feeds/press-release.xml",                         "FTC", False),
     ("https://www.gao.gov/rss/reports.xml",                                 "GAO", False),
@@ -1877,6 +1889,28 @@ def deduplicate(articles: List[Article]) -> List[Article]:
 
 
 # ── Classification: Claude Haiku ──────────────────────────────────────────────
+async def _record_qa_cost(report: dict) -> None:
+    """Record the QA pass in bulletin_cost_logs at $0.00.
+
+    The RSS queries are free, so the value here is not spend - it is that /costs
+    shows QA ran and how many feeds it checked. A pipeline stage that costs
+    nothing and is therefore invisible is a stage nobody notices has stopped
+    working.
+    """
+    try:
+        calls = int((report or {}).get("qa_sources_checked") or 0)
+        from app.bulletin_intelligence import bulletin_store
+
+        recorder = getattr(bulletin_store, "record_llm_cost", None) or             getattr(bulletin_store, "log_cost", None)
+        if recorder is None:
+            logger.debug("QA cost: no cost recorder available, skipping")
+            return
+        await recorder(operation="qa_verification", model="rss", tokens_in=0,
+                       tokens_out=0, cost=0.0, calls=calls)
+    except Exception as exc:
+        logger.debug(f"QA cost record skipped: {type(exc).__name__}")
+
+
 async def classify_articles(articles: List[Article], agency: AgencyConfig) -> List[Article]:
     if not ANTHROPIC_KEY or not articles:
         return articles
@@ -3294,6 +3328,48 @@ async def run_daily_cycle(
             art.topic = art.topic or "fcc_news_events"
             art.relevance_score = 0.7
         classified = unique
+
+    # ── QA verification pass (Phase 5.5) ─────────────────────────────────────────
+    # collect → classify → QA VERIFY → generate → deliver
+    #
+    # Collection reads a fixed feed list, so a relevant story from an outlet not on
+    # that list is structurally invisible to it. Google News and Talkwalker index by
+    # keyword rather than by publisher, which is exactly that blind spot.
+    #
+    # Wrapped whole: QA is additive and must never block delivery. Any failure here
+    # leaves `classified` untouched and the briefing goes out as it would have.
+    try:
+        from app.bulletin_intelligence.fcc_qa_verification import run_qa_verification
+
+        _qa_add, _qa_report = await run_qa_verification(classified, hours=24)
+        if _qa_add:
+            _qa_articles = []
+            for _c in _qa_add:
+                try:
+                    _art = Article(
+                        title=_c.get("title", ""),
+                        url=_c.get("url", ""),
+                        source=_c.get("source_name") or _c.get("qa_source", "QA"),
+                        published_at=_c.get("published_at", "") or "",
+                        summary="",
+                    )
+                    # Unclassified on purpose. These arrive after the classifier has
+                    # run; giving them a topic here would be a guess presented as a
+                    # classification. "other" plus a passing relevance score lets the
+                    # render gate treat them on the same footing as anything else.
+                    _art.topic = "other"
+                    _art.relevance_score = 0.6
+                    _art.source_type = "qa"
+                    _qa_articles.append(_art)
+                except Exception:
+                    continue
+            classified = list(classified) + _qa_articles
+            logger.info(f"QA verification added {len(_qa_articles)} article(s); "
+                        f"classified pool now {len(classified)}")
+        await _record_qa_cost(_qa_report)
+    except Exception as _qa_err:
+        logger.warning(f"QA verification skipped ({type(_qa_err).__name__}: {_qa_err}) "
+                       f"- briefing continues with {len(classified)} classified articles")
 
     # ── Enhancement pass (deterministic, additive — never lowers volume by default) ──
     # 1) Flag known subscription outlets → briefing shows [SUBSCRIPTION REQUIRED].

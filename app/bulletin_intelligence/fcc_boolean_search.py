@@ -26,6 +26,11 @@ FCC_SEARCH_TOPICS = {
             OR "Universal Service"
             OR "open meeting"
             OR "tentative agenda"
+        
+            # Phase 5.5: commissioners by name - trade press writes
+            # "Carr said Thursday" without ever printing "FCC".
+            OR "Geoffrey Starks"
+            OR "Nathan Simington"
         )
         """,
 
@@ -70,7 +75,22 @@ FCC_SEARCH_TOPICS = {
         OR "one ring scam"
         OR robotexts
         OR ("scam" AND "text")
-        OR ("fraud" AND "text")
+        OR ("fraud" AND "text"
+            # Phase 5.5: commissioners by name - trade press writes
+            # "Carr said Thursday" without ever printing "FCC".
+            OR "Brendan Carr"
+            OR "Anna Gomez"
+            OR "Geoffrey Starks"
+            OR "Nathan Simington"
+            OR "Olivia Trusty"
+            # Phase 5.5 topic keyword expansion
+            OR "robocall"
+            OR "TCPA"
+            OR "spoofing"
+            OR "SIM swap"
+            OR "text scam"
+            OR "AI voice clone"
+        )
         OR "phone unlocking"
         OR porting
         OR "port out scam"
@@ -131,6 +151,20 @@ FCC_SEARCH_TOPICS = {
             OR "station totals"
             OR "ownership cap"
             OR "national cap"
+        
+            # Phase 5.5: commissioners by name - trade press writes
+            # "Carr said Thursday" without ever printing "FCC".
+            OR "Brendan Carr"
+            OR "Anna Gomez"
+            OR "Geoffrey Starks"
+            OR "Nathan Simington"
+            OR "Olivia Trusty"
+            # Phase 5.5 topic keyword expansion
+            OR "media ownership"
+            OR "license renewal"
+            OR "station transfer"
+            OR "public interest"
+            OR "localism"
         )
         """,
 
@@ -171,6 +205,23 @@ FCC_SEARCH_TOPICS = {
             OR SpaceMobile
             OR "W-band"
             OR "D-band"
+        
+            # Phase 5.5: commissioners by name - trade press writes
+            # "Carr said Thursday" without ever printing "FCC".
+            OR "Brendan Carr"
+            OR "Anna Gomez"
+            OR "Geoffrey Starks"
+            OR "Nathan Simington"
+            OR "Olivia Trusty"
+            # Phase 5.5 topic keyword expansion
+            OR "LEO satellite"
+            OR "GEO satellite"
+            OR "NGSO"
+            OR "satellite constellation"
+            OR "orbital debris"
+            OR "Ka-band"
+            OR "Ku-band"
+            OR "V-band"
         )
         """,
 
@@ -242,6 +293,21 @@ FCC_SEARCH_TOPICS = {
             OR hurricane
             OR "disaster report"
             OR NG911
+        
+            # Phase 5.5: commissioners by name - trade press writes
+            # "Carr said Thursday" without ever printing "FCC".
+            OR "Brendan Carr"
+            OR "Anna Gomez"
+            OR "Geoffrey Starks"
+            OR "Nathan Simington"
+            OR "Olivia Trusty"
+            # Phase 5.5 topic keyword expansion
+            OR "EAS"
+            OR "IPAWS"
+            OR "911"
+            OR "NG911"
+            OR "Amber Alert"
+            OR "wireless emergency"
         )
         """,
 
@@ -280,6 +346,32 @@ FCC_SEARCH_TOPICS = {
             OR "spectrum pipeline"
             OR "mid-band"
             OR NEPA
+        
+            # Phase 5.5: commissioners by name - trade press writes
+            # "Carr said Thursday" without ever printing "FCC".
+            OR "Brendan Carr"
+            OR "Anna Gomez"
+            OR "Geoffrey Starks"
+            OR "Nathan Simington"
+            OR "Olivia Trusty"
+            # Phase 5.5 topic keyword expansion
+            OR "spectrum auction"
+            OR "C-band"
+            OR "CBRS"
+            OR "millimeter wave"
+            OR "6 GHz"
+            OR "upper C-band"
+            OR "low-band"
+            OR "AWS spectrum"
+            OR "5G"
+            OR "T-Mobile"
+            OR "AT&T"
+            OR "Verizon"
+            OR "AST SpaceMobile"
+            OR "Starlink"
+            OR "satellite D2D"
+            OR "direct-to-device"
+            OR "Project Kuiper"
         )
         """,
 
@@ -377,6 +469,31 @@ FCC_SEARCH_TOPICS = {
             OR "USF contribution"
             OR "E-Rate"
             OR "rural health care"
+        
+            # Phase 5.5: commissioners by name - trade press writes
+            # "Carr said Thursday" without ever printing "FCC".
+            OR "Brendan Carr"
+            OR "Anna Gomez"
+            OR "Geoffrey Starks"
+            OR "Nathan Simington"
+            OR "Olivia Trusty"
+            # Phase 5.5 topic keyword expansion
+            OR "AI communications"
+            OR "AI telecom"
+            OR "deepfake"
+            OR "AI robocall"
+            OR "AI voice clone"
+                    # Phase 5.5 topic keyword expansion
+            OR "BEAD"
+            OR "Comcast"
+            OR "Charter"
+            OR "EchoStar"
+            OR "Dish Network"
+            OR "fiber deployment"
+            OR "RDOF"
+            OR "Lifeline"
+            OR "ACP"
+            OR "USF"
         )
         """,
 
@@ -426,6 +543,14 @@ FCC_SEARCH_TOPICS = {
             OR "submarine cable"
             OR "landing license"
             OR SLTE
+        
+            # Phase 5.5: commissioners by name - trade press writes
+            # "Carr said Thursday" without ever printing "FCC".
+            OR "Brendan Carr"
+            OR "Anna Gomez"
+            OR "Geoffrey Starks"
+            OR "Nathan Simington"
+            OR "Olivia Trusty"
         )
         """
     }
