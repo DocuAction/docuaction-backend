@@ -55,8 +55,23 @@ jobs:
 
       - name: Run tests
         run: |
-          python -m pytest --tb=short -q || true
+          pip install pytest pytest-asyncio httpx
+          python -m pytest tests/ -v --tb=short --junitxml=test-results.xml
           echo "Tests completed"
+        env:
+          # No database in CI. tests/conftest.py probes for one and skips the
+          # DB-backed tests with an explicit reason rather than failing the run.
+          # The boundary tests - routing, auth, authorization, headers - all run.
+          SECRET_KEY: ${{ github.sha }}${{ github.sha }}
+          ALLOWED_HOSTS: '*'
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ github.sha }}
+          path: test-results.xml
+          retention-days: 30
 
       - name: Run security scan (Bandit)
         run: |
