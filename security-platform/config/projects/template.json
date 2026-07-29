@@ -1,0 +1,73 @@
+{
+  "_comment": "Template project config. Copy to <yourproject>.json and edit. Run with: python cli.py -p <yourproject> full --all",
+  "name": "template",
+  "display_name": "Template Project",
+  "description": "Copy this file, rename it, and point the targets at your code.",
+
+  "_comment_targets": "One entry per codebase. path must be ABSOLUTE. On a CI runner, generate this file at runtime rather than committing machine-specific paths - a path that does not resolve produces a scan of zero files that still reports success.",
+  "targets": [
+    {
+      "name": "backend",
+      "path": "/absolute/path/to/backend",
+      "language": "Python"
+    },
+    {
+      "name": "frontend",
+      "path": "/absolute/path/to/frontend",
+      "language": "JavaScript"
+    }
+  ],
+
+  "_comment_excludes": "Directories never scanned. Vendored dependencies and build output produce findings you cannot fix and drown the ones you can.",
+  "exclude_patterns": [
+    "**/node_modules/**",
+    "**/.venv/**",
+    "**/venv/**",
+    "**/__pycache__/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/out/**",
+    "**/.next/**",
+    "**/pydeps/**",
+    "**/site-packages/**",
+    "**/*.min.js",
+    "**/migrations/versions/**"
+  ],
+
+  "_comment_plugins": "Enable only what applies. A scanner listed but unavailable is reported as SKIPPED with its capability named, never silently omitted.",
+  "plugins": {
+    "bandit": {"enabled": true},
+    "semgrep": {"enabled": true},
+    "gitleaks": {"enabled": true},
+    "custom_rules": {"enabled": true},
+    "pip_audit": {"enabled": true},
+    "npm_audit": {"enabled": true},
+    "cyclonedx": {"enabled": true}
+  },
+
+  "_comment_gate": "Release gate thresholds. block_on_critical should stay true. min_score is a floor, not a target - set it where you are, then raise it.",
+  "gate": {
+    "block_on_critical": true,
+    "max_high_cves": 25,
+    "min_score": 30,
+    "require_sbom": true,
+    "require_at_least_one_scanner": true
+  },
+
+  "_comment_dast": "DAST target. MUST be a non-production host. The suite aborts if this matches a production endpoint.",
+  "dast": {
+    "enabled": false,
+    "target": "http://localhost:8000",
+    "rate_limit_per_6s": 8
+  },
+
+  "_comment_compliance": "Frameworks to map findings against in generated reports.",
+  "compliance_frameworks": [
+    "nist_800_53",
+    "hipaa",
+    "owasp_top10",
+    "owasp_api",
+    "cwe_top25",
+    "soc2"
+  ]
+}
