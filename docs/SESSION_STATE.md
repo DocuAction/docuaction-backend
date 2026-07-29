@@ -10,8 +10,8 @@ Updated at each significant milestone.
 | Field | Value |
 |---|---|
 | Branch | `main` |
-| Latest commit | `fd09e96` — docs: session report, rolling checkpoint, platform packaging |
-| Unpushed commits | 0 (`origin/main` = `fd09e96`, verified) |
+| Latest commit | `412bf14` — docs: final scan figures, 59.2 / gate WARN |
+| Unpushed commits | 0 (`origin/main` = `412bf14`, verified) |
 | Working tree | clean at time of writing |
 | Production | `/health` 200 · 8/8 endpoint sweep · scheduler running, 4 jobs |
 | Development | `/health` 200 · 6/6 endpoint sweep when paced |
@@ -34,6 +34,7 @@ Updated at each significant milestone.
 | 9 | Stash reported, not popped | `stash@{0}`, 12 files, 486+/279- | VERIFIED |
 | 10 | Production verification sweep | prod 8/8, dev 6/6 paced, frontend 3/3 | VERIFIED |
 | 11 | Test suite on merged tree | 27 passed, 5 skipped, 0 failed (304s) | VERIFIED |
+| 20 | Test suite on final `main` | 27 passed, 5 skipped, 0 failed (294s) — confirmatory re-run | VERIFIED |
 | 12 | `config/projects/template.json` | Valid JSON; synced to both platform copies | VERIFIED |
 | 13 | Security platform README rewrite | Replaced stale version claiming 1B–1G "Not started" | VERIFIED |
 | 14 | Full security scan (post-merge, authoritative) | **59.2 / gate WARN** · 203 findings [C:0 H:40 M:45 L:116] · SBOM 2 artefacts | VERIFIED |
@@ -98,11 +99,18 @@ and pulled instances out of rotation.
 
 ## Next recommended action
 
-1. Finish the authoritative security scan and record the score (Block 3).
-2. Write `docs/SESSION_REPORT_2026-07-28.md` (Block 6).
-3. Commit and push the platform packaging work (Block 7).
-4. Then continuous improvement: the highest-value low-risk items are the 15
-   missing FK indexes and the N+1 queries in the bulletin pipeline.
+All requested blocks are complete and verified. Recommended next, in value order:
+
+1. **Run Semgrep once on Linux CI.** Every score reported to date is missing one
+   scanner's coverage, so 59.2 is an upper bound rather than a measurement.
+2. **Migrate `DATABASE_URL` and `PERIGON_API_KEY` to Key Vault** (prod), then
+   adopt `docuaction-kv-dev` for the five plaintext dev secrets.
+3. **Add the 15 missing foreign-key indexes and fix the bulletin N+1 queries.**
+   Highest-value performance work available — but note this touches the database
+   schema, which is prohibited without explicit instruction, so it needs a
+   go-ahead before starting.
+4. **Implement audit log hash chaining** (additive, backward-compatible).
+5. **Resolve `stash@{0}`** — 12 files of WIP that predate this session.
 
 ## Rollback references
 
