@@ -33,6 +33,7 @@ from app.core.email import (
 )
 from app.models.database import User, AuditLog
 from app.services.audit_logger import log_ai_request
+from app.core.client_ip import get_client_ip
 
 logger = logging.getLogger("docuaction.auth.reset")
 router = APIRouter(prefix="/api/auth", tags=["Auth — Password Reset"])
@@ -160,7 +161,7 @@ async def forgot_password(
     - NEVER reveals whether email exists (always returns success message)
     - Generates single-use JWT reset token (1-hour expiry)
     """
-    ip = request.client.host if request.client else "unknown"
+    ip = get_client_ip(request) or "unknown"
 
     # Rate limit check
     if _check_rate_limit(ip):
@@ -212,7 +213,7 @@ async def reset_password(
     - Strong password validation enforced
     - Full audit logging
     """
-    ip = request.client.host if request.client else "unknown"
+    ip = get_client_ip(request) or "unknown"
 
     # Validate password strength
     password_error = _validate_password(data.new_password)

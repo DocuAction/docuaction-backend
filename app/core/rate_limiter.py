@@ -8,6 +8,7 @@ import logging
 from collections import defaultdict
 from fastapi import Request, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
+from app.core.client_ip import get_client_ip
 
 logger = logging.getLogger("docuaction.ratelimit")
 
@@ -125,5 +126,5 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 pass
 
         # Fallback to IP address
-        client_ip = request.client.host if request.client else "unknown"
+        client_ip = get_client_ip(request) or "unknown"
         return f"ip:{client_ip}", "free"

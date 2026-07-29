@@ -28,6 +28,7 @@ import logging
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.client_ip import get_client_ip
 from app.core.security import get_current_user
 from app.core.database import get_db
 from app.services.audit import log_tefca_event
@@ -36,12 +37,14 @@ logger = logging.getLogger("docuaction.case_management.audit")
 
 
 def _client_ip(request: Request) -> str | None:
-    """Real client IP. App Service terminates TLS, so request.client.host is the
-    load balancer; X-Forwarded-For's first entry is the originating address."""
-    xff = request.headers.get("x-forwarded-for", "")
-    if xff:
-        return xff.split(",")[0].strip()
-    return getattr(request.client, "host", None)
+    """Real client IP, as observed by App Service.
+
+    Delegates to the canonical helper, which reads the RIGHTMOST X-Forwarded-For
+    entry. The previous implementation here took the leftmost entry, which the
+    caller controls — a forged header would have written an attacker-chosen
+    address into the PHI audit trail.
+    """
+    return get_client_ip(request)
 
 
 async def audit_phi_access(

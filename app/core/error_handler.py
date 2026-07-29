@@ -9,6 +9,7 @@ import traceback
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from app.core.client_ip import get_client_ip
 
 logger = logging.getLogger("docuaction.errors")
 
@@ -105,7 +106,7 @@ def register_exception_handlers(app):
                 from app.core.database import async_session_maker
                 from app.models.database import AuditLog
                 from datetime import datetime
-                _ip = request.client.host if request.client else None
+                _ip = get_client_ip(request)
                 async with async_session_maker() as _db:
                     _db.add(AuditLog(
                         tenant_id="default",

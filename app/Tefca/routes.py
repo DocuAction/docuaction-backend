@@ -40,6 +40,7 @@ from . import review_engine
 from . import reporting
 from . import qa_engine
 from . import report_renderer
+from app.core.client_ip import get_client_ip
 from .models import (
     TEFCAEntity, TEFCAReviewCycle, TEFCAEvidenceRecord, TEFCASourceCache,
     TEFCAPriorityCase, TEFCAReport, TEFCAAnalystQueue,
@@ -156,10 +157,7 @@ def _bucket_label_enum(bucket: int) -> BucketLabel:
 
 
 def _client_ip(request: Request) -> Optional[str]:
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else None
+    return get_client_ip(request)
 
 
 def _assigned_role(tier: int, bucket: int) -> str:

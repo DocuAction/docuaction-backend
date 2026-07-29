@@ -19,6 +19,7 @@ import os
 import time
 from fastapi import Depends, Request, HTTPException
 from app.core.security import require_role
+from app.core.client_ip import get_client_ip
 
 BULLETIN_AUTH_ENABLED = os.getenv("BULLETIN_AUTH_ENABLED", "false").strip().lower() == "true"
 BULLETIN_RATE_LIMIT_ENABLED = os.getenv("BULLETIN_RATE_LIMIT_ENABLED", "false").strip().lower() == "true"
@@ -45,7 +46,7 @@ async def rate_limit(request: Request):
     BULLETIN_RATE_LIMIT_ENABLED=true. Never raises when disabled."""
     if not BULLETIN_RATE_LIMIT_ENABLED:
         return
-    key = (request.client.host if request and request.client else "anon")
+    key = ((get_client_ip(request) if request else None) or "anon")
     now = time.time()
     window = 3600.0
     hits = [t for t in _BUCKET.get(key, []) if now - t < window]

@@ -25,6 +25,7 @@ from app.core.upload_security import safe_upload_path
 from app.services.file_scanner import FileScanner
 from app.services.audit import log_audit_event
 from app.models.database import User, Document, Output, AudioFile, Transcript, AuditLog
+from app.core.client_ip import get_client_ip
 from app.models.schemas import (
     SignupRequest, LoginRequest, VerifyEmailRequest, TokenResponse, UserResponse,
     ProcessRequest, ProcessResponse,
@@ -45,10 +46,7 @@ def _client_ip(request: Request | None) -> str | None:
     """Best-effort client IP (honours X-Forwarded-For behind the proxy)."""
     if request is None:
         return None
-    fwd = request.headers.get("x-forwarded-for", "")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else None
+    return get_client_ip(request)
 
 
 async def _scan_upload_or_reject(db, user, request, content, filename, ext, resource_type):
@@ -192,7 +190,7 @@ async def _audit_auth(db, user_id, action, details=None, request=None, correlati
     ip = None
     ua = None
     if request is not None:
-        ip = request.client.host if request.client else None
+        ip = get_client_ip(request)
         ua = request.headers.get("user-agent")
     try:
         db.add(AuditLog(
@@ -219,7 +217,7 @@ async def _audit_auth(db, user_id, action, details=None, request=None, correlati
 @router.post("/api/auth/signup", status_code=201, tags=["Auth"])
 async def signup(data: SignupRequest, request: Request, db: AsyncSession = Depends(get_db)):
     cid = str(uuid.uuid4())
-    ip = request.client.host if request.client else None
+    ip = get_client_ip(request)
     email = _normalize_email(data.email)
 
     # Registration throttling — cap self-registrations per IP so the endpoint can't be
@@ -344,7 +342,7 @@ async def login(data: LoginRequest, request: Request, db: AsyncSession = Depends
 
     # Brute-force protection: throttle per IP, and temporarily lock an account after
     # repeated failures. Both return 429 without confirming whether the email exists.
-    if _ip_login_throttled(request.client.host if request.client else None):
+    if _ip_login_throttled(get_client_ip(request)):
         await _audit_auth(db, None, "login_throttled", {"email": email, "reason": "ip_rate_limited"}, request, cid)
         raise HTTPException(429, "Too many login attempts. Please try again later.")
     if _account_locked(email):
