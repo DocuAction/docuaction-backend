@@ -14,3 +14,6 @@ pv.html
 dev-deploy.zip
 deploy.zip
 pydeps/
+
+# Claude Code local settings — has contained plaintext DB connection strings
+.claude/

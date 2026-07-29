@@ -81,7 +81,10 @@ async def bulletin_costs(
 
 
 # ── Boolean search profiles (Phase 2) ──────────────────────────────────────────
-@router.get("/profiles")
+# Boolean profiles are editorial configuration, not published content. The
+# preview and latest endpoints stay public because FCC contacts open them from
+# an email link with no account; this one has no such consumer.
+@router.get("/profiles", dependencies=guard("viewer"))
 async def list_search_profiles(agency_id: str = Query("fcc")):
     """Boolean search profiles plus which source is currently live.
 
