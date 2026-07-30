@@ -2,9 +2,10 @@
 DocuAction AI — Application Entry Point
 v6.0.0 — Migration Intelligence Module Added
 """
+import os
 import time
 import logging
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from sqlalchemy import text
@@ -249,6 +250,24 @@ async def health():
             "bulletin_intelligence": "active",
         },
         "tefca_connectors": tefca["connectors"],
+    }
+
+
+@app.get("/api/config")
+async def get_config(request: Request):
+    """Which backend is this, really — deliberately unauthenticated.
+
+    A frontend built against the wrong API cannot detect that on its own: the
+    URL it calls is baked into its bundle, so it has no second opinion. This
+    endpoint is that second opinion, which is why it must answer before login.
+    It returns only what the caller already knows by virtue of reaching it (the
+    host it dialled) plus the environment name, so there is nothing here worth
+    authenticating.
+    """
+    return {
+        "environment": os.getenv("ENVIRONMENT", "unknown"),
+        "version": "6.0.0",
+        "api_host": request.url.hostname,
     }
 
 
