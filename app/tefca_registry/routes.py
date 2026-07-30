@@ -20,6 +20,7 @@ from app.tefca_registry import models as reg
 from app.tefca_registry import queries as q
 from app.tefca_registry import verification as v
 from app.tefca_registry.schemas import BulkVerifyRequest, VerifyOptions
+from app.core.client_ip import get_client_ip
 
 router = APIRouter(
     prefix="/api/tefca/registry",
@@ -209,7 +210,7 @@ def _ext_of(filename: str, default: str) -> str:
 
 
 def _client_ip(request: Request):
-    return request.client.host if request.client else None
+    return get_client_ip(request)
 
 
 @router.post("/import/fhir-bundle")

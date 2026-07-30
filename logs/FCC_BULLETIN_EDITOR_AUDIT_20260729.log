@@ -3116,3 +3116,1361 @@ pv-magazine-usa.com/2026/07/28/f... | Surfaced by a single provider (would be mi
     - [CSPAN] U.S. House of Representatives U.S. House of Representatives: federal communications commission to establish a task force to be known as a 6-g... | Surfaced by a single provider (would be missed without it)
 
 ========================================================================
+========================================================================
+FCC BULLETIN — EDITOR AUDIT   agency=fcc   2026-07-29T19:36:12
+========================================================================
+
+SECTION 1 — ARTICLES COLLECTED
+  Total collected (post domain-exclusion): 371
+  Unique after dedup: 298   Classified: 284   In briefing: 150
+  Provider breakdown:
+    Talkwalker       0
+    NewsAPI.ai       0
+    Event Registry   0
+    RSS              170
+    Government       0
+    GDELT            0
+    Other            201
+
+SECTION 2 — ARTICLES REMOVED
+  Total removed: 222
+  [Duplicate] — 73
+    - Starlink Routers Receive Conditional Exemption From FCC’s Covered List - Broadband Breakfast  | provider=RSS | reason=Duplicate
+    - FCC Bans Foreign-Made Humanoid Robots, Targeting China Over National Security - Broadband Breakfast  | provider=RSS | reason=Duplicate
+    - NAB Meets With FCC’s Anna Gomez to Discuss Broadcast Ownership Rules - radioworld.com  | provider=RSS | reason=Duplicate
+    - Former FCC Chairs Urge Brendan Carr to End ABC Broadcast License Review: ‘An Assault on Free Speech Disguised as Regulatory Process’ - IMDb  | provider=RSS | reason=Duplicate
+    - Former FCC Chairs Urge Brendan Carr to End ABC Broadcast License Review: 'An Assault on Free Speech Disguised as Regulatory Process' - TheWrap  | provider=RSS | reason=Duplicate
+    - Pay TV Group Meets with FCC Staffers to Oppose FCC Ownership Rule Changes - TVTechnology  | provider=RSS | reason=Duplicate
+    - FCC blocks new foreign-made power inverters and advanced robots over national security risks - Fox Business  | provider=RSS | reason=Duplicate
+    - FCC OKs $6.3B in upper C-band incentive payments, but cable ops still concerned - Light Reading  | provider=RSS | reason=Duplicate
+    - U . S . bans foreign - made humanoid robots , targeting China over national security  | provider=Inquirer.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over national security  | provider=Mymotherlode.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Broomfieldenterprise.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Lowellsun.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Republicanherald.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Citizensvoice.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Advocate-News.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Twincities.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Sandiegouniontribune.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over national security  | provider=Abc12.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Greeleytribune.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Reporterherald.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Orovillemr.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Eptrail.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Akronnewsreporter.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Dailydemocrat.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over national security  | provider=Adn.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Ocregister.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Pressdemocrat.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Dailynews.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots . Here why  | provider=Fox8Live.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over national security  | provider=Ktbs.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China  | provider=Wgal.Com | reason=Duplicate
+    - FCC Bans Chinese Humanoid Robots Over Security Concerns  | provider=Knst.Iheart.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China  | provider=Wgauradio.Com | reason=Duplicate
+    - FCC Bans Chinese Humanoid Robots Over Security Concerns  | provider=Wmmbam.Iheart.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China  | provider=Wpbf.Com | reason=Duplicate
+    - FCC Bans Chinese Humanoid Robots Over Security Concerns  | provider=1430Kasi.Iheart.Com | reason=Duplicate
+    - U . S . bans foreign - made humanoid robots , targeting China – NBC New York  | provider=Nbcnewyork.Com | reason=Duplicate
+    - FCC Bans Chinese Humanoid Robots Over Security Concerns  | provider=Wrno.Iheart.Com | reason=Duplicate
+    - FCC Bans Chinese Humanoid Robots Over Security Concerns  | provider=590Kqnt.Iheart.Com | reason=Duplicate
+    - FCC Bans Chinese Humanoid Robots Over Security Concerns  | provider=Kfyi.Iheart.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China  | provider=4029Tv.Com | reason=Duplicate
+    - FCC Bans Chinese Humanoid Robots Over Security Concerns  | provider=Kste.Iheart.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over national security  | provider=Asiaone.Com | reason=Duplicate
+    - FCC Bans Chinese Humanoid Robots Over Security Concerns  | provider=Wtkg.Iheart.Com | reason=Duplicate
+    - FCC Bans Chinese Humanoid Robots Over Security Concerns  | provider=Jetradio1400.Iheart.Com | reason=Duplicate
+    - FCC Bans Chinese Humanoid Robots Over Security Concerns | NewsTalk WMEQ  | provider=Wmeq.Iheart.Com | reason=Duplicate
+    - FCC Bans Chinese Humanoid Robots Over Security Concerns  | provider=Talkradio1059.Iheart.Com | reason=Duplicate
+    - FCC Bans Chinese Humanoid Robots Over Security Concerns  | provider=Newsradio1290Wtks.Iheart.Com | reason=Duplicate
+    - FCC Bans Chinese Humanoid Robots Over Security Concerns  | provider=Koacolorado.Iheart.Com | reason=Duplicate
+    - FCC Bans Chinese Humanoid Robots Over Security Concerns  | provider=Kfab.Iheart.Com | reason=Duplicate
+    - FCC Bans Chinese Humanoid Robots Over Security Concerns  | provider=1440Wgig.Iheart.Com | reason=Duplicate
+    - FCC Bans Chinese Humanoid Robots Over Security Concerns  | provider=Wrak.Iheart.Com | reason=Duplicate
+    - FCC Bans Chinese Humanoid Robots Over Security Concerns | NewsRadio 1370 AM & 92 . 9 FM WSPD  | provider=Wspd.Iheart.Com | reason=Duplicate
+    - FCC Bans Chinese Humanoid Robots Over Security Concerns  | provider=Wiod.Iheart.Com | reason=Duplicate
+    - FCC Bans Chinese Humanoid Robots Over Security Concerns  | provider=Wgiram.Iheart.Com | reason=Duplicate
+    - FCC Bans Chinese Humanoid Robots Over Security Concerns  | provider=Wflafm.Iheart.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over national security  | provider=Mankatofreepress.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over national security  | provider=Wfmj.Com | reason=Duplicate
+    - Why lawmakers are concerned about where billions in broadband funding is going  | provider=Click2Houston.Com | reason=Duplicate
+    - [CSPAN] Federalist Society Previews Supreme Court Term Part 1: delegation something we should consider. the inspector general's office has aske...  | provider=Cspan | reason=Duplicate
+    - [CSPAN] Federalist Society Previews Supreme Court Term Part 1: has asked for a search warrant in that case. there are a bunch of cases involvin...  | provider=Cspan | reason=Duplicate
+    - [CSPAN] Federalist Society Previews Supreme Court Term: delegation something we should consider. the inspector general's office has aske...  | provider=Cspan | reason=Duplicate
+    - [CSPAN2] FCC Commissioner  Others Testify on Biden Administration Policies: okay. today were joined by excellent witnesses and the honorable senior republic...  | provider=Cspan2 | reason=Duplicate
+    - [CSPAN3] Discussion on Emerging AI Technologies: media attack new media and try to use regulation to deal with that. it is really...  | provider=Cspan3 | reason=Duplicate
+    - [CSPAN3] Discussion on Emerging AI Technologies: to use regulation to deal with that. it is really because of newspapers lobbying...  | provider=Cspan3 | reason=Duplicate
+    - [CSPAN] U.S. House of Representatives U.S. House of Representatives: sector. the fact act will require the federal communications commission to publi...  | provider=Cspan | reason=Duplicate
+    - [CSPAN] U.S. House of Representatives U.S. House of Representatives: magnifies this target. this helps address these concerns. this would require the...  | provider=Cspan | reason=Duplicate
+    - [CSPAN] U.S. House of Representatives U.S. House of Representatives: h.r. 820. a bill to direct the federal communications commission to publish a li...  | provider=Cspan | reason=Duplicate
+    - [CSPAN] U.S. House of Representatives U.S. House of Representatives: recognized as the equipment and services used in their drones to the federal com...  | provider=Cspan | reason=Duplicate
+    - [CSPAN3] Nixon Administration 1970s Womens Initiatives: summary was urging the appointment of a woman to the federal communications comm...  | provider=Cspan3 | reason=Duplicate
+    - [CSPAN3] Nixon Administration 1970s Womens Initiatives: nixon. this is an item in his news summary was urging the appointment of a woman...  | provider=Cspan3 | reason=Duplicate
+    - [CSPAN] NTSB Chair and Others Discuss New Vehicle Technology and Safety Standards: yet, there is more work to be done. the federal communications commission wil  | provider=Cspan | reason=Duplicate
+    - FCC censorship czar Brendan Carr is threatening the broadcast licenses of eight local ABC stations because Trump doesn’t  | provider=BlueSky | reason=Duplicate
+  [Corporate Noise] — 14
+    - PMI Names Jeannie Ericson Inaugural CEO  | provider=RSS | reason=Corporate Noise
+    - NAFB Names Rita Frazer and Tom Cassidy as 2026 Hall of Fame Inductees  | provider=RSS | reason=Corporate Noise
+    - Ericson Appointed Inaugural PMI CEO  | provider=RSS | reason=Corporate Noise
+    - Beadnell Promoted To Top Role Of Heritage TV Operation  | provider=RSS | reason=Corporate Noise
+    - Spotwise Unveils System to Automate Media Tasks  | provider=RSS | reason=Corporate Noise
+    - Allison Demers Joins WIHS As News Director & Afternoon Host  | provider=RSS | reason=Corporate Noise
+    - Ian Rambo Joins Connoisseur Fredericksburg As Operations Manager & WFLS Morning Host  | provider=RSS | reason=Corporate Noise
+    - Monday (telco diary) | ‘A new telco growth profile’?  | provider=RSS | reason=Corporate Noise
+    - Colorado Unveils Roadmap for Statewide $31.5M Middle-Mile Broadband Network  | provider=RSS | reason=Corporate Noise
+    - K-Love Names Andrew Lambeth Chief Marketing and Communications Officer  | provider=RSS | reason=Corporate Noise
+    - NAB Names Finalists for 2026 Marconi Radio Awards  | provider=RSS | reason=Corporate Noise
+    - K-LOVE Appoints A Chief Marketing and Communications Officer  | provider=RSS | reason=Corporate Noise
+    - Boeing takes $280 million hit on troubled Air Force One program  | provider=RSS | reason=Corporate Noise
+    - Verizon’s Numbers Show Growth, but the Math Is Fuzzy  | provider=RSS | reason=Corporate Noise
+  [Low Confidence] — 134
+    - U . S . bans foreign - made humanoid robots , targeting China over national security  | provider=Japantoday.Com | reason=Low Confidence
+    - Coalition of 22 Advocacy Groups Backs Disney in FCC Fight  | provider=Thewrap.Com | reason=Low Confidence
+    - ABC License Probe Proves Unconstitutional , Former FCC Chairs Say  | provider=Mediapost.Com | reason=Low Confidence
+    - Due to potatosecurity risks the U.S. FCC bans the import of new humanoid and quadruped robots, as well as connected powe  | provider=BlueSky | reason=Low Confidence
+    - Due to cybersecurity risks the U.S. FCC bans the import of new humanoid and quadruped robots, as well as connected power  | provider=BlueSky | reason=Low Confidence
+    - Rolling Wireless S.a r.l. submitted a new device:
+
+RW962D
+FCC ID: 2AX2URW962D  | provider=BlueSky | reason=Low Confidence
+    - Rolling Wireless S.a r.l. submitted a new device:
+
+RW962E
+FCC ID: 2AX2URW962E  | provider=BlueSky | reason=Low Confidence
+    - Media Action Center/ Frequency Forward "Petition to Deny" Moves to Block Backroom FCC-Disney Settlement Over ABC License  | provider=BlueSky | reason=Low Confidence
+    - Who wins and who loses after US bans foreign robots?
+->Ars Technica | More info at BigEarthData.ai | #ArtificialIntellig  | provider=BlueSky | reason=Low Confidence
+    - Media Action Center has joined with Frequency Forward to prevent the Disney-ABC case at the FCC from being settled behin  | provider=BlueSky | reason=Low Confidence
+    - Please stop and read this article.
+
+Pushing enforcement from FCC to IRS has purposefully created an oversight vacuum tha  | provider=BlueSky | reason=Low Confidence
+    - The Trump administration has banned new Chinese-made robots and power inverters, citing security risks to the US AI supp  | provider=BlueSky | reason=Low Confidence
+    - www.huffpost.com/entry/fcc-ba...  | provider=BlueSky | reason=Low Confidence
+    - What did you enter for "Proceeding(s): Specify the FCC proceeding(s) to which your filing refers"?  | provider=BlueSky | reason=Low Confidence
+    - U.S:Amazon eyes 2028 launch for direct-to-phone satellite network
+Amazon's satellite venture plans to connect smartphone  | provider=BlueSky | reason=Low Confidence
+    - The FCC says the issue is national security: robots can collect data, move through homes, schools and factories, and plu  | provider=BlueSky | reason=Low Confidence
+    - “Trump Administration Exempts SpaceX’s Starlink From Sweeping FCC Ban on Foreign-Made Routers Through February 2028” How  | provider=BlueSky | reason=Low Confidence
+    - US government bans foreign-produced inverters #energysky -- via pv-tech:  | provider=BlueSky | reason=Low Confidence
+    - I really didn't see this coming. But, it's all about precedent. If the FCC can do it to ABC now, a Democratic administra  | provider=BlueSky | reason=Low Confidence
+    - It's bad news for Chinese robot vacuum manufacturers like Roborock, Ecovacs, and Dreame, which dominate the market. The  | provider=BlueSky | reason=Low Confidence
+    - Amazon’un ABD Federal İletişim Komisyonu’na (FCC) sunduğu başvuruya göre sistem, hücresel operatörlerle birlikte çalışac  | provider=BlueSky | reason=Low Confidence
+    - Amazon, telefonlara doğrudan uydu bağlantısı sağlayacak LEO ağı için başvuru yaptı
+Amazon, Amazon LEO adını verdiği yeni  | provider=BlueSky | reason=Low Confidence
+    - My local ABC channel has asked us to comment to the FCC about the value the station is.  I can't imagine not having it.  | provider=BlueSky | reason=Low Confidence
+    - Federal İletişim Komisyonu’nun (FCC) duyurduğu önlemler, yeni insansı / dört ayaklı robotların ve diğer versiyonların ya  | provider=BlueSky | reason=Low Confidence
+    - You can respond to the FCC here fcc.gov/ecfs/filings... 
+
+reader.inquirer.com/infinity/art... - Philadelphia's 6abc is u  | provider=BlueSky | reason=Low Confidence
+    - America will not be beat!
+Except where we cannot compete! 
+USA USA!
+www.nbcnews.com/tech/tech-ne...  | provider=BlueSky | reason=Low Confidence
+    - DIY active(!) weather radar. "…it is not meant to be used in the real world at the moment and is currently in violation  | provider=BlueSky | reason=Low Confidence
+    - www.jdsupra.com/legalnews/fc...  | provider=BlueSky | reason=Low Confidence
+    - U.S. bans new vacuum and mowing robots, Roombas now considered threat to national security
+www.notebookcheck.net/U-S-ban  | provider=BlueSky | reason=Low Confidence
+    - www.reuters.com/business/med...  | provider=BlueSky | reason=Low Confidence
+    - Amazon seeks approval for 5,105 satellite direct-to-device constellation
+
+Amazon is asking the US Federal Communications  | provider=BlueSky | reason=Low Confidence
+    - 🔗 Read the full joint filing here: futurefreespeech.org/the-future-o...  | provider=BlueSky | reason=Low Confidence
+    - The Federal Communications Commission has banned 'new' foreign-made inverters, citing White House claims of national sec  | provider=BlueSky | reason=Low Confidence
+    - “The U.S. Federal Communications Commission is banning imports of new foreign-made humanoid robots and power inverters,  | provider=BlueSky | reason=Low Confidence
+    - De Amerikaanse overheid heeft omvormers en 'geavanceerde robots' uit het buitenland verboden. Dat maakt de Amerikaanse F  | provider=BlueSky | reason=Low Confidence
+    - The absolute dumbest of dumbfucks.
+
+www.pv-magazine.com/2026/07/29/f...  | provider=BlueSky | reason=Low Confidence
+    - pv-magazine-usa.com/2026/07/28/f...  | provider=BlueSky | reason=Low Confidence
+    - The duration of Starlink’s exemption is comparable to its peers, though the approval comes months later.  | provider=BlueSky | reason=Low Confidence
+    - This policy makes no sense. I already can’t buy some of the world’s most advanced cars, and now the same restrictions ma  | provider=BlueSky | reason=Low Confidence
+    - Les États-Unis interdisent l’importation de nouveaux robots humanoïdes et onduleurs étrangers pour raisons de sécurité n  | provider=BlueSky | reason=Low Confidence
+    - ABC’s Defenders Flounder in Rebuttals to FCC, Bite at Disney - News Busters, #MediaBias  | provider=BlueSky | reason=Low Confidence
+    - Not just humanoids: the FCC says planned U.S. import restrictions also cover robot vacuums, mops, lawn mowers and transp  | provider=BlueSky | reason=Low Confidence
+    - FCC bans new foreign inverter imports #energysky -- via Solar Power World:  | provider=BlueSky | reason=Low Confidence
+    - @edzitron.com 
+
+"Tech companies have been counting on rapid solar and battery storage rollouts to keep these data center  | provider=BlueSky | reason=Low Confidence
+    - U.S. bans humanoid robot imports, eyeing China and national security concerns
+replaye.com/u-s-bans-hum...
+
+#News #Humano  | provider=BlueSky | reason=Low Confidence
+    - FCC bans foreign-made humanoid robots and power inverters in sweeping national security expansion
+
+RT & follow.
+
+https:/  | provider=BlueSky | reason=Low Confidence
+    - "... hits right as developers plan to connect more than 58,000 MW of new solar and storage over the next year. Without c  | provider=BlueSky | reason=Low Confidence
+    - www.foxnews.com/media/conser...  | provider=BlueSky | reason=Low Confidence
+    - FCC censorship czar Brendan Carr is threatening the broadcast licenses of eight local ABC stations because Trump doesn’t  | provider=BlueSky | reason=Low Confidence
+    - 🟡 SCOOP: SpaceX is coming for AT&T, Verizon, and T-Mobile as it tries to fill a hole in its airwaves crucial for a full-  | provider=BlueSky | reason=Low Confidence
+    - $SPCX is hunting urban radio spectrum to compete with $T, $VZ and $TMUS —via acquisitions or a 2027 auction. Carriers’ s  | provider=BlueSky | reason=Low Confidence
+    - Happy to see my paper with @t8el.bsky.social on the Combinatorial Multi-Round Ascending Auction out in print at AEJ: Mic  | provider=BlueSky | reason=Low Confidence
+    - Trying to keep up with the situational nanny-statism of this administration makes me feel like I’m taking crazy pills.  | provider=BlueSky | reason=Low Confidence
+    - FCC bans new Chinese robots and power inverters  | provider=Thebusinessjournal.Com | reason=Low Confidence
+    - US Bans Foreign - Made Humanoid Robots , Targeting China Over National Security  | provider=Theyeshivaworld.Com | reason=Low Confidence
+    - Trump Administration Bans Chinese Humanoid Robots , Robot Dogs Over National Security Concerns  | provider=Dailycaller.Com | reason=Low Confidence
+    - FCC announces ban on foreign humanoid robots , targeting China  | provider=Americanbazaaronline.Com | reason=Low Confidence
+    - US bans foreign - made humanoid robots . Here why  | provider=Ktiv.Com | reason=Low Confidence
+    - The US just banned Chinese humanoid robots and power inverters over security fears  | provider=Techspot.Com | reason=Low Confidence
+    - US bans foreign - made humanoid robots , targets China over national security  | provider=Tribuneonlineng.Com | reason=Low Confidence
+    - US Slams Door On Chinese Humanoid Robots Over Spying Threats  | provider=Hothardware.Com | reason=Low Confidence
+    - FCC Slammed by Former Agency Officials Over Review of ABC’s Licenses: ‘An Assault on Free Speech Disguised as Regulatory  | provider=BlueSky | reason=Low Confidence
+    - FCC carves out Starlink from foreign-made router ban as national security policy meets supply chain reality
+
+Repost if y  | provider=BlueSky | reason=Low Confidence
+    - US Bans Chinese and Foreign - Made Humanoid Robots  | provider=En.Tempo.Co | reason=Low Confidence
+    - US restricts humanoid robot imports from China over national security concerns  | provider=Businesstoday.In | reason=Low Confidence
+    - 22 Advocacy Groups Line Up to Support Disney in Tangle With FCC  | provider=Variety.Com | reason=Low Confidence
+    - US bans imports of foreign - made humanoid robots ahead of Trump - Xi meet , targets China - dominated market  | provider=Hindustantimes.Com | reason=Low Confidence
+    - Trump admin bans foreign - made robots , power gear amid fears of Chinese influence  | provider=Eenews.Net | reason=Low Confidence
+    - Latest Articles  | provider=Freerepublic.Com | reason=Low Confidence
+    - Trump administration bans imports of Chinese - made humanoid robots  | provider=Yahoo.Com | reason=Low Confidence
+    - US bans foreign - made humanoid robots , targeting China  | provider=Koat.Com | reason=Low Confidence
+    - Humanoid robot imports banned as U . S . targets Chinese products over national security concerns  | provider=Cbsnews.Com | reason=Low Confidence
+    - FCC Bans Chinese Humanoid Robots Over Security Concerns  | provider=Kogo.Iheart.Com | reason=Low Confidence
+    - “FCC Slammed by Former Agency Officials Over Review of ABC’s Licenses: ‘An Assault on Free Speech Disguised as Regulator  | provider=BlueSky | reason=Low Confidence
+    - Trump Administration Bans New Chinese Humanoid Robots
+https://hardware.slashdot.org/story/26/07/29/0441240/trump-adminis  | provider=BlueSky | reason=Low Confidence
+    - Trump Administration Bans New Chinese Humanoid Robots
+
+https://hardware.slashdot.org/story/26/07/29/0441240/trump-admini  | provider=BlueSky | reason=Low Confidence
+    - Several former top officials at the Federal Communications Commission called on FCC Chair Brendan Carr on Tuesday to aba  | provider=BlueSky | reason=Low Confidence
+    - And trump calls people who value checks and balances communist!  Give me a break!  Brendan Carr (FCC) is puttingABC new  | provider=BlueSky | reason=Low Confidence
+    - Former FCC Chairs Urge Brendan Carr to End ABC Broadcast License Review: ‘An Assault on Free Speech Disguised as Regulat  | provider=BlueSky | reason=Low Confidence
+    - Trump ally, Brendan Carr wants to control the media to satisfy Trump. It is a 'chiling message' with the ABC license rev  | provider=BlueSky | reason=Low Confidence
+    - FCC Bans Chinese Humanoid Robots Over Security Concerns | Talk Radio 105 . 9  | provider=Knrs.Iheart.Com | reason=Low Confidence
+    - FCC Bans Chinese Humanoid Robots Over Security Concerns | News Radio 101 . 9 Big WAAX  | provider=1019Bigwaax.Iheart.Com | reason=Low Confidence
+    - The US government just blacklisted foreign - made robots and power inverters  | provider=Digitaltrends.Com | reason=Low Confidence
+    - Why lawmakers are concerned about where billions in broadband funding is going – KTBB News , Weather , Talk  | provider=Ktbb.Com | reason=Low Confidence
+    - Variety
+
+A group of former FCC officials are accusing Chairman Brendan Carr of trying to “censor Disney and ABC’s speech  | provider=BlueSky | reason=Low Confidence
+    - More bangers  | provider=BlueSky | reason=Low Confidence
+    - "A group of former FCC chairs and top agency officials of both parties are calling on current chairman Brendan Carr to e  | provider=BlueSky | reason=Low Confidence
+    - variety.com/2026/tv/news...  | provider=BlueSky | reason=Low Confidence
+    - Exactly.  | provider=BlueSky | reason=Low Confidence
+    - Speaking out against censorship, especially when you have a platform, is essential: variety.com/2026/tv/news...  | provider=BlueSky | reason=Low Confidence
+    - Trump’s FCC went after one of our local stations: ABC7.
+
+This lawless administration wants to dictate what you can see o  | provider=BlueSky | reason=Low Confidence
+    - More, from an event larger group of former FCC officials, today. variety.com/2026/tv/news...  | provider=BlueSky | reason=Low Confidence
+    - Former commissioners and staffers urged chairman Brendan Carr to halt the early renewal process.  | provider=BlueSky | reason=Low Confidence
+    - 𝗙𝗖𝗖 𝘃𝗼𝘁𝗲𝘀 𝗼𝗻 𝟭𝟲𝟬𝗠𝗛𝘇 𝗨𝗽𝗽𝗲𝗿 𝗖-𝗕𝗮𝗻𝗱 𝗮𝘂𝗰𝘁𝗶𝗼𝗻 𝗳𝗼𝗿 𝟱𝗚 𝗮𝗻𝗱 𝟲𝗚
+The FCC will vote Wednesday to auction 160 megahertz of Upper C-B  | provider=BlueSky | reason=Low Confidence
+    - Satellite companies could get an extra $6.3 billion for clearing the band quickly  | provider=BlueSky | reason=Low Confidence
+    - ​The Broadband Last Mile Is Rural America Economic Growth Engine  | provider=Forbes.Com | reason=Low Confidence
+    - [CNBC] Squawk Box: market to the broadband net neutrality debate. i'm just looking, meta's profits ...  | provider=Cnbc | reason=Low Confidence
+    - [CNBC] Squawk Box: the net neutrality debate with broadband. we don't want them to have the slower ...  | provider=Cnbc | reason=Low Confidence
+    - Upper C-band auction offers another lift for GEO industry
+
+TAMPA, Fla. — Satellite operators have welcomed the prospect  | provider=BlueSky | reason=Low Confidence
+    - [FOX Business] Kudlow: well know. i mean, do you know this story, perhaps, but the federal communicatio...  | provider=Fox Business | reason=Low Confidence
+    - [CSPAN3] Nixon Administration 1970s Womens Initiatives: nixon. this is an item in his news summary was urging the appointment of a woman...  | provider=Cspan3 | reason=Low Confidence
+    - [CSPAN3] Stacy Schiff The Revolutionary - Samuel Adams: summary, a group called american in television and radio urged nixon. this is an...  | provider=Cspan3 | reason=Low Confidence
+    - [CSPAN3] Nixon Administration 1970s Womens Initiatives: summary was urging the appointment of a woman to the federal communications comm...  | provider=Cspan3 | reason=Low Confidence
+    - [CSPAN3] Nixon Administration 1970s Womens Initiatives: is just a summary -- was urging the appointment of a woman to the federal commun...  | provider=Cspan3 | reason=Low Confidence
+    - [FOX Business] Mornings With Maria Bartiromo: less lag, better gaming! i'm gonna need to charge you for three people. . maria:...  | provider=Fox Business | reason=Low Confidence
+    - [CSPAN] Federalist Society Previews Supreme Court Term Part 1: has asked for a search warrant in that case. there are a bunch of cases involvin...  | provider=Cspan | reason=Low Confidence
+    - [CSPAN2] Book TV: not allowed to own stocks that are regulated by the federal communications commi...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] Author Discussion on Journalism: not allowed to own stocks that are regulated by the federal communications commi...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] Book TV: stacks, trading forms. and we thought, you know how the heck we're going to go t...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] Author Discussion on Journalism: stacks, trading forms. and we thought, you know how the heck we're going to go t...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] Author Discussion on Journalism: that. and the idea was my my dad worked for the federal communications commissio...  | provider=Cspan2 | reason=Low Confidence
+    - [MSNBC] Velshi: distort of tony him from a nuclear reactor? you know, you want a scientist doing...  | provider=Msnbc | reason=Low Confidence
+    - [CSPAN] Federalist Society Previews Supreme Court Term: delegation something we should consider. the inspector general's office has aske...  | provider=Cspan | reason=Low Confidence
+    - [FOX News] Special Report With Bret Baier: services. the debt exchange deal includes payment of $1 and the assumption of ar...  | provider=Fox News | reason=Low Confidence
+    - [MSNBC] Katy Tur Reports: recover. in addition to fema, that includes the federal communications commissio...  | provider=Msnbc | reason=Low Confidence
+    - [CNN] Inside Politics With Dana Bash: available resources fast as possible. well to your communities. the rescue, reco...  | provider=Cnn | reason=Low Confidence
+    - [MSNBC] Jose Diaz-Balart Reports: he said that fema administrator is still on the ground there. he also talked abo...  | provider=Msnbc | reason=Low Confidence
+    - [FOX News] The Faulkner Focus: rebuilding. in addition to fema including the federal communications commission ...  | provider=Fox News | reason=Low Confidence
+    - [CNN] CNN Newsroom With Pamela Brown: every every available resources fast as possible to your communities. the rescue...  | provider=Cnn | reason=Low Confidence
+    - [MSNBC] Jose Diaz-Balart Reports: every available resource as fast as possible to your communities, to rescue, rec...  | provider=Msnbc | reason=Low Confidence
+    - [CSPAN2] Hearing on Oversight of FBIs Security Clearances for Whistleblowers: s. 275, a bill to require the federal communications commission to establish a v..  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] U.S. Senate U.S. Senate: it's been more than 1500 days since the last federal communications commission h...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] FCC Commissioner  Others Testify on Biden Administration Policies: senior republican commissioner on the federal communications commission he's bee...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN3] FCC Commissioner  Others Testify on Biden Administration Policies: excellent witnesses, brandon carr is a commissioner on the federal communication...  | provider=Cspan3 | reason=Low Confidence
+    - [CSPAN] U.S. House of Representatives U.S. House of Representatives: federal communications commission to establish a task force to be known as a 6-g...  | provider=Cspan | reason=Low Confidence
+    - [CSPAN3] Discussion on Emerging AI Technologies: media attack new media and try to use regulation to deal with that. it is really...  | provider=Cspan3 | reason=Low Confidence
+    - [CSPAN3] Discussion on Emerging AI Technologies: to use regulation to deal with that. it is really because of newspapers lobbying...  | provider=Cspan3 | reason=Low Confidence
+    - [CSPAN2] U.S. Senate U.S. Senate: the presiding officer: the clerk will read the title of the bill for the second ...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] U.S. Senate U.S. Senate: -- an act to direct the federal communications commission to publish a list of e...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] The Civil War Tom Wheeler Mr. Lincolns T-Mails: read out the list of his accomplishments. a few highlights include his service a...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] The Civil War Tom Wheeler Mr. Lincolns T-Mails: businessman, an author and a public figure. i'm not even going to try and read o...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] Nixon Administration 1970s Womens Initiatives: federal communications commission. nixon, scrawled in the margin, why not? so, y...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] American History TV: nixon. this is an item in his news summary was urging the appointment of a woman...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN] NTSB Chair and Others Discuss New Vehicle Technology and Safety Standards: technology, in vehicles on roadways. i will say, as i mentioned in my remarks  | provider=Cspan | reason=Low Confidence
+  [Non-FCC (blocked domain)] — 1
+    - Former FCC Officials Line Up To Blast Brendan Carr Lawless Censorship Of ABC  | provider=Techdirt.Com | reason=Non-FCC (blocked domain)
+
+SECTION 3 — HIGH PRIORITY ARTICLES
+    [INCLUDED] term=Spectrum | Qualcomm Still Pushing for Sidelink Rulemaking | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=AT&T | EchoStar, AT&T Close $23 Billion Spectrum Sale | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Space | Space Experts Call for Government Action as Space Data Centers Emerge | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=AT&T | AT&T: More Than Half of Residential Fixed Wireless Subs Take a Mobile Line | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Spectrum | The 6G AI uplink panic (Analyst Angle) | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Space | Mason's Observations on "Wonderwall", "Dai Dai" & New Throwbacks | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Satellite | Tuesday (telco diary) | D2D in 3D – Amazon appeals to telcos | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=AT&T | AT&T and Wave expand their quantum partnership | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=iHeart | What Is KZPS' Blockbuster Move? | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | Former FCC Chairs Call Review Of ABC Licenses "An Assault On Free Speech" - Deadline | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | ABC License Probe Proves Unconstitutional, Former FCC Chairs Say 07/29/2026 - MediaPost | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Spectrum | SpaceX won't buy a telco. Musk will buy the spectrum and build one himself | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Spectrum | FCC Approves Upper C-Band Plan to Expand 5G Spectrum - ExecutiveGov | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Satellite | FCC OKs $6.3B in upper C-band incentive payments, but cable ops still concerned | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Satellite | FCC Approves Massive Modernization of Satellite Licensing Regime - Global Policy Watch | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Satellite | SpaceX Pushes FCC to Target Eutelsat OneWeb in Satellite Dispute With Europe - PCMag | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Space | FCC to overhaul space bureau’s licensing process down to ‘targeted review categories’ - SDxCentral | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | Reporters Committee urges FCC to reject petitions to deny ABC license renewals - Reporters Committee for Freedom of the Press | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | Comments on FCC License Renewals for ABC Stations Top 150,000 - TVTechnology | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Robocall | AG coalition urges FCC to strengthen scam robocall protections - Sun Community News | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Cybersecurity | FCC blocks new foreign-made power inverters and advanced robots over national security risks | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | FCC Slammed by Former Agency Officials Over Review of ABC's Licenses: 'An Assault on Free Speech Disguised as Regulatory Process' - Variety | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | Ex-FCC officials warn agency sending ‘chilling message’ with ABC license review - The Guardian | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | Former FCC officials oppose early review of Disney-owned ABC licenses - reuters.com | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | Former FCC leaders slam agency probe into ABC - USA Today | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Robocall | Stronger FCC rules could curb robocall scams after $2B in losses nationwide - WCTI | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Robocall | FCC Urged To Tighten Robocall Controls - z100portland.iheart.com | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | Former FCC officials blast agency’s targeting of ABC - TheDesk.net | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | Conservative Groups Urge FCC To Show Restraint in ABC Investigation - Reason Magazine | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Spectrum | EchoStar closes AT&amp;T spectrum deal, but wrinkles remain | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Pole Attachment | Broadband Providers Praise Some State Pole Attachment Models, Argue Others Fall Behind - Broadband Breakfast | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Spectrum | The FCC and its current chairman, Brendan Carr, were blasted by former heads of the agency and other officials as pursui | reason=kept in briefing (priority-protected)
+    [REJECTED] term=ABC | Former FCC Chairs Urge Brendan Carr to End ABC Broadcast License Review: ‘An Assault on Free Speech Disguised as Regulatory Process’ - IMDb | reason=Duplicate
+    [REJECTED] term=ABC | Former FCC Chairs Urge Brendan Carr to End ABC Broadcast License Review: 'An Assault on Free Speech Disguised as Regulatory Process' - TheWrap | reason=Duplicate
+    [REJECTED] term=Wireless | [CSPAN] U.S. House of Representatives U.S. House of Representatives: magnifies this target. this helps address these concerns. this would require the... | reason=Duplicate
+    [REJECTED] term=Foreign Ownership | [CSPAN] U.S. House of Representatives U.S. House of Representatives: h.r. 820. a bill to direct the federal communications commission to publish a li... | reason=Duplicate
+    [REJECTED] term=ABC | FCC censorship czar Brendan Carr is threatening the broadcast licenses of eight local ABC stations because Trump doesn’t | reason=Duplicate
+    [REJECTED] term=ABC | ABC License Probe Proves Unconstitutional , Former FCC Chairs Say | reason=Low Confidence
+    [REJECTED] term=Cybersecurity | Due to cybersecurity risks the U.S. FCC bans the import of new humanoid and quadruped robots, as well as connected power | reason=Low Confidence
+    [REJECTED] term=Wireless | Rolling Wireless S.a r.l. submitted a new device:
+
+RW962D
+FCC ID: 2AX2URW962D | reason=Low Confidence
+    [REJECTED] term=Wireless | Rolling Wireless S.a r.l. submitted a new device:
+
+RW962E
+FCC ID: 2AX2URW962E | reason=Low Confidence
+    [REJECTED] term=ABC | Media Action Center/ Frequency Forward "Petition to Deny" Moves to Block Backroom FCC-Disney Settlement Over ABC License | reason=Low Confidence
+    [REJECTED] term=ABC | Media Action Center has joined with Frequency Forward to prevent the Disney-ABC case at the FCC from being settled behin | reason=Low Confidence
+    [REJECTED] term=Satellite | U.S:Amazon eyes 2028 launch for direct-to-phone satellite network
+Amazon's satellite venture plans to connect smartphone | reason=Low Confidence
+    [REJECTED] term=ABC | I really didn't see this coming. But, it's all about precedent. If the FCC can do it to ABC now, a Democratic administra | reason=Low Confidence
+    [REJECTED] term=ABC | My local ABC channel has asked us to comment to the FCC about the value the station is.  I can't imagine not having it. | reason=Low Confidence
+    [REJECTED] term=Satellite | Amazon seeks approval for 5,105 satellite direct-to-device constellation
+
+Amazon is asking the US Federal Communications | reason=Low Confidence
+    [REJECTED] term=ABC | ABC’s Defenders Flounder in Rebuttals to FCC, Bite at Disney - News Busters, #MediaBias | reason=Low Confidence
+    [REJECTED] term=ABC | FCC censorship czar Brendan Carr is threatening the broadcast licenses of eight local ABC stations because Trump doesn’t | reason=Low Confidence
+    [REJECTED] term=AT&T | 🟡 SCOOP: SpaceX is coming for AT&T, Verizon, and T-Mobile as it tries to fill a hole in its airwaves crucial for a full- | reason=Low Confidence
+    [REJECTED] term=Spectrum | $SPCX is hunting urban radio spectrum to compete with $T, $VZ and $TMUS —via acquisitions or a 2027 auction. Carriers’ s | reason=Low Confidence
+    [REJECTED] term=Spectrum | Happy to see my paper with @t8el.bsky.social on the Combinatorial Multi-Round Ascending Auction out in print at AEJ: Mic | reason=Low Confidence
+    [REJECTED] term=ABC | FCC Slammed by Former Agency Officials Over Review of ABC’s Licenses: ‘An Assault on Free Speech Disguised as Regulatory | reason=Low Confidence
+    [REJECTED] term=ABC | “FCC Slammed by Former Agency Officials Over Review of ABC’s Licenses: ‘An Assault on Free Speech Disguised as Regulator | reason=Low Confidence
+    [REJECTED] term=ABC | Several former top officials at the Federal Communications Commission called on FCC Chair Brendan Carr on Tuesday to aba | reason=Low Confidence
+    [REJECTED] term=ABC | Former FCC Chairs Urge Brendan Carr to End ABC Broadcast License Review: ‘An Assault on Free Speech Disguised as Regulat | reason=Low Confidence
+    [REJECTED] term=ABC | Trump ally, Brendan Carr wants to control the media to satisfy Trump. It is a 'chiling message' with the ABC license rev | reason=Low Confidence
+    [REJECTED] term=ABC | Variety
+
+A group of former FCC officials are accusing Chairman Brendan Carr of trying to “censor Disney and ABC’s speech | reason=Low Confidence
+    [REJECTED] term=Spectrum | "A group of former FCC chairs and top agency officials of both parties are calling on current chairman Brendan Carr to e | reason=Low Confidence
+    [REJECTED] term=Spectrum | 𝗙𝗖𝗖 𝘃𝗼𝘁𝗲𝘀 𝗼𝗻 𝟭𝟲𝟬𝗠𝗛𝘇 𝗨𝗽𝗽𝗲𝗿 𝗖-𝗕𝗮𝗻𝗱 𝗮𝘂𝗰𝘁𝗶𝗼𝗻 𝗳𝗼𝗿 𝟱𝗚 𝗮𝗻𝗱 𝟲𝗚
+The FCC will vote Wednesday to auction 160 megahertz of Upper C-B | reason=Low Confidence
+    [REJECTED] term=Satellite | Satellite companies could get an extra $6.3 billion for clearing the band quickly | reason=Low Confidence
+    [REJECTED] term=Spectrum | Upper C-band auction offers another lift for GEO industry
+
+TAMPA, Fla. — Satellite operators have welcomed the prospect | reason=Low Confidence
+    [REJECTED] term=AT&T | [CSPAN2] Book TV: not allowed to own stocks that are regulated by the federal communications commi... | reason=Low Confidence
+    [REJECTED] term=AT&T | [CSPAN2] Author Discussion on Journalism: not allowed to own stocks that are regulated by the federal communications commi... | reason=Low Confidence
+    [REJECTED] term=AT&T | [CSPAN2] Author Discussion on Journalism: that. and the idea was my my dad worked for the federal communications commissio... | reason=Low Confidence
+    [REJECTED] term=Foreign Ownership | [CSPAN2] U.S. Senate U.S. Senate: -- an act to direct the federal communications commission to publish a list of e... | reason=Low Confidence
+    [REJECTED] term=ABC | Former FCC Officials Line Up To Blast Brendan Carr Lawless Censorship Of ABC | reason=Non-FCC (blocked domain)
+
+SECTION 4 — COVERAGE GAP
+  Coverage gaps flagged: 150
+    - Qualcomm Still Pushing for Sidelink Rulemaking | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Pay-TV Operators Accuse FCC of Flip-Flopping on Ways to Resolve Retransmission Consent Policy Disputes | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - NAB Meets With FCC’s Anna Gomez to Discuss Broadcast Ownership Rules | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Starlink Routers Receive Conditional Exemption From FCC’s Covered List | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Bans Foreign-Made Humanoid Robots, Targeting China Over National Security | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Rural Carriers Appeal FCC for Deadline Relief | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - EchoStar, AT&T Close $23 Billion Spectrum Sale | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Space Experts Call for Government Action as Space Data Centers Emerge | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Tower Unanimously Rejected For Proximity to Historic Literary Site | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Cumulus Gains Approval to Extend Chapter 11 Filing Deadline | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - AT&T: More Than Half of Residential Fixed Wireless Subs Take a Mobile Line | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Verizon Fiber Expanding as Bain, Tillman Invest $1.5 Billion in Eaton | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - NTIA Extends Tribal Broadband Grant Deadlines Following Chickasaw Nation Visit | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - How to Fight Back Against Fraudulent Robocalls | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Shentel Adds Record 6,200 Fiber Subs | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - NTIA Launches Global 6G Leadership Initiative | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - ALLO Fiber to offer AI agents to business customers | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - The 6G AI uplink panic (Analyst Angle) | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - CTIA Wants Supreme Court to Again Review Decisions Upholding Carrier Fines | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Bipartisan Bill Introduced to Combat School Cyber Attacks | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Swyft Fiber acquires portions of Fastwyre’s fiber network in three southern states | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Mason's Observations on "Wonderwall", "Dai Dai" & New Throwbacks | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Tuesday (telco diary) | D2D in 3D – Amazon appeals to telcos | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - SiriusXM to Debut All-Sports Subscriber Plan | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - A Visit to Nashville’s WSM(AM) | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - NHL’s Blue Jackets Dumps Radio Host For TV Audio | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Digital Ad-Driven Entravision Preps For Q2 Earnings Reveal | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - More now say AI does more harm than good: Survey | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - DoorDash expands beyond drivers with new drone delivery program | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Senate Democrats press tech giants on AI safeguards for 'at-risk users' | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - AT&T and Wave expand their quantum partnership | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - KOPN(FM) Now Serves Mid-Missouri With a New BE Transmitter | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - DHD Releases Version 10.4 Firmware and Options | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Zip-Up: Mid-West ‘Merger’ To Yield A Nine-Station Zimmer Group | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - A Post-Bankruptcy Cumulus Will See Print Slasher’s Interest | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Spot-Level TV Ad Analysis: Now From MediaRadar | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Binder Exits Gray For A TitanTV Sales Role | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - SiriusXM To Debut A Sports-Focused Subscription Tier | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Rapid Transit Sees Riverfront Departure For Virginia Role | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - XR and AdImpact Pact As Political Ad Spending Ramps Up | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Zuckerberg knocks AI development centralization, control | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Rogue OpenAI agent compromised second tech firm's customer | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Trump administration bans foreign-made humanoid robots in move targeting China | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - AI giants back employee-led push asking US government to 'deliberately pace' development | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Russia accuses Telegram CEO Pavel Durov of aiding terrorism in its latest digital crackdown | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Hubbard To Lease WTLP To K-Love | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - What Is KZPS' Blockbuster Move? | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Nielsen Spring & June 2026 Ratings Releases 7/29 | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Beyond the Hype: Ilissa Miller on Responsible Growth, Data Centers and AI | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - The rise of agentic infra – why NetOps must outpace AI ambitions (Reader Forum) | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - North Carolina Radio Station Gets Community Lift After Tower Collapse | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Letter: The Dilemma of WBT’s Site | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Eiffel Tower Transmitter Site Undergoes Annual Maintenance | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Zimmer & Mid-West Family Broadcasting To Merge Springfield MO Operations | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - SiriusXM Launches Sports Only Subscription; Adds KSPN To Lineup | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - TM Studios & Capital Of Media Launch TRIL Imaging Library | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - The Agentic Network — Cisco on the platform path to agentic operations | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Private 5G – hype, hope, and (some) hard maths | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Network agents are “ready” for commercial use, but are telcos? (Analyst Angle) | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - American Tower Keeps on Rockin’ | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Hawaiian Telcom, Utility Reach Pole Removal Deal | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Verizon Signs $1 Billion Google Fiber Deal to Support AI Growth | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Park Cell Tower in Saint Paul Faces State Natural Resources Hurdles | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Quantum networking progresses on New Mexico’s ABQ-Net | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Brightspeed launches installation guarantee for fiber customers | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Cloud latency for AI hinges on fiber routes: Ookla analysis | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - The Pavek Museum Celebrates Edwin H. Armstrong | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Learfield and Adventure 33 Team Up for Prism | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Taming Diversity Delay and Packet Loss in Single-Frequency Networks | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Pattison Media Branches Into Visual Radio With Quu | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - NAB Marconi Radio Award Finalists For 2026 Are Unveiled | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Hey, Radio: You Beat Spotify and Pandora | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - GKB Brews Up A Badgers Pact For Milwaukee Radio Duo | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - New York school pauses plan to deploy humanlike AI robot teacher after backlash | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Elon Musk launches invite-only X Money with a Visa debit card, 6% yield and real-time transfers | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Trump's teleprompter operator who bet on speeches no longer working in the government | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Apple tops Nvidia as world’s most valuable company | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - NTIA Launches Global “Call to Action for 6G Leadership and Security” | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Nielsen Spring & June 2026 Ratings Releases 7/28 | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Little Rock's Sports Animal Shuts Down | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - 2026 Marconi Award Finalists | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - [Federal Register] Information Collection Being Reviewed by the Federal Communications Commission | provider=Federal Register | why=Surfaced by a single provider (would be missed without it)
+    - Former FCC Chairs Call Review Of ABC Licenses "An Assault On Free Speech" - Deadline | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Chairman Brendan Carr’s war on the First Amendment - The Verge | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - ABC License Probe Proves Unconstitutional, Former FCC Chairs Say 07/29/2026 - MediaPost | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - SpaceX won't buy a telco. Musk will buy the spectrum and build one himself | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Approves Upper C-Band Plan to Expand 5G Spectrum - ExecutiveGov | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Streamlines Broadband Label Rules, Easing Compliance Burdens for Providers - The National Law Review | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Rural Carriers Appeal FCC for Deadline Relief - Broadband Breakfast | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Approves SoftBank’s Acquisition of Regional ISP WideOpenWest! - Broadband Breakfast | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC to Migrate Subs Off Major Lifeline Provider - Broadband Breakfast | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Japan’s SoftBank Gains FCC Approval to Acquire Regional ISP WideOpenWest - Broadband Breakfast | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC OKs $6.3B in upper C-band incentive payments, but cable ops still concerned | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Approves Massive Modernization of Satellite Licensing Regime - Global Policy Watch | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - SpaceX Pushes FCC to Target Eutelsat OneWeb in Satellite Dispute With Europe - PCMag | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC exempts new Starlink routers from Covered List | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC to overhaul space bureau’s licensing process down to ‘targeted review categories’ - SDxCentral | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Pay TV Group Meets with FCC Staffers to Oppose FCC Ownership Rule Changes | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Reporters Committee urges FCC to reject petitions to deny ABC license renewals - Reporters Committee for Freedom of the Press | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Confronts Chinese-Produced Power Inverters and Robots - Foundation for Defense of Democracies | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - ATVA challenges FCC plan to repeal national TV ownership cap - NewscastStudio | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC: Ban on Foreign-Made Robots Includes Robot Vacuums - PCMag | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Minnesota joins 50-state coalition urging FCC to block illegal robocalls - 5 EYEWITNESS NEWS | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Comments on FCC License Renewals for ABC Stations Top 150,000 - TVTechnology | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - AG coalition urges FCC to strengthen scam robocall protections - Sun Community News | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - 22 Advocacy Groups Back Disney in FCC Fight: ‘The Government Is Violating the First Amendment’ (Wrap, The) | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - 22 Advocacy Groups Back Disney in FCC Fight: 'The Government Is Violating the First Amendment' - TheWrap | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC bans new foreign inverter imports - Solar Power World | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Quantifind Selected by FCC to Strengthen U.S. Communications Infrastructure Security - PR Newswire | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - ACLU, National Coalition Against Censorship and 20 Other Groups Line Up to Support Disney in Tangle With FCC - Variety | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - The FCC Just Banned Chinese Humanoid Robots. That's Not the Story Business Leaders Should Focus On - inc.com | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - US FCC bans imports of new humanoid bots - Taipei Times | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Attorney General Brown urges FCC to strengthen 'Know Your Customer' rules to combat robocalls - nottinghammd.com | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC exempts new Starlink devices from router ban | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Information Collection Being Reviewed by the Federal Communications Commission | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC bans foreign humanoid robots, expanding campaign against Chinese tech - The Washington Post | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC exempts new Starlink routers from Covered List - Mobile World Live | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Says Starlink Routers Exempt From Nat'l Security Ban - Law360 | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Pulls Major Provider From Lifeline, Citing Violations - Law360 | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC bans foreign-made advanced robotic devices and power inverters, under national security move | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC blocks new foreign-made power inverters and advanced robots over national security risks | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Slammed by Former Agency Officials Over Review of ABC's Licenses: 'An Assault on Free Speech Disguised as Regulatory Process' - Variety | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC bans foreign-produced solar inverters - pv magazine USA | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Ex-FCC officials warn agency sending ‘chilling message’ with ABC license review - The Guardian | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - 13 Former FCC Officials Blast Agency for `Threatening’ Free Speech - TVTechnology | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Former FCC officials oppose early review of Disney-owned ABC licenses - reuters.com | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Former FCC leaders slam agency probe into ABC - USA Today | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC exempts new Starlink devices from router ban - Light Reading | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - NC Attorney General Jeff Jackson calls on FCC to crack down on robocalls - ABC11 News | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Stronger FCC rules could curb robocall scams after $2B in losses nationwide - WCTI | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Urged To Tighten Robocall Controls - z100portland.iheart.com | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - McCuskey urges FCC to strengthen rules aimed at stopping illegal robocalls - WV News | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - AG Jackley joins nationwide push for tougher FCC rules to stop robocalls, scam texts - KOTA Territory News | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Former FCC officials blast agency’s targeting of ABC - TheDesk.net | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Conservative Groups Urge FCC To Show Restraint in ABC Investigation - Reason Magazine | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Former FCC Officials Call Disney-Owned Early License Review 'an Assault on Free Speech' - WDW News Today | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC bans IM Telecom from enrolling new Lifeline customers - Light Reading | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Pulling the 39% Thread: Why the FCC Must Fix More Than the Broadcast Cap | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Court Grants Cumulus Bankruptcy Extension | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - EchoStar closes AT&amp;T spectrum deal, but wrinkles remain | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Broadband Providers Praise Some State Pole Attachment Models, Argue Others Fall Behind - Broadband Breakfast | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - The US government just banned Roombas | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - The US government's robot ban also includes vacuums | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Trump’s Robot Vacuum Ban Sucks for Everyone | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Information Collection Being Submitted for Review and Approval to Office of Management and Budget | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - The US government just blacklisted foreign-made robots and power inverters | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - The US is banning foreign robots | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Amazon Leo prepara 5.000 satélites para su plan D2D | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - US bans humanoid robots from China, citing ‘unacceptable risks’ | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - The FCC and its current chairman, Brendan Carr, were blasted by former heads of the agency and other officials as pursui | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+
+SECTION 5 — EDITORIAL QUEUE (requires human review)
+  Items requiring review: 150
+    - Qualcomm Still Pushing for Sidelink Rulemaking | Surfaced by a single provider (would be missed without it)
+    - Pay-TV Operators Accuse FCC of Flip-Flopping on Ways to Resolve Retransmission Consent Policy Disputes | Surfaced by a single provider (would be missed without it)
+    - NAB Meets With FCC’s Anna Gomez to Discuss Broadcast Ownership Rules | Surfaced by a single provider (would be missed without it)
+    - Starlink Routers Receive Conditional Exemption From FCC’s Covered List | Surfaced by a single provider (would be missed without it)
+    - FCC Bans Foreign-Made Humanoid Robots, Targeting China Over National Security | Surfaced by a single provider (would be missed without it)
+    - Rural Carriers Appeal FCC for Deadline Relief | Surfaced by a single provider (would be missed without it)
+    - EchoStar, AT&T Close $23 Billion Spectrum Sale | Surfaced by a single provider (would be missed without it)
+    - Space Experts Call for Government Action as Space Data Centers Emerge | Surfaced by a single provider (would be missed without it)
+    - Tower Unanimously Rejected For Proximity to Historic Literary Site | Surfaced by a single provider (would be missed without it)
+    - Cumulus Gains Approval to Extend Chapter 11 Filing Deadline | Surfaced by a single provider (would be missed without it)
+    - AT&T: More Than Half of Residential Fixed Wireless Subs Take a Mobile Line | Surfaced by a single provider (would be missed without it)
+    - Verizon Fiber Expanding as Bain, Tillman Invest $1.5 Billion in Eaton | Surfaced by a single provider (would be missed without it)
+    - NTIA Extends Tribal Broadband Grant Deadlines Following Chickasaw Nation Visit | Surfaced by a single provider (would be missed without it)
+    - How to Fight Back Against Fraudulent Robocalls | Surfaced by a single provider (would be missed without it)
+    - Shentel Adds Record 6,200 Fiber Subs | Surfaced by a single provider (would be missed without it)
+    - NTIA Launches Global 6G Leadership Initiative | Surfaced by a single provider (would be missed without it)
+    - ALLO Fiber to offer AI agents to business customers | Surfaced by a single provider (would be missed without it)
+    - The 6G AI uplink panic (Analyst Angle) | Surfaced by a single provider (would be missed without it)
+    - CTIA Wants Supreme Court to Again Review Decisions Upholding Carrier Fines | Surfaced by a single provider (would be missed without it)
+    - Bipartisan Bill Introduced to Combat School Cyber Attacks | Surfaced by a single provider (would be missed without it)
+    - Swyft Fiber acquires portions of Fastwyre’s fiber network in three southern states | Surfaced by a single provider (would be missed without it)
+    - Mason's Observations on "Wonderwall", "Dai Dai" & New Throwbacks | Surfaced by a single provider (would be missed without it)
+    - Tuesday (telco diary) | D2D in 3D – Amazon appeals to telcos | Surfaced by a single provider (would be missed without it)
+    - SiriusXM to Debut All-Sports Subscriber Plan | Surfaced by a single provider (would be missed without it)
+    - A Visit to Nashville’s WSM(AM) | Surfaced by a single provider (would be missed without it)
+    - NHL’s Blue Jackets Dumps Radio Host For TV Audio | Surfaced by a single provider (would be missed without it)
+    - Digital Ad-Driven Entravision Preps For Q2 Earnings Reveal | Surfaced by a single provider (would be missed without it)
+    - More now say AI does more harm than good: Survey | Surfaced by a single provider (would be missed without it)
+    - DoorDash expands beyond drivers with new drone delivery program | Surfaced by a single provider (would be missed without it)
+    - Senate Democrats press tech giants on AI safeguards for 'at-risk users' | Surfaced by a single provider (would be missed without it)
+    - AT&T and Wave expand their quantum partnership | Surfaced by a single provider (would be missed without it)
+    - KOPN(FM) Now Serves Mid-Missouri With a New BE Transmitter | Surfaced by a single provider (would be missed without it)
+    - DHD Releases Version 10.4 Firmware and Options | Surfaced by a single provider (would be missed without it)
+    - Zip-Up: Mid-West ‘Merger’ To Yield A Nine-Station Zimmer Group | Surfaced by a single provider (would be missed without it)
+    - A Post-Bankruptcy Cumulus Will See Print Slasher’s Interest | Surfaced by a single provider (would be missed without it)
+    - Spot-Level TV Ad Analysis: Now From MediaRadar | Surfaced by a single provider (would be missed without it)
+    - Binder Exits Gray For A TitanTV Sales Role | Surfaced by a single provider (would be missed without it)
+    - SiriusXM To Debut A Sports-Focused Subscription Tier | Surfaced by a single provider (would be missed without it)
+    - Rapid Transit Sees Riverfront Departure For Virginia Role | Surfaced by a single provider (would be missed without it)
+    - XR and AdImpact Pact As Political Ad Spending Ramps Up | Surfaced by a single provider (would be missed without it)
+    - Zuckerberg knocks AI development centralization, control | Surfaced by a single provider (would be missed without it)
+    - Rogue OpenAI agent compromised second tech firm's customer | Surfaced by a single provider (would be missed without it)
+    - Trump administration bans foreign-made humanoid robots in move targeting China | Surfaced by a single provider (would be missed without it)
+    - AI giants back employee-led push asking US government to 'deliberately pace' development | Surfaced by a single provider (would be missed without it)
+    - Russia accuses Telegram CEO Pavel Durov of aiding terrorism in its latest digital crackdown | Surfaced by a single provider (would be missed without it)
+    - Hubbard To Lease WTLP To K-Love | Surfaced by a single provider (would be missed without it)
+    - What Is KZPS' Blockbuster Move? | Surfaced by a single provider (would be missed without it)
+    - Nielsen Spring & June 2026 Ratings Releases 7/29 | Surfaced by a single provider (would be missed without it)
+    - Beyond the Hype: Ilissa Miller on Responsible Growth, Data Centers and AI | Surfaced by a single provider (would be missed without it)
+    - The rise of agentic infra – why NetOps must outpace AI ambitions (Reader Forum) | Surfaced by a single provider (would be missed without it)
+    - North Carolina Radio Station Gets Community Lift After Tower Collapse | Surfaced by a single provider (would be missed without it)
+    - Letter: The Dilemma of WBT’s Site | Surfaced by a single provider (would be missed without it)
+    - Eiffel Tower Transmitter Site Undergoes Annual Maintenance | Surfaced by a single provider (would be missed without it)
+    - Zimmer & Mid-West Family Broadcasting To Merge Springfield MO Operations | Surfaced by a single provider (would be missed without it)
+    - SiriusXM Launches Sports Only Subscription; Adds KSPN To Lineup | Surfaced by a single provider (would be missed without it)
+    - TM Studios & Capital Of Media Launch TRIL Imaging Library | Surfaced by a single provider (would be missed without it)
+    - The Agentic Network — Cisco on the platform path to agentic operations | Surfaced by a single provider (would be missed without it)
+    - Private 5G – hype, hope, and (some) hard maths | Surfaced by a single provider (would be missed without it)
+    - Network agents are “ready” for commercial use, but are telcos? (Analyst Angle) | Surfaced by a single provider (would be missed without it)
+    - American Tower Keeps on Rockin’ | Surfaced by a single provider (would be missed without it)
+    - Hawaiian Telcom, Utility Reach Pole Removal Deal | Surfaced by a single provider (would be missed without it)
+    - Verizon Signs $1 Billion Google Fiber Deal to Support AI Growth | Surfaced by a single provider (would be missed without it)
+    - Park Cell Tower in Saint Paul Faces State Natural Resources Hurdles | Surfaced by a single provider (would be missed without it)
+    - Quantum networking progresses on New Mexico’s ABQ-Net | Surfaced by a single provider (would be missed without it)
+    - Brightspeed launches installation guarantee for fiber customers | Surfaced by a single provider (would be missed without it)
+    - Cloud latency for AI hinges on fiber routes: Ookla analysis | Surfaced by a single provider (would be missed without it)
+    - The Pavek Museum Celebrates Edwin H. Armstrong | Surfaced by a single provider (would be missed without it)
+    - Learfield and Adventure 33 Team Up for Prism | Surfaced by a single provider (would be missed without it)
+    - Taming Diversity Delay and Packet Loss in Single-Frequency Networks | Surfaced by a single provider (would be missed without it)
+    - Pattison Media Branches Into Visual Radio With Quu | Surfaced by a single provider (would be missed without it)
+    - NAB Marconi Radio Award Finalists For 2026 Are Unveiled | Surfaced by a single provider (would be missed without it)
+    - Hey, Radio: You Beat Spotify and Pandora | Surfaced by a single provider (would be missed without it)
+    - GKB Brews Up A Badgers Pact For Milwaukee Radio Duo | Surfaced by a single provider (would be missed without it)
+    - New York school pauses plan to deploy humanlike AI robot teacher after backlash | Surfaced by a single provider (would be missed without it)
+    - Elon Musk launches invite-only X Money with a Visa debit card, 6% yield and real-time transfers | Surfaced by a single provider (would be missed without it)
+    - Trump's teleprompter operator who bet on speeches no longer working in the government | Surfaced by a single provider (would be missed without it)
+    - Apple tops Nvidia as world’s most valuable company | Surfaced by a single provider (would be missed without it)
+    - NTIA Launches Global “Call to Action for 6G Leadership and Security” | Surfaced by a single provider (would be missed without it)
+    - Nielsen Spring & June 2026 Ratings Releases 7/28 | Surfaced by a single provider (would be missed without it)
+    - Little Rock's Sports Animal Shuts Down | Surfaced by a single provider (would be missed without it)
+    - 2026 Marconi Award Finalists | Surfaced by a single provider (would be missed without it)
+    - [Federal Register] Information Collection Being Reviewed by the Federal Communications Commission | Surfaced by a single provider (would be missed without it)
+    - Former FCC Chairs Call Review Of ABC Licenses "An Assault On Free Speech" - Deadline | Surfaced by a single provider (would be missed without it)
+    - FCC Chairman Brendan Carr’s war on the First Amendment - The Verge | Surfaced by a single provider (would be missed without it)
+    - ABC License Probe Proves Unconstitutional, Former FCC Chairs Say 07/29/2026 - MediaPost | Surfaced by a single provider (would be missed without it)
+    - SpaceX won't buy a telco. Musk will buy the spectrum and build one himself | Surfaced by a single provider (would be missed without it)
+    - FCC Approves Upper C-Band Plan to Expand 5G Spectrum - ExecutiveGov | Surfaced by a single provider (would be missed without it)
+    - FCC Streamlines Broadband Label Rules, Easing Compliance Burdens for Providers - The National Law Review | Surfaced by a single provider (would be missed without it)
+    - Rural Carriers Appeal FCC for Deadline Relief - Broadband Breakfast | Surfaced by a single provider (would be missed without it)
+    - FCC Approves SoftBank’s Acquisition of Regional ISP WideOpenWest! - Broadband Breakfast | Surfaced by a single provider (would be missed without it)
+    - FCC to Migrate Subs Off Major Lifeline Provider - Broadband Breakfast | Surfaced by a single provider (would be missed without it)
+    - Japan’s SoftBank Gains FCC Approval to Acquire Regional ISP WideOpenWest - Broadband Breakfast | Surfaced by a single provider (would be missed without it)
+    - FCC OKs $6.3B in upper C-band incentive payments, but cable ops still concerned | Surfaced by a single provider (would be missed without it)
+    - FCC Approves Massive Modernization of Satellite Licensing Regime - Global Policy Watch | Surfaced by a single provider (would be missed without it)
+    - SpaceX Pushes FCC to Target Eutelsat OneWeb in Satellite Dispute With Europe - PCMag | Surfaced by a single provider (would be missed without it)
+    - FCC exempts new Starlink routers from Covered List | Surfaced by a single provider (would be missed without it)
+    - FCC to overhaul space bureau’s licensing process down to ‘targeted review categories’ - SDxCentral | Surfaced by a single provider (would be missed without it)
+    - Pay TV Group Meets with FCC Staffers to Oppose FCC Ownership Rule Changes | Surfaced by a single provider (would be missed without it)
+    - Reporters Committee urges FCC to reject petitions to deny ABC license renewals - Reporters Committee for Freedom of the Press | Surfaced by a single provider (would be missed without it)
+    - FCC Confronts Chinese-Produced Power Inverters and Robots - Foundation for Defense of Democracies | Surfaced by a single provider (would be missed without it)
+    - ATVA challenges FCC plan to repeal national TV ownership cap - NewscastStudio | Surfaced by a single provider (would be missed without it)
+    - FCC: Ban on Foreign-Made Robots Includes Robot Vacuums - PCMag | Surfaced by a single provider (would be missed without it)
+    - Minnesota joins 50-state coalition urging FCC to block illegal robocalls - 5 EYEWITNESS NEWS | Surfaced by a single provider (would be missed without it)
+    - Comments on FCC License Renewals for ABC Stations Top 150,000 - TVTechnology | Surfaced by a single provider (would be missed without it)
+    - AG coalition urges FCC to strengthen scam robocall protections - Sun Community News | Surfaced by a single provider (would be missed without it)
+    - 22 Advocacy Groups Back Disney in FCC Fight: ‘The Government Is Violating the First Amendment’ (Wrap, The) | Surfaced by a single provider (would be missed without it)
+    - 22 Advocacy Groups Back Disney in FCC Fight: 'The Government Is Violating the First Amendment' - TheWrap | Surfaced by a single provider (would be missed without it)
+    - FCC bans new foreign inverter imports - Solar Power World | Surfaced by a single provider (would be missed without it)
+    - Quantifind Selected by FCC to Strengthen U.S. Communications Infrastructure Security - PR Newswire | Surfaced by a single provider (would be missed without it)
+    - ACLU, National Coalition Against Censorship and 20 Other Groups Line Up to Support Disney in Tangle With FCC - Variety | Surfaced by a single provider (would be missed without it)
+    - The FCC Just Banned Chinese Humanoid Robots. That's Not the Story Business Leaders Should Focus On - inc.com | Surfaced by a single provider (would be missed without it)
+    - US FCC bans imports of new humanoid bots - Taipei Times | Surfaced by a single provider (would be missed without it)
+    - Attorney General Brown urges FCC to strengthen 'Know Your Customer' rules to combat robocalls - nottinghammd.com | Surfaced by a single provider (would be missed without it)
+    - FCC exempts new Starlink devices from router ban | Surfaced by a single provider (would be missed without it)
+    - Information Collection Being Reviewed by the Federal Communications Commission | Surfaced by a single provider (would be missed without it)
+    - FCC bans foreign humanoid robots, expanding campaign against Chinese tech - The Washington Post | Surfaced by a single provider (would be missed without it)
+    - FCC exempts new Starlink routers from Covered List - Mobile World Live | Surfaced by a single provider (would be missed without it)
+    - FCC Says Starlink Routers Exempt From Nat'l Security Ban - Law360 | Surfaced by a single provider (would be missed without it)
+    - FCC Pulls Major Provider From Lifeline, Citing Violations - Law360 | Surfaced by a single provider (would be missed without it)
+    - FCC bans foreign-made advanced robotic devices and power inverters, under national security move | Surfaced by a single provider (would be missed without it)
+    - FCC blocks new foreign-made power inverters and advanced robots over national security risks | Surfaced by a single provider (would be missed without it)
+    - FCC Slammed by Former Agency Officials Over Review of ABC's Licenses: 'An Assault on Free Speech Disguised as Regulatory Process' - Variety | Surfaced by a single provider (would be missed without it)
+    - FCC bans foreign-produced solar inverters - pv magazine USA | Surfaced by a single provider (would be missed without it)
+    - Ex-FCC officials warn agency sending ‘chilling message’ with ABC license review - The Guardian | Surfaced by a single provider (would be missed without it)
+    - 13 Former FCC Officials Blast Agency for `Threatening’ Free Speech - TVTechnology | Surfaced by a single provider (would be missed without it)
+    - Former FCC officials oppose early review of Disney-owned ABC licenses - reuters.com | Surfaced by a single provider (would be missed without it)
+    - Former FCC leaders slam agency probe into ABC - USA Today | Surfaced by a single provider (would be missed without it)
+    - FCC exempts new Starlink devices from router ban - Light Reading | Surfaced by a single provider (would be missed without it)
+    - NC Attorney General Jeff Jackson calls on FCC to crack down on robocalls - ABC11 News | Surfaced by a single provider (would be missed without it)
+    - Stronger FCC rules could curb robocall scams after $2B in losses nationwide - WCTI | Surfaced by a single provider (would be missed without it)
+    - FCC Urged To Tighten Robocall Controls - z100portland.iheart.com | Surfaced by a single provider (would be missed without it)
+    - McCuskey urges FCC to strengthen rules aimed at stopping illegal robocalls - WV News | Surfaced by a single provider (would be missed without it)
+    - AG Jackley joins nationwide push for tougher FCC rules to stop robocalls, scam texts - KOTA Territory News | Surfaced by a single provider (would be missed without it)
+    - Former FCC officials blast agency’s targeting of ABC - TheDesk.net | Surfaced by a single provider (would be missed without it)
+    - Conservative Groups Urge FCC To Show Restraint in ABC Investigation - Reason Magazine | Surfaced by a single provider (would be missed without it)
+    - Former FCC Officials Call Disney-Owned Early License Review 'an Assault on Free Speech' - WDW News Today | Surfaced by a single provider (would be missed without it)
+    - FCC bans IM Telecom from enrolling new Lifeline customers - Light Reading | Surfaced by a single provider (would be missed without it)
+    - Pulling the 39% Thread: Why the FCC Must Fix More Than the Broadcast Cap | Surfaced by a single provider (would be missed without it)
+    - Court Grants Cumulus Bankruptcy Extension | Surfaced by a single provider (would be missed without it)
+    - EchoStar closes AT&amp;T spectrum deal, but wrinkles remain | Surfaced by a single provider (would be missed without it)
+    - Broadband Providers Praise Some State Pole Attachment Models, Argue Others Fall Behind - Broadband Breakfast | Surfaced by a single provider (would be missed without it)
+    - The US government just banned Roombas | Surfaced by a single provider (would be missed without it)
+    - The US government's robot ban also includes vacuums | Surfaced by a single provider (would be missed without it)
+    - Trump’s Robot Vacuum Ban Sucks for Everyone | Surfaced by a single provider (would be missed without it)
+    - Information Collection Being Submitted for Review and Approval to Office of Management and Budget | Surfaced by a single provider (would be missed without it)
+    - The US government just blacklisted foreign-made robots and power inverters | Surfaced by a single provider (would be missed without it)
+    - The US is banning foreign robots | Surfaced by a single provider (would be missed without it)
+    - Amazon Leo prepara 5.000 satélites para su plan D2D | Surfaced by a single provider (would be missed without it)
+    - US bans humanoid robots from China, citing ‘unacceptable risks’ | Surfaced by a single provider (would be missed without it)
+    - The FCC and its current chairman, Brendan Carr, were blasted by former heads of the agency and other officials as pursui | Surfaced by a single provider (would be missed without it)
+
+========================================================================
+========================================================================
+FCC BULLETIN — EDITOR AUDIT   agency=fcc   2026-07-29T19:40:47
+========================================================================
+
+SECTION 1 — ARTICLES COLLECTED
+  Total collected (post domain-exclusion): 368
+  Unique after dedup: 315   Classified: 301   In briefing: 150
+  Provider breakdown:
+    Talkwalker       0
+    NewsAPI.ai       0
+    Event Registry   0
+    RSS              164
+    Government       0
+    GDELT            0
+    Other            204
+
+SECTION 2 — ARTICLES REMOVED
+  Total removed: 218
+  [Duplicate] — 53
+    - Pay TV Group Meets with FCC Staffers to Oppose FCC Ownership Rule Changes - TVTechnology  | provider=RSS | reason=Duplicate
+    - Starlink Routers Receive Conditional Exemption From FCC’s Covered List - Broadband Breakfast  | provider=RSS | reason=Duplicate
+    - NAB Meets With FCC’s Anna Gomez to Discuss Broadcast Ownership Rules - radioworld.com  | provider=RSS | reason=Duplicate
+    - FCC Bans Foreign-Made Humanoid Robots, Targeting China Over National Security - Broadband Breakfast  | provider=RSS | reason=Duplicate
+    - FCC blocks new foreign-made power inverters and advanced robots over national security risks - Fox Business  | provider=RSS | reason=Duplicate
+    - Former FCC Chairs Urge Brendan Carr to End ABC Broadcast License Review: ‘An Assault on Free Speech Disguised as Regulatory Process’ - IMDb  | provider=RSS | reason=Duplicate
+    - Former FCC Chairs Urge Brendan Carr to End ABC Broadcast License Review: 'An Assault on Free Speech Disguised as Regulatory Process' - TheWrap  | provider=RSS | reason=Duplicate
+    - FCC OKs $6.3B in upper C-band incentive payments, but cable ops still concerned - Light Reading  | provider=RSS | reason=Duplicate
+    - U . S . bans foreign - made humanoid robots , targeting China over national security  | provider=Inquirer.Com | reason=Duplicate
+    - St . Paul police chief says mayor sexually harassed employees ; investigation underway  | provider=Grandforksherald.Com | reason=Duplicate
+    - St . Paul police chief says mayor sexually harassed employees ; investigation underway  | provider=Pineandlakes.Com | reason=Duplicate
+    - St . Paul police chief says mayor sexually harassed employees ; investigation underway  | provider=Inforum.Com | reason=Duplicate
+    - SpaceX Pushes FCC to Target Eutelsat OneWeb in Satellite Dispute With Europe  | provider=Pcmag.Com | reason=Duplicate
+    - St . Paul police chief says mayor sexually harassed employees ; investigation underway  | provider=Perhamfocus.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over national security  | provider=Mymotherlode.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Broomfieldenterprise.Com | reason=Duplicate
+    - Lindsey Graham returns home one last time for his funeral in South Carolina  | provider=Mykxlg.Com | reason=Duplicate
+    - St . Paul police chief says mayor sexually harassed employees ; investigation underway  | provider=Brainerddispatch.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Lowellsun.Com | reason=Duplicate
+    - Lindsey Graham returns home one last time for his funeral in South Carolina  | provider=Dailygazette.Com | reason=Duplicate
+    - Lindsey Graham returns home one last time for his funeral in South Carolina  | provider=Postregister.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Republicanherald.Com | reason=Duplicate
+    - Lindsey Graham returns home one last time for South Carolina funeral  | provider=Republicanherald.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Citizensvoice.Com | reason=Duplicate
+    - Pay TV Group Meets with FCC Staffers to Oppose FCC Ownership Rule Changes  | provider=Tvtechnology.Com | reason=Duplicate
+    - St . Paul police chief says mayor sexually harassed employees ; investigation underway  | provider=Postbulletin.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Advocate-News.Com | reason=Duplicate
+    - Fixkosten senken in einer Stunde : Wo fast jeder Haushalt zu viel zahlt  | provider=Fnp.De | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Twincities.Com | reason=Duplicate
+    - St . Paul police chief says mayor sexually harassed employees ; investigation underway  | provider=Parkrapidsenterprise.Com | reason=Duplicate
+    - Fixkosten senken in einer Stunde : Wo fast jeder Haushalt zu viel zahlt  | provider=Tz.De | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Sandiegouniontribune.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over national security  | provider=Abc12.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Greeleytribune.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Reporterherald.Com | reason=Duplicate
+    - St . Paul police chief says mayor sexually harassed employees ; investigation underway  | provider=Dglobe.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Orovillemr.Com | reason=Duplicate
+    - US bans foreign - made humanoid robots , targeting China over security  | provider=Eptrail.Com | reason=Duplicate
+    - Why lawmakers are concerned about where billions in broadband funding is going  | provider=Click2Houston.Com | reason=Duplicate
+    - [CSPAN] Federalist Society Previews Supreme Court Term Part 1: delegation something we should consider. the inspector general's office has aske...  | provider=Cspan | reason=Duplicate
+    - [CSPAN] Federalist Society Previews Supreme Court Term Part 1: has asked for a search warrant in that case. there are a bunch of cases involvin...  | provider=Cspan | reason=Duplicate
+    - [CSPAN] Federalist Society Previews Supreme Court Term: delegation something we should consider. the inspector general's office has aske...  | provider=Cspan | reason=Duplicate
+    - [CSPAN2] FCC Commissioner  Others Testify on Biden Administration Policies: okay. today were joined by excellent witnesses and the honorable senior republic...  | provider=Cspan2 | reason=Duplicate
+    - [CSPAN3] Discussion on Emerging AI Technologies: media attack new media and try to use regulation to deal with that. it is really...  | provider=Cspan3 | reason=Duplicate
+    - [CSPAN3] Discussion on Emerging AI Technologies: to use regulation to deal with that. it is really because of newspapers lobbying...  | provider=Cspan3 | reason=Duplicate
+    - [CSPAN] U.S. House of Representatives U.S. House of Representatives: sector. the fact act will require the federal communications commission to publi...  | provider=Cspan | reason=Duplicate
+    - [CSPAN] U.S. House of Representatives U.S. House of Representatives: magnifies this target. this helps address these concerns. this would require the...  | provider=Cspan | reason=Duplicate
+    - [CSPAN] U.S. House of Representatives U.S. House of Representatives: h.r. 820. a bill to direct the federal communications commission to publish a li...  | provider=Cspan | reason=Duplicate
+    - [CSPAN] U.S. House of Representatives U.S. House of Representatives: recognized as the equipment and services used in their drones to the federal com...  | provider=Cspan | reason=Duplicate
+    - [CSPAN3] Nixon Administration 1970s Womens Initiatives: summary was urging the appointment of a woman to the federal communications comm...  | provider=Cspan3 | reason=Duplicate
+    - [CSPAN3] Nixon Administration 1970s Womens Initiatives: nixon. this is an item in his news summary was urging the appointment of a woman...  | provider=Cspan3 | reason=Duplicate
+    - [CSPAN] NTSB Chair and Others Discuss New Vehicle Technology and Safety Standards: yet, there is more work to be done. the federal communications commission wil  | provider=Cspan | reason=Duplicate
+    - FCC censorship czar Brendan Carr is threatening the broadcast licenses of eight local ABC stations because Trump doesn’t  | provider=BlueSky | reason=Duplicate
+  [Corporate Noise] — 14
+    - PMI Names Jeannie Ericson Inaugural CEO  | provider=RSS | reason=Corporate Noise
+    - NAFB Names Rita Frazer and Tom Cassidy as 2026 Hall of Fame Inductees  | provider=RSS | reason=Corporate Noise
+    - Ericson Appointed Inaugural PMI CEO  | provider=RSS | reason=Corporate Noise
+    - Beadnell Promoted To Top Role Of Heritage TV Operation  | provider=RSS | reason=Corporate Noise
+    - Spotwise Unveils System to Automate Media Tasks  | provider=RSS | reason=Corporate Noise
+    - Allison Demers Joins WIHS As News Director & Afternoon Host  | provider=RSS | reason=Corporate Noise
+    - Ian Rambo Joins Connoisseur Fredericksburg As Operations Manager & WFLS Morning Host  | provider=RSS | reason=Corporate Noise
+    - Monday (telco diary) | ‘A new telco growth profile’?  | provider=RSS | reason=Corporate Noise
+    - Colorado Unveils Roadmap for Statewide $31.5M Middle-Mile Broadband Network  | provider=RSS | reason=Corporate Noise
+    - K-Love Names Andrew Lambeth Chief Marketing and Communications Officer  | provider=RSS | reason=Corporate Noise
+    - NAB Names Finalists for 2026 Marconi Radio Awards  | provider=RSS | reason=Corporate Noise
+    - Boeing takes $280 million hit on troubled Air Force One program  | provider=RSS | reason=Corporate Noise
+    - K-LOVE Appoints A Chief Marketing and Communications Officer  | provider=RSS | reason=Corporate Noise
+    - Verizon’s Numbers Show Growth, but the Math Is Fuzzy  | provider=RSS | reason=Corporate Noise
+  [Low Confidence] — 151
+    - U . S . bans foreign - made humanoid robots , targeting China over national security  | provider=Japantoday.Com | reason=Low Confidence
+    - Lindsey Graham returns home one last time for his funeral in South Carolina  | provider=Southcarolinapublicradio.Org | reason=Low Confidence
+    - Coalition of 22 Advocacy Groups Backs Disney in FCC Fight  | provider=Thewrap.Com | reason=Low Confidence
+    - St . Paul police chief says mayor sexually harassed employees ; investigation underway  | provider=Wadenapj.Com | reason=Low Confidence
+    - ABC License Probe Proves Unconstitutional , Former FCC Chairs Say  | provider=Mediapost.Com | reason=Low Confidence
+    - Never forget, it was Bill Clinton who signed the 1994 Telecom Act, that opened the floodgates for billionaire/corporate  | provider=BlueSky | reason=Low Confidence
+    - The fridge won liberty because given a choice between cheap food and democracy food won ! However, vacuuming or not may  | provider=BlueSky | reason=Low Confidence
+    - www.pcmag.com/news/fcc-ban...
+
+Something something planned economy something something "capitalism with American charact  | provider=BlueSky | reason=Low Confidence
+    - Due to potatosecurity risks the U.S. FCC bans the import of new humanoid and quadruped robots, as well as connected powe  | provider=BlueSky | reason=Low Confidence
+    - Due to cybersecurity risks the U.S. FCC bans the import of new humanoid and quadruped robots, as well as connected power  | provider=BlueSky | reason=Low Confidence
+    - Rolling Wireless S.a r.l. submitted a new device:
+
+RW962D
+FCC ID: 2AX2URW962D  | provider=BlueSky | reason=Low Confidence
+    - Rolling Wireless S.a r.l. submitted a new device:
+
+RW962E
+FCC ID: 2AX2URW962E  | provider=BlueSky | reason=Low Confidence
+    - Media Action Center/ Frequency Forward "Petition to Deny" Moves to Block Backroom FCC-Disney Settlement Over ABC License  | provider=BlueSky | reason=Low Confidence
+    - Who wins and who loses after US bans foreign robots?
+->Ars Technica | More info at BigEarthData.ai | #ArtificialIntellig  | provider=BlueSky | reason=Low Confidence
+    - Media Action Center has joined with Frequency Forward to prevent the Disney-ABC case at the FCC from being settled behin  | provider=BlueSky | reason=Low Confidence
+    - Please stop and read this article.
+
+Pushing enforcement from FCC to IRS has purposefully created an oversight vacuum tha  | provider=BlueSky | reason=Low Confidence
+    - The Trump administration has banned new Chinese-made robots and power inverters, citing security risks to the US AI supp  | provider=BlueSky | reason=Low Confidence
+    - www.huffpost.com/entry/fcc-ba...  | provider=BlueSky | reason=Low Confidence
+    - What did you enter for "Proceeding(s): Specify the FCC proceeding(s) to which your filing refers"?  | provider=BlueSky | reason=Low Confidence
+    - U.S:Amazon eyes 2028 launch for direct-to-phone satellite network
+Amazon's satellite venture plans to connect smartphone  | provider=BlueSky | reason=Low Confidence
+    - The FCC says the issue is national security: robots can collect data, move through homes, schools and factories, and plu  | provider=BlueSky | reason=Low Confidence
+    - “Trump Administration Exempts SpaceX’s Starlink From Sweeping FCC Ban on Foreign-Made Routers Through February 2028” How  | provider=BlueSky | reason=Low Confidence
+    - US government bans foreign-produced inverters #energysky -- via pv-tech:  | provider=BlueSky | reason=Low Confidence
+    - I really didn't see this coming. But, it's all about precedent. If the FCC can do it to ABC now, a Democratic administra  | provider=BlueSky | reason=Low Confidence
+    - It's bad news for Chinese robot vacuum manufacturers like Roborock, Ecovacs, and Dreame, which dominate the market. The  | provider=BlueSky | reason=Low Confidence
+    - Amazon’un ABD Federal İletişim Komisyonu’na (FCC) sunduğu başvuruya göre sistem, hücresel operatörlerle birlikte çalışac  | provider=BlueSky | reason=Low Confidence
+    - Amazon, telefonlara doğrudan uydu bağlantısı sağlayacak LEO ağı için başvuru yaptı
+Amazon, Amazon LEO adını verdiği yeni  | provider=BlueSky | reason=Low Confidence
+    - My local ABC channel has asked us to comment to the FCC about the value the station is.  I can't imagine not having it.  | provider=BlueSky | reason=Low Confidence
+    - Federal İletişim Komisyonu’nun (FCC) duyurduğu önlemler, yeni insansı / dört ayaklı robotların ve diğer versiyonların ya  | provider=BlueSky | reason=Low Confidence
+    - You can respond to the FCC here fcc.gov/ecfs/filings... 
+
+reader.inquirer.com/infinity/art... - Philadelphia's 6abc is u  | provider=BlueSky | reason=Low Confidence
+    - U.S. bans new vacuum and mowing robots, Roombas now considered threat to national security
+www.notebookcheck.net/U-S-ban  | provider=BlueSky | reason=Low Confidence
+    - www.reuters.com/business/med...  | provider=BlueSky | reason=Low Confidence
+    - Amazon seeks approval for 5,105 satellite direct-to-device constellation
+
+Amazon is asking the US Federal Communications  | provider=BlueSky | reason=Low Confidence
+    - 🔗 Read the full joint filing here: futurefreespeech.org/the-future-o...  | provider=BlueSky | reason=Low Confidence
+    - The Federal Communications Commission has banned 'new' foreign-made inverters, citing White House claims of national sec  | provider=BlueSky | reason=Low Confidence
+    - “The U.S. Federal Communications Commission is banning imports of new foreign-made humanoid robots and power inverters,  | provider=BlueSky | reason=Low Confidence
+    - De Amerikaanse overheid heeft omvormers en 'geavanceerde robots' uit het buitenland verboden. Dat maakt de Amerikaanse F  | provider=BlueSky | reason=Low Confidence
+    - The absolute dumbest of dumbfucks.
+
+www.pv-magazine.com/2026/07/29/f...  | provider=BlueSky | reason=Low Confidence
+    - pv-magazine-usa.com/2026/07/28/f...  | provider=BlueSky | reason=Low Confidence
+    - The duration of Starlink’s exemption is comparable to its peers, though the approval comes months later.  | provider=BlueSky | reason=Low Confidence
+    - This policy makes no sense. I already can’t buy some of the world’s most advanced cars, and now the same restrictions ma  | provider=BlueSky | reason=Low Confidence
+    - Les États-Unis interdisent l’importation de nouveaux robots humanoïdes et onduleurs étrangers pour raisons de sécurité n  | provider=BlueSky | reason=Low Confidence
+    - ABC’s Defenders Flounder in Rebuttals to FCC, Bite at Disney - News Busters, #MediaBias  | provider=BlueSky | reason=Low Confidence
+    - Not just humanoids: the FCC says planned U.S. import restrictions also cover robot vacuums, mops, lawn mowers and transp  | provider=BlueSky | reason=Low Confidence
+    - FCC bans new foreign inverter imports #energysky -- via Solar Power World:  | provider=BlueSky | reason=Low Confidence
+    - @edzitron.com 
+
+"Tech companies have been counting on rapid solar and battery storage rollouts to keep these data center  | provider=BlueSky | reason=Low Confidence
+    - U.S. bans humanoid robot imports, eyeing China and national security concerns
+replaye.com/u-s-bans-hum...
+
+#News #Humano  | provider=BlueSky | reason=Low Confidence
+    - FCC bans foreign-made humanoid robots and power inverters in sweeping national security expansion
+
+RT & follow.
+
+https:/  | provider=BlueSky | reason=Low Confidence
+    - "... hits right as developers plan to connect more than 58,000 MW of new solar and storage over the next year. Without c  | provider=BlueSky | reason=Low Confidence
+    - www.foxnews.com/media/conser...  | provider=BlueSky | reason=Low Confidence
+    - 🟡 SCOOP: SpaceX is coming for AT&T, Verizon, and T-Mobile as it tries to fill a hole in its airwaves crucial for a full-  | provider=BlueSky | reason=Low Confidence
+    - $SPCX is hunting urban radio spectrum to compete with $T, $VZ and $TMUS —via acquisitions or a 2027 auction. Carriers’ s  | provider=BlueSky | reason=Low Confidence
+    - Happy to see my paper with @t8el.bsky.social on the Combinatorial Multi-Round Ascending Auction out in print at AEJ: Mic  | provider=BlueSky | reason=Low Confidence
+    - Trying to keep up with the situational nanny-statism of this administration makes me feel like I’m taking crazy pills.  | provider=BlueSky | reason=Low Confidence
+    - FCC bans new Chinese robots and power inverters  | provider=Thebusinessjournal.Com | reason=Low Confidence
+    - Who wins and who loses after US bans foreign robots ?  | provider=Arstechnica.Com | reason=Low Confidence
+    - Pro - Data Center Ads Target Oregon , Here Who Behind Them  | provider=Corvallisadvocate.Com | reason=Low Confidence
+    - U . S . Expands National Security Ban to Include Humanoid and Quadruped Robots  | provider=English.Pravda.Ru | reason=Low Confidence
+    - FCC Cracks Down on Provider Accused of Fraud in  Obama Phone  Program – PJ Media  | provider=Pjmedia.Com | reason=Low Confidence
+    - US Bans Foreign - Made Humanoid Robots , Targeting China Over National Security  | provider=Theyeshivaworld.Com | reason=Low Confidence
+    - The US Government Robot Ban Also Includes Vacuums  | provider=Engadget.Com | reason=Low Confidence
+    - Phone networks must do more to prevent illegal robocalls : AGs  | provider=Brooklyneagle.Com | reason=Low Confidence
+    - Almost all future robot vacuums were just banned by the US government  | provider=9To5Mac.Com | reason=Low Confidence
+    - ABC and Disney Face FCC License Battle as Defenders Struggle With Legal Rebutt  | provider=Newsbusters.Org | reason=Low Confidence
+    - Lindsey Graham returns home as friends honor his South Carolina ties at funeral  | provider=Independent.Co.Uk | reason=Low Confidence
+    - AST SpaceMobile vs . QuantumScape : Which Stock Is a Better Buy in 2026 ?  | provider=Fool.Com | reason=Low Confidence
+    - Launch Manifests Are Becoming Spectrum Policy – SatNews  | provider=Satnews.Com | reason=Low Confidence
+    - Trump Administration Bans Chinese Humanoid Robots , Robot Dogs Over National Security Concerns  | provider=Dailycaller.Com | reason=Low Confidence
+    - FCC slaps ban on Chinese robots revealing US plans for unmanned warfighting  | provider=Theblaze.Com | reason=Low Confidence
+    - The ACLU Supports Disney CEO Josh DAmaro In FCC Fight  | provider=Laughingplace.Com | reason=Low Confidence
+    - You Can Stream Local TV Channels For Free Here How  | provider=Engadget.Com | reason=Low Confidence
+    - Pro - data center industry group behind ad campaign in Oregon , six other states  | provider=Idahostatejournal.Com | reason=Low Confidence
+    - FCC announces ban on foreign humanoid robots , targeting China  | provider=Americanbazaaronline.Com | reason=Low Confidence
+    - US Bans New Chinese Humanoid Robot Imports as Tech Rivalry With Beijing Escalates  | provider=Bearingdrift.Com | reason=Low Confidence
+    - US bans foreign - made humanoid robots . Here why  | provider=Ktiv.Com | reason=Low Confidence
+    - Lindsey Graham returns to South Carolina for funeral – NBC Bay Area  | provider=Nbcbayarea.Com | reason=Low Confidence
+    - Comments on FCC License Renewals for ABC Stations Top 150 , 000  | provider=Tvtechnology.Com | reason=Low Confidence
+    - The US just banned Chinese humanoid robots and power inverters over security fears  | provider=Techspot.Com | reason=Low Confidence
+    - Lindsey Graham returns home one last time for South Carolina funeral  | provider=Citizensvoice.Com | reason=Low Confidence
+    - South Carolina honors Lindsey Graham one last time at his funeral  | provider=Wdbo.Com | reason=Low Confidence
+    - Meta Mark Zuckerberg blasts AI  centralization , opposes US ban on Chinese models  | provider=Nypost.Com | reason=Low Confidence
+    - US bans foreign - made humanoid robots , targets China over national security  | provider=Tribuneonlineng.Com | reason=Low Confidence
+    - Mid - West Family to Hand Springfield Radio Reins Over to Zimmer  | provider=Radioink.Com | reason=Low Confidence
+    - Fixkosten senken in einer Stunde : Wo fast jeder Haushalt zu viel zahlt  | provider=Hna.De | reason=Low Confidence
+    - US bans Chinese humanoid robots  | provider=Shanghaisun.Com | reason=Low Confidence
+    - US Slams Door On Chinese Humanoid Robots Over Spying Threats  | provider=Hothardware.Com | reason=Low Confidence
+    - US bans imports of new Chinese robots over security concerns  | provider=Aljazeera.Com | reason=Low Confidence
+    - Concordia Parish Eyes Littering Cameras as Louisiana Bans Balloon Releases and Updates  I Voted  Sticker  | provider=Listenupyall.Com | reason=Low Confidence
+    - AP Business SummaryBrief at 12 : 54 p . m . EDT  | provider=Mankatofreepress.Com | reason=Low Confidence
+    - Stille Ausgaben : Was abgebucht wird , ohne dass jemand es merkt  | provider=Merkur.De | reason=Low Confidence
+    - Alleged kidnapper given custody of Christian girl in Pakistan  | provider=Christiandaily.Com | reason=Low Confidence
+    - FCC carves out Starlink from foreign-made router ban as national security policy meets supply chain reality
+
+Repost if y  | provider=BlueSky | reason=Low Confidence
+    - Seventh Circuit Holds Texts Are Not  Telephone Call Under Telephone Consumer Protection Act  | provider=Insidearm.Com | reason=Low Confidence
+    - FCC Bans Chinese Humanoid Robots and Power Inverters Linked to Confirmed Backdoors  | provider=Techtimes.Com | reason=Low Confidence
+    - National 1 : sacré champion de National 3 en 2026 , Hauts - Lyonnais recevra son trophée lors de la première journée  | provider=Foot-National.Com | reason=Low Confidence
+    - “FCC Slammed by Former Agency Officials Over Review of ABC’s Licenses: ‘An Assault on Free Speech Disguised as Regulator  | provider=BlueSky | reason=Low Confidence
+    - Trump Administration Bans New Chinese Humanoid Robots
+https://hardware.slashdot.org/story/26/07/29/0441240/trump-adminis  | provider=BlueSky | reason=Low Confidence
+    - Trump Administration Bans New Chinese Humanoid Robots
+
+https://hardware.slashdot.org/story/26/07/29/0441240/trump-admini  | provider=BlueSky | reason=Low Confidence
+    - And trump calls people who value checks and balances communist!  Give me a break!  Brendan Carr (FCC) is puttingABC new  | provider=BlueSky | reason=Low Confidence
+    - Former FCC Chairs Urge Brendan Carr to End ABC Broadcast License Review: ‘An Assault on Free Speech Disguised as Regulat  | provider=BlueSky | reason=Low Confidence
+    - Trump ally, Brendan Carr wants to control the media to satisfy Trump. It is a 'chiling message' with the ABC license rev  | provider=BlueSky | reason=Low Confidence
+    - Iowa AG Bird joins bipartisan push for tougher Know Your Customer robocall rules  | provider=Cbs2Iowa.Com | reason=Low Confidence
+    - Why lawmakers are concerned about where billions in broadband funding is going – KTBB News , Weather , Talk  | provider=Ktbb.Com | reason=Low Confidence
+    - More bangers  | provider=BlueSky | reason=Low Confidence
+    - variety.com/2026/tv/news...  | provider=BlueSky | reason=Low Confidence
+    - Exactly.  | provider=BlueSky | reason=Low Confidence
+    - Speaking out against censorship, especially when you have a platform, is essential: variety.com/2026/tv/news...  | provider=BlueSky | reason=Low Confidence
+    - Trump’s FCC went after one of our local stations: ABC7.
+
+This lawless administration wants to dictate what you can see o  | provider=BlueSky | reason=Low Confidence
+    - More, from an event larger group of former FCC officials, today. variety.com/2026/tv/news...  | provider=BlueSky | reason=Low Confidence
+    - Former commissioners and staffers urged chairman Brendan Carr to halt the early renewal process.  | provider=BlueSky | reason=Low Confidence
+    - Satellite companies could get an extra $6.3 billion for clearing the band quickly  | provider=BlueSky | reason=Low Confidence
+    - Are phone companies doing enough to stop robocalls in Arizona ?  | provider=Azfamily.Com | reason=Low Confidence
+    - ​The Broadband Last Mile Is Rural America Economic Growth Engine  | provider=Forbes.Com | reason=Low Confidence
+    - Upper C-band auction offers another lift for GEO industry
+
+TAMPA, Fla. — Satellite operators have welcomed the prospect  | provider=BlueSky | reason=Low Confidence
+    - [FOX Business] Kudlow: well know. i mean, do you know this story, perhaps, but the federal communicatio...  | provider=Fox Business | reason=Low Confidence
+    - [CSPAN3] Nixon Administration 1970s Womens Initiatives: nixon. this is an item in his news summary was urging the appointment of a woman...  | provider=Cspan3 | reason=Low Confidence
+    - [CSPAN3] Stacy Schiff The Revolutionary - Samuel Adams: summary, a group called american in television and radio urged nixon. this is an...  | provider=Cspan3 | reason=Low Confidence
+    - [CSPAN3] Nixon Administration 1970s Womens Initiatives: summary was urging the appointment of a woman to the federal communications comm...  | provider=Cspan3 | reason=Low Confidence
+    - [CSPAN3] Nixon Administration 1970s Womens Initiatives: is just a summary -- was urging the appointment of a woman to the federal commun...  | provider=Cspan3 | reason=Low Confidence
+    - [FOX Business] Mornings With Maria Bartiromo: less lag, better gaming! i'm gonna need to charge you for three people. . maria:...  | provider=Fox Business | reason=Low Confidence
+    - [CSPAN] Federalist Society Previews Supreme Court Term Part 1: has asked for a search warrant in that case. there are a bunch of cases involvin...  | provider=Cspan | reason=Low Confidence
+    - [CSPAN2] Book TV: not allowed to own stocks that are regulated by the federal communications commi...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] Author Discussion on Journalism: not allowed to own stocks that are regulated by the federal communications commi...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] Book TV: stacks, trading forms. and we thought, you know how the heck we're going to go t...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] Author Discussion on Journalism: stacks, trading forms. and we thought, you know how the heck we're going to go t...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] Author Discussion on Journalism: that. and the idea was my my dad worked for the federal communications commissio...  | provider=Cspan2 | reason=Low Confidence
+    - [MSNBC] Velshi: distort of tony him from a nuclear reactor? you know, you want a scientist doing...  | provider=Msnbc | reason=Low Confidence
+    - [CSPAN] Federalist Society Previews Supreme Court Term: delegation something we should consider. the inspector general's office has aske...  | provider=Cspan | reason=Low Confidence
+    - [FOX News] Special Report With Bret Baier: services. the debt exchange deal includes payment of $1 and the assumption of ar...  | provider=Fox News | reason=Low Confidence
+    - [MSNBC] Katy Tur Reports: recover. in addition to fema, that includes the federal communications commissio...  | provider=Msnbc | reason=Low Confidence
+    - [CNN] Inside Politics With Dana Bash: available resources fast as possible. well to your communities. the rescue, reco...  | provider=Cnn | reason=Low Confidence
+    - [MSNBC] Jose Diaz-Balart Reports: he said that fema administrator is still on the ground there. he also talked abo...  | provider=Msnbc | reason=Low Confidence
+    - [FOX News] The Faulkner Focus: rebuilding. in addition to fema including the federal communications commission ...  | provider=Fox News | reason=Low Confidence
+    - [CNN] CNN Newsroom With Pamela Brown: every every available resources fast as possible to your communities. the rescue...  | provider=Cnn | reason=Low Confidence
+    - [MSNBC] Jose Diaz-Balart Reports: every available resource as fast as possible to your communities, to rescue, rec...  | provider=Msnbc | reason=Low Confidence
+    - [CSPAN2] Hearing on Oversight of FBIs Security Clearances for Whistleblowers: s. 275, a bill to require the federal communications commission to establish a v..  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] U.S. Senate U.S. Senate: it's been more than 1500 days since the last federal communications commission h...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] FCC Commissioner  Others Testify on Biden Administration Policies: senior republican commissioner on the federal communications commission he's bee...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN3] FCC Commissioner  Others Testify on Biden Administration Policies: excellent witnesses, brandon carr is a commissioner on the federal communication...  | provider=Cspan3 | reason=Low Confidence
+    - [CSPAN] U.S. House of Representatives U.S. House of Representatives: federal communications commission to establish a task force to be known as a 6-g...  | provider=Cspan | reason=Low Confidence
+    - [CSPAN3] Discussion on Emerging AI Technologies: media attack new media and try to use regulation to deal with that. it is really...  | provider=Cspan3 | reason=Low Confidence
+    - [CSPAN3] Discussion on Emerging AI Technologies: to use regulation to deal with that. it is really because of newspapers lobbying...  | provider=Cspan3 | reason=Low Confidence
+    - [CSPAN2] U.S. Senate U.S. Senate: the presiding officer: the clerk will read the title of the bill for the second ...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] U.S. Senate U.S. Senate: -- an act to direct the federal communications commission to publish a list of e...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] The Civil War Tom Wheeler Mr. Lincolns T-Mails: read out the list of his accomplishments. a few highlights include his service a...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] The Civil War Tom Wheeler Mr. Lincolns T-Mails: businessman, an author and a public figure. i'm not even going to try and read o...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] Nixon Administration 1970s Womens Initiatives: federal communications commission. nixon, scrawled in the margin, why not? so, y...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN2] American History TV: nixon. this is an item in his news summary was urging the appointment of a woman...  | provider=Cspan2 | reason=Low Confidence
+    - [CSPAN] NTSB Chair and Others Discuss New Vehicle Technology and Safety Standards: technology, in vehicles on roadways. i will say, as i mentioned in my remarks  | provider=Cspan | reason=Low Confidence
+    - [CSPAN3] Public Affairs Events: conversation on the senate spectrum auction. that would help support the removal...  | provider=Cspan3 | reason=Low Confidence
+    - [CSPAN3] FCC Chair Testifies on 2025 Budget Request: statutory obligation? i'm glad you asked. i do know at present there is conversa...  | provider=Cspan3 | reason=Low Confidence
+  [Non-FCC (blocked domain)] — 0
+
+SECTION 3 — HIGH PRIORITY ARTICLES
+    [INCLUDED] term=Spectrum | Qualcomm Still Pushing for Sidelink Rulemaking | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=AT&T | EchoStar, AT&T Close $23 Billion Spectrum Sale | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Space | Space Experts Call for Government Action as Space Data Centers Emerge | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=AT&T | AT&T: More Than Half of Residential Fixed Wireless Subs Take a Mobile Line | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Spectrum | The 6G AI uplink panic (Analyst Angle) | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Space | Mason's Observations on "Wonderwall", "Dai Dai" & New Throwbacks | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Satellite | Tuesday (telco diary) | D2D in 3D – Amazon appeals to telcos | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=AT&T | AT&T and Wave expand their quantum partnership | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=iHeart | What Is KZPS' Blockbuster Move? | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | Former FCC Chairs Call Review Of ABC Licenses "An Assault On Free Speech" - Deadline | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | ABC License Probe Proves Unconstitutional, Former FCC Chairs Say 07/29/2026 - MediaPost | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Spectrum | SpaceX won't buy a telco. Musk will buy the spectrum and build one himself | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Spectrum | FCC Approves Upper C-Band Plan to Expand 5G Spectrum - ExecutiveGov | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Satellite | FCC OKs $6.3B in upper C-band incentive payments, but cable ops still concerned | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Satellite | FCC Approves Massive Modernization of Satellite Licensing Regime - Global Policy Watch | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Satellite | SpaceX Pushes FCC to Target Eutelsat OneWeb in Satellite Dispute With Europe - PCMag | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Space | FCC to overhaul space bureau’s licensing process down to ‘targeted review categories’ - SDxCentral | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | Reporters Committee urges FCC to reject petitions to deny ABC license renewals - Reporters Committee for Freedom of the Press | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | Comments on FCC License Renewals for ABC Stations Top 150,000 - TVTechnology | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Robocall | AG coalition urges FCC to strengthen scam robocall protections - Sun Community News | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Cybersecurity | FCC blocks new foreign-made power inverters and advanced robots over national security risks | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | Ex-FCC officials warn agency sending ‘chilling message’ with ABC license review - The Guardian | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | Former FCC officials oppose early review of Disney-owned ABC licenses - Reuters | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | FCC Slammed by Former Agency Officials Over Review of ABC's Licenses: 'An Assault on Free Speech Disguised as Regulatory Process' - Variety | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | Former FCC leaders slam agency probe into ABC - USA Today | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Robocall | Stronger FCC rules could curb robocall scams after $2B in losses nationwide - WCTI | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Robocall | FCC Urged To Tighten Robocall Controls - z100portland.iheart.com | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | Former FCC officials blast agency’s targeting of ABC - TheDesk.net | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | Conservative Groups Urge FCC To Show Restraint in ABC Investigation - Reason Magazine | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Spectrum | EchoStar closes AT&amp;T spectrum deal, but wrinkles remain | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Pole Attachment | Broadband Providers Praise Some State Pole Attachment Models, Argue Others Fall Behind - Broadband Breakfast | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Spectrum | The FCC and its current chairman, Brendan Carr, were blasted by former heads of the agency and other officials as pursui | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Spectrum | "A group of former FCC chairs and top agency officials of both parties are calling on current chairman Brendan Carr to e | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | Variety
+
+A group of former FCC officials are accusing Chairman Brendan Carr of trying to “censor Disney and ABC’s speech | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=Spectrum | 𝗙𝗖𝗖 𝘃𝗼𝘁𝗲𝘀 𝗼𝗻 𝟭𝟲𝟬𝗠𝗛𝘇 𝗨𝗽𝗽𝗲𝗿 𝗖-𝗕𝗮𝗻𝗱 𝗮𝘂𝗰𝘁𝗶𝗼𝗻 𝗳𝗼𝗿 𝟱𝗚 𝗮𝗻𝗱 𝟲𝗚
+The FCC will vote Wednesday to auction 160 megahertz of Upper C-B | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | FCC censorship czar Brendan Carr is threatening the broadcast licenses of eight local ABC stations because Trump doesn’t | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | FCC Slammed by Former Agency Officials Over Review of ABC’s Licenses: ‘An Assault on Free Speech Disguised as Regulatory | reason=kept in briefing (priority-protected)
+    [INCLUDED] term=ABC | Several former top officials at the Federal Communications Commission called on FCC Chair Brendan Carr on Tuesday to aba | reason=kept in briefing (priority-protected)
+    [REJECTED] term=ABC | Former FCC Chairs Urge Brendan Carr to End ABC Broadcast License Review: ‘An Assault on Free Speech Disguised as Regulatory Process’ - IMDb | reason=Duplicate
+    [REJECTED] term=ABC | Former FCC Chairs Urge Brendan Carr to End ABC Broadcast License Review: 'An Assault on Free Speech Disguised as Regulatory Process' - TheWrap | reason=Duplicate
+    [REJECTED] term=Satellite | SpaceX Pushes FCC to Target Eutelsat OneWeb in Satellite Dispute With Europe | reason=Duplicate
+    [REJECTED] term=Wireless | [CSPAN] U.S. House of Representatives U.S. House of Representatives: magnifies this target. this helps address these concerns. this would require the... | reason=Duplicate
+    [REJECTED] term=Foreign Ownership | [CSPAN] U.S. House of Representatives U.S. House of Representatives: h.r. 820. a bill to direct the federal communications commission to publish a li... | reason=Duplicate
+    [REJECTED] term=ABC | FCC censorship czar Brendan Carr is threatening the broadcast licenses of eight local ABC stations because Trump doesn’t | reason=Duplicate
+    [REJECTED] term=ABC | ABC License Probe Proves Unconstitutional , Former FCC Chairs Say | reason=Low Confidence
+    [REJECTED] term=Cybersecurity | Due to cybersecurity risks the U.S. FCC bans the import of new humanoid and quadruped robots, as well as connected power | reason=Low Confidence
+    [REJECTED] term=Wireless | Rolling Wireless S.a r.l. submitted a new device:
+
+RW962D
+FCC ID: 2AX2URW962D | reason=Low Confidence
+    [REJECTED] term=Wireless | Rolling Wireless S.a r.l. submitted a new device:
+
+RW962E
+FCC ID: 2AX2URW962E | reason=Low Confidence
+    [REJECTED] term=ABC | Media Action Center/ Frequency Forward "Petition to Deny" Moves to Block Backroom FCC-Disney Settlement Over ABC License | reason=Low Confidence
+    [REJECTED] term=ABC | Media Action Center has joined with Frequency Forward to prevent the Disney-ABC case at the FCC from being settled behin | reason=Low Confidence
+    [REJECTED] term=Satellite | U.S:Amazon eyes 2028 launch for direct-to-phone satellite network
+Amazon's satellite venture plans to connect smartphone | reason=Low Confidence
+    [REJECTED] term=ABC | I really didn't see this coming. But, it's all about precedent. If the FCC can do it to ABC now, a Democratic administra | reason=Low Confidence
+    [REJECTED] term=ABC | My local ABC channel has asked us to comment to the FCC about the value the station is.  I can't imagine not having it. | reason=Low Confidence
+    [REJECTED] term=Satellite | Amazon seeks approval for 5,105 satellite direct-to-device constellation
+
+Amazon is asking the US Federal Communications | reason=Low Confidence
+    [REJECTED] term=ABC | ABC’s Defenders Flounder in Rebuttals to FCC, Bite at Disney - News Busters, #MediaBias | reason=Low Confidence
+    [REJECTED] term=AT&T | 🟡 SCOOP: SpaceX is coming for AT&T, Verizon, and T-Mobile as it tries to fill a hole in its airwaves crucial for a full- | reason=Low Confidence
+    [REJECTED] term=Spectrum | $SPCX is hunting urban radio spectrum to compete with $T, $VZ and $TMUS —via acquisitions or a 2027 auction. Carriers’ s | reason=Low Confidence
+    [REJECTED] term=Spectrum | Happy to see my paper with @t8el.bsky.social on the Combinatorial Multi-Round Ascending Auction out in print at AEJ: Mic | reason=Low Confidence
+    [REJECTED] term=ABC | ABC and Disney Face FCC License Battle as Defenders Struggle With Legal Rebutt | reason=Low Confidence
+    [REJECTED] term=Spectrum | Launch Manifests Are Becoming Spectrum Policy – SatNews | reason=Low Confidence
+    [REJECTED] term=ABC | Comments on FCC License Renewals for ABC Stations Top 150 , 000 | reason=Low Confidence
+    [REJECTED] term=ABC | “FCC Slammed by Former Agency Officials Over Review of ABC’s Licenses: ‘An Assault on Free Speech Disguised as Regulator | reason=Low Confidence
+    [REJECTED] term=ABC | Former FCC Chairs Urge Brendan Carr to End ABC Broadcast License Review: ‘An Assault on Free Speech Disguised as Regulat | reason=Low Confidence
+    [REJECTED] term=ABC | Trump ally, Brendan Carr wants to control the media to satisfy Trump. It is a 'chiling message' with the ABC license rev | reason=Low Confidence
+    [REJECTED] term=Robocall | Iowa AG Bird joins bipartisan push for tougher Know Your Customer robocall rules | reason=Low Confidence
+    [REJECTED] term=Satellite | Satellite companies could get an extra $6.3 billion for clearing the band quickly | reason=Low Confidence
+    [REJECTED] term=Spectrum | Upper C-band auction offers another lift for GEO industry
+
+TAMPA, Fla. — Satellite operators have welcomed the prospect | reason=Low Confidence
+    [REJECTED] term=AT&T | [CSPAN2] Book TV: not allowed to own stocks that are regulated by the federal communications commi... | reason=Low Confidence
+    [REJECTED] term=AT&T | [CSPAN2] Author Discussion on Journalism: not allowed to own stocks that are regulated by the federal communications commi... | reason=Low Confidence
+    [REJECTED] term=AT&T | [CSPAN2] Author Discussion on Journalism: that. and the idea was my my dad worked for the federal communications commissio... | reason=Low Confidence
+    [REJECTED] term=Foreign Ownership | [CSPAN2] U.S. Senate U.S. Senate: -- an act to direct the federal communications commission to publish a list of e... | reason=Low Confidence
+    [REJECTED] term=Spectrum | [CSPAN3] Public Affairs Events: conversation on the senate spectrum auction. that would help support the removal... | reason=Low Confidence
+    [REJECTED] term=Spectrum | [CSPAN3] FCC Chair Testifies on 2025 Budget Request: statutory obligation? i'm glad you asked. i do know at present there is conversa... | reason=Low Confidence
+
+SECTION 4 — COVERAGE GAP
+  Coverage gaps flagged: 150
+    - Qualcomm Still Pushing for Sidelink Rulemaking | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Pay-TV Operators Accuse FCC of Flip-Flopping on Ways to Resolve Retransmission Consent Policy Disputes | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - NAB Meets With FCC’s Anna Gomez to Discuss Broadcast Ownership Rules | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Starlink Routers Receive Conditional Exemption From FCC’s Covered List | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Bans Foreign-Made Humanoid Robots, Targeting China Over National Security | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Rural Carriers Appeal FCC for Deadline Relief | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - EchoStar, AT&T Close $23 Billion Spectrum Sale | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Space Experts Call for Government Action as Space Data Centers Emerge | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Tower Unanimously Rejected For Proximity to Historic Literary Site | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Cumulus Gains Approval to Extend Chapter 11 Filing Deadline | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - AT&T: More Than Half of Residential Fixed Wireless Subs Take a Mobile Line | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Verizon Fiber Expanding as Bain, Tillman Invest $1.5 Billion in Eaton | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - NTIA Extends Tribal Broadband Grant Deadlines Following Chickasaw Nation Visit | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - How to Fight Back Against Fraudulent Robocalls | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Shentel Adds Record 6,200 Fiber Subs | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - NTIA Launches Global 6G Leadership Initiative | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - ALLO Fiber to offer AI agents to business customers | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - The 6G AI uplink panic (Analyst Angle) | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - CTIA Wants Supreme Court to Again Review Decisions Upholding Carrier Fines | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Bipartisan Bill Introduced to Combat School Cyber Attacks | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Swyft Fiber acquires portions of Fastwyre’s fiber network in three southern states | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Mason's Observations on "Wonderwall", "Dai Dai" & New Throwbacks | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Tuesday (telco diary) | D2D in 3D – Amazon appeals to telcos | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - SiriusXM to Debut All-Sports Subscriber Plan | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - A Visit to Nashville’s WSM(AM) | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - More now say AI does more harm than good: Survey | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - DoorDash expands beyond drivers with new drone delivery program | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Senate Democrats press tech giants on AI safeguards for 'at-risk users' | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - NHL’s Blue Jackets Dumps Radio Host For TV Audio | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Digital Ad-Driven Entravision Preps For Q2 Earnings Reveal | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - AT&T and Wave expand their quantum partnership | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - KOPN(FM) Now Serves Mid-Missouri With a New BE Transmitter | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - DHD Releases Version 10.4 Firmware and Options | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Zuckerberg knocks AI development centralization, control | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Rogue OpenAI agent compromised second tech firm's customer | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Trump administration bans foreign-made humanoid robots in move targeting China | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - AI giants back employee-led push asking US government to 'deliberately pace' development | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Russia accuses Telegram CEO Pavel Durov of aiding terrorism in its latest digital crackdown | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Zip-Up: Mid-West ‘Merger’ To Yield A Nine-Station Zimmer Group | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - A Post-Bankruptcy Cumulus Will See Print Slasher’s Interest | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Spot-Level TV Ad Analysis: Now From MediaRadar | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Binder Exits Gray For A TitanTV Sales Role | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - SiriusXM To Debut A Sports-Focused Subscription Tier | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Rapid Transit Sees Riverfront Departure For Virginia Role | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - XR and AdImpact Pact As Political Ad Spending Ramps Up | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Hubbard To Lease WTLP To K-Love | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - What Is KZPS' Blockbuster Move? | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Nielsen Spring & June 2026 Ratings Releases 7/29 | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Beyond the Hype: Ilissa Miller on Responsible Growth, Data Centers and AI | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - The rise of agentic infra – why NetOps must outpace AI ambitions (Reader Forum) | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - North Carolina Radio Station Gets Community Lift After Tower Collapse | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Letter: The Dilemma of WBT’s Site | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Eiffel Tower Transmitter Site Undergoes Annual Maintenance | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Zimmer & Mid-West Family Broadcasting To Merge Springfield MO Operations | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - SiriusXM Launches Sports Only Subscription; Adds KSPN To Lineup | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - TM Studios & Capital Of Media Launch TRIL Imaging Library | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - The Agentic Network — Cisco on the platform path to agentic operations | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Private 5G – hype, hope, and (some) hard maths | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Network agents are “ready” for commercial use, but are telcos? (Analyst Angle) | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - American Tower Keeps on Rockin’ | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Hawaiian Telcom, Utility Reach Pole Removal Deal | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Verizon Signs $1 Billion Google Fiber Deal to Support AI Growth | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Park Cell Tower in Saint Paul Faces State Natural Resources Hurdles | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Quantum networking progresses on New Mexico’s ABQ-Net | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Brightspeed launches installation guarantee for fiber customers | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Cloud latency for AI hinges on fiber routes: Ookla analysis | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - The Pavek Museum Celebrates Edwin H. Armstrong | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Learfield and Adventure 33 Team Up for Prism | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Taming Diversity Delay and Packet Loss in Single-Frequency Networks | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Pattison Media Branches Into Visual Radio With Quu | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - New York school pauses plan to deploy humanlike AI robot teacher after backlash | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Elon Musk launches invite-only X Money with a Visa debit card, 6% yield and real-time transfers | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Trump's teleprompter operator who bet on speeches no longer working in the government | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Apple tops Nvidia as world’s most valuable company | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - NAB Marconi Radio Award Finalists For 2026 Are Unveiled | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Hey, Radio: You Beat Spotify and Pandora | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - GKB Brews Up A Badgers Pact For Milwaukee Radio Duo | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Nielsen Spring & June 2026 Ratings Releases 7/28 | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Little Rock's Sports Animal Shuts Down | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - 2026 Marconi Award Finalists | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - NTIA Launches Global “Call to Action for 6G Leadership and Security” | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - [Federal Register] Information Collection Being Reviewed by the Federal Communications Commission | provider=Federal Register | why=Surfaced by a single provider (would be missed without it)
+    - FCC chair defends new U.S. ban on foreign-made humanoid robots, a market China dominates - NBC News | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Chairman Brendan Carr’s war on the First Amendment - The Verge | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Former FCC Chairs Call Review Of ABC Licenses "An Assault On Free Speech" - Deadline | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - ABC License Probe Proves Unconstitutional, Former FCC Chairs Say 07/29/2026 - MediaPost | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - SpaceX won't buy a telco. Musk will buy the spectrum and build one himself | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Approves Upper C-Band Plan to Expand 5G Spectrum - ExecutiveGov | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Streamlines Broadband Label Rules, Easing Compliance Burdens for Providers - The National Law Review | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Rural Carriers Appeal FCC for Deadline Relief - Broadband Breakfast | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Approves SoftBank’s Acquisition of Regional ISP WideOpenWest! - Broadband Breakfast | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC to Migrate Subs Off Major Lifeline Provider - Broadband Breakfast | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Japan’s SoftBank Gains FCC Approval to Acquire Regional ISP WideOpenWest - Broadband Breakfast | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC OKs $6.3B in upper C-band incentive payments, but cable ops still concerned | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Approves Massive Modernization of Satellite Licensing Regime - Global Policy Watch | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - SpaceX Pushes FCC to Target Eutelsat OneWeb in Satellite Dispute With Europe - PCMag | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC to overhaul space bureau’s licensing process down to ‘targeted review categories’ - SDxCentral | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Pay TV Group Meets with FCC Staffers to Oppose FCC Ownership Rule Changes | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Reporters Committee urges FCC to reject petitions to deny ABC license renewals - Reporters Committee for Freedom of the Press | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Confronts Chinese-Produced Power Inverters and Robots - Foundation for Defense of Democracies | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC: Ban on Foreign-Made Robots Includes Robot Vacuums - PCMag | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - ATVA challenges FCC plan to repeal national TV ownership cap - NewscastStudio | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Minnesota joins 50-state coalition urging FCC to block illegal robocalls - 5 EYEWITNESS NEWS | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Comments on FCC License Renewals for ABC Stations Top 150,000 - TVTechnology | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - AG coalition urges FCC to strengthen scam robocall protections - Sun Community News | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - 22 Advocacy Groups Back Disney in FCC Fight: ‘The Government Is Violating the First Amendment’ (Wrap, The) | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC bans new foreign inverter imports - Solar Power World | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Quantifind Selected by FCC to Strengthen U.S. Communications Infrastructure Security - PR Newswire | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - ACLU, National Coalition Against Censorship and 20 Other Groups Line Up to Support Disney in Tangle With FCC - Variety | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - The FCC Just Banned Chinese Humanoid Robots. That's Not the Story Business Leaders Should Focus On - inc.com | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - 22 Advocacy Groups Back Disney in FCC Fight: 'The Government Is Violating the First Amendment' - TheWrap | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Attorney General Brown urges FCC to strengthen 'Know Your Customer' rules to combat robocalls - nottinghammd.com | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC exempts new Starlink devices from router ban | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC bans foreign humanoid robots, expanding campaign against Chinese tech - The Washington Post | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC exempts new Starlink routers from Covered List - Mobile World Live | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Says Starlink Routers Exempt From Nat'l Security Ban - Law360 | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC bans foreign-made advanced robotic devices and power inverters, under national security move | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC blocks new foreign-made power inverters and advanced robots over national security risks | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC blocks approval of new foreign-made robots, power inverters | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Ex-FCC officials warn agency sending ‘chilling message’ with ABC license review - The Guardian | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Former FCC officials oppose early review of Disney-owned ABC licenses - Reuters | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Slammed by Former Agency Officials Over Review of ABC's Licenses: 'An Assault on Free Speech Disguised as Regulatory Process' - Variety | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC bans foreign-produced solar inverters - pv magazine USA | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - 13 Former FCC Officials Blast Agency for `Threatening’ Free Speech - TVTechnology | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Former FCC leaders slam agency probe into ABC - USA Today | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC exempts new Starlink devices from router ban - Light Reading | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - NC Attorney General Jeff Jackson calls on FCC to crack down on robocalls - ABC11 News | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Stronger FCC rules could curb robocall scams after $2B in losses nationwide - WCTI | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - FCC Urged To Tighten Robocall Controls - z100portland.iheart.com | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - McCuskey urges FCC to strengthen rules aimed at stopping illegal robocalls - WV News | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - AG Jackley joins nationwide push for tougher FCC rules to stop robocalls, scam texts - KOTA Territory News | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Former FCC officials blast agency’s targeting of ABC - TheDesk.net | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Conservative Groups Urge FCC To Show Restraint in ABC Investigation - Reason Magazine | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Former FCC Officials Call Disney-Owned Early License Review 'an Assault on Free Speech' - WDW News Today | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Pulling the 39% Thread: Why the FCC Must Fix More Than the Broadcast Cap | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - EchoStar closes AT&amp;T spectrum deal, but wrinkles remain | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Broadband Providers Praise Some State Pole Attachment Models, Argue Others Fall Behind - Broadband Breakfast | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - The US government just banned Roombas | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - The US government's robot ban also includes vacuums | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - Trump’s Robot Vacuum Ban Sucks for Everyone | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - The US government just blacklisted foreign-made robots and power inverters | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - The US is banning foreign robots | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - US bans humanoid robots from China, citing ‘unacceptable risks’ | provider=RSS | why=Surfaced by a single provider (would be missed without it)
+    - The FCC and its current chairman, Brendan Carr, were blasted by former heads of the agency and other officials as pursui | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - "A group of former FCC chairs and top agency officials of both parties are calling on current chairman Brendan Carr to e | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - Variety
+
+A group of former FCC officials are accusing Chairman Brendan Carr of trying to “censor Disney and ABC’s speech | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - 𝗙𝗖𝗖 𝘃𝗼𝘁𝗲𝘀 𝗼𝗻 𝟭𝟲𝟬𝗠𝗛𝘇 𝗨𝗽𝗽𝗲𝗿 𝗖-𝗕𝗮𝗻𝗱 𝗮𝘂𝗰𝘁𝗶𝗼𝗻 𝗳𝗼𝗿 𝟱𝗚 𝗮𝗻𝗱 𝟲𝗚
+The FCC will vote Wednesday to auction 160 megahertz of Upper C-B | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - FCC censorship czar Brendan Carr is threatening the broadcast licenses of eight local ABC stations because Trump doesn’t | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - FCC Slammed by Former Agency Officials Over Review of ABC’s Licenses: ‘An Assault on Free Speech Disguised as Regulatory | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+    - Several former top officials at the Federal Communications Commission called on FCC Chair Brendan Carr on Tuesday to aba | provider=BlueSky | why=Surfaced by a single provider (would be missed without it)
+
+SECTION 5 — EDITORIAL QUEUE (requires human review)
+  Items requiring review: 150
+    - Qualcomm Still Pushing for Sidelink Rulemaking | Surfaced by a single provider (would be missed without it)
+    - Pay-TV Operators Accuse FCC of Flip-Flopping on Ways to Resolve Retransmission Consent Policy Disputes | Surfaced by a single provider (would be missed without it)
+    - NAB Meets With FCC’s Anna Gomez to Discuss Broadcast Ownership Rules | Surfaced by a single provider (would be missed without it)
+    - Starlink Routers Receive Conditional Exemption From FCC’s Covered List | Surfaced by a single provider (would be missed without it)
+    - FCC Bans Foreign-Made Humanoid Robots, Targeting China Over National Security | Surfaced by a single provider (would be missed without it)
+    - Rural Carriers Appeal FCC for Deadline Relief | Surfaced by a single provider (would be missed without it)
+    - EchoStar, AT&T Close $23 Billion Spectrum Sale | Surfaced by a single provider (would be missed without it)
+    - Space Experts Call for Government Action as Space Data Centers Emerge | Surfaced by a single provider (would be missed without it)
+    - Tower Unanimously Rejected For Proximity to Historic Literary Site | Surfaced by a single provider (would be missed without it)
+    - Cumulus Gains Approval to Extend Chapter 11 Filing Deadline | Surfaced by a single provider (would be missed without it)
+    - AT&T: More Than Half of Residential Fixed Wireless Subs Take a Mobile Line | Surfaced by a single provider (would be missed without it)
+    - Verizon Fiber Expanding as Bain, Tillman Invest $1.5 Billion in Eaton | Surfaced by a single provider (would be missed without it)
+    - NTIA Extends Tribal Broadband Grant Deadlines Following Chickasaw Nation Visit | Surfaced by a single provider (would be missed without it)
+    - How to Fight Back Against Fraudulent Robocalls | Surfaced by a single provider (would be missed without it)
+    - Shentel Adds Record 6,200 Fiber Subs | Surfaced by a single provider (would be missed without it)
+    - NTIA Launches Global 6G Leadership Initiative | Surfaced by a single provider (would be missed without it)
+    - ALLO Fiber to offer AI agents to business customers | Surfaced by a single provider (would be missed without it)
+    - The 6G AI uplink panic (Analyst Angle) | Surfaced by a single provider (would be missed without it)
+    - CTIA Wants Supreme Court to Again Review Decisions Upholding Carrier Fines | Surfaced by a single provider (would be missed without it)
+    - Bipartisan Bill Introduced to Combat School Cyber Attacks | Surfaced by a single provider (would be missed without it)
+    - Swyft Fiber acquires portions of Fastwyre’s fiber network in three southern states | Surfaced by a single provider (would be missed without it)
+    - Mason's Observations on "Wonderwall", "Dai Dai" & New Throwbacks | Surfaced by a single provider (would be missed without it)
+    - Tuesday (telco diary) | D2D in 3D – Amazon appeals to telcos | Surfaced by a single provider (would be missed without it)
+    - SiriusXM to Debut All-Sports Subscriber Plan | Surfaced by a single provider (would be missed without it)
+    - A Visit to Nashville’s WSM(AM) | Surfaced by a single provider (would be missed without it)
+    - More now say AI does more harm than good: Survey | Surfaced by a single provider (would be missed without it)
+    - DoorDash expands beyond drivers with new drone delivery program | Surfaced by a single provider (would be missed without it)
+    - Senate Democrats press tech giants on AI safeguards for 'at-risk users' | Surfaced by a single provider (would be missed without it)
+    - NHL’s Blue Jackets Dumps Radio Host For TV Audio | Surfaced by a single provider (would be missed without it)
+    - Digital Ad-Driven Entravision Preps For Q2 Earnings Reveal | Surfaced by a single provider (would be missed without it)
+    - AT&T and Wave expand their quantum partnership | Surfaced by a single provider (would be missed without it)
+    - KOPN(FM) Now Serves Mid-Missouri With a New BE Transmitter | Surfaced by a single provider (would be missed without it)
+    - DHD Releases Version 10.4 Firmware and Options | Surfaced by a single provider (would be missed without it)
+    - Zuckerberg knocks AI development centralization, control | Surfaced by a single provider (would be missed without it)
+    - Rogue OpenAI agent compromised second tech firm's customer | Surfaced by a single provider (would be missed without it)
+    - Trump administration bans foreign-made humanoid robots in move targeting China | Surfaced by a single provider (would be missed without it)
+    - AI giants back employee-led push asking US government to 'deliberately pace' development | Surfaced by a single provider (would be missed without it)
+    - Russia accuses Telegram CEO Pavel Durov of aiding terrorism in its latest digital crackdown | Surfaced by a single provider (would be missed without it)
+    - Zip-Up: Mid-West ‘Merger’ To Yield A Nine-Station Zimmer Group | Surfaced by a single provider (would be missed without it)
+    - A Post-Bankruptcy Cumulus Will See Print Slasher’s Interest | Surfaced by a single provider (would be missed without it)
+    - Spot-Level TV Ad Analysis: Now From MediaRadar | Surfaced by a single provider (would be missed without it)
+    - Binder Exits Gray For A TitanTV Sales Role | Surfaced by a single provider (would be missed without it)
+    - SiriusXM To Debut A Sports-Focused Subscription Tier | Surfaced by a single provider (would be missed without it)
+    - Rapid Transit Sees Riverfront Departure For Virginia Role | Surfaced by a single provider (would be missed without it)
+    - XR and AdImpact Pact As Political Ad Spending Ramps Up | Surfaced by a single provider (would be missed without it)
+    - Hubbard To Lease WTLP To K-Love | Surfaced by a single provider (would be missed without it)
+    - What Is KZPS' Blockbuster Move? | Surfaced by a single provider (would be missed without it)
+    - Nielsen Spring & June 2026 Ratings Releases 7/29 | Surfaced by a single provider (would be missed without it)
+    - Beyond the Hype: Ilissa Miller on Responsible Growth, Data Centers and AI | Surfaced by a single provider (would be missed without it)
+    - The rise of agentic infra – why NetOps must outpace AI ambitions (Reader Forum) | Surfaced by a single provider (would be missed without it)
+    - North Carolina Radio Station Gets Community Lift After Tower Collapse | Surfaced by a single provider (would be missed without it)
+    - Letter: The Dilemma of WBT’s Site | Surfaced by a single provider (would be missed without it)
+    - Eiffel Tower Transmitter Site Undergoes Annual Maintenance | Surfaced by a single provider (would be missed without it)
+    - Zimmer & Mid-West Family Broadcasting To Merge Springfield MO Operations | Surfaced by a single provider (would be missed without it)
+    - SiriusXM Launches Sports Only Subscription; Adds KSPN To Lineup | Surfaced by a single provider (would be missed without it)
+    - TM Studios & Capital Of Media Launch TRIL Imaging Library | Surfaced by a single provider (would be missed without it)
+    - The Agentic Network — Cisco on the platform path to agentic operations | Surfaced by a single provider (would be missed without it)
+    - Private 5G – hype, hope, and (some) hard maths | Surfaced by a single provider (would be missed without it)
+    - Network agents are “ready” for commercial use, but are telcos? (Analyst Angle) | Surfaced by a single provider (would be missed without it)
+    - American Tower Keeps on Rockin’ | Surfaced by a single provider (would be missed without it)
+    - Hawaiian Telcom, Utility Reach Pole Removal Deal | Surfaced by a single provider (would be missed without it)
+    - Verizon Signs $1 Billion Google Fiber Deal to Support AI Growth | Surfaced by a single provider (would be missed without it)
+    - Park Cell Tower in Saint Paul Faces State Natural Resources Hurdles | Surfaced by a single provider (would be missed without it)
+    - Quantum networking progresses on New Mexico’s ABQ-Net | Surfaced by a single provider (would be missed without it)
+    - Brightspeed launches installation guarantee for fiber customers | Surfaced by a single provider (would be missed without it)
+    - Cloud latency for AI hinges on fiber routes: Ookla analysis | Surfaced by a single provider (would be missed without it)
+    - The Pavek Museum Celebrates Edwin H. Armstrong | Surfaced by a single provider (would be missed without it)
+    - Learfield and Adventure 33 Team Up for Prism | Surfaced by a single provider (would be missed without it)
+    - Taming Diversity Delay and Packet Loss in Single-Frequency Networks | Surfaced by a single provider (would be missed without it)
+    - Pattison Media Branches Into Visual Radio With Quu | Surfaced by a single provider (would be missed without it)
+    - New York school pauses plan to deploy humanlike AI robot teacher after backlash | Surfaced by a single provider (would be missed without it)
+    - Elon Musk launches invite-only X Money with a Visa debit card, 6% yield and real-time transfers | Surfaced by a single provider (would be missed without it)
+    - Trump's teleprompter operator who bet on speeches no longer working in the government | Surfaced by a single provider (would be missed without it)
+    - Apple tops Nvidia as world’s most valuable company | Surfaced by a single provider (would be missed without it)
+    - NAB Marconi Radio Award Finalists For 2026 Are Unveiled | Surfaced by a single provider (would be missed without it)
+    - Hey, Radio: You Beat Spotify and Pandora | Surfaced by a single provider (would be missed without it)
+    - GKB Brews Up A Badgers Pact For Milwaukee Radio Duo | Surfaced by a single provider (would be missed without it)
+    - Nielsen Spring & June 2026 Ratings Releases 7/28 | Surfaced by a single provider (would be missed without it)
+    - Little Rock's Sports Animal Shuts Down | Surfaced by a single provider (would be missed without it)
+    - 2026 Marconi Award Finalists | Surfaced by a single provider (would be missed without it)
+    - NTIA Launches Global “Call to Action for 6G Leadership and Security” | Surfaced by a single provider (would be missed without it)
+    - [Federal Register] Information Collection Being Reviewed by the Federal Communications Commission | Surfaced by a single provider (would be missed without it)
+    - FCC chair defends new U.S. ban on foreign-made humanoid robots, a market China dominates - NBC News | Surfaced by a single provider (would be missed without it)
+    - FCC Chairman Brendan Carr’s war on the First Amendment - The Verge | Surfaced by a single provider (would be missed without it)
+    - Former FCC Chairs Call Review Of ABC Licenses "An Assault On Free Speech" - Deadline | Surfaced by a single provider (would be missed without it)
+    - ABC License Probe Proves Unconstitutional, Former FCC Chairs Say 07/29/2026 - MediaPost | Surfaced by a single provider (would be missed without it)
+    - SpaceX won't buy a telco. Musk will buy the spectrum and build one himself | Surfaced by a single provider (would be missed without it)
+    - FCC Approves Upper C-Band Plan to Expand 5G Spectrum - ExecutiveGov | Surfaced by a single provider (would be missed without it)
+    - FCC Streamlines Broadband Label Rules, Easing Compliance Burdens for Providers - The National Law Review | Surfaced by a single provider (would be missed without it)
+    - Rural Carriers Appeal FCC for Deadline Relief - Broadband Breakfast | Surfaced by a single provider (would be missed without it)
+    - FCC Approves SoftBank’s Acquisition of Regional ISP WideOpenWest! - Broadband Breakfast | Surfaced by a single provider (would be missed without it)
+    - FCC to Migrate Subs Off Major Lifeline Provider - Broadband Breakfast | Surfaced by a single provider (would be missed without it)
+    - Japan’s SoftBank Gains FCC Approval to Acquire Regional ISP WideOpenWest - Broadband Breakfast | Surfaced by a single provider (would be missed without it)
+    - FCC OKs $6.3B in upper C-band incentive payments, but cable ops still concerned | Surfaced by a single provider (would be missed without it)
+    - FCC Approves Massive Modernization of Satellite Licensing Regime - Global Policy Watch | Surfaced by a single provider (would be missed without it)
+    - SpaceX Pushes FCC to Target Eutelsat OneWeb in Satellite Dispute With Europe - PCMag | Surfaced by a single provider (would be missed without it)
+    - FCC to overhaul space bureau’s licensing process down to ‘targeted review categories’ - SDxCentral | Surfaced by a single provider (would be missed without it)
+    - Pay TV Group Meets with FCC Staffers to Oppose FCC Ownership Rule Changes | Surfaced by a single provider (would be missed without it)
+    - Reporters Committee urges FCC to reject petitions to deny ABC license renewals - Reporters Committee for Freedom of the Press | Surfaced by a single provider (would be missed without it)
+    - FCC Confronts Chinese-Produced Power Inverters and Robots - Foundation for Defense of Democracies | Surfaced by a single provider (would be missed without it)
+    - FCC: Ban on Foreign-Made Robots Includes Robot Vacuums - PCMag | Surfaced by a single provider (would be missed without it)
+    - ATVA challenges FCC plan to repeal national TV ownership cap - NewscastStudio | Surfaced by a single provider (would be missed without it)
+    - Minnesota joins 50-state coalition urging FCC to block illegal robocalls - 5 EYEWITNESS NEWS | Surfaced by a single provider (would be missed without it)
+    - Comments on FCC License Renewals for ABC Stations Top 150,000 - TVTechnology | Surfaced by a single provider (would be missed without it)
+    - AG coalition urges FCC to strengthen scam robocall protections - Sun Community News | Surfaced by a single provider (would be missed without it)
+    - 22 Advocacy Groups Back Disney in FCC Fight: ‘The Government Is Violating the First Amendment’ (Wrap, The) | Surfaced by a single provider (would be missed without it)
+    - FCC bans new foreign inverter imports - Solar Power World | Surfaced by a single provider (would be missed without it)
+    - Quantifind Selected by FCC to Strengthen U.S. Communications Infrastructure Security - PR Newswire | Surfaced by a single provider (would be missed without it)
+    - ACLU, National Coalition Against Censorship and 20 Other Groups Line Up to Support Disney in Tangle With FCC - Variety | Surfaced by a single provider (would be missed without it)
+    - The FCC Just Banned Chinese Humanoid Robots. That's Not the Story Business Leaders Should Focus On - inc.com | Surfaced by a single provider (would be missed without it)
+    - 22 Advocacy Groups Back Disney in FCC Fight: 'The Government Is Violating the First Amendment' - TheWrap | Surfaced by a single provider (would be missed without it)
+    - Attorney General Brown urges FCC to strengthen 'Know Your Customer' rules to combat robocalls - nottinghammd.com | Surfaced by a single provider (would be missed without it)
+    - FCC exempts new Starlink devices from router ban | Surfaced by a single provider (would be missed without it)
+    - FCC bans foreign humanoid robots, expanding campaign against Chinese tech - The Washington Post | Surfaced by a single provider (would be missed without it)
+    - FCC exempts new Starlink routers from Covered List - Mobile World Live | Surfaced by a single provider (would be missed without it)
+    - FCC Says Starlink Routers Exempt From Nat'l Security Ban - Law360 | Surfaced by a single provider (would be missed without it)
+    - FCC bans foreign-made advanced robotic devices and power inverters, under national security move | Surfaced by a single provider (would be missed without it)
+    - FCC blocks new foreign-made power inverters and advanced robots over national security risks | Surfaced by a single provider (would be missed without it)
+    - FCC blocks approval of new foreign-made robots, power inverters | Surfaced by a single provider (would be missed without it)
+    - Ex-FCC officials warn agency sending ‘chilling message’ with ABC license review - The Guardian | Surfaced by a single provider (would be missed without it)
+    - Former FCC officials oppose early review of Disney-owned ABC licenses - Reuters | Surfaced by a single provider (would be missed without it)
+    - FCC Slammed by Former Agency Officials Over Review of ABC's Licenses: 'An Assault on Free Speech Disguised as Regulatory Process' - Variety | Surfaced by a single provider (would be missed without it)
+    - FCC bans foreign-produced solar inverters - pv magazine USA | Surfaced by a single provider (would be missed without it)
+    - 13 Former FCC Officials Blast Agency for `Threatening’ Free Speech - TVTechnology | Surfaced by a single provider (would be missed without it)
+    - Former FCC leaders slam agency probe into ABC - USA Today | Surfaced by a single provider (would be missed without it)
+    - FCC exempts new Starlink devices from router ban - Light Reading | Surfaced by a single provider (would be missed without it)
+    - NC Attorney General Jeff Jackson calls on FCC to crack down on robocalls - ABC11 News | Surfaced by a single provider (would be missed without it)
+    - Stronger FCC rules could curb robocall scams after $2B in losses nationwide - WCTI | Surfaced by a single provider (would be missed without it)
+    - FCC Urged To Tighten Robocall Controls - z100portland.iheart.com | Surfaced by a single provider (would be missed without it)
+    - McCuskey urges FCC to strengthen rules aimed at stopping illegal robocalls - WV News | Surfaced by a single provider (would be missed without it)
+    - AG Jackley joins nationwide push for tougher FCC rules to stop robocalls, scam texts - KOTA Territory News | Surfaced by a single provider (would be missed without it)
+    - Former FCC officials blast agency’s targeting of ABC - TheDesk.net | Surfaced by a single provider (would be missed without it)
+    - Conservative Groups Urge FCC To Show Restraint in ABC Investigation - Reason Magazine | Surfaced by a single provider (would be missed without it)
+    - Former FCC Officials Call Disney-Owned Early License Review 'an Assault on Free Speech' - WDW News Today | Surfaced by a single provider (would be missed without it)
+    - Pulling the 39% Thread: Why the FCC Must Fix More Than the Broadcast Cap | Surfaced by a single provider (would be missed without it)
+    - EchoStar closes AT&amp;T spectrum deal, but wrinkles remain | Surfaced by a single provider (would be missed without it)
+    - Broadband Providers Praise Some State Pole Attachment Models, Argue Others Fall Behind - Broadband Breakfast | Surfaced by a single provider (would be missed without it)
+    - The US government just banned Roombas | Surfaced by a single provider (would be missed without it)
+    - The US government's robot ban also includes vacuums | Surfaced by a single provider (would be missed without it)
+    - Trump’s Robot Vacuum Ban Sucks for Everyone | Surfaced by a single provider (would be missed without it)
+    - The US government just blacklisted foreign-made robots and power inverters | Surfaced by a single provider (would be missed without it)
+    - The US is banning foreign robots | Surfaced by a single provider (would be missed without it)
+    - US bans humanoid robots from China, citing ‘unacceptable risks’ | Surfaced by a single provider (would be missed without it)
+    - The FCC and its current chairman, Brendan Carr, were blasted by former heads of the agency and other officials as pursui | Surfaced by a single provider (would be missed without it)
+    - "A group of former FCC chairs and top agency officials of both parties are calling on current chairman Brendan Carr to e | Surfaced by a single provider (would be missed without it)
+    - Variety
+
+A group of former FCC officials are accusing Chairman Brendan Carr of trying to “censor Disney and ABC’s speech | Surfaced by a single provider (would be missed without it)
+    - 𝗙𝗖𝗖 𝘃𝗼𝘁𝗲𝘀 𝗼𝗻 𝟭𝟲𝟬𝗠𝗛𝘇 𝗨𝗽𝗽𝗲𝗿 𝗖-𝗕𝗮𝗻𝗱 𝗮𝘂𝗰𝘁𝗶𝗼𝗻 𝗳𝗼𝗿 𝟱𝗚 𝗮𝗻𝗱 𝟲𝗚
+The FCC will vote Wednesday to auction 160 megahertz of Upper C-B | Surfaced by a single provider (would be missed without it)
+    - FCC censorship czar Brendan Carr is threatening the broadcast licenses of eight local ABC stations because Trump doesn’t | Surfaced by a single provider (would be missed without it)
+    - FCC Slammed by Former Agency Officials Over Review of ABC’s Licenses: ‘An Assault on Free Speech Disguised as Regulatory | Surfaced by a single provider (would be missed without it)
+    - Several former top officials at the Federal Communications Commission called on FCC Chair Brendan Carr on Tuesday to aba | Surfaced by a single provider (would be missed without it)
+
+========================================================================

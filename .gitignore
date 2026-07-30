@@ -12,6 +12,7 @@ pv.html
 
 # Deployment artifacts - built, never committed
 dev-deploy.zip
+prod-deploy.zip
 deploy.zip
 pydeps/
 

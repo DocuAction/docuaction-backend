@@ -39,6 +39,48 @@ os.environ.setdefault(
 from fastapi.testclient import TestClient  # noqa: E402
 from app.main import app  # noqa: E402
 
+# Every TestClient request runs the app on its own short-lived event loop, but
+# the async engine's connection pool is module-level and outlives it. A pooled
+# connection opened by one test gets handed to the next, where awaiting it fails
+# with "Event loop is closed" - which surfaces as a 500 and reads as an
+# application bug. Which test takes the hit depends on collection order, so the
+# failure moves around as tests are added. NullPool keeps a connection's life
+# inside the request that opened it, so nothing crosses a loop boundary. This is
+# a test-harness concern only; production keeps the real pool.
+#
+# There are two engines: app.database.engine, and the lazily-built one behind
+# app.core.database.get_db - which is the one the auth routes actually use. Both
+# are switched, and the lazy one is forced into existence first so it does not
+# come back later with the default pool.
+def _use_null_pool() -> None:
+    from sqlalchemy.pool import NullPool
+
+    engines = []
+    try:
+        from app.core import database as core_db
+
+        engines.append(core_db._get_engine())
+    except Exception:
+        pass
+    try:
+        from app.database import engine as app_engine
+
+        engines.append(app_engine)
+    except Exception:
+        pass
+    for eng in engines:
+        try:
+            sync = eng.sync_engine
+            sync.pool = NullPool(sync.pool._creator, dialect=sync.dialect)
+        except Exception:
+            pass
+
+
+try:
+    _use_null_pool()
+except Exception:  # pragma: no cover - never block the suite on this
+    pass
+
 
 def _database_reachable() -> bool:
     """Attempt a real connection, not just a TCP handshake.
@@ -97,6 +139,18 @@ def _reset_rate_limiter():
 
         rl._request_log.clear()
         rl._burst_log.clear()
+    except Exception:
+        pass
+    # The login throttles are separate module-level buckets. Without clearing
+    # them, the account-lockout and per-IP windows carry across tests - every
+    # test shares one client address, so a later test sees a 429 earned by an
+    # earlier one.
+    try:
+        from app.api import routes as api_routes
+
+        api_routes._login_fail_by_account.clear()
+        api_routes._login_attempts_by_ip.clear()
+        api_routes._signup_by_ip.clear()
     except Exception:
         pass
     yield
