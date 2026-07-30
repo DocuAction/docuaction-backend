@@ -213,7 +213,11 @@ CYCLE_LOCK_TTL = 180  # seconds (covers a typical 1-2 min cycle)
 
 
 def _hash(url: str, title: str) -> str:
-    return hashlib.md5(f"{url}{title}".encode()).hexdigest()
+    # Dedup key only - two articles with the same URL and headline are the same
+    # story. Nothing authenticates on this value, so MD5's collision weakness is
+    # not a threat here; usedforsecurity=False states that intent and keeps the
+    # call working on FIPS-restricted builds, where plain md5() raises.
+    return hashlib.md5(f"{url}{title}".encode(), usedforsecurity=False).hexdigest()
 
 
 def _now() -> str:
