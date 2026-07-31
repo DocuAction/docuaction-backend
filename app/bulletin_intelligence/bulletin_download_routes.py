@@ -504,21 +504,19 @@ async def download_bulletin_excel(
     )
 
 
-@router.get("/briefings/{briefing_id}/excel", dependencies=guard("viewer"))
-async def download_briefing_excel(briefing_id: str):
-    """Download a past briefing (from Run History) as the SAME QA Excel sheet as the
-    Daily Briefing — identical columns: #, Category, Story Group, Relationship,
-    Title, Summary, Source, Subscription Required, Relevance, URL.
+def _briefing_articles(briefing_id: str):
+    """Rehydrate a briefing's stories, in document order.
 
-    The briefing only stores its rendered HTML, so we rehydrate each story's full
-    metadata from the archive by matching the URLs in that HTML. Falls back to the
-    agency's current top articles if an old briefing's stories have aged out, so the
-    sheet is never empty.
+    A Briefing stores only its rendered HTML, so the stories are recovered by
+    matching the URLs in that HTML back to the archive. That matters: it keeps
+    every export showing the SAME set the reader sees in the preview, rather
+    than each format re-deriving its own list and quietly disagreeing.
+
+    Returns (briefing, agency, articles). Raises HTTPException on any miss.
     """
     try:
         from app.bulletin_intelligence.engine import (
             get_briefing, get_briefing_html, _articles, _agencies,
-            _cluster_stories, _section_of, AGT_SECTIONS,
         )
     except ImportError:
         raise HTTPException(500, "Bulletin engine not available")
@@ -531,7 +529,6 @@ async def download_briefing_excel(briefing_id: str):
     if not agency:
         raise HTTPException(404, f"Agency {agency_id} not found")
 
-    # 1) Extract the story URLs from the stored briefing HTML, in document order.
     html = get_briefing_html(briefing_id) or ""
     seen, ordered_urls = set(), []
     for u in re.findall(r'href="(https?://[^"#]+)"', html):
@@ -542,14 +539,13 @@ async def download_briefing_excel(briefing_id: str):
         seen.add(u)
         ordered_urls.append(u)
 
-    # 2) Rehydrate full metadata from the archive by URL.
     by_url = {}
     for a in _articles.values():
         if getattr(a, "agency_id", None) == agency_id and getattr(a, "url", ""):
             by_url.setdefault(a.url, a)
     arts = [by_url[u] for u in ordered_urls if u in by_url]
 
-    # 3) Fallback for old briefings whose stories have aged out of the archive.
+    # Fallback for old briefings whose stories have aged out of the archive.
     if not arts:
         cap = max(int(briefing.get("article_count") or 0), 50)
         arts = sorted(
@@ -559,6 +555,76 @@ async def download_briefing_excel(briefing_id: str):
         )[:cap]
     if not arts:
         raise HTTPException(404, "No articles available to export for this briefing")
+    return briefing, agency, arts
+
+
+@router.get("/briefings/{briefing_id}/excel")
+async def download_briefing_excel_public(briefing_id: str):
+    """Client-facing Excel for a briefing — PUBLIC, same access model as the HTML
+    preview. FCC contacts open both from an emailed link and have no accounts.
+
+    Columns are the reader's view (#, Topic, Source, Headline, Summary, URL) plus
+    a Summary sheet of counts by topic. Internal QA signals — relevance score,
+    story-group id, subscription flag — are deliberately absent: this endpoint is
+    unauthenticated, and those belong to the guarded QA sheet at
+    /briefings/{id}/excel-qa.
+    """
+    briefing, _agency, arts = _briefing_articles(briefing_id)
+
+    try:
+        from app.bulletin_intelligence.excel_export import create_bulletin_excel
+        from app.bulletin_intelligence.engine import _section_of
+    except ImportError as e:
+        raise HTTPException(500, f"Excel export unavailable: {e}")
+
+    def _sec(a):
+        try:
+            return _section_of(a)
+        except Exception:
+            return "General"
+
+    wb = create_bulletin_excel(briefing, arts, _sec)
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+
+    agency_tag = str(briefing.get("agency_id") or "fcc").upper()
+    date_tag = re.sub(r"[^0-9A-Za-z]+", "_",
+                      str(briefing.get("briefing_date", "") or "")).strip("_")[:24]
+    fname = f"{agency_tag}_Bulletin_{date_tag or briefing_id}.xlsx"
+    logger.info(f"Briefing Excel (public): id={briefing_id} rows={len(arts)}")
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@router.get("/briefings/{briefing_id}/excel-qa", dependencies=guard("viewer"))
+async def download_briefing_excel(briefing_id: str):
+    """Download a past briefing (from Run History) as the SAME QA Excel sheet as the
+    Daily Briefing — identical columns: #, Category, Story Group, Relationship,
+    Title, Summary, Source, Subscription Required, Relevance, URL.
+
+    Stays role-guarded and moved off /excel (which is now the public client sheet)
+    because relevance scores and subscription flags are internal QA signals.
+
+    The briefing only stores its rendered HTML, so we rehydrate each story's full
+    metadata from the archive by matching the URLs in that HTML. Falls back to the
+    agency's current top articles if an old briefing's stories have aged out, so the
+    sheet is never empty.
+    """
+    try:
+        from app.bulletin_intelligence.engine import (
+            _cluster_stories, _section_of, AGT_SECTIONS,
+        )
+    except ImportError:
+        raise HTTPException(500, "Bulletin engine not available")
+
+    # Steps 1-3 (extract URLs from the stored HTML, rehydrate from the archive,
+    # fall back for aged-out briefings) are shared with the public sheet.
+    briefing, agency, arts = _briefing_articles(briefing_id)
 
     # 4) Same clustering + ordering + render as the Daily Briefing Excel.
     section_index = {s: i for i, s in enumerate(AGT_SECTIONS)}

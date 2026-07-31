@@ -656,6 +656,42 @@ async def get_briefing_endpoint(briefing_id: str):
     return {k: v for k, v in briefing.items() if k not in ("html_content", "docx_b64")}
 
 
+def _inject_download_bar(html: str, briefing_id: str) -> str:
+    """Add the View-HTML / Download-Excel bar to a briefing's header.
+
+    Injected when the preview is SERVED rather than baked in when the briefing is
+    rendered, for two reasons. Briefings already generated — the ones the FCC
+    contacts' current email links point at — get the buttons without being
+    regenerated. And the stored html_content is also what gets emailed, so
+    leaving it untouched keeps the email body free of buttons that only make
+    sense in a browser.
+
+    Links are relative: the preview is served from the same origin as the API, so
+    they resolve without depending on PUBLIC_BASE_URL being set correctly.
+
+    Never raises. If the header anchor isn't found (e.g. the simple-HTML
+    fallback render), the page is returned exactly as stored — the preview
+    working matters more than the buttons.
+    """
+    base = f"/api/v1/bulletin/briefings/{briefing_id}"
+    bar = (
+        '<div style="text-align:center;margin-top:12px">'
+        f'<a href="{base}/preview" '
+        'style="display:inline-block;background:#003087;color:#ffffff;padding:8px 16px;'
+        'text-decoration:none;font-size:12px;border-radius:4px;margin:0 4px">'
+        '&#127760; View Full Bulletin</a>'
+        f'<a href="{base}/excel" '
+        'style="display:inline-block;background:#0078D4;color:#ffffff;padding:8px 16px;'
+        'text-decoration:none;font-size:12px;border-radius:4px;margin:0 4px">'
+        '&#128229; Download Excel</a>'
+        '</div>'
+    )
+    anchor = '<div style="border-top:1px solid #4f7fbd;margin:12px auto;max-width:560px"></div>'
+    if anchor in html:
+        return html.replace(anchor, bar + anchor, 1)
+    return html
+
+
 @router.get("/briefings/{briefing_id}/preview")
 async def preview_briefing(briefing_id: str):
     """Return the full HTML briefing for preview."""
@@ -663,6 +699,10 @@ async def preview_briefing(briefing_id: str):
     if not html:
         raise HTTPException(status_code=404, detail="Briefing not found")
     from fastapi.responses import HTMLResponse
+    try:
+        html = _inject_download_bar(html, briefing_id)
+    except Exception as e:  # pragma: no cover - never break the preview
+        logger.warning(f"Download bar injection skipped for {briefing_id}: {e}")
     return HTMLResponse(content=html)
 
 
