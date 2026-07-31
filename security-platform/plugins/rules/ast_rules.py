@@ -28,10 +28,29 @@ AUTH_CALLABLES = {
 }
 
 # Routes that are legitimately public.
+#
+# Matched as substrings against the route path, and checked BEFORE the auth-guard
+# test — an entry here suppresses the missing-auth finding outright, so keep them
+# as specific as the route allows.
+#
+# /briefings/{briefing_id}/excel: public by design. It is the Excel form of the
+# bulletin that FCC contacts download, and it carries the same access model as
+# the HTML preview alongside it — those contacts have no accounts and open both
+# from an emailed link. Briefing ids are non-guessable
+# (agency_YYYYMMDD_HHMMSS of the generation instant), and the sheet holds only
+# published story metadata: topic, source, headline, summary, URL. The internal
+# QA sheet — relevance scores, story-group ids, subscription flags — is a
+# separate route (/excel-qa) and stays role-guarded.
+#
+# Caveat worth knowing: this entry is a prefix of "/excel-qa", so it whitelists
+# that path too. Harmless today because /excel-qa carries an explicit
+# guard("viewer"), but it does mean the scanner would not catch that guard being
+# removed. Narrow this if the hint list ever gains exact matching.
 PUBLIC_PATH_HINTS = ("/health", "/healthz", "/ready", "/live", "/metrics", "/docs",
                      "/openapi", "/login", "/signup", "/register", "/token",
                      "/forgot-password", "/reset-password", "/refresh", "/callback",
-                     "/webhook", "/public", "/demo", "/preview")
+                     "/webhook", "/public", "/demo", "/preview",
+                     "/briefings/{briefing_id}/excel")
 
 
 class AstFinding:
