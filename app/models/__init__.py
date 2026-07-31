@@ -1140,3 +1140,26 @@ class SavedSearch(AuditMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_run: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+
+
+# ── Enterprise models: imported for registration, not for use here ────────────
+#
+# app/models/enterprise_models.py declares tenants, tenant_users, contexts,
+# process_jobs, decisions, actions, traceability, policy_validations,
+# state_audit_log and execution_queue. Until this import existed, the module was
+# only ever imported lazily INSIDE the /api/enterprise route handlers — which is
+# after startup, and therefore too late for the tables to be registered on
+# Base.metadata when main.py runs create_all(). On any database that did not
+# receive them by another route (dev), every /api/enterprise/* endpoint returned
+# HTTP 500: each handler calls _get_tenant_id() first, which touches tenants.
+#
+# Those models bind to app.core.database.Base (via app.models.database), which is
+# the same Base main.py calls create_all on — so importing the module here is
+# what puts the tables in front of create_all. Note this is NOT the Base the
+# models above use (app.database.Base); the two metadata registries are separate.
+#
+# Imported as a module rather than `import *` on purpose: a wildcard would pull
+# ten class names into this namespace, which already defines its own User and
+# AuditLog on the other Base. Registration is a side effect of importing the
+# module at all; the names are not needed here.
+from app.models import enterprise_models  # noqa: F401,E402

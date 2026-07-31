@@ -10,11 +10,15 @@ venv/
 # One-off generated FCC briefing HTML preview (not source; release docs stay tracked)
 pv.html
 
-# Deployment artifacts - built, never committed
+# Deployment artifacts - built, never committed.
+# pydeps_new/ is the staging copy of the vendored Linux wheels (~5,500 files);
+# prod-deploy.prev.zip is the rollback copy of the previous prod artifact.
 dev-deploy.zip
 prod-deploy.zip
+prod-deploy.prev.zip
 deploy.zip
 pydeps/
+pydeps_new/
 
 # Claude Code local settings — has contained plaintext DB connection strings
 .claude/
