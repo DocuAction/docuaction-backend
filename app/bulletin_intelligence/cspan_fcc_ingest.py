@@ -29,7 +29,16 @@ async def ingest_fcc_gov() -> List[dict]:
                 headers={"User-Agent": "DocuAction-BulletinIntelligence/1.0"},
             )
             if resp.status_code == 200:
-                import xml.etree.ElementTree as ET
+                # defusedxml, not stdlib ElementTree: these parse XML fetched from remote
+                # feeds we do not control. stdlib ET is vulnerable to entity-expansion
+                # (billion-laughs / quadratic blowup), which on the unattended scheduler
+                # would hang the collector rather than fail a request. Falls back to the
+                # stdlib parser if defusedxml is somehow absent, so a missing dependency
+                # degrades collection instead of breaking it.
+                try:
+                    from defusedxml import ElementTree as ET
+                except ImportError:  # pragma: no cover
+                    import xml.etree.ElementTree as ET
                 root = ET.fromstring(resp.text)
                 for item in root.findall(".//item"):
                     title = item.findtext("title", "")

@@ -5,6 +5,7 @@ from fastapi.responses import Response
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from app.core.security import require_role
 from app.database import get_db
 from app.models import (
     Quote, QuoteLineItem, RFQ, SupplierPriceSnapshot, QuoteStatus
@@ -13,9 +14,10 @@ from app.schemas import QuoteCreateRequest, QuoteResponse, PricingRequest
 from app.services.pricing import price_request
 from app.services.audit import log_action
 
-router = APIRouter(prefix="/quotes", tags=["Quotes"])
-
-
+# Router-level auth. app/routers/ is dormant (see __init__.py) and this
+# dependency is the precondition recorded there for ever mounting it: every
+# route inherits the check, so a handler added later cannot arrive unguarded.
+router = APIRouter(prefix="/quotes", tags=["Quotes"], dependencies=[Depends(require_role("contributor"))])
 @router.post("", response_model=QuoteResponse, status_code=201)
 async def create_quote(req: QuoteCreateRequest, db: AsyncSession = Depends(get_db)):
     # Verify RFQ

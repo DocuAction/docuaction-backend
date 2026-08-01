@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, func, or_, desc, distinct
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from app.core.security import require_role
 from app.database import get_db
 from app.models import (
     RFQ, Quote, QuoteLineItem, BOMItem, Supplier, PurchaseOrder, DealStatus,
@@ -17,9 +18,10 @@ from app.models import (
 )
 from app.services.auth import get_current_user
 
-router = APIRouter(prefix="/deals", tags=["Deal Workspace"])
-
-
+# Router-level auth. app/routers/ is dormant (see __init__.py) and this
+# dependency is the precondition recorded there for ever mounting it: every
+# route inherits the check, so a handler added later cannot arrive unguarded.
+router = APIRouter(prefix="/deals", tags=["Deal Workspace"], dependencies=[Depends(require_role("contributor"))])
 # ══════════════════════════════════════════════════════════════
 # DEAL WORKSPACE — Single unified view for an RFQ
 # ══════════════════════════════════════════════════════════════

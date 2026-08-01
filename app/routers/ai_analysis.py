@@ -4,15 +4,17 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.security import require_role
 from app.database import get_db
 from app.models import ProposalLibraryItem
 from app.services.auth import get_current_user
 import os
 import httpx
 
-router = APIRouter(prefix="/ai", tags=["AI Analysis"])
-
-
+# Router-level auth. app/routers/ is dormant (see __init__.py) and this
+# dependency is the precondition recorded there for ever mounting it: every
+# route inherits the check, so a handler added later cannot arrive unguarded.
+router = APIRouter(prefix="/ai", tags=["AI Analysis"], dependencies=[Depends(require_role("contributor"))])
 class TextAnalysisRequest(BaseModel):
     text: str
     project_id: str | None = None

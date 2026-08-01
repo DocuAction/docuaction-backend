@@ -1076,7 +1076,16 @@ async def ingest_rss(agency: AgencyConfig, lookback_hours: int = 24) -> list:
     Always FCC-relevant — no filtering needed.
     FREE — no API key required.
     """
-    import xml.etree.ElementTree as ET
+    # defusedxml, not stdlib ElementTree: these parse XML fetched from remote
+    # feeds we do not control. stdlib ET is vulnerable to entity-expansion
+    # (billion-laughs / quadratic blowup), which on the unattended scheduler
+    # would hang the collector rather than fail a request. Falls back to the
+    # stdlib parser if defusedxml is somehow absent, so a missing dependency
+    # degrades collection instead of breaking it.
+    try:
+        from defusedxml import ElementTree as ET
+    except ImportError:  # pragma: no cover
+        import xml.etree.ElementTree as ET
 
     articles = []
     # Collect anything at/after the business-day window start (ET). The precise

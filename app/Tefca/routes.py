@@ -1618,12 +1618,12 @@ async def seed_mock_data(db: AsyncSession = Depends(get_db), user=Depends(get_cu
 # methodology + discrepancy-taxonomy are reference data (public, like the
 # dashboard). run-sample / execute / sampling-runs are operations (role-gated).
 
-@tefca_dashboard_router.get("/methodology", summary="Review methodology / control framework (reference)")
+@tefca_dashboard_router.get("/methodology", dependencies=[Depends(require_role("viewer"))], summary="Review methodology / control framework (reference)")
 async def get_methodology():
     return review_engine.generate_control_framework()
 
 
-@tefca_dashboard_router.get("/discrepancy-taxonomy", summary="Discrepancy taxonomy (reference)")
+@tefca_dashboard_router.get("/discrepancy-taxonomy", dependencies=[Depends(require_role("viewer"))], summary="Discrepancy taxonomy (reference)")
 async def get_discrepancy_taxonomy():
     return {
         "buckets": list(review_engine.DISCREPANCY_TAXONOMY.keys()),

@@ -3,13 +3,15 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.security import require_role
 from app.database import get_db
 from app.models import ProposalLibraryItem, ProposalCategory
 from app.services.auth import get_current_user
 
-router = APIRouter(prefix="/proposal-library", tags=["Proposal Library"])
-
-
+# Router-level auth. app/routers/ is dormant (see __init__.py) and this
+# dependency is the precondition recorded there for ever mounting it: every
+# route inherits the check, so a handler added later cannot arrive unguarded.
+router = APIRouter(prefix="/proposal-library", tags=["Proposal Library"], dependencies=[Depends(require_role("contributor"))])
 class LibraryItemCreate(BaseModel):
     title: str
     category: ProposalCategory = ProposalCategory.FULL_PROPOSAL

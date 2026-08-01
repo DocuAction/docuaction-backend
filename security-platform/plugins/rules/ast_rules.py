@@ -27,30 +27,71 @@ AUTH_CALLABLES = {
     "require_permission", "check_auth", "current_user",
 }
 
-# Routes that are legitimately public.
-#
-# Matched as substrings against the route path, and checked BEFORE the auth-guard
-# test — an entry here suppresses the missing-auth finding outright, so keep them
-# as specific as the route allows.
-#
-# /briefings/{briefing_id}/excel: public by design. It is the Excel form of the
-# bulletin that FCC contacts download, and it carries the same access model as
-# the HTML preview alongside it — those contacts have no accounts and open both
-# from an emailed link. Briefing ids are non-guessable
-# (agency_YYYYMMDD_HHMMSS of the generation instant), and the sheet holds only
-# published story metadata: topic, source, headline, summary, URL. The internal
-# QA sheet — relevance scores, story-group ids, subscription flags — is a
-# separate route (/excel-qa) and stays role-guarded.
-#
-# Caveat worth knowing: this entry is a prefix of "/excel-qa", so it whitelists
-# that path too. Harmless today because /excel-qa carries an explicit
-# guard("viewer"), but it does mean the scanner would not catch that guard being
-# removed. Narrow this if the hint list ever gains exact matching.
+# Routes that are legitimately public, matched as SUBSTRINGS of the route path.
+# Checked before the auth-guard test, so an entry here suppresses the missing-auth
+# finding outright — keep them as specific as the route allows.
 PUBLIC_PATH_HINTS = ("/health", "/healthz", "/ready", "/live", "/metrics", "/docs",
                      "/openapi", "/login", "/signup", "/register", "/token",
                      "/forgot-password", "/reset-password", "/refresh", "/callback",
-                     "/webhook", "/public", "/demo", "/preview",
-                     "/briefings/{briefing_id}/excel")
+                     "/webhook", "/public", "/demo", "/preview")
+
+# Routes public by design that must match EXACTLY, because a substring entry
+# would also whitelist a neighbouring route that is not public.
+#
+# /briefings/{briefing_id}/excel is the Excel form of the bulletin FCC contacts
+# download — same access model as the HTML preview beside it, and those contacts
+# have no accounts. Briefing ids are non-guessable (agency_YYYYMMDD_HHMMSS of the
+# generation instant) and the sheet holds only published story metadata: topic,
+# source, headline, summary, URL.
+#
+# Exact, not a hint: as a substring it also matched "/excel-qa", the internal QA
+# sheet carrying relevance scores and subscription flags. That route is guarded
+# today, but a substring entry would have hidden the finding if its guard were
+# ever removed — the scanner would have gone quiet exactly when it mattered.
+PUBLIC_PATH_EXACT = frozenset({
+    "/briefings/{briefing_id}/excel",
+
+    # ── Bulletin: published to FCC contacts who have no accounts ──────────────
+    # These are the read side of a public newsletter. They are opened from an
+    # emailed link, contain only already-published story metadata, and are
+    # listed as public-by-design in the platform's endpoint policy. Guarding any
+    # of them breaks delivery to the client, which is the product.
+    "/latest/{agency_id}",
+    "/latest/{agency_id}/preview",
+    "/history/{agency_id}",
+    "/quality/latest",
+    "/sources",
+    "/sources/health",
+    "/sources/missing",
+
+    # ── Authentication flows: cannot require the credential they establish ────
+    # verify-email is reached from a link in the verification mail, before the
+    # account is usable. saml/config is read by the login page before any token
+    # exists. Requiring auth on either makes sign-in impossible, not safer.
+    "/api/auth/verify-email",
+    "/saml/config",
+
+    # ── Monitoring ────────────────────────────────────────────────────────────
+    # Module status and provenance, documented public and used by uptime checks.
+    # Returns no record data.
+    "/status",
+
+    # Environment identity. Exists so a frontend built against the wrong backend
+    # can be detected from the browser — it has to answer before login, and it
+    # returns only the environment name, version and the host that replied.
+    "/api/config",
+
+    # Data-residency and AI-training posture. Published for transparency and
+    # read by the settings page; the handler's own docstring records it as
+    # public. Returns policy statements, no records.
+    "/residency",
+
+    # NOTE deliberately NOT listed: "/info". The rule sees only the decorator
+    # path, so an exact entry for it would also whitelist
+    # /api/v1/case-management/info, which is protected and is an explicit target
+    # in the DAST suite (AUTHZ-008). /api/plans/info is left flagged rather than
+    # risk silencing that one -- see the sprint report's accepted-residual list.
+})
 
 
 class AstFinding:
@@ -171,6 +212,8 @@ def check_endpoint_auth(tree: ast.AST, source_lines: List[str]) -> List[AstFindi
                 continue
 
             path = _route_path(args)
+            if path in PUBLIC_PATH_EXACT:
+                continue
             if any(h in path.lower() for h in PUBLIC_PATH_HINTS):
                 continue
 

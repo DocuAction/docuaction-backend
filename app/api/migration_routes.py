@@ -32,6 +32,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.core.database import get_db
+from app.core.security import require_role
 from app.middleware.module_gate import require_module, require_permission
 
 logger = logging.getLogger("docuaction.migration.api")
@@ -99,7 +100,7 @@ async def create_project(
     }
 
 
-@router.get("/projects")
+@router.get("/projects", dependencies=[Depends(require_role("viewer"))])
 async def list_projects(
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
@@ -135,7 +136,7 @@ async def list_projects(
     }
 
 
-@router.get("/projects/{project_id}")
+@router.get("/projects/{project_id}", dependencies=[Depends(require_role("viewer"))])
 async def get_project(
     project_id: str,
     db: AsyncSession = Depends(get_db),

@@ -39,10 +39,18 @@ PROTECTED: List[Tuple[str, str, str]] = [
 ]
 
 # Endpoints intended to be publicly readable - a 401 here would be a false positive.
+#
+# /api/v1/bulletin/costs was listed here and is NOT public: it carries
+# guard("contributor") and returns 401 anonymously on both dev and prod
+# (verified 2026-07-31). Asserting it should serve anonymous callers inverted
+# the test - a correctly guarded endpoint read as a failure, and had the guard
+# ever been dropped the scanner would have called that a pass.
 PUBLIC_OK: List[Tuple[str, str]] = [
     ("/health", "GET"),
+    ("/api/config", "GET"),
     ("/api/v1/bulletin/health", "GET"),
-    ("/api/v1/bulletin/costs", "GET"),
+    ("/api/v1/bulletin/sources", "GET"),
+    ("/api/v1/bulletin/quality/latest", "GET"),
 ]
 
 

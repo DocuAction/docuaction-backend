@@ -11,6 +11,7 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from app.core.security import require_role
 from app.database import get_db
 from app.models import (
     JobPosting, Candidate, Application,
@@ -18,9 +19,10 @@ from app.models import (
 )
 from app.services.auth import get_current_user
 
-router = APIRouter(prefix="/staffing", tags=["Staffing / ATS"])
-
-
+# Router-level auth. app/routers/ is dormant (see __init__.py) and this
+# dependency is the precondition recorded there for ever mounting it: every
+# route inherits the check, so a handler added later cannot arrive unguarded.
+router = APIRouter(prefix="/staffing", tags=["Staffing / ATS"], dependencies=[Depends(require_role("contributor"))])
 # ── Schemas ──
 
 class JobCreate(BaseModel):

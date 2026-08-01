@@ -21,9 +21,10 @@
       "enabled": true
     }
   ],
-  "_comment_excludes": "Merged with Project.DEFAULT_EXCLUDES. pydeps/ matters here: it is the vendored Linux wheel tree used for Azure deploys and would otherwise be scanned as if it were first-party code.",
+  "_comment_excludes": "Merged with Project.DEFAULT_EXCLUDES. pydeps matters here: it is the vendored Linux wheel tree used for Azure deploys and would otherwise be scanned as if it were first-party code. The glob is pydeps*/ , not pydeps/ , because staging copies get built under sibling names - a pydeps_new/ tree added 2026-07-31 leaked 118 Critical and 59 High findings from third-party wheels into the report and failed the gate on block_on_critical. Dependency risk is covered properly by pip_audit/SCA, which reads the manifest rather than the unpacked tree.",
   "exclude_patterns": [
     "**/pydeps/**",
+    "**/pydeps*/**",
     "**/.next/**",
     "**/out/**",
     "**/alembic/versions/**",

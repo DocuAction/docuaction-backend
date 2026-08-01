@@ -3,12 +3,15 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, or_, desc, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.security import require_role
 from app.database import get_db
 from app.models import Customer
 from app.services.auth import get_current_user
 
-router = APIRouter(prefix="/customers", tags=["Customers"])
-
+# Router-level auth. app/routers/ is dormant (see __init__.py) and this
+# dependency is the precondition recorded there for ever mounting it: every
+# route inherits the check, so a handler added later cannot arrive unguarded.
+router = APIRouter(prefix="/customers", tags=["Customers"], dependencies=[Depends(require_role("contributor"))])
 FIELDS = ['name','customer_type','division','department','agency_code','website',
     'contact_name','contact_title','contact_email','contact_phone',
     'contact2_name','contact2_title','contact2_email','contact2_phone',

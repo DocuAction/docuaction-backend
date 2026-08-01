@@ -2,15 +2,17 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy import select, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.security import require_role
 from app.database import get_db
 from app.models import Supplier
 from app.schemas import SupplierCreate, SupplierResponse
 import csv
 import io
 
-router = APIRouter(prefix="/suppliers", tags=["Suppliers"])
-
-
+# Router-level auth. app/routers/ is dormant (see __init__.py) and this
+# dependency is the precondition recorded there for ever mounting it: every
+# route inherits the check, so a handler added later cannot arrive unguarded.
+router = APIRouter(prefix="/suppliers", tags=["Suppliers"], dependencies=[Depends(require_role("contributor"))])
 # ── CREATE ──
 @router.post("", response_model=SupplierResponse, status_code=201)
 async def create_supplier(payload: SupplierCreate, db: AsyncSession = Depends(get_db)):

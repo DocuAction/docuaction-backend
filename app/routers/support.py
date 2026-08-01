@@ -4,13 +4,15 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.security import require_role
 from app.database import get_db
 from app.models import SupportTicket, TicketStatus, TicketPriority
 from app.services.auth import get_current_user
 
-router = APIRouter(prefix="/support", tags=["Support"])
-
-
+# Router-level auth. app/routers/ is dormant (see __init__.py) and this
+# dependency is the precondition recorded there for ever mounting it: every
+# route inherits the check, so a handler added later cannot arrive unguarded.
+router = APIRouter(prefix="/support", tags=["Support"], dependencies=[Depends(require_role("contributor"))])
 @router.post("/tickets", status_code=201)
 async def create_ticket(payload: dict, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     count = await db.execute(select(func.count(SupportTicket.id)))

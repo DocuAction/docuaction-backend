@@ -5,13 +5,15 @@ from fastapi.responses import Response
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from app.core.security import require_role
 from app.database import get_db
 from app.models import RFQ, Quote, Candidate, Application, JobPosting
 from app.services.auth import get_current_user
 
-router = APIRouter(prefix="/export", tags=["Export"])
-
-
+# Router-level auth. app/routers/ is dormant (see __init__.py) and this
+# dependency is the precondition recorded there for ever mounting it: every
+# route inherits the check, so a handler added later cannot arrive unguarded.
+router = APIRouter(prefix="/export", tags=["Export"], dependencies=[Depends(require_role("contributor"))])
 def _make_xlsx(headers, rows, sheet_name="Export"):
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side

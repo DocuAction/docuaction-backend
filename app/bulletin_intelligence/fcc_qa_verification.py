@@ -110,7 +110,16 @@ def _within_hours(published: str, hours: int) -> bool:
 def _parse_google_rss(xml_text: str, query: str) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     try:
-        import xml.etree.ElementTree as ET
+        # defusedxml, not stdlib ElementTree: these parse XML fetched from remote
+        # feeds we do not control. stdlib ET is vulnerable to entity-expansion
+        # (billion-laughs / quadratic blowup), which on the unattended scheduler
+        # would hang the collector rather than fail a request. Falls back to the
+        # stdlib parser if defusedxml is somehow absent, so a missing dependency
+        # degrades collection instead of breaking it.
+        try:
+            from defusedxml import ElementTree as ET
+        except ImportError:  # pragma: no cover
+            import xml.etree.ElementTree as ET
 
         root = ET.fromstring(xml_text)
     except Exception as exc:

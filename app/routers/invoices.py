@@ -12,9 +12,10 @@ from app.models import Invoice, InvoiceLineItem, InvoiceStatus
 from app.services.auth import require_role
 import io
 
-router = APIRouter(prefix="/invoices", tags=["Invoices"])
-
-
+# Router-level auth. app/routers/ is dormant (see __init__.py) and this
+# dependency is the precondition recorded there for ever mounting it: every
+# route inherits the check, so a handler added later cannot arrive unguarded.
+router = APIRouter(prefix="/invoices", tags=["Invoices"], dependencies=[Depends(require_role("contributor"))])
 class InvoiceLineCreate(BaseModel):
     description: str
     quantity: Decimal = Decimal("1")

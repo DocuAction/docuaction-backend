@@ -119,7 +119,7 @@ async def seed_search_profiles_endpoint(agency_id: str = Query("fcc")):
 
 
 # ── Source Coverage Report ─────────────────────────────────────────────────────
-@router.get("/coverage/{agency_id}")
+@router.get("/coverage/{agency_id}", dependencies=guard("viewer"))
 async def coverage_report(agency_id: str):
     """Daily source/coverage analytics from the most recent cycle: sources scanned,
     stories collected/rejected, duplicates removed, subscription stories, coverage
@@ -186,7 +186,7 @@ async def create_agency(req: AgencyCreateRequest):
     return {"status": "registered", "agency_id": config.agency_id, "name": config.name}
 
 
-@router.get("/agencies")
+@router.get("/agencies", dependencies=guard("viewer"))
 async def list_agencies_endpoint():
     agencies = list_agencies()
     return {
@@ -206,7 +206,7 @@ async def list_agencies_endpoint():
     }
 
 
-@router.get("/agencies/{agency_id}")
+@router.get("/agencies/{agency_id}", dependencies=guard("viewer"))
 async def get_agency_endpoint(agency_id: str):
     agency = get_agency(agency_id)
     if not agency:
@@ -357,7 +357,7 @@ async def latest_briefing_preview(agency_id: str):
                             status_code=307)
 
 
-@router.get("/today/{agency_id}")
+@router.get("/today/{agency_id}", dependencies=guard("viewer"))
 async def today_briefing(agency_id: str, lookback_hours: int = 72):
     """Today's briefing — the 'always works' endpoint. If one exists for today it's
     returned; otherwise a collection runs now and its result is returned. Never
@@ -442,7 +442,7 @@ async def send_briefing(agency_id: str, briefing_id: str):
 
 
 # ── Editorial Queue ────────────────────────────────────────────────────────────
-@router.get("/queue/{agency_id}")
+@router.get("/queue/{agency_id}", dependencies=guard("viewer"))
 async def get_queue(agency_id: str):
     """Get all briefings pending editorial approval."""
     queue = get_editorial_queue(agency_id)
@@ -586,7 +586,7 @@ async def upsert_sources(agency_id: str, items: List[SourceRegistryItem]):
     return {"agency_id": agency_id, "upserted": n}
 
 
-@router.get("/coverage-assurance/{agency_id}")
+@router.get("/coverage-assurance/{agency_id}", dependencies=guard("viewer"))
 async def coverage_assurance(agency_id: str):
     """Phase 6 — HONEST coverage assurance. Coverage % is computed ONLY when an
     expected-source registry AND per-source outcomes both exist; otherwise it is
@@ -620,7 +620,7 @@ async def coverage_assurance(agency_id: str):
 
 
 # ── PWS coverage foundation (additive) ───────────────────────────────────────
-@router.get("/source-classifications")
+@router.get("/source-classifications", dependencies=guard("viewer"))
 async def source_classifications():
     """The PWS source-classification taxonomy (for registry editors / dashboard)."""
     return {"classifications": [{"id": c, "label": CLASSIFICATION_LABELS[c]} for c in SOURCE_CLASSIFICATIONS]}
@@ -647,7 +647,7 @@ async def approve_briefing(briefing_id: str):
     return result
 
 
-@router.get("/briefings/{briefing_id}")
+@router.get("/briefings/{briefing_id}", dependencies=guard("viewer"))
 async def get_briefing_endpoint(briefing_id: str):
     briefing = get_briefing(briefing_id)
     if not briefing:

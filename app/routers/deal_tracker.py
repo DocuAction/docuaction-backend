@@ -14,13 +14,15 @@ from datetime import datetime, date, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, func, and_, or_, case, desc
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.security import require_role
 from app.database import get_db
 from app.models import DealRegistration, RFQ, Quote, QuoteLineItem, Supplier, SupplierQuoteRequest
 from app.services.auth import get_current_user
 
-router = APIRouter(prefix="/deal-tracker", tags=["Deal Tracker"])
-
-
+# Router-level auth. app/routers/ is dormant (see __init__.py) and this
+# dependency is the precondition recorded there for ever mounting it: every
+# route inherits the check, so a handler added later cannot arrive unguarded.
+router = APIRouter(prefix="/deal-tracker", tags=["Deal Tracker"], dependencies=[Depends(require_role("contributor"))])
 @router.get("/dashboard")
 async def deal_dashboard(user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Master dashboard — all deal registrations with alerts and workflow status."""

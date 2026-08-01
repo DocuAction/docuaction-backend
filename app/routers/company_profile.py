@@ -3,13 +3,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.security import require_role
 from app.database import get_db
 from app.models import CompanyProfile
 from app.services.auth import get_current_user
 
-router = APIRouter(prefix="/company-profile", tags=["Company Profile"])
-
-
+# Router-level auth. app/routers/ is dormant (see __init__.py) and this
+# dependency is the precondition recorded there for ever mounting it: every
+# route inherits the check, so a handler added later cannot arrive unguarded.
+router = APIRouter(prefix="/company-profile", tags=["Company Profile"], dependencies=[Depends(require_role("contributor"))])
 class ProfileReq(BaseModel):
     company_name: str
     dba_name: str | None = None

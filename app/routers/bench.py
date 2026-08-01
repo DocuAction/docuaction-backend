@@ -11,6 +11,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, func, or_, desc
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.security import require_role
 from app.database import get_db
 from app.models import (
     Candidate, JobPosting, JobStatus, BenchCandidate, BenchStatus,
@@ -19,7 +20,10 @@ from app.models import (
 )
 from app.services.auth import get_current_user
 
-router = APIRouter(prefix="/ats/bench", tags=["Bench Sales"])
+# Router-level auth. app/routers/ is dormant (see __init__.py) and this
+# dependency is the precondition recorded there for ever mounting it: every
+# route inherits the check, so a handler added later cannot arrive unguarded.
+router = APIRouter(prefix="/ats/bench", tags=["Bench Sales"], dependencies=[Depends(require_role("contributor"))])
 ATS_ROLES = {"Admin", "Manager", "Staffing Manager", "Recruiter", "Sales"}
 
 VALID_TRANSITIONS = {

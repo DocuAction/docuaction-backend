@@ -4,14 +4,16 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from app.core.security import require_role
 from app.database import get_db
 from app.models import RFQ
 from app.schemas import RFQCreate, RFQResponse
 from app.services.audit import log_action
 
-router = APIRouter(prefix="/rfq", tags=["RFQ"])
-
-
+# Router-level auth. app/routers/ is dormant (see __init__.py) and this
+# dependency is the precondition recorded there for ever mounting it: every
+# route inherits the check, so a handler added later cannot arrive unguarded.
+router = APIRouter(prefix="/rfq", tags=["RFQ"], dependencies=[Depends(require_role("contributor"))])
 @router.post("", response_model=RFQResponse, status_code=201)
 async def create_rfq(payload: RFQCreate, db: AsyncSession = Depends(get_db)):
     rfq = RFQ(**payload.model_dump())

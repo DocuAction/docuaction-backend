@@ -6,12 +6,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select, func, or_, and_, desc
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.security import require_role
 from app.database import get_db
 from app.models import Opportunity, OpportunitySource, OpportunityStatus, CompanyProfile, SavedSearch, RFQ
 from app.services.auth import get_current_user
 
-router = APIRouter(prefix="/opportunities", tags=["Opportunities"])
-
+# Router-level auth. app/routers/ is dormant (see __init__.py) and this
+# dependency is the precondition recorded there for ever mounting it: every
+# route inherits the check, so a handler added later cannot arrive unguarded.
+router = APIRouter(prefix="/opportunities", tags=["Opportunities"], dependencies=[Depends(require_role("contributor"))])
 SAM_API_KEY = os.getenv("SAM_GOV_API_KEY", "")
 SAM_API_URL = "https://api.sam.gov/opportunities/v2/search"
 USASPENDING_API_URL = "https://api.usaspending.gov/api/v2"
