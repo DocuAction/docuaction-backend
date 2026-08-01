@@ -129,6 +129,38 @@ def build_limitations(source_coverage: Dict[str, Dict[str, int]],
     return lines or ["None identified."]
 
 
+def weekly_trend(reviews: List[dict]) -> List[dict]:
+    """Per-ISO-week B1-B4 counts, oldest first.
+
+    Only reviews carrying a usable `created_at` can be placed on the timeline.
+    Rather than silently dropping the rest — which would make the trend totals
+    disagree with the distribution totals for no visible reason — undated
+    reviews are counted under an explicit "undated" bucket.
+    """
+    weeks: Dict[str, Dict[str, int]] = {}
+    for r in reviews:
+        raw = r.get("created_at")
+        key = "undated"
+        if raw:
+            try:
+                dt = (raw if isinstance(raw, datetime)
+                      else datetime.fromisoformat(str(raw).replace("Z", "+00:00")))
+                iso = dt.isocalendar()
+                key = f"{iso[0]}-W{iso[1]:02d}"
+            except Exception:
+                key = "undated"
+        row = weeks.setdefault(key, {"week": key, "b1": 0, "b2": 0, "b3": 0, "b4": 0})
+        bucket = (r.get("reclassified_to")
+                  if r.get("reviewer_resolution") == "reclassified"
+                  else r.get("classification_bucket"))
+        if bucket in ("B1", "B2", "B3", "B4"):
+            row[bucket.lower()] += 1
+
+    dated = sorted((v for k, v in weeks.items() if k != "undated"),
+                   key=lambda x: x["week"])
+    return dated + ([weeks["undated"]] if "undated" in weeks else [])
+
+
 def build_report_data(*, report_type: str, period_start: date, period_end: date,
                       reviews: List[dict], verifications: List[dict],
                       sample: Optional[dict] = None,
@@ -208,6 +240,11 @@ def build_report_data(*, report_type: str, period_start: date, period_end: date,
                                     "Only a source that was reached and returned no "
                                     "record counts as a finding.",
         },
+
+        # Quarterly adds the per-week series; a quarter reported as one number
+        # hides whether the rate is improving or deteriorating inside it.
+        **({"weekly_trend": weekly_trend(reviews)}
+           if report_type == "quarterly" else {}),
 
         # MANDATORY. Never omitted, never empty.
         "limitations": build_limitations(coverage, reviews, extra_limitations),

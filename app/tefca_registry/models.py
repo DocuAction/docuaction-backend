@@ -556,6 +556,36 @@ class ReviewReport(Base):
     )
 
 
+# ─── 17. review_cycles ────────────────────────────────────────────────────────
+
+class ReviewCycle(Base):
+    """Ties a drawn sample to the report produced from it.
+
+    Without this the chain is only inferable — a report references a sample, and
+    the sample references entities, but nothing names the review period as a
+    single traceable unit. An auditor asking "which sample backs the Q3 report,
+    and which cycle was that" should get one row, not a join they have to
+    reconstruct.
+    """
+    __tablename__ = "review_cycles"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cycle_type = Column(String(20), nullable=False)   # retrospective|ongoing|priority
+    cycle_number = Column(Integer)
+    cycle_start = Column(Date)
+    cycle_end = Column(Date)
+    sample_id = Column(UUID(as_uuid=True), ForeignKey("review_samples.id"))
+    report_id = Column(UUID(as_uuid=True), ForeignKey("review_reports.id"))
+    status = Column(String(20), nullable=False, server_default=text("'open'"))
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_review_cycles_type", "cycle_type"),
+        Index("idx_review_cycles_status", "status"),
+        Index("idx_review_cycles_period", "cycle_start", "cycle_end"),
+    )
+
+
 # Ordered parents-first for FK-scoped create_all / drop_all and the migration.
 TEFCA_REG_TABLE_ORDER = [
     "tefca_reg_entities",
@@ -575,4 +605,5 @@ TEFCA_REG_TABLE_ORDER = [
     "tefca_verifications",
     "sample_entities",
     "review_reports",
+    "review_cycles",         # after samples + reports (FK parents)
 ]

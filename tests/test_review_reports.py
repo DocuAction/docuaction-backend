@@ -176,3 +176,89 @@ def test_bucket_labels_cover_all_four():
 
 def test_build_limitations_never_returns_empty():
     assert build_limitations({}, [review("REV-1", "B1")]) != []
+
+
+# ── P1.1 quarterly trend ─────────────────────────────────────────────────────
+
+def test_weekly_trend_present_only_on_quarterly():
+    from app.tefca_registry.report_generator import weekly_trend
+    reviews = [dict(review("REV-1", "B1"), created_at="2026-07-01T10:00:00"),
+               dict(review("REV-2", "B3"), created_at="2026-07-01T11:00:00"),
+               dict(review("REV-3", "B1"), created_at="2026-07-08T10:00:00")]
+    q = build_report_data(report_type="quarterly", period_start=date(2026, 7, 1),
+                          period_end=date(2026, 9, 30), reviews=reviews,
+                          verifications=[], rule_set_version=1)
+    w = build_report_data(report_type="weekly", period_start=START,
+                          period_end=END, reviews=reviews, verifications=[],
+                          rule_set_version=1)
+    assert "weekly_trend" in q
+    assert "weekly_trend" not in w
+    assert len(q["weekly_trend"]) == 2
+
+
+def test_weekly_trend_counts_resolved_bucket():
+    from app.tefca_registry.report_generator import weekly_trend
+    t = weekly_trend([dict(review("REV-1", "B3", resolution="reclassified",
+                                  reclass="B1"), created_at="2026-07-01T10:00:00")])
+    assert t[0]["b1"] == 1 and t[0]["b3"] == 0
+
+
+def test_weekly_trend_surfaces_undated_rather_than_dropping():
+    """Silently dropping undated reviews would make the trend disagree with the
+    distribution for no visible reason."""
+    from app.tefca_registry.report_generator import weekly_trend
+    t = weekly_trend([review("REV-1", "B1")])
+    assert t and t[-1]["week"] == "undated" and t[-1]["b1"] == 1
+
+
+# ── P1.2 Excel export ────────────────────────────────────────────────────────
+
+def test_weekly_excel_has_three_sheets_and_opens():
+    import io
+    from openpyxl import load_workbook
+    from app.tefca_registry.report_excel import build_weekly_excel
+    data = build()
+    blob = build_weekly_excel(data, "WR-2026-W31", [{
+        "review_id": "REV-2026-000001", "entity_name": "Test Hospital",
+        "npi": "1477978807", "entity_type": "participant",
+        "verification": {"nppes": {"status": "verified"},
+                         "pecos": {"status": "verified"},
+                         "oig_leie": {"status": "clear"}},
+        "bucket": "B1", "rule_code": "RULE-001", "rationale": "clean"}])
+    assert blob[:2] == b"PK"
+    wb = load_workbook(io.BytesIO(blob))
+    assert "Entity Results" in wb.sheetnames
+    assert "Summary Statistics" in wb.sheetnames
+    assert "Limitations" in wb.sheetnames
+
+
+def test_excel_limitations_sheet_is_never_empty():
+    """If a reader opens the Excel and not the HTML they must still see the
+    caveats, or the export launders a caveated report into a clean one."""
+    import io
+    from openpyxl import load_workbook
+    from app.tefca_registry.report_excel import build_weekly_excel
+    wb = load_workbook(io.BytesIO(build_weekly_excel(build(), "WR-2026-W31", [])))
+    s = wb["Limitations"]
+    assert s.max_row >= 5
+    assert s.cell(5, 1).value
+
+
+def test_excel_empty_period_says_so_rather_than_looking_broken():
+    import io
+    from openpyxl import load_workbook
+    from app.tefca_registry.report_excel import build_weekly_excel
+    wb = load_workbook(io.BytesIO(build_weekly_excel(
+        build(reviews=[], verifications=[]), "WR-2026-W31", [])))
+    ws = wb["Entity Results"]
+    assert "No reviews" in str(ws.cell(2, 2).value)
+
+
+def test_excel_reader_affordances():
+    import io
+    from openpyxl import load_workbook
+    from app.tefca_registry.report_excel import build_weekly_excel
+    wb = load_workbook(io.BytesIO(build_weekly_excel(build(), "WR-2026-W31", [])))
+    ws = wb["Entity Results"]
+    assert ws.freeze_panes == "A2"
+    assert ws.auto_filter.ref.startswith("A1:")

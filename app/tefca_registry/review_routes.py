@@ -508,6 +508,63 @@ async def get_report(report_id: str, db: AsyncSession = Depends(get_db)):
             "generated_at": r.generated_at, "data": r.report_data}
 
 
+@router.get("/reports/{report_id}/excel", dependencies=[Depends(require_role("viewer"))])
+async def get_report_excel(report_id: str, db: AsyncSession = Depends(get_db)):
+    """Excel form of an archived report.
+
+    Built from the STORED report_data, never recomputed — a report that renders
+    one set of numbers as HTML and another as Excel would be worse than having
+    no export. Entity rows are rehydrated from the review records the report
+    covers so the sheet carries review IDs and per-source outcomes.
+    """
+    from fastapi.responses import Response
+    from app.tefca_registry.report_excel import build_weekly_excel
+
+    r = (await db.execute(select(reg.ReviewReport)
+                          .where(reg.ReviewReport.report_id == report_id))
+         ).scalars().first()
+    if not r:
+        raise HTTPException(404, "Report not found")
+
+    ids = []
+    for bucket_ids in ((r.report_data or {}).get("classification_distribution", {})
+                       .get("review_ids", {}) or {}).values():
+        ids.extend([i for i in (bucket_ids or []) if i])
+
+    rows = []
+    if ids:
+        records = (await db.execute(
+            select(reg.ReviewRecord)
+            .where(reg.ReviewRecord.review_id.in_(ids)))).scalars().all()
+        by_entity = {}
+        if records:
+            ents = (await db.execute(
+                select(reg.TefcaRegEntity).where(
+                    reg.TefcaRegEntity.id.in_([x.entity_id for x in records])))
+            ).scalars().all()
+            by_entity = {e.id: e for e in ents}
+        for rec in records:
+            ent = by_entity.get(rec.entity_id)
+            vr = rec.verification_results or {}
+            rows.append({
+                "review_id": rec.review_id,
+                "entity_name": getattr(ent, "name", ""),
+                "npi": ((vr.get("sources") or {}).get("nppes") or {}).get(
+                    "lookup_identifier", ""),
+                "entity_type": getattr(ent, "entity_level", ""),
+                "verification": vr.get("sources") or {},
+                "bucket": rec.reclassified_to or rec.classification_bucket,
+                "rule_code": rec.classification_rule,
+                "rationale": rec.classification_rationale,
+            })
+
+    data = build_weekly_excel(r.report_data or {}, report_id, rows)
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{report_id}.xlsx"'})
+
+
 @router.get("/reports/{report_id}/html", dependencies=[Depends(require_role("viewer"))])
 async def get_report_html(report_id: str, db: AsyncSession = Depends(get_db)):
     from fastapi.responses import HTMLResponse
