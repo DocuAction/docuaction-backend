@@ -27,6 +27,17 @@ class VerifyOptions(BaseModel):
     )
 
 
+class StatusChangeRequest(BaseModel):
+    """A guarded lifecycle transition. The target is validated by
+    state_machine.py, so an unreachable status is a 400 with the route to take,
+    not a silent write."""
+    status: str = Field(
+        description="draft | pending_verification | active | suspended | inactive")
+    reason: Optional[str] = Field(
+        default=None, max_length=1000,
+        description="Recorded in the audit trail alongside the transition.")
+
+
 class BulkVerifyRequest(VerifyOptions):
     """Bulk verification across a filtered set (empty filter = all entities)."""
     entity_level: Optional[str] = Field(default=None, description="qhin|participant|sub_participant|child")

@@ -30,6 +30,7 @@ from typing import Awaitable, Callable, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.npi_validator import validate_for_import
 from app.tefca_registry import models as reg
 
 # Canonical system URI per identifier type (matches the seed convention).
@@ -129,6 +130,9 @@ async def persist_import(
     skipped = 0
     key_to_uuid: dict[str, uuid.UUID] = {}
     created: list[tuple[ParsedEntity, uuid.UUID]] = []
+    # NPIs that failed the check digit. Reported alongside the batch result so an
+    # operator sees them without trawling the audit table; never a rejection.
+    validation_warnings: list[dict] = []
 
     # ── PASS 1 — entities + identifiers + endpoints + audit ──
     for p in parsed:
@@ -160,6 +164,26 @@ async def persist_import(
                         identifier_status="active"))
                 for ep in p.endpoints:
                     session.add(reg.TefcaEntityEndpoint(id=uuid.uuid4(), entity_id=eid, **ep))
+
+                # NPI check digit (CMS Luhn). FLAGS, never rejects: existing seed
+                # and RCE data contains NPIs with bad check digits, and refusing
+                # the import would break a working system to enforce a rule those
+                # records predate. The entity lands, the problem is visible.
+                for (itype, val, _u, _pri) in p.identifiers:
+                    if itype != "npi":
+                        continue
+                    result = validate_for_import(val)
+                    if result["npi_valid"]:
+                        continue
+                    warn = {"entity_name": p.name, "key": p.key,
+                            "npi": result["npi"],
+                            "error": result["npi_validation_error"]}
+                    validation_warnings.append(warn)
+                    session.add(reg.TefcaRegAuditLog(
+                        id=uuid.uuid4(), entity_id=eid, action="npi_flagged",
+                        actor_id=actor_id, actor_email=actor_email,
+                        metadata_=warn, ip_address=ip_address))
+
                 session.add(reg.TefcaRegAuditLog(
                     id=uuid.uuid4(), entity_id=eid, action="entity_created",
                     actor_id=actor_id, actor_email=actor_email,
@@ -227,13 +251,18 @@ async def persist_import(
         id=uuid.uuid4(), entity_id=None, action="import_completed",
         actor_id=actor_id, actor_email=actor_email,
         metadata_={"batch_id": str(batch.id), "imported": imported,
-                   "skipped": skipped, "errors": errors}, ip_address=ip_address))
+                   "skipped": skipped, "errors": errors,
+                   "npi_flagged": len(validation_warnings)}, ip_address=ip_address))
     await session.commit()
 
     return {
         "batch_id": str(batch.id), "source_type": source_type, "status": status,
         "total": total, "imported": imported, "skipped": skipped,
         "error_count": errors, "errors": err_list, "duration_ms": batch.duration_ms,
+        # Entities that imported successfully but carry an NPI failing the CMS
+        # check digit. Separate from `errors`: nothing was rejected.
+        "validation_warnings": validation_warnings,
+        "npi_flagged_count": len(validation_warnings),
     }
 
 

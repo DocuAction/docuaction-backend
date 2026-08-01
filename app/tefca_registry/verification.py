@@ -32,19 +32,15 @@ def _vid(kind: str, key: str) -> uuid.UUID:
 
 
 def _npi_valid(npi: str) -> bool:
-    """Validate a 10-digit NPI via the Luhn algorithm over '80840' + first 9 digits."""
-    if not npi or len(npi) != 10 or not npi.isdigit():
-        return False
-    s = "80840" + npi[:9]
-    total = 0
-    for i, ch in enumerate(reversed(s)):
-        d = int(ch)
-        if i % 2 == 0:
-            d *= 2
-            if d > 9:
-                d -= 9
-        total += d
-    return (total + int(npi[9])) % 10 == 0
+    """Validate a 10-digit NPI (CMS Luhn over '80840' + the first 9 digits).
+
+    Delegates to app.services.npi_validator, which is the tested implementation.
+    This module previously carried its own copy of the same algorithm — two
+    implementations of one rule is one opportunity for them to disagree, and the
+    copy here was the one nothing exercised.
+    """
+    from app.services.npi_validator import is_valid_npi
+    return is_valid_npi(npi)
 
 
 # ── global context ────────────────────────────────────────────────────────────

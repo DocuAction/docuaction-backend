@@ -7,6 +7,7 @@ and ``/api/v1/tefca/*`` routers. Router-gated with ``require_role("reviewer")``.
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from typing import Optional
 
@@ -19,8 +20,13 @@ from app.core.security import require_role
 from app.tefca_registry import models as reg
 from app.tefca_registry import queries as q
 from app.tefca_registry import verification as v
-from app.tefca_registry.schemas import BulkVerifyRequest, VerifyOptions
+from app.tefca_registry import lifecycle
+from app.tefca_registry import audit as reg_audit
+from app.tefca_registry.schemas import (BulkVerifyRequest, StatusChangeRequest,
+                                        VerifyOptions)
 from app.core.client_ip import get_client_ip
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/tefca/registry",
@@ -173,15 +179,193 @@ async def entity_findings(entity_id: uuid.UUID, db: AsyncSession = Depends(get_d
 
 @router.post("/entities/{entity_id}/verify")
 async def verify_entity(entity_id: uuid.UUID,
+                        request: Request,
                         opts: VerifyOptions = VerifyOptions(),
                         db: AsyncSession = Depends(get_db),
-                        user=Depends(require_role("reviewer"))):
-    if not await db.get(reg.TefcaRegEntity, entity_id):
+                        user=Depends(require_role("contributor"))):
+    """Run verification, score confidence, and advance the lifecycle.
+
+    Every step past the internal checks is best-effort. A connector being down
+    must not fail the request or lose the work already done, so external checks
+    are scored over the sources that ANSWERED and an unreachable source is
+    recorded as unavailable rather than as a mismatch — otherwise an NPPES
+    outage would be indistinguishable from an entity NPPES has never heard of.
+    """
+    entity = await db.get(reg.TefcaRegEntity, entity_id)
+    if not entity:
         raise HTTPException(404, "Entity not found")
-    return await v.verify_one(
+
+    actor_id, actor_email = reg_audit.actor_of(user)
+    ip = get_client_ip(request)
+    reg_audit.record(db, reg_audit.VERIFICATION_STARTED, entity_id,
+                     actor_id=actor_id, actor_email=actor_email, ip_address=ip,
+                     metadata={"trigger_type": opts.trigger_type,
+                               "include_external": opts.include_external})
+    await db.commit()
+
+    # Internal checks (identity, hierarchy) — this commits internally.
+    result = await v.verify_one(
         db, entity_id, include_external=opts.include_external,
         trigger_type=opts.trigger_type,
-        actor_id=getattr(user, "id", None), actor_email=getattr(user, "email", None))
+        actor_id=actor_id, actor_email=actor_email)
+
+    # External authoritative sources, each isolated: one failure must not cost
+    # the others or the score.
+    source_results = await _probe_sources(db, entity_id)
+    scoring = lifecycle.compute_confidence(source_results)
+
+    entity = await db.get(reg.TefcaRegEntity, entity_id)
+    if scoring["confidence_score"] is not None:
+        entity.confidence_score = scoring["confidence_score"]
+
+    # draft -> pending_verification is the only automatic move. Promotion to
+    # active stays a human decision; a score is evidence for that call, not the
+    # call itself.
+    transition = None
+    if entity.operational_status == lifecycle.sm.DRAFT:
+        try:
+            transition = lifecycle.apply_transition(
+                db, entity, lifecycle.sm.PENDING_VERIFICATION, user=user,
+                ip_address=ip, extra={"trigger": "verification"})
+        except lifecycle.TransitionRefused as exc:
+            transition = {"allowed": False, "reason": exc.message}
+
+    reg_audit.record(db, reg_audit.VERIFICATION_COMPLETED, entity_id,
+                     actor_id=actor_id, actor_email=actor_email, ip_address=ip,
+                     metadata={"confidence": scoring, "findings": result})
+    await db.commit()
+
+    return {**result, "entity_id": str(entity_id), "confidence": scoring,
+            "transition": transition,
+            "operational_status": entity.operational_status}
+
+
+async def _probe_sources(db, entity_id) -> dict:
+    """Ask each authoritative source about this entity's NPI.
+
+    Returns {source_key: True|False|None} for lifecycle.compute_confidence:
+    None means "did not answer" and is excluded from the score. Never raises —
+    a verification that returns partial results is far more useful than one that
+    500s because a third-party API had a bad minute.
+    """
+    from sqlalchemy import select as _select
+    npi = (await db.execute(
+        _select(reg.TefcaEntityIdentifier.identifier_value).where(
+            reg.TefcaEntityIdentifier.entity_id == entity_id,
+            reg.TefcaEntityIdentifier.identifier_type == "npi",
+        ).limit(1))).scalar_one_or_none()
+
+    # No NPI is a fact about the record, not a source outage: nothing can
+    # corroborate an identity that was never supplied.
+    if not npi:
+        return {k: None for k in lifecycle.SOURCE_WEIGHTS}
+
+    results: dict = {k: None for k in lifecycle.SOURCE_WEIGHTS}
+    try:
+        from app.Tefca.connectors import SourceConnectorManager
+        mgr = SourceConnectorManager()
+    except Exception as exc:  # pragma: no cover - connectors optional
+        logger.warning("TEFCA connectors unavailable for %s: %s", entity_id, exc)
+        return results
+
+    # Each connector exposes lookup_by_npi and returns a SourceResult. SAM.gov is
+    # keyed on UEI rather than NPI, so it is not probed here — the registry has
+    # no UEI for these entities, and asking with the wrong identifier would
+    # produce a confident "no match" that means nothing. It stays unavailable,
+    # which shrinks the divisor honestly.
+    probes = {
+        "nppes": getattr(mgr, "nppes", None),
+        "pecos": getattr(mgr, "pecos", None),
+        "oig_leie": getattr(mgr, "leie", None),
+    }
+    for key, connector in probes.items():
+        fn = getattr(connector, "lookup_by_npi", None) if connector else None
+        if fn is None:
+            continue
+        try:
+            r = await fn(npi)
+            # Distinguish the two failure modes deliberately. A source that
+            # answered "no record" is a real no-match and must count against the
+            # score. A source that errored has told us nothing, and scoring that
+            # as a mismatch would turn an outage into an accusation.
+            if getattr(r, "error", None):
+                results[key] = None
+            else:
+                results[key] = bool(getattr(r, "success", False))
+        except Exception as exc:  # noqa: BLE001 - one source must not sink the run
+            logger.info("TEFCA source %s unavailable for %s: %s", key, entity_id, exc)
+            results[key] = None
+
+    # OIG LEIE is an EXCLUSION list: a hit is bad news, absence is the good
+    # outcome. Inverted here so "matched" means the same thing (corroborates the
+    # entity) across every source feeding the weighted score.
+    if results.get("oig_leie") is not None:
+        results["oig_leie"] = not results["oig_leie"]
+    return results
+
+
+@router.patch("/entities/{entity_id}/status")
+async def change_entity_status(entity_id: uuid.UUID,
+                               req: StatusChangeRequest,
+                               request: Request,
+                               db: AsyncSession = Depends(get_db),
+                               user=Depends(require_role("contributor"))):
+    """Move an entity through its lifecycle, subject to the state machine.
+
+    The registry previously stored operational_status as a free string, so
+    draft -> active (skipping verification) and inactive -> active (resurrecting
+    a deregistered entity) both succeeded silently. Both are refused here, and
+    the refusal is audited — an attempt to skip verification is exactly what a
+    reviewer wants to see.
+    """
+    entity = await db.get(reg.TefcaRegEntity, entity_id)
+    if not entity:
+        raise HTTPException(404, "Entity not found")
+
+    target = (req.status or "").strip().lower()
+    if not lifecycle.sm.is_valid_state(target):
+        raise HTTPException(
+            400,
+            f"Unknown status '{req.status}'. Valid: "
+            f"{', '.join(sorted(lifecycle.sm.VALID_STATES))}.")
+
+    try:
+        result = lifecycle.apply_transition(
+            db, entity, target, user=user,
+            ip_address=get_client_ip(request),
+            extra={"reason": req.reason} if req.reason else None)
+    except lifecycle.TransitionRefused as exc:
+        # Commit so the refusal is recorded even though the change is rejected.
+        await db.commit()
+        raise HTTPException(400, exc.message)
+
+    await db.commit()
+    return {**result, "reason": req.reason,
+            "allowed_next": sorted(lifecycle.sm.allowed_targets(target))}
+
+
+@router.post("/dev/seed", dependencies=[Depends(require_role("admin"))])
+async def seed_dev_registry(request: Request,
+                            force: bool = Query(False,
+                                                description="Import even if the registry already has entities. "
+                                                            "Duplicate TEFCAID/HCID are skipped, so this is idempotent."),
+                            db: AsyncSession = Depends(get_db),
+                            user=Depends(require_role("admin"))):
+    """Load synthetic demo entities through the real CSV import path.
+
+    Admin-only and refuses a populated registry unless forced. Runs the ordinary
+    importer rather than inserting rows, so seeding exercises the same parser,
+    NPI validation and audit writes a real import does — a seed that bypassed
+    that path could pass while the path itself was broken.
+
+    Two of the seeded NPIs fail the CMS check digit deliberately, so the
+    flag-don't-reject behaviour has something to flag.
+    """
+    from app.tefca_registry import dev_seed
+    actor_id, actor_email = reg_audit.actor_of(user)
+    return await dev_seed.seed(db, force=force, actor_id=actor_id,
+                               actor_email=actor_email,
+                               ip_address=get_client_ip(request))
 
 
 @router.post("/verify")

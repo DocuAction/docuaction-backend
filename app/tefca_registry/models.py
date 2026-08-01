@@ -17,7 +17,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
-    Column, String, Integer, BigInteger, Boolean, Date, DateTime, Text,
+    Column, String, Integer, BigInteger, Boolean, Date, DateTime, Float, Text,
     ForeignKey, Index, CheckConstraint, UniqueConstraint, func, text,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
@@ -55,6 +55,11 @@ class TefcaRegEntity(Base):
     exchange_purposes = Column(JSONB)
     current_version = Column(Integer, nullable=False, server_default=text("1"))
     is_active = Column(Boolean, nullable=False, server_default=text("true"))
+    # Weighted verification confidence, 0.0-1.0, written by the verify endpoint.
+    # Nullable with no default on purpose: NULL means "never verified", which is
+    # a different statement from 0.0 ("verified and every source disagreed").
+    # Backfilling it would erase that distinction for every existing row.
+    confidence_score = Column(Float)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(),
                         onupdate=datetime.utcnow)

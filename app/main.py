@@ -133,6 +133,12 @@ async def startup():
         # Upload security scan — SHA-256 checksum of uploaded document bytes.
         # NULL for pre-existing rows (grandfathered); populated on new uploads.
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS checksum_sha256 VARCHAR(64)",
+        # TEFCA verification confidence (0.0-1.0), written by
+        # POST /api/tefca/registry/entities/{id}/verify. No default: NULL means
+        # "never verified", which is not the same claim as 0.0 ("verified, and
+        # every source disagreed"). create_all() cannot add a column to a table
+        # that already exists, which is why this lives here.
+        "ALTER TABLE tefca_reg_entities ADD COLUMN IF NOT EXISTS confidence_score DOUBLE PRECISION",
     ]
     for attempt in range(1, 8):
         try:
