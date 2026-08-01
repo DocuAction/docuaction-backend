@@ -195,48 +195,41 @@ async def verify_entity(entity_id: uuid.UUID,
     if not entity:
         raise HTTPException(404, "Entity not found")
 
-    actor_id, actor_email = reg_audit.actor_of(user)
     ip = get_client_ip(request)
-    reg_audit.record(db, reg_audit.VERIFICATION_STARTED, entity_id,
-                     actor_id=actor_id, actor_email=actor_email, ip_address=ip,
-                     metadata={"trigger_type": opts.trigger_type,
-                               "include_external": opts.include_external})
-    await db.commit()
+    actor_id, actor_email = reg_audit.actor_of(user)
 
-    # Internal checks (identity, hierarchy) — this commits internally.
-    result = await v.verify_one(
+    # Internal checks (identity, hierarchy) — commits internally.
+    internal = await v.verify_one(
         db, entity_id, include_external=opts.include_external,
         trigger_type=opts.trigger_type,
         actor_id=actor_id, actor_email=actor_email)
 
-    # External authoritative sources, each isolated: one failure must not cost
-    # the others or the score.
-    source_results = await _probe_sources(db, entity_id)
-    scoring = lifecycle.compute_confidence(source_results)
-
-    entity = await db.get(reg.TefcaRegEntity, entity_id)
-    if scoring["confidence_score"] is not None:
-        entity.confidence_score = scoring["confidence_score"]
+    # The reviewable half: five-state source probes, B1-B4 classification, a
+    # stable review id and a per-source audit row. Shared with the priority
+    # review so both produce identical records — three call sites building
+    # review records three slightly different ways is how audit trails develop
+    # holes.
+    from app.tefca_registry.review_service import run_review
+    review = await run_review(db, entity, user=user, ip_address=ip,
+                              trigger=opts.trigger_type)
 
     # draft -> pending_verification is the only automatic move. Promotion to
-    # active stays a human decision; a score is evidence for that call, not the
+    # active stays a human decision; evidence informs that call, it is not the
     # call itself.
+    entity = await db.get(reg.TefcaRegEntity, entity_id)
     transition = None
     if entity.operational_status == lifecycle.sm.DRAFT:
         try:
             transition = lifecycle.apply_transition(
                 db, entity, lifecycle.sm.PENDING_VERIFICATION, user=user,
-                ip_address=ip, extra={"trigger": "verification"})
+                ip_address=ip, extra={"trigger": "verification",
+                                      "review_id": review["review_id"]})
+            await db.commit()
         except lifecycle.TransitionRefused as exc:
+            await db.commit()
             transition = {"allowed": False, "reason": exc.message}
 
-    reg_audit.record(db, reg_audit.VERIFICATION_COMPLETED, entity_id,
-                     actor_id=actor_id, actor_email=actor_email, ip_address=ip,
-                     metadata={"confidence": scoring, "findings": result})
-    await db.commit()
-
-    return {**result, "entity_id": str(entity_id), "confidence": scoring,
-            "transition": transition,
+    return {**review, "findings": internal, "transition": transition,
             "operational_status": entity.operational_status}
 
 
@@ -349,6 +342,11 @@ async def seed_dev_registry(request: Request,
                             force: bool = Query(False,
                                                 description="Import even if the registry already has entities. "
                                                             "Duplicate TEFCAID/HCID are skipped, so this is idempotent."),
+                            include_real: bool = Query(
+                                False,
+                                description="Also load 5 real, publicly-listed hospital NPIs so the "
+                                            "verification and B1 classification paths can be demonstrated. "
+                                            "DEV ONLY — refused when ENVIRONMENT=production."),
                             db: AsyncSession = Depends(get_db),
                             user=Depends(require_role("admin"))):
     """Load synthetic demo entities through the real CSV import path.
@@ -361,10 +359,23 @@ async def seed_dev_registry(request: Request,
     Two of the seeded NPIs fail the CMS check digit deliberately, so the
     flag-don't-reject behaviour has something to flag.
     """
+    import os
     from app.tefca_registry import dev_seed
+
+    # Hard stop on production. Demo entities in the production registry would
+    # contaminate the population every sample and report is drawn from, and a
+    # contaminated denominator is not correctable after the fact. Production
+    # imports ONC-provided data only.
+    if (os.getenv("ENVIRONMENT", "") or "").strip().lower() == "production":
+        raise HTTPException(
+            403,
+            "Seeding is disabled on production. This registry is the population "
+            "that samples and reports are drawn from; demo entities would corrupt "
+            "every downstream figure. Import ONC-provided data instead.")
+
     actor_id, actor_email = reg_audit.actor_of(user)
-    return await dev_seed.seed(db, force=force, actor_id=actor_id,
-                               actor_email=actor_email,
+    return await dev_seed.seed(db, force=force, include_real=include_real,
+                               actor_id=actor_id, actor_email=actor_email,
                                ip_address=get_client_ip(request))
 
 

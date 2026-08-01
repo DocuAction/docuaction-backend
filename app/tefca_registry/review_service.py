@@ -1,0 +1,245 @@
+"""One review: verify against sources, classify, persist, return the envelope.
+
+The single place where a verification becomes a reviewable record. Kept separate
+from the route so the same path serves the ordinary verify endpoint, the
+priority review, and any future scheduled run — three call sites producing
+review records by three slightly different routes is how audit trails develop
+holes.
+
+The five verification states are preserved end to end. Nothing here collapses
+`unavailable` into `not_found`: one is a third party's outage and must not count
+against the entity, the other is a statement about the entity and must.
+"""
+from __future__ import annotations
+
+import logging
+from datetime import datetime
+from typing import Any, Dict, Optional
+
+from app.tefca_registry import audit as reg_audit
+from app.tefca_registry import models as reg
+from app.tefca_registry.bucket_classifier import (
+    BucketClassifier, FAILED, NOT_CHECKED, NOT_FOUND, UNAVAILABLE, VERIFIED,
+    ensure_seed_rules)
+
+logger = logging.getLogger(__name__)
+
+_classifier = BucketClassifier()
+
+# Sources the model expects. Those without a connector are reported as
+# not_checked with a reason rather than omitted — a source missing from the
+# response reads as an oversight, while "not_checked: no connector" is a
+# disclosed gap.
+NO_CONNECTOR = {
+    "sam_gov": "SAM.gov is keyed on UEI, which the registry does not hold; "
+               "API key also not provisioned",
+    "state_registry": "No connector implemented",
+    "irs": "No connector implemented; IRS data is keyed on EIN",
+}
+
+SOURCE_LABELS = {
+    "nppes": "NPI Registry — CMS/HHS",
+    "pecos": "Provider Enrollment — CMS",
+    "oig_leie": "Exclusion List — OIG/HHS",
+    "sam_gov": "Federal Registration — GSA",
+    "state_registry": "State licensure registry",
+    "irs": "IRS Exempt Organizations",
+}
+
+
+async def probe_sources(db, entity_id) -> Dict[str, dict]:
+    """Query each connector for this entity's NPI, in five-state form.
+
+    Never raises. A verification that returns partial results is far more useful
+    than one that 500s because a third-party API had a bad minute.
+    """
+    from sqlalchemy import select
+
+    npi = (await db.execute(
+        select(reg.TefcaEntityIdentifier.identifier_value).where(
+            reg.TefcaEntityIdentifier.entity_id == entity_id,
+            reg.TefcaEntityIdentifier.identifier_type == "npi").limit(1))
+    ).scalar_one_or_none()
+
+    out: Dict[str, dict] = {
+        k: {"status": NOT_CHECKED, "reason": why, "label": SOURCE_LABELS.get(k)}
+        for k, why in NO_CONNECTOR.items()
+    }
+
+    if not npi:
+        for key in ("nppes", "pecos", "oig_leie"):
+            out[key] = {"status": NOT_CHECKED,
+                        "reason": "entity has no NPI identifier to look up",
+                        "label": SOURCE_LABELS.get(key)}
+        return out
+
+    try:
+        from app.Tefca.connectors import SourceConnectorManager
+        mgr = SourceConnectorManager()
+    except Exception as exc:  # pragma: no cover
+        logger.warning("TEFCA connectors unavailable: %s", exc)
+        for key in ("nppes", "pecos", "oig_leie"):
+            out[key] = {"status": UNAVAILABLE, "reason": f"connector import failed: {exc}",
+                        "label": SOURCE_LABELS.get(key)}
+        return out
+
+    for key, attr in (("nppes", "nppes"), ("pecos", "pecos"), ("oig_leie", "leie")):
+        conn = getattr(mgr, attr, None)
+        fn = getattr(conn, "lookup_by_npi", None) if conn else None
+        if fn is None:
+            out[key] = {"status": NOT_CHECKED, "reason": "connector not available",
+                        "label": SOURCE_LABELS.get(key)}
+            continue
+        try:
+            r = await fn(npi)
+            err = getattr(r, "error", None)
+            ok = bool(getattr(r, "success", False))
+            data = getattr(r, "data", None) or {}
+
+            # CRITICAL: SourceResult.success means THE QUERY SUCCEEDED, not that
+            # the entity was found or excluded. The finding lives in .data. An
+            # earlier version read success as the answer, which reported every
+            # entity whose LEIE lookup merely completed as EXCLUDED — the single
+            # most damaging misclassification available here, since B4 is
+            # disqualifying. The answer is always taken from the payload now.
+            if err or not ok:
+                # Reached-and-errored is UNAVAILABLE, not a finding. Scoring an
+                # outage against the entity would be an accusation, not a result.
+                out[key] = {"status": UNAVAILABLE,
+                            "reason": str(err or "source did not complete")[:200],
+                            "label": SOURCE_LABELS.get(key)}
+            elif key == "oig_leie":
+                # Exclusion list: a hit is bad news, absence is the good outcome.
+                # `excluded` counts only ACTIVE exclusions — a reinstated
+                # provider is not currently excluded.
+                out[key] = {"status": "excluded" if data.get("excluded") else "clear",
+                            "label": SOURCE_LABELS.get(key),
+                            "exclusion_count": data.get("exclusion_count", 0)}
+            else:
+                # NPPES/PECOS return ok() for BOTH found and not-found; `found`
+                # is what distinguishes them.
+                out[key] = {"status": VERIFIED if data.get("found", False) else NOT_FOUND,
+                            "label": SOURCE_LABELS.get(key)}
+        except Exception as exc:  # noqa: BLE001 — one source must not sink the run
+            out[key] = {"status": FAILED, "reason": f"{type(exc).__name__}: {exc}"[:200],
+                        "label": SOURCE_LABELS.get(key)}
+        out[key]["verified_at"] = datetime.utcnow().isoformat() + "Z"
+        out[key]["lookup_identifier"] = npi
+    return out
+
+
+def coverage_note(sources: Dict[str, dict]) -> dict:
+    """Plain-language coverage, so a reader is never left to assume completeness."""
+    checked = [k for k, v in sources.items()
+               if v.get("status") in (VERIFIED, NOT_FOUND, "clear", "excluded")]
+    unavailable = [k for k, v in sources.items() if v.get("status") == UNAVAILABLE]
+    not_checked = [k for k, v in sources.items() if v.get("status") == NOT_CHECKED]
+    failed = [k for k, v in sources.items() if v.get("status") == FAILED]
+    verified = [k for k, v in sources.items() if v.get("status") in (VERIFIED, "clear")]
+
+    parts = [f"{len(checked)} of {len(sources)} sources checked."]
+    if unavailable:
+        parts.append(f"Unavailable: {', '.join(sorted(unavailable))}.")
+    if not_checked:
+        parts.append(f"Not checked: {', '.join(sorted(not_checked))}.")
+    if failed:
+        parts.append(f"Errored: {', '.join(sorted(failed))}.")
+    return {
+        "sources_checked": len(checked), "sources_available": len(sources),
+        "sources_verified": len(verified), "sources_unavailable": len(unavailable),
+        "sources_not_checked": len(not_checked), "sources_failed": len(failed),
+        "coverage_note": " ".join(parts),
+    }
+
+
+def _derived_fields(sources: Dict[str, dict], npi_flagged: bool) -> dict:
+    """Signals the rules reference but the connectors do not emit directly."""
+    nppes = sources.get("nppes", {}).get("status")
+    pecos = sources.get("pecos", {}).get("status")
+    return {
+        "npi_validation": "invalid" if npi_flagged else "valid",
+        # Conflict means both answered and disagreed. If either is unavailable
+        # there is no conflict to see — only a gap.
+        "nppes_pecos_conflict": (
+            nppes in (VERIFIED, NOT_FOUND) and pecos in (VERIFIED, NOT_FOUND)
+            and nppes != pecos),
+        "multiple_source_conflict": False,
+    }
+
+
+async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
+                     sample_id=None, trigger: str = "manual") -> dict:
+    """Verify, classify, persist a ReviewRecord, return the response envelope."""
+    from app.services.npi_validator import validate_npi
+    from sqlalchemy import select
+    from app.tefca_registry.review_routes import generate_review_id
+
+    await ensure_seed_rules(db)
+    actor_id, actor_email = reg_audit.actor_of(user)
+
+    reg_audit.record(db, reg_audit.VERIFICATION_STARTED, entity.id,
+                     actor_id=actor_id, actor_email=actor_email,
+                     ip_address=ip_address, metadata={"trigger": trigger})
+
+    sources = await probe_sources(db, entity.id)
+
+    npi = (await db.execute(
+        select(reg.TefcaEntityIdentifier.identifier_value).where(
+            reg.TefcaEntityIdentifier.entity_id == entity.id,
+            reg.TefcaEntityIdentifier.identifier_type == "npi").limit(1))
+    ).scalar_one_or_none()
+    npi_flagged = bool(npi) and not validate_npi(npi)[0]
+
+    results = {"sources": sources, "fields": _derived_fields(sources, npi_flagged),
+               "confidence_score": None}
+
+    classification = await _classifier.classify_with_db(db, results)
+    review_id = await generate_review_id(db)
+
+    # One audit row per source — the minimal record an auditor needs to retrace
+    # the decision, without storing full provenance.
+    for src, info in sources.items():
+        db.add(reg.TefcaVerification(
+            entity_id=entity.id, review_id=review_id, source=src,
+            lookup_identifier=info.get("lookup_identifier"),
+            verification_status=("verified" if info.get("status") == "clear"
+                                 else info.get("status")),
+            detail=info.get("reason"), data_source_label=info.get("label")))
+
+    db.add(reg.ReviewRecord(
+        review_id=review_id, entity_id=entity.id, sample_id=sample_id,
+        verification_results=results,          # snapshot, not a live pointer
+        classification_bucket=classification.bucket,
+        classification_rule=classification.rule_code,
+        classification_rule_version=classification.rule_version,
+        classification_rationale=classification.rationale,
+        reviewed_at=datetime.utcnow()))
+
+    if sample_id:
+        await db.execute(
+            reg.SampleEntity.__table__.update()
+            .where(reg.SampleEntity.sample_id == sample_id,
+                   reg.SampleEntity.entity_id == entity.id)
+            .values(review_id=review_id, review_status="reviewed",
+                    discrepancy_bucket=classification.bucket,
+                    reviewed_at=datetime.utcnow()))
+
+    reg_audit.record(db, reg_audit.VERIFICATION_COMPLETED, entity.id,
+                     actor_id=actor_id, actor_email=actor_email,
+                     ip_address=ip_address,
+                     metadata={"review_id": review_id,
+                               "bucket": classification.bucket,
+                               "rule": classification.rule_code,
+                               "rule_version": classification.rule_version})
+    await db.commit()
+
+    return {
+        "entity_id": str(entity.id),
+        "review_id": review_id,
+        "verification": sources,
+        "classification": {
+            **classification.as_dict(),
+            "classified_at": datetime.utcnow().isoformat() + "Z",
+        },
+        "confidence": coverage_note(sources),
+    }

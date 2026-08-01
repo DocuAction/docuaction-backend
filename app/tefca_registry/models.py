@@ -352,6 +352,210 @@ class TefcaRegAuditLog(Base):
     )
 
 
+# ─── 11. review_rules ─────────────────────────────────────────────────────────
+
+class ReviewRule(Base):
+    """A versioned B1-B4 classification rule.
+
+    Versioned rather than mutable because a classification made last quarter has
+    to stay explainable after ONC changes its guidance. Retiring sets
+    retired_date and inserts a new row at version+1; the old row stays so an old
+    review still resolves to the rule text that actually produced it. There is
+    no DELETE for the same reason.
+    """
+    __tablename__ = "review_rules"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    rule_code = Column(String(20), nullable=False)
+    name = Column(String(100), nullable=False)
+    bucket = Column(String(2), nullable=False)          # B1 | B2 | B3 | B4
+    priority = Column(Integer, nullable=False)          # lower evaluates first
+    conditions = Column(JSONB, nullable=False)
+    description = Column(Text)
+    version = Column(Integer, nullable=False, server_default=text("1"))
+    effective_date = Column(Date)
+    retired_date = Column(Date)                          # NULL = current
+    is_active = Column(Boolean, nullable=False, server_default=text("true"))
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(),
+                        onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("rule_code", "version", name="uq_review_rule_code_version"),
+        Index("idx_review_rules_active", "is_active"),
+        Index("idx_review_rules_priority", "priority"),
+        Index("idx_review_rules_bucket", "bucket"),
+    )
+
+
+# ─── 12. review_records ───────────────────────────────────────────────────────
+
+class ReviewRecord(Base):
+    """One completed review, addressable by a stable REV-YYYY-NNNNNN id.
+
+    verification_results is a SNAPSHOT taken at review time, not a pointer to
+    live state. A report issued in week 31 must keep saying what it said even
+    after the entity is re-verified in week 32.
+    """
+    __tablename__ = "review_records"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    review_id = Column(String(20), nullable=False, unique=True)   # REV-2026-000001
+    entity_id = Column(UUID(as_uuid=True), ForeignKey("tefca_reg_entities.id"),
+                       nullable=False)
+    sample_id = Column(UUID(as_uuid=True), ForeignKey("review_samples.id"))
+    verification_results = Column(JSONB)
+    classification_bucket = Column(String(2))
+    classification_rule = Column(String(20))
+    classification_rule_version = Column(Integer)
+    classification_rationale = Column(Text)
+    # NULL until a human acts. "confirmed" | "reclassified"
+    reviewer_resolution = Column(String(20))
+    reclassified_to = Column(String(2))
+    reclassified_by = Column(UUID(as_uuid=True))
+    reclassified_at = Column(DateTime)
+    resolution_rationale = Column(Text)
+    reviewed_at = Column(DateTime)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_review_records_entity", "entity_id"),
+        Index("idx_review_records_bucket", "classification_bucket"),
+        Index("idx_review_records_sample", "sample_id"),
+        Index("idx_review_records_resolution", "reviewer_resolution"),
+        Index("idx_review_records_created", "created_at"),
+    )
+
+
+# ─── 13. tefca_verifications ──────────────────────────────────────────────────
+
+class TefcaVerification(Base):
+    """Minimal per-source audit record for one connector call.
+
+    Deliberately NOT full provenance — identifier used, outcome, timestamp and
+    the source label, which is what an auditor needs to retrace a decision.
+
+    verification_status carries FIVE states, not pass/fail. The distinction that
+    matters for statistics: `unavailable` (source unreachable) must never count
+    against an entity, while `not_found` (source reached, no record) must. A
+    two-state model silently converts an outage into a finding.
+    """
+    __tablename__ = "tefca_verifications"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    entity_id = Column(UUID(as_uuid=True), ForeignKey("tefca_reg_entities.id"),
+                       nullable=False)
+    review_id = Column(String(20))
+    source = Column(String(50), nullable=False)
+    lookup_identifier = Column(String(50))
+    # verified | not_found | not_checked | unavailable | failed
+    verification_status = Column(String(20), nullable=False)
+    detail = Column(Text)
+    data_source_label = Column(String(100))
+    verified_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_tefca_verif_entity", "entity_id"),
+        Index("idx_tefca_verif_source", "source"),
+        Index("idx_tefca_verif_status", "verification_status"),
+        Index("idx_tefca_verif_review", "review_id"),
+    )
+
+
+# ─── 14. review_samples ───────────────────────────────────────────────────────
+
+class ReviewSample(Base):
+    """A drawn statistical sample plus the EXACT configuration behind it.
+
+    Every parameter is stored rather than assumed from today's defaults —
+    confidence, margin, proportion, FPC, seed and the rule-set version. A sample
+    drawn in Q3 must be reproducible in Q4 even if the defaults have moved.
+    """
+    __tablename__ = "review_samples"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    sample_name = Column(String(100))
+    review_type = Column(String(20))                    # weekly | quarterly | priority
+    population_size = Column(Integer, nullable=False)
+    sample_size = Column(Integer, nullable=False)
+    confidence_level = Column(Float, nullable=False)
+    margin_of_error = Column(Float, nullable=False)
+    proportion = Column(Float, nullable=False)
+    use_fpc = Column(Boolean, nullable=False, server_default=text("true"))
+    random_seed = Column(BigInteger)
+    rule_set_version = Column(Integer)
+    strata_config = Column(JSONB)
+    strata_distribution = Column(JSONB)
+    status = Column(String(20), nullable=False, server_default=text("'drawn'"))
+    drawn_at = Column(DateTime, nullable=False, server_default=func.now())
+    completed_at = Column(DateTime)
+    created_by = Column(UUID(as_uuid=True))
+
+    __table_args__ = (
+        Index("idx_review_samples_type", "review_type"),
+        Index("idx_review_samples_status", "status"),
+        Index("idx_review_samples_drawn", "drawn_at"),
+    )
+
+
+# ─── 15. sample_entities ──────────────────────────────────────────────────────
+
+class SampleEntity(Base):
+    """Membership of one entity in one drawn sample."""
+    __tablename__ = "sample_entities"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    sample_id = Column(UUID(as_uuid=True), ForeignKey("review_samples.id"),
+                       nullable=False)
+    entity_id = Column(UUID(as_uuid=True), ForeignKey("tefca_reg_entities.id"),
+                       nullable=False)
+    review_status = Column(String(20), nullable=False, server_default=text("'pending'"))
+    review_id = Column(String(20))
+    discrepancy_bucket = Column(String(2))
+    stratum = Column(String(100))
+    reviewed_at = Column(DateTime)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("sample_id", "entity_id", name="uq_sample_entity"),
+        Index("idx_sample_entities_sample", "sample_id"),
+        Index("idx_sample_entities_entity", "entity_id"),
+        Index("idx_sample_entities_status", "review_status"),
+    )
+
+
+# ─── 16. review_reports ───────────────────────────────────────────────────────
+
+class ReviewReport(Base):
+    """An archived report, stored exactly as delivered.
+
+    Both the structured data and the rendered HTML are kept. Reports are never
+    regenerated: if the underlying entities change next week, the report issued
+    this week must still say what the client received. Regenerating on read
+    would quietly rewrite history.
+    """
+    __tablename__ = "review_reports"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    report_id = Column(String(30), nullable=False, unique=True)   # WR-2026-W31
+    report_type = Column(String(20), nullable=False)              # weekly|quarterly|priority
+    period_start = Column(Date)
+    period_end = Column(Date)
+    sample_id = Column(UUID(as_uuid=True), ForeignKey("review_samples.id"))
+    entity_id = Column(UUID(as_uuid=True), ForeignKey("tefca_reg_entities.id"))
+    rule_set_version = Column(Integer)
+    report_data = Column(JSONB)
+    report_html = Column(Text)
+    generated_at = Column(DateTime, nullable=False, server_default=func.now())
+    generated_by = Column(UUID(as_uuid=True))
+
+    __table_args__ = (
+        Index("idx_review_reports_type", "report_type"),
+        Index("idx_review_reports_period", "period_start", "period_end"),
+        Index("idx_review_reports_generated", "generated_at"),
+    )
+
+
 # Ordered parents-first for FK-scoped create_all / drop_all and the migration.
 TEFCA_REG_TABLE_ORDER = [
     "tefca_reg_entities",
@@ -364,4 +568,11 @@ TEFCA_REG_TABLE_ORDER = [
     "tefca_entity_findings",
     "tefca_import_batches",
     "tefca_reg_audit_log",
+    # Tasks 3-5 operational engine.
+    "review_rules",
+    "review_samples",        # before review_records / sample_entities (FK parent)
+    "review_records",
+    "tefca_verifications",
+    "sample_entities",
+    "review_reports",
 ]

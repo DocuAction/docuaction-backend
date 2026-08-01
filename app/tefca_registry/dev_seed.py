@@ -94,12 +94,44 @@ def _rows() -> list[dict]:
     ]
 
 
-def build_csv() -> str:
+def _real_npi_rows() -> list[dict]:
+    """Five real, publicly-listed hospital NPIs — DEV ONLY.
+
+    Synthetic NPIs cannot be corroborated by NPPES, so every verification
+    against the synthetic seed returns null confidence and B3. That proves the
+    null path and nothing else. These five exist in the public NPI registry, so
+    a verification run produces a real NPPES/PECOS/OIG answer and the B1 path
+    becomes demonstrable.
+
+    NPIs are public data from the NPPES registry. These rows are NEVER seeded on
+    production — production imports only ONC-provided data, and the seed
+    endpoint is admin-gated precisely so this cannot happen by accident.
+    """
+    return [
+        dict(tefcaid="TEFCA-REAL-001", hcid="HCID-R001", name="Johns Hopkins Hospital",
+             level="participant", npi="1316966918", state="MD", city="Baltimore",
+             status="draft", parent="TEFCA-QHIN-001"),
+        dict(tefcaid="TEFCA-REAL-002", hcid="HCID-R002", name="Mayo Clinic",
+             level="participant", npi="1063626960", state="MN", city="Rochester",
+             status="draft", parent="TEFCA-QHIN-002"),
+        dict(tefcaid="TEFCA-REAL-003", hcid="HCID-R003", name="Cleveland Clinic",
+             level="participant", npi="1649278978", state="OH", city="Cleveland",
+             status="draft", parent="TEFCA-QHIN-002"),
+        dict(tefcaid="TEFCA-REAL-004", hcid="HCID-R004", name="Massachusetts General Hospital",
+             level="participant", npi="1982604013", state="MA", city="Boston",
+             status="draft", parent="TEFCA-QHIN-001"),
+        dict(tefcaid="TEFCA-REAL-005", hcid="HCID-R005", name="Inova Fairfax Hospital",
+             level="participant", npi="1205839487", state="VA", city="Falls Church",
+             status="draft", parent="TEFCA-QHIN-001"),
+    ]
+
+
+def build_csv(include_real: bool = False) -> str:
     """The seed as CSV text, in the column shape csv_import expects."""
     header = ("TEFCAID,HCID,EntityName,EntityLevel,ParentTEFCAID,NPI,State,City,"
               "OperationalStatus\n")
     lines = [header]
-    for r in _rows():
+    for r in _rows() + (_real_npi_rows() if include_real else []):
         lines.append(
             f"{r['tefcaid']},{r['hcid']},\"{r['name']}\",{r['level']},"
             f"{r.get('parent','')},{r['npi']},{r['state']},{r['city']},{r['status']}\n")
@@ -112,6 +144,7 @@ async def entity_count(session: AsyncSession) -> int:
 
 
 async def seed(session: AsyncSession, *, force: bool = False,
+               include_real: bool = False,
                actor_id=None, actor_email: Optional[str] = None,
                ip_address: Optional[str] = None) -> dict:
     """Load the seed through the real CSV importer.
@@ -130,8 +163,10 @@ async def seed(session: AsyncSession, *, force: bool = False,
                 "hint": "pass force=true to import anyway (duplicates are skipped)"}
 
     result = await import_csv(
-        session, build_csv(), filename="dev_seed.csv",
+        session, build_csv(include_real=include_real),
+        filename="dev_seed_real.csv" if include_real else "dev_seed.csv",
         actor_id=actor_id, actor_email=actor_email, ip_address=ip_address)
     result["seeded"] = True
     result["existing_before"] = existing
+    result["included_real_npis"] = include_real
     return result

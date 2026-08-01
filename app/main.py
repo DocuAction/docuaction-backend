@@ -340,6 +340,13 @@ logger.info("Loaded: tefca-review-protocol + dashboard (REQUIRED — uncondition
 # TEFCA routers above. Over the tefca_reg_* tables (Phase 1B).
 from app.tefca_registry.routes import router as tefca_registry_router  # noqa: E402
 app.include_router(tefca_registry_router)
+
+# TEFCA ARC Tasks 3-5 — versioned rules, sampling, reviews, reports, priority
+# review. Separate router because the review engine changes when ONC guidance
+# changes, which is a different cadence from the registry CRUD beneath it.
+from app.tefca_registry.review_routes import router as tefca_review_router  # noqa: E402
+app.include_router(tefca_review_router)
+logger.info("Loaded: tefca-arc-review (Tasks 3-5 — /api/tefca/review-rules, /samples, /reviews, /reports)")
 logger.info("Loaded: tefca-registry (Phase 2A — /api/tefca/registry/*)")
 
 # ═══ CASE MANAGEMENT ═══
