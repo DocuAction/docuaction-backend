@@ -107,21 +107,26 @@ def _real_npi_rows() -> list[dict]:
     production — production imports only ONC-provided data, and the seed
     endpoint is admin-gated precisely so this cannot happen by accident.
     """
+    # Every NPI below was resolved from the live NPPES registry
+    # (npiregistry.cms.hhs.gov, enumeration_type=NPI-2) on 2026-08-01 and passes
+    # the CMS check digit. The previous set carried three numbers that failed
+    # Luhn outright — they could not have been real NPIs, and none of them could
+    # exercise the B1 path because NPPES has no such record.
     return [
         dict(tefcaid="TEFCA-REAL-001", hcid="HCID-R001", name="Johns Hopkins Hospital",
-             level="participant", npi="1316966918", state="MD", city="Baltimore",
+             level="participant", npi="1477978807", state="MD", city="Baltimore",
              status="draft", parent="TEFCA-QHIN-001"),
         dict(tefcaid="TEFCA-REAL-002", hcid="HCID-R002", name="Mayo Clinic",
-             level="participant", npi="1063626960", state="MN", city="Rochester",
+             level="participant", npi="1881018208", state="MN", city="Rochester",
              status="draft", parent="TEFCA-QHIN-002"),
         dict(tefcaid="TEFCA-REAL-003", hcid="HCID-R003", name="Cleveland Clinic",
-             level="participant", npi="1649278978", state="OH", city="Cleveland",
+             level="participant", npi="1275791162", state="OH", city="Cleveland",
              status="draft", parent="TEFCA-QHIN-002"),
         dict(tefcaid="TEFCA-REAL-004", hcid="HCID-R004", name="Massachusetts General Hospital",
-             level="participant", npi="1982604013", state="MA", city="Boston",
+             level="participant", npi="1821141649", state="MA", city="Boston",
              status="draft", parent="TEFCA-QHIN-001"),
         dict(tefcaid="TEFCA-REAL-005", hcid="HCID-R005", name="Inova Fairfax Hospital",
-             level="participant", npi="1205839487", state="VA", city="Falls Church",
+             level="participant", npi="1770626038", state="VA", city="Falls Church",
              status="draft", parent="TEFCA-QHIN-001"),
     ]
 
@@ -136,6 +141,56 @@ def build_csv(include_real: bool = False) -> str:
             f"{r['tefcaid']},{r['hcid']},\"{r['name']}\",{r['level']},"
             f"{r.get('parent','')},{r['npi']},{r['state']},{r['city']},{r['status']}\n")
     return "".join(lines)
+
+
+async def refresh_real_npis(session: AsyncSession) -> dict:
+    """Correct the NPI on already-imported TEFCA-REAL-* entities.
+
+    The importer is idempotent by TEFCAID/HCID — it SKIPS an entity that already
+    exists rather than updating it. That is right for real imports (an import
+    must never silently overwrite a curated record), but it means a fixture
+    seeded with a wrong NPI keeps that wrong NPI forever.
+
+    Updating the identifier in place rather than deleting and re-importing:
+    these entities are referenced by review_records, verifications and
+    sample_entities, and deleting them would either cascade through that history
+    or fail on the foreign keys. The identifier is the only thing that was
+    wrong.
+    """
+    from sqlalchemy import update
+
+    wanted = {r["tefcaid"]: r["npi"] for r in _real_npi_rows()}
+    updated, unchanged, missing = [], [], []
+
+    for tefcaid, npi in wanted.items():
+        entity_id = (await session.execute(
+            select(reg.TefcaEntityIdentifier.entity_id).where(
+                reg.TefcaEntityIdentifier.identifier_type == "tefcaid",
+                reg.TefcaEntityIdentifier.identifier_value == tefcaid))
+        ).scalar_one_or_none()
+        if not entity_id:
+            missing.append(tefcaid)
+            continue
+
+        current = (await session.execute(
+            select(reg.TefcaEntityIdentifier.identifier_value).where(
+                reg.TefcaEntityIdentifier.entity_id == entity_id,
+                reg.TefcaEntityIdentifier.identifier_type == "npi"))
+        ).scalar_one_or_none()
+
+        if current == npi:
+            unchanged.append(tefcaid)
+            continue
+
+        await session.execute(
+            update(reg.TefcaEntityIdentifier)
+            .where(reg.TefcaEntityIdentifier.entity_id == entity_id,
+                   reg.TefcaEntityIdentifier.identifier_type == "npi")
+            .values(identifier_value=npi))
+        updated.append({"tefcaid": tefcaid, "from": current, "to": npi})
+
+    await session.commit()
+    return {"updated": updated, "unchanged": unchanged, "missing": missing}
 
 
 async def entity_count(session: AsyncSession) -> int:
@@ -162,6 +217,11 @@ async def seed(session: AsyncSession, *, force: bool = False,
                 "existing_entities": existing,
                 "hint": "pass force=true to import anyway (duplicates are skipped)"}
 
+    # Correct any already-imported real fixtures BEFORE importing. The importer
+    # skips existing TEFCAIDs, so without this a fixture seeded with a wrong NPI
+    # would never be fixed by re-running the seed.
+    refreshed = await refresh_real_npis(session) if include_real else None
+
     result = await import_csv(
         session, build_csv(include_real=include_real),
         filename="dev_seed_real.csv" if include_real else "dev_seed.csv",
@@ -169,4 +229,6 @@ async def seed(session: AsyncSession, *, force: bool = False,
     result["seeded"] = True
     result["existing_before"] = existing
     result["included_real_npis"] = include_real
+    if refreshed is not None:
+        result["real_npi_refresh"] = refreshed
     return result

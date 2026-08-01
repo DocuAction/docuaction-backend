@@ -30,11 +30,18 @@ _classifier = BucketClassifier()
 # not_checked with a reason rather than omitted — a source missing from the
 # response reads as an oversight, while "not_checked: no connector" is a
 # disclosed gap.
+# Reported as not_checked WITH A REASON — never "unavailable". The distinction
+# is load-bearing: "unavailable" implies a source that normally answers is
+# temporarily down and will recover, which invites someone to retry and wait.
+# "not_checked — connector not implemented" says the work has not been built,
+# which is a roadmap item and needs a decision, not a retry.
 NO_CONNECTOR = {
-    "sam_gov": "SAM.gov is keyed on UEI, which the registry does not hold; "
-               "API key also not provisioned",
-    "state_registry": "No connector implemented",
-    "irs": "No connector implemented; IRS data is keyed on EIN",
+    "sam_gov": "Connector implemented but not operational — API key required "
+               "(free registration at api.data.gov). Also keyed on UEI, which "
+               "the registry does not currently hold.",
+    "state_registry": "Connector not implemented",
+    "irs": "Connector not implemented — IRS data is keyed on EIN, which the "
+           "registry does not currently hold",
 }
 
 SOURCE_LABELS = {
@@ -128,34 +135,82 @@ async def probe_sources(db, entity_id) -> Dict[str, dict]:
     return out
 
 
-def coverage_note(sources: Dict[str, dict]) -> dict:
-    """Plain-language coverage, so a reader is never left to assume completeness."""
-    checked = [k for k, v in sources.items()
-               if v.get("status") in (VERIFIED, NOT_FOUND, "clear", "excluded")]
-    unavailable = [k for k, v in sources.items() if v.get("status") == UNAVAILABLE]
-    not_checked = [k for k, v in sources.items() if v.get("status") == NOT_CHECKED]
-    failed = [k for k, v in sources.items() if v.get("status") == FAILED]
-    verified = [k for k, v in sources.items() if v.get("status") in (VERIFIED, "clear")]
+#: Connectors that EXIST and are queried on every verification. Coverage is
+#: measured against this set, not against every source the model can name.
+#: Counting an unbuilt connector as a missing source would report permanently
+#: degraded coverage for work that was never scheduled — it makes the platform
+#: look broken rather than incomplete, and no verification could ever reach
+#: full coverage no matter how healthy the live sources were.
+IMPLEMENTED_SOURCES = ("nppes", "pecos", "oig_leie")
 
-    parts = [f"{len(checked)} of {len(sources)} sources checked."]
+
+def coverage_note(sources: Dict[str, dict]) -> dict:
+    """Plain-language coverage over the connectors that actually exist."""
+    impl = {k: v for k, v in sources.items() if k in IMPLEMENTED_SOURCES}
+    unimplemented = sorted(k for k in sources if k not in IMPLEMENTED_SOURCES)
+
+    checked = [k for k, v in impl.items()
+               if v.get("status") in (VERIFIED, NOT_FOUND, "clear", "excluded")]
+    unavailable = [k for k, v in impl.items() if v.get("status") == UNAVAILABLE]
+    not_checked = [k for k, v in impl.items() if v.get("status") == NOT_CHECKED]
+    failed = [k for k, v in impl.items() if v.get("status") == FAILED]
+    verified = [k for k, v in impl.items() if v.get("status") in (VERIFIED, "clear")]
+
+    parts = [f"{len(checked)} of {len(impl)} implemented sources checked."]
     if unavailable:
         parts.append(f"Unavailable: {', '.join(sorted(unavailable))}.")
     if not_checked:
         parts.append(f"Not checked: {', '.join(sorted(not_checked))}.")
     if failed:
         parts.append(f"Errored: {', '.join(sorted(failed))}.")
+    if unimplemented:
+        # Reported separately and explicitly. These are a roadmap item, not a
+        # coverage failure, and conflating the two misstates both.
+        parts.append(f"Not implemented (excluded from coverage): "
+                     f"{', '.join(unimplemented)}.")
+
     return {
-        "sources_checked": len(checked), "sources_available": len(sources),
-        "sources_verified": len(verified), "sources_unavailable": len(unavailable),
-        "sources_not_checked": len(not_checked), "sources_failed": len(failed),
+        "sources_checked": len(checked),
+        "sources_available": len(impl),          # implemented connectors only
+        "sources_verified": len(verified),
+        "sources_unavailable": len(unavailable),
+        "sources_not_checked": len(not_checked),
+        "sources_failed": len(failed),
+        "sources_not_implemented": len(unimplemented),
+        "not_implemented": unimplemented,
         "coverage_note": " ".join(parts),
     }
 
 
+def detect_source_conflict(sources: Dict[str, dict]) -> bool:
+    """Do two sources that BOTH answered contradict each other?
+
+    Only sources that actually responded can conflict. If one is unavailable or
+    unimplemented there is a gap, not a disagreement, and calling that a
+    conflict would manufacture a B3 out of an outage.
+
+    Two contradictions are recognised:
+      * NPPES has the provider, PECOS does not — an enrolment inconsistency.
+      * PECOS shows the provider enrolled while OIG lists them as excluded —
+        the more serious pairing, since an excluded provider should not be
+        actively enrolled.
+    """
+    def st(name: str) -> Optional[str]:
+        return (sources.get(name) or {}).get("status")
+
+    nppes, pecos, oig = st("nppes"), st("pecos"), st("oig_leie")
+
+    if nppes == VERIFIED and pecos == NOT_FOUND:
+        return True
+    if pecos == VERIFIED and oig == "excluded":
+        return True
+    return False
+
+
 def _derived_fields(sources: Dict[str, dict], npi_flagged: bool) -> dict:
     """Signals the rules reference but the connectors do not emit directly."""
-    nppes = sources.get("nppes", {}).get("status")
-    pecos = sources.get("pecos", {}).get("status")
+    nppes = (sources.get("nppes") or {}).get("status")
+    pecos = (sources.get("pecos") or {}).get("status")
     return {
         "npi_validation": "invalid" if npi_flagged else "valid",
         # Conflict means both answered and disagreed. If either is unavailable
@@ -163,7 +218,7 @@ def _derived_fields(sources: Dict[str, dict], npi_flagged: bool) -> dict:
         "nppes_pecos_conflict": (
             nppes in (VERIFIED, NOT_FOUND) and pecos in (VERIFIED, NOT_FOUND)
             and nppes != pecos),
-        "multiple_source_conflict": False,
+        "multiple_source_conflict": detect_source_conflict(sources),
     }
 
 
