@@ -45,9 +45,16 @@ def test_sql_payload_in_query_string_is_handled(client, payload):
 
 
 @pytest.mark.parametrize("payload", SQL_PAYLOADS)
-def test_sql_payload_in_login_body_is_rejected_not_executed(client, payload):
+def test_sql_payload_in_login_body_is_rejected_not_executed(client, db_required,
+                                                            payload):
     """The classic auth bypass. Anything other than a clean rejection — and in
-    particular a 200 — would mean the credential check was side-stepped."""
+    particular a 200 — would mean the credential check was side-stepped.
+
+    Needs a real database. The assertion is "a hostile payload must not produce
+    a 500", and without a working database EVERY login produces a 500 from the
+    driver — so the test could not tell an injection defect from a missing test
+    DB. It skips with a reason instead of failing for the wrong cause.
+    """
     r = client.post("/api/auth/login", json={"email": payload, "password": payload})
     assert r.status_code != 500
     assert r.status_code != 200, "SQL payload authenticated -- auth bypass"
@@ -71,8 +78,12 @@ def test_path_traversal_does_not_read_the_filesystem(client, payload):
     assert "root:x:" not in body, "traversal returned /etc/passwd content"
 
 
-def test_oversized_body_is_refused_not_buffered(client):
-    """A 10 MB login body should be rejected, not parsed."""
+def test_oversized_body_is_refused_not_buffered(client, db_required):
+    """A 10 MB login body should be rejected, not parsed.
+
+    Database-gated for the same reason as the SQL login tests: with no working
+    database the 500 comes from the driver, not from the body size.
+    """
     r = client.post("/api/auth/login",
                     json={"email": "a@b.c", "password": "x" * (10 * 1024 * 1024)})
     assert r.status_code != 500

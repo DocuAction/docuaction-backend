@@ -29,6 +29,7 @@ from typing import Awaitable, Callable, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.services.npi_validator import validate_for_import
 from app.tefca_registry import models as reg
@@ -109,7 +110,13 @@ async def persist_import(
         file_checksum=file_checksum, file_size_bytes=file_size,
         status="processing", total_records=total,
         imported_count=0, updated_count=0, skipped_count=0,
-        error_count=len(err_list), errors=err_list, imported_by=actor_id,
+        # A COPY. `errors` is a plain JSONB column with no MutableList wrapper,
+        # so SQLAlchemy's committed-state snapshot keeps a reference to whatever
+        # list it is handed. Passing the live err_list means that snapshot is
+        # mutated in step with it, old and new compare equal at assignment time,
+        # no UPDATE is emitted, and the batch keeps the empty list it was first
+        # flushed with — leaving an auditor an error_count with no error detail.
+        error_count=len(err_list), errors=list(err_list), imported_by=actor_id,
         started_at=started,
     )
     session.add(batch)
@@ -244,7 +251,11 @@ async def persist_import(
     batch.imported_count = imported
     batch.skipped_count = skipped
     batch.error_count = errors
-    batch.errors = err_list
+    # Copy again (see the constructor), then force the column dirty. flag_modified
+    # is belt-and-braces for an audit-trail column: it guarantees the UPDATE is
+    # emitted without depending on how history comparison treats a JSONB list.
+    batch.errors = list(err_list)
+    flag_modified(batch, "errors")
     batch.completed_at = datetime.utcnow()
     batch.duration_ms = int((time.monotonic() - t0) * 1000)
     session.add(reg.TefcaRegAuditLog(
