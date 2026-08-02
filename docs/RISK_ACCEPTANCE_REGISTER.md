@@ -179,7 +179,12 @@ actual RTO before ATO.
 | Owner | Imran (Azure portal) |
 | Review date | 2026-10-31 |
 
-**Action.** Disable public access and enable private endpoint.
+**Action.** Enable a private endpoint, cut the application over to it, and only
+then disable public access — **in that order**. See *Remediation sequence* below.
+
+> **Do not disable public network access as a standalone change.** The
+> application currently connects over the public endpoint. Disabling it before
+> the cutover is complete causes an immediate production outage.
 
 **Notes.** Application code is not affected. Database access is restricted by
 firewall rules and credentials. Full remediation requires Azure Private Link
@@ -198,7 +203,12 @@ configuration.
 | Owner | Imran (Azure portal) |
 | Review date | 2026-10-31 |
 
-**Action.** Disable public access and enable private endpoint.
+**Action.** Enable a private endpoint, cut the application over to it, and only
+then disable public access — **in that order**. See *Remediation sequence* below.
+
+> **Do not disable public network access as a standalone change.** The
+> application currently connects over the public endpoint. Disabling it before
+> the cutover is complete causes an immediate production outage.
 
 **Notes.** Application code is not affected. Database access is restricted by
 firewall rules and credentials. Full remediation requires Azure Private Link
@@ -217,11 +227,41 @@ configuration.
 | Owner | Imran (Azure portal) |
 | Review date | 2026-10-31 |
 
-**Action.** Disable public access and enable private endpoint.
+**Action.** Enable a private endpoint, cut the application over to it, and only
+then disable public access — **in that order**. See *Remediation sequence* below.
+
+> **Do not disable public network access as a standalone change.** The
+> application currently connects over the public endpoint. Disabling it before
+> the cutover is complete causes an immediate production outage.
 
 **Notes.** Application code is not affected. Database access is restricted by
 firewall rules and credentials. Full remediation requires Azure Private Link
 configuration.
+
+---
+
+## Remediation sequence for RA-007 / RA-008 / RA-009
+
+Applies to all three servers. **The order is the control** — steps 1–3 are
+non-disruptive and reversible; step 4 is the only one that can take production
+down, and it is safe only once step 3 has actually passed.
+
+1. Create a Private Endpoint for the PostgreSQL Flexible Server.
+2. Update the application connection string to the `.privatelink.` hostname.
+3. **Verify the application works over the private endpoint.** Do not proceed on
+   assumption — this is the gate for step 4.
+4. Only then, disable public network access.
+
+**Current posture is deliberate, not an oversight.** The application connects
+over the public endpoint today. Public access stays enabled until the cutover is
+verified; there is no partial state that improves on this.
+
+**Estimated cost.** ~$7–10/month per private endpoint. Deferred pending budget,
+which is why these are acknowledged with an owner rather than scheduled.
+
+**Standing instruction.** No automated tooling or agent is to make Azure
+networking changes for these findings. Remediation is a deliberate, manually
+sequenced operation performed by the owner.
 
 ---
 
