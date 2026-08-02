@@ -9,60 +9,82 @@
 | Python | 3.13.11 |
 | Database | PostgreSQL (Azure) |
 | Deployment | Azure App Service |
-| Build | Git SHA `706a2f641f3a48f3dc117f57d579ddc82dbd5686` |
+| Build | Git SHA `7e2ca47e3d5e80db0d89ec776c7ab23455a129bf` |
 | Backend URL | https://docuaction-dev.azurewebsites.net |
-| Test Date (UTC) | 2026-08-01T22:08:31+00:00 |
+| Test Date (UTC) | 2026-08-02T19:23:52.047658+00:00 |
 
+## Tool Versions
 
-**Entity:** Inova Fairfax Hospital  
-**Entity ID:** `74452505-01f5-49bc-8b8f-17aa82268a9d`
+| Tool | Version |
+|------|---------|
+| Python | 3.13.11 |
+| httpx | 0.28.1 |
 
+Entity: **Inova Fairfax Hospital** (`74452505-01f5-49bc-8b8f-17aa82268a9d`), NPI `1770626038`.
 
-`POST /api/tefca/registry/entities/{id}/verify` -> HTTP 200
+`POST /api/tefca/registry/entities/74452505-01f5-49bc-8b8f-17aa82268a9d/verify` -> HTTP 200
 
+| Test ID | Description | Expected | Actual | Result |
+|---|---|---|---|---|
+| 1.2 | Verify a known entity end to end | HTTP 200 with per-source results and a bucket classification | HTTP 200, 3 source(s) answered, 3 not_checked, bucket B1 | PASS |
 
-## Per-source verification status
+## Source-by-source outcome
 
-| Source | Status | Reason / Label |
-|--------|--------|----------------|
-| sam_gov | `not_checked` | Connector implemented but not operational — API key required (free registration at api.data.gov). Also keyed on UEI, which the registry does not currently hold. |
-| state_registry | `not_checked` | Connector not implemented |
-| irs | `not_checked` | Connector not implemented — IRS data is keyed on EIN, which the registry does not currently hold |
-| nppes | `verified` | NPI Registry — CMS/HHS |
-| pecos | `verified` | Provider Enrollment — CMS |
-| oig_leie | `clear` | Exclusion List — OIG/HHS |
+| Source | Status | Identifier | Verified at | Note |
+|---|---|---|---|---|
+| `sam_gov` | not_checked | - | - | Connector implemented but not operational — API key required (free registration at api.dat |
+| `state_registry` | not_checked | - | - | Connector not implemented |
+| `irs` | not_checked | - | - | Connector not implemented — IRS data is keyed on EIN, which the registry does not currentl |
+| `nppes` | verified | 1770626038 | 2026-08-02T19:23:54.744511Z | NPI Registry — CMS/HHS |
+| `pecos` | verified | 1770626038 | 2026-08-02T19:23:55.166192Z | Provider Enrollment — CMS |
+| `oig_leie` | clear | 1770626038 | 2026-08-02T19:24:05.935621Z | Exclusion List — OIG/HHS |
 
 ## Classification
 
-| Field | Value |
-|-------|-------|
-| bucket | B1 |
-| rule_code | RULE-001 |
-| rule_version | 1 |
-| rule_name | B1 No Discrepancy |
-| classified_at | 2026-08-01T22:08:46.914953Z |
-| rationale | B1 No Discrepancy (RULE-001 v1): nppes is verified; oig_leie is clear; pecos is verified |
-
-## Coverage
-
-| Field | Value |
-|-------|-------|
-| sources_checked | 3 |
-| sources_available | 3 |
-| sources_verified | 3 |
-| sources_unavailable | 0 |
-| sources_not_checked | 0 |
-| sources_failed | 0 |
-| sources_not_implemented | 3 |
-| not_implemented | ['irs', 'sam_gov', 'state_registry'] |
-| coverage_note | 3 of 3 implemented sources checked. Not implemented (excluded from coverage): irs, sam_gov, state_registry. |
+```json
+{
+  "bucket": "B1",
+  "rule_code": "RULE-001",
+  "rule_version": 2,
+  "rule_name": "B1 No Discrepancy",
+  "rationale": "B1 No Discrepancy (RULE-001 v2): nppes is verified; oig_leie is clear; pecos is verified",
+  "matched_conditions": [
+    "nppes is verified",
+    "oig_leie is clear",
+    "pecos is verified"
+  ],
+  "evidence_summary": {
+    "sources_total": 6,
+    "sources_checked": 3,
+    "sources_verified": 3,
+    "sources_not_found": 0,
+    "sources_unavailable": 0,
+    "sources_not_checked": 3,
+    "sources_failed": 0,
+    "by_state": {
+      "verified": 2,
+      "not_found": 0,
+      "not_checked": 3,
+      "unavailable": 0,
+      "failed": 0,
+      "clear": 1,
+      "excluded": 0
+    }
+  },
+  "evaluated_rules": [
+    "RULE-005v2",
+    "RULE-001v2"
+  ],
+  "classified_at": "2026-08-02T19:24:06.451753Z"
+}
+```
 
 ## Full response
 
 ```json
 {
   "entity_id": "74452505-01f5-49bc-8b8f-17aa82268a9d",
-  "review_id": "REV-2026-000019",
+  "review_id": "REV-2026-000033",
   "verification": {
     "sam_gov": {
       "status": "not_checked",
@@ -82,29 +104,29 @@
     "nppes": {
       "status": "verified",
       "label": "NPI Registry \u2014 CMS/HHS",
-      "verified_at": "2026-08-01T22:08:39.454713Z",
+      "verified_at": "2026-08-02T19:23:54.744511Z",
       "lookup_identifier": "1770626038"
     },
     "pecos": {
       "status": "verified",
       "label": "Provider Enrollment \u2014 CMS",
-      "verified_at": "2026-08-01T22:08:39.623328Z",
+      "verified_at": "2026-08-02T19:23:55.166192Z",
       "lookup_identifier": "1770626038"
     },
     "oig_leie": {
       "status": "clear",
       "label": "Exclusion List \u2014 OIG/HHS",
       "exclusion_count": 0,
-      "verified_at": "2026-08-01T22:08:46.497189Z",
+      "verified_at": "2026-08-02T19:24:05.935621Z",
       "lookup_identifier": "1770626038"
     }
   },
   "classification": {
     "bucket": "B1",
     "rule_code": "RULE-001",
-    "rule_version": 1,
+    "rule_version": 2,
     "rule_name": "B1 No Discrepancy",
-    "rationale": "B1 No Discrepancy (RULE-001 v1): nppes is verified; oig_leie is clear; pecos is verified",
+    "rationale": "B1 No Discrepancy (RULE-001 v2): nppes is verified; oig_leie is clear; pecos is verified",
     "matched_conditions": [
       "nppes is verified",
       "oig_leie is clear",
@@ -129,10 +151,10 @@
       }
     },
     "evaluated_rules": [
-      "RULE-005v1",
-      "RULE-001v1"
+      "RULE-005v2",
+      "RULE-001v2"
     ],
-    "classified_at": "2026-08-01T22:08:46.914953Z"
+    "classified_at": "2026-08-02T19:24:06.451753Z"
   },
   "confidence": {
     "sources_checked": 3,
@@ -158,5 +180,24 @@
   },
   "transition": null,
   "operational_status": "pending_verification"
+}
+```
+
+## Entity state before and after
+
+`GET .../entities/{id}` before -> HTTP 200, after -> HTTP 200
+
+**Before** — verification_status: `verified`, operational_status: `pending_verification`
+
+**After** — verification_status: `verified`, operational_status: `pending_verification`
+
+### Findings for this entity
+
+```json
+{
+  "items": [],
+  "total": 0,
+  "limit": 200,
+  "offset": 0
 }
 ```
