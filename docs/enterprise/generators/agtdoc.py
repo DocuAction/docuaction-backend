@@ -278,6 +278,43 @@ class AGTDoc:
         self.d.add_paragraph()
         return t
 
+    def diagram(self, lines, caption=""):
+        """Render a text-based diagram inside a shaded, bordered single cell.
+
+        Monospace (Consolas) is used here and ONLY here. Arial is proportional,
+        so box-drawing and arrow alignment collapses under it — the diagram
+        would render as ragged text rather than a figure. Body copy stays Arial
+        per the branding standard.
+        """
+        t = self.d.add_table(rows=1, cols=1)
+        t.style = "Table Grid"
+        c = t.rows[0].cells[0]
+        c.text = ""
+        par = c.paragraphs[0]
+        par.paragraph_format.space_after = Pt(0)
+        par.paragraph_format.line_spacing = 1.0
+        for i, line in enumerate(lines):
+            r = par.add_run()
+            if i:
+                r.add_break()          # soft line break inside one paragraph
+            r.add_text(line)
+            r.font.name = "Consolas"
+            r.font.size = Pt(7.5)
+            rpr = r._element.get_or_add_rPr()
+            rf = OxmlElement("w:rFonts")
+            for a in ("w:ascii", "w:hAnsi", "w:cs"):
+                rf.set(qn(a), "Consolas")
+            rpr.append(rf)
+        _shade(c, "F7F9FC")
+        if caption:
+            cp = self.d.add_paragraph()
+            cr = cp.add_run(caption)
+            cr.font.size = Pt(8)
+            cr.italic = True
+            cr.font.color.rgb = RGBColor(0x55, 0x55, 0x55)
+            cr.font.name = "Arial"
+        self.d.add_paragraph()
+
     def callout(self, text, label="NOTE"):
         t = self.d.add_table(rows=1, cols=1)
         t.style = "Table Grid"

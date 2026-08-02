@@ -35,8 +35,8 @@ D.doc_control([
     ("Author", "Imran Siddiqui, Chief Executive Officer"),
     ("Classification", "CONFIDENTIAL — Controlled Unclassified Information (CUI)"),
     ("Distribution", "ASTP/ONC programme staff; AGT programme staff"),
-    ("Related Documents", "AGT-REQ-001, AGT-DA-001, AGT-SA-001, AGT-TE-005, "
-                          "AGT-TE-006"),
+    ("Related Documents", "AGT-REQ-001, AGT-EA-001, AGT-SD-001, AGT-DA-001, "
+                          "AGT-SA-001, AGT-TE-005, AGT-TE-006"),
 ])
 D.page_break()
 D.toc()
@@ -561,10 +561,12 @@ D.table(["#", "Reference", "Relevance"],
          ("10", "NIST SP 800-63B", "Authentication and session management"),
          ("11", "Section 508 / WCAG 2.2 AA", "Accessibility conformance"),
          ("12", "AGT-REQ-001", "Volume II — Requirements Specification"),
-         ("13", "AGT-DA-001", "Volume VI — Enterprise Data Architecture"),
-         ("14", "AGT-SA-001", "Automated Security Assessment"),
-         ("15", "AGT-TE-005", "TEFCA Operational Validation"),
-         ("16", "AGT-TE-006",
+         ("13", "AGT-EA-001", "Volume III — Enterprise Architecture"),
+         ("14", "AGT-SD-001", "Volume IV — System and Module Design"),
+         ("15", "AGT-DA-001", "Volume VI — Enterprise Data Architecture"),
+         ("16", "AGT-SA-001", "Automated Security Assessment"),
+         ("17", "AGT-TE-005", "TEFCA Operational Validation"),
+         ("18", "AGT-TE-006",
           "Performance Baseline, Access Control and API Contract")],
         widths=(0.4, 3.0, 3.1))
 D.page_break()
