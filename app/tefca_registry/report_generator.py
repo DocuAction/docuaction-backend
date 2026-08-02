@@ -40,7 +40,8 @@ BUCKET_LABELS = {
 # Sources with no connector today. Named explicitly so the limitations section
 # reports a known gap rather than leaving the reader to infer one.
 KNOWN_GAPS = {
-    "sam_gov": "Unavailable — API key not provisioned (SAM_GOV_API_KEY)",
+    "sam_gov": "SAM.gov: API key configured. Entity lookup endpoints returning "
+               "404 — API version under investigation.",
     "rce_directory": "Not checked — access pending Case #00055525",
     "state_registry": "Not checked — no connector implemented",
     "irs": "Not checked — no connector implemented; IRS data is keyed on EIN, "
