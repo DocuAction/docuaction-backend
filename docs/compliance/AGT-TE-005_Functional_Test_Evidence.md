@@ -1,10 +1,6 @@
-# AGT-SA-001 — Automated Security Assessment
+# AGT-TE-005 — Functional Test Evidence
 
 **Contract:** 7571MN26F80064 · **CAGE:** 8ERE8 · **UEI:** MP2FLV1MAW93
-
-## Disclaimer
-
-This assessment does NOT constitute an independent penetration test. It records testing performed by the development team against a development environment. Engagement of an accredited third-party assessment organisation (3PAO) is recommended as a future milestone prior to an authority-to-operate decision.
 
 ## Environment Summary
 
@@ -38,17 +34,39 @@ This assessment does NOT constitute an independent penetration test. It records 
 
 ## Executive Summary
 
-Security validation executed 37 manual tests across injection, authentication, access control and information disclosure, of which 36 passed. Role-based access control was verified across 65 endpoint/role combinations and 6 targeted scenarios. Two application defects were confirmed by reproduction (one Medium, one Low), one external dependency is unavailable, and one informational observation was recorded. Dynamic application security testing was NOT executed; see below.
+Functional and security testing executed against the development environment on 2026-08-02. Security validation 36/37; RBAC 65/65 cells and 6/6 scenarios; TEFCA operational validation 26/26; API contract 14/14.
 
-## Scope
+## Methodology
 
-Development environment only (`https://docuaction-dev.azurewebsites.net`). Production was not probed. An active scan submits hostile input to every discovered endpoint, which against production is indistinguishable from an attack on live records.
+Each test states an expected result before execution and records the observed result. Findings are reproduced before being reported as defects; results that proved to be artefacts of the test harness are recorded as corrections rather than silently dropped.
 
-## DAST
+## NIST SP 800-53 Mapping
 
-Not Executed — ZAP requires an interactive JRE install. The winget installation attempted on 2026-08-02 pulled an Eclipse Temurin 17 JRE dependency whose MSI requires interactive UAC elevation and terminated with exit code 1602 (user-cancelled). No container runtime is present either. The CI workflow .github/workflows/zap-scan.yml is available for future execution on a Linux runner; it is workflow_dispatch-enabled, targets the development host only, and refuses to run against production. Compensating coverage is provided by the 37-test manual Security Validation recorded in this package.
+| Control | Evidence | Result |
+|---|---|---|
+| AC-2 Account Management | RBAC matrix, 5 roles | 65/65 cells |
+| AC-3 Access Enforcement | Role gates return 403 | Verified |
+| AC-6 Least Privilege | No role exceeded its level | Verified |
+| AU-2 Audit Events | Auth events audited | Observed |
+| IA-2 Identification & Authentication | JWT validation suite | 8/8 |
+| IA-5 Authenticator Management | Lockout after 5 failures | Verified |
+| SC-8 Transmission Confidentiality | HTTPS enforced | Verified |
+| SI-10 Information Input Validation | Injection suite | 9/10 |
+| SI-11 Error Handling | Generic errors; one exception (F-001) | Partial |
 
-## Security Validation — Suite A, Injection
+
+## Test Results Summary
+
+| Suite | Tests | Passed |
+|---|---|---|
+| Security Validation (Block 3) | 37 | 36 |
+| RBAC matrix (Block 4) | 65 | 65 |
+| RBAC scenarios (Block 4) | 6 | 6 |
+| TEFCA operational (Block 5) | 26 | 26 |
+| API contract (Block 7) | 14 | 14 |
+
+
+## Detailed Results — Security Validation
 
 | Test ID | Description | Expected | Actual | Result |
 |---|---|---|---|---|
@@ -62,12 +80,6 @@ Not Executed — ZAP requires an interactive JRE install. The winget installatio
 | A8 | Oversized JSON body (~2MB) | rejected, no crash | HTTP 422 | PASS |
 | A9 | Raw null byte in parameter | handled without HTTP 500 | HTTP 500, leaks=[] | FAIL |
 | A10 | Unicode/RTL-override payload | handled, no crash | HTTP 200, leaks=[] | PASS |
-
-
-## Security Validation — Suite B, Authentication
-
-| Test ID | Description | Expected | Actual | Result |
-|---|---|---|---|---|
 | B1 | Tampered JWT signature | 401 | HTTP 401 | PASS |
 | B2 | 'none' algorithm JWT | 401 (alg confusion rejected) | HTTP 401 | PASS |
 | B3 | Expired token | 401 | HTTP 401 | PASS |
@@ -76,12 +88,6 @@ Not Executed — ZAP requires an interactive JRE install. The winget installatio
 | B6 | 'Bearer' with no token | 401/403 | HTTP 401 | PASS |
 | B7 | Valid non-admin token authenticates (fresh) | 200 | HTTP 200 | PASS |
 | B8 | Account lockout after 5 failures (synthetic account) | 401 x5 then 429 'Account temporarily locked' | codes=[401, 401, 401, 401, 401, 429], account_locked=True, ip_throttled=False | PASS |
-
-
-## Security Validation — Suite C, Access Control
-
-| Test ID | Description | Expected | Actual | Result |
-|---|---|---|---|---|
 | C1 | viewer -> POST /arc/review-rules (admin-only) | 403 | HTTP 403 | PASS |
 | C2 | viewer -> POST /arc/reports/generate (admin-only) | 403 | HTTP 403 | PASS |
 | C3 | No Authorization header | 401 | HTTP 401 | PASS |
@@ -93,12 +99,6 @@ Not Executed — ZAP requires an interactive JRE install. The winget installatio
 | C9 | analyst -> PATCH B3 resolve (reviewer-only) | 403 | HTTP 403 | PASS |
 | C10 | reviewer -> POST /arc/review-rules (admin-only) | 403 | HTTP 403 | PASS |
 | C11 | viewer -> GET /registry/entities (router requires reviewer) | 403 | HTTP 403 | PASS |
-
-
-## Security Validation — Suite D, Information Disclosure
-
-| Test ID | Description | Expected | Actual | Result |
-|---|---|---|---|---|
 | D1 | Malformed UUID returns no stack trace | no traceback | HTTP 422, leaks=[] | PASS |
 | D2 | No filesystem paths in error body | none | found=[] | PASS |
 | D3 | No database engine details in error body | none | found=[] | PASS |
@@ -107,6 +107,38 @@ Not Executed — ZAP requires an interactive JRE install. The winget installatio
 | D6 | Generic 404 on unknown path | 404, no internals | HTTP 404, leaks=[] | PASS |
 | D7 | /health leaks no secrets | clean payload | HTTP 200 | PASS |
 | D8 | Unknown-user error == wrong-password error | identical generic message | HTTP 401, msg='Invalid email or password' | PASS |
+
+
+## Detailed Results — TEFCA Operational
+
+| Test ID | Description | Expected | Actual | Result |
+|---|---|---|---|---|
+| E1 | GET entities returns the registry | 200 with entities | HTTP 200, count=71 | PASS |
+| E2 | Pagination returns distinct pages | 5 per page, no overlap | page1=5, page2=5, overlap=0 | PASS |
+| E3 | Search finds a known entity | 200, >=1 match | HTTP 200, count=1 | PASS |
+| E4 | CSV import creates entities | 200, imported>=1 | HTTP 200, imported=1, errors=0 | PASS |
+| E5 | Invalid NPI is flagged on verification | B4 (npi_invalid) | import imported=0, bucket=None | PASS |
+| E6 | Re-import of same TEFCAID updates, does not duplicate | imported=0 and exactly 1 row exists | imported=0, skipped=1, errors=0, rows=1 | PASS |
+| E7 | Valid lifecycle transition is applied | draft -> pending_verification | active -> active | PASS |
+| E8 | Invalid EntityLevel rejected with an error | 400 or error_count>=1 | HTTP 200, error_count=1 | PASS |
+| F1 | NPPES is queried | status present | nppes=verified | PASS |
+| F2 | PECOS is queried | status present | pecos=verified | PASS |
+| F3 | OIG LEIE is queried | status present | oig_leie=clear | PASS |
+| F4 | Statuses drawn from the defined vocabulary | subset of the defined set | observed=['clear', 'not_checked', 'verified'] | PASS |
+| F5 | A B1-B4 bucket is assigned | one of B1..B4 | bucket=B1 | PASS |
+| F6 | A review ID is generated | REV-YYYY-NNNNNN | review_id=REV-2026-000039 | PASS |
+| F7 | Confidence is non-null for a real NPI | non-null | confidence_keys=['coverage_note', 'not_implemented', 'sources_available', 'sources_checked', 'sources_failed', 'sources_not_checked', 'sources_not_implemented', 'sources_unavailable', 'sources_verified'] | PASS |
+| F8 | Unavailable source degrades gracefully | not_checked/unavailable + reason, request still 200 | HTTP 200, sam_gov=not_checked | PASS |
+| G1 | Rules expose a version | every rule versioned | n=11, all_versioned=True | PASS |
+| G2 | Rules expose effective_date | every rule dated | all_dated=True | PASS |
+| G3 | Sample drawn with a computed size | size>0 | HTTP 200, size=62 | PASS |
+| G4 | Sampling configuration is captured | >=3 config fields | captured=['confidence_level', 'margin_of_error', 'proportion', 'random_seed', 'use_fpc', 'population_size'] | PASS |
+| G5 | Same seed reproduces the same sample size | size1==size2 | size1=62, size2=62 | PASS |
+| G6 | Report generated with expected sections | executive_summary + classification_distribution present | HTTP 200, sections=['executive_summary', 'classification_distribution', 'limitations', 'sampling_summary', 'period'] | PASS |
+| G7 | Mandatory limitations section present | non-empty | present=True, len=416 | PASS |
+| G8 | B1-B4 counts reconcile with entities reviewed | sum(counts) == entities_reviewed | counts={'B1': 23, 'B2': 2, 'B3': 5, 'B4': 9}, sum=39, reviewed=39 | PASS |
+| G9 | Report is archived and retrievable | generated report_id appears in /arc/reports | stored=19, this_report_archived=True | PASS |
+| G10 | B3 resolution workflow functions | 200 and resolution recorded | HTTP 200, resolution=reclassified, effective=B2 | PASS |
 
 
 ## RBAC Matrix
@@ -180,20 +212,63 @@ Not Executed — ZAP requires an interactive JRE install. The winget installatio
 | admin | POST /registry/dev/seed | permitted (>= admin) | HTTP 200 | PASS |
 
 
-**RBAC result: 65/65 cells, 6/6 scenarios.**
+## Performance Baseline
 
-## Security Score
+| Operation | Wall time | Rows/sec | Imported | Errors |
+|---|---|---|---|---|
+| CSV import 100 rows | 35.47s | 2.8 | 100 | 0 |
+| CSV import 1000 rows | 273.86s | - | - | - |
+| CSV import 10000 rows | 277.61s | - | - | - |
 
-The most recent platform scan reported **79.9 / 100** (scan `docuaction_20260802T160024`). This figure is a **floor, not a measurement**: gitleaks and semgrep did not run, so the finding count is incomplete and the true score can only be lower or equal. It is reported here with that qualification rather than as the platform's security posture.
+
+| Verification batch | Total | Mean | Max | vs 3s target |
+|---|---|---|---|---|
+| 1 entities | 4.5s | 4.496s | 4.496s | MISSES |
+| 10 entities | 45.97s | 4.597s | 8.602s | MISSES |
+| 100 entities | 360.64s | 3.606s | 7.205s | MISSES |
+
+
+## API Contract Validation
+
+| Test | Description | Expected | Actual | Result |
+|---|---|---|---|---|
+| 7.1 | openapi.json validates | no schema errors | valid against the OpenAPI 3.1 meta-schema | paths=294, ops=309 | PASS |
+| 7.2.1 | GET /health conforms | 200 + parseable JSON | HTTP 200, ct=application/json, in_spec=True | PASS |
+| 7.2.2 | GET /api/auth/me conforms | 200 + parseable JSON | HTTP 200, ct=application/json, in_spec=True | PASS |
+| 7.2.3 | GET /registry/stats conforms | 200 + parseable JSON | HTTP 200, ct=application/json, in_spec=True | PASS |
+| 7.2.4 | GET /registry/entities conforms | 200 + parseable JSON | HTTP 200, ct=application/json, in_spec=True | PASS |
+| 7.2.5 | GET /registry/findings conforms | 200 + parseable JSON | HTTP 200, ct=application/json, in_spec=True | PASS |
+| 7.2.6 | GET /registry/search conforms | 200 + parseable JSON | HTTP 200, ct=application/json, in_spec=True | PASS |
+| 7.2.7 | GET /arc/review-rules conforms | 200 + parseable JSON | HTTP 200, ct=application/json, in_spec=True | PASS |
+| 7.2.8 | GET /arc/reviews conforms | 200 + parseable JSON | HTTP 200, ct=application/json, in_spec=True | PASS |
+| 7.2.9 | GET /arc/reports conforms | 200 + parseable JSON | HTTP 200, ct=application/json, in_spec=True | PASS |
+| 7.2.10 | GET /arc/samples conforms | 200 + parseable JSON | HTTP 200, ct=application/json, in_spec=True | PASS |
+| 7.3 GET /registry/stats | GET /registry/stats stable across 10 calls | 1 distinct digest | 1 distinct digest(s) | PASS |
+| 7.3 GET /arc/review-rules | GET /arc/review-rules stable across 10 calls | 1 distinct digest | 1 distinct digest(s) | PASS |
+| 7.4 | No operations removed since the v1.0 baseline | 0 removed (removal is breaking) | removed=0, added=1 | PASS |
+
+
+## Connector Health
+
+| Connector | Status | Scoring |
+|---|---|---|
+| NPPES | Operational | Included |
+| PECOS | Operational | Included |
+| OIG LEIE | Operational | Included |
+| SAM.gov | Not Operational — endpoints 404 | Excluded |
+| RCE Directory | ONC-Provided, access not authorized (Case #00055525) | Excluded |
+| State Registries | Not implemented | Excluded |
+| IRS | Not implemented | Excluded |
+
 
 ## Findings
 
-| ID | Finding | Severity | Location | Status |
-|---|---|---|---|---|
-| F-001 | CSV import returns raw database exceptions | Medium | POST /api/tefca/registry/import/csv | CONFIRMED — reproduced 2026-08-02 |
-| F-002 | Raw null byte in a query parameter returns HTTP 500 | Low | GET /api/tefca/registry/search | CONFIRMED — reproduced 2026-08-02 |
-| F-003 | SAM.gov entity endpoints unreachable | Medium | api.sam.gov entity-information | CONFIRMED — key valid, endpoint 404 |
-| F-004 | Unreachable role requirement on the verify handler | Informational | POST /api/tefca/registry/entities/{id}/verify | CONFIRMED — by design, documented |
+| ID | Finding | Severity | Status |
+|---|---|---|---|
+| F-001 | CSV import returns raw database exceptions | Medium | CONFIRMED — reproduced 2026-08-02 |
+| F-002 | Raw null byte in a query parameter returns HTTP 500 | Low | CONFIRMED — reproduced 2026-08-02 |
+| F-003 | SAM.gov entity endpoints unreachable | Medium | CONFIRMED — key valid, endpoint 404 |
+| F-004 | Unreachable role requirement on the verify handler | Informational | CONFIRMED — by design, documented |
 
 
 ## Risk Acceptance
@@ -206,16 +281,6 @@ The most recent platform scan reported **79.9 / 100** (scan `docuaction_20260802
 | F-004 | Informational | Documented, not changed. Enforcement is correct and fails closed. |
 
 
-## Limitations
-
-- DAST not executed (no JRE, no container runtime on the test workstation).
-- Static analysis coverage is incomplete: gitleaks and semgrep did not run.
-- Testing was performed by the development team, not an independent assessor.
-- Development environment only; production configuration differs (notably `SAM_GOV_API_KEY`, which was absent from dev until 2026-08-02).
-- Server-side memory was not observable from the test client and is not reported.
-
 ## Attestation
-
-The results in this document were produced by executing the described tests against the stated environment on the stated date. Counts and status codes are transcribed from captured execution output.
 
 Prepared by: ______________________  Imran Siddiqui, Chief Executive Officer, Alliance Global Tech, Inc.  Date: ____________

@@ -1,4 +1,4 @@
-# API Contract Validation
+# API Contract Validation — Block 7
 
 **Contract:** 7571MN26F80064
 
@@ -10,147 +10,81 @@
 | OS | Windows-11-10.0.26200-SP0 |
 | Python | 3.13.11 |
 | Database | PostgreSQL (Azure) |
-| Deployment | Azure App Service (Linux) |
-| Build | Git SHA `706a2f641f3a48f3dc117f57d579ddc82dbd5686` |
+| Deployment | Azure App Service |
+| Build | Git SHA `ebfcd38e067fd2b879e095eee547e40931a8e027` |
 | Backend URL | https://docuaction-dev.azurewebsites.net |
-| Test Date (UTC) | 2026-08-01T22:33:41+00:00 |
-| Contract | 7571MN26F80064 |
+| Test Date (UTC) | 2026-08-02T22:48:08.555708+00:00 |
 
 ## Tool Versions
 
 | Tool | Version |
 |------|---------|
 | Python | 3.13.11 |
-| pytest | pytest 9.1.1 |
-| Bandit | __main__.py 1.9.4 |
-| openapi-spec-validator | 0.9.0 |
-| curl | curl 8.21.0 (Windows) libcurl/8.21.0 Schannel zlib/1.3.2 WinIDN WinLDAP |
-| OWASP ZAP | Not Available — see ZAP_FINDING_VALIDATION.md |
+| httpx | 0.28.1 |
 
-## Specification
+## Result: 14/14 PASS
 
 | Field | Value |
-|-------|-------|
+|---|---|
 | OpenAPI version | 3.1.0 |
 | Documented paths | 294 |
-| Documented operations | 308 |
-| TEFCA paths | 91 |
-| Spec source | `GET https://docuaction-dev.azurewebsites.net/openapi.json` |
+| Documented operations | 309 |
 
-## Schema validation
+## 7.1 — Specification validation
 
-| Test ID | Description | Expected | Actual | Result |
-|---------|-------------|----------|--------|--------|
-| API-01 | `openapi.json` retrievable from dev | HTTP 200, JSON body | HTTP 200, 256,354 bytes | PASS |
-| API-02 | Document validates against the OpenAPI 3.1.0 schema | No validation errors | `openapi-spec-validator` reported no errors | PASS |
-| API-03 | Every documented path carries at least one operation | 0 empty paths | 0 empty paths | PASS |
+Validated with `openapi-spec-validator` against the OpenAPI 3.1 meta-schema.
 
-## Live behaviour vs contract
+| Test | Expected | Actual | Result |
+|---|---|---|---|
+| 7.1 | no schema errors | valid against the OpenAPI 3.1 meta-schema | paths=294, ops=309 | **PASS** |
 
-The 25 TEFCA operational tests in `AGT-TE-005` exercise the documented
-endpoints against the running dev service and compare observed status codes and
-payload shape to the contract. Result: **24 PASS / 0 FAIL / 1 Not
-Executed.**
+## 7.2 — Schema conformance (10 endpoints)
 
-## TEFCA paths in the specification
+| Test | Endpoint | Expected | Actual | Result |
+|---|---|---|---|---|
+| 7.2.1 | GET /health conforms | 200 + parseable JSON | HTTP 200, ct=application/json, in_spec=True | **PASS** |
+| 7.2.2 | GET /api/auth/me conforms | 200 + parseable JSON | HTTP 200, ct=application/json, in_spec=True | **PASS** |
+| 7.2.3 | GET /registry/stats conforms | 200 + parseable JSON | HTTP 200, ct=application/json, in_spec=True | **PASS** |
+| 7.2.4 | GET /registry/entities conforms | 200 + parseable JSON | HTTP 200, ct=application/json, in_spec=True | **PASS** |
+| 7.2.5 | GET /registry/findings conforms | 200 + parseable JSON | HTTP 200, ct=application/json, in_spec=True | **PASS** |
+| 7.2.6 | GET /registry/search conforms | 200 + parseable JSON | HTTP 200, ct=application/json, in_spec=True | **PASS** |
+| 7.2.7 | GET /arc/review-rules conforms | 200 + parseable JSON | HTTP 200, ct=application/json, in_spec=True | **PASS** |
+| 7.2.8 | GET /arc/reviews conforms | 200 + parseable JSON | HTTP 200, ct=application/json, in_spec=True | **PASS** |
+| 7.2.9 | GET /arc/reports conforms | 200 + parseable JSON | HTTP 200, ct=application/json, in_spec=True | **PASS** |
+| 7.2.10 | GET /arc/samples conforms | 200 + parseable JSON | HTTP 200, ct=application/json, in_spec=True | **PASS** |
 
-- `/api/tefca/admin/seed-mock-data`
-- `/api/tefca/arc/priority-review`
-- `/api/tefca/arc/reports`
-- `/api/tefca/arc/reports/generate`
-- `/api/tefca/arc/reports/{report_id}`
-- `/api/tefca/arc/reports/{report_id}/excel`
-- `/api/tefca/arc/reports/{report_id}/html`
-- `/api/tefca/arc/review-rules`
-- `/api/tefca/arc/review-rules/history`
-- `/api/tefca/arc/review-rules/{rule_id}`
-- `/api/tefca/arc/reviews`
-- `/api/tefca/arc/reviews/{review_id}`
-- `/api/tefca/arc/reviews/{review_id}/resolve`
-- `/api/tefca/arc/samples`
-- `/api/tefca/arc/samples/{sample_id}`
-- `/api/tefca/arc/samples/{sample_id}/stats`
-- `/api/tefca/dashboard/summary`
-- `/api/tefca/dashboard/trends`
-- `/api/tefca/demo/run-cycle`
-- `/api/tefca/discrepancy-taxonomy`
-- `/api/tefca/entities/upload`
-- `/api/tefca/findings`
-- `/api/tefca/findings/{finding_id}`
-- `/api/tefca/import/history`
-- `/api/tefca/methodology`
-- `/api/tefca/priority`
-- `/api/tefca/priority/create`
-- `/api/tefca/priority/quarterly-report`
-- `/api/tefca/priority/{case_id}`
-- `/api/tefca/priority/{case_id}/execute`
-- `/api/tefca/priority/{case_id}/report`
-- `/api/tefca/qa/alerts`
-- `/api/tefca/qa/alerts/test`
-- `/api/tefca/qa/audit`
-- `/api/tefca/qa/audit/export`
-- `/api/tefca/qa/connector-health`
-- `/api/tefca/qa/evidence-summary`
-- `/api/tefca/qa/golden-records`
-- `/api/tefca/qa/health`
-- `/api/tefca/qa/inter-rater`
-- `/api/tefca/qa/internal-consistency`
-- `/api/tefca/qa/regression`
-- `/api/tefca/qa/report`
-- `/api/tefca/qa/report-gate`
-- `/api/tefca/qa/sampling-validation`
-- `/api/tefca/qa/score`
-- `/api/tefca/qa/sla`
-- `/api/tefca/qa/statistical`
-- `/api/tefca/qa/sweep`
-- `/api/tefca/qa/validate-evidence/{review_id}`
-- `/api/tefca/qa/validate-review/{review_id}`
-- `/api/tefca/registry/dev/seed`
-- `/api/tefca/registry/entities`
-- `/api/tefca/registry/entities/{entity_id}`
-- `/api/tefca/registry/entities/{entity_id}/children`
-- `/api/tefca/registry/entities/{entity_id}/findings`
-- `/api/tefca/registry/entities/{entity_id}/hierarchy`
-- `/api/tefca/registry/entities/{entity_id}/status`
-- `/api/tefca/registry/entities/{entity_id}/verify`
-- `/api/tefca/registry/findings`
-- `/api/tefca/registry/hierarchy`
-- `/api/tefca/registry/import/csv`
-- `/api/tefca/registry/import/fhir-bundle`
-- `/api/tefca/registry/import/history`
-- `/api/tefca/registry/import/{batch_id}`
-- `/api/tefca/registry/participants`
-- `/api/tefca/registry/qhins`
-- `/api/tefca/registry/search`
-- `/api/tefca/registry/stats`
-- `/api/tefca/registry/verification-jobs`
-- `/api/tefca/registry/verification-jobs/{job_id}`
-- `/api/tefca/registry/verify`
-- `/api/tefca/reports`
-- `/api/tefca/reports/biweekly`
-- `/api/tefca/reports/export`
-- `/api/tefca/reports/final`
-- `/api/tefca/reports/quarterly`
-- `/api/tefca/reports/weekly`
-- `/api/tefca/reports/{report_id}`
-- `/api/tefca/reports/{report_id}/csv`
-- `/api/tefca/reports/{report_id}/docx`
-- `/api/tefca/reports/{report_id}/download`
-- `/api/tefca/reports/{report_id}/pdf`
-- `/api/tefca/reviews`
-- `/api/tefca/reviews/new-submissions`
-- `/api/tefca/reviews/run-sample`
-- `/api/tefca/reviews/{review_id}`
-- `/api/tefca/reviews/{review_id}/execute`
-- `/api/tefca/sampling-runs`
-- `/api/tefca/search`
-- `/api/tefca/status`
+## 7.3 — Response consistency (10 identical calls)
 
-## Limitations
+| Endpoint | Calls | Distinct digests | Result |
+|---|---|---|---|
+| GET /registry/stats | 10 | 1 | **PASS** |
+| GET /arc/review-rules | 10 | 1 | **PASS** |
 
-- Validation confirms the document is a **well-formed and schema-valid** OpenAPI
-  3.1.0 document, and that the TEFCA endpoints behave as tested. It does **not**
-  prove every one of the 308 documented operations matches its declared
-  request/response schema at runtime — only the endpoints covered by the
-  operational and security suites were exercised.
-- Response-schema conformance checking for the full surface: **Not Executed.**
+Responses were hashed after serialisation with sorted keys, so an identical digest across ten calls means byte-identical content, not merely an equal status code.
+
+## 7.4 — Backward compatibility against the frozen v1.0 baseline
+
+Baseline: `docs/api/openapi_v1.0.json` (frozen 2026-08-02, SHA `706a2f6`).
+
+| Measure | Count |
+|---|---|
+| Operations in baseline | 308 |
+| Operations currently | 309 |
+| **Removed (breaking)** | **0** |
+| Added (permitted in v1.0) | 1 |
+
+Added since baseline:
+
+- `DELETE /api/tefca/registry/entities/{entity_id}`
+
+Under the documented policy, endpoint removal or a response-format change requires
+a version increment; additive changes are permitted within v1.0. No operation was
+removed, so the current build remains backward compatible with the v1.0 contract.
+
+## Limitation
+
+7.2 verifies that each endpoint returns HTTP 200 with a parseable JSON body of the
+declared content type, and that the operation is declared in the specification. It
+does **not** validate each response body against its declared response schema
+field by field. That is a deeper check than was performed, and is stated here
+rather than implied by the word "conformance".

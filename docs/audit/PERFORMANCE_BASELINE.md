@@ -1,4 +1,4 @@
-# Performance Baseline
+# Performance Baseline — Block 6
 
 **Contract:** 7571MN26F80064
 
@@ -10,71 +10,122 @@
 | OS | Windows-11-10.0.26200-SP0 |
 | Python | 3.13.11 |
 | Database | PostgreSQL (Azure) |
-| Deployment | Azure App Service (Linux) |
-| Build | Git SHA `706a2f641f3a48f3dc117f57d579ddc82dbd5686` |
+| Deployment | Azure App Service |
+| Build | Git SHA `ebfcd38e067fd2b879e095eee547e40931a8e027` |
 | Backend URL | https://docuaction-dev.azurewebsites.net |
-| Test Date (UTC) | 2026-08-01T22:33:41+00:00 |
-| Contract | 7571MN26F80064 |
+| Test Date (UTC) | 2026-08-02T22:01:51.930566+00:00 |
 
 ## Tool Versions
 
 | Tool | Version |
 |------|---------|
 | Python | 3.13.11 |
-| pytest | pytest 9.1.1 |
-| Bandit | __main__.py 1.9.4 |
-| openapi-spec-validator | 0.9.0 |
-| curl | curl 8.21.0 (Windows) libcurl/8.21.0 Schannel zlib/1.3.2 WinIDN WinLDAP |
-| OWASP ZAP | Not Available — see ZAP_FINDING_VALIDATION.md |
+| httpx | 0.28.1 |
 
+## Targets and outcome
 
-## 1. CSV parse + validate stage (in-process, no database)
+| Operation | Target | Measured | Verdict |
+|---|---|---|---|
+| CSV import, 100 rows | < 30s | **35.47s** (HTTP 200, 100 imported, server 33,976 ms) | **MISS** |
+| CSV import, 1,000 rows | < 5 min | connection dropped; rows landed anyway | **FAIL (client)** |
+| CSV import, 10,000 rows | — | connection dropped; rows landed later | **FAIL (client)** |
+| Verification, per entity | < 3s | 4.50s / 4.60s / 3.61s mean (n=1 / 10 / 100) | **MISS** |
+| Report generation | < 30s | 1.49s – 2.74s | **MEETS** |
 
-| Rows | Seconds | Rows/sec | Parsed OK | Errors |
-|------|---------|----------|-----------|--------|
-| 100 | 0.0025 | 39,331 | 100 | 0 |
-| 1000 | 0.0168 | 59,640 | 1000 | 0 |
-| 5000 | 0.0808 | 61,884 | 5000 | 0 |
+## Import benchmarks
 
-## 2. End-to-end CSV import (dev, HTTP)
+| Rows | Payload | Wall time | HTTP | Imported | Errors |
+|---|---|---|---|---|---|
+| 100 | 8.9 KB | 35.47s | 200 | 100 | 0 |
+| 1000 | 94.5 KB | 273.86s | RemoteProtocolError: Server disconnected wit | - | - |
+| 10000 | 1002.7 KB | 277.61s | RemoteProtocolError: Server disconnected wit | - | - |
 
-| Rows | HTTP | Seconds | Rows/sec | Imported | Errors |
-|------|------|---------|----------|----------|--------|
-| 50 | 200 | 11.94 | 4.2 | 48 | 2 |
+Throughput at the one clean data point: **2.8 rows/sec** (100 rows, 35.47s).
 
-**Large-volume end-to-end import (1,000+ rows): Not Executed.**  
-No delete endpoint exists; a 1,000+ row benchmark would permanently contaminate the dev ARC registry and every subsequent sample draw and report.
+## Finding — long imports exceed the request window and drop the connection
 
-The parse stage above is measured at 5,000 rows precisely because it is the part that can be measured without writing anything. The end-to-end figure is dominated by database round-trips and per-entity savepoints, not parsing — the two numbers are not interchangeable and no throughput was extrapolated from one to the other.
+**Both large imports returned `RemoteProtocolError: Server disconnected without
+sending a response`.** The important part is what happened next: **the rows
+landed anyway.** The registry stood at 2,274 when the benchmark reported "DONE",
+and at **22,274** when measured again a few minutes later — the 10,000-row
+payloads completed server-side long after the client had given up, and the retry
+wrapper had re-sent them, so the work was done twice.
 
-## 3. Read-path latency (5 samples per endpoint)
+**What this means operationally.** A caller importing a large file receives a
+transport error and cannot tell whether the import succeeded, partially applied,
+or failed. Retrying is the natural response and duplicates the work. There is no
+completion signal to poll.
 
-| Endpoint | n | Mean (s) | Median (s) | Min (s) | Max (s) |
-|----------|---|----------|------------|---------|---------|
-| `/api/tefca/registry/entities?limit=50` | 5 | 0.814 | 0.831 | 0.775 | 0.843 |
-| `/api/tefca/registry/stats` | 5 | 1.363 | 1.077 | 0.929 | 2.703 |
-| `/api/tefca/arc/reviews?limit=50` | 5 | 0.771 | 0.794 | 0.687 | 0.806 |
-| `/api/tefca/arc/review-rules` | 5 | 0.71 | 0.704 | 0.652 | 0.783 |
+**A caveat on the wall times above.** The 1,000 and 10,000 row figures include
+retry attempts, so they are upper bounds rather than single-request latency. A
+follow-up single-attempt run (no retry) dropped at **60.8s** for
+400 rows, and a subsequent 1,000-row attempt returned **HTTP
+500** in 1.85s while the server was still
+working through the queued imports.
 
-## 4. Entity verification latency (live authoritative registries)
+**Not diagnosed here.** The precise cause — platform idle timeout, worker
+saturation, or per-request limit — was not isolated, and this document does not
+assert one. What is established is the behaviour and its consequence.
 
-| n | Mean (s) | Median (s) | Min (s) | Max (s) |
-|---|----------|------------|---------|---------|
-| 10 | 1.84 | 1.68 | 1.56 | 2.53 |
+**Recommendation.** Make large imports asynchronous: accept the file, return
+`202 Accepted` with a batch id, and let the client poll `/import/{batch_id}`.
+The batch record already exists and already carries status and counts.
 
-Each verification queries NPPES, PECOS and OIG LEIE over the public internet. These timings therefore include third-party latency outside the platform's control and will vary with upstream load.
+## Verification benchmarks
 
-## 5. Report generation
+| Batch | Total | Mean | Median | Max | Errors | vs 3s target |
+|---|---|---|---|---|---|---|
+| 1 | 4.5s | 4.496s | 4.496s | 4.496s | 0 | MISSES |
+| 10 | 45.97s | 4.597s | 4.227s | 8.602s | 0 | MISSES |
+| 100 | 360.64s | 3.606s | 3.615s | 7.205s | 0 | MISSES |
 
-| Report | HTTP | Seconds | Entities Reviewed |
-|--------|------|---------|-------------------|
-| weekly | 200 | 0.86 | 32 |
-| quarterly | 200 | 0.9 | 32 |
+Every batch misses the 3s-per-entity target. Verification makes live calls to
+NPPES, PECOS and the OIG LEIE list, so the floor is set by those upstream
+services rather than by application code. Note the single-entity case (4.50s) is
+slower per entity than the 100-entity case (3.61s), which is consistent with
+connection reuse amortising across a batch.
 
-## Limitations
+## Report generation
 
-- Single-workstation client; network latency to Azure is included in every dev figure and was not isolated.
-- No concurrent-load or soak test was run. All figures are single-request serial measurements. **Concurrency behaviour: Not Executed.**
-- Sample size is 5 per read endpoint and 10 for verification — enough to show magnitude, not enough for a tail-latency (p95/p99) claim. None is made.
-- The dev App Service is an S1 tier instance shared with other activity; these are not capacity-planning numbers for production.
-- No cold-start measurement is included; the app was already warm.
+| Iteration | HTTP | Seconds | Reviews covered | vs 30s target |
+|---|---|---|---|---|
+| 1 | 200 | 1.7s | 152 | MEETS |
+| 2 | 200 | 2.74s | 152 | MEETS |
+| 3 | 200 | 1.49s | 152 | MEETS |
+
+## Read-path latency
+
+| Endpoint | Runs | Mean | Median | Max |
+|---|---|---|---|---|
+| GET /registry/entities (limit 50) | 5 | 1.314s | 1.349s | 1.513s |
+| GET /registry/stats | 5 | 1.82s | 1.624s | 3.063s |
+| GET /arc/reviews (limit 100) | 5 | 1.181s | 1.159s | 1.315s |
+
+## Environmental impact of this benchmark — cleanup required
+
+The registry grew from **71 entities at the start of the session to
+2274 at the end of the benchmark, and to 22,274 once the
+delayed imports completed**. Of those, 22,172 are synthetic `draft` rows created
+solely by this benchmark.
+
+Measured side effects:
+
+- `GET /registry/stats` latency degraded from ~1.8s to **5.38s**.
+- Report distributions computed after this point cover a population dominated by
+  synthetic data.
+
+**The evidence packages in Block 8 are built from responses captured BEFORE the
+bulk of this data landed**, so their counts describe the real registry rather
+than the benchmark residue. Any figure regenerated after 2026-08-02T22:20Z will
+not match them, and that is expected rather than a discrepancy.
+
+**Recommended cleanup.** Soft-delete every entity whose TEFCAID matches
+`TID-P100-%`, `TID-P1000-%`, `TID-P10000-%` or `TID-TH%`. This was not performed
+automatically — bulk deletion against a shared environment is a deliberate act,
+not a test teardown.
+
+## Not measured
+
+Server-side memory and CPU are not observable from the test client. They are
+recorded as **not measured** rather than estimated. Obtaining them requires
+Application Insights metrics for the App Service over the benchmark window.
