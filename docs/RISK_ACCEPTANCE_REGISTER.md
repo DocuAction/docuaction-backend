@@ -168,6 +168,63 @@ actual RTO before ATO.
 
 ---
 
+## RA-007 — Azure PostgreSQL public network access (prod)
+
+| Field | Value |
+|-------|-------|
+| Severity | High |
+| Component | `docuaction-db` (rg-docuaction-prod) |
+| Scanner rule | `AZ-DB-006-docuaction-db` |
+| Status | **Acknowledged — requires Azure infrastructure change** |
+| Owner | Imran (Azure portal) |
+| Review date | 2026-10-31 |
+
+**Action.** Disable public access and enable private endpoint.
+
+**Notes.** Application code is not affected. Database access is restricted by
+firewall rules and credentials. Full remediation requires Azure Private Link
+configuration.
+
+---
+
+## RA-008 — Azure PostgreSQL public network access (geo)
+
+| Field | Value |
+|-------|-------|
+| Severity | High |
+| Component | `docuaction-db-geo` (rg-docuaction-prod) |
+| Scanner rule | `AZ-DB-006-docuaction-db-geo` |
+| Status | **Acknowledged — requires Azure infrastructure change** |
+| Owner | Imran (Azure portal) |
+| Review date | 2026-10-31 |
+
+**Action.** Disable public access and enable private endpoint.
+
+**Notes.** Application code is not affected. Database access is restricted by
+firewall rules and credentials. Full remediation requires Azure Private Link
+configuration.
+
+---
+
+## RA-009 — Azure PostgreSQL public network access (dev)
+
+| Field | Value |
+|-------|-------|
+| Severity | High |
+| Component | `docuaction-db-dev` (rg-docuaction-dev) |
+| Scanner rule | `AZ-DB-006-docuaction-db-dev` |
+| Status | **Acknowledged — requires Azure infrastructure change** |
+| Owner | Imran (Azure portal) |
+| Review date | 2026-10-31 |
+
+**Action.** Disable public access and enable private endpoint.
+
+**Notes.** Application code is not affected. Database access is restricted by
+firewall rules and credentials. Full remediation requires Azure Private Link
+configuration.
+
+---
+
 ## Register summary
 
 | ID | Severity | Decision | Closes when |
@@ -178,7 +235,18 @@ actual RTO before ATO.
 | RA-004 | Medium | Accept | Upstream fix |
 | RA-005 | Medium | Accept (time-limited) | Azure DB cutover |
 | RA-006 | Medium | **Mitigate** | Restore rehearsed, RTO measured |
+| RA-007 | High | Acknowledged — infra change | Private endpoint on `docuaction-db` |
+| RA-008 | High | Acknowledged — infra change | Private endpoint on `docuaction-db-geo` |
+| RA-009 | High | Acknowledged — infra change | Private endpoint on `docuaction-db-dev` |
 
 **0 Critical. 0 unaccepted High findings from static analysis** (Bandit: 0 High).
 
-**Update 2026-08-02.** RA-001 and RA-002 are closed by remediation, not by expiry: `npm audit` on the frontend now reports 0 vulnerabilities. Three new High findings have since surfaced from Azure database configuration (public network access on `docuaction-db`, `docuaction-db-geo` and `docuaction-db-dev`). They are NOT accepted and are not covered by this register — they require their own assessment.
+**Update 2026-08-02.** RA-001 and RA-002 are closed by remediation, not by expiry: `npm audit` on the frontend now reports 0 vulnerabilities. Three new High findings surfaced from Azure database configuration (public network access on `docuaction-db`, `docuaction-db-geo` and `docuaction-db-dev`); they are now recorded as **RA-007, RA-008 and RA-009**.
+
+These three are **acknowledged, not accepted** — the distinction matters. They
+remain open High findings with a named owner and a defined remediation, and they
+are not resolvable in code: each requires an Azure Private Link configuration
+change made through the portal. They were assigned RA-007 onward rather than
+RA-003 onward because those identifiers were already in use and are cited by the
+enterprise documentation generators; reusing them would have silently altered
+published Volumes II and III.
