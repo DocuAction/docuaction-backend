@@ -60,6 +60,13 @@ class TefcaRegEntity(Base):
     # a different statement from 0.0 ("verified and every source disagreed").
     # Backfilling it would erase that distinction for every existing row.
     confidence_score = Column(Float)
+    # Soft delete. Rows are never physically removed: review_records,
+    # tefca_verifications and sample_entities all reference an entity, and a
+    # hard delete would orphan the evidence behind a classification that has
+    # already been reported. Distinct from is_active, which means "not currently
+    # operating" — a legitimate state for a real participant.
+    is_deleted = Column(Boolean, nullable=False, server_default=text("false"))
+    deleted_at = Column(DateTime)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(),
                         onupdate=datetime.utcnow)

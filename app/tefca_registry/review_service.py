@@ -20,7 +20,7 @@ from app.tefca_registry import audit as reg_audit
 from app.tefca_registry import models as reg
 from app.tefca_registry.bucket_classifier import (
     BucketClassifier, FAILED, NOT_CHECKED, NOT_FOUND, UNAVAILABLE, VERIFIED,
-    ensure_seed_rules)
+    ensure_seed_rules, ensure_rules_v2)
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +230,10 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
     from app.tefca_registry.review_routes import generate_review_id
 
     await ensure_seed_rules(db)
+    # v2 wires SAM.gov into classification. Every SAM condition fires only
+    # on a positive finding, so with no SAM key this is a no-op on bucketing
+    # (test_v2_is_identical_to_v1_when_sam_is_silent). Idempotent.
+    await ensure_rules_v2(db)
     actor_id, actor_email = reg_audit.actor_of(user)
 
     reg_audit.record(db, reg_audit.VERIFICATION_STARTED, entity.id,

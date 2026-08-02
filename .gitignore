@@ -22,3 +22,6 @@ pydeps_new/
 
 # Claude Code local settings — has contained plaintext DB connection strings
 .claude/
+
+# Holds rotated dev credentials — must never be committed
+docs/SESSION_STATE.md

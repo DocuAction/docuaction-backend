@@ -331,3 +331,54 @@ def test_sources_without_a_connector_are_disclosed_not_omitted():
     from app.tefca_registry.review_service import NO_CONNECTOR
     assert {"sam_gov", "state_registry", "irs"} <= set(NO_CONNECTOR)
     assert all(NO_CONNECTOR[k] for k in NO_CONNECTOR)
+
+
+# ── version 2: SAM.gov wired in ──────────────────────────────────────────────
+
+from app.tefca_registry.bucket_classifier import SEED_RULES, SEED_RULES_V2  # noqa: E402
+
+
+@pytest.mark.parametrize("sources", [
+    dict(nppes="verified", pecos="verified", oig_leie="clear", sam_gov="not_checked"),
+    dict(nppes="verified", pecos="verified", oig_leie="clear", sam_gov="unavailable"),
+    dict(nppes="not_found", pecos="verified", oig_leie="clear", sam_gov="not_checked"),
+    dict(nppes="verified", pecos="unavailable", oig_leie="clear", sam_gov="unavailable"),
+    dict(nppes="verified", pecos="verified", oig_leie="excluded", sam_gov="not_checked"),
+])
+def test_v2_is_identical_to_v1_when_sam_is_silent(sources):
+    """The whole point of the v2 design.
+
+    SAM has no API key in any current environment, so it reports not_checked.
+    If v2 changed any bucket under those conditions it would reclassify the
+    entire registry on deploy. Every added condition must fire only on a
+    positive SAM finding.
+    """
+    r = results(**sources)
+    assert clf().classify(r, rules=SEED_RULES).bucket == \
+           clf().classify(r, rules=SEED_RULES_V2).bucket
+
+
+def test_v2_sends_sam_excluded_to_b4():
+    """v1 got this wrong: RULE-005 matched only status 'debarred', but the
+    connector emits 'excluded', so a SAM-excluded entity with clean NPPES/PECOS
+    fell through to RULE-001 and was reported B1 'No Discrepancy'."""
+    r = results(nppes="verified", pecos="verified", oig_leie="clear",
+                sam_gov="excluded")
+    assert clf().classify(r, rules=SEED_RULES).bucket == "B1"        # the bug
+    out = clf().classify(r, rules=SEED_RULES_V2)
+    assert out.bucket == "B4"
+    assert out.rule_code == "RULE-005"
+
+
+def test_v2_still_catches_debarred():
+    r = results(nppes="verified", pecos="verified", oig_leie="clear",
+                sam_gov="debarred")
+    assert clf().classify(r, rules=SEED_RULES_V2).bucket == "B4"
+
+
+def test_v2_sam_excluded_blocks_b2_and_b3_too():
+    """A disqualifier that only guards B1 would let the same entity in via the
+    administrative-variance rule."""
+    r = results(nppes="verified", pecos="verified", oig_leie="clear",
+                sam_gov="excluded", fields={"name_mismatch": {"severity": "minor"}})
+    assert clf().classify(r, rules=SEED_RULES_V2).bucket == "B4"

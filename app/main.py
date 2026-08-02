@@ -139,6 +139,10 @@ async def startup():
         # every source disagreed"). create_all() cannot add a column to a table
         # that already exists, which is why this lives here.
         "ALTER TABLE tefca_reg_entities ADD COLUMN IF NOT EXISTS confidence_score DOUBLE PRECISION",
+        # Soft delete for test/import cleanup. Same reason as above: create_all()
+        # cannot add columns to an existing table.
+        "ALTER TABLE tefca_reg_entities ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT false",
+        "ALTER TABLE tefca_reg_entities ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP",
     ]
     for attempt in range(1, 8):
         try:

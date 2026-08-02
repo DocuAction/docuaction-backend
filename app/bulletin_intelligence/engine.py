@@ -47,6 +47,16 @@ except ImportError:
     EXTENDED_FCC_OFFICIALS = []
     EXTENDED_FCC_CORE_PHRASES = []
 
+# Separate guard on purpose. Folding this into the block above would mean an
+# unrelated failure there (say fcc_keywords_extended) leaves is_deactivated
+# undefined, and collection then dies with NameError deep inside the feed loop —
+# far from the import that actually broke.
+try:
+    from app.bulletin_intelligence.dead_feeds import is_deactivated
+except ImportError:                                   # pragma: no cover
+    def is_deactivated(_url: str) -> bool:
+        return False
+
 logger = logging.getLogger(__name__)
 
 ANTHROPIC_KEY   = os.getenv("ANTHROPIC_API_KEY", "")
@@ -1104,6 +1114,17 @@ async def ingest_rss(agency: AgencyConfig, lookback_hours: int = 24) -> list:
             all_feeds.append((url, outlet, topic, False, False))
     for url, outlet, paywalled in MAJOR_OUTLET_FEEDS:
         all_feeds.append((url, outlet, "other", True, paywalled))
+
+    # Drop feeds confirmed gone (HTTP 404/410 on two independent probes). Each
+    # one costs a request and a timeout slot every cycle and returns nothing.
+    # Filtered here rather than deleted from the source lists so the decision is
+    # visible, reviewable and reversible in one file — see dead_feeds.py for why
+    # 403s and timeouts are deliberately NOT in that set.
+    _before = len(all_feeds)
+    all_feeds = [f for f in all_feeds if not is_deactivated(f[0])]
+    if _before != len(all_feeds):
+        logger.info("Skipped %d deactivated feed(s); %d remain",
+                    _before - len(all_feeds), len(all_feeds))
 
     # Fetch all feeds CONCURRENTLY (bounded). Sequential fetching over 100+ feeds at
     # a 30s timeout meant one slow/dead feed stalled the whole cycle for minutes;

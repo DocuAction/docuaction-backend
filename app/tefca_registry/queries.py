@@ -104,8 +104,13 @@ def finding_dict(f: reg.TefcaEntityFinding) -> dict:
 
 async def list_entities(session: AsyncSession, *, entity_level=None, entity_type=None,
                         state=None, verification_status=None, operational_status=None,
-                        is_active=None, q=None, limit=50, offset=0) -> dict:
-    conds = []
+                        is_active=None, q=None, limit=50, offset=0,
+                        include_deleted=False) -> dict:
+    # Soft-deleted rows are excluded by default. They must not appear in the
+    # sample frame a weekly report draws from, or a report cites entities an
+    # operator has already removed.
+    conds = [] if include_deleted else [
+        reg.TefcaRegEntity.is_deleted.is_(False)]
     if entity_level:
         conds.append(reg.TefcaRegEntity.entity_level == entity_level)
     if entity_type:
@@ -347,10 +352,17 @@ async def stats(session: AsyncSession) -> dict:
             select(col, func.count()).group_by(col))).all()
         return {str(k): int(v) for k, v in rows}
 
+    live = reg.TefcaRegEntity.is_deleted.is_(False)
     entities_total = int(await session.scalar(
-        select(func.count()).select_from(reg.TefcaRegEntity)) or 0)
+        select(func.count()).select_from(reg.TefcaRegEntity).where(live)) or 0)
+    deleted_total = int(await session.scalar(
+        select(func.count()).select_from(reg.TefcaRegEntity)
+        .where(reg.TefcaRegEntity.is_deleted.is_(True))) or 0)
     return {
         "entities_total": entities_total,
+        # Surfaced rather than hidden: an operator comparing a row count against
+        # an import batch needs to see where the difference went.
+        "entities_deleted": deleted_total,
         "by_level": await group_count(reg.TefcaRegEntity.entity_level),
         "by_verification_status": await group_count(reg.TefcaRegEntity.verification_status),
         "by_operational_status": await group_count(reg.TefcaRegEntity.operational_status),

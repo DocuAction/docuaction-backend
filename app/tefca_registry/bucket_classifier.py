@@ -172,6 +172,54 @@ SEED_RULES: List[dict] = [
 ]
 
 
+def _v2_rules() -> List[dict]:
+    """Version 2 — SAM.gov wired into classification.
+
+    Derived from SEED_RULES rather than retyped, so the delta is the only thing
+    to read and the two cannot drift.
+
+    DESIGN NOTE, and it is the important one: SAM is added as a DISQUALIFIER,
+    never as a requirement. Requiring `sam_gov: verified` for B1 would drop every
+    entity out of B1 the moment SAM is unreachable — and SAM is currently
+    unreachable for want of an API key, so it would reclassify the entire
+    registry on deploy. "Entity is not excluded" is the claim the contract needs,
+    and a source that never answered has not contradicted it.
+
+    So:
+      RULE-001/002/003 (B1/B2)  gain `none_of sam_gov in {excluded, debarred}`
+      RULE-005        (B4)      gains `any_of  sam_gov == excluded`
+
+    Every added condition fires only on a positive SAM finding. With no key,
+    SAM reports `not_checked`, none of these match, and classification is
+    byte-for-byte identical to version 1. When a key is provisioned the rules
+    start biting with no further code change.
+    """
+    import copy
+
+    SAM_BAD = [{"source": "sam_gov", "status": "excluded"},
+               {"source": "sam_gov", "status": "debarred"}]
+    out = []
+    for spec in copy.deepcopy(SEED_RULES):
+        code = spec["rule_code"]
+        cond = spec["conditions"]
+        if code in ("RULE-001", "RULE-002", "RULE-003"):
+            cond.setdefault("none_of", []).extend(SAM_BAD)
+        elif code == "RULE-005":
+            # "debarred" is already present from v1; add the status our connector
+            # actually emits so the rule matches real payloads, not just the
+            # vocabulary v1 anticipated.
+            existing = {(c.get("source"), c.get("status"))
+                        for c in cond.get("any_of", [])}
+            for c in SAM_BAD:
+                if (c["source"], c["status"]) not in existing:
+                    cond.setdefault("any_of", []).append(c)
+        out.append(spec)
+    return out
+
+
+SEED_RULES_V2: List[dict] = _v2_rules()
+
+
 class BucketClassifier:
     """Evaluates verification results against the active rule set.
 
@@ -429,3 +477,41 @@ async def ensure_seed_rules(session) -> int:
     await session.commit()
     logger.info("Seeded %d review rules (version 1)", len(SEED_RULES))
     return len(SEED_RULES)
+
+
+async def ensure_rules_v2(session, effective: Optional[date] = None) -> int:
+    """Retire version 1 rules and activate version 2 (SAM.gov wired in).
+
+    Idempotent: returns 0 if any version-2 row already exists.
+
+    v1 rows are RETIRED, never deleted. A classification recorded last week
+    cites the rule version that produced it, and an auditor asking "what did
+    RULE-001 say when this entity was bucketed" needs that row to still exist.
+    Deleting it would leave every historical review pointing at nothing.
+    """
+    from sqlalchemy import func as sqlfunc, select
+    from app.tefca_registry import models as reg
+
+    eff = effective or date.today()
+    already = int((await session.execute(
+        select(sqlfunc.count()).select_from(reg.ReviewRule)
+        .where(reg.ReviewRule.version == 2))).scalar() or 0)
+    if already:
+        return 0
+
+    v1 = (await session.execute(
+        select(reg.ReviewRule).where(reg.ReviewRule.version == 1))).scalars().all()
+    for row in v1:
+        row.is_active = False
+        row.retired_date = eff
+
+    for spec in SEED_RULES_V2:
+        session.add(reg.ReviewRule(
+            rule_code=spec["rule_code"], name=spec["name"], bucket=spec["bucket"],
+            priority=spec["priority"], conditions=spec["conditions"],
+            description=spec["description"], version=2,
+            effective_date=eff, is_active=True))
+    await session.commit()
+    logger.info("Retired %d v1 rules; activated %d v2 rules",
+                len(v1), len(SEED_RULES_V2))
+    return len(SEED_RULES_V2)

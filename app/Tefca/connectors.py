@@ -450,8 +450,33 @@ class OIGLEIEConnector:
 # ─── SAM.gov Federal Registration & Exclusions (GSA) ─────────────────────────
 
 class SAMGovConnector:
+    """SAM.gov federal registration + exclusion (debarment) checks.
+
+    TWO endpoints are needed and they are NOT interchangeable:
+
+      Entity Management (v3)  -> is the entity registered, and is that
+                                 registration currently Active?
+      Exclusions       (v4)   -> is the entity debarred/excluded?
+
+    The v3 record carries an `exclusionStatusFlag`, but that flag is a summary
+    maintained on the registration. An entity with no SAM registration at all
+    can still appear on the exclusions list, and in that case v3 returns nothing
+    while v4 returns a hit. Trusting v3 alone would report "not found, therefore
+    fine" about a debarred party, so the exclusions endpoint is queried
+    independently rather than inferred.
+
+    SAM is keyed on UEI/CAGE, never NPI. Search strategy, in order:
+      1. UEI present  -> exact match, authoritative.
+      2. No UEI       -> legal-business-name search, which is fuzzy.
+      3. Name search returning MORE THAN ONE entity -> ambiguous; flagged for
+         manual review rather than resolved by guessing. Picking the first hit
+         would attach a federal registration (or a debarment) to an entity on
+         the strength of a name collision.
+    """
+
     BASE_URL = "https://api.sam.gov/entity-information/v3/entities"
-    API_VERSION = "v3"
+    EXCLUSIONS_URL = "https://api.sam.gov/entity-information/v4/exclusions"
+    API_VERSION = "v3+v4"
 
     def __init__(self):
         # Read the key at INSTANTIATION, not at class-definition/import time,
@@ -516,6 +541,154 @@ class SAMGovConnector:
         except Exception as e:
             logger.warning(f"SAM.gov unavailable for UEI {uei}: {e}")
             return SourceResult.unavailable("SAM_GOV", str(e), qp, self.API_VERSION)
+
+    async def lookup_by_name(self, legal_name: str) -> SourceResult:
+        """Fuzzy fallback when the registry holds no UEI.
+
+        Returns `ambiguous: True` when SAM matches more than one entity. That is
+        a real answer, not a failure: the caller must not treat it as verified.
+        """
+        qp = {"legalBusinessName": legal_name}
+        if not self.api_key:
+            return SourceResult.unavailable(
+                "SAM_GOV", "SAM_GOV_API_KEY not set (register a free key at sam.gov)",
+                qp, self.API_VERSION)
+        if not legal_name:
+            return SourceResult.unavailable(
+                "SAM_GOV", "no legal name on entity", qp, self.API_VERSION)
+        try:
+            resp = await _get_with_retry(
+                self.BASE_URL,
+                params={"api_key": self.api_key, "legalBusinessName": legal_name,
+                        "includeSections": "entityRegistration,coreData",
+                        "page": 0, "size": 10},
+                headers=HTTP_HEADERS,
+            )
+            if resp.status_code != 200:
+                return SourceResult.unavailable(
+                    "SAM_GOV", f"HTTP {resp.status_code}", qp, self.API_VERSION)
+            payload = resp.json()
+            entities = payload.get("entityData", []) or []
+            if not entities:
+                return SourceResult.ok(
+                    "SAM_GOV", {"found": False, "matched_by": "name",
+                                "ambiguous": False, "excluded": False},
+                    qp, self.API_VERSION, raw_for_hash=payload)
+            if len(entities) > 1:
+                return SourceResult.ok(
+                    "SAM_GOV",
+                    {"found": True, "matched_by": "name", "ambiguous": True,
+                     "match_count": len(entities),
+                     "candidates": [
+                         {"uei": (e.get("entityRegistration") or {}).get("ueiSAM"),
+                          "legal_name": (e.get("entityRegistration") or {})
+                          .get("legalBusinessName")} for e in entities[:10]],
+                     "registration_current": None, "excluded": False,
+                     "note": "Multiple SAM entities match this legal name; "
+                             "manual review required to pick the right one."},
+                    qp, self.API_VERSION, raw_for_hash=payload)
+            reg = entities[0].get("entityRegistration", {}) or {}
+            status = (reg.get("registrationStatus") or "").upper()
+            return SourceResult.ok(
+                "SAM_GOV",
+                {"found": True, "matched_by": "name", "ambiguous": False,
+                 "uei": reg.get("ueiSAM"),
+                 "legal_name": reg.get("legalBusinessName"),
+                 "registration_status": reg.get("registrationStatus"),
+                 "registration_current": status == "ACTIVE",
+                 "registration_expiry": reg.get("registrationExpirationDate"),
+                 "excluded": reg.get("exclusionStatusFlag") == "Y"},
+                qp, self.API_VERSION, raw_for_hash=payload)
+        except Exception as e:
+            logger.warning(f"SAM.gov name lookup failed for {legal_name!r}: {e}")
+            return SourceResult.unavailable("SAM_GOV", str(e), qp, self.API_VERSION)
+
+    async def check_exclusions(self, uei: str = "", legal_name: str = "") -> SourceResult:
+        """Exclusions (debarment) check against the v4 endpoint.
+
+        Semantics, stated because they invert the usual reading: results FOUND
+        means the entity IS excluded (bad). No results means NOT excluded
+        (good). A transport failure is neither — it is `unavailable`, and must
+        never be collapsed into "clear".
+        """
+        qp = {k: v for k, v in (("ueiSAM", uei), ("q", legal_name)) if v}
+        if not self.api_key:
+            return SourceResult.unavailable(
+                "SAM_GOV_EXCLUSIONS",
+                "SAM_GOV_API_KEY not set (register a free key at sam.gov)",
+                qp, "v4")
+        if not (uei or legal_name):
+            return SourceResult.unavailable(
+                "SAM_GOV_EXCLUSIONS", "no UEI or legal name to query", qp, "v4")
+        params = {"api_key": self.api_key, "page": 0, "size": 10}
+        if uei:
+            params["ueiSAM"] = uei
+        else:
+            params["q"] = legal_name
+        try:
+            resp = await _get_with_retry(self.EXCLUSIONS_URL, params=params,
+                                         headers=HTTP_HEADERS)
+            if resp.status_code != 200:
+                return SourceResult.unavailable(
+                    "SAM_GOV_EXCLUSIONS", f"HTTP {resp.status_code}", qp, "v4")
+            payload = resp.json()
+            records = (payload.get("excludedEntity")
+                       or payload.get("excludedEntities") or []) or []
+            total = payload.get("totalRecords")
+            if total is None:
+                total = len(records)
+            return SourceResult.ok(
+                "SAM_GOV_EXCLUSIONS",
+                {"excluded": bool(total),
+                 "match_count": total,
+                 "matched_by": "uei" if uei else "name",
+                 "exclusions": [
+                     {"name": (r.get("exclusionIdentification") or {})
+                      .get("exclusionName"),
+                      "type": (r.get("exclusionTypes") or {}).get("exclusionType"),
+                      "agency": (r.get("exclusionProgram") or {})
+                      .get("excludingAgencyName"),
+                      "active_date": (r.get("exclusionActions") or {})
+                      .get("listOfActions")} for r in records[:10]]},
+                qp, "v4", raw_for_hash=payload)
+        except Exception as e:
+            logger.warning(f"SAM.gov exclusions lookup failed: {e}")
+            return SourceResult.unavailable("SAM_GOV_EXCLUSIONS", str(e), qp, "v4")
+
+    async def verify(self, uei: str = "", legal_name: str = "") -> SourceResult:
+        """Combined registration + exclusion check — the entry point callers want.
+
+        Registration comes from v3 (by UEI when available, else by name);
+        exclusion comes independently from v4. If EITHER leg is unavailable the
+        combined result reports what is known and flags the gap, rather than
+        presenting a half-answer as complete.
+        """
+        qp = {k: v for k, v in (("uei", uei), ("legal_name", legal_name)) if v}
+        reg = (await self.lookup_by_uei(uei)) if uei else \
+              (await self.lookup_by_name(legal_name))
+        exc = await self.check_exclusions(uei=uei, legal_name=legal_name)
+
+        if not reg.success and not exc.success:
+            return SourceResult.unavailable(
+                "SAM_GOV", reg.error or exc.error or "both SAM legs unavailable",
+                qp, self.API_VERSION)
+
+        data = dict(reg.data or {})
+        data["registration_available"] = reg.success
+        data["exclusions_available"] = exc.success
+        if exc.success:
+            # v4 is authoritative for exclusion; it overrides the v3 summary flag.
+            data["excluded"] = bool(exc.get("excluded"))
+            data["exclusion_match_count"] = exc.get("match_count")
+            data["exclusions"] = exc.get("exclusions")
+        else:
+            data["exclusion_check_error"] = exc.error
+            data.setdefault("excluded", False)
+            # Do not let a missing exclusions check read as a clean bill.
+            data["excluded_known"] = False
+        if exc.success:
+            data["excluded_known"] = True
+        return SourceResult.ok("SAM_GOV", data, qp, self.API_VERSION)
 
     async def lookup_by_npi(self, npi: str) -> SourceResult:
         # The SAM.gov entity API has no NPI index. Callers should pass UEI via

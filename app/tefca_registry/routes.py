@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
@@ -335,6 +336,55 @@ async def change_entity_status(entity_id: uuid.UUID,
     await db.commit()
     return {**result, "reason": req.reason,
             "allowed_next": sorted(lifecycle.sm.allowed_targets(target))}
+
+
+@router.delete("/entities/{entity_id}")
+async def soft_delete_entity(entity_id: uuid.UUID,
+                             request: Request,
+                             reason: str = Query(
+                                 "", description="Why this entity is being removed. "
+                                                 "Recorded in the audit log."),
+                             db: AsyncSession = Depends(get_db),
+                             user=Depends(require_role("admin"))):
+    """Soft-delete an entity. Admin only.
+
+    SOFT, not hard. review_records, tefca_verifications and sample_entities all
+    reference an entity; removing the row would orphan the evidence behind a
+    classification that may already have been reported to ONC. The row stays,
+    flagged, and drops out of listings, stats and the sample frame.
+
+    This exists because there was previously no way to remove anything. That
+    made a large-volume import benchmark impossible to run honestly: 1,000 test
+    entities would permanently contaminate every subsequent sample draw and
+    weekly report, so the benchmark was reported as Not Executed instead.
+
+    Deliberately NOT idempotent-silent: deleting an already-deleted entity
+    returns 409 rather than 200. A cleanup script that reports success for rows
+    it did not touch hides a targeting bug.
+    """
+    entity = await db.get(reg.TefcaRegEntity, entity_id)
+    if not entity:
+        raise HTTPException(404, "Entity not found")
+    if entity.is_deleted:
+        raise HTTPException(409, "Entity is already deleted")
+
+    entity.is_deleted = True
+    entity.is_active = False
+    entity.deleted_at = datetime.utcnow()
+
+    reg_audit.record(db, entity_id=entity_id, action="entity_deleted",
+                     actor_id=getattr(user, "id", None),
+                     actor_email=getattr(user, "email", None),
+                     metadata={"reason": reason or None,
+                               "name": entity.name,
+                               "soft_delete": True},
+                     ip_address=get_client_ip(request))
+    await db.commit()
+    return {"id": str(entity_id), "name": entity.name, "is_deleted": True,
+            "deleted_at": entity.deleted_at.isoformat(),
+            "reason": reason or None,
+            "note": "Soft delete — the row is retained so prior classifications "
+                    "and samples keep their referent."}
 
 
 @router.post("/dev/seed", dependencies=[Depends(require_role("admin"))])

@@ -23,7 +23,7 @@ from app.core.security import require_role
 from app.tefca_registry import audit as reg_audit
 from app.tefca_registry import models as reg
 from app.tefca_registry.bucket_classifier import (
-    BucketClassifier, ensure_seed_rules)
+    BucketClassifier, ensure_seed_rules, ensure_rules_v2)
 from app.tefca_registry.report_generator import (
     build_report_data, render_html, report_id_for)
 from app.tefca_registry.sampling_engine import CochranSampler
@@ -120,6 +120,10 @@ class GenerateReport(BaseModel):
 async def list_rules(include_retired: bool = Query(False),
                      db: AsyncSession = Depends(get_db)):
     await ensure_seed_rules(db)
+    # v2 wires SAM.gov into classification. Every SAM condition fires only
+    # on a positive finding, so with no SAM key this is a no-op on bucketing
+    # (test_v2_is_identical_to_v1_when_sam_is_silent). Idempotent.
+    await ensure_rules_v2(db)
     stmt = select(reg.ReviewRule)
     if not include_retired:
         stmt = stmt.where(reg.ReviewRule.is_active.is_(True),

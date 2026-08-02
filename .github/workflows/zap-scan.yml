@@ -1,0 +1,84 @@
+# Dynamic Application Security Testing (DAST) — OWASP ZAP
+# =========================================================
+# ZAP is an open-source scanner widely used in federal secure development
+# workflows. This job covers the UNAUTHENTICATED attack surface; the
+# authenticated surface is covered by stackhawk-scan.yml. Neither replaces the
+# other — an unauthenticated crawler cannot reach a role-guarded endpoint, and
+# an authenticated scan starts past the very boundary an attacker hits first.
+#
+# DEV ONLY. Production is never a scan target: an active scan submits hostile
+# input to every discovered endpoint, and against production that is
+# indistinguishable from an attack on live records.
+#
+# ZAP findings are NOT defects until reproduced. Follow the finding workflow in
+# docs/DEPLOYMENT_GUIDE.md: detect -> reproduce manually -> confirm
+# exploitability -> fix only if confirmed -> re-test. Do not auto-fix.
+
+name: OWASP ZAP DAST Scan
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'   # Mondays 06:00 UTC
+
+permissions:
+  contents: read
+  issues: write           # zap actions open an issue summarising findings
+
+jobs:
+  zap-api-scan:
+    name: ZAP API scan (unauthenticated)
+    runs-on: ubuntu-latest
+    env:
+      TARGET: https://docuaction-dev.azurewebsites.net
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Refuse to run against production
+        run: |
+          case "$TARGET" in
+            *api.docuaction.io*|*api-prod.docuaction.io*|*docuaction-emffhfgwc0gffgc9*)
+              echo "::error::TARGET points at production. DAST is dev-only."
+              exit 1 ;;
+          esac
+          echo "Target confirmed non-production: $TARGET"
+
+      - name: Wait for dev to be reachable
+        run: |
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$TARGET/health" || true)
+            echo "attempt $i: /health $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 15
+          done
+          echo "::error::dev did not become healthy; not scanning a cold target"
+          exit 1
+
+      - name: Fetch OpenAPI spec
+        run: |
+          curl -sf --max-time 60 "$TARGET/openapi.json" -o openapi.json
+          python -c "import json;s=json.load(open('openapi.json'));print('paths:',len(s['paths']))"
+
+      - name: Run ZAP API scan
+        uses: zaproxy/action-api-scan@v0.9.0
+        with:
+          target: openapi.json
+          format: openapi
+          # Do not fail the build on findings. A DAST report is evidence to be
+          # triaged, not a merge gate — gating on raw findings trains people to
+          # silence the scanner rather than read it.
+          allow_issue_writing: true
+          fail_action: false
+          cmd_options: '-z "-config scanner.strength=MEDIUM" -I'
+
+      - name: Upload ZAP report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-report-${{ github.run_number }}
+          retention-days: 90
+          path: |
+            report_html.html
+            report_json.json
+            report_md.md

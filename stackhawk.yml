@@ -1,0 +1,58 @@
+# StackHawk scan configuration — DEV ONLY.
+#
+# The bearer token is injected as ${SCAN_TOKEN} by the CI job, which mints it
+# from a real login. It is never stored here. ${APP_ID} comes from the
+# StackHawk dashboard once an application is created (see docs/DAST_CI_SETUP.md).
+app:
+  applicationId: ${APP_ID}
+  env: Development
+  host: ${TARGET}
+
+  # Import the live OpenAPI document rather than crawling. The API is 294 paths
+  # and a crawler discovers only what it can reach by following links, which for
+  # a JSON API is almost nothing.
+  openApiConf:
+    filePath: ./openapi.json
+
+  authentication:
+    # The app issues a JWT from POST /api/auth/login. Injecting the token
+    # directly is deliberate: replaying a login for every request would trip the
+    # per-IP rate limit (20 attempts / 15 min) within seconds and the rest of
+    # the scan would read as a wall of 429s rather than real findings.
+    external:
+      type: BEARER_TOKEN
+      value: ${SCAN_TOKEN}
+
+    tokenExtraction:
+      type: JSON
+      value: access_token
+
+    # Endpoints that must NOT be treated as "logged out" when they 401.
+    loggedInIndicator: "\"(email|role|id)\""
+    loggedOutIndicator: "(Not authenticated|Could not validate credentials)"
+
+  # Paths excluded from active scanning, each for a stated reason.
+  hawkAddOn:
+    autoPolicy: true
+
+  exclusions:
+    - name: Auth endpoints
+      # Active-scanning the login route means thousands of failed attempts,
+      # which trips the lockout and rate limiter and starves the rest of the
+      # scan of a valid session.
+      paths:
+        - path: "/api/auth/login"
+        - path: "/api/auth/signup"
+
+    - name: Destructive registry writes
+      # These mutate the ARC registry, which has no delete endpoint for entities
+      # created before this sprint. A fuzzer here permanently contaminates the
+      # sample frame every weekly report draws from.
+      paths:
+        - path: "/api/tefca/registry/import/.*"
+        - path: "/api/tefca/registry/dev/seed"
+
+    - name: Outbound email
+      # POST /send actually sends mail to real recipients.
+      paths:
+        - path: "/api/v1/bulletin/.*/send"

@@ -1,0 +1,103 @@
+# Dynamic Application Security Testing (DAST) — StackHawk (authenticated)
+# =======================================================================
+# StackHawk complements the ZAP job. ZAP scans the unauthenticated surface;
+# this scans PAST the login boundary using a real bearer token, which is where
+# the TEFCA ARC endpoints, the review workflow and every role-guarded route
+# actually live. An unauthenticated scan reports those as "401" and moves on.
+#
+# DEV ONLY, same reasoning as zap-scan.yml.
+#
+# REQUIRED SECRETS (see docs/DAST_CI_SETUP.md):
+#   HAWK_API_KEY   - StackHawk API key (free tier, no card)
+#   DAST_USER      - dev account email used to mint the scan token
+#   DAST_PASSWORD  - that account's password
+#
+# Without HAWK_API_KEY the job SKIPS rather than fails, so a fork or a repo
+# without the secret does not show a permanently red pipeline that everyone
+# learns to ignore.
+
+name: StackHawk DAST Scan (authenticated)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 6 * * 1'   # Mondays 06:30 UTC, after the ZAP job
+
+permissions:
+  contents: read
+
+jobs:
+  stackhawk:
+    name: StackHawk authenticated scan
+    runs-on: ubuntu-latest
+    env:
+      TARGET: https://docuaction-dev.azurewebsites.net
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for API key
+        id: gate
+        run: |
+          if [ -z "${{ secrets.HAWK_API_KEY }}" ]; then
+            echo "::warning::HAWK_API_KEY not set — skipping. See docs/DAST_CI_SETUP.md"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Refuse to run against production
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          case "$TARGET" in
+            *api.docuaction.io*|*api-prod.docuaction.io*|*docuaction-emffhfgwc0gffgc9*)
+              echo "::error::TARGET points at production. DAST is dev-only."
+              exit 1 ;;
+          esac
+
+      - name: Wait for dev and fetch spec
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$TARGET/health" || true)
+            echo "attempt $i: /health $code"
+            [ "$code" = "200" ] && break
+            sleep 15
+          done
+          curl -sf --max-time 60 "$TARGET/openapi.json" -o openapi.json
+
+      - name: Mint a bearer token for the scan
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          tok=$(curl -s --max-time 60 -X POST "$TARGET/api/auth/login" \
+            -H 'Content-Type: application/json' \
+            --data-binary "{\"email\":\"${{ secrets.DAST_USER }}\",\"password\":\"${{ secrets.DAST_PASSWORD }}\"}" \
+            | python -c "import sys,json;print(json.load(sys.stdin).get('access_token',''))")
+          if [ -z "$tok" ]; then
+            echo "::error::could not obtain a token — an authenticated scan without a token is just an unauthenticated scan wearing a label"
+            exit 1
+          fi
+          echo "::add-mask::$tok"
+          echo "SCAN_TOKEN=$tok" >> "$GITHUB_ENV"
+
+      - name: Run StackHawk scan
+        if: steps.gate.outputs.run == 'true'
+        uses: stackhawk/hawkscan-action@v2.1.3
+        continue-on-error: true          # evidence, not a merge gate
+        with:
+          apiKey: ${{ secrets.HAWK_API_KEY }}
+          configurationFiles: stackhawk.yml
+          environmentVariables: |
+            SCAN_TOKEN
+            TARGET
+
+      - name: Upload StackHawk results
+        if: always() && steps.gate.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: stackhawk-report-${{ github.run_number }}
+          retention-days: 90
+          path: |
+            hawk.*
+            *.json
+            *.html
