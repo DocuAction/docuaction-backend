@@ -22,8 +22,19 @@ and must not be recorded as taken until it has been.*
 |-------|-------|
 | Severity | High |
 | Component | `next` 16.2.12 (frontend) |
-| Decision | **Accept** |
-| Review date | 2026-10-31 |
+| Decision | ~~Accept~~ → **CLOSED — REMEDIATED 2026-08-02** |
+| Closed | 2026-08-02 |
+
+**Closure note.** This acceptance rested on the premise that no fix existed
+short of a breaking downgrade. That premise was wrong, and the error was in
+where the fix was sought. The advisory was reported against `next` only because
+`next` depends on a vulnerable `sharp`; the actual vulnerable component is
+`sharp <0.35.0` (libvips CVEs). Pinning `sharp` forward to 0.35.3 through an
+`overrides` entry cleared the advisory without touching the framework.
+`npm audit` now reports **0 vulnerabilities**. See
+`frontend/docs/ADR-001_NextJS_Version_Selection.md`.
+
+The original rationale is retained below for the record.
 
 **Rationale.** There is no fixed stable release. The advisory range covers
 through `16.3.0-preview.7`, and the latest stable release is `16.2.12` — the
@@ -46,8 +57,18 @@ paths most Next advisories concern.
 |-------|-------|
 | Severity | High |
 | Component | `sharp` (transitive via `next`) |
-| Decision | **Accept** |
-| Review date | 2026-10-31 |
+| Decision | ~~Accept~~ → **CLOSED — REMEDIATED 2026-08-02** |
+| Closed | 2026-08-02 |
+
+**Closure note.** Remediated at the correct layer: `sharp` pinned to 0.35.3 via
+an `overrides` entry, rather than through the `next` dependency tree. Confirmed
+low risk before applying — the build is a static export with
+`images: { unoptimized: true }` and no `next/image` imports, so the image
+optimisation server that `sharp` serves is never run. Build re-verified after
+the change (77 static routes). See
+`frontend/docs/ADR-001_NextJS_Version_Selection.md`.
+
+The original rationale is retained below for the record.
 
 **Rationale.** Same root cause and same fix path as RA-001 — it resolves only
 through the Next.js dependency tree, and the only available "fix" is the same
@@ -151,11 +172,13 @@ actual RTO before ATO.
 
 | ID | Severity | Decision | Closes when |
 |----|----------|----------|-------------|
-| RA-001 | High | Accept | Next 16.3.0 stable |
-| RA-002 | High | Accept | With RA-001 |
+| RA-001 | High | **CLOSED — remediated 2026-08-02** | Closed |
+| RA-002 | High | **CLOSED — remediated 2026-08-02** | Closed |
 | RA-003 | High | Accept | Scanner rule matches full path |
 | RA-004 | Medium | Accept | Upstream fix |
 | RA-005 | Medium | Accept (time-limited) | Azure DB cutover |
 | RA-006 | Medium | **Mitigate** | Restore rehearsed, RTO measured |
 
 **0 Critical. 0 unaccepted High findings from static analysis** (Bandit: 0 High).
+
+**Update 2026-08-02.** RA-001 and RA-002 are closed by remediation, not by expiry: `npm audit` on the frontend now reports 0 vulnerabilities. Three new High findings have since surfaced from Azure database configuration (public network access on `docuaction-db`, `docuaction-db-geo` and `docuaction-db-dev`). They are NOT accepted and are not covered by this register — they require their own assessment.
