@@ -21,6 +21,7 @@ importers produce identical structures.
 """
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -28,11 +29,38 @@ from datetime import date, datetime
 from typing import Awaitable, Callable, Optional
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.services.npi_validator import validate_for_import
 from app.tefca_registry import models as reg
+
+logger = logging.getLogger(__name__)
+
+
+def safe_import_error(label: str, exc: Exception, context: str = "") -> str:
+    """Caller-safe text for a per-row import failure.
+
+    The raw exception is deliberately NOT returned. A database error carries the
+    ORM name, the driver, the constraint, the table, the column list and the
+    whole statement; returning it hands an API client a map of the schema. The
+    detail is logged server-side instead, where an operator can still find it.
+
+    Never surface: table names, column names, SQL, constraint names, ORM or
+    driver class names.
+    """
+    logger.error("import row failure (%s) label=%r: %s: %s",
+                 context or "import", label, type(exc).__name__, exc, exc_info=True)
+    if isinstance(exc, IntegrityError):
+        return (f"{label}: Duplicate entity identifier. An entity with this "
+                f"identifier already exists.")
+    if isinstance(exc, ValueError):
+        # Our own validation text ("missing required column(s): TEFCAID"), which
+        # is the actionable part of a bad row. It contains no database internals.
+        return f"{label}: {exc}"
+    return (f"{label}: Unable to process this row. Please verify the data and "
+            f"retry.")
 
 # Canonical system URI per identifier type (matches the seed convention).
 SYSTEM_URI = {
@@ -203,7 +231,7 @@ async def persist_import(
             imported += 1
         except Exception as ex:  # noqa: BLE001 — one bad entity must not fail the batch
             errors += 1
-            err_list.append(f"{p.name}: {type(ex).__name__}: {ex}")
+            err_list.append(safe_import_error(p.name, ex, "entity"))
 
     # ── PASS 2 — resolve partOf into relationships ──
     rels_by_child: dict[uuid.UUID, list] = {}
@@ -229,7 +257,7 @@ async def persist_import(
                 {"parent_id": str(parent), "relationship_type": rtype})
         except Exception as ex:  # noqa: BLE001
             errors += 1
-            err_list.append(f"{p.name}: relationship error {type(ex).__name__}: {ex}")
+            err_list.append(safe_import_error(p.name, ex, "relationship"))
 
     # ── initial version snapshot per created entity ──
     for (p, eid) in created:
@@ -434,7 +462,8 @@ async def import_fhir_bundle(
         try:
             parsed.append(_parse_org(res))
         except Exception as ex:  # noqa: BLE001
-            pre_errors.append(f"{res.get('id') or 'unknown'}: parse error {type(ex).__name__}: {ex}")
+            pre_errors.append(
+                safe_import_error(str(res.get("id") or "unknown"), ex, "parse"))
     return await persist_import(
         session, source_type="fhir_bundle", filename=filename, file_checksum=file_checksum,
         file_size=file_size, parsed=parsed, total=total, pre_errors=pre_errors,

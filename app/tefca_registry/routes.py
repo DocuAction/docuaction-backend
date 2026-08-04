@@ -13,6 +13,10 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
+
+from app.core.input_sanitize import reject_null_bytes
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +33,13 @@ from app.core.client_ip import get_client_ip
 
 logger = logging.getLogger(__name__)
 
+# NOTE: This router requires reviewer role at router level.
+# Individual endpoint require_role("contributor") decorators are overridden by
+# this router-level dependency — router dependencies run first, and the stricter
+# of the two binds. A contributor therefore never reaches those handlers.
+# This is intentional: all registry operations require reviewer access minimum.
+# Verified by the Block 4 RBAC matrix (2026-08-02), which recorded the handler's
+# own declaration as unreachable rather than as a defect.
 router = APIRouter(
     prefix="/api/tefca/registry",
     tags=["TEFCA Registry"],
@@ -87,6 +98,10 @@ async def hierarchy_roots(db: AsyncSession = Depends(get_db)):
 async def search(q_: str = Query(..., alias="q", min_length=1),
                  limit: int = Query(25, ge=1, le=100),
                  db: AsyncSession = Depends(get_db)):
+    # Postgres cannot compare a NUL byte inside text, so an unescaped \x00 here
+    # raises at the driver and surfaces as a 500. Reject it as the validation
+    # failure it is (422) rather than reporting bad input as a server fault.
+    reject_null_bytes(q_, "search query")
     return await q.search(db, q_, limit=limit)
 
 
@@ -502,10 +517,28 @@ async def import_csv_route(
     except Exception:
         raise HTTPException(400, "Invalid CSV encoding (expected UTF-8)")
     from app.tefca_registry.csv_import import import_csv
-    return await import_csv(
+    result = await import_csv(
         db, text, filename=file.filename, file_checksum=checksum,
         file_size=len(content), actor_id=getattr(user, "id", None),
         actor_email=getattr(user, "email", None), ip_address=_client_ip(request))
+
+    # A batch import can legitimately succeed in part, so the body carries the
+    # per-row detail either way. But a flat 200 on a batch where rows failed is
+    # invisible to status-code monitoring — the failure only shows up to a caller
+    # who parses the body (AGT-SA-001 F-001).
+    #
+    # The distinction matters and is not cosmetic:
+    #   422 — nothing imported. The submission was unprocessable as a whole, which
+    #         is the case the finding reproduced: HTTP 200 with status "failed".
+    #   207 — some rows landed, some did not. A 4xx here would be wrong; the
+    #         successful rows really were created and the caller must not retry
+    #         the whole file blindly. "Mixed outcome, read the body."
+    #   200 — everything imported.
+    summary = result or {}
+    if summary.get("error_count"):
+        status = 422 if not summary.get("imported_count") else 207
+        return JSONResponse(status_code=status, content=jsonable_encoder(summary))
+    return result
 
 
 def _batch_summary(b: reg.TefcaImportBatch) -> dict:

@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.tefca_registry.fhir_import import (
     ENTITY_LEVELS, SYSTEM_URI, ParsedEntity, _resolve_tefcaid_parent, persist_import,
+    safe_import_error,
 )
 
 _DEFAULT_TYPE_BY_LEVEL = {
@@ -87,7 +88,7 @@ async def import_csv(
         try:
             parsed.append(_parse_row(row))
         except Exception as ex:  # noqa: BLE001
-            pre_errors.append(f"Row {i}: {ex}")
+            pre_errors.append(safe_import_error(f"Row {i}", ex, "csv parse"))
     return await persist_import(
         session, source_type="csv", filename=filename, file_checksum=file_checksum,
         file_size=file_size, parsed=parsed, total=total, pre_errors=pre_errors,

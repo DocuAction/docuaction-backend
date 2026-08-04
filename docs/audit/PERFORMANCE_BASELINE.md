@@ -103,26 +103,66 @@ connection reuse amortising across a batch.
 
 ## Environmental impact of this benchmark — cleanup required
 
-The registry grew from **71 entities at the start of the session to
+The registry grew from **74 entities at the start of the session to
 2274 at the end of the benchmark, and to 22,274 once the
-delayed imports completed**. Of those, 22,172 are synthetic `draft` rows created
-solely by this benchmark.
+delayed imports completed**. Of those, **22,200** are synthetic `draft` rows
+created solely by this benchmark.
 
 Measured side effects:
 
-- `GET /registry/stats` latency degraded from ~1.8s to **5.38s**.
 - Report distributions computed after this point cover a population dominated by
-  synthetic data.
+  synthetic data. This is the material effect and the reason cleanup was required.
+- Read-path latency was **not** durably degraded — see the correction below.
+
+> **Correction, 2026-08-04.** This section previously stated that
+> `GET /registry/stats` degraded from ~1.8s to **5.38s**, and that the registry
+> held 71 real entities and 22,172 synthetic ones. Direct re-measurement against
+> the same environment, with the full 22,274-row population still present, did not
+> reproduce the latency claim:
+>
+> | Sample | 1 (cold) | 2 | 3 | 4 |
+> |---|---|---|---|---|
+> | `GET /registry/stats` | 2.34s | 0.75s | 1.04s | 1.07s |
+>
+> Warm latency of **~0.75-1.07s is below the 1.82s mean recorded as the healthy
+> baseline** in the Read-path table above. The 5.38s figure was almost certainly
+> captured while the delayed bulk imports were still committing, i.e. under write
+> contention, and describes a transient condition rather than a steady state.
+>
+> The entity counts were also wrong and did not reconcile: 71 + 22,172 = 22,243,
+> against a measured population of 22,274. A full inventory pass counted
+> **22,200 synthetic rows and 74 non-synthetic survivors**, which reconciles
+> exactly. The survivor count held at 74 across six independent inventory passes
+> taken before, during and after cleanup.
 
 **The evidence packages in Block 8 are built from responses captured BEFORE the
 bulk of this data landed**, so their counts describe the real registry rather
 than the benchmark residue. Any figure regenerated after 2026-08-02T22:20Z will
 not match them, and that is expected rather than a discrepancy.
 
-**Recommended cleanup.** Soft-delete every entity whose TEFCAID matches
-`TID-P100-%`, `TID-P1000-%`, `TID-P10000-%` or `TID-TH%`. This was not performed
-automatically — bulk deletion against a shared environment is a deliberate act,
-not a test teardown.
+**Cleanup — executed 2026-08-03/04.** Soft-deleted every entity whose TEFCAID
+matches `TID-P100-%`, `TID-P1000-%` or `TID-P10000-%`, via
+`scripts/cleanup_benchmark_entities.py` against the authenticated admin API.
+Bulk deletion against a shared environment is a deliberate act rather than a test
+teardown, so it was run explicitly on the owner's instruction and in batches, with
+a read-only inventory pass before and after each.
+
+| Pattern | Matched | Disposition |
+|---|---:|---|
+| `TID-P100-%` | 200 | soft-deleted |
+| `TID-P1000-%` | 2,000 | soft-deleted |
+| `TID-P10000-%` | 20,000 | soft-deleted |
+| **Total** | **22,200** | |
+| Survivors (no pattern match) | 74 | retained |
+
+A fourth pattern, `TID-TH%`, appeared in the original recommendation and is
+removed here: it matched **zero** rows on every inventory pass. No such entities
+were created by this benchmark.
+
+Deletion is soft (`app/tefca_registry/routes.py`): rows are retained with
+`is_deleted`/`deleted_at` set, so `review_records`, `tefca_verifications` and
+`sample_entities` keep their referent, and deleted rows drop out of listings,
+stats and the sample frame. Nothing was physically removed.
 
 ## Not measured
 

@@ -65,6 +65,14 @@ Each test states an expected result before execution and records the observed re
 | TEFCA operational (Block 5) | 26 | 26 |
 | API contract (Block 7) | 14 | 14 |
 
+> **These results supersede the preliminary counts in
+> `SPRINT_REPORT_2026-08-01_ARC_TESTING.md`.** That report reflects an earlier and
+> smaller run: the RBAC scenario suite has since grown from **5 scenarios to 6**
+> (all passing in both runs), and the TEFCA operational suite from **25 tests
+> (24 passed, 1 Not Executed) to 26**, with the previously unexecuted test now
+> executed and passing. No result was revised downward and no earlier test was
+> retracted. This document reflects the final validated results.
+
 
 ## Detailed Results — Security Validation
 

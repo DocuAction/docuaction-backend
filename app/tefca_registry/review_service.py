@@ -36,8 +36,12 @@ _classifier = BucketClassifier()
 # "not_checked — connector not implemented" says the work has not been built,
 # which is a roadmap item and needs a decision, not a retry.
 NO_CONNECTOR = {
-    "sam_gov": "SAM.gov: API key configured. Entity lookup endpoints returning "
-               "404 — API version under investigation.",
+    # "not operational" is load-bearing: test_unimplemented_are_not_checked_never
+    # _unavailable asserts every reason here says "not implemented" or "not
+    # operational", so a reader is never told to retry a source that will not
+    # start answering on its own.
+    "sam_gov": "SAM.gov: not operational — API key configured. Entity lookup "
+               "endpoints returning 404, API version under investigation.",
     "state_registry": "Connector not implemented",
     "irs": "Connector not implemented — IRS data is keyed on EIN, which the "
            "registry does not currently hold",

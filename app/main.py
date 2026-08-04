@@ -55,6 +55,26 @@ from app.core.rate_limiter import RateLimitMiddleware  # noqa: E402
 app.add_middleware(RateLimitMiddleware)
 
 
+# ── Request-level NUL-byte rejection (AGT-SA-001 F-002 / Block 3 Suite A test A9).
+#    Postgres cannot store or compare a NUL inside a text value, so a raw \x00 that
+#    reaches any query raises at the driver and surfaces as HTTP 500 — a validation
+#    failure reported as a server fault. Rejecting it here covers every route at
+#    once, rather than relying on each handler remembering to call
+#    reject_null_bytes(). URL only; see find_null_byte for why bodies are excluded. ──
+from app.core.input_sanitize import find_null_byte  # noqa: E402
+from app.core.error_handler import create_error_response  # noqa: E402
+
+
+@app.middleware("http")
+async def reject_null_bytes_middleware(request, call_next):
+    offender = find_null_byte(request.url.path, request.url.query)
+    if offender:
+        return create_error_response(
+            422, f"Invalid {offender}: null bytes are not permitted.",
+            "INVALID_INPUT")
+    return await call_next(request)
+
+
 # ── Security response headers (FIX 8 — NIST SC-8 / SC-18). ──
 @app.middleware("http")
 async def security_headers(request, call_next):
