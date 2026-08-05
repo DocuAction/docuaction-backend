@@ -214,3 +214,41 @@ def test_qa_mode_is_the_client_sheet_plus_l_to_p():
     assert qw.max_column == 16
     assert qw.cell(2, 12).value == "OK"
     assert qw.cell(2, 16).value == "YES"
+
+
+def test_unterminated_tags_are_stripped():
+    """Observed on dev: 16 cells still carried markup after the first HTML fix.
+
+    Summaries are truncated upstream, which cuts mid-tag and leaves
+    '... The post <a href="https://exa' with no closing '>'. The tag regex cannot
+    match that, so the raw markup reached the cell. These are the exact shapes
+    that leaked.
+    """
+    from app.bulletin_intelligence.excel_export import strip_html
+
+    leaked = [
+        'Vacuums. Here is what that means <font color="#6f6',
+        'The post <a href="https://news.google.com/rss/art',
+        'Story text <img width="150" height="120" src="htt',
+        '<a href="https://news.google.com/rss/articles/CBMi',
+    ]
+    for raw in leaked:
+        out = strip_html(raw)
+        assert "<" not in out, f"unterminated tag survived: {out!r}"
+
+    # A bare '<' in ordinary prose is NOT markup and must be preserved.
+    assert strip_html("Revenue rose when 5 < 10 held true") == \
+        "Revenue rose when 5 < 10 held true"
+
+
+def test_truncated_summary_produces_clean_cells():
+    """End to end: a truncated-mid-tag summary must reach the sheet clean."""
+    arts = _articles()
+    arts[0].summary = ("The Commission acted today. The post "
+                       '<a href="https://example.com/very-long-url-that-got-cut')
+    arts[1].summary = 'Story body <img width="150" height="120" src="https://x'
+    wb, _ = _roundtrip(create_bulletin_excel(BRIEFING, arts, lambda a: a.section))
+    ws = wb["FCC Daily Bulletin"]
+    for r in range(2, ws.max_row + 1):
+        text = str(ws.cell(r, 6).value or "")
+        assert "<" not in text and ">" not in text, f"row {r}: {text!r}"

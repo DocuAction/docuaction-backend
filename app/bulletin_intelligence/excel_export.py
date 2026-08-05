@@ -48,6 +48,12 @@ BORDER = Border(left=_thin, right=_thin, top=_thin, bottom=_thin)
 _TAG = re.compile(r"<[^>]+>")
 _WS = re.compile(r"\s+")
 _SPACE_BEFORE_PUNCT = re.compile(r"\s+([.,;:!?%)\]])")
+# An UNTERMINATED tag at the end of the string. Summaries are truncated upstream,
+# which routinely cuts mid-tag and leaves '... The post <a href="https://exa' with
+# no closing '>'. _TAG cannot match that, so the raw markup reached the cell -- the
+# exact defect observed on dev (16 cells, every one ending in <a/<img/<font).
+# Requires a letter after '<' so ordinary prose like "5 < 10" is left alone.
+_DANGLING_TAG = re.compile(r"<\s*/?[a-zA-Z][^>]*$")
 
 
 def strip_html(text: Any) -> str:
@@ -65,10 +71,12 @@ def strip_html(text: Any) -> str:
     if text is None:
         return ""
     s = _TAG.sub(" ", str(text))
+    s = _DANGLING_TAG.sub(" ", s)
     s = unescape(s)
     # Re-strip: unescape can reveal a literal tag that was entity-encoded in the
     # source (&lt;div&gt;), which must not survive into the cell either.
     s = _TAG.sub(" ", s)
+    s = _DANGLING_TAG.sub(" ", s)
     s = _WS.sub(" ", s).strip()
     # Tags are replaced with a space so "<b>a</b><b>b</b>" does not become "ab",
     # but that leaves "voted <b>today</b>." reading as "voted today ." — close the
