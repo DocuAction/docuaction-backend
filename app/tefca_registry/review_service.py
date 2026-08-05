@@ -225,6 +225,80 @@ def _derived_fields(sources: Dict[str, dict], npi_flagged: bool) -> dict:
     }
 
 
+async def _resolve_entity(db, entity, sources: Dict[str, dict]) -> dict:
+    """Steps 2-4: compare the registry record against what the sources returned.
+
+    Step 2 normalises both addresses to USPS Publication 28 form, step 3 scores
+    the organisation names with Jaro-Winkler, and step 4 asks an AI to adjudicate
+    ONLY when those two disagree and AI resolution is enabled.
+
+    Returns a plain dict for the review snapshot. Never raises — the caller wraps
+    this too, but failing closed here keeps the reason attached to the review
+    rather than only in a log line.
+    """
+    from app.tefca_registry.entity_resolver import EntityResolver, resolution_mode
+
+    # The authoritative record as the sources describe it. NPPES is the registry
+    # of record for provider name and practice address, so it is preferred; PECOS
+    # is the fallback. A source that errored contributes nothing.
+    authoritative = {}
+    for src in ("nppes", "pecos"):
+        info = sources.get(src) or {}
+        data = info.get("data") or {}
+        if info.get("status") in (None, "error") or not data:
+            continue
+        authoritative = {
+            "name": data.get("organization_name") or data.get("name") or "",
+            "address": data.get("practice_address") or data.get("address") or "",
+            "npi": data.get("npi") or "",
+            "entity_type": data.get("entity_type") or "",
+        }
+        if authoritative.get("name") or authoritative.get("address"):
+            authoritative["_source"] = src
+            break
+
+    if not authoritative:
+        return {"status": "no_authoritative_record",
+                "note": "no source returned comparable name/address data",
+                "mode": resolution_mode()}
+
+    ours = {
+        "name": getattr(entity, "name", "") or "",
+        "address": getattr(entity, "address", "") or "",
+        "entity_type": getattr(entity, "entity_type", "") or "",
+    }
+
+    ai_client = None
+    try:
+        from app.tefca_registry.ai_client import build_ai_client
+        ai_client = build_ai_client()
+    except Exception as e:  # noqa: BLE001 — deterministic path must still run
+        logger.debug("AI client unavailable, deterministic resolution only: %s", e)
+
+    resolver = EntityResolver(ai_client=ai_client)
+    result = resolver.resolve(ours, authoritative)
+
+    # Step 7: every AI call is audit-logged with model, prompt version, input,
+    # output, confidence, threshold, latency and software version.
+    for record in resolver.audit_records:
+        reg_audit.record(db, "ai_entity_resolution", entity.id,
+                         metadata=record)
+
+    return {
+        "status": "resolved",
+        "mode": resolver.mode,
+        "compared_against": authoritative.get("_source"),
+        "is_match": result.is_match,
+        "confidence": result.confidence,
+        "method": result.method,
+        "reasoning": result.reasoning,
+        "requires_manual_review": result.requires_manual_review,
+        "ai_consulted": result.ai_consulted,
+        "threshold_applied": result.threshold_applied,
+        "details": result.details,
+    }
+
+
 async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
                      sample_id=None, trigger: str = "manual") -> dict:
     """Verify, classify, persist a ReviewRecord, return the response envelope."""
@@ -254,6 +328,22 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
 
     results = {"sources": sources, "fields": _derived_fields(sources, npi_flagged),
                "confidence_score": None}
+
+    # ── Steps 2-4: entity resolution (USPS -> Jaro-Winkler -> AI) ────────────
+    # Runs BEFORE classification and contributes nothing to the bucket: the B1-B4
+    # rules engine remains the sole classifier, so wiring this in cannot change
+    # any existing classification outcome. What it produces is a resolution
+    # opinion recorded alongside the review for a human to act on.
+    #
+    # AI is reached only when the deterministic steps disagree AND
+    # AI_ENTITY_RESOLUTION is not "disabled" (the default). With AI off this is
+    # pure USPS normalisation plus name similarity, costs nothing, and calls
+    # nothing external.
+    try:
+        results["entity_resolution"] = await _resolve_entity(db, entity, sources)
+    except Exception as e:  # noqa: BLE001 — resolution must never fail a review
+        logger.warning("Entity resolution skipped for %s: %s", entity.id, e)
+        results["entity_resolution"] = {"status": "skipped", "reason": str(e)[:200]}
 
     classification = await _classifier.classify_with_db(db, results)
     review_id = await generate_review_id(db)

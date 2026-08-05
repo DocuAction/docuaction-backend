@@ -131,6 +131,18 @@ and is deterministic under test.
 
 ---
 
+## 6a. Vendor agreement
+
+**A Business Associate Agreement with Anthropic has been executed.** The BAA was
+signed online prior to August 2026. AI entity resolution is therefore not gated
+on a vendor agreement.
+
+The data controls in §7 remain in force regardless: the BAA governs what the
+vendor may do with data it receives, while §7 governs what we send in the first
+place. Sending only public directory data is a design constraint of this module,
+not a compensating control for a missing agreement, and it does not relax now
+that the BAA is in place.
+
 ## 7. Data controls — public data only, never PHI
 
 Outbound payloads are built from an **allowlist**, not a blocklist:
@@ -159,10 +171,6 @@ nor the audit record.
 
 ## Outstanding
 
-- **No Business Associate Agreement is in place with any AI vendor.** This is an
-  open item in `SESSION_STATE.md`. Until one exists, `AI_ENTITY_RESOLUTION`
-  should remain `disabled` in any environment handling real data, regardless of
-  the public-data-only control above.
 - Monthly validation is defined here but not yet scheduled.
 - The threshold values (0.95 / 0.70) are initial settings and should be tuned
   against observed reviewer agreement once volume permits.
