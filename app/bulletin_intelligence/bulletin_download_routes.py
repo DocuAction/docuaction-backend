@@ -583,7 +583,22 @@ async def download_briefing_excel_public(briefing_id: str):
         except Exception:
             return "General"
 
-    wb = create_bulletin_excel(briefing, arts, _sec)
+    # Sheet 2 needs the stories Google News carried that our own sources did not.
+    # Those are exactly the articles the QA pass added, which the engine tags with
+    # source_type "qa" — so the cross-check sheet reports what actually happened in
+    # the cycle rather than re-deriving a comparison from scratch here.
+    _gn_missing, _qa_report = [], None
+    try:
+        from app.bulletin_intelligence.google_news_collector import get_qa_report
+        _qa_report = get_qa_report(str(briefing.get("agency_id") or "fcc"))
+        _gn_missing = [a for a in arts
+                       if (getattr(a, "source_type", "") or "") == "qa"]
+    except Exception as _e:
+        logger.debug(f"Google News cross-check data unavailable: {_e}")
+
+    wb = create_bulletin_excel(briefing, arts, _sec,
+                               google_news_missing=_gn_missing,
+                               qa_report=_qa_report)
     buffer = io.BytesIO()
     wb.save(buffer)
     buffer.seek(0)
@@ -689,7 +704,39 @@ def _render_excel_workbook(agency, clusters, sec_of):
     # distinction that matters to a reviewer is which rows we owe to the QA pass.
     headers = ["#", "Category", "Story Group", "Relationship", "Title", "Summary",
                "Source", "Subscription Required", "Relevance", "URL", "Provider",
-               "Google News Match"]
+               "Google News Match", "QA Score", "Duplicate Flag", "URL Status",
+               "Word Count", "Classification Confidence", "Editorial Notes"]
+    # Columns L-R are the internal review surface. Two notes on what is NOT here:
+    #
+    #   URL Status is left blank. Populating it means one HTTP request per article
+    #   inside a download handler — slow, and it would make the spreadsheet's
+    #   contents depend on whether third-party sites happen to be up. It is a
+    #   column for a link-checker job to fill, not this one.
+    #
+    #   Classification Confidence is blank unless the classifier actually recorded
+    #   one. Deriving it from relevance_score would be inventing a number and
+    #   presenting it as a measurement.
+    try:
+        from app.bulletin_intelligence.url_dedup import duplicate_flag as _dup_flag
+        from app.bulletin_intelligence.engine import _last_duplicate_groups as _dup_groups
+    except Exception:  # noqa: BLE001 — the sheet must build regardless
+        _dup_flag, _dup_groups = None, []
+
+    def _qa_extras(article) -> list:
+        summary = _re.sub(r"<[^>]+>", "", (getattr(article, "summary", "") or ""))
+        words = len(summary.split())
+        # QA Score flags rows a reviewer should look at rather than scoring quality:
+        # a summary outside the 60-100 word band is the concrete, checkable defect.
+        in_band = 60 <= words <= 100
+        conf = getattr(article, "classification_confidence", None)
+        return [
+            "OK" if in_band else "REVIEW",
+            (_dup_flag(article, _dup_groups) if _dup_flag else ""),
+            "",                       # URL Status — see note above
+            words,
+            ("" if conf in (None, "") else conf),
+            "",                       # Editorial Notes — reviewer writes these
+        ]
     try:
         from app.bulletin_intelligence.google_news_collector import (
             get_qa_report, titles_match)
@@ -733,7 +780,7 @@ def _render_excel_workbook(agency, clusters, sec_of):
             provider = getattr(art, "provider", "") or getattr(art, "source", "") or ""
             ws.append([num, sec_of(art), gi, relationship, title, summary, outlet,
                        "Yes" if paywalled else "No", f"{int(rel * 100)}%", url, provider,
-                       _gn_status(art)])
+                       _gn_status(art)] + _qa_extras(art))
 
             if url:
                 uc = ws.cell(row=row, column=10)
@@ -748,7 +795,8 @@ def _render_excel_workbook(agency, clusters, sec_of):
                 ws.cell(row=row, column=3).fill = group_fill
             row += 1
 
-    widths = [5, 24, 11, 12, 50, 72, 22, 18, 10, 42, 16, 18]
+    widths = [5, 24, 11, 12, 50, 72, 22, 18, 10, 42, 16, 18,
+              10, 14, 12, 11, 22, 30]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
     for r in range(2, row):

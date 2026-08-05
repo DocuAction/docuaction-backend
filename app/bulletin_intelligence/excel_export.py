@@ -1,17 +1,24 @@
-"""FCC bulletin -> client-facing Excel workbook.
+"""FCC bulletin -> client-facing Excel workbook (3 sheets).
 
-This is the sheet an FCC contact downloads from the email link, so it carries
-only what a reader needs: the story, where it came from, and how to reach it.
-It deliberately does NOT include relevance scores, story-group ids or the
-subscription flag — those are internal QA signals and this workbook is served
-from a PUBLIC endpoint. The QA spreadsheet still exists, guarded, and is built
-by `_render_excel_workbook` in bulletin_download_routes.py.
+Sheet 1 "FCC Daily Bulletin"      — one row per story, columns A-K
+Sheet 2 "Google News Cross-Check" — stories Google News carried that our own
+                                    sources did not, so a reviewer sees what the
+                                    QA pass caught before the FCC does
+Sheet 3 "Summary"                 — counts by category and relevance, coverage
 
 Why articles are passed in rather than read off the briefing: the Briefing
 dataclass stores `html_content`, `article_count` and `topic_counts` — it has no
 article list. The caller rehydrates the stories by matching the URLs in the
 stored HTML back to the archive, which is what keeps this workbook and the HTML
 preview showing the same set rather than two independently re-derived ones.
+
+COLUMNS H AND I ARE DELIVERABLE FIELDS, NOT INTERNAL SIGNALS. An earlier version
+of this module excluded "Subscription Required" and "Relevance" on the theory
+that they were internal QA data on a public endpoint. They are not: both are part
+of the contract workbook's A-K column set. Subscription Required tells FCC staff
+whether they can actually read the article; Relevance tells them what to
+prioritise. Do not remove them as a "security tightening" — that would break the
+deliverable format.
 """
 from __future__ import annotations
 
@@ -26,8 +33,11 @@ BLUE = "0078D4"
 BAND = "F5F8FD"
 GRID = "D0D0D0"
 
-HEADERS = ["#", "Topic", "Source", "Headline", "Summary", "URL"]
-WIDTHS = [5, 25, 22, 60, 80, 50]
+HEADERS = ["#", "Category", "Date", "Relationship", "Title", "Summary", "Source",
+           "Subscription Required", "Relevance", "URL", "Provider"]
+WIDTHS = [5, 22, 15, 15, 50, 80, 25, 12, 10, 50, 15]
+WRAP_COLS = (5, 6)      # Title, Summary
+URL_COL = 10
 
 _thin = Side(style="thin", color=GRID)
 BORDER = Border(left=_thin, right=_thin, top=_thin, bottom=_thin)
@@ -57,16 +67,117 @@ def _source_of(article: Any) -> str:
     return ""
 
 
+def _relevance_band(article: Any) -> str:
+    try:
+        score = float(getattr(article, "relevance_score", 0) or 0)
+    except (TypeError, ValueError):
+        return "Low"
+    if score >= 0.75:
+        return "High"
+    return "Medium" if score >= 0.45 else "Low"
+
+
+def _relationship(article: Any) -> str:
+    """Original / Follow-up / Analysis, derived from the classifier's type."""
+    kind = (getattr(article, "article_type", "") or "").lower()
+    if kind in ("analysis", "opinion", "editorial"):
+        return "Analysis"
+    if kind in ("follow-up", "followup"):
+        return "Follow-up"
+    return "Original"
+
+
+def _title_with_tags(article: Any) -> str:
+    """Title carrying the [Opinion] / [Subscription Required] tags.
+
+    The tags belong in the title by design — the summary prompt forbids them in
+    the summary, so this is the only place a reader sees them.
+    """
+    title = _clean(getattr(article, "title", ""))
+    kind = (getattr(article, "article_type", "") or "").lower()
+    if kind in ("opinion", "editorial") and "[Opinion]" not in title:
+        title = f"{title} [Opinion]"
+    if bool(getattr(article, "is_paywalled", False)) and "[Subscription Required]" not in title:
+        title = f"{title} [Subscription Required]"
+    return title
+
+
+def _date_of(article: Any) -> str:
+    return _clean(getattr(article, "published_at", ""))[:10]
+
+
+def _style_header(ws, headers: List[str], row: int = 1) -> None:
+    font = Font(name="Arial", size=11, bold=True, color="FFFFFF")
+    fill = PatternFill("solid", fgColor=NAVY)
+    for col, name in enumerate(headers, start=1):
+        c = ws.cell(row=row, column=col, value=name)
+        c.font = font
+        c.fill = fill
+        c.border = BORDER
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws.column_dimensions[get_column_letter(col)].width = WIDTHS[col - 1]
+
+
+def _write_rows(ws, rows: List[Any], topic_of, start_row: int = 2) -> int:
+    """Write the A-K body. Returns the last row written."""
+    body = Font(name="Arial", size=10)
+    cat_font = Font(name="Arial", size=10, bold=True, color=NAVY)
+    url_font = Font(name="Arial", size=10, color=BLUE, underline="single")
+    band_fill = PatternFill("solid", fgColor=BAND)
+    wrap = Alignment(wrap_text=True, vertical="top")
+    top = Alignment(vertical="top")
+
+    r = start_row - 1
+    for i, a in enumerate(rows, start=1):
+        r = start_row + i - 1
+        url = _clean(getattr(a, "url", ""))
+        values = [
+            i,
+            topic_of(a),
+            _date_of(a),
+            _relationship(a),
+            _title_with_tags(a),
+            _clean(getattr(a, "summary", "")),
+            _source_of(a),
+            "Yes" if getattr(a, "is_paywalled", False) else "No",
+            _relevance_band(a),
+            url,
+            _clean(getattr(a, "provider", "") or getattr(a, "source", "")),
+        ]
+        for col, v in enumerate(values, start=1):
+            c = ws.cell(row=r, column=col, value=v)
+            c.font = body
+            c.border = BORDER
+            c.alignment = wrap if col in WRAP_COLS else top
+            if i % 2 == 0:
+                c.fill = band_fill
+        ws.cell(row=r, column=2).font = cat_font
+        u = ws.cell(row=r, column=URL_COL)
+        u.font = url_font
+        # Excel refuses very long hyperlink targets, and one bad link should not
+        # cost the whole workbook.
+        if url.startswith(("http://", "https://")) and len(url) <= 2000:
+            u.hyperlink = url
+    return r
+
+
 def create_bulletin_excel(
     briefing: Dict[str, Any],
     articles: List[Any],
     section_of: Optional[Callable[[Any], str]] = None,
+    google_news_missing: Optional[List[Any]] = None,
+    qa_report: Optional[Dict[str, Any]] = None,
 ) -> Workbook:
-    """Build the two-sheet client workbook.
+    """Build the three-sheet client workbook.
 
     `section_of` maps an article to its display section (the engine's
     `_section_of`). When absent we fall back to the article's own `section` or
     `topic`, so this module never hard-depends on the engine.
+
+    `google_news_missing` are stories Google News carried that our own sources
+    did not. Empty or omitted renders Sheet 2 as an explicit "all matched"
+    statement rather than a blank sheet — a blank sheet reads as "not run", and
+    this one needs to say "ran, found nothing".
     """
     date_str = _clean(briefing.get("briefing_date") or "")
     agency = str(briefing.get("agency_id") or "fcc").upper()
@@ -79,110 +190,124 @@ def create_bulletin_excel(
                 pass
         return _clean(getattr(a, "section", "") or getattr(a, "topic", "") or "General")
 
-    # Sort by topic, then source within topic — the order the spec asks for and
-    # the order that makes the sheet skimmable by section.
+    # Sort by category, then source within category — skimmable by section.
     rows = sorted(articles, key=lambda a: (topic_of(a).lower(), _source_of(a).lower()))
 
     wb = Workbook()
 
-    # ── Sheet 1: the stories ──────────────────────────────────────────────────
+    # ── Sheet 1: FCC Daily Bulletin ───────────────────────────────────────────
     ws = wb.active
-    ws.title = _sheet_title(f"{agency} Bulletin", date_str)
-
-    header_font = Font(name="Arial", size=11, bold=True, color="FFFFFF")
-    header_fill = PatternFill("solid", fgColor=NAVY)
-    for col, name in enumerate(HEADERS, start=1):
-        c = ws.cell(row=1, column=col, value=name)
-        c.font = header_font
-        c.fill = header_fill
-        c.border = BORDER
-        c.alignment = Alignment(horizontal="center", vertical="center")
-        ws.column_dimensions[get_column_letter(col)].width = WIDTHS[col - 1]
-
-    body = Font(name="Arial", size=10)
-    topic_font = Font(name="Arial", size=10, bold=True, color=NAVY)
-    url_font = Font(name="Arial", size=10, color=BLUE, underline="single")
-    band_fill = PatternFill("solid", fgColor=BAND)
-    wrap = Alignment(wrap_text=True, vertical="top")
-    top = Alignment(vertical="top")
-
-    for i, a in enumerate(rows, start=1):
-        r = i + 1
-        url = _clean(getattr(a, "url", ""))
-        values = [
-            i,
-            topic_of(a),
-            _source_of(a),
-            _clean(getattr(a, "title", "")),
-            _clean(getattr(a, "summary", "")),
-            url,
-        ]
-        for col, v in enumerate(values, start=1):
-            c = ws.cell(row=r, column=col, value=v)
-            c.font = body
-            c.border = BORDER
-            c.alignment = wrap if col in (4, 5) else top
-            if i % 2 == 0:
-                c.fill = band_fill
-        ws.cell(row=r, column=2).font = topic_font
-        u = ws.cell(row=r, column=6)
-        u.font = url_font
-        if url.startswith(("http://", "https://")):
-            # Guard the hyperlink: Excel refuses very long targets, and a broken
-            # link should not cost us the whole workbook.
-            if len(url) <= 2000:
-                u.hyperlink = url
-
+    ws.title = "FCC Daily Bulletin"
+    _style_header(ws, HEADERS)
+    last = _write_rows(ws, rows, topic_of)
     ws.freeze_panes = "A2"
     if rows:
-        ws.auto_filter.ref = f"A1:{get_column_letter(len(HEADERS))}{len(rows) + 1}"
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(HEADERS))}{last}"
 
-    # ── Sheet 2: summary ──────────────────────────────────────────────────────
+    # ── Sheet 2: Google News Cross-Check ──────────────────────────────────────
+    gn = wb.create_sheet("Google News Cross-Check")
+    missing = list(google_news_missing or [])
+
+    banner = gn.cell(row=1, column=1, value=(
+        "GOOGLE NEWS CROSS-CHECK — Articles found in Google News but not in "
+        "primary sources. Review for potential inclusion."))
+    banner.font = Font(name="Arial", size=11, bold=True, color="FFFFFF")
+    banner.fill = PatternFill("solid", fgColor=NAVY)
+    banner.alignment = Alignment(horizontal="left", vertical="center")
+    gn.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(HEADERS))
+
+    if missing:
+        _style_header(gn, HEADERS, row=2)
+        gn_last = _write_rows(gn, missing, topic_of, start_row=3)
+        gn.freeze_panes = "A3"
+        gn.auto_filter.ref = f"A2:{get_column_letter(len(HEADERS))}{gn_last}"
+    else:
+        msg = gn.cell(row=3, column=1, value=(
+            "All Google News articles matched. No missing stories identified."))
+        msg.font = Font(name="Arial", size=11, color=NAVY)
+        for col in range(1, len(HEADERS) + 1):
+            gn.column_dimensions[get_column_letter(col)].width = WIDTHS[col - 1]
+
+    # ── Sheet 3: Summary ──────────────────────────────────────────────────────
     s = wb.create_sheet("Summary")
     s.column_dimensions["A"].width = 42
-    s.column_dimensions["B"].width = 12
+    s.column_dimensions["B"].width = 16
 
-    s["A1"] = f"{agency} Daily News Summary"
+    s["A1"] = f"{agency} Daily Intelligence Bulletin"
     s["A1"].font = Font(name="Arial", size=14, bold=True, color=NAVY)
     s["A2"] = date_str
     s["A2"].font = Font(name="Arial", size=12, color=NAVY)
     s["A3"] = "Prepared by Alliance Global Tech, Inc. (AGT)"
     s["A3"].font = Font(name="Arial", size=10)
 
-    for col, name in enumerate(("Topic", "Count"), start=1):
+    header_font = Font(name="Arial", size=11, bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor=NAVY)
+    body = Font(name="Arial", size=10)
+    label_font = Font(name="Arial", size=10, bold=True, color=NAVY)
+
+    def _stat(row: int, label: str, value: Any, bold: bool = False) -> int:
+        lc = s.cell(row=row, column=1, value=label)
+        lc.font = label_font if bold else body
+        lc.border = BORDER
+        vc = s.cell(row=row, column=2, value=value)
+        vc.font = label_font if bold else body
+        vc.border = BORDER
+        vc.alignment = Alignment(horizontal="center")
+        return row + 1
+
+    for col, name in enumerate(("Statistic", "Value"), start=1):
         c = s.cell(row=5, column=col, value=name)
         c.font = header_font
         c.fill = header_fill
         c.border = BORDER
         c.alignment = Alignment(horizontal="center")
 
-    # Counts come from the rows actually written, so the two sheets can never
+    r = 6
+    r = _stat(r, "Total Articles", len(rows), bold=True)
+
+    # Counts come from the rows actually written, so the sheets can never
     # disagree — deriving them from briefing["topic_counts"] would reintroduce
     # the count-vs-render split this workbook exists to avoid.
     counts: Dict[str, int] = {}
     for a in rows:
-        t = topic_of(a)
-        counts[t] = counts.get(t, 0) + 1
-
+        key = topic_of(a)
+        counts[key] = counts.get(key, 0) + 1
     ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0].lower()))
-    r = 6
-    for topic, n in ordered:
-        tc = s.cell(row=r, column=1, value=topic)
-        tc.font = Font(name="Arial", size=10, bold=True, color=NAVY)
-        tc.border = BORDER
-        nc = s.cell(row=r, column=2, value=n)
-        nc.font = body
-        nc.border = BORDER
-        nc.alignment = Alignment(horizontal="center")
-        r += 1
 
+    r += 1
+    s.cell(row=r, column=1, value="By Category").font = label_font
+    r += 1
+    cat_start = r
+    for cat, n in ordered:
+        r = _stat(r, cat, n)
+    cat_end = r - 1
+
+    bands = {"High": 0, "Medium": 0, "Low": 0}
+    for a in rows:
+        bands[_relevance_band(a)] += 1
+    r += 1
+    s.cell(row=r, column=1, value="By Relevance").font = label_font
+    r += 1
+    for band in ("High", "Medium", "Low"):
+        r = _stat(r, band, bands[band])
+
+    rep = qa_report or {}
+    total_gn = int(rep.get("google_news_count", 0) or 0)
+    matched = int(rep.get("matched", 0) or 0)
+    rate = f"{(matched / total_gn * 100):.0f}%" if total_gn else "n/a"
+    r += 1
+    r = _stat(r, "Google News Coverage", f"{matched}/{total_gn} ({rate})")
+    r = _stat(r, "Missing from Google News", len(missing))
+    r = _stat(r, "Sources Used", len({_source_of(a) for a in rows if _source_of(a)}))
+
+    r += 1
     tc = s.cell(row=r, column=1, value="TOTAL")
     tc.font = Font(name="Arial", size=11, bold=True, color=NAVY)
     tc.border = BORDER
     nc = s.cell(row=r, column=2)
     # A live formula, not a baked number, so the sheet stays correct if a reader
-    # deletes a topic row.
-    nc.value = f"=SUM(B6:B{r - 1})" if ordered else 0
+    # deletes a category row.
+    nc.value = f"=SUM(B{cat_start}:B{cat_end})" if ordered else 0
     nc.font = Font(name="Arial", size=11, bold=True, color=NAVY)
     nc.border = BORDER
     nc.alignment = Alignment(horizontal="center")

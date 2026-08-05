@@ -758,7 +758,7 @@ def _inject_download_bar(html: str, briefing_id: str) -> str:
         f'<a href="{base}/excel" '
         'style="display:inline-block;background:#0078D4;color:#ffffff;padding:8px 16px;'
         'text-decoration:none;font-size:12px;border-radius:4px;margin:0 4px">'
-        '&#128229; Download Excel</a>'
+        '&#128229; Download FCC Bulletin</a>'
         '</div>'
     )
     anchor = '<div style="border-top:1px solid #4f7fbd;margin:12px auto;max-width:560px"></div>'
