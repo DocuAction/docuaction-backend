@@ -41,8 +41,10 @@ SAFETY
     Perigon outage cannot stop a bulletin cycle.
 """
 
+import hashlib
 import logging
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -60,6 +62,90 @@ TIMEOUT = float(os.getenv("PERIGON_TIMEOUT", "45"))
 PAGE_SIZE = int(os.getenv("PERIGON_PAGE_SIZE", "50"))
 # How many Boolean profiles to run per cycle. Each is one HTTP call.
 MAX_PROFILES = int(os.getenv("PERIGON_MAX_PROFILES", "9"))
+
+# ── Quota protection ────────────────────────────────────────────────────────
+# The free tier is 150 requests/day and was being exhausted by ~06:00. The drain
+# was amplification, not a loop in this module:
+#
+#   9 profiles x 3 cycle attempts (scheduler.MAX_CYCLE_ATTEMPTS) = 27 calls/cycle
+#   ...and scheduler._run_cycle_with_retry counts a cycle as FAILED when it
+#   returns no articles. Once the quota is gone, _fetch returns [] silently, the
+#   cycle looks failed, the hourly watchdog re-runs it, and each re-run spends
+#   another 27 calls. Exhaustion is self-reinforcing: 150/27 ~= 5.5 hours.
+#
+# Three independent guards, any one of which is sufficient to stop the bleed:
+#   1. RESPONSE CACHE (24h) — a retry or watchdog re-run reuses the first answer
+#      instead of re-billing it. This is what actually breaks the loop, taking a
+#      failing day from 27+/hour down to 9 calls total.
+#   2. PER-RUN CAP — bounds any single cycle regardless of profile count.
+#   3. DAILY BUDGET — a hard ceiling below the tier limit; once tripped, the
+#      provider goes quiet for the rest of the day rather than burning credit on
+#      calls that will 429 anyway.
+#
+# Every guard degrades to "return what we have and log", never to an exception:
+# a Perigon problem must never stop a bulletin.
+CACHE_TTL_S = int(os.getenv("PERIGON_CACHE_TTL_S", str(24 * 3600)))
+MAX_CALLS_PER_RUN = int(os.getenv("PERIGON_MAX_CALLS_PER_RUN", "50"))
+DAILY_BUDGET = int(os.getenv("PERIGON_DAILY_BUDGET", "120"))  # under the 150 tier
+
+# {cache_key: (expires_at_epoch, [articles])}
+_cache: Dict[str, Any] = {}
+# Rolls over on UTC date change. "exhausted" latches on a 429 so we stop probing.
+_budget: Dict[str, Any] = {"date": None, "calls": 0, "exhausted": False}
+
+
+def _cache_key(query: str, from_date: str) -> str:
+    return hashlib.sha256(f"{from_date}|{query}".encode()).hexdigest()
+
+
+def _cache_get(key: str):
+    hit = _cache.get(key)
+    if not hit:
+        return None
+    expires_at, payload = hit
+    if time.time() >= expires_at:
+        _cache.pop(key, None)
+        return None
+    return payload
+
+
+def _cache_put(key: str, payload) -> None:
+    _cache[key] = (time.time() + CACHE_TTL_S, payload)
+
+
+def _budget_roll() -> None:
+    """Reset the daily counter when the UTC date changes."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if _budget["date"] != today:
+        _budget.update({"date": today, "calls": 0, "exhausted": False})
+
+
+def _budget_allows() -> bool:
+    _budget_roll()
+    if _budget["exhausted"]:
+        return False
+    return _budget["calls"] < DAILY_BUDGET
+
+
+def budget_status() -> Dict[str, Any]:
+    """Observable counters for the provider-health surface and tests."""
+    _budget_roll()
+    return {
+        "date": _budget["date"],
+        "calls_today": _budget["calls"],
+        "daily_budget": DAILY_BUDGET,
+        "remaining": max(0, DAILY_BUDGET - _budget["calls"]),
+        "exhausted": _budget["exhausted"],
+        "cache_entries": len(_cache),
+        "cache_ttl_s": CACHE_TTL_S,
+        "max_calls_per_run": MAX_CALLS_PER_RUN,
+    }
+
+
+def _reset_for_tests() -> None:
+    """Clear cache and budget. Test-support only."""
+    _cache.clear()
+    _budget.update({"date": None, "calls": 0, "exhausted": False})
 
 # Excluded because "FCC" is also FC Cincinnati. Appended to every profile query.
 _SPORTS_EXCLUSION = '(soccer OR "FC Cincinnati" OR MLS OR "Major League Soccer")'
@@ -99,6 +185,25 @@ def _profiles() -> List[Dict[str, str]]:
 
 
 async def _fetch(client: httpx.AsyncClient, query: str, from_date: str) -> List[Dict[str, Any]]:
+    """One Perigon query, behind the cache and the budget.
+
+    Returns [] rather than raising on any failure — the caller treats an empty
+    result as "this profile contributed nothing", which is exactly right when the
+    quota is gone.
+    """
+    key = _cache_key(query, from_date)
+    cached = _cache_get(key)
+    if cached is not None:
+        logger.debug("Perigon: cache hit (%s...)", key[:8])
+        return cached
+
+    if not _budget_allows():
+        logger.warning(
+            "Perigon: daily budget spent (%d/%d used, exhausted=%s) — skipping call "
+            "and continuing with other sources",
+            _budget["calls"], DAILY_BUDGET, _budget["exhausted"])
+        return []
+
     params = {
         "apiKey": PERIGON_API_KEY,
         "q": query,
@@ -108,11 +213,23 @@ async def _fetch(client: httpx.AsyncClient, query: str, from_date: str) -> List[
         "sortBy": "relevance",
         "size": PAGE_SIZE,
     }
+    _budget["calls"] += 1
     resp = await client.get(PERIGON_BASE, params=params)
+    if resp.status_code == 429:
+        # Latch: the tier is spent. Further calls today would only burn latency
+        # and confirm what we already know.
+        _budget["exhausted"] = True
+        logger.warning("Perigon: HTTP 429 quota exceeded — provider disabled for "
+                       "the rest of the day; bulletin continues on other sources")
+        return []
     if resp.status_code != 200:
         logger.warning(f"Perigon HTTP {resp.status_code}: {resp.text[:160]}")
         return []
-    return resp.json().get("articles", []) or []
+    rows = resp.json().get("articles", []) or []
+    # Cache successes only. Caching a failure would suppress a legitimate retry
+    # once the quota resets.
+    _cache_put(key, rows)
+    return rows
 
 
 def _to_article(r: Dict[str, Any], agency_id: str, make_article, hasher, now_iso) -> Optional[Any]:
@@ -195,12 +312,21 @@ async def ingest_perigon(agency, lookback_hours: int = 24, *,
 
     out: List[Any] = []
     seen: set = set()
+    calls_this_run = 0
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             for p in profiles:
                 q = _build_query(p["boolean"])
                 if not q:
                     continue
+                # Per-run ceiling. Cache hits are free and do not count toward it.
+                if _cache_get(_cache_key(q, from_date)) is None:
+                    if calls_this_run >= MAX_CALLS_PER_RUN:
+                        logger.warning(
+                            "Perigon: per-run cap of %d reached — remaining profiles "
+                            "skipped this cycle", MAX_CALLS_PER_RUN)
+                        break
+                    calls_this_run += 1
                 try:
                     rows = await _fetch(client, q, from_date)
                 except Exception as e:
@@ -223,14 +349,27 @@ async def ingest_perigon(agency, lookback_hours: int = 24, *,
 async def perigon_health() -> Dict[str, Any]:
     """Lightweight reachability + auth probe for the provider-health surface."""
     if not PERIGON_ENABLED:
-        return {"provider": "perigon", "enabled": False, "reason": "PERIGON_API_KEY not set"}
+        return {"provider": "perigon", "enabled": False, "reason": "PERIGON_API_KEY not set",
+                "budget": budget_status()}
+    # A health probe is a billable request. Anything polling this endpoint was
+    # silently competing with the bulletin for the same 150/day, so the probe now
+    # respects the budget and reports state instead of spending the last credits.
+    if not _budget_allows():
+        return {
+            "provider": "perigon", "enabled": True, "status": "quota_exhausted",
+            "note": "probe skipped to preserve quota; not an availability failure",
+            "budget": budget_status(),
+        }
     started = datetime.now(timezone.utc)
     try:
+        _budget["calls"] += 1
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             resp = await client.get(PERIGON_BASE, params={
                 "apiKey": PERIGON_API_KEY, "q": "FCC", "size": 1,
                 "language": "en", "country": "us", "sortBy": "relevance",
             })
+        if resp.status_code == 429:
+            _budget["exhausted"] = True
         ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
         return {
             "provider": "perigon",
@@ -240,6 +379,8 @@ async def perigon_health() -> Dict[str, Any]:
             "response_ms": ms,
             # numResults is capped at 10000 by the API and is NOT a real count.
             "note": "numResults from Perigon is capped at 10000; not a true total",
+            "budget": budget_status(),
         }
     except Exception as e:
-        return {"provider": "perigon", "enabled": True, "status": "error", "error": str(e)[:200]}
+        return {"provider": "perigon", "enabled": True, "status": "error",
+                "error": str(e)[:200], "budget": budget_status()}

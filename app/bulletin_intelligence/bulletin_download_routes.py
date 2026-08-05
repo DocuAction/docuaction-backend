@@ -676,9 +676,34 @@ def _render_excel_workbook(agency, clusters, sec_of):
     ws.title = "FCC Bulletin QA"
 
     # Provider column (col 11) is appended LAST so every existing column index
-    # (and its styling) is unchanged — additive, backward-compatible.
+    # (and its styling) is unchanged — additive, backward-compatible. "Google News
+    # Match" (col 12) follows the same rule.
+    #
+    #   ADDED_BY_QA — Google News carried this and none of our own sources did.
+    #                 The QA pass added it; without that pass we would have missed it.
+    #   YES         — we already had it AND Google News carried it too.
+    #   NO          — we had it; Google News did not surface it this cycle.
+    #
+    # There is deliberately no "MISSING" state: QA adds what it finds, so a story
+    # Google News carried is never absent from the delivered briefing. The
+    # distinction that matters to a reviewer is which rows we owe to the QA pass.
     headers = ["#", "Category", "Story Group", "Relationship", "Title", "Summary",
-               "Source", "Subscription Required", "Relevance", "URL", "Provider"]
+               "Source", "Subscription Required", "Relevance", "URL", "Provider",
+               "Google News Match"]
+    try:
+        from app.bulletin_intelligence.google_news_collector import (
+            get_qa_report, titles_match)
+        _gn_titles = list((get_qa_report("fcc") or {}).get("google_titles") or [])
+    except Exception:  # noqa: BLE001 — the spreadsheet must build regardless
+        _gn_titles, titles_match = [], None
+
+    def _gn_status(article) -> str:
+        if (getattr(article, "source_type", "") or "") == "qa":
+            return "ADDED_BY_QA"
+        if not _gn_titles or titles_match is None:
+            return ""  # no QA run this cycle — assert nothing rather than guess
+        title = getattr(article, "title", "") or ""
+        return "YES" if any(titles_match(title, g) for g in _gn_titles) else "NO"
     ws.append(headers)
     header_fill = PatternFill("solid", fgColor="0F172A")
     header_font = Font(bold=True, color="FFFFFF", size=11)
@@ -707,7 +732,8 @@ def _render_excel_workbook(agency, clusters, sec_of):
             relationship = "Primary" if mi == 0 else "Similar"
             provider = getattr(art, "provider", "") or getattr(art, "source", "") or ""
             ws.append([num, sec_of(art), gi, relationship, title, summary, outlet,
-                       "Yes" if paywalled else "No", f"{int(rel * 100)}%", url, provider])
+                       "Yes" if paywalled else "No", f"{int(rel * 100)}%", url, provider,
+                       _gn_status(art)])
 
             if url:
                 uc = ws.cell(row=row, column=10)
@@ -722,7 +748,7 @@ def _render_excel_workbook(agency, clusters, sec_of):
                 ws.cell(row=row, column=3).fill = group_fill
             row += 1
 
-    widths = [5, 24, 11, 12, 50, 72, 22, 18, 10, 42, 16]
+    widths = [5, 24, 11, 12, 50, 72, 22, 18, 10, 42, 16, 18]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
     for r in range(2, row):

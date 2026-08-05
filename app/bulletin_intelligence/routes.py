@@ -118,6 +118,33 @@ async def seed_search_profiles_endpoint(agency_id: str = Query("fcc")):
         raise HTTPException(500, f"seed failed: {str(e)[:200]}")
 
 
+# ── Google News QA comparison ──────────────────────────────────────────────────
+@router.get("/qa/google-news-compare", dependencies=guard("viewer"))
+async def google_news_compare(agency_id: str = "fcc"):
+    """Google News QA comparison for the latest cycle.
+
+    The FCC verifies our bulletin against Google News, so this answers the same
+    question before delivery: which stories did Google News carry that none of our
+    other sources found?
+
+    `missing_from_bulletin` counts stories unique to Google News. They ARE in the
+    briefing — the Google News collector runs as a source — so this is a coverage
+    signal about the other sources, not a list of gaps in what gets delivered.
+
+    `qa_passed` is false when 5 or more stories were unique to Google News, which
+    means the rest of the source set under-performed for that cycle.
+    """
+    from app.bulletin_intelligence.google_news_collector import get_qa_report
+    report = get_qa_report(agency_id)
+    if not report:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No Google News QA report yet for {agency_id}. Run a cycle first "
+                   f"(POST /api/v1/bulletin/run/{agency_id}).",
+        )
+    return report
+
+
 # ── Source Coverage Report ─────────────────────────────────────────────────────
 @router.get("/coverage/{agency_id}", dependencies=guard("viewer"))
 async def coverage_report(agency_id: str):

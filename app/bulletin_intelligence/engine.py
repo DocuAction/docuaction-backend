@@ -3277,6 +3277,12 @@ async def run_daily_cycle(
     # tasks.append(ingest_news(agency, lookback_hours))
 
     # ── Free broad-coverage sources (no Claude cost; gather ignores failures) ──
+    # NOTE: Google News is NOT collected here. It is already fetched by
+    # fcc_qa_verification.run_qa_verification below, after classification, where it
+    # runs behind the FCC_KEYWORDS relevance gate. Adding it as a collector too
+    # would fetch every feed twice per cycle and bypass that gate on the first pass
+    # — a keyword search for "FCC" returns Florida Citrus Commission and FC
+    # Cincinnati, which is exactly what the gate exists to reject.
     # GDELT DOC 2.0 — thousands of online outlets, free, no key
     tasks.append(_ingest_gdelt_doc_articles(agency, lookback_hours))
     # Primary sources — FCC.gov daily digest/headlines + congressional hearing
@@ -3341,6 +3347,7 @@ async def run_daily_cycle(
         logger.debug(f"better_deduplicate wrapper skipped: {_e}")
         unique = deduplicate(all_articles)
 
+
     # Safety cap (ADD-only): the extended source list can surface far more unique
     # articles per cycle, and classify_articles makes one LLM call per 8 of them,
     # sequentially — so cost/time scale with volume. Cap what we hand the classifier
@@ -3376,6 +3383,14 @@ async def run_daily_cycle(
         from app.bulletin_intelligence.fcc_qa_verification import run_qa_verification
 
         _qa_add, _qa_report = await run_qa_verification(classified, hours=24)
+        # Expose the QA outcome on an endpoint so it can be checked BEFORE the
+        # briefing goes to the FCC, rather than only living in this cycle's logs.
+        try:
+            from app.bulletin_intelligence.google_news_collector import (
+                store_qa_report, summarize_legacy_qa_report)
+            store_qa_report(agency_id, summarize_legacy_qa_report(_qa_report))
+        except Exception as _e:
+            logger.debug(f"QA report not stored for endpoint: {_e}")
         if _qa_add:
             _qa_articles = []
             for _c in _qa_add:

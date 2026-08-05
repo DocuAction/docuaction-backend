@@ -40,7 +40,14 @@ def test_relevance_gate_accepts_real_fcc():
 
 
 def test_qa_queries_configured():
-    assert len(QA_QUERIES) == 8
+    # 9 as of 2026-08-04: a query covering Olivia Trusty and Nathan Simington was
+    # added because neither commissioner appeared in any prior pattern, so stories
+    # naming only one of them were structurally invisible to the QA cross-check.
+    assert len(QA_QUERIES) == 9
+    joined = " ".join(QA_QUERIES)
+    for commissioner in ("Brendan Carr", "Anna Gomez", "Geoffrey Starks",
+                         "Olivia Trusty", "Nathan Simington"):
+        assert commissioner in joined, f"no QA query covers {commissioner}"
 
 
 def test_empty_titles_never_match():

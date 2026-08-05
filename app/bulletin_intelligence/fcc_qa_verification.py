@@ -41,6 +41,9 @@ QA_QUERIES = [
     '"FCC"',
     '"Brendan Carr"',
     '"Anna Gomez" OR "Geoffrey Starks"',
+    # Added 2026-08-04: neither commissioner was covered by the queries above, so
+    # stories naming only one of them were structurally invisible to QA.
+    '"Olivia Trusty" OR "Nathan Simington"',
     '"spectrum auction" OR "C-band"',
     '"robocall" OR "TCPA"',
     '"BEAD broadband"',
@@ -264,6 +267,12 @@ async def run_qa_verification(existing_articles: List[Any],
         to_add.append(candidate)
 
     report["added_from_qa"] = len(to_add)
+    # Titles of everything keyword search surfaced this cycle. Carried so the QA
+    # spreadsheet can mark, per row, whether Google News also carried that story —
+    # the counts alone can't answer that question for an individual article.
+    report["google_titles"] = [
+        (g.get("title") or "") for g in google if (g.get("title") or "").strip()
+    ]
 
     logger.info(
         "QA verification: sources=%s google=%s talkwalker=%s already=%s added=%s "
