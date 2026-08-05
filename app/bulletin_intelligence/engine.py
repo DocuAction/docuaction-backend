@@ -366,6 +366,18 @@ except Exception:                    # pragma: no cover
     _ET = pytz.timezone("America/New_York")
 
 
+def _parse_action_date(value: str):
+    """Parse a Congress.gov actionDate (YYYY-MM-DD) to an aware UTC datetime."""
+    v = (value or "").strip()
+    if not v:
+        return None
+    try:
+        dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+
+
 def get_briefing_window():
     """Freshness window for a briefing: the PREVIOUS BUSINESS DAY(S) in US Eastern
     time, not a rolling 72h. Returns (start, end) as aware ET datetimes; an article
@@ -1358,7 +1370,7 @@ async def ingest_gdelt(agency: AgencyConfig, lookback_hours: int = 24) -> List[A
                         source_type="news",
                         title=title,
                         url=url,
-                        published_at=art_data.get("seendate", _now()),
+                        published_at=art_data.get("seendate", "") or "",
                         summary=title,
                         full_text=title,
                         author="",
@@ -1417,7 +1429,7 @@ async def ingest_tavily(agency: AgencyConfig, lookback_hours: int = 24) -> List[
                             source_type="news",
                             title=r.get("title",""),
                             url=r.get("url",""),
-                            published_at=r.get("published_date", _now()),
+                            published_at=r.get("published_date", "") or "",
                             summary=r.get("content","")[:400],
                             full_text=r.get("content",""),
                             author="",
@@ -1472,7 +1484,7 @@ async def ingest_newsapi(agency: AgencyConfig, lookback_hours: int = 24) -> List
                         source_type="news",
                         title=r.get("title",""),
                         url=r.get("url",""),
-                        published_at=r.get("publishedAt", _now()),
+                        published_at=r.get("publishedAt", "") or "",
                         summary=r.get("description","")[:400],
                         full_text=r.get("content","")[:800],
                         author=r.get("author",""),
@@ -1693,7 +1705,7 @@ Return ONLY the JSON array. No explanation."""}
                     source_type="news",
                     title=item.get('title', ''),
                     url=item.get('url', ''),
-                    published_at=item.get('published_at', _now()),
+                    published_at=item.get('published_at', '') or '',
                     summary=item.get('summary', ''),
                     full_text=item.get('summary', ''),
                     author=item.get('author', ''),
@@ -1765,7 +1777,7 @@ Return ONLY the JSON array."""}
                     source_type="broadcast",
                     title=f"[Broadcast] {item.get('title', '')}",
                     url=item.get('url', ''),
-                    published_at=item.get('published_at', _now()),
+                    published_at=item.get('published_at', '') or '',
                     summary=item.get('summary', ''),
                     full_text=item.get('summary', ''),
                     author="",
@@ -1834,7 +1846,7 @@ Return ONLY the JSON array."""}
                     source_type="social",
                     title=item.get('title', ''),
                     url=item.get('url', ''),
-                    published_at=item.get('published_at', _now()),
+                    published_at=item.get('published_at', '') or '',
                     summary=item.get('summary', ''),
                     full_text=item.get('summary', ''),
                     author=item.get('author', ''),
@@ -1887,7 +1899,7 @@ async def ingest_regulatory(agency: AgencyConfig) -> List[Article]:
                             source_type="regulatory",
                             title=f"[Federal Register] {doc.get('title', '')}",
                             url=doc.get("html_url", ""),
-                            published_at=doc.get("publication_date", datetime.now().strftime("%Y-%m-%d")),
+                            published_at=doc.get("publication_date", "") or "",
                             summary=doc.get("abstract", "")[:400],
                             full_text=doc.get("abstract", ""),
                             author="",
@@ -1903,6 +1915,10 @@ async def ingest_regulatory(agency: AgencyConfig) -> List[Article]:
 
     # Congress.gov — free, optional API key for higher rate limits
     if CONGRESS_KEY:
+        # Bounded by the bill's own latest action, independent of when
+        # Congress.gov re-indexed it. This is the check that stops a March bill.
+        _congress_cutoff = datetime.now(timezone.utc) - timedelta(
+            hours=int(os.getenv("BULLETIN_HARD_MAX_AGE_HOURS", "48")))
         try:
             async with httpx.AsyncClient(timeout=TIMEOUT) as client:
                 resp = await client.get(
@@ -1911,12 +1927,36 @@ async def ingest_regulatory(agency: AgencyConfig) -> List[Article]:
                         "apiKey": CONGRESS_KEY,
                         "format": "json",
                         "limit": 5,
+                        # This filters on INDEX time, not action time -- see the
+                        # actionDate check below, which is what actually bounds
+                        # how old a bill can be.
                         "fromDateTime": (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%dT00:00:00Z"),
                     },
                     headers=HTTP_HEADERS
                 )
                 if resp.status_code == 200:
                     for bill in resp.json().get("bills", []):
+                        # THE MARCH-ARTICLE BUG. The API query filters on
+                        # `fromDateTime`, which is when Congress.gov last INDEXED
+                        # the record — not when the bill was last acted on. A bill
+                        # whose latest action was in March, re-indexed last week,
+                        # passes that filter and then gets dated March here.
+                        #
+                        # Filter on the date we actually display. An undated bill
+                        # is skipped rather than stamped with _now(): stamping
+                        # fabricates a date and makes the item invisible to every
+                        # downstream freshness check.
+                        _action_date = (bill.get("latestAction") or {}).get("actionDate", "")
+                        if not _action_date:
+                            logger.debug("Congress: skipping bill with no actionDate: %s",
+                                         (bill.get("title") or "")[:80])
+                            continue
+                        _act_dt = _parse_action_date(_action_date)
+                        if _act_dt is None or _act_dt < _congress_cutoff:
+                            logger.info("Congress: rejected bill last acted %s (outside window): %s",
+                                        _action_date, (bill.get("title") or "")[:80])
+                            continue
+
                         dedup = _hash(bill.get("url", ""), bill.get("title", ""))
                         art = Article(
                             article_id=f"{agency.agency_id}_cg_{dedup}",
@@ -1925,7 +1965,7 @@ async def ingest_regulatory(agency: AgencyConfig) -> List[Article]:
                             source_type="regulatory",
                             title=f"[Congress] {bill.get('title', 'Untitled Bill')}",
                             url=bill.get("url", ""),
-                            published_at=bill.get("latestAction", {}).get("actionDate", _now()),
+                            published_at=_action_date,
                             summary=bill.get("latestAction", {}).get("text", ""),
                             full_text=bill.get("title", ""),
                             author="",
@@ -3490,6 +3530,29 @@ async def run_daily_cycle(
     except Exception as _e:
         logger.debug(f"better_deduplicate wrapper skipped: {_e}")
         unique = deduplicate(all_articles)
+
+    # ── Freshness gate ───────────────────────────────────────────────────────
+    # enforce_freshness existed and was correct but was NEVER CALLED — the only
+    # reference outside its own module was a test. Every source was trusted to
+    # police its own dates, and the ones that did not, did not: Congress filters
+    # on re-index time while dating on action time, which is how a March article
+    # reached an August briefing.
+    #
+    # Runs AFTER all sources collect and BEFORE classification, so it is one gate
+    # every article passes through regardless of collector. The 48h hard rail is
+    # independent of the editorial window: an article can sit inside a wide
+    # Monday window and still be months old.
+    try:
+        from app.bulletin_intelligence.editorial_rules import enforce_freshness
+        _before_fresh = len(unique)
+        unique = enforce_freshness(unique, lookback_hours=lookback_hours)
+        if len(unique) < _before_fresh:
+            logger.warning("Freshness gate: %d → %d articles (%d rejected)",
+                           _before_fresh, len(unique), _before_fresh - len(unique))
+    except Exception as _e:
+        # Never fail a briefing on the gate itself — but say so loudly, because a
+        # silently skipped freshness gate is how stale content ships.
+        logger.error("FRESHNESS GATE SKIPPED (stale articles may ship): %s", _e)
 
     # ── AMP / syndication dedup ──────────────────────────────────────────────
     # The dedup above compares dedup_hash and a 60-char title prefix, which the

@@ -118,6 +118,87 @@ async def seed_search_profiles_endpoint(agency_id: str = Query("fcc")):
         raise HTTPException(500, f"seed failed: {str(e)[:200]}")
 
 
+# ── Manual collection ──────────────────────────────────────────────────────────
+class CollectRequest(BaseModel):
+    agency_id: str = "fcc"
+    date: Optional[str] = None            # YYYY-MM-DD; defaults to the normal window
+    sources: List[str] = ["all"]
+    dry_run: bool = False
+
+
+@router.post("/collect", dependencies=guard("admin"))
+async def collect_now(req: CollectRequest, background: BackgroundTasks):
+    """Run a collection cycle on demand — admin only.
+
+    The scheduler fires once a day at 00:01 ET. This exists so a run can be
+    triggered at any time: after fixing a source, to re-pull a day that came back
+    thin, or to see what a window would produce before committing to it.
+
+    `date` (YYYY-MM-DD) collects the 24 hours of that ET day. Omitted, it uses the
+    ordinary briefing window — yesterday 00:00 ET to today 00:00 ET, which is the
+    editorial design for a 00:01 briefing, not a bug.
+
+    `dry_run` reports what the window WOULD admit without persisting or
+    delivering anything.
+
+    Returns immediately with a job id; collection continues in the background.
+    """
+    from app.bulletin_intelligence.engine import get_agency, get_briefing_window
+    import uuid as _uuid
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+    agency = get_agency(req.agency_id)
+    if not agency:
+        raise HTTPException(404, f"Agency {req.agency_id} not found")
+
+    if req.date:
+        try:
+            day = _dt.strptime(req.date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(400, "date must be YYYY-MM-DD")
+        # Hours from the START of the requested day to now. The freshness gate
+        # still applies its 48h hard rail on top, so an old date yields an
+        # explicitly empty result rather than a stale briefing.
+        start = _dt.combine(day, _dt.min.time(), tzinfo=_tz.utc)
+        lookback = max(1, int((_dt.now(_tz.utc) - start).total_seconds() // 3600))
+        window = {"mode": "explicit_date", "date": req.date, "lookback_hours": lookback}
+    else:
+        ws, we = get_briefing_window()
+        lookback = max(1, int((_dt.now(ws.tzinfo) - ws).total_seconds() // 3600))
+        window = {"mode": "briefing_window", "start": ws.isoformat(),
+                  "end": we.isoformat(), "lookback_hours": lookback}
+
+    job_id = f"collect_{req.agency_id}_{_uuid.uuid4().hex[:12]}"
+
+    if req.dry_run:
+        # Deliberately does not start a cycle: a dry run that still collected
+        # would be indistinguishable from a real one in its side effects.
+        return {
+            "job_id": job_id, "status": "dry_run", "agency_id": req.agency_id,
+            "window": window, "sources": req.sources,
+            "note": ("Nothing was collected, stored or delivered. The 48h hard "
+                     "freshness rail applies to any real run of this window."),
+        }
+
+    async def _run():
+        try:
+            from app.bulletin_intelligence.engine import run_daily_cycle
+            await run_daily_cycle(req.agency_id, auto_deliver=False,
+                                  lookback_hours=lookback)
+            logger.info("Manual collection %s finished (%s)", job_id, window)
+        except Exception as e:
+            logger.error("Manual collection %s failed: %s", job_id, e)
+
+    background.add_task(_run)
+    return {
+        "job_id": job_id, "status": "started", "agency_id": req.agency_id,
+        "window": window, "sources": req.sources, "auto_deliver": False,
+        "note": ("Collection runs in the background; poll /latest/{agency_id} or "
+                 "/health for progress. Delivery is NOT triggered — this only "
+                 "collects and generates."),
+    }
+
+
 # ── Perigon quota observability ────────────────────────────────────────────────
 @router.get("/perigon/health", dependencies=guard("admin"))
 async def perigon_quota_health(probe: bool = Query(

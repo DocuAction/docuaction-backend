@@ -680,7 +680,10 @@ async def download_briefing_excel(briefing_id: str):
             # 60-100 word band is the concrete, checkable defect.
             "OK" if 60 <= words <= 100 else "REVIEW",
             (_dup_flag(a, _dup_groups) if _dup_flag else ""),
-            "",                # URL Status — a link-checker's job, not a handler's
+            # URL Status doubles as the date-provenance signal: "No Date" is the
+            # one thing a reviewer must see before trusting an undated item, and
+            # it is more actionable here than an empty cell.
+            ("No Date" if (getattr(a, "date_status", "") == "date_unknown") else ""),
             words,
             gn,
         ]

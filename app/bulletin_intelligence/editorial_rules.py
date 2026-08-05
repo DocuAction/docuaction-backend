@@ -14,10 +14,13 @@ Pure stdlib. Operates on Article-like objects (attrs: outlet, url, title,
 published_at, is_paywalled, summary, source_type, topic).
 """
 
+import logging
 import os
 import re
 from datetime import datetime, timezone, timedelta
 from typing import List, Any, Tuple
+
+logger = logging.getLogger("docuaction.bulletin.editorial")
 
 # Outlets that are subscription-only — show headline + [SUBSCRIPTION REQUIRED].
 # Substring-matched against the outlet name (case-insensitive), so "The New York
@@ -111,27 +114,109 @@ def enforce_fccgov_cap(articles: List[Any]) -> List[Any]:
     return kept
 
 
+# Nothing older than this reaches a briefing, whatever the source claims and
+# whatever window is in force. A March article in an August bulletin is a
+# credibility failure with the FCC, and every per-source filter has now been
+# observed to leak at least once: Congress filters on re-index time while dating
+# on action time, and several collectors stamp _now() onto undated items.
+HARD_MAX_AGE_HOURS = int(os.getenv("BULLETIN_HARD_MAX_AGE_HOURS", "48"))
+
+DATE_UNKNOWN = "date_unknown"
+
+
 def enforce_freshness(articles: List[Any], lookback_hours: int = 24,
-                      now: datetime = None) -> List[Any]:
-    """Drop articles older than the lookback window. Undated items are kept
-    (they came from live ingestion this cycle)."""
+                      now: datetime = None, *,
+                      hard_max_age_hours: int = None) -> List[Any]:
+    """Drop articles outside the freshness window, with a hard age backstop.
+
+    Two gates, deliberately different:
+
+      * `lookback_hours` is the editorial window — how far back this briefing is
+        meant to reach. A Monday run legitimately reaches back over the weekend.
+      * `hard_max_age_hours` (48 by default) is a safety rail that applies no
+        matter how wide the editorial window is. It exists because per-source
+        date filtering has proven unreliable, and it is the thing that stops a
+        March article regardless of which collector produced it.
+
+    UNDATED items are KEPT and MARKED, not dropped and not back-dated. Dropping
+    them loses real stories; stamping them with now() -- which several collectors
+    were doing -- fabricates a date and makes them permanently invisible to every
+    filter. Marking pushes the decision to a human, who can see "No Date" in the
+    QA sheet and judge.
+    """
     now = now or datetime.now(timezone.utc)
     cutoff = now - timedelta(hours=lookback_hours)
-    kept = []
+    hard_cutoff = now - timedelta(hours=hard_max_age_hours or HARD_MAX_AGE_HOURS)
+    kept, rejected = [], 0
+
     for a in articles:
         s = (getattr(a, "published_at", "") or "").strip()
         if not s:
-            kept.append(a)  # no date → assume current-cycle
+            _mark_date_unknown(a, "missing")
+            kept.append(a)
             continue
-        try:
-            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            if dt >= cutoff:
-                kept.append(a)
-        except Exception:
-            kept.append(a)  # unparseable date → don't silently drop
+        dt = _parse_any(s)
+        if dt is None:
+            _mark_date_unknown(a, "unparseable")
+            kept.append(a)
+            continue
+
+        # The hard rail is checked first and independently: an article can sit
+        # inside a wide editorial window and still be months old.
+        if dt < hard_cutoff:
+            rejected += 1
+            logger.warning("Rejected article from %s (older than %dh): %s",
+                           dt.date().isoformat(), hard_max_age_hours or HARD_MAX_AGE_HOURS,
+                           (getattr(a, "title", "") or "")[:90])
+            continue
+        # A date in the future is a source error, not a scoop. Small clock skew
+        # is tolerated; a genuinely future-dated item is rejected.
+        if dt > now + timedelta(hours=6):
+            rejected += 1
+            logger.warning("Rejected future-dated article (%s): %s",
+                           dt.isoformat(), (getattr(a, "title", "") or "")[:90])
+            continue
+        if dt >= cutoff:
+            kept.append(a)
+        else:
+            rejected += 1
+            logger.info("Outside editorial window (%s): %s", dt.date().isoformat(),
+                        (getattr(a, "title", "") or "")[:90])
+
+    if rejected:
+        logger.warning("Freshness: %d of %d article(s) rejected", rejected, len(articles))
     return kept
+
+
+def _parse_any(value: str):
+    """ISO-8601 or RFC-2822, returned as an aware UTC datetime, or None."""
+    s = (value or "").strip()
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except Exception:
+        try:
+            from email.utils import parsedate_to_datetime
+            dt = parsedate_to_datetime(s)
+        except Exception:
+            return None
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+
+
+def _mark_date_unknown(article: Any, reason: str) -> None:
+    """Flag an undated article so the QA sheet can show 'No Date'.
+
+    Best-effort: a collector object that rejects attribute assignment must not
+    cost us the article.
+    """
+    try:
+        setattr(article, "date_status", DATE_UNKNOWN)
+        setattr(article, "date_status_reason", reason)
+    except Exception:
+        pass
 
 
 # ── Corporate-announcement filter (UAT false-positive fix) ────────────────────
