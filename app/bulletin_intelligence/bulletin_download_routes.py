@@ -618,31 +618,29 @@ async def download_briefing_excel_public(briefing_id: str):
 
 @router.get("/briefings/{briefing_id}/excel-qa", dependencies=guard("viewer"))
 async def download_briefing_excel(briefing_id: str):
-    """Download a past briefing (from Run History) as the SAME QA Excel sheet as the
-    Daily Briefing — identical columns: #, Category, Story Group, Relationship,
-    Title, Summary, Source, Subscription Required, Relevance, URL.
+    """Download a briefing as the internal QA workbook — LOGIN REQUIRED.
 
-    Stays role-guarded and moved off /excel (which is now the public client sheet)
-    because relevance scores and subscription flags are internal QA signals.
+    Identical to the public FCC Bulletin download (same three sheets, same A-K
+    columns, same clean plain-text cells) plus internal columns L-P: QA Score,
+    Duplicate Flag, URL Status, Word Count, Google News Match.
+
+    It shares create_bulletin_excel with the public sheet rather than rendering
+    its own workbook. That is the point: "the client file plus extras" only stays
+    true if there is one writer. The previous implementation kept a separate
+    column list and had already drifted — it carried a Story Group column the
+    client file does not have, and lacked the Date column that it does.
 
     The briefing only stores its rendered HTML, so we rehydrate each story's full
     metadata from the archive by matching the URLs in that HTML. Falls back to the
     agency's current top articles if an old briefing's stories have aged out, so the
     sheet is never empty.
     """
-    try:
-        from app.bulletin_intelligence.engine import (
-            _cluster_stories, _section_of, AGT_SECTIONS,
-        )
-    except ImportError:
-        raise HTTPException(500, "Bulletin engine not available")
-
-    # Steps 1-3 (extract URLs from the stored HTML, rehydrate from the archive,
-    # fall back for aged-out briefings) are shared with the public sheet.
     briefing, agency, arts = _briefing_articles(briefing_id)
 
-    # 4) Same clustering + ordering + render as the Daily Briefing Excel.
-    section_index = {s: i for i, s in enumerate(AGT_SECTIONS)}
+    try:
+        from app.bulletin_intelligence.engine import _section_of
+    except ImportError:
+        raise HTTPException(500, "Bulletin engine not available")
 
     def _sec(a):
         try:
@@ -650,17 +648,54 @@ async def download_briefing_excel(briefing_id: str):
         except Exception:
             return "General"
 
-    ordered = sorted(arts, key=lambda a: getattr(a, "relevance_score", 0) or 0, reverse=True)
+    # Duplicate flags come from the cycle's own dedup groups, so the column
+    # reports what the pipeline decided rather than recomputing a second opinion.
     try:
-        clusters = _cluster_stories(ordered)
-    except Exception as e:
-        logger.warning(f"Briefing Excel clustering unavailable, flat list: {e}")
-        clusters = [[a] for a in ordered]
-    clusters.sort(key=lambda m: (section_index.get(_sec(m[0]), 99),
-                                 -(getattr(m[0], "relevance_score", 0) or 0)))
+        from app.bulletin_intelligence.url_dedup import duplicate_flag as _dup_flag
+        from app.bulletin_intelligence.engine import _last_duplicate_groups as _dup_groups
+    except Exception:  # noqa: BLE001 — a QA column must never cost the download
+        _dup_flag, _dup_groups = None, []
 
     try:
-        buffer = _render_excel_workbook(agency, clusters, _sec)
+        from app.bulletin_intelligence.google_news_collector import (
+            get_qa_report, titles_match)
+        _qa_report = get_qa_report(str(briefing.get("agency_id") or "fcc"))
+        _gn_titles = list((_qa_report or {}).get("google_titles") or [])
+    except Exception:
+        _qa_report, _gn_titles, titles_match = None, [], None
+
+    from app.bulletin_intelligence.excel_export import strip_html as _strip
+
+    def _qa_extras(a):
+        words = len(_strip(getattr(a, "summary", "")).split())
+        if (getattr(a, "source_type", "") or "") == "qa":
+            gn = "ADDED"
+        elif _gn_titles and titles_match is not None:
+            gn = "YES" if any(titles_match(getattr(a, "title", "") or "", t)
+                              for t in _gn_titles) else "NO"
+        else:
+            gn = ""            # no QA run this cycle — assert nothing
+        return [
+            # Flags rows worth a reviewer's attention: a summary outside the
+            # 60-100 word band is the concrete, checkable defect.
+            "OK" if 60 <= words <= 100 else "REVIEW",
+            (_dup_flag(a, _dup_groups) if _dup_flag else ""),
+            "",                # URL Status — a link-checker's job, not a handler's
+            words,
+            gn,
+        ]
+
+    _gn_missing = [a for a in arts if (getattr(a, "source_type", "") or "") == "qa"]
+
+    try:
+        from app.bulletin_intelligence.excel_export import create_bulletin_excel
+        wb = create_bulletin_excel(briefing, arts, _sec,
+                                   google_news_missing=_gn_missing,
+                                   qa_report=_qa_report,
+                                   qa=True, qa_extras=_qa_extras)
+        buffer = io.BytesIO()
+        wb.save(buffer)
+        buffer.seek(0)
     except ImportError:
         raise HTTPException(500, "openpyxl not installed. Add 'openpyxl' to requirements.txt")
 
@@ -685,6 +720,8 @@ def _render_excel_workbook(agency, clusters, sec_of):
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment
     from openpyxl.utils import get_column_letter
+
+    from app.bulletin_intelligence.excel_export import strip_html as _strip
 
     wb = Workbook()
     ws = wb.active
@@ -723,7 +760,7 @@ def _render_excel_workbook(agency, clusters, sec_of):
         _dup_flag, _dup_groups = None, []
 
     def _qa_extras(article) -> list:
-        summary = _re.sub(r"<[^>]+>", "", (getattr(article, "summary", "") or ""))
+        summary = _strip(getattr(article, "summary", ""))
         words = len(summary.split())
         # QA Score flags rows a reviewer should look at rather than scoring quality:
         # a summary outside the 60-100 word band is the concrete, checkable defect.
@@ -772,7 +809,7 @@ def _render_excel_workbook(agency, clusters, sec_of):
             summary = _re.sub(r"<[^>]+>", "", (getattr(art, "summary", "") or "")).replace("\n", " ").strip()
             if len(summary) > 600:
                 summary = summary[:600].rstrip() + "…"
-            outlet = getattr(art, "outlet", "") or ""
+            outlet = _strip(getattr(art, "outlet", ""))
             url = getattr(art, "url", "") or ""
             rel = getattr(art, "relevance_score", 0) or 0
             paywalled = bool(getattr(art, "is_paywalled", False))

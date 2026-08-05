@@ -22,6 +22,8 @@ deliverable format.
 """
 from __future__ import annotations
 
+import re
+from html import unescape
 from typing import Any, Callable, Dict, List, Optional
 
 from openpyxl import Workbook
@@ -43,11 +45,46 @@ _thin = Side(style="thin", color=GRID)
 BORDER = Border(left=_thin, right=_thin, top=_thin, bottom=_thin)
 
 
+_TAG = re.compile(r"<[^>]+>")
+_WS = re.compile(r"\s+")
+_SPACE_BEFORE_PUNCT = re.compile(r"\s+([.,;:!?%)\]])")
+
+
+def strip_html(text: Any) -> str:
+    """Plain text from a value that may contain HTML.
+
+    Summaries and titles are assembled from scraped feed content and from the
+    briefing renderer, both of which carry markup. Written straight into a cell
+    that markup is what the reader sees — "<p>The Commission voted…</p>" — which
+    is the defect this exists to prevent.
+
+    Order matters: tags are removed BEFORE entities are decoded. Decoding first
+    would turn "&lt;script&gt;" into "<script>" and the tag stripper would then
+    delete it, silently destroying text that was never markup to begin with.
+    """
+    if text is None:
+        return ""
+    s = _TAG.sub(" ", str(text))
+    s = unescape(s)
+    # Re-strip: unescape can reveal a literal tag that was entity-encoded in the
+    # source (&lt;div&gt;), which must not survive into the cell either.
+    s = _TAG.sub(" ", s)
+    s = _WS.sub(" ", s).strip()
+    # Tags are replaced with a space so "<b>a</b><b>b</b>" does not become "ab",
+    # but that leaves "voted <b>today</b>." reading as "voted today ." — close the
+    # gap before sentence punctuation.
+    return _SPACE_BEFORE_PUNCT.sub(r"\1", s)
+
+
 def _clean(value: Any) -> str:
-    """Excel rejects control characters in cell text; strip them rather than
-    letting openpyxl raise on one bad scraped summary."""
-    s = "" if value is None else str(value)
-    return "".join(ch for ch in s if ch == "\n" or ch == "\t" or ord(ch) >= 32).strip()
+    """The single choke point for every text cell in this workbook.
+
+    Strips HTML, decodes entities, collapses whitespace, and drops control
+    characters — Excel rejects the latter and openpyxl raises on them, so one bad
+    scraped summary would otherwise cost the whole download.
+    """
+    s = strip_html(value)
+    return "".join(ch for ch in s if ord(ch) >= 32).strip()
 
 
 def _sheet_title(prefix: str, date_str: str) -> str:
@@ -59,12 +96,22 @@ def _sheet_title(prefix: str, date_str: str) -> str:
 
 
 def _source_of(article: Any) -> str:
-    """Prefer the human outlet name; fall back through the collector fields."""
+    """Prefer the human outlet name; fall back through the collector fields.
+
+    Routed through _clean like every other text cell — outlet names arrive from
+    feed metadata and have carried entities (&amp;) before now.
+    """
     for attr in ("source_name", "outlet", "source"):
         v = getattr(article, attr, "") or ""
         if v:
-            return str(v)
+            return _clean(v)
     return ""
+
+
+# Internal-only columns appended to the QA workbook after the shared A-K set.
+QA_HEADERS = ["QA Score", "Duplicate Flag", "URL Status", "Word Count",
+              "Google News Match"]
+QA_WIDTHS = [10, 14, 12, 11, 18]
 
 
 def _relevance_band(article: Any) -> str:
@@ -115,11 +162,19 @@ def _style_header(ws, headers: List[str], row: int = 1) -> None:
         c.fill = fill
         c.border = BORDER
         c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        ws.column_dimensions[get_column_letter(col)].width = WIDTHS[col - 1]
+        widths = WIDTHS + QA_WIDTHS
+        if col - 1 < len(widths):
+            ws.column_dimensions[get_column_letter(col)].width = widths[col - 1]
 
 
-def _write_rows(ws, rows: List[Any], topic_of, start_row: int = 2) -> int:
-    """Write the A-K body. Returns the last row written."""
+def _write_rows(ws, rows: List[Any], topic_of, start_row: int = 2,
+                extras: Optional[Callable[[Any], List[Any]]] = None) -> int:
+    """Write the A-K body, plus `extras(article)` appended when supplied.
+
+    The QA workbook is defined as "the client workbook plus internal columns", so
+    it shares this writer rather than maintaining a parallel column list — that is
+    what keeps A-K identical between the two files instead of drifting apart.
+    """
     body = Font(name="Arial", size=10)
     cat_font = Font(name="Arial", size=10, bold=True, color=NAVY)
     url_font = Font(name="Arial", size=10, color=BLUE, underline="single")
@@ -144,6 +199,11 @@ def _write_rows(ws, rows: List[Any], topic_of, start_row: int = 2) -> int:
             url,
             _clean(getattr(a, "provider", "") or getattr(a, "source", "")),
         ]
+        if extras is not None:
+            try:
+                values = values + list(extras(a))
+            except Exception:  # noqa: BLE001 — a QA column must not cost the file
+                values = values + [""] * len(QA_HEADERS)
         for col, v in enumerate(values, start=1):
             c = ws.cell(row=r, column=col, value=v)
             c.font = body
@@ -167,6 +227,8 @@ def create_bulletin_excel(
     section_of: Optional[Callable[[Any], str]] = None,
     google_news_missing: Optional[List[Any]] = None,
     qa_report: Optional[Dict[str, Any]] = None,
+    qa: bool = False,
+    qa_extras: Optional[Callable[[Any], List[Any]]] = None,
 ) -> Workbook:
     """Build the three-sheet client workbook.
 
@@ -195,14 +257,20 @@ def create_bulletin_excel(
 
     wb = Workbook()
 
+    # QA mode is the same workbook plus internal columns L-P. Sharing one path is
+    # deliberate: the two downloads must agree on A-K, and a second column list
+    # would drift the moment either is edited.
+    headers = HEADERS + QA_HEADERS if qa else HEADERS
+    extras = qa_extras if qa else None
+
     # ── Sheet 1: FCC Daily Bulletin ───────────────────────────────────────────
     ws = wb.active
     ws.title = "FCC Daily Bulletin"
-    _style_header(ws, HEADERS)
-    last = _write_rows(ws, rows, topic_of)
+    _style_header(ws, headers)
+    last = _write_rows(ws, rows, topic_of, extras=extras)
     ws.freeze_panes = "A2"
     if rows:
-        ws.auto_filter.ref = f"A1:{get_column_letter(len(HEADERS))}{last}"
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{last}"
 
     # ── Sheet 2: Google News Cross-Check ──────────────────────────────────────
     gn = wb.create_sheet("Google News Cross-Check")
@@ -214,19 +282,19 @@ def create_bulletin_excel(
     banner.font = Font(name="Arial", size=11, bold=True, color="FFFFFF")
     banner.fill = PatternFill("solid", fgColor=NAVY)
     banner.alignment = Alignment(horizontal="left", vertical="center")
-    gn.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(HEADERS))
+    gn.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
 
     if missing:
-        _style_header(gn, HEADERS, row=2)
-        gn_last = _write_rows(gn, missing, topic_of, start_row=3)
+        _style_header(gn, headers, row=2)
+        gn_last = _write_rows(gn, missing, topic_of, start_row=3, extras=extras)
         gn.freeze_panes = "A3"
-        gn.auto_filter.ref = f"A2:{get_column_letter(len(HEADERS))}{gn_last}"
+        gn.auto_filter.ref = f"A2:{get_column_letter(len(headers))}{gn_last}"
     else:
         msg = gn.cell(row=3, column=1, value=(
             "All Google News articles matched. No missing stories identified."))
         msg.font = Font(name="Arial", size=11, color=NAVY)
-        for col in range(1, len(HEADERS) + 1):
-            gn.column_dimensions[get_column_letter(col)].width = WIDTHS[col - 1]
+        for col in range(1, len(headers) + 1):
+            gn.column_dimensions[get_column_letter(col)].width = (WIDTHS + QA_WIDTHS)[col - 1]
 
     # ── Sheet 3: Summary ──────────────────────────────────────────────────────
     s = wb.create_sheet("Summary")

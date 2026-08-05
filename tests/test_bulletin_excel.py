@@ -169,3 +169,48 @@ def test_empty_briefing_still_produces_a_valid_file():
     assert wb.sheetnames == ["FCC Daily Bulletin", "Google News Cross-Check", "Summary"]
     assert wb["FCC Daily Bulletin"].max_row == 1  # header only
     assert _summary_map(wb["Summary"])["Total Articles"] == 0
+
+
+# ── HTML must never reach a cell ─────────────────────────────────────────────
+
+def test_no_html_in_any_cell():
+    """The reported defect: raw markup rendered into the Summary column."""
+    arts = _articles()
+    arts[0].summary = "<p>The Commission voted <b>today</b>.</p>"
+    arts[0].title = "<span>FCC acts</span> on spectrum"
+    arts[1].summary = "<div>Fined &amp;8,000, per the <a href='#'>order</a>.</div>"
+    arts[1].source_name = arts[1].outlet = "AT&amp;T News"
+
+    wb, _ = _roundtrip(create_bulletin_excel(BRIEFING, arts, lambda a: a.section))
+    for name in wb.sheetnames:
+        ws = wb[name]
+        for row in ws.iter_rows():
+            for cell in row:
+                text = str(cell.value or "")
+                assert "<" not in text and ">" not in text, \
+                    f"HTML leaked into {name}!{cell.coordinate}: {text[:80]!r}"
+                assert "&amp;" not in text and "&lt;" not in text, \
+                    f"undecoded entity in {name}!{cell.coordinate}: {text[:80]!r}"
+
+    ws = wb["FCC Daily Bulletin"]
+    joined = " ".join(str(ws.cell(r, 6).value or "") for r in range(2, ws.max_row + 1))
+    assert "The Commission voted today." in joined, "spacing before punctuation not closed"
+
+
+def test_qa_mode_is_the_client_sheet_plus_l_to_p():
+    """'Same as Button 1 plus extras' only holds if A-K is byte-identical."""
+    from app.bulletin_intelligence.excel_export import QA_HEADERS
+    arts = _articles()
+    client, _ = _roundtrip(create_bulletin_excel(BRIEFING, arts, lambda a: a.section))
+    qa, _ = _roundtrip(create_bulletin_excel(
+        BRIEFING, arts, lambda a: a.section,
+        qa=True, qa_extras=lambda a: ["OK", "No", "", 80, "YES"]))
+
+    cw, qw = client["FCC Daily Bulletin"], qa["FCC Daily Bulletin"]
+    assert [cw.cell(1, c).value for c in range(1, 12)] == \
+           [qw.cell(1, c).value for c in range(1, 12)]
+    assert [qw.cell(1, c).value for c in range(12, 17)] == QA_HEADERS
+    assert cw.max_column == 11, "client sheet must not carry QA columns"
+    assert qw.max_column == 16
+    assert qw.cell(2, 12).value == "OK"
+    assert qw.cell(2, 16).value == "YES"
