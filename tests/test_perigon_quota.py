@@ -1,13 +1,13 @@
 """Perigon quota-protection tests.
 
-Context: the 150/day free tier was exhausted by ~06:00. The drain was
-amplification — 9 Boolean profiles x 3 cycle attempts = 27 calls per cycle, and
-scheduler._run_cycle_with_retry counts a cycle as failed when it returns no
-articles, so an exhausted quota made every subsequent hourly watchdog tick spend
-another 27 calls.
+Context: the free tier is 150 requests PER MONTH and was being exhausted. The
+drain was amplification — 9 Boolean profiles x 3 cycle attempts = 27 calls per
+cycle, and scheduler._run_cycle_with_retry counts a cycle as failed when it
+returns no articles, so an exhausted quota made every subsequent hourly watchdog
+tick spend another 27 calls. Against a MONTHLY cap, one bad day burns the month.
 
 These tests pin the three guards that stop it: a 24h response cache, a per-run
-call cap, and a daily budget that latches on 429. All of them must degrade to
+call cap, and a monthly budget that latches on 429. All of them must degrade to
 "return what we have" rather than raising, because a Perigon failure must never
 stop a bulletin.
 """
@@ -79,15 +79,15 @@ async def test_cache_key_includes_from_date():
 
 
 @pytest.mark.asyncio
-async def test_daily_budget_stops_calls_and_returns_empty(monkeypatch):
-    monkeypatch.setattr(perigon, "DAILY_BUDGET", 2)
+async def test_monthly_budget_stops_calls_and_returns_empty(monkeypatch):
+    monkeypatch.setattr(perigon, "MONTHLY_BUDGET", 2)
     client = CountingClient()
     for i in range(5):
         result = await perigon._fetch(client, f"q{i}", "2026-08-04")
         assert isinstance(result, list)  # never raises, always a list
 
-    assert client.calls == 2, "budget must hard-stop billable calls"
-    assert perigon.budget_status()["remaining"] == 0
+    assert client.calls == 2, "monthly budget must hard-stop billable calls"
+    assert perigon.budget_status()["budget_remaining"] == 0
 
 
 @pytest.mark.asyncio
@@ -119,14 +119,14 @@ async def test_failures_are_not_cached():
 
 
 @pytest.mark.asyncio
-async def test_budget_rolls_over_on_new_utc_date(monkeypatch):
-    monkeypatch.setattr(perigon, "DAILY_BUDGET", 1)
+async def test_budget_rolls_over_on_new_utc_month(monkeypatch):
+    monkeypatch.setattr(perigon, "MONTHLY_BUDGET", 1)
     client = CountingClient()
     await perigon._fetch(client, "q1", "2026-08-04")
-    assert perigon.budget_status()["remaining"] == 0
+    assert perigon.budget_status()["budget_remaining"] == 0
 
-    perigon._budget["date"] = "2026-08-03"  # simulate the date advancing
-    assert perigon.budget_status()["remaining"] == 1
+    perigon._budget["month"] = "2026-07"  # simulate the month advancing
+    assert perigon.budget_status()["budget_remaining"] == 1
     assert perigon.budget_status()["exhausted"] is False
 
 
@@ -139,24 +139,45 @@ async def test_ingest_returns_empty_without_key(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_health_probe_respects_budget(monkeypatch):
-    """Polling provider health was silently competing for the same 150/day."""
+    """Polling provider health was silently competing for the same 150/month."""
     monkeypatch.setattr(perigon, "PERIGON_ENABLED", True)
     monkeypatch.setattr(perigon, "PERIGON_API_KEY", "test-key")
     perigon._budget["exhausted"] = True
-    perigon._budget["date"] = perigon.datetime.now(perigon.timezone.utc).strftime("%Y-%m-%d")
+    perigon._budget["month"] = perigon.datetime.now(perigon.timezone.utc).strftime("%Y-%m")
 
     out = await perigon.perigon_health()
     assert out["status"] == "quota_exhausted"
     assert out["budget"]["exhausted"] is True
 
 
-def test_budget_status_shape():
+def test_budget_status_retains_operator_fields():
     s = perigon.budget_status()
-    for key in ("date", "calls_today", "daily_budget", "remaining",
-                "exhausted", "cache_entries", "cache_ttl_s", "max_calls_per_run"):
+    for key in ("month", "calls_this_month", "monthly_budget", "exhausted",
+                "cache_entries", "cache_ttl_s", "max_calls_per_run"):
         assert key in s, f"budget_status missing {key}"
 
 
-def test_daily_budget_is_below_the_free_tier():
-    """A ceiling at or above 150 would not protect anything."""
-    assert perigon.DAILY_BUDGET < 150
+def test_monthly_budget_is_below_the_free_tier():
+    """The tier is 150 requests per MONTH. A ceiling at or above it, or one
+    scoped to a day, protects nothing: 120/day permits ~3,600/month."""
+    assert perigon.MONTHLY_BUDGET < 150
+    assert perigon.BUDGET_TOTAL == 150
+    assert not hasattr(perigon, "DAILY_BUDGET"), "budget must be monthly, not daily"
+
+
+def test_budget_status_reports_the_documented_endpoint_shape():
+    s = perigon.budget_status()
+    for key in ("budget_total", "budget_remaining", "calls_today",
+                "cache_hits_today", "last_call", "status"):
+        assert key in s, f"budget_status missing {key}"
+    assert s["status"] in ("active", "quota_exceeded")
+
+
+@pytest.mark.asyncio
+async def test_cache_hits_are_counted():
+    client = CountingClient()
+    await perigon._fetch(client, "q", "2026-08-05")
+    await perigon._fetch(client, "q", "2026-08-05")
+    await perigon._fetch(client, "q", "2026-08-05")
+    assert client.calls == 1
+    assert perigon.budget_status()["cache_hits_today"] == 2

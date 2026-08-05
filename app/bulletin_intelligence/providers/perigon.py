@@ -64,34 +64,51 @@ PAGE_SIZE = int(os.getenv("PERIGON_PAGE_SIZE", "50"))
 MAX_PROFILES = int(os.getenv("PERIGON_MAX_PROFILES", "9"))
 
 # ── Quota protection ────────────────────────────────────────────────────────
-# The free tier is 150 requests/day and was being exhausted by ~06:00. The drain
-# was amplification, not a loop in this module:
+# The free tier is 150 requests PER MONTH. The drain was amplification, not a
+# loop in this module:
 #
 #   9 profiles x 3 cycle attempts (scheduler.MAX_CYCLE_ATTEMPTS) = 27 calls/cycle
 #   ...and scheduler._run_cycle_with_retry counts a cycle as FAILED when it
 #   returns no articles. Once the quota is gone, _fetch returns [] silently, the
 #   cycle looks failed, the hourly watchdog re-runs it, and each re-run spends
-#   another 27 calls. Exhaustion is self-reinforcing: 150/27 ~= 5.5 hours.
+#   another 27 calls. Exhaustion is self-reinforcing — and against a MONTHLY cap
+#   of 150, a single bad day of watchdog retries burns the whole month.
 #
 # Three independent guards, any one of which is sufficient to stop the bleed:
 #   1. RESPONSE CACHE (24h) — a retry or watchdog re-run reuses the first answer
-#      instead of re-billing it. This is what actually breaks the loop, taking a
-#      failing day from 27+/hour down to 9 calls total.
+#      instead of re-billing it. Against a monthly cap this is not an
+#      optimization but the load-bearing control.
 #   2. PER-RUN CAP — bounds any single cycle regardless of profile count.
-#   3. DAILY BUDGET — a hard ceiling below the tier limit; once tripped, the
-#      provider goes quiet for the rest of the day rather than burning credit on
-#      calls that will 429 anyway.
+#   3. MONTHLY BUDGET — a hard ceiling below the tier limit; once tripped, the
+#      provider goes quiet for the rest of the month rather than burning credit
+#      on calls that will 429 anyway.
 #
 # Every guard degrades to "return what we have and log", never to an exception:
 # a Perigon problem must never stop a bulletin.
 CACHE_TTL_S = int(os.getenv("PERIGON_CACHE_TTL_S", str(24 * 3600)))
 MAX_CALLS_PER_RUN = int(os.getenv("PERIGON_MAX_CALLS_PER_RUN", "50"))
-DAILY_BUDGET = int(os.getenv("PERIGON_DAILY_BUDGET", "120"))  # under the 150 tier
+
+# THE TIER IS 150 REQUESTS PER MONTH, NOT PER DAY.
+# An earlier version of this module budgeted 120/day, which permits ~3,600/month
+# against a 150/month cap — it would have consumed the entire month's quota in
+# roughly a day and a quarter while appearing to be a working guard.
+#
+# At 9 profiles per cycle and one cycle per day, an uncached month costs ~270
+# calls — already over the cap before any retry. So the 24h cache is not an
+# optimization here, it is the only thing that makes daily collection viable at
+# all: with it, a day costs 9 calls (~270/month still), which is why the monthly
+# ceiling below must also hold. When the ceiling is reached the provider goes
+# quiet for the rest of the month and the bulletin runs on its other sources.
+MONTHLY_BUDGET = int(os.getenv("PERIGON_MONTHLY_BUDGET", "140"))  # under the 150 tier
+BUDGET_TOTAL = int(os.getenv("PERIGON_TIER_LIMIT", "150"))
 
 # {cache_key: (expires_at_epoch, [articles])}
 _cache: Dict[str, Any] = {}
-# Rolls over on UTC date change. "exhausted" latches on a 429 so we stop probing.
-_budget: Dict[str, Any] = {"date": None, "calls": 0, "exhausted": False}
+# Rolls over on UTC MONTH change. "exhausted" latches on a 429 so we stop probing.
+_budget: Dict[str, Any] = {
+    "month": None, "calls": 0, "exhausted": False,
+    "day": None, "calls_today": 0, "cache_hits": 0, "last_call": None,
+}
 
 
 def _cache_key(query: str, from_date: str) -> str:
@@ -114,27 +131,42 @@ def _cache_put(key: str, payload) -> None:
 
 
 def _budget_roll() -> None:
-    """Reset the daily counter when the UTC date changes."""
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    if _budget["date"] != today:
-        _budget.update({"date": today, "calls": 0, "exhausted": False})
+    """Reset the monthly counter on UTC month change; daily counter on date change.
+
+    The month is what gates spending — the day counter is reporting only.
+    """
+    now = datetime.now(timezone.utc)
+    month, today = now.strftime("%Y-%m"), now.strftime("%Y-%m-%d")
+    if _budget["month"] != month:
+        _budget.update({"month": month, "calls": 0, "exhausted": False,
+                        "cache_hits": 0})
+    if _budget["day"] != today:
+        _budget.update({"day": today, "calls_today": 0})
 
 
 def _budget_allows() -> bool:
     _budget_roll()
     if _budget["exhausted"]:
         return False
-    return _budget["calls"] < DAILY_BUDGET
+    return _budget["calls"] < MONTHLY_BUDGET
 
 
 def budget_status() -> Dict[str, Any]:
     """Observable counters for the provider-health surface and tests."""
     _budget_roll()
+    remaining = max(0, MONTHLY_BUDGET - _budget["calls"])
     return {
-        "date": _budget["date"],
-        "calls_today": _budget["calls"],
-        "daily_budget": DAILY_BUDGET,
-        "remaining": max(0, DAILY_BUDGET - _budget["calls"]),
+        "budget_total": BUDGET_TOTAL,
+        "budget_remaining": remaining,
+        "calls_today": _budget["calls_today"],
+        "calls_this_month": _budget["calls"],
+        "cache_hits_today": _budget["cache_hits"],
+        "last_call": _budget["last_call"],
+        "status": "quota_exceeded" if (_budget["exhausted"] or remaining == 0) else "active",
+        # Retained for operators: the ceiling that actually gates spending, and
+        # the cache that makes staying under it possible.
+        "monthly_budget": MONTHLY_BUDGET,
+        "month": _budget["month"],
         "exhausted": _budget["exhausted"],
         "cache_entries": len(_cache),
         "cache_ttl_s": CACHE_TTL_S,
@@ -145,7 +177,9 @@ def budget_status() -> Dict[str, Any]:
 def _reset_for_tests() -> None:
     """Clear cache and budget. Test-support only."""
     _cache.clear()
-    _budget.update({"date": None, "calls": 0, "exhausted": False})
+    _budget.update({"month": None, "calls": 0, "exhausted": False,
+                    "day": None, "calls_today": 0, "cache_hits": 0,
+                    "last_call": None})
 
 # Excluded because "FCC" is also FC Cincinnati. Appended to every profile query.
 _SPORTS_EXCLUSION = '(soccer OR "FC Cincinnati" OR MLS OR "Major League Soccer")'
@@ -194,14 +228,16 @@ async def _fetch(client: httpx.AsyncClient, query: str, from_date: str) -> List[
     key = _cache_key(query, from_date)
     cached = _cache_get(key)
     if cached is not None:
+        _budget_roll()
+        _budget["cache_hits"] += 1
         logger.debug("Perigon: cache hit (%s...)", key[:8])
         return cached
 
     if not _budget_allows():
         logger.warning(
-            "Perigon: daily budget spent (%d/%d used, exhausted=%s) — skipping call "
-            "and continuing with other sources",
-            _budget["calls"], DAILY_BUDGET, _budget["exhausted"])
+            "Perigon: MONTHLY budget spent (%d/%d used this month, exhausted=%s) — "
+            "skipping call and continuing with other sources",
+            _budget["calls"], MONTHLY_BUDGET, _budget["exhausted"])
         return []
 
     params = {
@@ -214,13 +250,15 @@ async def _fetch(client: httpx.AsyncClient, query: str, from_date: str) -> List[
         "size": PAGE_SIZE,
     }
     _budget["calls"] += 1
+    _budget["calls_today"] += 1
+    _budget["last_call"] = datetime.now(timezone.utc).isoformat()
     resp = await client.get(PERIGON_BASE, params=params)
     if resp.status_code == 429:
         # Latch: the tier is spent. Further calls today would only burn latency
         # and confirm what we already know.
         _budget["exhausted"] = True
         logger.warning("Perigon: HTTP 429 quota exceeded — provider disabled for "
-                       "the rest of the day; bulletin continues on other sources")
+                       "the rest of the MONTH; bulletin continues on other sources")
         return []
     if resp.status_code != 200:
         logger.warning(f"Perigon HTTP {resp.status_code}: {resp.text[:160]}")
@@ -363,6 +401,8 @@ async def perigon_health() -> Dict[str, Any]:
     started = datetime.now(timezone.utc)
     try:
         _budget["calls"] += 1
+        _budget["calls_today"] += 1
+        _budget["last_call"] = datetime.now(timezone.utc).isoformat()
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             resp = await client.get(PERIGON_BASE, params={
                 "apiKey": PERIGON_API_KEY, "q": "FCC", "size": 1,

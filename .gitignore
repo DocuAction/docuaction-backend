@@ -14,9 +14,13 @@ pv.html
 # pydeps_new/ is the staging copy of the vendored Linux wheels (~5,500 files);
 # prod-deploy.prev.zip is the rollback copy of the previous prod artifact.
 dev-deploy.zip
-prod-deploy.zip
-prod-deploy.prev.zip
 deploy.zip
+# Glob rather than named files: rollback generations (prod-deploy.prev2.zip) and
+# commit-tagged builds (prod-deploy-<sha>.zip) are ~60 MB each and were slipping
+# past the old exact-name list into `git add -A`.
+prod-deploy*.zip
+# Staging tree the prod artifact is assembled in.
+prod-build/
 pydeps/
 pydeps_new/
 

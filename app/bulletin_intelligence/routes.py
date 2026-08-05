@@ -118,6 +118,54 @@ async def seed_search_profiles_endpoint(agency_id: str = Query("fcc")):
         raise HTTPException(500, f"seed failed: {str(e)[:200]}")
 
 
+# ── Perigon quota observability ────────────────────────────────────────────────
+@router.get("/perigon/health", dependencies=guard("admin"))
+async def perigon_quota_health(probe: bool = Query(
+        False, description="Also make one live reachability call (spends budget).")):
+    """Perigon quota state — budget remaining, calls today, cache size.
+
+    Exists because the free tier was being exhausted daily by ~06:00 with no
+    visible signal: the provider fails silently by design (a Perigon problem must
+    never stop a bulletin), so the only evidence anything was wrong was a thinner
+    briefing. Without this route the guards are unobservable and the first sign
+    they stopped working would again be the absence of a problem.
+
+    Read-only by default. `probe=true` performs one live reachability call, which
+    spends a request from the same budget it reports — off by default so that
+    monitoring this endpoint cannot itself drain the quota, which is exactly how
+    perigon_health() contributed to the original problem.
+
+    Admin-guarded: it reports provider capacity and configuration state.
+    """
+    from app.bulletin_intelligence.providers.perigon import (
+        PERIGON_ENABLED, budget_status, perigon_health)
+
+    status = budget_status()
+    payload = {
+        # Documented contract — flat, so a monitor can read it without unwrapping.
+        "budget_total": status["budget_total"],
+        "budget_remaining": status["budget_remaining"],
+        "calls_today": status["calls_today"],
+        "cache_hits_today": status["cache_hits_today"],
+        "last_call": status["last_call"],
+        "status": status["status"],
+        "provider": "perigon",
+        "enabled": PERIGON_ENABLED,
+        "budget": status,
+        "note": ("The tier is 150 requests per MONTH, so budget_remaining counts "
+                 "down over the month, not the day. Counters are per worker "
+                 "process; Azure App Service may run several, so the ceiling is "
+                 "per-worker and the 24h response cache is what bounds total spend."),
+    }
+    if not PERIGON_ENABLED:
+        payload["status"] = "not_configured"
+        payload["reason"] = "PERIGON_API_KEY not set — provider inert, no calls made"
+        return payload
+    if probe:
+        payload["probe"] = await perigon_health()
+    return payload
+
+
 # ── Google News QA comparison ──────────────────────────────────────────────────
 @router.get("/qa/google-news-compare", dependencies=guard("viewer"))
 async def google_news_compare(agency_id: str = "fcc"):
