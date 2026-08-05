@@ -107,6 +107,10 @@ FCC_TOPIC_LABELS = TOPIC_LABELS  # alias for backward compatibility
 # ── Client display sections (the 6 buckets in the AGT FCC Daily News email) ─────
 # These are what the CLIENT sees, grouped from the finer internal topics above.
 # Order here is the order they appear in the briefing.
+# Duplicate groups from the most recent cycle, for the QA spreadsheet's
+# Duplicate Flag column. Reset each cycle; empty until one runs.
+_last_duplicate_groups = []
+
 AGT_SECTIONS = [
     "General",            # client's Appendix A label for FCC_NEWS; always first
     "Consumers",
@@ -120,6 +124,56 @@ AGT_SECTIONS = [
     "AI / Machine Learning",
     "International",
 ]
+
+GENERIC_SECTION = "General"
+
+# Keyword routing used when nothing else places a story, so "General" stops acting
+# as a catch-all sink. Order matters: the first matching rule wins, and the more
+# specific dispositions (enforcement, legislation) are checked before the broad
+# sector buckets, because "FCC fines a broadcaster" is an enforcement story that
+# merely happens to mention broadcasting.
+_SECTION_KEYWORDS = [
+    ("Enforcement & Consumer", (
+        "enforcement", "forfeiture", "consent decree", "penalty", "fine",
+        "notice of apparent liability", "citation", "pirate radio")),
+    ("Public Safety / Cybersecurity / Privacy", (
+        "911", "e911", "emergency alert", "public safety", "outage",
+        "cyber", "privacy", "data breach", "security")),
+    ("Wireless & Spectrum", (
+        "spectrum", "mhz", "megahertz", "ghz", "auction", "c-band", "cbrs",
+        "5g", "6g", "wireless", "satellite", "ngso", "earth station")),
+    ("Broadband & Infrastructure", (
+        "broadband", "fiber", "bead", "usf", "universal service", "e-rate",
+        "lifeline", "rdof", "digital divide", "pole attachment", "isp")),
+    ("Media & Broadcasting", (
+        "broadcast", "radio station", "television", " tv ", "media ownership",
+        "broadcast license", "retransmission",
+        # "cable" alone is too greedy — it matched "undersea cable", which is an
+        # International story. Qualify it.
+        "cable television", "cable operator", "cable provider", "cable system")),
+    ("Consumers", (
+        "robocall", "tcpa", "do not call", "consumer complaint", "scam",
+        "accessibility", "consumer protection")),
+    ("AI / Machine Learning", (
+        "artificial intelligence", " ai ", "machine learning")),
+    ("International", (
+        "international", "itu", "subsea", "undersea cable", "treaty",
+        "foreign carrier")),
+    ("Space Policy", ("space bureau", "launch", "orbital", "constellation")),
+    ("Business & Tech", (
+        "net neutrality", "merger", "acquisition", "telecom industry",
+        "market", "earnings")),
+]
+
+
+def _keyword_section(title: str, summary: str = "") -> str:
+    """First matching section by keyword, or "" when nothing matches."""
+    text = f" {(title or '')} {(summary or '')} ".lower()
+    for section, needles in _SECTION_KEYWORDS:
+        if any(n in text for n in needles):
+            return section
+    return ""
+
 
 # Fallback topic -> section map (used if the classifier doesn't set a section).
 TOPIC_TO_SECTION = {
@@ -2325,8 +2379,21 @@ def _section_of(art: "Article") -> str:
         return bs
     if art.section in AGT_SECTIONS:
         return art.section
-    sec = TOPIC_TO_SECTION.get(art.topic, "General")
-    return sec if sec in AGT_SECTIONS else "General"   # never drop a story
+    sec = TOPIC_TO_SECTION.get(art.topic, "")
+    if sec in AGT_SECTIONS and sec != GENERIC_SECTION:
+        return sec
+    # "General" is no longer a destination. It was acting as a sink: anything the
+    # classifier and the boolean spec both declined to place landed there, so the
+    # section filled up with stories that each had a specific home. Resolve by
+    # keyword instead, and only fall back to General when nothing at all matches
+    # — never drop a story.
+    #
+    # NOTE: "General" remains in AGT_SECTIONS because engine.py:111 records it as
+    # the client's Appendix A label for FCC_NEWS. Sections with no articles are not
+    # rendered, so it disappears from output on its own once nothing is assigned to
+    # it. Removing the label outright is a change to a contract deliverable's
+    # structure and is deliberately NOT done here.
+    return _keyword_section(art.title or "", art.summary or "") or GENERIC_SECTION
 
 
 def _clean_headline(title: str) -> str:
@@ -2505,8 +2572,89 @@ def _collect_sections(clusters, summaries: Dict[str, str]):
     return [(sec, by_section[sec]) for sec in AGT_SECTIONS]
 
 
+# ── Summary prompt ──────────────────────────────────────────────────────────
+# House style for this briefing: every summary OPENS with the date and source.
+#
+# Note for future editors: an earlier draft of this prompt required the exact
+# opposite (never open with a date or source, start with the subject). If you are
+# changing this again, change the EXAMPLES in the same edit — a prompt that states
+# one rule and demonstrates another produces inconsistent output, and the examples
+# tend to win.
+SUMMARY_PROMPT = """You write article summaries for a federal agency daily intelligence briefing.
+
+TARGET: 70-100 words per summary.
+  High relevance (>= 0.75): 80-100 words
+  Medium relevance (0.45-0.74): 70-90 words
+  Low relevance (< 0.45): 60-80 words
+  MINIMUM: 60 words. MAXIMUM: 100 words.
+
+RULES:
+
+1. ALWAYS start with: "On [Month Day, Year], [Source]..."
+   This is the required format for this briefing.
+   Example: "On August 4, 2026, Law360 reported that..."
+   Use the item's `published` date and `outlet` fields. If the date is missing,
+   open with the source alone: "Law360 reported that..."
+
+2. After the date+source opening, state the key facts.
+
+3. For opinion pieces:
+   "On [date], [Source] published an opinion piece in which [Author] argued that..."
+
+4. Word count: 70-100 words, banded by the item's `relevance` value as above.
+
+5. Cover the TOP 2-3 most important facts with enough detail to be useful. This
+   is not a one-liner - give context and substance within the word count.
+
+6. State ONLY what the article says. No analysis, no implications, no regulatory
+   context that is not in the source. If the provided text is thin, summarize only
+   what is given - do NOT invent facts.
+
+7. For opinion pieces, attribute the argument: "Williams argues..." not "The
+   article states..."
+
+8. Do NOT include stock tickers (NASDAQ, TSX, NYSE) unless the article is
+   specifically about markets.
+
+9. Do NOT use these words: unprecedented, significant, bombshell, major,
+   breaking, sweeping, landmark, groundbreaking.
+
+10. Do NOT put [Subscription Required] in the summary - it belongs in the title.
+
+11. Do NOT put [Opinion] in the summary - it belongs in the title.
+
+EXAMPLES:
+
+GOOD (date + source opening, opinion attributed, 84 words):
+"On August 3, 2026, Broadband Breakfast published an opinion piece in which
+Jonathan Williams of the American Legislative Exchange Council argued that the One
+Big Beautiful Bill Act restores the FCC's spectrum auction authority through 2034.
+Williams noted the authority had lapsed under the Biden administration, the first
+such lapse in three decades, and that the bill directs the FCC to make at least 800
+megahertz available for commercial use and to auction at least 100 megahertz of
+Upper C-Band spectrum by July 2027."
+
+BAD (starts with the subject instead of date + source):
+"Williams of the American Legislative Exchange Council argues the One Big Beautiful
+Bill Act restores the FCC's spectrum auction authority through 2034."
+
+GOOD (date + source opening, ticker omitted, 71 words):
+"On August 4, 2026, Cyprus Shipping News reported that Telesat GEO is prepared to
+execute the FCC Upper C-band transition plan as one of the largest satellite
+operators affected by the Commission's spectrum repurposing proceeding. The company
+said its transition preparations follow the FCC's ongoing effort to clear Upper
+C-band spectrum for commercial wireless broadband deployment, and that it expects to
+meet the Commission's published clearing milestones."
+
+BAD (starts with the subject, and carries a stock ticker):
+"Telesat GEO Inc., a subsidiary of Telesat Corporation (NASDAQ and TSX: TSAT), is
+prepared to execute the FCC's Upper C-band transition plan."
+
+Return ONLY a JSON array of {"id":"...","summary":"..."}."""
+
+
 async def _summaries_for(articles: List[Article], agency: AgencyConfig) -> Dict[str, str]:
-    """Claude-written 2-4 sentence factual summaries, keyed by article_id."""
+    """Claude-written summaries in briefing house style, keyed by article_id."""
     fallback = {a.article_id: (a.summary or a.title or "")[:400] for a in articles}
     if not ANTHROPIC_KEY or not articles:
         return fallback
@@ -2514,15 +2662,11 @@ async def _summaries_for(articles: List[Article], agency: AgencyConfig) -> Dict[
 
     async def _summary_batch(batch: List[Article]) -> Dict[str, str]:
         items = [{"id": a.article_id, "title": a.title, "outlet": a.outlet,
+                  "published": (getattr(a, "published_at", "") or "")[:10],
+                  "relevance": round(float(getattr(a, "relevance_score", 0.5) or 0.5), 2),
+                  "article_type": getattr(a, "article_type", "news") or "news",
                   "text": (a.full_text or a.summary or "")[:1500]} for a in batch]
-        prompt = (
-            f"You write summaries for the {agency.short_name} Daily News Monitoring briefing — a "
-            "government news-clipping service. For each item write a 2-4 sentence FACTUAL summary: "
-            "lead with the concrete news (who/what/when, dates, dollar amounts, votes, notable quotes). "
-            "No opinion, no marketing language. If the provided text is thin, summarize only what is "
-            'given — do NOT invent facts. Return ONLY a JSON array of {"id":"...","summary":"..."}.\n\n'
-            "Items:\n" + json.dumps(items)
-        )
+        prompt = SUMMARY_PROMPT + "\n\nItems:\n" + json.dumps(items)
         res: Dict[str, str] = {}
         try:
             resp = await client.messages.create(
@@ -3346,6 +3490,28 @@ async def run_daily_cycle(
     except Exception as _e:
         logger.debug(f"better_deduplicate wrapper skipped: {_e}")
         unique = deduplicate(all_articles)
+
+    # ── AMP / syndication dedup ──────────────────────────────────────────────
+    # The dedup above compares dedup_hash and a 60-char title prefix, which the
+    # same story wearing an AMP URL, tracking parameters, or a syndicated
+    # headline slips straight past. This pass catches those four cases.
+    #
+    # Additive and non-destructive: find_duplicates marks, it does not delete, and
+    # every input is accounted for in keepers + duplicates. The duplicates are
+    # retained on _last_duplicate_groups so the QA sheet can flag them rather than
+    # having them vanish silently — a dedup bug that drops a real story is far
+    # costlier than one that leaves a duplicate visible in review.
+    try:
+        from app.bulletin_intelligence.url_dedup import find_duplicates
+        _before = len(unique)
+        _keepers, _dup_groups = find_duplicates(unique)
+        globals()["_last_duplicate_groups"] = _dup_groups
+        if len(_keepers) < _before:
+            logger.info("AMP/URL dedup: %d → %d (%d marked duplicate)",
+                        _before, len(_keepers), _before - len(_keepers))
+        unique = _keepers
+    except Exception as _e:
+        logger.warning(f"AMP/URL dedup skipped: {_e}")
 
 
     # Safety cap (ADD-only): the extended source list can surface far more unique

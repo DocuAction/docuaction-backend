@@ -20,6 +20,7 @@ Design notes:
 """
 
 import asyncio
+import base64
 import logging
 import re
 from dataclasses import dataclass, field
@@ -154,6 +155,50 @@ def _ET():
         return ET
 
 
+def unwrap_google_news_url(link: str, source_url: str = "") -> str:
+    """Return the publisher's URL, unwrapping a Google News redirect when possible.
+
+    Google News RSS <link> values are redirect wrappers
+    (news.google.com/rss/articles/CBMi...). Storing those is bad in three ways:
+    they defeat URL-based dedup (every wrapper is unique), they are opaque in the
+    briefing, and they rot when Google rotates them.
+
+    Two extraction paths, no network call:
+      1. The <source url="..."> attribute, when the feed provides it. Note this is
+         the publisher's HOME page, not the article — useful for the domain, not
+         as the article link, so it is only used when nothing better exists.
+      2. A base64url payload in the path. Older wrappers embed the target URL
+         there; newer ones embed an opaque internal id instead, so this decodes
+         only when a plausible http(s) URL actually falls out.
+
+    Following the redirect over HTTP would resolve every case, but costs one
+    request per article and Google rate-limits it — not worth it inside a
+    collection cycle. Unresolvable wrappers are returned unchanged rather than
+    dropped: a wrapped link still works for a human clicking it.
+    """
+    link = (link or "").strip()
+    if not link or "news.google.com" not in link:
+        return link
+
+    m = re.search(r"/(?:rss/)?articles/([A-Za-z0-9_\-]+)", link)
+    if m:
+        token = m.group(1)
+        for candidate in (token, token + "=" * (-len(token) % 4)):
+            try:
+                raw = base64.urlsafe_b64decode(candidate).decode("utf-8", "replace")
+            except Exception:
+                continue
+            found = re.search(r"https?://[^\s\x00-\x1f\"'<>]{6,}", raw)
+            if found:
+                url = found.group(0).rstrip("\\").strip()
+                # Guard against decoding into another Google wrapper.
+                if "news.google.com" not in url:
+                    return url
+            break
+
+    return link
+
+
 def parse_rss(xml_text: str) -> List[Dict[str, str]]:
     """Parse a Google News RSS document into plain dicts.
 
@@ -180,16 +225,62 @@ def parse_rss(xml_text: str) -> List[Dict[str, str]]:
             continue
         source_el = item.find("source")
         source = ""
-        if source_el is not None and source_el.text:
-            source = source_el.text.strip()
+        source_url = ""
+        if source_el is not None:
+            if source_el.text:
+                source = source_el.text.strip()
+            source_url = (source_el.get("url") or "").strip()
+        real = unwrap_google_news_url(link, source_url)
         out.append({
             "title": title,
-            "url": link,
+            "url": real,
+            "google_url": link if real != link else "",
             "source": source,
             "published": _text("pubDate"),
             "summary": _text("description"),
         })
     return out
+
+
+def _parse_pubdate(value: str) -> Optional[datetime]:
+    """Parse an RSS pubDate to an aware UTC datetime, or None."""
+    if not (value or "").strip():
+        return None
+    try:
+        from email.utils import parsedate_to_datetime
+        dt = parsedate_to_datetime(value.strip())
+    except Exception:
+        return None
+    if dt is None:
+        return None
+    return dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def is_from_today(published: str, *, now: Optional[datetime] = None) -> bool:
+    """True when the item was published on today's UTC date.
+
+    `when:1d` in the feed query is a relative 24h window, not a calendar day, so
+    it still returns yesterday-evening stories. This is the calendar-day gate.
+
+    An UNPARSEABLE or missing date returns True. Google News omits pubDate on some
+    items, and treating "no date" as "not today" would silently discard real
+    stories — the failure this whole QA layer exists to prevent. Better a stale
+    item a reviewer can see than a missing one they cannot.
+    """
+    dt = _parse_pubdate(published)
+    if dt is None:
+        return True
+    today = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).date()
+    return dt.date() == today
+
+
+def filter_to_today(items: List[Dict[str, str]], *,
+                    now: Optional[datetime] = None) -> List[Dict[str, str]]:
+    kept = [i for i in items if is_from_today(i.get("published", ""), now=now)]
+    dropped = len(items) - len(kept)
+    if dropped:
+        logger.info("Google News: dropped %d item(s) not from today's UTC date", dropped)
+    return kept
 
 
 def deduplicate_by_url(items: List[Dict[str, str]]) -> List[Dict[str, str]]:
@@ -292,8 +383,13 @@ class GoogleNewsCollector:
             it["feed"] = feed["name"]
         return items
 
-    async def collect_raw(self) -> List[Dict[str, str]]:
-        """Fetch every feed concurrently; return deduplicated raw dicts."""
+    async def collect_raw(self, *, now: Optional[datetime] = None) -> List[Dict[str, str]]:
+        """Fetch every feed concurrently; return deduplicated raw dicts.
+
+        `now` overrides the clock used by the today-only filter. Production leaves
+        it None; tests pass a fixed instant so a dated fixture does not silently
+        start failing the day after it was written.
+        """
         results: List[Dict[str, str]] = []
         try:
             async with httpx.AsyncClient(
@@ -315,6 +411,7 @@ class GoogleNewsCollector:
             else:
                 # Never block on one feed failure.
                 logger.warning("Google News feed failed: %s: %s", feed["name"], r)
+        results = filter_to_today(results, now=now)
         deduped = deduplicate_by_url(results)
         logger.info("Google News: %d articles from %d feeds (%d before dedup)",
                     len(deduped), len(self.feeds), len(results))

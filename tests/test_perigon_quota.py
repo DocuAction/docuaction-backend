@@ -181,3 +181,23 @@ async def test_cache_hits_are_counted():
     await perigon._fetch(client, "q", "2026-08-05")
     assert client.calls == 1
     assert perigon.budget_status()["cache_hits_today"] == 2
+
+
+def test_three_fixed_queries_fit_the_monthly_tier():
+    """9 profiles x 30 days = 270 calls against a 150/month cap — unreachable by
+    any amount of guarding. Three queries is what actually fits."""
+    qs = perigon._profiles()
+    assert len(qs) == 3, f"expected 3 queries, got {len(qs)}"
+    assert len(qs) * 30 < perigon.BUDGET_TOTAL, "monthly cost must fit the tier"
+    booleans = [q["boolean"] for q in qs]
+    assert '"FCC"' in booleans
+    assert '"Federal Communications Commission"' in booleans
+    assert "spectrum broadband" in booleans
+
+
+def test_bare_fcc_query_still_excludes_the_soccer_club():
+    """A bare "FCC" returns FC Cincinnati match reports. The exclusion is what
+    makes a broad query safe to run."""
+    q = perigon._build_query('"FCC"')
+    assert "FC Cincinnati" in q
+    assert "NOT" in q

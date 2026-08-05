@@ -60,8 +60,28 @@ TIMEOUT = float(os.getenv("PERIGON_TIMEOUT", "45"))
 # Per-profile page size. Perigon's max page is larger, but the bulletin caps
 # classification at BULLETIN_MAX_CLASSIFY anyway, so pulling more just adds latency.
 PAGE_SIZE = int(os.getenv("PERIGON_PAGE_SIZE", "50"))
-# How many Boolean profiles to run per cycle. Each is one HTTP call.
-MAX_PROFILES = int(os.getenv("PERIGON_MAX_PROFILES", "9"))
+# How many queries to run per cycle. Each is one HTTP call.
+#
+# Reduced 9 -> 3 to fit the 150/month tier: 3 x ~30 days = ~90 calls/month, with
+# headroom for the occasional uncached retry. At 9 profiles this was ~270/month
+# and the ceiling was unreachable by any amount of guarding.
+MAX_PROFILES = int(os.getenv("PERIGON_MAX_PROFILES", "3"))
+
+# The three queries, fixed rather than "first 3 of the Boolean profile store" —
+# slicing that store would pick whichever profiles happen to sort first, which is
+# not a coverage decision anyone made.
+#
+# These are broad on purpose: with only 3 calls the goal is recall, and precision
+# is recovered downstream by the classifier and the FCC_KEYWORDS relevance gate.
+# _build_query() still appends the sports exclusion to each, which is what keeps
+# a bare "FCC" from returning FC Cincinnati match reports.
+FIXED_QUERIES = [
+    {"key": "fcc_bare", "boolean": '"FCC"'},
+    {"key": "fcc_full", "boolean": '"Federal Communications Commission"'},
+    {"key": "spectrum_broadband", "boolean": "spectrum broadband"},
+]
+# Set PERIGON_USE_BOOLEAN_PROFILES=true to go back to the Phase 2 profile store.
+USE_BOOLEAN_PROFILES = os.getenv("PERIGON_USE_BOOLEAN_PROFILES", "").strip().lower() in ("1", "true", "yes")
 
 # ── Quota protection ────────────────────────────────────────────────────────
 # The free tier is 150 requests PER MONTH. The drain was amplification, not a
@@ -204,7 +224,14 @@ def _build_query(boolean_query: str) -> str:
 
 
 def _profiles() -> List[Dict[str, str]]:
-    """Boolean profiles to query, from the Phase 2 store (DB-backed, with fallback)."""
+    """Queries to run this cycle.
+
+    Defaults to the three fixed queries sized for the 150/month tier. The Phase 2
+    Boolean profile store remains available behind PERIGON_USE_BOOLEAN_PROFILES
+    for anyone on a paid tier who can afford the wider sweep.
+    """
+    if not USE_BOOLEAN_PROFILES:
+        return FIXED_QUERIES[:MAX_PROFILES]
     try:
         from app.bulletin_intelligence.profiles.boolean_profiles import PROFILES
         out = []

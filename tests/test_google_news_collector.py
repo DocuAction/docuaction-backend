@@ -119,7 +119,10 @@ async def test_feed_failure_graceful(monkeypatch):
         return gnc.parse_rss(SAMPLE_RSS)
 
     monkeypatch.setattr(GoogleNewsCollector, "_fetch_feed", fake_fetch)
-    out = await collector.collect_raw()
+    # Pin the clock to the fixture's date; collect_raw applies the today-only
+    # filter, and SAMPLE_RSS is dated 04 Aug 2026.
+    from datetime import datetime, timezone
+    out = await collector.collect_raw(now=datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc))
     assert len(out) == 2, "the healthy feed's articles must survive"
 
 
@@ -159,3 +162,42 @@ def test_normalize_title_strips_outlet_suffix():
     assert gnc.normalize_title("FCC votes today - Reuters") == "fcc votes today"
     # A hyphenated headline ending in punctuation is not an outlet suffix.
     assert "why" in gnc.normalize_title("FCC acts - but why?")
+
+
+def test_google_news_url_unwrapping():
+    """Wrapper URLs defeat URL-based dedup — every wrapper is unique — and rot
+    when Google rotates them."""
+    import base64
+    real = "https://www.law360.com/articles/2509705/fcc-acts-on-spectrum"
+    token = base64.urlsafe_b64encode(("\x08\x13\x22" + real).encode()).decode().rstrip("=")
+    wrapped = f"https://news.google.com/rss/articles/{token}?oc=5"
+    assert gnc.unwrap_google_news_url(wrapped) == real
+
+    # An opaque (newer-format) wrapper must be returned UNCHANGED, not dropped —
+    # a wrapped link still works for a human clicking it.
+    opaque = "https://news.google.com/rss/articles/CBMiK0hodHRwc0"
+    assert gnc.unwrap_google_news_url(opaque) == opaque
+
+    # Non-Google URLs pass straight through.
+    plain = "https://reuters.com/article/x"
+    assert gnc.unwrap_google_news_url(plain) == plain
+    assert gnc.unwrap_google_news_url("") == ""
+
+
+def test_google_news_today_only_filter():
+    """`when:1d` is a rolling 24h window, not a calendar day, so it still returns
+    yesterday-evening stories."""
+    from datetime import datetime, timezone
+    now = datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc)
+    assert gnc.is_from_today("Wed, 05 Aug 2026 09:00:00 GMT", now=now) is True
+    assert gnc.is_from_today("Tue, 04 Aug 2026 23:59:00 GMT", now=now) is False
+
+    # Missing/unparseable dates are KEPT: discarding them would silently lose
+    # real stories, which is the failure this QA layer exists to prevent.
+    assert gnc.is_from_today("", now=now) is True
+    assert gnc.is_from_today("not a date", now=now) is True
+
+    items = [{"published": "Wed, 05 Aug 2026 09:00:00 GMT"},
+             {"published": "Tue, 04 Aug 2026 23:59:00 GMT"},
+             {"published": ""}]
+    assert len(gnc.filter_to_today(items, now=now)) == 2
