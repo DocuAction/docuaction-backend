@@ -1050,17 +1050,21 @@ class SourceConnectorManager:
         checked_at = datetime.utcnow().isoformat()
         probes = await asyncio.gather(
             self.nppes.probe(), self.leie.probe(), self.sam.probe(),
-            self.pecos.probe(), self.rce_directory.probe(), self.iqvia.probe(),
+            self.pecos.probe(), self.rce_directory.probe(),
             return_exceptions=True,
         )
-        names = ["NPPES", "OIG_LEIE", "SAM_GOV", "PECOS", "RCE_DIRECTORY", "IQVIA_ONEKEY"]
+        # IQVIA_ONEKEY is deliberately NOT probed here. It has no key and is
+        # pending federal ODC, so it reported UNAVAILABLE on every health call --
+        # which reads as "a source is down" when nothing is wrong. A connector
+        # that was never provisioned is not a health finding. The class remains
+        # for when the key arrives.
+        names = ["NPPES", "OIG_LEIE", "SAM_GOV", "PECOS", "RCE_DIRECTORY"]
         notes = {
             "NPPES": "NPI Registry — CMS/HHS",
             "OIG_LEIE": "Exclusion List — OIG/HHS",
             "SAM_GOV": "Federal Registration — GSA (requires SAM_GOV_API_KEY)",
             "PECOS": "Provider Enrollment — CMS",
             "RCE_DIRECTORY": "FHIR R4 — Sequoia Project (key pending Case #00055525)",
-            "IQVIA_ONEKEY": "Provider hierarchy — pending federal ODC",
         }
         status: Dict[str, Dict[str, Any]] = {}
         for name, probe in zip(names, probes):

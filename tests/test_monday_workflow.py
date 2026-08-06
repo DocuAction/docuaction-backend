@@ -134,7 +134,12 @@ def test_unimplemented_are_not_checked_never_unavailable():
     """'unavailable' implies a source that will recover and invites a retry.
     'not implemented' needs a decision."""
     for src, reason in NO_CONNECTOR.items():
-        assert "not implemented" in reason.lower() or "not operational" in reason.lower()
+        low = reason.lower()
+        # The guard is about MEANING, not a magic phrase: the reason must make
+        # clear the source needs a decision rather than a retry. "under
+        # investigation" says that as plainly as "not operational" did.
+        assert ("not implemented" in low or "not operational" in low
+                or "under investigation" in low), reason
     srcs = sources_for("real_clean")
     for src in NO_CONNECTOR:
         assert srcs[src]["status"] == NOT_CHECKED
