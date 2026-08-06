@@ -186,6 +186,30 @@ _DDL = [
     "ON bulletin_search_profiles(agency_id, profile_key)",
     "CREATE INDEX IF NOT EXISTS ix_bulletin_search_profiles_enabled "
     "ON bulletin_search_profiles(agency_id, enabled)",
+    # ── Distribution list (Task 3.5) ────────────────────────────────────────────
+    # Additive, and deliberately NOT authoritative yet: AgencyConfig.distribution_list
+    # remains what send_briefing_email reads. This table exists so the list can be
+    # edited without a redeploy; promoting it to the send path is a separate change,
+    # because a half-migrated recipient list is how a briefing gets sent to nobody.
+    #
+    # Deactivation is a flag, not a DELETE — who used to receive a federal
+    # deliverable is part of the delivery record.
+    """CREATE TABLE IF NOT EXISTS bulletin_recipients (
+         id         TEXT PRIMARY KEY,
+         agency_id  TEXT,
+         email      TEXT,
+         name       TEXT,
+         role       TEXT,
+         active     BOOLEAN DEFAULT TRUE,
+         created_at TEXT,
+         updated_at TEXT
+       )""",
+    # Case-folded so Imran@fcc.gov and imran@fcc.gov cannot both be added and
+    # produce a duplicate send.
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_bulletin_recipients_email "
+    "ON bulletin_recipients(agency_id, LOWER(email))",
+    "CREATE INDEX IF NOT EXISTS ix_bulletin_recipients_active "
+    "ON bulletin_recipients(agency_id, active)",
 ]
 
 # Flipped to True once init_store() succeeds; gates write attempts so we don't
@@ -567,6 +591,91 @@ async def seed_search_profiles(rows: List[Dict[str, Any]]) -> int:
     except Exception as e:
         logger.warning(f"seed_search_profiles failed: {e}")
         return 0
+
+
+# ── Recipients (Task 3.5) ─────────────────────────────────────────────────────
+
+async def fetch_recipients(agency_id: str = "fcc",
+                           active_only: bool = True) -> List[Dict[str, Any]]:
+    """Read the distribution list. [] when the store is unavailable.
+
+    The caller cannot distinguish "no recipients" from "database down" by the
+    return value alone — so no send path may treat [] as an authoritative empty
+    list. Check store_enabled() first.
+    """
+    if not _enabled:
+        return []
+    try:
+        sql = ("SELECT id, agency_id, email, name, role, active, created_at, updated_at "
+               "FROM bulletin_recipients WHERE agency_id = :aid")
+        if active_only:
+            sql += " AND active = TRUE"
+        sql += " ORDER BY LOWER(email) ASC"
+        async with async_session_maker() as s:
+            rows = (await s.execute(text(sql), {"aid": agency_id})).mappings().all()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.warning(f"fetch_recipients failed: {e}")
+        return []
+
+
+async def upsert_recipient(row: Dict[str, Any]) -> str:
+    """Add or update one recipient, keyed on (agency_id, lower(email)).
+
+    Re-adding an address that was deactivated reactivates it rather than
+    failing on the unique index — from the operator's side "add this person
+    back" and "add this person" are the same action.
+
+    Returns "inserted" | "updated" | "unavailable" | "error".
+    """
+    if not _enabled:
+        return "unavailable"
+    try:
+        async with async_session_maker() as s:
+            res = await s.execute(
+                text(
+                    "INSERT INTO bulletin_recipients (id, agency_id, email, name, role, "
+                    "active, created_at, updated_at) "
+                    "VALUES (:id, :agency_id, :email, :name, :role, :active, "
+                    ":created_at, :updated_at) "
+                    "ON CONFLICT (agency_id, (LOWER(email))) DO UPDATE SET "
+                    "name = EXCLUDED.name, role = EXCLUDED.role, "
+                    "active = EXCLUDED.active, updated_at = EXCLUDED.updated_at "
+                    "RETURNING (xmax = 0) AS inserted"
+                ),
+                row,
+            )
+            inserted = res.scalar()
+            await s.commit()
+        return "inserted" if inserted else "updated"
+    except Exception as e:
+        logger.warning(f"upsert_recipient failed: {e}")
+        return "error"
+
+
+async def deactivate_recipient(agency_id: str, email: str) -> bool:
+    """Flag a recipient inactive. Never deletes — see the DDL comment."""
+    if not _enabled:
+        return False
+    try:
+        async with async_session_maker() as s:
+            res = await s.execute(
+                text("UPDATE bulletin_recipients SET active = FALSE, updated_at = :ts "
+                     "WHERE agency_id = :aid AND LOWER(email) = LOWER(:email)"),
+                {"aid": agency_id, "email": email,
+                 "ts": datetime.now(timezone.utc).isoformat()},
+            )
+            await s.commit()
+        return int(res.rowcount or 0) > 0
+    except Exception as e:
+        logger.warning(f"deactivate_recipient failed: {e}")
+        return False
+
+
+def store_enabled() -> bool:
+    """Whether persistence is actually available, so callers can tell an empty
+    result apart from an unreachable database."""
+    return _enabled
 
 
 async def save_source_outcomes(rows: List[Dict[str, Any]]) -> int:

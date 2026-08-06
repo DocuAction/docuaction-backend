@@ -27,11 +27,17 @@
 | OIG LEIE | Operational | 2026-08-02T19:25:52.002883+00:00 | N/A | Included | CONNECTOR_RESPONSES.md | HHS OIG exclusions CSV |
 | SAM.gov | Not Operational | N/A | 2026-08-02T18:59:52+00:00 | **Excluded** | (see notes) | Key valid (api.data.gov quota 1000/hr vs DEMO_KEY 10); entity/exclusions endpoints return empty HTTP 404 at SAM ingress (`server: istio-envoy`, no gateway headers). Key present in prod app settings, **absent in dev**. |
 | State Registries | Not Implemented | N/A | N/A | Excluded | N/A | Connector not built |
-| IRS | Not Implemented | N/A | N/A | Excluded | N/A | Connector not built; keyed on EIN, which the registry does not capture |
+| IRS | Not Applicable | N/A | N/A | Excluded | N/A | No public API exists for for-profit entity verification. IRS TEOS covers only tax-exempt organizations (501(c)(3)). IRS data is additionally keyed on EIN, which the registry does not hold. This is a permanent gap, not an unbuilt connector — it will not be scheduled. |
 | RCE Directory | ONC-Provided | N/A | N/A | **Excluded** | N/A | Data provided by HHS/ONC. Direct access not authorized. Case #00055525 |
 
 **"Excluded"** = not counted in confidence scoring (neither helps nor hurts).  
 **"Operational"** = queried on every verification run.
+
+## IQVIA OneKey — removed from the health probe (2026-08-05)
+
+IQVIA_ONEKEY is no longer probed by the connector health check. It has no key and is pending federal ODC, so it reported `UNAVAILABLE` on every health call — which reads as an outage when nothing is wrong. A connector that was never provisioned is not a health finding.
+
+The `IQVIAOneKeyConnector` class is retained and unchanged; only its participation in the health probe was removed. It re-enables in one line when a key is issued.
 
 ## SAM.gov — status change from the previous matrix
 
@@ -39,7 +45,9 @@ The prior matrix recorded SAM.gov as *Pending — requires API key*. That is no 
 
 It remains **Not Operational and excluded from scoring** — it returns no data. But the remediation is an endpoint/entitlement question (likely a SAM System Account with registered IPs), not another key request.
 
-A second, separate defect: `SAM_GOV_API_KEY` is set on the **prod** App Service only. `docuaction-dev` does not have it.
+~~A second, separate defect: `SAM_GOV_API_KEY` is set on the **prod** App Service only. `docuaction-dev` does not have it.~~
+
+**Corrected 2026-08-05.** `SAM_GOV_API_KEY` is now present on **both** `docuaction-dev` and `Docuaction` (prod), verified directly against App Service settings. A 40-character key is set on each and neither is `DEMO_KEY`. The dev-key gap recorded above has been closed; the 404 persists independently of it, which further supports the entitlement diagnosis rather than a credential one.
 
 ## Why excluded sources do not reduce coverage
 

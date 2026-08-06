@@ -44,8 +44,14 @@ NO_CONNECTOR = {
     "sam_gov": "API key configured. Entity lookup endpoints returning 404 — "
                "API version under investigation.",
     "state_registry": "Connector not implemented",
-    "irs": "Connector not implemented — IRS data is keyed on EIN, which the "
-           "registry does not currently hold",
+    # NOT "not implemented" — that implies a roadmap item. There is no public
+    # IRS API for verifying a for-profit entity at all; TEOS covers only
+    # tax-exempt organisations. This will never be built, and saying so is more
+    # useful than leaving a reader waiting for it.
+    "irs": "Not applicable — no public IRS API exists for for-profit entity "
+           "verification. IRS TEOS covers only tax-exempt organizations "
+           "(501(c)(3)), and IRS data is keyed on EIN, which the registry does "
+           "not hold.",
 }
 
 SOURCE_LABELS = {

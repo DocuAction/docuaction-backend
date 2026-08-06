@@ -3,10 +3,13 @@ DocuAction Bulletin Intelligence — API Routes
 Registers as /api/v1/bulletin on the main FastAPI app
 """
 
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Depends, Request
+from fastapi import (APIRouter, HTTPException, Query, BackgroundTasks, Depends,
+                     Request, UploadFile, File)
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from typing import Optional, List
 import logging
+import re
 
 # Phase 2 — flag-gated auth (default OFF -> no-op, no behavior change).
 from .auth import guard, rate_limit
@@ -196,6 +199,286 @@ async def collect_now(req: CollectRequest, background: BackgroundTasks):
         "note": ("Collection runs in the background; poll /latest/{agency_id} or "
                  "/health for progress. Delivery is NOT triggered — this only "
                  "collects and generates."),
+    }
+
+
+@router.post("/upload-reviewed/{briefing_id}", dependencies=guard("admin"))
+async def upload_reviewed(briefing_id: str,
+                          file: UploadFile = File(...),
+                          dry_run: bool = True,
+                          apply_deletions: bool = False):
+    """Take a human-reviewed bulletin workbook back in.
+
+    Defaults to `dry_run=true` — it reports exactly what would change and
+    changes nothing. That default is deliberate: the upload arrives after
+    someone has spent an hour editing, and the failure mode worth preventing is
+    a wrong-briefing file silently overwriting good summaries.
+
+    `apply_deletions` is separate from `dry_run` because a row missing from the
+    sheet is indistinguishable from a truncated upload. Removals are always
+    reported; they are only acted on when this is explicitly set.
+    """
+    from app.bulletin_intelligence.reviewed_upload import (
+        UploadError, parse_reviewed_workbook, diff_against_articles)
+    from app.bulletin_intelligence.bulletin_download_routes import _briefing_articles
+
+    name = (file.filename or "").lower()
+    if not name.endswith(".xlsx"):
+        raise HTTPException(400, f"Expected a .xlsx file, got {file.filename!r}")
+
+    data = await file.read()
+    try:
+        parsed = parse_reviewed_workbook(data)
+    except UploadError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(400, f"Could not parse the workbook: {str(e)[:200]}")
+
+    briefing, _agency, arts = _briefing_articles(briefing_id)
+    diff = diff_against_articles(parsed["rows"], arts)
+
+    result = {
+        "briefing_id": briefing_id,
+        "dry_run": dry_run,
+        "apply_deletions": apply_deletions,
+        "parsed": {k: parsed[k] for k in
+                   ("sheet", "count", "duplicate_rows", "warnings")},
+        "diff": diff,
+    }
+
+    if dry_run:
+        result["status"] = "validated"
+        result["note"] = ("Nothing was changed. Re-send with dry_run=false to "
+                          "apply.")
+        return result
+
+    by_url = {r["url"].lower(): r for r in parsed["rows"]}
+    applied = 0
+    for a in arts:
+        url = str(getattr(a, "url", "") or "").lower()
+        row = by_url.get(url)
+        if not row:
+            continue
+        touched = False
+        for field, attr in (("title", "title"), ("summary", "summary")):
+            new = row.get(field) or ""
+            if new and new != str(getattr(a, attr, "") or ""):
+                try:
+                    setattr(a, attr, new)
+                    touched = True
+                except Exception:
+                    pass
+        if touched:
+            applied += 1
+
+    result["status"] = "applied"
+    result["articles_updated"] = applied
+    if diff["removed_count"] and not apply_deletions:
+        result["deletions_skipped"] = diff["removed_count"]
+        result["note"] = (f"{diff['removed_count']} article(s) were absent from "
+                          "the upload and were LEFT IN PLACE. Re-send with "
+                          "apply_deletions=true to remove them.")
+    return result
+
+
+# ── Recipients (Task 3.5) ─────────────────────────────────────────────────────
+# The table is editable here but is NOT yet what send_briefing_email reads —
+# AgencyConfig.distribution_list still is. Promoting it is a deliberate separate
+# step; until then this endpoint reports both so the two lists can be compared
+# before anyone relies on it.
+
+_EMAIL_RE = re.compile(r"^[^@\s,;]+@[^@\s,;]+\.[A-Za-z]{2,}$")
+
+
+class RecipientIn(BaseModel):
+    email: str
+    name: str = ""
+    role: str = ""
+    agency_id: str = "fcc"
+    active: bool = True
+
+
+@router.get("/recipients", dependencies=guard("admin"))
+async def list_recipients(agency_id: str = "fcc", include_inactive: bool = False):
+    from app.bulletin_intelligence import bulletin_store
+
+    if not bulletin_store.store_enabled():
+        raise HTTPException(
+            503, "Recipient store unavailable — cannot distinguish an empty "
+                 "distribution list from an unreachable database")
+
+    rows = await bulletin_store.fetch_recipients(
+        agency_id, active_only=not include_inactive)
+
+    configured: List[str] = []
+    try:
+        from app.bulletin_intelligence.engine import get_agency
+        ag = get_agency(agency_id)
+        configured = list(getattr(ag, "distribution_list", []) or [])
+    except Exception:
+        pass
+
+    table_active = {str(r.get("email", "")).lower()
+                    for r in rows if r.get("active")}
+    return {
+        "agency_id": agency_id,
+        "recipients": rows,
+        "count": len(rows),
+        "configured_distribution_list": configured,
+        "delivery_source": "agency_config",
+        "only_in_config": sorted(e for e in configured
+                                 if e.lower() not in table_active),
+        "only_in_table": sorted(e for e in table_active
+                                if e.lower() not in {c.lower() for c in configured}),
+        "note": ("Sends still use the agency config list. This table is not yet "
+                 "wired into delivery."),
+    }
+
+
+@router.post("/recipients", dependencies=guard("admin"))
+async def add_recipient(req: RecipientIn):
+    import uuid as _uuid
+    from datetime import datetime as _dt, timezone as _tz
+    from app.bulletin_intelligence import bulletin_store
+
+    email = (req.email or "").strip()
+    if not _EMAIL_RE.match(email):
+        raise HTTPException(400, f"Not a valid email address: {email!r}")
+
+    if not bulletin_store.store_enabled():
+        raise HTTPException(503, "Recipient store unavailable — write rejected "
+                                 "rather than silently dropped")
+
+    ts = _dt.now(_tz.utc).isoformat()
+    result = await bulletin_store.upsert_recipient({
+        "id": f"rcpt_{_uuid.uuid4().hex[:12]}",
+        "agency_id": req.agency_id or "fcc",
+        "email": email,
+        "name": (req.name or "").strip(),
+        "role": (req.role or "").strip(),
+        "active": bool(req.active),
+        "created_at": ts,
+        "updated_at": ts,
+    })
+    if result in ("error", "unavailable"):
+        raise HTTPException(503, f"Recipient not saved ({result})")
+    return {"status": result, "email": email, "agency_id": req.agency_id}
+
+
+@router.delete("/recipients/{email}", dependencies=guard("admin"))
+async def remove_recipient(email: str, agency_id: str = "fcc"):
+    """Deactivate, not delete — the delivery record keeps who was on the list."""
+    from app.bulletin_intelligence import bulletin_store
+
+    if not bulletin_store.store_enabled():
+        raise HTTPException(503, "Recipient store unavailable")
+    ok = await bulletin_store.deactivate_recipient(agency_id, email)
+    if not ok:
+        raise HTTPException(404, f"No recipient {email} for agency {agency_id}")
+    return {"status": "deactivated", "email": email, "agency_id": agency_id}
+
+
+@router.get("/email-preview/{briefing_id}", response_class=HTMLResponse)
+async def email_preview(briefing_id: str):
+    """The exact Outlook-safe HTML that an email send would carry.
+
+    Served so the body can be checked in a real client before it goes to the
+    FCC: paste it into a test send, or view it here. Rendering it in a browser
+    proves nothing about Outlook Classic — a browser is far more forgiving than
+    the MSWord engine Outlook renders with — so treat this as a diff tool, not
+    as a passing test.
+    """
+    from app.bulletin_intelligence.bulletin_download_routes import _briefing_articles
+    from app.bulletin_intelligence.email_template import build_email_html
+
+    briefing, agency, arts = _briefing_articles(briefing_id)
+
+    try:
+        from app.bulletin_intelligence.engine import _section_of
+        section_of = _section_of
+    except Exception:
+        section_of = None
+
+    return HTMLResponse(build_email_html(
+        arts,
+        briefing_date=str(briefing.get("briefing_date") or ""),
+        section_of=section_of,
+        agency_name=getattr(agency, "short_name", "FCC"),
+    ))
+
+
+class RegenerateRequest(BaseModel):
+    force: bool = False
+
+
+@router.post("/regenerate/{briefing_id}", dependencies=guard("admin"))
+async def regenerate_briefing(briefing_id: str, req: RegenerateRequest,
+                              background: BackgroundTasks):
+    """Re-run classification and summaries on an EXISTING briefing's articles.
+
+    Collects nothing. Use it when a briefing has bad summaries or wrong
+    categories but the article set itself is fine — re-collecting would spend
+    API quota to fetch the same stories, and on a metered provider that is the
+    expensive way to fix a formatting problem.
+
+    Because it does not collect, it also cannot remove articles that should
+    never have been gathered. A briefing containing stale items needs a fresh
+    collection (POST /collect), not a regeneration — the freshness gate runs
+    during collection.
+
+    Returns immediately with a job id; the work runs in the background.
+    """
+    import uuid as _uuid
+
+    try:
+        from app.bulletin_intelligence.bulletin_download_routes import _briefing_articles
+    except ImportError:
+        raise HTTPException(500, "Bulletin download module not available")
+
+    try:
+        briefing, agency, arts = _briefing_articles(briefing_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(404, f"Briefing {briefing_id} not readable: {str(e)[:160]}")
+
+    if not arts:
+        raise HTTPException(
+            404, f"Briefing {briefing_id} has no rehydratable articles to regenerate")
+
+    job_id = f"regen_{briefing_id}_{_uuid.uuid4().hex[:8]}"
+
+    async def _run():
+        try:
+            from app.bulletin_intelligence.engine import (
+                classify_articles, _summaries_for, get_agency)
+            ag = get_agency(str(briefing.get("agency_id") or "fcc")) or agency
+            reclassified = await classify_articles(arts, ag)
+            summaries = await _summaries_for(reclassified, ag)
+            applied = 0
+            for a in reclassified:
+                new = summaries.get(getattr(a, "article_id", ""), "")
+                if new:
+                    try:
+                        a.summary = new
+                        applied += 1
+                    except Exception:
+                        pass
+            logger.info("Regenerate %s: %d articles reclassified, %d summaries applied",
+                        job_id, len(reclassified), applied)
+        except Exception as e:
+            logger.error("Regenerate %s failed: %s", job_id, e)
+
+    background.add_task(_run)
+    return {
+        "job_id": job_id,
+        "status": "started",
+        "briefing_id": briefing_id,
+        "article_count": len(arts),
+        "force": req.force,
+        "note": ("Re-runs classification and summaries on the existing article "
+                 "set. Collects nothing, so it cannot drop articles that should "
+                 "not have been collected — use POST /collect for that."),
     }
 
 
