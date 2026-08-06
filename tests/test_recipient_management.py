@@ -110,13 +110,74 @@ def test_store_helpers_degrade_without_raising(monkeypatch):
     assert asyncio.run(bulletin_store.deactivate_recipient("fcc", "a@b.com")) is False
 
 
-# ── Not yet load-bearing ──────────────────────────────────────────────────────
+# ── The send path reads this table ────────────────────────────────────────────
+# resolve_recipients() decides who a briefing is addressed to. Each case below
+# is a way that decision can go wrong and mail the wrong people — or nobody.
 
-def test_sends_still_read_the_agency_config_list():
-    """The table is editable but is NOT what send_briefing_email reads yet. If
-    that changes, this test should change with it — deliberately."""
-    import inspect
-    from app.bulletin_intelligence.engine import send_briefing_email
-    src = inspect.getsource(send_briefing_email)
-    assert "agency.distribution_list" in src
-    assert "fetch_recipients" not in src
+import asyncio
+
+from app.bulletin_intelligence import engine
+
+
+def _agency():
+    ag = engine.get_agency("fcc")
+    assert ag is not None
+    return ag
+
+
+def test_active_table_entries_win_over_the_config_list(monkeypatch):
+    monkeypatch.setattr(bulletin_store, "store_enabled", lambda: True)
+
+    async def _rows(agency_id, active_only=True):
+        return [{"email": "ops@fcc.gov"}, {"email": "press@fcc.gov"}]
+
+    monkeypatch.setattr(bulletin_store, "fetch_recipients", _rows)
+    to_list, source = asyncio.run(engine.resolve_recipients(_agency()))
+    assert to_list == ["ops@fcc.gov", "press@fcc.gov"]
+    assert source == "recipients_table"
+
+
+def test_an_empty_table_falls_back_to_the_config_list(monkeypatch):
+    monkeypatch.setattr(bulletin_store, "store_enabled", lambda: True)
+
+    async def _none(agency_id, active_only=True):
+        return []
+
+    monkeypatch.setattr(bulletin_store, "fetch_recipients", _none)
+    to_list, source = asyncio.run(engine.resolve_recipients(_agency()))
+    assert to_list == list(_agency().distribution_list)
+    assert source == "agency_config_empty"
+
+
+def test_an_unreachable_store_falls_back_rather_than_mailing_nobody(monkeypatch):
+    """fetch_recipients() returns [] for both "empty" and "database down". If the
+    send path trusted that, one outage would silently deliver to no one."""
+    monkeypatch.setattr(bulletin_store, "store_enabled", lambda: False)
+    to_list, source = asyncio.run(engine.resolve_recipients(_agency()))
+    assert to_list == list(_agency().distribution_list)
+    assert source == "agency_config_store_down"
+
+
+def test_a_raising_store_falls_back_rather_than_propagating(monkeypatch):
+    monkeypatch.setattr(bulletin_store, "store_enabled", lambda: True)
+
+    async def _boom(agency_id, active_only=True):
+        raise RuntimeError("connection reset")
+
+    monkeypatch.setattr(bulletin_store, "fetch_recipients", _boom)
+    to_list, source = asyncio.run(engine.resolve_recipients(_agency()))
+    assert to_list == list(_agency().distribution_list)
+    assert source == "agency_config_store_error"
+
+
+def test_addresses_differing_only_in_case_are_sent_to_once(monkeypatch):
+    """The unique index is case-folded, but a legacy row could predate it. Two
+    rows for one person must not become two copies of the same briefing."""
+    monkeypatch.setattr(bulletin_store, "store_enabled", lambda: True)
+
+    async def _dupes(agency_id, active_only=True):
+        return [{"email": "Ops@fcc.gov"}, {"email": "ops@fcc.gov"}]
+
+    monkeypatch.setattr(bulletin_store, "fetch_recipients", _dupes)
+    to_list, _ = asyncio.run(engine.resolve_recipients(_agency()))
+    assert to_list == ["Ops@fcc.gov"]

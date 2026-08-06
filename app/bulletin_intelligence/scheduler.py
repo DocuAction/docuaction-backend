@@ -150,7 +150,13 @@ async def _run_cycle_with_retry(agency_id: str, *, label: str,
                 last_error = f"delivery failed: {result.get('delivery')}"
                 logger.error(f"{label}: attempt {attempt} — {last_error}")
             else:
-                logger.info(f"{label} complete: {count} articles → {agency.distribution_list}")
+                # Report what delivery actually addressed, not the config list —
+                # since the recipients table took over, those can differ.
+                delivery = result.get("delivery") or {}
+                sent_to = (f"{delivery.get('recipients')} recipient(s) via "
+                           f"{delivery.get('recipient_source')}"
+                           if delivery else "no delivery attempted")
+                logger.info(f"{label} complete: {count} articles → {sent_to}")
                 return result
         except Exception as e:
             last_error = f"{type(e).__name__}: {e}"

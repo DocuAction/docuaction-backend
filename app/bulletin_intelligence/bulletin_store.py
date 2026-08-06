@@ -187,10 +187,12 @@ _DDL = [
     "CREATE INDEX IF NOT EXISTS ix_bulletin_search_profiles_enabled "
     "ON bulletin_search_profiles(agency_id, enabled)",
     # ── Distribution list (Task 3.5) ────────────────────────────────────────────
-    # Additive, and deliberately NOT authoritative yet: AgencyConfig.distribution_list
-    # remains what send_briefing_email reads. This table exists so the list can be
-    # edited without a redeploy; promoting it to the send path is a separate change,
-    # because a half-migrated recipient list is how a briefing gets sent to nobody.
+    # Authoritative for sends when it holds active rows; AgencyConfig.distribution_list
+    # is the fallback for an empty or unreachable table (engine.resolve_recipients).
+    # The table exists so the list can be edited without a redeploy, and the fallback
+    # exists because a half-migrated recipient list is how a briefing gets sent to
+    # nobody — fetch_recipients() cannot tell "empty" from "database down", so the
+    # send path must never treat its [] as an instruction to mail no one.
     #
     # Deactivation is a flag, not a DELETE — who used to receive a federal
     # deliverable is part of the delivery record.

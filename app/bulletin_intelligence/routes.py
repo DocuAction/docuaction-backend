@@ -282,10 +282,11 @@ async def upload_reviewed(briefing_id: str,
 
 
 # ── Recipients (Task 3.5) ─────────────────────────────────────────────────────
-# The table is editable here but is NOT yet what send_briefing_email reads —
-# AgencyConfig.distribution_list still is. Promoting it is a deliberate separate
-# step; until then this endpoint reports both so the two lists can be compared
-# before anyone relies on it.
+# This table is now what sends read, with AgencyConfig.distribution_list as the
+# fallback when it is empty or unreachable (engine.resolve_recipients). The
+# response still reports both lists and their difference, because during the
+# changeover "who gets tomorrow's briefing" is answered by which of the two is
+# in effect — and that is worth being able to read off directly.
 
 _EMAIL_RE = re.compile(r"^[^@\s,;]+@[^@\s,;]+\.[A-Za-z]{2,}$")
 
@@ -311,10 +312,14 @@ async def list_recipients(agency_id: str = "fcc", include_inactive: bool = False
         agency_id, active_only=not include_inactive)
 
     configured: List[str] = []
+    effective: List[str] = []
+    source = "unknown"
     try:
-        from app.bulletin_intelligence.engine import get_agency
+        from app.bulletin_intelligence.engine import get_agency, resolve_recipients
         ag = get_agency(agency_id)
         configured = list(getattr(ag, "distribution_list", []) or [])
+        if ag is not None:
+            effective, source = await resolve_recipients(ag)
     except Exception:
         pass
 
@@ -325,13 +330,17 @@ async def list_recipients(agency_id: str = "fcc", include_inactive: bool = False
         "recipients": rows,
         "count": len(rows),
         "configured_distribution_list": configured,
-        "delivery_source": "agency_config",
+        # What the next send would actually address, resolved by the send path's
+        # own function rather than re-derived here.
+        "effective_recipients": effective,
+        "delivery_source": source,
         "only_in_config": sorted(e for e in configured
                                  if e.lower() not in table_active),
         "only_in_table": sorted(e for e in table_active
                                 if e.lower() not in {c.lower() for c in configured}),
-        "note": ("Sends still use the agency config list. This table is not yet "
-                 "wired into delivery."),
+        "note": ("Sends read this table when it has active entries; otherwise "
+                 "they fall back to the agency config list. delivery_source "
+                 "says which is in effect."),
     }
 
 
@@ -389,22 +398,18 @@ async def email_preview(briefing_id: str):
     as a passing test.
     """
     from app.bulletin_intelligence.bulletin_download_routes import _briefing_articles
-    from app.bulletin_intelligence.email_template import build_email_html
+    from app.bulletin_intelligence.engine import render_modern_email
 
     briefing, agency, arts = _briefing_articles(briefing_id)
 
-    try:
-        from app.bulletin_intelligence.engine import _section_of
-        section_of = _section_of
-    except Exception:
-        section_of = None
-
-    return HTMLResponse(build_email_html(
+    # Same renderer the send path calls, so this preview cannot drift from the
+    # body that actually ships.
+    html, _subject = render_modern_email(
         arts,
         briefing_date=str(briefing.get("briefing_date") or ""),
-        section_of=section_of,
-        agency_name=getattr(agency, "short_name", "FCC"),
-    ))
+        agency=agency,
+    )
+    return HTMLResponse(html)
 
 
 class RegenerateRequest(BaseModel):
@@ -863,20 +868,33 @@ async def collect_now(agency_id: str, lookback_hours: int = 72):
 
 
 @router.post("/send/{agency_id}/{briefing_id}", dependencies=guard("qalead") + [Depends(rate_limit)])
-async def send_briefing(agency_id: str, briefing_id: str):
-    """Email the summary (short summary + VIEW FULL BRIEFING button) for a specific
-    briefing to the agency's distribution list. Separate from collection."""
+async def send_briefing(agency_id: str, briefing_id: str,
+                        template_version: Optional[str] = None):
+    """Email a specific briefing to the agency's distribution list. Separate from
+    collection.
+
+    Recipients resolve from the bulletin_recipients table, falling back to the
+    agency config list. The body follows EMAIL_TEMPLATE_VERSION; pass
+    ?template_version=modern to override it for one send without changing the
+    environment — that is how a body is trialled before it becomes the default.
+    """
     b = get_briefing(briefing_id)
     if not b or b.get("agency_id") != agency_id:
         raise HTTPException(status_code=404,
                             detail=f"Briefing {briefing_id} not found for {agency_id}")
-    result = await send_briefing_email(briefing_id)
+    result = await send_briefing_email(briefing_id, template_version=template_version)
     if result.get("error"):
         await audit("delivery", entity_type="briefing", entity_id=briefing_id, action="send",
                     result="error", details={"error": result["error"]})
         raise HTTPException(status_code=400, detail=result["error"])
+    # Which list and which body were used are part of the delivery record: a
+    # briefing that went to the config fallback is a different event from one
+    # that went to the managed list, and only the audit row survives to say so.
     await audit("delivery", entity_type="briefing", entity_id=briefing_id, action="send",
-                details={"recipients": result.get("recipients"), "sent": result.get("status")})
+                details={"recipients": result.get("recipients"),
+                         "sent": result.get("status"),
+                         "recipient_source": result.get("recipient_source"),
+                         "template_version": result.get("template_version")})
     return {"briefing_id": briefing_id, **result}
 
 

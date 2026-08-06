@@ -30,7 +30,7 @@ Required env vars:
 
 import os, json, logging, asyncio, hashlib, re
 from datetime import datetime, timedelta, timezone
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass, asdict, field
 
 import httpx
@@ -3089,11 +3089,65 @@ def _simple_html(agency: AgencyConfig, articles: List[Article], briefing_date: s
 </body></html>"""
 
 
+# ── Distribution list resolution ───────────────────────────────────────────────
+# The bulletin_recipients table is authoritative when it has entries; otherwise
+# AgencyConfig.distribution_list is. That ordering exists so the list can be
+# edited without a redeploy, without an unreachable database silently emptying
+# it: fetch_recipients() returns [] both for "nobody is subscribed" and for
+# "Postgres is down", and those two must not produce the same send.
+#
+# Every fallback is therefore deliberate and named. `source` travels back to the
+# caller and into the audit record, so a send that went to the config list can
+# be told apart from one that went to the table — after the fact, from the log
+# alone, without re-deriving anything.
+
+async def resolve_recipients(agency: AgencyConfig) -> Tuple[List[str], str]:
+    """Return (addresses, source) for one agency's send.
+
+    source is one of:
+      recipients_table       — the table had active entries; they were used
+      agency_config_empty    — the store is up and the table is genuinely empty
+      agency_config_store_down    — the store never initialised
+      agency_config_store_error   — the read raised
+    """
+    fallback = [e for e in (agency.distribution_list or []) if e]
+    try:
+        from app.bulletin_intelligence import bulletin_store
+        if not bulletin_store.store_enabled():
+            logger.warning("Recipient store unavailable — falling back to "
+                           "AgencyConfig.distribution_list")
+            return fallback, "agency_config_store_down"
+        rows = await bulletin_store.fetch_recipients(agency.agency_id, active_only=True)
+    except Exception as e:
+        logger.warning(f"resolve_recipients failed ({e}) — falling back to "
+                       "AgencyConfig.distribution_list")
+        return fallback, "agency_config_store_error"
+
+    # Case-folded dedup. The unique index already prevents two rows differing
+    # only in case, but an address may also appear in a caller-supplied list.
+    addresses: List[str] = []
+    seen = set()
+    for row in rows:
+        email = str(row.get("email") or "").strip()
+        if email and email.lower() not in seen:
+            seen.add(email.lower())
+            addresses.append(email)
+
+    if not addresses:
+        return fallback, "agency_config_empty"
+    return addresses, "recipients_table"
+
+
 # ── Email Delivery: SendGrid ───────────────────────────────────────────────────
 async def deliver_briefing(agency: AgencyConfig, html: str, briefing_date: str) -> Dict[str, Any]:
+    to_list, source = await resolve_recipients(agency)
     if not SENDGRID_KEY:
         logger.warning("SENDGRID_API_KEY not set — dry run mode")
-        return {"status": "dry_run", "recipients": len(agency.distribution_list)}
+        return {"status": "dry_run", "recipients": len(to_list),
+                "recipient_source": source}
+    if not to_list:
+        return {"status": "error", "error": "No recipients configured for this agency",
+                "recipient_source": source}
 
     subject = f"{agency.short_name} Morning Intelligence Briefing — {briefing_date}"
     try:
@@ -3102,17 +3156,18 @@ async def deliver_briefing(agency: AgencyConfig, html: str, briefing_date: str) 
                 "https://api.sendgrid.com/v3/mail/send",
                 headers={"Authorization": f"Bearer {SENDGRID_KEY}", "Content-Type": "application/json"},
                 json={
-                    "personalizations": [{"to": [{"email": e} for e in agency.distribution_list]}],
+                    "personalizations": [{"to": [{"email": e} for e in to_list]}],
                     "from": {"email": agency.distribution_email, "name": f"{agency.name} Intelligence"},
                     "subject": subject,
                     "content": [{"type": "text/html", "value": html}],
                 }
             )
             resp.raise_for_status()
-            return {"status": "delivered", "recipients": len(agency.distribution_list), "subject": subject}
+            return {"status": "delivered", "recipients": len(to_list),
+                    "recipient_source": source, "subject": subject}
     except Exception as e:
         logger.error(f"SendGrid error: {e}")
-        return {"status": "error", "error": str(e)}
+        return {"status": "error", "error": str(e), "recipient_source": source}
 
 
 # ── LLM Visibility Tracker — Multi-AI (UNIQUE FEATURE) ───────────────────────
@@ -3964,6 +4019,85 @@ PUBLIC_BASE_URL = os.getenv("BULLETIN_PUBLIC_BASE_URL", "https://api-prod.docuac
 # From-address for the summary send (Step 10). Must be a SendGrid-verified sender.
 SEND_FROM_EMAIL = os.getenv("BULLETIN_SEND_FROM", "news@agtbi.com")
 
+# ── Email body selection ───────────────────────────────────────────────────────
+# classic — the short summary + "VIEW FULL BRIEFING" button. What has been going
+#           out; the body stays small and the reader follows a link.
+# modern  — the full Outlook-Classic-safe article list (email_template.py). The
+#           briefing reads in the mail client with no link to follow.
+#
+# Read per call rather than captured at import, so the App Service setting can be
+# changed and the app restarted to switch bodies — no code deploy, no redeploy of
+# a build. An unrecognised value is classic: a typo in an env var must not decide
+# what a federal deliverable looks like.
+EMAIL_TEMPLATE_VERSIONS = ("classic", "modern")
+
+
+def email_template_version(override: Optional[str] = None) -> str:
+    raw = override if override is not None else os.getenv("EMAIL_TEMPLATE_VERSION", "classic")
+    value = str(raw or "").strip().lower()
+    if value not in EMAIL_TEMPLATE_VERSIONS:
+        if value:
+            logger.warning(f"EMAIL_TEMPLATE_VERSION={value!r} not one of "
+                           f"{EMAIL_TEMPLATE_VERSIONS} — using classic")
+        return "classic"
+    return value
+
+
+def render_modern_email(articles, *, briefing_date: str,
+                        agency: AgencyConfig) -> Tuple[str, str]:
+    """(html, subject) for the modern body.
+
+    The single place the modern template's arguments are chosen. GET
+    /email-preview and the send path both come through here, so the preview is
+    the body that ships rather than a second rendering that agrees with it only
+    until one of them is edited.
+    """
+    from app.bulletin_intelligence.email_template import build_email_html, build_subject
+
+    try:
+        section_of = _section_of
+    except NameError:
+        section_of = None
+
+    name = getattr(agency, "short_name", "FCC")
+    return (
+        build_email_html(articles, briefing_date=briefing_date,
+                         section_of=section_of, agency_name=name),
+        build_subject(briefing_date, agency_name=name),
+    )
+
+
+def _modern_email_for_briefing(briefing_id: str, briefing: "Briefing",
+                               agency: AgencyConfig) -> Tuple[Optional[str], str, str]:
+    """(html, subject, fallback_reason) — html is None when modern cannot be built.
+
+    A briefing stores rendered HTML, not its article objects, so the modern body
+    needs the stories rehydrated by URL. That can come back short, and a body
+    built from a short list is worse than the classic one: it looks complete
+    while omitting stories. So anything less than the full set falls back and
+    says why, rather than sending a quietly truncated briefing.
+    """
+    try:
+        from app.bulletin_intelligence.bulletin_download_routes import _briefing_articles
+        _b, _agency, arts = _briefing_articles(briefing_id)
+    except Exception as e:
+        return None, "", f"could not rehydrate articles ({type(e).__name__}: {e})"
+
+    expected = int(getattr(briefing, "article_count", 0) or 0)
+    if expected and len(arts) < expected:
+        return None, "", (f"rehydrated {len(arts)} of {expected} articles — "
+                          "refusing to send a truncated briefing")
+    if not arts:
+        return None, "", "briefing has no rehydratable articles"
+
+    try:
+        html, subject = render_modern_email(
+            arts, briefing_date=str(getattr(briefing, "briefing_date", "") or ""),
+            agency=agency)
+    except Exception as e:
+        return None, "", f"modern template failed ({type(e).__name__}: {e})"
+    return html, subject, ""
+
 
 def _briefing_preview_url(briefing_id: str) -> str:
     """Absolute URL to the full HTML preview of a specific briefing."""
@@ -4042,11 +4176,19 @@ Generated by DocuAction AI — Alliance Global Tech, Inc.</td></tr>
 
 
 async def send_briefing_email(briefing_id: str, *,
-                              recipients: Optional[List[str]] = None) -> Dict[str, Any]:
-    """Email a summary of one briefing (short summary + VIEW FULL BRIEFING button)
-    from SEND_FROM_EMAIL to the agency's distribution list. SEPARATE from
-    collection — collection makes a briefing live; this is an explicit send.
-    Records delivered_at/recipients and re-persists on success."""
+                              recipients: Optional[List[str]] = None,
+                              template_version: Optional[str] = None) -> Dict[str, Any]:
+    """Email one briefing from SEND_FROM_EMAIL. SEPARATE from collection —
+    collection makes a briefing live; this is an explicit send.
+
+    Recipients come from the bulletin_recipients table, falling back to
+    AgencyConfig.distribution_list (see resolve_recipients). An explicit
+    `recipients` argument overrides both — that is the test-send path.
+
+    The body is classic or modern per EMAIL_TEMPLATE_VERSION; `template_version`
+    overrides the env for a single send. Records delivered_at/recipients and
+    re-persists on success.
+    """
     briefing = _briefings.get(briefing_id)
     if not briefing:
         return {"error": "Briefing not found"}
@@ -4054,18 +4196,42 @@ async def send_briefing_email(briefing_id: str, *,
     if not agency:
         return {"error": "Agency not found"}
 
-    to_list = recipients if recipients else list(agency.distribution_list)
+    if recipients:
+        to_list, recipient_source = list(recipients), "explicit"
+    else:
+        to_list, recipient_source = await resolve_recipients(agency)
     if not to_list:
-        return {"error": "No recipients configured for this agency"}
+        return {"error": "No recipients configured for this agency",
+                "recipient_source": recipient_source}
 
     preview_url = _briefing_preview_url(briefing_id)
-    html = _build_summary_email_html(agency, briefing, preview_url)
-    subject = f"{agency.short_name} Daily Briefing — {briefing.briefing_date}"
+    requested = email_template_version(template_version)
+    used = requested
+    fallback_reason = ""
+    html = None
+    subject = ""
+
+    if requested == "modern":
+        html, subject, fallback_reason = _modern_email_for_briefing(
+            briefing_id, briefing, agency)
+        if html is None:
+            logger.warning(f"modern email unavailable for {briefing_id} — "
+                           f"{fallback_reason}; sending classic")
+            used = "classic"
+
+    if html is None:
+        html = _build_summary_email_html(agency, briefing, preview_url)
+        subject = f"{agency.short_name} Daily Briefing — {briefing.briefing_date}"
+
+    meta = {"recipient_source": recipient_source, "template_version": used}
+    if used != requested:
+        meta["template_requested"] = requested
+        meta["template_fallback_reason"] = fallback_reason
 
     if not SENDGRID_KEY:
         logger.warning("SENDGRID_API_KEY not set — send_briefing_email dry run")
         return {"status": "dry_run", "recipients": len(to_list), "preview_url": preview_url,
-                "subject": subject, "from": SEND_FROM_EMAIL}
+                "subject": subject, "from": SEND_FROM_EMAIL, **meta}
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             resp = await client.post(
@@ -4081,7 +4247,7 @@ async def send_briefing_email(briefing_id: str, *,
             resp.raise_for_status()
     except Exception as e:
         logger.error(f"send_briefing_email SendGrid error: {e}")
-        return {"status": "error", "error": str(e), "preview_url": preview_url}
+        return {"status": "error", "error": str(e), "preview_url": preview_url, **meta}
 
     briefing.delivered_at = _now()
     briefing.delivery_recipients = len(to_list)
@@ -4091,7 +4257,7 @@ async def send_briefing_email(briefing_id: str, *,
     except Exception as e:
         logger.warning(f"Persist after send failed: {e}")
     return {"status": "delivered", "recipients": len(to_list), "preview_url": preview_url,
-            "subject": subject, "from": SEND_FROM_EMAIL}
+            "subject": subject, "from": SEND_FROM_EMAIL, **meta}
 
 
 # ── Pre-register FCC ───────────────────────────────────────────────────────────
