@@ -4000,16 +4000,31 @@ def get_briefing_html(briefing_id: str) -> Optional[str]:
     return b.html_content if b else None
 
 
+# A Briefing carries two large blobs that no list view needs: the rendered HTML
+# and the base64 Word document. Both are served by their own endpoints, keyed on
+# briefing_id. Left in a list response they dominate it completely — 173
+# briefings of docx_b64 measured 11.7 MB of a 11.8 MB payload, and the request
+# took 35-40s, which the browser reports to the user as "Failed to fetch".
+#
+# So a list endpoint strips both. `_summarize_briefing` exists so that adding a
+# third blob to Briefing later cannot reintroduce this one endpoint at a time.
+_BRIEFING_BLOB_FIELDS = ("html_content", "docx_b64")
+
+
+def _summarize_briefing(briefing) -> Dict:
+    """A Briefing as a dict, without the payload fields no list view reads."""
+    d = asdict(briefing) if not isinstance(briefing, dict) else dict(briefing)
+    for field_name in _BRIEFING_BLOB_FIELDS:
+        d.pop(field_name, None)
+    return d
+
+
 def get_briefing_history(agency_id: str) -> List[Dict]:
-    """All briefings for an agency (any status), newest first, without HTML payload."""
+    """All briefings for an agency (any status), newest first, without the
+    HTML or DOCX payloads (see _summarize_briefing)."""
     items = [b for b in _briefings.values() if b.agency_id == agency_id]
     items.sort(key=lambda b: b.generated_at or "", reverse=True)
-    history = []
-    for b in items:
-        d = asdict(b)
-        d.pop("html_content", None)
-        history.append(d)
-    return history
+    return [_summarize_briefing(b) for b in items]
 
 
 # ── Live-feed access + summary email ───────────────────────────────────────────
@@ -4110,13 +4125,12 @@ def _latest_preview_url(agency_id: str) -> str:
 
 
 def get_latest_briefing(agency_id: str) -> Optional[Dict]:
-    """Most recent briefing for an agency (any status), without the HTML payload."""
+    """Most recent briefing for an agency (any status), without the payload fields."""
     items = [b for b in _briefings.values() if b.agency_id == agency_id]
     if not items:
         return None
     items.sort(key=lambda b: (b.generated_at or "", b.briefing_id), reverse=True)
-    d = asdict(items[0])
-    d.pop("html_content", None)
+    d = _summarize_briefing(items[0])
     return d
 
 
@@ -4130,8 +4144,7 @@ def get_today_briefing(agency_id: str) -> Optional[Dict]:
     if not todays:
         return None
     todays.sort(key=lambda b: (b.generated_at or "", b.briefing_id), reverse=True)
-    d = asdict(todays[0])
-    d.pop("html_content", None)
+    d = _summarize_briefing(todays[0])
     return d
 
 
