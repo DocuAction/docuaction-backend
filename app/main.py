@@ -95,6 +95,18 @@ from app.core.error_handler import register_exception_handlers  # noqa: E402
 register_exception_handlers(app)
 
 
+@app.on_event("shutdown")
+async def _close_usps_client():
+    """Release the pooled USPS connections. Best-effort: a shutdown path that can
+    raise turns a clean restart into a crash, and this holds nothing durable."""
+    try:
+        from app.tefca_registry.usps_client import _client
+        if _client is not None:
+            await _client.aclose()
+    except Exception as e:
+        logger.debug("USPS client close skipped: %s", e)
+
+
 @app.on_event("startup")
 async def startup():
     # Schema setup MUST succeed before serving traffic — if the DB is briefly
@@ -261,11 +273,19 @@ async def health():
         scheduler = scheduler_status()
     except Exception as e:
         scheduler = {"running": False, "error": str(e)}
+    # USPS address standardization is optional — reported from client state only,
+    # never probed, because /health must not depend on an external API answering.
+    try:
+        from app.tefca_registry.usps_client import get_usps_client
+        usps = get_usps_client().health()
+    except Exception as e:
+        usps = {"status": "unavailable", "error": str(e)}
     return {
         "status": "healthy",
         "version": "6.0.0",
         "platform": "DocuAction AI",
         "scheduler": scheduler,
+        "usps": usps,
         "modules": {
             "documents": "active",
             "audio": "active",
@@ -372,6 +392,10 @@ from app.tefca_registry.review_routes import router as tefca_review_router  # no
 app.include_router(tefca_review_router)
 logger.info("Loaded: tefca-arc-review (Tasks 3-5 — /api/tefca/review-rules, /samples, /reviews, /reports)")
 logger.info("Loaded: tefca-registry (Phase 2A — /api/tefca/registry/*)")
+
+# USPS observability at /api/v1/usps/*. safe_load, not a hard import: these are
+# metrics endpoints, and losing them must never take the API down.
+safe_load("app.tefca_registry.usps_routes", "usps-metrics")
 
 # ═══ CASE MANAGEMENT ═══
 safe_load("app.case_management", "case-management")

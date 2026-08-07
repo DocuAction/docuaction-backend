@@ -306,6 +306,61 @@ async def _resolve_entity(db, entity, sources: Dict[str, dict]) -> dict:
     }
 
 
+def _address_meta(results: dict, key: str):
+    """Read one address-comparison field for the audit row.
+
+    Tolerant by design: the comparison is wrapped in its own try/except above, so
+    `address_match` may be the skipped-shape dict instead of a full AddressMatch.
+    An audit row must still be written in that case."""
+    return (results.get("address_match") or {}).get(key)
+
+
+async def _compare_addresses(entity, sources: Dict[str, dict]) -> dict:
+    """Compare the registry address against what NPPES (or PECOS) reports.
+
+    Returns the AddressMatch as a dict, with the two audit fields the caller
+    needs folded in. `usps_latency_ms` is measured here rather than read off the
+    result because AddressMatch carries no latency field — only USPSAddressResult
+    does, and by the time the comparison is built those have been consumed.
+    It is None whenever USPS was not called, which is the common case.
+    """
+    import time as _time
+    from app.tefca_registry.address_normalizer import ThreeLayerAddressNormalizer
+
+    authoritative = ""
+    compared_against = None
+    for src in ("nppes", "pecos"):
+        info = sources.get(src) or {}
+        data = info.get("data") or {}
+        if info.get("status") in (None, "error") or not data:
+            continue
+        authoritative = data.get("practice_address") or data.get("address") or ""
+        if authoritative:
+            compared_against = src
+            break
+
+    submitted = getattr(entity, "address", "") or ""
+    if not submitted or not authoritative:
+        # Not a mismatch — there was nothing to compare. Saying "no match" here
+        # would put a discrepancy in the record that no one can act on.
+        return {"match": False, "confidence": 0.0, "method": "not_compared",
+                "reason": "registry or source address missing",
+                "compared_against": compared_against,
+                "usps_used": False, "usps_latency_ms": None}
+
+    started = _time.perf_counter()
+    result = await ThreeLayerAddressNormalizer().standardize_and_compare(
+        submitted, authoritative)
+    elapsed_ms = round((_time.perf_counter() - started) * 1000, 2)
+
+    usps_used = result.method.startswith("usps")
+    payload = result.model_dump()
+    payload["compared_against"] = compared_against
+    payload["usps_used"] = usps_used
+    payload["usps_latency_ms"] = elapsed_ms if usps_used else None
+    return payload
+
+
 async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
                      sample_id=None, trigger: str = "manual") -> dict:
     """Verify, classify, persist a ReviewRecord, return the response envelope."""
@@ -352,6 +407,17 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
         logger.warning("Entity resolution skipped for %s: %s", entity.id, e)
         results["entity_resolution"] = {"status": "skipped", "reason": str(e)[:200]}
 
+    # ── Address comparison (three-layer: code → USPS → code-only) ────────────
+    # Like entity resolution above, this is recorded alongside the review and
+    # feeds nothing into classification — the B1-B4 rules engine stays the sole
+    # classifier, so wiring an external API in here cannot move a bucket. With
+    # no USPS credentials it is pure code normalization: no network, no cost.
+    try:
+        results["address_match"] = await _compare_addresses(entity, sources)
+    except Exception as e:  # noqa: BLE001 — an address check must never fail a review
+        logger.warning("Address comparison skipped for %s: %s", entity.id, e)
+        results["address_match"] = {"method": "skipped", "reason": str(e)[:200]}
+
     classification = await _classifier.classify_with_db(db, results)
     review_id = await generate_review_id(db)
 
@@ -389,7 +455,15 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
                      metadata={"review_id": review_id,
                                "bucket": classification.bucket,
                                "rule": classification.rule_code,
-                               "rule_version": classification.rule_version})
+                               "rule_version": classification.rule_version,
+                               # Which address path decided this review, and what
+                               # it cost. An auditor asking "was an external API
+                               # consulted for this record" needs to answer it
+                               # from the audit row, not by re-running anything.
+                               "address_method": _address_meta(results, "method"),
+                               "usps_used": bool(_address_meta(results, "usps_used")),
+                               "usps_latency_ms": _address_meta(results,
+                                                                "usps_latency_ms")})
     await db.commit()
 
     return {
