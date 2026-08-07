@@ -449,6 +449,35 @@ class OIGLEIEConnector:
 
 # ─── SAM.gov Federal Registration & Exclusions (GSA) ─────────────────────────
 
+def _sam_failure_reason(resp) -> str:
+    """Turn a non-200 SAM response into something diagnosable.
+
+    `HTTP 404` on its own sent an investigation down the wrong path once already
+    (see the note on SAMGovConnector.__init__), because it is the status SAM
+    returns both when an entity is absent and when the API is not serving at all.
+    These strings are read by an operator deciding whether to go get a key, so
+    they say which of those happened.
+    """
+    status = getattr(resp, "status_code", 0)
+    try:
+        body = (resp.text or "").strip()
+    except Exception:  # noqa: BLE001 — diagnostics must not raise
+        body = ""
+
+    if status == 404 and not body:
+        # A live route without a key answers 403 with a JSON error. An empty 404
+        # means the gateway had no route to offer, which no API key can fix.
+        return ("HTTP 404 with an empty body — api.sam.gov served no route. "
+                "This is an upstream/GSA-side outage, NOT a missing or invalid "
+                "API key; a request carrying no key at all gets the same empty "
+                "404 rather than the documented 403.")
+    if status in (401, 403):
+        return f"HTTP {status} — SAM.gov rejected the API key: {body[:160]}"
+    if status == 429:
+        return "HTTP 429 — SAM.gov rate limit reached (daily quota is per key)"
+    return f"HTTP {status}{(' — ' + body[:160]) if body else ''}"
+
+
 class SAMGovConnector:
     """SAM.gov federal registration + exclusion (debarment) checks.
 
@@ -480,9 +509,31 @@ class SAMGovConnector:
 
     def __init__(self):
         # Read the key at INSTANTIATION, not at class-definition/import time,
-        # so a key loaded after import (e.g. via .env) is honored. NOTE: the
-        # SAM.gov entity API does NOT accept the public DEMO_KEY (returns 404) —
-        # a free but registered key from https://sam.gov is required.
+        # so a key loaded after import (e.g. via .env) is honored.
+        #
+        # CORRECTION 2026-08-07. This used to say the 404s were caused by using
+        # the public DEMO_KEY and that a registered key would fix them. That was
+        # wrong, and it cost an investigation. Tested with a real registered
+        # 40-character key:
+        #
+        #   - every path on api.sam.gov returns 404 with an EMPTY body —
+        #     entity-information v1/v2/v3/v4, opportunities v1/v2,
+        #     data-services, and the bare host root
+        #   - a deliberately invalid key returns the identical empty 404, so the
+        #     key is never evaluated
+        #   - NO key at all also returns the empty 404, where a live route is
+        #     documented to return 403
+        #   - a path that certainly does not exist (/zzz-does-not-exist) is
+        #     indistinguishable from a documented one
+        #   - reproduced from three independent networks (workstation, Azure
+        #     Central US via the dev container, and a third-party fetcher) and on
+        #     the separate api-alpha.sam.gov environment
+        #   - sam.gov itself serves 200, so this is api.sam.gov specifically
+        #
+        # api.sam.gov is therefore not routing its API. Getting another key will
+        # not change that. Re-test with:
+        #   curl -s -o /dev/null -w '%{http_code}' https://api.sam.gov/zzz
+        # and treat anything other than 404 as a sign the platform is back.
         self.api_key = os.getenv("SAM_GOV_API_KEY", "")
 
     async def lookup_by_uei(self, uei: str) -> SourceResult:
@@ -508,7 +559,8 @@ class SAMGovConnector:
                 headers=HTTP_HEADERS,
             )
             if resp.status_code != 200:
-                return SourceResult.unavailable("SAM_GOV", f"HTTP {resp.status_code}", qp, self.API_VERSION)
+                return SourceResult.unavailable(
+                    "SAM_GOV", _sam_failure_reason(resp), qp, self.API_VERSION)
             payload = resp.json()
             entities = payload.get("entityData", [])
             if not entities:
@@ -566,7 +618,7 @@ class SAMGovConnector:
             )
             if resp.status_code != 200:
                 return SourceResult.unavailable(
-                    "SAM_GOV", f"HTTP {resp.status_code}", qp, self.API_VERSION)
+                    "SAM_GOV", _sam_failure_reason(resp), qp, self.API_VERSION)
             payload = resp.json()
             entities = payload.get("entityData", []) or []
             if not entities:
@@ -630,7 +682,7 @@ class SAMGovConnector:
                                          headers=HTTP_HEADERS)
             if resp.status_code != 200:
                 return SourceResult.unavailable(
-                    "SAM_GOV_EXCLUSIONS", f"HTTP {resp.status_code}", qp, "v4")
+                    "SAM_GOV_EXCLUSIONS", _sam_failure_reason(resp), qp, "v4")
             payload = resp.json()
             records = (payload.get("excludedEntity")
                        or payload.get("excludedEntities") or []) or []
@@ -1059,10 +1111,20 @@ class SourceConnectorManager:
         # that was never provisioned is not a health finding. The class remains
         # for when the key arrives.
         names = ["NPPES", "OIG_LEIE", "SAM_GOV", "PECOS", "RCE_DIRECTORY"]
+        # SAM's note is derived, not fixed. It read "(requires SAM_GOV_API_KEY)"
+        # on every failure, including on environments where the key WAS set —
+        # which points at the wrong fix, and did. Say which of the two states
+        # this actually is.
+        sam_note = "Federal Registration — GSA"
+        if not getattr(self.sam, "api_key", ""):
+            sam_note += " (requires SAM_GOV_API_KEY)"
+        else:
+            sam_note += (" (key configured; if UNAVAILABLE, api.sam.gov is not "
+                         "routing — upstream, not a key problem)")
         notes = {
             "NPPES": "NPI Registry — CMS/HHS",
             "OIG_LEIE": "Exclusion List — OIG/HHS",
-            "SAM_GOV": "Federal Registration — GSA (requires SAM_GOV_API_KEY)",
+            "SAM_GOV": sam_note,
             "PECOS": "Provider Enrollment — CMS",
             "RCE_DIRECTORY": "FHIR R4 — Sequoia Project (key pending Case #00055525)",
         }
