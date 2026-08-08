@@ -379,5 +379,10 @@ class TEFCAImportHistory(Base):
     rejected_count = Column(Integer, default=0)    # rows that failed validation
     uploaded_by = Column(String(255), index=True)
     uploaded_at = Column(DateTime, default=datetime.utcnow, index=True)
+    # QA-1.6 / QA-4.2 — SHA-256 of the uploaded bytes. Integrity evidence: it is
+    # what lets a reviewer prove months later that the file in the record is the
+    # file that was processed. NULL on rows written before this column existed;
+    # backfilling it is impossible because the original bytes were never kept.
+    file_hash = Column(String(64), index=True)
     status = Column(String(20), index=True)        # completed / partial / failed
     errors = Column(JSONB, default=list)           # [{row, field, reason}]

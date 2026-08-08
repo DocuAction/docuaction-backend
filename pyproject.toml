@@ -81,3 +81,12 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
 addopts = "-ra --strict-markers --strict-config"
+# Kept in step with pytest.ini, which is what pytest actually reads while an ini
+# file exists at the rootdir. Duplicated deliberately so this block is still
+# correct if pytest.ini is ever removed.
+markers = [
+    "regression: regression tests that must pass on every deploy",
+    "qa_defect: tests for confirmed QA defects (August 2026 report)",
+    "security: security-specific regression tests",
+    "bulletin: bulletin module regression tests",
+]

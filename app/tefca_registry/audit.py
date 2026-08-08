@@ -34,6 +34,10 @@ STATUS_CHANGED = "status_changed"
 STATUS_CHANGE_REFUSED = "status_change_refused"
 VERIFICATION_STARTED = "verification_started"
 VERIFICATION_COMPLETED = "verification_completed"
+# QA-1.7 names this event `entity_import`, and the audit trail is read by people
+# looking for that word. IMPORT_COMPLETED is kept as an alias so any older row
+# already written under the previous value still has a name in this vocabulary.
+ENTITY_IMPORT = "entity_import"
 IMPORT_COMPLETED = "import_completed"
 NPI_FLAGGED = "npi_flagged"
 

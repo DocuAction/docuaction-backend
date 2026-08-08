@@ -68,7 +68,7 @@ async def _scan_upload_or_reject(db, user, request, content, filename, ext, reso
     )
     await db.commit()  # persist the audit record even when the upload is rejected
     if not result.ok:
-        raise HTTPException(422, "File rejected: security validation failed")
+        raise HTTPException(422, "File rejected: potentially malicious content")
     return result.sha256
 # ═══════════════════════════════════════════════════════
 # AUTH ENDPOINTS

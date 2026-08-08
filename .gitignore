@@ -36,3 +36,6 @@ docs/QA_CREDENTIALS.md
 # Runtime logs and test artifacts — regenerated on every run, never source.
 logs/*.log
 results.xml
+# JUnit output from the QA regression runs (--junit-xml). Regenerated on every
+# run and machine-specific; the pass/fail record belongs in CI, not in git.
+results_*.xml

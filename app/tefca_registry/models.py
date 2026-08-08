@@ -343,7 +343,8 @@ class TefcaRegAuditLog(Base):
     # identifier_added, identifier_removed, relationship_created,
     # relationship_ended, verification_started, verification_completed,
     # finding_created, finding_resolved, review_submitted, import_started,
-    # import_completed, version_created, status_changed, merge_executed
+    # entity_import (QA-1.7; formerly import_completed), version_created,
+    # status_changed, merge_executed
     action = Column(String(100), nullable=False)
     actor_id = Column(UUID(as_uuid=True))
     actor_email = Column(String(500))

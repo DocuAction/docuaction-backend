@@ -173,6 +173,12 @@ def require_role(minimum_role):
         # logged-out account holding a still-unexpired token.
         _enforce_account_state(user, payload)
         return user
+    # Exposed so the effective gate on a route can be asserted without minting a
+    # token per role and seeding a user for each. QA-1.8 was precisely a
+    # configuration defect — a router-level gate silently overriding every
+    # endpoint's own declaration — and that class of bug is invisible to a test
+    # that only checks the deny direction on one role.
+    role_checker.minimum_role = minimum_role
     return role_checker
 
 async def refresh_access_token(refresh_token, db):

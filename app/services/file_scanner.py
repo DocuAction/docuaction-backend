@@ -97,6 +97,21 @@ _CONTENT_PATTERNS = [
     (b"xl/macrosheets", "excel_macro"),
     (b"-encodedcommand", "powershell_encoded"),
     (b"powershell", "powershell"),
+    # QA-1.1. A CSV is not rendered by this application, but an exported one is
+    # opened in a spreadsheet and its values are frequently pasted into pages
+    # that DO render them. The payload therefore has to be stopped at ingest —
+    # once a row is a database value, every downstream consumer has to remember
+    # to escape it, and the audit trail records that we accepted it.
+    #
+    # <script and javascript: were already covered above; these are the vectors
+    # that carry the same payload without either token.
+    (b"<iframe", "embedded_iframe"),
+    (b"<object", "embedded_object"),
+    (b"<embed", "embedded_embed"),
+    (b"onclick", "inline_event_handler"),
+    (b"onerror", "inline_event_handler"),
+    (b"eval(", "eval_call"),
+    (b"expression(", "css_expression"),
 ]
 
 

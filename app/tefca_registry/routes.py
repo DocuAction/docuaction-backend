@@ -2,7 +2,8 @@
 TEFCA registry API (Phase 2A) — read/query + verification.
 
 Mounted at ``/api/tefca/registry/*``, separate from the legacy ``/api/tefca/*``
-and ``/api/v1/tefca/*`` routers. Router-gated with ``require_role("reviewer")``.
+and ``/api/v1/tefca/*`` routers. Router floor is ``require_role("viewer")``; each
+endpoint declares its own requirement above that (see the note by the router).
 """
 from __future__ import annotations
 
@@ -33,17 +34,30 @@ from app.core.client_ip import get_client_ip
 
 logger = logging.getLogger(__name__)
 
-# NOTE: This router requires reviewer role at router level.
-# Individual endpoint require_role("contributor") decorators are overridden by
-# this router-level dependency — router dependencies run first, and the stricter
-# of the two binds. A contributor therefore never reaches those handlers.
-# This is intentional: all registry operations require reviewer access minimum.
-# Verified by the Block 4 RBAC matrix (2026-08-02), which recorded the handler's
-# own declaration as unreachable rather than as a defect.
+# ── Access control ────────────────────────────────────────────────────────────
+# The router gate is the FLOOR (authenticated + at least viewer); each endpoint
+# declares its own requirement, and the stricter of the two binds.
+#
+# This reverses an earlier decision. The gate was require_role("reviewer"), which
+# sat above every handler's own declaration and made those declarations dead
+# code — a contributor could not reach a handler marked contributor, and a viewer
+# could not read. The Block 4 RBAC matrix (2026-08-02) recorded that as intended.
+# The August 2026 QA matrix records it as a defect (QA-1.8) and requires reads at
+# viewer and import/verification at contributor, so the floor moves to viewer and
+# the per-endpoint declarations become load-bearing.
+#
+# WHAT THIS OPENS: every GET on this router is now reachable by a viewer, where
+# it previously required reviewer. Writes are unchanged or stricter — imports and
+# single-entity verification move reviewer -> contributor by design, and status
+# change moves contributor -> reviewer so it matches the matrix rather than
+# silently relying on the old floor.
+#
+# Adding an endpoint here without an explicit require_role gives it VIEWER
+# access. Declare the role on every new write endpoint.
 router = APIRouter(
     prefix="/api/tefca/registry",
     tags=["TEFCA Registry"],
-    dependencies=[Depends(require_role("reviewer"))],
+    dependencies=[Depends(require_role("viewer"))],
 )
 
 
@@ -318,7 +332,13 @@ async def change_entity_status(entity_id: uuid.UUID,
                                req: StatusChangeRequest,
                                request: Request,
                                db: AsyncSession = Depends(get_db),
-                               user=Depends(require_role("contributor"))):
+                               # reviewer, not contributor: a lifecycle/status
+                               # change is the "resolve" action the QA matrix
+                               # puts at reviewer. Declared contributor before,
+                               # but the old router floor made it reviewer in
+                               # practice — this keeps the behaviour it actually
+                               # had once the floor moved to viewer.
+                               user=Depends(require_role("reviewer"))):
     """Move an entity through its lifecycle, subject to the state machine.
 
     The registry previously stored operational_status as a free string, so
@@ -478,7 +498,9 @@ async def import_fhir_bundle_route(
     request: Request,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("reviewer")),
+    # contributor ("analyst"), per the QA matrix: importing a roster is data
+    # entry, not adjudication. Was reviewer via the old router floor (QA-1.8).
+    user=Depends(require_role("contributor")),
 ):
     content = await file.read()
     # Existing platform upload scanner (lazy import — avoids import-order coupling).
@@ -505,7 +527,9 @@ async def import_csv_route(
     request: Request,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("reviewer")),
+    # contributor ("analyst"), per the QA matrix: importing a roster is data
+    # entry, not adjudication. Was reviewer via the old router floor (QA-1.8).
+    user=Depends(require_role("contributor")),
 ):
     content = await file.read()
     from app.api.routes import _scan_upload_or_reject
@@ -516,11 +540,17 @@ async def import_csv_route(
         text = content.decode("utf-8-sig")
     except Exception:
         raise HTTPException(400, "Invalid CSV encoding (expected UTF-8)")
-    from app.tefca_registry.csv_import import import_csv
-    result = await import_csv(
-        db, text, filename=file.filename, file_checksum=checksum,
-        file_size=len(content), actor_id=getattr(user, "id", None),
-        actor_email=getattr(user, "email", None), ip_address=_client_ip(request))
+    from app.tefca_registry.csv_import import EmptyCSVError, import_csv
+    try:
+        result = await import_csv(
+            db, text, filename=file.filename, file_checksum=checksum,
+            file_size=len(content), actor_id=getattr(user, "id", None),
+            actor_email=getattr(user, "email", None), ip_address=_client_ip(request))
+    except EmptyCSVError as e:
+        # QA-1.4. 422 rather than 400: the request is well-formed, the content is
+        # not processable. Distinct from a parse failure so the operator is told
+        # the file was empty rather than that it was malformed.
+        raise HTTPException(422, str(e))
 
     # A batch import can legitimately succeed in part, so the body carries the
     # per-row detail either way. But a flat 200 on a batch where rows failed is
@@ -542,8 +572,14 @@ async def import_csv_route(
 
 
 def _batch_summary(b: reg.TefcaImportBatch) -> dict:
+    # QA-1.6 — file_checksum and imported_by were stored but omitted here, so the
+    # history LIST could not answer "which file, and who". They were reachable
+    # only by opening each batch individually, which is not how an auditor reads
+    # a history page. Both are on the row already; this was a projection gap.
     return {
         "id": b.id, "source_type": b.source_type, "filename": b.filename,
+        "file_checksum": b.file_checksum, "file_size_bytes": b.file_size_bytes,
+        "imported_by": b.imported_by,
         "status": b.status, "total_records": b.total_records,
         "imported_count": b.imported_count, "skipped_count": b.skipped_count,
         "error_count": b.error_count, "duration_ms": b.duration_ms,

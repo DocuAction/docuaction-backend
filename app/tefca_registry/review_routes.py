@@ -646,3 +646,196 @@ def _recommendations(bucket: str) -> List[str]:
                "Suspend the entity pending resolution.",
                "Notify the COR; document the disposition."],
     }.get(bucket, ["Manual examination required."])
+
+
+# ═══ Priority-review dashboard (QA-2.1, QA-2.2, QA-2.3) ═══════════════════════
+# There was no dashboard and no due-date model before this — "shows no overdue
+# metrics" was a missing feature, not a broken query. The SLA policy itself lives
+# in app/tefca_registry/sla.py so it is testable without a database and editable
+# in one place; this endpoint only joins it to the sample tables.
+
+
+@router.get("/priority-reviews/dashboard",
+            dependencies=[Depends(require_role("reviewer"))])
+async def priority_review_dashboard(
+    include_completed: bool = Query(False,
+                                    description="Include reviews already done"),
+    limit: int = Query(200, ge=1, le=1000),
+    db: AsyncSession = Depends(get_db),
+):
+    """Outstanding sampled reviews with SLA state, newest sample first.
+
+    A review's clock starts when its sample was DRAWN, not when the entity was
+    created — the entity may have sat in the registry for months before being
+    selected, and dating the SLA from creation would report every first review
+    as years overdue.
+    """
+    from app.tefca_registry import sla
+
+    now = datetime.utcnow()
+    rows = (await db.execute(
+        select(reg.SampleEntity, reg.ReviewSample, reg.TefcaRegEntity)
+        .join(reg.ReviewSample, reg.SampleEntity.sample_id == reg.ReviewSample.id)
+        .join(reg.TefcaRegEntity, reg.SampleEntity.entity_id == reg.TefcaRegEntity.id)
+        .order_by(reg.ReviewSample.drawn_at.desc())
+        .limit(limit))).all()
+
+    items: List[Dict[str, Any]] = []
+    for sample_entity, sample, entity in rows:
+        completed = (sample_entity.review_status or "").lower() == "reviewed"
+        if completed and not include_completed:
+            continue
+        block = sla.describe(sample.drawn_at, sample.review_type,
+                             now=now, completed=completed)
+        items.append({
+            "sample_id": str(sample.id),
+            "sample_name": sample.sample_name,
+            "review_type": sample.review_type,
+            "entity_id": str(entity.id),
+            "entity_name": entity.name,
+            "review_id": sample_entity.review_id,
+            "review_status": sample_entity.review_status,
+            "discrepancy_bucket": sample_entity.discrepancy_bucket,
+            # ISO 8601 throughout (QA-2.2). Formatting for a human is the display
+            # layer's job; a mixed-format payload cannot be sorted or parsed.
+            "drawn_at": sample.drawn_at.isoformat() if sample.drawn_at else None,
+            "reviewed_at": (sample_entity.reviewed_at.isoformat()
+                            if sample_entity.reviewed_at else None),
+            **block,
+        })
+
+    overdue = [i for i in items if i["sla_status"] == sla.OVERDUE]
+    at_risk = [i for i in items if i["sla_status"] == sla.AT_RISK]
+    return {
+        "generated_at": now.isoformat(),
+        "total": len(items),
+        # QA-2.1 — the count AND the list. A bare number tells a reviewer that
+        # something is late without telling them what to open.
+        "overdue_count": len(overdue),
+        "overdue_reviews": overdue,
+        "at_risk_count": len(at_risk),
+        "on_track_count": len(items) - len(overdue) - len(at_risk),
+        "sla_windows_days": sla.REVIEW_SLA_DAYS,
+        "reviews": items,
+    }
+
+
+# ═══ Review cycles (QA-3.1, QA-3.2, QA-3.3) ═══════════════════════════════════
+# Cycle creation already worked, at POST /api/v1/tefca/cycles on the legacy
+# router, gated at program_manager (admin clears it; reviewer does not). The
+# reported defect is a PATH mismatch, not a permission or mounting fault.
+#
+# These routes put the documented ARC-namespaced surface on top of the SAME
+# tefca_review_cycles table rather than introducing a second cycle store, which
+# would let two endpoints disagree about how many cycles exist.
+
+
+class ARCCycleCreate(BaseModel):
+    name: Optional[str] = Field(None, description="Operator label for the cycle")
+    cycle_type: str = Field(
+        description="TASK3_RETROSPECTIVE | TASK4_ONGOING | TASK5_PRIORITY")
+    start_date: str = Field(description="ISO 8601 date or datetime")
+    end_date: Optional[str] = Field(None, description="ISO 8601 date or datetime")
+
+
+def _parse_iso(value: str, field: str) -> datetime:
+    try:
+        return datetime.fromisoformat(str(value).strip())
+    except (TypeError, ValueError):
+        raise HTTPException(422, f"{field} must be ISO 8601 (got {value!r})")
+
+
+@router.post("/cycles", status_code=201,
+             dependencies=[Depends(require_role("admin"))])
+async def create_arc_cycle(req: ARCCycleCreate, http: Request,
+                           db: AsyncSession = Depends(get_db),
+                           user=Depends(require_role("admin"))):
+    """Create a review cycle. 201 with the cycle_id."""
+    from app.Tefca.models import CycleStatus, CycleType, TEFCAReviewCycle
+
+    try:
+        ctype = CycleType(req.cycle_type)
+    except ValueError:
+        raise HTTPException(
+            422, f"Invalid cycle_type. Use one of: {[c.value for c in CycleType]}")
+
+    start = _parse_iso(req.start_date, "start_date")
+    end = _parse_iso(req.end_date, "end_date") if req.end_date else None
+    if end and end < start:
+        # Caught here rather than left to the reader: an inverted range makes
+        # every completion percentage and overdue count downstream meaningless.
+        raise HTTPException(422, "end_date must not be earlier than start_date")
+
+    row = TEFCAReviewCycle(
+        cycle_type=ctype, cycle_start_date=start, cycle_end_date=end,
+        cycle_status=CycleStatus.PLANNED,
+        created_by=str(getattr(user, "email", "") or ""),
+    )
+    db.add(row)
+    await db.flush()
+    reg_audit.record(db, "cycle_created", None,
+                     actor_id=getattr(user, "id", None),
+                     actor_email=getattr(user, "email", None),
+                     ip_address=get_client_ip(http),
+                     metadata={"cycle_id": str(row.cycle_id),
+                               "cycle_type": ctype.value, "name": req.name})
+    await db.commit()
+    return {
+        "cycle_id": str(row.cycle_id),
+        "name": req.name,
+        "cycle_type": ctype.value,
+        "cycle_status": row.cycle_status.value,
+        # QA-3.2 — echo the dates back so a caller can confirm what was stored
+        # rather than trusting that its input was parsed the way it intended.
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat() if end else None,
+    }
+
+
+@router.get("/cycles/{cycle_id}/stats",
+            dependencies=[Depends(require_role("reviewer"))])
+async def arc_cycle_stats(cycle_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    """Completion and bucket distribution for one cycle (QA-3.3)."""
+    from app.Tefca.models import TEFCAReviewCycle
+    from app.tefca_registry import sla
+
+    cycle = (await db.execute(
+        select(TEFCAReviewCycle)
+        .where(TEFCAReviewCycle.cycle_id == cycle_id))).scalar_one_or_none()
+    if not cycle:
+        raise HTTPException(404, f"Review cycle {cycle_id} not found")
+
+    total = int(cycle.total_entities_sampled or 0)
+    reviewed = int(cycle.total_entities_completed or 0)
+    pending = max(0, total - reviewed)
+    buckets = {"B1": int(cycle.bucket_1_count or 0),
+               "B2": int(cycle.bucket_2_count or 0),
+               "B3": int(cycle.bucket_3_count or 0),
+               "B4": int(cycle.bucket_4_count or 0)}
+
+    # A cycle with nothing sampled is 0% complete, not 100%. Dividing by a zero
+    # population and calling the result "done" is how an empty cycle reports as
+    # a finished one.
+    completion_rate = round(reviewed / total, 4) if total else 0.0
+
+    status = (cycle.cycle_status.value if cycle.cycle_status else None)
+    finished = status in ("COMPLETE", "REPORT_GENERATED")
+    overdue = bool(cycle.cycle_end_date) and not finished and \
+        sla.is_overdue(cycle.cycle_end_date, datetime.utcnow())
+
+    return {
+        "cycle_id": str(cycle.cycle_id),
+        "cycle_type": cycle.cycle_type.value if cycle.cycle_type else None,
+        "cycle_status": status,
+        "start_date": (cycle.cycle_start_date.isoformat()
+                       if cycle.cycle_start_date else None),
+        "end_date": (cycle.cycle_end_date.isoformat()
+                     if cycle.cycle_end_date else None),
+        "total": total,
+        "reviewed": reviewed,
+        "pending": pending,
+        "completion_rate": completion_rate,
+        "completion_percent": round(completion_rate * 100, 2),
+        "bucket_counts": buckets,
+        "overdue": overdue,
+    }

@@ -20,6 +20,10 @@ from sqlalchemy import text, select
 from pydantic import BaseModel, ValidationError
 from statemachine import StateMachine, State
 
+# Shared SLA bands, so this endpoint and the ARC dashboard cannot disagree about
+# what "overdue" or "at risk" means. Pure functions, no DB, no import cycle.
+from app.tefca_registry import sla as _sla
+
 logger = logging.getLogger("docuaction.tefca.qa")
 
 QA_SCORE_THRESHOLD = 85.0
@@ -924,11 +928,29 @@ async def check_priority_sla(db, triggered_by="automatic") -> Dict[str, Any]:
             row.update({"phase": "open", "days_open": days_open, "past_deadline": past_deadline, "breached": breached})
             if breached:
                 breaches.append(str(c.case_id))
+
+        # QA-2.2 / QA-2.3 — the three-band status the UI colours red/amber/green,
+        # plus an ISO 8601 due date. `breached` is a boolean: it can say "late"
+        # but not "about to be late", so a reviewer had no way to see a case
+        # heading for a breach before it became one. Bands come from the shared
+        # module so this endpoint and the ARC dashboard cannot disagree about
+        # what "at risk" means.
+        row["due_date"] = c.deadline_date.isoformat() if c.deadline_date else None
+        row["sla_status"] = (
+            _sla.ON_TRACK if completed else _sla.sla_status(c.deadline_date, now))
+        row["sla_days_remaining"] = _sla.days_remaining(c.deadline_date, now)
         rows.append(row)
     total = len(cases)
     compliance = round(100.0 * (total - len(breaches)) / total, 1) if total else 100.0
+    overdue = [r for r in rows if r.get("sla_status") == _sla.OVERDUE]
+    at_risk = [r for r in rows if r.get("sla_status") == _sla.AT_RISK]
     result = {"total_cases": total, "breaches": len(breaches), "breaching_case_ids": breaches,
               "sla_compliance_pct": compliance, "sla_targets_days": SLA_TARGETS, "cases": rows,
+              # QA-2.1 — the counts a dashboard leads with, alongside the list so
+              # a reviewer can open what is late rather than only be told a number.
+              "overdue_count": len(overdue), "overdue_cases": overdue,
+              "at_risk_count": len(at_risk),
+              "on_track_count": len(rows) - len(overdue) - len(at_risk),
               "checked_at": now.isoformat()}
     await log_qa_audit(db, gate_name="priority_review_sla", gate_type="sla",
                        passed=len(breaches) == 0, score=compliance, threshold=100.0,

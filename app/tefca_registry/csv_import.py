@@ -42,6 +42,35 @@ def _get(row: dict, key: str) -> Optional[str]:
     return None
 
 
+class EmptyCSVError(ValueError):
+    """No data rows. Separate from a parse failure so the route can answer 422
+    with a reason of its own — "0 imported, 0 errors" is indistinguishable from
+    a successful no-op, and QA-1.4 is exactly that confusion."""
+
+
+def _validate_npi_cell(value: Optional[str]) -> None:
+    """Reject a malformed NPI at parse time (QA-1.2, QA-1.3).
+
+    This is deliberately enforced HERE, at the CSV boundary, and not in
+    fhir_import.validate_for_import — that function flags rather than rejects on
+    purpose, because existing seed and RCE records carry NPIs with bad check
+    digits and rejecting them would break importing data the rule postdates.
+    Operator-supplied CSV is a different population: it is being typed or
+    exported now, so a bad NPI there is a mistake to catch rather than history
+    to tolerate.
+
+    NPI is optional in this format. A blank cell is not an error; a present but
+    invalid one is.
+    """
+    if value is None or not str(value).strip():
+        return
+    from app.services.npi_validator import validate_npi
+
+    ok, message = validate_npi(str(value).strip())
+    if not ok:
+        raise ValueError(f"invalid NPI '{value}': {message}")
+
+
 def _parse_row(row: dict) -> ParsedEntity:
     tefcaid = _get(row, "TEFCAID")
     hcid = _get(row, "HCID")
@@ -53,6 +82,7 @@ def _parse_row(row: dict) -> ParsedEntity:
         raise ValueError("missing required column(s): " + ", ".join(missing))
     if level not in ENTITY_LEVELS:
         raise ValueError(f"invalid EntityLevel '{level}'")
+    _validate_npi_cell(_get(row, "NPI"))
 
     entity_type = (_get(row, "EntityType") or _DEFAULT_TYPE_BY_LEVEL[level]).lower()
     op_status = (_get(row, "OperationalStatus") or "active").lower()
@@ -89,6 +119,14 @@ async def import_csv(
             parsed.append(_parse_row(row))
         except Exception as ex:  # noqa: BLE001
             pre_errors.append(safe_import_error(f"Row {i}", ex, "csv parse"))
+
+    # QA-1.4 — checked AFTER the read loop rather than on the raw text, so a
+    # header-only file and a file of nothing but blank lines are both caught.
+    # Raised rather than returned: a batch record for an import that never had
+    # anything to import is noise in the audit trail.
+    if total == 0:
+        raise EmptyCSVError("File contains no data rows")
+
     return await persist_import(
         session, source_type="csv", filename=filename, file_checksum=file_checksum,
         file_size=file_size, parsed=parsed, total=total, pre_errors=pre_errors,

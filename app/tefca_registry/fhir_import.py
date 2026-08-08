@@ -89,6 +89,12 @@ REL_TYPE_BY_LEVEL = {
 
 ENTITY_LEVELS = {"qhin", "participant", "sub_participant", "child"}
 
+# Identifier types treated as uniquely identifying an entity for idempotent
+# skip. NPI joined tefcaid/hcid for QA-1.5: re-importing a provider roster under
+# fresh TEFCAIDs is a normal thing to do and used to create the same provider
+# twice, because only the registry's own keys were being compared.
+_DUP_KEY_TYPES = ("tefcaid", "hcid", "npi")
+
 
 @dataclass
 class ParsedEntity:
@@ -155,10 +161,25 @@ async def persist_import(
         metadata_={"source": source_type, "filename": filename, "records": total},
         ip_address=ip_address))
 
-    # Pre-load existing mandatory-identifier values for idempotent skip.
-    existing = set((await session.execute(
-        select(reg.TefcaEntityIdentifier.identifier_value).where(
-            reg.TefcaEntityIdentifier.identifier_type.in_(("tefcaid", "hcid"))))).scalars().all())
+    # Pre-load existing identifier values for idempotent skip.
+    #
+    # QA-1.5 adds npi to the set that was previously (tefcaid, hcid). An NPI is
+    # the identifier a provider is actually known by, and re-importing a roster
+    # under fresh TEFCAIDs is a routine way to end up with the same provider
+    # twice. Keyed per type, not as one flat set, so an NPI can never collide
+    # with a TEFCAID that happens to be the same string.
+    dup_rows = (await session.execute(
+        select(reg.TefcaEntityIdentifier.identifier_type,
+               reg.TefcaEntityIdentifier.identifier_value).where(
+            reg.TefcaEntityIdentifier.identifier_type.in_(_DUP_KEY_TYPES)))).all()
+    existing: dict[str, set] = {t: set() for t in _DUP_KEY_TYPES}
+    for itype, val in dup_rows:
+        if itype in existing and val:
+            existing[itype].add(val)
+    # Structured counterpart to the "already exists" strings in `errors`. A
+    # caller reconciling a roster needs to know WHICH rows were skipped and why,
+    # and parsing that back out of prose is not an interface.
+    skipped_details: list[dict] = []
 
     errors = len(err_list)
     imported = 0
@@ -171,10 +192,16 @@ async def persist_import(
 
     # ── PASS 1 — entities + identifiers + endpoints + audit ──
     for p in parsed:
-        dup_vals = [v for (t, v, _u, _pri) in p.identifiers if t in ("tefcaid", "hcid")]
-        if any(v in existing for v in dup_vals):
+        dup_vals = [(t, v) for (t, v, _u, _pri) in p.identifiers if t in _DUP_KEY_TYPES]
+        clash = next(((t, v) for (t, v) in dup_vals if v in existing.get(t, ())), None)
+        if clash:
             skipped += 1
             err_list.append(f"Entity {p.name} already exists")
+            skipped_details.append({
+                "entity_name": p.name, "key": p.key,
+                "reason": "duplicate_identifier",
+                "identifier_type": clash[0], "identifier_value": clash[1],
+            })
             continue
         try:
             async with session.begin_nested():
@@ -224,8 +251,8 @@ async def persist_import(
                     actor_id=actor_id, actor_email=actor_email,
                     metadata_={"source": source_type, "fhir_id": p.key}, ip_address=ip_address))
                 await session.flush()
-            for v in dup_vals:
-                existing.add(v)     # catch in-file duplicates too
+            for (t, v) in dup_vals:
+                existing.setdefault(t, set()).add(v)  # catch in-file duplicates too
             key_to_uuid[p.key] = eid
             created.append((p, eid))
             imported += 1
@@ -286,17 +313,25 @@ async def persist_import(
     flag_modified(batch, "errors")
     batch.completed_at = datetime.utcnow()
     batch.duration_ms = int((time.monotonic() - t0) * 1000)
+    # QA-1.7 / QA-4.2 — filename and file_hash belong on the audit row itself.
+    # They were on the batch record only, which meant answering "what file
+    # produced this change, and can we prove it was that file" required joining
+    # the audit trail to another table by batch_id. Evidence a reviewer has to
+    # assemble is evidence that does not get checked.
     session.add(reg.TefcaRegAuditLog(
-        id=uuid.uuid4(), entity_id=None, action="import_completed",
+        id=uuid.uuid4(), entity_id=None, action="entity_import",
         actor_id=actor_id, actor_email=actor_email,
-        metadata_={"batch_id": str(batch.id), "imported": imported,
-                   "skipped": skipped, "errors": errors,
+        metadata_={"batch_id": str(batch.id), "source": source_type,
+                   "filename": filename, "file_hash": file_checksum,
+                   "imported": imported, "skipped": skipped, "errors": errors,
                    "npi_flagged": len(validation_warnings)}, ip_address=ip_address))
     await session.commit()
 
     return {
         "batch_id": str(batch.id), "source_type": source_type, "status": status,
         "total": total, "imported": imported, "skipped": skipped,
+        "skipped_details": skipped_details,
+        "file_hash": file_checksum, "filename": filename,
         "error_count": errors, "errors": err_list, "duration_ms": batch.duration_ms,
         # Entities that imported successfully but carry an NPI failing the CMS
         # check digit. Separate from `errors`: nothing was rejected.

@@ -2663,9 +2663,13 @@ def _parse_upload(filename: str, raw: bytes):
 
 @tefca_dashboard_router.post("/entities/upload", summary="Import entities from CSV or JSON")
 async def upload_entities(
+    request: Request,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("reviewer")),
+    # QA-1.8 — contributor ("analyst"), not reviewer. Importing a roster is data
+    # entry, not adjudication. This is the endpoint the Entity Import page posts
+    # to, so it is the one the RBAC matrix is actually describing.
+    user=Depends(require_role("contributor")),
 ):
     """Import QHIN participant entities.
 
@@ -2677,6 +2681,16 @@ async def upload_entities(
     imported" is a fact the reviewer needs to be able to see afterwards (P2, P7).
     """
     raw = await file.read()
+
+    # QA-1.1 — security scan BEFORE parsing, so a malicious payload is never
+    # walked by a parser or written to a row. Returns the SHA-256 the history
+    # record stores (QA-1.6), and writes its own file_scan audit event including
+    # on rejection. Rejection is a generic 422 that names no specific check.
+    from app.api.routes import _scan_upload_or_reject
+
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower() if "." in (file.filename or "") else "csv"
+    file_hash = await _scan_upload_or_reject(
+        db, user, request, raw, file.filename, ext, "tefca_entity_import")
 
     # An unparseable file is a 400 — but it is STILL an import attempt, and the
     # audit trail must show it. Recording only the imports that parsed would make
@@ -2691,10 +2705,30 @@ async def upload_entities(
             rejected_count=0,
             uploaded_by=getattr(user, "email", None) or str(user),
             status="failed",
+            file_hash=file_hash,
             errors=[{"row": None, "field": "file", "reason": str(exc.detail)}],
         ))
         await db.commit()
         raise
+
+    # QA-1.4 — a file with no data rows is unprocessable, not a successful import
+    # of nothing. It previously returned 200 with total 0, which is
+    # indistinguishable from a no-op success. The history row is still written,
+    # for the same reason the parse failure above writes one.
+    if not rows:
+        db.add(TEFCAImportHistory(
+            filename=file.filename,
+            record_count=0,
+            imported_count=0,
+            rejected_count=0,
+            uploaded_by=getattr(user, "email", None) or str(user),
+            status="failed",
+            file_hash=file_hash,
+            errors=[{"row": None, "field": "file",
+                     "reason": "File contains no data rows"}],
+        ))
+        await db.commit()
+        raise HTTPException(422, "File contains no data rows")
 
     errors = []
     accepted = []
@@ -2728,6 +2762,11 @@ async def upload_entities(
         })
 
     imported = 0
+    # QA-1.5 — a row whose NPI already exists UPDATES the existing entity rather
+    # than creating a second one. That was already true; what was missing is that
+    # the caller was never told, so a re-import looked identical to a fresh one.
+    # Counted and reported separately from `imported`.
+    skipped_details = []
     for a in accepted:
         etype = a["entity_type"]
         if etype not in ("QHIN", "PARTICIPANT", "SUBPARTICIPANT"):
@@ -2746,6 +2785,11 @@ async def upload_entities(
             existing.npi_submitted = a["npi"]
             existing.uei_submitted = a["uei"]
             existing.date_last_updated = datetime.utcnow()
+            skipped_details.append({
+                "entity_name": a["entity_name"], "npi": a["npi"],
+                "reason": "duplicate_npi",
+                "action": "updated_existing_entity",
+            })
         else:
             db.add(TEFCAEntity(
                 rce_organization_id=rce_id,
@@ -2770,15 +2814,29 @@ async def upload_entities(
         rejected_count=len(rows) - imported,
         uploaded_by=getattr(user, "email", None) or str(user),
         status=status,
+        file_hash=file_hash,
         errors=errors[:200],
     ))
+    # QA-1.7 — the import as an audit event, not only as a history row. The two
+    # are read by different people: history answers "what did we load", the audit
+    # trail answers "who changed the registry, when, and from which file".
+    await log_tefca_event(
+        db, user=user, action="entity_import", resource_type="tefca_import_history",
+        resource_id=None, ip_address=_client_ip(request),
+        details={"filename": file.filename, "file_hash": file_hash,
+                 "imported": imported, "skipped": len(skipped_details),
+                 "errors": len(errors), "total": len(rows)},
+    )
     await db.commit()
 
     return {
         "imported": imported,
         "rejected": len(rows) - imported,
+        "skipped": len(skipped_details),
+        "skipped_details": skipped_details,
         "total": len(rows),
         "status": status,
+        "file_hash": file_hash,
         "errors": errors,
     }
 
@@ -2807,6 +2865,13 @@ async def import_history(
             "uploaded_by": r.uploaded_by,
             "uploaded_at": r.uploaded_at.isoformat() if r.uploaded_at else None,
             "status": r.status,
+            # QA-1.6 / QA-4.2 — integrity evidence in the LIST, not only on a
+            # detail view. NULL on rows imported before the column existed, and
+            # deliberately not faked: an absent hash must not look like a
+            # verified one. Both keys are returned so an older UI reading
+            # `file_hash` and a newer one reading `sha256` both work.
+            "file_hash": r.file_hash,
+            "sha256": r.file_hash,
             "errors": r.errors or [],
         } for r in rows],
     }

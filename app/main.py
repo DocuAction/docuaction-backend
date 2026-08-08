@@ -175,6 +175,12 @@ async def startup():
         # cannot add columns to an existing table.
         "ALTER TABLE tefca_reg_entities ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT false",
         "ALTER TABLE tefca_reg_entities ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP",
+        # QA-1.6 — SHA-256 of an uploaded entity-import file, so the import
+        # history can prove which bytes produced which rows. Same reason as the
+        # columns above: create_all() cannot alter an existing table. NULL on
+        # rows written before this existed, and not backfillable — the original
+        # upload bytes were never retained.
+        "ALTER TABLE tefca_import_history ADD COLUMN IF NOT EXISTS file_hash VARCHAR(64)",
     ]
     for attempt in range(1, 8):
         try:
