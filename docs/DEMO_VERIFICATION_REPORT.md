@@ -23,19 +23,19 @@ Five real healthcare entities were submitted through the complete TEFCA workflow
 | 4 | Registry stats | **PASS** | total entities: ? |
 | 5 | Draw sample | **PASS** | n=378 from N=22275 at 95%/5% |
 | 6 | Generate weekly report | **PASS** | 6/6 required sections present |
-| 7 | Create review cycle | **PASS** | cycle_id c853a4ef-fdbc-486c-941f-a1e406ca6310 |
+| 7 | Create review cycle | **PASS** | cycle_id 77777def-f4c9-4921-9af7-e7ef2544bdde |
 | 8 | Priority review | **PASS** | severity high, 3 recommendations |
-| 9 | Audit trail + import history | **PASS** | 14 import records, 13 carry a SHA-256 |
+| 9 | Audit trail + import history | **PASS** | 20 import records, 20 carry a SHA-256 |
 
 ## Entity Verification Results
 
 | NPI | Entity | NPPES | PECOS | OIG | SAM | Name Match | Address Match | Bucket | Review ID |
 |-----|--------|-------|-------|-----|-----|------------|---------------|--------|-----------|
-| 1477978807 | Johns Hopkins Hospital | verified | verified | clear | not_checked | inconclusive (1.0) | not_compared (0.0) | B1 | REV-2026-000189 |
-| 1881018208 | Mayo Clinic | verified | verified | clear | not_checked | inconclusive (1.0) | not_compared (0.0) | B1 | REV-2026-000190 |
-| 1275791162 | Cleveland Clinic | verified | verified | clear | not_checked | inconclusive (1.0) | not_compared (0.0) | B1 | REV-2026-000191 |
-| 1821141649 | Massachusetts General Hospital | verified | verified | clear | not_checked | inconclusive (1.0) | not_compared (0.0) | B1 | REV-2026-000192 |
-| 1770626038 | Inova Fairfax Hospital | verified | verified | clear | not_checked | inconclusive (1.0) | not_compared (0.0) | B1 | REV-2026-000193 |
+| 1477978807 | Johns Hopkins Hospital | verified | verified | clear | not_checked | address+name (0.9285) | code_normalization (0.8571) | B1 | REV-2026-000207 |
+| 1881018208 | Mayo Clinic | verified | verified | clear | not_checked | inconclusive (1.0) | code_normalization (0.75) | B1 | REV-2026-000208 |
+| 1275791162 | Cleveland Clinic | verified | verified | clear | not_checked | inconclusive (1.0) | code_normalization (0.6) | B1 | REV-2026-000209 |
+| 1821141649 | Massachusetts General Hospital | verified | verified | clear | not_checked | inconclusive (1.0) | code_normalization (0.6667) | B1 | REV-2026-000210 |
+| 1770626038 | Inova Fairfax Hospital | verified | verified | clear | not_checked | address+name (1.0) | code_normalization (1.0) | B1 | REV-2026-000211 |
 
 > **What step 3 verified.** Import (step 2) writes to the legacy `tefca_entities` table, which is what the Entity Import page posts to. Registry verification (step 3) reads `tefca_reg_entities`. Those are two different tables, so the records verified above were matched to the imported entities **by name**, not carried through from the import. NPPES, PECOS and OIG results are genuine live lookups. An empty Address Match reflects a registry record that holds no address, not a failed comparison. Reconciling the two stores is outstanding work, and this report should not be read as demonstrating a single unbroken import-to-verification path.
 
@@ -98,20 +98,21 @@ A guarded endpoint answering 401 without a token is a PASS: the guard working is
 
 ## Known Architectural Issues
 
-### Entity records are split across two tables
+### Entity records live in two tables, now bridged
 
-The Entity Import page posts to `POST /api/tefca/entities/upload`, which writes the legacy `tefca_entities` table. Registry verification reads `tefca_reg_entities`. These are separate stores with separate schemas, and an import into one does not populate the other.
+The Entity Import page posts to `POST /api/tefca/entities/upload`, which writes the legacy `tefca_entities` table. Registry verification reads `tefca_reg_entities`. These remain separate stores with separate schemas.
 
-Consequences visible in this report:
+They were previously disjoint, and this report recorded the consequence: step 3 matched registry records to the imported entities **by name**, and Address Match read `not_compared` because those records held no address.
 
-- Step 3 verifies registry records matched to the imported entities **by name**, not records carried through from step 2.
-- Address Match is empty where the matched registry record holds no address. That is a missing input, not a failed comparison.
+Each import now also upserts the entity into the registry, matched on NPI, carrying name, address, city, state and ZIP. One operator action populates both stores, so verification sees what was imported and the address comparison has something to compare. The Address Match column above reflects real comparisons.
 
-This is a known issue, accepted for this demonstration and scheduled for a dedicated session. It is recorded here rather than omitted because the alternative — presenting the run as one unbroken import-to-verification path — would overstate what was proven.
+The underlying duplication is unchanged and a full merge is scheduled separately. Bridging is the same outcome reached one table at a time, rather than changing every endpoint on two routers at once.
 
 ### SAM.gov returns 404 for every path
 
-A valid API key is configured and present in the runtime. Every endpoint returns an empty HTTP 404, including requests carrying no key and requests to paths that do not exist, from three independent networks. The key is never evaluated. This is upstream routing, not a code or credential fault, and SAM is reported as `not_checked` rather than counted against any entity.
+The key is proven valid: it returns HTTP 200 with `X-Ratelimit-Limit: 36000` against the api.data.gov gateway, where `DEMO_KEY` gets 10 and an invalid key gets 401. That also rules out the theory that a more privileged (FOUO) key is needed.
+
+Every `api.sam.gov` path nevertheless returns an empty HTTP 404 from `server: istio-envoy` — including requests carrying no key at all, an invalid key, the bare host root, and paths that do not exist. Requests are refused at SAM's ingress before authentication runs, so no credential change can affect it. SAM is reported as `not_checked` rather than counted against any entity.
 
 ## Notes on Data Provenance
 
@@ -138,4 +139,4 @@ DEMO_EMAIL=<admin email> DEMO_PASSWORD=<password> \
   python scripts/run_full_demo.py --base-url https://docuaction-dev.azurewebsites.net
 ```
 
-_Generated 2026-08-09T04:18:10.988496+00:00 by scripts/run_full_demo.py. Every value above is copied from a live API response; no result is assumed or filled in by hand._
+_Generated 2026-08-09T20:11:46.686984+00:00 by scripts/run_full_demo.py. Every value above is copied from a live API response; no result is assumed or filled in by hand._

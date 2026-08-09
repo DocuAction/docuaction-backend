@@ -473,12 +473,20 @@ def _sam_failure_reason(resp) -> str:
         body = ""
 
     if status == 404 and not body:
-        # A live route without a key answers 403 with a JSON error. An empty 404
-        # means the gateway had no route to offer, which no API key can fix.
+        # Not a key problem, and provably so. The same key returns HTTP 200 with
+        # X-Ratelimit-Limit: 36000 against api.data.gov (DEMO_KEY gets 10, an
+        # invalid key gets 401), so it is valid and fully provisioned — which
+        # also rules out the "public key, needs FOUO" theory. Meanwhile every
+        # api.sam.gov path answers an empty 404 from `server: istio-envoy` with
+        # no api.data.gov gateway headers, including requests with no key, with
+        # an invalid key, to the bare root, and to paths that do not exist.
+        # Requests are being refused at SAM's ingress before authentication ever
+        # runs. No credential change can affect that.
         return ("HTTP 404 with an empty body — api.sam.gov served no route. "
-                "This is an upstream/GSA-side outage, NOT a missing or invalid "
-                "API key; a request carrying no key at all gets the same empty "
-                "404 rather than the documented 403.")
+                "Upstream routing at SAM, NOT a missing, invalid or "
+                "insufficiently privileged API key: the same key is valid with a "
+                "36,000/hr quota on api.data.gov, and requests carrying no key "
+                "get this identical empty 404.")
     if status in (401, 403):
         return f"HTTP {status} — SAM.gov rejected the API key: {body[:160]}"
     if status == 429:

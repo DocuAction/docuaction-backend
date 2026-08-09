@@ -2758,6 +2758,13 @@ async def upload_entities(
             "entity_type": (norm.get("entity_type") or "PARTICIPANT").upper(),
             "uei": norm.get("uei") or None,
             "address": norm.get("address") or None,
+            # Carried for the registry bridge. The legacy table keeps the whole
+            # address in one JSONB blob, but the registry stores city/state/zip
+            # as columns and compares a one-line address against NPPES, so the
+            # components have to survive parsing rather than be flattened here.
+            "city": norm.get("city") or None,
+            "state": norm.get("state") or None,
+            "zip": norm.get("zip") or norm.get("zip_code") or norm.get("postal_code") or None,
             "contact": norm.get("contact") or None,
         })
 
@@ -2805,6 +2812,28 @@ async def upload_entities(
             ))
         imported += 1
 
+    # ── Bridge into the registry ────────────────────────────────────────────
+    # This table and tefca_reg_entities were disjoint: importing here left
+    # verification, which reads the registry, with nothing to work on. The
+    # end-to-end demo surfaced it — step 3 matched registry rows by NAME and
+    # address comparison reported "not_compared" because those rows had no
+    # address, while every step still reported success.
+    #
+    # Bridging keeps one operator action populating both stores. It runs AFTER
+    # the legacy writes and never raises: an import that already succeeded must
+    # not be lost because a secondary write failed.
+    from app.tefca_registry.import_bridge import bridge_many
+
+    bridge = await bridge_many(db, [{
+        "npi": a["npi"],
+        "name": a["entity_name"],
+        "address": a.get("address"),
+        "city": a.get("city"),
+        "state": a.get("state"),
+        "zip_code": a.get("zip"),
+        "entity_type": a["entity_type"],
+    } for a in accepted], source="csv_import")
+
     status = "completed" if imported and not errors else ("partial" if imported else "failed")
 
     db.add(TEFCAImportHistory(
@@ -2825,7 +2854,10 @@ async def upload_entities(
         resource_id=None, ip_address=_client_ip(request),
         details={"filename": file.filename, "file_hash": file_hash,
                  "imported": imported, "skipped": len(skipped_details),
-                 "errors": len(errors), "total": len(rows)},
+                 "errors": len(errors), "total": len(rows),
+                 "registry_created": bridge["registry_created"],
+                 "registry_updated": bridge["registry_updated"],
+                 "registry_failed": bridge["registry_failed"]},
     )
     await db.commit()
 
@@ -2838,6 +2870,13 @@ async def upload_entities(
         "status": status,
         "file_hash": file_hash,
         "errors": errors,
+        # Reported separately from `imported`: the legacy write and the registry
+        # write can disagree, and a caller who sees only "imported: 5" would not
+        # know that verification still cannot see those entities.
+        "registry_created": bridge["registry_created"],
+        "registry_updated": bridge["registry_updated"],
+        "registry_failed": bridge["registry_failed"],
+        "registry_details": bridge["registry_details"],
     }
 
 

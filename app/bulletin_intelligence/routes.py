@@ -1425,3 +1425,52 @@ async def demo_cycle(agency_id: str = "fcc"):
         "sources_represented": list(set(a.source_type for a in demo_articles)),
         "message": f"Demo complete. Approve briefing at POST /api/v1/bulletin/briefings/{briefing_id}/approve"
     }
+
+
+# ── Word document (Task 2) ────────────────────────────────────────────────────
+# The reviewer cleans up the QA workbook, uploads it back, and then needs the
+# briefing as a Word document to paste into an email. This reads the SAME
+# rehydrated articles every other export reads, so a reviewed workbook applied
+# through POST /upload-reviewed/{id} is reflected here automatically rather than
+# through a second parsing path that could disagree with it.
+
+
+@router.post("/generate-word/{briefing_id}", dependencies=guard("contributor"))
+async def generate_word(briefing_id: str):
+    """The briefing as a .docx download, in the FCC format."""
+    from fastapi.responses import Response
+
+    from app.bulletin_intelligence.bulletin_download_routes import _briefing_articles
+    from app.bulletin_intelligence.word_generator import (BulletinWordGenerator,
+                                                          filename_for)
+
+    briefing, agency, _articles = _briefing_articles(briefing_id)
+    generator = BulletinWordGenerator(
+        agency_name=getattr(agency, "short_name", "FCC"))
+    try:
+        content = generator.generate(briefing_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Word generation failed for {briefing_id}: {e}", exc_info=True)
+        raise HTTPException(500, "Could not generate the Word document")
+
+    name = filename_for(str(briefing.get("briefing_date") or ""),
+                        getattr(agency, "short_name", "FCC"))
+    return Response(
+        content=content,
+        media_type=("application/vnd.openxmlformats-officedocument"
+                    ".wordprocessingml.document"),
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+    )
+
+
+@router.get("/generate-word/{briefing_id}", dependencies=guard("contributor"))
+async def generate_word_get(briefing_id: str):
+    """GET alias for the same download.
+
+    A browser cannot follow a POST from a plain link or an anchor target, and
+    the History tab lists historical briefings as links. Same handler, so the
+    two cannot drift.
+    """
+    return await generate_word(briefing_id)

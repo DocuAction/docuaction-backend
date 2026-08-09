@@ -18,11 +18,23 @@ class FakeResponse:
 
 
 def test_empty_404_is_reported_as_upstream_not_a_key_problem():
+    """Asserted on meaning, not on an exact sentence, so the wording can be
+    sharpened without a false failure — as it was once the key was proven valid
+    at 36,000/hr on api.data.gov, which also ruled out the FOUO-privilege
+    theory."""
+    reason = _sam_failure_reason(FakeResponse(404, "")).lower()
+    assert "upstream" in reason
+    assert "not a missing" in reason, "must say explicitly that it is not the key"
+    # The wrong conclusions must not be reachable from this string.
+    assert "register" not in reason
+    assert "request a new key" not in reason
+
+
+def test_the_empty_404_reason_cites_the_evidence():
+    """An operator reading this at 2am should not have to take it on trust."""
     reason = _sam_failure_reason(FakeResponse(404, ""))
-    assert "upstream" in reason.lower()
-    assert "NOT a missing or invalid" in reason
-    # The wrong conclusion must not be reachable from this string.
-    assert "register" not in reason.lower()
+    assert "api.data.gov" in reason, "cite where the key was proven valid"
+    assert "no key" in reason.lower(), "cite that keyless requests 404 identically"
 
 
 def test_404_with_a_body_is_not_claimed_to_be_an_outage():

@@ -661,34 +661,42 @@ class DemoRunner:
 
         a("## Known Architectural Issues")
         a("")
-        a("### Entity records are split across two tables")
+        a("### Entity records live in two tables, now bridged")
         a("")
         a("The Entity Import page posts to `POST /api/tefca/entities/upload`, "
           "which writes the legacy `tefca_entities` table. Registry "
-          "verification reads `tefca_reg_entities`. These are separate stores "
-          "with separate schemas, and an import into one does not populate the "
-          "other.")
+          "verification reads `tefca_reg_entities`. These remain separate "
+          "stores with separate schemas.")
         a("")
-        a("Consequences visible in this report:")
+        a("They were previously disjoint, and this report recorded the "
+          "consequence: step 3 matched registry records to the imported "
+          "entities **by name**, and Address Match read `not_compared` because "
+          "those records held no address.")
         a("")
-        a("- Step 3 verifies registry records matched to the imported entities "
-          "**by name**, not records carried through from step 2.")
-        a("- Address Match is empty where the matched registry record holds no "
-          "address. That is a missing input, not a failed comparison.")
+        a("Each import now also upserts the entity into the registry, matched "
+          "on NPI, carrying name, address, city, state and ZIP. One operator "
+          "action populates both stores, so verification sees what was "
+          "imported and the address comparison has something to compare. The "
+          "Address Match column above reflects real comparisons.")
         a("")
-        a("This is a known issue, accepted for this demonstration and scheduled "
-          "for a dedicated session. It is recorded here rather than omitted "
-          "because the alternative — presenting the run as one unbroken "
-          "import-to-verification path — would overstate what was proven.")
+        a("The underlying duplication is unchanged and a full merge is "
+          "scheduled separately. Bridging is the same outcome reached one "
+          "table at a time, rather than changing every endpoint on two routers "
+          "at once.")
         a("")
         a("### SAM.gov returns 404 for every path")
         a("")
-        a("A valid API key is configured and present in the runtime. Every "
-          "endpoint returns an empty HTTP 404, including requests carrying no "
-          "key and requests to paths that do not exist, from three independent "
-          "networks. The key is never evaluated. This is upstream routing, not "
-          "a code or credential fault, and SAM is reported as `not_checked` "
-          "rather than counted against any entity.")
+        a("The key is proven valid: it returns HTTP 200 with "
+          "`X-Ratelimit-Limit: 36000` against the api.data.gov gateway, where "
+          "`DEMO_KEY` gets 10 and an invalid key gets 401. That also rules out "
+          "the theory that a more privileged (FOUO) key is needed.")
+        a("")
+        a("Every `api.sam.gov` path nevertheless returns an empty HTTP 404 from "
+          "`server: istio-envoy` — including requests carrying no key at all, "
+          "an invalid key, the bare host root, and paths that do not exist. "
+          "Requests are refused at SAM's ingress before authentication runs, so "
+          "no credential change can affect it. SAM is reported as "
+          "`not_checked` rather than counted against any entity.")
         a("")
 
         a("## Notes on Data Provenance")
