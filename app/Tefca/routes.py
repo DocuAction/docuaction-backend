@@ -440,7 +440,7 @@ async def connector_health(user=Depends(require_role("reviewer"))):
 
 # ─── Reference dataset (development data only) ───────────────────────────────
 
-@tefca_router.get("/mock/entities", summary="View bundled RCE development dataset")
+@tefca_router.get("/mock/entities", summary="View bundled bundled development dataset")
 async def get_mock_entities(
     bucket: Optional[int] = None,
     qhin: Optional[str] = None,
@@ -513,7 +513,7 @@ async def list_cycles(db: AsyncSession = Depends(get_db), user=Depends(require_r
 
 # ─── Validation ──────────────────────────────────────────────────────────────
 
-@tefca_router.post("/validate/entity", summary="Validate one RCE entity (persisted)")
+@tefca_router.post("/validate/entity", summary="Validate one TEFCA entity (persisted)")
 async def validate_single_entity(
     entity: dict, http: Request,
     cycle_id: Optional[str] = Query(None),
@@ -579,7 +579,7 @@ async def validate_batch(
         entity_type=entity_type, qhin_name=qhin_name, limit=100000,
     )
     if not rce_result.success or not rce_result.data:
-        raise HTTPException(503, f"RCE Directory unavailable: {rce_result.error}")
+        raise HTTPException(503, f"TEFCA entity data unavailable: {rce_result.error}")
     entities = rce_result.data.get("organizations", [])
     total = len(entities)
     sample_size = calculate_sample_size(total) if total > 0 else 0

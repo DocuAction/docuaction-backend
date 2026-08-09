@@ -69,7 +69,7 @@ SYSTEM_URI = {
     "ccn": "urn:oid:2.16.840.1.113883.4.336",
     "clia": "urn:oid:2.16.840.1.113883.4.7",
     "naic": "urn:oid:2.16.840.1.113883.6.300",
-    "tefcaid": "https://rce.sequoiaproject.org/fhir/identifier/tefcaid",
+    "tefcaid": "urn:docuaction:tefca/fhir/identifier/tefcaid",
 }
 
 # FHIR identifier system -> our identifier_type (for system-based detection).

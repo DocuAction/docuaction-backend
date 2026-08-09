@@ -522,7 +522,7 @@ async def generate_priority_status_report(db, case_id) -> Optional[dict]:
         "severity": sev,
         "impact_assessment": _IMPACT_BY_SEVERITY.get(sev, "Assessment pending."),
         "recommendations": case.recommendations or [
-            {"recommendation": "QHIN to verify and correct the flagged data, then resubmit to the RCE Directory."}],
+            {"recommendation": "QHIN to verify and correct the flagged data, then resubmit to the TEFCA entity data."}],
         "prevention_recommendation": case.prevention_recommendation,
         "resolution_status": status,
         "resolution_notes": case.resolution_notes,

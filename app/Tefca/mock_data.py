@@ -1,8 +1,8 @@
 """
 DocuAction TEFCA Review Protocol
-Mock RCE Directory Data — 30 entities covering all 4 buckets
-Replace with live Sequoia Project RCE Directory API when key arrives.
-Email: techsupport@sequoiaproject.org
+Mock TEFCA entity data Data — 30 entities covering all 4 buckets
+Replaced by the ONC-provided entity dataset once it is loaded.
+Email: the ONC contract point of contact
 """
 
 from datetime import datetime
@@ -16,13 +16,13 @@ BUCKET_1_ENTITIES = [
     {
         "resourceType": "Organization",
         "id": "rce-org-b1-001",
-        "meta": {"profile": ["http://rce.sequoiaproject.org/StructureDefinition/RCEOrganization"]},
+        "meta": {"profile": ["urn:docuaction:tefca/StructureDefinition/RCEOrganization"]},
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1003000126"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "PART-001"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "PART-001"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "PARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "PARTICIPANT"}]}],
         "name": "Riverside Community Health Network",
         "alias": ["RCHN"],
         "telecom": [
@@ -47,10 +47,10 @@ BUCKET_1_ENTITIES = [
         "id": "rce-org-b1-002",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1023011403"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "PART-002"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "PART-002"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "PARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "PARTICIPANT"}]}],
         "name": "Capital Region Medical Associates",
         "telecom": [{"system": "phone", "value": "301-555-0202"}],
         "address": [{
@@ -70,10 +70,10 @@ BUCKET_1_ENTITIES = [
         "id": "rce-org-b1-003",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1033126539"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "SUBPART-001"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "SUBPART-001"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "SUBPARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "SUBPARTICIPANT"}]}],
         "name": "Northern Virginia Urgent Care Centers LLC",
         "telecom": [{"system": "phone", "value": "703-555-0303"}],
         "address": [{
@@ -93,10 +93,10 @@ BUCKET_1_ENTITIES = [
         "id": "rce-org-b1-004",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1043211843"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "PART-003"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "PART-003"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "PARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "PARTICIPANT"}]}],
         "name": "Chesapeake Health Information Exchange",
         "alias": ["Chesapeake HIE"],
         "telecom": [
@@ -120,10 +120,10 @@ BUCKET_1_ENTITIES = [
         "id": "rce-org-b1-005",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1053310247"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "SUBPART-002"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "SUBPART-002"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "SUBPARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "SUBPARTICIPANT"}]}],
         "name": "Pediatric Specialists of Virginia PA",
         "telecom": [{"system": "phone", "value": "571-555-0505"}],
         "address": [{
@@ -143,10 +143,10 @@ BUCKET_1_ENTITIES = [
         "id": "rce-org-b1-006",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1063411651"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "PART-004"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "PART-004"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "PARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "PARTICIPANT"}]}],
         "name": "MidAtlantic Behavioral Health Services Inc",
         "telecom": [{"system": "phone", "value": "202-555-0606"}],
         "address": [{
@@ -166,10 +166,10 @@ BUCKET_1_ENTITIES = [
         "id": "rce-org-b1-007",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1073514055"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "PART-005"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "PART-005"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "PARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "PARTICIPANT"}]}],
         "name": "Annapolis Regional Hospital Corporation",
         "alias": ["Annapolis Regional Hospital"],
         "telecom": [{"system": "phone", "value": "410-555-0707"}],
@@ -190,10 +190,10 @@ BUCKET_1_ENTITIES = [
         "id": "rce-org-b1-008",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1083617459"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "SUBPART-003"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "SUBPART-003"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "SUBPARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "SUBPARTICIPANT"}]}],
         "name": "Frederick County Home Health Agency",
         "telecom": [{"system": "phone", "value": "301-555-0808"}],
         "address": [{
@@ -213,10 +213,10 @@ BUCKET_1_ENTITIES = [
         "id": "rce-org-b1-009",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1093718863"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "PART-006"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "PART-006"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "PARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "PARTICIPANT"}]}],
         "name": "Potomac Valley Radiology Group",
         "telecom": [{"system": "phone", "value": "240-555-0909"}],
         "address": [{
@@ -236,10 +236,10 @@ BUCKET_1_ENTITIES = [
         "id": "rce-org-b1-010",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1104921267"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "PART-007"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "PART-007"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "PARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "PARTICIPANT"}]}],
         "name": "Eastern Shore Rural Health Commission",
         "telecom": [{"system": "phone", "value": "410-555-1010"}],
         "address": [{
@@ -268,10 +268,10 @@ BUCKET_2_ENTITIES = [
         "id": "rce-org-b2-001",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1114022671"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "PART-008"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "PART-008"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "PARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "PARTICIPANT"}]}],
         "name": "Memorial Health System",
         "telecom": [{"system": "phone", "value": "410-555-1101"}],
         "address": [{
@@ -291,10 +291,10 @@ BUCKET_2_ENTITIES = [
         "id": "rce-org-b2-002",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1124124075"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "SUBPART-004"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "SUBPART-004"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "SUBPARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "SUBPARTICIPANT"}]}],
         "name": "Prince Georges Orthopedic and Sports Medicine",
         "telecom": [{"system": "phone", "value": "301-555-1102"}],
         "address": [{
@@ -314,10 +314,10 @@ BUCKET_2_ENTITIES = [
         "id": "rce-org-b2-003",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1134226479"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "PART-009"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "PART-009"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "PARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "PARTICIPANT"}]}],
         "name": "St. Agnes Medical Center",
         "telecom": [{"system": "phone", "value": "410-555-1103"}],
         "address": [{
@@ -337,10 +337,10 @@ BUCKET_2_ENTITIES = [
         "id": "rce-org-b2-004",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1144328883"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "SUBPART-005"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "SUBPART-005"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "SUBPARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "SUBPARTICIPANT"}]}],
         "name": "Howard County Mental Health Authority",
         "telecom": [{"system": "phone", "value": "410-555-1104"}],
         "address": [{
@@ -360,10 +360,10 @@ BUCKET_2_ENTITIES = [
         "id": "rce-org-b2-005",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1154431287"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "PART-010"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "PART-010"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "PARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "PARTICIPANT"}]}],
         "name": "Southern Maryland Hospital Center",
         "alias": ["SMHC"],
         "telecom": [{"system": "phone", "value": "301-555-1105"}],
@@ -384,10 +384,10 @@ BUCKET_2_ENTITIES = [
         "id": "rce-org-b2-006",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1164533691"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "SUBPART-006"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "SUBPART-006"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "SUBPARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "SUBPARTICIPANT"}]}],
         "name": "Western Maryland Physicians LLC",
         "telecom": [{"system": "phone", "value": "301-555-1106"}],
         "address": [{
@@ -407,10 +407,10 @@ BUCKET_2_ENTITIES = [
         "id": "rce-org-b2-007",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1174636095"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "PART-011"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "PART-011"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "PARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "PARTICIPANT"}]}],
         "name": "Carroll County General Hospital",
         "telecom": [{"system": "phone", "value": "410-555-1107"}],
         "address": [{
@@ -430,10 +430,10 @@ BUCKET_2_ENTITIES = [
         "id": "rce-org-b2-008",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1184738499"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "SUBPART-007"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "SUBPART-007"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "SUBPARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "SUBPARTICIPANT"}]}],
         "name": "Calvert Health Medical Center",
         "telecom": [{"system": "phone", "value": "410-555-1108"}],
         "address": [{
@@ -462,10 +462,10 @@ BUCKET_3_ENTITIES = [
         "id": "rce-org-b3-001",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1194840903"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "PART-012"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "PART-012"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "PARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "PARTICIPANT"}]}],
         "name": "Atlantic Coast Health Partners",
         "telecom": [{"system": "phone", "value": "410-555-1201"}],
         "address": [{
@@ -485,10 +485,10 @@ BUCKET_3_ENTITIES = [
         "id": "rce-org-b3-002",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1204943307"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "SUBPART-008"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "SUBPART-008"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "SUBPARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "SUBPARTICIPANT"}]}],
         "name": "Bay Area Medical Services Corp",
         "telecom": [{"system": "phone", "value": "443-555-1202"}],
         "address": [{
@@ -508,10 +508,10 @@ BUCKET_3_ENTITIES = [
         "id": "rce-org-b3-003",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1215045711"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "PART-013"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "PART-013"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "PARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "PARTICIPANT"}]}],
         "name": "Chesapeake Community Physicians Group",
         "telecom": [{"system": "phone", "value": "410-555-1203"}],
         "address": [{
@@ -531,10 +531,10 @@ BUCKET_3_ENTITIES = [
         "id": "rce-org-b3-004",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1225148115"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "SUBPART-009"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "SUBPART-009"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "SUBPARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "SUBPARTICIPANT"}]}],
         "name": "Harford County Health Alliance",
         "telecom": [{"system": "phone", "value": "410-555-1204"}],
         "address": [{
@@ -554,10 +554,10 @@ BUCKET_3_ENTITIES = [
         "id": "rce-org-b3-005",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1235250519"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "PART-014"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "PART-014"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "PARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "PARTICIPANT"}]}],
         "name": "Garrett Regional Medical Center Partners",
         "telecom": [{"system": "phone", "value": "301-555-1205"}],
         "address": [{
@@ -577,10 +577,10 @@ BUCKET_3_ENTITIES = [
         "id": "rce-org-b3-006",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1245352923"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "SUBPART-010"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "SUBPART-010"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "SUBPARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "SUBPARTICIPANT"}]}],
         "name": "Talbot County Community Health Corp",
         "telecom": [{"system": "phone", "value": "410-555-1206"}],
         "address": [{
@@ -600,10 +600,10 @@ BUCKET_3_ENTITIES = [
         "id": "rce-org-b3-007",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1255455327"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "PART-015"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "PART-015"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "PARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "PARTICIPANT"}]}],
         "name": "Regional Health Network of Maryland",
         "telecom": [{"system": "phone", "value": "301-555-1207"}],
         "address": [{
@@ -632,10 +632,10 @@ BUCKET_4_ENTITIES = [
         "id": "rce-org-b4-001",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1265557731"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "SUBPART-011"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "SUBPART-011"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "SUBPARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "SUBPARTICIPANT"}]}],
         "name": "Coastal Medical Supply and Services Inc",
         "telecom": [{"system": "phone", "value": "410-555-1301"}],
         "address": [{
@@ -655,10 +655,10 @@ BUCKET_4_ENTITIES = [
         "id": "rce-org-b4-002",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1275660135"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "PART-016"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "PART-016"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "PARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "PARTICIPANT"}]}],
         "name": "Summit Healthcare Management LLC",
         "telecom": [{"system": "phone", "value": "410-555-1302"}],
         "address": [{
@@ -678,10 +678,10 @@ BUCKET_4_ENTITIES = [
         "id": "rce-org-b4-003",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1285762539"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "SUBPART-012"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "SUBPART-012"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "SUBPARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "SUBPARTICIPANT"}]}],
         "name": "Meridian Healthcare Consulting Group",
         "telecom": [{"system": "phone", "value": "202-555-1303"}],
         "address": [{
@@ -701,10 +701,10 @@ BUCKET_4_ENTITIES = [
         "id": "rce-org-b4-004",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "9999999993"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "PART-017"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "PART-017"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "PARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "PARTICIPANT"}]}],
         "name": "National Healthcare Partners Network",
         "telecom": [{"system": "phone", "value": "301-555-1304"}],
         "address": [{
@@ -724,10 +724,10 @@ BUCKET_4_ENTITIES = [
         "id": "rce-org-b4-005",
         "identifier": [
             {"system": "http://hl7.org/fhir/sid/us-npi", "value": "1295864943"},
-            {"system": "http://rce.sequoiaproject.org/identifier", "value": "SUBPART-013"}
+            {"system": "urn:docuaction:tefca/identifier", "value": "SUBPART-013"}
         ],
         "active": True,
-        "type": [{"coding": [{"system": "http://rce.sequoiaproject.org/entity-type", "code": "SUBPARTICIPANT"}]}],
+        "type": [{"coding": [{"system": "urn:docuaction:tefca/entity-type", "code": "SUBPARTICIPANT"}]}],
         "name": "Advantage Health Supply Corporation",
         "telecom": [{"system": "phone", "value": "410-555-1305"}],
         "address": [{

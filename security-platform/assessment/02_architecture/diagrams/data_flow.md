@@ -16,7 +16,7 @@ flowchart TB
     BE -->|"keyless · PHI (NPI)"| LE[OIG LEIE]
     BE -->|"key · CONFIDENTIAL (UEI)"| SAM[SAM.gov]
     BE -->|"OAuth2 · CUI/PHI (FHIR)"| BOX[ONC Box]
-    BE -->|"key · CUI (FHIR)"| RCE[RCE-Sequoia]
+    BE -->|"key · CUI (FHIR)"| RCE[RCE-ONC]
     BE -->|"file · PHI-capable"| DISK[/Local disk uploads/]
 
     classDef phi fill:#fdd,stroke:#a00;

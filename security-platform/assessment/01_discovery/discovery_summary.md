@@ -29,7 +29,7 @@ This breadth is the single most important context for the whole assessment: **se
 | Frontend framework | **Next.js 16 (App Router, static export)** |
 | Frontend page routes / components / src files / LOC | **75 / 63 / 182 / 29,609** |
 | RBAC roles | 8 (viewer→admin) |
-| External APIs | 8 (Anthropic, OpenAI, NPPES, LEIE, PECOS, SAM, RCE/Sequoia, SendGrid) |
+| External APIs | 8 (Anthropic, OpenAI, NPPES, LEIE, PECOS, SAM, RCE/ONC, SendGrid) |
 | Azure resources (prod RG) | ~20 (App Service, 2× PostgreSQL, KV+private endpoint, SWA, App Insights, Log Analytics, 4 alerts, VNet) |
 | CI workflows | 3 (CodeQL, dependency-review, security-scan) |
 

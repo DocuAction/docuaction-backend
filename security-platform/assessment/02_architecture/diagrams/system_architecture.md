@@ -15,7 +15,7 @@ graph TB
     subgraph "External APIs"
         LLM[Anthropic Claude<br/>OpenAI Whisper]
         GOV[NPPES / LEIE /<br/>PECOS / SAM.gov]
-        RCE[RCE-Sequoia FHIR /<br/>ONC Box]
+        RCE[RCE-ONC-provided entity data /<br/>ONC Box]
         NEWS[GDELT / NewsAPI /<br/>eventregistry]
         MAIL[SendGrid]
     end

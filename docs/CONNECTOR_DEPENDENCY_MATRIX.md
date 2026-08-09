@@ -17,7 +17,7 @@ classification, and how it affects scoring while it cannot.
 | **SAM.gov** | Not Operational | API key required (free at api.data.gov). Also keyed on **UEI**, which the registry does not hold | **Excluded** until key *and* UEI available |
 | **State Registries** | Not Implemented | Connector development. ~50 separate registries, no common API | **Excluded** |
 | **IRS TEOS / EDGAR** | Not Implemented | Connector development. Keyed on **EIN**, which the registry does not hold | **Excluded** |
-| **RCE Directory** | Not Operational | Pending Case #00055525 with The Sequoia Project | **Excluded** |
+| **TEFCA entity data** | Not Operational | Pending(entity data provided by ONC)with The ONC | **Excluded** |
 
 ---
 
@@ -82,8 +82,8 @@ a decision, not a retry.
    identifier table already supports arbitrary types) or the connector cannot
    match. The key alone is necessary but not sufficient.
 
-### RCE Directory
-Blocked externally on Case #00055525 with The Sequoia Project. No engineering
+### TEFCA entity data
+Blocked externally on(entity data provided by ONC)with The ONC. No engineering
 work available until access is granted.
 
 ### IRS

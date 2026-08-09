@@ -89,4 +89,5 @@ markers = [
     "qa_defect: tests for confirmed QA defects (August 2026 report)",
     "security: security-specific regression tests",
     "bulletin: bulletin module regression tests",
+    "e2e: end-to-end workflow tests",
 ]

@@ -135,7 +135,7 @@ sources through a connector layer:
 | PECOS | Live | Medicare enrollment |
 | OIG LEIE | Live | Exclusions list |
 | SAM.gov | Key required | Requires registered API key |
-| RCE / Sequoia | Pending | Integration in progress |
+| RCE / ONC | Pending | Integration in progress |
 | IQVIA OneKey | Pending | Integration in progress |
 
 Connector roles and data handling align with **HHSAR 352.204-71** and

@@ -25,19 +25,19 @@
 ## PHASE 2 — TEFCA ecosystem (public-domain context; the product should reflect this business process)
 
 `[VERIFIED — public sources]`
-- **TEFCA** (Trusted Exchange Framework and Common Agreement) is the ONC/ASTP framework for nationwide EHI exchange across health information networks. **The Sequoia Project is the Recognized Coordinating Entity (RCE)** under a 5-year ONC contract (awarded Aug 2023); it develops/maintains the **Common Agreement**, which every **QHIN** signs and whose terms **flow down to Participants and Subparticipants**. There are **>21,000 organizations live on TEFCA** representing **>96,000 connections** — consistent with the platform's coded population **N=94,231** `[VERIFIED: code]`.
+- **TEFCA** (Trusted Exchange Framework and Common Agreement) is the ONC/ASTP framework for nationwide EHI exchange across health information networks. **The ONC is the Recognized Coordinating Entity (RCE)** under a 5-year ONC contract (awarded Aug 2023); it develops/maintains the **Common Agreement**, which every **QHIN** signs and whose terms **flow down to Participants and Subparticipants**. There are **>21,000 organizations live on TEFCA** representing **>96,000 connections** — consistent with the platform's coded population **N=94,231** `[VERIFIED: code]`.
 - **QHIN lifecycle:** application → onboarding → designation (rigorous, ~12 months) → signs Common Agreement → operates and connects Participants/Subparticipants.
 - **Authoritative validation sources the platform uses** `[VERIFIED: connectors.py]`:
   - **NPPES** (NPI Registry, CMS/HHS) — provider identity/enumeration.
   - **PECOS** (Medicare enrollment, CMS) — enrollment/screening; monitors adverse actions.
   - **OIG-LEIE** (HHS-OIG List of Excluded Individuals/Entities) — program exclusions.
   - **SAM.gov** (GSA) — federal registration/debarment.
-  - **RCE Directory** (Sequoia FHIR R4) — the directory of entities under review.
+  - **TEFCA entity data** (ONC-provided entity data R4) — the directory of entities under review.
   - **IQVIA OneKey** — commercial provider-hierarchy reference.
 - **Program-integrity framing** `[VERIFIED — public sources]`: **CMS One PI (One Program Integrity)** is CMS's fraud/waste/abuse analytics "one-stop shop" over an Integrated Data Repository; PECOS continuously screens/validates providers and monitors adverse actions. The TEFCA ARC review protocol is analogous in spirit — a **federal quality/integrity review** that reconciles directory-submitted attributes against authoritative sources and classifies discrepancies for COR determination.
 - **Business-process implication `[INFERRED]`:** the UI should be organized around the **federal quality-review lifecycle** (sample → validate → classify → evidence → disposition → escalate → report → COR determination), not around technology modules.
 
-*Sources:* [ONC TEFCA](https://healthit.gov/policy/tefca/) · [Sequoia RCE](https://rce.sequoiaproject.org/) · [Common Agreement](https://rce.sequoiaproject.org/common-agreement/) · [ASTP/Sequoia continuation](https://www.healthcareitnews.com/news/astp-continues-sequoia-project-tefca-implementation) · [CMS One PI](https://security.cms.gov/pia/one-program-integrity) · [CMS One PI leaflet](https://www.cms.gov/files/document/dasg-leaflet-one-pi.pdf)
+*Sources:* [ONC TEFCA](https://healthit.gov/policy/tefca/) · [ONC RCE](urn:docuaction:tefca/) · [Common Agreement](urn:docuaction:tefca/common-agreement/) · [ASTP/ONC continuation](https://www.healthcareitnews.com/news/astp-continues-sequoia-project-tefca-implementation) · [CMS One PI](https://security.cms.gov/pia/one-program-integrity) · [CMS One PI leaflet](https://www.cms.gov/files/document/dasg-leaflet-one-pi.pdf)
 
 ---
 
@@ -102,7 +102,7 @@ All are supported by existing aggregate/QA endpoints `[VERIFIED]`; only the **ro
 
 The implemented workflow — now read at the engine level — is rigorous and defensible `[VERIFIED]`:
 
-1. **Import** — RCE Directory (FHIR R4) is the source of entities; currently **MOCK** (30 synthetic FHIR Organizations across 4 buckets) pending Sequoia key (Case #00055525).
+1. **Import** — TEFCA entity data (FHIR R4) is the source of entities; currently **MOCK** (30 synthetic FHIR Organizations across 4 buckets) pending ONC key (entity data provided by ONC).
 2. **Sampling** — **Cochran with finite-population correction**, 95% CI, z=1.96, p=0.5, margin 0.05, proportional stratification across **11 QHINs**, deterministic seed 42 → **N=94,231 ⇒ n=383**.
 3. **Validation (Tier-1)** — concurrent query of NPPES/LEIE/SAM/PECOS; **fail-closed** (a required source unavailable ⇒ `INDETERMINATE`, never a clean B1 auto-complete); confidence starts 1.0 and each finding deducts (0.40 severe … 0.10 minor).
 4. **Classification** — **worst-finding-wins** bucket (B4 Non-Compliant → B3 Inexplicable → B2 Minor/Admin → B1 None); explicit **finding codes** (e.g., `LEIE_ACTIVE_EXCLUSION`, `SAM_ACTIVE_DEBARMENT`, `PECOS_PAYMENT_SUSPENSION`, `NPI_NOT_FOUND` → B4).
@@ -153,7 +153,7 @@ The implemented workflow — now read at the engine level — is rigorous and de
 
 **Data Architecture `[VERIFIED]`** — entities → validation engine → 6 connectors → **source cache (SHA-256 hash + freshness + api_version)** → bucket+confidence → 5-element evidence → queue/disposition → reports + immutable `tefca_qa_audit`. Denormalized `tefca_reviews`/`tefca_findings` back dashboards; authoritative rich data in `tefca_evidence_records`.
 
-**Connector Architecture `[VERIFIED]`** — 6 sources, **fail-closed** (VERIFIED-ok vs unavailable; never fabricated clean values), 3-retry exponential backoff (transient only), per-source health logging. Live: NPPES (keyless), OIG-LEIE (free CSV, 24h cache), PECOS (via NPPES proxy; **payment_suspension intentionally None** pending COR feed). Pending keys: **SAM.gov** (`SAM_GOV_API_KEY`), **RCE Directory** (Sequoia Case #00055525), **IQVIA OneKey** (federal ODC). *Key provisioning is configuration, not code.*
+**Connector Architecture `[VERIFIED]`** — 6 sources, **fail-closed** (VERIFIED-ok vs unavailable; never fabricated clean values), 3-retry exponential backoff (transient only), per-source health logging. Live: NPPES (keyless), OIG-LEIE (free CSV, 24h cache), PECOS (via NPPES proxy; **payment_suspension intentionally None** pending COR feed). Pending keys: **SAM.gov** (`SAM_GOV_API_KEY`), **TEFCA entity data** (entity data provided by ONC), **IQVIA OneKey** (federal ODC). *Key provisioning is configuration, not code.*
 
 **Analytics Architecture `[RECOMMENDED]`** — on `/dashboard/summary,trends` + QA endpoints; add drill-through, cross-filter, time-range, saved views, faceting.
 

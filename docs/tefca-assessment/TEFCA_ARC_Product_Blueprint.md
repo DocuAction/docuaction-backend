@@ -171,7 +171,7 @@ Provenance banner on every screen · "as-of {cycle} · {timestamp}" on every KPI
 508/WCAG AA conformance target; performance budget for dense grids (virtualized tables); consistent auth-error and permission-denied UX per role; no client-side PII caching; provenance/lineage visible for every finding.
 
 ### C.6 Guardrails (unchanged from constraints)
-No backend/API/DB/auth/scheduler/deployment change is required or permitted; every screen above maps to an **existing** endpoint. Two live-data items (RCE Directory, IQVIA OneKey) await **API keys** (configuration), not code.
+No backend/API/DB/auth/scheduler/deployment change is required or permitted; every screen above maps to an **existing** endpoint. Two live-data items (TEFCA entity data, IQVIA OneKey) await **API keys** (configuration), not code.
 
 ---
 

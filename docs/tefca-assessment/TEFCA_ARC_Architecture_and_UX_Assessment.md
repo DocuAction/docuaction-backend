@@ -30,7 +30,7 @@ This assessment is grounded in three **real** sources examined during the review
 | # | Requirement (derived) | Source of truth | Evidenced where | Status in app |
 |---|---|---|---|---|
 | R1 | Maintain master registry of TEFCA entities (QHIN/Participant/Subparticipant) with submitted identifiers (NPI, UEI, address, endpoints, FHIR) | `[EVIDENCED]` | `TEFCAEntity` model | ✅ Implemented |
-| R2 | Validate each entity against 6 authoritative sources (NPPES, PECOS, OIG-LEIE, SAM.gov, RCE Directory, IQVIA OneKey) | `[EVIDENCED]` | `connectors.py`, `/health` connectors, Overview "4/6 Sources Live" | ✅ 4 live / 2 pending keys |
+| R2 | Validate each entity against 6 authoritative sources (NPPES, PECOS, OIG-LEIE, SAM.gov, TEFCA entity data, IQVIA OneKey) | `[EVIDENCED]` | `connectors.py`, `/health` connectors, Overview "4/6 Sources Live" | ✅ 4 live / 2 pending keys |
 | R3 | Four-bucket discrepancy classification (No Discrepancy / Minor-Admin / Inexplicable / Non-Compliant) | `[EVIDENCED]` | `BucketClassification`, `BucketLabel`; Overview bucket cards | ✅ Implemented |
 | R4 | Three-tier routing (T1 auto / T2 analyst / T3 SME-ONC) with human-in-the-loop for B2–B4/indeterminate | `[EVIDENCED]` | `TierAssignment`, `TEFCAAnalystQueue`; Overview tier routing | ✅ Implemented |
 | R5 | Statistical sampling at 95% confidence per cycle | `[EVIDENCED]` | `TEFCAReviewCycle.sample_confidence_level`; Overview "95% Confidence"; `/sampling` | ✅ Implemented |

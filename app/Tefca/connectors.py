@@ -52,15 +52,23 @@ RETRY_ATTEMPTS = 3
 
 
 # ─── Data-provenance honesty ─────────────────────────────────────────────────
-# The RCE Directory (Sequoia FHIR) is the source of the entities under review.
-# Until RCE_DIRECTORY_API_KEY is provisioned (pending Sequoia Case #00055525) the
-# connector serves the bundled development dataset, so the ENTIRE review pipeline
-# is running on demonstration data. These helpers give every API/report payload a
-# single, honest provenance label so mock output can never be mistaken for a
+# TEFCA entity population data is PROVIDED BY ONC per contract direction. AGT
+# does not source it independently and does not query any external directory
+# system for it.
+#
+# Until that dataset is loaded, this module serves a bundled development
+# dataset, which means the ENTIRE review pipeline is running on demonstration
+# data. These helpers stamp a single, honest provenance label on every
+# API/report payload so demonstration output can never be mistaken for a
 # production review.
+#
+# TEFCA_ENTITY_DATA_KEY is the flag that says the ONC-provided dataset is in
+# place. The legacy name RCE_DIRECTORY_API_KEY is still read so an environment
+# set before the rename keeps working.
 def is_running_mock() -> bool:
-    """True if the module is serving MOCK entity data (RCE Directory key unset)."""
-    return not bool(os.getenv("RCE_DIRECTORY_API_KEY", "").strip())
+    """True if the module is serving MOCK entity data (no ONC dataset loaded)."""
+    return not bool((os.getenv("TEFCA_ENTITY_DATA_KEY")
+                     or os.getenv("RCE_DIRECTORY_API_KEY", "")).strip())
 
 
 def data_source_labels() -> Dict[str, Any]:
@@ -841,20 +849,24 @@ class PECOSConnector:
             return False
 
 
-# ─── RCE Directory (Sequoia Project) — FHIR R4 ───────────────────────────────
+# ─── TEFCA entity data (provided by ONC) — FHIR R4 ───────────────────────────────
 
 class RCEDirectoryConnector:
-    """
-    FHIR R4 Organization endpoint. Live API key pending — Case #00055525 with
-    the Sequoia Project (techsupport@sequoiaproject.org).
+    """TEFCA entity population data — PROVIDED BY ONC per contract direction.
 
-    When RCE_DIRECTORY_API_KEY is set, organizations are pulled live. When it is
-    not, get_all_organizations / get_organization_by_id serve the bundled
-    development dataset, clearly flagged data_source="MOCK". The validation
-    engine refuses to auto-classify MOCK-sourced entities as Bucket 1, so mock
-    development data can never masquerade as a finalized clean finding.
+    AGT does not source entity population data independently and does not query
+    any external directory system for it. This class is the loader for the
+    ONC-provided dataset, kept under its original name because the identifier
+    appears in database rows, source keys and API payloads; renaming the class
+    would be a data migration, not an edit.
+
+    Until the ONC-provided dataset is in place, get_all_organizations and
+    get_organization_by_id serve a bundled development dataset, clearly flagged
+    data_source="MOCK". The validation engine refuses to auto-classify
+    MOCK-sourced entities as Bucket 1, so demonstration data can never
+    masquerade as a finalized clean finding.
     """
-    BASE_URL = "https://rce.sequoiaproject.org/fhir/r4"
+    BASE_URL = "urn:docuaction:tefca/fhir/r4"
     API_VERSION = "R4"
 
     def __init__(self):
@@ -906,7 +918,7 @@ class RCEDirectoryConnector:
                 qp, self.API_VERSION, raw_for_hash=payload,
             )
         except Exception as e:
-            logger.warning(f"RCE Directory unavailable: {e}")
+            logger.warning(f"TEFCA entity data unavailable: {e}")
             return SourceResult.unavailable("RCE_DIRECTORY", str(e), qp, self.API_VERSION)
 
     async def get_organization_by_id(self, rce_id: str) -> SourceResult:
@@ -932,14 +944,14 @@ class RCEDirectoryConnector:
             org["data_source"] = "LIVE"
             return SourceResult.ok("RCE_DIRECTORY", org, qp, self.API_VERSION, raw_for_hash=org)
         except Exception as e:
-            logger.warning(f"RCE Directory unavailable for {rce_id}: {e}")
+            logger.warning(f"TEFCA entity data unavailable for {rce_id}: {e}")
             return SourceResult.unavailable("RCE_DIRECTORY", str(e), qp, self.API_VERSION)
 
     async def lookup_by_npi(self, npi: str) -> SourceResult:
         qp = {"npi": npi}
         if not self._is_live():
             return SourceResult.unavailable(
-                "RCE_DIRECTORY", "live API key pending (Sequoia Case #00055525)", qp, self.API_VERSION
+                "RCE_DIRECTORY", "entity population data is provided by ONC", qp, self.API_VERSION
             )
         try:
             resp = await _get_with_retry(
@@ -1080,7 +1092,7 @@ class SourceConnectorManager:
 
     async def validate_entity(self, entity_id: str, entity_type: Optional[str] = None) -> Dict[str, Any]:
         """
-        Resolve an entity from the RCE Directory by id, then query all sources.
+        Resolve an entity from the TEFCA entity data by id, then query all sources.
         Returns {"entity": <org dict>, "sources": {<key>: SourceResult}} or an
         error envelope if the entity cannot be resolved.
         """
@@ -1126,7 +1138,7 @@ class SourceConnectorManager:
             "OIG_LEIE": "Exclusion List — OIG/HHS",
             "SAM_GOV": sam_note,
             "PECOS": "Provider Enrollment — CMS",
-            "RCE_DIRECTORY": "FHIR R4 — Sequoia Project (key pending Case #00055525)",
+            "RCE_DIRECTORY": "TEFCA entity data — provided by ONC per contract direction",
         }
         status: Dict[str, Dict[str, Any]] = {}
         for name, probe in zip(names, probes):

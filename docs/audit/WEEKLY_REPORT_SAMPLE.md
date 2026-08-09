@@ -214,7 +214,7 @@
     },
     "limitations": [
       "sam_gov: Unavailable \u2014 API key not provisioned (SAM_GOV_API_KEY)",
-      "rce_directory: Not checked \u2014 access pending Case #00055525",
+      "rce_directory: Not checked \u2014 access(entity data provided by ONC)",
       "state_registry: Not checked \u2014 no connector implemented",
       "irs: Not checked \u2014 no connector implemented; IRS data is keyed on EIN, which the registry does not currently hold",
       "5 B3 entities pending manual resolution: REV-2026-000026, REV-2026-000031, REV-2026-000028, REV-2026-000024, REV-2026-000027"

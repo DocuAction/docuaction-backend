@@ -15,7 +15,7 @@ Canonical URIs defined consistently in three places (`fhir_import.py:36-43`, `se
 | CCN | `urn:oid:2.16.840.1.113883.4.336` |
 | CLIA | `urn:oid:2.16.840.1.113883.4.7` |
 | NAIC | `urn:oid:2.16.840.1.113883.6.300` |
-| TEFCAID | `https://rce.sequoiaproject.org/fhir/identifier/tefcaid` |
+| TEFCAID | `urn:docuaction:tefca/fhir/identifier/tefcaid` |
 
 These match the expected RCE IG / US Core identifier systems. **Compliant.**
 

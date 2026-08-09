@@ -42,7 +42,7 @@ BUCKET_LABELS = {
 KNOWN_GAPS = {
     "sam_gov": "SAM.gov: API key configured. Entity lookup endpoints returning "
                "404 — API version under investigation.",
-    "rce_directory": "Not checked — access pending Case #00055525",
+    "rce_directory": "Not checked — entity population data is provided by ONC",
     "state_registry": "Not checked — no connector implemented",
     "irs": "Not checked — no connector implemented; IRS data is keyed on EIN, "
            "which the registry does not currently hold",

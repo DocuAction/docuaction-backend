@@ -359,7 +359,7 @@ def _data_sources():
         ("PECOS", "Medicare PECOS Enrollment", "federal_api", "rest", "https://data.cms.gov/provider-data", "none", True, "CMS"),
         ("LEIE", "OIG List of Excluded Individuals/Entities", "federal_api", "rest", "https://oig.hhs.gov/exclusions", "none", True, "HHS"),
         ("SAM", "SAM.gov Entity Management", "federal_api", "rest", "https://api.sam.gov", "api_key", True, "GSA"),
-        ("RCE", "RCE / Recognized Coordinating Entity Directory", "fhir_server", "fhir_r4", "https://rce.sequoiaproject.org", "api_key", False, "ONC"),
+        ("RCE", "RCE / Recognized Coordinating Entity Directory", "fhir_server", "fhir_r4", "urn:docuaction:tefca", "api_key", False, "ONC"),
         ("ONC_BOX", "ONC Box Document Repository", "cloud_storage", "box", "https://api.box.com/2.0", "oauth2", False, "ONC"),
         ("RXNORM", "NLM RxNorm", "federal_api", "rest", "https://rxnav.nlm.nih.gov/REST", "none", True, "NIH"),
         ("UMLS", "NLM UMLS Terminology Services", "federal_api", "rest", "https://uts-ws.nlm.nih.gov/rest", "api_key", True, "NIH"),

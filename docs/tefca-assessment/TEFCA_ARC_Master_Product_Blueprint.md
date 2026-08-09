@@ -97,7 +97,7 @@ Submitted entity (RCE dir / import) ──► Validation engine ──► 6 conn
 ```
 
 ## 14. Connector Architecture `[VERIFIED]`
-Six authoritative sources; **4 live** (NPPES · PECOS · OIG-LEIE · SAM.gov) and **2 pending API keys** (RCE Directory / FHIR · IQVIA OneKey) — health/latency logged (`TEFCAConnectorLog`, `/connectors/status`, `/qa/connector-health`). **`[RECOMMENDATION]`** uptime/latency panel + key-status + cycle-impact. *(Key provisioning is configuration, not code.)*
+Six authoritative sources; **4 live** (NPPES · PECOS · OIG-LEIE · SAM.gov) and **2 pending API keys** (TEFCA entity data / FHIR · IQVIA OneKey) — health/latency logged (`TEFCAConnectorLog`, `/connectors/status`, `/qa/connector-health`). **`[RECOMMENDATION]`** uptime/latency panel + key-status + cycle-impact. *(Key provisioning is configuration, not code.)*
 
 ## 15. Role Matrix `[VERIFIED: require_role]`
 | Capability | reviewer | senior_analyst | program_manager | qalead | admin/COR |

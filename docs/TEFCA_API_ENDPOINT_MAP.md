@@ -47,7 +47,7 @@ Auth column reflects the guard actually declared in source: router-level `depend
 | GET | `/api/v1/tefca/cycles` | reviewer (router-level `require_role`) | List review cycles |
 | POST | `/api/v1/tefca/cycles` | reviewer (router-level `require_role`) | Create review cycle |
 | POST | `/api/v1/tefca/evidence/generate` | reviewer (router-level `require_role`) | Generate + persist 5-element evidence record |
-| GET | `/api/v1/tefca/mock/entities` | reviewer (router-level `require_role`) | View bundled RCE development dataset |
+| GET | `/api/v1/tefca/mock/entities` | reviewer (router-level `require_role`) | View bundled bundled development dataset |
 | GET | `/api/v1/tefca/priority-cases` | reviewer (router-level `require_role`) | List priority cases |
 | POST | `/api/v1/tefca/priority-cases` | reviewer (router-level `require_role`) | Create COR-directed priority case |
 | PATCH | `/api/v1/tefca/priority-cases/{case_id}` | reviewer (router-level `require_role`) | Update priority case |
@@ -59,7 +59,7 @@ Auth column reflects the guard actually declared in source: router-level `depend
 | POST | `/api/v1/tefca/reports/final/{cycle_id}` | reviewer (router-level `require_role`) | Generate D3.2 final report |
 | POST | `/api/v1/tefca/reports/weekly/{cycle_id}` | reviewer (router-level `require_role`) | Generate D3.1 weekly progress report |
 | POST | `/api/v1/tefca/validate/batch` | reviewer (router-level `require_role`) | Run Tier-1 validation across a cycle (async, persisted) |
-| POST | `/api/v1/tefca/validate/entity` | reviewer (router-level `require_role`) | Validate one RCE entity (persisted) |
+| POST | `/api/v1/tefca/validate/entity` | reviewer (router-level `require_role`) | Validate one TEFCA entity (persisted) |
 | GET | `/api/v1/tefca/validate/status/{cycle_id}` | reviewer (router-level `require_role`) | Batch validation progress |
 
 ## TEFCA Legacy module (/api/tefca) (53)

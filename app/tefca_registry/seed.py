@@ -8,7 +8,7 @@ Generates a synthetic-but-realistic TEFCA registry:
   * identifiers (TEFCAID + HCID on every entity; NPI ~85%; CCN/CLIA/NAIC subsets)
   * one initial tefca_entity_versions snapshot per entity
   * relationships (belongs_to / sub_participant_of + dual / historical / merger)
-  * FHIR R4 Organization JSON in fhir_resource (RCE QHIN profile for QHINs)
+  * FHIR R4 Organization JSON in fhir_resource (TEFCA QHIN profile for QHINs)
   * 36 INTENTIONAL defects woven into the dataset (Phase 1D)
 
 Safety
@@ -63,9 +63,9 @@ SYSTEM_URI = {
     "ccn": "urn:oid:2.16.840.1.113883.4.336",
     "clia": "urn:oid:2.16.840.1.113883.4.7",
     "naic": "urn:oid:2.16.840.1.113883.6.300",
-    "tefcaid": "https://rce.sequoiaproject.org/fhir/identifier/tefcaid",
+    "tefcaid": "urn:docuaction:tefca/fhir/identifier/tefcaid",
 }
-QHIN_PROFILE = "https://rce.sequoiaproject.org/fhir/StructureDefinition/qhin-organization"
+QHIN_PROFILE = "urn:docuaction:tefca/fhir/StructureDefinition/qhin-organization"
 
 EXPECTED = {
     "tefca_reg_entities": 176,
@@ -456,7 +456,7 @@ class _Gen:
                 ],
                 "type": [{
                     "coding": [{
-                        "system": "https://rce.sequoiaproject.org/fhir/CodeSystem/entity-type",
+                        "system": "urn:docuaction:tefca/fhir/CodeSystem/entity-type",
                         "code": ent["entity_type"],
                     }]
                 }],

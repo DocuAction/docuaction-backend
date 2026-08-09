@@ -81,7 +81,7 @@ healthcare and procurement data sources through the TEFCA connectors.
 | PECOS                             | Live                |
 | OIG LEIE                          | Live                |
 | SAM.gov                           | API key required    |
-| RCE Directory / Sequoia Project   | Pending             |
+| TEFCA entity data / ONC   | Pending             |
 | IQVIA OneKey                      | Pending             |
 
 ---

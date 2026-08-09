@@ -61,5 +61,5 @@ Router-gated with `require_role("reviewer")`. 19 routes:
 ## Cross-cutting
 
 - **File uploads:** 17 modules accept `UploadFile`; a multi-layer scanner (`app/services/file_scanner.py`) runs before processing (magic bytes, dangerous content, size, CSV/JSON structure, SHA-256).
-- **External calls originating from endpoints:** Anthropic, OpenAI, NPPES, LEIE, PECOS, SAM.gov, RCE/Sequoia FHIR, SendGrid.
+- **External calls originating from endpoints:** Anthropic, OpenAI, NPPES, LEIE, PECOS, SAM.gov, RCE/ONC-provided entity data, SendGrid.
 - **Raw SQL:** 149 `text(...)` usages across the codebase — an injection surface to review in Part 8 (most appear parameterized; startup uses `text()` for `ALTER TABLE … IF NOT EXISTS` schema repair).

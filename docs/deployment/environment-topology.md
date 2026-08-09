@@ -171,7 +171,7 @@ all secret-bearing settings.
 | Variable | Purpose | Placeholder |
 |----------|---------|-------------|
 | `SAM_GOV_API_KEY` | SAM.gov entity/exclusion connector key (registered key required). | `<sam-key>` |
-| `RCE_DIRECTORY_API_KEY` | RCE Directory connector API key. | `<rce-key>` |
+| `RCE_DIRECTORY_API_KEY` | TEFCA entity data connector API key. | `<rce-key>` |
 | `IQVIA_ONEKEY_API_KEY` | IQVIA OneKey reference-data API key. | `<iqvia-key>` |
 | `TEFCA_ALERT_FROM` | From address for TEFCA operational alerts. | `alerts@docuaction.io` |
 | `TEFCA_ALERT_RECIPIENTS` | Comma-separated TEFCA alert recipients. | `security@agtbi.com` |

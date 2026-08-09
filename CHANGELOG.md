@@ -45,8 +45,8 @@ module suite.
 - **DocuAction TEFCA ARC** healthcare module suite, including the TEFCA Review
   Protocol, validation engine, case management, and decision intelligence.
 - **TEFCA connectors** for provider and sanction data: NPPES (live), PECOS
-  (live), and OIG LEIE (live); SAM.gov (API key required); RCE Directory /
-  Sequoia Project and IQVIA OneKey (pending).
+  (live), and OIG LEIE (live); SAM.gov (API key required); TEFCA entity data /
+  ONC and IQVIA OneKey (pending).
 - **Bulletin Intelligence** module with scheduled collection and delivery via
   APScheduler.
 - Additional platform modules: Documents, Audio (OpenAI Whisper transcription),

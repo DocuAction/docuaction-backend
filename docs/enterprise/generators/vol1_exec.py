@@ -262,7 +262,7 @@ D.p("Each assumption below carries the consequence if it proves false, because "
 D.table(["ID", "Assumption", "If it does not hold"],
         [("A-01", "ONC provides entity data via CSV or Box transfer",
           "Ingestion requires a new integration; schedule impact to Task 3"),
-         ("A-02", "SAM.gov and RCE Directory data are provided by ONC",
+         ("A-02", "SAM.gov and TEFCA entity data data are provided by ONC",
           "AGT cannot verify against these sources directly; coverage stays at "
           "3 of 7 possible sources"),
          ("A-03", "FIPS 199 Moderate categorisation applies",
@@ -312,9 +312,9 @@ D.p("There is no common API across the fifty state licensure registries. Most "
     "implemented', and is excluded from confidence scoring rather than counted "
     "as a missing source.")
 
-D.h2("6.3 RCE Directory — no direct access")
+D.h2("6.3 TEFCA entity data — no direct access")
 D.p("The Recognized Coordinating Entity directory is not directly accessible to "
-    "AGT. Data must be provided by ONC. A support case with The Sequoia Project "
+    "AGT. Data must be provided by ONC. A support case with The ONC "
     "remains open.")
 
 D.h2("6.4 Azure Key Vault — firewalled to private link")
@@ -338,7 +338,7 @@ D.table(["Source", "Status", "In confidence scoring"],
          ("PECOS", "Operational — 5/5 reachable, 242 ms mean", "Yes"),
          ("OIG LEIE", "Operational — 5/5 reachable, 428 ms mean", "Yes"),
          ("SAM.gov", "Built, not operational — no API key", "No"),
-         ("RCE Directory", "Not accessible — ONC-provided", "No"),
+         ("TEFCA entity data", "Not accessible — ONC-provided", "No"),
          ("State registries", "Not implemented — no standard interface", "No"),
          ("IRS", "Not implemented — keyed on EIN, not captured", "No")],
         widths=(1.5, 3.4, 1.6))
@@ -525,7 +525,7 @@ GLOSS = [
     ("QHIN", "Qualified Health Information Network"),
     ("QTF", "QHIN Technical Framework"),
     ("RBAC", "Role-Based Access Control"),
-    ("RCE", "Recognized Coordinating Entity — The Sequoia Project"),
+    ("RCE", "Recognized Coordinating Entity — The ONC"),
     ("SAM", "System for Award Management — federal registration and exclusions"),
     ("SAST", "Static Application Security Testing — analysis of source code"),
     ("SCA", "Software Composition Analysis — dependency vulnerability scanning"),

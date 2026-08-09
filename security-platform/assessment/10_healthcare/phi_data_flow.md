@@ -23,7 +23,7 @@
 ## 3. Where PHI is TRANSMITTED
 | Destination | Data sent | TLS | Minimized? |
 |---|---|:--:|---|
-| NPPES (`connectors.py:243`), LEIE (`:350`), SAM (`:459`), PECOS (`:558`), RCE/Sequoia (`:638`), IQVIA (`:760`) | **provider** NPI/UEI/name/address only | ✅ HTTPS | N/A (no patient PHI) |
+| NPPES (`connectors.py:243`), LEIE (`:350`), SAM (`:459`), PECOS (`:558`), RCE/ONC (`:638`), IQVIA (`:760`) | **provider** NPI/UEI/name/address only | ✅ HTTPS | N/A (no patient PHI) |
 | **Anthropic** (`ai_engine.py:469`) — main doc pipeline | document text, **masked** (`mask_pii`, :251) | ✅ HTTPS | ◐ **partial — misses names/addresses** |
 | **Anthropic** — case-management engines (`ccm_engine.py:25,164`, `discharge_engine.py:19,33`) | clinical text (**names, MRN, DOB, diagnoses**) | ✅ HTTPS | ❌ **NOT masked, NOT authenticated** |
 

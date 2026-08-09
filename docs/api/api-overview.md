@@ -106,7 +106,7 @@ exhaustive listing.
 ## 9. Connector Endpoints (TEFCA)
 
 TEFCA Review Protocol endpoints integrate authoritative sources — NPPES (live),
-PECOS (live), OIG LEIE (live), SAM.gov (API key required), and RCE/Sequoia and
+PECOS (live), OIG LEIE (live), SAM.gov (API key required), and RCE/ONC and
 IQVIA OneKey (pending). Connector behavior and roles align with HHSAR 352.204-71
 and FAR 52.212-4.
 

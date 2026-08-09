@@ -25,10 +25,11 @@
 | NPPES | Operational | 2026-08-02T19:25:50.360026+00:00 | N/A | Included | CONNECTOR_RESPONSES.md | CMS NPI Registry |
 | PECOS | Operational | 2026-08-02T19:25:50.360026+00:00 | N/A | Included | CONNECTOR_RESPONSES.md | CMS Provider Enrollment (same CMS endpoint as NPPES) |
 | OIG LEIE | Operational | 2026-08-02T19:25:52.002883+00:00 | N/A | Included | CONNECTOR_RESPONSES.md | HHS OIG exclusions CSV |
-| SAM.gov | Not Operational | N/A | 2026-08-02T18:59:52+00:00 | **Excluded** | (see notes) | Key valid (api.data.gov quota 1000/hr vs DEMO_KEY 10); entity/exclusions endpoints return empty HTTP 404 at SAM ingress (`server: istio-envoy`, no gateway headers). Key present in prod app settings, **absent in dev**. |
+| SAM.gov | Under Investigation | N/A | 2026-08-07T01:35:00+00:00 | **Excluded** | (see notes) | API key configured and present in the dev runtime (40 chars, verified 2026-08-07). Correct v3/v4 endpoints in use. Every path returns an empty HTTP 404 at SAM's ingress. Upstream routing issue, not code — see the SAM.gov section below. |
+| USPS | Not Configured | N/A | N/A | Excluded | N/A | Address standardization is optional. Code-based USPS Publication 28 normalization is active and requires no key; the API activates when `USPS_CLIENT_ID` / `USPS_CLIENT_SECRET` are set. |
 | State Registries | Not Implemented | N/A | N/A | Excluded | N/A | Connector not built |
 | IRS | Not Applicable | N/A | N/A | Excluded | N/A | No public API exists for for-profit entity verification. IRS TEOS covers only tax-exempt organizations (501(c)(3)). IRS data is additionally keyed on EIN, which the registry does not hold. This is a permanent gap, not an unbuilt connector — it will not be scheduled. |
-| RCE Directory | ONC-Provided | N/A | N/A | **Excluded** | N/A | Data provided by HHS/ONC. Direct access not authorized. Case #00055525 |
+| TEFCA Entity Data | ONC Provides | N/A | N/A | **Excluded** | N/A | All entity population data, directory information and participant lists are provided by ONC per contract direction. AGT does not access external directory systems directly and does not source this data independently. |
 
 **"Excluded"** = not counted in confidence scoring (neither helps nor hurts).  
 **"Operational"** = queried on every verification run.

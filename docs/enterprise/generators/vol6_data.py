@@ -398,7 +398,7 @@ D.table(["Source", "Source Field", "Target", "Target Field", "Transform",
          ("SAM.gov v4", "excludedEntity[]", "tefca_verifications",
           "result.excluded", "Any result means excluded",
           "Queried independently of v3 — see AGT-EX-001 §6.1"),
-         ("RCE Directory", "ONC-provided extract", "tefca_reg_entities",
+         ("TEFCA entity data", "ONC-provided extract", "tefca_reg_entities",
           "(various)", "Not implemented", "No direct access")],
         widths=(0.85, 1.35, 1.25, 1.05, 1.15, 1.35), font_size=7.5)
 D.page_break()

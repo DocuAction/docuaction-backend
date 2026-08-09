@@ -21,7 +21,7 @@ Every connection with direction, protocol, auth, sensitivity, and encryption-in-
        ├──▶ OIG LEIE (oig.hhs.gov)                   OUT  · keyless · [PHI: NPI/name] · TLS ✅
        ├──▶ PECOS / CMS data (data.cms.gov)          OUT  · keyless · [PHI: provider] · TLS ✅
        ├──▶ SAM.gov (api.sam.gov)                    OUT  · API key · [CONFIDENTIAL: entity/UEI] · TLS ✅
-       ├──▶ RCE/Sequoia FHIR (rce.sequoiaproject.org)OUT  · API key · [CUI/PHI: FHIR] · TLS ✅
+       ├──▶ RCE/ONC-provided entity data (rce.sequoiaproject.org)OUT  · API key · [CUI/PHI: FHIR] · TLS ✅
        ├──▶ ONC Box (box.com)                        IN   · OAuth2 · [CUI/PHI: FHIR bundles] · TLS ✅
        ├──▶ News APIs (GDELT/NewsAPI.ai/.org/eventregistry) OUT · API key/keyless · [PUBLIC: queries] · TLS ✅
        └──▶ Local disk /home/site/wwwroot/uploads    IN   · filesystem · [PHI-capable uploads] · at-rest (Azure) ✅ · ⚠ not Blob, not shared

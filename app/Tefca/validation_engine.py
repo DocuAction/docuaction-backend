@@ -69,7 +69,7 @@ FINDING_DESCRIPTIONS = {
     FindingCode.NAME_COMPLETELY_DIFFERENT: "NPI found but under completely different organization name",
     FindingCode.ADDRESS_STATE_CONFLICT: "Different state across two or more authoritative sources",
     FindingCode.ENTITY_TYPE_MISMATCH: "Submitted entity type does not match NPPES taxonomy classification",
-    FindingCode.NPI_MISSING: "No NPI provided in RCE Directory submission",
+    FindingCode.NPI_MISSING: "No NPI provided in TEFCA entity data submission",
     FindingCode.SAM_REGISTRATION_LAPSED: "SAM.gov registration expired without renewal on record",
     FindingCode.NAME_ABBREVIATION_DIFF: "Name difference attributable to abbreviation (St./Saint, Corp./Corporation)",
     FindingCode.NAME_PUNCTUATION_DIFF: "Name difference attributable to punctuation only",

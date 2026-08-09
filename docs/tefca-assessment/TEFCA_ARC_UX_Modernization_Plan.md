@@ -150,7 +150,7 @@ Executive analytics on existing aggregates + QA: KPIs, accuracy/discrepancy tren
 ---
 
 ## 11. Data Import Experience `[RECOMMENDED]`
-Professional wizard (stepper): **Upload → Map → Validate → Preview diffs → Confirm → Provenance-stamp → History (rollback)**. Surfaces new-vs-updated, validation errors inline, MOCK/PRODUCTION stamp, and an import audit log. On `/reviews/new-submissions`, `/validate/batch` `[VERIFIED]`. (RCE Directory is MOCK until Sequoia key — config, not code `[VERIFIED]`.)
+Professional wizard (stepper): **Upload → Map → Validate → Preview diffs → Confirm → Provenance-stamp → History (rollback)**. Surfaces new-vs-updated, validation errors inline, MOCK/PRODUCTION stamp, and an import audit log. On `/reviews/new-submissions`, `/validate/batch` `[VERIFIED]`. (TEFCA entity data is MOCK until ONC key — config, not code `[VERIFIED]`.)
 
 ---
 

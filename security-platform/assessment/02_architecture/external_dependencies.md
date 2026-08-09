@@ -11,7 +11,7 @@ Verified against source (`grep` of hosts + client code). "Business Critical" = t
 | **OIG LEIE** (oig.hhs.gov/exclusions) | TEFCA verification | Medium | Low | NPI/name (CSV download) | Keyless | cache | retry |
 | **PECOS / CMS data** (data.cms.gov) | TEFCA verification | Medium | Low | provider queries | Keyless | cache | retry |
 | **SAM.gov** (api.sam.gov) | TEFCA verify + GovCon opportunities | Medium | **Medium** | entity/UEI queries | **API key (registered)** | cache | retry |
-| **RCE / Sequoia** (rce.sequoiaproject.org/fhir) | TEFCA registry directory + identifier system | Medium | Medium | FHIR queries | API key (per config) | manual/import | — |
+| **RCE / ONC** (rce.sequoiaproject.org/fhir) | TEFCA registry directory + identifier system | Medium | Medium | FHIR queries | API key (per config) | manual/import | — |
 | **News APIs** (GDELT, NewsAPI.ai, NewsAPI.org, eventregistry/Perigon) | Bulletin Intelligence | High (to bulletin) | Medium | search queries | API keys / keyless (GDELT) | multi-source failover (GDELT ↔ NewsAPI ↔ eventregistry) | timeouts |
 | **ONC Box** (box.com) | TEFCA (FHIR file drop — referenced, 3 files) | Medium | Medium | FHIR bundles | OAuth2 (per data-source config) | manual upload / CSV | — |
 | **Azure Key Vault** | Secrets delivery | **Critical** | Low | Secret reads | **Managed Identity** (private endpoint) | app-setting env fallback | Azure SDK |
@@ -29,7 +29,7 @@ Verified against source (`grep` of hosts + client code). "Business Critical" = t
 | **OpenAI** | Audio transcription unavailable (no fallback); minor chat path. |
 | **SendGrid** | No emails (invites, password resets, alerts) — **blocks new-user onboarding & password recovery**. No SMTP fallback. |
 | **NPPES/LEIE/PECOS/SAM** | TEFCA **external** verification degraded (already gated off for synthetic data); **internal** identity+hierarchy checks unaffected; cache mitigates. Registry browse/import unaffected. |
-| **RCE/Sequoia / ONC Box** | TEFCA directory sync + FHIR file ingestion pause; manual/CSV import still works. |
+| **RCE/ONC / ONC Box** | TEFCA directory sync + FHIR file ingestion pause; manual/CSV import still works. |
 | **News APIs** | Bulletin briefings stale; multi-source failover reduces impact; no effect on other modules. |
 
 ## Concentration & single-points

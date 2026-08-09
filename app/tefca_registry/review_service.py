@@ -137,6 +137,29 @@ async def probe_sources(db, entity_id) -> Dict[str, dict]:
                 # is what distinguishes them.
                 out[key] = {"status": VERIFIED if data.get("found", False) else NOT_FOUND,
                             "label": SOURCE_LABELS.get(key)}
+                # Carry the authoritative record forward.
+                #
+                # Without this, `data` never left this function, and
+                # _resolve_entity — which reads info["data"] and skips a source
+                # that has none — found nothing to compare against on every
+                # single run. The effect was silent: entity resolution reported
+                # "no_authoritative_record" and steps 6 and 7 of the documented
+                # pipeline (Jaro-Winkler name matching, address comparison) never
+                # executed, while NPPES itself reported "verified".
+                #
+                # Only the comparison fields are copied, not the whole payload:
+                # this dict is persisted as the review's verification_results
+                # snapshot, and snapshots are kept for the life of the contract.
+                if data.get("found"):
+                    out[key]["data"] = {
+                        "organization_name": (data.get("organization_name")
+                                              or data.get("legal_name")
+                                              or data.get("name")),
+                        "practice_address": _practice_address(data),
+                        "npi": data.get("npi") or npi,
+                        "entity_type": data.get("enumeration_type")
+                        or data.get("entity_type"),
+                    }
         except Exception as exc:  # noqa: BLE001 — one source must not sink the run
             out[key] = {"status": FAILED, "reason": f"{type(exc).__name__}: {exc}"[:200],
                         "label": SOURCE_LABELS.get(key)}
@@ -304,6 +327,30 @@ async def _resolve_entity(db, entity, sources: Dict[str, dict]) -> dict:
         "threshold_applied": result.threshold_applied,
         "details": result.details,
     }
+
+
+def _practice_address(data: dict) -> str:
+    """One-line practice address from an NPPES/PECOS payload.
+
+    NPPES returns `addresses` as a list, each tagged LOCATION or MAILING. The
+    LOCATION entry is the practice address and the one worth comparing; a
+    mailing address is frequently a lockbox or a corporate office in another
+    state, so comparing against it would manufacture mismatches for entities
+    that are perfectly consistent.
+    """
+    addresses = data.get("addresses") or []
+    chosen = next((a for a in addresses
+                   if str(a.get("address_purpose", "")).upper() == "LOCATION"), None)
+    if chosen is None and addresses:
+        chosen = addresses[0]
+    if not chosen:
+        return data.get("practice_address") or data.get("address") or ""
+    parts = [chosen.get("address_1"), chosen.get("address_2"),
+             chosen.get("city"), chosen.get("state"),
+             # NPPES pads ZIP to 9 digits with no hyphen; the normalizer reads a
+             # 5-digit ZIP, and "212870010" would not match "21287".
+             (chosen.get("postal_code") or "")[:5]]
+    return " ".join(str(p).strip() for p in parts if p and str(p).strip())
 
 
 def _address_meta(results: dict, key: str):
@@ -475,4 +522,12 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
             "classified_at": datetime.utcnow().isoformat() + "Z",
         },
         "confidence": coverage_note(sources),
+        # Steps 6-7 of the documented pipeline. Both were already computed and
+        # persisted into verification_results, but neither was returned — so a
+        # caller who had just run a verification could not see what the name and
+        # address comparison concluded without re-reading the review record.
+        # They are the two fields a reviewer looks at first when a bucket looks
+        # wrong.
+        "entity_resolution": results.get("entity_resolution"),
+        "address_match": results.get("address_match"),
     }
