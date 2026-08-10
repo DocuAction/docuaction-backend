@@ -118,8 +118,8 @@ def _source_of(article: Any) -> str:
 
 # Internal-only columns appended to the QA workbook after the shared A-K set.
 QA_HEADERS = ["QA Score", "Duplicate Flag", "URL Status", "Word Count",
-              "Google News Match"]
-QA_WIDTHS = [10, 14, 12, 11, 18]
+              "Google News Match", "Held From Bulletin"]
+QA_WIDTHS = [10, 14, 12, 11, 18, 20]
 
 
 def _relevance_band(article: Any) -> str:

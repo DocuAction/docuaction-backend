@@ -133,12 +133,30 @@ GENERIC_SECTION = "General"
 # sector buckets, because "FCC fines a broadcaster" is an enforcement story that
 # merely happens to mention broadcasting.
 _SECTION_KEYWORDS = [
+    # Nominations and congressional activity come FIRST. "Trump Nominates
+    # Danielle Thumann for FCC Spot" is a legislative story that mentions no
+    # sector at all, and without this rule it fell through every sector bucket
+    # to General. Placed above the sector rules because a confirmation hearing
+    # about a broadcaster is still a confirmation story.
+    #
+    # AGT_SECTIONS has no "Congressional & Legislative" label — the section list
+    # is a contract deliverable's structure and is not changed here — so these
+    # route to Business & Tech, the closest existing home for policy/oversight
+    # news. Worth revisiting with the client if the volume justifies a section.
+    ("Business & Tech", (
+        "nominat", "nominee", "confirmation hearing", "confirmed by the senate",
+        "commission seat", "fcc seat", "senate commerce", "house energy",
+        "subcommittee", "oversight hearing", "house committee",
+        "senate committee", "lawmakers", "legislation", "bill would")),
     ("Enforcement & Consumer", (
         "enforcement", "forfeiture", "consent decree", "penalty", "fine",
         "notice of apparent liability", "citation", "pirate radio")),
     ("Public Safety / Cybersecurity / Privacy", (
         "911", "e911", "emergency alert", "public safety", "outage",
-        "cyber", "privacy", "data breach", "security")),
+        "cyber", "privacy", "data breach", "security",
+        # Drone and robotics restrictions are handled here as equipment-security
+        # matters, which is how the FCC treats them.
+        "drone", "dji", "unmanned aircraft", "robot")),
     ("Wireless & Spectrum", (
         "spectrum", "mhz", "megahertz", "ghz", "auction", "c-band", "cbrs",
         "5g", "6g", "wireless", "satellite", "ngso", "earth station")),
@@ -148,6 +166,11 @@ _SECTION_KEYWORDS = [
     ("Media & Broadcasting", (
         "broadcast", "radio station", "television", " tv ", "media ownership",
         "broadcast license", "retransmission",
+        # Ownership-cap stories are the largest group that was landing in
+        # General. "tv station" and "ownership cap" are the phrases that
+        # actually appear in the headlines.
+        "ownership cap", "tv station", "station group", "local tv",
+        "nationwide cap",
         # "cable" alone is too greedy — it matched "undersea cable", which is an
         # International story. Qualify it.
         "cable television", "cable operator", "cable provider", "cable system")),
@@ -158,12 +181,63 @@ _SECTION_KEYWORDS = [
         "artificial intelligence", " ai ", "machine learning")),
     ("International", (
         "international", "itu", "subsea", "undersea cable", "treaty",
-        "foreign carrier")),
+        "foreign carrier",
+        # Chinese-equipment stories are an FCC staple (covered list, Huawei,
+        # ZTE) and were falling through to General.
+        "china", "chinese", "huawei", "zte", "foreign adversary",
+        "covered list", "foreign ownership")),
     ("Space Policy", ("space bureau", "launch", "orbital", "constellation")),
     ("Business & Tech", (
         "net neutrality", "merger", "acquisition", "telecom industry",
         "market", "earnings")),
 ]
+
+
+# ISSUE 4 — language gate for the public briefing.
+#
+# langdetect is optional on purpose. It is a soft dependency: if it is not
+# installed the gate lets everything through rather than failing the cycle,
+# because a missing library must not empty a briefing. When it IS installed,
+# detection runs on title + summary.
+#
+# The ASCII pre-check in front of it is not an optimisation, it is a correctness
+# guard. langdetect is statistical and unreliable on short strings — it will call
+# a five-word English headline Danish often enough to matter. A headline written
+# in Latin script with no accented characters is treated as English without
+# asking, so only genuinely non-Latin or accented text reaches the detector.
+_NON_ASCII = re.compile(r"[^\x00-\x7F]")
+
+
+def is_english(article) -> bool:
+    """True when an article should appear in the English-language briefing.
+
+    Fails OPEN at every step. A detector that is absent, that raises, or that is
+    merely unsure keeps the article — dropping a real FCC story because a
+    language model was uncertain is a worse outcome than leaving one foreign
+    headline in.
+    """
+    title = str(getattr(article, "title", "") or "")
+    summary = str(getattr(article, "summary", "") or "")
+    text = f"{title} {summary}".strip()
+    if not text:
+        return True
+
+    # Plain ASCII: English (or close enough that the detector adds no value).
+    if not _NON_ASCII.search(text):
+        return True
+
+    try:
+        from langdetect import detect, DetectorFactory
+        # Deterministic results — langdetect is randomised by default, and a
+        # briefing that includes a story one day and drops it the next for the
+        # same text is worse than either outcome consistently.
+        DetectorFactory.seed = 0
+        return detect(text) == "en"
+    except ImportError:
+        return True
+    except Exception:
+        # Detection failed on this text. Keep the article.
+        return True
 
 
 def _keyword_section(title: str, summary: str = "") -> str:
@@ -984,6 +1058,97 @@ def _build_coverage_report(agency_id, all_articles, unique, classified, briefing
         "strict_fcc_gate": STRICT_FCC_GATE,
         "provider_analytics": provider_analytics,
         "provider_coverage_comparison": provider_coverage,
+    }
+
+
+def coverage_from_latest_briefing(agency_id: str) -> Optional[Dict[str, Any]]:
+    """Rebuild a coverage report from the newest briefing, for when the live one
+    is gone.
+
+    `_last_coverage` is populated by a collection cycle and lives only in that
+    process's memory, so it is empty after any restart — a deploy, a scale event,
+    or simply a different worker serving the request. The panel then reported
+    "no collection run recorded" while a complete briefing sat in the database,
+    which reads as a failed collection rather than as a lost cache.
+
+    WHAT CAN AND CANNOT BE REBUILT
+
+    Everything computed from the stories that shipped is exact: category and
+    section counts, subscription stories, outlets, sources, and the count in the
+    briefing. Those come from the articles themselves.
+
+    The funnel counts CANNOT be rebuilt. stories_collected, after_dedup,
+    duplicates_removed, classified and rejected are measurements of what
+    happened DURING the cycle — how many were fetched before dedup, how many
+    were dropped. The final article set has no memory of what was discarded on
+    the way. They are returned as null with `unavailable_fields` naming them,
+    rather than back-filled with the post-briefing count, which would report
+    zero duplicates removed on every rebuilt report and quietly overstate the
+    collection's precision.
+    """
+    from collections import Counter
+
+    briefing = get_latest_briefing(agency_id)
+    if not briefing:
+        return None
+
+    briefing_id = briefing.get("briefing_id")
+    try:
+        from app.bulletin_intelligence.bulletin_download_routes import _briefing_articles
+        _b, _agency, arts = _briefing_articles(briefing_id)
+    except Exception as e:  # noqa: BLE001 — a rebuild must never raise into a route
+        logger.warning("coverage rebuild could not rehydrate %s: %s", briefing_id, e)
+        arts = []
+
+    news = [a for a in arts if (getattr(a, "source_type", "") or "") != "social"]
+
+    def _safe(fn, article, default="Other"):
+        """Classification helpers read fields an archived article may not carry.
+        A dashboard panel must degrade to "Other", never 500."""
+        try:
+            return fn(article) or default
+        except Exception:  # noqa: BLE001
+            return default
+
+    by_category = dict(Counter(_safe(fcc_category, a) for a in news))
+    expected = [r[0] for r in FCC_CATEGORY_RULES]
+
+    return {
+        "generated_at": briefing.get("generated_at") or _now(),
+        "agency_id": agency_id,
+        # Provenance, stated up front. A consumer must be able to tell a rebuilt
+        # report from one measured during a live cycle.
+        "derived_from": "latest_briefing",
+        "briefing_id": briefing_id,
+        "briefing_date": briefing.get("briefing_date"),
+        "note": ("Rebuilt from the stored briefing because no collection cycle "
+                 "has run in this process since it started. Content counts are "
+                 "exact; the collection funnel counts were not recorded with the "
+                 "briefing and are reported as null rather than estimated."),
+        "sources_scanned": dict(Counter(getattr(a, "source", "?") or "?" for a in arts)),
+        "source_count": len({getattr(a, "source", "?") or "?" for a in arts}),
+        "in_briefing": len(news),
+        "subscription_stories": sum(1 for a in news if getattr(a, "is_paywalled", False)),
+        "by_category": by_category,
+        "by_section": dict(Counter(_safe(_section_of, a) for a in news)),
+        "missing_category_warnings": [c for c in expected if by_category.get(c, 0) == 0],
+        "top_outlets": Counter((getattr(a, "outlet", "") or "?")
+                               for a in news).most_common(10),
+        "social_collected": sum(1 for a in arts
+                                if (getattr(a, "source_type", "") or "") == "social"),
+        "strict_fcc_gate": STRICT_FCC_GATE,
+        # Not recoverable — see the docstring.
+        "stories_collected": None,
+        "after_dedup": None,
+        "duplicates_removed": None,
+        "classified": None,
+        "rejected": None,
+        "provider_analytics": None,
+        "provider_coverage_comparison": None,
+        "unavailable_fields": ["stories_collected", "after_dedup",
+                               "duplicates_removed", "classified", "rejected",
+                               "provider_analytics",
+                               "provider_coverage_comparison"],
     }
 
 
@@ -2411,13 +2576,25 @@ def _is_paywalled_url(url: str) -> bool:
 def _section_of(art: "Article") -> str:
     # FCC-org category (General-first) leads; then the client's boolean spec, the
     # model's section, and the topic map. Never returns an invalid section.
+    # ISSUE 1 — "General" is never accepted as a PLACEMENT, only as a last
+    # resort. get_category() returns "General" the moment a story mentions the
+    # FCC generically, and because "General" is a member of AGT_SECTIONS that
+    # answer used to be returned here and short-circuit every router below it.
+    # That is how a story titled "FCC Removes Nationwide Cap Limiting Local TV
+    # Ownership" — which the keyword router places in Media & Broadcasting on
+    # the word "ownership" — ended up in General with 28 others.
+    #
+    # Each stage now has to name a SPECIFIC section to win.
+    def _placed(value: str) -> bool:
+        return value in AGT_SECTIONS and value != GENERIC_SECTION
+
     cat = get_category(art.title or "", art.summary or "")
-    if cat in AGT_SECTIONS:
+    if _placed(cat):
         return cat
     bs = _boolean_section(art.title or "", art.summary or "")
-    if bs in AGT_SECTIONS:
+    if _placed(bs):
         return bs
-    if art.section in AGT_SECTIONS:
+    if _placed(art.section):
         return art.section
     sec = TOPIC_TO_SECTION.get(art.topic, "")
     if sec in AGT_SECTIONS and sec != GENERIC_SECTION:
@@ -2436,12 +2613,36 @@ def _section_of(art: "Article") -> str:
     return _keyword_section(art.title or "", art.summary or "") or GENERIC_SECTION
 
 
+# ISSUE 2 — speaker tags some FCC feeds prepend to a headline. These are the
+# publishing system's attribution, not part of the title, and they read badly in
+# a briefing: "CHAIRMAN CARR: FCC Removes Nationwide Cap..." is the FCC's own
+# release format, not how the story should appear to a reader.
+#
+# Deliberately anchored and bounded: ALL-CAPS role, an optional name of one or
+# two words, then a colon, all within the first ~40 characters. A looser rule
+# ("strip anything before the first colon") would decapitate legitimate
+# headlines — "Starlink: what the FCC filing says" is a title, not a tag.
+_SPEAKER_PREFIX = re.compile(
+    r"^\s*(?:CHAIRMAN|CHAIRWOMAN|CHAIR|COMMISSIONER|ACTING\s+CHAIR(?:MAN|WOMAN)?"
+    r"|PRESS\s+RELEASE|STATEMENT|MEDIA\s+ADVISORY)"
+    r"(?:\s+[A-Z][A-Za-z'’\-]+){0,2}\s*:\s*",
+)
+
+
 def _clean_headline(title: str) -> str:
-    """Strip a leading source tag like '[Federal Register] ' or '[Broadcast] ' that
-    some ingesters prepend — the outlet is already shown separately."""
+    """Strip a leading source tag ('[Federal Register] ') or speaker tag
+    ('CHAIRMAN CARR: ') that some ingesters prepend — the outlet and the speaker
+    are already shown separately."""
     t = (title or "").strip()
     if t.startswith("[") and "]" in t[:40]:
         t = t[t.index("]") + 1:].strip()
+    # Applied after the bracket strip so "[Broadcast] CHAIRMAN CARR: ..." loses
+    # both, and repeated so a doubled tag cannot survive.
+    for _ in range(2):
+        stripped = _SPEAKER_PREFIX.sub("", t, count=1)
+        if stripped == t:
+            break
+        t = stripped.strip()
     return t
 
 
@@ -2503,6 +2704,17 @@ async def _prepare_briefing_sections(agency: AgencyConfig, articles: List[Articl
         if (a.topic != "other" or a.relevance_score >= 0.4) and a.source_type != "social"
     ]
 
+    # ISSUE 4 — English only. Spanish, Greek and Vietnamese stories reached the
+    # Aug 10 briefing. The FCC bulletin is an English deliverable, and a headline
+    # its readers cannot read is noise regardless of how relevant the story is.
+    # Excluded here rather than at ingest so the article still exists for the QA
+    # workbook and the archive; only the public briefing drops it.
+    dropped_non_english = [a for a in news if not is_english(a)]
+    if dropped_non_english:
+        logger.info("briefing: dropped %d non-English article(s)",
+                    len(dropped_non_english))
+        news = [a for a in news if a not in dropped_non_english]
+
     # Lenient spam/junk removal (press releases, malformed URLs, listicles). Uses a
     # LOW threshold so only clear junk is dropped — volume is preserved.
     try:
@@ -2532,7 +2744,39 @@ async def _prepare_briefing_sections(agency: AgencyConfig, articles: List[Articl
     clusters = _cluster_stories(capped)
     primaries = [c[0] for c in clusters]
     summaries = await _summaries_for(primaries, agency)
-    return _collect_sections(clusters, summaries)
+
+    # ISSUE 6 — a story with no summary does not go in the public briefing.
+    #
+    # When summarisation fails or returns nothing, the renderer fell back to the
+    # article's own text, which for many feeds is the headline again. The reader
+    # saw the same sentence twice and learned nothing, and it looked like a
+    # formatting fault rather than a missing summary.
+    #
+    # These are DROPPED FROM THE BRIEFING ONLY. The articles stay in the archive
+    # and in the QA workbook flagged `no_summary`, so a reviewer can see what was
+    # held back and why — silently discarding them would hide a summarisation
+    # outage behind a slightly shorter briefing.
+    def _has_summary(article) -> bool:
+        text = (summaries.get(article.article_id) or article.summary or "").strip()
+        if not text:
+            return False
+        # A "summary" that merely restates the headline is not a summary.
+        title = _clean_headline(article.title or "").strip().lower()
+        return text.strip().lower() != title
+
+    kept, no_summary = [], []
+    for cluster in clusters:
+        (kept if _has_summary(cluster[0]) else no_summary).append(cluster)
+    if no_summary:
+        logger.info("briefing: held back %d story/stories with no usable summary",
+                    len(no_summary))
+        for cluster in no_summary:
+            try:
+                setattr(cluster[0], "qa_flag", "no_summary")
+            except Exception:  # noqa: BLE001 — flagging must not break the cycle
+                pass
+
+    return _collect_sections(kept, summaries)
 
 
 def _cluster_stories(articles: List[Article]) -> List[List[Article]]:
@@ -2568,13 +2812,68 @@ def _cluster_stories(articles: List[Article]) -> List[List[Article]]:
                 break
         if not placed:
             clusters.append({"toks": tk, "members": [a]})
+
+    # ISSUE 3 — the PRIMARY is the most authoritative account of the story, not
+    # whichever copy happened to score highest on relevance.
+    #
+    # Ten outlets rewriting one FCC announcement produce ten near-identical
+    # articles. Which one leads matters: the Federal Register notice or the FCC's
+    # own release is the record, and a Google News aggregation of a trade-press
+    # rewrite is the least direct version of it. Before this, ordering was by
+    # relevance alone, so the aggregator frequently led and the primary source
+    # appeared underneath as "related".
+    #
+    # Thresholds are deliberately UNCHANGED (Jaccard 0.30, min 2 shared tokens).
+    # Only the ordering within an existing cluster moves.
+    for cl in clusters:
+        cl["members"].sort(key=lambda a: (_source_authority(a),
+                                          -float(getattr(a, "relevance_score", 0) or 0)))
     return [cl["members"] for cl in clusters]
 
 
+# Lower rank wins. Grouped by how DIRECT the account is, not by prestige:
+# the primary-source tiers are the record itself, the trade press reports on it,
+# and the aggregators report on the trade press.
+_AUTHORITY_TIERS = (
+    # 0 — the record: government publications and the agency's own releases.
+    (0, ("federal_register", "congress_gov", "fcc.gov", "federalregister.gov",
+         "congress.gov", "regulations.gov", "govinfo.gov")),
+    # 1 — direct RSS from a named outlet, including FCC and trade feeds.
+    (1, ("rss",)),
+    # 2 — trade and wire press reached through a search provider.
+    (2, ("newsapi_ai", "newsapi", "tavily")),
+    # 3 — aggregators and derived indexes: furthest from the source.
+    (3, ("gdelt", "google", "news.google")),
+    # 4 — model-mediated search results, which are summaries of summaries.
+    (4, ("claude_search", "claude_broadcast_search", "claude_social_search")),
+)
+_AUTHORITY_DEFAULT = 3
+
+
+def _source_authority(article) -> int:
+    """Rank an article by how direct its source is. Lower is more authoritative.
+
+    Reads source, outlet and URL together because the same publication arrives
+    under different labels depending on the ingester that found it.
+    """
+    blob = " ".join(str(getattr(article, f, "") or "").lower()
+                    for f in ("source", "outlet", "provider", "url"))
+    for rank, needles in _AUTHORITY_TIERS:
+        if any(n in blob for n in needles):
+            return rank
+    return _AUTHORITY_DEFAULT
+
+
 def _collect_sections(clusters, summaries: Dict[str, str]):
-    """Build all sections (always present). Each cluster -> one primary story plus
-    its RELATED coverage. Named-leadership items are prefixed (e.g. 'CHAIRMAN CARR:')
-    and floated to the top of the General section. Empty section headers are kept."""
+    """Build the sections that have stories. Each cluster -> one primary story
+    plus its RELATED coverage; the primary is the most authoritative account
+    (see _source_authority), not merely the highest-scoring copy.
+
+    Named-leadership items are floated to the top of the General section.
+
+    Sections with no stories are NOT emitted: an empty heading in a delivered
+    briefing reads as a section that failed to populate, not as "no news here
+    today"."""
     idx = 0
     by_section = {s: [] for s in AGT_SECTIONS}
     for members in clusters:
@@ -2609,7 +2908,12 @@ def _collect_sections(clusters, summaries: Dict[str, str]):
         })
     # Float leadership activity to the top of General (stable order otherwise).
     by_section["General"].sort(key=lambda s: not s.get("_leader"))
-    return [(sec, by_section[sec]) for sec in AGT_SECTIONS]
+    # ISSUE 5 — drop empty sections. This returned every label in AGT_SECTIONS
+    # whether or not it had stories, so a heading like "Enforcement & Consumer"
+    # rendered with nothing beneath it. In a delivered briefing an empty heading
+    # does not read as "no enforcement news today"; it reads as a section that
+    # failed to populate.
+    return [(sec, by_section[sec]) for sec in AGT_SECTIONS if by_section[sec]]
 
 
 # ── Summary prompt ──────────────────────────────────────────────────────────

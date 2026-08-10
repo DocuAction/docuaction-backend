@@ -42,3 +42,8 @@ weasyprint
 # 0.6.3 -> 0.6.4 closes CVE-2026-59884/59885/59886. Transitive via python-jose,
 # pinned here so the fixed version is explicit rather than resolver-dependent.
 pyasn1==0.6.4
+
+# Language detection for the English-only bulletin gate (ISSUE 4).
+# Optional at runtime: engine.is_english() fails open if the import is missing,
+# so a briefing is never emptied by an absent detector.
+langdetect==1.0.9

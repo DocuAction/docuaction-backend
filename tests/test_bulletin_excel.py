@@ -201,18 +201,24 @@ def test_qa_mode_is_the_client_sheet_plus_l_to_p():
     """'Same as Button 1 plus extras' only holds if A-K is byte-identical."""
     from app.bulletin_intelligence.excel_export import QA_HEADERS
     arts = _articles()
+    # Sized from QA_HEADERS rather than hardcoded. Adding a QA column is a normal
+    # change, and a test that pins the count fails on the addition instead of on
+    # the property it exists to protect: that A-K stays byte-identical.
+    extras = ["OK", "No", "", 80, "YES"] + [""] * (len(QA_HEADERS) - 5)
+    first_qa, last_qa = 12, 11 + len(QA_HEADERS)
+
     client, _ = _roundtrip(create_bulletin_excel(BRIEFING, arts, lambda a: a.section))
     qa, _ = _roundtrip(create_bulletin_excel(
         BRIEFING, arts, lambda a: a.section,
-        qa=True, qa_extras=lambda a: ["OK", "No", "", 80, "YES"]))
+        qa=True, qa_extras=lambda a: extras))
 
     cw, qw = client["FCC Daily Bulletin"], qa["FCC Daily Bulletin"]
     assert [cw.cell(1, c).value for c in range(1, 12)] == \
            [qw.cell(1, c).value for c in range(1, 12)]
-    assert [qw.cell(1, c).value for c in range(12, 17)] == QA_HEADERS
+    assert [qw.cell(1, c).value for c in range(first_qa, last_qa + 1)] == QA_HEADERS
     assert cw.max_column == 11, "client sheet must not carry QA columns"
-    assert qw.max_column == 16
-    assert qw.cell(2, 12).value == "OK"
+    assert qw.max_column == last_qa
+    assert qw.cell(2, first_qa).value == "OK"
     assert qw.cell(2, 16).value == "YES"
 
 

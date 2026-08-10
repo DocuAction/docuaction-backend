@@ -686,6 +686,12 @@ async def download_briefing_excel(briefing_id: str):
             ("No Date" if (getattr(a, "date_status", "") == "date_unknown") else ""),
             words,
             gn,
+            # ISSUE 6 — why a story is in this workbook but NOT in the public
+            # bulletin. Articles held back for a missing or headline-repeating
+            # summary are flagged rather than silently dropped: a reviewer has to
+            # be able to see what was withheld, or a summarisation outage just
+            # looks like a shorter briefing.
+            (getattr(a, "qa_flag", "") or ""),
         ]
 
     _gn_missing = [a for a in arts if (getattr(a, "source_type", "") or "") == "qa"]

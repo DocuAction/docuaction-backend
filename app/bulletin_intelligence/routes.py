@@ -568,15 +568,27 @@ async def coverage_report(agency_id: str):
     """Daily source/coverage analytics from the most recent cycle: sources scanned,
     stories collected/rejected, duplicates removed, subscription stories, coverage
     by category/section, and missing-category warnings."""
-    from app.bulletin_intelligence.engine import _last_coverage
+    from app.bulletin_intelligence.engine import (_last_coverage,
+                                                  coverage_from_latest_briefing)
     report = _last_coverage.get(agency_id)
-    if not report:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No coverage report yet for {agency_id}. Run a cycle first "
-                   f"(POST /api/v1/bulletin/run/{agency_id}).",
-        )
-    return report
+    if report:
+        return report
+
+    # _last_coverage is per-process and empty after any restart — a deploy, a
+    # scale event, or just a different worker taking the request. The panel then
+    # said "no collection run recorded" while a complete briefing sat in the
+    # database, which reads as a failed collection rather than a lost cache.
+    # Rebuild from the stored briefing instead.
+    rebuilt = coverage_from_latest_briefing(agency_id)
+    if rebuilt:
+        return rebuilt
+
+    # Now the 404 means what it says: there is genuinely no briefing.
+    raise HTTPException(
+        status_code=404,
+        detail=f"No briefing exists yet for {agency_id}. Run a collection "
+               f"(POST /api/v1/bulletin/run/{agency_id}).",
+    )
 
 
 # ── Refresh cache from the durable store ───────────────────────────────────────
