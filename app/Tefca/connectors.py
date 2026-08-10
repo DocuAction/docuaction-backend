@@ -1122,15 +1122,25 @@ class SourceConnectorManager:
         checked_at = datetime.utcnow().isoformat()
         probes = await asyncio.gather(
             self.nppes.probe(), self.leie.probe(), self.sam.probe(),
-            self.pecos.probe(), self.rce_directory.probe(),
+            self.pecos.probe(),
             return_exceptions=True,
         )
-        # IQVIA_ONEKEY is deliberately NOT probed here. It has no key and is
-        # pending federal ODC, so it reported UNAVAILABLE on every health call --
-        # which reads as "a source is down" when nothing is wrong. A connector
-        # that was never provisioned is not a health finding. The class remains
-        # for when the key arrives.
-        names = ["NPPES", "OIG_LEIE", "SAM_GOV", "PECOS", "RCE_DIRECTORY"]
+        # Two connectors are deliberately NOT probed here.
+        #
+        # IQVIA_ONEKEY has no key and is pending federal ODC, so it reported
+        # UNAVAILABLE on every health call — which reads as "a source is down"
+        # when nothing is wrong. A connector that was never provisioned is not a
+        # health finding.
+        #
+        # TEFCA entity population data is PROVIDED BY ONC per contract
+        # direction. AGT does not query an external directory for it, so there
+        # is nothing here to probe and reporting it as a connector implied a
+        # dependency that does not exist. Removed from the health list entirely
+        # rather than reported as perpetually unavailable.
+        #
+        # Both classes remain for the day their inputs arrive; only their
+        # participation in the health probe was removed.
+        names = ["NPPES", "OIG_LEIE", "SAM_GOV", "PECOS"]
         # SAM's note is derived, not fixed. It read "(requires SAM_GOV_API_KEY)"
         # on every failure, including on environments where the key WAS set —
         # which points at the wrong fix, and did. Say which of the two states
@@ -1146,7 +1156,6 @@ class SourceConnectorManager:
             "OIG_LEIE": "Exclusion List — OIG/HHS",
             "SAM_GOV": sam_note,
             "PECOS": "Provider Enrollment — CMS",
-            "RCE_DIRECTORY": "TEFCA entity data — provided by ONC per contract direction",
         }
         status: Dict[str, Dict[str, Any]] = {}
         for name, probe in zip(names, probes):

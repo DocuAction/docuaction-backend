@@ -104,6 +104,49 @@ def test_the_mock_flag_reads_the_onc_dataset_variable():
     assert "RCE_DIRECTORY_API_KEY" in src
 
 
+def test_health_does_not_report_an_external_directory_connector():
+    """Entity population data is provided by ONC. Listing a directory connector
+    in the health probe implied a dependency that does not exist, and reported
+    it as perpetually unavailable — which reads as an outage rather than as a
+    thing we deliberately do not call."""
+    import asyncio
+
+    from app.Tefca import connectors as c
+
+    class Stub:
+        api_key = ""
+
+        async def probe(self):
+            return True
+
+    manager = c.SourceConnectorManager.__new__(c.SourceConnectorManager)
+    for attr in ("nppes", "leie", "sam", "pecos", "rce_directory"):
+        setattr(manager, attr, Stub())
+
+    health = asyncio.run(manager.health_check())
+    assert "RCE_DIRECTORY" not in health, \
+        f"health still lists an external directory connector: {sorted(health)}"
+    # The sources actually queried are still reported.
+    assert {"NPPES", "OIG_LEIE", "SAM_GOV", "PECOS"} == set(health)
+
+
+def test_the_directory_connector_class_is_retained():
+    """Removed from the health probe, not deleted: the loader is still how the
+    ONC-provided dataset gets in, and its identifiers appear in stored rows."""
+    from app.Tefca.connectors import RCEDirectoryConnector
+
+    assert hasattr(RCEDirectoryConnector, "probe")
+
+
+def test_confidence_scoring_never_weighted_the_directory():
+    """Removing it from health must not change any score. It was never in the
+    weight table, which is what makes this safe."""
+    from app.tefca_registry.lifecycle import SOURCE_WEIGHTS
+
+    assert "rce_directory" not in SOURCE_WEIGHTS
+    assert round(sum(SOURCE_WEIGHTS.values()), 4) == 1.0
+
+
 def test_mock_data_is_still_labelled_as_demonstration_data():
     """Removing vendor names must not have removed the honesty label — an
     unlabelled demonstration dataset is worse than a named one."""
