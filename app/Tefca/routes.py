@@ -14,6 +14,7 @@ finite-population correction (FIX 7).
 import csv
 import io as _io
 import json
+import os
 import uuid
 import logging
 from datetime import datetime, timedelta
@@ -1587,6 +1588,28 @@ async def seed_mock_data(db: AsyncSession = Depends(get_db), user=Depends(requir
     # is loaded from the DB by get_current_user, not trusted from the token.
     if user.email not in ADMIN_EMAILS:
         raise HTTPException(403, f"Admin allowlist required; {user.email} not authorized")
+
+    # Hard stop on production — mirrors the identical guard on the registry seeder
+    # (app/tefca_registry/routes.py). These 50 rows are fabricated entities carrying
+    # REAL QHIN names ('Health Gorilla', 'Epic Nexus', ...), so on production they
+    # would sit in the same table as ONC-provided reviews while claiming a genuine
+    # QHIN as their source. is_mock_data=true marks them in the row, but the UI's
+    # MockDataBanner keys off the GLOBAL /api/tefca/status data_source, not the
+    # per-row flag — so once real and mock rows coexist, nothing on screen tells
+    # them apart. The block that follows only skips seeding when the table is
+    # ALREADY non-empty, which does not help an empty production table.
+    #
+    # The admin allowlist above is an authorization control, not an environment
+    # control: it stops the wrong person seeding, not the right person seeding the
+    # wrong environment. This is the latter.
+    if (os.getenv("ENVIRONMENT", "") or "").strip().lower() == "production":
+        raise HTTPException(
+            403,
+            "Mock data seeding is not permitted in production. These rows are "
+            "fabricated entities labelled with real QHIN names; in the production "
+            "review table they would be indistinguishable from ONC-provided data "
+            "on screen. Import ONC-provided data instead.")
+
     out = {"alters": [], "mock_data": None, "actions": []}
 
     # 1 + 2: additive columns (IF NOT EXISTS — safe to re-run)

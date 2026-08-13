@@ -44,3 +44,9 @@ results_*.xml
 deploy-rbac-fix.zip
 deploy-rbac-fix-v2.zip
 deploy-dev-fixed.zip
+
+# Guard-only prod artifact built for the seed-mock-data production block.
+prod-deploy-seed-guard.zip
+
+# Microsoft Word lock files (created while a .docx is open; never wanted in git).
+~$*
