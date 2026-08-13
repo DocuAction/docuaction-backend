@@ -51,13 +51,23 @@ from .models import (
 
 logger = logging.getLogger("docuaction.tefca.routes")
 
-# ── Router — authenticated by default. require_role("reviewer") is the MINIMUM
-#    for any TEFCA endpoint; stricter roles are applied per-route. No endpoint is
-#    reachable without a valid JWT. (FIX 2 — HHSAR 352.204-71 / FAR 52.212-4) ──
+# ── Router — authenticated by default. No endpoint is reachable without a valid
+#    JWT. (FIX 2 — HHSAR 352.204-71 / FAR 52.212-4)
+#
+#    The router-level floor is "viewer" (level 1), NOT a stricter role. A floor is
+#    a CEILING on how permissive any route beneath it can be: while this said
+#    "reviewer" (level 4), every endpoint in this router — including every
+#    read-only GET — was closed to viewer(1), contributor(2) and manager(3). Those
+#    are the only non-admin roles the admin API could assign, so in practice the
+#    whole module was admin-only. Least privilege is enforced by the PER-ROUTE
+#    guard on each endpoint below (reviewer to write, qalead to approve,
+#    program_manager to submit deliverables); this floor exists only to guarantee
+#    no route is ever silently anonymous. Every route in this router declares its
+#    own require_role, so lowering the floor widens nothing on its own. ──
 tefca_router = APIRouter(
     prefix="/api/v1/tefca",
     tags=["TEFCA Review Protocol"],
-    dependencies=[Depends(require_role("reviewer"))],
+    dependencies=[Depends(require_role("viewer"))],
 )
 router = tefca_router  # safe_load / main.py expects mod.router
 
@@ -425,7 +435,7 @@ async def _validate_and_persist(
 # ─── Connector health ────────────────────────────────────────────────────────
 
 @tefca_router.get("/connectors/status", summary="Probe all data source connectors")
-async def connector_health(user=Depends(require_role("reviewer"))):
+async def connector_health(user=Depends(require_role("viewer"))):
     manager = get_connector_manager()
     status = await manager.health_check()
     live = sum(1 for s in status.values() if s.get("live"))
@@ -444,7 +454,7 @@ async def connector_health(user=Depends(require_role("reviewer"))):
 async def get_mock_entities(
     bucket: Optional[int] = None,
     qhin: Optional[str] = None,
-    user=Depends(require_role("reviewer")),
+    user=Depends(require_role("viewer")),
 ):
     entities = ALL_MOCK_ENTITIES
     if bucket:
@@ -494,7 +504,7 @@ async def create_cycle(
 
 
 @tefca_router.get("/cycles", summary="List review cycles")
-async def list_cycles(db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
+async def list_cycles(db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer"))):
     rows = (await db.execute(select(TEFCAReviewCycle).order_by(TEFCAReviewCycle.created_at.desc()))).scalars().all()
     return {
         "total": len(rows),
@@ -649,7 +659,7 @@ async def _run_batch_validation(entity_dicts: list, cycle_id_str: str, initiated
 
 @tefca_router.get("/validate/status/{cycle_id}", summary="Batch validation progress")
 async def get_validation_status(
-    cycle_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+    cycle_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
     try:
         cid = uuid.UUID(cycle_id)
@@ -685,7 +695,7 @@ def _queue_item_dto(q: TEFCAAnalystQueue) -> dict:
 
 @tefca_router.get("/queue/tier2", summary="Tier-2 analyst queue")
 async def get_tier2_queue(
-    limit: int = 100, db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+    limit: int = 100, db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
     rows = (await db.execute(
         select(TEFCAAnalystQueue).where(
@@ -849,7 +859,7 @@ async def create_priority_case(
 
 @tefca_router.get("/priority-cases", summary="List priority cases")
 async def list_priority_cases(
-    status: Optional[str] = None, db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+    status: Optional[str] = None, db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
     q = select(TEFCAPriorityCase).order_by(TEFCAPriorityCase.created_at.desc())
     if status:
@@ -1074,7 +1084,7 @@ async def generate_final_report(
 
 
 @tefca_router.get("/reports", summary="List generated reports")
-async def list_reports(db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
+async def list_reports(db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer"))):
     rows = (await db.execute(select(TEFCAReport).order_by(TEFCAReport.generated_at.desc()))).scalars().all()
     return {
         "total": len(rows),
@@ -1294,7 +1304,7 @@ async def tefca_search(
     q: str = Query("", description="NPI (10 digits), entity name, or QHIN"),
     type: str = Query("all", description="all | npi | name | qhin"),
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("reviewer")),
+    user=Depends(require_role("viewer")),
 ):
     """Search reviews/entities/findings by NPI, name, or QHIN. A 10-digit query is
     treated as an NPI (exact) and triggers a live NPPES lookup; otherwise it is a
@@ -1392,7 +1402,7 @@ async def export_reviews(
     start: Optional[str] = Query(None),
     end: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("reviewer")),
+    user=Depends(require_role("viewer")),
 ):
     if format.lower() != "csv":
         raise HTTPException(400, "Only format=csv is supported")
@@ -1499,7 +1509,7 @@ FROM (VALUES ('nppes'),('oig_leie'),('pecos'),('sam_gov'),
 
 @tefca_dashboard_router.post("/demo/run-cycle",
                              summary="[admin] Run one QA validation cycle on a mock review (demo)")
-async def demo_run_cycle(db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
+async def demo_run_cycle(db: AsyncSession = Depends(get_db), user=Depends(require_role("admin"))):
     """Admin demo. Picks one mock review, probes the live source connectors, runs
     the REAL QA gate ladder (intake -> connectors -> findings -> QA score) via
     qa_engine.validate_review, and returns the entity, connector health, findings,
@@ -1571,7 +1581,7 @@ async def demo_run_cycle(db: AsyncSession = Depends(get_db), user=Depends(get_cu
 
 @tefca_dashboard_router.post("/admin/seed-mock-data",
                              summary="[admin] Apply RFQ columns + seed mock review data (idempotent)")
-async def seed_mock_data(db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
+async def seed_mock_data(db: AsyncSession = Depends(get_db), user=Depends(require_role("admin"))):
     # Gated by the ADMIN_EMAILS allowlist (email-based), not role, so an existing
     # token for an allowlisted admin works without changing the DB role. The email
     # is loaded from the DB by get_current_user, not trusted from the token.
@@ -1735,7 +1745,7 @@ async def execute_review(
 
 
 @tefca_dashboard_router.get("/sampling-runs", summary="List sampling runs")
-async def list_sampling_runs(db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
+async def list_sampling_runs(db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer"))):
     rows = (await db.execute(
         select(TEFCAReviewCycle).order_by(TEFCAReviewCycle.created_at.desc())
     )).scalars().all()
@@ -1807,7 +1817,7 @@ async def create_final_report(
 @tefca_dashboard_router.get("/reports", summary="List reports (filters: type, start, end)")
 async def list_tefca_reports(
     type: Optional[str] = Query(None), start: Optional[str] = Query(None), end: Optional[str] = Query(None),
-    db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
     q = select(TEFCAReport).order_by(TEFCAReport.generated_at.desc())
     if type:
@@ -1832,7 +1842,7 @@ async def list_tefca_reports(
 
 @tefca_dashboard_router.get("/reports/{report_id}", summary="Full report detail")
 async def get_tefca_report(
-    report_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+    report_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
     rid = _parse_uuid(report_id)
     r = (await db.execute(select(TEFCAReport).where(TEFCAReport.report_id == rid))).scalar_one_or_none()
@@ -1850,7 +1860,7 @@ async def get_tefca_report(
 
 @tefca_dashboard_router.get("/reports/{report_id}/csv", summary="Download report as 12-column CSV")
 async def get_tefca_report_csv(
-    report_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+    report_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
     rid = _parse_uuid(report_id)
     r = (await db.execute(select(TEFCAReport).where(TEFCAReport.report_id == rid))).scalar_one_or_none()
@@ -1871,7 +1881,7 @@ async def _load_report_or_404(report_id: str, db: AsyncSession) -> TEFCAReport:
 
 @tefca_dashboard_router.get("/reports/{report_id}/pdf", summary="Download report as branded PDF")
 async def get_tefca_report_pdf(
-    report_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+    report_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
     """Render a persisted report as an AGT-branded PDF (contains PII — role-gated,
     like the CSV export). MOCK reports carry a prominent MOCK-DATA banner."""
@@ -1888,7 +1898,7 @@ async def get_tefca_report_pdf(
 
 @tefca_dashboard_router.get("/reports/{report_id}/docx", summary="Download report as branded DOCX")
 async def get_tefca_report_docx(
-    report_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+    report_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
     """Render a persisted report as an AGT-branded editable Word document (PII —
     role-gated). MOCK reports carry a prominent MOCK-DATA banner."""
@@ -1948,7 +1958,7 @@ async def create_quarterly_report(
 async def list_new_submissions(
     since: str = Query(..., description="ISO date YYYY-MM-DD"),
     qhin: Optional[str] = Query(None),
-    db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
     since_dt = _parse_date(since)
     rows = await reporting.get_new_submissions(db, qhin, since_dt)
@@ -1997,7 +2007,7 @@ class PriorityCreateRequest(BaseModel):
 @tefca_dashboard_router.post("/priority/create", summary="Create a COR-directed priority review (admin only)")
 async def priority_create(
     request: PriorityCreateRequest, http: Request,
-    db: AsyncSession = Depends(get_db), user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
 ):
     if user.email not in ADMIN_EMAILS:
         raise HTTPException(403, f"Admin allowlist required; {user.email} not authorized")
@@ -2036,7 +2046,7 @@ async def priority_execute(
 async def priority_list(
     status: Optional[str] = Query(None), qhin: Optional[str] = Query(None),
     start: Optional[str] = Query(None), end: Optional[str] = Query(None),
-    db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
     q = select(TEFCAPriorityCase).order_by(TEFCAPriorityCase.assigned_date.desc())
     if qhin:
@@ -2056,7 +2066,7 @@ async def priority_list(
 
 @tefca_dashboard_router.get("/priority/{case_id}", summary="Priority case detail")
 async def priority_detail(
-    case_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+    case_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
     cid = _parse_uuid(case_id)
     c = (await db.execute(select(TEFCAPriorityCase).where(TEFCAPriorityCase.case_id == cid))).scalar_one_or_none()
@@ -2075,7 +2085,7 @@ async def priority_detail(
 
 @tefca_dashboard_router.get("/priority/{case_id}/report", summary="Formatted COR status report")
 async def priority_report(
-    case_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+    case_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
     cid = _parse_uuid(case_id)
     report = await reporting.generate_priority_status_report(db, cid)
@@ -2107,7 +2117,7 @@ async def qa_platform_health(db: AsyncSession = Depends(get_db)):
 
 
 @tefca_dashboard_router.get("/qa/connector-health", summary="Connector health scores")
-async def qa_connector_health(db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
+async def qa_connector_health(db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer"))):
     return await qa_engine.ConnectorHealthCheck().check_all_connectors(db=db)
 
 
@@ -2116,7 +2126,7 @@ async def qa_audit_trail(
     review_id: Optional[str] = Query(None), gate_name: Optional[str] = Query(None),
     gate_type: Optional[str] = Query(None), passed: Optional[bool] = Query(None),
     limit: int = Query(100),
-    db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
     clauses, params = [], {"lim": min(max(limit, 1), 500)}
     if review_id:
@@ -2143,7 +2153,7 @@ async def qa_validate_review(review_id: str, db: AsyncSession = Depends(get_db),
 
 
 @tefca_dashboard_router.get("/qa/score", summary="Overall QA score across all dimensions")
-async def qa_overall_score(db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
+async def qa_overall_score(db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer"))):
     return await qa_engine.overall_qa_score(db)
 
 
@@ -2157,7 +2167,7 @@ async def qa_validate_evidence(review_id: str, db: AsyncSession = Depends(get_db
 @tefca_dashboard_router.get("/qa/report-gate", summary="Evidence gate that must be open before a report is generated")
 async def qa_report_gate(
     start: Optional[str] = Query(None), end: Optional[str] = Query(None),
-    db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
     s = _parse_date(start) if start else None
     e = _parse_date(end) if end else None
@@ -2165,7 +2175,7 @@ async def qa_report_gate(
 
 
 @tefca_dashboard_router.get("/qa/evidence-summary", summary="Evidence completeness across all reviews")
-async def qa_evidence_summary(db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
+async def qa_evidence_summary(db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer"))):
     return await qa_engine.evidence_gate(db, None, None, triggered_by="manual")
 
 
@@ -2174,7 +2184,7 @@ async def qa_evidence_summary(db: AsyncSession = Depends(get_db), user=Depends(r
 @tefca_dashboard_router.get("/qa/sampling-validation", summary="Sampling validation vs Cochran @95% CI")
 async def qa_sampling_validation(
     population: int = Query(94231), confidence: float = Query(0.95), margin: float = Query(0.05),
-    db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
     return await qa_engine.validate_sampling(db, population, confidence, margin, triggered_by="manual")
 
@@ -2183,7 +2193,7 @@ async def qa_sampling_validation(
                             summary="Internal consistency score (pipeline self-consistency — NOT inter-rater reliability)")
 async def qa_internal_consistency(
     sample_size: int = Query(20), seed: int = Query(42),
-    db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
     return await qa_engine.internal_consistency_check(db, sample_size, seed, triggered_by="manual")
 
@@ -2192,7 +2202,7 @@ async def qa_internal_consistency(
                             summary="[deprecated alias] Internal consistency score — NOT true inter-rater reliability")
 async def qa_inter_rater(
     sample_size: int = Query(20), seed: int = Query(42),
-    db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
     # Backward-compatible path; returns the honestly-labeled internal consistency
     # score (real IRR requires double-review sampling — see qa_engine TODO).
@@ -2200,37 +2210,37 @@ async def qa_inter_rater(
 
 
 @tefca_dashboard_router.get("/qa/statistical", summary="Combined statistical QA (sampling + internal consistency + CI)")
-async def qa_statistical(db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
+async def qa_statistical(db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer"))):
     return await qa_engine.statistical_qa(db, triggered_by="manual")
 
 
 # ─── QA regression / golden-record endpoints (QA Task 4) ─────────────────────
 
 @tefca_dashboard_router.get("/qa/golden-records", summary="List the golden known-answer test cases")
-async def qa_golden_records(user=Depends(require_role("reviewer"))):
+async def qa_golden_records(user=Depends(require_role("viewer"))):
     cases = [{"case": name, "expected_bucket": expected} for (name, _e, _sr, expected) in qa_engine._golden_cases()]
     return {"total": len(cases), "golden_records": cases}
 
 
 @tefca_dashboard_router.get("/qa/regression", summary="Run golden-record regression; detect classification drift")
-async def qa_regression(db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
+async def qa_regression(db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer"))):
     return await qa_engine.run_golden_regression(db, triggered_by="manual")
 
 
 # ─── QA monitoring, SLA & alert endpoints (QA Task 5) ────────────────────────
 
 @tefca_dashboard_router.get("/qa/sla", summary="Priority-review SLA tracking")
-async def qa_sla(db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
+async def qa_sla(db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer"))):
     return await qa_engine.check_priority_sla(db, triggered_by="manual")
 
 
 @tefca_dashboard_router.get("/qa/sweep", summary="Run a full QA sweep (all gates + alerts + SLA)")
-async def qa_sweep(db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
+async def qa_sweep(db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer"))):
     return await qa_engine.run_qa_sweep(db, triggered_by="manual")
 
 
 @tefca_dashboard_router.get("/qa/alerts", summary="Recent QA threshold alerts")
-async def qa_alerts(limit: int = Query(50), db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
+async def qa_alerts(limit: int = Query(50), db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer"))):
     rows = (await db.execute(text(
         "SELECT id, gate_name, gate_type, details, triggered_by, created_at FROM tefca_qa_audit "
         "WHERE gate_type = 'alert' ORDER BY created_at DESC LIMIT :lim"), {"lim": min(max(limit, 1), 200)})).mappings().all()
@@ -2262,7 +2272,7 @@ async def qa_generate_report(db: AsyncSession = Depends(get_db), user=Depends(re
 @tefca_dashboard_router.get("/qa/audit/export", summary="Export the QA audit trail as CSV")
 async def qa_audit_export(
     format: str = Query("csv"), limit: int = Query(5000),
-    db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
     if format.lower() != "csv":
         raise HTTPException(400, "Only format=csv is supported")
@@ -2419,7 +2429,7 @@ async def list_entity_reviews(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("reviewer")),
+    user=Depends(require_role("viewer")),
 ):
     """The reviewer queue. Returns an empty list when there is nothing — not an error."""
     q = select(TEFCAReview).order_by(TEFCAReview.created_at.desc())
@@ -2457,7 +2467,7 @@ async def list_entity_reviews(
 async def get_entity_review(
     review_id: str,
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("reviewer")),
+    user=Depends(require_role("viewer")),
 ):
     rid = _parse_uuid(review_id)
     review = (await db.execute(
@@ -2526,7 +2536,7 @@ async def list_findings(
     limit: int = Query(200, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("reviewer")),
+    user=Depends(require_role("viewer")),
 ):
     """Findings register. Returns an empty list when there are none — not an error."""
     q = select(TEFCAFinding, TEFCAReview).join(
@@ -2569,7 +2579,7 @@ async def list_findings(
 async def get_finding(
     finding_id: str,
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("reviewer")),
+    user=Depends(require_role("viewer")),
 ):
     fid = _parse_uuid(finding_id)
     row = (await db.execute(
@@ -2885,7 +2895,7 @@ async def import_history(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("reviewer")),
+    user=Depends(require_role("viewer")),
 ):
     """Every import attempt, including the ones that imported nothing."""
     q = select(TEFCAImportHistory).order_by(TEFCAImportHistory.uploaded_at.desc())
@@ -2921,7 +2931,7 @@ async def download_report(
     report_id: str,
     format: str = Query("pdf", description="pdf | docx"),
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("reviewer")),
+    user=Depends(require_role("viewer")),
 ):
     """Generic download. Delegates to the existing renderers rather than
     duplicating them — one renderer, one output, no second implementation to

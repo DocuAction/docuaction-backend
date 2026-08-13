@@ -656,7 +656,7 @@ def _recommendations(bucket: str) -> List[str]:
 
 
 @router.get("/priority-reviews/dashboard",
-            dependencies=[Depends(require_role("reviewer"))])
+            dependencies=[Depends(require_role("viewer"))])
 async def priority_review_dashboard(
     include_completed: bool = Query(False,
                                     description="Include reviews already done"),
@@ -793,7 +793,7 @@ async def create_arc_cycle(req: ARCCycleCreate, http: Request,
 
 
 @router.get("/cycles/{cycle_id}/stats",
-            dependencies=[Depends(require_role("reviewer"))])
+            dependencies=[Depends(require_role("viewer"))])
 async def arc_cycle_stats(cycle_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     """Completion and bucket distribution for one cycle (QA-3.3)."""
     from app.Tefca.models import TEFCAReviewCycle

@@ -15,11 +15,11 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
-from sqlalchemy import select, desc, delete as sa_delete, update as sa_update
+from sqlalchemy import select, desc, func, delete as sa_delete, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import get_current_user, ADMIN_EMAILS, hash_password
+from app.core.security import get_current_user, ADMIN_EMAILS, hash_password, ROLE_HIERARCHY
 from app.core.email import send_invitation_email, send_verification_email, app_url
 from app.api.password_reset import _create_reset_token, INVITE_TOKEN_EXPIRE
 from app.models.database import User, AuditLog, Document, Output, AudioFile, Transcript
@@ -51,7 +51,15 @@ LEGACY_MAP = {
     "bulletin": "bulletin_intelligence", "tefca": "tefca_review", "casemanagement": "case_management",
     "healthcare": "healthcare_claims", "trust": "trust_center",
 }
-VALID_ROLES = {"admin", "manager", "contributor", "viewer"}
+# Every role in core.security.ROLE_HIERARCHY must be assignable here, otherwise a
+# role that the authorization layer honours cannot actually be granted through the
+# product. The four TEFCA contract roles (reviewer / senior_analyst / qalead /
+# program_manager) were missing, so the only role above "manager" (level 3) that an
+# admin could assign was "admin" (level 8) — and every /api/v1/tefca endpoint sits
+# behind a reviewer (level 4) floor. Net effect: TEFCA was admin-only, and the only
+# way to create a real reviewer was a direct DB write. Derived from ROLE_HIERARCHY
+# rather than restated, so the two can never drift apart again.
+VALID_ROLES = set(ROLE_HIERARCHY)
 
 
 def is_super_admin(user) -> bool:
@@ -66,6 +74,38 @@ async def require_admin(user=Depends(get_current_user)):
     if (getattr(user, "role", "") or "").lower() != "admin" and user.email not in ADMIN_EMAILS:
         raise HTTPException(403, "Admin access required")
     return user
+
+
+# Modules a newly-created account starts with, by role. The ORM default for
+# allowed_modules is [] (models/database.py), which meant every new non-admin
+# account was created with NO areas granted and had to wait for an admin to tick
+# boxes before the product did anything — the same "looks provisioned, behaves
+# locked-out" shape as the TEFCA P0. These are DEFAULTS applied at creation only:
+# an explicit permissions list always wins, and nothing here re-grants modules an
+# admin later removes.
+#
+# This is module visibility, NOT privilege. What a role may DO inside a module is
+# decided by require_role on each endpoint; granting "tefca_review" to a viewer
+# still leaves every write 403. Privilege is never inferred from anything about
+# the account (email domain included) — see the standing prohibition in
+# core/security.py.
+_BASE_MODULES = ["tefca_review", "bulletin_intelligence"]
+DEFAULT_MODULES_BY_ROLE = {
+    "viewer": _BASE_MODULES,
+    "contributor": _BASE_MODULES,
+    "manager": _BASE_MODULES,
+    "reviewer": _BASE_MODULES,
+    "senior_analyst": _BASE_MODULES,
+    "qalead": _BASE_MODULES,
+    "program_manager": _BASE_MODULES,
+    "admin": [m["id"] for m in MODULES],
+}
+
+
+def default_modules_for_role(role) -> list:
+    """Starting module grant for `role`. Unknown roles get the base set rather
+    than everything — an unrecognised role must never widen access."""
+    return list(DEFAULT_MODULES_BY_ROLE.get((role or "").lower(), _BASE_MODULES))
 
 
 def _clean_modules(requested) -> list:
@@ -168,9 +208,14 @@ async def _create(req_email, full_name, role, permissions, admin, db):
     if exists.scalar_one_or_none():
         raise HTTPException(400, "Email already registered")
     temp = _gen_password()
+    # An explicit permissions list wins; only fall back to the role default when the
+    # caller supplied none. Passing [] and passing nothing are indistinguishable over
+    # JSON here (both arrive as an empty list), and "no areas at all" is not a useful
+    # account to create, so the default applies to both.
+    granted = _clean_modules(permissions) if permissions else default_modules_for_role(role)
     user = User(
         email=email, password_hash=hash_password(temp), full_name=(full_name or "").strip(),
-        role=role, is_active=True, allowed_modules=_clean_modules(permissions or []),
+        role=role, is_active=True, allowed_modules=granted,
     )
     db.add(user)
     await db.commit()
@@ -240,6 +285,72 @@ async def set_role(user_id: str, req: RoleReq, admin=Depends(require_admin), db:
     return _serialize(target)
 
 
+class BulkRoleReq(BaseModel):
+    emails: List[str]
+    role: str
+
+
+@router.post("/users/bulk-role")
+async def bulk_set_role(req: BulkRoleReq, admin=Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    """Assign one role to many accounts by email. Admin-only and fully audited.
+
+    Exists so that onboarding a group of reviewers is a single AUTHORISED,
+    ATTRIBUTABLE act rather than a reason to reach for automatic elevation (e.g.
+    "everyone at this domain becomes a reviewer"). Privilege is granted here by a
+    named admin against a named list, and every grant writes its own audit row —
+    which is what the least-privilege / authorized-personnel requirement asks for
+    and what a domain rule cannot provide.
+
+    Enforces exactly the same guards as PATCH /users/{id}/role, per target: only a
+    super admin may grant admin or modify an existing admin, and an admin cannot
+    demote themselves. Per-account outcomes are reported instead of aborting the
+    batch, so one bad address does not hide the rest of the result.
+    """
+    new_role = (req.role or "").lower()
+    if new_role not in VALID_ROLES:
+        raise HTTPException(400, "Invalid role")
+    if new_role == "admin" and not is_super_admin(admin):
+        raise HTTPException(403, "Only a super admin can grant the admin role")
+    if not isinstance(req.emails, list) or not req.emails:
+        raise HTTPException(400, "emails must be a non-empty list")
+    if len(req.emails) > 200:
+        raise HTTPException(400, "Too many emails in one request (max 200)")
+
+    wanted = [(e or "").strip().lower() for e in req.emails]
+    wanted = [e for e in wanted if e]
+    result = await db.execute(select(User).where(func.lower(User.email).in_(wanted)))
+    found = {u.email.lower(): u for u in result.scalars().all()}
+
+    updated, skipped = [], []
+    for email in wanted:
+        target = found.get(email)
+        if not target:
+            skipped.append({"email": email, "reason": "no such account"})
+            continue
+        if str(target.id) == str(admin.id) and new_role != "admin":
+            skipped.append({"email": email, "reason": "cannot remove your own admin role"})
+            continue
+        if is_admin_account(target) and not is_super_admin(admin):
+            skipped.append({"email": email, "reason": "only a super admin can modify an admin account"})
+            continue
+        old = target.role
+        if old == new_role:
+            skipped.append({"email": email, "reason": "already %s" % new_role})
+            continue
+        target.role = new_role
+        updated.append({"email": email, "from": old, "to": new_role})
+
+    if updated:
+        await db.commit()
+        for row in updated:
+            u = found[row["email"]]
+            await _audit(db, admin, "role_changed", str(u.id), u.email,
+                         {"from": row["from"], "to": new_role, "via": "bulk-role"})
+
+    return {"role": new_role, "updated": updated, "skipped": skipped,
+            "updated_count": len(updated), "skipped_count": len(skipped)}
+
+
 class ApproveReq(BaseModel):
     role: Optional[str] = None                 # role to assign on approval (optional)
     permissions: Optional[List[str]] = None    # modules to grant on approval (optional)
@@ -270,6 +381,11 @@ async def approve_user(user_id: str, req: ApproveReq, admin=Depends(require_admi
 
     if req.permissions is not None:
         target.allowed_modules = _clean_modules(req.permissions)
+    elif not _normalize_stored(target.allowed_modules):
+        # Approving an account that has no areas at all would activate a login that
+        # can reach nothing. Only fills a genuine blank — an existing grant is never
+        # overwritten, so this cannot silently re-widen an account an admin narrowed.
+        target.allowed_modules = default_modules_for_role(target.role)
 
     target.is_verified = True
     target.is_active = True

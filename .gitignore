@@ -39,3 +39,8 @@ results.xml
 # JUnit output from the QA regression runs (--junit-xml). Regenerated on every
 # run and machine-specific; the pass/fail record belongs in CI, not in git.
 results_*.xml
+
+# One-off deploy artifacts built during the August 2026 RBAC fix (~58 MB each).
+deploy-rbac-fix.zip
+deploy-rbac-fix-v2.zip
+deploy-dev-fixed.zip
