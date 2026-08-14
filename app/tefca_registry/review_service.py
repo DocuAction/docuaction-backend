@@ -298,15 +298,24 @@ async def _resolve_entity(db, entity, sources: Dict[str, dict]) -> dict:
         "entity_type": getattr(entity, "entity_type", "") or "",
     }
 
-    ai_client = None
-    try:
-        from app.tefca_registry.ai_client import build_ai_client
-        ai_client = build_ai_client()
-    except Exception as e:  # noqa: BLE001 — deterministic path must still run
-        logger.debug("AI client unavailable, deterministic resolution only: %s", e)
-
-    resolver = EntityResolver(ai_client=ai_client)
-    result = resolver.resolve(ours, authoritative)
+    # No AI client is injected. AI reaches this pipeline only through
+    # TEFCAAIOrchestrator (app/tefca_registry/ai/), which applies policy, the
+    # egress allowlist, output validation, evidence scoring, the human gate, and
+    # audit before any recommendation comes back. resolve_with_orchestrator()
+    # runs the deterministic steps first and consults AI only for a genuinely
+    # inconclusive pair; it never raises, so an unavailable or denied control
+    # plane yields the deterministic result unchanged.
+    resolver = EntityResolver()
+    result = await resolver.resolve_with_orchestrator(
+        ours, authoritative,
+        evidence_signals={
+            # The one objective signal this function can see and the resolver
+            # cannot: whether the upstream sources corroborate each other. The
+            # resolver folds it into no_conflicting_fields alongside its own
+            # identifier-conflict check.
+            "source_agreement": not detect_source_conflict(sources),
+        },
+    )
 
     # Step 7: every AI call is audit-logged with model, prompt version, input,
     # output, confidence, threshold, latency and software version.
@@ -325,6 +334,14 @@ async def _resolve_entity(db, entity, sources: Dict[str, dict]) -> dict:
         "requires_manual_review": result.requires_manual_review,
         "ai_consulted": result.ai_consulted,
         "threshold_applied": result.threshold_applied,
+        # Objective evidence quality, not the model's self-assessment. Present
+        # whenever the control plane ran (including when it declined to call
+        # AI), absent when steps 1-3 settled the pair without it.
+        "evidence_quality_score": result.details.get("evidence_quality_score"),
+        # Surfaced explicitly rather than left implicit in requires_manual_review
+        # so a consumer of this payload cannot read an AI recommendation without
+        # also reading that a human must sign it off.
+        "human_review_required": bool(result.requires_manual_review),
         "details": result.details,
     }
 

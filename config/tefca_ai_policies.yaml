@@ -1,0 +1,93 @@
+# TEFCA AI Control Plane — policy of record
+#
+# THIS FILE IS THE POLICY. The code in app/tefca_registry/ai/ ENFORCES it;
+# the code does not define it. A policy change is a change to this file
+# reviewed through git, not a change to Python.
+#
+# SCOPE: TEFCA entity resolution only. The bulletin module is out of scope and
+# is not governed by this file.
+#
+# FAIL CLOSED: if this file is missing, unreadable, or fails schema validation,
+# the policy engine denies every task and no AI call is made. Deterministic
+# verification continues unaffected. There is no path where a broken policy
+# results in an unconstrained AI call.
+
+version: "pre-production-v1"
+last_updated: "2026-08-13"
+scope: "tefca_entity_resolution_only"
+status: "foundation"
+
+# The complete set of things AI may be asked to do. Anything not on this list
+# is denied — an allowlist, so a new task type cannot reach AI by default.
+permitted_tasks:
+  - compare_entity_names
+  - compare_entity_addresses
+  - recommend_match_status
+
+# Named explicitly rather than left to fall through the allowlist. A denial that
+# names the prohibition is auditable evidence; "not in the approved list" is not
+# the same statement to a reviewer as "this is forbidden".
+prohibited_tasks:
+  - change_classification
+  - approve_entity
+  - reject_entity
+  - modify_source_evidence
+  - delete_records
+  - change_validation_rules
+  - change_system_prompt
+  - bypass_human_review
+  - make_compliance_determination
+  - access_unapproved_data
+  - publish_deliverables
+  - modify_workflow_state
+
+risk_tier:
+  # All TEFCA entity resolution is HIGH risk. There is no low-risk tier here,
+  # so there is no tier a caller could select to weaken the controls.
+  # Human review is ALWAYS required.
+  validation: strict
+  dual_verify: true
+  human_review: always
+
+evidence_quality:
+  scoring_version: "pre-production-v1"
+  mode: "human_review_only"
+
+  # Weights are UNCALIBRATED placeholders. `status` is deliberately a string
+  # rather than a number: it is read by is_calibrated() and it makes the
+  # uncalibrated state visible in the artifact a reviewer actually reads.
+  # Until ONC approves calibrated weights, the score is recorded for
+  # observability and drives no decision.
+  weights:
+    status: "CALIBRATION_REQUIRED"
+    npi_exact_match: 0.30
+    address_normalized_match: 0.20
+    usps_zip4_match: 0.15
+    name_similarity_above_085: 0.15
+    entity_type_match: 0.10
+    source_agreement: 0.10
+    no_conflicting_fields: 0.10
+    models_agree: 0.05
+
+  thresholds:
+    # null, not a number. There is no score at which work proceeds without a
+    # human, so there is no threshold to express.
+    auto_proceed: null
+    human_required: "always"
+
+  production_calibration:
+    required: true
+    minimum_cases: 100
+    approval_required: "ONC"
+
+# Data egress allowlist — the ONLY fields that may be sent to an AI provider.
+# Public directory data. Never PHI, patient data, or SSNs. The validator
+# independently re-checks what was sent against this list, so a caller that
+# builds a payload by hand still fails the check rather than leaking.
+public_fields:
+  - name
+  - address
+  - npi
+  - entity_type
+  - state
+  - tefcaid

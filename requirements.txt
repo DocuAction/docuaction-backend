@@ -33,6 +33,13 @@ openpyxl==3.1.5
 # RSS/Atom from feeds we do not control is parsed with defusedxml rather than
 # stdlib ElementTree, which is vulnerable to entity-expansion (billion-laughs).
 # On the unattended scheduler that is a hang, not a failed request.
+# TEFCA AI control plane reads its policy from config/tefca_ai_policies.yaml.
+# Pinned at the version already resolved in the environment (previously present
+# only transitively via dev tooling), so this makes an existing install explicit
+# rather than moving any pin. Absent PyYAML fails closed — the policy engine
+# denies every task and AI stays off — but that is a silent disablement, and a
+# governance dependency should be declared rather than inferred.
+PyYAML==6.0.3
 defusedxml==0.7.1
 apscheduler==3.10.4
 tenacity==9.0.0

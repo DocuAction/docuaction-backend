@@ -27,6 +27,19 @@ GOVERNANCE (docs/AI_GOVERNANCE.md):
       entity type. Never PHI, patient data, or SSNs.
     * Every call is audit-logged with model, prompt version, input, output,
       confidence, the threshold applied, latency, and software version.
+
+CONTROL PLANE (app/tefca_registry/ai/):
+    The production AI path is resolve_with_orchestrator() below, which runs the
+    deterministic steps 1-3 first and only then hands an inconclusive pair to
+    TEFCAAIOrchestrator — policy, egress filter, versioned prompt, gateway,
+    validation, evidence scoring, human gate, audit. Nothing in this module
+    imports a provider SDK, and the orchestrator is the only route to one.
+
+    The injected-AIClient path (resolve() with an ai_client) predates the
+    control plane and is retained for the tests that exercise threshold
+    behaviour with a double. Production never supplies a client:
+    build_ai_client() returns None unconditionally, so the only way to reach a
+    provider is through the orchestrator.
 """
 
 import json
@@ -293,6 +306,131 @@ class EntityResolver:
         return self._resolve_with_ai(a, b, base)
 
     # ── AI step ─────────────────────────────────────────────────────────────
+    async def resolve_with_orchestrator(
+        self, a: Dict[str, Any], b: Dict[str, Any], *,
+        orchestrator: Any = None,
+        evidence_signals: Optional[Dict[str, Any]] = None,
+    ) -> ResolutionResult:
+        """Deterministic first; the orchestrator only for the residue.
+
+        Same resolution order as resolve() — identifiers, address, name — and
+        the same short-circuits. Only a genuinely inconclusive pair reaches AI,
+        and only through the control plane.
+
+        Never raises. Every failure path returns the deterministic result, so a
+        broken control plane degrades the recommendation and not the
+        verification.
+        """
+        base = self.resolve(a, b)
+
+        # Steps 1-3 settled it, or AI is off. Either way there is nothing to ask.
+        if base.method != "inconclusive" or self.mode == MODE_DISABLED:
+            return base
+
+        try:
+            if orchestrator is None:
+                from app.tefca_registry.ai.orchestrator import TEFCAAIOrchestrator
+                orchestrator = TEFCAAIOrchestrator()
+
+            signals = self._evidence_signals(a, b, base, evidence_signals)
+            result = await orchestrator.resolve_entity(
+                entity_name=a.get("name"), entity_address=a.get("address"),
+                entity_npi=a.get("npi"), entity_type=a.get("entity_type"),
+                registry_name=b.get("name"), registry_address=b.get("address"),
+                registry_npi=b.get("npi"), registry_type=b.get("entity_type"),
+                evidence_signals=signals,
+            )
+        except Exception as exc:  # noqa: BLE001 — AI must never break the pipeline
+            logger.warning("TEFCA AI orchestrator failed (%s: %s) — falling back to "
+                           "deterministic result", type(exc).__name__, exc)
+            base.threshold_applied = "orchestrator_error"
+            return base
+
+        # The orchestrator's own audit rows join the resolver's list so the
+        # caller's existing "write every audit record" loop persists them in the
+        # same transaction. One write path, not two.
+        self.audit_records.extend(result.audit_records)
+
+        if result.status != "needs_review":
+            # denied or ai_unavailable — the deterministic result stands.
+            base.threshold_applied = result.status
+            base.details["evidence_quality_score"] = result.evidence_quality_score
+            return base
+
+        return ResolutionResult(
+            # None, always. The orchestrator returns a recommendation; setting
+            # is_match here would convert advice into a determination, which is
+            # precisely what the reviewer exists to do instead.
+            is_match=None,
+            confidence=base.confidence,
+            method="ai_advisory",
+            reasoning=(result.text or "")[:500],
+            requires_manual_review=True,
+            ai_consulted=True,
+            threshold_applied="human_review_required",
+            details={
+                **base.details,
+                "evidence_quality_score": result.evidence_quality_score,
+                "evidence_signals": result.evidence_signals,
+                "validation_passed": result.validation_passed,
+                "validation_errors": result.validation_errors,
+                "prompt_version": result.prompt_version,
+                "provider": result.provider,
+                "model": result.model,
+                # Recorded for the audit trail; nothing reads it to decide.
+                "ai_raw_confidence": result.ai_raw_confidence,
+                "models_agree": result.models_agree,
+            },
+        )
+
+    def _evidence_signals(self, a: Dict[str, Any], b: Dict[str, Any],
+                          base: ResolutionResult,
+                          supplied: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Objective signals for the evidence score.
+
+        Derived from the deterministic comparisons already performed, so the
+        score reflects measurements the pipeline made rather than anything the
+        model reported about itself. A caller may supply extras (usps_zip4_match,
+        source_agreement) that only the review context knows; those take
+        precedence, since the caller has strictly more information here.
+        """
+        address = base.details.get("address") or {}
+        name_score = base.details.get("name_score", 0.0)
+        npi_a = (a.get("npi") or "").strip()
+        npi_b = (b.get("npi") or "").strip()
+        type_a = (a.get("entity_type") or "").strip().lower()
+        type_b = (b.get("entity_type") or "").strip().lower()
+
+        no_identifier_conflict = not (npi_a and npi_b and npi_a != npi_b)
+
+        signals: Dict[str, Any] = {
+            "npi_exact_match": bool(npi_a and npi_b and npi_a == npi_b),
+            "address_normalized_match": bool(address.get("is_match")),
+            "name_similarity": name_score,
+            "entity_type_match": bool(type_a and type_b and type_a == type_b),
+        }
+        if supplied:
+            signals.update(supplied)
+
+        # A conjunction, not an override. The resolver knows about conflicting
+        # identifiers; the caller knows whether the upstream sources contradict
+        # each other. Either one being true means fields conflict, so letting
+        # the caller's value replace the resolver's would silently discard a
+        # detected NPI conflict and inflate the score for exactly the pairs
+        # that most need a reviewer's attention.
+        signals["no_conflicting_fields"] = bool(
+            no_identifier_conflict
+            and signals.get("no_conflicting_fields", True)
+            and signals.get("source_agreement", True)
+        )
+        return signals
+
+    # ── Legacy injected-client AI step ──────────────────────────────────
+    # Predates the control plane. Reached only when a caller supplies an
+    # ai_client; production supplies None (build_ai_client returns None
+    # unconditionally), so the only live route to a provider is the
+    # orchestrator. Retained because the threshold behaviour it implements is
+    # covered by tests that inject a double.
     def _resolve_with_ai(self, a: Dict[str, Any], b: Dict[str, Any],
                          base: ResolutionResult) -> ResolutionResult:
         payload = {"record_a": _public_payload(a), "record_b": _public_payload(b)}

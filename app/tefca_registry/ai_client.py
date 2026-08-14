@@ -1,18 +1,33 @@
-"""Anthropic adapter for the entity resolver.
+"""DEPRECATED — superseded by the TEFCA AI control plane.
 
-The resolver itself imports no SDK — it takes an injected client satisfying a
-two-method protocol (see entity_resolver.AIClient). This module is the one place
-the SDK is named, so swapping vendors or routing through an internal gateway
-means writing another adapter, not touching resolution logic.
+WHAT CHANGED
 
-The `anthropic` package is already a dependency (requirements.txt, and engine.py
-uses it for the bulletin classifier), so this adds nothing to the install.
+This module used to invoke the Anthropic SDK's message-creation call directly.
+(Spelling that method name out here, even in prose, would trip the CI scan
+described below — which is the scan working, not a false positive: it cannot
+distinguish a call from a mention, and a scan that tried to would be one a
+determined bypass could hide behind a comment.)
 
-MODEL CHOICE: Sonnet here, Haiku in the bulletin. Deliberate split — headline
-classification is high-volume and shallow, while deciding whether two records
-describe one organisation is a judgement call on the residue that deterministic
-matching could not settle. The volume is low enough (only inconclusive pairs
-reach it) that the cost difference is immaterial.
+That direct call is gone. All TEFCA AI now routes through TEFCAAIOrchestrator,
+and only
+app/tefca_registry/ai/gateway.py may reach a provider. A CI test scans
+app/tefca_registry/ and app/Tefca/ and fails the build if a provider call
+reappears anywhere else.
+
+WHY THIS FILE STILL EXISTS
+
+Removing it outright would drop `AnthropicClient` and `build_ai_client` from the
+package's surface, which existing tests import. The names are kept; the
+capability is not. build_ai_client() returns None unconditionally, so the
+deprecated wiring cannot produce a working client, and complete() raises rather
+than silently returning empty text — a silent no-op would be indistinguishable
+from a model with no opinion, and the pipeline treats those very differently.
+
+The `available` property is retained with its original meaning (is a key
+configured?) because that is a fact about the environment, not a capability of
+this module.
+
+Bulletin code is unaffected and keeps its own direct provider calls.
 """
 
 import logging
@@ -28,9 +43,12 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
 DEFAULT_MAX_TOKENS = int(os.getenv("AI_ENTITY_RESOLUTION_MAX_TOKENS", "512"))
 DEFAULT_TIMEOUT = float(os.getenv("AI_ENTITY_RESOLUTION_TIMEOUT", "30"))
 
+_REPLACEMENT = ("app.tefca_registry.ai.orchestrator.TEFCAAIOrchestrator "
+                "(the only approved path for TEFCA AI)")
+
 
 class AnthropicClient:
-    """Minimal synchronous adapter satisfying entity_resolver.AIClient."""
+    """Retired adapter. Reports key presence; cannot call a provider."""
 
     def __init__(self, api_key: Optional[str] = None,
                  max_tokens: int = DEFAULT_MAX_TOKENS,
@@ -38,53 +56,29 @@ class AnthropicClient:
         self.api_key = (api_key if api_key is not None else ANTHROPIC_API_KEY).strip()
         self.max_tokens = max_tokens
         self.timeout = timeout
-        self._client = None
 
     @property
     def available(self) -> bool:
+        """Whether a key is configured. Unchanged meaning; note that a
+        configured key no longer makes this client able to call anything."""
         return bool(self.api_key)
 
-    def _ensure(self):
-        if self._client is None:
-            import anthropic  # imported lazily so an absent SDK is not an import-time failure
-            self._client = anthropic.Anthropic(api_key=self.api_key, timeout=self.timeout)
-        return self._client
-
     def complete(self, *, model: str, system: str, prompt: str) -> str:
-        """Return the model's raw text. Raises on failure.
-
-        Raising rather than returning "" is correct here: the resolver catches
-        the exception, records it in the audit trail with its type, and falls
-        back to the deterministic result. Swallowing it would make an outage
-        indistinguishable from a genuine "no answer".
-        """
-        client = self._ensure()
-        resp = client.messages.create(
-            model=model,
-            max_tokens=self.max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        parts = []
-        for block in getattr(resp, "content", []) or []:
-            if getattr(block, "type", "") == "text":
-                parts.append(getattr(block, "text", "") or "")
-        return "\n".join(parts).strip()
+        """Always raises. There is no ungoverned path to a provider."""
+        raise NotImplementedError(
+            "Direct provider calls are not permitted in TEFCA code. Use "
+            + _REPLACEMENT)
 
 
 def build_ai_client() -> Optional[AnthropicClient]:
-    """The client the pipeline should use, or None when AI is off.
+    """Always None.
 
-    Returns None when resolution is disabled or no key is configured, so callers
-    get the deterministic-only path without needing to check two things.
+    Previously returned a live client when AI_ENTITY_RESOLUTION was enabled and
+    a key was set. Returning None unconditionally is what makes the control
+    plane airtight rather than merely preferred: EntityResolver.resolve() takes
+    the deterministic path when its client is None, so even a caller still
+    wired to this function cannot reach a provider around the orchestrator.
     """
-    from app.tefca_registry.entity_resolver import resolution_mode, MODE_DISABLED
-
-    if resolution_mode() == MODE_DISABLED:
-        return None
-    client = AnthropicClient()
-    if not client.available:
-        logger.warning("AI_ENTITY_RESOLUTION is enabled but ANTHROPIC_API_KEY is "
-                       "not set — falling back to deterministic resolution only")
-        return None
-    return client
+    logger.debug("build_ai_client() is deprecated and returns None; TEFCA AI "
+                 "routes through %s", _REPLACEMENT)
+    return None
