@@ -395,10 +395,28 @@ async def approve_user(user_id: str, req: ApproveReq, admin=Depends(require_admi
     return _serialize(target)
 
 
+class RejectReq(BaseModel):
+    # AD-004 — a rejection is a decision about a person's access, and a decision
+    # with no recorded reason cannot be reviewed, appealed or explained later.
+    # Optional on the wire so existing callers posting an empty body keep working;
+    # the UI always sends one.
+    reason: Optional[str] = None
+
+
 @router.post("/users/{user_id}/reject")
-async def reject_user(user_id: str, admin=Depends(require_admin), db: AsyncSession = Depends(get_db)):
+async def reject_user(
+    user_id: str,
+    req: RejectReq = RejectReq(),
+    admin=Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
     """Reject a pending self-registered account: deactivate and disable it. The user
-    keeps no access and cannot log in. (Use DELETE to remove entirely.)"""
+    keeps no access and cannot log in. (Use DELETE to remove entirely.)
+
+    The reason is written to the audit record, not to the user row: the audit
+    trail is the immutable history, and a later status change must not overwrite
+    why this decision was taken.
+    """
     result = await db.execute(select(User).where(User.id == user_id))
     target = result.scalar_one_or_none()
     if not target:
@@ -409,7 +427,9 @@ async def reject_user(user_id: str, admin=Depends(require_admin), db: AsyncSessi
     target.status = "disabled"
     target.tokens_revoked_at = datetime.utcnow()
     await db.commit(); await db.refresh(target)
-    await _audit(db, admin, "account_rejected", str(target.id), target.email)
+    reason = (req.reason or "").strip() if req else ""
+    await _audit(db, admin, "account_rejected", str(target.id), target.email,
+                 {"reason": reason} if reason else None)
     return _serialize(target)
 
 

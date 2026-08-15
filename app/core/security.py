@@ -42,6 +42,54 @@ ROLE_HIERARCHY = {
     "admin": 8,            # full access including user management
 }
 
+# Role spellings that are NOT the canonical key but mean one of the roles above.
+#
+# QA Round 2: an account whose stored role was a near-miss spelling resolved to
+# level 0 through ROLE_HIERARCHY.get(role, 0) and was denied EVERY role-gated
+# route, including read-only ones. A Level-2 Contributor logging in as
+# "analyst" was refused the entity import they are explicitly authorised to
+# perform (IMP-016), and the denial looked identical to a correct one.
+#
+# Aliasing is deliberately conservative: it only maps spellings onto a role that
+# already exists, and it can never resolve to a HIGHER privilege than the name
+# it is an alias for. Anything still unrecognised remains level 0 (deny) — the
+# fail-closed default is kept, this only stops a typo from acting like a policy.
+ROLE_ALIASES = {
+    "analyst": "contributor",
+    "editor": "contributor",
+    "senioranalyst": "senior_analyst",
+    "senior analyst": "senior_analyst",
+    "qa_lead": "qalead",
+    "qa lead": "qalead",
+    "qualitylead": "qalead",
+    "programmanager": "program_manager",
+    "program manager": "program_manager",
+    "pm": "program_manager",
+    "administrator": "admin",
+    "superadmin": "admin",
+    "super_admin": "admin",
+    "read_only": "viewer",
+    "readonly": "viewer",
+    "user": "viewer",
+}
+
+
+def canonical_role(role) -> str:
+    """Normalise a stored/token role to a ROLE_HIERARCHY key.
+
+    Unknown roles are returned lowercased and unchanged so they still miss the
+    hierarchy and deny (level 0). This never invents privilege.
+    """
+    key = str(role or "").strip().lower().replace("-", "_")
+    if key in ROLE_HIERARCHY:
+        return key
+    return ROLE_ALIASES.get(key, ROLE_ALIASES.get(key.replace("_", " "), key))
+
+
+def role_level(role) -> int:
+    """The privilege level of a role name, after alias normalisation. 0 = unknown."""
+    return ROLE_HIERARCHY.get(canonical_role(role), 0)
+
 SAML_CONFIG = {
     "enabled": False,
     "sp_entity_id": "https://api.docuaction.io/saml/metadata",
@@ -160,7 +208,7 @@ def require_role(minimum_role):
         user_id = payload.get("sub")
         token_role = payload.get("role", "viewer")
         required_level = ROLE_HIERARCHY.get(minimum_role, 0)
-        user_level = ROLE_HIERARCHY.get(token_role, 0)
+        user_level = role_level(token_role)
         if user_level < required_level:
             raise HTTPException(403, f"Required: {minimum_role}, Current: {token_role}")
         from app.models.database import User

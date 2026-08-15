@@ -340,6 +340,18 @@ async def login(data: LoginRequest, request: Request, db: AsyncSession = Depends
     cid = str(uuid.uuid4())
     email = _normalize_email(data.email)
 
+    # LOGIN-004 / LOGIN-005 — an absent email or password is a malformed request,
+    # not a failed authentication attempt. Rejecting it here means an empty field
+    # never reaches the database or the password hasher.
+    #
+    # This is NOT an enumeration leak: the response depends only on what the
+    # client sent, never on whether any account exists. It also must not count
+    # toward account lockout — there is no account to lock, and letting empty
+    # submissions consume attempts would let anyone lock out a known address by
+    # posting a blank form.
+    if not email or not (data.password or "").strip():
+        raise HTTPException(400, "Email and password are both required.")
+
     # Brute-force protection: throttle per IP, and temporarily lock an account after
     # repeated failures. Both return 429 without confirming whether the email exists.
     if _ip_login_throttled(get_client_ip(request)):

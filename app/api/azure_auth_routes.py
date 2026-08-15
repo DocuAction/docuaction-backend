@@ -117,6 +117,24 @@ def _map_role(claims: dict) -> str:
     return DEFAULT_ROLE if DEFAULT_ROLE in ROLE_HIERARCHY else "viewer"
 
 
+@router.get("/api/auth/sso/status", tags=["Auth"])
+async def sso_status():
+    """Whether Entra SSO is usable on THIS server. Public and unauthenticated —
+    the sign-in page must be able to ask before anyone has a token.
+
+    LOGIN-007: the login page had no "Sign in with Microsoft" control at all, so
+    the case could not pass. It cannot simply be added unconditionally either:
+    the initiation route 503s when AZURE_AD_* is unset, and a button that always
+    fails is worse than no button. The page asks here and shows the control only
+    where SSO actually works.
+
+    Deliberately returns nothing but a boolean and a provider name. Client ids
+    and tenant ids are not secrets, but an unauthenticated endpoint has no
+    reason to hand out the tenant's identifiers.
+    """
+    return {"enabled": _configured(), "provider": "microsoft" if _configured() else None}
+
+
 @router.get("/api/auth/login/azure", tags=["Auth"])
 async def login_azure(request: Request):
     """Kick off Entra sign-in — redirect the browser to Microsoft."""

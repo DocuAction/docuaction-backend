@@ -23,7 +23,7 @@ from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, Query, Depends, HTTPException, Request, UploadFile, File
 from fastapi.responses import Response
 from pydantic import BaseModel
-from sqlalchemy import select, text
+from sqlalchemy import select, text, func, cast, or_, String
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db, async_session_maker
@@ -71,6 +71,44 @@ tefca_router = APIRouter(
     dependencies=[Depends(require_role("viewer"))],
 )
 router = tefca_router  # safe_load / main.py expects mod.router
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOGIN-013 / EQ-003 — PII visibility by role
+#
+# The QA role definitions are explicit: viewer@ is "Level 1 Viewer (no PII
+# access)" and reviewer@ is "Level 4 Reviewer (can see PII, make decisions)".
+# The API did not implement that distinction — /api/tefca/reviews is gated at
+# viewer and returned full 10-digit NPIs to every role, so a viewer signing in
+# and opening the Entity Queue saw the identifiers they are defined as not
+# having access to. LOGIN-013 was reported as the top blocker; this is what it
+# was testing.
+#
+# Masking happens on the SERVER. Hiding a column in the browser leaves the
+# values in the JSON, one devtools panel away, which is not access control.
+#
+# The last four digits are kept: a reviewer discussing a case with a viewer
+# needs a shared reference, and 4 digits of a 10-digit NPI is not a re-identifier
+# on its own. Nothing is invented — absent stays absent.
+PII_ROLE_FLOOR = "reviewer"
+
+
+def _can_see_pii(user) -> bool:
+    from app.core.security import ROLE_HIERARCHY, role_level
+
+    return role_level(getattr(user, "role", None)) >= ROLE_HIERARCHY[PII_ROLE_FLOOR]
+
+
+def _mask_identifier(value, keep: int = 4):
+    """'1999000101' -> '••••••0101'. None stays None; short values fully masked."""
+    if not value:
+        return value
+    s = str(value)
+    if len(s) <= keep:
+        return "•" * len(s)
+    return "•" * (len(s) - keep) + s[-keep:]
+
+
 
 
 # ─── Lazy singletons ─────────────────────────────────────────────────────────
@@ -512,12 +550,29 @@ async def list_cycles(db: AsyncSession = Depends(get_db), user=Depends(require_r
         "cycles": [{
             "cycle_id": str(c.cycle_id), "cycle_type": c.cycle_type.value if c.cycle_type else None,
             "cycle_status": c.cycle_status.value if c.cycle_status else None,
-            "total_entities_completed": c.total_entities_completed,
+            "cycle_number": c.cycle_number,
+            # RC-003 — the cycle's own start and end dates. The list omitted
+            # them entirely, so the Review Cycles table rendered "—" in both date
+            # columns and there was no date to check the format of. They are
+            # stored on every row; only the serializer was missing them.
+            "cycle_start_date": c.cycle_start_date.isoformat() if c.cycle_start_date else None,
+            "cycle_end_date": c.cycle_end_date.isoformat() if c.cycle_end_date else None,
+            # RC-004 — completion tracking. `remaining` is derived here so the
+            # table and any card reading this endpoint cannot disagree. No
+            # percentage is returned: sampled == 0 has no meaningful rate, and a
+            # 0% shown for "not started yet" is a different claim from 0% of a
+            # started cycle.
+            "total_entities_sampled": c.total_entities_sampled or 0,
+            "total_entities_completed": c.total_entities_completed or 0,
+            "total_entities_remaining": max(
+                0, (c.total_entities_sampled or 0) - (c.total_entities_completed or 0)),
             "bucket_counts": {
                 "1": c.bucket_1_count, "2": c.bucket_2_count,
                 "3": c.bucket_3_count, "4": c.bucket_4_count,
             },
+            "created_by": c.created_by,
             "created_at": c.created_at.isoformat() if c.created_at else None,
+            "completed_at": c.completed_at.isoformat() if c.completed_at else None,
         } for c in rows],
     }
 
@@ -1286,6 +1341,416 @@ async def dashboard_trends(db: AsyncSession = Depends(get_db)):
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# QA ROUND 2 — MISSION CONTROL BACKING ENDPOINTS (DEF-003 / DEF-004 / DEF-005)
+#
+# Three Mission Control panels — Validation Queue, Recent Activity and
+# Notifications — had no endpoint of their own. They were assembled in the
+# browser from whatever the other calls happened to return, so a tester watching
+# the network tab saw no request that produced those rows and correctly reported
+# the data as frontend-provided. Worse, when /reviews was unavailable the page
+# fell back to the bundled MOCK entity fixture, whose rows carry a hardcoded
+# status of "pending" — which is how a Failed record could be shown as Pending.
+#
+# Each panel now has one endpoint that owns its rows. Nothing here fabricates a
+# record: every field is read from tefca_entities, tefca_reviews, audit_logs or
+# the live connector probe, and a panel with no data returns an empty list
+# rather than a plausible-looking sample.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Entity lifecycle states that mean "this entity has not been validated yet".
+_UNVALIDATED_ENTITY_STATUSES = [
+    EntityStatus.PENDING_REVIEW, EntityStatus.IN_REVIEW, EntityStatus.ESCALATED,
+]
+
+
+def _entity_status_value(entity) -> str:
+    st = getattr(entity, "current_status", None)
+    return str(getattr(st, "value", st) or "PENDING_REVIEW").lower()
+
+
+def _parse_entity_status(raw: str):
+    """Accept 'Pending Review', 'pending_review', 'PENDING-REVIEW' → EntityStatus.
+
+    Returns None for an unrecognised value so the caller can 400 rather than
+    silently returning the unfiltered list — a filter that quietly does nothing
+    is how stale data gets read as current data.
+    """
+    key = (raw or "").strip().upper().replace(" ", "_").replace("-", "_")
+    return EntityStatus.__members__.get(key)
+
+
+@tefca_dashboard_router.get(
+    "/dashboard/validation-queue",
+    summary="Entities awaiting validation against the authoritative sources",
+    dependencies=[Depends(require_role("viewer"))],
+)
+async def dashboard_validation_queue(
+    status: Optional[str] = Query(None, description="Filter by entity status"),
+    qhin: Optional[str] = Query(None, description="Filter by QHIN / source"),
+    search: Optional[str] = Query(None, description="Entity name or NPI substring"),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("viewer")),
+):
+    """The Validation Queue panel on Mission Control (DEF-003).
+
+    Filtering happens HERE, in SQL, not in the browser against a cached page of
+    rows: a filter that narrows a stale local array will happily show a record
+    whose status changed minutes ago (DEF-001/DEF-006). Every filter change is a
+    fresh query against current state.
+
+    `status` is matched case-insensitively so a UI that sends the display label
+    ("Pending Review") resolves to the stored enum value.
+    """
+    q = select(TEFCAEntity)
+
+    if status and status.strip().lower() not in ("", "all"):
+        wanted = _parse_entity_status(status)
+        if wanted is None:
+            raise HTTPException(
+                400,
+                "Unknown status %r. Valid values: %s"
+                % (status, ", ".join(EntityStatus.__members__)),
+            )
+        q = q.where(TEFCAEntity.current_status == wanted)
+    else:
+        # Default view: only what still needs validating.
+        q = q.where(TEFCAEntity.current_status.in_(_UNVALIDATED_ENTITY_STATUSES))
+    if qhin:
+        q = q.where(TEFCAEntity.qhin_name == qhin)
+    if search:
+        term = f"%{search.strip().lower()}%"
+        q = q.where(or_(
+            func.lower(TEFCAEntity.legal_name_submitted).like(term),
+            func.lower(func.coalesce(TEFCAEntity.npi_submitted, "")).like(term),
+        ))
+
+    q = q.order_by(TEFCAEntity.date_last_updated.desc())
+    total = len((await db.execute(q)).scalars().all())
+    rows = (await db.execute(q.limit(limit).offset(offset))).scalars().all()
+
+    show_pii = _can_see_pii(user)
+
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "pii_masked": not show_pii,
+        "entities": [{
+            "id": str(e.entity_id),
+            "entity_name": e.legal_name_submitted,
+            "npi": e.npi_submitted if show_pii else _mask_identifier(e.npi_submitted),
+            "entity_type": str(getattr(e.entity_type, "value", e.entity_type) or "PARTICIPANT"),
+            "qhin": e.qhin_name,
+            "source": e.qhin_name,
+            # The entity's OWN status. Never a constant: a Failed / escalated
+            # entity rendered as "Pending" was DEF-002.
+            "status": _entity_status_value(e),
+            "bucket": str(getattr(e.latest_bucket, "value", e.latest_bucket)) if e.latest_bucket else None,
+            "confidence": e.latest_confidence,
+            "first_seen": e.date_first_seen.isoformat() if e.date_first_seen else None,
+            "last_updated": e.date_last_updated.isoformat() if e.date_last_updated else None,
+        } for e in rows],
+        **data_source_labels(),
+    }
+
+
+# Audit actions worth surfacing on the dashboard, mapped to a plain-language verb.
+_ACTIVITY_ACTION_LABELS = {
+    "entity_import": "Imported entities",
+    "review_executed": "Ran validation",
+    "review_decision": "Recorded a decision",
+    "entity_verified": "Verified entity",
+    "priority_case_created": "Opened a priority case",
+    "report_generated": "Generated a report",
+    "user_approved": "Approved a user",
+    "user_rejected": "Rejected a user",
+    "user_role_changed": "Changed a user role",
+    "login_success": "Signed in",
+    "file_scan": "Scanned an uploaded file",
+}
+
+
+@tefca_dashboard_router.get(
+    "/dashboard/recent-activity",
+    summary="Recent audit-backed activity for the Mission Control feed",
+    dependencies=[Depends(require_role("viewer"))],
+)
+async def dashboard_recent_activity(
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """The Recent Activity feed (DEF-004).
+
+    Every entry is an audit_logs row with its real recorded timestamp. The feed
+    previously merged whatever objects happened to carry a date, and QA-gate
+    records are written at request time — which is why every line read
+    "just now". Relative time is computed by the client from `timestamp`; the
+    absolute ISO value is always sent so the two can never disagree.
+    """
+    from app.models.database import AuditLog, User
+
+    rows = (await db.execute(
+        select(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit)
+    )).scalars().all()
+
+    user_ids = {r.user_id for r in rows if r.user_id}
+    actors = {}
+    if user_ids:
+        users = (await db.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()
+        actors = {u.id: (u.full_name or u.email) for u in users}
+
+    def describe(r):
+        d = r.details if isinstance(r.details, dict) else {}
+        return (d.get("entity_name") or d.get("filename") or d.get("email")
+                or r.resource_id or r.resource_type or "—")
+
+    return {
+        "total": len(rows),
+        "activity": [{
+            "id": str(r.id),
+            "action": r.action,
+            "action_label": _ACTIVITY_ACTION_LABELS.get(
+                r.action, (r.action or "activity").replace("_", " ").capitalize()),
+            "entity": describe(r),
+            "resource_type": r.resource_type,
+            "resource_id": r.resource_id,
+            "user": actors.get(r.user_id) or "System",
+            "outcome": (r.details or {}).get("result") if isinstance(r.details, dict) else None,
+            # The REAL recorded time. Never "now".
+            "timestamp": r.created_at.isoformat() if r.created_at else None,
+        } for r in rows],
+    }
+
+
+@tefca_dashboard_router.get(
+    "/dashboard/notifications",
+    summary="Real system notifications (connector outages, QA failures, SLA breaches)",
+    dependencies=[Depends(require_role("viewer"))],
+)
+async def dashboard_notifications(db: AsyncSession = Depends(get_db)):
+    """The Notifications panel (DEF-005).
+
+    Only real failing signals are returned. There is no notification store to
+    read, and inventing one would put fabricated alerts in front of a COR, so
+    this reports observed conditions: a connector that did not answer, a QA gate
+    that did not pass, an SLA breach, and imports that failed. An entirely
+    healthy platform legitimately returns an empty list.
+    """
+    out = []
+
+    # 1. Connector availability — from the live probe, not a cached label.
+    try:
+        health = await get_connector_manager().health_check()
+    except Exception:
+        health = {}
+    for key, label in (("SAM_GOV", "SAM.gov"), ("NPPES", "NPPES"),
+                       ("OIG_LEIE", "OIG LEIE"), ("PECOS", "PECOS")):
+        info = health.get(key) or {}
+        if not info.get("live"):
+            out.append({
+                "id": f"connector:{key.lower()}",
+                "severity": "warning",
+                "category": "connector",
+                "title": f"{label} unavailable",
+                "detail": info.get("detail") or info.get("error")
+                          or "The source did not confirm availability on the last probe.",
+                "timestamp": datetime.utcnow().isoformat(),
+            })
+
+    # 2. QA gates that did not pass.
+    try:
+        qa = await qa_engine.PlatformReadinessCheck().run(db)
+        for check in (qa.get("checks") or []):
+            if not check.get("passed"):
+                out.append({
+                    "id": f"qa:{check.get('name')}",
+                    "severity": "error",
+                    "category": "qa",
+                    "title": f"QA check failed — {check.get('name')}",
+                    "detail": check.get("detail"),
+                    "timestamp": datetime.utcnow().isoformat(),
+                })
+    except Exception:
+        # A notifications panel must never take the dashboard down with it.
+        pass
+
+    # 3. Imports that failed — read from the history table, with real times.
+    failed_imports = (await db.execute(
+        select(TEFCAImportHistory)
+        .where(TEFCAImportHistory.status.in_(["failed", "partial"]))
+        .order_by(TEFCAImportHistory.uploaded_at.desc())
+        .limit(5)
+    )).scalars().all()
+    for imp in failed_imports:
+        out.append({
+            "id": f"import:{imp.id}",
+            "severity": "error" if imp.status == "failed" else "warning",
+            "category": "import",
+            "title": f"Import {imp.status}: {imp.filename}",
+            "detail": f"{imp.imported_count or 0} of {imp.record_count or 0} rows imported.",
+            "timestamp": imp.uploaded_at.isoformat() if imp.uploaded_at else None,
+        })
+
+    return {"total": len(out), "notifications": out}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QA ROUND 2 — AUDIT TRAIL (AT-001 … AT-009)
+#
+# The Audit Trail page was reading /api/tefca/qa/audit — the QA GATE trail,
+# which records gate evaluations and nothing else. Every column the Audit Trail
+# is specified to show (correlation id, user, event type, outcome, IP) and every
+# event it is specified to contain (login_success, login_failure, file_scan,
+# entity_import) lives in audit_logs, a different table. That single wrong
+# endpoint is why all seven Audit Trail cases failed: the page was not broken,
+# it was pointed at the wrong data.
+#
+# This serves audit_logs with the specified columns. It is read-only by
+# construction — there is no write, update or delete route on it (AT-006), and
+# nothing here can alter a record.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Coarse event categories for the Audit Trail type filter (AT-007).
+_AUDIT_EVENT_TYPES = {
+    "authentication": [
+        "login_success", "login_failed", "login_blocked", "login_throttled",
+        "logout", "signup", "signup_rejected", "signup_throttled",
+        "email_verified", "email_verification_failed", "password_reset",
+    ],
+    "data_import": ["entity_import", "file_scan", "fhir_import", "csv_import"],
+    "review": ["review_executed", "review_decision", "entity_verified", "bucket_override"],
+    "administration": [
+        "user_approved", "user_rejected", "user_disabled", "user_role_changed",
+        "user_invited", "password_set",
+    ],
+    "reporting": ["report_generated", "report_downloaded", "export"],
+}
+
+# Details keys that must never be echoed, whatever a caller wrote into them.
+# AT-008 requires no secret in any record; the writers do not put one there, and
+# this makes that a property of the READ path too, so a future careless writer
+# cannot leak through this endpoint.
+_AUDIT_REDACT_KEYS = {
+    "password", "new_password", "old_password", "token", "access_token",
+    "refresh_token", "api_key", "apikey", "secret", "authorization",
+    "client_secret", "private_key",
+}
+
+
+def _audit_event_type(action: str) -> str:
+    a = (action or "").lower()
+    for etype, actions in _AUDIT_EVENT_TYPES.items():
+        if a in actions:
+            return etype
+    return "other"
+
+
+def _safe_audit_details(details) -> dict:
+    if not isinstance(details, dict):
+        return {}
+    return {
+        k: ("[redacted]" if k.lower() in _AUDIT_REDACT_KEYS else v)
+        for k, v in details.items()
+    }
+
+
+@tefca_dashboard_router.get(
+    "/audit-trail",
+    summary="Platform audit trail (timestamp, correlation id, user, event, outcome, IP)",
+    dependencies=[Depends(require_role("qalead"))],
+)
+async def tefca_audit_trail(
+    event_type: Optional[str] = Query(
+        None, description="authentication | data_import | review | administration | reporting | other | all"),
+    action: Optional[str] = Query(None, description="Exact action name, e.g. login_success"),
+    correlation_id: Optional[str] = Query(
+        None, description="Return every event sharing this correlation id (AT-009)"),
+    search: Optional[str] = Query(None, description="Action or resource substring"),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    """Read-only audit trail.
+
+    Gated at qalead (level 6) — the QA Lead's remit is audit access without
+    entity-change rights, which is exactly this endpoint. Reviewers below that
+    level do not need the whole platform's authentication history to do a review.
+    """
+    from app.models.database import AuditLog, User
+
+    q = select(AuditLog)
+
+    if event_type and event_type.strip().lower() not in ("", "all"):
+        key = event_type.strip().lower()
+        if key == "other":
+            known = [a for actions in _AUDIT_EVENT_TYPES.values() for a in actions]
+            q = q.where(func.lower(AuditLog.action).notin_(known))
+        elif key in _AUDIT_EVENT_TYPES:
+            q = q.where(func.lower(AuditLog.action).in_(_AUDIT_EVENT_TYPES[key]))
+        else:
+            raise HTTPException(
+                400,
+                "Unknown event_type %r. Valid values: %s, other, all"
+                % (event_type, ", ".join(sorted(_AUDIT_EVENT_TYPES))),
+            )
+    if action:
+        q = q.where(func.lower(AuditLog.action) == action.strip().lower())
+    if correlation_id:
+        # details is JSON; compare as text so this works without a JSON operator.
+        q = q.where(cast(AuditLog.details, String).like(f"%{correlation_id}%"))
+    if search:
+        term = f"%{search.strip().lower()}%"
+        q = q.where(or_(
+            func.lower(AuditLog.action).like(term),
+            func.lower(func.coalesce(AuditLog.resource_type, "")).like(term),
+            func.lower(func.coalesce(AuditLog.resource_id, "")).like(term),
+        ))
+
+    q = q.order_by(AuditLog.created_at.desc())
+    total = len((await db.execute(q)).scalars().all())
+    rows = (await db.execute(q.limit(limit).offset(offset))).scalars().all()
+
+    user_ids = {r.user_id for r in rows if r.user_id}
+    actors = {}
+    if user_ids:
+        found = (await db.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()
+        actors = {str(u.id): u.email for u in found}
+
+    def outcome_of(r):
+        details = r.details if isinstance(r.details, dict) else {}
+        if details.get("result"):
+            return details["result"]
+        a = (r.action or "").lower()
+        if a.endswith(("_failed", "_failure", "_rejected", "_blocked", "_throttled")):
+            return "failure"
+        return "success"
+
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "event_types": sorted(_AUDIT_EVENT_TYPES) + ["other"],
+        "entries": [{
+            "id": str(r.id),
+            "timestamp": r.created_at.isoformat() if r.created_at else None,
+            "correlation_id": (r.details or {}).get("correlation_id")
+                              if isinstance(r.details, dict) else None,
+            "user": actors.get(str(r.user_id)) or (
+                (r.details or {}).get("email") if isinstance(r.details, dict) else None) or "System",
+            "event_type": _audit_event_type(r.action),
+            "action": r.action,
+            "outcome": outcome_of(r),
+            "ip_address": r.ip_address,
+            "resource_type": r.resource_type,
+            "resource_id": r.resource_id,
+            "details": _safe_audit_details(r.details),
+        } for r in rows],
+    }
+
+
 @tefca_dashboard_router.get("/status", summary="Module status + data provenance (public)")
 async def tefca_status():
     """Lightweight public status: whether TEFCA is serving MOCK or PRODUCTION data,
@@ -1403,7 +1868,12 @@ async def export_reviews(
     start: Optional[str] = Query(None),
     end: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("viewer")),
+    # LOGIN-013 — this export carries NPIs and entity identifiers; the route's
+    # own summary has always said "contains PII" while admitting viewer(1).
+    # Masking a CSV would produce an evidence file that silently differs from
+    # the record, so this is a denial rather than a redaction: the export is for
+    # roles cleared to see the data.
+    user=Depends(require_role(PII_ROLE_FLOOR)),
 ):
     if format.lower() != "csv":
         raise HTTPException(400, "Only format=csv is supported")
@@ -2078,11 +2548,18 @@ async def priority_list(
         q = q.where(TEFCAPriorityCase.assigned_date >= _parse_date(start))
     if end:
         q = q.where(TEFCAPriorityCase.assigned_date <= _parse_date(end))
-    if status:
+    if status and status.strip().lower() != "all":
         try:
             q = q.where(TEFCAPriorityCase.case_status == CaseStatus(status))
         except ValueError:
-            pass  # unknown status filter ignored
+            # A filter that silently does nothing is worse than one that fails:
+            # the caller reads the UNFILTERED list as the filtered answer. This
+            # is the same defect class as the stale Pending Reviews filter.
+            raise HTTPException(
+                400,
+                "Unknown status %r. Valid values: %s"
+                % (status, ", ".join(c.value for c in CaseStatus)),
+            )
     rows = (await db.execute(q)).scalars().all()
     return {"total": len(rows), "cases": [_priority_case_dto(c) for c in rows]}
 
@@ -2258,7 +2735,16 @@ async def qa_sla(db: AsyncSession = Depends(get_db), user=Depends(require_role("
 
 
 @tefca_dashboard_router.get("/qa/sweep", summary="Run a full QA sweep (all gates + alerts + SLA)")
-async def qa_sweep(db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer"))):
+async def qa_sweep(
+    db: AsyncSession = Depends(get_db),
+    # QA-004 — "Viewer cannot QA. Access denied." Running a sweep EXECUTES every
+    # gate, records audit rows and can dispatch threshold alerts. It is an
+    # operational QA action with side effects, not a dashboard read, and Level 6
+    # QA Lead is the role defined to perform it (QA-001/QA-002). It was gated at
+    # viewer, so anyone signed in could trigger a full sweep and the alert
+    # emails that go with it.
+    user=Depends(require_role("qalead")),
+):
     return await qa_engine.run_qa_sweep(db, triggered_by="manual")
 
 
@@ -2407,12 +2893,17 @@ async def _bucket_by_npi(db: AsyncSession, npis: list) -> dict:
     return out
 
 
-def _serialize_review(review: TEFCAReview, findings: list, bucket_label) -> dict:
+def _serialize_review(review: TEFCAReview, findings: list, bucket_label,
+                      show_pii: bool = True) -> dict:
     return {
         "id": str(review.id),
         "entity_name": review.entity_name,
-        "npi": review.npi,
-        "uei": review.uei,
+        "npi": review.npi if show_pii else _mask_identifier(review.npi),
+        "uei": review.uei if show_pii else _mask_identifier(review.uei),
+        # Stated explicitly so the UI can label a masked value as masked rather
+        # than as missing data. "Redacted for your role" and "we don't have it"
+        # are different facts and must not render the same way.
+        "pii_masked": not show_pii,
         "qhin": review.qhin,
         "entity_type": review.entity_type,
         "entity_state": review.entity_state,
@@ -2447,19 +2938,35 @@ async def _latest_evidence_for_npi(db: AsyncSession, npi):
 
 @tefca_dashboard_router.get("/reviews", summary="List entity reviews (filters: status, qhin)")
 async def list_entity_reviews(
-    status: Optional[str] = Query(None),
+    status: Optional[str] = Query(
+        None, description="Review disposition. Case-insensitive; 'all' for every review."),
     qhin: Optional[str] = Query(None),
+    search: Optional[str] = Query(None, description="Entity name or NPI substring"),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role("viewer")),
 ):
-    """The reviewer queue. Returns an empty list when there is nothing — not an error."""
+    """The reviewer queue. Returns an empty list when there is nothing — not an error.
+
+    DEF-001 — the Pending Reviews panel calls this again on every filter change
+    rather than narrowing the array it loaded at page open, so what is displayed
+    is current state. `status` is matched case-insensitively: the UI shows
+    display labels, and an exact-match filter silently returned nothing when the
+    case differed.
+    """
     q = select(TEFCAReview).order_by(TEFCAReview.created_at.desc())
-    if status:
-        q = q.where(TEFCAReview.status == status)
+    if status and status.strip().lower() not in ("", "all"):
+        q = q.where(func.lower(TEFCAReview.status)
+                    == status.strip().lower().replace(" ", "_").replace("-", "_"))
     if qhin:
         q = q.where(TEFCAReview.qhin == qhin)
+    if search:
+        term = f"%{search.strip().lower()}%"
+        q = q.where(or_(
+            func.lower(func.coalesce(TEFCAReview.entity_name, "")).like(term),
+            func.lower(func.coalesce(TEFCAReview.npi, "")).like(term),
+        ))
 
     total = len((await db.execute(q)).scalars().all())
     rows = (await db.execute(q.limit(limit).offset(offset))).scalars().all()
@@ -2475,12 +2982,16 @@ async def list_entity_reviews(
 
     buckets = await _bucket_by_npi(db, [r.npi for r in rows])
 
+    # LOGIN-013 / EQ-003 — below reviewer, identifiers are masked server-side.
+    show_pii = _can_see_pii(user)
+
     return {
         "total": total,
         "limit": limit,
         "offset": offset,
+        "pii_masked": not show_pii,
         "reviews": [
-            _serialize_review(r, by_review.get(r.id, []), buckets.get(r.npi))
+            _serialize_review(r, by_review.get(r.id, []), buckets.get(r.npi), show_pii)
             for r in rows
         ],
     }
@@ -2504,7 +3015,7 @@ async def get_entity_review(
     )).scalars().all()
 
     buckets = await _bucket_by_npi(db, [review.npi])
-    base = _serialize_review(review, findings, buckets.get(review.npi))
+    base = _serialize_review(review, findings, buckets.get(review.npi), _can_see_pii(user))
 
     evidence = await _latest_evidence_for_npi(db, review.npi)
 
@@ -2550,6 +3061,174 @@ async def get_entity_review(
         "confidence_score": (evidence.confidence_score if evidence else None),
     })
     return base
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QA ROUND 2 — HUMAN DECISIONS (DW-001 … DW-005, DW-009)
+#
+# The Decision Workspace sealed decisions to localStorage under
+# 'arc-decision-ledger' and stopped there. The page said so in its own footer
+# ("Records are sealed locally for this prototype"), but from the outside the
+# workflow looked complete: the reviewer chose Accept, entered a rationale, hit
+# Seal, and the record appeared in the ledger. Nothing reached the server. The
+# entity's status never changed, no reviewer was recorded against it, and no
+# audit entry was written — so every case that checks for those outcomes failed,
+# and a decision was lost the moment the browser's storage was cleared.
+#
+# A human adjudication is the single most important thing this system produces.
+# It belongs in the database and the audit trail, not in a browser.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Decision -> the review status it produces. This is the whole disposition
+# vocabulary the dashboard aggregates over (_REVIEW_STATUS_MAP).
+_DECISION_STATUS = {
+    "accept": "no_discrepancy",       # cleared
+    "approve": "no_discrepancy",
+    "reject": "non_compliant",        # flagged
+    "flag": "non_compliant",
+    "escalate": "non_compliant",
+    "modify": None,                   # caller supplies the classification
+    "investigate": "indeterminate",
+}
+
+# Classifications a reviewer may set with a "modify" decision.
+_MODIFIABLE_STATUSES = {
+    "no_discrepancy", "minor_administrative", "non_compliant",
+    "inexplicable", "indeterminate",
+}
+
+
+class ReviewDecisionRequest(BaseModel):
+    decision: str
+    rationale: str
+    # Required only for decision="modify" — the classification being moved to.
+    classification: Optional[str] = None
+
+
+@tefca_dashboard_router.post(
+    "/reviews/{review_id}/decision",
+    summary="Record a human decision on a review (accept / reject / modify)",
+)
+async def record_review_decision(
+    review_id: str,
+    body: ReviewDecisionRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    # Reviewer (level 4) and above. DW-006: a viewer or contributor cannot
+    # adjudicate, and the gate is here rather than only in the UI — hiding a
+    # button is not an access control.
+    user=Depends(require_role("reviewer")),
+):
+    """Persist a reviewer's decision, then update the review and write the audit row.
+
+    The rationale is REQUIRED (DW-004). A decision with no stated reason cannot
+    be reviewed by a supervisor, defended to the COR, or explained a year later,
+    so an empty one is rejected here and not merely discouraged in the form.
+
+    Decisions are APPEND-ONLY in the audit trail (DW-005). The review row carries
+    the current disposition; the audit trail carries how it got there, including
+    the AI recommendation that the human accepted or overrode. Both are kept:
+    replacing the recommendation with the decision would lose the fact that a
+    human disagreed with the machine, which is the entire point of the gate.
+    """
+    rid = _parse_uuid(review_id)
+    review = (await db.execute(
+        select(TEFCAReview).where(TEFCAReview.id == rid)
+    )).scalar_one_or_none()
+    if not review:
+        raise HTTPException(404, f"No review exists with id {review_id}")
+
+    decision = (body.decision or "").strip().lower()
+    if decision not in _DECISION_STATUS:
+        raise HTTPException(
+            400,
+            "Unknown decision %r. Valid values: %s"
+            % (body.decision, ", ".join(sorted(_DECISION_STATUS))),
+        )
+
+    rationale = (body.rationale or "").strip()
+    if not rationale:
+        raise HTTPException(400, "A rationale is required to record a decision.")
+
+    if decision == "modify":
+        classification = (body.classification or "").strip().lower()
+        if classification not in _MODIFIABLE_STATUSES:
+            raise HTTPException(
+                400,
+                "decision='modify' requires a classification. Valid values: %s"
+                % ", ".join(sorted(_MODIFIABLE_STATUSES)),
+            )
+        new_status = classification
+    else:
+        new_status = _DECISION_STATUS[decision]
+
+    previous_status = review.status
+    review.status = new_status
+    review.reviewer_id = getattr(user, "email", None) or str(user)
+    review.updated_at = datetime.utcnow()
+
+    await log_tefca_event(
+        db, user=user, action="review_decision", resource_type="tefca_reviews",
+        resource_id=str(review.id), ip_address=_client_ip(request),
+        details={
+            "entity_name": review.entity_name,
+            "npi": review.npi,
+            "decision": decision,
+            "rationale": rationale,
+            "previous_status": previous_status,
+            "new_status": new_status,
+        },
+    )
+    await db.commit()
+    await db.refresh(review)
+
+    return {
+        "id": str(review.id),
+        "decision": decision,
+        "previous_status": previous_status,
+        "status": review.status,
+        "reviewer": review.reviewer_id,
+        "rationale": rationale,
+        "recorded_at": review.updated_at.isoformat() if review.updated_at else None,
+    }
+
+
+@tefca_dashboard_router.get(
+    "/reviews/{review_id}/decisions",
+    summary="Decision history for a review (append-only)",
+    dependencies=[Depends(require_role("viewer"))],
+)
+async def review_decision_history(
+    review_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """DW-009 — every decision recorded against this review, oldest first.
+
+    Read from the audit trail rather than from a mutable column, because the
+    audit trail is the record that cannot be overwritten by the next decision.
+    """
+    from app.models.database import AuditLog
+
+    rid = _parse_uuid(review_id)
+    rows = (await db.execute(
+        select(AuditLog)
+        .where(AuditLog.action == "review_decision")
+        .where(AuditLog.resource_id == str(rid))
+        .order_by(AuditLog.created_at.asc())
+    )).scalars().all()
+
+    return {
+        "total": len(rows),
+        "decisions": [{
+            "id": str(r.id),
+            "decision": (r.details or {}).get("decision"),
+            "rationale": (r.details or {}).get("rationale"),
+            "previous_status": (r.details or {}).get("previous_status"),
+            "new_status": (r.details or {}).get("new_status"),
+            "actor": (r.details or {}).get("actor") or (r.details or {}).get("email"),
+            "timestamp": r.created_at.isoformat() if r.created_at else None,
+        } for r in rows],
+    }
 
 
 @tefca_dashboard_router.get("/findings", summary="List findings across all entities")
@@ -2915,13 +3594,35 @@ async def upload_entities(
 
 @tefca_dashboard_router.get("/import/history", summary="Entity import history")
 async def import_history(
+    status: Optional[str] = Query(
+        None, description="completed | partial | failed. Omit or 'all' for every attempt."),
+    search: Optional[str] = Query(None, description="Filename or uploader substring"),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role("viewer")),
 ):
-    """Every import attempt, including the ones that imported nothing."""
-    q = select(TEFCAImportHistory).order_by(TEFCAImportHistory.uploaded_at.desc())
+    """Every import attempt, including the ones that imported nothing.
+
+    DEF-006 — filtering is done here, in SQL. The Import History table used to
+    fetch once on page load and then narrow that array in the browser, so a
+    filter applied minutes later described the state of the world at load time.
+    """
+    q = select(TEFCAImportHistory)
+    if status and status.strip().lower() not in ("", "all"):
+        wanted = status.strip().lower()
+        valid = {"completed", "partial", "failed"}
+        if wanted not in valid:
+            raise HTTPException(
+                400, "Unknown status %r. Valid values: %s" % (status, ", ".join(sorted(valid))))
+        q = q.where(func.lower(TEFCAImportHistory.status) == wanted)
+    if search:
+        term = f"%{search.strip().lower()}%"
+        q = q.where(or_(
+            func.lower(func.coalesce(TEFCAImportHistory.filename, "")).like(term),
+            func.lower(func.coalesce(TEFCAImportHistory.uploaded_by, "")).like(term),
+        ))
+    q = q.order_by(TEFCAImportHistory.uploaded_at.desc())
     total = len((await db.execute(q)).scalars().all())
     rows = (await db.execute(q.limit(limit).offset(offset))).scalars().all()
     return {

@@ -345,6 +345,29 @@ def test_no_tefca_read_endpoint_sits_above_the_viewer_floor():
     # Deliberate exceptions, each justified rather than blanket-ignored.
     ALLOWED_ABOVE_VIEWER = {
         "/api/v1/tefca/queue/tier3",  # Bucket-3 escalation queue — senior_analyst by contract
+        # Platform audit trail — qalead (6). This is the ONE TEFCA read that is
+        # not entity data: it is every user's authentication history, with their
+        # email addresses and source IPs. Level 6 is "QA Lead — audit access, no
+        # entity changes", which is precisely this capability. Opening it to
+        # viewer would also contradict the rule the viewer role exists to
+        # enforce (LOGIN-013: a viewer sees no PII anywhere), so the general
+        # principle behind this test argues FOR the exception here rather than
+        # against it.
+        "/api/tefca/audit-trail",
+        # CSV export of reviews — reviewer (4). The route's own summary has
+        # always read "contains PII" while admitting viewer(1). Masking the file
+        # instead would hand out an evidence artefact that silently differs from
+        # the record it claims to be, so this one is a denial rather than a
+        # redaction. The equivalent data IS available to a viewer through
+        # /api/tefca/reviews, with identifiers masked.
+        "/api/tefca/reports/export",
+        # QA sweep — qalead (6). Modelled as a GET, but it EXECUTES every QA
+        # gate, writes audit rows and can dispatch threshold alert emails. It is
+        # an operational action with side effects rather than a dashboard read,
+        # and QA-004 specifies that a viewer is denied it. The read-only QA
+        # results a viewer legitimately needs remain open: /api/tefca/qa/score,
+        # /qa/health, /qa/audit and /qa/evidence-summary are all still viewer.
+        "/api/tefca/qa/sweep",
     }
 
     offenders = []
