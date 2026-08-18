@@ -65,6 +65,12 @@ EVENT_TYPE_ACTIONS = {
         "login_throttled", "logout", "signup", "signup_rejected",
         "signup_throttled", "email_verified", "email_verification_failed",
         "password_reset",
+        # Self-registration. Named `user_registered`, so the `user_` prefix rule
+        # below would otherwise file it under administration — but nobody
+        # administered anything: a member of the public created an account. It
+        # belongs with the other authentication events an analyst reviews
+        # together.
+        "user_registered",
     ],
     "security": ["file_scan", "permission_denied"],
     "data_import": ["entity_import", "import_completed", "fhir_import", "csv_import"],

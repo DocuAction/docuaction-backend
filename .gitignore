@@ -19,6 +19,10 @@ deploy.zip
 # commit-tagged builds (prod-deploy-<sha>.zip) are ~60 MB each and were slipping
 # past the old exact-name list into `git add -A`.
 prod-deploy*.zip
+# Same reason, for artifacts built under the deploy-<name>.zip convention
+# (deploy-qa-round3.zip, deploy-rbac-fix.zip, ...). Named individually below in
+# the past, which is exactly how a 61 MB build slipped past the list.
+deploy-*.zip
 # Staging tree the prod artifact is assembled in.
 prod-build/
 pydeps/

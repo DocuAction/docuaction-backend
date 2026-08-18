@@ -464,6 +464,109 @@ def test_seed_qa_test_data_uses_non_colliding_npis():
     assert positions == {"overdue", "at_risk", "on_track"}
 
 
+def test_pr002_overdue_fixture_deadline_is_actually_in_the_past():
+    """PR-002 — "overdue" must mean a deadline that has PASSED.
+
+    Offsets are relative to now, not absolute dates, so the overdue row stays
+    overdue and the on-track row stays on-track however long after seeding the
+    case is run. A hard-coded date would let the at-risk row silently drift into
+    overdue and the assertion that distinguishes them would stop distinguishing
+    anything — the fixture would rot into a false pass.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    backend = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location(
+        "_qa_seed3", backend / "scripts" / "seed_qa_test_data.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    by_position = {f["expected_sla"]: f for f in mod.PRIORITY_FIXTURES}
+
+    assert by_position["overdue"]["deadline_offset_days"] < 0, "overdue is not past due"
+    assert by_position["at_risk"]["deadline_offset_days"] > 0
+    assert by_position["on_track"]["deadline_offset_days"] > (
+        by_position["at_risk"]["deadline_offset_days"]
+    ), "on-track must have more headroom than at-risk"
+
+    # Each case needs its own COR reference — the upsert keys on it, so a shared
+    # reference would collapse all three fixtures into one row.
+    refs = {f["cor_reference"] for f in mod.PRIORITY_FIXTURES}
+    assert len(refs) == len(mod.PRIORITY_FIXTURES)
+
+
+# ─── LOGIN-009 — registration flow ───────────────────────────────────────────
+
+
+def test_login009_signup_returns_no_token():
+    """Signup must NOT sign the registrant in.
+
+    The /signup page stored `data.access_token` and redirected to /dashboard.
+    Since the P1 registration-security fix the endpoint returns only a status
+    and a message, so that stored the literal string "undefined" as the token
+    and dropped the user on a dashboard they cannot load. Pinning the contract
+    here is what stops a client being written against the old shape again.
+    """
+    import ast
+    from pathlib import Path
+
+    backend = Path(__file__).resolve().parents[1]
+    src = (backend / "app" / "api" / "routes.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+
+    signup = next(
+        (n for n in ast.walk(tree)
+         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "signup"),
+        None,
+    )
+    assert signup is not None, "signup endpoint not found"
+
+    body = ast.get_source_segment(src, signup) or ""
+    assert "pending_verification" in body
+    # The endpoint must not hand back credentials of any kind.
+    for forbidden in ("access_token", "refresh_token", "create_token_pair"):
+        assert forbidden not in body, (
+            f"signup returns {forbidden} — registration must not sign the user in"
+        )
+
+
+def test_login009_signup_accepts_company_not_organization():
+    """The field the signup form sends must be a field the API reads.
+
+    The /signup page posted `organization`; SignupRequest declares `company`.
+    Pydantic ignores unknown fields, so the request SUCCEEDED and the value the
+    user typed was silently dropped — a 201 that quietly lost data.
+    """
+    from app.models.schemas import SignupRequest
+
+    fields = set(SignupRequest.model_fields)
+    assert "company" in fields
+    assert "organization" not in fields, (
+        "if the API ever accepts `organization`, the front end must be updated "
+        "in the same change rather than relying on one of the two spellings"
+    )
+
+    # A payload using the wrong spelling parses fine and loses the value — this
+    # is the exact silent failure, asserted rather than described.
+    parsed = SignupRequest(email="a@b.co", password="x" * 10, organization="Acme")
+    assert parsed.company == "", "unknown field silently dropped, as expected"
+
+
+def test_login009_user_registered_is_an_authentication_event():
+    """Self-registration is not an administration action.
+
+    `user_registered` matches the `user_` prefix rule that files administrative
+    actions, but nobody administered anything — a member of the public created
+    an account. It belongs with the events an analyst reviews together.
+    """
+    from app.services.audit import classify_event_type
+
+    assert classify_event_type("user_registered") == "authentication"
+    # The prefix rule must still work for genuine admin actions.
+    assert classify_event_type("user_disabled") == "administration"
+
+
 def test_seed_qa_test_data_seeds_enough_rows_to_scroll():
     """EQ-010 is untestable below a screenful of rows."""
     import importlib.util

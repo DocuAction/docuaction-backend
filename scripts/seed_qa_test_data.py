@@ -19,11 +19,17 @@ unrunnable into pass-or-fail.
 
 WHAT IT CREATES
 ---------------
-  * 3 priority reviews with KNOWN SLA positions — one overdue, one at-risk, one
-    on-track — so a tester can assert which badge each row shows rather than
-    checking only that the page rendered.
+  * 3 COR priority CASES at known SLA positions — one already past its deadline,
+    one close to it, one comfortably inside — so a tester can assert which badge
+    each row shows rather than checking only that the page rendered (PR-002).
+    These populate the Priority Reviews panel, which reads /api/tefca/priority.
+  * 3 matching entity reviews, which populate the Entity Queue. The two are
+    SEPARATE tables: seeding only reviews leaves PR-003/PR-004 exactly as
+    blocked as they were, which is the mistake this fixture exists to prevent.
   * 1 COMPLETED review cycle with known counts, for RC-004.
-  * Enough entity reviews to make the Entity Queue scroll, for EQ-010.
+  * 30 further entity reviews, enough to make the Entity Queue scroll (EQ-010),
+    spread across the disposition vocabulary so the status filter has something
+    to filter.
 
 Dates are computed as offsets from "now" so the overdue row is still overdue
 next month. Hard-coded dates would make the fixture rot into a false pass: the
@@ -68,28 +74,37 @@ QA_MARKER = "QA-ROUND3-FIXTURE"
 PRIORITY_FIXTURES = [
     {
         "key": f"{QA_MARKER}-PRIORITY-OVERDUE",
+        "cor_reference": f"{QA_MARKER}-COR-OVERDUE",
         "entity_name": "Northgate Regional Health (QA overdue)",
         "npi": "9900000101",
         "qhin": "eHealth Exchange",
-        # Opened well past the SLA window — must render as OVERDUE.
+        # PR-002 — deadline already PAST. Must render as OVERDUE.
         "age_days": 45,
+        "deadline_offset_days": -10,
+        "severity": "CRITICAL",
         "expected_sla": "overdue",
     },
     {
         "key": f"{QA_MARKER}-PRIORITY-AT-RISK",
+        "cor_reference": f"{QA_MARKER}-COR-AT-RISK",
         "entity_name": "Lakeside Care Alliance (QA at-risk)",
         "npi": "9900000202",
         "qhin": "CommonWell",
-        # Inside the window but close to it — must render as AT RISK.
+        # Deadline close but not passed. Must render as AT RISK.
         "age_days": 12,
+        "deadline_offset_days": 2,
+        "severity": "HIGH",
         "expected_sla": "at_risk",
     },
     {
         "key": f"{QA_MARKER}-PRIORITY-ON-TRACK",
+        "cor_reference": f"{QA_MARKER}-COR-ON-TRACK",
         "entity_name": "Summit Valley Physicians (QA on-track)",
         "npi": "9900000303",
         "qhin": "Health Gorilla",
         "age_days": 2,
+        "deadline_offset_days": 21,
+        "severity": "MEDIUM",
         "expected_sla": "on_track",
     },
 ]
@@ -122,7 +137,8 @@ async def _seed(session, *, verify_only: bool = False) -> dict:
     from app.Tefca.models import TEFCAReview
 
     now = datetime.utcnow()
-    report = {"priority": [], "scroll_rows": 0, "cycle": None, "created": 0, "updated": 0}
+    report = {"priority": [], "priority_cases": 0, "scroll_rows": 0, "cycle": None,
+              "created": 0, "updated": 0}
 
     async def upsert_review(*, key, entity_name, npi, qhin, status, risk, age_days,
                             reviewer=None):
@@ -162,7 +178,13 @@ async def _seed(session, *, verify_only: bool = False) -> dict:
         report["created"] += 1
         return row
 
-    # ── PR-003 / PR-004 — three priority reviews at known SLA positions ──────
+    # ── PR-002 / PR-003 / PR-004 — priority CASES at known SLA positions ─────
+    #
+    # The review rows below populate the Entity Queue. They do NOT populate the
+    # Priority Reviews panel, which reads /api/tefca/priority — a different
+    # table (tefca_priority_cases) keyed on deadline_date. Seeding only reviews
+    # would leave PR-003 and PR-004 exactly as blocked as they were, which is
+    # the mistake this fixture exists to stop making.
     for fx in PRIORITY_FIXTURES:
         await upsert_review(
             key=fx["key"],
@@ -174,6 +196,47 @@ async def _seed(session, *, verify_only: bool = False) -> dict:
             age_days=fx["age_days"],
         )
         report["priority"].append({"npi": fx["npi"], "expected_sla": fx["expected_sla"]})
+
+    try:
+        from app.Tefca.models import CaseSeverity, CaseStatus, TEFCAPriorityCase
+
+        for fx in PRIORITY_FIXTURES:
+            cor_ref = fx["cor_reference"]
+            case = (await session.execute(
+                select(TEFCAPriorityCase).where(
+                    TEFCAPriorityCase.cor_reference == cor_ref)
+            )).scalars().first()
+
+            assigned = now - timedelta(days=fx["age_days"])
+            # deadline_offset_days is relative to NOW, not to assignment, so the
+            # overdue row stays overdue and the on-track row stays on-track
+            # however long after seeding the case is executed.
+            deadline = now + timedelta(days=fx["deadline_offset_days"])
+
+            if case is None:
+                if not verify_only:
+                    session.add(TEFCAPriorityCase(
+                        cor_reference=cor_ref,
+                        qhin=fx["qhin"],
+                        assigned_by=QA_MARKER,
+                        assigned_date=assigned,
+                        deadline_date=deadline,
+                        issue_description=(
+                            f"{QA_MARKER} — deterministic fixture for QA Round 3 "
+                            f"({fx['expected_sla']} SLA position)."),
+                        case_status=CaseStatus.ASSIGNED,
+                        severity=CaseSeverity[fx["severity"]],
+                    ))
+                    report["created"] += 1
+            elif not verify_only:
+                case.deadline_date = deadline
+                case.assigned_date = assigned
+                case.case_status = CaseStatus.ASSIGNED
+                case.severity = CaseSeverity[fx["severity"]]
+                report["updated"] += 1
+            report["priority_cases"] += 1
+    except Exception as exc:  # pragma: no cover - model shape varies
+        report["priority_cases"] = f"skipped: {type(exc).__name__}: {exc}"
 
     # ── EQ-010 — enough rows for the Entity Queue to scroll ──────────────────
     # Statuses are spread across the disposition vocabulary rather than all set
@@ -275,6 +338,7 @@ async def main() -> int:
 
         print(f"  priority reviews : {len(report['priority'])} "
               f"({', '.join(p['expected_sla'] for p in report['priority'])})")
+        print(f"  priority cases   : {report['priority_cases']}")
         print(f"  scroll rows      : {report['scroll_rows']}")
         print(f"  completed cycle  : {report['cycle']}")
         print(f"  created={report['created']} updated={report['updated']}")

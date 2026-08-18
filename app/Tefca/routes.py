@@ -1739,8 +1739,15 @@ def _safe_audit_details(details) -> dict:
     dependencies=[Depends(require_role("qalead"))],
 )
 async def tefca_audit_trail(
+    # AT-007 — the valid values are read FROM the vocabulary rather than retyped
+    # here. This description listed the pre-Round-3 buckets and had already gone
+    # stale (no `security`, no `data_change`), so the API documentation was
+    # telling callers that two real, selectable values did not exist.
     event_type: Optional[str] = Query(
-        None, description="authentication | data_import | review | administration | reporting | other | all"),
+        None,
+        description="Event category. One of: "
+                    + " | ".join(sorted(_AUDIT_EVENT_TYPES))
+                    + " | other | all"),
     action: Optional[str] = Query(None, description="Exact action name, e.g. login_success"),
     correlation_id: Optional[str] = Query(
         None, description="Return every event sharing this correlation id (AT-009)"),
