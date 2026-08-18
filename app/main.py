@@ -162,6 +162,24 @@ async def startup():
         "ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS details JSON",
         "ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS ip_address VARCHAR(50)",
         "ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT now()",
+        # AT-001 / AT-009 (QA Round 3). These are MANDATORY here, not optional:
+        # the ORM maps them, so every INSERT into audit_logs names them. Shipping
+        # the model without the columns would fail every audited operation —
+        # login, import, review decisions — with "column does not exist". That is
+        # an outage of the audit trail, not a degraded feature.
+        #
+        # Nullable with no default, so adding them is a catalogue-only change in
+        # Postgres and does not rewrite the table.
+        #
+        # Indexes and the historical backfill deliberately live in the Alembic
+        # migration (20260817_audit_fields) rather than here: CREATE INDEX takes
+        # a lock and an unbounded UPDATE could exceed the container start-time
+        # limit on a large audit table. Neither is needed for correctness — the
+        # read path derives event_type/outcome/correlation_id when the column is
+        # NULL, so an un-backfilled row still reads correctly.
+        "ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS event_type VARCHAR(50)",
+        "ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS outcome VARCHAR(20)",
+        "ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS correlation_id VARCHAR(64)",
         # Upload security scan — SHA-256 checksum of uploaded document bytes.
         # NULL for pre-existing rows (grandfathered); populated on new uploads.
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS checksum_sha256 VARCHAR(64)",

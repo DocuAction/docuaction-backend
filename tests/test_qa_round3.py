@@ -228,6 +228,43 @@ def test_at001_unknown_action_is_never_null_event_type():
     assert classify_event_type(None) == "other"
 
 
+def test_at001_new_audit_columns_are_in_the_startup_schema_patch():
+    """Every mapped audit_logs column must have a startup ALTER.
+
+    The deployed app does NOT run Alembic — app/main.py applies idempotent
+    `ADD COLUMN IF NOT EXISTS` statements at startup, and that is what actually
+    shapes the live schema. The ORM names every mapped column in its INSERT, so
+    a column that exists on the model but has no startup ALTER fails EVERY
+    audited operation on the deployed environment — login, import, review
+    decisions — with "column does not exist".
+
+    That is an outage of the audit trail, and it is invisible locally because
+    the local database is either absent or already correct. This test is the
+    thing that catches it before a deploy does.
+    """
+    from pathlib import Path
+
+    from app.models.database import AuditLog
+
+    src = (Path(__file__).resolve().parents[1] / "app" / "main.py").read_text(
+        encoding="utf-8")
+
+    # The original columns (id, user_id, action) have been on the table since it
+    # was created, so they need no drift repair. Everything added AFTER the table
+    # shipped does — production's audit_logs already exists, and create_all()
+    # cannot alter an existing table.
+    ORIGINAL = {"id", "user_id", "action"}
+
+    for column in AuditLog.__table__.columns.keys():
+        if column in ORIGINAL:
+            continue
+        assert f"ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS {column} " in src, (
+            f"audit_logs.{column} is mapped by the ORM but has no startup "
+            f"ALTER in app/main.py — every INSERT into audit_logs will fail "
+            f"on a deployed environment whose table predates the column"
+        )
+
+
 def test_at007_write_and_read_paths_share_one_vocabulary():
     """The stored event_type must always be a bucket the filter offers.
 
