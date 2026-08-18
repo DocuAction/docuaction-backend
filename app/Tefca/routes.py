@@ -23,7 +23,7 @@ from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, Query, Depends, HTTPException, Request, UploadFile, File
 from fastapi.responses import Response
 from pydantic import BaseModel
-from sqlalchemy import select, text, func, cast, or_, String
+from sqlalchemy import select, text, func, cast, or_, and_, String
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db, async_session_maker
@@ -107,6 +107,29 @@ def _mask_identifier(value, keep: int = 4):
     if len(s) <= keep:
         return "•" * len(s)
     return "•" * (len(s) - keep) + s[-keep:]
+
+
+# NPI system URI as it appears in the bundled FHIR-shaped dataset.
+_NPI_SYSTEM = "http://hl7.org/fhir/sid/us-npi"
+
+
+def _mask_mock_entity(entity: dict) -> dict:
+    """Copy of a bundled FHIR Organization with its NPI identifier masked.
+
+    Copied rather than mutated: ALL_MOCK_ENTITIES is a module-level constant
+    shared by every request, so masking in place would permanently corrupt the
+    dataset for the reviewer who asked for it next.
+    """
+    out = dict(entity)
+    idents = out.get("identifier")
+    if isinstance(idents, list):
+        out["identifier"] = [
+            {**i, "value": _mask_identifier(i.get("value"))}
+            if isinstance(i, dict) and i.get("system") == _NPI_SYSTEM else i
+            for i in idents
+        ]
+    out["pii_masked"] = True
+    return out
 
 
 
@@ -500,8 +523,19 @@ async def get_mock_entities(
         entities = [e for e in entities if e.get("_expected_bucket") == bucket]
     if qhin:
         entities = [e for e in entities if e.get("_qhin") == qhin]
+
+    # EQ-003 — this endpoint is the Entity Queue's FALLBACK. When /api/tefca/reviews
+    # errors, the queue page loads this instead, and it was handing every viewer a
+    # full ten-digit NPI per row while the endpoint it fell back FROM masked them.
+    # The masking rule has to hold on whichever path the page actually took, so it
+    # is applied here as well.
+    show_pii = _can_see_pii(user)
+    if not show_pii:
+        entities = [_mask_mock_entity(e) for e in entities]
+
     return {
         "total": len(entities), "stats": MOCK_STATS, "entities": entities,
+        "pii_masked": not show_pii,
         "note": "Bundled development dataset — flagged MOCK; never auto-finalized as B1.",
     }
 
@@ -1210,18 +1244,60 @@ _FINDING_REASON_LABELS = {
 }
 
 
-# tefca_reviews.status (4-bucket disposition) -> dashboard pass/fail/pending/indeterminate
+# tefca_reviews.status -> dashboard pass/fail/pending/indeterminate.
+#
+# MC-005 — THE BUG THIS FIXES
+#
+# This map covered only the 4-bucket disposition vocabulary, and _review_status()
+# defaulted EVERYTHING ELSE to "pending". But tefca_reviews.status carries two
+# vocabularies: the disposition written by the decision endpoint
+# (no_discrepancy, non_compliant, …) and the coarse status the column was
+# originally documented with (pass / fail / pending). A row stored as "pass" or
+# "compliant" matched nothing, fell through the default, and was counted as
+# PENDING — so Mission Control's "Active Reviews" KPI included reviews that were
+# finished.
+#
+# The default is what made it invisible: an unmapped status did not raise, did
+# not log, and did not show up as unknown. It quietly inflated the one number an
+# executive reads first, and it would do the same for any status added later.
+# Unknown statuses are now counted as "unknown" and are NOT active work.
 _REVIEW_STATUS_MAP = {
+    # 4-bucket disposition (written by the decision endpoint)
     "no_discrepancy": "pass",
     "minor_administrative": "pass",
     "inexplicable": "pending",
     "non_compliant": "fail",
     "indeterminate": "indeterminate",
+    # coarse vocabulary the column was originally documented with, plus the
+    # display spellings that reach it from imports and the legacy pipeline
+    "pass": "pass",
+    "passed": "pass",
+    "compliant": "pass",
+    "completed": "pass",
+    "closed": "pass",
+    "resolved": "pass",
+    "fail": "fail",
+    "failed": "fail",
+    "flagged": "fail",
+    "pending": "pending",
+    "pending_review": "pending",
+    "under_review": "pending",
+    "in_review": "pending",
+    "in_progress": "pending",
+    "new": "pending",
+    "queued": "pending",
 }
 
 
 def _review_status(status: str) -> str:
-    return _REVIEW_STATUS_MAP.get((status or "").lower(), "pending")
+    """Dashboard bucket for a stored review status.
+
+    An unrecognised status is "unknown", NOT "pending". Guessing that unmapped
+    means outstanding is what produced MC-005; a status nobody mapped is a fact
+    about the data, and reporting it as active work makes the KPI wrong in the
+    one direction an operator cannot detect.
+    """
+    return _REVIEW_STATUS_MAP.get((status or "").strip().lower(), "unknown")
 
 
 def _connector_health_snapshot(health: dict) -> dict:
@@ -1234,7 +1310,9 @@ def _connector_health_snapshot(health: dict) -> dict:
 async def dashboard_summary(db: AsyncSession = Depends(get_db)):
     reviews = (await db.execute(select(TEFCAReview))).scalars().all()
     total = len(reviews)
-    by_status = {"pass": 0, "fail": 0, "pending": 0, "indeterminate": 0}
+    # MC-005 — "unknown" is always present, so a status nobody mapped is visible
+    # as its own count rather than being folded into the active-work bucket.
+    by_status = {"pass": 0, "fail": 0, "pending": 0, "indeterminate": 0, "unknown": 0}
     by_risk = {"low": 0, "medium": 0, "high": 0, "critical": 0}
     review_times = []
     by_month: dict = {}
@@ -1614,20 +1692,15 @@ async def dashboard_notifications(db: AsyncSession = Depends(get_db)):
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Coarse event categories for the Audit Trail type filter (AT-007).
-_AUDIT_EVENT_TYPES = {
-    "authentication": [
-        "login_success", "login_failed", "login_blocked", "login_throttled",
-        "logout", "signup", "signup_rejected", "signup_throttled",
-        "email_verified", "email_verification_failed", "password_reset",
-    ],
-    "data_import": ["entity_import", "file_scan", "fhir_import", "csv_import"],
-    "review": ["review_executed", "review_decision", "entity_verified", "bucket_override"],
-    "administration": [
-        "user_approved", "user_rejected", "user_disabled", "user_role_changed",
-        "user_invited", "password_set",
-    ],
-    "reporting": ["report_generated", "report_downloaded", "export"],
-}
+# AT-007 — ONE vocabulary, defined in app/services/audit.py and imported here.
+#
+# This used to be a second, hand-maintained copy of the same buckets. The write
+# path stamped audit_logs.event_type from one list and this filter selected from
+# the other, so the two could disagree about which bucket an action belonged to:
+# a row could display an event type that its own filter would not return. The
+# list that classifies a row on the way IN is now the list the filter offers on
+# the way OUT.
+from app.services.audit import EVENT_TYPE_ACTIONS as _AUDIT_EVENT_TYPES
 
 # Details keys that must never be echoed, whatever a caller wrote into them.
 # AT-008 requires no secret in any record; the writers do not put one there, and
@@ -1641,11 +1714,14 @@ _AUDIT_REDACT_KEYS = {
 
 
 def _audit_event_type(action: str) -> str:
-    a = (action or "").lower()
-    for etype, actions in _AUDIT_EVENT_TYPES.items():
-        if a in actions:
-            return etype
-    return "other"
+    """Read-path fallback for rows written before audit_logs.event_type existed.
+
+    Delegates to the same classifier the write path uses, so a backfilled row and
+    a freshly written one are never labelled differently.
+    """
+    from app.services.audit import classify_event_type
+
+    return classify_event_type(action)
 
 
 def _safe_audit_details(details) -> dict:
@@ -1699,8 +1775,18 @@ async def tefca_audit_trail(
     if action:
         q = q.where(func.lower(AuditLog.action) == action.strip().lower())
     if correlation_id:
-        # details is JSON; compare as text so this works without a JSON operator.
-        q = q.where(cast(AuditLog.details, String).like(f"%{correlation_id}%"))
+        # AT-009 — match the indexed COLUMN. This previously cast the whole
+        # `details` JSON to text and did a LIKE over it, which scanned the table
+        # and would also match a row where the id merely appeared inside some
+        # other field. Rows written before the column existed are backfilled by
+        # the migration, but the details fallback is kept so a row that somehow
+        # escaped the backfill is still findable rather than silently absent.
+        cid = correlation_id.strip()
+        q = q.where(or_(
+            AuditLog.correlation_id == cid,
+            and_(AuditLog.correlation_id.is_(None),
+                 cast(AuditLog.details, String).like(f"%{cid}%")),
+        ))
     if search:
         term = f"%{search.strip().lower()}%"
         q = q.where(or_(
@@ -1720,6 +1806,11 @@ async def tefca_audit_trail(
         actors = {str(u.id): u.email for u in found}
 
     def outcome_of(r):
+        # AT-001 — the stored column is authoritative. The derivation below is
+        # retained only for rows written before the column existed, so an old
+        # row still reads correctly instead of showing a blank outcome.
+        if getattr(r, "outcome", None):
+            return r.outcome
         details = r.details if isinstance(r.details, dict) else {}
         if details.get("result"):
             return details["result"]
@@ -1727,6 +1818,11 @@ async def tefca_audit_trail(
         if a.endswith(("_failed", "_failure", "_rejected", "_blocked", "_throttled")):
             return "failure"
         return "success"
+
+    def correlation_of(r):
+        if getattr(r, "correlation_id", None):
+            return r.correlation_id
+        return (r.details or {}).get("correlation_id") if isinstance(r.details, dict) else None
 
     return {
         "total": total,
@@ -1736,11 +1832,10 @@ async def tefca_audit_trail(
         "entries": [{
             "id": str(r.id),
             "timestamp": r.created_at.isoformat() if r.created_at else None,
-            "correlation_id": (r.details or {}).get("correlation_id")
-                              if isinstance(r.details, dict) else None,
+            "correlation_id": correlation_of(r),
             "user": actors.get(str(r.user_id)) or (
                 (r.details or {}).get("email") if isinstance(r.details, dict) else None) or "System",
-            "event_type": _audit_event_type(r.action),
+            "event_type": getattr(r, "event_type", None) or _audit_event_type(r.action),
             "action": r.action,
             "outcome": outcome_of(r),
             "ip_address": r.ip_address,
@@ -1785,6 +1880,15 @@ async def tefca_search(
     LIMIT = 50
     like = f"%{term}%"
 
+    # EQ-003 — identifiers are masked below the reviewer floor HERE too. The
+    # reviews list endpoint was patched for this in Round 2; search was not, and
+    # it returns the same rows from the same tables to the same viewer role. A
+    # masking rule enforced on one of two doors into the same data is not a
+    # masking rule. Searching an NPI still MATCHES on the full value — the query
+    # is the operator's own input, so echoing a masked result is not a leak —
+    # but nothing unmasked is returned to a principal below the floor.
+    show_pii = _can_see_pii(user)
+
     # Reviews (denormalized dashboard data).
     rq = select(TEFCAReview)
     if type == "npi" or (type == "all" and is_npi):
@@ -1800,7 +1904,9 @@ async def tefca_search(
         ))
     reviews = (await db.execute(rq.limit(LIMIT))).scalars().all()
     reviews_out = [{
-        "id": str(r.id), "entity_name": r.entity_name, "npi": r.npi, "uei": r.uei,
+        "id": str(r.id), "entity_name": r.entity_name,
+        "npi": r.npi if show_pii else _mask_identifier(r.npi),
+        "uei": r.uei if show_pii else _mask_identifier(r.uei),
         "qhin": r.qhin, "entity_type": r.entity_type, "status": r.status,
         "risk_level": r.risk_level, "is_mock_data": r.is_mock_data,
     } for r in reviews]
@@ -1834,7 +1940,8 @@ async def tefca_search(
         erows = (await db.execute(eq.limit(LIMIT))).scalars().all()
         entities_out = [{
             "entity_id": str(e.entity_id), "qhin": e.qhin_name,
-            "legal_name": e.legal_name_submitted, "npi": e.npi_submitted,
+            "legal_name": e.legal_name_submitted,
+            "npi": e.npi_submitted if show_pii else _mask_identifier(e.npi_submitted),
             "entity_type": e.entity_type.value if e.entity_type else None,
             "status": e.current_status.value if e.current_status else None,
         } for e in erows]
@@ -1857,6 +1964,7 @@ async def tefca_search(
 
     return {
         "query": term, "type": type, "is_npi": is_npi,
+        "pii_masked": not show_pii,
         "counts": {"reviews": len(reviews_out), "entities": len(entities_out), "findings": len(findings_out)},
         "reviews": reviews_out, "entities": entities_out, "findings": findings_out, "nppes": nppes,
     }
@@ -2455,11 +2563,15 @@ async def list_new_submissions(
 ):
     since_dt = _parse_date(since)
     rows = await reporting.get_new_submissions(db, qhin, since_dt)
+    # EQ-003 — same review rows, same viewer floor, same masking rule.
+    show_pii = _can_see_pii(user)
     return {
         "since": since, "qhin": qhin, "count": len(rows),
+        "pii_masked": not show_pii,
         "submissions": [{
             "review_id": str(r.id), "entity_name": r.entity_name, "qhin": r.qhin,
-            "npi": r.npi, "status": r.status, "risk_level": r.risk_level,
+            "npi": r.npi if show_pii else _mask_identifier(r.npi),
+            "status": r.status, "risk_level": r.risk_level,
             "created_at": r.created_at.isoformat() if r.created_at else None,
         } for r in rows],
     }
@@ -3252,15 +3364,19 @@ async def list_findings(
     total = len((await db.execute(q)).all())
     rows = (await db.execute(q.limit(limit).offset(offset))).all()
 
+    # EQ-003 — the findings register joins the review row and republishes its NPI.
+    show_pii = _can_see_pii(user)
+
     return {
         "total": total,
         "limit": limit,
         "offset": offset,
+        "pii_masked": not show_pii,
         "findings": [{
             "id": str(f.id),
             "entity_id": str(f.review_id) if f.review_id else None,
             "entity_name": (r.entity_name if r else None),
-            "npi": (r.npi if r else None),
+            "npi": ((r.npi if show_pii else _mask_identifier(r.npi)) if r else None),
             "qhin": (r.qhin if r else None),
             "finding_code": f.finding_type,
             "source": f.connector,
@@ -3325,6 +3441,96 @@ def _valid_npi(npi) -> bool:
     return bool(npi) and str(npi).strip().isdigit() and len(str(npi).strip()) == 10
 
 
+# ── Column vocabulary (IMP-001 / IMP-016) ────────────────────────────────────
+#
+# THE BUG THIS FIXES
+#
+# Rows were normalised with `k.strip().lower()` and then read with
+# `norm.get("entity_name")` / `norm.get("npi")` / `norm.get("qhin")`. A roster
+# exported from a spreadsheet carries human headers — "Organization Name",
+# "NPI Number" — which lowercase to "organization name" and "npi number" and
+# match none of those keys. Every row therefore failed the required-field check
+# and the import reported `imported: 0` against a file the operator had just
+# watched preview five rows successfully.
+#
+# It failed with a per-row reason ("required field is empty"), so it did not
+# look like a mapping bug — it looked like the operator's file was empty. The
+# header sniff in _parse_upload had the same blind spot and would 400 a
+# friendly-header file outright.
+#
+# ONE map, applied in ONE place, used by BOTH the header sniff and the row
+# reader, so a header that previews cannot then fail to import. Canonical names
+# map to themselves so a file already using backend names is unaffected.
+_COLUMN_ALIASES = {
+    # entity_name
+    "entity_name": "entity_name",
+    "entity name": "entity_name",
+    "organization name": "entity_name",
+    "organisation name": "entity_name",
+    "organization": "entity_name",
+    "org name": "entity_name",
+    "legal name": "entity_name",
+    "legal_name": "legal_name",   # already a recognised fallback below
+    "name": "entity_name",
+    # npi
+    "npi": "npi",
+    "npi number": "npi",
+    "npi_number": "npi",
+    "national provider identifier": "npi",
+    # qhin
+    "qhin": "qhin",
+    "qhin name": "qhin",
+    "qhin_name": "qhin",
+    # address components
+    "address": "address",
+    "street address": "address",
+    "address line 1": "address",
+    "city": "city",
+    "state": "state",
+    "zip": "zip",
+    "zip code": "zip",
+    "zip_code": "zip",
+    "postal code": "zip",
+    "postal_code": "zip",
+    # other optional columns the importer already consumes
+    "entity_type": "entity_type",
+    "entity type": "entity_type",
+    "entity_state": "entity_state",
+    "uei": "uei",
+    "contact": "contact",
+}
+
+
+def _canonical_column(key) -> str:
+    """Map one header to its canonical name. Unknown headers keep their own
+    normalised name rather than being dropped — an unrecognised column is not an
+    error, and silently discarding it would hide data the operator supplied."""
+    k = (key or "").strip().lower()
+    # Tolerate the separators spreadsheets produce: "NPI-Number", "NPI_Number".
+    flat = k.replace("_", " ").replace("-", " ")
+    flat = " ".join(flat.split())
+    return _COLUMN_ALIASES.get(k) or _COLUMN_ALIASES.get(flat) or k
+
+
+def _normalize_row(row: dict) -> dict:
+    """Canonical-key view of one uploaded row, values stripped to strings.
+
+    A canonical key already present in the file wins over one produced by an
+    alias, so an explicit `entity_name` column is never overwritten by a
+    "Name" column that happens to sit beside it.
+    """
+    out = {}
+    for k, v in (row or {}).items():
+        canon = _canonical_column(k)
+        val = str(v).strip() if v is not None else ""
+        raw_key = (k or "").strip().lower()
+        # Don't let an alias clobber a value already set by the canonical header.
+        if canon in out and out[canon] and raw_key != canon:
+            continue
+        out[canon] = val
+    return out
+
+
 def _parse_upload(filename: str, raw: bytes):
     """Parse CSV or JSON into a list of dicts. Raises HTTPException(400) on failure.
 
@@ -3361,7 +3567,10 @@ def _parse_upload(filename: str, raw: bytes):
         # fake success P5 forbids. It is a 400.
         if not rows:
             raise HTTPException(400, "No data rows were found in the file. Nothing was imported.")
-        header = {(k or "").strip().lower() for k in (rows[0] or {}).keys()}
+        # IMP-001 — sniff the CANONICAL header set, so "Organization Name" /
+        # "NPI Number" is recognised as an entity roster rather than 400'd as
+        # an unrelated file.
+        header = {_canonical_column(k) for k in (rows[0] or {}).keys()}
         if not header & {"entity_name", "legal_name", "npi", "qhin"}:
             raise HTTPException(
                 400,
@@ -3446,7 +3655,9 @@ async def upload_entities(
     accepted = []
 
     for i, row in enumerate(rows, start=1):
-        norm = {(k or "").strip().lower(): (str(v).strip() if v is not None else "") for k, v in row.items()}
+        # IMP-001 — canonical keys, so a friendly header imports rather than
+        # failing every row with "required field is empty".
+        norm = _normalize_row(row)
         entity_name = norm.get("entity_name") or norm.get("legal_name") or ""
         npi = norm.get("npi") or ""
         qhin = norm.get("qhin") or ""

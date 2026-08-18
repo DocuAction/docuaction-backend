@@ -86,15 +86,38 @@ class Output(Base):
 
 
 class AuditLog(Base):
+    """Canonical audit trail.
+
+    AT-001 — `event_type`, `outcome` and `correlation_id` are first-class
+    COLUMNS, not keys inside `details`. They were previously either absent or
+    buried in the JSON blob, which meant the audit trail could not be filtered
+    or grouped by them in SQL: "show me every failed authentication" and "show
+    me everything that happened during this import" were both unanswerable
+    without scanning and re-parsing every row. An auditor's first two questions
+    should not require a table scan.
+
+    `details` keeps carrying the event-specific payload; these three carry the
+    facts every event has in common.
+    """
     __tablename__ = "audit_logs"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id = Column(String(50), default="default", nullable=False, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     action = Column(String(100), nullable=False)
+    # Coarse classification the Audit Trail UI filters on (AT-007): authentication,
+    # security, data_import, review_decision, data_change, reporting, system.
+    event_type = Column(String(50), index=True)
+    # success | failure | rejected | blocked. AT-004/AT-005 exist because the
+    # trail recorded successes far more reliably than failures; giving the
+    # outcome its own indexed column makes "what failed" a first-class query.
+    outcome = Column(String(20), index=True)
     resource_type = Column(String(50))
     resource_id = Column(String(255))
     details = Column(JSON)
     ip_address = Column(String(50))
+    # AT-009 — shared by every event emitted within one business transaction, so
+    # an import and the file_scan that gated it can be reassembled afterwards.
+    correlation_id = Column(String(64), index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

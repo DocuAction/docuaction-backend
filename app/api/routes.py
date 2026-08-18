@@ -23,7 +23,7 @@ from app.core.security import hash_password, verify_password, create_token, crea
 from app.core.email import send_verification_email, app_url
 from app.core.upload_security import safe_upload_path
 from app.services.file_scanner import FileScanner
-from app.services.audit import log_audit_event
+from app.services.audit import log_audit_event, classify_event_type, classify_outcome
 from app.models.database import User, Document, Output, AudioFile, Transcript, AuditLog
 from app.core.client_ip import get_client_ip
 from app.models.schemas import (
@@ -192,19 +192,31 @@ async def _audit_auth(db, user_id, action, details=None, request=None, correlati
     if request is not None:
         ip = get_client_ip(request)
         ua = request.headers.get("user-agent")
+    cid = correlation_id or str(uuid.uuid4())
     try:
+        # AT-001 / AT-004 — event_type and outcome are columns, so a failed
+        # authentication is findable with `WHERE outcome = 'failure'` rather than
+        # by knowing in advance that the action happens to be spelled
+        # "login_failed". AT-009 — the correlation id is promoted out of details
+        # onto its own column so one sign-in attempt's events group in SQL.
+        #
+        # `details` carries the submitted email and the reason; it has never
+        # carried the password or the issued token, and must not start.
         db.add(AuditLog(
             tenant_id="default",
             user_id=str(user_id) if user_id else None,
             action=action,                       # result (e.g. login_success/login_failed)
+            event_type=classify_event_type(action),
+            outcome=classify_outcome(action, None),
             resource_type="auth",
             details={
-                "correlation_id": correlation_id or str(uuid.uuid4()),
+                "correlation_id": cid,
                 "user_agent": ua,
                 **(details or {}),               # carries email + reason
                 "at": datetime.utcnow().isoformat() + "Z",   # timestamp
             },
             ip_address=ip,
+            correlation_id=cid,
         ))
         await db.commit()
     except Exception:
@@ -393,6 +405,15 @@ async def login(data: LoginRequest, request: Request, db: AsyncSession = Depends
         raise HTTPException(403, "Your account has been disabled. Contact your administrator.")
 
     _clear_login_failures(email)
+
+    # ADM-001 — stamp the login. `last_active_at` was written ONLY by the Azure
+    # AD path, so for every password-authenticated account it kept the column
+    # default (the row's creation time) forever. The admin table dutifully
+    # rendered that as "Last Login", which is worse than showing nothing: it is
+    # a plausible, specific, wrong date that nobody would think to question.
+    user.last_active_at = datetime.utcnow()
+    await db.commit()
+
     await _audit_auth(db, user.id, "login_success", {"email": user.email, "reason": "credentials_valid"}, request, cid)
     tokens = create_token_pair(str(user.id), user.role, user.email)
     return TokenResponse(access_token=tokens["access_token"], user=UserResponse.model_validate(user))

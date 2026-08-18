@@ -272,7 +272,13 @@ def test_audit_trail_redacts_credential_shaped_keys():
     ("login_success", "authentication"),
     ("login_failed", "authentication"),
     ("entity_import", "data_import"),
-    ("file_scan", "data_import"),
+    # SUPERSEDED BY QA ROUND 3 (AT-005): file_scan is classified "security",
+    # not "data_import". Round 3 specifies the malicious-upload rejection as a
+    # security event, and it is — the scan runs before parsing and its whole
+    # purpose is to refuse a file, which is not an import outcome. The
+    # expectation is updated rather than the test deleted: the case still
+    # asserts that the action is categorised, which is what AT-007 needs.
+    ("file_scan", "security"),
     ("review_decision", "review"),
     ("user_role_changed", "administration"),
     ("report_generated", "reporting"),

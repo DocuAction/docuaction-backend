@@ -139,6 +139,10 @@ def _serialize(u: User) -> dict:
         "allowed_modules": _normalize_stored(u.allowed_modules),  # alias
         "created_at": str(u.created_at) if u.created_at else None,
         "last_active_at": str(getattr(u, "last_active_at", "") or "") or None,
+        # ADM-001 — the admin table's column is called "Last Login", so the field
+        # is exposed under that name rather than leaving the UI to infer that
+        # `last_active_at` is the same thing. Same value, unambiguous contract.
+        "last_login": str(getattr(u, "last_active_at", "") or "") or None,
     }
 
 
