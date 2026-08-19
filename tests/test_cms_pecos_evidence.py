@@ -852,3 +852,46 @@ class TestSufficiency:
                             Applicability.NOT_APPLICABLE.value, ""),
         ]
         assert sufficiency_summary(results)["all_required_dimensions_settled"] is True
+
+
+class TestAuditCallSignature:
+    """Every `log_tefca_event(...)` in routes.py must bind to its real signature.
+
+    This exists because it did not. The dimension-evidence endpoints called
+    `log_tefca_event(db, user, "event", {...})` — positional — while the function
+    takes `db` positionally and everything else keyword-only. Python raises that
+    only when the line executes, so it survived import, unit tests, a green
+    1067-test suite and a deploy, and first appeared as an HTTP 500 on dev.
+
+    A static bind over every call site catches the whole class at test time
+    instead of at request time. It is AST-based rather than a mock, so it needs
+    no database and covers call sites nobody wrote a test for.
+    """
+
+    def test_every_log_tefca_event_call_binds(self):
+        import ast
+        import inspect
+        from app.services.audit import log_tefca_event
+
+        signature = inspect.signature(log_tefca_event)
+        source = open("app/Tefca/routes.py", encoding="utf-8").read()
+        tree = ast.parse(source)
+
+        calls = [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "id", None) == "log_tefca_event"
+        ]
+        assert calls, "no log_tefca_event call sites found — has the audit call been renamed?"
+
+        failures = []
+        for call in calls:
+            positional = [object()] * len(call.args)
+            keywords = {kw.arg: object() for kw in call.keywords if kw.arg}
+            if any(kw.arg is None for kw in call.keywords):
+                continue  # **kwargs splat — cannot be checked statically
+            try:
+                signature.bind(*positional, **keywords)
+            except TypeError as exc:
+                failures.append(f"routes.py:{call.lineno}: {exc}")
+        assert not failures, "log_tefca_event call sites do not match its signature:\n" + "\n".join(failures)

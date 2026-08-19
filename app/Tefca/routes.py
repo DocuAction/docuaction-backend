@@ -3972,7 +3972,27 @@ async def entity_evidence_dimensions(
 
     entity = _entity_by_reference(entity_ref)
     if not entity:
-        raise HTTPException(404, f"No entity resolves from '{entity_ref}'")
+        # 200 with entity_resolved=false, NOT 404.
+        #
+        # "No ONC record exists for this identifier" and "the request failed"
+        # are different facts, and a 404 makes the client guess which one it
+        # got. The ARC review population and the ONC entity population are
+        # genuinely disjoint in some environments — a review NPI with no ONC
+        # record is an ordinary data-linkage fact, not an error, and the
+        # reviewer is entitled to be told exactly that.
+        #
+        # No entity is matched by name to fill the gap: attributing another
+        # organisation's evidence to this review is worse than showing none.
+        return {
+            "entity_ref": entity_ref,
+            "entity_resolved": False,
+            "dimensions": [],
+            "note": (f"No ONC/RCE entity record resolves from '{entity_ref}'. Dimension "
+                     "evidence is assembled against the ONC-supplied entity population; "
+                     "this identifier is not in it, so there is nothing to assemble. "
+                     "This is a data-linkage fact, not a retrieval failure, and nothing "
+                     "is inferred from it."),
+        }
 
     service = EvidenceService(manager=get_connector_manager(), enable_website=include_website)
     evidence = await service.build_evidence(entity)
@@ -3983,10 +4003,16 @@ async def entity_evidence_dimensions(
     evidence["persisted_rows"] = persisted
 
     await log_tefca_event(
-        db, user, "evidence_dimensions_generated",
-        {"entity_id": entity.get("id"), "dimensions": len(evidence.get("dimensions", [])),
-         "persisted_rows": persisted},
+        db, user=user, action="EVIDENCE_DIMENSIONS_GENERATED",
+        resource_type="tefca_dimension_evidence", resource_id=entity.get("id"),
+        details={
+            "entity_id": entity.get("id"),
+            "dimensions": len(evidence.get("dimensions", [])),
+            "persisted_rows": persisted,
+            "generation_timestamp": evidence.get("generated_at"),
+        },
     )
+    await db.commit()
     return evidence
 
 
@@ -4033,9 +4059,16 @@ async def review_evidence_dimensions(
     evidence["persisted_rows"] = persisted
 
     await log_tefca_event(
-        db, user, "evidence_dimensions_generated",
-        {"review_id": review_id, "entity_id": entity.get("id"), "persisted_rows": persisted},
+        db, user=user, action="EVIDENCE_DIMENSIONS_GENERATED",
+        resource_type="tefca_dimension_evidence", resource_id=review_id,
+        details={
+            "review_id": review_id,
+            "entity_id": entity.get("id"),
+            "persisted_rows": persisted,
+            "generation_timestamp": evidence.get("generated_at"),
+        },
     )
+    await db.commit()
     return evidence
 
 
