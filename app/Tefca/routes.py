@@ -3904,3 +3904,204 @@ async def download_report(
         media_type=media,
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DIMENSION-ORGANISED EVIDENCE (CMS/PECOS evidence architecture)
+#
+# Additive. Nothing above this line changed: the five-element evidence record,
+# the B1–B4 classification, /reviews/{id} and /connectors/status all keep their
+# existing shapes and behaviour. These endpoints expose the evidence layer that
+# organises what the sources said into the six verification dimensions, with
+# enough provenance on every item to reproduce the determination later.
+#
+# Deliberately NOT here: any endpoint that returns a score, a percentage, or a
+# count of passing sources. The dimension structure is the answer.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _entity_by_reference(reference: str) -> Optional[dict]:
+    """Resolve an ONC entity by id or by identifier value (NPI, TEFCA id)."""
+    ref = (reference or "").strip()
+    if not ref:
+        return None
+    for org in ALL_MOCK_ENTITIES:
+        if str(org.get("id")) == ref:
+            return org
+    for org in ALL_MOCK_ENTITIES:
+        for ident in org.get("identifier") or []:
+            if (ident.get("value") or "").strip() == ref:
+                return org
+    return None
+
+
+async def _persist_dimension_evidence(db: AsyncSession, entity_id: str,
+                                      review_id: Optional[str], evidence: dict) -> int:
+    """INSERT one generation of evidence rows. Never updates, never deletes.
+
+    A failure to persist must not fail the read: the analyst still needs to see
+    the evidence, and a storage fault is not a reason to withhold what the
+    sources actually said.
+    """
+    from app.Tefca.evidence_service import evidence_rows_for_persistence
+    from app.Tefca.models import TEFCADimensionEvidence
+
+    rows = evidence_rows_for_persistence(entity_id, review_id, evidence)
+    try:
+        for row in rows:
+            db.add(TEFCADimensionEvidence(**row))
+        await db.commit()
+        return len(rows)
+    except Exception as exc:
+        await db.rollback()
+        logger.warning("dimension evidence not persisted for %s: %s", entity_id, exc)
+        return 0
+
+
+@tefca_dashboard_router.get(
+    "/entities/{entity_ref}/evidence-dimensions",
+    summary="Six-dimension evidence for one entity",
+)
+async def entity_evidence_dimensions(
+    entity_ref: str,
+    persist: bool = True,
+    include_website: bool = False,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("viewer")),
+):
+    from app.Tefca.evidence_service import EvidenceService
+
+    entity = _entity_by_reference(entity_ref)
+    if not entity:
+        raise HTTPException(404, f"No entity resolves from '{entity_ref}'")
+
+    service = EvidenceService(manager=get_connector_manager(), enable_website=include_website)
+    evidence = await service.build_evidence(entity)
+
+    persisted = 0
+    if persist:
+        persisted = await _persist_dimension_evidence(db, str(entity.get("id")), None, evidence)
+    evidence["persisted_rows"] = persisted
+
+    await log_tefca_event(
+        db, user, "evidence_dimensions_generated",
+        {"entity_id": entity.get("id"), "dimensions": len(evidence.get("dimensions", [])),
+         "persisted_rows": persisted},
+    )
+    return evidence
+
+
+@tefca_dashboard_router.get(
+    "/reviews/{review_id}/evidence-dimensions",
+    summary="Six-dimension evidence for the entity behind a review",
+)
+async def review_evidence_dimensions(
+    review_id: str,
+    persist: bool = True,
+    include_website: bool = False,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("viewer")),
+):
+    from app.Tefca.evidence_service import EvidenceService
+
+    rid = _parse_uuid(review_id)
+    review = (await db.execute(
+        select(TEFCAReview).where(TEFCAReview.id == rid)
+    )).scalar_one_or_none()
+    if not review:
+        raise HTTPException(404, f"No review exists with id {review_id}")
+
+    entity = _entity_by_reference(review.npi or "")
+    if not entity:
+        # An honest empty answer. Fabricating an entity to hang evidence on
+        # would produce evidence about nothing.
+        return {
+            "review_id": review_id,
+            "entity_resolved": False,
+            "dimensions": [],
+            "note": ("No ONC entity record resolves from the NPI on this review, so no "
+                     "dimension evidence can be assembled for it."),
+        }
+
+    service = EvidenceService(manager=get_connector_manager(), enable_website=include_website)
+    evidence = await service.build_evidence(entity)
+    evidence["review_id"] = review_id
+    evidence["entity_resolved"] = True
+
+    persisted = 0
+    if persist:
+        persisted = await _persist_dimension_evidence(db, str(entity.get("id")), review_id, evidence)
+    evidence["persisted_rows"] = persisted
+
+    await log_tefca_event(
+        db, user, "evidence_dimensions_generated",
+        {"review_id": review_id, "entity_id": entity.get("id"), "persisted_rows": persisted},
+    )
+    return evidence
+
+
+@tefca_dashboard_router.get(
+    "/entities/{entity_ref}/evidence-history",
+    summary="Every preserved generation of dimension evidence for an entity",
+)
+async def entity_evidence_history(
+    entity_ref: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("viewer")),
+):
+    """Proof that re-running a verification preserved what came before.
+
+    Generations are returned newest first. Nothing is collapsed or pruned: a
+    determination that cited the January CMS extract has to stay explicable
+    after the April extract lands.
+    """
+    from app.Tefca.models import TEFCADimensionEvidence
+
+    rows = (await db.execute(
+        select(TEFCADimensionEvidence)
+        .where(TEFCADimensionEvidence.entity_id == entity_ref)
+        .order_by(TEFCADimensionEvidence.created_at.desc())
+    )).scalars().all()
+
+    generations: dict = {}
+    for r in rows:
+        gen = r.generation_timestamp or (r.created_at.isoformat() if r.created_at else "unknown")
+        generations.setdefault(gen, []).append({
+            "dimension": r.evidence_dimension,
+            "source": r.source,
+            "disposition": r.disposition,
+            "dimension_disposition": r.dimension_disposition,
+            "source_dataset": r.source_dataset,
+            "ppef_component": r.ppef_component,
+            "dataset_version_anchor": r.dataset_version_anchor,
+            "query_timestamp": r.query_timestamp,
+            "rule_applied": r.rule_applied,
+            "analyst_notes": r.analyst_notes,
+            "reviewed_by": r.reviewed_by,
+        })
+    return {
+        "entity_id": entity_ref,
+        "generation_count": len(generations),
+        "generations": [
+            {"generation_timestamp": g, "row_count": len(items), "evidence": items}
+            for g, items in sorted(generations.items(), reverse=True)
+        ],
+        "retention_note": ("Evidence is append-only. Re-running a verification adds a "
+                           "generation; it never overwrites or deletes a previous one."),
+    }
+
+
+@tefca_dashboard_router.get(
+    "/connectors/cms-systems",
+    summary="CMS system and capability health",
+)
+async def cms_connector_systems(user=Depends(require_role("viewer"))):
+    """Two CMS systems, reported as systems.
+
+    PPEF Enrollment, Practice Location, Reassignment and Additional NPIs are
+    components of ONE relational dataset and are reported as capabilities of it.
+    Listing them as four external systems would inflate one authority into four
+    and imply four independent corroborations where there is one.
+    """
+    from app.Tefca.evidence_service import EvidenceService
+
+    return await EvidenceService(manager=get_connector_manager()).health()

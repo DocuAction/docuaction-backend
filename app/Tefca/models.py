@@ -386,3 +386,69 @@ class TEFCAImportHistory(Base):
     file_hash = Column(String(64), index=True)
     status = Column(String(20), index=True)        # completed / partial / failed
     errors = Column(JSONB, default=list)           # [{row, field, reason}]
+
+
+class TEFCADimensionEvidence(Base):
+    """Dimension-organised evidence, one row per (dimension, source) item.
+
+    APPEND-ONLY BY CONTRACT
+    ───────────────────────
+    Rows here are INSERTED and never updated or deleted by the evidence layer.
+    Re-running a verification writes a NEW generation, distinguished by
+    `generation_timestamp`; the prior generation stays exactly as it was. That
+    is not tidiness, it is the requirement: a determination made in March cited
+    the CMS dataset published in January, and after CMS publishes the April
+    extract the only way to explain that determination is for the January
+    evidence to still be there, unmodified.
+
+    `dataset_version_anchor` is what pins the evidence to a specific CMS
+    publication — CMS mints a new dataset UUID per quarterly release, so the
+    UUID identifies the exact extract a lookup ran against.
+
+    Analyst fields (reviewed_by / reviewed_at / analyst_notes) are the ONE
+    exception to append-only: a human annotating a row is a distinct act from
+    the system rewriting evidence, and the annotation is itself audited.
+    """
+    __tablename__ = "tefca_dimension_evidence"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    entity_id = Column(String(255), nullable=False, index=True)
+    review_id = Column(String(255), index=True)
+    review_cycle_id = Column(UUID(as_uuid=True), ForeignKey("tefca_review_cycles.cycle_id"))
+
+    evidence_dimension = Column(String(64), nullable=False, index=True)
+    dimension_disposition = Column(String(32))
+    dimension_applicability = Column(String(32))
+
+    source = Column(String(64), nullable=False, index=True)
+    source_dataset = Column(String(128))
+    ppef_component = Column(String(64))
+    source_record_identifier = Column(Text)
+    query_identifier = Column(Text)
+    query_timestamp = Column(String(64))
+    dataset_version_anchor = Column(String(128))
+    http_last_modified = Column(String(64))
+
+    disposition = Column(String(32), nullable=False)
+    fields_evaluated = Column(JSONB, default=list)
+    field_matches = Column(JSONB, default=list)
+    field_conflicts = Column(JSONB, default=list)
+    original_values = Column(JSONB, default=dict)
+    normalized_values = Column(JSONB, default=dict)
+    rule_applied = Column(String(128))
+    note = Column(Text)
+
+    retrieved_at = Column(String(64))
+    generation_timestamp = Column(String(64), index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    # Analyst annotation — see the class docstring for why these are writable.
+    analyst_notes = Column(Text)
+    reviewed_by = Column(String(255))
+    reviewed_at = Column(DateTime)
+
+    __table_args__ = (
+        Index("idx_dim_evidence_entity_dimension", "entity_id", "evidence_dimension"),
+        Index("idx_dim_evidence_generation", "entity_id", "generation_timestamp"),
+    )
