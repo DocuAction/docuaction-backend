@@ -269,6 +269,23 @@ class RoleReq(BaseModel):
     role: str
 
 
+def _revoke_sessions(target) -> None:
+    """Invalidate every outstanding token for `target`, right now.
+
+    Stamping `tokens_revoked_at` is what makes an authorisation change take
+    effect on a session that already exists. `_token_revoked` in
+    app.core.security compares each token's `iat` against this timestamp on
+    EVERY authenticated request, so the next call from an old token is rejected
+    with 401 and the user must sign in again — receiving a token minted from
+    their current role.
+
+    Called from every path that changes what a user is allowed to do. It is a
+    function rather than a line copied into each endpoint precisely because the
+    defect this fixes was one such path being forgotten: the role changed in the
+    database and the user's existing session carried on with the old privileges.
+    """
+    target.tokens_revoked_at = datetime.utcnow()
+
 @router.patch("/users/{user_id}/role")
 async def set_role(user_id: str, req: RoleReq, admin=Depends(require_admin), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.id == user_id))
@@ -284,8 +301,11 @@ async def set_role(user_id: str, req: RoleReq, admin=Depends(require_admin), db:
         raise HTTPException(403, "Only a super admin can change admin roles")
     old = target.role
     target.role = new_role
+    # A role change that leaves the old session alive is not a role change.
+    _revoke_sessions(target)
     await db.commit(); await db.refresh(target)
-    await _audit(db, admin, "role_changed", str(target.id), target.email, {"from": old, "to": new_role})
+    await _audit(db, admin, "role_changed", str(target.id), target.email,
+                 {"from": old, "to": new_role, "sessions_revoked": True})
     return _serialize(target)
 
 
@@ -342,6 +362,9 @@ async def bulk_set_role(req: BulkRoleReq, admin=Depends(require_admin), db: Asyn
             skipped.append({"email": email, "reason": "already %s" % new_role})
             continue
         target.role = new_role
+        # Same rule as the single-account path: a bulk demotion that leaves every
+        # affected session alive would be the same defect at scale.
+        _revoke_sessions(target)
         updated.append({"email": email, "from": old, "to": new_role})
 
     if updated:
@@ -349,7 +372,8 @@ async def bulk_set_role(req: BulkRoleReq, admin=Depends(require_admin), db: Asyn
         for row in updated:
             u = found[row["email"]]
             await _audit(db, admin, "role_changed", str(u.id), u.email,
-                         {"from": row["from"], "to": new_role, "via": "bulk-role"})
+                         {"from": row["from"], "to": new_role, "via": "bulk-role",
+                          "sessions_revoked": True})
 
     return {"role": new_role, "updated": updated, "skipped": skipped,
             "updated_count": len(updated), "skipped_count": len(skipped)}
@@ -394,8 +418,14 @@ async def approve_user(user_id: str, req: ApproveReq, admin=Depends(require_admi
     target.is_verified = True
     target.is_active = True
     target.status = "active"
+    # Approval assigns a role, and every role assignment revokes outstanding
+    # sessions — including this one. A pending account should not hold a usable
+    # token, but "should not" is an assumption about a different code path, and
+    # the cost of not relying on it is one timestamp.
+    _revoke_sessions(target)
     await db.commit(); await db.refresh(target)
-    await _audit(db, admin, "account_approved", str(target.id), target.email, {"role": target.role})
+    await _audit(db, admin, "account_approved", str(target.id), target.email,
+                 {"role": target.role, "sessions_revoked": True})
     return _serialize(target)
 
 
@@ -481,8 +511,12 @@ async def set_permissions(user_id: str, req: PermissionsReq, admin=Depends(requi
         raise HTTPException(404, "User not found")
     cleaned = _clean_modules(req.permissions)
     target.allowed_modules = cleaned
+    # Removing module access is an authorisation change like any other, so the
+    # session it was removed from must not survive it.
+    _revoke_sessions(target)
     await db.commit(); await db.refresh(target)
-    await _audit(db, admin, "permissions_changed", str(target.id), target.email, {"permissions": cleaned})
+    await _audit(db, admin, "permissions_changed", str(target.id), target.email,
+                 {"permissions": cleaned, "sessions_revoked": True})
     return _serialize(target)
 
 
@@ -501,6 +535,8 @@ async def update_user(user_id: str, payload: dict, admin=Depends(require_admin),
             raise HTTPException(400, "You cannot remove your own admin role")
         if (nr == "admin" or is_admin_account(target)) and not is_super_admin(admin):
             raise HTTPException(403, "Only a super admin can change admin roles")
+        if (target.role or "") != nr:
+            _revoke_sessions(target)
         target.role = nr
     if "is_active" in payload:
         if str(target.id) == str(admin.id) and not payload["is_active"]:

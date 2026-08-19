@@ -206,16 +206,38 @@ def require_role(minimum_role):
     ):
         payload = decode_token(creds.credentials)
         user_id = payload.get("sub")
-        token_role = payload.get("role", "viewer")
-        required_level = ROLE_HIERARCHY.get(minimum_role, 0)
-        user_level = role_level(token_role)
-        if user_level < required_level:
-            raise HTTPException(403, f"Required: {minimum_role}, Current: {token_role}")
         from app.models.database import User
         result = await db.execute(select(User).where(User.id == user_id))
         user = result.scalar_one_or_none()
         if not user:
             raise HTTPException(401, "User not found")
+
+        # THE AUTHORIZATION DECISION USES THE DATABASE ROLE, NEVER THE TOKEN ROLE.
+        #
+        # This check previously read `payload.get("role")`. A JWT is a snapshot of
+        # who the user was when it was minted, and it is signed — so a stale role
+        # inside one is not tampering, it is simply out of date, and the signature
+        # makes it look authoritative. An admin who demoted a reviewer to
+        # contributor (or removed their access) in Admin -> Users & Access changed
+        # the database and nothing else: the reviewer's browser kept a valid,
+        # correctly-signed token asserting `role: reviewer` and kept passing every
+        # role gate until it expired on its own — up to 24h for an admin token,
+        # 15 minutes otherwise.
+        #
+        # The user row is already being loaded on the next line for account-state
+        # enforcement, so reading the role from it costs nothing extra and makes a
+        # role change take effect on the very next request, in BOTH directions: a
+        # demotion bites immediately, and a promotion works without forcing the
+        # user to sign out and back in.
+        #
+        # `role_level` is fail-closed — an unknown, missing or NULL role resolves
+        # to 0 and is denied.
+        required_level = ROLE_HIERARCHY.get(minimum_role, 0)
+        db_role = getattr(user, "role", None)
+        if role_level(db_role) < required_level:
+            raise HTTPException(
+                403, f"Required: {minimum_role}, Current: {canonical_role(db_role)}"
+            )
         # Same disable/approval/session-revocation enforcement as get_current_user, so
         # role-gated endpoints (e.g. TEFCA) cannot be reached by a disabled or
         # logged-out account holding a still-unexpired token.
