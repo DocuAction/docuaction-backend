@@ -23,7 +23,7 @@ from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, Query, Depends, HTTPException, Request, UploadFile, File
 from fastapi.responses import Response
 from pydantic import BaseModel
-from sqlalchemy import select, text, func, cast, or_, and_, String
+from sqlalchemy import select, text, func, cast, or_, and_, String, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db, async_session_maker
@@ -3994,7 +3994,10 @@ async def entity_evidence_dimensions(
                      "is inferred from it."),
         }
 
-    service = EvidenceService(manager=get_connector_manager(), enable_website=include_website)
+    from app.Tefca.ppef_store import make_local_store
+    service = EvidenceService(manager=get_connector_manager(),
+                              enable_website=include_website,
+                              local_store=make_local_store(db))
     evidence = await service.build_evidence(entity)
 
     persisted = 0
@@ -4048,7 +4051,10 @@ async def review_evidence_dimensions(
                      "dimension evidence can be assembled for it."),
         }
 
-    service = EvidenceService(manager=get_connector_manager(), enable_website=include_website)
+    from app.Tefca.ppef_store import make_local_store
+    service = EvidenceService(manager=get_connector_manager(),
+                              enable_website=include_website,
+                              local_store=make_local_store(db))
     evidence = await service.build_evidence(entity)
     evidence["review_id"] = review_id
     evidence["entity_resolved"] = True
@@ -4127,7 +4133,10 @@ async def entity_evidence_history(
     "/connectors/cms-systems",
     summary="CMS system and capability health",
 )
-async def cms_connector_systems(user=Depends(require_role("viewer"))):
+async def cms_connector_systems(
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("viewer")),
+):
     """Two CMS systems, reported as systems.
 
     PPEF Enrollment, Practice Location, Reassignment and Additional NPIs are
@@ -4135,6 +4144,255 @@ async def cms_connector_systems(user=Depends(require_role("viewer"))):
     Listing them as four external systems would inflate one authority into four
     and imply four independent corroborations where there is one.
     """
-    from app.Tefca.evidence_service import EvidenceService
+    from app.Tefca.cms_ppef import cms_capability_health
+    from app.Tefca.ppef_store import snapshot_status
 
-    return await EvidenceService(manager=get_connector_manager()).health()
+    # Capability status depends on what has actually been ingested, so the
+    # health answer is computed against the local store rather than guessed.
+    try:
+        snapshots = await snapshot_status(db)
+    except Exception as exc:
+        logger.warning("PPEF snapshot status unavailable: %s", exc)
+        snapshots = {}
+    return await cms_capability_health(snapshot_status=snapshots)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PPEF RESOURCE DISCOVERY AND VERSIONED INGESTION
+#
+# CMS publishes four of the five PPEF relational components as quarterly CSV
+# sub-files of the parent dataset rather than as data-api datasets. These
+# endpoints discover what CMS currently offers, ingest a component into the
+# local evidence store with its checksum and provenance, and report what has
+# been ingested.
+#
+# Ingestion is admin-gated: it writes to the evidence store, and evidence that
+# anyone can rewrite is not evidence.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@tefca_dashboard_router.get(
+    "/ppef/resources",
+    summary="Discover the CMS PPEF components currently published, and how each is obtainable",
+)
+async def ppef_resource_discovery(user=Depends(require_role("viewer"))):
+    """Live discovery — never a hard-coded identifier.
+
+    CMS re-publishes quarterly with new file names, media uuids and titles, so
+    a cached identifier would silently point at last quarter.
+    """
+    from app.Tefca.ppef_resources import PPEFResourceCatalog, TRANSPORT_RATIONALE
+
+    discovered = await PPEFResourceCatalog().discover()
+    return {
+        "checked_at": datetime.utcnow().isoformat(),
+        "parent_dataset_id": "2457ea29-fc82-48b0-86ec-3b0755de7515",
+        "components": {
+            k: {**v.to_dict(), "transport_rationale": TRANSPORT_RATIONALE.get(k)}
+            for k, v in discovered.items()
+        },
+        "discovery_note": (
+            "Sub-files are ancillary resources of the parent dataset, listed by "
+            "/data-api/v1/dataset/{parent}/resources. They are absent from the DCAT "
+            "catalogue, and their file_uuids are media ids that 404 against the "
+            "data-api — hence download transport."
+        ),
+    }
+
+
+@tefca_dashboard_router.get(
+    "/ppef/snapshots",
+    summary="Ingested PPEF snapshots with full provenance",
+)
+async def ppef_snapshots(
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("viewer")),
+):
+    from app.Tefca.models import TEFCAPPEFSnapshot
+
+    rows = (await db.execute(
+        select(TEFCAPPEFSnapshot).order_by(TEFCAPPEFSnapshot.ingested_at.desc()).limit(100)
+    )).scalars().all()
+    return {
+        "count": len(rows),
+        "snapshots": [{
+            "id": str(s.id),
+            "component": s.component,
+            "cms_title": s.cms_title,
+            "file_name": s.file_name,
+            "resource_id": s.resource_id,
+            "resource_version": s.resource_version,
+            "as_of_label": s.as_of_label,
+            "transport": s.transport,
+            "file_size": s.file_size,
+            "sha256": s.sha256,
+            "schema_fields": s.schema_fields,
+            "record_count": s.record_count,
+            "rows_truncated": bool(s.rows_truncated),
+            "ingest_status": s.ingest_status,
+            "error": s.error,
+            "retrieved_at": s.retrieved_at.isoformat() if s.retrieved_at else None,
+            "ingested_at": s.ingested_at.isoformat() if s.ingested_at else None,
+            "ingested_by": s.ingested_by,
+        } for s in rows],
+        "retention_note": (
+            "Snapshots are append-only. CMS PPEF carries CURRENT enrolment data, so a "
+            "quarter disappears from the source when the next publishes; the preserved "
+            "snapshot and its checksum are what keep an earlier determination explicable."
+        ),
+    }
+
+
+async def _run_ppef_ingest(snapshot_id, component: str, max_rows, actor_email):
+    """Ingest one component in the BACKGROUND, on its own database session.
+
+    This does not run inside the request for a concrete reason: the Azure front
+    end closes a connection that has produced no bytes for 60 seconds, and a
+    real ingest is minutes of work — 130k rows for the smallest sub-file and
+    millions for Reassignment. The first attempt on dev died at exactly 60.4s
+    with no response, which is the worst possible failure mode: the caller
+    cannot tell a timeout from a crash, and rows may still be landing.
+
+    So the endpoint returns 202 immediately with a snapshot id, and this task
+    drives the load to completion, marking the snapshot `complete` or `failed`.
+    ppef_store only reads `complete` snapshots, so a load in flight is never
+    served as evidence.
+    """
+    from sqlalchemy import delete as _delete
+
+    # app.core.database.async_session_maker() RETURNS A SESSION, not a factory —
+    # it is `_get_session_maker()()`. Calling its result is what raised
+    # "'AsyncSession' object is not callable" and killed every background ingest
+    # on dev while the endpoint still reported 202. Bind it once, use it directly.
+    from app.core.database import async_session_maker
+    from app.Tefca.models import TEFCAPPEFRecord, TEFCAPPEFSnapshot
+    from app.Tefca.ppef_ingest import IngestError, PPEFIngestor, SchemaDriftError
+
+    async with async_session_maker() as db:
+        written = {"rows": 0}
+
+        async def write_batch(batch):
+            for row in batch:
+                db.add(TEFCAPPEFRecord(
+                    snapshot_id=snapshot_id,
+                    component=component,
+                    enrollment_id=row.get("enrollment_id"),
+                    related_enrollment_id=row.get("related_enrollment_id"),
+                    npi=row.get("npi"),
+                    payload=row.get("payload") or {},
+                ))
+            await db.commit()
+            written["rows"] += len(batch)
+
+        async def fail(reason: str):
+            await db.rollback()
+            try:
+                snap = await db.get(TEFCAPPEFSnapshot, snapshot_id)
+                if snap is not None:
+                    snap.ingest_status = "failed"
+                    snap.error = reason[:2000]
+                await db.execute(
+                    _delete(TEFCAPPEFRecord).where(TEFCAPPEFRecord.snapshot_id == snapshot_id))
+                await db.commit()
+            except Exception:
+                await db.rollback()
+
+        try:
+            meta = await PPEFIngestor().ingest(component, write_batch=write_batch, max_rows=max_rows)
+        except SchemaDriftError as exc:
+            logger.warning("PPEF schema drift for %s: %s", component, exc)
+            await fail(f"schema_drift: {exc}")
+            return
+        except IngestError as exc:
+            await fail(f"ingest_error: {exc}")
+            return
+        except Exception as exc:
+            logger.warning("PPEF ingest failed for %s: %s", component, exc)
+            await fail(f"unexpected: {exc}")
+            return
+
+        snap = await db.get(TEFCAPPEFSnapshot, snapshot_id)
+        if snap is None:
+            return
+        snap.cms_title = meta.cms_title
+        snap.file_name = meta.file_name
+        snap.resource_id = meta.resource_id
+        snap.parent_dataset_id = meta.parent_dataset_id
+        snap.download_url = meta.download_url
+        snap.api_endpoint = meta.api_endpoint
+        snap.transport = meta.transport
+        snap.resource_version = meta.resource_version
+        snap.as_of_label = meta.as_of_label
+        snap.file_size = meta.file_size
+        snap.sha256 = meta.sha256
+        snap.schema_fields = meta.schema_fields
+        snap.record_count = meta.record_count
+        snap.rows_truncated = meta.rows_truncated
+        snap.http_last_modified = meta.http_last_modified
+        snap.ingest_status = "complete"      # only now readable as evidence
+        await db.commit()
+        logger.info("PPEF ingest complete: %s %s rows=%s sha=%s",
+                    component, meta.resource_version, meta.record_count, meta.sha256[:12])
+
+
+@tefca_dashboard_router.post(
+    "/ppef/snapshots/ingest",
+    status_code=202,
+    summary="Start a background download+ingest of one CMS PPEF component",
+)
+async def ppef_ingest_component(
+    component: str,
+    background: BackgroundTasks,
+    max_rows: Optional[int] = None,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("admin")),
+):
+    """Queue an ingest and return 202 with the snapshot id.
+
+    Poll GET /ppef/snapshots for status. `max_rows` caps the load; when it bites
+    the snapshot records rows_truncated=True, so a partial load is never
+    presented as a complete one.
+
+    Schema drift marks the snapshot `failed` rather than loading nulls into an
+    evidence store.
+    """
+    import uuid as _uuid
+
+    from app.Tefca.models import TEFCAPPEFSnapshot
+    from app.Tefca.ppef_resources import EXPECTED_FIELDS
+
+    component = (component or "").strip().upper()
+    if component not in EXPECTED_FIELDS:
+        raise HTTPException(400, f"Unknown PPEF component '{component}'. "
+                                 f"Known: {sorted(EXPECTED_FIELDS)}")
+
+    snapshot_id = _uuid.uuid4()
+    # The snapshot row exists before any record references it: the records table
+    # has a foreign key to it, and beyond the constraint this is the honest
+    # order — a failed load leaves a `failed` row documenting the attempt.
+    db.add(TEFCAPPEFSnapshot(
+        id=snapshot_id,
+        component=component,
+        ingest_status="pending",
+        ingested_by=getattr(user, "email", None),
+    ))
+    await db.commit()
+
+    await log_tefca_event(
+        db, user=user, action="PPEF_SNAPSHOT_INGEST_STARTED",
+        resource_type="tefca_ppef_snapshot", resource_id=str(snapshot_id),
+        details={"component": component, "max_rows": max_rows},
+    )
+    await db.commit()
+
+    background.add_task(_run_ppef_ingest, snapshot_id, component, max_rows,
+                        getattr(user, "email", None))
+    return {
+        "snapshot_id": str(snapshot_id),
+        "component": component,
+        "ingest_status": "pending",
+        "max_rows": max_rows,
+        "poll": "/api/tefca/ppef/snapshots",
+        "note": ("Ingestion runs in the background: a full sub-file is minutes of work "
+                 "and the gateway closes an idle request at 60s. The snapshot becomes "
+                 "readable as evidence only when it reaches ingest_status=complete."),
+    }

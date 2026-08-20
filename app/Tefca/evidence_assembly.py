@@ -553,11 +553,19 @@ def _dimension_address(entity: Dict[str, Any], profile: ApplicabilityProfile,
         # "the provider also bills from a second site" is visible rather than
         # collapsed into whichever row happened to be first.
         if not rows:
-            candidates.append({
-                "source": SOURCE_PECOS_PRACTICE_LOCATION, "address": None,
-                "note": ("NO_PRACTICE_LOCATION — CMS documents that some individual "
-                         "enrolments legitimately have no practice location row. Not a failure."),
-            })
+            # Distinguish "CMS has no location row for this enrolment" from
+            # "our snapshot is partial and cannot answer".
+            if (location.data or {}).get("inconclusive"):
+                candidates.append({
+                    "source": SOURCE_PECOS_PRACTICE_LOCATION, "unavailable": True,
+                    "note": (location.data or {}).get("inconclusive_reason"),
+                })
+            else:
+                candidates.append({
+                    "source": SOURCE_PECOS_PRACTICE_LOCATION, "address": None,
+                    "note": ("NO_PRACTICE_LOCATION — CMS documents that some individual "
+                             "enrolments legitimately have no practice location row. Not a failure."),
+                })
         for row in rows:
             candidates.append({
                 "source": SOURCE_PECOS_PRACTICE_LOCATION,
@@ -720,7 +728,11 @@ def _dimension_relationship(entity: Dict[str, Any], profile: ApplicabilityProfil
         data = reassignment.data or {}
         records = data.get("records") or []
         receiving = sorted({r.get("RCV_BNFT_ENRLMT_ID") for r in records if r.get("RCV_BNFT_ENRLMT_ID")})
-        if not records:
+        if not records and data.get("inconclusive"):
+            # A partial snapshot cannot support "no reassignment exists".
+            corroboration = Disposition.INSUFFICIENT_EVIDENCE
+            note = data.get("inconclusive_reason")
+        elif not records:
             # "RCE relationship exists + no PECOS reassignment" — never a FAIL.
             corroboration = (Disposition.REVIEW if profile.medicare_relevance == "LIKELY"
                              else Disposition.NOT_APPLICABLE)

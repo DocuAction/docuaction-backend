@@ -324,10 +324,69 @@ class TestRevocation:
 # ── PPEF relational components ───────────────────────────────────────────────
 
 class TestRelationalComponents:
-    async def test_unpublished_component_is_unavailable_not_fabricated(self):
+    async def test_download_only_component_without_snapshot_is_unavailable_not_fabricated(self):
+        """No API and nothing ingested -> UNAVAILABLE, never an invented match.
+
+        CORRECTED. This test previously asserted the reason string
+        "not_published_via_cms_data_api", encoding a claim that CMS does not
+        publish these components at all. That claim was disproven: CMS publishes
+        all four as quarterly CSV sub-files of the parent dataset (see
+        ppef_resources). The BEHAVIOUR under test is unchanged and still
+        asserted — no data-api and no snapshot means UNAVAILABLE with data=None
+        — only the reason string now states the true fact.
+        """
         result = await PPEFRelationalConnector(FakeCMSClient()).practice_locations(["I1"])
         assert result.success is False
-        assert "not_published_via_cms_data_api" in (result.error or "")
+        assert "no_snapshot_ingested" in (result.error or "")
+        assert result.data is None          # fail-closed: nothing readable as clean
+
+    async def test_api_unavailable_reason_states_the_transport_fact(self):
+        """The other reason string must stay accurate too: CMS offers no API here."""
+        from app.Tefca.cms_ppef import COMPONENT_UNPUBLISHED_REASON
+        assert "not_available_via_cms_data_api" in COMPONENT_UNPUBLISHED_REASON
+        assert "download" in COMPONENT_UNPUBLISHED_REASON.lower()
+
+    async def test_snapshot_backed_component_resolves_without_any_api(self):
+        """With a snapshot present, a download-only component answers normally."""
+        async def store(component, key_field, ids):
+            return (
+                [{"ENRLMT_ID": "I1", "CITY_NAME": "BALTIMORE", "STATE_CD": "MD",
+                  "ZIP_CD": "212011925"}],
+                {"resource_version": "2026.07.17", "sha256": "abc123",
+                 "cms_resource_title": "Address Sub-File Q3 2026", "realtime": False},
+            )
+
+        conn = PPEFRelationalConnector(FakeCMSClient(), local_store=store)
+        result = await conn.practice_locations(["I1"])
+        assert result.success is True
+        assert result.get("record_count") == 1
+        assert result.get("records")[0]["CITY_NAME"] == "BALTIMORE"
+        assert result.get("provenance")["cms_resource_title"] == "Address Sub-File Q3 2026"
+
+    async def test_snapshot_with_no_rows_is_not_the_same_as_no_snapshot(self):
+        """"Searched, genuinely none" and "never loaded" must not collapse.
+
+        CMS documents that some individual enrolments legitimately have no
+        practice-location row, so an empty result from a real snapshot is a
+        finding about the enrolment, while a missing snapshot is a finding about
+        us.
+        """
+        async def empty_store(component, key_field, ids):
+            return ([], {"resource_version": "2026.07.17", "sha256": "abc123"})
+
+        conn = PPEFRelationalConnector(FakeCMSClient(), local_store=empty_store)
+        result = await conn.practice_locations(["I1"])
+        assert result.success is True          # the snapshot answered
+        assert result.get("found") is False    # and the answer is "no rows"
+        assert result.get("record_count") == 0
+
+    async def test_local_store_failure_degrades_to_unavailable_not_to_a_clean_result(self):
+        async def broken_store(component, key_field, ids):
+            raise RuntimeError("database unreachable")
+
+        conn = PPEFRelationalConnector(FakeCMSClient(), local_store=broken_store)
+        result = await conn.practice_locations(["I1"])
+        assert result.success is False
         assert result.data is None
 
     async def test_practice_location_linkage_when_published(self, monkeypatch):
@@ -895,3 +954,75 @@ class TestAuditCallSignature:
             except TypeError as exc:
                 failures.append(f"routes.py:{call.lineno}: {exc}")
         assert not failures, "log_tefca_event call sites do not match its signature:\n" + "\n".join(failures)
+
+
+class TestTruncatedSnapshotCannotProveAbsence:
+    """A partial snapshot must never manufacture a clean negative.
+
+    Found during dev verification: a capped ingest returned no rows for an
+    enrolment and the address dimension reported NO_PRACTICE_LOCATION — a claim
+    about CMS data — when the truth was only that our snapshot was partial.
+    "Not in our snapshot" and "not in CMS" are different statements and only the
+    second says anything about the entity.
+    """
+
+    async def test_truncated_snapshot_with_no_rows_is_inconclusive(self):
+        async def truncated_store(component, key_field, ids):
+            return ([], {"resource_version": "2026.07.17", "sha256": "abc",
+                         "rows_truncated": True})
+
+        conn = PPEFRelationalConnector(FakeCMSClient(), local_store=truncated_store)
+        result = await conn.practice_locations(["I1"])
+        assert result.success is True
+        assert result.get("found") is False
+        assert result.get("inconclusive") is True
+        assert "snapshot_truncated_no_rows" in result.get("inconclusive_reason")
+
+    async def test_complete_snapshot_with_no_rows_is_a_real_absence(self):
+        async def complete_store(component, key_field, ids):
+            return ([], {"resource_version": "2026.07.17", "sha256": "abc",
+                         "rows_truncated": False})
+
+        conn = PPEFRelationalConnector(FakeCMSClient(), local_store=complete_store)
+        result = await conn.practice_locations(["I1"])
+        assert result.get("found") is False
+        assert result.get("inconclusive") is False   # CMS genuinely has no row
+
+    async def test_address_dimension_does_not_claim_no_practice_location_when_truncated(self):
+        async def truncated_store(component, key_field, ids):
+            return ([], {"resource_version": "2026.07.17", "rows_truncated": True,
+                         "sha256": "abc"})
+
+        entity = onc_entity()
+        conn = PPEFRelationalConnector(FakeCMSClient(), local_store=truncated_store)
+        sources = clean_sources(
+            cms_ppef_enrollment=await enrollment_source(FakeCMSClient()),
+            cms_revocation=await revocation_source(FakeCMSClient()),
+            cms_ppef_practice_location=await conn.practice_locations(["I1"]),
+        )
+        profile = build_profile(entity, nppes_data=nppes_result().data)
+        d4 = dim(assemble_dimensions(entity, profile, sources), Dimension.D4_ADDRESS)
+        notes = " ".join(i.note or "" for i in d4.items)
+        assert "NO_PRACTICE_LOCATION" not in notes
+        assert "snapshot_truncated_no_rows" in notes
+
+    async def test_reassignment_absence_from_a_partial_snapshot_is_insufficient_evidence(self):
+        async def truncated_store(component, key_field, ids):
+            return ([], {"resource_version": "2026.07.17", "rows_truncated": True,
+                         "sha256": "abc"})
+
+        entity = onc_entity()
+        nppes = nppes_result(enumeration_type="NPI-1", taxonomy_code="207V00000X")
+        conn = PPEFRelationalConnector(FakeCMSClient(), local_store=truncated_store)
+        sources = clean_sources(
+            nppes=nppes,
+            cms_ppef_enrollment=await enrollment_source(FakeCMSClient()),
+            cms_revocation=await revocation_source(FakeCMSClient()),
+            cms_ppef_reassignment=await conn.reassignments(["I1"]),
+        )
+        profile = build_profile(entity, nppes_data=nppes.data, pecos_found=False)
+        d6 = dim(assemble_dimensions(entity, profile, sources),
+                 Dimension.D6_PROVIDER_ORG_RELATIONSHIP)
+        item = next(i for i in d6.items if i.source == "CMS_PPEF_REASSIGNMENT")
+        assert item.disposition == Disposition.INSUFFICIENT_EVIDENCE.value
+        assert d6.disposition != Disposition.FAIL.value

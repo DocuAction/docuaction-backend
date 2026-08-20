@@ -144,12 +144,16 @@ class EvidenceService:
         manager: Optional[SourceConnectorManager] = None,
         cms_client: Optional[CMSDataAPIClient] = None,
         enable_website: bool = False,
+        local_store=None,
     ):
         self.manager = manager or SourceConnectorManager()
         client = cms_client or CMSDataAPIClient()
         self.ppef = PPEFEnrollmentConnector(client)
         self.revocation = CMSRevocationConnector(client)
-        self.relational = PPEFRelationalConnector(client)
+        # local_store lets the four download-only components resolve from an
+        # ingested quarterly snapshot. Without one they report UNAVAILABLE with
+        # a reason — which is honest, and never a finding against an entity.
+        self.relational = PPEFRelationalConnector(client, local_store=local_store)
         # Off by default: website corroboration reaches out to a third-party host
         # and is supplemental evidence only. It is opt-in per review.
         self.enable_website = enable_website

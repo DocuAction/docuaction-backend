@@ -20,31 +20,48 @@ copied out of a specification and hoped for.
                       PROVIDER_TYPE_DESC, REVOCATION_RSN,
                       REVOCATION_EFCTV_DT, REENROLLMENT_BAR_EXPRTN_DT
 
-THE FOUR OTHER PPEF RELATIONAL COMPONENTS ARE NOT AVAILABLE THROUGH THIS API
-────────────────────────────────────────────────────────────────────────────
-The specification describes PPEF as five relational files joined on ENRLMT_ID
-(Enrollment, Reassignment, Practice Location, Secondary Specialty, Additional
-NPIs). CMS documents that structure for the quarterly file package. It is NOT
-what data.cms.gov exposes today, and the difference is load-bearing:
+THE FOUR RELATIONAL SUB-FILES ARE PUBLISHED — AS DOWNLOADS, NOT AS APIs
+───────────────────────────────────────────────────────────────────────
+CORRECTION. An earlier version of this module stated that CMS does not publish
+the four sub-files. That was wrong, and the error is recorded here rather than
+quietly deleted, because the reasoning behind it was sound and still needs
+answering:
 
-  * The DCAT catalogue (https://data.cms.gov/data.json, 159 datasets) carries a
-    single PPEF entry. Its five distributions are three API versions and two CSV
-    versions of the SAME Enrollment extract — the CSVs are literally named
-    PPEF_Enrollment_Extract_2026.07.17.csv and ...2026.04.01.csv.
-  * All three API distributions were probed. All three return the identical
-    11-field Enrollment schema above.
-  * A catalogue-wide search for REASGN / ENRLMT / PRACTICE_LOCATION /
-    ADDITIONAL_NPI matched only the Revalidation datasets — and the spec
-    explicitly forbids substituting "Revalidation Reassignment List" for the
-    PPEF reassignment relationship. They are different datasets.
+  * The DCAT catalogue lists ONE PPEF dataset. All 159 dataset titles were read
+    — no Reassignment, Practice Location, Address, Additional NPIs or Secondary
+    Specialty dataset exists there under any name.
+  * Its distributions are only Enrollment, in three API and two CSV versions.
+  * A catalogue-wide distribution search matched only the Revalidation
+    products, which the specification forbids substituting.
 
-So the relational components resolve to UNAVAILABLE with a machine-readable
-reason. They are NOT stubbed with invented joins, and their absence is NEVER a
-verification failure — an evidence dimension with no reachable authority is
-UNAVAILABLE or NOT_APPLICABLE, never FAIL. When CMS publishes them (or an
-operator supplies the quarterly files), fill in `dataset_id` on the component
-and the surrounding evidence logic works unchanged, because every consumer
-already handles the multi-record, one-to-many shape.
+All true. The catalogue is simply not where the sub-files live. They are
+ancillary RESOURCES of the parent dataset, listed by an endpoint the catalogue
+never mentions — GET /data-api/v1/dataset/{parent}/resources — and discovered
+by app.Tefca.ppef_resources. Verified live 2026-08-19:
+
+  Reassignment Sub-File Q3 2026        PPEF_Reassignment_Extract_2026.07.17.csv       128.7 MB
+  Address Sub-File Q3 2026             PPEF_Practice_Location_Extract_2026.07.17.csv   43.2 MB
+  Secondary Specialty Sub-File Q3 2026 PPEF_Secondary_Specialty_Extract_2026.07.17.csv 27.2 MB
+  Additional NPIs Sub-File Q3 2026     PPEF_Additional_NPIs_2026.07.17.csv              3.6 MB
+
+Their file_uuids are MEDIA ids, not dataset ids: all four return 404 against
+/data-api/v1/dataset/{uuid}/data. So the transport is download-and-ingest, and
+the honest classification is DOWNLOAD_AVAILABLE — never API_AVAILABLE, because
+no API request for them has ever succeeded.
+
+Note the naming: CMS titles the practice-location resource "Address Sub-File"
+while naming the file PPEF_Practice_Location_Extract. One capability, two
+names. It is normalised internally to PRACTICE_LOCATION with the CMS title
+preserved in provenance, rather than split into two capabilities.
+
+HOW A COMPONENT IS SERVED
+─────────────────────────
+  1. If CMS ever exposes a data-api dataset id for it, use the API.
+  2. Otherwise serve it from an ingested quarterly snapshot (ppef_ingest).
+  3. If neither exists, UNAVAILABLE with a reason — never a fabricated match.
+
+An absent snapshot is an operational fact ("nothing ingested yet"), not a
+finding against an entity, and it never becomes a verification failure.
 
 POINT-IN-TIME (Amendment 6)
 ───────────────────────────
@@ -112,11 +129,22 @@ PPEF_COMPONENT_DATASETS: Dict[PPEFComponent, Optional[str]] = {
 }
 
 COMPONENT_UNPUBLISHED_REASON = (
-    "ppef_component_not_published_via_cms_data_api: the CMS DCAT catalogue "
-    "exposes only the PPEF Enrollment extract; the Reassignment, Practice "
-    "Location, Additional NPIs and Secondary Specialty relational files are not "
-    "served by data.cms.gov/data-api. Substituting the Revalidation "
-    "Reassignment List is prohibited — it is a different dataset."
+    "ppef_component_not_available_via_cms_data_api: CMS publishes this component "
+    "as a downloadable quarterly sub-file of the parent PPEF dataset, not as a "
+    "data-api dataset — its file_uuid is a media id and returns 404 against "
+    "/data-api/v1/dataset/{uuid}/data. Serve it from an ingested snapshot "
+    "instead. Substituting the Revalidation Reassignment List is prohibited — "
+    "it is a different dataset."
+)
+
+#: Returned when the component has no API and nothing has been ingested yet.
+#: Distinct from the message above because "CMS offers no API for this" and
+#: "we have not loaded it yet" are different facts with different remedies.
+COMPONENT_NO_SNAPSHOT_REASON = (
+    "ppef_component_no_snapshot_ingested: this component is download-only and no "
+    "quarterly snapshot has been ingested into the local evidence store. Run the "
+    "PPEF ingestion for it. This is an operational state, not a finding about "
+    "any entity."
 )
 
 # Field names, exactly as CMS returns them. Referenced symbolically so a CMS
@@ -455,21 +483,25 @@ class CMSRevocationConnector:
 
 
 class PPEFRelationalConnector:
-    """The PPEF components CMS does not currently serve over the data API.
+    """The four PPEF relational components, served by whichever transport exists.
 
-    This class exists so the relational model is REPRESENTED honestly rather
-    than silently missing: each component reports UNAVAILABLE with a specific,
-    machine-readable reason, and the evidence layer converts that into
-    UNAVAILABLE / NOT_APPLICABLE — never FAIL, never a fabricated match.
+    CMS publishes these as downloadable quarterly sub-files rather than as
+    data-api datasets (see the module docstring). This class therefore resolves
+    them from an ingested snapshot, while keeping the data-api path live for the
+    day CMS exposes one — PPEF_COMPONENT_DATASETS is still consulted first, so a
+    single mapping entry switches a component over with no other change.
 
-    `dataset_id` is read from PPEF_COMPONENT_DATASETS, so the day CMS publishes
-    (or an operator loads) a component, one mapping entry turns it on.
+    `local_store` is injected rather than imported so this connector has no
+    database dependency of its own: routes supply a snapshot-backed callable,
+    and tests supply an in-memory one.
     """
 
     SOURCE_NAME = "CMS_PPEF"
 
-    def __init__(self, client: Optional[CMSDataAPIClient] = None):
+    def __init__(self, client: Optional[CMSDataAPIClient] = None, local_store=None):
         self.client = client or CMSDataAPIClient()
+        # async (component, key_field, enrollment_ids) -> (records, snapshot_provenance) | None
+        self.local_store = local_store
 
     def component_dataset(self, component: PPEFComponent) -> Optional[str]:
         return PPEF_COMPONENT_DATASETS.get(component)
@@ -522,6 +554,14 @@ class PPEFRelationalConnector:
     async def _fan_out(
         self, component: PPEFComponent, key_field: str, enrollment_ids: List[str]
     ) -> SourceResult:
+        """Resolve a component for a set of enrolment ids.
+
+        Three transports, tried in the order of what CMS actually offers:
+          1. data-api, if CMS ever publishes a dataset id for this component;
+          2. an ingested quarterly snapshot (the real path today);
+          3. neither — UNAVAILABLE with a reason that distinguishes "CMS has no
+             API for this" from "nothing has been ingested yet".
+        """
         source = f"{self.SOURCE_NAME}_{component.value}"
         ids = [e for e in (enrollment_ids or []) if e]
         if not ids:
@@ -531,8 +571,44 @@ class PPEFRelationalConnector:
                 {"component": component.value}, None,
             )
         if not self.component_dataset(component):
+            # No API. Try the local snapshot store before declaring anything
+            # unavailable — this is the transport CMS actually supports.
+            if self.local_store is not None:
+                try:
+                    local = await self.local_store(component.value, key_field, ids)
+                except Exception as exc:
+                    logger.warning("PPEF local store failed for %s: %s", component.value, exc)
+                    local = None
+                if local is not None:
+                    records, snapshot = local
+                    # A TRUNCATED snapshot cannot support a negative finding.
+                    #
+                    # "Not in our snapshot" and "not in CMS data" are different
+                    # claims, and only the second one says anything about the
+                    # entity. When a capped ingest returns no rows, the honest
+                    # answer is that the evidence is inconclusive — otherwise a
+                    # partial load would manufacture clean absences, which is
+                    # precisely the silent-wrongness this design exists to avoid.
+                    truncated = bool((snapshot or {}).get("rows_truncated"))
+                    inconclusive = truncated and not records
+                    return SourceResult.ok(
+                        source,
+                        {"found": bool(records), "records": records,
+                         "record_count": len(records), "enrollment_ids_queried": ids,
+                         "snapshot_truncated": truncated,
+                         "inconclusive": inconclusive,
+                         "inconclusive_reason": (
+                             "snapshot_truncated_no_rows: the ingested snapshot is partial, so "
+                             "the absence of rows for this enrolment is not evidence that CMS "
+                             "has none. Ingest the complete file before relying on a negative."
+                             if inconclusive else None),
+                         "provenance": snapshot},
+                        {"component": component.value, "enrollment_ids": ids},
+                        (snapshot or {}).get("resource_version"),
+                        raw_for_hash=records,
+                    )
             return SourceResult.unavailable(
-                source, COMPONENT_UNPUBLISHED_REASON,
+                source, COMPONENT_NO_SNAPSHOT_REASON,
                 {"component": component.value, "enrollment_ids": ids}, None,
             )
         results = await asyncio.gather(
@@ -559,7 +635,10 @@ CAPABILITY_DEGRADED = "DEGRADED"
 CAPABILITY_UNAVAILABLE = "UNAVAILABLE"
 
 
-async def cms_capability_health(client: Optional[CMSDataAPIClient] = None) -> Dict[str, Any]:
+async def cms_capability_health(
+    client: Optional[CMSDataAPIClient] = None,
+    snapshot_status: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     """Per-capability health for the CMS systems, not per-"API".
 
     Two systems are reported — CMS/PECOS Public Provider Enrollment (with its
@@ -582,22 +661,49 @@ async def cms_capability_health(client: Optional[CMSDataAPIClient] = None) -> Di
     revocation_live = bool(revocation_live) if not isinstance(revocation_live, Exception) else False
     checked_at = datetime.utcnow().isoformat()
 
+    from app.Tefca.ppef_resources import (
+        KNOWN_COMPONENT_TRANSPORT,
+        TRANSPORT_RATIONALE,
+        ResourceStatus,
+        Transport,
+    )
+
+    snapshots = snapshot_status or {}
     capabilities = []
     for component in PPEFComponent:
         dataset = PPEF_COMPONENT_DATASETS[component]
-        if dataset is None:
-            status = CAPABILITY_DEGRADED
-            note = COMPONENT_UNPUBLISHED_REASON
-        elif enrollment_live:
+        known = KNOWN_COMPONENT_TRANSPORT.get(component.value, {})
+        transport = known.get("transport", Transport.NONE.value)
+        resource_status = known.get("status", ResourceStatus.UNAVAILABLE.value)
+        snap = snapshots.get(component.value)
+
+        if dataset is not None:
+            # Served by the data-api. Live iff the probe answered.
+            status = CAPABILITY_AVAILABLE if enrollment_live else CAPABILITY_UNAVAILABLE
+            note = ("Reachable via data.cms.gov data-api."
+                    if enrollment_live else "CMS data-api did not answer the probe.")
+        elif snap:
+            # Download-only component with an ingested snapshot: this is the
+            # normal healthy state for four of the five components.
             status = CAPABILITY_AVAILABLE
-            note = "Reachable via data.cms.gov data-api."
+            note = (f"Served from ingested snapshot {snap.get('resource_version')} "
+                    f"({snap.get('record_count')} records, sha256 "
+                    f"{str(snap.get('sha256'))[:12]}…).")
         else:
-            status = CAPABILITY_UNAVAILABLE
-            note = "CMS data-api did not answer the probe."
+            # CMS publishes it, we simply have not loaded it yet. DEGRADED, not
+            # UNAVAILABLE: the system is answering and the capability is
+            # obtainable — it is an operational gap, not an outage.
+            status = CAPABILITY_DEGRADED
+            note = COMPONENT_NO_SNAPSHOT_REASON
+
         capabilities.append({
             "capability": component.value,
             "status": status,
             "dataset_id": dataset,
+            "transport": transport,
+            "resource_status": resource_status,
+            "rationale": TRANSPORT_RATIONALE.get(component.value),
+            "snapshot": snap,
             "note": note,
         })
 
