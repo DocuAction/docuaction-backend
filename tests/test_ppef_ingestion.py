@@ -490,6 +490,68 @@ class TestIngestAuditCompleteness:
         assert "user=actor" in src
         assert 'db, user=None, action="PPEF_SNAPSHOT_INGESTED"' not in src
 
+    def test_ppef_ingestion_creates_audit_event_with_provenance(self):
+        """The named merge-gate test: completion is audited with full provenance.
+
+        Every field an auditor needs to reproduce or challenge a determination
+        must be on the completion record — who asked, what executed it, which
+        CMS component and quarter, how many rows, the checksum, and whether the
+        load was complete or partial.
+        """
+        import inspect
+
+        from app.Tefca import routes
+
+        src = inspect.getsource(routes._run_ppef_ingest)
+        start = src.index('action="PPEF_SNAPSHOT_INGESTED"')
+        block = src[start:start + 2500]
+
+        required = {
+            "actor identity":   "requested_by",
+            "executing agent":  "executed_by",
+            "action type":      "PPEF_SNAPSHOT_INGESTED",
+            "component":        '"component": component',
+            "quarter":          '"quarter"',
+            "row count":        '"record_count"',
+            "checksum":         '"sha256"',
+            "completion time":  '"completed_at"',
+            "result":           "result_status",
+            "truncation":       "rows_truncated",
+            "schema":           "schema_validated",
+        }
+        missing = [name for name, token in required.items() if token not in block]
+        assert not missing, f"completion audit is missing: {missing}"
+
+    def test_audit_failure_cannot_pass_silently(self):
+        """An audit write that fails quietly is worse than one that never ran.
+
+        This block previously sat outside any handler: a failure escaped the
+        background task and left a complete snapshot with no completion record,
+        which is exactly the state that looked fine and was not.
+        """
+        import inspect
+
+        from app.Tefca import routes
+
+        src = inspect.getsource(routes._run_ppef_ingest)
+        assert "AUDIT FAILED" in src
+        assert "logger.error" in src
+
+    def test_attribution_names_both_requester_and_executor(self):
+        """Neither half alone is honest.
+
+        Attributing solely to the admin implies a human watched 3.9M rows load;
+        attributing solely to the system loses who authorised it — and a
+        null user_id is invisible in the admin activity feed.
+        """
+        import inspect
+
+        from app.Tefca import routes
+
+        src = inspect.getsource(routes._run_ppef_ingest)
+        assert "user=actor" in src, "must attribute to the requesting admin"
+        assert "system/ppef-ingest" in src, "must name the executing service"
+
     def test_completion_audit_carries_the_reproducibility_fields(self):
         import inspect
 

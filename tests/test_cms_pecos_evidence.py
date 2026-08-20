@@ -1085,3 +1085,68 @@ class TestSnapshotEvidenceCounts:
         for item in d6.items:
             if item.disposition == Disposition.CORROBORATED.value:
                 assert item.record_count > 0
+
+
+class TestLegacyPecosKeyDisambiguation:
+    """One word must not mean two things in the same audit trail.
+
+    `PECOSConnector` queries NPPES, and historical rows carry
+    source_name="pecos" meaning exactly that. Genuine PECOS evidence now exists
+    as CMS_PPEF_ENROLLMENT. The historical rows are NOT rewritten — an audit
+    value records what was believed when it was written — so the ambiguity is
+    resolved by refusing the key for new evidence and by describing it
+    explicitly wherever it is rendered.
+    """
+
+    def test_legacy_key_is_documented_as_nppes_not_pecos(self):
+        from app.Tefca.source_registry import describe_source
+
+        legacy = describe_source("pecos")
+        assert legacy["deprecated"] is True
+        assert "NPPES" in legacy["queries"]
+        assert legacy["superseded_by"] == "CMS_PPEF_ENROLLMENT"
+
+    def test_genuine_pecos_evidence_is_never_flagged_legacy(self):
+        from app.Tefca.source_registry import describe_source, is_legacy_pecos
+
+        assert is_legacy_pecos("pecos") is True
+        assert is_legacy_pecos("PECOS") is True
+        assert is_legacy_pecos("CMS_PPEF_ENROLLMENT") is False
+        assert describe_source("CMS_PPEF_ENROLLMENT")["deprecated"] is False
+
+    def test_new_evidence_store_refuses_the_ambiguous_key(self):
+        from app.Tefca.source_registry import assert_canonical_evidence_source
+
+        assert assert_canonical_evidence_source("CMS_PPEF_ENROLLMENT") == "CMS_PPEF_ENROLLMENT"
+        assert assert_canonical_evidence_source("NPPES") == "NPPES"
+        with pytest.raises(ValueError) as exc:
+            assert_canonical_evidence_source("pecos")
+        assert "ambiguous" in str(exc.value)
+
+    async def test_assembled_evidence_uses_only_canonical_sources(self):
+        """The evidence layer must never emit the legacy key."""
+        from app.Tefca.source_registry import CANONICAL_EVIDENCE_SOURCES, is_legacy_pecos
+
+        client = FakeCMSClient({cms_ppef.PPEF_ENROLLMENT_DATASET_ID: [enrollment_row()]})
+        entity = onc_entity()
+        sources = clean_sources(
+            cms_ppef_enrollment=await enrollment_source(client),
+            cms_revocation=await revocation_source(FakeCMSClient()),
+        )
+        profile = build_profile(entity, nppes_data=nppes_result().data, pecos_found=True)
+        results = assemble_dimensions(entity, profile, sources)
+        emitted = {i.source for r in results for i in r.items}
+        assert not any(is_legacy_pecos(s) for s in emitted), emitted
+        unknown = emitted - CANONICAL_EVIDENCE_SOURCES
+        assert not unknown, f"undeclared source keys: {unknown}"
+
+    def test_legacy_validation_path_keeps_its_key(self):
+        """The OLD path is left alone — renaming it would rewrite history.
+
+        SourceConnectorManager still reports "pecos", and stored rows still say
+        "pecos". That is correct: those rows mean an NPPES-proxy check, and the
+        registry says so.
+        """
+        from app.Tefca.connectors import SourceConnectorManager
+
+        assert "pecos" in SourceConnectorManager.REQUIRED_SOURCES

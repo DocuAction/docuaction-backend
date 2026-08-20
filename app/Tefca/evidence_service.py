@@ -258,10 +258,17 @@ def evidence_rows_for_persistence(
     because the determination that cited the old evidence has to stay
     explicable after CMS publishes a newer dataset.
     """
+    from app.Tefca.source_registry import assert_canonical_evidence_source
+
     rows: List[Dict[str, Any]] = []
     generated_at = evidence.get("generated_at")
     for dim in evidence.get("dimensions", []):
         for item in dim.get("evidence", []):
+            # Refuse to persist the ambiguous legacy key. Genuine PECOS evidence
+            # is CMS_PPEF_ENROLLMENT; identity is NPPES. Letting "pecos" into the
+            # new store would put two different meanings behind one word in the
+            # same audit trail.
+            assert_canonical_evidence_source(item.get("source"))
             rows.append({
                 "entity_id": entity_id,
                 "review_id": review_id,

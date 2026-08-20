@@ -4358,30 +4358,55 @@ async def _run_ppef_ingest(snapshot_id, component: str, max_rows, actor_email):
         # The endpoint records that an ingest STARTED, but a start is a request,
         # not a fact about data. Only this row carries what a determination is
         # later defended with: the checksum, the row count, the CMS quarter and
-        # whether the load was truncated. Moving ingestion into a background
-        # task silently dropped it, leaving an audit trail of twelve starts and
-        # one completion.
-        await log_tefca_event(
-            db, user=actor, action="PPEF_SNAPSHOT_INGESTED",
-            resource_type="tefca_ppef_snapshot", resource_id=str(snapshot_id),
-            details={
-                "component": component,
-                "cms_title": meta.cms_title,
-                "file_name": meta.file_name,
-                "resource_id": meta.resource_id,
-                "parent_dataset_id": meta.parent_dataset_id,
-                "resource_version": meta.resource_version,
-                "as_of_label": meta.as_of_label,
-                "sha256": meta.sha256,
-                "file_size": meta.file_size,
-                "record_count": meta.record_count,
-                "rows_truncated": meta.rows_truncated,
-                "schema_fields": meta.schema_fields,
-                "transport": meta.transport,
-                "actor": actor_email,
-            },
-        )
-        await db.commit()
+        # whether the load was truncated.
+        #
+        # ATTRIBUTION. The ingest is REQUESTED by an authenticated admin and
+        # EXECUTED by a background task. Both are recorded: user_id is the admin
+        # who asked for it (so the row surfaces in their activity trail, where an
+        # operator looks), and `executed_by` names the background service so the
+        # record never implies a human sat and watched 3.9M rows load.
+        #
+        # Wrapped in try/except that LOGS. An audit write that can fail silently
+        # is itself a defect — this block previously sat outside any handler, so
+        # a failure escaped the background task and left a complete snapshot with
+        # no completion record.
+        try:
+            await log_tefca_event(
+                db, user=actor, action="PPEF_SNAPSHOT_INGESTED",
+                resource_type="tefca_ppef_snapshot", resource_id=str(snapshot_id),
+                result="success",
+                outcome="SUCCESS",
+                details={
+                    "result_status": "PARTIAL" if meta.rows_truncated else "SUCCESS",
+                    "requested_by": actor_email,
+                    "executed_by": "system/ppef-ingest (background task)",
+                    "dataset": "CMS PPEF",
+                    "component": component,
+                    "cms_title": meta.cms_title,
+                    "file_name": meta.file_name,
+                    "resource_id": meta.resource_id,
+                    "parent_dataset_id": meta.parent_dataset_id,
+                    "resource_version": meta.resource_version,
+                    "quarter": meta.as_of_label,
+                    "sha256": meta.sha256,
+                    "file_size": meta.file_size,
+                    "record_count": meta.record_count,
+                    "rows_truncated": meta.rows_truncated,
+                    "schema_fields": meta.schema_fields,
+                    "schema_validated": True,
+                    "transport": meta.transport,
+                    "download_url": meta.download_url,
+                    "retrieved_at": meta.retrieved_at,
+                    "completed_at": meta.ingested_at,
+                    "realtime": False,
+                },
+            )
+            await db.commit()
+            logger.info("PPEF ingest audit written: %s snapshot=%s", component, snapshot_id)
+        except Exception as exc:
+            await db.rollback()
+            logger.error("PPEF ingest AUDIT FAILED for %s snapshot=%s: %s",
+                         component, snapshot_id, exc)
 
 
 @tefca_dashboard_router.post(
