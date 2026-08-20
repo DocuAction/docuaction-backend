@@ -261,6 +261,25 @@ async def startup():
     else:
         logger.info("Bulletin scheduler DISABLED (set ENABLE_SCHEDULER=true to enable)")
 
+    # PPEF ingestion — its OWN scheduler (poller + stale-job reaper).
+    #
+    # Separate from the bulletin scheduler on purpose. Bulletin is gated behind
+    # ENABLE_SCHEDULER because two boxes running it would email subscribers two
+    # copies of the same briefing — a side effect that cannot be taken back. PPEF
+    # has no such hazard: duplicate execution is refused by the DATABASE (a
+    # partial unique index over active jobs, plus FOR UPDATE SKIP LOCKED on the
+    # claim), so a second poller finds nothing to claim rather than loading a
+    # quarter twice. It therefore starts unconditionally, and it must: the reaper
+    # is what recovers jobs orphaned by the recycle that just happened.
+    #
+    # Failure to start is logged and swallowed. A scheduler that cannot start is
+    # a degraded loader, not a reason to refuse to serve the application.
+    try:
+        from app.Tefca.ppef_scheduler import start_ppef_scheduler
+        start_ppef_scheduler()
+    except Exception as e:
+        logger.warning(f"PPEF scheduler not started: {e}")
+
 
 # Cached TEFCA connector probe. /health is polled frequently by load balancers,
 # so the live probe result is cached for 60s to avoid hammering the source APIs.

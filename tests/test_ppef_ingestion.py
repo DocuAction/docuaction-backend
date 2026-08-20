@@ -395,12 +395,17 @@ class TestBackgroundSessionUsage:
             "ingest binds it directly and must be updated with it"
         )
 
-    def test_background_ingest_does_not_call_the_returned_session(self):
+    def test_job_runner_does_not_call_the_returned_session(self):
+        """The ingest runner moved from a BackgroundTask to the durable job
+        runner, and the session bug moved with the risk. Same assertion, new
+        home: `ppef_scheduler.run_job` and the scheduler's own ticks each open a
+        session, and none of them may call the object the helper returns.
+        """
         import inspect
 
-        from app.Tefca import routes
+        from app.Tefca import ppef_scheduler
 
-        src = inspect.getsource(routes._run_ppef_ingest)
+        src = inspect.getsource(ppef_scheduler)
         assert "async with async_session_maker() as db" in src
         # The specific bug: binding the RESULT to a local and then calling it.
         assert "session_maker = async_session_maker()" not in src
@@ -466,14 +471,19 @@ class TestIngestAuditCompleteness:
     an audit trail that records intentions rather than outcomes.
     """
 
-    def test_background_task_audits_completion_and_failure(self):
+    def test_job_runner_audits_completion_and_failure(self):
         import inspect
 
-        from app.Tefca import routes
+        from app.Tefca import ppef_scheduler
 
-        src = inspect.getsource(routes._run_ppef_ingest)
+        src = inspect.getsource(ppef_scheduler)
         assert 'action="PPEF_SNAPSHOT_INGESTED"' in src, "completion is not audited"
         assert 'action="PPEF_SNAPSHOT_INGEST_FAILED"' in src, "failure is not audited"
+        # The QUEUE row is the intention and lives on the endpoint; it must not
+        # be mistaken for, or replace, the completion record.
+        from app.Tefca import routes
+        assert ('action="PPEF_SNAPSHOT_INGEST_QUEUED"'
+                in inspect.getsource(routes.ppef_ingest_component))
 
     def test_completion_audit_is_attributed_not_system_anonymous(self):
         """A system-attributed row is invisible in the admin activity feed.
@@ -484,9 +494,9 @@ class TestIngestAuditCompleteness:
         """
         import inspect
 
-        from app.Tefca import routes
+        from app.Tefca import ppef_scheduler
 
-        src = inspect.getsource(routes._run_ppef_ingest)
+        src = inspect.getsource(ppef_scheduler)
         assert "user=actor" in src
         assert 'db, user=None, action="PPEF_SNAPSHOT_INGESTED"' not in src
 
@@ -500,9 +510,9 @@ class TestIngestAuditCompleteness:
         """
         import inspect
 
-        from app.Tefca import routes
+        from app.Tefca import ppef_scheduler
 
-        src = inspect.getsource(routes._run_ppef_ingest)
+        src = inspect.getsource(ppef_scheduler)
         start = src.index('action="PPEF_SNAPSHOT_INGESTED"')
         block = src[start:start + 2500]
 
@@ -531,9 +541,9 @@ class TestIngestAuditCompleteness:
         """
         import inspect
 
-        from app.Tefca import routes
+        from app.Tefca import ppef_scheduler
 
-        src = inspect.getsource(routes._run_ppef_ingest)
+        src = inspect.getsource(ppef_scheduler)
         assert "AUDIT FAILED" in src
         assert "logger.error" in src
 
@@ -546,20 +556,24 @@ class TestIngestAuditCompleteness:
         """
         import inspect
 
-        from app.Tefca import routes
+        from app.Tefca import ppef_scheduler
 
-        src = inspect.getsource(routes._run_ppef_ingest)
+        src = inspect.getsource(ppef_scheduler)
         assert "user=actor" in src, "must attribute to the requesting admin"
-        assert "system/ppef-ingest" in src, "must name the executing service"
+        # The executing agent is now the scheduler poller rather than a
+        # BackgroundTask. What matters is unchanged: the row names a SERVICE,
+        # never implying a human sat and watched millions of rows load.
+        assert "system/ppef-" in src, "must name the executing service"
+        assert "executed_by" in src
 
     def test_completion_audit_carries_the_reproducibility_fields(self):
         import inspect
 
-        from app.Tefca import routes
+        from app.Tefca import ppef_scheduler
 
-        src = inspect.getsource(routes._run_ppef_ingest)
+        src = inspect.getsource(ppef_scheduler)
         start = src.index('action="PPEF_SNAPSHOT_INGESTED"')
-        block = src[start:start + 1400]
+        block = src[start:start + 1800]
         for field in ("sha256", "record_count", "rows_truncated", "resource_version",
                       "file_name", "schema_fields"):
             assert field in block, f"completion audit is missing {field}"

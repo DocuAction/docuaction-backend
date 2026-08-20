@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from sqlalchemy import (
     Column, String, Integer, Float, Boolean, DateTime,
-    Enum, ForeignKey, Text, JSON, Index
+    Enum, ForeignKey, Text, JSON, Index, text
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
@@ -534,4 +534,82 @@ class TEFCAPPEFRecord(Base):
         Index("idx_ppef_record_component_enrollment", "component", "enrollment_id"),
         Index("idx_ppef_record_component_related", "component", "related_enrollment_id"),
         Index("idx_ppef_record_snapshot_component", "snapshot_id", "component"),
+    )
+
+
+class TEFCAPPEFIngestJob(Base):
+    """Durable job record for one PPEF component ingestion.
+
+    THE DATABASE IS THE AUTHORITATIVE STATE STORE.
+    APScheduler triggers and polls; it never holds job state. Its default
+    MemoryJobStore loses everything on process death, and that is precisely the
+    failure this table exists to survive: five dev snapshots sat at `pending`
+    forever because the worker was recycled and nothing recorded that the work
+    had stopped.
+
+    CONCURRENCY IS ENFORCED HERE, NOT BY THE SCHEDULER.
+    `uq_ppef_job_active_component` is a PARTIAL UNIQUE INDEX over
+    (component, resource_version) covering only NON-TERMINAL states. Two workers
+    racing to queue the same component for the same quarter cannot both win: the
+    second INSERT violates the constraint and is rejected by Postgres. That holds
+    whether the app runs one worker or twenty, which matters because nothing in
+    the deployment currently *enforces* single-worker — it is merely the default.
+
+    Terminal states (COMPLETE, FAILED) leave the index, so a clean retry after a
+    failure is always permitted.
+    """
+    __tablename__ = "tefca_ppef_ingest_jobs"
+
+    # Lifecycle states. Order is meaningful and asserted by tests.
+    STATE_QUEUED = "QUEUED"
+    STATE_STARTED = "STARTED"
+    STATE_DOWNLOADING = "DOWNLOADING"
+    STATE_VALIDATING = "VALIDATING"
+    STATE_LOADING = "LOADING"
+    STATE_COMPLETE = "COMPLETE"
+    STATE_FAILED = "FAILED"
+
+    TERMINAL_STATES = (STATE_COMPLETE, STATE_FAILED)
+    ACTIVE_STATES = (STATE_QUEUED, STATE_STARTED, STATE_DOWNLOADING,
+                     STATE_VALIDATING, STATE_LOADING)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    component = Column(String(40), nullable=False, index=True)
+    #: CMS quarterly version, e.g. "2026.07.17". Part of the concurrency key so
+    #: a new quarter can be ingested while an older job is still terminal.
+    resource_version = Column(String(32), index=True)
+    quarter = Column(String(32))                    # e.g. "Q3 2026"
+
+    state = Column(String(20), nullable=False, default=STATE_QUEUED, index=True)
+    #: Set for ACTIVE states, NULL once terminal. This is the column the partial
+    #: unique index keys on — see __table_args__.
+    active_marker = Column(Boolean, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    started_at = Column(DateTime)
+    #: Written repeatedly while work is in flight. A stale value is how the
+    #: reaper tells "still working" from "worker died".
+    heartbeat_at = Column(DateTime, index=True)
+    completed_at = Column(DateTime)
+    failed_at = Column(DateTime)
+
+    attempt_count = Column(Integer, default=0)
+    error_reason = Column(Text)
+
+    snapshot_id = Column(UUID(as_uuid=True), ForeignKey("tefca_ppef_snapshots.id"))
+    checksum = Column(String(64))
+    row_count = Column(Integer)
+
+    requested_by = Column(String(255))
+    max_rows = Column(Integer)
+
+    __table_args__ = (
+        Index("idx_ppef_job_state_heartbeat", "state", "heartbeat_at"),
+        Index("idx_ppef_job_component_version", "component", "resource_version"),
+        # THE concurrency guard. active_marker is True only while non-terminal,
+        # so at most one active job may exist per (component, version).
+        Index("uq_ppef_job_active_component", "component", "resource_version",
+              "active_marker", unique=True,
+              postgresql_where=text("active_marker IS TRUE")),
     )

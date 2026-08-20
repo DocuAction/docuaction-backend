@@ -4242,232 +4242,166 @@ async def ppef_snapshots(
     }
 
 
-async def _run_ppef_ingest(snapshot_id, component: str, max_rows, actor_email):
-    """Ingest one component in the BACKGROUND, on its own database session.
-
-    This does not run inside the request for a concrete reason: the Azure front
-    end closes a connection that has produced no bytes for 60 seconds, and a
-    real ingest is minutes of work — 130k rows for the smallest sub-file and
-    millions for Reassignment. The first attempt on dev died at exactly 60.4s
-    with no response, which is the worst possible failure mode: the caller
-    cannot tell a timeout from a crash, and rows may still be landing.
-
-    So the endpoint returns 202 immediately with a snapshot id, and this task
-    drives the load to completion, marking the snapshot `complete` or `failed`.
-    ppef_store only reads `complete` snapshots, so a load in flight is never
-    served as evidence.
-    """
-    from sqlalchemy import delete as _delete
-
-    # app.core.database.async_session_maker() RETURNS A SESSION, not a factory —
-    # it is `_get_session_maker()()`. Calling its result is what raised
-    # "'AsyncSession' object is not callable" and killed every background ingest
-    # on dev while the endpoint still reported 202. Bind it once, use it directly.
-    from app.core.database import async_session_maker
-    from app.Tefca.models import TEFCAPPEFRecord, TEFCAPPEFSnapshot
-    from app.Tefca.ppef_ingest import IngestError, PPEFIngestor, SchemaDriftError
-    from app.Tefca.ppef_store import copy_records
-
-    async with async_session_maker() as db:
-        written = {"rows": 0}
-
-        # Resolve the initiating admin so the completion audit is ATTRIBUTED.
-        #
-        # log_tefca_event(user=None) writes a valid row with a null user_id, but
-        # /api/admin/users/{id}/activity filters by user_id — so a system-attributed
-        # completion is invisible exactly where an operator goes looking for it.
-        # The ingest was caused by a named admin; the record should say so.
-        actor = None
-        if actor_email:
-            try:
-                from app.models.database import User
-                actor = (await db.execute(
-                    select(User).where(User.email == actor_email))).scalar_one_or_none()
-            except Exception:
-                actor = None
-
-        async def write_batch(batch):
-            # COPY, not row-by-row inserts: a full Reassignment load is ~3.7M
-            # rows, which ORM inserts would turn into a multi-hour job.
-            # copy_records falls back to ORM inserts if the driver cannot COPY,
-            # so the load still completes correctly, only slower.
-            written["rows"] += await copy_records(db, snapshot_id, component, batch)
-            await db.commit()
-
-        async def fail(reason: str):
-            await db.rollback()
-            try:
-                snap = await db.get(TEFCAPPEFSnapshot, snapshot_id)
-                if snap is not None:
-                    snap.ingest_status = "failed"
-                    snap.error = reason[:2000]
-                await db.execute(
-                    _delete(TEFCAPPEFRecord).where(TEFCAPPEFRecord.snapshot_id == snapshot_id))
-                await db.commit()
-                # A failed ingest is audited too. An audit trail that records
-                # only successes cannot be used to investigate anything.
-                await log_tefca_event(
-                    db, user=actor, action="PPEF_SNAPSHOT_INGEST_FAILED",
-                    resource_type="tefca_ppef_snapshot", resource_id=str(snapshot_id),
-                    details={"component": component, "reason": reason[:500],
-                             "actor": actor_email},
-                )
-                await db.commit()
-            except Exception:
-                await db.rollback()
-
-        try:
-            meta = await PPEFIngestor().ingest(component, write_batch=write_batch, max_rows=max_rows)
-        except SchemaDriftError as exc:
-            logger.warning("PPEF schema drift for %s: %s", component, exc)
-            await fail(f"schema_drift: {exc}")
-            return
-        except IngestError as exc:
-            await fail(f"ingest_error: {exc}")
-            return
-        except Exception as exc:
-            logger.warning("PPEF ingest failed for %s: %s", component, exc)
-            await fail(f"unexpected: {exc}")
-            return
-
-        snap = await db.get(TEFCAPPEFSnapshot, snapshot_id)
-        if snap is None:
-            return
-        snap.cms_title = meta.cms_title
-        snap.file_name = meta.file_name
-        snap.resource_id = meta.resource_id
-        snap.parent_dataset_id = meta.parent_dataset_id
-        snap.download_url = meta.download_url
-        snap.api_endpoint = meta.api_endpoint
-        snap.transport = meta.transport
-        snap.resource_version = meta.resource_version
-        snap.as_of_label = meta.as_of_label
-        snap.file_size = meta.file_size
-        snap.sha256 = meta.sha256
-        snap.schema_fields = meta.schema_fields
-        snap.record_count = meta.record_count
-        snap.rows_truncated = meta.rows_truncated
-        snap.http_last_modified = meta.http_last_modified
-        snap.ingest_status = "complete"      # only now readable as evidence
-        await db.commit()
-        logger.info("PPEF ingest complete: %s %s rows=%s sha=%s",
-                    component, meta.resource_version, meta.record_count, meta.sha256[:12])
-
-        # The COMPLETION audit — the one that matters.
-        #
-        # The endpoint records that an ingest STARTED, but a start is a request,
-        # not a fact about data. Only this row carries what a determination is
-        # later defended with: the checksum, the row count, the CMS quarter and
-        # whether the load was truncated.
-        #
-        # ATTRIBUTION. The ingest is REQUESTED by an authenticated admin and
-        # EXECUTED by a background task. Both are recorded: user_id is the admin
-        # who asked for it (so the row surfaces in their activity trail, where an
-        # operator looks), and `executed_by` names the background service so the
-        # record never implies a human sat and watched 3.9M rows load.
-        #
-        # Wrapped in try/except that LOGS. An audit write that can fail silently
-        # is itself a defect — this block previously sat outside any handler, so
-        # a failure escaped the background task and left a complete snapshot with
-        # no completion record.
-        try:
-            await log_tefca_event(
-                db, user=actor, action="PPEF_SNAPSHOT_INGESTED",
-                resource_type="tefca_ppef_snapshot", resource_id=str(snapshot_id),
-                result="success",
-                outcome="SUCCESS",
-                details={
-                    "result_status": "PARTIAL" if meta.rows_truncated else "SUCCESS",
-                    "requested_by": actor_email,
-                    "executed_by": "system/ppef-ingest (background task)",
-                    "dataset": "CMS PPEF",
-                    "component": component,
-                    "cms_title": meta.cms_title,
-                    "file_name": meta.file_name,
-                    "resource_id": meta.resource_id,
-                    "parent_dataset_id": meta.parent_dataset_id,
-                    "resource_version": meta.resource_version,
-                    "quarter": meta.as_of_label,
-                    "sha256": meta.sha256,
-                    "file_size": meta.file_size,
-                    "record_count": meta.record_count,
-                    "rows_truncated": meta.rows_truncated,
-                    "schema_fields": meta.schema_fields,
-                    "schema_validated": True,
-                    "transport": meta.transport,
-                    "download_url": meta.download_url,
-                    "retrieved_at": meta.retrieved_at,
-                    "completed_at": meta.ingested_at,
-                    "realtime": False,
-                },
-            )
-            await db.commit()
-            logger.info("PPEF ingest audit written: %s snapshot=%s", component, snapshot_id)
-        except Exception as exc:
-            await db.rollback()
-            logger.error("PPEF ingest AUDIT FAILED for %s snapshot=%s: %s",
-                         component, snapshot_id, exc)
-
-
 @tefca_dashboard_router.post(
     "/ppef/snapshots/ingest",
     status_code=202,
-    summary="Start a background download+ingest of one CMS PPEF component",
+    summary="Queue a durable CMS PPEF ingestion job",
 )
 async def ppef_ingest_component(
     component: str,
-    background: BackgroundTasks,
     max_rows: Optional[int] = None,
+    force: bool = False,
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role("admin")),
 ):
-    """Queue an ingest and return 202 with the snapshot id.
+    """Create a QUEUED job row and return 202 with its id.
 
-    Poll GET /ppef/snapshots for status. `max_rows` caps the load; when it bites
-    the snapshot records rows_truncated=True, so a partial load is never
-    presented as a complete one.
+    The work does NOT run in this request, and no longer runs in a FastAPI
+    BackgroundTask. A background task lives and dies with its worker: when the
+    Azure App Service container was recycled mid-load the task simply vanished,
+    leaving five dev snapshots stuck at `pending` with `error = None`. Nothing
+    had reported a failure because nothing was left alive to report one.
 
-    Schema drift marks the snapshot `failed` rather than loading nulls into an
-    evidence store.
+    Now a durable job row is written and the PPEF scheduler's poller claims it.
+    Every state transition and heartbeat is committed, so a killed worker leaves
+    a truthful record and the reaper can fail the job cleanly instead of leaving
+    it pending forever.
+
+    Poll GET /ppef/snapshots/ingest/{job_id} for persisted state.
+
+    IDEMPOTENT: if this exact CMS quarter is already loaded COMPLETE and
+    untruncated, the call returns ALREADY_LOADED and queues nothing. `force=true`
+    queues anyway, for a deliberate re-ingest.
+
+    CONCURRENCY is refused by a database constraint rather than by a prior check,
+    so two callers racing cannot both start the same component and quarter.
     """
-    import uuid as _uuid
-
-    from app.Tefca.models import TEFCAPPEFSnapshot
-    from app.Tefca.ppef_resources import EXPECTED_FIELDS
+    from app.Tefca import ppef_jobs
+    from app.Tefca.ppef_ingest import _as_of_label
+    from app.Tefca.ppef_resources import EXPECTED_FIELDS, PPEFResourceCatalog
 
     component = (component or "").strip().upper()
     if component not in EXPECTED_FIELDS:
         raise HTTPException(400, f"Unknown PPEF component '{component}'. "
                                  f"Known: {sorted(EXPECTED_FIELDS)}")
 
-    snapshot_id = _uuid.uuid4()
-    # The snapshot row exists before any record references it: the records table
-    # has a foreign key to it, and beyond the constraint this is the honest
-    # order — a failed load leaves a `failed` row documenting the attempt.
-    db.add(TEFCAPPEFSnapshot(
-        id=snapshot_id,
-        component=component,
-        ingest_status="pending",
-        ingested_by=getattr(user, "email", None),
-    ))
-    await db.commit()
+    # Discover the CURRENT quarter so the job is keyed to a real CMS version
+    # rather than to whatever was current when someone last edited a constant.
+    # Discovery failure is not fatal here — the job records a null version and
+    # the runner discovers again — but it does disable the idempotency check,
+    # because "already loaded" cannot be decided without knowing which quarter.
+    resource_version = quarter = file_name = None
+    try:
+        discovered = (await PPEFResourceCatalog().discover()).get(component)
+        if discovered is not None:
+            resource_version = discovered.resource_version
+            file_name = discovered.file_name
+            quarter = _as_of_label(discovered.cms_title)
+    except Exception as exc:
+        logger.warning("PPEF discovery failed while queueing %s: %s", component, exc)
+
+    if not force and resource_version:
+        existing = await ppef_jobs.find_complete_snapshot(
+            db, component, resource_version, file_name)
+        if existing is not None:
+            return {
+                "status": "ALREADY_LOADED",
+                "component": component,
+                "resource_version": resource_version,
+                "quarter": quarter,
+                "snapshot_id": str(existing.id),
+                "record_count": existing.record_count,
+                "sha256": existing.sha256,
+                "ingested_at": existing.ingested_at.isoformat() if existing.ingested_at else None,
+                "note": ("An identical COMPLETE, untruncated snapshot for this quarter "
+                         "already exists, so nothing was queued. Re-downloading 3.9M "
+                         "rows to produce a byte-identical result is cost without "
+                         "information. Pass force=true to re-ingest deliberately."),
+            }
+
+    try:
+        job = await ppef_jobs.queue_job(
+            db, component=component, resource_version=resource_version,
+            quarter=quarter, requested_by=getattr(user, "email", None),
+            max_rows=max_rows)
+    except ppef_jobs.JobConflict as exc:
+        raise HTTPException(409, str(exc))
 
     await log_tefca_event(
-        db, user=user, action="PPEF_SNAPSHOT_INGEST_STARTED",
-        resource_type="tefca_ppef_snapshot", resource_id=str(snapshot_id),
-        details={"component": component, "max_rows": max_rows},
+        db, user=user, action="PPEF_SNAPSHOT_INGEST_QUEUED",
+        resource_type="tefca_ppef_ingest_job", resource_id=str(job.id),
+        details={"component": component, "resource_version": resource_version,
+                 "quarter": quarter, "max_rows": max_rows, "force": force,
+                 "requested_by": getattr(user, "email", None),
+                 "executed_by": "system/ppef-scheduler (APScheduler poller)"},
     )
     await db.commit()
 
-    background.add_task(_run_ppef_ingest, snapshot_id, component, max_rows,
-                        getattr(user, "email", None))
     return {
-        "snapshot_id": str(snapshot_id),
+        "status": "QUEUED",
+        "job_id": str(job.id),
         "component": component,
-        "ingest_status": "pending",
-        "max_rows": max_rows,
-        "poll": "/api/tefca/ppef/snapshots",
-        "note": ("Ingestion runs in the background: a full sub-file is minutes of work "
-                 "and the gateway closes an idle request at 60s. The snapshot becomes "
-                 "readable as evidence only when it reaches ingest_status=complete."),
+        "resource_version": resource_version,
+        "quarter": quarter,
+        "state": job.state,
+        "poll": f"/api/tefca/ppef/snapshots/ingest/{job.id}",
+        "note": ("Durable job queued. Execution is driven by the PPEF scheduler and "
+                 "all state lives in the database, not in process memory, so a "
+                 "recycled worker leaves a FAILED job rather than a silent one."),
+    }
+
+
+@tefca_dashboard_router.get(
+    "/ppef/snapshots/ingest/{job_id}",
+    summary="Persisted state of one PPEF ingestion job",
+)
+async def ppef_ingest_status(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("viewer")),
+):
+    """Job state read from the database only — never from process memory.
+
+    Reports heartbeat age and staleness, so an operator can see that a worker
+    has gone quiet before the reaper formally fails the job.
+    """
+    import uuid as _uuid
+
+    from app.Tefca import ppef_jobs
+
+    try:
+        parsed = _uuid.UUID(str(job_id))
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(400, f"'{job_id}' is not a valid job id")
+
+    status = await ppef_jobs.job_status(db, parsed)
+    if status is None:
+        raise HTTPException(404, f"No ingestion job with id {job_id}")
+    return status
+
+
+@tefca_dashboard_router.get(
+    "/ppef/jobs",
+    summary="Recent PPEF ingestion jobs with persisted state",
+)
+async def ppef_jobs_list(
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("viewer")),
+):
+    """Recent jobs, newest first — the operator view of what the loader has done."""
+    from app.Tefca import ppef_jobs
+    from app.Tefca.models import TEFCAPPEFIngestJob
+    from app.Tefca.ppef_scheduler import scheduler_status
+
+    rows = (await db.execute(
+        select(TEFCAPPEFIngestJob)
+        .order_by(TEFCAPPEFIngestJob.created_at.desc())
+        .limit(max(1, min(limit, 200)))
+    )).scalars().all()
+    return {
+        "count": len(rows),
+        "jobs": [await ppef_jobs.job_status(db, r.id) for r in rows],
+        "stale_threshold_seconds": ppef_jobs.STALE_HEARTBEAT_SECONDS,
+        "scheduler": scheduler_status(),
     }
