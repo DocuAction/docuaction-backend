@@ -23,7 +23,7 @@ from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, Query, Depends, HTTPException, Request, UploadFile, File
 from fastapi.responses import Response
 from pydantic import BaseModel
-from sqlalchemy import select, text, func, cast, or_, and_, String
+from sqlalchemy import select, text, func, cast, or_, and_, String, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db, async_session_maker
@@ -3904,3 +3904,570 @@ async def download_report(
         media_type=media,
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DIMENSION-ORGANISED EVIDENCE (CMS/PECOS evidence architecture)
+#
+# Additive. Nothing above this line changed: the five-element evidence record,
+# the B1–B4 classification, /reviews/{id} and /connectors/status all keep their
+# existing shapes and behaviour. These endpoints expose the evidence layer that
+# organises what the sources said into the six verification dimensions, with
+# enough provenance on every item to reproduce the determination later.
+#
+# Deliberately NOT here: any endpoint that returns a score, a percentage, or a
+# count of passing sources. The dimension structure is the answer.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _entity_by_reference(reference: str) -> Optional[dict]:
+    """Resolve an ONC entity by id or by identifier value (NPI, TEFCA id)."""
+    ref = (reference or "").strip()
+    if not ref:
+        return None
+    for org in ALL_MOCK_ENTITIES:
+        if str(org.get("id")) == ref:
+            return org
+    for org in ALL_MOCK_ENTITIES:
+        for ident in org.get("identifier") or []:
+            if (ident.get("value") or "").strip() == ref:
+                return org
+    return None
+
+
+async def _persist_dimension_evidence(db: AsyncSession, entity_id: str,
+                                      review_id: Optional[str], evidence: dict) -> int:
+    """INSERT one generation of evidence rows. Never updates, never deletes.
+
+    A failure to persist must not fail the read: the analyst still needs to see
+    the evidence, and a storage fault is not a reason to withhold what the
+    sources actually said.
+    """
+    from app.Tefca.evidence_service import evidence_rows_for_persistence
+    from app.Tefca.models import TEFCADimensionEvidence
+
+    rows = evidence_rows_for_persistence(entity_id, review_id, evidence)
+    try:
+        for row in rows:
+            db.add(TEFCADimensionEvidence(**row))
+        await db.commit()
+        return len(rows)
+    except Exception as exc:
+        await db.rollback()
+        logger.warning("dimension evidence not persisted for %s: %s", entity_id, exc)
+        return 0
+
+
+@tefca_dashboard_router.get(
+    "/entities/{entity_ref}/evidence-dimensions",
+    summary="Six-dimension evidence for one entity",
+)
+async def entity_evidence_dimensions(
+    entity_ref: str,
+    persist: bool = True,
+    include_website: bool = False,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("viewer")),
+):
+    from app.Tefca.evidence_service import EvidenceService
+
+    entity = _entity_by_reference(entity_ref)
+    if not entity:
+        # 200 with entity_resolved=false, NOT 404.
+        #
+        # "No ONC record exists for this identifier" and "the request failed"
+        # are different facts, and a 404 makes the client guess which one it
+        # got. The ARC review population and the ONC entity population are
+        # genuinely disjoint in some environments — a review NPI with no ONC
+        # record is an ordinary data-linkage fact, not an error, and the
+        # reviewer is entitled to be told exactly that.
+        #
+        # No entity is matched by name to fill the gap: attributing another
+        # organisation's evidence to this review is worse than showing none.
+        return {
+            "entity_ref": entity_ref,
+            "entity_resolved": False,
+            "dimensions": [],
+            "note": (f"No ONC/RCE entity record resolves from '{entity_ref}'. Dimension "
+                     "evidence is assembled against the ONC-supplied entity population; "
+                     "this identifier is not in it, so there is nothing to assemble. "
+                     "This is a data-linkage fact, not a retrieval failure, and nothing "
+                     "is inferred from it."),
+        }
+
+    from app.Tefca.ppef_store import make_local_store
+    service = EvidenceService(manager=get_connector_manager(),
+                              enable_website=include_website,
+                              local_store=make_local_store(db))
+    evidence = await service.build_evidence(entity)
+
+    persisted = 0
+    if persist:
+        persisted = await _persist_dimension_evidence(db, str(entity.get("id")), None, evidence)
+    evidence["persisted_rows"] = persisted
+
+    await log_tefca_event(
+        db, user=user, action="EVIDENCE_DIMENSIONS_GENERATED",
+        resource_type="tefca_dimension_evidence", resource_id=entity.get("id"),
+        details={
+            "entity_id": entity.get("id"),
+            "dimensions": len(evidence.get("dimensions", [])),
+            "persisted_rows": persisted,
+            "generation_timestamp": evidence.get("generated_at"),
+        },
+    )
+    await db.commit()
+    return evidence
+
+
+@tefca_dashboard_router.get(
+    "/reviews/{review_id}/evidence-dimensions",
+    summary="Six-dimension evidence for the entity behind a review",
+)
+async def review_evidence_dimensions(
+    review_id: str,
+    persist: bool = True,
+    include_website: bool = False,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("viewer")),
+):
+    from app.Tefca.evidence_service import EvidenceService
+
+    rid = _parse_uuid(review_id)
+    review = (await db.execute(
+        select(TEFCAReview).where(TEFCAReview.id == rid)
+    )).scalar_one_or_none()
+    if not review:
+        raise HTTPException(404, f"No review exists with id {review_id}")
+
+    entity = _entity_by_reference(review.npi or "")
+    if not entity:
+        # An honest empty answer. Fabricating an entity to hang evidence on
+        # would produce evidence about nothing.
+        return {
+            "review_id": review_id,
+            "entity_resolved": False,
+            "dimensions": [],
+            "note": ("No ONC entity record resolves from the NPI on this review, so no "
+                     "dimension evidence can be assembled for it."),
+        }
+
+    from app.Tefca.ppef_store import make_local_store
+    service = EvidenceService(manager=get_connector_manager(),
+                              enable_website=include_website,
+                              local_store=make_local_store(db))
+    evidence = await service.build_evidence(entity)
+    evidence["review_id"] = review_id
+    evidence["entity_resolved"] = True
+
+    persisted = 0
+    if persist:
+        persisted = await _persist_dimension_evidence(db, str(entity.get("id")), review_id, evidence)
+    evidence["persisted_rows"] = persisted
+
+    await log_tefca_event(
+        db, user=user, action="EVIDENCE_DIMENSIONS_GENERATED",
+        resource_type="tefca_dimension_evidence", resource_id=review_id,
+        details={
+            "review_id": review_id,
+            "entity_id": entity.get("id"),
+            "persisted_rows": persisted,
+            "generation_timestamp": evidence.get("generated_at"),
+        },
+    )
+    await db.commit()
+    return evidence
+
+
+@tefca_dashboard_router.get(
+    "/entities/{entity_ref}/evidence-history",
+    summary="Every preserved generation of dimension evidence for an entity",
+)
+async def entity_evidence_history(
+    entity_ref: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("viewer")),
+):
+    """Proof that re-running a verification preserved what came before.
+
+    Generations are returned newest first. Nothing is collapsed or pruned: a
+    determination that cited the January CMS extract has to stay explicable
+    after the April extract lands.
+    """
+    from app.Tefca.models import TEFCADimensionEvidence
+
+    rows = (await db.execute(
+        select(TEFCADimensionEvidence)
+        .where(TEFCADimensionEvidence.entity_id == entity_ref)
+        .order_by(TEFCADimensionEvidence.created_at.desc())
+    )).scalars().all()
+
+    generations: dict = {}
+    for r in rows:
+        gen = r.generation_timestamp or (r.created_at.isoformat() if r.created_at else "unknown")
+        generations.setdefault(gen, []).append({
+            "dimension": r.evidence_dimension,
+            "source": r.source,
+            "disposition": r.disposition,
+            "dimension_disposition": r.dimension_disposition,
+            "source_dataset": r.source_dataset,
+            "ppef_component": r.ppef_component,
+            "dataset_version_anchor": r.dataset_version_anchor,
+            "query_timestamp": r.query_timestamp,
+            "rule_applied": r.rule_applied,
+            "analyst_notes": r.analyst_notes,
+            "reviewed_by": r.reviewed_by,
+        })
+    return {
+        "entity_id": entity_ref,
+        "generation_count": len(generations),
+        "generations": [
+            {"generation_timestamp": g, "row_count": len(items), "evidence": items}
+            for g, items in sorted(generations.items(), reverse=True)
+        ],
+        "retention_note": ("Evidence is append-only. Re-running a verification adds a "
+                           "generation; it never overwrites or deletes a previous one."),
+    }
+
+
+@tefca_dashboard_router.get(
+    "/connectors/cms-systems",
+    summary="CMS system and capability health",
+)
+async def cms_connector_systems(
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("viewer")),
+):
+    """Two CMS systems, reported as systems.
+
+    PPEF Enrollment, Practice Location, Reassignment and Additional NPIs are
+    components of ONE relational dataset and are reported as capabilities of it.
+    Listing them as four external systems would inflate one authority into four
+    and imply four independent corroborations where there is one.
+    """
+    from app.Tefca.cms_ppef import cms_capability_health
+    from app.Tefca.ppef_store import snapshot_status
+
+    # Capability status depends on what has actually been ingested, so the
+    # health answer is computed against the local store rather than guessed.
+    try:
+        snapshots = await snapshot_status(db)
+    except Exception as exc:
+        logger.warning("PPEF snapshot status unavailable: %s", exc)
+        snapshots = {}
+    return await cms_capability_health(snapshot_status=snapshots)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PPEF RESOURCE DISCOVERY AND VERSIONED INGESTION
+#
+# CMS publishes four of the five PPEF relational components as quarterly CSV
+# sub-files of the parent dataset rather than as data-api datasets. These
+# endpoints discover what CMS currently offers, ingest a component into the
+# local evidence store with its checksum and provenance, and report what has
+# been ingested.
+#
+# Ingestion is admin-gated: it writes to the evidence store, and evidence that
+# anyone can rewrite is not evidence.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@tefca_dashboard_router.get(
+    "/ppef/resources",
+    summary="Discover the CMS PPEF components currently published, and how each is obtainable",
+)
+async def ppef_resource_discovery(user=Depends(require_role("viewer"))):
+    """Live discovery — never a hard-coded identifier.
+
+    CMS re-publishes quarterly with new file names, media uuids and titles, so
+    a cached identifier would silently point at last quarter.
+    """
+    from app.Tefca.ppef_resources import PPEFResourceCatalog, TRANSPORT_RATIONALE
+
+    discovered = await PPEFResourceCatalog().discover()
+    return {
+        "checked_at": datetime.utcnow().isoformat(),
+        "parent_dataset_id": "2457ea29-fc82-48b0-86ec-3b0755de7515",
+        "components": {
+            k: {**v.to_dict(), "transport_rationale": TRANSPORT_RATIONALE.get(k)}
+            for k, v in discovered.items()
+        },
+        "discovery_note": (
+            "Sub-files are ancillary resources of the parent dataset, listed by "
+            "/data-api/v1/dataset/{parent}/resources. They are absent from the DCAT "
+            "catalogue, and their file_uuids are media ids that 404 against the "
+            "data-api — hence download transport."
+        ),
+    }
+
+
+@tefca_dashboard_router.get(
+    "/ppef/snapshots",
+    summary="Ingested PPEF snapshots with full provenance",
+)
+async def ppef_snapshots(
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("viewer")),
+):
+    from app.Tefca.models import TEFCAPPEFSnapshot
+
+    rows = (await db.execute(
+        select(TEFCAPPEFSnapshot).order_by(TEFCAPPEFSnapshot.ingested_at.desc()).limit(100)
+    )).scalars().all()
+    return {
+        "count": len(rows),
+        "snapshots": [{
+            "id": str(s.id),
+            "component": s.component,
+            "cms_title": s.cms_title,
+            "file_name": s.file_name,
+            "resource_id": s.resource_id,
+            "resource_version": s.resource_version,
+            "as_of_label": s.as_of_label,
+            "transport": s.transport,
+            "file_size": s.file_size,
+            "sha256": s.sha256,
+            "schema_fields": s.schema_fields,
+            "record_count": s.record_count,
+            "rows_truncated": bool(s.rows_truncated),
+            "ingest_status": s.ingest_status,
+            "error": s.error,
+            "retrieved_at": s.retrieved_at.isoformat() if s.retrieved_at else None,
+            "ingested_at": s.ingested_at.isoformat() if s.ingested_at else None,
+            "ingested_by": s.ingested_by,
+        } for s in rows],
+        "retention_note": (
+            "Snapshots are append-only. CMS PPEF carries CURRENT enrolment data, so a "
+            "quarter disappears from the source when the next publishes; the preserved "
+            "snapshot and its checksum are what keep an earlier determination explicable."
+        ),
+    }
+
+
+async def _run_ppef_ingest(snapshot_id, component: str, max_rows, actor_email):
+    """Ingest one component in the BACKGROUND, on its own database session.
+
+    This does not run inside the request for a concrete reason: the Azure front
+    end closes a connection that has produced no bytes for 60 seconds, and a
+    real ingest is minutes of work — 130k rows for the smallest sub-file and
+    millions for Reassignment. The first attempt on dev died at exactly 60.4s
+    with no response, which is the worst possible failure mode: the caller
+    cannot tell a timeout from a crash, and rows may still be landing.
+
+    So the endpoint returns 202 immediately with a snapshot id, and this task
+    drives the load to completion, marking the snapshot `complete` or `failed`.
+    ppef_store only reads `complete` snapshots, so a load in flight is never
+    served as evidence.
+    """
+    from sqlalchemy import delete as _delete
+
+    # app.core.database.async_session_maker() RETURNS A SESSION, not a factory —
+    # it is `_get_session_maker()()`. Calling its result is what raised
+    # "'AsyncSession' object is not callable" and killed every background ingest
+    # on dev while the endpoint still reported 202. Bind it once, use it directly.
+    from app.core.database import async_session_maker
+    from app.Tefca.models import TEFCAPPEFRecord, TEFCAPPEFSnapshot
+    from app.Tefca.ppef_ingest import IngestError, PPEFIngestor, SchemaDriftError
+    from app.Tefca.ppef_store import copy_records
+
+    async with async_session_maker() as db:
+        written = {"rows": 0}
+
+        # Resolve the initiating admin so the completion audit is ATTRIBUTED.
+        #
+        # log_tefca_event(user=None) writes a valid row with a null user_id, but
+        # /api/admin/users/{id}/activity filters by user_id — so a system-attributed
+        # completion is invisible exactly where an operator goes looking for it.
+        # The ingest was caused by a named admin; the record should say so.
+        actor = None
+        if actor_email:
+            try:
+                from app.models.database import User
+                actor = (await db.execute(
+                    select(User).where(User.email == actor_email))).scalar_one_or_none()
+            except Exception:
+                actor = None
+
+        async def write_batch(batch):
+            # COPY, not row-by-row inserts: a full Reassignment load is ~3.7M
+            # rows, which ORM inserts would turn into a multi-hour job.
+            # copy_records falls back to ORM inserts if the driver cannot COPY,
+            # so the load still completes correctly, only slower.
+            written["rows"] += await copy_records(db, snapshot_id, component, batch)
+            await db.commit()
+
+        async def fail(reason: str):
+            await db.rollback()
+            try:
+                snap = await db.get(TEFCAPPEFSnapshot, snapshot_id)
+                if snap is not None:
+                    snap.ingest_status = "failed"
+                    snap.error = reason[:2000]
+                await db.execute(
+                    _delete(TEFCAPPEFRecord).where(TEFCAPPEFRecord.snapshot_id == snapshot_id))
+                await db.commit()
+                # A failed ingest is audited too. An audit trail that records
+                # only successes cannot be used to investigate anything.
+                await log_tefca_event(
+                    db, user=actor, action="PPEF_SNAPSHOT_INGEST_FAILED",
+                    resource_type="tefca_ppef_snapshot", resource_id=str(snapshot_id),
+                    details={"component": component, "reason": reason[:500],
+                             "actor": actor_email},
+                )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+
+        try:
+            meta = await PPEFIngestor().ingest(component, write_batch=write_batch, max_rows=max_rows)
+        except SchemaDriftError as exc:
+            logger.warning("PPEF schema drift for %s: %s", component, exc)
+            await fail(f"schema_drift: {exc}")
+            return
+        except IngestError as exc:
+            await fail(f"ingest_error: {exc}")
+            return
+        except Exception as exc:
+            logger.warning("PPEF ingest failed for %s: %s", component, exc)
+            await fail(f"unexpected: {exc}")
+            return
+
+        snap = await db.get(TEFCAPPEFSnapshot, snapshot_id)
+        if snap is None:
+            return
+        snap.cms_title = meta.cms_title
+        snap.file_name = meta.file_name
+        snap.resource_id = meta.resource_id
+        snap.parent_dataset_id = meta.parent_dataset_id
+        snap.download_url = meta.download_url
+        snap.api_endpoint = meta.api_endpoint
+        snap.transport = meta.transport
+        snap.resource_version = meta.resource_version
+        snap.as_of_label = meta.as_of_label
+        snap.file_size = meta.file_size
+        snap.sha256 = meta.sha256
+        snap.schema_fields = meta.schema_fields
+        snap.record_count = meta.record_count
+        snap.rows_truncated = meta.rows_truncated
+        snap.http_last_modified = meta.http_last_modified
+        snap.ingest_status = "complete"      # only now readable as evidence
+        await db.commit()
+        logger.info("PPEF ingest complete: %s %s rows=%s sha=%s",
+                    component, meta.resource_version, meta.record_count, meta.sha256[:12])
+
+        # The COMPLETION audit — the one that matters.
+        #
+        # The endpoint records that an ingest STARTED, but a start is a request,
+        # not a fact about data. Only this row carries what a determination is
+        # later defended with: the checksum, the row count, the CMS quarter and
+        # whether the load was truncated.
+        #
+        # ATTRIBUTION. The ingest is REQUESTED by an authenticated admin and
+        # EXECUTED by a background task. Both are recorded: user_id is the admin
+        # who asked for it (so the row surfaces in their activity trail, where an
+        # operator looks), and `executed_by` names the background service so the
+        # record never implies a human sat and watched 3.9M rows load.
+        #
+        # Wrapped in try/except that LOGS. An audit write that can fail silently
+        # is itself a defect — this block previously sat outside any handler, so
+        # a failure escaped the background task and left a complete snapshot with
+        # no completion record.
+        try:
+            await log_tefca_event(
+                db, user=actor, action="PPEF_SNAPSHOT_INGESTED",
+                resource_type="tefca_ppef_snapshot", resource_id=str(snapshot_id),
+                result="success",
+                outcome="SUCCESS",
+                details={
+                    "result_status": "PARTIAL" if meta.rows_truncated else "SUCCESS",
+                    "requested_by": actor_email,
+                    "executed_by": "system/ppef-ingest (background task)",
+                    "dataset": "CMS PPEF",
+                    "component": component,
+                    "cms_title": meta.cms_title,
+                    "file_name": meta.file_name,
+                    "resource_id": meta.resource_id,
+                    "parent_dataset_id": meta.parent_dataset_id,
+                    "resource_version": meta.resource_version,
+                    "quarter": meta.as_of_label,
+                    "sha256": meta.sha256,
+                    "file_size": meta.file_size,
+                    "record_count": meta.record_count,
+                    "rows_truncated": meta.rows_truncated,
+                    "schema_fields": meta.schema_fields,
+                    "schema_validated": True,
+                    "transport": meta.transport,
+                    "download_url": meta.download_url,
+                    "retrieved_at": meta.retrieved_at,
+                    "completed_at": meta.ingested_at,
+                    "realtime": False,
+                },
+            )
+            await db.commit()
+            logger.info("PPEF ingest audit written: %s snapshot=%s", component, snapshot_id)
+        except Exception as exc:
+            await db.rollback()
+            logger.error("PPEF ingest AUDIT FAILED for %s snapshot=%s: %s",
+                         component, snapshot_id, exc)
+
+
+@tefca_dashboard_router.post(
+    "/ppef/snapshots/ingest",
+    status_code=202,
+    summary="Start a background download+ingest of one CMS PPEF component",
+)
+async def ppef_ingest_component(
+    component: str,
+    background: BackgroundTasks,
+    max_rows: Optional[int] = None,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("admin")),
+):
+    """Queue an ingest and return 202 with the snapshot id.
+
+    Poll GET /ppef/snapshots for status. `max_rows` caps the load; when it bites
+    the snapshot records rows_truncated=True, so a partial load is never
+    presented as a complete one.
+
+    Schema drift marks the snapshot `failed` rather than loading nulls into an
+    evidence store.
+    """
+    import uuid as _uuid
+
+    from app.Tefca.models import TEFCAPPEFSnapshot
+    from app.Tefca.ppef_resources import EXPECTED_FIELDS
+
+    component = (component or "").strip().upper()
+    if component not in EXPECTED_FIELDS:
+        raise HTTPException(400, f"Unknown PPEF component '{component}'. "
+                                 f"Known: {sorted(EXPECTED_FIELDS)}")
+
+    snapshot_id = _uuid.uuid4()
+    # The snapshot row exists before any record references it: the records table
+    # has a foreign key to it, and beyond the constraint this is the honest
+    # order — a failed load leaves a `failed` row documenting the attempt.
+    db.add(TEFCAPPEFSnapshot(
+        id=snapshot_id,
+        component=component,
+        ingest_status="pending",
+        ingested_by=getattr(user, "email", None),
+    ))
+    await db.commit()
+
+    await log_tefca_event(
+        db, user=user, action="PPEF_SNAPSHOT_INGEST_STARTED",
+        resource_type="tefca_ppef_snapshot", resource_id=str(snapshot_id),
+        details={"component": component, "max_rows": max_rows},
+    )
+    await db.commit()
+
+    background.add_task(_run_ppef_ingest, snapshot_id, component, max_rows,
+                        getattr(user, "email", None))
+    return {
+        "snapshot_id": str(snapshot_id),
+        "component": component,
+        "ingest_status": "pending",
+        "max_rows": max_rows,
+        "poll": "/api/tefca/ppef/snapshots",
+        "note": ("Ingestion runs in the background: a full sub-file is minutes of work "
+                 "and the gateway closes an idle request at 60s. The snapshot becomes "
+                 "readable as evidence only when it reaches ingest_status=complete."),
+    }

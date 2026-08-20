@@ -386,3 +386,152 @@ class TEFCAImportHistory(Base):
     file_hash = Column(String(64), index=True)
     status = Column(String(20), index=True)        # completed / partial / failed
     errors = Column(JSONB, default=list)           # [{row, field, reason}]
+
+
+class TEFCADimensionEvidence(Base):
+    """Dimension-organised evidence, one row per (dimension, source) item.
+
+    APPEND-ONLY BY CONTRACT
+    ───────────────────────
+    Rows here are INSERTED and never updated or deleted by the evidence layer.
+    Re-running a verification writes a NEW generation, distinguished by
+    `generation_timestamp`; the prior generation stays exactly as it was. That
+    is not tidiness, it is the requirement: a determination made in March cited
+    the CMS dataset published in January, and after CMS publishes the April
+    extract the only way to explain that determination is for the January
+    evidence to still be there, unmodified.
+
+    `dataset_version_anchor` is what pins the evidence to a specific CMS
+    publication — CMS mints a new dataset UUID per quarterly release, so the
+    UUID identifies the exact extract a lookup ran against.
+
+    Analyst fields (reviewed_by / reviewed_at / analyst_notes) are the ONE
+    exception to append-only: a human annotating a row is a distinct act from
+    the system rewriting evidence, and the annotation is itself audited.
+    """
+    __tablename__ = "tefca_dimension_evidence"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    entity_id = Column(String(255), nullable=False, index=True)
+    review_id = Column(String(255), index=True)
+    review_cycle_id = Column(UUID(as_uuid=True), ForeignKey("tefca_review_cycles.cycle_id"))
+
+    evidence_dimension = Column(String(64), nullable=False, index=True)
+    dimension_disposition = Column(String(32))
+    dimension_applicability = Column(String(32))
+
+    source = Column(String(64), nullable=False, index=True)
+    source_dataset = Column(String(128))
+    ppef_component = Column(String(64))
+    source_record_identifier = Column(Text)
+    query_identifier = Column(Text)
+    query_timestamp = Column(String(64))
+    dataset_version_anchor = Column(String(128))
+    http_last_modified = Column(String(64))
+
+    disposition = Column(String(32), nullable=False)
+    fields_evaluated = Column(JSONB, default=list)
+    field_matches = Column(JSONB, default=list)
+    field_conflicts = Column(JSONB, default=list)
+    original_values = Column(JSONB, default=dict)
+    normalized_values = Column(JSONB, default=dict)
+    rule_applied = Column(String(128))
+    note = Column(Text)
+
+    retrieved_at = Column(String(64))
+    generation_timestamp = Column(String(64), index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    # Analyst annotation — see the class docstring for why these are writable.
+    analyst_notes = Column(Text)
+    reviewed_by = Column(String(255))
+    reviewed_at = Column(DateTime)
+
+    __table_args__ = (
+        Index("idx_dim_evidence_entity_dimension", "entity_id", "evidence_dimension"),
+        Index("idx_dim_evidence_generation", "entity_id", "generation_timestamp"),
+    )
+
+
+class TEFCAPPEFSnapshot(Base):
+    """One ingested CMS PPEF component file, with everything needed to reproduce it.
+
+    CMS states that PPEF carries CURRENT enrollment information, not historical.
+    That single sentence is why this table exists: the moment CMS publishes the
+    next quarter, the data behind an earlier determination is gone from the
+    source. Preserving the snapshot — and the checksum of the exact bytes — is
+    what lets a determination say "evaluated against CMS PPEF Q3 2026, file
+    PPEF_Practice_Location_Extract_2026.07.17.csv, SHA-256 abc..., retrieved
+    2026-08-19" and have that mean something a year later.
+
+    Snapshots are append-only. A re-ingest of the same quarter writes a new row;
+    nothing is updated in place.
+    """
+    __tablename__ = "tefca_ppef_snapshots"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    component = Column(String(40), nullable=False, index=True)
+    # The CMS display title, preserved EXACTLY as published — "Address Sub-File
+    # Q3 2026" for the component normalised internally as PRACTICE_LOCATION.
+    cms_title = Column(String(255))
+    file_name = Column(String(255))
+    resource_id = Column(String(64))            # CMS file_uuid (a media id, not a dataset id)
+    parent_dataset_id = Column(String(64))
+    download_url = Column(Text)
+    api_endpoint = Column(Text)
+    transport = Column(String(20))              # DATA_API | DOWNLOAD | BOTH
+
+    resource_version = Column(String(32), index=True)   # e.g. 2026.07.17
+    as_of_label = Column(String(64))                    # e.g. "Q3 2026"
+    file_size = Column(Integer)
+    sha256 = Column(String(64), index=True)
+    schema_fields = Column(JSONB, default=list)
+    record_count = Column(Integer, default=0)
+    rows_truncated = Column(Boolean, default=False)
+
+    http_last_modified = Column(String(64))
+    retrieved_at = Column(DateTime, default=datetime.utcnow)
+    ingested_at = Column(DateTime, default=datetime.utcnow)
+    ingest_status = Column(String(20), default="pending")   # pending|complete|failed
+    error = Column(Text)
+    ingested_by = Column(String(255))
+
+    __table_args__ = (
+        Index("idx_ppef_snapshot_component_version", "component", "resource_version"),
+    )
+
+
+class TEFCAPPEFRecord(Base):
+    """One row from a PPEF sub-file, keyed for ENRLMT_ID joins.
+
+    Deliberately ONE table for every component rather than five. The components
+    share a join key and are queried the same way; five near-identical tables
+    would mean five migrations, five query paths and five places for the join to
+    drift. The component-specific columns live in `payload`.
+
+    `related_enrollment_id` exists for REASSIGNMENT, whose two identifiers BOTH
+    join back to ENROLLMENT.ENRLMT_ID: `enrollment_id` holds
+    REASGN_BNFT_ENRLMT_ID (the practitioner) and `related_enrollment_id` holds
+    RCV_BNFT_ENRLMT_ID (the entity receiving the reassigned benefits). Keeping
+    them in named columns rather than only in the payload is what makes the
+    Amendment 5 traversal a query instead of a scan.
+    """
+    __tablename__ = "tefca_ppef_records"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    snapshot_id = Column(UUID(as_uuid=True), ForeignKey("tefca_ppef_snapshots.id"),
+                         nullable=False, index=True)
+    component = Column(String(40), nullable=False, index=True)
+
+    enrollment_id = Column(String(32), index=True)
+    related_enrollment_id = Column(String(32), index=True)
+    npi = Column(String(10), index=True)
+    payload = Column(JSONB, default=dict)
+
+    __table_args__ = (
+        Index("idx_ppef_record_component_enrollment", "component", "enrollment_id"),
+        Index("idx_ppef_record_component_related", "component", "related_enrollment_id"),
+        Index("idx_ppef_record_snapshot_component", "snapshot_id", "component"),
+    )
