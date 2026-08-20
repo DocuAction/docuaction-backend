@@ -4266,22 +4266,33 @@ async def _run_ppef_ingest(snapshot_id, component: str, max_rows, actor_email):
     from app.core.database import async_session_maker
     from app.Tefca.models import TEFCAPPEFRecord, TEFCAPPEFSnapshot
     from app.Tefca.ppef_ingest import IngestError, PPEFIngestor, SchemaDriftError
+    from app.Tefca.ppef_store import copy_records
 
     async with async_session_maker() as db:
         written = {"rows": 0}
 
+        # Resolve the initiating admin so the completion audit is ATTRIBUTED.
+        #
+        # log_tefca_event(user=None) writes a valid row with a null user_id, but
+        # /api/admin/users/{id}/activity filters by user_id — so a system-attributed
+        # completion is invisible exactly where an operator goes looking for it.
+        # The ingest was caused by a named admin; the record should say so.
+        actor = None
+        if actor_email:
+            try:
+                from app.models.database import User
+                actor = (await db.execute(
+                    select(User).where(User.email == actor_email))).scalar_one_or_none()
+            except Exception:
+                actor = None
+
         async def write_batch(batch):
-            for row in batch:
-                db.add(TEFCAPPEFRecord(
-                    snapshot_id=snapshot_id,
-                    component=component,
-                    enrollment_id=row.get("enrollment_id"),
-                    related_enrollment_id=row.get("related_enrollment_id"),
-                    npi=row.get("npi"),
-                    payload=row.get("payload") or {},
-                ))
+            # COPY, not row-by-row inserts: a full Reassignment load is ~3.7M
+            # rows, which ORM inserts would turn into a multi-hour job.
+            # copy_records falls back to ORM inserts if the driver cannot COPY,
+            # so the load still completes correctly, only slower.
+            written["rows"] += await copy_records(db, snapshot_id, component, batch)
             await db.commit()
-            written["rows"] += len(batch)
 
         async def fail(reason: str):
             await db.rollback()
@@ -4292,6 +4303,15 @@ async def _run_ppef_ingest(snapshot_id, component: str, max_rows, actor_email):
                     snap.error = reason[:2000]
                 await db.execute(
                     _delete(TEFCAPPEFRecord).where(TEFCAPPEFRecord.snapshot_id == snapshot_id))
+                await db.commit()
+                # A failed ingest is audited too. An audit trail that records
+                # only successes cannot be used to investigate anything.
+                await log_tefca_event(
+                    db, user=actor, action="PPEF_SNAPSHOT_INGEST_FAILED",
+                    resource_type="tefca_ppef_snapshot", resource_id=str(snapshot_id),
+                    details={"component": component, "reason": reason[:500],
+                             "actor": actor_email},
+                )
                 await db.commit()
             except Exception:
                 await db.rollback()
@@ -4332,6 +4352,36 @@ async def _run_ppef_ingest(snapshot_id, component: str, max_rows, actor_email):
         await db.commit()
         logger.info("PPEF ingest complete: %s %s rows=%s sha=%s",
                     component, meta.resource_version, meta.record_count, meta.sha256[:12])
+
+        # The COMPLETION audit — the one that matters.
+        #
+        # The endpoint records that an ingest STARTED, but a start is a request,
+        # not a fact about data. Only this row carries what a determination is
+        # later defended with: the checksum, the row count, the CMS quarter and
+        # whether the load was truncated. Moving ingestion into a background
+        # task silently dropped it, leaving an audit trail of twelve starts and
+        # one completion.
+        await log_tefca_event(
+            db, user=actor, action="PPEF_SNAPSHOT_INGESTED",
+            resource_type="tefca_ppef_snapshot", resource_id=str(snapshot_id),
+            details={
+                "component": component,
+                "cms_title": meta.cms_title,
+                "file_name": meta.file_name,
+                "resource_id": meta.resource_id,
+                "parent_dataset_id": meta.parent_dataset_id,
+                "resource_version": meta.resource_version,
+                "as_of_label": meta.as_of_label,
+                "sha256": meta.sha256,
+                "file_size": meta.file_size,
+                "record_count": meta.record_count,
+                "rows_truncated": meta.rows_truncated,
+                "schema_fields": meta.schema_fields,
+                "transport": meta.transport,
+                "actor": actor_email,
+            },
+        )
+        await db.commit()
 
 
 @tefca_dashboard_router.post(

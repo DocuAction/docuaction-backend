@@ -19,10 +19,19 @@ genuinely silent about the sub-files.
     which the specification forbids substituting.
 
 All of that was true and none of it was the whole picture. The sub-files are
-published as ANCILLARY RESOURCES of the parent PPEF dataset, and they are
-listed by an endpoint the catalogue does not mention:
+published as ANCILLARY RESOURCES of the parent PPEF dataset, reachable through
+CMS's DECLARED mechanism — every PPEF distribution in data.json carries a
+`resourcesAPI` field:
+
+    GET https://data.cms.gov/data-api/v1/dataset-resources/{parent_uuid}
+        -> {name, fileSize, downloadURL} per resource   [PRIMARY, documented]
 
     GET https://data.cms.gov/data-api/v1/dataset/{parent_uuid}/resources
+        -> the same 11 resources plus file_uuid/media ids  [supplementary]
+
+(The `resourcesAPI` field was missed on a first pass because only DATASET-level
+keys were inspected; it lives on the DISTRIBUTION objects. Downloading a
+sub-file is therefore a documented CMS capability, not a workaround.)
 
 That returns 11 resources for PPEF, four of which are the sub-files. Their
 file_uuids are media identifiers, NOT data-api dataset ids — all four return
@@ -56,6 +65,9 @@ from app.Tefca.connectors import HTTP_HEADERS, _get_with_retry
 logger = logging.getLogger(__name__)
 
 CMS_DATA_API_ROOT = "https://data.cms.gov/data-api/v1/dataset"
+#: The DCAT-declared `resourcesAPI` route — CMS's supported mechanism for
+#: enumerating a dataset's downloadable resources programmatically.
+CMS_DATASET_RESOURCES_ROOT = "https://data.cms.gov/data-api/v1/dataset-resources"
 
 PPEF_PARENT_DATASET_ID = "2457ea29-fc82-48b0-86ec-3b0755de7515"
 CMS_REVOCATION_DATASET_ID = "a6496a7d-4e19-479a-a9ad-d4c0a49e07c3"
@@ -180,16 +192,70 @@ class PPEFResourceCatalog:
         self.parent_dataset_id = parent_dataset_id
         self.timeout = timeout
 
-    async def fetch_resources(self) -> List[Dict[str, Any]]:
-        url = f"{CMS_DATA_API_ROOT}/{self.parent_dataset_id}/resources"
+    async def fetch_official_resources(self) -> List[Dict[str, Any]]:
+        """The DCAT-declared mechanism: the `resourcesAPI` endpoint.
+
+        Every PPEF distribution in data.json carries
+        `resourcesAPI: https://data.cms.gov/data-api/v1/dataset-resources/{uuid}`,
+        which is CMS's supported programmatic route to a dataset's downloadable
+        resources. It returns {name, fileSize, downloadURL} per resource.
+
+        This is the PRIMARY source, so downloading a sub-file is a documented
+        CMS capability rather than a workaround.
+        """
+        url = f"{CMS_DATASET_RESOURCES_ROOT}/{self.parent_dataset_id}"
         resp = await _get_with_retry(url, params={}, headers=HTTP_HEADERS, timeout=self.timeout)
         if resp.status_code != 200:
-            raise RuntimeError(f"CMS resources endpoint returned HTTP {resp.status_code}")
+            raise RuntimeError(f"CMS resourcesAPI returned HTTP {resp.status_code}")
         payload = resp.json()
         rows = payload.get("data")
         if not isinstance(rows, list):
-            raise RuntimeError("CMS resources endpoint returned an unexpected shape")
+            raise RuntimeError("CMS resourcesAPI returned an unexpected shape")
         return rows
+
+    async def fetch_resource_ids(self) -> Dict[str, Dict[str, Any]]:
+        """Supplementary: the media/resource identifiers, keyed by file name.
+
+        `resourcesAPI` gives name/size/URL but not the media id, and the
+        provenance requirements ask for the resource identifier. This sibling
+        endpoint supplies it. It is SUPPLEMENTARY on purpose — a failure here
+        costs provenance detail, never the ability to discover or download.
+        """
+        url = f"{CMS_DATA_API_ROOT}/{self.parent_dataset_id}/resources"
+        try:
+            resp = await _get_with_retry(url, params={}, headers=HTTP_HEADERS, timeout=self.timeout)
+            if resp.status_code != 200:
+                return {}
+            rows = resp.json().get("data") or []
+        except Exception as exc:
+            logger.info("PPEF resource-id lookup unavailable: %s", exc)
+            return {}
+        return {r.get("file_name"): r for r in rows if r.get("file_name")}
+
+    async def fetch_resources(self) -> List[Dict[str, Any]]:
+        """Merge the official listing with the media ids, keyed on file name.
+
+        The official endpoint reports `name` + `downloadURL`; the file name is
+        derived from the URL because that is what carries the CMS structural
+        name (see the module docstring on "Address Sub-File").
+        """
+        official = await self.fetch_official_resources()
+        by_name = await self.fetch_resource_ids()
+        merged: List[Dict[str, Any]] = []
+        for row in official:
+            url = row.get("downloadURL") or ""
+            file_name = url.rsplit("/", 1)[-1] if url else None
+            extra = by_name.get(file_name, {})
+            merged.append({
+                "title": row.get("name"),
+                "file_name": file_name,
+                "file_url": url,
+                "file_size": row.get("fileSize"),
+                "file_uuid": extra.get("file_uuid"),
+                "file_mime": extra.get("file_mime"),
+                "type": extra.get("type", "Dataset"),
+            })
+        return merged
 
     async def discover(self) -> Dict[str, PPEFResource]:
         """Map every PPEF component to its current CMS resource.

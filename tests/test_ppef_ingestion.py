@@ -236,26 +236,31 @@ def csv_bytes(header: List[str], rows: List[List[str]]) -> bytes:
 
 
 class StubIngestor(PPEFIngestor):
-    """PPEFIngestor with the network replaced by fixed bytes."""
+    """PPEFIngestor with the byte source replaced by fixed content.
 
-    def __init__(self, payload: bytes, rows=None):
+    Overrides `iter_chunks` — the seam the real ingestor streams through — so
+    hashing, schema validation, batching and truncation all run exactly as they
+    do in production, with no network.
+
+    `chunk_size` deliberately defaults small so multi-chunk behaviour (rows
+    split across chunk boundaries) is exercised rather than assumed.
+    """
+
+    def __init__(self, payload: bytes, rows=None, chunk_size: int = 7):
         super().__init__(catalog=FakeCatalog(rows))
         self.payload = payload
+        self.chunk_size = chunk_size
+        self.last_modified = "Tue, 21 Jul 2026 13:31:54 GMT"
 
-    async def _download(self, resource, sink):
-        sink(self.payload)
-        return {"sha256": hashlib.sha256(self.payload).hexdigest(),
-                "bytes": len(self.payload),
-                "http_last_modified": "Tue, 21 Jul 2026 13:31:54 GMT",
-                "retrieved_at": "2026-08-19T00:00:00"}
+    async def iter_chunks(self, resource):
+        for i in range(0, len(self.payload), self.chunk_size):
+            yield self.payload[i:i + self.chunk_size]
 
 
 @pytest.fixture
-def patched_download(monkeypatch):
+def patched_download():
+    """Kept as a fixture so existing tests read unchanged; now a no-op passthrough."""
     def _apply(ingestor: StubIngestor):
-        async def fake(resource, sink, timeout=None):
-            return await ingestor._download(resource, sink)
-        monkeypatch.setattr("app.Tefca.ppef_ingest.download_component", fake)
         return ingestor
     return _apply
 
@@ -400,3 +405,99 @@ class TestBackgroundSessionUsage:
         # The specific bug: binding the RESULT to a local and then calling it.
         assert "session_maker = async_session_maker()" not in src
         assert "async with session_maker()" not in src
+
+
+class TestTwoPhaseIngest:
+    """Download and parse must not share a clock.
+
+    The first implementation parsed and wrote to the database inline with the
+    HTTP response still open, so the client's 900s timeout covered database
+    write time too. It worked for the three small sub-files and left the 128 MB
+    Reassignment file unfinished — the failure only appeared at scale, on dev.
+
+    Fetching to a spooled temp file first bounds the network phase by transfer
+    speed alone and lets parsing take as long as it needs.
+    """
+
+    async def test_stream_is_fully_consumed_before_any_row_is_written(self, patched_download):
+        order: List[str] = []
+
+        class OrderedStub(StubIngestor):
+            async def iter_chunks(self, resource):
+                async for chunk in super().iter_chunks(resource):
+                    order.append("fetch")
+                    yield chunk
+
+        payload = csv_bytes(["ENRLMT_ID", "NPI"],
+                            [[f"I{i}", f"100000000{i}"] for i in range(40)])
+        ing = patched_download(OrderedStub(payload, chunk_size=16))
+
+        def writer(batch):
+            order.append("write")
+
+        await ing.ingest("ADDITIONAL_NPIS", write_batch=writer)
+        assert "fetch" in order and "write" in order
+        # Every fetch precedes every write: the socket is closed before the
+        # database work starts.
+        assert order.index("write") > max(i for i, v in enumerate(order) if v == "fetch")
+
+    async def test_checksum_covers_the_whole_file_even_when_capped(self, patched_download):
+        payload = csv_bytes(["ENRLMT_ID", "NPI"],
+                            [[f"I{i}", f"100000000{i}"] for i in range(200)])
+        capped = patched_download(StubIngestor(payload)).ingest(
+            "ADDITIONAL_NPIS", write_batch=lambda b: None, max_rows=5)
+        full = patched_download(StubIngestor(payload)).ingest(
+            "ADDITIONAL_NPIS", write_batch=lambda b: None)
+        a = await capped
+        b = await full
+        assert a.rows_truncated is True and b.rows_truncated is False
+        assert a.record_count == 5 and b.record_count == 200
+        # Same published file -> same checksum, regardless of how much was kept.
+        assert a.sha256 == b.sha256 == hashlib.sha256(payload).hexdigest()
+        assert a.file_size == b.file_size == len(payload)
+
+
+class TestIngestAuditCompleteness:
+    """Start, completion AND failure must all be audited.
+
+    The background move kept the START audit in the endpoint and dropped the
+    COMPLETION one, which is the row that actually carries the checksum, the row
+    count and the CMS quarter. Dev showed twelve starts against one completion —
+    an audit trail that records intentions rather than outcomes.
+    """
+
+    def test_background_task_audits_completion_and_failure(self):
+        import inspect
+
+        from app.Tefca import routes
+
+        src = inspect.getsource(routes._run_ppef_ingest)
+        assert 'action="PPEF_SNAPSHOT_INGESTED"' in src, "completion is not audited"
+        assert 'action="PPEF_SNAPSHOT_INGEST_FAILED"' in src, "failure is not audited"
+
+    def test_completion_audit_is_attributed_not_system_anonymous(self):
+        """A system-attributed row is invisible in the admin activity feed.
+
+        log_tefca_event(user=None) writes a valid row with a null user_id, but
+        /api/admin/users/{id}/activity filters on user_id — so the completion
+        record existed and could not be found where an operator would look.
+        """
+        import inspect
+
+        from app.Tefca import routes
+
+        src = inspect.getsource(routes._run_ppef_ingest)
+        assert "user=actor" in src
+        assert 'db, user=None, action="PPEF_SNAPSHOT_INGESTED"' not in src
+
+    def test_completion_audit_carries_the_reproducibility_fields(self):
+        import inspect
+
+        from app.Tefca import routes
+
+        src = inspect.getsource(routes._run_ppef_ingest)
+        start = src.index('action="PPEF_SNAPSHOT_INGESTED"')
+        block = src[start:start + 1400]
+        for field in ("sha256", "record_count", "rows_truncated", "resource_version",
+                      "file_name", "schema_fields"):
+            assert field in block, f"completion audit is missing {field}"

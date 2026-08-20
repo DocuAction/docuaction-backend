@@ -44,6 +44,7 @@ import csv
 import hashlib
 import io
 import logging
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional
@@ -62,11 +63,16 @@ logger = logging.getLogger(__name__)
 #: Streaming chunk size for the download.
 CHUNK_BYTES = 1 << 20  # 1 MiB
 
-#: Rows per database batch. Large enough to be efficient, small enough that a
-#: failure does not roll back an hour of work.
-BATCH_ROWS = 5_000
+#: Rows per database batch. Sized for COPY: large enough that the per-batch
+#: round trip is negligible against millions of rows, small enough that a
+#: failure costs one batch rather than an hour of work.
+BATCH_ROWS = 50_000
 
 DOWNLOAD_TIMEOUT_SECONDS = 900.0
+
+#: Below this the download stays in memory; above it, it spools to disk. Keeps
+#: a 320 MB Enrollment extract from sitting in an App Service worker's RAM.
+SPOOL_MAX_BYTES = 32 * 1024 * 1024
 
 
 class SchemaDriftError(RuntimeError):
@@ -216,6 +222,32 @@ class PPEFIngestor:
 
     def __init__(self, catalog: Optional[PPEFResourceCatalog] = None):
         self.catalog = catalog or PPEFResourceCatalog()
+        #: Set while streaming. Transport metadata, NOT a CMS as-of date.
+        self.last_modified: Optional[str] = None
+
+    async def iter_chunks(self, resource: PPEFResource):
+        """Yield the resource bytes, chunk by chunk.
+
+        Isolated as its own overridable method so ingestion can be exercised
+        without a network: tests supply fixed bytes, production streams from
+        CMS. Everything downstream — hashing, schema validation, batching,
+        truncation — is identical in both cases, which is the point of putting
+        the seam here rather than around the whole ingest.
+        """
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(DOWNLOAD_TIMEOUT_SECONDS), follow_redirects=True
+        ) as client:
+            async with client.stream(
+                "GET", resource.download_url,
+                headers={"User-Agent": "DocuAction-TEFCA/1.0"},
+            ) as resp:
+                if resp.status_code != 200:
+                    raise IngestError(
+                        f"{resource.component}: HTTP {resp.status_code} from CMS")
+                self.last_modified = resp.headers.get("Last-Modified")
+                async for chunk in resp.aiter_bytes(CHUNK_BYTES):
+                    yield chunk
+
 
     async def ingest(
         self,
@@ -224,54 +256,89 @@ class PPEFIngestor:
         max_rows: Optional[int] = None,
         resource: Optional[PPEFResource] = None,
     ) -> SnapshotMeta:
-        """Ingest one component. Returns the snapshot provenance.
+        """Ingest one component in TWO PHASES: fetch, then parse.
 
-        `max_rows` caps the load for constrained environments. When it bites,
-        `rows_truncated` is True on the snapshot — a partial ingest is never
-        presented as a complete one, because evidence assembled from a silently
-        truncated table would look identical to evidence assembled from a
-        complete one.
+        WHY TWO PHASES
+        The first version parsed and wrote to the database inline with the HTTP
+        response still open. That coupled two unrelated clocks: the client's
+        900s timeout then covered database write time as well as transfer time.
+        It worked for the small sub-files and failed for Reassignment — 128 MB
+        and ~3.7M rows — which sat unfinished while the other three completed.
+
+        Now the download runs to a spooled temp file first (bounded by network
+        speed alone), the connection closes, and parsing happens against local
+        bytes with no socket to expire. It also matches the documented
+        architecture: download → checksum → staging → normalised tables.
+
+        Memory stays flat either way: the file spools to disk past a threshold
+        and is parsed a line at a time.
+
+        `max_rows` caps the load; when it bites, `rows_truncated` is True — a
+        partial ingest is never presented as a complete one.
         """
         if resource is None:
             discovered = await self.catalog.discover()
             resource = discovered.get(component)
         if resource is None:
             raise IngestError(f"{component}: not discovered in the CMS resource list")
+        if not resource.download_url:
+            raise IngestError(f"{component}: no download URL discovered")
 
-        buffer = bytearray()
-        meta = await download_component(resource, buffer.extend)
+        digest = hashlib.sha256()
+        total_bytes = 0
+        retrieved_at = datetime.utcnow().isoformat()
 
-        text = bytes(buffer).decode("utf-8-sig", errors="replace")
-        del buffer
+        # ── Phase 1: fetch to a spooled temp file, hashing the bytes received ──
+        spool = tempfile.SpooledTemporaryFile(max_size=SPOOL_MAX_BYTES, mode="w+b")
+        try:
+            async for chunk in self.iter_chunks(resource):
+                digest.update(chunk)
+                total_bytes += len(chunk)
+                spool.write(chunk)
+            http_last_modified = self.last_modified
+            spool.seek(0)
 
-        count = 0
-        truncated = False
-        batch: List[Dict[str, Any]] = []
-        fields: List[str] = []
+            # ── Phase 2: parse locally. No open socket, no timeout to race. ──
+            count = 0
+            truncated = False
+            header_seen = False
+            fields: List[str] = []
+            batch: List[Dict[str, Any]] = []
 
-        reader = csv.reader(io.StringIO(text))
-        header = next(reader, None)
-        if header is None:
-            raise IngestError(f"{component}: file is empty")
-        fields = validate_schema(component, header)
-
-        for raw in reader:
-            if max_rows is not None and count >= max_rows:
-                truncated = True
-                break
-            if not any(raw):
-                continue
-            batch.append(normalize_row(component, dict(zip(fields, raw))))
-            count += 1
-            if len(batch) >= BATCH_ROWS:
-                maybe = write_batch(batch)
+            async def flush(rows: List[Dict[str, Any]]) -> None:
+                maybe = write_batch(rows)
                 if hasattr(maybe, "__await__"):
                     await maybe
-                batch = []
-        if batch:
-            maybe = write_batch(batch)
-            if hasattr(maybe, "__await__"):
-                await maybe
+
+            text_stream = io.TextIOWrapper(spool, encoding="utf-8-sig", errors="replace",
+                                           newline="")
+            for raw_line in text_stream:
+                line = raw_line.rstrip("\r\n")
+                if not line.strip():
+                    continue
+                row = next(csv.reader([line]))
+                if not header_seen:
+                    fields = validate_schema(component, row)
+                    header_seen = True
+                    continue
+                if max_rows is not None and count >= max_rows:
+                    truncated = True
+                    break
+                batch.append(normalize_row(component, dict(zip(fields, row))))
+                count += 1
+                if len(batch) >= BATCH_ROWS:
+                    await flush(batch)
+                    batch = []
+            if batch:
+                await flush(batch)
+        finally:
+            try:
+                spool.close()
+            except Exception:
+                pass
+
+        if not header_seen:
+            raise IngestError(f"{component}: file is empty")
 
         return SnapshotMeta(
             component=component,
@@ -284,12 +351,12 @@ class PPEFIngestor:
             transport=resource.transport or Transport.DOWNLOAD.value,
             resource_version=resource.resource_version,
             as_of_label=_as_of_label(resource.cms_title),
-            file_size=meta["bytes"],
-            sha256=meta["sha256"],
+            file_size=total_bytes,
+            sha256=digest.hexdigest(),
             schema_fields=fields,
             record_count=count,
             rows_truncated=truncated,
-            http_last_modified=meta.get("http_last_modified"),
-            retrieved_at=meta["retrieved_at"],
+            http_last_modified=http_last_modified,
+            retrieved_at=retrieved_at,
             ingested_at=datetime.utcnow().isoformat(),
         )

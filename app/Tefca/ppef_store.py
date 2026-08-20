@@ -13,7 +13,9 @@ version, checksum, retrieval time — rather than just "PECOS said so".
 
 from __future__ import annotations
 
+import json
 import logging
+import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import select
@@ -34,7 +36,11 @@ def _snapshot_provenance(snap) -> Dict[str, Any]:
         "resource_version": snap.resource_version,
         "as_of_label": snap.as_of_label,
         "sha256": snap.sha256,
-        "record_count": snap.record_count,
+        # The SNAPSHOT's total, not the number of rows this query matched. Named
+        # distinctly because conflating the two produced an evidence item that
+        # read "CORROBORATED, records=0" — a self-contradiction in an audit
+        # trail. `row_count` (set per query below) is the matched count.
+        "snapshot_record_count": snap.record_count,
         "rows_truncated": bool(snap.rows_truncated),
         "transport": snap.transport,
         "query_identifier": f"snapshot:{snap.id}",
@@ -126,6 +132,74 @@ def make_local_store(db):
         # values — so downstream evidence quotes the source rather than a
         # paraphrase of it.
         records = [dict(r.payload or {}) for r in rows]
-        return records, _snapshot_provenance(snap)
+        provenance = _snapshot_provenance(snap)
+        # Rows matched for THIS enrolment set — what the evidence item reports.
+        provenance["row_count"] = len(records)
+        provenance["query_filters"] = {key_field: list(enrollment_ids)}
+        return records, provenance
 
     return store
+
+
+async def copy_records(db, snapshot_id, component: str, rows: List[Dict[str, Any]]) -> int:
+    """Bulk-insert PPEF rows with Postgres COPY.
+
+    WHY NOT ORM INSERTS
+    Full quarterly loads are ~5.5M rows across the four sub-files (Reassignment
+    alone is ~3.7M). Row-by-row ORM inserts over a network to Azure Postgres
+    make that a multi-hour job; COPY makes it minutes. The evidence semantics
+    are identical — this is purely how the bytes get into the table.
+
+    Falls back to ORM inserts when the driver is not asyncpg (e.g. a test or a
+    different backend), so correctness never depends on the fast path being
+    available.
+
+    `payload` is JSONB, and asyncpg's COPY expects it pre-encoded as text.
+    `id` is generated here because COPY bypasses the Python-side column default.
+    """
+    if not rows:
+        return 0
+
+    from app.Tefca.models import TEFCAPPEFRecord
+
+    records = [
+        (
+            uuid.uuid4(),
+            snapshot_id,
+            component,
+            r.get("enrollment_id"),
+            r.get("related_enrollment_id"),
+            r.get("npi"),
+            json.dumps(r.get("payload") or {}),
+        )
+        for r in rows
+    ]
+
+    try:
+        connection = await db.connection()
+        raw = await connection.get_raw_connection()
+        driver = getattr(raw, "driver_connection", None)
+        if driver is None or not hasattr(driver, "copy_records_to_table"):
+            raise AttributeError("driver does not support COPY")
+        await driver.copy_records_to_table(
+            "tefca_ppef_records",
+            records=records,
+            columns=["id", "snapshot_id", "component", "enrollment_id",
+                     "related_enrollment_id", "npi", "payload"],
+        )
+        return len(records)
+    except Exception as exc:
+        # A COPY failure must not silently drop rows: fall back to the slow path
+        # rather than returning a count for data that never landed.
+        logger.info("COPY unavailable (%s); falling back to ORM inserts", exc)
+        for r in rows:
+            db.add(TEFCAPPEFRecord(
+                snapshot_id=snapshot_id,
+                component=component,
+                enrollment_id=r.get("enrollment_id"),
+                related_enrollment_id=r.get("related_enrollment_id"),
+                npi=r.get("npi"),
+                payload=r.get("payload") or {},
+            ))
+        await db.flush()
+        return len(rows)

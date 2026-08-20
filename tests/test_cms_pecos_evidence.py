@@ -1026,3 +1026,62 @@ class TestTruncatedSnapshotCannotProveAbsence:
         item = next(i for i in d6.items if i.source == "CMS_PPEF_REASSIGNMENT")
         assert item.disposition == Disposition.INSUFFICIENT_EVIDENCE.value
         assert d6.disposition != Disposition.FAIL.value
+
+
+class TestSnapshotEvidenceCounts:
+    """An evidence item must report the rows IT matched, not the snapshot total.
+
+    Found on dev after the full loads: the reassignment item read
+    "CORROBORATED, records=0" — corroborated by nothing, which is a
+    contradiction an auditor would rightly stop at. The item was reading the
+    CMS query row-count, which snapshot-backed reads never set.
+    """
+
+    async def test_item_record_count_reflects_matched_rows(self):
+        async def store(component, key_field, ids):
+            return (
+                [{"REASGN_BNFT_ENRLMT_ID": "I1", "RCV_BNFT_ENRLMT_ID": "O9"},
+                 {"REASGN_BNFT_ENRLMT_ID": "I1", "RCV_BNFT_ENRLMT_ID": "O10"}],
+                {"resource_version": "2026.07.17", "sha256": "abc",
+                 "snapshot_record_count": 3_899_791, "row_count": 2,
+                 "rows_truncated": False, "realtime": False,
+                 "update_cadence": "quarterly"},
+            )
+
+        entity = onc_entity()
+        nppes = nppes_result(enumeration_type="NPI-1", taxonomy_code="207V00000X")
+        conn = PPEFRelationalConnector(FakeCMSClient(), local_store=store)
+        sources = clean_sources(
+            nppes=nppes,
+            cms_ppef_enrollment=await enrollment_source(FakeCMSClient()),
+            cms_revocation=await revocation_source(FakeCMSClient()),
+            cms_ppef_reassignment=await conn.reassignments(["I1"]),
+        )
+        profile = build_profile(entity, nppes_data=nppes.data, pecos_found=True)
+        d6 = dim(assemble_dimensions(entity, profile, sources),
+                 Dimension.D6_PROVIDER_ORG_RELATIONSHIP)
+        item = next(i for i in d6.items if i.source == "CMS_PPEF_REASSIGNMENT")
+        assert item.disposition == Disposition.CORROBORATED.value
+        assert item.record_count == 2, "must report matched rows, not the snapshot total"
+
+    async def test_corroborated_never_reports_zero_records(self):
+        async def store(component, key_field, ids):
+            return ([{"REASGN_BNFT_ENRLMT_ID": "I1", "RCV_BNFT_ENRLMT_ID": "O9"}],
+                    {"resource_version": "2026.07.17", "row_count": 1,
+                     "rows_truncated": False})
+
+        entity = onc_entity()
+        nppes = nppes_result(enumeration_type="NPI-1", taxonomy_code="207V00000X")
+        conn = PPEFRelationalConnector(FakeCMSClient(), local_store=store)
+        sources = clean_sources(
+            nppes=nppes,
+            cms_ppef_enrollment=await enrollment_source(FakeCMSClient()),
+            cms_revocation=await revocation_source(FakeCMSClient()),
+            cms_ppef_reassignment=await conn.reassignments(["I1"]),
+        )
+        profile = build_profile(entity, nppes_data=nppes.data, pecos_found=True)
+        d6 = dim(assemble_dimensions(entity, profile, sources),
+                 Dimension.D6_PROVIDER_ORG_RELATIONSHIP)
+        for item in d6.items:
+            if item.disposition == Disposition.CORROBORATED.value:
+                assert item.record_count > 0
