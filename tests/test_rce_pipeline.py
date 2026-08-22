@@ -224,6 +224,53 @@ class TestQualityRules:
             assert rule.severity() in qr.SEVERITY_OVERRIDES.values() or \
                 rule.severity() in (qr.CRITICAL, qr.HIGH, qr.MEDIUM, qr.LOW, qr.INFO)
 
+    def test_dq_rule_ids_are_unique(self):
+        """No two rules may claim the same rule_id.
+
+        `RULE_BY_ID` is a dict comprehension, so a duplicate is silently
+        deduplicated with last-wins — while `quality_engine` iterates `RULES`
+        and executes BOTH, merges their per-rule counters, stamps every issue
+        with the later rule's severity, and finally dies at commit on
+        `uq_rce_rule_exec_run_rule` after a full 23,566-record pass.
+        """
+        ids = [rule.rule_id for rule in qr.RULES]
+        duplicates = sorted({rid for rid in ids if ids.count(rid) > 1})
+        assert not duplicates, f"duplicate rule_id(s): {duplicates}"
+        assert len(qr.RULE_BY_ID) == len(qr.RULES), (
+            "RULE_BY_ID lost entries to deduplication — a duplicate rule_id "
+            "exists that the list check above should have caught.")
+
+    def test_duplicate_rule_id_is_refused_at_load(self):
+        """The guard raises rather than warning, and names the free ids."""
+        original = qr.RULES
+        try:
+            qr.RULES = original + (original[0],)
+            with pytest.raises(qr.DuplicateRuleId) as exc:
+                qr._assert_rule_ids_unique()
+            assert original[0].rule_id in str(exc.value)
+        finally:
+            qr.RULES = original
+        qr._assert_rule_ids_unique()  # restored set must still load
+
+    def test_next_available_rule_ids_are_derived_not_hardcoded(self):
+        """FMT-005/006 are TAKEN. The next free ids must reflect that."""
+        nxt = qr.next_available_rule_ids()
+        assert nxt["FMT"] == "FMT-007", (
+            "FMT-005 (Contact phone complete) and FMT-006 (Contact email "
+            "well-formed) already ship. A new FMT rule starts at FMT-007.")
+        assert nxt["CON"] == "CON-006"
+        assert nxt["BUS"] == "BUS-004"
+        for prefix, rule_id in nxt.items():
+            assert rule_id not in qr.RULE_BY_ID, (
+                f"{rule_id} is advertised as free but already exists")
+
+    def test_auto_safe_rules_all_exist(self):
+        """The allow-list cannot name a rule that is not in the set."""
+        for rule_id in qr.AUTO_SAFE_RULES:
+            assert rule_id in qr.RULE_BY_ID, (
+                f"AUTO_SAFE_RULES names {rule_id}, which is not a registered "
+                f"rule — the correction gate would silently never match it.")
+
     def test_missing_npi_is_informational_never_a_failure(self):
         """19.45% of the delivered population has no NPI. Absence is a fact."""
         result = findings("NPI-001", ctx(row(NPI="")))

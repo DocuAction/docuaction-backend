@@ -700,6 +700,60 @@ RULE_BY_ID: Dict[str, Rule] = {rule.rule_id: rule for rule in RULES}
 AUTO_SAFE_RULES = frozenset({"FMT-001", "FMT-002", "FMT-004"})
 
 
+class DuplicateRuleId(RuntimeError):
+    """Two rules claim the same rule_id. Raised at import, never at run time."""
+
+
+def _assert_rule_ids_unique() -> None:
+    """Refuse to load a rule set containing a duplicate rule_id.
+
+    WHY THIS IS AN IMPORT-TIME FAILURE AND NOT A WARNING
+    ────────────────────────────────────────────────────
+    `RULE_BY_ID` is a dict comprehension over `RULES`, so a duplicate id is
+    silently deduplicated with last-definition-wins — while `quality_engine`
+    iterates `RULES` itself and would execute BOTH. The three consequences
+    compound, and none of them announces itself as a duplicate:
+
+      * both rules run over all 23,566 records, doubling the work
+      * `per_rule_evaluated` / `per_rule_issues` are keyed by rule_id, so the
+        two rules' counters MERGE and the execution history becomes unreadable
+      * every issue from either rule is stamped with the LATER rule's severity,
+        because `_issue_row` resolves severity through `RULE_BY_ID`
+
+    The run then dies at `db.commit()` on `uq_rce_rule_exec_run_rule`, after the
+    full pass has completed — an expensive, late failure whose message says
+    nothing about rule ids. Failing at import turns that into a one-line error
+    before anything runs.
+
+    NOTE FOR WHOEVER ADDS THE NEXT RULE: FMT-005 and FMT-006 are ALREADY TAKEN
+    ("Contact phone complete", "Contact email well-formed"). Next free ids are
+    FMT-007, CON-006 and BUS-004 — see `next_available_rule_ids()`.
+    """
+    seen: Dict[str, int] = {}
+    for rule in RULES:
+        seen[rule.rule_id] = seen.get(rule.rule_id, 0) + 1
+    duplicates = sorted(rid for rid, n in seen.items() if n > 1)
+    if duplicates:
+        raise DuplicateRuleId(
+            f"duplicate rule_id in RULES: {duplicates}. Each rule_id must appear "
+            f"exactly once; a duplicate is silently deduplicated by RULE_BY_ID "
+            f"but executed twice by quality_engine. Next free ids: "
+            f"{next_available_rule_ids()}")
+
+
+def next_available_rule_ids() -> Dict[str, str]:
+    """The next unused id per category prefix. Derived, never hand-maintained."""
+    highest: Dict[str, int] = {}
+    for rule in RULES:
+        prefix, _, number = rule.rule_id.rpartition("-")
+        if prefix and number.isdigit():
+            highest[prefix] = max(highest.get(prefix, 0), int(number))
+    return {prefix: f"{prefix}-{n + 1:03d}" for prefix, n in sorted(highest.items())}
+
+
+_assert_rule_ids_unique()
+
+
 def rule_config_hash() -> str:
     """SHA-256 over the rule set's identity, versions and effective severities.
 

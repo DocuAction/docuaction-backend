@@ -119,6 +119,32 @@ _SOURCE_STATE_DIMENSIONS = frozenset({
     "TEFCA_ALIGNMENT", "PROVIDER_ORG_RELATIONSHIP",
 })
 
+#: The D1 evidence field carrying the organisation-name comparison.
+#:
+#: Named here rather than written inline so the producer and the consumer can be
+#: asserted equal by a test instead of agreeing by coincidence — they did not
+#: agree for the whole of the first run, and nothing failed to say so.
+#: `evidence_assembly._dimension_identity` is the producer.
+IDENTITY_NAME_FIELD = "legal_name"
+
+#: Classifier SIGNAL names this translator can emit, and the evidence input each
+#: one is derived from. Exposed so a test can assert that every signal the active
+#: `review_rules` reference is either produced here or explicitly declared
+#: unproduced — the failure this module has already had once is a rule condition
+#: silently having no input at all.
+#:
+#: Signals NOT emitted here, and why (see docs/methodology_decision_package.md):
+#:   taxonomy_mismatch        no NUCC taxonomy comparison exists in any dimension
+#:   confidence_below         the dimension layer computes no confidence score
+#:   nppes_pecos_conflict     defined in review_service._derived_fields, not here
+#:   multiple_source_conflict defined in review_service.detect_source_conflict
+#:   required_verification_failed  no producer anywhere
+EMITTED_FIELD_SIGNALS: Dict[str, str] = {
+    "address_mismatch": "D4 dimension disposition + PARTIAL_MATCH item scan",
+    "name_mismatch": f"D1 field_conflicts[].field == {IDENTITY_NAME_FIELD!r}",
+    "npi_validation": "evidence.data_quality_flags NPI_MALFORMED / NPI_CHECK_DIGIT_FAILED",
+}
+
 
 def dimensions_to_verification_results(evidence: Dict[str, Any]) -> Dict[str, Any]:
     """Translate assembled D1-D6 evidence into the classifier's input shape.
@@ -169,9 +195,40 @@ def dimensions_to_verification_results(evidence: Dict[str, Any]) -> Dict[str, An
                     "disposition": disposition,
                 }
         if name == "IDENTITY":
+            # THE EVIDENCE FIELD IS `legal_name`, NOT `name`.
+            #
+            # This condition read `== "name"` and therefore never matched.
+            # `_dimension_identity` writes `{"field": "legal_name", ...}` into
+            # field_conflicts, and every other layer agrees with it: D1 declares
+            # `fields_evaluated=[..., "legal_name", ...]`, the NPPES and SAM
+            # connectors shape their responses under a `legal_name` key, and
+            # `TEFCAEntity.legal_name_submitted` is the column. Across the 1,984
+            # persisted evidence rows the value `legal_name` occurs 92 times and
+            # the value `name` occurs zero times.
+            #
+            # So the signal `name_mismatch` was never emitted, and RULE-003 —
+            # which is written to grade a minor name difference as B2 — could
+            # only ever fire on `address_mismatch`. Correcting the key restores
+            # the input the approved rule was written to consume; it does not
+            # change what the rule does with it.
+            #
+            # TWO NAMESPACES, DELIBERATELY NOT MERGED. `legal_name` is the
+            # EVIDENCE field (what was compared). `name_mismatch` is the
+            # CLASSIFIER SIGNAL (what the rules are written against, and what
+            # review_rules RULE-003 v2 references by name). Renaming the signal
+            # would be a rule change; renaming the evidence field would break
+            # the persisted rows. Only the lookup was wrong.
+            #
+            # SEVERITY IS STILL HARDCODED `minor`, AND THAT IS A KNOWN GAP.
+            # Grading which name differences are minor and which are material
+            # is a methodology question — `ValidationEngine` uses a five-band
+            # similarity model and the dimension layer has none. Deciding the
+            # bands here would be inventing methodology, so the existing
+            # constant is left exactly as it was and the question is recorded in
+            # docs/methodology_decision_package.md (Decision D5).
             conflicts = [c for i in dimension.get("evidence", [])
                          for c in (i.get("field_conflicts") or [])]
-            if any((c.get("field") or "") == "name" for c in conflicts):
+            if any((c.get("field") or "") == IDENTITY_NAME_FIELD for c in conflicts):
                 fields["name_mismatch"] = {"severity": "minor"}
 
     quality = evidence.get("data_quality_flags") or []
