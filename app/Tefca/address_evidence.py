@@ -52,6 +52,18 @@ SUPPLEMENTAL_ADDRESS_SOURCES = frozenset({SOURCE_WEBSITE})
 
 
 class AddressComparison:
+    """The LAYER 2 address-comparison vocabulary.
+
+    Registered in `app.core.evidence_vocabulary` as Layer 2, and DELIBERATELY NOT
+    RENAMED. Three of these five names also exist at Layer 3 (NOT_FOUND,
+    UNAVAILABLE, CONFLICT) and two exist nowhere else (MATCH, PARTIAL_MATCH) —
+    but 176 MATCH and 76 PARTIAL_MATCH rows are already persisted in the shared
+    disposition column, and the terms are clear in their own context. They are
+    grandfathered pre-1.0; the contract check fails on NEW collisions, not these.
+    """
+
+    VOCABULARY_LAYER = "LAYER_2"
+
     MATCH = "MATCH"
     PARTIAL_MATCH = "PARTIAL_MATCH"
     CONFLICT = "CONFLICT"

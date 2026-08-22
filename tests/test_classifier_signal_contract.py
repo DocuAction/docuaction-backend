@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.core.evidence_vocabulary import CLASSIFIER_SIGNAL_REGISTRY, PATH_RCE
 from app.tefca_registry.rce.arc_pipeline import (
     EMITTED_FIELD_SIGNALS,
     IDENTITY_NAME_FIELD,
@@ -59,32 +60,17 @@ PRODUCER_CONFLICT_FIELDS = {
     "TEFCA_ALIGNMENT": {"data_quality", "active_status"},
 }
 
-#: Rule conditions with no producer on the RCE path, and WHY. Each entry is a
-#: deliberate deferral recorded in docs/methodology_decision_package.md — not an
-#: oversight, and not something to wire without a decision.
+#: Rule conditions with no producer on the RCE path, and WHY.
+#:
+#: DERIVED FROM THE SHARED REGISTRY (B5 / E1), not restated here. This dict used
+#: to hold its own copy of the reasons while `arc_pipeline` held its own copy of
+#: the emitted list — so the producer, the consumer and this test could each be
+#: correct about a different thing. `app.core.evidence_vocabulary` now holds one
+#: entry per signal and everything reads it.
 DECLARED_UNPRODUCED = {
-    "taxonomy_mismatch":
-        "No taxonomy comparison exists. NPPES supplies a NUCC taxonomy; the RCE "
-        "delivery supplies none (field_map: 'STILL NOT SUPPLIED ... any "
-        "NUCC-grade provider/organisation taxonomy'), so there is no second "
-        "operand to compare against. FUTURE_SIGNAL.",
-    "confidence_below":
-        "The dimension layer computes no confidence score, by design — "
-        "sufficiency_summary() contains no arithmetic. Porting "
-        "ValidationEngine's deduction model would transplant one classifier's "
-        "scoring into the other. METHODOLOGY_DECISION_REQUIRED.",
-    "nppes_pecos_conflict":
-        "A derivation exists in review_service._derived_fields, but 'pecos' "
-        "denotes a different source in each path: the NPPES-proxy connector "
-        "there, genuine CMS_PPEF_ENROLLMENT here. Reusing the rule would make a "
-        "PECOS non-match contribute to B3, contradicting _dimension_medicare's "
-        "explicit rule that a PECOS non-match is never a TEFCA failure. "
-        "METHODOLOGY_DECISION_REQUIRED.",
-    "multiple_source_conflict":
-        "detect_source_conflict() exists but its first clause turns on the same "
-        "'pecos' ambiguity as above. METHODOLOGY_DECISION_REQUIRED.",
-    "required_verification_failed":
-        "No producer anywhere in the codebase. FUTURE_SIGNAL.",
+    name: entry.note
+    for name, entry in CLASSIFIER_SIGNAL_REGISTRY.items()
+    if not any(p.path == PATH_RCE for p in entry.producers)
 }
 
 

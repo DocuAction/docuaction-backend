@@ -443,6 +443,16 @@ class TEFCADimensionEvidence(Base):
     generation_timestamp = Column(String(64), index=True)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
+    #: Which evidence vocabulary this row's terms belong to (B5 / migration
+    #: 20260823_vocab_version). NULL on every row written before versioning
+    #: existed, and DELIBERATELY LEFT NULL — `evidence_vocabulary.vocabulary_of`
+    #: derives "LEGACY" at read time. Backfilling would erase the difference
+    #: between "predates versioning" and "retrospectively assigned", which is the
+    #: same reason `confidence_score` above carries no default.
+    #:
+    #: No server_default, so adding it did not rewrite the 1,984 existing rows.
+    vocabulary_version = Column(String(10), index=True)
+
     # Analyst annotation — see the class docstring for why these are writable.
     analyst_notes = Column(Text)
     reviewed_by = Column(String(255))

@@ -40,6 +40,15 @@ from sqlalchemy import func, select, text
 from app.tefca_registry import models as reg
 from app.tefca_registry.rce import models as m
 
+# The shared vocabulary registry. `app/core/__init__.py` is empty, so this import
+# is side-effect free and cannot cycle back into either domain package — which is
+# why the registry lives there rather than under app/Tefca/, whose __init__ eagerly
+# imports routes, connectors, validation_engine and mock_data.
+from app.core.evidence_vocabulary import (
+    CLASSIFIER_SIGNAL_REGISTRY as _SIGNAL_REGISTRY,
+    PATH_RCE as _PATH_RCE,
+)
+
 logger = logging.getLogger(__name__)
 
 #: B1-B4 → review tier. B1 auto-completes; B3 and B4 both escalate to T3, but
@@ -127,22 +136,22 @@ _SOURCE_STATE_DIMENSIONS = frozenset({
 #: `evidence_assembly._dimension_identity` is the producer.
 IDENTITY_NAME_FIELD = "legal_name"
 
-#: Classifier SIGNAL names this translator can emit, and the evidence input each
-#: one is derived from. Exposed so a test can assert that every signal the active
-#: `review_rules` reference is either produced here or explicitly declared
-#: unproduced — the failure this module has already had once is a rule condition
-#: silently having no input at all.
+#: Classifier SIGNAL names this translator emits, derived from the shared
+#: registry rather than restated here.
 #:
-#: Signals NOT emitted here, and why (see docs/methodology_decision_package.md):
-#:   taxonomy_mismatch        no NUCC taxonomy comparison exists in any dimension
-#:   confidence_below         the dimension layer computes no confidence score
-#:   nppes_pecos_conflict     defined in review_service._derived_fields, not here
-#:   multiple_source_conflict defined in review_service.detect_source_conflict
-#:   required_verification_failed  no producer anywhere
+#: THE REGISTRY IS THE SINGLE DEFINITION. This dict previously held its own copy
+#: of the emitted-signal list while the test file held its own copy of the
+#: unproduced-signal list, so producer, consumer and test could each be correct
+#: about a different thing. `app.core.evidence_vocabulary` now holds one entry
+#: per signal, recording — separately — whether it can be PRODUCED, whether its
+#: VALUE DOMAIN is settled, and whether its B1-B4 CONSEQUENCE is decided.
+#:
+#: Signals not emitted on this path are registered there with a reason and a
+#: blocking decision, not omitted. See docs/methodology_decision_package.md.
 EMITTED_FIELD_SIGNALS: Dict[str, str] = {
-    "address_mismatch": "D4 dimension disposition + PARTIAL_MATCH item scan",
-    "name_mismatch": f"D1 field_conflicts[].field == {IDENTITY_NAME_FIELD!r}",
-    "npi_validation": "evidence.data_quality_flags NPI_MALFORMED / NPI_CHECK_DIGIT_FAILED",
+    name: (entry.producers[0].location if entry.producers else "")
+    for name, entry in _SIGNAL_REGISTRY.items()
+    if any(p.path == _PATH_RCE for p in entry.producers)
 }
 
 

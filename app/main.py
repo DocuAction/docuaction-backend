@@ -280,6 +280,54 @@ async def startup():
     except Exception as e:
         logger.warning(f"PPEF scheduler not started: {e}")
 
+    # ═══ EVIDENCE VOCABULARY CONTRACT (B5 / E1) ═══
+    #
+    # STAGE A: report-only at startup, FATAL in CI. `load_rules` already raises
+    # on an unregistered signal when the rules are next loaded; this pass runs
+    # the same check eagerly so a rule row inserted since the last deploy is
+    # visible on boot rather than on first classification.
+    #
+    # STAGE B (VOCABULARY_CONTRACT_STARTUP_MODE=fatal) is DELIBERATELY OPT-IN and
+    # must remain so until the Azure dev/prod review_rules inventory confirms no
+    # unregistered signal exists. Shipping straight to fatal would trade a
+    # silent-miss risk for an availability risk — a production start failure over
+    # a rule row nobody has inventoried.
+    try:
+        from app.core.vocabulary_contract import (
+            assert_vocabulary_contract_at_startup, startup_mode)
+        from app.tefca_registry.bucket_classifier import SEED_RULES_V2
+        from app.core.database import async_session_maker
+        from sqlalchemy import select as _select
+        from app.tefca_registry import models as _reg
+
+        rules = SEED_RULES_V2
+        try:
+            async with async_session_maker() as _s:
+                rows = (await _s.execute(
+                    _select(_reg.ReviewRule).where(_reg.ReviewRule.is_active.is_(True))
+                )).scalars().all()
+            if rows:
+                rules = [{"rule_code": r.rule_code, "name": r.name, "bucket": r.bucket,
+                          "priority": r.priority, "conditions": r.conditions or {},
+                          "version": r.version} for r in rows]
+        except Exception as e:  # noqa: BLE001 — fall back to the seed definitions
+            logger.info(f"vocabulary contract: using seed rules ({type(e).__name__})")
+
+        summary = assert_vocabulary_contract_at_startup(rules)
+        logger.info(
+            "Evidence vocabulary contract [%s]: %d/%d rule conditions ready, "
+            "%d not ready",
+            summary["mode"], summary["conditions_ready"], summary["conditions_total"],
+            len(summary["conditions_not_ready"]))
+    except Exception as e:
+        # A raise here means CHECK 4 fired in Stage B, which is intended to stop
+        # startup. Anything else must not.
+        from app.core.vocabulary_contract import (
+            UnknownSignalReference as _USR, startup_mode as _sm)
+        if isinstance(e, _USR) and _sm() == "fatal":
+            raise
+        logger.warning(f"Vocabulary contract check skipped: {e}")
+
 
 # Cached TEFCA connector probe. /health is polled frequently by load balancers,
 # so the live probe result is cached for 60s to avoid hammering the source APIs.

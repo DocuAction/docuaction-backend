@@ -79,6 +79,21 @@ class Disposition(str, Enum):
     NOT_FOUND = "NOT_FOUND"
 
 
+#: WHICH VOCABULARY LAYER THIS ENUM BELONGS TO.
+#:
+#: `Disposition` is the LAYER 3 vocabulary — what D1-D6 concluded. It is NOT the
+#: Layer 1 observation vocabulary, which lives in
+#: `app.core.evidence_vocabulary.ObservationState` and uses deliberately
+#: qualified names (NO_MATCH_OBSERVED, SOURCE_UNAVAILABLE,
+#: LOOKUP_NOT_APPLICABLE) precisely so the two do not collide.
+#:
+#: NOT_FOUND and UNAVAILABLE below duplicate Layer 1 concepts under Layer 3
+#: names. They are grandfathered pre-1.0 and are NOT renamed: 504 NOT_FOUND and
+#: 268 UNAVAILABLE item rows are already persisted, and renaming a term to tidy
+#: a namespace would invalidate stored evidence. See
+#: `app.core.evidence_vocabulary.ALLOWED_CROSS_LAYER_TERMS`.
+VOCABULARY_LAYER = "LAYER_3"
+
 CORE_DISPOSITIONS = frozenset({
     Disposition.PASS, Disposition.FAIL, Disposition.REVIEW,
     Disposition.NOT_APPLICABLE, Disposition.UNAVAILABLE,

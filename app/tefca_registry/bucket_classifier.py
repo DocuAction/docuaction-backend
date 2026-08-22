@@ -273,11 +273,29 @@ class BucketClassifier:
             if cur is None or (r.version or 0) > (cur.version or 0):
                 best[r.rule_code] = r
 
-        self._rules = self._sorted([{
+        loaded = self._sorted([{
             "rule_code": r.rule_code, "name": r.name, "bucket": r.bucket,
             "priority": r.priority, "conditions": r.conditions or {},
             "description": r.description, "version": r.version,
         } for r in best.values()])
+
+        # CHECK 4 — the vocabulary contract, enforced BEFORE the rules are cached.
+        #
+        # Rules are DATABASE ROWS. A rule inserted referencing a signal nothing
+        # produces does not fail — it silently never fires, and the rule set
+        # claims coverage it does not have. That already happened once with
+        # `name_mismatch`. Every other contract check ranges over code-defined
+        # vocabulary and belongs in CI; this one has to run against whatever the
+        # database actually holds, so it runs here.
+        #
+        # A registered signal that is DECLARED_UNAVAILABLE or METHODOLOGY_BLOCKED
+        # does NOT raise: that is a disclosed gap, reported per condition by
+        # `condition_readiness`. Only an UNREGISTERED reference raises.
+        from app.core.vocabulary_contract import assert_db_rules_reference_known_signals
+
+        assert_db_rules_reference_known_signals(loaded)
+
+        self._rules = loaded
         self._loaded_at = time.monotonic()
         return self._rules
 
