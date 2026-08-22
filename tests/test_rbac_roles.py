@@ -368,6 +368,16 @@ def test_no_tefca_read_endpoint_sits_above_the_viewer_floor():
         # results a viewer legitimately needs remain open: /api/tefca/qa/score,
         # /qa/health, /qa/audit and /qa/evidence-summary are all still viewer.
         "/api/tefca/qa/sweep",
+        # QA work queue — qalead (6). Directly analogous to the tier-3 queue
+        # above: it is a QA lead's worklist, not entity data, and it names the
+        # ANALYST who made each determination. Staff email addresses are the
+        # same category the /api/tefca/audit-trail exception turns on
+        # (LOGIN-013: a viewer sees no PII anywhere), so the principle behind
+        # this test argues for the exception rather than against it. The
+        # read-only decision record a viewer legitimately needs stays open:
+        # /api/tefca/arc/reviews/{review_id}/history is viewer, and returns the
+        # full chain including superseded events.
+        "/api/tefca/arc/qa-queue",
     }
 
     offenders = []

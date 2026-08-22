@@ -839,3 +839,122 @@ async def arc_cycle_stats(cycle_id: uuid.UUID, db: AsyncSession = Depends(get_db
         "bucket_counts": buckets,
         "overdue": overdue,
     }
+
+
+# ── B2 QA GATE — immutable analyst / QA decision events ──────────────────────
+#
+# These endpoints record DECISIONS. They assign no work and imply no tier:
+# which tier receives which bucket is Decision D3 and is unresolved, so no queue
+# routing is built here. What QA governs is what happens AFTER a determination
+# exists, which is independent of who was assigned it.
+
+class AnalystDetermination(BaseModel):
+    determination: str = Field(description="CONFIRM | RECLASSIFY")
+    determined_bucket: Optional[str] = Field(None, description="B1 | B2 | B3 | B4")
+    rationale: str = Field(min_length=10, max_length=4000)
+
+
+class QaReview(BaseModel):
+    qa_action: str = Field(description="APPROVE | RETURN | ESCALATE")
+    qa_reason: str = Field(min_length=10, max_length=4000)
+    escalated_to_user_id: Optional[uuid.UUID] = None
+    escalation_reason: Optional[str] = Field(None, max_length=4000)
+    #: Segregation-of-duties exception. Requires an admin grant from a DIFFERENT
+    #: person. Recorded, counted, and expected to be disabled in production.
+    sod_exception_granted_by: Optional[uuid.UUID] = None
+    sod_exception_reason: Optional[str] = Field(None, max_length=4000)
+
+
+class SupersedeDetermination(BaseModel):
+    supersedes_decision_id: uuid.UUID
+    determination: str = Field(description="CONFIRM | RECLASSIFY")
+    determined_bucket: Optional[str] = Field(None, description="B1 | B2 | B3 | B4")
+    supersession_reason: str = Field(min_length=10, max_length=4000)
+    rationale: Optional[str] = Field(None, max_length=4000)
+
+
+@router.post("/reviews/{review_id}/determination",
+             dependencies=[Depends(require_role("reviewer"))])
+async def record_determination(review_id: str, req: AnalystDetermination,
+                               request: Request,
+                               db: AsyncSession = Depends(get_db),
+                               user=Depends(require_role("reviewer"))):
+    """Record an analyst determination as a new immutable event."""
+    from app.tefca_registry.qa_gate import QaGateRefused, record_analyst_determination
+
+    try:
+        result = await record_analyst_determination(
+            db, review_id, user=user, determination=req.determination,
+            determined_bucket=req.determined_bucket, rationale=req.rationale,
+            ip_address=get_client_ip(request))
+    except QaGateRefused as exc:
+        raise HTTPException(409, str(exc))
+    await db.commit()
+    return result
+
+
+@router.post("/reviews/{review_id}/qa", dependencies=[Depends(require_role("qalead"))])
+async def submit_qa(review_id: str, req: QaReview, request: Request,
+                    db: AsyncSession = Depends(get_db),
+                    user=Depends(require_role("qalead"))):
+    """APPROVE, RETURN or ESCALATE. Never an edit of the analyst's decision."""
+    from app.tefca_registry.qa_gate import QaGateRefused, submit_qa_review
+
+    try:
+        result = await submit_qa_review(
+            db, review_id, user=user, qa_action=req.qa_action,
+            qa_reason=req.qa_reason,
+            escalated_to_user_id=req.escalated_to_user_id,
+            escalation_reason=req.escalation_reason,
+            sod_exception_granted_by=req.sod_exception_granted_by,
+            sod_exception_reason=req.sod_exception_reason,
+            ip_address=get_client_ip(request))
+    except QaGateRefused as exc:
+        raise HTTPException(409, str(exc))
+    await db.commit()
+    return result
+
+
+@router.post("/reviews/{review_id}/supersede",
+             dependencies=[Depends(require_role("program_manager"))])
+async def supersede(review_id: str, req: SupersedeDetermination, request: Request,
+                    db: AsyncSession = Depends(get_db),
+                    user=Depends(require_role("program_manager"))):
+    """Issue a NEW determination that supersedes an earlier one after escalation."""
+    from app.tefca_registry.qa_gate import QaGateRefused, supersede_determination
+
+    try:
+        result = await supersede_determination(
+            db, review_id, user=user,
+            supersedes_decision_id=req.supersedes_decision_id,
+            determination=req.determination,
+            determined_bucket=req.determined_bucket,
+            supersession_reason=req.supersession_reason,
+            rationale=req.rationale, ip_address=get_client_ip(request))
+    except QaGateRefused as exc:
+        raise HTTPException(409, str(exc))
+    await db.commit()
+    return result
+
+
+# NOT /reviews/qa-queue: `@router.get("/reviews/{review_id}")` is registered
+# earlier in this module, and FastAPI matches in registration order — the
+# literal path would be swallowed as review_id="qa-queue" and return 404 for
+# a review that does not exist. A distinct path avoids depending on ordering.
+@router.get("/qa-queue", dependencies=[Depends(require_role("qalead"))])
+async def get_qa_queue(limit: int = Query(100, ge=1, le=500),
+                       db: AsyncSession = Depends(get_db)):
+    """Determinations awaiting QA. Not an analyst work queue — see D3."""
+    from app.tefca_registry.qa_gate import qa_queue
+
+    items = await qa_queue(db, limit=limit)
+    return {"count": len(items), "awaiting_qa": items}
+
+
+@router.get("/reviews/{review_id}/history",
+            dependencies=[Depends(require_role("viewer"))])
+async def get_review_history(review_id: str, db: AsyncSession = Depends(get_db)):
+    """The full ordered decision chain, superseded events included and marked."""
+    from app.tefca_registry.qa_gate import review_state
+
+    return await review_state(db, review_id)
