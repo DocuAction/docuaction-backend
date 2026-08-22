@@ -30,6 +30,8 @@ GUARDED_REVISIONS = [
     "20260824_evidence_provenance.py",
     "20260825_qa_decision_events.py",
     "20260826_area1_mutation_audit.py",
+    "20260827_startup_table_coverage.py",
+    "20260828_area1_privilege_correction.py",
 ]
 
 # DDL that creates something. Calling these unconditionally is the defect.
@@ -64,6 +66,49 @@ def _function(filename: str, name: str) -> ast.FunctionDef:
         if isinstance(node, ast.FunctionDef) and node.name == name:
             return node
     raise AssertionError(f"{filename} has no {name}()")
+
+
+def _load(filename: str):
+    """Import a revision module so its constants can be compared by value."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_rev_" + filename.replace(".", "_"), VERSIONS / filename)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _executed_sql(filename: str):
+    """Every string this revision hands to op.execute() or sa.text().
+
+    Scanning all string constants would match the prose: these revisions explain
+    the SQL they replaced, and one of them logs a warning containing the word
+    INSERT. What matters is only what actually reaches the database.
+    """
+    statements = []
+    for node in ast.walk(_tree(filename)):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = getattr(func, "attr", None)
+        if name not in ("execute", "text"):
+            continue
+        for argument in node.args:
+            if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+                statements.append(argument.value)
+            elif isinstance(argument, ast.JoinedStr):     # f-string
+                statements.append("".join(
+                    part.value for part in argument.values
+                    if isinstance(part, ast.Constant) and isinstance(part.value, str)))
+    return statements
+
+
+def _assert_no_dml(filename: str) -> None:
+    """A structural revision must not send an INSERT, UPDATE or DELETE."""
+    for statement in _executed_sql(filename):
+        assert not re.search(r"\b(INSERT INTO|DELETE FROM|UPDATE \w+ SET)\b",
+                             statement.upper()), (
+            f"{filename} executes a DML statement: {statement[:90]!r}")
 
 
 def _guarded_by_a_conditional(func: ast.FunctionDef, call: ast.Call) -> bool:
@@ -253,3 +298,195 @@ def test_the_chain_has_exactly_one_head():
     assert len(heads) == 1, f"expected a single head, found {sorted(heads)}"
     assert sum(1 for d in down_revisions.values() if d is None) == 1, (
         "more than one base revision")
+
+
+class TestBothBasesAreVisibleToAlembic:
+    """env.py must see every modelled table, not one Base out of two.
+
+    The project declares models on `app.database.Base` and on
+    `app.core.database.Base`. env.py targeted the first and imported one of the
+    eight modules that populate them, so Alembic could see 47 of 135 tables and
+    `alembic check` proposed dropping most of the database. These tests fail if
+    a Base or a model module falls out of env.py again.
+    """
+
+    ENV = Path(__file__).resolve().parents[1] / "alembic" / "env.py"
+
+    def test_env_targets_both_declarative_bases(self):
+        source = self.ENV.read_text(encoding="utf-8")
+        assert "from app.database import Base as AppBase" in source
+        assert "from app.core.database import Base as CoreBase" in source
+        assert "_merged_metadata()" in source
+
+    def test_env_imports_every_module_that_registers_models(self):
+        """Metadata is populated by import; a missing import hides tables."""
+        source = _code(self.ENV.read_text(encoding="utf-8"))
+        for module in ("app.tefca_registry.models",
+                       "app.tefca_registry.rce.models",
+                       "app.platform_config.models",
+                       "app.Tefca.models",
+                       "app.case_management.models",
+                       "app.models.migration_models",
+                       "app.api.templates",
+                       "app.api.validation_routes"):
+            assert f"import {module}" in source, (
+                f"env.py no longer imports {module}; the tables it declares are "
+                f"invisible to autogenerate again")
+
+    def test_env_does_not_import_app_main(self):
+        """Importing the app registers routers and reads feed configuration.
+
+        A migration run must do neither.
+        """
+        assert "import app.main" not in _code(self.ENV.read_text(encoding="utf-8"))
+
+    def test_the_users_collision_is_resolved_in_favour_of_the_live_shape(self):
+        """`users` is declared on both Bases with different columns.
+
+        The 16-column CoreBase definition matches the live table exactly; the
+        9-column AppBase one does not. Alembic refuses duplicate table keys, so
+        one has to lose, and it has to be the one that is wrong.
+        """
+        source = self.ENV.read_text(encoding="utf-8")
+        assert 'DUPLICATE_TABLES_ON_APP_BASE = {"users"}' in source
+        assert "sorted_tables" in source
+
+    def test_merged_metadata_has_no_duplicate_table_keys(self):
+        """The merge itself must not reintroduce the error it exists to avoid."""
+        import importlib
+
+        from app.core.database import Base as CoreBase
+        from app.database import Base as AppBase
+        import app.models  # noqa: F401
+        for module in ("app.tefca_registry.models", "app.tefca_registry.rce.models",
+                       "app.platform_config.models", "app.Tefca.models",
+                       "app.case_management.models", "app.models.migration_models",
+                       "app.api.templates", "app.api.validation_routes"):
+            importlib.import_module(module)
+        collisions = set(AppBase.metadata.tables) & set(CoreBase.metadata.tables)
+        assert collisions == {"users"}, (
+            f"a new table name now collides across the two Bases: "
+            f"{sorted(collisions - {'users'})}. env.py resolves 'users' "
+            f"explicitly; anything else needs the same treatment or Alembic "
+            f"will refuse to run.")
+
+    def test_unmodelled_tables_are_named_with_a_reason(self):
+        """Excluding a table from comparison must be a decision, not a habit."""
+        source = self.ENV.read_text(encoding="utf-8")
+        assert "UNMODELLED_TABLES" in source
+        assert "area1_mutation_log" in source
+        assert "bulletin_articles" in source
+        assert "tefca_qa_audit" in source
+        assert "bulletin_recipients" in source
+        # the reason each is excluded has to be written down next to it
+        assert "written by database triggers" in source
+        assert "hand-written `CREATE TABLE IF NOT EXISTS`" in source
+
+
+class TestArea1PrivilegeCorrection:
+    """20260828 must state the Phase 4 design and 20260822 must stay frozen."""
+
+    CORRECTIVE = "20260828_area1_privilege_correction.py"
+    HISTORICAL = "20260822_rce_pipeline.py"
+
+    def test_the_historical_revision_still_carries_its_original_grants(self):
+        """20260822 is not rewritten. Its blanket revoke is a fact of history.
+
+        Editing it would make one revision id mean two different things
+        depending on when a database applied it.
+        """
+        source = _source(self.HISTORICAL)
+        assert 'REVOKE UPDATE, DELETE ON {table} FROM "{role}"' in source
+        assert "_apply_immutability_grants" in source
+
+    def test_the_correction_is_a_later_revision(self):
+        source = _source(self.CORRECTIVE)
+        assert 'revision = "20260828_area1_grants"' in source
+        assert 'down_revision = "20260827_startup_coverage"' in source
+
+    def test_it_matches_the_approved_column_level_design(self):
+        """The migration and repository.py must not drift apart.
+
+        The migration does not import the repository — a revision that reads
+        application code stops being a fixed record. So the two are pinned to
+        each other here instead.
+        """
+        from app.tefca_registry.rce.repository import (
+            IMMUTABLE_TABLES, MUTABLE_WORKFLOW_COLUMNS, OWNER_ROLE)
+        revision_module = _load(self.CORRECTIVE)
+        assert tuple(revision_module.IMMUTABLE_TABLES) == tuple(IMMUTABLE_TABLES), (
+            "the corrective migration's table list no longer matches "
+            "repository.IMMUTABLE_TABLES")
+        assert (tuple(revision_module.MUTABLE_WORKFLOW_COLUMNS)
+                == tuple(MUTABLE_WORKFLOW_COLUMNS)), (
+            "the corrective migration's writable columns no longer match "
+            "repository.MUTABLE_WORKFLOW_COLUMNS")
+        assert revision_module.OWNER_ROLE == OWNER_ROLE
+
+    def test_it_revokes_truncate_as_well_as_update_and_delete(self):
+        """TRUNCATE is not covered by DELETE and empties Area 1 just as well."""
+        assert "REVOKE UPDATE, DELETE, TRUNCATE ON" in _code(_source(self.CORRECTIVE))
+
+    def test_it_grants_update_on_exactly_the_two_workflow_columns(self):
+        from app.tefca_registry.rce.repository import MUTABLE_WORKFLOW_COLUMNS
+        code = _code(_source(self.CORRECTIVE))
+        assert "GRANT UPDATE ({columns}) ON rce_source_records" in code
+        assert 'columns = ", ".join(MUTABLE_WORKFLOW_COLUMNS)' in code
+        assert len(MUTABLE_WORKFLOW_COLUMNS) == 2
+
+    def test_the_foreign_key_lock_grant_is_conditional_on_ownership(self):
+        """Inserting Area 1 records needs a row lock on the intake table.
+
+        PostgreSQL runs that lock as the OWNER of the referenced table, so a
+        role that owns rce_source_intakes and has had UPDATE revoked cannot
+        insert into rce_source_records at all. The one-column grant that fixes
+        it must not be issued once ownership has moved — that would be handing
+        out a privilege nothing needs.
+        """
+        code = _code(_source(self.CORRECTIVE))
+        assert 'INTAKE_FK_LOCK_COLUMN = "status"' in code
+        assert '_owner_of("rce_source_intakes") != role' in code
+        assert "GRANT UPDATE ({INTAKE_FK_LOCK_COLUMN}) ON rce_source_intakes" in code
+
+    def test_it_writes_no_row(self):
+        _assert_no_dml(self.CORRECTIVE)
+
+    def test_downgrade_restores_the_previous_revisions_state(self):
+        code = _code(_source(self.CORRECTIVE))
+        downgrade = code[code.index("def downgrade"):]
+        assert 'REVOKE UPDATE, DELETE ON {table} FROM "{role}"' in downgrade
+        assert 'GRANT SELECT, INSERT ON {table} TO "{role}"' in downgrade
+        assert "REVOKE UPDATE ({columns}) ON rce_source_records" in downgrade
+
+
+class TestStartupTableCoverage:
+    """20260827 must make `alembic upgrade head` produce a usable database."""
+
+    FILENAME = "20260827_startup_table_coverage.py"
+
+    def test_it_creates_the_tables_the_chain_was_missing(self):
+        source = _source(self.FILENAME)
+        for table in ("users", "documents", "audit_logs", "tenants", "outputs"):
+            assert f"_has_table('{table}')" in source, (
+                f"{table} is not covered; `alembic upgrade head` still builds a "
+                f"database the application cannot start against")
+
+    def test_it_does_not_drop_the_area1_mutation_log(self):
+        """Autogenerate proposed it because the table has no ORM model."""
+        code = _code(_source(self.FILENAME))
+        assert "area1_mutation_log" not in code
+
+    def test_enum_types_are_created_once_and_shared(self):
+        """Two tables sharing an enum would otherwise collide on CREATE TYPE."""
+        code = _code(_source(self.FILENAME))
+        assert "_create_enum_types()" in code
+        assert "create_type=False" in code
+        assert "sa.Enum(" not in code
+
+    def test_downgrade_tolerates_an_enum_another_table_still_uses(self):
+        """`casestatus` is also on tefca_priority_cases, which the chain owns."""
+        code = _code(_source(self.FILENAME))
+        assert "dependent_objects_still_exist" in code
+
+    def test_it_writes_no_row(self):
+        _assert_no_dml(self.FILENAME)
