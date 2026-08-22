@@ -300,38 +300,47 @@ def test_the_chain_has_exactly_one_head():
         "more than one base revision")
 
 
-class TestBothBasesAreVisibleToAlembic:
-    """env.py must see every modelled table, not one Base out of two.
+class TestTefcaEnvironmentImports:
+    """env.py must import every module that declares a table this chain owns.
 
-    The project declares models on `app.database.Base` and on
-    `app.core.database.Base`. env.py targeted the first and imported one of the
-    eight modules that populate them, so Alembic could see 47 of 135 tables and
-    `alembic check` proposed dropping most of the database. These tests fail if
-    a Base or a model module falls out of env.py again.
+    Metadata is populated by IMPORTING the module that declares the model, not
+    by declaring the Base. env.py once imported one of the eight such modules
+    and could see 47 of 135 tables, which is why `alembic check` proposed
+    dropping most of the database. These tests fail if an import that the TEFCA
+    scope depends on falls out again.
     """
 
     ENV = Path(__file__).resolve().parents[1] / "alembic" / "env.py"
 
-    def test_env_targets_both_declarative_bases(self):
+    def test_env_targets_the_base_the_tefca_models_use(self):
         source = self.ENV.read_text(encoding="utf-8")
-        assert "from app.database import Base as AppBase" in source
         assert "from app.core.database import Base as CoreBase" in source
-        assert "_merged_metadata()" in source
+        assert "_scoped_metadata()" in source
 
-    def test_env_imports_every_module_that_registers_models(self):
-        """Metadata is populated by import; a missing import hides tables."""
+    def test_env_imports_every_module_the_tefca_scope_needs(self):
         source = _code(self.ENV.read_text(encoding="utf-8"))
-        for module in ("app.tefca_registry.models",
+        for module in ("app.models.database",          # users, audit_logs
+                       "app.platform_config.models",   # platform_*
+                       "app.tefca_registry.models",
                        "app.tefca_registry.rce.models",
-                       "app.platform_config.models",
-                       "app.Tefca.models",
-                       "app.case_management.models",
-                       "app.models.migration_models",
-                       "app.api.templates",
-                       "app.api.validation_routes"):
+                       "app.Tefca.models"):
             assert f"import {module}" in source, (
                 f"env.py no longer imports {module}; the tables it declares are "
                 f"invisible to autogenerate again")
+
+    def test_env_does_not_import_other_programs_models(self):
+        """Importing another product's models is how the 61 got in.
+
+        The scope filter would still exclude them, but an import that has no
+        reason to be here invites someone to widen the filter to match.
+        """
+        source = _code(self.ENV.read_text(encoding="utf-8"))
+        for module in ("app.case_management.models", "app.models.migration_models",
+                       "app.models.enterprise_models"):
+            assert f"import {module}" not in source, (
+                f"env.py imports {module}, which belongs to another program chain")
+        assert "from app.models import *" not in source, (
+            "star-importing app.models pulls in the whole ERP product")
 
     def test_env_does_not_import_app_main(self):
         """Importing the app registers routers and reads feed configuration.
@@ -340,16 +349,25 @@ class TestBothBasesAreVisibleToAlembic:
         """
         assert "import app.main" not in _code(self.ENV.read_text(encoding="utf-8"))
 
-    def test_the_users_collision_is_resolved_in_favour_of_the_live_shape(self):
-        """`users` is declared on both Bases with different columns.
+    def test_the_authoritative_users_definition_is_the_one_in_scope(self):
+        """`users` is declared twice, and the two disagree.
 
-        The 16-column CoreBase definition matches the live table exactly; the
-        9-column AppBase one does not. Alembic refuses duplicate table keys, so
-        one has to lose, and it has to be the one that is wrong.
+        app/models/__init__.py declares 9 columns; app/models/database.py
+        declares 16, which is what the live table has. Targeting only
+        app.core.database.Base is what keeps the wrong one out — and it is also
+        why Alembic no longer raises `Duplicate table keys across multiple
+        MetaData objects: "users"`.
         """
+        import importlib
+        from app.core.database import Base as CoreBase
+        from app.database import Base as AppBase
+        import app.models  # noqa: F401
+        importlib.import_module("app.models.database")
+        assert len(AppBase.metadata.tables["users"].columns) == 9
+        assert len(CoreBase.metadata.tables["users"].columns) == 16
         source = self.ENV.read_text(encoding="utf-8")
-        assert 'DUPLICATE_TABLES_ON_APP_BASE = {"users"}' in source
-        assert "sorted_tables" in source
+        assert "import Base as AppBase" not in source, (
+            "targeting AppBase reintroduces the users collision")
 
     def test_merged_metadata_has_no_duplicate_table_keys(self):
         """The merge itself must not reintroduce the error it exists to avoid."""
@@ -464,29 +482,186 @@ class TestStartupTableCoverage:
 
     FILENAME = "20260827_startup_table_coverage.py"
 
-    def test_it_creates_the_tables_the_chain_was_missing(self):
+    def test_it_covers_the_tefca_gap_and_the_two_core_dependencies(self):
+        """Three tables: TEFCA's own gap, plus what TEFCA reads from Core.
+
+        `documents`, `tenants` and `outputs` were in an earlier draft of this
+        revision and are deliberately gone — they are Core-owned and TEFCA does
+        not import them. Their apparent use was `from docx import Document`.
+        """
         source = _source(self.FILENAME)
-        for table in ("users", "documents", "audit_logs", "tenants", "outputs"):
+        for table in ("tefca_import_history", "users", "audit_logs"):
             assert f"_has_table('{table}')" in source, (
-                f"{table} is not covered; `alembic upgrade head` still builds a "
-                f"database the application cannot start against")
+                f"{table} is not covered; TEFCA's chain no longer builds a "
+                f"database TEFCA can start against")
+        for table in ("documents", "tenants", "outputs", "quotes", "cm_patients"):
+            assert f"_has_table('{table}')" not in source, (
+                f"{table} is not TEFCA's to create — see "
+                f"docs/database_domain_architecture.md")
 
     def test_it_does_not_drop_the_area1_mutation_log(self):
         """Autogenerate proposed it because the table has no ORM model."""
         code = _code(_source(self.FILENAME))
         assert "area1_mutation_log" not in code
 
-    def test_enum_types_are_created_once_and_shared(self):
-        """Two tables sharing an enum would otherwise collide on CREATE TYPE."""
-        code = _code(_source(self.FILENAME))
-        assert "_create_enum_types()" in code
-        assert "create_type=False" in code
-        assert "sa.Enum(" not in code
-
-    def test_downgrade_tolerates_an_enum_another_table_still_uses(self):
-        """`casestatus` is also on tefca_priority_cases, which the chain owns."""
-        code = _code(_source(self.FILENAME))
-        assert "dependent_objects_still_exist" in code
-
     def test_it_writes_no_row(self):
         _assert_no_dml(self.FILENAME)
+
+
+class TestTefcaChainScope:
+    """The TEFCA chain owns TEFCA's schema and nothing else.
+
+    Option D of docs/database_domain_architecture.md makes each program module
+    the owner of its own schema. Before that decision, `env.py` targeted every
+    model the process could import, and `alembic upgrade head` would have created
+    61 tables belonging to ERP, case management, migration tooling and the
+    enterprise core inside a database holding federal contract evidence.
+
+    These tests read the real constants out of `alembic/env.py` and recompute the
+    owned set from the real models. They do not import env.py — importing it runs
+    the migrations.
+    """
+
+    ENV = Path(__file__).resolve().parents[1] / "alembic" / "env.py"
+
+    @staticmethod
+    def _env_constant(name):
+        tree = ast.parse(TestTefcaChainScope.ENV.read_text(encoding="utf-8"))
+        for node in tree.body:
+            if (isinstance(node, ast.Assign) and node.targets
+                    and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id == name):
+                return ast.literal_eval(node.value)
+        raise AssertionError(f"alembic/env.py no longer defines {name}")
+
+    @staticmethod
+    def _load_models():
+        import importlib
+        from app.core.database import Base as CoreBase
+        from app.database import Base as AppBase
+        import app.models  # noqa: F401
+        for module in ("app.tefca_registry.models", "app.tefca_registry.rce.models",
+                       "app.platform_config.models", "app.Tefca.models",
+                       "app.case_management.models", "app.models.migration_models",
+                       "app.api.templates", "app.api.validation_routes"):
+            importlib.import_module(module)
+        return AppBase, CoreBase
+
+    @classmethod
+    def _owned(cls):
+        """Recompute what env.py's _scoped_metadata() would own."""
+        import app.platform_config.models as platform
+        _AppBase, CoreBase = cls._load_models()
+        prefixes = tuple(cls._env_constant("TEFCA_MODULE_PREFIXES"))
+        owned = set(cls._env_constant("CORE_DEPENDENCIES"))
+        owned |= set(platform.PLATFORM_TABLE_ORDER)
+        for mapper in CoreBase.registry.mappers:
+            klass = mapper.class_
+            table = getattr(klass, "__tablename__", None)
+            if table and klass.__module__.startswith(prefixes):
+                owned.add(table)
+        return owned
+
+    @classmethod
+    def _tables_of(cls, *modules):
+        import importlib
+        from app.core.database import Base as CoreBase
+        from app.database import Base as AppBase
+        cls._load_models()
+        names = set()
+        for base in (CoreBase, AppBase):
+            for mapper in base.registry.mappers:
+                klass = mapper.class_
+                table = getattr(klass, "__tablename__", None)
+                if table and klass.__module__ in modules:
+                    names.add(table)
+        return names
+
+    def test_scope_excludes_erp_business_tables(self):
+        # `users` is declared twice — the stale 9-column copy in app/models/
+        # __init__.py and the authoritative 16-column one in app/models/
+        # database.py. Subtracting the Core module keeps the fixture to the ERP
+        # product rather than flagging a Core dependency as a leak.
+        erp = self._tables_of("app.models") - self._tables_of("app.models.database")
+        assert len(erp) > 40, (
+            f"expected the ERP product's table set, got {len(erp)} — the fixture "
+            f"is wrong, not the scope")
+        leaked = erp & self._owned()
+        assert not leaked, (
+            f"the TEFCA chain would manage ERP/business tables: {sorted(leaked)}")
+
+    def test_scope_excludes_bulletin_tables(self):
+        """Bulletin persistence is raw startup SQL in a subsystem TEFCA does not own."""
+        owned = self._owned()
+        leaked = {t for t in owned if t.startswith("bulletin_")}
+        assert not leaked, f"the TEFCA chain would manage Bulletin tables: {leaked}"
+
+    def test_scope_excludes_case_management_and_migration_tooling(self):
+        other = (self._tables_of("app.case_management.models")
+                 | self._tables_of("app.models.migration_models"))
+        assert other, "no case-management or migration-tooling models found"
+        leaked = other & self._owned()
+        assert not leaked, (
+            f"the TEFCA chain would manage another program's tables: {sorted(leaked)}")
+
+    def test_scope_excludes_the_enterprise_core(self):
+        """contexts -> decisions -> actions -> traceability is Core, not TEFCA."""
+        enterprise = self._tables_of("app.models.enterprise_models")
+        leaked = enterprise & self._owned()
+        assert not leaked, (
+            f"the TEFCA chain would manage the enterprise core: {sorted(leaked)}")
+
+    def test_scope_covers_every_tefca_model(self):
+        """A TEFCA table the chain does not own is a table nothing creates."""
+        tefca = (self._tables_of("app.Tefca.models")
+                 | self._tables_of("app.tefca_registry.models")
+                 | self._tables_of("app.tefca_registry.rce.models"))
+        assert len(tefca) >= 40, f"expected the full TEFCA model set, got {len(tefca)}"
+        missing = tefca - self._owned()
+        assert not missing, f"TEFCA tables outside the TEFCA chain: {sorted(missing)}"
+
+    def test_core_dependencies_are_only_what_tefca_imports(self):
+        """`users` and `audit_logs`, traced from import statements.
+
+        `documents` was `from docx import Document`; `audit_log` was a class-name
+        collision. Neither belongs here, and adding one back should need a reason.
+        """
+        assert self._env_constant("CORE_DEPENDENCIES") == {"users", "audit_logs"}
+
+    def test_no_owned_table_has_a_foreign_key_outside_the_scope(self):
+        """A foreign key crossing the boundary means the boundary is wrong."""
+        _AppBase, CoreBase = self._load_models()
+        owned = self._owned()
+        crossings = []
+        for name, table in CoreBase.metadata.tables.items():
+            if name not in owned:
+                continue
+            for fk in table.foreign_keys:
+                target = (fk._colspec.split(".")[0]
+                          if isinstance(fk._colspec, str) else fk.column.table.name)
+                if target not in owned:
+                    crossings.append(f"{name} -> {target}")
+        assert not crossings, (
+            f"foreign keys leave the TEFCA scope: {crossings}. Either the target "
+            f"belongs in the scope or the source does not belong to TEFCA.")
+
+    def test_comparison_is_restricted_to_owned_tables(self):
+        """`alembic check` must mean 'is TEFCA in sync', not 'is anything else here'."""
+        source = self.ENV.read_text(encoding="utf-8")
+        assert "TEFCA_CHAIN_TABLES" in source
+        assert "return name in TEFCA_CHAIN_TABLES" in source
+
+    def test_the_coverage_revision_creates_only_owned_tables(self):
+        revision = _source("20260827_startup_table_coverage.py")
+        created = set(re.findall(r"op\.create_table\('([^']+)'", revision))
+        assert created == {"tefca_import_history", "users", "audit_logs"}, (
+            f"the coverage revision creates {sorted(created)}; it should cover "
+            f"only TEFCA's own gap plus the two Core dependencies")
+        leaked = created - self._owned()
+        assert not leaked, f"coverage revision creates unowned tables: {leaked}"
+
+    def test_the_coverage_revision_creates_no_enum_types(self):
+        """All 35 enum types belonged to the removed tables."""
+        revision = _code(_source("20260827_startup_table_coverage.py"))
+        assert "ENUM_TYPES" not in revision
+        assert "_create_enum_types" not in revision

@@ -8,34 +8,35 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-# ── model registries ────────────────────────────────────────────────────────
-# The project declares two independent declarative Bases:
+# ── this is the TEFCA program chain ─────────────────────────────────────────
+# DocuAction is a platform of program modules that share a Core, and Option D
+# of docs/database_domain_architecture.md makes each module the owner of its own
+# schema and its own migration chain. This environment owns TEFCA.
 #
-#   app.database.Base        47 tables — the ERP/business models
-#   app.core.database.Base   89 tables — core, TEFCA, platform, registry, RCE
+# Two problems had to be fixed in sequence to get here, and both matter.
 #
-# Only the first was a target here, and only `app.models` was imported, so
-# Alembic could see 47 of the 136 modelled tables. Everything the TEFCA work
-# built was invisible to `--autogenerate` and to `alembic check`, which is why
-# that check proposed dropping most of the database.
+# First, `target_metadata` pointed at one of the project's two declarative Bases
+# and imported one of the eight modules that populate them, so Alembic could see
+# 47 of the 135 modelled tables and `alembic check` proposed dropping most of the
+# database. Metadata is populated by IMPORTING the module that declares the
+# model, not by declaring the Base.
 #
-# Metadata is populated by IMPORTING the module that declares the model, not by
-# declaring the Base. Every module below registers tables on one of the two
-# Bases; drop one and its tables go invisible again. `app.main` is deliberately
-# NOT imported — it registers routers and loads network feed configuration, and
-# a migration run must not do either.
-from app.database import Base as AppBase
+# Second, targeting *everything* over-corrected. It made this chain responsible
+# for 61 tables belonging to four other products — ERP, case management,
+# migration tooling and the enterprise core — and `upgrade head` would have
+# created all of them in a database holding federal contract evidence.
+#
+# So the input is deliberately narrow: TEFCA's own models, plus the Core tables
+# a TEFCA deployment genuinely needs. `app.main` is not imported — it registers
+# routers and reads network feed configuration, and a migration run must do
+# neither.
 from app.core.database import Base as CoreBase
 
-from app.models import *  # noqa: F401,F403  ERP models -> AppBase (+ core models)
-import app.tefca_registry.models       # noqa: F401,E402  registry
-import app.tefca_registry.rce.models   # noqa: F401,E402  RCE pipeline, Area 1/2
-import app.platform_config.models      # noqa: F401,E402  platform_*
-import app.Tefca.models                # noqa: F401,E402  review, evidence, PPEF
-import app.case_management.models      # noqa: F401,E402
-import app.models.migration_models     # noqa: F401,E402
-import app.api.templates               # noqa: F401,E402  declares output_templates
-import app.api.validation_routes       # noqa: F401,E402  declares validation_queue
+import app.models.database              # noqa: F401,E402  users, audit_logs
+import app.platform_config.models       # noqa: F401,E402  platform_*
+import app.tefca_registry.models        # noqa: F401,E402  registry
+import app.tefca_registry.rce.models    # noqa: F401,E402  RCE pipeline, Area 1/2
+import app.Tefca.models                 # noqa: F401,E402  review, evidence, PPEF
 
 config = context.config
 
@@ -51,41 +52,76 @@ if db_url:
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# ── the one name that collides across the two Bases ─────────────────────────
-# `users` is declared twice: app/models/__init__.py (9 columns, on AppBase) and
-# app/models/database.py (16 columns, on CoreBase). Alembic refuses a duplicate
-# table key across target metadata collections — `ValueError: Duplicate table
-# keys across multiple MetaData objects: "users"` — and it is right to, because
-# the two definitions disagree about what the table is.
-#
-# The live table has 16 columns and matches the CoreBase definition exactly,
-# column for column, with nothing left over on either side. CoreBase is
-# authoritative; the AppBase copy is stale. The stale one is dropped from the
-# comparison rather than deleted from the codebase: removing a model is an
-# application change, and this file's job is to describe the schema, not edit it.
-DUPLICATE_TABLES_ON_APP_BASE = {"users"}
+# ── what this chain owns ────────────────────────────────────────────────────
+# Ownership is decided by the module that declares the model, not by the table
+# name, and the classification is the one in docs/database_domain_architecture.md.
+TEFCA_MODULE_PREFIXES = ("app.Tefca", "app.tefca_registry")
+
+#: Core tables a TEFCA deployment genuinely needs. Traced from `ast` import
+#: statements, not by matching names — `app/Tefca/routes.py` joins `audit_logs`
+#: to `users` for the audit trail, and `ppef_scheduler.py` resolves
+#: `job.requested_by` by email. Both are read-only from TEFCA and neither is
+#: foreign-keyed from a TEFCA table. Two other apparent dependencies were false:
+#: `documents` came from `from docx import Document` (python-docx, not the ORM
+#: model) and `audit_log` from a class-name collision with `audit_logs`.
+CORE_DEPENDENCIES = {"users", "audit_logs"}
+
+#: Program configuration. Core-owned under Option D, but `20260725_platform_config`
+#: — a released revision that cannot be rewritten — creates it, so this chain
+#: still owns it until Stage 2 moves Core to its own chain. Describing that
+#: honestly keeps `alembic check` meaningful; pretending otherwise would leave
+#: thirteen live tables managed by nobody.
+CORE_OWNED_UNTIL_STAGE_2 = set(app.platform_config.models.PLATFORM_TABLE_ORDER)
 
 
-def _merged_metadata():
-    """One MetaData holding both Bases, with the collision resolved.
+def _tefca_tables():
+    """Table names declared by a TEFCA module."""
+    names = set()
+    for mapper in CoreBase.registry.mappers:
+        cls = mapper.class_
+        table = getattr(cls, "__tablename__", None)
+        if table and cls.__module__.startswith(TEFCA_MODULE_PREFIXES):
+            names.add(table)
+    return names
 
-    A list of MetaData would be the obvious shape, but it cannot express "these
-    two collections share a name and this is the definition that wins". Copying
-    into a single collection can: `saved_searches` (AppBase) has a foreign key to
-    `users`, and in a merged collection that key resolves against the authoritative
-    CoreBase definition instead of dangling.
+
+def _scoped_metadata():
+    """Only what the TEFCA chain owns.
+
+    Copying into a fresh MetaData rather than filtering at comparison time is
+    deliberate: it makes the scope a property of the environment instead of a
+    rule applied afterwards, so a model imported by accident cannot leak into a
+    migration.
     """
-    merged = MetaData()
+    owned = _tefca_tables() | CORE_DEPENDENCIES | CORE_OWNED_UNTIL_STAGE_2
+    scoped = MetaData()
     for table in CoreBase.metadata.sorted_tables:
-        table.to_metadata(merged)
-    for table in AppBase.metadata.sorted_tables:
-        if table.name in DUPLICATE_TABLES_ON_APP_BASE:
-            continue
-        table.to_metadata(merged)
-    return merged
+        if table.name in owned:
+            table.to_metadata(scoped)
+    missing = owned - set(scoped.tables)
+    if missing:
+        raise RuntimeError(
+            f"TEFCA chain claims tables that no imported model declares: "
+            f"{sorted(missing)}. Add the module that declares them to the "
+            f"imports above, or remove them from the owned set.")
+    # A foreign key pointing outside the scope would mean the boundary is wrong.
+    for table in scoped.tables.values():
+        for fk in table.foreign_keys:
+            target = (fk._colspec.split(".")[0] if isinstance(fk._colspec, str)
+                      else fk.column.table.name)
+            if target not in owned:
+                raise RuntimeError(
+                    f"{table.name} has a foreign key to {target}, which this "
+                    f"chain does not own. Either {target} belongs in the TEFCA "
+                    f"scope or the model does not belong to TEFCA.")
+    return scoped
 
 
-target_metadata = _merged_metadata()
+target_metadata = _scoped_metadata()
+
+#: Everything this chain owns, for `include_object`. A table outside it is
+#: another module's business and must not be reported as drift here.
+TEFCA_CHAIN_TABLES = set(target_metadata.tables)
 
 # ── tables that exist by design without an ORM model ────────────────────────
 # Autogenerate compares the database against the models, so a table no model
@@ -139,13 +175,21 @@ MIGRATION_OWNED_INDEXES = {
 
 
 def include_object(object_, name, type_, reflected, compare_to):
-    if type_ == "table" and name in UNMODELLED_TABLES:
-        return False
+    """Compare only what this chain owns.
+
+    A scoped chain shares its database with other modules' tables, and every one
+    of them would otherwise look like something to drop. Restricting the
+    comparison is what makes `alembic check` mean "is the TEFCA schema in sync"
+    rather than "does this database contain anything else".
+    """
+    if type_ == "table":
+        return name in TEFCA_CHAIN_TABLES and name not in UNMODELLED_TABLES
     if type_ == "index":
         if name in MIGRATION_OWNED_INDEXES:
             return False
         table = getattr(object_, "table", None)
-        if table is not None and table.name in UNMODELLED_TABLES:
+        if table is not None and (table.name not in TEFCA_CHAIN_TABLES
+                                  or table.name in UNMODELLED_TABLES):
             return False
     return True
 
