@@ -43,8 +43,78 @@ UUID = postgresql.UUID(as_uuid=True)
 IMMUTABLE_TABLES = ("rce_source_intakes", "rce_source_records")
 
 
+
+# ── drift guards ────────────────────────────────────────────────────────────
+# This revision predates the reconciliation of the Alembic chain with the schema
+# that `app/main.py` startup's `Base.metadata.create_all()` had already
+# materialised, so it can be asked to create objects that are already there.
+# Every DDL call below is routed through an existence check, which is what lets
+# the upgrade converge from an empty, a partially drifted and a fully drifted
+# schema alike. Nothing here changes WHAT the revision creates.
+#
+# In offline (--sql) mode there is no live bind to inspect. The guards then open
+# and the full DDL is emitted: that script is drift-unaware by construction and
+# is meant to be read before it is run.
+
+
+def _offline() -> bool:
+    return op.get_context().as_sql
+
+
+def _tables() -> set:
+    if _offline():
+        return set()
+    return set(sa.inspect(op.get_bind()).get_table_names())
+
+
+def _columns(table: str) -> set:
+    if _offline() or table not in _tables():
+        return set()
+    return {c["name"] for c in sa.inspect(op.get_bind()).get_columns(table)}
+
+
+def _indexes(table: str) -> set:
+    if _offline() or table not in _tables():
+        return set()
+    inspector = sa.inspect(op.get_bind())
+    names = {i["name"] for i in inspector.get_indexes(table)}
+    names |= {u["name"] for u in inspector.get_unique_constraints(table)
+              if u.get("name")}
+    return names
+
+
+def _create_table(name: str, *columns, **kwargs) -> None:
+    if name not in _tables():
+        op.create_table(name, *columns, **kwargs)
+
+
+def _create_index(name: str, table: str, columns, **kwargs) -> None:
+    if name not in _indexes(table):
+        op.create_index(name, table, columns, **kwargs)
+
+
+def _add_column(table: str, column) -> None:
+    if column.name not in _columns(table):
+        op.add_column(table, column)
+
+
+def _drop_index(name: str, table_name: str) -> None:
+    if _offline() or name in _indexes(table_name):
+        op.drop_index(name, table_name=table_name)
+
+
+def _drop_table(name: str) -> None:
+    if _offline() or name in _tables():
+        op.drop_table(name)
+
+
+def _drop_column(table: str, name: str) -> None:
+    if _offline() or name in _columns(table):
+        op.drop_column(table, name)
+
+
 def upgrade() -> None:
-    op.create_table(
+    _create_table(
         "rce_source_intakes",
         sa.Column("id", UUID, primary_key=True),
         sa.Column("delivery_label", sa.String(200)),
@@ -78,13 +148,13 @@ def upgrade() -> None:
                   server_default=sa.func.now()),
         sa.CheckConstraint("record_count >= 0", name="ck_rce_intake_count_nonneg"),
     )
-    op.create_index("idx_rce_intake_sha", "rce_source_intakes", ["sha256"])
-    op.create_index("idx_rce_intake_received", "rce_source_intakes", ["received_at"])
-    op.create_index("idx_rce_intake_status", "rce_source_intakes", ["status"])
-    op.create_index("idx_rce_intake_duplicate", "rce_source_intakes",
+    _create_index("idx_rce_intake_sha", "rce_source_intakes", ["sha256"])
+    _create_index("idx_rce_intake_received", "rce_source_intakes", ["received_at"])
+    _create_index("idx_rce_intake_status", "rce_source_intakes", ["status"])
+    _create_index("idx_rce_intake_duplicate", "rce_source_intakes",
                     ["duplicate_of_intake_id"])
 
-    op.create_table(
+    _create_table(
         "rce_source_records",
         sa.Column("id", UUID, primary_key=True),
         sa.Column("source_intake_id", UUID,
@@ -121,9 +191,9 @@ def upgrade() -> None:
         ("idx_rce_record_intake_status", ["source_intake_id", "promotion_status"]),
         ("idx_rce_record_parse_status", ["parse_status"]),
     ):
-        op.create_index(name, "rce_source_records", cols)
+        _create_index(name, "rce_source_records", cols)
 
-    op.create_table(
+    _create_table(
         "rce_ingestion_runs",
         sa.Column("id", UUID, primary_key=True),
         sa.Column("source_intake_id", UUID,
@@ -144,12 +214,12 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(), nullable=False,
                   server_default=sa.func.now()),
     )
-    op.create_index("idx_rce_run_intake", "rce_ingestion_runs", ["source_intake_id"])
-    op.create_index("idx_rce_run_intake_started", "rce_ingestion_runs",
+    _create_index("idx_rce_run_intake", "rce_ingestion_runs", ["source_intake_id"])
+    _create_index("idx_rce_run_intake_started", "rce_ingestion_runs",
                     ["source_intake_id", "started_at"])
-    op.create_index("idx_rce_run_status", "rce_ingestion_runs", ["run_status"])
+    _create_index("idx_rce_run_status", "rce_ingestion_runs", ["run_status"])
 
-    op.create_table(
+    _create_table(
         "rce_rule_execution_history",
         sa.Column("id", UUID, primary_key=True),
         sa.Column("run_id", UUID, sa.ForeignKey("rce_ingestion_runs.id"),
@@ -168,10 +238,10 @@ def upgrade() -> None:
                   server_default=sa.func.now()),
         sa.UniqueConstraint("run_id", "rule_id", name="uq_rce_rule_exec_run_rule"),
     )
-    op.create_index("idx_rce_rule_exec_run", "rce_rule_execution_history", ["run_id"])
-    op.create_index("idx_rce_rule_exec_rule", "rce_rule_execution_history", ["rule_id"])
+    _create_index("idx_rce_rule_exec_run", "rce_rule_execution_history", ["run_id"])
+    _create_index("idx_rce_rule_exec_rule", "rce_rule_execution_history", ["rule_id"])
 
-    op.create_table(
+    _create_table(
         "rce_issues",
         sa.Column("id", UUID, primary_key=True),
         sa.Column("issue_code", sa.String(30), nullable=False, unique=True),
@@ -221,11 +291,11 @@ def upgrade() -> None:
         ("idx_rce_issue_resolution", ["resolution"]),
         ("idx_rce_issue_authority", ["correction_authority"]),
     ):
-        op.create_index(name, "rce_issues", cols)
-    op.create_index("idx_rce_issue_open", "rce_issues", ["source_intake_id"],
+        _create_index(name, "rce_issues", cols)
+    _create_index("idx_rce_issue_open", "rce_issues", ["source_intake_id"],
                     postgresql_where=sa.text("resolution = 'OPEN'"))
 
-    op.create_table(
+    _create_table(
         "rce_curated_records",
         sa.Column("id", UUID, primary_key=True),
         sa.Column("source_intake_id", UUID,
@@ -286,9 +356,9 @@ def upgrade() -> None:
         ("idx_rce_curated_entity", ["canonical_entity_id"]),
         ("idx_rce_curated_intake_status", ["source_intake_id", "record_status"]),
     ):
-        op.create_index(name, "rce_curated_records", cols)
+        _create_index(name, "rce_curated_records", cols)
 
-    op.create_table(
+    _create_table(
         "rce_correction_details",
         sa.Column("id", UUID, primary_key=True),
         sa.Column("curated_record_id", UUID,
@@ -314,15 +384,15 @@ def upgrade() -> None:
             "('AUTO_SAFE','HUMAN_REQUIRED','QA_REQUIRED','NO_CORRECTION')",
             name="ck_rce_correction_authority"),
     )
-    op.create_index("idx_rce_correction_curated", "rce_correction_details",
+    _create_index("idx_rce_correction_curated", "rce_correction_details",
                     ["curated_record_id"])
-    op.create_index("idx_rce_correction_source", "rce_correction_details",
+    _create_index("idx_rce_correction_source", "rce_correction_details",
                     ["source_record_id"])
-    op.create_index("idx_rce_correction_issue", "rce_correction_details", ["issue_id"])
-    op.create_index("idx_rce_correction_authority", "rce_correction_details",
+    _create_index("idx_rce_correction_issue", "rce_correction_details", ["issue_id"])
+    _create_index("idx_rce_correction_authority", "rce_correction_details",
                     ["correction_authority"])
 
-    op.create_table(
+    _create_table(
         "tefca_entity_contacts",
         sa.Column("id", UUID, primary_key=True),
         sa.Column("entity_id", UUID,
@@ -345,8 +415,8 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(), nullable=False,
                   server_default=sa.func.now()),
     )
-    op.create_index("idx_tefca_contact_entity", "tefca_entity_contacts", ["entity_id"])
-    op.create_index("idx_tefca_contact_source_record", "tefca_entity_contacts",
+    _create_index("idx_tefca_contact_entity", "tefca_entity_contacts", ["entity_id"])
+    _create_index("idx_tefca_contact_source_record", "tefca_entity_contacts",
                     ["source_record_id"])
 
     # ── RCE attributes on the canonical entity ──────────────────────────────
@@ -367,15 +437,15 @@ def upgrade() -> None:
         sa.Column("rce_attributes", JSONB),
         sa.Column("source_record_id", UUID),
     ):
-        op.add_column("tefca_reg_entities", column)
+        _add_column("tefca_reg_entities", column)
     for name, cols in (
         ("idx_tefca_reg_ent_rce_oid", ["rce_org_oid"]),
         ("idx_tefca_reg_ent_rce_tefcaid", ["rce_tefcaid"]),
         ("idx_tefca_reg_ent_rce_hcid", ["rce_hcid"]),
         ("idx_tefca_reg_ent_source_record", ["source_record_id"]),
     ):
-        op.create_index(name, "tefca_reg_entities", cols)
-    op.create_index("idx_tefca_reg_ent_test", "tefca_reg_entities",
+        _create_index(name, "tefca_reg_entities", cols)
+    _create_index("idx_tefca_reg_ent_test", "tefca_reg_entities",
                     ["is_test_record"],
                     postgresql_where=sa.text("is_test_record = true"))
 
@@ -414,9 +484,9 @@ def downgrade() -> None:
                    "sequoia_org_type", "org_node_type", "hl7_org_role",
                    "org_managing_org", "is_test_record", "rce_attributes",
                    "source_record_id"):
-        op.drop_column("tefca_reg_entities", column)
+        _drop_column("tefca_reg_entities", column)
     for table in ("tefca_entity_contacts", "rce_correction_details",
                   "rce_curated_records", "rce_issues",
                   "rce_rule_execution_history", "rce_ingestion_runs",
                   "rce_source_records", "rce_source_intakes"):
-        op.drop_table(table)
+        _drop_table(table)

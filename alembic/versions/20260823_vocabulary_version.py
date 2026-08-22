@@ -44,22 +44,60 @@ COLUMN = "vocabulary_version"
 INDEX = "idx_dim_evidence_vocab_version"
 
 
+
+# ── offline (--sql) tolerance ───────────────────────────────────────────────
+# `alembic upgrade --sql` binds a MockConnection, which sa.inspect() cannot
+# read. The guards below would raise NoInspectionAvailable and no reviewable
+# script could be produced. Offline they are handed an inspector that reports an
+# empty database, so upgrade() emits its full DDL — drift-unaware by
+# construction, which is what an offline script is. downgrade() renders as a
+# no-op offline for the same reason, and is not offered as a review artefact.
+
+
+class _OfflineInspector:
+    """Reports an empty schema so every create guard opens."""
+
+    @staticmethod
+    def get_table_names():
+        return []
+
+    @staticmethod
+    def get_columns(table):
+        return []
+
+    @staticmethod
+    def get_indexes(table):
+        return []
+
+    @staticmethod
+    def get_unique_constraints(table):
+        return []
+
+    @staticmethod
+    def get_foreign_keys(table):
+        return []
+
+
+def _inspect(bind):
+    return _OfflineInspector() if op.get_context().as_sql else sa.inspect(bind)
+
+
 def upgrade() -> None:
     bind = op.get_bind()
-    existing = {c["name"] for c in sa.inspect(bind).get_columns(TABLE)}
+    existing = {c["name"] for c in _inspect(bind).get_columns(TABLE)}
     if COLUMN not in existing:
         # Nullable, no server_default — see the module docstring.
         op.add_column(TABLE, sa.Column(COLUMN, sa.String(10), nullable=True))
-    indexes = {i["name"] for i in sa.inspect(bind).get_indexes(TABLE)}
+    indexes = {i["name"] for i in _inspect(bind).get_indexes(TABLE)}
     if INDEX not in indexes:
         op.create_index(INDEX, TABLE, [COLUMN])
 
 
 def downgrade() -> None:
     bind = op.get_bind()
-    indexes = {i["name"] for i in sa.inspect(bind).get_indexes(TABLE)}
+    indexes = {i["name"] for i in _inspect(bind).get_indexes(TABLE)}
     if INDEX in indexes:
         op.drop_index(INDEX, table_name=TABLE)
-    existing = {c["name"] for c in sa.inspect(bind).get_columns(TABLE)}
+    existing = {c["name"] for c in _inspect(bind).get_columns(TABLE)}
     if COLUMN in existing:
         op.drop_column(TABLE, COLUMN)

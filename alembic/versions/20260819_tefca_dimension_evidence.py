@@ -22,8 +22,62 @@ branch_labels = None
 depends_on = None
 
 
+
+# ── drift guards ────────────────────────────────────────────────────────────
+# This revision predates the reconciliation of the Alembic chain with the schema
+# that `app/main.py` startup's `Base.metadata.create_all()` had already
+# materialised, so it can be asked to create objects that are already there.
+# Every DDL call below is routed through an existence check, which is what lets
+# the upgrade converge from an empty, a partially drifted and a fully drifted
+# schema alike. Nothing here changes WHAT the revision creates.
+#
+# In offline (--sql) mode there is no live bind to inspect. The guards then open
+# and the full DDL is emitted: that script is drift-unaware by construction and
+# is meant to be read before it is run.
+
+
+def _offline() -> bool:
+    return op.get_context().as_sql
+
+
+def _tables() -> set:
+    if _offline():
+        return set()
+    return set(sa.inspect(op.get_bind()).get_table_names())
+
+
+def _indexes(table: str) -> set:
+    if _offline() or table not in _tables():
+        return set()
+    inspector = sa.inspect(op.get_bind())
+    names = {i["name"] for i in inspector.get_indexes(table)}
+    names |= {u["name"] for u in inspector.get_unique_constraints(table)
+              if u.get("name")}
+    return names
+
+
+def _create_table(name: str, *columns, **kwargs) -> None:
+    if name not in _tables():
+        op.create_table(name, *columns, **kwargs)
+
+
+def _create_index(name: str, table: str, columns, **kwargs) -> None:
+    if name not in _indexes(table):
+        op.create_index(name, table, columns, **kwargs)
+
+
+def _drop_index(name: str, table_name: str) -> None:
+    if _offline() or name in _indexes(table_name):
+        op.drop_index(name, table_name=table_name)
+
+
+def _drop_table(name: str) -> None:
+    if _offline() or name in _tables():
+        op.drop_table(name)
+
+
 def upgrade() -> None:
-    op.create_table(
+    _create_table(
         "tefca_dimension_evidence",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("entity_id", sa.String(255), nullable=False),
@@ -56,17 +110,17 @@ def upgrade() -> None:
         sa.Column("reviewed_by", sa.String(255)),
         sa.Column("reviewed_at", sa.DateTime()),
     )
-    op.create_index("idx_dim_evidence_entity_dimension", "tefca_dimension_evidence",
+    _create_index("idx_dim_evidence_entity_dimension", "tefca_dimension_evidence",
                     ["entity_id", "evidence_dimension"])
-    op.create_index("idx_dim_evidence_generation", "tefca_dimension_evidence",
+    _create_index("idx_dim_evidence_generation", "tefca_dimension_evidence",
                     ["entity_id", "generation_timestamp"])
-    op.create_index("ix_tefca_dimension_evidence_entity_id", "tefca_dimension_evidence",
+    _create_index("ix_tefca_dimension_evidence_entity_id", "tefca_dimension_evidence",
                     ["entity_id"])
-    op.create_index("ix_tefca_dimension_evidence_review_id", "tefca_dimension_evidence",
+    _create_index("ix_tefca_dimension_evidence_review_id", "tefca_dimension_evidence",
                     ["review_id"])
-    op.create_index("ix_tefca_dimension_evidence_source", "tefca_dimension_evidence",
+    _create_index("ix_tefca_dimension_evidence_source", "tefca_dimension_evidence",
                     ["source"])
-    op.create_index("ix_tefca_dimension_evidence_dimension", "tefca_dimension_evidence",
+    _create_index("ix_tefca_dimension_evidence_dimension", "tefca_dimension_evidence",
                     ["evidence_dimension"])
 
 
@@ -75,10 +129,10 @@ def downgrade() -> None:
     # downgrade exists so the migration chain is complete and reversible in a
     # development database; it should not be run against an environment whose
     # determinations have been issued.
-    op.drop_index("ix_tefca_dimension_evidence_dimension", table_name="tefca_dimension_evidence")
-    op.drop_index("ix_tefca_dimension_evidence_source", table_name="tefca_dimension_evidence")
-    op.drop_index("ix_tefca_dimension_evidence_review_id", table_name="tefca_dimension_evidence")
-    op.drop_index("ix_tefca_dimension_evidence_entity_id", table_name="tefca_dimension_evidence")
-    op.drop_index("idx_dim_evidence_generation", table_name="tefca_dimension_evidence")
-    op.drop_index("idx_dim_evidence_entity_dimension", table_name="tefca_dimension_evidence")
-    op.drop_table("tefca_dimension_evidence")
+    _drop_index("ix_tefca_dimension_evidence_dimension", table_name="tefca_dimension_evidence")
+    _drop_index("ix_tefca_dimension_evidence_source", table_name="tefca_dimension_evidence")
+    _drop_index("ix_tefca_dimension_evidence_review_id", table_name="tefca_dimension_evidence")
+    _drop_index("ix_tefca_dimension_evidence_entity_id", table_name="tefca_dimension_evidence")
+    _drop_index("idx_dim_evidence_generation", table_name="tefca_dimension_evidence")
+    _drop_index("idx_dim_evidence_entity_dimension", table_name="tefca_dimension_evidence")
+    _drop_table("tefca_dimension_evidence")

@@ -33,8 +33,62 @@ branch_labels = None
 depends_on = None
 
 
+
+# ── drift guards ────────────────────────────────────────────────────────────
+# This revision predates the reconciliation of the Alembic chain with the schema
+# that `app/main.py` startup's `Base.metadata.create_all()` had already
+# materialised, so it can be asked to create objects that are already there.
+# Every DDL call below is routed through an existence check, which is what lets
+# the upgrade converge from an empty, a partially drifted and a fully drifted
+# schema alike. Nothing here changes WHAT the revision creates.
+#
+# In offline (--sql) mode there is no live bind to inspect. The guards then open
+# and the full DDL is emitted: that script is drift-unaware by construction and
+# is meant to be read before it is run.
+
+
+def _offline() -> bool:
+    return op.get_context().as_sql
+
+
+def _tables() -> set:
+    if _offline():
+        return set()
+    return set(sa.inspect(op.get_bind()).get_table_names())
+
+
+def _indexes(table: str) -> set:
+    if _offline() or table not in _tables():
+        return set()
+    inspector = sa.inspect(op.get_bind())
+    names = {i["name"] for i in inspector.get_indexes(table)}
+    names |= {u["name"] for u in inspector.get_unique_constraints(table)
+              if u.get("name")}
+    return names
+
+
+def _create_table(name: str, *columns, **kwargs) -> None:
+    if name not in _tables():
+        op.create_table(name, *columns, **kwargs)
+
+
+def _create_index(name: str, table: str, columns, **kwargs) -> None:
+    if name not in _indexes(table):
+        op.create_index(name, table, columns, **kwargs)
+
+
+def _drop_index(name: str, table_name: str) -> None:
+    if _offline() or name in _indexes(table_name):
+        op.drop_index(name, table_name=table_name)
+
+
+def _drop_table(name: str) -> None:
+    if _offline() or name in _tables():
+        op.drop_table(name)
+
+
 def upgrade() -> None:
-    op.create_table(
+    _create_table(
         "tefca_ppef_ingest_jobs",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("component", sa.String(40), nullable=False),
@@ -64,21 +118,21 @@ def upgrade() -> None:
     # production schema is created by metadata create_all, so a migration that
     # invented its own names would leave the two environments differing in a way
     # nothing checks.
-    op.create_index("ix_tefca_ppef_ingest_jobs_component",
+    _create_index("ix_tefca_ppef_ingest_jobs_component",
                     "tefca_ppef_ingest_jobs", ["component"])
-    op.create_index("ix_tefca_ppef_ingest_jobs_resource_version",
+    _create_index("ix_tefca_ppef_ingest_jobs_resource_version",
                     "tefca_ppef_ingest_jobs", ["resource_version"])
-    op.create_index("ix_tefca_ppef_ingest_jobs_state",
+    _create_index("ix_tefca_ppef_ingest_jobs_state",
                     "tefca_ppef_ingest_jobs", ["state"])
-    op.create_index("ix_tefca_ppef_ingest_jobs_created_at",
+    _create_index("ix_tefca_ppef_ingest_jobs_created_at",
                     "tefca_ppef_ingest_jobs", ["created_at"])
-    op.create_index("ix_tefca_ppef_ingest_jobs_heartbeat_at",
+    _create_index("ix_tefca_ppef_ingest_jobs_heartbeat_at",
                     "tefca_ppef_ingest_jobs", ["heartbeat_at"])
-    op.create_index("idx_ppef_job_state_heartbeat",
+    _create_index("idx_ppef_job_state_heartbeat",
                     "tefca_ppef_ingest_jobs", ["state", "heartbeat_at"])
-    op.create_index("idx_ppef_job_component_version",
+    _create_index("idx_ppef_job_component_version",
                     "tefca_ppef_ingest_jobs", ["component", "resource_version"])
-    op.create_index(
+    _create_index(
         "uq_ppef_job_active_component",
         "tefca_ppef_ingest_jobs",
         ["component", "resource_version", "active_marker"],
@@ -98,5 +152,5 @@ def downgrade() -> None:
         "ix_tefca_ppef_ingest_jobs_resource_version",
         "ix_tefca_ppef_ingest_jobs_component",
     ):
-        op.drop_index(name, table_name="tefca_ppef_ingest_jobs")
-    op.drop_table("tefca_ppef_ingest_jobs")
+        _drop_index(name, table_name="tefca_ppef_ingest_jobs")
+    _drop_table("tefca_ppef_ingest_jobs")

@@ -99,9 +99,47 @@ FOR EACH ROW EXECUTE FUNCTION area1_log_mutation();
 """
 
 
+
+# ── offline (--sql) tolerance ───────────────────────────────────────────────
+# `alembic upgrade --sql` binds a MockConnection, which sa.inspect() cannot
+# read. The guards below would raise NoInspectionAvailable and no reviewable
+# script could be produced. Offline they are handed an inspector that reports an
+# empty database, so upgrade() emits its full DDL — drift-unaware by
+# construction, which is what an offline script is. downgrade() renders as a
+# no-op offline for the same reason, and is not offered as a review artefact.
+
+
+class _OfflineInspector:
+    """Reports an empty schema so every create guard opens."""
+
+    @staticmethod
+    def get_table_names():
+        return []
+
+    @staticmethod
+    def get_columns(table):
+        return []
+
+    @staticmethod
+    def get_indexes(table):
+        return []
+
+    @staticmethod
+    def get_unique_constraints(table):
+        return []
+
+    @staticmethod
+    def get_foreign_keys(table):
+        return []
+
+
+def _inspect(bind):
+    return _OfflineInspector() if op.get_context().as_sql else sa.inspect(bind)
+
+
 def upgrade() -> None:
     bind = op.get_bind()
-    if "area1_mutation_log" not in set(sa.inspect(bind).get_table_names()):
+    if "area1_mutation_log" not in set(_inspect(bind).get_table_names()):
         op.create_table(
             "area1_mutation_log",
             sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
@@ -138,5 +176,5 @@ def downgrade() -> None:
     op.execute("DROP TRIGGER IF EXISTS trg_area1_intake_mutation ON rce_source_intakes")
     op.execute("DROP FUNCTION IF EXISTS area1_log_mutation()")
     bind = op.get_bind()
-    if "area1_mutation_log" in set(sa.inspect(bind).get_table_names()):
+    if "area1_mutation_log" in set(_inspect(bind).get_table_names()):
         op.drop_table("area1_mutation_log")
