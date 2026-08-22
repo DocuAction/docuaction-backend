@@ -1,0 +1,339 @@
+/*
+ * DocuAction Federal Reporting Visual Standard (USWDS-based)
+ * ==========================================================
+ *
+ * This is NOT an "HHS palette". It is DocuAction's reporting standard, built on
+ * U.S. Web Design System tokens. The distinction matters: naming it after an
+ * agency would imply the agency issued or approved it.
+ *
+ * EVERY colour used anywhere in a report — text, chart series, status
+ * indicators, table rules — resolves through one of the --report-* variables
+ * below. Nothing hard-codes a hex value. That is what makes a future rebrand or
+ * a contrast remediation a single-file edit rather than an archaeology project
+ * across templates and chart code.
+ *
+ * FONTS ARE BUNDLED, NEVER FETCHED
+ * There is no @import and no https:// anywhere in this file. Public Sans is
+ * loaded from app/reports/fonts/ as a controlled project asset. A report that
+ * reached out to a font CDN at render time would render differently depending
+ * on network conditions, would leak the fact of generation to a third party,
+ * and would fail entirely in an air-gapped environment.
+ */
+
+/* ── Public Sans, bundled ─────────────────────────────────────────────────── */
+
+@font-face {
+  font-family: "Public Sans";
+  font-style: normal;
+  font-weight: 400;
+  src: url("../fonts/PublicSans-Regular.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Public Sans";
+  font-style: normal;
+  font-weight: 700;
+  src: url("../fonts/PublicSans-Bold.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Public Sans";
+  font-style: italic;
+  font-weight: 400;
+  src: url("../fonts/PublicSans-Italic.woff2") format("woff2");
+}
+
+/* ── Semantic tokens, mapped to USWDS ─────────────────────────────────────── */
+
+:root {
+  --report-primary:   #005ea2;  /* USWDS blue-vivid-60   */
+  --report-primary-v: #0050d8;  /* USWDS blue-warm-60v   */
+  --report-success:   #00a91c;  /* USWDS green-cool-40v  */
+  --report-warning:   #ffbe2e;  /* USWDS gold-20v        */
+  --report-error:     #d83933;  /* USWDS red-40          */
+  --report-text:      #1b1b1b;  /* USWDS gray-90         */
+  --report-muted:     #71767a;  /* USWDS gray-cool-50    */
+  --report-bg:        #ffffff;
+  --report-bg-alt:    #f0f0f0;  /* USWDS gray-5          */
+  --report-border:    #dfe1e2;  /* USWDS gray-cool-20    */
+
+  /*
+   * DERIVED TOKEN — muted text sitting on the alt background.
+   *
+   * --report-muted (#71767a) is 4.59:1 on white, which passes, but only 4.03:1
+   * on --report-bg-alt (#f0f0f0), which FAILS the 4.5:1 minimum. The automated
+   * contrast check caught it on the pairing the figure source/notes lines
+   * actually produce, since those sit inside tinted panels.
+   *
+   * Resolved by darkening one step to USWDS gray-cool-60, giving 5.92:1 on the
+   * alt background — rather than by lightening the panel or exempting the
+   * pairing. The base palette is unchanged: this is an additional token for a
+   * context the base one cannot serve, and it lives here with the others so a
+   * future accessibility change is still a single-file edit.
+   */
+  --report-muted-on-alt: #565c65;  /* USWDS gray-cool-60 */
+
+  --report-font: "Public Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --report-body-size: 10.5pt;   /* ~14px equivalent in print */
+  --report-line-height: 1.5;
+}
+
+@page {
+  size: letter;
+  margin: 20mm 18mm 18mm 18mm;
+  @bottom-center {
+    content: "Page " counter(page) " of " counter(pages);
+    font-family: var(--report-font);
+    font-size: 8pt;
+    color: var(--report-muted);
+  }
+}
+
+/* ── Base ─────────────────────────────────────────────────────────────────── */
+
+body {
+  font-family: var(--report-font);
+  font-size: var(--report-body-size);
+  line-height: var(--report-line-height);
+  color: var(--report-text);
+  background: var(--report-bg);
+  margin: 0;
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--report-font);
+  font-weight: 700;
+  color: var(--report-text);
+  line-height: 1.3;
+  /* Never orphan a heading at the foot of a page — a heading whose section
+     starts overleaf breaks the reading order for sighted and assistive readers
+     alike. */
+  break-after: avoid;
+  page-break-after: avoid;
+}
+
+h1 { font-size: 20pt; margin: 0 0 4pt; }
+h2 { font-size: 14pt; margin: 18pt 0 6pt; border-bottom: 2px solid var(--report-primary);
+     padding-bottom: 3pt; }
+h3 { font-size: 11.5pt; margin: 12pt 0 4pt; }
+h4 { font-size: 10.5pt; margin: 10pt 0 3pt; }
+
+p  { margin: 0 0 8pt; }
+a  { color: var(--report-primary); }
+
+/* ── Report masthead ──────────────────────────────────────────────────────── */
+
+.report-header {
+  border-bottom: 4px solid var(--report-primary);
+  padding-bottom: 8pt;
+  margin-bottom: 14pt;
+}
+
+.report-header .report-kicker {
+  font-size: 9pt;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--report-primary);
+  font-weight: 700;
+}
+
+.report-meta {
+  font-size: 8.5pt;
+  color: var(--report-muted);
+  margin-top: 4pt;
+}
+
+/* ── Scope at a Glance ────────────────────────────────────────────────────── */
+
+.scope-box {
+  border: 1pt solid var(--report-border);
+  border-left: 5pt solid var(--report-primary);
+  background: var(--report-bg-alt);
+  padding: 10pt 12pt;
+  margin: 0 0 14pt;
+  break-inside: avoid;
+}
+
+.scope-box h2 {
+  margin: 0 0 6pt;
+  border: none;
+  padding: 0;
+  font-size: 12pt;
+}
+
+.scope-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 3pt 16pt;
+}
+
+.scope-item {
+  display: flex;
+  justify-content: space-between;
+  border-bottom: 1px dotted var(--report-border);
+  padding: 2pt 0;
+}
+
+.scope-item .label { color: var(--report-text); }
+.scope-item .value { font-weight: 700; }
+
+/* ── Brief panels ─────────────────────────────────────────────────────────── */
+
+.panel {
+  border: 1pt solid var(--report-border);
+  padding: 9pt 11pt;
+  margin-bottom: 10pt;
+  break-inside: avoid;
+}
+
+.panel h3 {
+  margin-top: 0;
+  color: var(--report-primary);
+  text-transform: uppercase;
+  font-size: 9.5pt;
+  letter-spacing: 0.04em;
+}
+
+.highlights {
+  border-left: 5pt solid var(--report-primary-v);
+  background: var(--report-bg-alt);
+  padding: 9pt 11pt 9pt 16pt;
+  margin-bottom: 14pt;
+  break-inside: avoid;
+}
+
+.highlights ul { margin: 4pt 0 0; padding-left: 14pt; }
+.highlights li { margin-bottom: 4pt; }
+
+/* ── Status indicators: colour + SHAPE + TEXT, never colour alone ─────────── */
+/*
+ * The glyph is what survives greyscale printing, colour-blindness, and a screen
+ * reader reading the text stream. Colour is the redundant third channel here,
+ * not the carrier. WCAG 1.4.1 is the requirement; the glyph is how it is met.
+ */
+
+.status {
+  display: inline-block;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.status .glyph { font-size: 11pt; line-height: 1; margin-right: 3pt; }
+.status .text  { font-size: 9pt; letter-spacing: 0.03em; }
+
+.status-b1 .glyph { color: var(--report-success); }
+.status-b2 .glyph { color: var(--report-warning); }
+.status-b3 .glyph { color: var(--report-warning); }
+.status-b4 .glyph { color: var(--report-error); }
+
+/* Text stays near-black rather than taking the status colour: gold on white is
+   1.7:1 and would fail 4.5:1 badly if it carried the label. */
+.status .text { color: var(--report-text); }
+
+/* ── Tables ───────────────────────────────────────────────────────────────── */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8pt 0 12pt;
+  font-size: 9.5pt;
+}
+
+caption {
+  text-align: left;
+  font-weight: 700;
+  padding-bottom: 4pt;
+  color: var(--report-text);
+}
+
+th {
+  background: var(--report-primary);
+  color: #ffffff;              /* 7.0:1 on --report-primary */
+  text-align: left;
+  padding: 5pt 7pt;
+  border: 1px solid var(--report-primary);
+  font-weight: 700;
+}
+
+td {
+  padding: 4pt 7pt;
+  border: 1px solid var(--report-border);
+  vertical-align: top;
+}
+
+tbody tr:nth-child(even) { background: var(--report-bg-alt); }
+
+thead { display: table-header-group; }   /* repeat headers across page breaks */
+tr    { break-inside: avoid; }
+
+.rag-green  { font-weight: 700; }
+.rag-amber  { font-weight: 700; }
+.rag-red    { font-weight: 700; }
+
+/* ── Figures ──────────────────────────────────────────────────────────────── */
+
+figure {
+  margin: 12pt 0 16pt;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+figure img {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--report-border);
+}
+
+figcaption {
+  font-weight: 700;
+  font-size: 10pt;
+  margin-bottom: 5pt;
+}
+
+.figure-source,
+.figure-notes {
+  font-size: 8pt;
+  /* Darker muted: these lines appear both on the page and inside tinted
+     panels, and --report-muted fails 4.5:1 on the alt background. */
+  color: var(--report-muted-on-alt);
+  margin: 3pt 0 0;
+  line-height: 1.4;
+}
+
+.insufficient-data {
+  border: 1pt dashed var(--report-muted);
+  background: var(--report-bg-alt);
+  color: var(--report-text);
+  padding: 14pt;
+  text-align: center;
+  font-style: italic;
+}
+
+/* ── Appendix / footnotes ─────────────────────────────────────────────────── */
+
+.appendix { font-size: 9pt; }
+.appendix dt { font-weight: 700; margin-top: 6pt; }
+.appendix dd { margin: 2pt 0 0 14pt; }
+
+.accessibility-statement {
+  border: 1pt solid var(--report-border);
+  padding: 8pt 10pt;
+  font-size: 8.5pt;
+  color: var(--report-text);
+  margin-top: 14pt;
+}
+
+.page-break { break-before: page; page-break-before: always; }
+
+/* Screen-reader-only: available to assistive technology, invisible on the page.
+   Used for table summaries and chart long-descriptions that would be redundant
+   visually but are the only way a non-visual reader gets the same information. */
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

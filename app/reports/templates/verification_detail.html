@@ -1,0 +1,287 @@
+{#
+  Report 1, pages 2+ — detail body, on the ONC Data Brief model.
+
+  Section headings are FULL SENTENCES carrying the finding, not category labels.
+  "3.1 Results" makes a reader work for the point; "3.1 82.4% of applicable
+  entities satisfied all required verification dimensions" delivers it in the
+  outline, which is also what a screen-reader user hears when navigating by
+  heading.
+
+  The heading text is interpolated from the data. When the denominator is zero
+  the heading says so rather than rendering "0.0%" — a heading is the last place
+  a fabricated number should appear.
+#}
+{% extends "base.html" %}
+
+{% block title %}Entity Verification Report {{ snapshot.report_id }} — Detail{% endblock %}
+{% block description %}Detailed TEFCA entity verification findings{% endblock %}
+{% block kicker %}Entity Verification Report &middot; Detail{% endblock %}
+{% block heading %}Entity Verification: Detailed Findings{% endblock %}
+
+{% block content %}
+
+<section class="highlights" aria-labelledby="highlights-heading">
+  <h2 id="highlights-heading">Highlights</h2>
+  <ul>
+    <li>
+      {{ scope.records_evaluated|number }} of {{ scope.records_received|number }}
+      records in scope were evaluated in this reporting period.
+    </li>
+    {% if dimensions.all_applicable_pass_pct != INSUFFICIENT_DATA %}
+      <li>
+        {{ dimensions.all_applicable_pass_pct|pct }} of applicable verification
+        dimensions were satisfied
+        ({{ dimensions.applicable_satisfied|number }} of
+        {{ dimensions.applicable_evaluated|number }}).
+      </li>
+    {% else %}
+      <li>
+        No applicable verification dimensions were evaluated, so no satisfied
+        rate can be reported for this period.
+      </li>
+    {% endif %}
+    {% if not buckets.insufficient_data %}
+      <li>
+        {{ buckets.counts['B1']|number }} entities showed no discrepancy (B1);
+        {{ buckets.counts['B3']|number }} were inexplicable (B3) and
+        {{ buckets.counts['B4']|number }} non-compliant (B4).
+      </li>
+    {% endif %}
+    <li>
+      {{ scope.issues_identified|number }} open data-quality issue(s) are
+      recorded against the entity population.
+    </li>
+    {% if qhins.comparison_meaningful %}
+      <li>
+        Results span {{ qhins.qhin_count|number }} QHINs; per-QHIN outcomes are
+        compared in Figure {{ charts.get('qhin_comparison').figure_number }}.
+      </li>
+    {% endif %}
+  </ul>
+</section>
+
+<h2>
+  3.1
+  {% if dimensions.all_applicable_pass_pct != INSUFFICIENT_DATA %}
+    {{ dimensions.all_applicable_pass_pct|pct }} of applicable entities satisfied
+    all required verification dimensions
+  {% else %}
+    No applicable verification dimensions were evaluated in this reporting period
+  {% endif %}
+</h2>
+<p>
+  Percentages are computed over APPLICABLE dimensions. A dimension recorded as
+  not applicable for an entity &mdash; Medicare enrollment for an entity that
+  holds no NPI, for instance &mdash; is excluded from the denominator rather
+  than counted as unsatisfied. Counting it would understate compliance for
+  entities that did nothing wrong.
+</p>
+
+{% set chart = charts.get('evidence_dimensions') %}
+{% if chart %}{{ figure(chart, chart_images.get('evidence_dimensions', '')) }}{% endif %}
+
+<table>
+  <caption>Evidence dimension results</caption>
+  <thead>
+    <tr>
+      <th scope="col">Dimension</th>
+      <th scope="col">Applicable</th>
+      <th scope="col">Satisfied</th>
+      <th scope="col">Not applicable</th>
+      <th scope="col">Satisfied rate</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in dimensions.dimensions %}
+      <tr>
+        <th scope="row">{{ row.label }}</th>
+        <td>{{ row.applicable|number }}</td>
+        <td>{{ row.satisfied|number }}</td>
+        <td>{{ row.not_applicable|number }}</td>
+        <td>{{ row.satisfied_pct|pct }}</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2>
+  3.2
+  {% if buckets.insufficient_data %}
+    No entities were classified in this reporting period
+  {% else %}
+    {{ buckets.counts['B1']|number }} of {{ buckets.total_classified|number }}
+    entities showed no discrepancy
+  {% endif %}
+</h2>
+<p>
+  Classification follows the approved B1&ndash;B4 methodology. Each review record
+  carries the rule code and rule version that produced its classification, so a
+  determination stays explainable after the rule set is revised. An analyst
+  reclassification supersedes the automated bucket and is what is counted here.
+</p>
+
+<h2>
+  3.3
+  {% if coverage.insufficient_data %}
+    No source verification activity was recorded in this reporting period
+  {% else %}
+    Verification coverage varied across {{ coverage.sources|length }} authoritative sources
+  {% endif %}
+</h2>
+<p>{{ coverage.state_note }}</p>
+
+{% set chart = charts.get('verification_coverage') %}
+{% if chart %}{{ figure(chart, chart_images.get('verification_coverage', '')) }}{% endif %}
+
+{% if not coverage.insufficient_data %}
+  <table>
+    <caption>Verification outcomes by source</caption>
+    <thead>
+      <tr>
+        <th scope="col">Source</th>
+        {% for state in coverage.states %}
+          <th scope="col">{{ state.replace('_', ' ')|title }}</th>
+        {% endfor %}
+        <th scope="col">Total</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in coverage.sources %}
+        <tr>
+          <th scope="row">{{ row.source }}</th>
+          {% for state in coverage.states %}
+            <td>{{ row.counts.get(state, 0)|number }}</td>
+          {% endfor %}
+          <td>{{ row.total|number }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endif %}
+
+<h2>
+  3.4
+  {% if entity_status.insufficient_data %}
+    No entities are recorded in the registry for this reporting period
+  {% else %}
+    {{ entity_status.total|number }} entities are recorded across
+    {{ entity_status.counts|length }} verification states
+  {% endif %}
+</h2>
+
+{% set chart = charts.get('entity_status') %}
+{% if chart %}{{ figure(chart, chart_images.get('entity_status', '')) }}{% endif %}
+
+{% if qhins.comparison_meaningful %}
+  <h2>3.5 Review outcomes across {{ qhins.qhin_count|number }} QHINs</h2>
+  <p>
+    QHIN attribution comes from the review record. Entities with no attribution
+    are grouped as Unattributed rather than distributed across QHINs, because
+    assigning them would invent a relationship the data does not state.
+  </p>
+  {% set chart = charts.get('qhin_comparison') %}
+  {% if chart %}{{ figure(chart, chart_images.get('qhin_comparison', '')) }}{% endif %}
+{% endif %}
+
+<h2 class="page-break">
+  {% if exceptions.count %}
+    4. {{ exceptions.count|number }} entities require analyst attention
+  {% else %}
+    4. No entities require analyst escalation in this reporting period
+  {% endif %}
+</h2>
+{% if exceptions.count %}
+  <table>
+    <caption>B3 and B4 exceptions</caption>
+    <thead>
+      <tr>
+        <th scope="col">Review ID</th>
+        <th scope="col">Status</th>
+        <th scope="col">Classification</th>
+        <th scope="col">Rule</th>
+        <th scope="col">Resolution</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in exceptions.exceptions %}
+        <tr>
+          <th scope="row">{{ item.review_id or 'Unassigned' }}</th>
+          <td>{{ status_indicator(item.bucket, buckets.indicators) }}</td>
+          <td>{{ item.bucket_label }}</td>
+          <td>{{ item.rule or 'Not recorded' }}{% if item.rule_version %} v{{ item.rule_version }}{% endif %}</td>
+          <td>{{ item.resolution or 'Unresolved' }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <p>
+    No B3 or B4 classifications were recorded. This is a statement about the
+    entities evaluated in this period, not an assurance about entities outside
+    the evaluated scope.
+  </p>
+{% endif %}
+
+{% endblock %}
+
+{% block appendix %}
+<section class="appendix page-break" aria-labelledby="appendix-heading">
+  <h2 id="appendix-heading">Appendix A. Methodology, Sources and Definitions</h2>
+
+  <h3>A.1 Methodology</h3>
+  <p>
+    Entities are evaluated across six evidence dimensions. Each dimension
+    receives one disposition regardless of how many sources or records informed
+    it: correlated components of a single dataset are one body of evidence, not
+    independent votes. No score, percentage or count of passing sources is
+    derived from the dimension structure.
+  </p>
+
+  <h3>A.2 Data sources</h3>
+  <dl>
+    <dt>ONC/RCE TEFCA directory</dt>
+    <dd>Primary evidence for TEFCA alignment and TEFCA relationships.</dd>
+    <dt>NPPES</dt>
+    <dd>Primary NPI identity authority. Never replaced by PECOS.</dd>
+    <dt>CMS PECOS Public Provider Enrollment (PPEF)</dt>
+    <dd>Medicare enrollment evidence. Quarterly, never real-time.</dd>
+    <dt>CMS Revoked Providers and Suppliers</dt>
+    <dd>
+      A separate control from enrollment. A negative lookup establishes only
+      that no active revocation record was found &mdash; it is not evidence of
+      enrollment or of good standing.
+    </dd>
+    <dt>OIG LEIE</dt>
+    <dd>Exclusion screening.</dd>
+    <dt>SAM.gov</dt>
+    <dd>Federal registration and debarment. Keyed on UEI, not NPI.</dd>
+  </dl>
+
+  <h3>A.3 Definitions</h3>
+  <dl>
+    <dt>Applicable dimension</dt>
+    <dd>
+      A dimension the methodology requires for this entity. Dimensions recorded
+      as not applicable are excluded from satisfied rates.
+    </dd>
+    <dt>Unavailable</dt>
+    <dd>
+      A source could not be reached. Never counted against an entity: an upstream
+      outage is not evidence about the organisation.
+    </dd>
+    <dt>Not found</dt>
+    <dd>A source answered and held no matching record.</dd>
+    <dt>B1&ndash;B4</dt>
+    <dd>
+      B1 no discrepancy; B2 minor or administrative; B3 inexplicable;
+      B4 non-compliant.
+    </dd>
+  </dl>
+
+  <h3>A.4 Known limitation</h3>
+  <p>
+    TIN and EIN are out of scope. CMS public enrollment data is not treated as
+    exposing tax identifiers, and none are derived, scraped or inferred.
+  </p>
+</section>
+{% endblock %}

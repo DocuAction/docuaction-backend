@@ -24,8 +24,9 @@ sources, and no CMS component is counted as an independent vote.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
+from app.Tefca import rce_fields
 from app.Tefca.address_evidence import (
     AddressComparison,
     SOURCE_NPPES,
@@ -57,10 +58,21 @@ from app.Tefca.evidence_dimensions import (
 NPI_SYSTEM = "http://hl7.org/fhir/sid/us-npi"
 TEFCA_ID_SYSTEM = "urn:docuaction:tefca/identifier"
 
-#: Fields the spec asks about that the ONC/HHS dataset does not contain. Named
-#: explicitly so D5 can report "not supplied" instead of silently omitting them
-#: — a missing field and an absent field look identical otherwise.
-ONC_FIELDS_NOT_SUPPLIED = ("hcid", "exchange_purpose", "npi_type_marker", "provider_entity_type")
+#: Fields the spec asks about that may be absent from a given RCE record.
+#:
+#: CORRECTED, AND THE CORRECTION IS THE POINT. This tuple previously asserted
+#: that hcid and exchange_purpose are never supplied by ONC. That was true of the
+#: pre-delivery FHIR fixture and is false of the RCE delivery, which carries HCID
+#: and purposesofuse on most records. D5 now reports "not supplied" only for the
+#: fields THIS record actually lacks, checked per entity, rather than declaring a
+#: whole category of data missing from the feed.
+#:
+#: What genuinely still has no RCE source: an NPI Type 1/Type 2 marker and a
+#: NUCC-grade provider taxonomy. Both come from NPPES, which remains the identity
+#: authority. They stay in this list because no RCE field supplies them.
+ONC_FIELDS_NOT_SUPPLIED = (
+    "hcid", "exchange_purpose", "npi_type_marker", "provider_entity_type",
+)
 
 
 def _identifier(entity: Dict[str, Any], system: str) -> Optional[str]:
@@ -398,22 +410,48 @@ def _dimension_medicare(profile: ApplicabilityProfile,
 
 # ── D3 EXCLUSION / DEBARMENT / REVOCATION ────────────────────────────────────
 
-def _dimension_exclusion(profile: ApplicabilityProfile,
+def _dimension_exclusion(entity: Dict[str, Any], profile: ApplicabilityProfile,
                          sources: Dict[str, SourceResult]) -> DimensionResult:
     """Three controls, three separately identifiable results, one dimension.
 
     They are never collapsed into "federal checks passed": OIG exclusion, SAM
     debarment and CMS revocation answer different questions and a reviewer has
     to be able to see which one spoke.
+
+    APPLICABILITY IS DECIDED PER SOURCE, NOT ONCE FOR THE DIMENSION
+    ──────────────────────────────────────────────────────────────
+    A missing NPI does NOT make D3 not-applicable. Exclusion and debarment
+    screening are obligations that attach to the ORGANISATION, and both OIG LEIE
+    and SAM.gov support organisation-name search — so where no NPI exists, the
+    org-level check is attempted rather than skipped.
+
+    What must never happen is the previous behaviour: `lookup_by_npi("")`
+    returned a clean "no exclusion found" for an entity nothing was searched
+    for, which is a manufactured negative. Each source now resolves to one of:
+
+        PASS                   searched, and nothing found
+        REVIEW                 searched, potential match, analyst decides
+        NOT_FOUND              org-level search ran and matched nothing
+        INSUFFICIENT_EVIDENCE  no usable identifier for this source; the check
+                               could not be performed and is NOT reported clean
+        UNAVAILABLE            the source itself could not be reached
+        NOT_APPLICABLE         the control does not attach to this entity type
     """
     dim = Dimension.D3_EXCLUSION_REVOCATION.value
     applicability = profile.applicability_of(Dimension.D3_EXCLUSION_REVOCATION)
     items: List[EvidenceItem] = []
     any_hit = False
     any_unavailable = False
+    any_insufficient = False
 
-    leie = sources.get("leie_npi")
-    if _ok(leie):
+    npi = profile.npi_available
+    org_name = (rce_fields.rce_value(entity, "name") or entity.get("name") or "").strip()
+    uei = _identifier(entity, "urn:docuaction:tefca/identifier/uei")
+
+    # ── OIG LEIE — NPI first, organisation name as the documented fallback ──
+    leie = sources.get("leie_npi") if npi else None
+    leie_org = sources.get("leie_org")
+    if npi and _ok(leie):
         d = leie.data or {}
         excluded = bool(d.get("excluded") or d.get("match") or d.get("matches"))
         any_hit = any_hit or excluded
@@ -421,11 +459,50 @@ def _dimension_exclusion(profile: ApplicabilityProfile,
             dimension=dim, source="OIG_LEIE",
             disposition=Disposition.REVIEW.value if excluded else Disposition.PASS.value,
             query_timestamp=leie.query_timestamp, dataset_version_anchor=leie.api_version,
+            query_identifier=f"npi={npi}",
             fields_evaluated=["npi", "exclusion_type", "exclusion_date"],
             original_values=dict(d),
-            rule_applied="OIG_LEIE_EXCLUSION_CHECK",
+            rule_applied="OIG_LEIE_EXCLUSION_CHECK_BY_NPI",
             note="Potential exclusion match — analyst determination required."
                  if excluded else "No exclusion record found for this NPI.",
+        ))
+    elif _ok(leie_org):
+        d = leie_org.data or {}
+        excluded = bool(d.get("excluded") or d.get("exclusion_found"))
+        any_hit = any_hit or excluded
+        items.append(EvidenceItem(
+            dimension=dim, source="OIG_LEIE",
+            disposition=Disposition.REVIEW.value if excluded else Disposition.NOT_FOUND.value,
+            query_timestamp=leie_org.query_timestamp,
+            dataset_version_anchor=leie_org.api_version,
+            query_identifier=f"org={org_name}",
+            fields_evaluated=["business_name", "exclusion_type", "exclusion_date"],
+            original_values=dict(d),
+            rule_applied="OIG_LEIE_ORG_LEVEL_CHECK_NO_NPI",
+            note=("Potential exclusion match on the organisation name — analyst "
+                  "determination required."
+                  if excluded else
+                  "No NPI available, so LEIE was screened by organisation name. No "
+                  "match found. NOT_FOUND rather than PASS: a name search is weaker "
+                  "evidence than an NPI match and must not read as an equivalent "
+                  "clearance."),
+        ))
+    elif leie_org is not None and not _ok(leie_org):
+        any_unavailable = True
+        items.append(EvidenceItem(
+            dimension=dim, source="OIG_LEIE", disposition=Disposition.UNAVAILABLE.value,
+            rule_applied="OIG_LEIE_ORG_LEVEL_CHECK_NO_NPI",
+            note=(leie_org.error or "OIG LEIE could not be reached."),
+        ))
+    elif not npi and not org_name:
+        any_insufficient = True
+        items.append(EvidenceItem(
+            dimension=dim, source="OIG_LEIE",
+            disposition=Disposition.INSUFFICIENT_EVIDENCE.value,
+            rule_applied="NO_USABLE_IDENTIFIER_FOR_LEIE",
+            note=("Neither an NPI nor an organisation name is available, so no LEIE "
+                  "screening could be performed. Reported as insufficient evidence — "
+                  "NOT as an absence of exclusions."),
         ))
     else:
         any_unavailable = True
@@ -434,8 +511,48 @@ def _dimension_exclusion(profile: ApplicabilityProfile,
             note=(leie.error if leie else "OIG LEIE was not queried."),
         ))
 
+    # ── SAM.gov — keyed on UEI; organisation name is the fallback ──
+    #
+    # SAM is NOT keyed on NPI at all, so a missing NPI is irrelevant to it. What
+    # matters is whether a UEI or a legal name was available.
     sam = sources.get("sam_exclusion")
-    if _ok(sam):
+    sam_name = sources.get("sam_name")
+    if _ok(sam) and uei:
+        d = sam.data or {}
+        debarred = bool(d.get("debarred") or d.get("exclusions"))
+        any_hit = any_hit or debarred
+        items.append(EvidenceItem(
+            dimension=dim, source="SAM_GOV",
+            disposition=Disposition.REVIEW.value if debarred else Disposition.PASS.value,
+            query_timestamp=sam.query_timestamp, dataset_version_anchor=sam.api_version,
+            query_identifier=f"uei={uei}",
+            fields_evaluated=["uei", "registration_status", "exclusions"],
+            original_values=dict(d),
+            rule_applied="SAM_DEBARMENT_CHECK_BY_UEI",
+            note="Potential debarment match — analyst determination required."
+                 if debarred else "No debarment record found.",
+        ))
+    elif _ok(sam_name):
+        d = sam_name.data or {}
+        debarred = bool(d.get("debarred") or d.get("exclusions"))
+        any_hit = any_hit or debarred
+        items.append(EvidenceItem(
+            dimension=dim, source="SAM_GOV",
+            disposition=Disposition.REVIEW.value if debarred else Disposition.NOT_FOUND.value,
+            query_timestamp=sam_name.query_timestamp,
+            dataset_version_anchor=sam_name.api_version,
+            query_identifier=f"legal_name={org_name}",
+            fields_evaluated=["legal_name", "registration_status", "exclusions"],
+            original_values=dict(d),
+            rule_applied="SAM_ORG_LEVEL_CHECK_NO_UEI",
+            note=("Potential debarment match on the organisation name — analyst "
+                  "determination required."
+                  if debarred else
+                  "No UEI available, so SAM.gov was screened by legal name. No match "
+                  "found. NOT_FOUND rather than PASS — a name search does not carry "
+                  "the weight of a UEI match."),
+        ))
+    elif _ok(sam):
         d = sam.data or {}
         debarred = bool(d.get("debarred") or d.get("exclusions"))
         any_hit = any_hit or debarred
@@ -448,6 +565,16 @@ def _dimension_exclusion(profile: ApplicabilityProfile,
             rule_applied="SAM_DEBARMENT_CHECK",
             note="Potential debarment match — analyst determination required."
                  if debarred else "No debarment record found.",
+        ))
+    elif not uei and not org_name:
+        any_insufficient = True
+        items.append(EvidenceItem(
+            dimension=dim, source="SAM_GOV",
+            disposition=Disposition.INSUFFICIENT_EVIDENCE.value,
+            rule_applied="NO_USABLE_IDENTIFIER_FOR_SAM",
+            note=("Neither a UEI nor an organisation name is available, so no SAM.gov "
+                  "screening could be performed. Reported as insufficient evidence — "
+                  "NOT as an absence of debarments."),
         ))
     else:
         any_unavailable = True
@@ -489,6 +616,10 @@ def _dimension_exclusion(profile: ApplicabilityProfile,
             rule_applied="CMS_OUTAGE_IS_NOT_A_VERIFICATION_FAILURE",
         ))
 
+    # Roll-up. Order matters: a potential match outranks an outage, and an
+    # outage outranks a check that could not be attempted — but NONE of the
+    # three ever produces a clean PASS, because each means something different
+    # was left unestablished.
     if any_hit:
         disposition, rationale, needs = (
             Disposition.REVIEW,
@@ -503,13 +634,38 @@ def _dimension_exclusion(profile: ApplicabilityProfile,
             "One or more of the three controls could not be reached. Not a finding.",
             True,
         )
-    else:
+    elif any_insufficient:
         disposition, rationale, needs = (
-            Disposition.PASS,
-            ("All three controls answered with no match: OIG LEIE no exclusion, SAM no "
-             f"debarment, CMS {NO_ACTIVE_REVOCATION_RECORD_FOUND}."),
-            False,
+            Disposition.INSUFFICIENT_EVIDENCE,
+            ("One or more controls had no usable identifier to search on, so the check "
+             "could not be performed. This is NOT a clearance and NOT a finding against "
+             "the entity — it is a statement that the screening did not happen."),
+            True,
         )
+    else:
+        settled = [i.source for i in items
+                   if i.disposition == Disposition.PASS.value]
+        name_only = [i.source for i in items
+                     if i.disposition == Disposition.NOT_FOUND.value]
+        rationale = (
+            "All three controls answered with no match: OIG LEIE no exclusion, SAM no "
+            f"debarment, CMS {NO_ACTIVE_REVOCATION_RECORD_FOUND}."
+        )
+        if name_only:
+            # Screened, nothing found, but on a weaker key. The dimension does
+            # not claim a full PASS on the strength of a name search alone.
+            rationale = (
+                f"No exclusion, debarment or revocation match found. {', '.join(sorted(set(name_only)))} "
+                "was screened at organisation level rather than by identifier, which is "
+                "weaker evidence; the dimension is reported as REVIEW so an analyst "
+                "confirms the identity behind the name search."
+            )
+            disposition, needs = Disposition.REVIEW, True
+        else:
+            disposition, needs = Disposition.PASS, False
+        return DimensionResult(dimension=dim, disposition=disposition.value,
+                               applicability=applicability, rationale=rationale,
+                               items=items, requires_analyst=needs)
     return DimensionResult(dimension=dim, disposition=disposition.value,
                            applicability=applicability, rationale=rationale,
                            items=items, requires_analyst=needs)
@@ -615,90 +771,268 @@ def _dimension_address(entity: Dict[str, Any], profile: ApplicabilityProfile,
 
 # ── D5 TEFCA ALIGNMENT ───────────────────────────────────────────────────────
 
-def _dimension_tefca(entity: Dict[str, Any], profile: ApplicabilityProfile) -> DimensionResult:
+def _dimension_tefca(
+    entity: Dict[str, Any],
+    profile: ApplicabilityProfile,
+    parent_resolver: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None,
+) -> DimensionResult:
     """Evaluated from ONC/HHS/RCE data ONLY.
 
-    Fields ONC does not supply are reported as not supplied. They are not
-    inferred from PECOS, and Exchange Purpose in particular is never derived
-    from Medicare data — PECOS has nothing to say about why two organisations
-    exchange information under TEFCA.
+    Six facets, each with its own disposition, rolled up into one dimension
+    result. The facets are reported individually because "D5 REVIEW" without
+    saying WHICH part of the TEFCA record is in question is not reviewable.
+
+        TEFCAID          present            -> PASS      / NOT_FOUND
+        HCID             present            -> PASS      / NOT_FOUND
+        sequoiaorgtype   present + in vocab -> PASS      / REVIEW
+        purposesofuse    present            -> PASS      / NOT_APPLICABLE
+        partOf           resolves           -> PASS      / REVIEW
+        active           active=1           -> PASS      / REVIEW
+
+    Fields the RCE record does not carry are reported as not supplied. They are
+    never inferred from PECOS, and Exchange Purpose in particular is never
+    derived from Medicare data — PECOS has nothing to say about why two
+    organisations exchange information under TEFCA.
     """
     dim = Dimension.D5_TEFCA_ALIGNMENT.value
     applicability = profile.applicability_of(Dimension.D5_TEFCA_ALIGNMENT)
+
     tefca_class = tefca_class_of(entity)
-    tefca_identifier = _identifier(entity, TEFCA_ID_SYSTEM)
-    npi = _identifier(entity, NPI_SYSTEM)
-    parent = (entity.get("partOf") or {}).get("reference")
+    tefcaid = rce_fields.tefca_id(entity)
+    hcid = rce_fields.hcid(entity)
+    aaid = rce_fields.aaid(entity)
+    sequoia = rce_fields.sequoia_org_type(entity)
+    node_type = rce_fields.organization_node_type(entity)
+    purposes = rce_fields.purposes_of_use(entity)
+    rce_parent = rce_fields.part_of(entity)
+    managing_org = rce_fields.org_managing_org(entity)
+    active = rce_fields.is_active(entity)
+    npi = rce_fields.rce_npi(entity) or _identifier(entity, NPI_SYSTEM)
+    legacy_identifier = _identifier(entity, TEFCA_ID_SYSTEM)
+    fhir_parent = (entity.get("partOf") or {}).get("reference")
     qhin = entity.get("_qhin")
+
+    facets: Dict[str, Dict[str, Any]] = {}
+    matches: List[Dict[str, Any]] = []
+    conflicts: List[Dict[str, Any]] = []
+
+    def facet(name: str, disposition: Disposition, value: Any, note: str) -> None:
+        facets[name] = {"disposition": disposition.value, "value": value, "note": note}
+        if disposition is Disposition.PASS:
+            matches.append({"field": name, "value": value, "result": "PASS"})
+        elif disposition in (Disposition.REVIEW, Disposition.CONFLICT):
+            conflicts.append({"field": name, "value": value,
+                              "result": disposition.value, "note": note})
+
+    # ── TEFCAID ──
+    facet("tefca_identifier", Disposition.PASS if tefcaid else Disposition.NOT_FOUND,
+          tefcaid,
+          "TEFCA identifier supplied by the RCE." if tefcaid else
+          "No TEFCAID in the RCE record. Reported as not found; nothing is inferred.")
+
+    # ── HCID ──
+    #
+    # NOT_FOUND rather than REVIEW. The delivery is documented to omit HCID on
+    # some records, so its absence is a known property of the data rather than a
+    # question about this entity.
+    facet("hcid", Disposition.PASS if hcid else Disposition.NOT_FOUND, hcid,
+          "Home Community ID supplied by the RCE." if hcid else
+          "No HCID in the RCE record. The delivery omits HCID on some records; "
+          "reported as not found, never inferred.")
+
+    # ── sequoiaorgtype ──
+    if sequoia and sequoia in rce_fields.SEQUOIA_ORG_TYPES:
+        facet("sequoia_org_type", Disposition.PASS, sequoia,
+              f"RCE organisational classification: {sequoia}.")
+    elif sequoia:
+        facet("sequoia_org_type", Disposition.REVIEW, sequoia,
+              f"sequoiaorgtype '{sequoia}' is outside the delivered vocabulary "
+              f"{list(rce_fields.SEQUOIA_ORG_TYPES)}. Analyst determination required.")
+    else:
+        facet("sequoia_org_type", Disposition.REVIEW, None,
+              "No sequoiaorgtype in the RCE record. The entity's TEFCA "
+              "classification cannot be established from the delivered data.")
+
+    # ── purposesofuse ──
+    #
+    # NOT_APPLICABLE, not REVIEW: an entity that exchanges for no declared
+    # purpose has not failed anything, and the delivery leaves the field empty
+    # on records where no purpose applies.
+    facet("exchange_purpose",
+          Disposition.PASS if purposes else Disposition.NOT_APPLICABLE,
+          purposes,
+          f"Exchange Purpose supplied: {', '.join(purposes)}." if purposes else
+          "No Exchange Purpose supplied in the RCE record. NOT_APPLICABLE — never "
+          "inferred, and never derived from PECOS.")
+
+    # ── partOf ──
+    parent_reference = rce_fields.parent_reference(entity)
+    if not parent_reference:
+        if tefca_class == "SUBPARTICIPANT":
+            facet("parent_relationship", Disposition.REVIEW, None,
+                  "A Subparticipant with no partOf in the RCE record. The TEFCA "
+                  "hierarchy requires a Participant parent; analyst determination "
+                  "required.")
+        else:
+            facet("parent_relationship", Disposition.NOT_APPLICABLE, None,
+                  "No partOf supplied. A Participant's parent is its QHIN, expressed "
+                  "through orgManagingOrg rather than partOf.")
+    elif parent_resolver is None:
+        # PRESENT but not checked. Deliberately distinct from "unresolved":
+        # claiming a broken hierarchy because nothing looked is a false finding.
+        facet("parent_relationship", Disposition.PASS, parent_reference,
+              "Parent reference present in the RCE record. Resolution against the "
+              "entity population was not attempted in this evaluation.")
+    elif parent_resolver(parent_reference) is not None:
+        facet("parent_relationship", Disposition.PASS, parent_reference,
+              "Parent reference resolves to an entity in the TEFCA population.")
+    else:
+        facet("parent_relationship", Disposition.REVIEW, parent_reference,
+              f"partOf '{parent_reference}' does not resolve to any entity in the "
+              "population. Analyst determination required — the parent may simply "
+              "not be in the delivered scope.")
+
+    # ── active ──
+    facet("active_status", Disposition.PASS if active else Disposition.REVIEW,
+          "1" if active else "0",
+          "Entity is active in the RCE record." if active else
+          "Entity is INACTIVE in the RCE record (active=0). Routed to analyst "
+          "review; an inactive entity is a legitimate reportable state and the "
+          "record is preserved, never dropped.")
 
     supplied = {
         "tefca_class": tefca_class,
-        "tefca_identifier": tefca_identifier,
+        "sequoia_org_type": sequoia,
+        "organization_node_type": node_type,
+        "tefca_identifier": tefcaid,
+        "hcid": hcid,
+        "aaid": aaid,
         "npi": npi,
-        "parent_reference": parent,
+        "exchange_purpose": purposes,
+        "parent_reference": parent_reference,
+        "org_managing_org": managing_org,
         "qhin_attribution": qhin,
         "organization_name": entity.get("name"),
-        "active": entity.get("active"),
+        "active": "1" if active else "0",
+        "legacy_tefca_identifier": legacy_identifier,
     }
-    not_supplied = {f: "NOT_SUPPLIED_BY_ONC" for f in ONC_FIELDS_NOT_SUPPLIED}
+    not_supplied = {
+        field: "NOT_SUPPLIED_BY_RCE"
+        for field in ONC_FIELDS_NOT_SUPPLIED
+        if not supplied.get(field)
+    }
 
-    conflicts: List[Dict[str, Any]] = []
-    if tefca_class == "SUBPARTICIPANT" and not parent:
+    quality = rce_fields.quality_flags(entity)
+    if quality:
+        # Data-quality signals are reported alongside the TEFCA facts, not folded
+        # into them. Mojibake in a name does not make the entity non-aligned; it
+        # makes the record defective, which is a different statement.
         conflicts.append({
-            "field": "parent_reference", "result": "MISSING",
-            "note": "A Subparticipant with no parent organisation in the ONC record.",
+            "field": "data_quality", "result": "FLAGGED", "value": quality,
+            "note": "Record-level data-quality flags. Reported for the analyst; "
+                    "no value is auto-corrected and nothing here alters the "
+                    "TEFCA alignment facets above.",
         })
-    if tefca_class and tefca_class != "QHIN" and not qhin:
-        conflicts.append({
-            "field": "qhin_attribution", "result": "MISSING",
-            "note": "Non-QHIN entity with no QHIN attribution in the ONC record.",
-        })
+
+    needs_analyst = any(
+        f["disposition"] == Disposition.REVIEW.value for f in facets.values()
+    )
+    disposition = Disposition.REVIEW if needs_analyst else Disposition.PASS
 
     item = EvidenceItem(
-        dimension=dim, source="ONC_RCE_DIRECTORY",
-        disposition=Disposition.REVIEW.value if conflicts else Disposition.PASS.value,
+        dimension=dim, source="ONC_RCE_DIRECTORY", disposition=disposition.value,
+        source_record_identifier=tefcaid or rce_fields.rce_value(entity, "id"),
         fields_evaluated=sorted(supplied.keys()),
-        field_matches=[{"field": k, "value": v} for k, v in supplied.items() if v],
+        field_matches=matches,
         field_conflicts=conflicts,
         original_values=supplied,
-        normalized_values={"fields_not_supplied_by_onc": not_supplied},
-        rule_applied="TEFCA_ALIGNMENT_FROM_ONC_DATA_ONLY",
-        note=("HCID and Exchange Purpose are not present in the ONC-supplied dataset and "
-              "are reported as not supplied. They are never inferred, and never derived "
+        normalized_values={
+            "facets": facets,
+            "fields_not_supplied_by_rce": not_supplied,
+            "data_quality_flags": quality,
+            "organization_node_type_note": (
+                "organizationNodeType describes technical exchange behaviour. It is "
+                "NOT the TEFCA hierarchy and is never used to derive the entity's "
+                "TEFCA class."
+            ),
+        },
+        rule_applied="TEFCA_ALIGNMENT_FROM_RCE_DATA_ONLY",
+        note=("Evaluated exclusively from the RCE-supplied record. Nothing here is "
+              "inferred from Medicare data, and Exchange Purpose is never derived "
               "from PECOS."),
     )
-    disposition = Disposition.REVIEW if conflicts else Disposition.PASS
+    unresolved = sorted(k for k, v in facets.items()
+                        if v["disposition"] == Disposition.REVIEW.value)
     return DimensionResult(
         dimension=dim, disposition=disposition.value, applicability=applicability,
-        rationale=("TEFCA alignment evaluated from the ONC-supplied record."
-                   + (" Internal inconsistencies found — see conflicts." if conflicts else "")),
-        items=[item], requires_analyst=bool(conflicts),
+        rationale=("TEFCA alignment evaluated from the RCE-supplied record."
+                   + (f" Facets requiring analyst determination: {', '.join(unresolved)}."
+                      if unresolved else "")),
+        items=[item], requires_analyst=needs_analyst,
     )
 
 
 # ── D6 PROVIDER ↔ ORGANIZATION RELATIONSHIP ─────────────────────────────────
 
-def _dimension_relationship(entity: Dict[str, Any], profile: ApplicabilityProfile,
-                            sources: Dict[str, SourceResult]) -> DimensionResult:
+def _dimension_relationship(
+    entity: Dict[str, Any],
+    profile: ApplicabilityProfile,
+    sources: Dict[str, SourceResult],
+    parent_resolver: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None,
+) -> DimensionResult:
     """RCE relationship is primary; PECOS reassignment corroborates at most.
 
     They answer different questions and are never treated as equivalent:
       RCE   — what is this organisation's relationship within TEFCA?
       PECOS — has this practitioner reassigned Medicare benefits to this entity?
+
+    TWO RCE POINTERS, TWO DIFFERENT EDGES
+    `partOf` names a Subparticipant's Participant. `orgManagingOrg` names the
+    managing QHIN. They are recorded separately because they are different
+    relationships: collapsing them would put a QHIN where the hierarchy expects
+    a Participant, and would make "has a parent" true for every entity in the
+    delivery.
     """
     dim = Dimension.D6_PROVIDER_ORG_RELATIONSHIP.value
     applicability = profile.applicability_of(Dimension.D6_PROVIDER_ORG_RELATIONSHIP)
-    parent = (entity.get("partOf") or {}).get("reference")
+    rce_parent = rce_fields.part_of(entity)
+    fhir_parent = (entity.get("partOf") or {}).get("reference")
+    parent = rce_fields.parent_reference(entity)
+    managing_org = rce_fields.qhin_reference(entity)
     items: List[EvidenceItem] = []
+
+    resolved_parent = parent_resolver(parent) if (parent and parent_resolver) else None
+    parent_resolution = (
+        "NOT_ATTEMPTED" if (parent and parent_resolver is None)
+        else "RESOLVED" if resolved_parent is not None
+        else "UNRESOLVED" if parent
+        else "NO_PARENT_REFERENCE"
+    )
 
     items.append(EvidenceItem(
         dimension=dim, source="ONC_RCE_DIRECTORY",
         disposition=Disposition.PASS.value if parent else Disposition.NOT_FOUND.value,
-        fields_evaluated=["partOf.reference", "type", "_qhin"],
-        original_values={"parent_reference": parent, "qhin_attribution": entity.get("_qhin"),
-                         "tefca_class": tefca_class_of(entity)},
+        source_record_identifier=rce_fields.tefca_id(entity),
+        fields_evaluated=["partOf", "orgManagingOrg", "sequoiaorgtype", "_qhin"],
+        original_values={
+            "parent_reference": parent,
+            "rce_part_of": rce_parent,
+            "fhir_part_of": fhir_parent,
+            "org_managing_org": managing_org,
+            "qhin_attribution": entity.get("_qhin"),
+            "tefca_class": tefca_class_of(entity),
+            "sequoia_org_type": rce_fields.sequoia_org_type(entity),
+        },
+        normalized_values={
+            "parent_resolution": parent_resolution,
+            "resolved_parent_name": (resolved_parent or {}).get("name"),
+            "edge_semantics": {
+                "partOf": "Subparticipant -> its Participant",
+                "orgManagingOrg": "entity -> its managing QHIN",
+            },
+        },
         rule_applied="RCE_RELATIONSHIP_IS_PRIMARY_TEFCA_EVIDENCE",
-        note=("ONC-supplied TEFCA relationship. This is the authoritative statement of the "
+        note=("RCE-supplied TEFCA relationship. This is the authoritative statement of the "
               "entity's TEFCA relationship; Medicare reassignment is not a substitute for it."),
     ))
 
@@ -820,13 +1154,21 @@ def assemble_dimensions(
     profile: ApplicabilityProfile,
     sources: Dict[str, SourceResult],
     website_evidence: Optional[Dict[str, Any]] = None,
+    parent_resolver: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None,
 ) -> List[DimensionResult]:
-    """Build all six dimensions, in review reading order."""
+    """Build all six dimensions, in review reading order.
+
+    `parent_resolver` maps an RCE parent reference (a TEFCAID, HCID or record id)
+    to the parent entity, or None when it does not resolve. Optional: with no
+    resolver, D5 and D6 report that a parent reference is PRESENT but that
+    resolution was not attempted — which is a different and more honest state
+    than reporting it unresolved.
+    """
     return [
         _dimension_identity(entity, profile, sources),
         _dimension_medicare(profile, sources),
-        _dimension_exclusion(profile, sources),
+        _dimension_exclusion(entity, profile, sources),
         _dimension_address(entity, profile, sources, website_evidence),
-        _dimension_tefca(entity, profile),
-        _dimension_relationship(entity, profile, sources),
+        _dimension_tefca(entity, profile, parent_resolver),
+        _dimension_relationship(entity, profile, sources, parent_resolver),
     ]

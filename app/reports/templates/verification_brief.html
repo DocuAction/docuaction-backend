@@ -1,0 +1,138 @@
+{#
+  Report 1, page 1 — "Verification in Brief".
+
+  Modelled on the HHS-OIG "Report in Brief": a reader who gets no further than
+  this page should still come away with why the work was done, how, what was
+  found, and what is recommended.
+
+  Every number is a template variable. There is no static percentage anywhere in
+  this file — a sentence like "94% of entities cleared all six dimensions"
+  written as literal text would keep saying 94% forever, no matter what the data
+  did, and would be a fabricated metric in a federal deliverable.
+#}
+{% extends "base.html" %}
+
+{% block title %}Entity Verification Report {{ snapshot.report_id }} — Verification in Brief{% endblock %}
+{% block description %}TEFCA entity verification results for {{ snapshot.review_cycle_id or 'all records' }}{% endblock %}
+{% block kicker %}Entity Verification Report &middot; Verification in Brief{% endblock %}
+{% block heading %}Entity Verification in Brief{% endblock %}
+
+{% block content %}
+
+{{ scope_box(scope) }}
+
+<section class="panel" aria-labelledby="why-heading">
+  <h3 id="why-heading">Why this verification was performed</h3>
+  <p>
+    The TEFCA Recognized Coordinating Entity supplies DocuAction with the
+    participant and subparticipant records in scope for review. This report
+    documents the verification of those records against authoritative federal
+    sources, organised into six evidence dimensions, and their classification
+    under the approved B1&ndash;B4 discrepancy methodology.
+  </p>
+  <p>
+    {{ scope.records_received|number }} records were in scope for this reporting
+    period and {{ scope.records_evaluated|number }} were evaluated.
+    {% if scope.records_held %}
+      {{ scope.records_held|number }} record(s) were held and are not counted in
+      the classification figures below.
+    {% endif %}
+  </p>
+</section>
+
+<section class="panel" aria-labelledby="how-heading">
+  <h3 id="how-heading">How DocuAction verified</h3>
+  <p>
+    Each entity is evaluated across six evidence dimensions &mdash; Identity,
+    Medicare Enrollment, Exclusion and Revocation, Address, TEFCA Alignment, and
+    the Provider&ndash;Organization relationship. Each dimension carries its own
+    disposition and its own applicability, and evidence is retained with the
+    provenance needed to reproduce the determination.
+  </p>
+  <p>
+    Dimensions are not counted as votes. A dimension that does not apply to an
+    entity is recorded as not applicable and excluded from the satisfied rate
+    rather than counted against the entity, and a source that could not be
+    reached is recorded as unavailable rather than as a finding.
+  </p>
+</section>
+
+<section class="panel" aria-labelledby="found-heading">
+  <h3 id="found-heading">What DocuAction found</h3>
+  {% if buckets.insufficient_data %}
+    <p class="insufficient-data">
+      Insufficient data for this reporting period. No entities were classified,
+      so no distribution is reported.
+    </p>
+  {% else %}
+    <p>
+      {{ buckets.total_classified|number }} entities were classified.
+      {% if dimensions.all_applicable_pass_pct != INSUFFICIENT_DATA %}
+        {{ dimensions.all_applicable_pass_pct|pct }} of applicable verification
+        dimensions were satisfied across the evaluated population.
+      {% else %}
+        No applicable dimensions were evaluated, so no satisfied rate is reported.
+      {% endif %}
+    </p>
+    <table>
+      <caption>Classification summary</caption>
+      <thead>
+        <tr>
+          <th scope="col">Classification</th>
+          <th scope="col">Status</th>
+          <th scope="col">Entities</th>
+          <th scope="col">Share</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for code in ['B1', 'B2', 'B3', 'B4'] %}
+          <tr>
+            <th scope="row">{{ code }} &mdash; {{ buckets.labels[code] }}</th>
+            <td>{{ status_indicator(code, buckets.indicators) }}</td>
+            <td>{{ buckets.counts[code]|number }}</td>
+            <td>{{ buckets.percentages[code]|pct }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+
+  {% set chart = charts.get('b1_b4_distribution') %}
+  {% if chart %}
+    {{ figure(chart, chart_images.get('b1_b4_distribution', '')) }}
+  {% endif %}
+</section>
+
+<section class="panel" aria-labelledby="recommend-heading">
+  <h3 id="recommend-heading">What DocuAction recommends</h3>
+  <ul>
+    {% if exceptions.count %}
+      <li>
+        Work the {{ exceptions.count|number }} B3/B4 exception(s) listed in the
+        detail section. Each carries the rule and rule version that produced it,
+        and none has been failed automatically.
+      </li>
+    {% else %}
+      <li>
+        No B3 or B4 exceptions were raised in this reporting period. No
+        escalation is recommended on the basis of these results.
+      </li>
+    {% endif %}
+    {% for metric in sla.metrics %}
+      {% if metric.rag in ('AMBER', 'RED') %}
+        <li>
+          {{ metric.metric }} is at {{ metric.pct|pct }} against a
+          {{ metric.target_pct }}% target &mdash; below the threshold and
+          recommended for attention.
+        </li>
+      {% endif %}
+    {% endfor %}
+    <li>
+      Retain this report and its provenance record. The evidence behind every
+      figure is preserved and the report can be reproduced from the same
+      snapshot.
+    </li>
+  </ul>
+</section>
+
+{% endblock %}

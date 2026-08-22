@@ -1,0 +1,147 @@
+{#
+  Base report layout.
+
+  lang and <title> are set here, on every report, because both are automated
+  accessibility checks AND both become PDF document properties: the title is
+  what a reader sees in a PDF viewer's title bar and what a screen reader
+  announces first.
+
+  The macros below are the ONLY way a status indicator or a figure gets into a
+  report. That is deliberate — an indicator built by hand would eventually be
+  built with colour alone, and a figure assembled inline would eventually ship
+  without alt text. Centralising them makes the accessible form the path of
+  least resistance.
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}DocuAction TEFCA ARC Report{% endblock %}</title>
+  <meta name="description" content="{% block description %}TEFCA ARC verification report{% endblock %}">
+  <meta name="generator" content="DocuAction Report Engine {{ template_version }}">
+  <style>{{ css }}</style>
+</head>
+<body>
+
+{% macro status_indicator(bucket, indicators) %}
+  {#
+    Colour + SHAPE + TEXT. All three, always.
+
+    The glyph is aria-hidden and the text label carries the meaning for assistive
+    technology — a screen reader announcing "black up-pointing triangle REVIEW"
+    is noise, while the sighted reader needs the shape to distinguish states in
+    greyscale. Each channel serves the reader who needs it.
+  #}
+  {% set ind = indicators.get(bucket, {}) %}
+  <span class="status status-{{ bucket|lower }}">
+    <span class="glyph" aria-hidden="true">{{ ind.get('glyph', '') }}</span><span
+      class="text">{{ ind.get('text', bucket) }} &mdash; {{ bucket }}</span>
+  </span>
+{% endmacro %}
+
+{% macro figure(chart, image_uri) %}
+  {#
+    A figure is a numbered caption, the image with its text equivalent, a source
+    line and a notes line. The engine refuses a chart with empty alt text, so
+    reaching this macro already guarantees one exists.
+  #}
+  <figure id="figure-{{ chart.figure_number }}">
+    <figcaption>{{ chart.numbered_title }}</figcaption>
+    {% if chart.insufficient_data %}
+      <p class="insufficient-data">Insufficient data for this reporting period.</p>
+      <p class="sr-only">{{ chart.alt_text }}</p>
+    {% else %}
+      <img src="{{ image_uri }}" alt="{{ chart.alt_text }}">
+    {% endif %}
+    <p class="figure-source">{{ chart.source }}</p>
+    <p class="figure-notes">Notes: {{ chart.notes }}</p>
+  </figure>
+{% endmacro %}
+
+{% macro scope_box(scope, title='Scope at a Glance') %}
+  <section class="scope-box" aria-labelledby="scope-heading">
+    <h2 id="scope-heading">{{ title }}</h2>
+    <div class="scope-grid">
+      <div class="scope-item"><span class="label">Reporting period</span><span class="value">
+        {%- if scope.reporting_period_start or scope.reporting_period_end -%}
+          {{ scope.reporting_period_start|date }} &ndash; {{ scope.reporting_period_end|date }}
+        {%- else -%}Not specified{%- endif -%}
+      </span></div>
+      <div class="scope-item"><span class="label">Records received</span><span class="value">{{ scope.records_received|number }}</span></div>
+      <div class="scope-item"><span class="label">Records evaluated</span><span class="value">{{ scope.records_evaluated|number }}</span></div>
+      <div class="scope-item"><span class="label">QHINs</span><span class="value">{{ scope.qhin_count|number }}</span></div>
+      <div class="scope-item"><span class="label">Issues identified</span><span class="value">{{ scope.issues_identified|number }}</span></div>
+      <div class="scope-item"><span class="label">Records held</span><span class="value">{{ scope.records_held|number }}</span></div>
+      <div class="scope-item"><span class="label">B3/B4 escalations</span><span class="value">{{ scope.escalations|number }}</span></div>
+      <div class="scope-item"><span class="label">Review cycle</span><span class="value">{{ scope.review_cycle_id or 'All records' }}</span></div>
+    </div>
+  </section>
+{% endmacro %}
+
+<header class="report-header">
+  <p class="report-kicker">{% block kicker %}DocuAction TEFCA ARC{% endblock %}</p>
+  <h1>{% block heading %}Report{% endblock %}</h1>
+  <p class="report-meta">
+    Report {{ snapshot.report_id }} &middot; Generated {{ generated_at_display }}
+    &middot; Report Data Service v{{ snapshot.report_data_service_version }}
+    &middot; Template v{{ snapshot.template_version }}
+  </p>
+</header>
+
+<main>
+{% block content %}{% endblock %}
+</main>
+
+<footer>
+  {% block appendix %}{% endblock %}
+
+  <section class="accessibility-statement" aria-labelledby="a11y-heading">
+    <h2 id="a11y-heading">Accessibility</h2>
+    <p>{{ snapshot.accessibility.get('conformance_claim',
+          'Automated accessibility checks were not recorded for this report.') }}</p>
+    {% if snapshot.accessibility.get('manual_review_required') %}
+      <p>Manual review still required before any conformance claim is made:</p>
+      <ul>
+        {% for item in snapshot.accessibility.get('manual_review_required') %}
+          <li>{{ item }}</li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </section>
+
+  <section class="appendix" aria-labelledby="prov-heading">
+    <h2 id="prov-heading">Report Provenance</h2>
+    <table>
+      <caption>Provenance record for {{ snapshot.report_id }}</caption>
+      <thead>
+        <tr><th scope="col">Attribute</th><th scope="col">Value</th></tr>
+      </thead>
+      <tbody>
+        <tr><th scope="row">Report ID</th><td>{{ snapshot.report_id }}</td></tr>
+        <tr><th scope="row">Report type</th><td>{{ snapshot.report_type }}</td></tr>
+        <tr><th scope="row">Generated (UTC)</th><td>{{ snapshot.generation_timestamp }}</td></tr>
+        <tr><th scope="row">Generated by</th><td>{{ snapshot.generated_by }}</td></tr>
+        <tr><th scope="row">Review cycle</th><td>{{ snapshot.review_cycle_id or 'All records' }}</td></tr>
+        <tr><th scope="row">Dataset snapshot version</th><td>{{ snapshot.dataset_snapshot_version or 'Not recorded' }}</td></tr>
+        <tr><th scope="row">Evidence generation</th><td>{{ snapshot.evidence_generation or 'Not recorded' }}</td></tr>
+        <tr><th scope="row">B1&ndash;B4 rule version</th><td>{{ snapshot.b1_b4_rule_version or 'Not recorded' }}</td></tr>
+        <tr><th scope="row">RCE source file SHA-256</th><td>{{ snapshot.rce_source_file_sha256 or 'Not yet tracked (Area 1 pending)' }}</td></tr>
+        <tr><th scope="row">Report Data Service version</th><td>{{ snapshot.report_data_service_version }}</td></tr>
+        <tr><th scope="row">Template version</th><td>{{ snapshot.template_version }}</td></tr>
+        <tr><th scope="row">Data payload hash</th><td>{{ snapshot.data_payload_hash }}</td></tr>
+        <tr><th scope="row">PDF engine</th><td>{{ snapshot.pdf_engine.get('engine') }} {{ snapshot.pdf_engine.get('version') or '' }}</td></tr>
+      </tbody>
+    </table>
+    <p class="figure-notes">
+      Every value in this report is read from frozen verification results through
+      the Report Data Service. Report generation is read-only: no NPPES, PECOS,
+      OIG, SAM or USPS lookup runs, and no D1&ndash;D6 or B1&ndash;B4 evaluation
+      is performed while a report is produced. Regenerating this report from the
+      same snapshot produces the same numbers.
+    </p>
+  </section>
+</footer>
+
+</body>
+</html>

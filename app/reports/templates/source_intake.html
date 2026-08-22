@@ -1,0 +1,158 @@
+{#
+  Report 4 — Source Intake.
+
+  The provenance record for one delivery: what arrived, how it was read, what it
+  contained, and how it differs from the delivery before it. Every value comes
+  from the Area 1 intake record and the locked field map.
+#}
+{% extends "base.html" %}
+
+{% block title %}Source Intake Report {{ snapshot.report_id }}{% endblock %}
+{% block description %}Intake provenance for an ONC/RCE delivery{% endblock %}
+{% block kicker %}DocuAction TEFCA ARC &middot; Source Intake{% endblock %}
+{% block heading %}RCE Delivery Intake Record{% endblock %}
+
+{% block content %}
+
+{% if intake.insufficient_data %}
+  <p class="insufficient-data">
+    Insufficient data: no delivery has been received. This is an absence of
+    intake, not an intake of nothing.
+  </p>
+{% else %}
+
+<section class="scope-box" aria-labelledby="si-scope">
+  <h2 id="si-scope">File at a Glance</h2>
+  <div class="scope-grid">
+    <div class="scope-item"><span class="label">File name</span><span class="value">{{ intake.filename }}</span></div>
+    <div class="scope-item"><span class="label">Size (bytes)</span><span class="value">{{ intake.file_size_bytes|number }}</span></div>
+    <div class="scope-item"><span class="label">Records</span><span class="value">{{ intake.record_count|number }}</span></div>
+    <div class="scope-item"><span class="label">Fields per record</span><span class="value">{{ intake.field_count|number }}</span></div>
+    <div class="scope-item"><span class="label">Delimiter</span><span class="value">{{ intake.delimiter_name }}</span></div>
+    <div class="scope-item"><span class="label">Encoding</span><span class="value">{{ intake.encoding }}</span></div>
+    <div class="scope-item"><span class="label">Line terminator</span><span class="value">{{ intake.line_terminator }}</span></div>
+    <div class="scope-item"><span class="label">Received</span><span class="value">{{ intake.received_at|date }}</span></div>
+  </div>
+</section>
+
+<h2>1. The delivery is preserved and verifiable</h2>
+<table>
+  <caption>File integrity and provenance</caption>
+  <thead>
+    <tr><th scope="col">Attribute</th><th scope="col">Value</th></tr>
+  </thead>
+  <tbody>
+    <tr><th scope="row">SHA-256</th><td>{{ intake.sha256 }}</td></tr>
+    <tr><th scope="row">Schema fingerprint</th><td>{{ intake.schema_fingerprint }}</td></tr>
+    <tr><th scope="row">Schema matches the locked field map</th>
+        <td>{{ 'No — held for reconciliation' if intake.schema_drift else 'Yes' }}</td></tr>
+    <tr><th scope="row">Field map version</th><td>{{ intake.field_map_version or 'Not recorded' }}</td></tr>
+    <tr><th scope="row">Received by</th><td>{{ intake.received_by or 'Not recorded' }}</td></tr>
+    <tr><th scope="row">Intake status</th><td>{{ intake.status }}</td></tr>
+    <tr><th scope="row">Byte-identical to an earlier delivery</th>
+        <td>{{ 'Yes — linked to ' ~ intake.duplicate_of_intake_id if intake.duplicate_content else 'No' }}</td></tr>
+  </tbody>
+</table>
+<p class="figure-notes">
+  The original bytes are preserved unmodified and the stored file re-hashes to
+  the value above. A byte-identical re-delivery is recorded as its own intake
+  and linked to the earlier one rather than rejected: ONC may legitimately
+  resend, and a rejected re-delivery would leave no record that it arrived.
+</p>
+
+<h2>2. Every delivered line was stored</h2>
+<p>
+  Area 1 holds one immutable row per delivered line, including any line that
+  could not be split into the expected field count. A parser that discarded a
+  malformed line would destroy the only evidence that the line was ever
+  delivered — and that line is precisely the one an auditor asks about.
+</p>
+
+{% set chart = charts.get('parse_status') %}
+{% if chart %}{{ figure(chart, chart_images.get('parse_status', '')) }}{% endif %}
+
+<table>
+  <caption>Parse outcome by delivered line</caption>
+  <thead>
+    <tr><th scope="col">Parse status</th><th scope="col">Lines</th></tr>
+  </thead>
+  <tbody>
+    {% for status, count in intake.parse_status_counts.items() %}
+      <tr><th scope="row">{{ status }}</th><td>{{ count|number }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2>3. Field population across the delivery</h2>
+{% set chart = charts.get('field_coverage') %}
+{% if chart %}{{ figure(chart, chart_images.get('field_coverage', '')) }}{% endif %}
+
+<table>
+  <caption>Delivered schema, in order, with observed population</caption>
+  <thead>
+    <tr>
+      <th scope="col">#</th>
+      <th scope="col">Column</th>
+      <th scope="col">Populated</th>
+      <th scope="col">Empty</th>
+      <th scope="col">Coverage</th>
+      <th scope="col">Distinct</th>
+      <th scope="col">Necessity</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for field in coverage.fields %}
+      <tr>
+        <th scope="row">{{ field.ordinal }}</th>
+        <td>{{ field.name }}</td>
+        <td>{{ field.populated|number }}</td>
+        <td>{{ field.empty|number }}</td>
+        <td>{{ field.coverage_pct }}%</td>
+        <td>{{ field.distinct|number }}</td>
+        <td>{{ field.necessity.replace('_', ' ')|title }}</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2>4. Quality summary</h2>
+<p>
+  {{ issues.total|number }} issues were raised across
+  {{ issues.records_affected|number }} of {{ issues.records_total|number }}
+  delivered records ({{ issues.records_affected_pct|pct }}).
+  {{ intake.mojibake_cells|number }} cells carried encoding-corruption markers
+  and {{ intake.embedded_tab_cells|number }} carried an embedded tab.
+</p>
+
+<h2>
+  {% if delta.comparable %}
+    5. Change from the previous delivery
+  {% else %}
+    5. No previous delivery to compare against
+  {% endif %}
+</h2>
+{% if delta.comparable %}
+  <table>
+    <caption>Delta from {{ delta.previous_filename }}</caption>
+    <thead>
+      <tr><th scope="col">Measure</th><th scope="col">Value</th></tr>
+    </thead>
+    <tbody>
+      <tr><th scope="row">Previous delivery received</th><td>{{ delta.previous_received_at|date }}</td></tr>
+      <tr><th scope="row">Previous record count</th><td>{{ delta.previous_record_count|number }}</td></tr>
+      <tr><th scope="row">Current record count</th><td>{{ delta.current_record_count|number }}</td></tr>
+      <tr><th scope="row">Net change</th><td>{{ delta.record_delta|number }}</td></tr>
+      <tr><th scope="row">Identifiers new in this delivery</th><td>{{ delta.new_ids|number }}</td></tr>
+      <tr><th scope="row">Identifiers absent from this delivery</th><td>{{ delta.removed_ids|number }}</td></tr>
+      <tr><th scope="row">Identifiers in both</th><td>{{ delta.common_ids|number }}</td></tr>
+      <tr><th scope="row">Byte-identical</th><td>{{ 'Yes' if delta.identical_bytes else 'No' }}</td></tr>
+      <tr><th scope="row">Schema changed</th><td>{{ 'Yes' if delta.schema_changed else 'No' }}</td></tr>
+    </tbody>
+  </table>
+{% else %}
+  <p>{{ delta.reason }}</p>
+{% endif %}
+
+{% endif %}
+
+{% endblock %}

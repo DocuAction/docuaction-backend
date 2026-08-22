@@ -1,0 +1,160 @@
+{
+  "intake_id": "9a32a35d-e6e3-40d3-90c6-2d1e43e0bab3",
+  "passed": true,
+  "populations": {
+    "A_source_records_received": 23566,
+    "B_rejected_or_held": 4,
+    "B_held": 4,
+    "B_rejected": 0,
+    "C_eligible": 23562,
+    "D_curated_records": 23566,
+    "E_promoted_to_registry": 23562,
+    "E_distinct_entities": 23562,
+    "F_verification_reviews": 43,
+    "F_verified_entities": 43
+  },
+  "curated_status_counts": {
+    "CLEAN": 21932,
+    "CORRECTED": 1630,
+    "HELD": 4
+  },
+  "corrections": {
+    "total": 1631,
+    "unexplained": 0
+  },
+  "rule_execution": {
+    "run_id": "ee045926-7bd7-4aeb-8ab8-4bab432b0e57",
+    "rules_executed": 31,
+    "rules_under_evaluated": [],
+    "rules_failed": []
+  },
+  "area1_integrity": {
+    "record_hashes": {
+      "records_checked": 23566,
+      "mismatches": 0,
+      "detail": [],
+      "intact": true
+    },
+    "stored_file": {
+      "checked": true,
+      "storage_path": "C:\\Imran_Coding projects\\DocuAction\\backend\\uploads\\rce_deliveries\\689472073480b1cc_onc-snapshot-20260720.csv",
+      "recorded_sha256": "689472073480b1cc4faf604527eda47e4e59928f7a6128d84b2f28bb6e9e9e8d",
+      "recomputed_sha256": "689472073480b1cc4faf604527eda47e4e59928f7a6128d84b2f28bb6e9e9e8d",
+      "intact": true
+    },
+    "immutability": {
+      "role": "docuaction",
+      "tables": {
+        "rce_source_intakes": {
+          "can_update": true,
+          "can_delete": true,
+          "can_insert": true,
+          "immutable": false
+        },
+        "rce_source_records": {
+          "can_update": true,
+          "can_delete": true,
+          "can_insert": true,
+          "immutable": false
+        }
+      },
+      "enforced": false,
+      "checked": true,
+      "note": "The application role still holds UPDATE and/or DELETE on Area 1 tables. Application-layer immutability holds today, but the database would permit a future code path to mutate delivered evidence. Apply immutability_grants_sql()."
+    }
+  },
+  "checks": [
+    {
+      "check": "A: every delivered line stored",
+      "passed": true,
+      "detail": "23566 source records vs 23566 declared on the intake"
+    },
+    {
+      "check": "D == A: every source record curated",
+      "passed": true,
+      "detail": "23566 curated vs 23566 source records"
+    },
+    {
+      "check": "C = A \u2212 B: eligible population is exact",
+      "passed": true,
+      "detail": "23562 eligible = 23566 received \u2212 4 (held 4 + rejected 0)"
+    },
+    {
+      "check": "E == C: every eligible record promoted",
+      "passed": true,
+      "detail": "23562 promoted vs 23562 eligible"
+    },
+    {
+      "check": "E: Area 1 promotion markers agree with Area 2",
+      "passed": true,
+      "detail": "23562 source records marked promoted vs 23562 curated records carrying an entity id"
+    },
+    {
+      "check": "E: one registry entity per promoted record",
+      "passed": true,
+      "detail": "23562 distinct entities vs 23562 promoted records"
+    },
+    {
+      "check": "F \u2286 E: every verification traces to a promoted entity",
+      "passed": true,
+      "detail": "43 reviews over 43 entities, within 23562 promoted"
+    },
+    {
+      "check": "Zero orphan Area 2 records",
+      "passed": true,
+      "detail": "0 curated records with no Area 1 parent"
+    },
+    {
+      "check": "Zero orphan promotions",
+      "passed": true,
+      "detail": "0 curated records pointing at a missing entity"
+    },
+    {
+      "check": "Zero orphan issues",
+      "passed": true,
+      "detail": "0 issues pointing at a missing source record"
+    },
+    {
+      "check": "Zero orphan corrections",
+      "passed": true,
+      "detail": "0 corrections with no curated record"
+    },
+    {
+      "check": "Every correction is explained",
+      "passed": true,
+      "detail": "0 of 1631 corrections cite neither an issue nor a reason"
+    },
+    {
+      "check": "Every rule evaluated every record",
+      "passed": true,
+      "detail": "0 rule(s) did not evaluate all 23566 records: []"
+    },
+    {
+      "check": "No rule execution failed",
+      "passed": true,
+      "detail": "0 rule(s) failed: []"
+    },
+    {
+      "check": "Every determination traces to evidence",
+      "passed": true,
+      "detail": "0 review(s) carry no dimension evidence"
+    },
+    {
+      "check": "Every determination cites a rule",
+      "passed": true,
+      "detail": "0 classified review(s) carry no rule_code"
+    },
+    {
+      "check": "Area 1 raw lines still hash to their intake values",
+      "passed": true,
+      "detail": "0 mismatch(es) across 23566 records"
+    },
+    {
+      "check": "Original delivery file unmodified",
+      "passed": true,
+      "detail": "stored sha256 matches"
+    }
+  ],
+  "failed_checks": [],
+  "note": "Every population is counted from the database. C = A \u2212 B and E = C are asserted as equalities, not tolerances: a record that does not appear on both sides of the arithmetic has gone somewhere nobody can account for."
+}

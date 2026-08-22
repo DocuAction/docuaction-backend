@@ -164,10 +164,19 @@ class EvidenceService:
         The existing five keys (nppes, leie_npi, sam_entity, sam_exclusion,
         pecos) are preserved untouched so ValidationEngine keeps working exactly
         as before; the CMS results are added under new keys.
+
+        ORGANISATION-LEVEL SCREENING WHEN NO NPI EXISTS
+        Many TEFCA entities legitimately hold no NPI. Screening them only by NPI
+        made `lookup_by_npi("")` return a clean "no exclusion found" for an
+        entity nothing had been searched for — a manufactured negative in a
+        federal exclusion check. Where no NPI is available, LEIE and SAM are
+        additionally queried by organisation name under the `leie_org` and
+        `sam_name` keys, and D3 reports which key answered.
         """
         from app.Tefca.connectors import _extract_npi
+        from app.Tefca import rce_fields
 
-        npi = _extract_npi(entity)
+        npi = rce_fields.rce_npi(entity) or _extract_npi(entity)
         existing, enrollment, revocation = await asyncio.gather(
             self.manager.query_all_sources(entity),
             self.ppef.lookup_by_npi(npi),
@@ -177,6 +186,26 @@ class EvidenceService:
         sources: Dict[str, SourceResult] = dict(existing)
         sources["cms_ppef_enrollment"] = enrollment
         sources["cms_revocation"] = revocation
+
+        org_name = (rce_fields.rce_value(entity, "name")
+                    or entity.get("name") or "").strip()
+        if not npi and org_name:
+            # LEIE screens individuals by (last, first) and organisations by the
+            # business name; `last` is positional and must be passed explicitly
+            # even when screening an organisation. Omitting it raised a TypeError
+            # that `_safe_lookup` swallowed, so the org-level check silently
+            # never ran and D3 fell through to INSUFFICIENT_EVIDENCE for every
+            # NPI-less entity — a check that appeared wired up and was not.
+            leie_org, sam_name = await asyncio.gather(
+                self._safe_lookup(self.manager.leie.lookup_by_name,
+                                  last="", first="", org=org_name),
+                self._safe_lookup(self.manager.sam.lookup_by_name, org_name),
+                return_exceptions=False,
+            )
+            if leie_org is not None:
+                sources["leie_org"] = leie_org
+            if sam_name is not None:
+                sources["sam_name"] = sam_name
 
         # Relational components are keyed on the enrolment ids the Enrollment
         # extract just gave us — the documented ENRLMT_ID linkage. They resolve
@@ -194,11 +223,40 @@ class EvidenceService:
         sources["cms_ppef_additional_npis"] = additional_npis
         return sources
 
+    @staticmethod
+    async def _safe_lookup(fn, *args, **kwargs) -> Optional[SourceResult]:
+        """Run a supplementary lookup, returning None if it raises.
+
+        Supplementary screening must never break a review. A None result means
+        the key is simply absent from `sources`, which D3 reports as the check
+        not having been performed — never as a clean pass.
+
+        A TypeError is logged at ERROR, not info. Every other exception here is
+        an outage — a third party being unreachable — but a TypeError means this
+        code called the connector wrongly, and the check has therefore never run
+        for anyone. That already happened once: the LEIE organisation lookup was
+        wired with a missing positional argument and degraded silently for every
+        NPI-less entity. An outage is news about the world; a TypeError is a bug,
+        and the two must not share a log level.
+        """
+        try:
+            return await fn(*args, **kwargs)
+        except TypeError as exc:
+            logger.error(
+                "org-level lookup called incorrectly (%s): %s. This check did "
+                "NOT run and no screening was performed.",
+                getattr(fn, "__qualname__", fn), exc, exc_info=True)
+            return None
+        except Exception as exc:  # noqa: BLE001
+            logger.info("org-level lookup unavailable: %s: %s", type(exc).__name__, exc)
+            return None
+
     async def build_evidence(
         self,
         entity: Dict[str, Any],
         sources: Optional[Dict[str, SourceResult]] = None,
         methodology_requires: Optional[Dict[str, str]] = None,
+        parent_resolver: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """Full dimension-organised evidence for one entity."""
         sources = sources if sources is not None else await self.gather_sources(entity)
@@ -225,12 +283,19 @@ class EvidenceService:
                 website = {"result": WEBSITE_UNAVAILABLE, "unavailable": True,
                            "affects_determination": False, "note": str(exc)}
 
-        dimensions = assemble_dimensions(entity, profile, sources, website)
+        dimensions = assemble_dimensions(entity, profile, sources, website,
+                                         parent_resolver=parent_resolver)
+        from app.Tefca import rce_fields
+
         return {
             "entity_id": entity.get("id"),
             "entity_name": entity.get("name"),
             "generated_at": datetime.utcnow().isoformat(),
             "applicability": profile.to_dict(),
+            # Record-level data-quality signals, surfaced next to the evidence
+            # rather than buried inside D5. Detected and reported; never
+            # auto-corrected.
+            "data_quality_flags": rce_fields.quality_flags(entity),
             "dimensions": [d.to_dict() for d in dimensions],
             "dimension_order": [d.value for d in DIMENSION_ORDER],
             "sufficiency": sufficiency_summary(dimensions),

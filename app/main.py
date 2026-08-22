@@ -440,6 +440,17 @@ logger.info("Loaded: tefca-registry (Phase 2A — /api/tefca/registry/*)")
 # metrics endpoints, and losing them must never take the API down.
 safe_load("app.tefca_registry.usps_routes", "usps-metrics")
 
+# ═══ RCE INGESTION PIPELINE ═══
+# Area 1 (immutable) -> quality -> Issue Ledger -> Area 2 -> canonical registry.
+# No mutating route exists for Area 1 — see app/tefca_registry/rce/repository.py.
+safe_load("app.tefca_registry.rce.routes", "tefca-rce-pipeline")
+
+# ═══ REPORTS ═══
+# Federal reporting engine at /api/reports/*. Reads FROZEN verification results
+# through the Report Data Service; generation never triggers a source lookup or
+# a D1-D6 / B1-B4 evaluation.
+safe_load("app.reports.routes", "reports")
+
 # ═══ CASE MANAGEMENT ═══
 safe_load("app.case_management", "case-management")
 

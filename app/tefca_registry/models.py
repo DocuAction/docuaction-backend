@@ -67,6 +67,38 @@ class TefcaRegEntity(Base):
     # operating" — a legitimate state for a real participant.
     is_deleted = Column(Boolean, nullable=False, server_default=text("false"))
     deleted_at = Column(DateTime)
+
+    # ── RCE-delivered attributes (migration 20260822_rce_pipeline) ───────────
+    #
+    # These are COLUMNS rather than identifier rows because the delivered data
+    # is not unique the way `tefca_entity_identifiers` assumes.
+    #
+    # TEFCAID was profiled at 23,566 populated / 23,325 distinct: 43 values
+    # repeat across 241 rows, one of them 69 times, and each repeat is a health
+    # system sharing one TEFCAID with its facilities. It identifies an
+    # ORGANISATION FAMILY, not a record. Forcing it through the unique index on
+    # (identifier_type, identifier_value, system_uri) fails on the 241st row —
+    # and "fixing" that by relaxing the index would remove the guarantee that
+    # protects NPI and the other genuinely unique identifiers.
+    #
+    # So: every entity carries its family TEFCAID here (indexed, NOT unique, so
+    # a lookup returns the whole family, which is the correct answer), and an
+    # identifier ROW is written only where the value is unique in the delivery.
+    rce_org_oid = Column(String(200))          # the delivery's `id` — unique
+    rce_tefcaid = Column(String(100))          # family identifier — NOT unique
+    rce_hcid = Column(String(100))
+    rce_aaid = Column(String(100))
+    sequoia_org_type = Column(String(50))      # Participant | Subparticipant
+    #: Technical exchange behaviour. NEVER the TEFCA hierarchy — see
+    #: app/Tefca/applicability.py:tefca_class_of.
+    org_node_type = Column(String(100))
+    hl7_org_role = Column(String(100))
+    org_managing_org = Column(String(200))     # QHIN OID
+    is_test_record = Column(Boolean, nullable=False, server_default=text("false"))
+    rce_attributes = Column(JSONB)
+    #: Provenance back to the exact delivered line this entity came from.
+    source_record_id = Column(UUID(as_uuid=True))
+
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(),
                         onupdate=datetime.utcnow)
@@ -79,6 +111,13 @@ class TefcaRegEntity(Base):
         Index("idx_tefca_reg_ent_name", "name"),
         Index("idx_tefca_reg_ent_active", "is_active",
               postgresql_where=text("is_active = true")),
+        # Non-unique on purpose — see the column comments above.
+        Index("idx_tefca_reg_ent_rce_oid", "rce_org_oid"),
+        Index("idx_tefca_reg_ent_rce_tefcaid", "rce_tefcaid"),
+        Index("idx_tefca_reg_ent_rce_hcid", "rce_hcid"),
+        Index("idx_tefca_reg_ent_source_record", "source_record_id"),
+        Index("idx_tefca_reg_ent_test", "is_test_record",
+              postgresql_where=text("is_test_record = true")),
     )
 
 

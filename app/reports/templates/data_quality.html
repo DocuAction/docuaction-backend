@@ -1,0 +1,164 @@
+{#
+  Report 2 — Data Quality.
+
+  Every number is a template variable read from the RCE Report Data Service.
+  There is no literal count or percentage anywhere in this file.
+#}
+{% extends "base.html" %}
+
+{% block title %}Data Quality Report {{ snapshot.report_id }}{% endblock %}
+{% block description %}Data-quality findings for an ONC/RCE delivery{% endblock %}
+{% block kicker %}DocuAction TEFCA ARC &middot; Data Quality{% endblock %}
+{% block heading %}RCE Delivery Data Quality{% endblock %}
+
+{% block content %}
+
+<section class="scope-box" aria-labelledby="dq-scope">
+  <h2 id="dq-scope">Delivery at a Glance</h2>
+  <div class="scope-grid">
+    <div class="scope-item"><span class="label">Delivery</span><span class="value">{{ intake.filename if not intake.insufficient_data else 'None' }}</span></div>
+    <div class="scope-item"><span class="label">Records delivered</span><span class="value">{{ intake.record_count|number if not intake.insufficient_data else '—' }}</span></div>
+    <div class="scope-item"><span class="label">Issues raised</span><span class="value">{{ issues.total|number }}</span></div>
+    <div class="scope-item"><span class="label">Records with an issue</span><span class="value">{{ issues.records_affected|number }}</span></div>
+    <div class="scope-item"><span class="label">Share of records affected</span><span class="value">{{ issues.records_affected_pct|pct }}</span></div>
+    <div class="scope-item"><span class="label">Corrections applied</span><span class="value">{{ remediation.corrections_applied|number }}</span></div>
+    <div class="scope-item"><span class="label">Records held</span><span class="value">{{ curation.status_counts.get('HELD', 0)|number }}</span></div>
+    <div class="scope-item"><span class="label">Rule set version</span><span class="value">{{ intake.field_map_version or 'Not recorded' }}</span></div>
+  </div>
+</section>
+
+<h2>
+  {% if issues.insufficient_data %}
+    1. No data-quality issues were recorded for this delivery
+  {% else %}
+    1. {{ issues.total|number }} issues were raised across
+    {{ issues.records_affected|number }} of {{ issues.records_total|number }} delivered records
+  {% endif %}
+</h2>
+<p>
+  Severity is assigned by a versioned, configuration-driven rule set, not by
+  intuition about a column name. Two decisions are worth stating explicitly: a
+  missing NPI is INFORMATIONAL because a substantial share of TEFCA entities
+  legitimately hold none, and a missing HCID or Exchange Purpose is
+  INFORMATIONAL because no business requirement establishing either as mandatory
+  is in DocuAction's possession. Neither is treated as an entity failure.
+</p>
+
+{% set chart = charts.get('issues_by_severity') %}
+{% if chart %}{{ figure(chart, chart_images.get('issues_by_severity', '')) }}{% endif %}
+
+{% if not issues.insufficient_data %}
+  <table>
+    <caption>Issues by severity</caption>
+    <thead>
+      <tr>
+        <th scope="col">Severity</th>
+        <th scope="col">Status</th>
+        <th scope="col">Issues</th>
+        <th scope="col">Share</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for severity, count in issues.by_severity.items() %}
+        {% if count %}
+          <tr>
+            <th scope="row">{{ severity }}</th>
+            <td>
+              <span class="status status-{{ 'b4' if severity in ('CRITICAL','HIGH')
+                                            else 'b2' if severity in ('MEDIUM','LOW')
+                                            else 'b1' }}">
+                <span class="glyph" aria-hidden="true">{{ issues.indicators[severity]['glyph'] }}</span><span
+                  class="text">{{ issues.indicators[severity]['text'] }}</span>
+              </span>
+            </td>
+            <td>{{ count|number }}</td>
+            <td>{{ ((count / issues.total * 100) | round(1)) }}%</td>
+          </tr>
+        {% endif %}
+      {% endfor %}
+    </tbody>
+  </table>
+{% endif %}
+
+<h2>
+  {% if issues.insufficient_data %}
+    2. No rules produced findings
+  {% else %}
+    2. {{ issues.by_rule|length }} distinct rules produced findings
+  {% endif %}
+</h2>
+
+{% set chart = charts.get('issues_by_rule') %}
+{% if chart %}{{ figure(chart, chart_images.get('issues_by_rule', '')) }}{% endif %}
+
+{% if not issues.insufficient_data %}
+  <table>
+    <caption>Issues by affected column</caption>
+    <thead>
+      <tr><th scope="col">Column</th><th scope="col">Issues</th></tr>
+    </thead>
+    <tbody>
+      {% for field, count in issues.by_field.items() %}
+        {% if loop.index <= 15 %}
+          <tr><th scope="row">{{ field }}</th><td>{{ count|number }}</td></tr>
+        {% endif %}
+      {% endfor %}
+    </tbody>
+  </table>
+{% endif %}
+
+<h2>
+  {% if remediation.insufficient_data %}
+    3. No remediation activity to report
+  {% else %}
+    3. {{ remediation.corrections_applied|number }} corrections were applied,
+    {{ remediation.open|number }} issues remain open
+  {% endif %}
+</h2>
+<p>
+  Correction authority is independent of confidence. A rule may be certain what
+  a value should be and still have no authority to change it: identity,
+  organisation name and relationship edits require a human at any confidence,
+  and AUTO_SAFE is confined to deterministic, non-substantive normalisation such
+  as whitespace, state-code case and postal-code zero-padding. Every applied
+  correction preserves the original value alongside it.
+</p>
+
+{% set chart = charts.get('issues_by_authority') %}
+{% if chart %}{{ figure(chart, chart_images.get('issues_by_authority', '')) }}{% endif %}
+
+{% if not remediation.insufficient_data %}
+  <table>
+    <caption>Remediation status</caption>
+    <thead>
+      <tr><th scope="col">Measure</th><th scope="col">Count</th></tr>
+    </thead>
+    <tbody>
+      {% for status, count in remediation.by_resolution.items() %}
+        <tr><th scope="row">Issues {{ status }}</th><td>{{ count|number }}</td></tr>
+      {% endfor %}
+      {% for authority, count in remediation.corrections_by_authority.items() %}
+        <tr><th scope="row">Corrections applied under {{ authority }}</th><td>{{ count|number }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endif %}
+
+<h2>
+  {% if curation.insufficient_data %}
+    4. No curated records exist for this delivery
+  {% else %}
+    4. {{ curation.promoted|number }} of {{ curation.total|number }} curated
+    records were promoted to the canonical registry
+  {% endif %}
+</h2>
+<p>
+  A record with an unresolved issue at holding severity is HELD and is excluded
+  from ARC verification until the issue is resolved. It remains in Area 1 and
+  Area 2, is counted in reconciliation, and is never dropped.
+</p>
+
+{% set chart = charts.get('curation_status') %}
+{% if chart %}{{ figure(chart, chart_images.get('curation_status', '')) }}{% endif %}
+
+{% endblock %}

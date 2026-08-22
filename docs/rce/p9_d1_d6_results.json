@@ -1,0 +1,252 @@
+[
+  {
+    "label": "Participant WITH NPI",
+    "oid": "1.2.840.114350.1.13.104.2.7.3.688884.100",
+    "name": "UTMB - Health",
+    "dims": {
+      "IDENTITY": "PASS",
+      "MEDICARE_ENR": "REVIEW",
+      "EXCLUSION_RE": "UNAVAILABLE",
+      "ADDRESS": "REVIEW",
+      "TEFCA_ALIGNM": "PASS",
+      "PROVIDER_ORG": "NOT_FOUND"
+    },
+    "category": "PROVIDER_ORGANIZATION",
+    "medicare": "LIKELY",
+    "npi": true,
+    "active": "1",
+    "applicability": {
+      "IDENTITY": "REQUIRED",
+      "MEDICARE_ENROLLMENT": "REQUIRED",
+      "EXCLUSION_REVOCATION": "REQUIRED",
+      "ADDRESS": "REQUIRED",
+      "TEFCA_ALIGNMENT": "REQUIRED",
+      "PROVIDER_ORG_RELATIONSHIP": "CORROBORATIVE"
+    }
+  },
+  {
+    "label": "Participant WITH NPI",
+    "oid": "1.2.840.114350.1.13.10.2.7.3.688884.100",
+    "name": "Buffalo Medical Group",
+    "dims": {
+      "IDENTITY": "PASS",
+      "MEDICARE_ENR": "PASS",
+      "EXCLUSION_RE": "UNAVAILABLE",
+      "ADDRESS": "REVIEW",
+      "TEFCA_ALIGNM": "PASS",
+      "PROVIDER_ORG": "NOT_APPLICABLE"
+    },
+    "category": "UNKNOWN",
+    "medicare": "LIKELY",
+    "npi": true,
+    "active": "1",
+    "applicability": {
+      "IDENTITY": "REQUIRED",
+      "MEDICARE_ENROLLMENT": "REQUIRED",
+      "EXCLUSION_REVOCATION": "REQUIRED",
+      "ADDRESS": "REQUIRED",
+      "TEFCA_ALIGNMENT": "REQUIRED",
+      "PROVIDER_ORG_RELATIONSHIP": "NOT_APPLICABLE"
+    }
+  },
+  {
+    "label": "Subparticipant WITH NPI",
+    "oid": "2.16.840.1.113883.3.564.26879",
+    "name": "SC - CAROLINA ORTHOPAEDIC AND NEUROSURGI",
+    "dims": {
+      "IDENTITY": "PASS",
+      "MEDICARE_ENR": "PASS",
+      "EXCLUSION_RE": "UNAVAILABLE",
+      "ADDRESS": "REVIEW",
+      "TEFCA_ALIGNM": "PASS",
+      "PROVIDER_ORG": "PASS"
+    },
+    "category": "UNKNOWN",
+    "medicare": "LIKELY",
+    "npi": true,
+    "active": "1",
+    "applicability": {
+      "IDENTITY": "REQUIRED",
+      "MEDICARE_ENROLLMENT": "REQUIRED",
+      "EXCLUSION_REVOCATION": "REQUIRED",
+      "ADDRESS": "REQUIRED",
+      "TEFCA_ALIGNMENT": "REQUIRED",
+      "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+    }
+  },
+  {
+    "label": "Subparticipant WITH NPI",
+    "oid": "2.16.840.1.113883.3.564.6790",
+    "name": "PA - Fountain Medical Associates, PC",
+    "dims": {
+      "IDENTITY": "PASS",
+      "MEDICARE_ENR": "PASS",
+      "EXCLUSION_RE": "UNAVAILABLE",
+      "ADDRESS": "PASS",
+      "TEFCA_ALIGNM": "PASS",
+      "PROVIDER_ORG": "PASS"
+    },
+    "category": "UNKNOWN",
+    "medicare": "LIKELY",
+    "npi": true,
+    "active": "1",
+    "applicability": {
+      "IDENTITY": "REQUIRED",
+      "MEDICARE_ENROLLMENT": "REQUIRED",
+      "EXCLUSION_REVOCATION": "REQUIRED",
+      "ADDRESS": "REQUIRED",
+      "TEFCA_ALIGNMENT": "REQUIRED",
+      "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+    }
+  },
+  {
+    "label": "Subparticipant WITH NPI",
+    "oid": "1.2.840.114350.1.13.105.2.7.3.688884.100.69476",
+    "name": "ALOHA FOOT CENTERS SA",
+    "dims": {
+      "IDENTITY": "PASS",
+      "MEDICARE_ENR": "PASS",
+      "EXCLUSION_RE": "UNAVAILABLE",
+      "ADDRESS": "REVIEW",
+      "TEFCA_ALIGNM": "PASS",
+      "PROVIDER_ORG": "PASS"
+    },
+    "category": "UNKNOWN",
+    "medicare": "LIKELY",
+    "npi": true,
+    "active": "1",
+    "applicability": {
+      "IDENTITY": "REQUIRED",
+      "MEDICARE_ENROLLMENT": "REQUIRED",
+      "EXCLUSION_REVOCATION": "REQUIRED",
+      "ADDRESS": "REQUIRED",
+      "TEFCA_ALIGNMENT": "REQUIRED",
+      "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+    }
+  },
+  {
+    "label": "Subparticipant NO NPI",
+    "oid": "1.2.840.114350.1.13.105.2.7.3.688884.100.74009",
+    "name": "COREY C CHINN MD LLC",
+    "dims": {
+      "IDENTITY": "REVIEW",
+      "MEDICARE_ENR": "NOT_APPLICABLE",
+      "EXCLUSION_RE": "UNAVAILABLE",
+      "ADDRESS": "NOT_FOUND",
+      "TEFCA_ALIGNM": "PASS",
+      "PROVIDER_ORG": "PASS"
+    },
+    "category": "UNKNOWN",
+    "medicare": "UNDETERMINED",
+    "npi": false,
+    "active": "1",
+    "applicability": {
+      "IDENTITY": "REQUIRED",
+      "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+      "EXCLUSION_REVOCATION": "REQUIRED",
+      "ADDRESS": "REQUIRED",
+      "TEFCA_ALIGNMENT": "REQUIRED",
+      "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+    }
+  },
+  {
+    "label": "Subparticipant NO NPI",
+    "oid": "1.2.840.114350.1.13.104.2.7.3.688884.100.26451",
+    "name": "UT Health Rio Grande Valley",
+    "dims": {
+      "IDENTITY": "REVIEW",
+      "MEDICARE_ENR": "NOT_APPLICABLE",
+      "EXCLUSION_RE": "UNAVAILABLE",
+      "ADDRESS": "NOT_FOUND",
+      "TEFCA_ALIGNM": "PASS",
+      "PROVIDER_ORG": "PASS"
+    },
+    "category": "UNKNOWN",
+    "medicare": "UNDETERMINED",
+    "npi": false,
+    "active": "1",
+    "applicability": {
+      "IDENTITY": "REQUIRED",
+      "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+      "EXCLUSION_REVOCATION": "REQUIRED",
+      "ADDRESS": "REQUIRED",
+      "TEFCA_ALIGNMENT": "REQUIRED",
+      "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+    }
+  },
+  {
+    "label": "INACTIVE (active=0)",
+    "oid": "1.2.840.114350.1.13.105.2.7.3.688884.100.8371",
+    "name": "Hawaii Pacific Health - Specialty Pharmacy",
+    "dims": {
+      "IDENTITY": "REVIEW",
+      "MEDICARE_ENR": "NOT_APPLICABLE",
+      "EXCLUSION_RE": "UNAVAILABLE",
+      "ADDRESS": "NOT_FOUND",
+      "TEFCA_ALIGNM": "REVIEW",
+      "PROVIDER_ORG": "PASS"
+    },
+    "category": "UNKNOWN",
+    "medicare": "UNDETERMINED",
+    "npi": false,
+    "active": "0",
+    "applicability": {
+      "IDENTITY": "REQUIRED",
+      "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+      "EXCLUSION_REVOCATION": "REQUIRED",
+      "ADDRESS": "REQUIRED",
+      "TEFCA_ALIGNMENT": "REQUIRED",
+      "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+    }
+  },
+  {
+    "label": "EMBEDDED TAB defect",
+    "oid": "2.16.840.1.113883.3.9960.3.15.1.87",
+    "name": "TortFlowAI, Inc",
+    "dims": {
+      "IDENTITY": "REVIEW",
+      "MEDICARE_ENR": "NOT_APPLICABLE",
+      "EXCLUSION_RE": "UNAVAILABLE",
+      "ADDRESS": "NOT_FOUND",
+      "TEFCA_ALIGNM": "PASS",
+      "PROVIDER_ORG": "NOT_APPLICABLE"
+    },
+    "category": "UNKNOWN",
+    "medicare": "UNDETERMINED",
+    "npi": false,
+    "active": "1",
+    "applicability": {
+      "IDENTITY": "REQUIRED",
+      "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+      "EXCLUSION_REVOCATION": "REQUIRED",
+      "ADDRESS": "REQUIRED",
+      "TEFCA_ALIGNMENT": "REQUIRED",
+      "PROVIDER_ORG_RELATIONSHIP": "NOT_APPLICABLE"
+    }
+  },
+  {
+    "label": "NO purposesofuse",
+    "oid": "1.2.840.114350.1.13.105.2.7.3.688884.100.74009",
+    "name": "COREY C CHINN MD LLC",
+    "dims": {
+      "IDENTITY": "REVIEW",
+      "MEDICARE_ENR": "NOT_APPLICABLE",
+      "EXCLUSION_RE": "UNAVAILABLE",
+      "ADDRESS": "NOT_FOUND",
+      "TEFCA_ALIGNM": "PASS",
+      "PROVIDER_ORG": "PASS"
+    },
+    "category": "UNKNOWN",
+    "medicare": "UNDETERMINED",
+    "npi": false,
+    "active": "1",
+    "applicability": {
+      "IDENTITY": "REQUIRED",
+      "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+      "EXCLUSION_REVOCATION": "REQUIRED",
+      "ADDRESS": "REQUIRED",
+      "TEFCA_ALIGNMENT": "REQUIRED",
+      "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+    }
+  }
+]

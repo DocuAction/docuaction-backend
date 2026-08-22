@@ -749,12 +749,41 @@ BUCKET_4_ENTITIES = [
 # Combined dataset
 # ─────────────────────────────────────────────────────────────────
 
-ALL_MOCK_ENTITIES = (
+BUCKET_ENTITIES = (
     BUCKET_1_ENTITIES +
     BUCKET_2_ENTITIES +
     BUCKET_3_ENTITIES +
     BUCKET_4_ENTITIES
 )
+
+# ─────────────────────────────────────────────────────────────────
+# RCE enrichment
+#
+# The 30 bucket fixtures gain an `_rce` block carrying all 41 delivered RCE
+# fields, and an 11-entity RCE-profile cohort is APPENDED covering the record
+# shapes the buckets cannot express: no NPI, inactive, encoding corruption, test
+# artefact.
+#
+# Enrichment adds `_rce` and nothing else. No existing entity's `identifier[]`,
+# `name`, `active` or `_expected_bucket` changes — the bucket fixtures stay
+# exactly as the validation, QA and evidence suites pin them.
+#
+# Every identifier and contact value is SYNTHETIC and constructed so it cannot
+# collide with a real one. See app/Tefca/rce_mock_enrichment.py.
+# ─────────────────────────────────────────────────────────────────
+
+from app.Tefca.rce_mock_enrichment import (  # noqa: E402
+    build_rce_profile_cohort,
+    enrich_entities,
+)
+
+enrich_entities(BUCKET_ENTITIES)
+
+#: The appended cohort. Kept separately addressable so a test can target the
+#: RCE-shaped records without filtering the whole population.
+RCE_PROFILE_ENTITIES = build_rce_profile_cohort()
+
+ALL_MOCK_ENTITIES = BUCKET_ENTITIES + RCE_PROFILE_ENTITIES
 
 MOCK_ENTITY_INDEX = {e["id"]: e for e in ALL_MOCK_ENTITIES}
 
@@ -764,6 +793,7 @@ MOCK_STATS = {
     "bucket_2": len(BUCKET_2_ENTITIES),
     "bucket_3": len(BUCKET_3_ENTITIES),
     "bucket_4": len(BUCKET_4_ENTITIES),
+    "rce_profile": len(RCE_PROFILE_ENTITIES),
     "qhins_represented": [
         "eHealth Exchange", "CommonWell Health Alliance", "MedAllies",
         "Health Gorilla", "Surescripts", "KONZA National Network", "Kno2"
