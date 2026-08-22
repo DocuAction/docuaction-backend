@@ -43,6 +43,27 @@ logger = logging.getLogger(__name__)
 #: Tables that must never accept UPDATE or DELETE from the application role.
 IMMUTABLE_TABLES = ("rce_source_intakes", "rce_source_records")
 
+#: The role that should OWN Area 1. Must not be a role the application can
+#: authenticate as — an owner can re-grant to itself, so leaving ownership with
+#: the application role makes any revoke self-reversible.
+OWNER_ROLE = "docuaction_owner"
+
+#: The ONLY columns on rce_source_records the application may update.
+#:
+#: Fourteen of the sixteen columns are immutable evidence; these two are
+#: workflow state, written once by `promotion.promote_delivery`. They are the
+#: entire reason a blanket REVOKE UPDATE would break the pipeline, and the
+#: reason a column-level grant is the right instrument.
+MUTABLE_WORKFLOW_COLUMNS = ("promotion_status", "canonical_entity_id")
+
+#: Columns on rce_source_records that carry delivered evidence. The application
+#: must hold no UPDATE privilege on any of them.
+IMMUTABLE_EVIDENCE_COLUMNS = (
+    "id", "source_intake_id", "line_number", "raw_line", "parsed",
+    "record_sha256", "source_rce_id", "tefcaid", "hcid", "npi", "field_count",
+    "parse_status", "parse_note", "created_at",
+)
+
 
 class Area1ImmutabilityViolation(RuntimeError):
     """An attempt was made to modify Area 1. Refused and audited."""
@@ -58,9 +79,34 @@ def immutability_grants_sql(role: str = "docuaction") -> List[str]:
     verifier checks for.
     """
     statements: List[str] = []
+
+    # OWNERSHIP MUST LEAVE THE APPLICATION ROLE FIRST, OR THE REVOKE IS A
+    # SUGGESTION. `docuaction` currently OWNS both Area 1 tables, and a
+    # PostgreSQL owner can re-GRANT to itself at any time; ALTER and DROP are
+    # inherent to ownership and cannot be revoked at all. Without this step the
+    # revoke guards against an accidental code path but not against intent.
+    statements.append(
+        f"-- Prerequisite: {OWNER_ROLE} must exist and must NOT be a role the "
+        f"application can authenticate as.")
     for table in IMMUTABLE_TABLES:
-        statements.append(f"REVOKE UPDATE, DELETE ON {table} FROM {role};")
+        statements.append(f"ALTER TABLE {table} OWNER TO {OWNER_ROLE};")
+
+    for table in IMMUTABLE_TABLES:
+        statements.append(f"REVOKE UPDATE, DELETE, TRUNCATE ON {table} FROM {role};")
         statements.append(f"GRANT SELECT, INSERT ON {table} TO {role};")
+
+    # COLUMN-LEVEL GRANT — the part that makes this safe to apply today.
+    #
+    # A blanket REVOKE UPDATE on rce_source_records BREAKS PROMOTION:
+    # `promotion.promote_delivery` legitimately writes `promotion_status` and
+    # `canonical_entity_id` after the entities are already committed, so the
+    # revoke would fail mid-transaction and leave Area 1 markers out of step
+    # with Area 2. PostgreSQL evaluates privileges on the COLUMNS an UPDATE
+    # names, so granting exactly those two keeps promotion working while every
+    # evidence column becomes unwritable by the application.
+    columns = ", ".join(MUTABLE_WORKFLOW_COLUMNS)
+    statements.append(
+        f"GRANT UPDATE ({columns}) ON rce_source_records TO {role};")
     return statements
 
 
@@ -84,7 +130,37 @@ async def verify_immutable(db, role: Optional[str] = None) -> Dict[str, Any]:
                 "  has_table_privilege(:role, :tbl, 'INSERT') AS can_insert"
             ), {"role": current, "tbl": table})).mappings().first()
             entry = dict(row) if row else {}
-            entry["immutable"] = not (entry.get("can_update") or entry.get("can_delete"))
+
+            # COLUMN-LEVEL PROBE — without this the table-level answer is
+            # misleading. `has_table_privilege(..., 'UPDATE')` returns TRUE
+            # whenever the role can update ANY column, so the correct hardened
+            # configuration (UPDATE granted on promotion_status and
+            # canonical_entity_id only) would be reported as unenforced and be
+            # indistinguishable from no enforcement at all.
+            if table == "rce_source_records":
+                writable = []
+                for column in IMMUTABLE_EVIDENCE_COLUMNS + MUTABLE_WORKFLOW_COLUMNS:
+                    can = (await db.execute(text(
+                        "SELECT has_column_privilege(:role, :tbl, :col, 'UPDATE') AS w"
+                    ), {"role": current, "tbl": table, "col": column})).scalar()
+                    if can:
+                        writable.append(column)
+                entry["updatable_columns"] = writable
+                evidence_writable = [c for c in writable
+                                     if c in IMMUTABLE_EVIDENCE_COLUMNS]
+                entry["evidence_columns_writable"] = evidence_writable
+                entry["workflow_columns_writable"] = [
+                    c for c in writable if c in MUTABLE_WORKFLOW_COLUMNS]
+                # Immutable means: no EVIDENCE column is writable and the table
+                # cannot be deleted from. Workflow columns being writable is the
+                # intended state, not a violation.
+                entry["immutable"] = not (evidence_writable or entry.get("can_delete"))
+                entry["workflow_writable_as_designed"] = (
+                    set(entry["workflow_columns_writable"]) == set(MUTABLE_WORKFLOW_COLUMNS))
+            else:
+                entry["immutable"] = not (entry.get("can_update")
+                                          or entry.get("can_delete"))
+
             result["tables"][table] = entry
             if not entry["immutable"]:
                 result["enforced"] = False

@@ -538,13 +538,43 @@ class TestImmutabilityContract:
                 assert not (methods & {"PUT", "PATCH", "DELETE"}), path
 
     def test_immutability_grants_cover_both_area1_tables(self):
+        """Both tables lose UPDATE, DELETE and TRUNCATE from the app role.
+
+        TRUNCATE was added in B1/Phase 4: it bypasses row-level protection
+        entirely, so revoking UPDATE and DELETE while leaving it granted would
+        protect every row individually and none of them collectively. The
+        assertion checks the privileges rather than an exact string, so
+        strengthening the revoke does not have to break the test.
+        """
         from app.tefca_registry.rce.repository import (
             IMMUTABLE_TABLES, immutability_grants_sql)
 
-        statements = " ".join(immutability_grants_sql("appuser"))
+        statements = immutability_grants_sql("appuser")
         for table in IMMUTABLE_TABLES:
-            assert f"REVOKE UPDATE, DELETE ON {table}" in statements
+            revoke = next((s for s in statements
+                           if s.startswith("REVOKE") and f" ON {table} " in s), None)
+            assert revoke is not None, f"no REVOKE emitted for {table}"
+            for privilege in ("UPDATE", "DELETE", "TRUNCATE"):
+                assert privilege in revoke, f"{privilege} not revoked on {table}"
+            assert "FROM appuser" in revoke
         assert set(IMMUTABLE_TABLES) == {"rce_source_intakes", "rce_source_records"}
+
+    def test_grants_keep_the_promotion_write_working(self):
+        """A blanket REVOKE UPDATE would break `promote_delivery` mid-transaction.
+
+        Promotion writes promotion_status and canonical_entity_id on 23,562 rows
+        AFTER the entities, identifiers and contacts are already committed. The
+        column-level grant is what lets Area 1 be hardened without that failure.
+        """
+        from app.tefca_registry.rce.repository import (
+            IMMUTABLE_EVIDENCE_COLUMNS, MUTABLE_WORKFLOW_COLUMNS,
+            immutability_grants_sql)
+
+        grant = next(s for s in immutability_grants_sql("appuser")
+                     if s.startswith("GRANT UPDATE ("))
+        granted = {c.strip() for c in grant.split("(", 1)[1].split(")", 1)[0].split(",")}
+        assert granted == set(MUTABLE_WORKFLOW_COLUMNS)
+        assert not (granted & set(IMMUTABLE_EVIDENCE_COLUMNS))
 
 
 # ═══ P2 — duplicate deliveries ═══════════════════════════════════════════════
