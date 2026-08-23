@@ -54,3 +54,7 @@ prod-deploy-seed-guard.zip
 
 # Microsoft Word lock files (created while a .docx is open; never wanted in git).
 ~$*
+
+# Phase 6 authoritative bulk artefacts — 1.7 GB of CMS/NPPES/OIG downloads.
+# Retained locally for reproducibility (hashes recorded in the DB), never committed.
+var/authoritative/
