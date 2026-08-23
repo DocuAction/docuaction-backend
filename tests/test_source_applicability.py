@@ -213,3 +213,56 @@ class TestDeterminism:
         """A source left undecided would silently never be asked."""
         matrix = build_matrix(entity(NPI=""))
         assert set(matrix.decisions) == {s.value for s in Source}
+
+
+class TestRealRceShapeCompatibility:
+    """`partOf` arrives as two different types, and both must work.
+
+    The FHIR fixture carries `partOf = {"reference": ...}`; the real RCE
+    delivery carries a bare OID string. `build_profile` assumed the dict and
+    raised AttributeError on the string. It never fired in production because
+    every caller nests the RCE fields under `_rce` via
+    `entity_resolution.registry_entity_to_evidence_shape` — but a caller handing
+    over a raw parsed record crashed the applicability engine, which is how this
+    was found. These fixtures are the two shapes as they actually occur.
+    """
+
+    #: A real value from rce_source_records.parsed — an OID, not a reference.
+    REAL_RCE_OID = "2.16.840.1.113883.4.391.1000"
+
+    def test_a_raw_rce_record_with_a_string_part_of_does_not_raise(self):
+        from app.Tefca.applicability import build_profile
+        raw = {"NPI": "1234567893", "sequoiaorgtype": "Subparticipant",
+               "partOf": self.REAL_RCE_OID, "name": "ACME CLINIC"}
+        profile = build_profile(raw)          # must not raise
+        assert profile is not None
+
+    def test_the_string_shape_is_read_as_a_parent_pointer(self):
+        from app.Tefca.applicability import _fhir_part_of
+        assert _fhir_part_of({"partOf": self.REAL_RCE_OID}) == self.REAL_RCE_OID
+
+    def test_the_fhir_dict_shape_still_works(self):
+        from app.Tefca.applicability import _fhir_part_of
+        assert _fhir_part_of(
+            {"partOf": {"reference": "Organization/123"}}) == "Organization/123"
+
+    @pytest.mark.parametrize("value", [None, "", "   ", {}, {"reference": ""},
+                                       {"reference": None}, 42, []])
+    def test_no_relationship_is_invented_from_an_empty_or_odd_value(self, value):
+        from app.Tefca.applicability import _fhir_part_of
+        assert _fhir_part_of({"partOf": value}) is None
+
+    def test_the_canonical_caller_is_unaffected(self):
+        """`_rce` remains the authority; the fallback only fills a gap."""
+        from app.Tefca.applicability import _fhir_part_of
+        canonical = {"_rce": {"partOf": "RCE-PARENT"}, "name": "X"}
+        assert _fhir_part_of(canonical) is None      # nothing at top level
+        matrix = build_matrix(canonical)
+        assert matrix.profile is not None
+
+    def test_the_matrix_runs_over_a_raw_parsed_record(self):
+        """The exact call that used to raise."""
+        raw = {"NPI": "", "sequoiaorgtype": "Participant",
+               "partOf": self.REAL_RCE_OID, "name": "STATE HIE"}
+        matrix = build_matrix(raw)
+        assert set(matrix.decisions) == {s.value for s in Source}

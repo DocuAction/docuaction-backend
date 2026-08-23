@@ -253,6 +253,33 @@ def available_npi(entity: Dict[str, Any],
     return str(returned).strip() or None if returned else None
 
 
+def _fhir_part_of(entity: Dict[str, Any]) -> Optional[str]:
+    """The parent pointer carried OUTSIDE the `_rce` block, whatever its shape.
+
+    Two real shapes reach this module and they are not the same type:
+
+        FHIR fixture   partOf = {"reference": "Organization/123"}
+        RCE delivery   partOf = "2.16.840.1.113883.4.391.1000"   (a bare OID)
+
+    The original code did `(entity.get("partOf") or {}).get("reference")`, which
+    raises AttributeError on the string. It never fired in production because
+    every caller goes through `entity_resolution.registry_entity_to_evidence_shape`,
+    which nests the RCE fields under `_rce` and leaves the top-level `partOf`
+    absent — but a caller handing over a raw parsed record crashed the
+    applicability engine, which is how this was found.
+
+    Returns the reference either way, and None for anything else. A blank string
+    stays falsy, so nothing here invents a relationship that was not delivered.
+    """
+    part_of = entity.get("partOf")
+    if isinstance(part_of, dict):
+        reference = part_of.get("reference")
+        return reference.strip() or None if isinstance(reference, str) else None
+    if isinstance(part_of, str):
+        return part_of.strip() or None
+    return None
+
+
 def classify_entity(
     entity: Dict[str, Any],
     nppes_data: Optional[Dict[str, Any]] = None,
@@ -435,10 +462,7 @@ def build_profile(
     # is deliberately NOT counted here — it names the QHIN, which every entity
     # has, so treating it as "a relationship was expressed" would make the
     # condition always true and the distinction meaningless.
-    has_parent = bool(
-        rce_fields.part_of(entity)
-        or (entity.get("partOf") or {}).get("reference")
-    )
+    has_parent = bool(rce_fields.part_of(entity) or _fhir_part_of(entity))
     if category in (EntityCategory.INDIVIDUAL_PROVIDER, EntityCategory.PROVIDER_ORGANIZATION):
         dims[Dimension.D6_PROVIDER_ORG_RELATIONSHIP.value] = REQ if has_parent else COR
         why[Dimension.D6_PROVIDER_ORG_RELATIONSHIP.value] = (
