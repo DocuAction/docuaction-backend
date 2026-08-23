@@ -28,8 +28,19 @@ documented. That is a contracts question, and no amount of engineering closes it
 | `templates/07_Evidence_Appendix.md` | COR-FACING DRAFT | Traceability component |
 | `templates/08_Closeout_Report.md` | COR-FACING DRAFT | Task 6. Skeleton by design |
 | `templates/09_Executive_Briefing.md` | COR-FACING DRAFT | Briefing format |
+| `TEFCA_ARC_Analyst_SOP_DRAFT.md` | INTERNAL OPERATIONS | 12-step procedure, five worked examples |
+| `TEFCA_ARC_QA_SOP_DRAFT.md` | INTERNAL OPERATIONS | Maps one-to-one onto `review_decision_events` |
+| `TEFCA_ARC_Operations_Playbook_DRAFT.md` | INTERNAL OPERATIONS | Daily / per-delivery / weekly / monthly + 9 incident procedures |
+| `TEFCA_ARC_Requirements_Traceability_Matrix_DRAFT.md` | COR-FACING DRAFT | 70 rows. No requirement labelled COMPLIANT |
+| `TEFCA_ARC_Production_Readiness_Checklist.md` | INTERNAL ENGINEERING | 33 items. One production blocker: `docuaction_owner` |
+| `TEFCA_ARC_Operating_Runbook_DRAFT.md` | INTERNAL OPERATIONS | Index to everything else |
 | `../onc_arc_deliverable_crosswalk.md` | INTERNAL ENGINEERING | Requirement-to-capability mapping |
+| `../phase8_learning_center_inventory.md` | INTERNAL ENGINEERING | What was reused vs built |
 | `../phase6_evidence_correction.md` | INTERNAL ENGINEERING | Why two evidence versions exist |
+
+The Learning Center itself is code, not a document: `app/core/learning/`
+(reusable framework) and `app/Tefca/learning_content.py` (ARC content —
+7 modules, 26 glossary terms, 8 contextual-help surfaces).
 
 Generated data products live in `var/authoritative/` and are gitignored:
 `arc_population_report.json` (the internal draft population report),
