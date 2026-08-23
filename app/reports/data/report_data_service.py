@@ -46,7 +46,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_ as sa_or, select
 
 logger = logging.getLogger(__name__)
 
@@ -239,12 +239,31 @@ class ReportDataService:
         generation stays exactly as it was and a report issued against it stays
         explicable.
         """
+        from app.Tefca.evidence_version import (
+            current_rule_version, historical_rule_versions)
         from app.Tefca.models import TEFCADimensionEvidence
 
         stmt = select(TEFCADimensionEvidence)
         if review_cycle_id:
             stmt = stmt.where(
                 TEFCADimensionEvidence.review_cycle_id == review_cycle_id)
+        # SUPERSEDED VERSIONS ARE EXCLUDED HERE, ONCE.
+        #
+        # Phase 6 ran, was found defective, and was corrected as a new
+        # rule_version. Both sets live in this append-only table. The de-dup
+        # below keys on (entity, dimension) and breaks ties on
+        # `generation_timestamp` — which the population runs leave NULL, so
+        # without this filter the tie-break compares "" to "" and the surviving
+        # row is whichever the database happened to return first. That is not
+        # double-counting; it is worse, because the number changes between runs
+        # for no visible reason.
+        #
+        # Rows with no rule_version predate versioning and are left alone.
+        superseded = historical_rule_versions()
+        if superseded:
+            stmt = stmt.where(sa_or(
+                TEFCADimensionEvidence.rule_version.is_(None),
+                TEFCADimensionEvidence.rule_version == current_rule_version()))
         try:
             rows = list((await self.db.execute(stmt)).scalars().all())
         except Exception as exc:  # noqa: BLE001

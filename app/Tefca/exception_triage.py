@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional
 
 #: Bump when a triage rule changes, so a queue item can be traced to the rules
 #: that put it there rather than to whatever the file says today.
-TRIAGE_VERSION = "1.0.0"
+TRIAGE_VERSION = "1.1.0"
 
 
 class Triage(str, Enum):
@@ -83,6 +83,24 @@ def triage(observation: Dict[str, Any]) -> TriageDecision:
     source = (observation.get("source") or "").strip()
     state = (observation.get("observation_result") or "").strip()
     applicability = (observation.get("dimension_applicability") or "").strip()
+    dimension = (observation.get("evidence_dimension") or "").strip()
+    comparison = (observation.get("dimension_disposition") or "").strip()
+
+    # 0. An address disagreement is a FACT the comparison established, and it is
+    #    not yet a review requirement. The RCE delivers a registered address;
+    #    NPPES and PPEF publish practice locations. Those are different kinds of
+    #    address, and no approved methodology says how large a difference between
+    #    them has to be before it means anything. Queueing 8,585 of them would
+    #    manufacture that threshold at 'any difference at all'; suppressing them
+    #    would manufacture it at 'never'. Both are methodology decisions, so the
+    #    condition is named and counted instead.
+    if "ADDRESS" in dimension and comparison == "CONFLICT":
+        return TriageDecision(
+            Triage.METHODOLOGY_PENDING,
+            f"{source} publishes an address that differs from the delivered one "
+            f"after normalisation. Whether a registered-address vs "
+            f"practice-location difference is material is not settled.",
+            blocked_by="D4_ADDRESS_MATERIALITY", priority=0)
 
     # 1. Applicability that nobody has settled. Checked FIRST: an unresolved
     #    applicability makes every downstream question premature, including
@@ -115,7 +133,13 @@ def triage(observation: Dict[str, Any]) -> TriageDecision:
             priority=90)
 
     # 4. Identity source could not resolve, or resolved to more than one record.
-    if source in _IDENTITY_SOURCES and state in ("NO_MATCH_OBSERVED", "MULTIPLE_MATCHES"):
+    #    Scoped to the IDENTITY dimension on purpose. NPPES also contributes an
+    #    ADDRESS observation, and a NO_MATCH there means "no address to compare",
+    #    not "this NPI does not exist" — treating the two alike would queue
+    #    thousands of entities as identity anomalies on the strength of a missing
+    #    address field.
+    if (source in _IDENTITY_SOURCES and "IDENTITY" in dimension
+            and state in ("NO_MATCH_OBSERVED", "MULTIPLE_MATCHES")):
         return TriageDecision(
             Triage.READY_FOR_ANALYST,
             f"NPPES is the identity authority for a delivered NPI and returned "

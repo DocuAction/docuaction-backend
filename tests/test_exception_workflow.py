@@ -26,9 +26,12 @@ from app.tefca_registry.qa_gate import is_reportable, history, effective_determi
 E = reg.ReviewDecisionEvent
 
 
-def _obs(source, state, applicability="REQUIRED"):
+def _obs(source, state, applicability="REQUIRED", dimension="IDENTITY",
+         comparison=None):
     return {"source": source, "observation_result": state,
-            "dimension_applicability": applicability}
+            "dimension_applicability": applicability,
+            "evidence_dimension": dimension,
+            "dimension_disposition": comparison}
 
 
 def _event(seq, event_type, actor, *, qa_action=None, determination=None,
@@ -68,7 +71,28 @@ class TestTriage:
     def test_identity_source_that_cannot_resolve_reaches_an_analyst(self):
         for state in (ObservationState.NO_MATCH_OBSERVED.value,
                       ObservationState.MULTIPLE_MATCHES.value):
-            assert triage(_obs("NPPES", state)).disposition is Triage.READY_FOR_ANALYST
+            d = triage(_obs("NPPES", state, dimension="IDENTITY"))
+            assert d.disposition is Triage.READY_FOR_ANALYST
+
+    def test_a_missing_nppes_address_is_not_an_identity_anomaly(self):
+        """NPPES feeds two dimensions; only the identity one signals an anomaly."""
+        d = triage(_obs("NPPES", ObservationState.NO_MATCH_OBSERVED.value,
+                        dimension="ADDRESS"))
+        assert d.disposition is not Triage.READY_FOR_ANALYST
+
+    def test_an_address_conflict_is_methodology_pending_not_analyst_work(self):
+        """No approved rule says how large an address difference must be."""
+        for src in ("NPPES", "CMS_PPEF_PRACTICE_LOCATION"):
+            d = triage(_obs(src, ObservationState.MATCH_OBSERVED.value,
+                            dimension="ADDRESS", comparison="CONFLICT"))
+            assert d.disposition is Triage.METHODOLOGY_PENDING
+            assert d.blocked_by == "D4_ADDRESS_MATERIALITY"
+
+    def test_an_address_that_agrees_is_not_queued(self):
+        for verdict in ("EXACT_MATCH", "NORMALIZED_MATCH"):
+            d = triage(_obs("NPPES", ObservationState.MATCH_OBSERVED.value,
+                            dimension="ADDRESS", comparison=verdict))
+            assert d.disposition is Triage.INFORMATIONAL_ONLY
 
     def test_a_missing_key_is_our_limitation_not_the_entitys_problem(self):
         d = triage(_obs("NPPES", ObservationState.INSUFFICIENT_IDENTIFIER.value))
@@ -255,3 +279,123 @@ class TestWorkItemRefusals:
             assert "why it exists" in str(exc)
         else:
             raise AssertionError("a work item with no stated reason must be refused")
+
+
+# ── evidence versioning: the correction must not double-count ────────────────
+
+class TestEvidenceVersionSelector:
+    """Phase 6 ran, was found defective, and was corrected as a NEW version.
+
+    Both versions are in the table. These assert that "current" means exactly
+    one of them and that the other stays reachable.
+    """
+
+    def test_current_is_the_newest_approved_version(self):
+        from app.Tefca.evidence_version import (
+            APPROVED_RULE_VERSIONS, current_rule_version)
+        assert current_rule_version() == APPROVED_RULE_VERSIONS[-1]
+        assert current_rule_version() == "phase6-bulk-1.1.0"
+
+    def test_the_original_run_is_historical_not_deleted(self):
+        from app.Tefca.evidence_version import (
+            APPROVED_RULE_VERSIONS, historical_rule_versions)
+        assert "phase6-bulk-1.0.0" in APPROVED_RULE_VERSIONS
+        assert "phase6-bulk-1.0.0" in historical_rule_versions()
+
+    def test_current_and_historical_are_disjoint(self):
+        """The whole point: a query cannot land in both sets and double-count."""
+        from app.Tefca.evidence_version import (
+            current_rule_version, historical_rule_versions)
+        assert current_rule_version() not in historical_rule_versions()
+
+    def test_every_approved_version_is_unique(self):
+        from app.Tefca.evidence_version import APPROVED_RULE_VERSIONS
+        assert len(APPROVED_RULE_VERSIONS) == len(set(APPROVED_RULE_VERSIONS))
+
+    def test_current_filter_pins_one_version(self):
+        import sqlalchemy as sa
+        from app.Tefca.evidence_version import current_filter, current_rule_version
+        col = sa.column("rule_version")
+        rendered = str(current_filter(col).compile(
+            compile_kwargs={"literal_binds": True}))
+        assert current_rule_version() in rendered
+        assert "phase6-bulk-1.0.0" not in rendered
+
+    def test_historical_filter_refuses_an_unknown_version(self):
+        """A typo must fail loudly, not silently select nothing."""
+        import sqlalchemy as sa
+        from app.Tefca.evidence_version import historical_filter
+        try:
+            historical_filter(sa.column("rule_version"), "phase6-bulk-9.9.9")
+        except ValueError as exc:
+            assert "not an approved rule version" in str(exc)
+        else:
+            raise AssertionError("an unknown rule version must be refused")
+
+    def test_historical_filter_accepts_the_original_run(self):
+        import sqlalchemy as sa
+        from app.Tefca.evidence_version import historical_filter
+        rendered = str(historical_filter(sa.column("rule_version"),
+                                         "phase6-bulk-1.0.0").compile(
+            compile_kwargs={"literal_binds": True}))
+        assert "phase6-bulk-1.0.0" in rendered
+
+
+class TestAddressComparison:
+    """A formatting difference is not a discrepancy, and absence is not conflict."""
+
+    def test_punctuation_and_case_do_not_create_a_conflict(self):
+        from app.Tefca.address_comparison import AddressResult, compare_to_nppes
+        rce = {"address_line": "123 Main St.", "address_city": "Boston",
+               "address_state": "MA", "address_postalCode": "02118"}
+        nppes = {"Provider First Line Business Practice Location Address": "123 MAIN STREET",
+                 "Provider Business Practice Location Address City Name": "BOSTON",
+                 "Provider Business Practice Location Address State Name": "MA"}
+        assert compare_to_nppes(rce, nppes).result is AddressResult.NORMALIZED_MATCH
+
+    def test_a_stripped_leading_zero_zip_is_not_a_conflict(self):
+        """6.9% of delivered ZIPs lost a leading zero upstream."""
+        from app.Tefca.address_comparison import norm_zip5
+        assert norm_zip5("2718") == norm_zip5("02718") == "02718"
+
+    def test_a_genuinely_different_street_is_a_conflict(self):
+        from app.Tefca.address_comparison import AddressResult, compare_to_nppes
+        rce = {"address_line": "123 Main St", "address_city": "Boston",
+               "address_state": "MA"}
+        nppes = {"Provider First Line Business Practice Location Address": "900 Elm Ave",
+                 "Provider Business Practice Location Address City Name": "Boston",
+                 "Provider Business Practice Location Address State Name": "MA"}
+        cmp_ = compare_to_nppes(rce, nppes)
+        assert cmp_.result is AddressResult.CONFLICT
+        assert "line" in cmp_.field_conflicts
+
+    def test_a_missing_source_record_is_unavailable_not_conflict(self):
+        from app.Tefca.address_comparison import AddressResult, compare_to_nppes
+        assert compare_to_nppes({"address_line": "1 A St"}, None).result \
+            is AddressResult.SOURCE_UNAVAILABLE
+
+    def test_ppef_can_never_claim_an_exact_match(self):
+        """PPEF publishes no street line; asserting EXACT would claim agreement
+        on a field the source never supplied."""
+        from app.Tefca.address_comparison import AddressResult, compare_to_ppef
+        rce = {"address_city": "Boston", "address_state": "MA",
+               "address_postalCode": "02118"}
+        cmp_ = compare_to_ppef(rce, [{"CITY_NAME": "BOSTON", "STATE_CD": "MA",
+                                      "ZIP_CD": "021181234"}])
+        assert cmp_.result is AddressResult.NORMALIZED_MATCH
+        assert "line" in cmp_.fields_not_compared
+
+    def test_one_matching_practice_location_is_a_match(self):
+        """A provider may enrol several locations; the third differing is not
+        a finding about the entity."""
+        from app.Tefca.address_comparison import AddressResult, compare_to_ppef
+        rce = {"address_city": "Boston", "address_state": "MA",
+               "address_postalCode": "02118"}
+        locs = [{"CITY_NAME": "WORCESTER", "STATE_CD": "MA", "ZIP_CD": "01601"},
+                {"CITY_NAME": "BOSTON", "STATE_CD": "MA", "ZIP_CD": "02118"}]
+        assert compare_to_ppef(rce, locs).result is AddressResult.NORMALIZED_MATCH
+
+    def test_no_published_location_is_insufficient_not_conflict(self):
+        from app.Tefca.address_comparison import AddressResult, compare_to_ppef
+        assert compare_to_ppef({"address_city": "Boston"}, None).result \
+            is AddressResult.INSUFFICIENT_DATA
