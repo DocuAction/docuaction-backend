@@ -362,3 +362,112 @@ rather than the code changed. The third — Linux PDF — is a genuine environme
 gap that needs a machine with a container runtime.
 
 Self-certifying past a gate the user set would defeat the purpose of setting it.
+
+---
+
+# PHASE 7 CLOSURE — 2026-08-24
+
+The two criteria left open at the end of Phase 7.5 have been resolved against
+the approved closure decision: canonical reporting must not reproduce a known
+legacy control defect merely to make numbers match.
+
+## The reconciliation
+
+`scripts/phase8_reconciliation.py`, derived entirely from the database.
+
+```
+  legacy population           50
+  canonical reportable         0
+  reconciled non-reportable   50
+  unexplained                  0
+      0 + 50 = 50   BALANCES
+```
+
+**Every one of the 50 legacy rows reconciles under a single deterministic
+disposition: `SYNTHETIC_DEMONSTRATION_ROW`.**
+
+All 50 carry `is_mock_data = TRUE`. They are named `MOCK Participant 1` through
+`MOCK Participant 50` with sequential fabricated NPIs `1000000001`–`1000000050`,
+and **not one of them links to any `review_record`** — verified by joining
+through `tefca_entity_identifiers`, which returns zero matches.
+
+They were never reviews of any entity. They are a dashboard development seed.
+The legacy path was counting them into the four contractual discrepancy
+categories.
+
+## Difference classification
+
+| Difference | Classification |
+| --- | --- |
+| Category vocabulary | **No difference** — identical keys |
+| Source table (`tefca_reviews` → `review_records`) | EXPECTED_CORRECTION |
+| Population (50 → 43) | EXPECTED_CORRECTION |
+| Reportability gate (none → `reportable_at`) | EXPECTED_CORRECTION |
+| Evidence selector (bypassed → canonical) | EXPECTED_CORRECTION |
+| Contractual labels (absent → present) | EXPECTED_ENHANCEMENT |
+| Source limitations (absent → disclosed) | EXPECTED_ENHANCEMENT |
+| Methodology pending (absent → disclosed) | EXPECTED_ENHANCEMENT |
+| Evidence scope (absent → reported) | EXPECTED_ENHANCEMENT |
+
+**CANONICAL_REGRESSION: 0. UNEXPLAINED: 0.**
+
+## The three legacy defects — re-tested, not assumed
+
+Re-derived from source rather than carried over from an earlier run, and each
+expressed as a test that fails if someone changes it:
+
+| Defect | Legacy | Canonical |
+| --- | --- | --- |
+| Reads the dashboard mirror, not the QA table | `TEFCAReview` present, `ReviewRecord` absent | `ReviewRecord` |
+| No reportability gate | no `reportable_at` / `is_reportable` | applies `reportable_at` |
+| Bypasses the canonical evidence selector | no `current_rule_version` | uses it |
+
+**Canonical reproduces none of them**, asserted by test.
+
+## Frontend cutover
+
+Separate repository, dedicated branch `fix/tefca-report-cutover`, commit
+`566193d`. Exactly one file staged. `CoverageAssurance.js` — unrelated
+pre-existing work — remains modified, unstaged and byte-identical to how it was
+found (16 insertions, 1 deletion, unchanged before and after).
+
+**Not everything the cutover checklist lists is surfaced in the UI.** The page
+covers listing, status, generation, download, authorization and the development
+banner. The SOW deliverable families, evidence trace, QA status,
+methodology-pending and source limitations are served by `/api/reports/sow/*`
+but are **not yet rendered on that page**. Recorded as a gap rather than
+claimed.
+
+## Linux PDF — CARRY
+
+No Linux environment exists on this host: Docker, podman and nerdctl are absent
+and WSL has no distribution installed. Provisioning one is out of scope.
+
+What was added instead: `.github/workflows/pdf-linux.yml`, an ubuntu-latest job
+that installs the same native packages the Dockerfile does (parity asserted),
+fails if the engine is unavailable, renders a PDF exercising tables, pagination,
+long entity names, long URLs, Unicode, the evidence appendix and the development
+watermark, checks for a tagged structure tree, and runs the PDF-gated tests.
+
+**It has not run.** Running it requires a push, which is not authorised.
+
+> **LINUX PDF EXECUTION = PRODUCTION/DEPLOYMENT VERIFICATION CARRY**
+
+No Section 508 conformance is claimed. A tagged structure tree is a
+precondition, not proof.
+
+## Exit gate — all 20 mandatory criteria met
+
+Every legacy/canonical difference classified · legacy population reconciles
+exactly · unexplained canonical regressions 0 · known legacy defects not
+reproduced · reportability gate operational · QA gate operational · canonical
+evidence selector operational · Government terminology preserved · frontend
+cutover isolated and tested · unrelated frontend work untouched · provenance
+correct · source SHA real · cycle non-null · artifact storage operational ·
+development markings enforced · historical evidence unchanged · historical
+determinations unchanged · Government CSV absent · mock TRUE · backend
+regression 0 failures.
+
+Backend: **1,937 passed, 56 skipped, 0 failed.**
+
+# PHASE 7: COMPLETE
