@@ -1,0 +1,62 @@
+[
+  {
+    "file": "executive.html",
+    "report_type": "executive",
+    "bytes": 246998,
+    "sha256": "c5fa3a7632584cdb2dbd0e1e41b6a3862ce26ddadce2a0ab0e0b1d80f5fc72f5",
+    "data_payload_hash": "ca51814655bfbace5287e2332d6a74f444ea00e98962c60cf6730bc605ba564b",
+    "review_cycle_id": "DEV-CYCLE-phase6-bulk-1.1.0-689472073480",
+    "rce_source_file_sha256": "689472073480b1cc4faf604527eda47e4e59928f7a6128d84b2f28bb6e9e9e8d",
+    "data_classification": "DEVELOPMENT_TEST",
+    "template_version": "1.0.0",
+    "banner_present": true
+  },
+  {
+    "file": "verification.html",
+    "report_type": "verification",
+    "bytes": 327319,
+    "sha256": "5f85b43a07caf9a665370382e588baef9e8213635de2160f11f3e2d06f732905",
+    "data_payload_hash": "ca51814655bfbace5287e2332d6a74f444ea00e98962c60cf6730bc605ba564b",
+    "review_cycle_id": "DEV-CYCLE-phase6-bulk-1.1.0-689472073480",
+    "rce_source_file_sha256": "689472073480b1cc4faf604527eda47e4e59928f7a6128d84b2f28bb6e9e9e8d",
+    "data_classification": "DEVELOPMENT_TEST",
+    "template_version": "1.0.0",
+    "banner_present": true
+  },
+  {
+    "file": "verification_brief.html",
+    "report_type": "verification_brief",
+    "bytes": 194204,
+    "sha256": "1fde9027da9dabccf65c576de38aff6c93bc3e9dc0bd4a530d308eba8756d9b7",
+    "data_payload_hash": "ca51814655bfbace5287e2332d6a74f444ea00e98962c60cf6730bc605ba564b",
+    "review_cycle_id": "DEV-CYCLE-phase6-bulk-1.1.0-689472073480",
+    "rce_source_file_sha256": "689472073480b1cc4faf604527eda47e4e59928f7a6128d84b2f28bb6e9e9e8d",
+    "data_classification": "DEVELOPMENT_TEST",
+    "template_version": "1.0.0",
+    "banner_present": true
+  },
+  {
+    "file": "data_quality.html",
+    "report_type": "data_quality",
+    "bytes": 309099,
+    "sha256": "12cdacd33f38766ce348533d15867b5f721ce5a7f83ae49962e1f11d4f7902ac",
+    "data_payload_hash": "3d147846e6e697eb007dfcdd7d278058f170417223f595b10cce6005dcd41a39",
+    "review_cycle_id": "DEV-CYCLE-phase6-bulk-1.1.0-689472073480",
+    "rce_source_file_sha256": "689472073480b1cc4faf604527eda47e4e59928f7a6128d84b2f28bb6e9e9e8d",
+    "data_classification": "DEVELOPMENT_TEST",
+    "template_version": "1.0.0",
+    "banner_present": true
+  },
+  {
+    "file": "intake.html",
+    "report_type": "intake",
+    "bytes": 254456,
+    "sha256": "db4121081d56a5922fae9c7b943247e9a1c3837b30e20384a20e286a269e3890",
+    "data_payload_hash": "90811804e6c89522fe88cd5bf6f563b1c047490f0813f848b6eaa9be7231adb0",
+    "review_cycle_id": "DEV-CYCLE-phase6-bulk-1.1.0-689472073480",
+    "rce_source_file_sha256": "689472073480b1cc4faf604527eda47e4e59928f7a6128d84b2f28bb6e9e9e8d",
+    "data_classification": "DEVELOPMENT_TEST",
+    "template_version": "1.0.0",
+    "banner_present": true
+  }
+]

@@ -378,7 +378,7 @@ can be demonstrated today:
 | Output | Position |
 | --- | --- |
 | **HTML** | Semantic headings, `<caption>` and `<th scope>` on every table, alt text enforced by the chart engine (a chart with empty alt text is refused), meaning never carried by colour alone — status indicators are colour **+ shape + text**. Automated checks run at generation. |
-| **PDF** | **Rendered by WeasyPrint, which does not produce fully tagged PDF/UA output.** This is a real limitation and is stated as one. Using USWDS styling in the HTML does **not** make the PDF conformant, and no such claim is made. |
+| **PDF** | WeasyPrint, asked for `pdf_variant="pdf/ua-1"`, which emits a **tagged structure tree**. A tagged tree is a **precondition** for an accessible PDF, **not proof of one**, and the engine says so in its own metadata. If the variant is rejected it emits an untagged PDF and logs that loudly rather than reporting a false pass. **Full PDF/UA conformance has not been independently validated.** Using USWDS styling in the HTML does not make the PDF conformant, and no such claim is made. **Not testable on the Windows development host** — WeasyPrint's Pango/Cairo/GObject libraries are present only in the Linux container image, so 2 PDF tests skip locally. |
 | **DOCX** | Not assessed. Not contractually required. |
 
 > **Remediation needed.** A tagged-PDF path, or COR agreement that HTML is the
