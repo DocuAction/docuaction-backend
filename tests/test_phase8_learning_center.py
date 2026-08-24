@@ -445,3 +445,128 @@ class TestLearningApi:
             response = client.get(path)
             assert response.status_code in (401, 403), \
                 f"{path} answered {response.status_code} unauthenticated"
+
+
+# ═══ No unsupported Government-policy wording ════════════════════════════════
+
+import os  # noqa: E402
+
+FRONTEND = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "..", "frontend", "src", "app", "tefca-arc")
+
+
+def _frontend_code(relative: str) -> str:
+    """Frontend source with comment lines stripped.
+
+    The files document what they were corrected FROM, and a naive grep reads
+    that explanation as the violation it describes.
+    """
+    path = os.path.normpath(os.path.join(FRONTEND, relative))
+    if not os.path.exists(path):
+        pytest.skip(f"frontend source not present: {relative}")
+    with open(path, encoding="utf-8") as fh:
+        return "\n".join(line for line in fh
+                         if not line.lstrip().startswith(("//", "*", "/*")))
+
+
+class TestNoUnsupportedPolicyWording:
+    """Operator-facing content may not invent a Government requirement.
+
+    Phase 8 found three in the static help page: fixed per-category review
+    deadlines with no contractual basis, B1-B4 presented as the classification
+    without the Government/AGT distinction, and a sample described as already
+    drawn.
+    """
+
+    def test_no_invented_per_category_deadlines(self):
+        """The contract sets the priority deadline per request (¶146) and no
+        standing per-category turnaround at all."""
+        code = _frontend_code("help/page.js")
+        for invented in ("B2 = 30 days", "B3 = 21 days", "B4 = 10 days"):
+            assert invented not in code, f"invented deadline still shown: {invented}"
+
+    def test_the_sample_is_not_described_as_drawn(self):
+        code = _frontend_code("help/page.js")
+        assert "fixed, auditable seed" not in code
+        assert "awaiting COR confirmation" in code
+
+    def test_b1_b4_is_qualified_wherever_it_appears(self):
+        code = _frontend_code("help/page.js")
+        if "B1-B4" in code or "(B1)" in code:
+            assert "shorthand" in code, (
+                "B1-B4 appears without being identified as AGT shorthand")
+
+    def test_the_government_categories_use_contract_wording(self):
+        from app.reports.data.sow_report_data import GOVERNMENT_CATEGORY_LABELS
+
+        code = _frontend_code("help/page.js").lower()
+        for label in GOVERNMENT_CATEGORY_LABELS.values():
+            assert label.lower() in code, f"missing contract wording: {label}"
+
+    def test_the_help_page_points_at_the_authoritative_guidance(self):
+        code = _frontend_code("help/page.js")
+        assert "/api/learning/TEFCA_ARC" in code
+
+    def test_backend_guidance_states_no_fixed_sla(self):
+        """The same rule, on the side that generates the reports."""
+        from app.Tefca.learning_methodology import decision_status
+
+        import json
+        payload = json.dumps(decision_status())
+        for invented in ("30 days", "21 days", "10 days"):
+            assert invented not in payload
+
+
+class TestContextualHelpComponent:
+
+    def test_the_component_exists(self):
+        code = _frontend_code("components/LearningHelp.js")
+        assert "LearningHelp" in code
+
+    def test_it_fetches_rather_than_hard_coding_guidance(self):
+        """Hard-coded copy drifts; the API derives its vocabulary from the live
+        enums and fails its own build when it stops matching."""
+        code = _frontend_code("components/LearningHelp.js")
+        assert "/api/learning/" in code
+        assert "tefcaFetch" in code
+
+    def test_it_renders_the_classification(self):
+        code = _frontend_code("components/LearningHelp.js")
+        for classification in ("GOVERNMENT_REQUIREMENT", "AGT_IMPLEMENTATION",
+                               "AGT_RECOMMENDATION",
+                               "PROGRAM_GUIDANCE_REQUESTED",
+                               "SOURCE_LIMITATION"):
+            assert classification in code
+
+    def test_it_shows_prohibited_conclusions(self):
+        code = _frontend_code("components/LearningHelp.js")
+        assert "prohibited_conclusions" in code
+        assert "NOT conclude" in code
+
+    def test_it_is_accessible(self):
+        """Semantic headings, an announced region, and labelled controls."""
+        code = _frontend_code("components/LearningHelp.js")
+        assert 'role="region"' in code
+        assert "aria-label" in code
+        assert "aria-expanded" in code
+        assert "aria-controls" in code
+        assert "<h3" in code and "<h4" in code
+        # Decorative icons must not be announced.
+        assert 'aria-hidden="true"' in code
+
+    def test_meaning_is_not_carried_by_colour_alone(self):
+        """Every classification tag renders its words, not just a colour."""
+        code = _frontend_code("components/LearningHelp.js")
+        assert "CLASSIFICATION_LABEL" in code
+        assert "Government requirement" in code
+
+    def test_a_failed_load_says_so(self):
+        """An empty panel reads as 'there is nothing to know here'."""
+        code = _frontend_code("components/LearningHelp.js")
+        assert "could not be loaded" in code
+
+    def test_it_is_wired_into_a_real_screen(self):
+        code = _frontend_code("reports/page.js")
+        assert "LearningHelp" in code
+        assert "report.release_status" in code
