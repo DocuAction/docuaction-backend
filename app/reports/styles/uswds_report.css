@@ -337,3 +337,37 @@ figcaption {
   white-space: nowrap;
   border: 0;
 }
+
+/* ── Development / test data banner ───────────────────────────────────────────
+   A development report that reaches the wrong inbox has to announce itself
+   before anyone reads a number off it, so this is deliberately loud: full
+   bleed, high contrast, above the report header.
+
+   Contrast is checked, not assumed — #b50909 on #fff5f5 and #1b1b1b on #fff5f5
+   both clear WCAG AA for body text. The meaning is carried by the words, never
+   by the colour: printed in greyscale the text still says exactly what it says.
+   It is a <div role="note">, so assistive technology announces it as a note
+   rather than silently skipping a coloured box. */
+.dev-banner {
+  border: 3pt solid #b50909;
+  background: #fff5f5;
+  padding: 10pt 12pt;
+  margin: 0 0 16pt 0;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.dev-banner-line1 {
+  margin: 0 0 4pt 0;
+  font-weight: 700;
+  font-size: 12pt;
+  letter-spacing: 0.02em;
+  color: #b50909;
+  text-transform: uppercase;
+}
+
+.dev-banner-line2 {
+  margin: 0;
+  font-size: 9pt;
+  color: #1b1b1b;
+}

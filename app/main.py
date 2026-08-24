@@ -497,7 +497,16 @@ safe_load("app.tefca_registry.rce.routes", "tefca-rce-pipeline")
 # Federal reporting engine at /api/reports/*. Reads FROZEN verification results
 # through the Report Data Service; generation never triggers a source lookup or
 # a D1-D6 / B1-B4 evaluation.
-safe_load("app.reports.routes", "reports")
+#
+# CANONICAL contract-facing report path, so it is registered UNCONDITIONALLY for
+# the same reason the TEFCA router above is: safe_load swallows an ImportError
+# and turns every /api/reports/* endpoint into a 404 while the service still
+# reports itself healthy. For a deliverable path that failure mode is worse than
+# not starting — an operator chasing a missing report would have no signal, and
+# the legacy generators would quietly keep serving in its place.
+from app.reports.routes import router as reports_router  # noqa: E402
+app.include_router(reports_router)
+logger.info("Loaded: reports (CANONICAL — /api/reports/*, unconditional registration)")
 
 # ═══ CASE MANAGEMENT ═══
 safe_load("app.case_management", "case-management")

@@ -191,4 +191,10 @@ def _empty_snapshot(report_id: str, report_type: str, dataset: Dict[str, Any],
         "generated_by": generated_by,
         "pdf_engine": {"engine": "WeasyPrint", "version": None},
         "accessibility": {},
+        # Development unless the real snapshot says otherwise. The first pass
+        # must render the SAME structure as the final one — the accessibility
+        # validator inspects it — and defaulting the other way would make the
+        # validation pass render a document without the classification banner.
+        "data_classification": "DEVELOPMENT_TEST",
+        "source_provenance": {},
     }

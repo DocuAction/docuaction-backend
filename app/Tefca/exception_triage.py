@@ -90,10 +90,12 @@ def triage(observation: Dict[str, Any]) -> TriageDecision:
     #    not yet a review requirement. The RCE delivers a registered address;
     #    NPPES and PPEF publish practice locations. Those are different kinds of
     #    address, and no approved methodology says how large a difference between
-    #    them has to be before it means anything. Queueing 8,585 of them would
-    #    manufacture that threshold at 'any difference at all'; suppressing them
-    #    would manufacture it at 'never'. Both are methodology decisions, so the
-    #    condition is named and counted instead.
+    #    them has to be before it means anything. On the development dataset that
+    #    is 8,584 NPPES conflicts plus 1,842 PPEF, so 10,426 observations across
+    #    9,032 entities. Queueing them would manufacture that threshold at 'any
+    #    difference at all'; suppressing them would manufacture it at 'never'.
+    #    Both are methodology decisions, so the condition is named and counted
+    #    instead. (Development-data figures, not ONC findings.)
     if "ADDRESS" in dimension and comparison == "CONFLICT":
         return TriageDecision(
             Triage.METHODOLOGY_PENDING,

@@ -21,8 +21,49 @@
   <meta name="description" content="{% block description %}TEFCA ARC verification report{% endblock %}">
   <meta name="generator" content="DocuAction Report Engine {{ template_version }}">
   <style>{{ css }}</style>
+  {#
+    The banner in <body> covers page one. A multi-page PDF needs the notice on
+    every page, which only a running page element gives — so the classification
+    is also written into the page margin. Conditional, hence here in the
+    template rather than in the stylesheet: CSS cannot branch on the snapshot.
+  #}
+  {% if snapshot.data_classification != 'GOVERNMENT' %}
+  <style>
+    @page {
+      @top-center {
+        content: "DEVELOPMENT / TEST DATA — NOT FOR GOVERNMENT DELIVERY";
+        font-family: var(--report-font);
+        font-size: 7.5pt;
+        font-weight: 700;
+        color: #b50909;
+      }
+    }
+  </style>
+  {% endif %}
 </head>
 <body>
+
+{#
+  DEVELOPMENT / TEST BANNER.
+
+  Placed first in <body> so it is the first thing both a sighted reader and a
+  screen reader encounter, and repeated in the running footer via CSS so it
+  survives pagination in PDF. It is deliberately not styled as a subtle notice:
+  a development report that reaches the wrong inbox must announce itself before
+  anyone reads a number off it.
+
+  Driven by snapshot.data_classification, which comes from the same flag the
+  rest of the application uses (`is_running_mock`). The report cannot disagree
+  with the dashboard about whether real data is loaded.
+#}
+{% if snapshot.data_classification != 'GOVERNMENT' %}
+<div class="dev-banner" role="note" aria-label="Development data notice">
+  <p class="dev-banner-line1">DEVELOPMENT / TEST DATA &mdash; NOT FOR GOVERNMENT DELIVERY</p>
+  <p class="dev-banner-line2">NOT ONC FINDINGS.
+     The Government source file has not yet been imported. Every figure in this
+     document is a validation result computed over development data.</p>
+</div>
+{% endif %}
 
 {% macro status_indicator(bucket, indicators) %}
   {#
@@ -126,7 +167,22 @@
         <tr><th scope="row">Dataset snapshot version</th><td>{{ snapshot.dataset_snapshot_version or 'Not recorded' }}</td></tr>
         <tr><th scope="row">Evidence generation</th><td>{{ snapshot.evidence_generation or 'Not recorded' }}</td></tr>
         <tr><th scope="row">B1&ndash;B4 rule version</th><td>{{ snapshot.b1_b4_rule_version or 'Not recorded' }}</td></tr>
-        <tr><th scope="row">RCE source file SHA-256</th><td>{{ snapshot.rce_source_file_sha256 or 'Not yet tracked (Area 1 pending)' }}</td></tr>
+        <tr><th scope="row">Data classification</th><td>
+          {%- if snapshot.data_classification == 'GOVERNMENT' -%}Government data
+          {%- else -%}DEVELOPMENT / TEST &mdash; not for Government delivery{%- endif -%}
+        </td></tr>
+        <tr><th scope="row">Source delivery</th><td>
+          {{- snapshot.source_provenance.get('original_filename') or 'No delivery recorded' -}}
+          {%- if snapshot.source_provenance.get('record_count') is not none %}
+            ({{ snapshot.source_provenance.get('record_count')|number }} records){% endif -%}
+        </td></tr>
+        <tr><th scope="row">Source file SHA-256</th><td>
+          {%- if snapshot.rce_source_file_sha256 -%}{{ snapshot.rce_source_file_sha256 }}
+          {%- else -%}Not available &mdash;
+            {{ snapshot.source_provenance.get('unavailable_reason') or 'reason not recorded' }}
+          {%- endif -%}
+        </td></tr>
+        <tr><th scope="row">Source schema fingerprint</th><td>{{ snapshot.source_provenance.get('schema_fingerprint') or 'Not recorded' }}</td></tr>
         <tr><th scope="row">Report Data Service version</th><td>{{ snapshot.report_data_service_version }}</td></tr>
         <tr><th scope="row">Template version</th><td>{{ snapshot.template_version }}</td></tr>
         <tr><th scope="row">Data payload hash</th><td>{{ snapshot.data_payload_hash }}</td></tr>

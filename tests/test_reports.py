@@ -661,11 +661,24 @@ class TestSnapshot:
 
     @pytest.mark.asyncio
     async def test_untracked_provenance_says_so_rather_than_omitting(self, populated):
-        """Area 1 does not exist yet, so there is no RCE file hash. The report
-        says that, rather than leaving the row out — "not yet tracked" and "we
-        forgot" look identical to a reader otherwise."""
+        """No Area-1 delivery in this fixture, so there is no source hash. The
+        report says so AND names the reason, rather than leaving the row out —
+        "not tracked" and "we forgot" look identical to a reader otherwise.
+
+        UPDATED in Phase 7A. This used to assert the literal string "Not yet
+        tracked (Area 1 pending)". Area 1 now exists, and the provenance lookup
+        reports a machine-readable reason instead of a fixed sentence, so the
+        assertion moved to the invariant the test was always about: the row is
+        present and it explains itself.
+        """
         result = await _generate(populated)
-        assert "Not yet tracked (Area 1 pending)" in result["html"]
+        html = result["html"]
+        assert "Source file SHA-256" in html
+        assert "Not available" in html
+        # the reason, not just the absence
+        assert "NO_DELIVERY_RECORDED" in html
+        # and never a placeholder standing in for a real digest
+        assert ">cafe<" not in html
 
 
 # ═══ Report types ════════════════════════════════════════════════════════════

@@ -100,6 +100,13 @@ class ReportSnapshot:
     data_payload_hash: Optional[str] = None
     pdf_engine: Dict[str, Any] = field(default_factory=dict)
     accessibility: Dict[str, Any] = field(default_factory=dict)
+    #: DEVELOPMENT_TEST or GOVERNMENT. Carried on the snapshot itself so a
+    #: stored report can never be re-read without its classification.
+    data_classification: str = "DEVELOPMENT_TEST"
+    #: The full Area-1 delivery record behind the population, not just its
+    #: hash — filename, record count and schema fingerprint are what make the
+    #: hash checkable by someone who was not here when it was generated.
+    source_provenance: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -161,24 +168,20 @@ async def active_rule_version(db) -> Optional[str]:
 
 
 async def latest_rce_source_sha256(db) -> Optional[str]:
-    """SHA-256 of the RCE delivery behind the population, when one is recorded.
+    """SHA-256 of the delivery behind the population, or None.
 
-    None until Area 1 exists (Monday P2). Recorded as None rather than omitted:
-    "we do not yet track this" and "this field was left out" are different
-    facts, and the snapshot should say which one applies.
+    Reads Area 1, which is the only authoritative delivery record.
+
+    This previously read `tefca_import_batches` ordered by `created_at desc`.
+    The newest row in that table is a unit-test fixture whose checksum is the
+    string "cafe", so every report ever generated stamped "cafe" as its source
+    hash while the real digest sat unread in Area 1. Never returns a value that
+    is not a real SHA-256; see `source_provenance.authoritative_source_provenance`
+    for the reason when it returns None.
     """
-    from app.tefca_registry import models as reg
+    from app.reports.data.source_provenance import authoritative_source_provenance
 
-    try:
-        return (await db.execute(
-            select(reg.TefcaImportBatch.file_checksum)
-            .where(reg.TefcaImportBatch.file_checksum.isnot(None))
-            .order_by(reg.TefcaImportBatch.created_at.desc())
-            .limit(1)
-        )).scalar()
-    except Exception as exc:  # noqa: BLE001
-        logger.info("source file checksum unavailable: %s", exc)
-        return None
+    return (await authoritative_source_provenance(db)).sha256
 
 
 async def build_snapshot(
@@ -195,8 +198,26 @@ async def build_snapshot(
     """Assemble the provenance record for one generated report."""
     from app.reports.engine.pdf_engine import engine_info
 
+    from app.reports.data.source_provenance import (
+        authoritative_source_provenance, resolve_cycle_id)
+
     scope = dataset.get("scope") or {}
-    review_cycle_id = dataset.get("review_cycle_id")
+    source = await authoritative_source_provenance(db)
+    evidence_generation = await latest_evidence_generation(
+        db, dataset.get("review_cycle_id"))
+    # Never null. A stored report with no cycle cannot be scoped afterwards,
+    # which is what every pre-existing report in review_reports suffers from.
+    # Anchored on the canonical evidence RULE version, not the generation
+    # timestamp: the rule version is what determines which observations a report
+    # may read, it is stable across re-runs, and it is the thing a reader can
+    # look up. A timestamp would make every regeneration a different "cycle".
+    from app.Tefca.evidence_version import current_rule_version
+
+    review_cycle_id = resolve_cycle_id(
+        dataset.get("review_cycle_id"),
+        evidence_version=(dataset.get("evidence_rule_version")
+                          or current_rule_version()),
+        source_sha256=source.sha256)
 
     def _iso(value: Any) -> Optional[str]:
         if value is None:
@@ -209,10 +230,10 @@ async def build_snapshot(
         generation_timestamp=datetime.now(timezone.utc).isoformat(),
         reporting_period_start=_iso(scope.get("reporting_period_start")),
         reporting_period_end=_iso(scope.get("reporting_period_end")),
-        review_cycle_id=str(review_cycle_id) if review_cycle_id else None,
-        dataset_snapshot_version=await latest_evidence_generation(db, review_cycle_id),
-        rce_source_file_sha256=await latest_rce_source_sha256(db),
-        evidence_generation=await latest_evidence_generation(db, review_cycle_id),
+        review_cycle_id=str(review_cycle_id),
+        dataset_snapshot_version=evidence_generation,
+        rce_source_file_sha256=source.sha256,
+        evidence_generation=evidence_generation,
         b1_b4_rule_version=await active_rule_version(db),
         query_parameters=dict(query_parameters or {}),
         generated_by=generated_by,
@@ -221,6 +242,8 @@ async def build_snapshot(
         data_payload_hash=data_payload_hash(dataset),
         pdf_engine=engine_info(),
         accessibility=dict(accessibility or {}),
+        data_classification=source.data_classification,
+        source_provenance=source.to_dict(),
     )
 
 
