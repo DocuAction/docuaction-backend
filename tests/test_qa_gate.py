@@ -284,3 +284,55 @@ async def test_no_fabricated_history_for_existing_determinations(db_required):
     assert events == 0, "no human decision may be fabricated for historical rows"
     assert reportable == 0, "the QA gate must not be back-dated"
     assert resolved == 0
+
+
+# ── reporting dependencies must fail loudly, not vanish quietly ───────────────
+#
+# Regression guard for the 2026-08-24 near-miss: a deployment whose vendored
+# dependency set predated the report engine would have started cleanly, served
+# /health 200, and produced no reports, because app/main.py loads routers via
+# safe_load() which swallows ImportError.
+
+def test_reporting_dependencies_pass_when_present():
+    from app.Tefca.qa_engine import PlatformReadinessCheck
+
+    result = PlatformReadinessCheck().check_reporting_dependencies()
+    assert result["name"] == "reporting_dependencies"
+    assert result["passed"] is True, result["detail"]
+    assert "jinja2" in result["detail"] and "matplotlib" in result["detail"]
+
+
+def test_reporting_dependency_absence_fails_readiness(monkeypatch):
+    """The property that matters: a missing engine turns readiness RED."""
+    import builtins
+
+    from app.Tefca.qa_engine import PlatformReadinessCheck
+
+    real_import = builtins.__import__
+
+    def no_matplotlib(name, *a, **kw):
+        if name == "matplotlib":
+            raise ImportError("No module named 'matplotlib'")
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", no_matplotlib)
+    result = PlatformReadinessCheck().check_reporting_dependencies()
+
+    assert result["passed"] is False
+    assert "MISSING REQUIRED REPORTING DEPENDENCIES" in result["detail"]
+    assert "matplotlib" in result["detail"]
+
+
+def test_pdf_engine_absence_does_not_fail_readiness(monkeypatch):
+    """WeasyPrint's native stack is absent on Windows by design.
+
+    Failing readiness on it would make the check permanently red on a developer
+    workstation and train people to ignore it. The container build enforces PDF.
+    """
+    from app.Tefca import qa_engine
+
+    result = qa_engine.PlatformReadinessCheck().check_reporting_dependencies()
+    # Whatever the PDF engine's state, the check's verdict follows the required
+    # imports only.
+    assert result["passed"] is True
+    assert "pdf engine" in result["detail"]

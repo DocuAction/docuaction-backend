@@ -333,6 +333,61 @@ class PlatformReadinessCheck:
         detail = ("all required set" if passed else "missing: " + ",".join(missing)) + ("; SAM key set" if sam else "; SAM key NOT set")
         return {"name": "required_config", "passed": passed, "detail": detail}
 
+    def check_reporting_dependencies(self) -> Dict[str, Any]:
+        """Fail loudly when a reporting dependency is missing.
+
+        WHY THIS EXISTS
+        ---------------
+        On 2026-08-24 a DEV deployment was halted one step before it shipped a
+        build whose vendored dependency set predated the report engine: jinja2
+        and matplotlib were absent. `app/main.py` loads routers through
+        `safe_load()`, which catches ImportError and logs a warning, so the
+        application would have started, answered /health with 200, and produced
+        no reports at all. Nothing in the readiness surface would have said so.
+
+        A missing report engine is not a degraded extra on this programme — the
+        deliverables ARE the reports. So it is a readiness FAILURE, not a note.
+
+        WHAT IS AND IS NOT REQUIRED
+        ---------------------------
+        jinja2 and matplotlib are pure-Python-importable on every platform and
+        are required: no template engine, no report; no chart engine, no figure.
+
+        The PDF engine is reported but NOT failed on. WeasyPrint binds to the
+        native Pango/Cairo/GObject stack, which is present in the Linux
+        container and absent on a Windows developer host. Making it a hard
+        failure would make readiness permanently red on a workstation and teach
+        people to ignore it — the exact reflex this check exists to prevent. The
+        container build already fails if WeasyPrint cannot emit a PDF, which is
+        the right place to enforce it.
+        """
+        required = ("jinja2", "matplotlib")
+        missing, present = [], []
+        for mod in required:
+            try:
+                __import__(mod)
+                present.append(mod)
+            except Exception as exc:  # noqa: BLE001 - any import failure counts
+                missing.append(f"{mod} ({type(exc).__name__})")
+
+        pdf_note = "pdf engine unknown"
+        try:
+            from app.reports.engine.pdf_engine import engine_info
+
+            info = engine_info()
+            pdf_note = ("pdf engine available"
+                        if info.get("available")
+                        else f"pdf engine UNAVAILABLE: {str(info.get('reason'))[:80]}")
+        except Exception as exc:  # noqa: BLE001
+            pdf_note = f"pdf engine not importable ({type(exc).__name__})"
+
+        passed = not missing
+        detail = (f"required reporting imports OK ({', '.join(present)}); {pdf_note}"
+                  if passed else
+                  f"MISSING REQUIRED REPORTING DEPENDENCIES: {', '.join(missing)} — "
+                  f"reports cannot be produced; {pdf_note}")
+        return {"name": "reporting_dependencies", "passed": passed, "detail": detail}
+
     async def run(self, db=None, skip_http=False) -> Dict[str, Any]:
         checks = []
         if db is not None:
@@ -342,6 +397,7 @@ class PlatformReadinessCheck:
         checks.append(self.check_auth())
         checks.append(await self.check_scheduler(db))
         checks.append(self.check_required_config())
+        checks.append(self.check_reporting_dependencies())
         passed = sum(1 for c in checks if c["passed"])
         score = round(100.0 * passed / len(checks), 1) if checks else 0.0
         result = {"ready": all(c["passed"] for c in checks), "score": score, "checks": checks,
