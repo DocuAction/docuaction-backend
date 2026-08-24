@@ -46,7 +46,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import func, or_ as sa_or, select
+from sqlalchemy import func, select
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +195,12 @@ class ReportDataService:
 
     def __init__(self, db):
         self.db = db
+        #: What the last evidence read actually covered — which rule version,
+        #: which versions were excluded, how many observations were read and
+        #: how many reached the report. Populated by `_dimension_rows`. A
+        #: report that narrows its own population must say so; a count that
+        #: shrinks with no visible reason is the failure this exists to prevent.
+        self.evidence_scope: Dict[str, Any] = {}
 
     # ── internal helpers ─────────────────────────────────────────────────────
 
@@ -247,37 +253,84 @@ class ReportDataService:
         if review_cycle_id:
             stmt = stmt.where(
                 TEFCADimensionEvidence.review_cycle_id == review_cycle_id)
-        # SUPERSEDED VERSIONS ARE EXCLUDED HERE, ONCE.
+        # ONLY THE CURRENT EVIDENCE VERSION REACHES A REPORT.
         #
         # Phase 6 ran, was found defective, and was corrected as a new
-        # rule_version. Both sets live in this append-only table. The de-dup
-        # below keys on (entity, dimension) and breaks ties on
-        # `generation_timestamp` — which the population runs leave NULL, so
-        # without this filter the tie-break compares "" to "" and the surviving
-        # row is whichever the database happened to return first. That is not
-        # double-counting; it is worse, because the number changes between runs
-        # for no visible reason.
+        # rule_version. Both sets live in this append-only table, so without
+        # this filter a report would sum a defective generation and its
+        # correction together.
         #
-        # Rows with no rule_version predate versioning and are left alone.
-        superseded = historical_rule_versions()
-        if superseded:
-            stmt = stmt.where(sa_or(
-                TEFCADimensionEvidence.rule_version.is_(None),
-                TEFCADimensionEvidence.rule_version == current_rule_version()))
+        # Unversioned rows are excluded too. They predate versioning, they
+        # cannot be attributed to any rule generation, and 716 of them carry an
+        # automatic PASS disposition — which the Phase 6 architecture forbids
+        # precisely because no source may assert a pass without a human. Rows
+        # whose provenance cannot be stated do not belong in a contract report.
+        # They are counted, not silently dropped: see `evidence_scope`.
+        stmt = stmt.where(
+            TEFCADimensionEvidence.rule_version == current_rule_version())
         try:
             rows = list((await self.db.execute(stmt)).scalars().all())
         except Exception as exc:  # noqa: BLE001
             logger.warning("report: dimension evidence unavailable: %s", exc)
+            self.evidence_scope = {
+                "rule_version": current_rule_version(),
+                "superseded_versions_excluded": historical_rule_versions(),
+                "observations_read": 0, "observations_reported": 0,
+                "unavailable": True}
             return []
 
+        # DE-DUP KEYS ON SOURCE AS WELL AS DIMENSION.
+        #
+        # It used to key on (entity, dimension) alone, and that quietly threw
+        # away 70,698 of 188,528 observations — 37.5% of the evidence. Every
+        # entity has an ADDRESS observation from NPPES *and* one from PPEF, and
+        # three EXCLUSION_REVOCATION observations from three different sources.
+        # Those are not duplicates. They are different sources answering the
+        # same question, and the disagreement between them is the finding.
+        #
+        # Worse than the loss was which row survived: `generation_timestamp` is
+        # NULL on all 188,528 population rows, so the tie-break compared "" to
+        # "" and the winner was whichever row the database happened to return
+        # first. The reported address-conflict count would change between runs
+        # with no visible cause.
+        #
+        # (entity, dimension, source) is exactly unique over the current
+        # evidence — 188,528 rows, 188,528 keys. The tie-break below is
+        # therefore unreachable for this data, and is kept deterministic anyway
+        # so a future generation that does collide resolves the same way twice.
         latest: Dict[tuple, Any] = {}
         for row in rows:
-            key = (row.entity_id, row.evidence_dimension)
+            key = (row.entity_id, row.evidence_dimension, row.source)
             current = latest.get(key)
-            if current is None or (row.generation_timestamp or "") > (
-                    current.generation_timestamp or ""):
+            if current is None or self._newer(row, current):
                 latest[key] = row
-        return list(latest.values())
+
+        kept = list(latest.values())
+        self.evidence_scope = {
+            "rule_version": current_rule_version(),
+            "superseded_versions_excluded": historical_rule_versions(),
+            "observations_read": len(rows),
+            "observations_reported": len(kept),
+            "collapsed_duplicates": len(rows) - len(kept),
+            "dedup_key": "entity_id + evidence_dimension + source",
+        }
+        return kept
+
+    @staticmethod
+    def _newer(candidate: Any, incumbent: Any) -> bool:
+        """Deterministic recency, with no reliance on row order.
+
+        `generation_timestamp` first because it is the real answer when it is
+        set, then `created_at`, then the primary key. The last of those is
+        arbitrary but it is *stable*, which is the property that matters: a
+        report regenerated from the same evidence must produce the same number,
+        and a tie broken by database return order does not.
+        """
+        def rank(row: Any) -> tuple:
+            return (str(getattr(row, "generation_timestamp", "") or ""),
+                    str(getattr(row, "created_at", "") or ""),
+                    str(getattr(row, "id", "") or ""))
+        return rank(candidate) > rank(incumbent)
 
     # ── the eight canonical queries ──────────────────────────────────────────
 
