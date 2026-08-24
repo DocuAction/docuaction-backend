@@ -7,8 +7,114 @@
 | Contract | 7571MN26F80064 (RFQ 7571MN26Q00038) |
 | Contractor | Alliance Global Tech, Inc. |
 | Date | 2026-08-23 |
+| COR | JaWanna Henry, HHS/ONC |
 | Engineering baseline | commit `dd8b7b7` · 1,756 tests passed, 0 failed · **architecture frozen** |
-| **Contract baseline** | **CONDITIONAL — EXECUTED AWARD VERIFICATION PENDING** |
+| **Contract baseline** | **ACTIVE PERFORMANCE.** Award number confirmed on AGT's delivered reports; the executed award *document* is not on this filesystem, so award-specific modifications remain unverified |
+| **Read first** | **ADDENDUM A** below supersedes several sections of the body |
+
+---
+
+---
+
+# ADDENDUM A — CORRECTIONS OF 2026-08-23 (supersede the sections below)
+
+An exhaustive search of the local contract and delivery folders — which earlier
+runs did not reach — located AGT's **executed contract deliverables**. Several
+conclusions in the body of this document are wrong as a result, and the
+corrections are material. **Read this addendum before anything below it.**
+
+## A.1 The contract is in active, on-schedule performance
+
+Evidence: `C:\ONS HHS\Kick off meeting\` and `C:\ONS HHS\weekly_JULY2026\`.
+
+| | |
+| --- | --- |
+| Award number | **7571MN26F80064** — confirmed on AGT's delivered reports |
+| COR | **JaWanna Henry**, HHS/ONC |
+| Kickoff | Held; deck dated 29 June 2026 |
+| **D2 methodology** | **Submitted 9 July 2026**; resubmitted in Word 27 July per ONC direction; **awaiting written COR acceptance** |
+| D3.1 weekly reports | **Nos. 1–6 delivered**, most recent 17 August 2026 |
+| Program meetings | Weekly reviews with ONC being held |
+
+## A.2 Task 2 is NOT overdue — correction to §18
+
+Section 18 of this document described Task 2 as overdue and proposed a recovery
+plan. **That was incorrect.** D2 was submitted 9 July 2026, within two weeks of
+award, and has been resubmitted once at ONC's direction. It awaits the COR's
+written acceptance. **No recovery plan is required and none should be sent.**
+Section 18 is superseded.
+
+## A.3 Sampling is defined and already submitted — correction to §4
+
+Section 4 stated that sampling parameters were undecided and put the margin of
+error to the COR. **D2 §5.1 already specifies them:**
+
+| Parameter | Value |
+| --- | --- |
+| Total population | **94,231 unique connections** (per Q1 of the solicitation Q&A; to be confirmed on data receipt) |
+| Confidence level | 95% |
+| Margin of error | **±5%** |
+| Required sample size | **383 entities** |
+| Method | **Stratified random sampling across all 11 QHINs**, finite population correction |
+| Stratum allocation | Within **3 business days** of data receipt, shared with the COR before reviews begin |
+
+The COR is asked to **confirm** these, not to originate them.
+
+## A.4 The reviewed population is NOT the contract population
+
+The 23,566-record dataset used throughout engineering is **development data**.
+AGT's own weekly reports state to the COR that entity data has not been received.
+Consequently:
+
+- The contract population is **94,231 connections**, sampled to **383 entities**.
+- Every population figure elsewhere in this document — including the 9,032
+  records with address conflicts — describes the **development dataset only** and
+  must never be presented as a contract result.
+- Entities reviewed under the contract: **0 of 383**.
+
+## A.5 Task 3 is blocked on the Government, not on AGT
+
+Recorded in the weekly blocker and risk registers:
+
+1. **Government assignment not yet issued** — required before Task 3 reviews.
+2. **Entity CSV not delivered via Box** — pending the assignment.
+
+Task 3 completes **23 October 2026**. Weekly Report No. 6 records 68 days
+remaining as at 16 August. AGT has registered the schedule-compression risk.
+
+## A.6 Security and privacy — correction to §15
+
+Section 15 recorded 13 gaps. Several are in fact complete:
+
+| Item | §15 said | Actually |
+| --- | --- | --- |
+| HHS Data Access Agreement | not assessed | **Signed by all AGT contract personnel — complete** |
+| NDAs | GAP | **Complete** |
+| Training | GAP | Platform training complete for all contract personnel; HHS Cybersecurity Essentials material held |
+| System Security Plan | not assessed | **Drafted, updated 20 July 2026** (`C:\ONS HHS\SSP_Plans\`) |
+| Staff roster / assignments | GAP | Named role assignments recorded in the weekly report |
+| Common Agreement / QTF | "not held" | **Held and cited** — Common Agreement V2.1, QTF V2.1, ToP V1.0 |
+
+Genuinely outstanding: FIPS-199 categorisation memo, an 800-53 control
+assessment, PTA/PIA, CUI marking, the one-hour federal incident reporting path,
+HSPD-12 status, Section 889 attestation, and per-deliverable 508 checklists.
+
+## A.7 Task 4 and Task 5 clarified by the Q&A
+
+- **Task 4 covers new entrants only** — not changed existing entities (Q2, Q8).
+  Section 3 of this document proposed treating changed records as in scope; that
+  is an AGT proposal only and is contradicted by the Q&A. Do not assume it.
+- **Task 5: one priority review = one individual Participant or Sub-participant**
+  (Q45).
+
+## A.8 What management should take from this
+
+The platform is certified and idle. The methodology is submitted and awaiting
+acceptance. Compliance prerequisites are largely complete. **The critical path
+runs entirely through the Government**: assignment, data, and D2 acceptance.
+
+The correct posture with the COR is a methodology review meeting and a status
+request on the two dependencies — not an apology and not a recovery plan.
 
 ---
 
