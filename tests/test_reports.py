@@ -735,6 +735,12 @@ class TestReportAPI:
         return app.openapi()
 
     def test_all_report_endpoints_are_registered(self):
+        """An exact inventory, so a route cannot appear or vanish unnoticed.
+
+        UPDATED in Phase 7.5: the SOW deliverable families and the artifact
+        store are served from the canonical path now, which is the whole point
+        of the migration.
+        """
         paths = {p for p in self._schema()["paths"] if p.startswith("/api/reports")}
         assert paths == {
             "/api/reports",
@@ -744,6 +750,12 @@ class TestReportAPI:
             "/api/reports/{report_id}/html",
             "/api/reports/{report_id}/pdf",
             "/api/reports/{report_id}/csv",
+            # Phase 7.5B — the contract's report families
+            "/api/reports/sow",
+            "/api/reports/sow/{deliverable}",
+            # Phase 7.5A — durable artifact storage
+            "/api/reports/artifacts/{report_id}",
+            "/api/reports/artifacts/{report_id}/download",
         }
 
     def test_report_endpoints_require_authentication(self):
@@ -755,7 +767,11 @@ class TestReportAPI:
                              ("get", "/api/reports/DA-ARC-2026-001"),
                              ("get", "/api/reports/DA-ARC-2026-001/html"),
                              ("get", "/api/reports/DA-ARC-2026-001/pdf"),
-                             ("get", "/api/reports/DA-ARC-2026-001/csv")):
+                             ("get", "/api/reports/DA-ARC-2026-001/csv"),
+                             ("get", "/api/reports/sow"),
+                             ("get", "/api/reports/sow/D3.1"),
+                             ("get", "/api/reports/artifacts/DA-ARC-2026-001"),
+                             ("get", "/api/reports/artifacts/DA-ARC-2026-001/download")):
             response = getattr(client, method)(path)
             assert response.status_code in (401, 403), (
                 f"{path} answered {response.status_code} unauthenticated; reports "
