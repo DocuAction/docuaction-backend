@@ -31,7 +31,7 @@
   <style>
     @page {
       @top-center {
-        content: "DEVELOPMENT / TEST DATA — NOT FOR GOVERNMENT DELIVERY";
+        content: "{% if snapshot.data_classification == 'NO_DATASET_LOADED' %}NO DATASET LOADED{% else %}DEVELOPMENT / TEST DATA{% endif %} — NOT FOR GOVERNMENT DELIVERY";
         font-family: var(--report-font);
         font-size: 7.5pt;
         font-weight: 700;
@@ -56,7 +56,14 @@
   rest of the application uses (`is_running_mock`). The report cannot disagree
   with the dashboard about whether real data is loaded.
 #}
-{% if snapshot.data_classification != 'GOVERNMENT' %}
+{% if snapshot.data_classification == 'NO_DATASET_LOADED' %}
+<div class="dev-banner" role="note" aria-label="No dataset loaded notice">
+  <p class="dev-banner-line1">NO DATASET LOADED &mdash; NOT FOR GOVERNMENT DELIVERY</p>
+  <p class="dev-banner-line2">The Government dataset has not yet been loaded and
+     no development data is present. No operational review results are
+     available, and nothing in this document is an ONC finding.</p>
+</div>
+{% elif snapshot.data_classification != 'GOVERNMENT' %}
 <div class="dev-banner" role="note" aria-label="Development data notice">
   <p class="dev-banner-line1">DEVELOPMENT / TEST DATA &mdash; NOT FOR GOVERNMENT DELIVERY</p>
   <p class="dev-banner-line2">NOT ONC FINDINGS.
@@ -169,6 +176,8 @@
         <tr><th scope="row">B1&ndash;B4 rule version</th><td>{{ snapshot.b1_b4_rule_version or 'Not recorded' }}</td></tr>
         <tr><th scope="row">Data classification</th><td>
           {%- if snapshot.data_classification == 'GOVERNMENT' -%}Government data
+          {%- elif snapshot.data_classification == 'NO_DATASET_LOADED' -%}
+            No dataset loaded &mdash; not for Government delivery
           {%- else -%}DEVELOPMENT / TEST &mdash; not for Government delivery{%- endif -%}
         </td></tr>
         <tr><th scope="row">Source delivery</th><td>

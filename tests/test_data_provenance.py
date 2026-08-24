@@ -91,17 +91,46 @@ def test_the_connector_matrix_states_onc_provides_entity_data():
     assert "AGT does not access external directory systems directly" in text
 
 
-def test_the_mock_flag_reads_the_onc_dataset_variable():
-    """The flag that says the ONC-provided dataset is loaded."""
-    from app.Tefca import connectors
+def test_the_mock_flag_does_not_read_a_credential():
+    """CORRECTED. This test used to require the opposite.
 
+    It asserted that `is_running_mock` reads TEFCA_ENTITY_DATA_KEY and the
+    legacy RCE_DIRECTORY_API_KEY, describing them as "the flag that says the
+    ONC-provided dataset is loaded". That conflation is the defect: a credential
+    says a source is reachable, not which dataset was received, and treating its
+    absence as "mock" labelled clean PRODUCTION deployments as serving
+    demonstration data.
+
+    Mock status is now a question about DATA, answered from the deployment
+    environment and — where a session exists — from actual intake provenance.
+    The credential is still read by the directory connector, which is what it is
+    for.
+    """
     import inspect
 
+    from app.Tefca import connectors
+
     src = inspect.getsource(connectors.is_running_mock)
-    assert "TEFCA_ENTITY_DATA_KEY" in src
-    # The legacy name stays readable so an environment set before the rename
-    # keeps working rather than silently flipping to MOCK.
-    assert "RCE_DIRECTORY_API_KEY" in src
+    assert "TEFCA_ENTITY_DATA_KEY" not in src
+    assert "RCE_DIRECTORY_API_KEY" not in src
+    assert "data_state" in src, "it must defer to the data-state model"
+
+    # The connector still authenticates with the key; only the mock
+    # determination stopped depending on it.
+    assert "RCE_DIRECTORY_API_KEY" in inspect.getsource(connectors)
+
+
+def test_a_credential_alone_never_reports_a_loaded_dataset(monkeypatch):
+    """The specific regression: setting a key must not make production look
+    loaded, and clearing one must not make it look mock."""
+    from app.Tefca.data_state import DataIdentity, data_state_sync
+
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("TEFCA_ENTITY_DATA_KEY", "a-real-looking-key")
+    assert data_state_sync().data_identity is DataIdentity.NONE
+
+    monkeypatch.delenv("TEFCA_ENTITY_DATA_KEY", raising=False)
+    assert data_state_sync().data_identity is DataIdentity.NONE
 
 
 def test_health_does_not_report_an_external_directory_connector():

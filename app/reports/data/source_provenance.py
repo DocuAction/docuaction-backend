@@ -52,6 +52,9 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 #: Development artefacts. Government delivery, when it happens, changes this.
 CLASSIFICATION_DEVELOPMENT = "DEVELOPMENT_TEST"
 CLASSIFICATION_GOVERNMENT = "GOVERNMENT"
+#: No dataset of any kind — the clean production state before first intake.
+#: Distinct from DEVELOPMENT_TEST, which asserts that development data exists.
+CLASSIFICATION_NONE = "NO_DATASET_LOADED"
 
 #: Why no authoritative hash was available, when that is the answer.
 REASON_NO_INTAKE = "NO_DELIVERY_RECORDED"
@@ -96,27 +99,48 @@ class SourceProvenance:
         return self.data_classification == CLASSIFICATION_GOVERNMENT
 
     @property
+    def has_no_dataset(self) -> bool:
+        """True for a clean deployment holding no dataset at all."""
+        return self.data_classification == CLASSIFICATION_NONE
+
+    @property
     def has_authoritative_hash(self) -> bool:
         return is_real_sha256(self.sha256)
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
         d["is_government_data"] = self.is_government_data
+        d["has_no_dataset"] = self.has_no_dataset
         d["has_authoritative_hash"] = self.has_authoritative_hash
         return d
 
 
 def _classification() -> str:
-    """Development until the Government dataset flag says otherwise.
+    """GOVERNMENT only when an authorised Government dataset is actually loaded.
 
-    Reuses the single flag the rest of the application already treats as the
-    authority on this (`is_running_mock`), so the report cannot disagree with
-    the dashboard about whether real data is loaded.
+    This used to read `is_running_mock()` and treat "not mock" as "Government".
+    Once that flag stopped meaning "no dataset configured" and started meaning
+    "this deployment serves mock data", the inverted reading would have labelled
+    a clean PRODUCTION report as GOVERNMENT — the opposite of the defect being
+    corrected, and a worse one.
+
+    It now reads the data-state model, where GOVERNMENT requires a controlled
+    intake with complete provenance. Anything else is development: an empty
+    production deployment produces no Government-classified report, because it
+    has no Government data to report on.
     """
     try:
-        from app.Tefca.connectors import is_running_mock
-        return (CLASSIFICATION_DEVELOPMENT if is_running_mock()
-                else CLASSIFICATION_GOVERNMENT)
+        from app.Tefca.data_state import DataIdentity, data_state_sync
+
+        identity = data_state_sync().data_identity
+        if identity is DataIdentity.GOVERNMENT:
+            return CLASSIFICATION_GOVERNMENT
+        if identity is DataIdentity.NONE:
+            # Empty production. Saying DEVELOPMENT_TEST here would assert that
+            # development evidence exists, which is the same class of untruth
+            # this correction exists to remove — just pointing the other way.
+            return CLASSIFICATION_NONE
+        return CLASSIFICATION_DEVELOPMENT
     except Exception as exc:  # noqa: BLE001
         # Unknown means development. Defaulting the other way would let an
         # import failure silently upgrade a development report to a

@@ -62,25 +62,52 @@ RETRY_ATTEMPTS = 3
 # API/report payload so demonstration output can never be mistaken for a
 # production review.
 #
-# TEFCA_ENTITY_DATA_KEY is the flag that says the ONC-provided dataset is in
-# place. The legacy name RCE_DIRECTORY_API_KEY is still read so an environment
-# set before the rename keeps working.
+# Mock status is a question about DATA, not about credentials.
+#
+# TEFCA_ENTITY_DATA_KEY and the legacy RCE_DIRECTORY_API_KEY are still read by
+# the directory connector below, because they are what authenticates it. They no
+# longer decide whether this deployment is serving mock data: a credential being
+# present or absent says nothing about which dataset was loaded, and treating it
+# as if it did is what labelled clean production environments as mock.
 def is_running_mock() -> bool:
-    """True if the module is serving MOCK entity data (no ONC dataset loaded)."""
-    return not bool((os.getenv("TEFCA_ENTITY_DATA_KEY")
-                     or os.getenv("RCE_DIRECTORY_API_KEY", "")).strip())
+    """True when this deployment is serving mock or test entity data.
+
+    CORRECTED. This used to return True whenever no entity-data key was
+    configured, which meant a clean PRODUCTION deployment — holding no data of
+    any kind — was labelled as serving demonstration data on every dashboard,
+    report and status response. "No Government data" and "mock data" are
+    different facts; an empty production system is empty, not fake.
+
+    It now answers only the question its name asks, and answers it from the
+    deployment environment rather than from the presence of an API key. A key
+    says a source is reachable; it says nothing about which data is loaded.
+
+    Development behaviour is unchanged: development still reports mock, and the
+    warnings that depend on it still appear. See `app/Tefca/data_state.py`.
+
+    Where a database session is available, prefer
+    `data_state.resolve_data_state(db)` — it determines Government status from
+    actual intake provenance rather than from configuration.
+    """
+    from app.Tefca.data_state import data_state_sync
+
+    return data_state_sync().shows_mock_warning
 
 
-def data_source_labels() -> Dict[str, Any]:
+def data_source_labels(state=None) -> Dict[str, Any]:
     """Provenance fields to stamp on every dashboard/report/status response.
-    Single source of truth — imported by reporting.py and routes.py."""
-    if is_running_mock():
-        return {
-            "data_source": "MOCK — demonstration data only",
-            "mock_data_warning": ("This report uses synthetic demonstration data. "
-                                  "Do not use for operational decisions."),
-        }
-    return {"data_source": "PRODUCTION", "mock_data_warning": None}
+
+    Single source of truth — imported by reporting.py, qa_engine.py and
+    routes.py.
+
+    `state` accepts a `DataState` resolved from the database by a caller that
+    has a session, which is the authoritative determination. Without one this
+    falls back to the conservative environment-only view, which never claims a
+    dataset is loaded that it has not verified.
+    """
+    from app.Tefca.data_state import data_state_sync, labels_for
+
+    return labels_for(state if state is not None else data_state_sync())
 
 HTTP_HEADERS = {
     "User-Agent": (
