@@ -23,8 +23,62 @@ branch_labels = None
 depends_on = None
 
 
+
+# ── drift guards ────────────────────────────────────────────────────────────
+# This revision predates the reconciliation of the Alembic chain with the schema
+# that `app/main.py` startup's `Base.metadata.create_all()` had already
+# materialised, so it can be asked to create objects that are already there.
+# Every DDL call below is routed through an existence check, which is what lets
+# the upgrade converge from an empty, a partially drifted and a fully drifted
+# schema alike. Nothing here changes WHAT the revision creates.
+#
+# In offline (--sql) mode there is no live bind to inspect. The guards then open
+# and the full DDL is emitted: that script is drift-unaware by construction and
+# is meant to be read before it is run.
+
+
+def _offline() -> bool:
+    return op.get_context().as_sql
+
+
+def _tables() -> set:
+    if _offline():
+        return set()
+    return set(sa.inspect(op.get_bind()).get_table_names())
+
+
+def _indexes(table: str) -> set:
+    if _offline() or table not in _tables():
+        return set()
+    inspector = sa.inspect(op.get_bind())
+    names = {i["name"] for i in inspector.get_indexes(table)}
+    names |= {u["name"] for u in inspector.get_unique_constraints(table)
+              if u.get("name")}
+    return names
+
+
+def _create_table(name: str, *columns, **kwargs) -> None:
+    if name not in _tables():
+        op.create_table(name, *columns, **kwargs)
+
+
+def _create_index(name: str, table: str, columns, **kwargs) -> None:
+    if name not in _indexes(table):
+        op.create_index(name, table, columns, **kwargs)
+
+
+def _drop_index(name: str, table_name: str) -> None:
+    if _offline() or name in _indexes(table_name):
+        op.drop_index(name, table_name=table_name)
+
+
+def _drop_table(name: str) -> None:
+    if _offline() or name in _tables():
+        op.drop_table(name)
+
+
 def upgrade() -> None:
-    op.create_table(
+    _create_table(
         "tefca_ppef_snapshots",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("component", sa.String(40), nullable=False),
@@ -49,13 +103,13 @@ def upgrade() -> None:
         sa.Column("error", sa.Text()),
         sa.Column("ingested_by", sa.String(255)),
     )
-    op.create_index("ix_tefca_ppef_snapshots_component", "tefca_ppef_snapshots", ["component"])
-    op.create_index("ix_tefca_ppef_snapshots_version", "tefca_ppef_snapshots", ["resource_version"])
-    op.create_index("ix_tefca_ppef_snapshots_sha256", "tefca_ppef_snapshots", ["sha256"])
-    op.create_index("idx_ppef_snapshot_component_version", "tefca_ppef_snapshots",
+    _create_index("ix_tefca_ppef_snapshots_component", "tefca_ppef_snapshots", ["component"])
+    _create_index("ix_tefca_ppef_snapshots_version", "tefca_ppef_snapshots", ["resource_version"])
+    _create_index("ix_tefca_ppef_snapshots_sha256", "tefca_ppef_snapshots", ["sha256"])
+    _create_index("idx_ppef_snapshot_component_version", "tefca_ppef_snapshots",
                     ["component", "resource_version"])
 
-    op.create_table(
+    _create_table(
         "tefca_ppef_records",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("snapshot_id", postgresql.UUID(as_uuid=True),
@@ -66,16 +120,16 @@ def upgrade() -> None:
         sa.Column("npi", sa.String(10)),
         sa.Column("payload", postgresql.JSONB(), server_default="{}"),
     )
-    op.create_index("ix_tefca_ppef_records_snapshot", "tefca_ppef_records", ["snapshot_id"])
-    op.create_index("ix_tefca_ppef_records_component", "tefca_ppef_records", ["component"])
-    op.create_index("ix_tefca_ppef_records_enrollment", "tefca_ppef_records", ["enrollment_id"])
-    op.create_index("ix_tefca_ppef_records_related", "tefca_ppef_records", ["related_enrollment_id"])
-    op.create_index("ix_tefca_ppef_records_npi", "tefca_ppef_records", ["npi"])
-    op.create_index("idx_ppef_record_component_enrollment", "tefca_ppef_records",
+    _create_index("ix_tefca_ppef_records_snapshot", "tefca_ppef_records", ["snapshot_id"])
+    _create_index("ix_tefca_ppef_records_component", "tefca_ppef_records", ["component"])
+    _create_index("ix_tefca_ppef_records_enrollment", "tefca_ppef_records", ["enrollment_id"])
+    _create_index("ix_tefca_ppef_records_related", "tefca_ppef_records", ["related_enrollment_id"])
+    _create_index("ix_tefca_ppef_records_npi", "tefca_ppef_records", ["npi"])
+    _create_index("idx_ppef_record_component_enrollment", "tefca_ppef_records",
                     ["component", "enrollment_id"])
-    op.create_index("idx_ppef_record_component_related", "tefca_ppef_records",
+    _create_index("idx_ppef_record_component_related", "tefca_ppef_records",
                     ["component", "related_enrollment_id"])
-    op.create_index("idx_ppef_record_snapshot_component", "tefca_ppef_records",
+    _create_index("idx_ppef_record_snapshot_component", "tefca_ppef_records",
                     ["snapshot_id", "component"])
 
 
@@ -87,9 +141,9 @@ def downgrade() -> None:
                "idx_ppef_record_component_enrollment", "ix_tefca_ppef_records_npi",
                "ix_tefca_ppef_records_related", "ix_tefca_ppef_records_enrollment",
                "ix_tefca_ppef_records_component", "ix_tefca_ppef_records_snapshot"):
-        op.drop_index(ix, table_name="tefca_ppef_records")
-    op.drop_table("tefca_ppef_records")
+        _drop_index(ix, table_name="tefca_ppef_records")
+    _drop_table("tefca_ppef_records")
     for ix in ("idx_ppef_snapshot_component_version", "ix_tefca_ppef_snapshots_sha256",
                "ix_tefca_ppef_snapshots_version", "ix_tefca_ppef_snapshots_component"):
-        op.drop_index(ix, table_name="tefca_ppef_snapshots")
-    op.drop_table("tefca_ppef_snapshots")
+        _drop_index(ix, table_name="tefca_ppef_snapshots")
+    _drop_table("tefca_ppef_snapshots")

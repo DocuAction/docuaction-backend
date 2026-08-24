@@ -1,0 +1,1223 @@
+{
+  "requested": 43,
+  "verified": 43,
+  "unresolved": [],
+  "bucket_counts": {
+    "B2": 10,
+    "B1": 12,
+    "B3": 21
+  },
+  "tier_counts": {
+    "1": 12,
+    "2": 10,
+    "3": 21
+  },
+  "rule_set_size": 5,
+  "outcomes": [
+    {
+      "entity_ref": "1.2.840.114350.1.13.104.2.7.3.688884.100",
+      "entity_id": "d9b5cedd-08a2-45d9-a48b-c21591454971",
+      "name": "UTMB - Health",
+      "review_id": "REV-2026-000001",
+      "bucket": "B2",
+      "rule_code": "RULE-003",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 2,
+      "assigned_role": "reviewer",
+      "dimensions": {
+        "IDENTITY": "PASS",
+        "MEDICARE_ENROLLMENT": "REVIEW",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "REVIEW",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "NOT_FOUND"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "REQUIRED",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "CORROBORATIVE"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.10.2.7.3.688884.100",
+      "entity_id": "094f3ab9-1f69-43fd-ab55-192f3c3558a4",
+      "name": "Buffalo Medical Group",
+      "review_id": "REV-2026-000002",
+      "bucket": "B1",
+      "rule_code": "RULE-001",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 1,
+      "assigned_role": "system",
+      "dimensions": {
+        "IDENTITY": "PASS",
+        "MEDICARE_ENROLLMENT": "PASS",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "REVIEW",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "NOT_APPLICABLE"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "REQUIRED",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "NOT_APPLICABLE"
+      }
+    },
+    {
+      "entity_ref": "2.16.840.1.113883.3.564.26879",
+      "entity_id": "b1c328db-6701-4918-a3b6-92117efab86d",
+      "name": "SC - CAROLINA ORTHOPAEDIC AND NEUROSURGI",
+      "review_id": "REV-2026-000003",
+      "bucket": "B1",
+      "rule_code": "RULE-001",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 1,
+      "assigned_role": "system",
+      "dimensions": {
+        "IDENTITY": "PASS",
+        "MEDICARE_ENROLLMENT": "PASS",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "REVIEW",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "REQUIRED",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "2.16.840.1.113883.3.564.6790",
+      "entity_id": "a7efefa5-5317-4d41-8a37-6bb934490694",
+      "name": "PA - Fountain Medical Associates, PC",
+      "review_id": "REV-2026-000004",
+      "bucket": "B1",
+      "rule_code": "RULE-001",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 1,
+      "assigned_role": "system",
+      "dimensions": {
+        "IDENTITY": "PASS",
+        "MEDICARE_ENROLLMENT": "PASS",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "PASS",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "REQUIRED",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.69476",
+      "entity_id": "e3986e15-6f64-448f-a882-fa7b4e7bc143",
+      "name": "ALOHA FOOT CENTERS SA",
+      "review_id": "REV-2026-000005",
+      "bucket": "B1",
+      "rule_code": "RULE-001",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 1,
+      "assigned_role": "system",
+      "dimensions": {
+        "IDENTITY": "PASS",
+        "MEDICARE_ENROLLMENT": "PASS",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "REVIEW",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "REQUIRED",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.74009",
+      "entity_id": "66e8bd12-85d7-4783-ab68-4be021112552",
+      "name": "COREY C CHINN MD LLC",
+      "review_id": "REV-2026-000006",
+      "bucket": "B3",
+      "rule_code": "RULE-004",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 3,
+      "assigned_role": "senior_analyst",
+      "dimensions": {
+        "IDENTITY": "REVIEW",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "NOT_FOUND",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.104.2.7.3.688884.100.26451",
+      "entity_id": "142eb7a7-67ae-434e-9e98-79178e99b7b1",
+      "name": "UT Health Rio Grande Valley",
+      "review_id": "REV-2026-000007",
+      "bucket": "B3",
+      "rule_code": "RULE-004",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 3,
+      "assigned_role": "senior_analyst",
+      "dimensions": {
+        "IDENTITY": "REVIEW",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "NOT_FOUND",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8371",
+      "entity_id": "d8be868c-32a8-4790-999a-28b05dc1a2d8",
+      "name": "Hawaii Pacific Health - Specialty Pharmacy",
+      "review_id": "REV-2026-000008",
+      "bucket": "B3",
+      "rule_code": "RULE-004",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 3,
+      "assigned_role": "senior_analyst",
+      "dimensions": {
+        "IDENTITY": "REVIEW",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "NOT_FOUND",
+        "TEFCA_ALIGNMENT": "REVIEW",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "2.16.840.1.113883.3.9960.3.15.1.87",
+      "entity_id": "9030122c-b012-41b1-ab77-485287f8e1d3",
+      "name": "TortFlowAI, Inc",
+      "review_id": "REV-2026-000009",
+      "bucket": "B3",
+      "rule_code": "RULE-004",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 3,
+      "assigned_role": "senior_analyst",
+      "dimensions": {
+        "IDENTITY": "REVIEW",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "NOT_FOUND",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "NOT_APPLICABLE"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "NOT_APPLICABLE"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100",
+      "entity_id": "605da67a-8d29-4276-aaad-08903cbfdcf0",
+      "name": "Hawaii Pacific Health",
+      "review_id": "REV-2026-000010",
+      "bucket": "B1",
+      "rule_code": "RULE-001",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 1,
+      "assigned_role": "system",
+      "dimensions": {
+        "IDENTITY": "PASS",
+        "MEDICARE_ENROLLMENT": "PASS",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "REVIEW",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "NOT_FOUND"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "REQUIRED",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "CORROBORATIVE"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8366",
+      "entity_id": "37506077-f373-478d-8f1e-3972e38b2595",
+      "name": "MALAMA KINO PRIMARY CARE INC",
+      "review_id": "REV-2026-000011",
+      "bucket": "B1",
+      "rule_code": "RULE-001",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 1,
+      "assigned_role": "system",
+      "dimensions": {
+        "IDENTITY": "PASS",
+        "MEDICARE_ENROLLMENT": "PASS",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "REVIEW",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "REQUIRED",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8367",
+      "entity_id": "e6332ff7-e6e8-48d4-bc66-a440131bf96c",
+      "name": "CHIA GRANDA MD LLC",
+      "review_id": "REV-2026-000012",
+      "bucket": "B3",
+      "rule_code": "DEFAULT-UNMATCHED",
+      "rule_version": 0,
+      "rule_matched": false,
+      "tier": 3,
+      "assigned_role": "senior_analyst",
+      "dimensions": {
+        "IDENTITY": "PASS",
+        "MEDICARE_ENROLLMENT": "REVIEW",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "REVIEW",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "REVIEW"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "REQUIRED",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8368",
+      "entity_id": "dceb3998-65a6-4b62-b4b2-54c89816349a",
+      "name": "KAPAA PEDIATRICS LLC",
+      "review_id": "REV-2026-000013",
+      "bucket": "B2",
+      "rule_code": "RULE-003",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 2,
+      "assigned_role": "reviewer",
+      "dimensions": {
+        "IDENTITY": "PASS",
+        "MEDICARE_ENROLLMENT": "REVIEW",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "REVIEW",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "REVIEW"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "REQUIRED",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8370",
+      "entity_id": "fa9fb514-c9e1-430e-81a0-4fad42951ad5",
+      "name": "Wilcox Medical Center",
+      "review_id": "REV-2026-000014",
+      "bucket": "B3",
+      "rule_code": "RULE-004",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 3,
+      "assigned_role": "senior_analyst",
+      "dimensions": {
+        "IDENTITY": "REVIEW",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "NOT_FOUND",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8372",
+      "entity_id": "8246fa1a-9b10-4f41-8775-90f37d60ef3c",
+      "name": "KAANAPALI MEDICAL SERVICES",
+      "review_id": "REV-2026-000015",
+      "bucket": "B1",
+      "rule_code": "RULE-001",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 1,
+      "assigned_role": "system",
+      "dimensions": {
+        "IDENTITY": "PASS",
+        "MEDICARE_ENROLLMENT": "PASS",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "REVIEW",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "REQUIRED",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8375",
+      "entity_id": "99040446-9d86-4284-967d-50a296a16214",
+      "name": "KUHIO MEDICAL CENTER",
+      "review_id": "REV-2026-000016",
+      "bucket": "B1",
+      "rule_code": "RULE-001",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 1,
+      "assigned_role": "system",
+      "dimensions": {
+        "IDENTITY": "PASS",
+        "MEDICARE_ENROLLMENT": "PASS",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "REVIEW",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "REQUIRED",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8377",
+      "entity_id": "95dbae41-ccfc-4694-ad63-e15954ae1a9b",
+      "name": "CHARLIE Y SONIDO MD",
+      "review_id": "REV-2026-000017",
+      "bucket": "B1",
+      "rule_code": "RULE-001",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 1,
+      "assigned_role": "system",
+      "dimensions": {
+        "IDENTITY": "PASS",
+        "MEDICARE_ENROLLMENT": "PASS",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "REVIEW",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "REQUIRED",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8378",
+      "entity_id": "e54a1597-3e83-47fb-a57f-17129e7fc16a",
+      "name": "TERRY Q YEE MD",
+      "review_id": "REV-2026-000018",
+      "bucket": "B1",
+      "rule_code": "RULE-001",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 1,
+      "assigned_role": "system",
+      "dimensions": {
+        "IDENTITY": "PASS",
+        "MEDICARE_ENROLLMENT": "PASS",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "REVIEW",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "REQUIRED",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8380",
+      "entity_id": "baa1ba10-9981-493d-9b63-2c971f5783fb",
+      "name": "SPINE & PAIN CENTER OF KAUAI SONNET",
+      "review_id": "REV-2026-000019",
+      "bucket": "B2",
+      "rule_code": "RULE-003",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 2,
+      "assigned_role": "reviewer",
+      "dimensions": {
+        "IDENTITY": "PASS",
+        "MEDICARE_ENROLLMENT": "REVIEW",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "REVIEW",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "REVIEW"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "REQUIRED",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8381",
+      "entity_id": "17d1fa24-44c2-4851-bb98-6ae81129f57c",
+      "name": "PACIFIC PULMONARY CONSULTANTS",
+      "review_id": "REV-2026-000020",
+      "bucket": "B1",
+      "rule_code": "RULE-001",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 1,
+      "assigned_role": "system",
+      "dimensions": {
+        "IDENTITY": "PASS",
+        "MEDICARE_ENROLLMENT": "PASS",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "REVIEW",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "REQUIRED",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8383",
+      "entity_id": "c04d6a36-8227-4a9f-ba63-1e84fb272334",
+      "name": "HAWAII COALITION FOR HEALTH",
+      "review_id": "REV-2026-000021",
+      "bucket": "B3",
+      "rule_code": "RULE-004",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 3,
+      "assigned_role": "senior_analyst",
+      "dimensions": {
+        "IDENTITY": "REVIEW",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "NOT_FOUND",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8384",
+      "entity_id": "06c3b125-fca0-4eb8-866d-aa1a0b4e56d2",
+      "name": "Kauai Medical Clinic",
+      "review_id": "REV-2026-000022",
+      "bucket": "B3",
+      "rule_code": "RULE-004",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 3,
+      "assigned_role": "senior_analyst",
+      "dimensions": {
+        "IDENTITY": "REVIEW",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "NOT_FOUND",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8385",
+      "entity_id": "d67760ac-aac7-4598-b29a-3b98491807b4",
+      "name": "JEFFREY LIM MD INC",
+      "review_id": "REV-2026-000023",
+      "bucket": "B3",
+      "rule_code": "RULE-004",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 3,
+      "assigned_role": "senior_analyst",
+      "dimensions": {
+        "IDENTITY": "REVIEW",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "NOT_FOUND",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8387",
+      "entity_id": "e7f25905-e83e-4c9d-8072-989a66e3e6dd",
+      "name": "North Shore Medical",
+      "review_id": "REV-2026-000024",
+      "bucket": "B3",
+      "rule_code": "RULE-004",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 3,
+      "assigned_role": "senior_analyst",
+      "dimensions": {
+        "IDENTITY": "REVIEW",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "NOT_FOUND",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.83896",
+      "entity_id": "dc5c5e32-e652-4ae5-aca9-bd48e82240d1",
+      "name": "KAHALA PEDIATRICS LLC",
+      "review_id": "REV-2026-000025",
+      "bucket": "B3",
+      "rule_code": "RULE-004",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 3,
+      "assigned_role": "senior_analyst",
+      "dimensions": {
+        "IDENTITY": "REVIEW",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "NOT_FOUND",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8464",
+      "entity_id": "2d5cd42b-2dd4-4252-9e1c-5585c7de96e9",
+      "name": "CHILDRENS CLINIC",
+      "review_id": "REV-2026-000026",
+      "bucket": "B3",
+      "rule_code": "RULE-004",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 3,
+      "assigned_role": "senior_analyst",
+      "dimensions": {
+        "IDENTITY": "REVIEW",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "NOT_FOUND",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8468",
+      "entity_id": "ad276e18-000e-4d6b-b43e-c90b25c23713",
+      "name": "HAROLD NILSSON MD LLC",
+      "review_id": "REV-2026-000027",
+      "bucket": "B3",
+      "rule_code": "RULE-004",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 3,
+      "assigned_role": "senior_analyst",
+      "dimensions": {
+        "IDENTITY": "REVIEW",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "NOT_FOUND",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8469",
+      "entity_id": "23654142-2c3f-4a3d-a0e5-913e7a7755ba",
+      "name": "MERI-MIKA MORISADA MD",
+      "review_id": "REV-2026-000028",
+      "bucket": "B3",
+      "rule_code": "RULE-004",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 3,
+      "assigned_role": "senior_analyst",
+      "dimensions": {
+        "IDENTITY": "REVIEW",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "NOT_FOUND",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8470",
+      "entity_id": "1acd4a34-2def-4b2b-aea1-04e762783023",
+      "name": "HAC ISLAND PEDIATRICS OF HONOLULU",
+      "review_id": "REV-2026-000029",
+      "bucket": "B3",
+      "rule_code": "RULE-004",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 3,
+      "assigned_role": "senior_analyst",
+      "dimensions": {
+        "IDENTITY": "REVIEW",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "NOT_FOUND",
+        "TEFCA_ALIGNMENT": "REVIEW",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8471",
+      "entity_id": "086df04c-6641-4a7d-9123-a16439450e23",
+      "name": "Honolulu Imagining Center - Hale Pawaa",
+      "review_id": "REV-2026-000030",
+      "bucket": "B3",
+      "rule_code": "RULE-004",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 3,
+      "assigned_role": "senior_analyst",
+      "dimensions": {
+        "IDENTITY": "REVIEW",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "NOT_FOUND",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8474",
+      "entity_id": "20172e5e-784e-4e03-99bc-8760e2cbd573",
+      "name": "HAC BERNARD K CHUN MD",
+      "review_id": "REV-2026-000031",
+      "bucket": "B3",
+      "rule_code": "RULE-004",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 3,
+      "assigned_role": "senior_analyst",
+      "dimensions": {
+        "IDENTITY": "REVIEW",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "NOT_FOUND",
+        "TEFCA_ALIGNMENT": "REVIEW",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8475",
+      "entity_id": "23564585-6eb2-42a2-af89-cf21cba978cd",
+      "name": "MICHAEL H T SIA MD INC",
+      "review_id": "REV-2026-000032",
+      "bucket": "B2",
+      "rule_code": "RULE-003",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 2,
+      "assigned_role": "reviewer",
+      "dimensions": {
+        "IDENTITY": "PASS",
+        "MEDICARE_ENROLLMENT": "REVIEW",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "REVIEW",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "REVIEW"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "REQUIRED",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8476",
+      "entity_id": "9e5066da-eb23-4903-bfd3-550580e9e9e0",
+      "name": "CHUNMEI WU MD",
+      "review_id": "REV-2026-000033",
+      "bucket": "B3",
+      "rule_code": "RULE-004",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 3,
+      "assigned_role": "senior_analyst",
+      "dimensions": {
+        "IDENTITY": "REVIEW",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "NOT_FOUND",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8477",
+      "entity_id": "470ab6f9-47bd-4708-8c3c-34088f881fca",
+      "name": "JAMES K NAKAMURA MD",
+      "review_id": "REV-2026-000034",
+      "bucket": "B2",
+      "rule_code": "RULE-003",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 2,
+      "assigned_role": "reviewer",
+      "dimensions": {
+        "IDENTITY": "PASS",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "REVIEW",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "CORROBORATIVE",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8478",
+      "entity_id": "39505f8d-970f-4f2d-adf6-9dfc87253c56",
+      "name": "KEITH T MATSUMOTO MD INC",
+      "review_id": "REV-2026-000035",
+      "bucket": "B2",
+      "rule_code": "RULE-003",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 2,
+      "assigned_role": "reviewer",
+      "dimensions": {
+        "IDENTITY": "PASS",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "REVIEW",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "CORROBORATIVE",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8479",
+      "entity_id": "84bb4e2c-4852-4003-a763-3f87d0357653",
+      "name": "HAC COH LLC",
+      "review_id": "REV-2026-000036",
+      "bucket": "B3",
+      "rule_code": "RULE-004",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 3,
+      "assigned_role": "senior_analyst",
+      "dimensions": {
+        "IDENTITY": "REVIEW",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "NOT_FOUND",
+        "TEFCA_ALIGNMENT": "REVIEW",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8480",
+      "entity_id": "382f5878-cd6f-435d-8596-eb8f62a7d31a",
+      "name": "PEGGY M LIAO MD",
+      "review_id": "REV-2026-000037",
+      "bucket": "B1",
+      "rule_code": "RULE-001",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 1,
+      "assigned_role": "system",
+      "dimensions": {
+        "IDENTITY": "PASS",
+        "MEDICARE_ENROLLMENT": "PASS",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "REVIEW",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "REQUIRED",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8529",
+      "entity_id": "5dd31b70-0769-4727-9fa8-ab877d48ef14",
+      "name": "VINSON DIEP MD",
+      "review_id": "REV-2026-000038",
+      "bucket": "B2",
+      "rule_code": "RULE-003",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 2,
+      "assigned_role": "reviewer",
+      "dimensions": {
+        "IDENTITY": "PASS",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "REVIEW",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "CORROBORATIVE",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8530",
+      "entity_id": "dd003041-8767-4cb3-9da3-06b986490814",
+      "name": "JAMES Y SIM, MD",
+      "review_id": "REV-2026-000039",
+      "bucket": "B2",
+      "rule_code": "RULE-003",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 2,
+      "assigned_role": "reviewer",
+      "dimensions": {
+        "IDENTITY": "PASS",
+        "MEDICARE_ENROLLMENT": "REVIEW",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "REVIEW",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "REVIEW"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "REQUIRED",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8531",
+      "entity_id": "de85fcbf-6951-4bec-a62f-92b3efe93cc3",
+      "name": "SHELLEY A LOUI MD",
+      "review_id": "REV-2026-000040",
+      "bucket": "B3",
+      "rule_code": "RULE-004",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 3,
+      "assigned_role": "senior_analyst",
+      "dimensions": {
+        "IDENTITY": "REVIEW",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "NOT_FOUND",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8532",
+      "entity_id": "1fb7af23-5d26-4fd5-a8f7-790443c4c5bb",
+      "name": "Pediatric Group of Honolulu",
+      "review_id": "REV-2026-000041",
+      "bucket": "B3",
+      "rule_code": "RULE-004",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 3,
+      "assigned_role": "senior_analyst",
+      "dimensions": {
+        "IDENTITY": "REVIEW",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "NOT_FOUND",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "PASS"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "NOT_APPLICABLE",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8533",
+      "entity_id": "7d6735e7-6348-4e27-b36f-06ef2ebed1a7",
+      "name": "FRANKLIN SH YOUNG MD INC",
+      "review_id": "REV-2026-000042",
+      "bucket": "B2",
+      "rule_code": "RULE-003",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 2,
+      "assigned_role": "reviewer",
+      "dimensions": {
+        "IDENTITY": "PASS",
+        "MEDICARE_ENROLLMENT": "REVIEW",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "REVIEW",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "REVIEW"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "REQUIRED",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    },
+    {
+      "entity_ref": "1.2.840.114350.1.13.105.2.7.3.688884.100.8534",
+      "entity_id": "0b7c2a3b-b0d0-43ef-8be4-ecabdd8089e9",
+      "name": "PPC NINA M TERUYA MD",
+      "review_id": "REV-2026-000043",
+      "bucket": "B2",
+      "rule_code": "RULE-003",
+      "rule_version": 2,
+      "rule_matched": true,
+      "tier": 2,
+      "assigned_role": "reviewer",
+      "dimensions": {
+        "IDENTITY": "PASS",
+        "MEDICARE_ENROLLMENT": "REVIEW",
+        "EXCLUSION_REVOCATION": "UNAVAILABLE",
+        "ADDRESS": "REVIEW",
+        "TEFCA_ALIGNMENT": "PASS",
+        "PROVIDER_ORG_RELATIONSHIP": "REVIEW"
+      },
+      "applicability": {
+        "IDENTITY": "REQUIRED",
+        "MEDICARE_ENROLLMENT": "REQUIRED",
+        "EXCLUSION_REVOCATION": "REQUIRED",
+        "ADDRESS": "REQUIRED",
+        "TEFCA_ALIGNMENT": "REQUIRED",
+        "PROVIDER_ORG_RELATIONSHIP": "REQUIRED"
+      }
+    }
+  ],
+  "separation_note": "Verification result (D1-D6), ARC determination (B1-B4) and review tier (T1-T3) are stored separately and are not collapsed. A B1 means no discrepancy was found against the evidence gathered; it is not a statement that every source passed."
+}

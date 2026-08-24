@@ -280,6 +280,54 @@ async def startup():
     except Exception as e:
         logger.warning(f"PPEF scheduler not started: {e}")
 
+    # ═══ EVIDENCE VOCABULARY CONTRACT (B5 / E1) ═══
+    #
+    # STAGE A: report-only at startup, FATAL in CI. `load_rules` already raises
+    # on an unregistered signal when the rules are next loaded; this pass runs
+    # the same check eagerly so a rule row inserted since the last deploy is
+    # visible on boot rather than on first classification.
+    #
+    # STAGE B (VOCABULARY_CONTRACT_STARTUP_MODE=fatal) is DELIBERATELY OPT-IN and
+    # must remain so until the Azure dev/prod review_rules inventory confirms no
+    # unregistered signal exists. Shipping straight to fatal would trade a
+    # silent-miss risk for an availability risk — a production start failure over
+    # a rule row nobody has inventoried.
+    try:
+        from app.core.vocabulary_contract import (
+            assert_vocabulary_contract_at_startup, startup_mode)
+        from app.tefca_registry.bucket_classifier import SEED_RULES_V2
+        from app.core.database import async_session_maker
+        from sqlalchemy import select as _select
+        from app.tefca_registry import models as _reg
+
+        rules = SEED_RULES_V2
+        try:
+            async with async_session_maker() as _s:
+                rows = (await _s.execute(
+                    _select(_reg.ReviewRule).where(_reg.ReviewRule.is_active.is_(True))
+                )).scalars().all()
+            if rows:
+                rules = [{"rule_code": r.rule_code, "name": r.name, "bucket": r.bucket,
+                          "priority": r.priority, "conditions": r.conditions or {},
+                          "version": r.version} for r in rows]
+        except Exception as e:  # noqa: BLE001 — fall back to the seed definitions
+            logger.info(f"vocabulary contract: using seed rules ({type(e).__name__})")
+
+        summary = assert_vocabulary_contract_at_startup(rules)
+        logger.info(
+            "Evidence vocabulary contract [%s]: %d/%d rule conditions ready, "
+            "%d not ready",
+            summary["mode"], summary["conditions_ready"], summary["conditions_total"],
+            len(summary["conditions_not_ready"]))
+    except Exception as e:
+        # A raise here means CHECK 4 fired in Stage B, which is intended to stop
+        # startup. Anything else must not.
+        from app.core.vocabulary_contract import (
+            UnknownSignalReference as _USR, startup_mode as _sm)
+        if isinstance(e, _USR) and _sm() == "fatal":
+            raise
+        logger.warning(f"Vocabulary contract check skipped: {e}")
+
 
 # Cached TEFCA connector probe. /health is polled frequently by load balancers,
 # so the live probe result is cached for 60s to avoid hammering the source APIs.
@@ -439,6 +487,41 @@ logger.info("Loaded: tefca-registry (Phase 2A — /api/tefca/registry/*)")
 # USPS observability at /api/v1/usps/*. safe_load, not a hard import: these are
 # metrics endpoints, and losing them must never take the API down.
 safe_load("app.tefca_registry.usps_routes", "usps-metrics")
+
+# ═══ RCE INGESTION PIPELINE ═══
+# Area 1 (immutable) -> quality -> Issue Ledger -> Area 2 -> canonical registry.
+# No mutating route exists for Area 1 — see app/tefca_registry/rce/repository.py.
+safe_load("app.tefca_registry.rce.routes", "tefca-rce-pipeline")
+
+# ═══ REPORTS ═══
+# Federal reporting engine at /api/reports/*. Reads FROZEN verification results
+# through the Report Data Service; generation never triggers a source lookup or
+# a D1-D6 / B1-B4 evaluation.
+#
+# CANONICAL contract-facing report path, so it is registered UNCONDITIONALLY for
+# the same reason the TEFCA router above is: safe_load swallows an ImportError
+# and turns every /api/reports/* endpoint into a 404 while the service still
+# reports itself healthy. For a deliverable path that failure mode is worse than
+# not starting — an operator chasing a missing report would have no signal, and
+# the legacy generators would quietly keep serving in its place.
+from app.reports.routes import router as reports_router  # noqa: E402
+app.include_router(reports_router)
+logger.info("Loaded: reports (CANONICAL — /api/reports/*, unconditional registration)")
+
+# ═══ LEARNING CENTER ═══
+# Operator guidance at /api/learning/*. CORE and programme-agnostic: it serves
+# whatever programmes have registered content, and imports nothing from TEFCA.
+# Importing the TEFCA content module is what registers the TEFCA programme, so
+# it must happen before the first request rather than lazily.
+from app.core.learning.routes import router as learning_router  # noqa: E402
+# `from ... import` deliberately: `import app.Tefca.learning_content`
+# rebinds the local name `app` to the package and shadows the FastAPI
+# instance, which fails on the very next line.
+from app.Tefca import learning_content as _tefca_learning  # noqa: E402,F401
+from app.Tefca.learning_routes import router as tefca_methodology_router  # noqa: E402
+app.include_router(learning_router)
+app.include_router(tefca_methodology_router)
+logger.info("Loaded: learning-center (/api/learning/*) + tefca-methodology")
 
 # ═══ CASE MANAGEMENT ═══
 safe_load("app.case_management", "case-management")

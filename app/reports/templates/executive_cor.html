@@ -1,0 +1,172 @@
+{#
+  Report 3 — Executive / COR summary.
+
+  TARGETS one page at normal operating volume. It does NOT force one page.
+
+  The distinction is deliberate and is why the test is named
+  `test_executive_report_fits_normal_volume` rather than
+  `..._one_page`: shrinking type or dropping required content to win a
+  pagination argument produces a document that is technically one page and
+  practically unreadable, and an executive summary that has quietly discarded
+  its exceptions list is worse than a two-page one. Typography here is the same
+  as every other report; density comes from a tighter layout, not smaller text.
+#}
+{% extends "base.html" %}
+
+{% block title %}Executive Summary {{ snapshot.report_id }} — TEFCA ARC{% endblock %}
+{% block description %}Executive summary of TEFCA ARC verification results{% endblock %}
+{% block kicker %}Executive Summary &middot; Contracting Officer's Representative{% endblock %}
+{% block heading %}TEFCA ARC Verification: Executive Summary{% endblock %}
+
+{% block content %}
+
+{{ scope_box(scope) }}
+
+<h2>Verification outcome</h2>
+{% if buckets.insufficient_data %}
+  <p class="insufficient-data">
+    Insufficient data for this reporting period. No entities were classified, so
+    no outcome is reported. This is an absence of measurement, not a measured
+    result of zero.
+  </p>
+{% else %}
+  <p>
+    {{ buckets.total_classified|number }} entities were classified in this
+    reporting period.
+    {% if dimensions.all_applicable_pass_pct != INSUFFICIENT_DATA %}
+      {{ dimensions.all_applicable_pass_pct|pct }} of applicable verification
+      dimensions were satisfied.
+    {% endif %}
+    {% if exceptions.count %}
+      {{ exceptions.count|number }} entities are in B3/B4 and require analyst
+      attention.
+    {% else %}
+      No B3 or B4 escalations were raised.
+    {% endif %}
+  </p>
+
+  {% set chart = charts.get('b1_b4_distribution') %}
+  {% if chart %}{{ figure(chart, chart_images.get('b1_b4_distribution', '')) }}{% endif %}
+{% endif %}
+
+<h2>Evidence dimension coverage</h2>
+{% set chart = charts.get('evidence_dimensions') %}
+{% if chart %}{{ figure(chart, chart_images.get('evidence_dimensions', '')) }}{% endif %}
+
+<h2>Service level compliance</h2>
+{% if sla.insufficient_data %}
+  <p class="insufficient-data">
+    Insufficient data for this reporting period. No reviews were recorded, so no
+    service level metrics are reported.
+  </p>
+{% else %}
+  <table>
+    <caption>Service level compliance (RAG)</caption>
+    <thead>
+      <tr>
+        <th scope="col">Metric</th>
+        <th scope="col">Met</th>
+        <th scope="col">Total</th>
+        <th scope="col">Achieved</th>
+        <th scope="col">Target</th>
+        <th scope="col">Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for metric in sla.metrics %}
+        <tr>
+          <th scope="row">{{ metric.metric }}</th>
+          <td>{{ metric.met|number }}</td>
+          <td>{{ metric.total|number }}</td>
+          <td>{{ metric.pct|pct }}</td>
+          <td>{{ metric.target_pct }}%</td>
+          {# RAG uses colour + shape + word. The word is what a screen reader
+             announces and what survives a monochrome print. #}
+          <td>
+            <span class="status status-{{ 'b1' if metric.rag == 'GREEN'
+                                          else 'b2' if metric.rag == 'AMBER'
+                                          else 'b4' }}">
+              <span class="glyph" aria-hidden="true">{{
+                '●' if metric.rag == 'GREEN' else '▲' if metric.rag == 'AMBER'
+                else '✕' if metric.rag == 'RED' else '■' }}</span><span
+                class="text">{{ metric.rag.replace('_', ' ')|title }}</span>
+            </span>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endif %}
+
+<h2>Key exceptions and risk items</h2>
+{% if exceptions.count %}
+  <table>
+    <caption>Entities requiring attention</caption>
+    <thead>
+      <tr>
+        <th scope="col">Review ID</th>
+        <th scope="col">Status</th>
+        <th scope="col">Classification</th>
+        <th scope="col">Resolution</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in exceptions.exceptions[:10] %}
+        <tr>
+          <th scope="row">{{ item.review_id or 'Unassigned' }}</th>
+          <td>{{ status_indicator(item.bucket, buckets.indicators) }}</td>
+          <td>{{ item.bucket_label }}</td>
+          <td>{{ item.resolution or 'Unresolved' }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if exceptions.count > 10 %}
+    {# Truncation is stated, never silent. A table that quietly stops at ten
+       reads as a complete list of ten. #}
+    <p class="figure-notes">
+      Showing the 10 highest-severity exceptions of {{ exceptions.count|number }}.
+      The full list appears in the Entity Verification Report and its paired CSV.
+    </p>
+  {% endif %}
+{% else %}
+  <p>
+    No B3 or B4 exceptions were raised in this reporting period. This is a
+    statement about the entities evaluated, not an assurance about entities
+    outside the evaluated scope.
+  </p>
+{% endif %}
+
+<h2>Recommendations</h2>
+<ul>
+  {% if exceptions.count %}
+    <li>
+      Assign the {{ exceptions.count|number }} open B3/B4 exception(s) for
+      analyst determination. No entity has been failed automatically; each
+      requires a human decision.
+    </li>
+  {% endif %}
+  {% for metric in sla.metrics %}
+    {% if metric.rag in ('AMBER', 'RED') %}
+      <li>
+        {{ metric.metric }} at {{ metric.pct|pct }} is below its
+        {{ metric.target_pct }}% target and warrants attention this cycle.
+      </li>
+    {% endif %}
+  {% endfor %}
+  {% if scope.records_held %}
+    <li>
+      {{ scope.records_held|number }} record(s) were received but not evaluated
+      in this cycle. Confirm whether they are in scope for the next cycle so the
+      received and evaluated counts reconcile.
+    </li>
+  {% endif %}
+  {% if not exceptions.count and not scope.records_held %}
+    <li>
+      No corrective action is recommended on the basis of this reporting period's
+      results.
+    </li>
+  {% endif %}
+</ul>
+
+{% endblock %}

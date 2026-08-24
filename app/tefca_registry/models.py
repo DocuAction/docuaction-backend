@@ -67,6 +67,38 @@ class TefcaRegEntity(Base):
     # operating" — a legitimate state for a real participant.
     is_deleted = Column(Boolean, nullable=False, server_default=text("false"))
     deleted_at = Column(DateTime)
+
+    # ── RCE-delivered attributes (migration 20260822_rce_pipeline) ───────────
+    #
+    # These are COLUMNS rather than identifier rows because the delivered data
+    # is not unique the way `tefca_entity_identifiers` assumes.
+    #
+    # TEFCAID was profiled at 23,566 populated / 23,325 distinct: 43 values
+    # repeat across 241 rows, one of them 69 times, and each repeat is a health
+    # system sharing one TEFCAID with its facilities. It identifies an
+    # ORGANISATION FAMILY, not a record. Forcing it through the unique index on
+    # (identifier_type, identifier_value, system_uri) fails on the 241st row —
+    # and "fixing" that by relaxing the index would remove the guarantee that
+    # protects NPI and the other genuinely unique identifiers.
+    #
+    # So: every entity carries its family TEFCAID here (indexed, NOT unique, so
+    # a lookup returns the whole family, which is the correct answer), and an
+    # identifier ROW is written only where the value is unique in the delivery.
+    rce_org_oid = Column(String(200))          # the delivery's `id` — unique
+    rce_tefcaid = Column(String(100))          # family identifier — NOT unique
+    rce_hcid = Column(String(100))
+    rce_aaid = Column(String(100))
+    sequoia_org_type = Column(String(50))      # Participant | Subparticipant
+    #: Technical exchange behaviour. NEVER the TEFCA hierarchy — see
+    #: app/Tefca/applicability.py:tefca_class_of.
+    org_node_type = Column(String(100))
+    hl7_org_role = Column(String(100))
+    org_managing_org = Column(String(200))     # QHIN OID
+    is_test_record = Column(Boolean, nullable=False, server_default=text("false"))
+    rce_attributes = Column(JSONB)
+    #: Provenance back to the exact delivered line this entity came from.
+    source_record_id = Column(UUID(as_uuid=True))
+
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(),
                         onupdate=datetime.utcnow)
@@ -79,6 +111,13 @@ class TefcaRegEntity(Base):
         Index("idx_tefca_reg_ent_name", "name"),
         Index("idx_tefca_reg_ent_active", "is_active",
               postgresql_where=text("is_active = true")),
+        # Non-unique on purpose — see the column comments above.
+        Index("idx_tefca_reg_ent_rce_oid", "rce_org_oid"),
+        Index("idx_tefca_reg_ent_rce_tefcaid", "rce_tefcaid"),
+        Index("idx_tefca_reg_ent_rce_hcid", "rce_hcid"),
+        Index("idx_tefca_reg_ent_source_record", "source_record_id"),
+        Index("idx_tefca_reg_ent_test", "is_test_record",
+              postgresql_where=text("is_test_record = true")),
     )
 
 
@@ -424,6 +463,11 @@ class ReviewRecord(Base):
     reclassified_at = Column(DateTime)
     resolution_rationale = Column(Text)
     reviewed_at = Column(DateTime)
+    #: Set ONLY by a QA APPROVE event (B2). NULL means the determination has not
+    #: passed QA and is not reportable — which is true of all 43 existing rows,
+    #: correctly: they are system recommendations no human has resolved, and the
+    #: gate must not be back-dated for them.
+    reportable_at = Column(DateTime)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
     __table_args__ = (
@@ -594,6 +638,124 @@ class ReviewCycle(Base):
     )
 
 
+# ─── 18. review_decision_events ───────────────────────────────────────────────
+
+class ReviewDecisionEvent(Base):
+    """Every human act on a determination. APPEND-ONLY.
+
+    WHY AN EVENT TABLE AND NOT COLUMNS ON review_records
+    ────────────────────────────────────────────────────
+    QA can RETURN a determination, the analyst then issues a new one, and QA
+    reviews again. That is a LOOP, and a fixed column set cannot hold a loop —
+    a second QA pass would overwrite the first, which is precisely what this
+    design exists to prevent. Seven columns can record one cycle; this table
+    records all of them.
+
+    NOTHING IS EVER OVERWRITTEN
+    A correction is a NEW event. A superseding determination is a NEW event that
+    POINTS AT the one it supersedes via `supersedes_decision_id`; the superseded
+    event keeps its own actor, timestamp and rationale forever. There is
+    deliberately no `override` column and no MODIFY action — an overwritten
+    decision cannot be audited, and "who decided what, when" is the only
+    question this table exists to answer.
+
+    ROLE IS CAPTURED AS AT THE TIME OF THE ACT
+    `actor_role` records the authority the decision was actually made under. The
+    authorisation check reads the LIVE database role (so a demotion takes effect
+    on the next request), but a later role change must not rewrite what a past
+    decision was authorised by.
+
+    THE 43 EXISTING DETERMINATIONS HAVE NO EVENTS, AND MUST NOT BE GIVEN ANY.
+    They are system recommendations that no human has resolved. Back-dating an
+    analyst or QA event for them would manufacture a human decision that never
+    happened.
+    """
+
+    __tablename__ = "review_decision_events"
+
+    #: Event types. A superseding determination is its own type, not a flag.
+    ANALYST_DETERMINATION = "ANALYST_DETERMINATION"
+    QA_REVIEW = "QA_REVIEW"
+    SUPERSEDING_DETERMINATION = "SUPERSEDING_DETERMINATION"
+
+    #: QA actions. No "override" — see the class docstring.
+    QA_APPROVE = "APPROVE"
+    QA_RETURN = "RETURN"
+    QA_ESCALATE = "ESCALATE"
+
+    DETERMINATION_EVENTS = (ANALYST_DETERMINATION, SUPERSEDING_DETERMINATION)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    review_id = Column(String(20), ForeignKey("review_records.review_id"),
+                       nullable=False, index=True)
+    #: 1, 2, 3 … per review. Ordering is DATA, not an implicit timestamp sort:
+    #: two events in the same transaction can share a timestamp.
+    sequence_number = Column(Integer, nullable=False)
+    event_type = Column(String(30), nullable=False, index=True)
+
+    actor_user_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    actor_email = Column(String(320), nullable=False)
+    #: The role held WHEN THE DECISION WAS MADE, not the role held now.
+    actor_role = Column(String(30), nullable=False)
+    occurred_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    # determination events
+    determination = Column(String(12))          # CONFIRM | RECLASSIFY
+    determined_bucket = Column(String(2))       # B1..B4 when RECLASSIFY
+    #: Mandatory on every event. A decision without a reason is not reviewable.
+    rationale = Column(Text, nullable=False)
+
+    # QA events
+    qa_action = Column(String(10))              # APPROVE | RETURN | ESCALATE
+    qa_reason = Column(Text)
+    escalated_to_user_id = Column(UUID(as_uuid=True))
+    escalation_reason = Column(Text)
+
+    # supersession
+    supersedes_decision_id = Column(UUID(as_uuid=True),
+                                    ForeignKey("review_decision_events.id"))
+    supersession_reason = Column(Text)
+
+    #: Segregation-of-duties exception. Requires an admin grant, is counted in
+    #: reconciliation, and should be disabled by configuration in production.
+    sod_exception_granted_by = Column(UUID(as_uuid=True))
+    sod_exception_reason = Column(Text)
+
+    ip_address = Column(String(45))
+    correlation_id = Column(UUID(as_uuid=True))
+
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("review_id", "sequence_number", name="uq_review_event_seq"),
+        # The invariants, enforced by the database rather than by convention.
+        CheckConstraint(
+            "event_type <> 'QA_REVIEW' OR qa_action IS NOT NULL",
+            name="ck_review_event_qa_action"),
+        CheckConstraint(
+            "qa_action IS NULL OR qa_action IN ('APPROVE','RETURN','ESCALATE')",
+            name="ck_review_event_qa_action_vocab"),
+        CheckConstraint(
+            "qa_action <> 'ESCALATE' OR "
+            "(escalated_to_user_id IS NOT NULL AND escalation_reason IS NOT NULL)",
+            name="ck_review_event_escalation_complete"),
+        CheckConstraint(
+            "supersedes_decision_id IS NULL OR supersession_reason IS NOT NULL",
+            name="ck_review_event_supersession_reason"),
+        CheckConstraint(
+            "length(btrim(rationale)) >= 10", name="ck_review_event_rationale"),
+        CheckConstraint(
+            "event_type IN ('ANALYST_DETERMINATION','QA_REVIEW',"
+            "'SUPERSEDING_DETERMINATION')", name="ck_review_event_type"),
+        CheckConstraint(
+            "determination IS NULL OR determination IN ('CONFIRM','RECLASSIFY')",
+            name="ck_review_event_determination"),
+        Index("idx_review_event_review_seq", "review_id", "sequence_number"),
+        Index("idx_review_event_supersedes", "supersedes_decision_id"),
+        Index("idx_review_event_qa_action", "qa_action"),
+    )
+
+
 # Ordered parents-first for FK-scoped create_all / drop_all and the migration.
 TEFCA_REG_TABLE_ORDER = [
     "tefca_reg_entities",
@@ -614,4 +776,6 @@ TEFCA_REG_TABLE_ORDER = [
     "sample_entities",
     "review_reports",
     "review_cycles",         # after samples + reports (FK parents)
+    # B2 QA gate. After review_records (FK parent).
+    "review_decision_events",
 ]

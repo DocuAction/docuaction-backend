@@ -1,31 +1,44 @@
 """
 Applicability engine — which evidence dimensions apply to THIS entity.
 
-WHAT THE ONC/HHS DATA ACTUALLY CONTAINS
-───────────────────────────────────────
-Inspected before writing any rule (30 entities, FHIR R4 Organization, the
-bundled ONC-shaped dataset). Fields present on 30/30:
+WHAT THE RCE DATA ACTUALLY CONTAINS
+───────────────────────────────────
+SUPERSEDED NOTE, KEPT DELIBERATELY. An earlier version of this docstring
+recorded — as inspected fact — that ONC supplies no HCID, no Exchange Purpose
+and no entity type. That was true of the 30-entity FHIR fixture it was written
+against. It is NOT true of the RCE delivery, which supplies all three. The claim
+is corrected here rather than quietly deleted, because a rule written on the old
+premise ("degrade to CORROBORATIVE, the data cannot tell us") is only safe to
+revisit if the premise it rested on is visible.
 
-  resourceType, id, identifier[], active, type[], name, telecom[], address[],
-  partOf, _qhin        (alias on 4/30, meta on 1/30)
+The RCE record carries 41 fields (see `app/Tefca/rce_fields.py`). The ones that
+drive applicability:
 
-  identifier[]  system=http://hl7.org/fhir/sid/us-npi        -> NPI
-                system=urn:docuaction:tefca/identifier       -> TEFCA identifier
-  type[].coding[].code  -> QHIN | PARTICIPANT | SUBPARTICIPANT
-  partOf.reference      -> parent organization
-  _qhin                 -> QHIN attribution
+  sequoiaorgtype        Participant | Subparticipant   -> TEFCA class
+  organizationNodeType  initiator | passthrough | no node
+                        TECHNICAL EXCHANGE BEHAVIOUR — never the hierarchy
+  NPI                   frequently and legitimately EMPTY
+  HCID / AAID / TEFCAID TEFCA identifiers
+  purposesofuse         Exchange Purpose, e.g. T-TRTMNT
+  partOf                Subparticipant -> its Participant
+  orgManagingOrg        the managing QHIN
+  active                0 | 1
 
-FIELDS THE SPEC ASKS ABOUT THAT ONC DOES **NOT** SUPPLY: HCID, Exchange
-Purpose, an NPI Type 1/Type 2 marker, and any provider/entity type beyond the
-TEFCA class. Those are not invented here. Where a rule would need one, the rule
-degrades to CORROBORATIVE or REVIEW instead of guessing.
+STILL NOT SUPPLIED: an NPI Type 1/Type 2 marker, and any NUCC-grade
+provider/organisation taxonomy. Those still come from NPPES, which remains the
+primary identity authority. Where a rule would need one and NPPES is silent, the
+rule degrades to CORROBORATIVE or NOT_APPLICABLE rather than guessing.
 
 THE CONSEQUENCE THAT DRIVES THIS MODULE
 ───────────────────────────────────────
-ONC gives the TEFCA class (QHIN/Participant/Subparticipant). It does NOT give
-the provider/organisation type. So Medicare relevance cannot be read off the
-ONC record: it has to come from NPPES (enumeration type + taxonomy), which is
-the primary identity authority anyway.
+The RCE gives the TEFCA class directly, so that no longer has to be inferred.
+It still does NOT give a provider/organisation taxonomy, so Medicare relevance
+is established from NPPES (enumeration type + taxonomy) wherever an NPI exists.
+
+Where no NPI exists at all, NPPES has nothing to say — and PECOS, being
+NPI-keyed, has nothing to be asked. That case resolves to NOT_APPLICABLE for D2,
+which is a statement about the available identifiers and not a finding against
+the entity.
 
 That produces three honest states, not two:
 
@@ -49,6 +62,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from app.Tefca import rce_fields
 from app.Tefca.evidence_dimensions import Applicability, Dimension
 
 # ── NPPES taxonomy → coarse organisational category ──────────────────────────
@@ -96,6 +110,14 @@ class ApplicabilityProfile:
     dimensions: Dict[str, str]         # Dimension.value -> Applicability.value
     rationale: Dict[str, str]          # Dimension.value -> why
     inputs_used: List[str]
+    #: RCE `sequoiaorgtype` as delivered. The authority for `tefca_class`.
+    sequoia_org_type: Optional[str] = None
+    #: RCE `organizationNodeType` — technical exchange behaviour. Carried for
+    #: display and audit ONLY. No applicability rule branches on it, and
+    #: `tefca_class` is never derived from it.
+    organization_node_type: Optional[str] = None
+    #: Any NPI available for this entity, or None. Drives D2 applicability.
+    npi_available: Optional[str] = None
 
     def applicability_of(self, dimension: Dimension) -> str:
         return self.dimensions.get(dimension.value, Applicability.CORROBORATIVE.value)
@@ -104,6 +126,13 @@ class ApplicabilityProfile:
         return {
             "entity_category": self.entity_category,
             "tefca_class": self.tefca_class,
+            "sequoia_org_type": self.sequoia_org_type,
+            "organization_node_type": self.organization_node_type,
+            "organization_node_type_note": (
+                "Technical exchange behaviour. NOT the TEFCA hierarchy and never "
+                "used to derive tefca_class."
+            ),
+            "npi_available": bool(self.npi_available),
             "nppes_enumeration_type": self.nppes_enumeration_type,
             "nppes_taxonomy_code": self.nppes_taxonomy_code,
             "nppes_taxonomy_desc": self.nppes_taxonomy_desc,
@@ -115,13 +144,38 @@ class ApplicabilityProfile:
 
 
 def tefca_class_of(entity: Dict[str, Any]) -> Optional[str]:
-    """QHIN | PARTICIPANT | SUBPARTICIPANT from the ONC-supplied type coding."""
+    """QHIN | PARTICIPANT | SUBPARTICIPANT — the entity's place in TEFCA.
+
+    `sequoiaorgtype` is the RCE-supplied authority and is consulted FIRST; the
+    FHIR type coding is the fallback for fixtures that predate the delivery.
+
+    `organizationNodeType` is NEVER read here. It describes technical exchange
+    behaviour — whether the organisation initiates, passes through, or operates
+    no node — and carries no information about the TEFCA hierarchy. A
+    Subparticipant may be an initiator and a Participant may operate no node.
+    Reading it as a class would silently reorganise the hierarchy.
+    """
+    sequoia = (rce_fields.sequoia_org_type(entity) or "").strip().upper()
+    if sequoia in {"PARTICIPANT", "SUBPARTICIPANT"}:
+        return sequoia
     for t in entity.get("type") or []:
         for c in t.get("coding") or []:
             code = (c.get("code") or "").strip().upper()
             if code in {"QHIN", "PARTICIPANT", "SUBPARTICIPANT"}:
                 return code
     return None
+
+
+def node_type_of(entity: Dict[str, Any]) -> Optional[str]:
+    """The RCE `organizationNodeType` — technical exchange behaviour ONLY.
+
+    Provided as a named accessor so that anything wanting this value has an
+    obvious, documented way to get it and no reason to reach for
+    `tefca_class_of()` instead. Nothing in the applicability rules branches on
+    it: how an organisation exchanges data does not change which verification
+    dimensions apply to it.
+    """
+    return rce_fields.organization_node_type(entity)
 
 
 def _taxonomy_category(code: Optional[str], desc: Optional[str]) -> str:
@@ -138,6 +192,92 @@ def _taxonomy_category(code: Optional[str], desc: Optional[str]) -> str:
     # A taxonomy we do not recognise tells us nothing. Say so rather than
     # defaulting into a category that carries obligations.
     return EntityCategory.UNKNOWN
+
+
+# ── RCE organisational signal ────────────────────────────────────────────────
+#
+# Used ONLY when NPPES is silent — which is the normal state for a TEFCA entity
+# that legitimately holds no NPI (a health information network, a clearinghouse,
+# a public health agency). Without this the category stays UNKNOWN, Medicare
+# relevance stays UNDETERMINED, and D2 sits at CORROBORATIVE forever for
+# entities that plainly have no Medicare dimension at all.
+#
+# DIRECTIONALLY SAFE BY CONSTRUCTION. Every pattern here resolves to a category
+# whose Medicare relevance is UNLIKELY. Nothing in this table can produce
+# PROVIDER_ORGANIZATION or INDIVIDUAL_PROVIDER, so it can only ever RELAX a
+# Medicare obligation — never impose one on an entity nothing established is
+# Medicare-relevant. A name heuristic must not be able to create a requirement.
+
+_RCE_ORG_SIGNALS = [
+    (re.compile(r"\b(health information (network|exchange)|hie|hin|interoperability)\b", re.I),
+     "HIE_HIN_QHIN"),
+    (re.compile(r"\b(clearinghouse|clearing house)\b", re.I), "HIE_HIN_QHIN"),
+    (re.compile(r"\b(public health|department of health|health department|"
+                r"state registry|immunization registry)\b", re.I), "PUBLIC_HEALTH_AGENCY"),
+    (re.compile(r"\b(health plan|payer|payor|insurance|assurance|managed care)\b", re.I),
+     "PAYER"),
+]
+
+
+def _rce_org_signal(entity: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+    """(category, matched_text) from the RCE-supplied organisation name, or
+    (None, None). See the table above for why this can only relax."""
+    name = (rce_fields.rce_value(entity, "name") or entity.get("name") or "").strip()
+    if not name:
+        return None, None
+    for pattern, category in _RCE_ORG_SIGNALS:
+        match = pattern.search(name)
+        if match:
+            return category, match.group(0)
+    return None, None
+
+
+def available_npi(entity: Dict[str, Any],
+                  nppes_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """Any NPI available for this entity — RCE-supplied, FHIR, or NPPES-returned.
+
+    An empty result is a fact about the record, not a defect: many TEFCA
+    entities legitimately hold no NPI. It matters for applicability because
+    PECOS enrolment is keyed on NPI — with no NPI there is no identifier with
+    which an enrolment could be either established or refuted.
+    """
+    supplied = rce_fields.rce_npi(entity)
+    if supplied:
+        return supplied
+    for ident in entity.get("identifier") or []:
+        if (ident.get("system") or "") == rce_fields.NPI_SYSTEM:
+            value = (ident.get("value") or "").strip()
+            if value:
+                return value
+    returned = (nppes_data or {}).get("npi")
+    return str(returned).strip() or None if returned else None
+
+
+def _fhir_part_of(entity: Dict[str, Any]) -> Optional[str]:
+    """The parent pointer carried OUTSIDE the `_rce` block, whatever its shape.
+
+    Two real shapes reach this module and they are not the same type:
+
+        FHIR fixture   partOf = {"reference": "Organization/123"}
+        RCE delivery   partOf = "2.16.840.1.113883.4.391.1000"   (a bare OID)
+
+    The original code did `(entity.get("partOf") or {}).get("reference")`, which
+    raises AttributeError on the string. It never fired in production because
+    every caller goes through `entity_resolution.registry_entity_to_evidence_shape`,
+    which nests the RCE fields under `_rce` and leaves the top-level `partOf`
+    absent — but a caller handing over a raw parsed record crashed the
+    applicability engine, which is how this was found.
+
+    Returns the reference either way, and None for anything else. A blank string
+    stays falsy, so nothing here invents a relationship that was not delivered.
+    """
+    part_of = entity.get("partOf")
+    if isinstance(part_of, dict):
+        reference = part_of.get("reference")
+        return reference.strip() or None if isinstance(reference, str) else None
+    if isinstance(part_of, str):
+        return part_of.strip() or None
+    return None
 
 
 def classify_entity(
@@ -180,9 +320,22 @@ def classify_entity(
             # rules below stay corroborative for it.
             category = EntityCategory.UNKNOWN
 
+    # RCE organisational signal — consulted ONLY where NPPES established nothing.
+    # NPPES stays the authority whenever it spoke; this fills the gap it leaves
+    # for entities that hold no NPI for it to speak about.
+    rce_signal_text = None
+    if category == EntityCategory.UNKNOWN:
+        signal_category, rce_signal_text = _rce_org_signal(entity)
+        if signal_category:
+            category = getattr(EntityCategory, signal_category)
+            inputs.append("rce_organization_name_signal")
+
     return category, {
         "tefca_class": tefca_class, "enumeration_type": enumeration_type,
         "taxonomy_code": taxonomy_code, "taxonomy_desc": taxonomy_desc,
+        "rce_signal_text": rce_signal_text,
+        "sequoia_org_type": rce_fields.sequoia_org_type(entity),
+        "organization_node_type": rce_fields.organization_node_type(entity),
         "inputs_used": inputs,
     }
 
@@ -237,6 +390,7 @@ def build_profile(
     )
 
     # ── D2 Medicare enrolment — driven by Medicare relevance, not by entity size.
+    npi = available_npi(entity, nppes_data)
     if relevance == "LIKELY":
         dims[Dimension.D2_MEDICARE_ENROLLMENT.value] = REQ
         why[Dimension.D2_MEDICARE_ENROLLMENT.value] = (
@@ -248,6 +402,25 @@ def build_profile(
         why[Dimension.D2_MEDICARE_ENROLLMENT.value] = (
             f"{category} is not normally a Medicare-enrolled provider. NOT_APPLICABLE "
             "unless specific evidence establishes Medicare relevance."
+        )
+    elif not npi:
+        # No NPI anywhere — RCE supplied none and NPPES returned none.
+        #
+        # PECOS enrolment records are keyed on NPI. With no NPI there is no
+        # identifier with which an enrolment could be established OR refuted, so
+        # leaving D2 corroborative would keep an open question that no available
+        # data can ever close. NOT_APPLICABLE states the actual position: this
+        # dimension has nothing to operate on.
+        #
+        # This is a statement about the identifiers on the record, NOT a finding
+        # against the entity, and NOT an assertion that the entity has no
+        # Medicare relationship. Many TEFCA entities legitimately hold no NPI.
+        dims[Dimension.D2_MEDICARE_ENROLLMENT.value] = NA
+        why[Dimension.D2_MEDICARE_ENROLLMENT.value] = (
+            "No NPI was supplied by the RCE and none was established through NPPES. "
+            "PECOS enrolment is keyed on NPI, so no enrolment can be established or "
+            "refuted for this entity. NOT_APPLICABLE — a statement about the "
+            "available identifiers, never a finding against the entity."
         )
     else:
         dims[Dimension.D2_MEDICARE_ENROLLMENT.value] = COR
@@ -276,16 +449,20 @@ def build_profile(
     # ── D5 TEFCA alignment — always required; it is the subject of the review.
     dims[Dimension.D5_TEFCA_ALIGNMENT.value] = REQ
     why[Dimension.D5_TEFCA_ALIGNMENT.value] = (
-        "TEFCA alignment is evaluated from ONC/HHS/RCE data only. Fields ONC did "
-        "not supply (HCID, Exchange Purpose) are reported as not supplied, never inferred."
+        "TEFCA alignment is evaluated from ONC/HHS/RCE data only. Fields the RCE "
+        "record does not carry are reported as not supplied, never inferred, and "
+        "Exchange Purpose is never derived from Medicare data."
     )
 
     # ── D6 Provider ↔ organisation relationship.
     #
-    # The RCE half is required wherever ONC expressed a relationship (partOf).
-    # The PECOS reassignment half is corroborative at most, and not applicable at
-    # all for a non-provider entity — a QHIN does not reassign Medicare benefits.
-    has_parent = bool((entity.get("partOf") or {}).get("reference"))
+    # The RCE half is required wherever the RCE expressed a relationship. Either
+    # pointer counts: `partOf` names a Subparticipant's Participant, and the FHIR
+    # fixture's partOf reference is the pre-delivery equivalent. `orgManagingOrg`
+    # is deliberately NOT counted here — it names the QHIN, which every entity
+    # has, so treating it as "a relationship was expressed" would make the
+    # condition always true and the distinction meaningless.
+    has_parent = bool(rce_fields.part_of(entity) or _fhir_part_of(entity))
     if category in (EntityCategory.INDIVIDUAL_PROVIDER, EntityCategory.PROVIDER_ORGANIZATION):
         dims[Dimension.D6_PROVIDER_ORG_RELATIONSHIP.value] = REQ if has_parent else COR
         why[Dimension.D6_PROVIDER_ORG_RELATIONSHIP.value] = (
@@ -319,6 +496,9 @@ def build_profile(
         dimensions=dims,
         rationale=why,
         inputs_used=ev["inputs_used"] + (["pecos_presence"] if pecos_found is not None else []),
+        sequoia_org_type=ev.get("sequoia_org_type"),
+        organization_node_type=ev.get("organization_node_type"),
+        npi_available=npi,
     )
 
 

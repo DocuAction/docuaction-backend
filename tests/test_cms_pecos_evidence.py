@@ -871,14 +871,43 @@ class TestNoAPICounting:
 
 
 class TestTEFCAAlignment:
-    def test_fields_onc_does_not_supply_are_reported_not_inferred(self):
+    def test_fields_not_supplied_are_reported_not_inferred(self):
+        """A field this record does not carry is REPORTED as absent, not omitted.
+
+        UPDATED for the RCE delivery, and the update is the point. This test
+        previously asserted that hcid and exchange_purpose are ALWAYS unsupplied,
+        which was true of the pre-delivery FHIR fixture and is false of the RCE
+        record — it carries both. The rule being pinned is the one that actually
+        matters and has not changed: whatever THIS record lacks is named as
+        lacking rather than silently dropped, because a missing field and an
+        absent field are indistinguishable otherwise.
+
+        `onc_entity()` is a pre-delivery fixture with no RCE block, so for it
+        hcid and exchange_purpose genuinely are absent.
+        """
         entity = onc_entity()
         sources = clean_sources()
         profile = build_profile(entity, nppes_data=nppes_result().data)
         d5 = dim(assemble_dimensions(entity, profile, sources), Dimension.D5_TEFCA_ALIGNMENT)
-        not_supplied = d5.items[0].normalized_values["fields_not_supplied_by_onc"]
-        assert not_supplied["hcid"] == "NOT_SUPPLIED_BY_ONC"
-        assert not_supplied["exchange_purpose"] == "NOT_SUPPLIED_BY_ONC"
+        not_supplied = d5.items[0].normalized_values["fields_not_supplied_by_rce"]
+        assert not_supplied["hcid"] == "NOT_SUPPLIED_BY_RCE"
+        assert not_supplied["exchange_purpose"] == "NOT_SUPPLIED_BY_RCE"
+
+    def test_fields_the_rce_does_supply_are_not_reported_missing(self):
+        """The other half of the rule: a field the record HAS is never reported
+        absent. Without this, the correction above could be satisfied by a D5
+        that simply always claims everything is missing."""
+        from app.Tefca.mock_data import MOCK_ENTITY_INDEX
+
+        entity = MOCK_ENTITY_INDEX["rce-org-rp-001"]  # RCE-shaped, carries both
+        profile = build_profile(entity, nppes_data=nppes_result().data)
+        d5 = dim(assemble_dimensions(entity, profile, clean_sources()),
+                 Dimension.D5_TEFCA_ALIGNMENT)
+        not_supplied = d5.items[0].normalized_values["fields_not_supplied_by_rce"]
+        assert "hcid" not in not_supplied
+        assert "exchange_purpose" not in not_supplied
+        # Still genuinely unsupplied by any RCE field — these come from NPPES.
+        assert not_supplied["npi_type_marker"] == "NOT_SUPPLIED_BY_RCE"
 
     def test_subparticipant_without_parent_is_review(self):
         entity = onc_entity(type=[{"coding": [{"code": "SUBPARTICIPANT"}]}], partOf={})

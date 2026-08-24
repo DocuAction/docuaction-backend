@@ -1138,7 +1138,8 @@ def _parse_date(s: str):
         raise HTTPException(400, f"Invalid date '{s}', expected ISO YYYY-MM-DD")
 
 
-@tefca_router.post("/reports/weekly/{cycle_id}", summary="Generate D3.1 weekly progress report")
+@tefca_router.post("/reports/weekly/{cycle_id}", deprecated=True,
+                   summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/sow/*. D3.1 weekly progress report")
 async def generate_weekly_report(
     cycle_id: str, http: Request,
     week_number: int = Query(...),
@@ -1157,7 +1158,8 @@ async def generate_weekly_report(
     return {"report_id": str(row.report_id), "report": data}
 
 
-@tefca_router.post("/reports/final/{cycle_id}", summary="Generate D3.2 final report")
+@tefca_router.post("/reports/final/{cycle_id}", deprecated=True,
+                   summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/sow/*. D3.2 final report")
 async def generate_final_report(
     cycle_id: str, http: Request,
     db: AsyncSession = Depends(get_db), user=Depends(require_role("program_manager")),
@@ -1173,7 +1175,8 @@ async def generate_final_report(
     return {"report_id": str(row.report_id), "report": data}
 
 
-@tefca_router.get("/reports", summary="List generated reports")
+@tefca_router.get("/reports", deprecated=True,
+                  summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports. List generated reports")
 async def list_reports(db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer"))):
     rows = (await db.execute(select(TEFCAReport).order_by(TEFCAReport.generated_at.desc()))).scalars().all()
     return {
@@ -2386,7 +2389,7 @@ class FinalReportRequest(BaseModel):
     period_end: Optional[str] = None
 
 
-@tefca_dashboard_router.post("/reports/weekly", summary="Generate a weekly progress report (SOW Task 3)")
+@tefca_dashboard_router.post("/reports/weekly", deprecated=True, summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. Weekly progress report (SOW Task 3)")
 async def create_weekly_report(
     request: WeeklyReportRequest, http: Request,
     db: AsyncSession = Depends(get_db), user=Depends(require_role("qalead")),
@@ -2404,7 +2407,7 @@ async def create_weekly_report(
     return report
 
 
-@tefca_dashboard_router.post("/reports/final", summary="Generate the final retrospective report (SOW Task 3)")
+@tefca_dashboard_router.post("/reports/final", deprecated=True, summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. Final retrospective report (SOW Task 3)")
 async def create_final_report(
     request: FinalReportRequest, http: Request,
     db: AsyncSession = Depends(get_db), user=Depends(require_role("program_manager")),
@@ -2422,7 +2425,7 @@ async def create_final_report(
     return report
 
 
-@tefca_dashboard_router.get("/reports", summary="List reports (filters: type, start, end)")
+@tefca_dashboard_router.get("/reports", deprecated=True, summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. List reports")
 async def list_tefca_reports(
     type: Optional[str] = Query(None), start: Optional[str] = Query(None), end: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
@@ -2448,7 +2451,7 @@ async def list_tefca_reports(
     }
 
 
-@tefca_dashboard_router.get("/reports/{report_id}", summary="Full report detail")
+@tefca_dashboard_router.get("/reports/{report_id}", deprecated=True, summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. Full report detail")
 async def get_tefca_report(
     report_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
@@ -2466,7 +2469,7 @@ async def get_tefca_report(
     }
 
 
-@tefca_dashboard_router.get("/reports/{report_id}/csv", summary="Download report as 12-column CSV")
+@tefca_dashboard_router.get("/reports/{report_id}/csv", deprecated=True, summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. Report as CSV")
 async def get_tefca_report_csv(
     report_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
@@ -2487,7 +2490,7 @@ async def _load_report_or_404(report_id: str, db: AsyncSession) -> TEFCAReport:
     return r
 
 
-@tefca_dashboard_router.get("/reports/{report_id}/pdf", summary="Download report as branded PDF")
+@tefca_dashboard_router.get("/reports/{report_id}/pdf", deprecated=True, summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. Report as PDF")
 async def get_tefca_report_pdf(
     report_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
@@ -2504,7 +2507,7 @@ async def get_tefca_report_pdf(
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
-@tefca_dashboard_router.get("/reports/{report_id}/docx", summary="Download report as branded DOCX")
+@tefca_dashboard_router.get("/reports/{report_id}/docx", deprecated=True, summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. Report as DOCX. DOCX is not a contract requirement (matrix §4).")
 async def get_tefca_report_docx(
     report_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
@@ -2526,7 +2529,7 @@ async def get_tefca_report_docx(
 
 # ─── Bi-weekly + quarterly reports, new-submissions (TEFCA Task 4) ───────────
 
-@tefca_dashboard_router.post("/reports/biweekly", summary="Generate a bi-weekly ongoing review (SOW Task 4)")
+@tefca_dashboard_router.post("/reports/biweekly", deprecated=True, summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. Bi-weekly ongoing review (SOW Task 4)")
 async def create_biweekly_report(
     request: FinalReportRequest, http: Request,
     db: AsyncSession = Depends(get_db), user=Depends(require_role("qalead")),
@@ -2544,7 +2547,7 @@ async def create_biweekly_report(
     return report
 
 
-@tefca_dashboard_router.post("/reports/quarterly", summary="Generate a quarterly report (SOW Task 4)")
+@tefca_dashboard_router.post("/reports/quarterly", deprecated=True, summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. Quarterly report (SOW Task 4)")
 async def create_quarterly_report(
     request: FinalReportRequest, http: Request,
     db: AsyncSession = Depends(get_db), user=Depends(require_role("program_manager")),
@@ -2702,7 +2705,8 @@ async def priority_detail(
     return dto
 
 
-@tefca_dashboard_router.get("/priority/{case_id}/report", summary="Formatted COR status report")
+@tefca_dashboard_router.get("/priority/{case_id}/report", deprecated=True,
+                            summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/sow/*. D5.1 priority status report")
 async def priority_report(
     case_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
@@ -2713,7 +2717,8 @@ async def priority_report(
     return report
 
 
-@tefca_dashboard_router.post("/priority/quarterly-report", summary="Generate priority quarterly aggregation")
+@tefca_dashboard_router.post("/priority/quarterly-report", deprecated=True,
+                             summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/sow/*. D5.2 priority quarterly report")
 async def priority_quarterly(
     request: FinalReportRequest, http: Request,
     db: AsyncSession = Depends(get_db), user=Depends(require_role("program_manager")),
@@ -3868,7 +3873,7 @@ async def import_history(
     }
 
 
-@tefca_dashboard_router.get("/reports/{report_id}/download", summary="Download a report (pdf|docx)")
+@tefca_dashboard_router.get("/reports/{report_id}/download", deprecated=True, summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. Download a report (pdf|docx)")
 async def download_report(
     report_id: str,
     format: str = Query("pdf", description="pdf | docx"),
@@ -3920,18 +3925,45 @@ async def download_report(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _entity_by_reference(reference: str) -> Optional[dict]:
-    """Resolve an ONC entity by id or by identifier value (NPI, TEFCA id)."""
-    ref = (reference or "").strip()
-    if not ref:
-        return None
-    for org in ALL_MOCK_ENTITIES:
-        if str(org.get("id")) == ref:
-            return org
-    for org in ALL_MOCK_ENTITIES:
-        for ident in org.get("identifier") or []:
-            if (ident.get("value") or "").strip() == ref:
-                return org
-    return None
+    """Resolve an ONC entity from the bundled fixtures.
+
+    RETAINED as the synchronous fixture path. `_resolve_entity()` below is the
+    entry point routes should use — it honours ENTITY_RESOLVER_SOURCE and can
+    reach the canonical registry. This function stays because several
+    non-evidence routes resolve fixtures directly and changing them all at once
+    would be a larger blast radius than the evidence path needs.
+    """
+    from app.Tefca.entity_resolution import resolve_from_mock
+
+    return resolve_from_mock(reference)
+
+
+async def _resolve_entity(db, reference: str) -> Optional[dict]:
+    """Resolve an entity under the configured ENTITY_RESOLVER_SOURCE.
+
+    Default "mock". Monday, once Area 1 -> Area 2 -> Registry is built and the
+    RCE dataset is approved, the flag flips to "db" and this same call starts
+    returning registry entities with no route change.
+    """
+    from app.Tefca.entity_resolution import resolve_entity
+
+    return await resolve_entity(db, reference)
+
+
+async def _evidence_population(db) -> list:
+    """The entity population used to resolve D5/D6 parent references.
+
+    Under "mock" this is the bundled fixtures. Under a db-backed source the
+    registry is the population, but materialising every entity to resolve one
+    parent would be wasteful, so the fixtures are used only when they are the
+    configured source; otherwise the assemblers report a parent reference as
+    present-but-not-checked, which is honest.
+    """
+    from app.Tefca.entity_resolution import SOURCE_MOCK, resolver_source
+
+    if resolver_source() == SOURCE_MOCK:
+        return list(ALL_MOCK_ENTITIES)
+    return []
 
 
 async def _persist_dimension_evidence(db: AsyncSession, entity_id: str,
@@ -3970,7 +4002,7 @@ async def entity_evidence_dimensions(
 ):
     from app.Tefca.evidence_service import EvidenceService
 
-    entity = _entity_by_reference(entity_ref)
+    entity = await _resolve_entity(db, entity_ref)
     if not entity:
         # 200 with entity_resolved=false, NOT 404.
         #
@@ -3994,11 +4026,15 @@ async def entity_evidence_dimensions(
                      "is inferred from it."),
         }
 
+    from app.Tefca.entity_resolution import make_parent_resolver
     from app.Tefca.ppef_store import make_local_store
     service = EvidenceService(manager=get_connector_manager(),
                               enable_website=include_website,
                               local_store=make_local_store(db))
-    evidence = await service.build_evidence(entity)
+    evidence = await service.build_evidence(
+        entity,
+        parent_resolver=make_parent_resolver(db, await _evidence_population(db)))
+    evidence["resolution_source"] = entity.get("_resolution_source")
 
     persisted = 0
     if persist:
@@ -4039,7 +4075,7 @@ async def review_evidence_dimensions(
     if not review:
         raise HTTPException(404, f"No review exists with id {review_id}")
 
-    entity = _entity_by_reference(review.npi or "")
+    entity = await _resolve_entity(db, review.npi or "")
     if not entity:
         # An honest empty answer. Fabricating an entity to hang evidence on
         # would produce evidence about nothing.
@@ -4051,13 +4087,17 @@ async def review_evidence_dimensions(
                      "dimension evidence can be assembled for it."),
         }
 
+    from app.Tefca.entity_resolution import make_parent_resolver
     from app.Tefca.ppef_store import make_local_store
     service = EvidenceService(manager=get_connector_manager(),
                               enable_website=include_website,
                               local_store=make_local_store(db))
-    evidence = await service.build_evidence(entity)
+    evidence = await service.build_evidence(
+        entity,
+        parent_resolver=make_parent_resolver(db, await _evidence_population(db)))
     evidence["review_id"] = review_id
     evidence["entity_resolved"] = True
+    evidence["resolution_source"] = entity.get("_resolution_source")
 
     persisted = 0
     if persist:

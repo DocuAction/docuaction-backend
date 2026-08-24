@@ -45,7 +45,14 @@ apscheduler==3.10.4
 tenacity==9.0.0
 python-statemachine==3.2.0
 pandera==0.32.0
+# Report engine. weasyprint renders the PDF and needs the native Pango/Cairo/
+# GObject stack, which the python:3.12-slim image provides; matplotlib renders
+# the figures with the Agg backend (no display required). Jinja2 arrives via
+# fastapi but is a direct dependency of the report templates, so it is pinned
+# here rather than relied on transitively.
 weasyprint
+matplotlib==3.11.1
+jinja2>=3.1.2
 # 0.6.3 -> 0.6.4 closes CVE-2026-59884/59885/59886. Transitive via python-jose,
 # pinned here so the fixed version is explicit rather than resolver-dependent.
 pyasn1==0.6.4

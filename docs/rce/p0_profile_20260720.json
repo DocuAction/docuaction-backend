@@ -1,0 +1,2128 @@
+{
+  "file_facts": {
+    "record_count": 23566,
+    "parse_ok": 23566,
+    "parse_malformed": 0,
+    "delimiter": "|",
+    "delimiter_name": "pipe",
+    "encoding": "utf-8",
+    "encoding_had_errors": false,
+    "sha256": "689472073480b1cc4faf604527eda47e4e59928f7a6128d84b2f28bb6e9e9e8d",
+    "size_bytes": 10042400,
+    "line_terminator": "CRLF",
+    "schema_fingerprint": "1cd655e9120dc9d0d6a52697ea470519b138fe0f9334af6f69467f3485ade3d0",
+    "field_count": 41,
+    "mojibake_cells": 0,
+    "embedded_tab_cells": 4,
+    "detection_note": "detected pipe \u2014 41 header fields, consistent on 50/50 sampled lines",
+    "filename": "onc-snapshot-20260720.csv"
+  },
+  "columns": [
+    {
+      "name": "id",
+      "ordinal": 0,
+      "total": 23566,
+      "populated": 23566,
+      "empty": 0,
+      "coverage_pct": 100.0,
+      "distinct": 23566,
+      "min_length": 17,
+      "max_length": 54,
+      "detected_type": "oid",
+      "samples": [
+        "07.52.30.07.2025.8547",
+        "1.2.840.114350.1.13.10.2.7.3.688884.100",
+        "1.2.840.114350.1.13.104.2.7.3.688884.100",
+        "1.2.840.114350.1.13.104.2.7.3.688884.100.26451",
+        "1.2.840.114350.1.13.105.2.7.3.688884.100"
+      ],
+      "top_values": [
+        [
+          "07.52.30.07.2025.8547",
+          1
+        ],
+        [
+          "1.2.840.114350.1.13.10.2.7.3.688884.100",
+          1
+        ],
+        [
+          "1.2.840.114350.1.13.104.2.7.3.688884.100",
+          1
+        ],
+        [
+          "1.2.840.114350.1.13.104.2.7.3.688884.100.26451",
+          1
+        ],
+        [
+          "1.2.840.114350.1.13.105.2.7.3.688884.100",
+          1
+        ],
+        [
+          "1.2.840.114350.1.13.105.2.7.3.688884.100.69476",
+          1
+        ],
+        [
+          "1.2.840.114350.1.13.105.2.7.3.688884.100.74009",
+          1
+        ],
+        [
+          "1.2.840.114350.1.13.105.2.7.3.688884.100.8366",
+          1
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": [
+        "length varies widely (17\u201354)"
+      ]
+    },
+    {
+      "name": "domains",
+      "ordinal": 1,
+      "total": 23566,
+      "populated": 23566,
+      "empty": 0,
+      "coverage_pct": 100.0,
+      "distinct": 1,
+      "min_length": 3,
+      "max_length": 3,
+      "detected_type": "fixed-width(3)",
+      "samples": [
+        "RCE",
+        "RCE",
+        "RCE",
+        "RCE",
+        "RCE"
+      ],
+      "top_values": [
+        [
+          "RCE",
+          23566
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": []
+    },
+    {
+      "name": "initiatoronly",
+      "ordinal": 2,
+      "total": 23566,
+      "populated": 5,
+      "empty": 23561,
+      "coverage_pct": 0.02,
+      "distinct": 1,
+      "min_length": 5,
+      "max_length": 5,
+      "detected_type": "fixed-width(5)",
+      "samples": [
+        "OTHER",
+        "OTHER",
+        "OTHER",
+        "OTHER",
+        "OTHER"
+      ],
+      "top_values": [
+        [
+          "OTHER",
+          5
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": [
+        "single distinct value 'OTHER' on only 5 of 23566 rows"
+      ]
+    },
+    {
+      "name": "orgManagingOrg",
+      "ordinal": 3,
+      "total": 23566,
+      "populated": 23566,
+      "empty": 0,
+      "coverage_pct": 100.0,
+      "distinct": 11,
+      "min_length": 19,
+      "max_length": 36,
+      "detected_type": "oid",
+      "samples": [
+        "2.16.840.1.113883.3.9960",
+        "1.2.840.114350.1.72.69847383.2",
+        "1.2.840.114350.1.72.69847383.2",
+        "1.2.840.114350.1.72.69847383.2",
+        "1.2.840.114350.1.72.69847383.2"
+      ],
+      "top_values": [
+        [
+          "2.16.840.1.113883.4.391.1000",
+          10481
+        ],
+        [
+          "2.16.840.1.113883.3.9960",
+          6977
+        ],
+        [
+          "1.2.840.114350.1.72.69847383.2",
+          4483
+        ],
+        [
+          "2.16.840.1.113883.3.432.0.16.500",
+          477
+        ],
+        [
+          "1.3.6.1.4.1.52618.1",
+          461
+        ],
+        [
+          "2.16.840.1.113883.3.3126",
+          366
+        ],
+        [
+          "2.16.840.1.113883.3.9415",
+          102
+        ],
+        [
+          "2.16.840.1.113883.3.7204.1.2.1.1.1.1",
+          88
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": []
+    },
+    {
+      "name": "purposesofuse",
+      "ordinal": 4,
+      "total": 23566,
+      "populated": 23154,
+      "empty": 412,
+      "coverage_pct": 98.25,
+      "distinct": 16,
+      "min_length": 4,
+      "max_length": 69,
+      "detected_type": "text",
+      "samples": [
+        "T-TRTMNT",
+        "T-TRTMNT",
+        "T-TRTMNT",
+        "T-TRTMNT",
+        "T-TRTMNT"
+      ],
+      "top_values": [
+        [
+          "T-TRTMNT",
+          20993
+        ],
+        [
+          "T-PH-ECR,T-TRTMNT",
+          1280
+        ],
+        [
+          "T-GOVDTRM-ACP,T-PH-ECR,T-TRTMNT",
+          273
+        ],
+        [
+          "T-PH-ECR",
+          167
+        ],
+        [
+          "T-GOVDTRM-ACP,T-TRTMNT",
+          157
+        ],
+        [
+          "T-GOVDTRM-ACP,T-PH-ECR",
+          133
+        ],
+        [
+          "T-GOVDTRM-ACP",
+          55
+        ],
+        [
+          "T-IAS,T-TRTMNT",
+          40
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": [
+        "value 'T-TRTMNT' occupies 20993 of 23566 rows (89.1%)",
+        "length varies widely (4\u201369)"
+      ]
+    },
+    {
+      "name": "stateofoperation",
+      "ordinal": 5,
+      "total": 23566,
+      "populated": 7,
+      "empty": 23559,
+      "coverage_pct": 0.03,
+      "distinct": 7,
+      "min_length": 2,
+      "max_length": 167,
+      "detected_type": "text",
+      "samples": [
+        "AL",
+        "NV",
+        "AZ,MN,NM",
+        "AK,MD,VA",
+        "TX"
+      ],
+      "top_values": [
+        [
+          "AL",
+          1
+        ],
+        [
+          "NV",
+          1
+        ],
+        [
+          "AZ,MN,NM",
+          1
+        ],
+        [
+          "AK,MD,VA",
+          1
+        ],
+        [
+          "TX",
+          1
+        ],
+        [
+          "AK,AL,AR,AS,AZ,CA,CO,CT,DC,DE,FL,GA,GU,HI,IA,ID,IL,IN,KS,KY,LA,MA,MD,ME,MI,MN,MO,MP,MS,MT,NC,ND,NE,NH,NJ,NM,NV,NY,OH,OK,OR,PA,PR,RI,SC,SD,TN,TX,UT,VA,VI,VT,WA,WI,WV,WY",
+          1
+        ],
+        [
+          "MD",
+          1
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": [
+        "length varies widely (2\u2013167)"
+      ]
+    },
+    {
+      "name": "doa",
+      "ordinal": 6,
+      "total": 23566,
+      "populated": 105,
+      "empty": 23461,
+      "coverage_pct": 0.45,
+      "distinct": 32,
+      "min_length": 17,
+      "max_length": 63,
+      "detected_type": "oid",
+      "samples": [
+        "1.3.6.1.4.1.52618.2.147904",
+        "2.16.840.1.113883.3.3126.2.3.29055.5",
+        "2.16.840.1.113883.3.3126.2.3.36296.5",
+        "2.16.840.1.113883.3.3126.2.3.34938.5",
+        "2.16.840.1.113883.3.3126.2.3.4819.5"
+      ],
+      "top_values": [
+        [
+          "2.16.840.1.113883.17.4186",
+          70
+        ],
+        [
+          "2.16.840.1.113883.3.3126.2.3.25726.5",
+          4
+        ],
+        [
+          "2.16.840.1.113883.3.3126.2.3.34938.5",
+          2
+        ],
+        [
+          "1.3.6.1.4.1.52618.2.147904",
+          1
+        ],
+        [
+          "2.16.840.1.113883.3.3126.2.3.29055.5",
+          1
+        ],
+        [
+          "2.16.840.1.113883.3.3126.2.3.36296.5",
+          1
+        ],
+        [
+          "2.16.840.1.113883.3.3126.2.3.4819.5",
+          1
+        ],
+        [
+          "2.16.840.1.113883.3.3126.2.3.37040.5",
+          1
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": [
+        "length varies widely (17\u201363)"
+      ]
+    },
+    {
+      "name": "transaction",
+      "ordinal": 7,
+      "total": 23566,
+      "populated": 0,
+      "empty": 23566,
+      "coverage_pct": 0.0,
+      "distinct": 0,
+      "min_length": 0,
+      "max_length": 0,
+      "detected_type": "empty",
+      "samples": [],
+      "top_values": [],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": []
+    },
+    {
+      "name": "delegationRole",
+      "ordinal": 8,
+      "total": 23566,
+      "populated": 2,
+      "empty": 23564,
+      "coverage_pct": 0.01,
+      "distinct": 1,
+      "min_length": 9,
+      "max_length": 9,
+      "detected_type": "fixed-width(9)",
+      "samples": [
+        "principal",
+        "principal"
+      ],
+      "top_values": [
+        [
+          "principal",
+          2
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": [
+        "single distinct value 'principal' on only 2 of 23566 rows"
+      ]
+    },
+    {
+      "name": "organizationNodeType",
+      "ordinal": 9,
+      "total": 23566,
+      "populated": 2,
+      "empty": 23564,
+      "coverage_pct": 0.01,
+      "distinct": 1,
+      "min_length": 15,
+      "max_length": 15,
+      "detected_type": "fixed-width(15)",
+      "samples": [
+        "initiating-node",
+        "initiating-node"
+      ],
+      "top_values": [
+        [
+          "initiating-node",
+          2
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": [
+        "single distinct value 'initiating-node' on only 2 of 23566 rows"
+      ]
+    },
+    {
+      "name": "NPI",
+      "ordinal": 10,
+      "total": 23566,
+      "populated": 18982,
+      "empty": 4584,
+      "coverage_pct": 80.55,
+      "distinct": 18675,
+      "min_length": 6,
+      "max_length": 22,
+      "detected_type": "integer-like",
+      "samples": [
+        "854565",
+        "1881659506",
+        "1982916078",
+        "1124071014",
+        "1407934433"
+      ],
+      "top_values": [
+        [
+          "1295023547",
+          12
+        ],
+        [
+          "1194743013",
+          3
+        ],
+        [
+          "1811215742",
+          3
+        ],
+        [
+          "1790706901",
+          3
+        ],
+        [
+          "1639172869",
+          3
+        ],
+        [
+          "1306938071",
+          3
+        ],
+        [
+          "1811991227",
+          3
+        ],
+        [
+          "1407244767",
+          3
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": []
+    },
+    {
+      "name": "NAIC",
+      "ordinal": 11,
+      "total": 23566,
+      "populated": 0,
+      "empty": 23566,
+      "coverage_pct": 0.0,
+      "distinct": 0,
+      "min_length": 0,
+      "max_length": 0,
+      "detected_type": "empty",
+      "samples": [],
+      "top_values": [],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": []
+    },
+    {
+      "name": "CCN",
+      "ordinal": 12,
+      "total": 23566,
+      "populated": 0,
+      "empty": 23566,
+      "coverage_pct": 0.0,
+      "distinct": 0,
+      "min_length": 0,
+      "max_length": 0,
+      "detected_type": "empty",
+      "samples": [],
+      "top_values": [],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": []
+    },
+    {
+      "name": "HCID",
+      "ordinal": 13,
+      "total": 23566,
+      "populated": 23566,
+      "empty": 0,
+      "coverage_pct": 100.0,
+      "distinct": 23562,
+      "min_length": 25,
+      "max_length": 62,
+      "detected_type": "urn:oid",
+      "samples": [
+        "urn:oid:07.52.30.07.2025.8547",
+        "urn:oid:1.2.840.114350.1.13.10.2.7.3.688884.100",
+        "urn:oid:1.2.840.114350.1.13.104.2.7.3.688884.100",
+        "urn:oid:1.2.840.114350.1.13.104.2.7.3.688884.100.26451",
+        "urn:oid:1.2.840.114350.1.13.105.2.7.3.688884.100"
+      ],
+      "top_values": [
+        [
+          "urn:oid:1.3.6.1.4.1.52618.2.137388",
+          2
+        ],
+        [
+          "urn:oid:1.3.6.1.4.1.55420.1",
+          2
+        ],
+        [
+          "urn:oid:2.16.840.1.113883.3.3126.2.3.29055.8",
+          2
+        ],
+        [
+          "urn:oid:2.16.840.1.113883.3.6448.5.1253913947.4.2",
+          2
+        ],
+        [
+          "urn:oid:07.52.30.07.2025.8547",
+          1
+        ],
+        [
+          "urn:oid:1.2.840.114350.1.13.10.2.7.3.688884.100",
+          1
+        ],
+        [
+          "urn:oid:1.2.840.114350.1.13.104.2.7.3.688884.100",
+          1
+        ],
+        [
+          "urn:oid:1.2.840.114350.1.13.104.2.7.3.688884.100.26451",
+          1
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": [
+        "length varies widely (25\u201362)"
+      ]
+    },
+    {
+      "name": "AAID",
+      "ordinal": 14,
+      "total": 23566,
+      "populated": 7447,
+      "empty": 16119,
+      "coverage_pct": 31.6,
+      "distinct": 7444,
+      "min_length": 25,
+      "max_length": 62,
+      "detected_type": "urn:oid",
+      "samples": [
+        "urn:oid:07.52.30.07.2025.8547",
+        "urn:oid:1.2.840.114350.1.13.10.2.7.3.688884.100",
+        "urn:oid:1.2.840.114350.1.13.104.2.7.3.688884.100",
+        "urn:oid:1.2.840.114350.1.13.105.2.7.3.688884.100",
+        "urn:oid:1.2.840.114350.1.13.107.2.7.3.688884.100"
+      ],
+      "top_values": [
+        [
+          "urn:oid:1.3.6.1.4.1.22812.4.10021952.0",
+          4
+        ],
+        [
+          "urn:oid:07.52.30.07.2025.8547",
+          1
+        ],
+        [
+          "urn:oid:1.2.840.114350.1.13.10.2.7.3.688884.100",
+          1
+        ],
+        [
+          "urn:oid:1.2.840.114350.1.13.104.2.7.3.688884.100",
+          1
+        ],
+        [
+          "urn:oid:1.2.840.114350.1.13.105.2.7.3.688884.100",
+          1
+        ],
+        [
+          "urn:oid:1.2.840.114350.1.13.107.2.7.3.688884.100",
+          1
+        ],
+        [
+          "urn:oid:1.2.840.114350.1.13.11.2.7.3.688884.100",
+          1
+        ],
+        [
+          "urn:oid:1.2.840.114350.1.13.111.2.7.3.688884.100",
+          1
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": [
+        "length varies widely (25\u201362)"
+      ]
+    },
+    {
+      "name": "TEFCAID",
+      "ordinal": 15,
+      "total": 23566,
+      "populated": 23566,
+      "empty": 0,
+      "coverage_pct": 100.0,
+      "distinct": 23325,
+      "min_length": 45,
+      "max_length": 45,
+      "detected_type": "urn:uuid",
+      "samples": [
+        "urn:uuid:f96df77a-cd1f-4bc8-91fc-bfa3f9592dc1",
+        "urn:uuid:f3371cb8-af1a-49d6-baaa-2020691606dc",
+        "urn:uuid:7d83525c-38de-4505-9444-d3c29a4102d1",
+        "urn:uuid:2fe0f15e-32f5-4f2e-b4e7-62f8164573cd",
+        "urn:uuid:5e98e153-811a-425d-b0b4-963431c9d21c"
+      ],
+      "top_values": [
+        [
+          "urn:uuid:9483c34b-f148-40af-82dc-25150e6a251c",
+          69
+        ],
+        [
+          "urn:uuid:9c8c2f00-2f91-4c08-9d11-378a1a367cba",
+          22
+        ],
+        [
+          "urn:uuid:96967e36-9f42-4a57-a121-31ab7bd25860",
+          20
+        ],
+        [
+          "urn:uuid:fd7121be-a6b4-4c3e-b293-0e3c29fa49e6",
+          18
+        ],
+        [
+          "urn:uuid:478303d6-7fb3-4de3-9b2e-539d12b2ee80",
+          15
+        ],
+        [
+          "urn:uuid:b5ba2a29-37eb-4224-a8a3-e2aacdcf56d2",
+          11
+        ],
+        [
+          "urn:uuid:03bacf65-f7d8-4845-a46e-41f8fe0cbf3c",
+          11
+        ],
+        [
+          "urn:uuid:65576d73-fe1e-47a6-a1ae-921d452b9d3d",
+          11
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": []
+    },
+    {
+      "name": "active",
+      "ordinal": 16,
+      "total": 23566,
+      "populated": 23566,
+      "empty": 0,
+      "coverage_pct": 100.0,
+      "distinct": 2,
+      "min_length": 1,
+      "max_length": 1,
+      "detected_type": "integer-like",
+      "samples": [
+        "0",
+        "1",
+        "1",
+        "1",
+        "1"
+      ],
+      "top_values": [
+        [
+          "1",
+          22594
+        ],
+        [
+          "0",
+          972
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": [
+        "value '1' occupies 22594 of 23566 rows (95.9%)"
+      ]
+    },
+    {
+      "name": "sequoiaorgtype",
+      "ordinal": 17,
+      "total": 23566,
+      "populated": 23566,
+      "empty": 0,
+      "coverage_pct": 100.0,
+      "distinct": 2,
+      "min_length": 11,
+      "max_length": 14,
+      "detected_type": "text",
+      "samples": [
+        "Subparticipant",
+        "Participant",
+        "Participant",
+        "Subparticipant",
+        "Participant"
+      ],
+      "top_values": [
+        [
+          "Subparticipant",
+          12489
+        ],
+        [
+          "Participant",
+          11077
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": [
+        "value 'Subparticipant' occupies 12489 of 23566 rows (53.0%)"
+      ]
+    },
+    {
+      "name": "hl7orgrole",
+      "ordinal": 18,
+      "total": 23566,
+      "populated": 60,
+      "empty": 23506,
+      "coverage_pct": 0.25,
+      "distinct": 5,
+      "min_length": 5,
+      "max_length": 11,
+      "detected_type": "text",
+      "samples": [
+        "provider",
+        "provider",
+        "provider",
+        "provider",
+        "provider"
+      ],
+      "top_values": [
+        [
+          "provider",
+          52
+        ],
+        [
+          "diagnostics",
+          4
+        ],
+        [
+          "agency",
+          2
+        ],
+        [
+          "payer",
+          1
+        ],
+        [
+          "HIE/HIO",
+          1
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": []
+    },
+    {
+      "name": "name",
+      "ordinal": 19,
+      "total": 23566,
+      "populated": 23566,
+      "empty": 0,
+      "coverage_pct": 100.0,
+      "distinct": 23284,
+      "min_length": 4,
+      "max_length": 99,
+      "detected_type": "text",
+      "samples": [
+        "ELLKAY-DOA-TEST",
+        "Buffalo Medical Group",
+        "UTMB - Health",
+        "UT Health Rio Grande Valley",
+        "Hawaii Pacific Health"
+      ],
+      "top_values": [
+        [
+          "HealthEx",
+          4
+        ],
+        [
+          "MICHIGAN HEALTHCARE PROFESSIONALS PC",
+          4
+        ],
+        [
+          "Community Memorial Hospital",
+          3
+        ],
+        [
+          "Hanover Hospital",
+          3
+        ],
+        [
+          "Kansas Spine & Specialty Hospital, LLC",
+          3
+        ],
+        [
+          "Wichita Family Medicine Specialists, LLC",
+          3
+        ],
+        [
+          "b.well Connected Health",
+          3
+        ],
+        [
+          "SAN ANTONIO REGIONAL HOSPITAL",
+          3
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 4,
+      "suspicious": [
+        "length varies widely (4\u201399)"
+      ]
+    },
+    {
+      "name": "alias",
+      "ordinal": 20,
+      "total": 23566,
+      "populated": 0,
+      "empty": 23566,
+      "coverage_pct": 0.0,
+      "distinct": 0,
+      "min_length": 0,
+      "max_length": 0,
+      "detected_type": "empty",
+      "samples": [],
+      "top_values": [],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": []
+    },
+    {
+      "name": "phone",
+      "ordinal": 21,
+      "total": 23566,
+      "populated": 84,
+      "empty": 23482,
+      "coverage_pct": 0.36,
+      "distinct": 82,
+      "min_length": 14,
+      "max_length": 14,
+      "detected_type": "fixed-width(14)",
+      "samples": [
+        "(619) 515-2300",
+        "(866) 797-3239",
+        "(866) 797-3239",
+        "(318) 285-9066",
+        "(662) 612-0311"
+      ],
+      "top_values": [
+        [
+          "(866) 797-3239",
+          2
+        ],
+        [
+          "(785) 337-2214",
+          2
+        ],
+        [
+          "(619) 515-2300",
+          1
+        ],
+        [
+          "(318) 285-9066",
+          1
+        ],
+        [
+          "(662) 612-0311",
+          1
+        ],
+        [
+          "(478) 240-2000",
+          1
+        ],
+        [
+          "(620) 725-3115",
+          1
+        ],
+        [
+          "(870) 352-6300",
+          1
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": []
+    },
+    {
+      "name": "email",
+      "ordinal": 22,
+      "total": 23566,
+      "populated": 0,
+      "empty": 23566,
+      "coverage_pct": 0.0,
+      "distinct": 0,
+      "min_length": 0,
+      "max_length": 0,
+      "detected_type": "empty",
+      "samples": [],
+      "top_values": [],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": []
+    },
+    {
+      "name": "address_text",
+      "ordinal": 23,
+      "total": 23566,
+      "populated": 23566,
+      "empty": 0,
+      "coverage_pct": 100.0,
+      "distinct": 5549,
+      "min_length": 7,
+      "max_length": 96,
+      "detected_type": "text",
+      "samples": [
+        "Primary",
+        "85 High St., Buffalo, NY 14203, US",
+        "301 University Blvd, Galveston, TX 77555, US",
+        "52253 State Hwy. 4, Brownsville, TX 78521, US",
+        "55 Merchant Street, Honolulu, HI 96813, US"
+      ],
+      "top_values": [
+        [
+          "Primary",
+          17717
+        ],
+        [
+          "455 Lee Street SW, Atlanta, GA 30310, US",
+          16
+        ],
+        [
+          "233 Doctors Street, Sparta, NC 28675, US",
+          10
+        ],
+        [
+          "131 Old Rd to Nine Acre Cor, Concord, MA 01742, US",
+          9
+        ],
+        [
+          "623 SW 10th Avenue, Topeka, KS 66612, US",
+          9
+        ],
+        [
+          "300 Mount Auburn Street, CAMBRIDGE, MA 02138, US",
+          7
+        ],
+        [
+          "1513 Cleveland Ave, Atlanta, GA 30344, US",
+          6
+        ],
+        [
+          "500 Lauchwood Drive, LAURINBURG, NC 28352, US",
+          5
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": [
+        "value 'Primary' occupies 17717 of 23566 rows (75.2%)",
+        "length varies widely (7\u201396)"
+      ]
+    },
+    {
+      "name": "address_line",
+      "ordinal": 24,
+      "total": 23566,
+      "populated": 23566,
+      "empty": 0,
+      "coverage_pct": 100.0,
+      "distinct": 22936,
+      "min_length": 4,
+      "max_length": 87,
+      "detected_type": "text",
+      "samples": [
+        "493 Middleboro Ave",
+        "85 High St.",
+        "301 University Blvd",
+        "52253 State Hwy. 4",
+        "55 Merchant Street"
+      ],
+      "top_values": [
+        [
+          "455 Lee Street SW",
+          16
+        ],
+        [
+          "131 Old Rd to Nine Acre Cor",
+          10
+        ],
+        [
+          "233 Doctors Street",
+          10
+        ],
+        [
+          "623 SW 10th Avenue",
+          9
+        ],
+        [
+          "300 Mount Auburn Street",
+          7
+        ],
+        [
+          "1513 Cleveland Ave",
+          6
+        ],
+        [
+          "500 Lauchwood Drive",
+          5
+        ],
+        [
+          "623 Southwest 10th Avenue",
+          5
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 4,
+      "leading_trailing_space_cells": 1587,
+      "suspicious": [
+        "length varies widely (4\u201387)"
+      ]
+    },
+    {
+      "name": "address_city",
+      "ordinal": 25,
+      "total": 23566,
+      "populated": 23566,
+      "empty": 0,
+      "coverage_pct": 100.0,
+      "distinct": 5333,
+      "min_length": 3,
+      "max_length": 38,
+      "detected_type": "text",
+      "samples": [
+        "East Taunton",
+        "Buffalo",
+        "Galveston",
+        "Brownsville",
+        "Honolulu"
+      ],
+      "top_values": [
+        [
+          "HOUSTON",
+          295
+        ],
+        [
+          "NEW YORK",
+          170
+        ],
+        [
+          "DALLAS",
+          161
+        ],
+        [
+          "CHICAGO",
+          157
+        ],
+        [
+          "MIAMI",
+          155
+        ],
+        [
+          "SAN ANTONIO",
+          146
+        ],
+        [
+          "BROOKLYN",
+          145
+        ],
+        [
+          "PHOENIX",
+          124
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 3,
+      "suspicious": [
+        "length varies widely (3\u201338)"
+      ]
+    },
+    {
+      "name": "address_state",
+      "ordinal": 26,
+      "total": 23566,
+      "populated": 23566,
+      "empty": 0,
+      "coverage_pct": 100.0,
+      "distinct": 54,
+      "min_length": 2,
+      "max_length": 2,
+      "detected_type": "fixed-width(2)",
+      "samples": [
+        "MA",
+        "NY",
+        "TX",
+        "TX",
+        "HI"
+      ],
+      "top_values": [
+        [
+          "TX",
+          3030
+        ],
+        [
+          "FL",
+          2309
+        ],
+        [
+          "CA",
+          2066
+        ],
+        [
+          "GA",
+          1223
+        ],
+        [
+          "MI",
+          1205
+        ],
+        [
+          "NY",
+          1025
+        ],
+        [
+          "IL",
+          808
+        ],
+        [
+          "MA",
+          761
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": []
+    },
+    {
+      "name": "address_postalCode",
+      "ordinal": 27,
+      "total": 23566,
+      "populated": 23566,
+      "empty": 0,
+      "coverage_pct": 100.0,
+      "distinct": 9311,
+      "min_length": 3,
+      "max_length": 10,
+      "detected_type": "text",
+      "samples": [
+        "2718",
+        "14203",
+        "77555",
+        "78521",
+        "96813"
+      ],
+      "top_values": [
+        [
+          "75093",
+          47
+        ],
+        [
+          "77479",
+          44
+        ],
+        [
+          "76104",
+          40
+        ],
+        [
+          "75231",
+          39
+        ],
+        [
+          "90211",
+          39
+        ],
+        [
+          "35801",
+          35
+        ],
+        [
+          "77494",
+          33
+        ],
+        [
+          "90048",
+          32
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": []
+    },
+    {
+      "name": "address_country",
+      "ordinal": 28,
+      "total": 23566,
+      "populated": 23566,
+      "empty": 0,
+      "coverage_pct": 100.0,
+      "distinct": 1,
+      "min_length": 2,
+      "max_length": 2,
+      "detected_type": "fixed-width(2)",
+      "samples": [
+        "US",
+        "US",
+        "US",
+        "US",
+        "US"
+      ],
+      "top_values": [
+        [
+          "US",
+          23566
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": []
+    },
+    {
+      "name": "partOf",
+      "ordinal": 29,
+      "total": 23566,
+      "populated": 23566,
+      "empty": 0,
+      "coverage_pct": 100.0,
+      "distinct": 300,
+      "min_length": 17,
+      "max_length": 46,
+      "detected_type": "oid",
+      "samples": [
+        "2.16.840.1.113883.3.9960.3.15.1.1",
+        "1.2.840.114350.1.72.69847383.2",
+        "1.2.840.114350.1.72.69847383.2",
+        "1.2.840.114350.1.13.104.2.7.3.688884.100",
+        "1.2.840.114350.1.72.69847383.2"
+      ],
+      "top_values": [
+        [
+          "2.16.840.1.113883.4.391.1000",
+          10481
+        ],
+        [
+          "2.16.840.1.113883.3.9960.3.15.1.5",
+          6859
+        ],
+        [
+          "1.2.840.114350.1.13.200.2.7.3.688884.100",
+          364
+        ],
+        [
+          "1.2.840.114350.1.72.69847383.2",
+          339
+        ],
+        [
+          "1.2.840.114350.1.13.76.2.7.3.688884.100",
+          258
+        ],
+        [
+          "2.16.840.1.113883.3.8312.300.2.1.1",
+          247
+        ],
+        [
+          "2.16.840.1.113883.3.346",
+          245
+        ],
+        [
+          "1.2.840.114350.1.13.362.2.7.3.688884.100",
+          217
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": []
+    },
+    {
+      "name": "contact_company",
+      "ordinal": 30,
+      "total": 23566,
+      "populated": 0,
+      "empty": 23566,
+      "coverage_pct": 0.0,
+      "distinct": 0,
+      "min_length": 0,
+      "max_length": 0,
+      "detected_type": "empty",
+      "samples": [],
+      "top_values": [],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": []
+    },
+    {
+      "name": "contact_purpose",
+      "ordinal": 31,
+      "total": 23566,
+      "populated": 17196,
+      "empty": 6370,
+      "coverage_pct": 72.97,
+      "distinct": 1,
+      "min_length": 5,
+      "max_length": 5,
+      "detected_type": "fixed-width(5)",
+      "samples": [
+        "ADMIN",
+        "ADMIN",
+        "ADMIN",
+        "ADMIN",
+        "ADMIN"
+      ],
+      "top_values": [
+        [
+          "ADMIN",
+          17196
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": []
+    },
+    {
+      "name": "contact_name",
+      "ordinal": 32,
+      "total": 23566,
+      "populated": 18240,
+      "empty": 5326,
+      "coverage_pct": 77.4,
+      "distinct": 10876,
+      "min_length": 4,
+      "max_length": 70,
+      "detected_type": "text",
+      "samples": [
+        "CommonWellHealthAlliance",
+        "Donna Carter",
+        "Cody Johansen",
+        "Cody Johansen",
+        "CommonWellHealthAlliance"
+      ],
+      "top_values": [
+        [
+          "CommonWellHealthAlliance",
+          6977
+        ],
+        [
+          "QHIN Admins",
+          95
+        ],
+        [
+          "Cody Johansen",
+          60
+        ],
+        [
+          "Oracle Health QHIN",
+          43
+        ],
+        [
+          "Thuy Hoang",
+          39
+        ],
+        [
+          "Joseph Demmons",
+          32
+        ],
+        [
+          "Lee Smith",
+          10
+        ],
+        [
+          "MedAllies",
+          7
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 2,
+      "suspicious": [
+        "length varies widely (4\u201370)"
+      ]
+    },
+    {
+      "name": "contact_phone",
+      "ordinal": 33,
+      "total": 23566,
+      "populated": 17775,
+      "empty": 5791,
+      "coverage_pct": 75.43,
+      "distinct": 34,
+      "min_length": 5,
+      "max_length": 19,
+      "detected_type": "text",
+      "samples": [
+        "201-808-9504",
+        "256-329-7111",
+        "-4781",
+        "-4781",
+        "201-808-9504"
+      ],
+      "top_values": [
+        [
+          "508-475-0450",
+          10481
+        ],
+        [
+          "201-808-9504",
+          6977
+        ],
+        [
+          "+1.845.896.0191",
+          102
+        ],
+        [
+          "-4781",
+          60
+        ],
+        [
+          "888.767.8326",
+          44
+        ],
+        [
+          "(866) 977-4367",
+          39
+        ],
+        [
+          "(470) 719-2032 x172",
+          32
+        ],
+        [
+          "(414) 312-3927",
+          10
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 1,
+      "suspicious": []
+    },
+    {
+      "name": "contact_email",
+      "ordinal": 34,
+      "total": 23566,
+      "populated": 17779,
+      "empty": 5787,
+      "coverage_pct": 75.44,
+      "distinct": 37,
+      "min_length": 17,
+      "max_length": 36,
+      "detected_type": "email",
+      "samples": [
+        "CommonWellSupport@ELLKAY.com",
+        "dcarter@russellmedcenter.com",
+        "cjohansen@healthienevada.org",
+        "cjohansen@healthienevada.org",
+        "CommonWellSupport@ELLKAY.com"
+      ],
+      "top_values": [
+        [
+          "prismanet_support@eclinicalworks.com",
+          10000
+        ],
+        [
+          "CommonWellSupport@ELLKAY.com",
+          6977
+        ],
+        [
+          "support@eclinicalworks.com",
+          481
+        ],
+        [
+          "qhinadmins@medallies.com",
+          95
+        ],
+        [
+          "cjohansen@healthienevada.org",
+          60
+        ],
+        [
+          "qhin_support_ohin_grp@oracle.com",
+          43
+        ],
+        [
+          "thoang@wrshealth.com",
+          39
+        ],
+        [
+          "joseph.demmons@azaleahealth.com",
+          32
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 1,
+      "suspicious": []
+    },
+    {
+      "name": "contact_address_text",
+      "ordinal": 35,
+      "total": 23566,
+      "populated": 163,
+      "empty": 23403,
+      "coverage_pct": 0.69,
+      "distinct": 14,
+      "min_length": 7,
+      "max_length": 60,
+      "detected_type": "text",
+      "samples": [
+        "505 E. Windmill Ln Suite 1C #121, Las Vegas, NV 89123",
+        "505 E. Windmill Ln Suite 1C #121, Las Vegas, NV 89123",
+        "1600 7th Avenue South, Birmingham, AL 35233",
+        "505 E. Windmill Ln Suite 1C #121, Las Vegas, NV 89123",
+        "505 E. Windmill Ln Suite 1C #121, Las Vegas, NV 89123"
+      ],
+      "top_values": [
+        [
+          "Primary",
+          84
+        ],
+        [
+          "505 E. Windmill Ln Suite 1C #121, Las Vegas, NV 89123",
+          59
+        ],
+        [
+          "5600 Fishers Lane, Rockville, MD 20857",
+          5
+        ],
+        [
+          "10480 Little Patuxent Parkway, Suite 800, Columbia, MD 21044",
+          4
+        ],
+        [
+          "2261 Market St, #4818, San Francisco, CA 94114",
+          2
+        ],
+        [
+          "1600 7th Avenue South, Birmingham, AL 35233",
+          1
+        ],
+        [
+          "501 Dexter Avenue, Montgomery, AL 36104",
+          1
+        ],
+        [
+          "105 Highway 80 east, Demopolis, AL 36732",
+          1
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": [
+        "length varies widely (7\u201360)"
+      ]
+    },
+    {
+      "name": "contact_address_line",
+      "ordinal": 36,
+      "total": 23566,
+      "populated": 7191,
+      "empty": 16375,
+      "coverage_pct": 30.51,
+      "distinct": 64,
+      "min_length": 10,
+      "max_length": 40,
+      "detected_type": "text",
+      "samples": [
+        "200 Riverfront Bvld Ste 3",
+        "PO Box 939",
+        "505 E. Windmill Ln Suite 1C #121",
+        "505 E. Windmill Ln Suite 1C #121",
+        "200 Riverfront Bvld Ste 3"
+      ],
+      "top_values": [
+        [
+          "200 Riverfront Bvld Ste 3",
+          6977
+        ],
+        [
+          "505 E. Windmill Ln Suite 1C #121",
+          59
+        ],
+        [
+          "6 Concourse Pkwy, Suite 2550",
+          42
+        ],
+        [
+          "2004 Route 17M",
+          39
+        ],
+        [
+          "5600 Fishers Lane",
+          5
+        ],
+        [
+          "10480 Little Patuxent Parkway, Suite 800",
+          4
+        ],
+        [
+          "2505 US Highway 431",
+          2
+        ],
+        [
+          "305 West Locust St",
+          2
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 43,
+      "suspicious": []
+    },
+    {
+      "name": "contact_address_city",
+      "ordinal": 37,
+      "total": 23566,
+      "populated": 7191,
+      "empty": 16375,
+      "coverage_pct": 30.51,
+      "distinct": 62,
+      "min_length": 4,
+      "max_length": 18,
+      "detected_type": "text",
+      "samples": [
+        "Elmwood Park",
+        "Alexander City",
+        "Las Vegas",
+        "Las Vegas",
+        "Elmwood Park"
+      ],
+      "top_values": [
+        [
+          "Elmwood Park",
+          6977
+        ],
+        [
+          "Las Vegas",
+          60
+        ],
+        [
+          "Goshen",
+          39
+        ],
+        [
+          "Suite 2550 Atlanta",
+          32
+        ],
+        [
+          "Atlanta",
+          10
+        ],
+        [
+          "Columbia",
+          5
+        ],
+        [
+          "Rockville",
+          5
+        ],
+        [
+          "Boaz",
+          2
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 1,
+      "suspicious": []
+    },
+    {
+      "name": "contact_address_state",
+      "ordinal": 38,
+      "total": 23566,
+      "populated": 7191,
+      "empty": 16375,
+      "coverage_pct": 30.51,
+      "distinct": 26,
+      "min_length": 2,
+      "max_length": 8,
+      "detected_type": "text",
+      "samples": [
+        "NJ",
+        "AL",
+        "NV",
+        "NV",
+        "NJ"
+      ],
+      "top_values": [
+        [
+          "NJ",
+          6977
+        ],
+        [
+          "NV",
+          60
+        ],
+        [
+          "Georgia",
+          42
+        ],
+        [
+          "New York",
+          39
+        ],
+        [
+          "MD",
+          12
+        ],
+        [
+          "AL",
+          11
+        ],
+        [
+          "NE",
+          6
+        ],
+        [
+          "TX",
+          6
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": []
+    },
+    {
+      "name": "contact_address_postalCode",
+      "ordinal": 39,
+      "total": 23566,
+      "populated": 7191,
+      "empty": 16375,
+      "coverage_pct": 30.51,
+      "distinct": 61,
+      "min_length": 4,
+      "max_length": 10,
+      "detected_type": "integer-like",
+      "samples": [
+        "9407",
+        "35801",
+        "89123",
+        "89123",
+        "9407"
+      ],
+      "top_values": [
+        [
+          "9407",
+          6977
+        ],
+        [
+          "89123",
+          60
+        ],
+        [
+          "30328",
+          42
+        ],
+        [
+          "10924",
+          39
+        ],
+        [
+          "20857",
+          5
+        ],
+        [
+          "21044",
+          4
+        ],
+        [
+          "35801",
+          2
+        ],
+        [
+          "35957",
+          2
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": []
+    },
+    {
+      "name": "contact_address_country",
+      "ordinal": 40,
+      "total": 23566,
+      "populated": 7183,
+      "empty": 16383,
+      "coverage_pct": 30.48,
+      "distinct": 1,
+      "min_length": 2,
+      "max_length": 2,
+      "detected_type": "fixed-width(2)",
+      "samples": [
+        "US",
+        "US",
+        "US",
+        "US",
+        "US"
+      ],
+      "top_values": [
+        [
+          "US",
+          7183
+        ]
+      ],
+      "mojibake_cells": 0,
+      "embedded_tab_cells": 0,
+      "leading_trailing_space_cells": 0,
+      "suspicious": []
+    }
+  ],
+  "integrity": {
+    "id": {
+      "populated": 23566,
+      "distinct": 23566,
+      "repeated_values": 0,
+      "extra_rows_from_repeats": 0,
+      "is_unique": true,
+      "worst_repeat": 0,
+      "worst_repeat_value": null
+    },
+    "TEFCAID": {
+      "populated": 23566,
+      "distinct": 23325,
+      "repeated_values": 43,
+      "extra_rows_from_repeats": 241,
+      "is_unique": false,
+      "worst_repeat": 69,
+      "worst_repeat_value": "urn:uuid:9483c34b-f148-40af-82dc-25150e6a251c"
+    },
+    "HCID": {
+      "populated": 23566,
+      "distinct": 23562,
+      "repeated_values": 4,
+      "extra_rows_from_repeats": 4,
+      "is_unique": false,
+      "worst_repeat": 2,
+      "worst_repeat_value": "urn:oid:1.3.6.1.4.1.52618.2.137388"
+    },
+    "AAID": {
+      "populated": 7447,
+      "distinct": 7444,
+      "repeated_values": 1,
+      "extra_rows_from_repeats": 3,
+      "is_unique": false,
+      "worst_repeat": 4,
+      "worst_repeat_value": "urn:oid:1.3.6.1.4.1.22812.4.10021952.0"
+    },
+    "NPI": {
+      "populated": 18982,
+      "distinct": 18675,
+      "repeated_values": 281,
+      "extra_rows_from_repeats": 307,
+      "is_unique": false,
+      "worst_repeat": 12,
+      "worst_repeat_value": "1295023547"
+    }
+  },
+  "populations": {
+    "total_records": 23566,
+    "parse_ok": 23566,
+    "parse_malformed": 0,
+    "npi_populated": 18982,
+    "npi_empty": 4584,
+    "sequoiaorgtype": {
+      "Subparticipant": 12489,
+      "Participant": 11077
+    },
+    "active": {
+      "0": 972,
+      "1": 22594
+    },
+    "active_by_type": {
+      "0|Subparticipant": 867,
+      "1|Participant": 10972,
+      "1|Subparticipant": 11622,
+      "0|Participant": 105
+    },
+    "qhin_count": 11,
+    "qhin_distribution": {
+      "2.16.840.1.113883.4.391.1000": 10481,
+      "2.16.840.1.113883.3.9960": 6977,
+      "1.2.840.114350.1.72.69847383.2": 4483,
+      "2.16.840.1.113883.3.432.0.16.500": 477,
+      "1.3.6.1.4.1.52618.1": 461,
+      "2.16.840.1.113883.3.3126": 366,
+      "2.16.840.1.113883.3.9415": 102,
+      "2.16.840.1.113883.3.7204.1.2.1.1.1.1": 88,
+      "2.16.840.1.113883.3.2054.6": 84,
+      "2.16.840.1.113883.3.13.11.1.1": 44,
+      "2.16.840.1.113883.3.3569": 3
+    },
+    "hcid_coverage_pct": 100.0,
+    "purposesofuse_coverage_pct": 98.25,
+    "purposesofuse_missing": 412,
+    "purposesofuse_tokens": {
+      "T-TRTMNT": 22748,
+      "T-PH-ECR": 1855,
+      "T-GOVDTRM-ACP": 618,
+      "T-IAS": 76,
+      "T-TREAT": 13,
+      "T-PH": 8,
+      "T-HCO": 3,
+      "T-PYMNT": 3,
+      "T-GOVDTRM": 2,
+      "T-PH-ELR": 2,
+      "T-GOVDTRM-SSD": 1
+    },
+    "purposesofuse_combinations": {
+      "T-TRTMNT": 20993,
+      "T-PH-ECR,T-TRTMNT": 1280,
+      "T-GOVDTRM-ACP,T-PH-ECR,T-TRTMNT": 273,
+      "T-PH-ECR": 167,
+      "T-GOVDTRM-ACP,T-TRTMNT": 157,
+      "T-GOVDTRM-ACP,T-PH-ECR": 133,
+      "T-GOVDTRM-ACP": 55,
+      "T-IAS,T-TRTMNT": 40,
+      "T-IAS": 34,
+      "T-TREAT": 9,
+      "T-PH": 6,
+      "T-TREAT,T-TRTMNT": 2,
+      "T-GOVDTRM,T-HCO,T-IAS,T-PH,T-PH-ECR,T-PH-ELR,T-PYMNT,T-TREAT,T-TRTMNT": 2,
+      "T-GOVDTRM-SSD": 1,
+      "T-HCO,T-TRTMNT": 1,
+      "T-PYMNT": 1
+    },
+    "contact_coverage": {
+      "contact_company": 0.0,
+      "contact_purpose": 72.97,
+      "contact_name": 77.4,
+      "contact_phone": 75.43,
+      "contact_email": 75.44,
+      "contact_address_text": 0.69,
+      "contact_address_line": 30.51,
+      "contact_address_city": 30.51,
+      "contact_address_state": 30.51,
+      "contact_address_postalCode": 30.51,
+      "contact_address_country": 30.48
+    }
+  },
+  "anomalies": {
+    "mojibake_cells_total": 0,
+    "mojibake_columns": {},
+    "embedded_tab_cells_total": 4,
+    "embedded_tab_columns": {
+      "address_line": 4
+    },
+    "embedded_tab_locations": [
+      {
+        "line_number": 12944,
+        "column": "address_line"
+      },
+      {
+        "line_number": 12953,
+        "column": "address_line"
+      },
+      {
+        "line_number": 12954,
+        "column": "address_line"
+      },
+      {
+        "line_number": 12955,
+        "column": "address_line"
+      }
+    ],
+    "npi": {
+      "wrong_length_count": 4,
+      "wrong_length_samples": [
+        "854565",
+        "116442605",
+        "164929675",
+        "1780787176, 1770559767"
+      ],
+      "non_digit_count": 1,
+      "non_digit_samples": [
+        "1780787176, 1770559767"
+      ],
+      "length_distribution": {
+        "10": 18978,
+        "9": 2,
+        "6": 1,
+        "22": 1
+      },
+      "check_digit_failures": 2,
+      "check_digit_failure_samples": [
+        "1114035472",
+        "1407108355"
+      ]
+    },
+    "zip": {
+      "shorter_than_five": 1627,
+      "length_distribution": {
+        "5": 19686,
+        "10": 2250,
+        "4": 1595,
+        "3": 32,
+        "6": 2,
+        "8": 1
+      },
+      "samples_short": [
+        "2718",
+        "2139",
+        "1606",
+        "6032",
+        "4101",
+        "5401",
+        "5403",
+        "5403",
+        "5408",
+        "7601"
+      ],
+      "non_numeric": []
+    },
+    "state": {
+      "distinct": 54,
+      "outside_usps_set": {}
+    },
+    "test_records": {
+      "count": 9,
+      "names": [
+        "ELLKAY-DOA-TEST",
+        "Surescripts Interconnect Test",
+        "QHIN Test - Organization 1",
+        "NTST Test Participant A",
+        "Test 3",
+        "TEST FACILITY-TOMCAT_MS_8145",
+        "TEST - NAMRATA RAWAL",
+        "TEST-INFANT WELFARE SOCIETY OF CHICAGO",
+        "TEST - MEMORIAL HERMANN HOSPITAL SYSTEM"
+      ],
+      "note": "Heuristic name match. Flagged for analyst determination; no record is excluded on this basis."
+    },
+    "hierarchy": {
+      "partof_populated": 23566,
+      "partof_distinct": 300,
+      "partof_resolves_in_file": 12474,
+      "orgmanagingorg_resolves_in_file": 0,
+      "partof_equals_orgmanagingorg_by_type": {
+        "Subparticipant|False": 12474,
+        "Participant|True": 11077,
+        "Subparticipant|True": 15
+      }
+    }
+  }
+}

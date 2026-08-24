@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from sqlalchemy import (
     Column, String, Integer, Float, Boolean, DateTime,
-    Enum, ForeignKey, Text, JSON, Index, text
+    Enum, ForeignKey, Text, JSON, Index, UniqueConstraint, text
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
@@ -443,6 +443,44 @@ class TEFCADimensionEvidence(Base):
     generation_timestamp = Column(String(64), index=True)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
+    #: Which evidence vocabulary this row's terms belong to (B5 / migration
+    #: 20260823_vocab_version). NULL on every row written before versioning
+    #: existed, and DELIBERATELY LEFT NULL — `evidence_vocabulary.vocabulary_of`
+    #: derives "LEGACY" at read time. Backfilling would erase the difference
+    #: between "predates versioning" and "retrospectively assigned", which is the
+    #: same reason `confidence_score` above carries no default.
+    #:
+    #: No server_default, so adding it did not rewrite the 1,984 existing rows.
+    vocabulary_version = Column(String(10), index=True)
+
+    # ── B3 provenance (migration 20260824_evidence_provenance) ──────────────
+    #
+    # ALL ADDITIVE AND NULLABLE. Historical rows keep NULL, which is the honest
+    # representation: the NPPES and LEIE editions consulted on 2026-08-21 were
+    # never recorded and CANNOT be recovered. Backfilling a guess would be worse
+    # than the gap it filled.
+    #
+    # `observation_result` is a SEPARATE column from `disposition` on purpose.
+    # `disposition` currently carries nine values drawn from three vocabularies
+    # (Layer 1 NOT_FOUND/UNAVAILABLE, Layer 3 PASS/REVIEW/…, and the address
+    # comparison MATCH/PARTIAL_MATCH). Recording what a source SAID apart from
+    # what DocuAction CONCLUDED is what lets the same evidence be re-interpreted
+    # under a revised methodology — which is exactly what answering D1-D9 will
+    # require.
+    source_version_id = Column(UUID(as_uuid=True), ForeignKey("source_version_snapshots.id"))
+    observation_result = Column(String(24), index=True)   # Layer 1 vocabulary
+    identifier_searched = Column(String(200))
+    identifier_type = Column(String(24))
+    #: SHA-256 of the canonicalised RAW response, taken before shaping. A hash of
+    #: `original_values` would only prove what we chose to keep.
+    observation_hash = Column(String(64), index=True)
+    raw_observation_ref = Column(Text)
+    match_method = Column(String(20))
+    match_level = Column(Integer)
+    match_version = Column(String(20))
+    rule_version = Column(String(20))
+    correlation_id = Column(UUID(as_uuid=True), index=True)
+
     # Analyst annotation — see the class docstring for why these are writable.
     analyst_notes = Column(Text)
     reviewed_by = Column(String(255))
@@ -451,6 +489,109 @@ class TEFCADimensionEvidence(Base):
     __table_args__ = (
         Index("idx_dim_evidence_entity_dimension", "entity_id", "evidence_dimension"),
         Index("idx_dim_evidence_generation", "entity_id", "generation_timestamp"),
+    )
+
+
+class SourceVersionSnapshot(Base):
+    """WHICH edition of a source answered. Append-only.
+
+    One row per (source, version) actually consulted, referenced by many
+    observations — because PPEF Q3 2026 is ONE artefact read by thousands of
+    lookups, and repeating its identity on every evidence row invites the copies
+    to drift.
+
+    API VERSION IS NOT DATASET VERSION, AND THEY GET SEPARATE COLUMNS.
+    NPPES publishes an API version ("2.1") and no data version; OIG LEIE
+    publishes neither, only a file that is replaced in place. Recording either
+    in `version_label` would assert a reproducibility that does not exist. Those
+    sources get `version_label = 'UNKNOWN'` and `is_point_in_time = false`.
+
+    `is_point_in_time` is the load-bearing column. False means: this observation
+    cannot be reproduced from the source, and any report citing it must not
+    imply otherwise.
+    """
+
+    __tablename__ = "source_version_snapshots"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    source = Column(String(40), nullable=False, index=True)
+    #: The SOURCE's own edition label, or 'UNKNOWN'. Never an API version.
+    version_label = Column(String(120), nullable=False)
+    source_as_of = Column(String(32))
+    #: SHA-256 of the retrieved artefact, where one exists.
+    source_file_hash = Column(String(64), index=True)
+    dataset_identifier = Column(String(120))
+    #: Recorded separately so it can never be mistaken for the dataset version.
+    api_version = Column(String(32))
+    #: Transport metadata — a CDN artefact, not the source's as-of date.
+    http_last_modified = Column(String(64))
+    record_count = Column(Integer)
+
+    retrieved_at = Column(String(64), nullable=False)
+    retrieval_method = Column(String(20), nullable=False)  # API|DOWNLOAD|LOCAL_*
+    storage_uri = Column(Text)
+    is_point_in_time = Column(Boolean, nullable=False, default=False)
+    note = Column(Text)
+
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        Index("idx_source_version_source_retrieved", "source", "retrieved_at"),
+        Index("idx_source_version_pit", "source", "is_point_in_time"),
+    )
+
+
+class EvidenceRelationshipPath(Base):
+    """The traversal that produced one piece of evidence. Append-only.
+
+    HOPS, NOT COLUMNS. PPEF is one-to-many at every level: a provider may hold
+    several enrolments, an enrolment several practice locations, several
+    specialties, several additional NPIs and several reassignments. A fixed
+    column set would force one of each and silently discard the rest, and
+    "PECOS matched" would remain the only answer available to an auditor asking
+    WHICH enrolment and via WHICH relationship.
+
+        NPI -> ENROLLMENT (ENRLMT_ID) -> practice location
+                                      -> secondary specialty
+                                      -> additional NPI
+                                      -> reassignment -> receiving ENRLMT_ID
+
+    `source_version_id` sits on EVERY hop rather than on the evidence row: the
+    PPEF components are separate files with separate hashes, and one evidence
+    item can legitimately traverse two of them.
+
+    NOTHING IS INGESTED BY THIS TABLE EXISTING. It is inert until a PPEF
+    snapshot is loaded — and it must exist first, or the first ingestion has
+    nowhere to record the traversal and flattens by default.
+    """
+
+    __tablename__ = "evidence_relationship_path"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    evidence_id = Column(UUID(as_uuid=True),
+                         ForeignKey("tefca_dimension_evidence.id", ondelete="CASCADE"),
+                         nullable=False, index=True)
+    hop_sequence = Column(Integer, nullable=False)
+
+    from_identifier_type = Column(String(30), nullable=False)
+    from_identifier_value = Column(String(120), nullable=False)
+    relationship_type = Column(String(40), nullable=False)
+    to_identifier_type = Column(String(30))
+    to_identifier_value = Column(String(200))
+
+    ppef_component = Column(String(40))
+    source_row_key = Column(String(160))
+    source_version_id = Column(UUID(as_uuid=True),
+                               ForeignKey("source_version_snapshots.id"))
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("evidence_id", "hop_sequence", name="uq_evidence_hop"),
+        Index("idx_evidence_hop_from", "from_identifier_type", "from_identifier_value"),
+        Index("idx_evidence_hop_to", "to_identifier_type", "to_identifier_value"),
+        Index("idx_evidence_hop_rel", "relationship_type"),
     )
 
 

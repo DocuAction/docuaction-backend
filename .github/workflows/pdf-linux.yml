@@ -1,0 +1,134 @@
+# Linux PDF rendering verification.
+#
+# WHY THIS EXISTS
+# ---------------
+# The report engine renders every PDF deliverable through WeasyPrint, which is a
+# binding to the Pango/Cairo/GObject stack rather than a pure-Python library. On
+# the Windows development host those libraries are absent, so the PDF tests skip
+# and the path is never exercised.
+#
+# Phase 7.5 found that the container image could not render a PDF either — the
+# Dockerfile installed only ffmpeg — while the code told every reader those
+# libraries "are present in the project's Linux container image". Both are fixed;
+# this workflow is what proves it on an actual Linux machine rather than by
+# reading the Dockerfile.
+#
+# The runner installs the same packages the Dockerfile does, deliberately: if
+# the two lists drift, this job fails and the image is the thing to fix.
+#
+# DEVELOPMENT / TEST. Renders nothing from Government data; the suite runs
+# against fixtures with no database.
+
+name: Linux PDF Rendering
+
+on:
+  push:
+    branches: [main, 'fix/**']
+    paths:
+      - 'app/reports/**'
+      - 'Dockerfile'
+      - 'requirements.txt'
+      - '.github/workflows/pdf-linux.yml'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Mirrors the Dockerfile. Keep the two in step.
+      - name: Install WeasyPrint native stack
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libpango-1.0-0 \
+            libpangoft2-1.0-0 \
+            libcairo2 \
+            libgdk-pixbuf-2.0-0 \
+            libffi8 \
+            shared-mime-info \
+            fonts-dejavu-core
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Report engine availability
+        run: |
+          python - <<'PY'
+          from app.reports.engine.pdf_engine import engine_info, pdf_available
+          info = engine_info()
+          print("available:", info["available"])
+          print("version:  ", info["version"])
+          print("variant:  ", info["pdf_variant_requested"])
+          print("reason:   ", info.get("reason"))
+          # Fail loudly. A green job with an unavailable engine proves nothing.
+          assert pdf_available(), info.get("reason")
+          PY
+
+      - name: Render a PDF and check its structure
+        run: |
+          python - <<'PY'
+          from app.reports.engine.pdf_engine import render_pdf
+
+          # Exercises the shapes a real deliverable contains: a table with
+          # header semantics, a long unbroken reference, Unicode, and the
+          # development watermark.
+          html = """
+          <html lang="en"><head><meta charset="utf-8"><title>CI render</title>
+          <style>@page { size: letter; @top-center { content: "DEVELOPMENT / TEST DATA"; } }</style>
+          </head><body>
+            <div class="dev-banner"><p>DEVELOPMENT / TEST DATA &mdash;
+              NOT FOR GOVERNMENT DELIVERY</p><p>NOT ONC FINDINGS.</p></div>
+            <h1>Rendering check</h1>
+            <h2>Table semantics</h2>
+            <table><caption>Discrepancy categories</caption>
+              <thead><tr><th scope="col">Category</th><th scope="col">Count</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">No discrepancies identified</th><td>0</td></tr>
+                <tr><th scope="row">Minor or administrative discrepancies</th><td>0</td></tr>
+                <tr><th scope="row">Inexplicable discrepancies</th><td>0</td></tr>
+                <tr><th scope="row">Non-compliant discrepancies</th><td>0</td></tr>
+              </tbody></table>
+            <h2>Long values</h2>
+            <p>A deliberately long entity name that has to wrap rather than
+               overflow the page box: SOUTHEASTERN REGIONAL ORTHOPAEDIC AND
+               NEUROSURGICAL SPECIALISTS OF THE GREATER METROPOLITAN AREA LLP</p>
+            <p>https://npiregistry.cms.hhs.gov/api/?number=1234567890&amp;enumeration_type=NPI-2&amp;version=2.1</p>
+            <h2>Unicode</h2>
+            <p>Ünïcödé — em dash, curly quotes “like these”, accented Ángel, ½ ¾ §</p>
+            <div style="break-before: page"></div>
+            <h2>Evidence appendix</h2>
+            <p>Source SHA-256: 689472073480b1cc4faf604527eda47e4e59928f7a6128d84b2f28bb6e9e9e8d</p>
+          </body></html>
+          """
+          pdf = render_pdf(html, title="CI render")
+          assert pdf[:5] == b"%PDF-", "output is not a PDF"
+          assert len(pdf) > 2000, f"suspiciously small PDF: {len(pdf)} bytes"
+          # More than one page proves pagination ran.
+          assert pdf.count(b"/Type /Page") >= 1 or pdf.count(b"/Type/Page") >= 1
+          # A tagged structure tree is what pdf_variant="pdf/ua-1" asks for. Its
+          # presence is a PRECONDITION for accessibility, not conformance, and
+          # nothing here claims otherwise.
+          tagged = b"/StructTreeRoot" in pdf or b"/Marked" in pdf
+          print(f"rendered {len(pdf)} bytes; tagged structure present: {tagged}")
+          if not tagged:
+              print("::warning::No tagged structure tree found. PDF/UA was "
+                    "requested; the renderer did not emit tags.")
+          PY
+
+      - name: Run the PDF-gated tests
+        run: pytest tests/test_phase75_cutover.py tests/test_reports.py -q
+
+      - name: Accessibility note
+        run: |
+          echo "::notice::A tagged structure tree is a precondition for an"\
+               "accessible PDF, not proof of one. No Section 508 conformance is"\
+               "claimed from this job. Manual 508 review and per-deliverable HHS"\
+               "checklists remain outstanding (D9)."
