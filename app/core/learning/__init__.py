@@ -23,6 +23,9 @@ WHERE THE UI LIVES
     tooltip placement belong to whoever builds the screen.
 """
 from .framework import (  # noqa: F401
+    KNOWLEDGE_VERSION,
+    PROGRAMS,
+    Classification,
     ContextualHelp,
     Glossary,
     GlossaryTerm,
@@ -30,11 +33,14 @@ from .framework import (  # noqa: F401
     LearningRegistry,
     Lesson,
     Module,
+    ProgramRegistry,
     ProhibitedConclusion,
     Role,
+    Statement,
 )
 
 __all__ = [
-    "ContextualHelp", "Glossary", "GlossaryTerm", "KnowledgeCheck",
-    "LearningRegistry", "Lesson", "Module", "ProhibitedConclusion", "Role",
+    "KNOWLEDGE_VERSION", "PROGRAMS", "Classification", "ContextualHelp",
+    "Glossary", "GlossaryTerm", "KnowledgeCheck", "LearningRegistry", "Lesson",
+    "Module", "ProgramRegistry", "ProhibitedConclusion", "Role", "Statement",
 ]
