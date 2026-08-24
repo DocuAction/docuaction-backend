@@ -1138,7 +1138,8 @@ def _parse_date(s: str):
         raise HTTPException(400, f"Invalid date '{s}', expected ISO YYYY-MM-DD")
 
 
-@tefca_router.post("/reports/weekly/{cycle_id}", summary="Generate D3.1 weekly progress report")
+@tefca_router.post("/reports/weekly/{cycle_id}", deprecated=True,
+                   summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/sow/*. D3.1 weekly progress report")
 async def generate_weekly_report(
     cycle_id: str, http: Request,
     week_number: int = Query(...),
@@ -1157,7 +1158,8 @@ async def generate_weekly_report(
     return {"report_id": str(row.report_id), "report": data}
 
 
-@tefca_router.post("/reports/final/{cycle_id}", summary="Generate D3.2 final report")
+@tefca_router.post("/reports/final/{cycle_id}", deprecated=True,
+                   summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/sow/*. D3.2 final report")
 async def generate_final_report(
     cycle_id: str, http: Request,
     db: AsyncSession = Depends(get_db), user=Depends(require_role("program_manager")),
@@ -1173,7 +1175,8 @@ async def generate_final_report(
     return {"report_id": str(row.report_id), "report": data}
 
 
-@tefca_router.get("/reports", summary="List generated reports")
+@tefca_router.get("/reports", deprecated=True,
+                  summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports. List generated reports")
 async def list_reports(db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer"))):
     rows = (await db.execute(select(TEFCAReport).order_by(TEFCAReport.generated_at.desc()))).scalars().all()
     return {
@@ -2386,7 +2389,7 @@ class FinalReportRequest(BaseModel):
     period_end: Optional[str] = None
 
 
-@tefca_dashboard_router.post("/reports/weekly", summary="Generate a weekly progress report (SOW Task 3)")
+@tefca_dashboard_router.post("/reports/weekly", deprecated=True, summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. Weekly progress report (SOW Task 3)")
 async def create_weekly_report(
     request: WeeklyReportRequest, http: Request,
     db: AsyncSession = Depends(get_db), user=Depends(require_role("qalead")),
@@ -2404,7 +2407,7 @@ async def create_weekly_report(
     return report
 
 
-@tefca_dashboard_router.post("/reports/final", summary="Generate the final retrospective report (SOW Task 3)")
+@tefca_dashboard_router.post("/reports/final", deprecated=True, summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. Final retrospective report (SOW Task 3)")
 async def create_final_report(
     request: FinalReportRequest, http: Request,
     db: AsyncSession = Depends(get_db), user=Depends(require_role("program_manager")),
@@ -2422,7 +2425,7 @@ async def create_final_report(
     return report
 
 
-@tefca_dashboard_router.get("/reports", summary="List reports (filters: type, start, end)")
+@tefca_dashboard_router.get("/reports", deprecated=True, summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. List reports")
 async def list_tefca_reports(
     type: Optional[str] = Query(None), start: Optional[str] = Query(None), end: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
@@ -2448,7 +2451,7 @@ async def list_tefca_reports(
     }
 
 
-@tefca_dashboard_router.get("/reports/{report_id}", summary="Full report detail")
+@tefca_dashboard_router.get("/reports/{report_id}", deprecated=True, summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. Full report detail")
 async def get_tefca_report(
     report_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
@@ -2466,7 +2469,7 @@ async def get_tefca_report(
     }
 
 
-@tefca_dashboard_router.get("/reports/{report_id}/csv", summary="Download report as 12-column CSV")
+@tefca_dashboard_router.get("/reports/{report_id}/csv", deprecated=True, summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. Report as CSV")
 async def get_tefca_report_csv(
     report_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
@@ -2487,7 +2490,7 @@ async def _load_report_or_404(report_id: str, db: AsyncSession) -> TEFCAReport:
     return r
 
 
-@tefca_dashboard_router.get("/reports/{report_id}/pdf", summary="Download report as branded PDF")
+@tefca_dashboard_router.get("/reports/{report_id}/pdf", deprecated=True, summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. Report as PDF")
 async def get_tefca_report_pdf(
     report_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
@@ -2504,7 +2507,7 @@ async def get_tefca_report_pdf(
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
-@tefca_dashboard_router.get("/reports/{report_id}/docx", summary="Download report as branded DOCX")
+@tefca_dashboard_router.get("/reports/{report_id}/docx", deprecated=True, summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. Report as DOCX. DOCX is not a contract requirement (matrix §4).")
 async def get_tefca_report_docx(
     report_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
@@ -2526,7 +2529,7 @@ async def get_tefca_report_docx(
 
 # ─── Bi-weekly + quarterly reports, new-submissions (TEFCA Task 4) ───────────
 
-@tefca_dashboard_router.post("/reports/biweekly", summary="Generate a bi-weekly ongoing review (SOW Task 4)")
+@tefca_dashboard_router.post("/reports/biweekly", deprecated=True, summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. Bi-weekly ongoing review (SOW Task 4)")
 async def create_biweekly_report(
     request: FinalReportRequest, http: Request,
     db: AsyncSession = Depends(get_db), user=Depends(require_role("qalead")),
@@ -2544,7 +2547,7 @@ async def create_biweekly_report(
     return report
 
 
-@tefca_dashboard_router.post("/reports/quarterly", summary="Generate a quarterly report (SOW Task 4)")
+@tefca_dashboard_router.post("/reports/quarterly", deprecated=True, summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. Quarterly report (SOW Task 4)")
 async def create_quarterly_report(
     request: FinalReportRequest, http: Request,
     db: AsyncSession = Depends(get_db), user=Depends(require_role("program_manager")),
@@ -2702,7 +2705,8 @@ async def priority_detail(
     return dto
 
 
-@tefca_dashboard_router.get("/priority/{case_id}/report", summary="Formatted COR status report")
+@tefca_dashboard_router.get("/priority/{case_id}/report", deprecated=True,
+                            summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/sow/*. D5.1 priority status report")
 async def priority_report(
     case_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
@@ -2713,7 +2717,8 @@ async def priority_report(
     return report
 
 
-@tefca_dashboard_router.post("/priority/quarterly-report", summary="Generate priority quarterly aggregation")
+@tefca_dashboard_router.post("/priority/quarterly-report", deprecated=True,
+                             summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/sow/*. D5.2 priority quarterly report")
 async def priority_quarterly(
     request: FinalReportRequest, http: Request,
     db: AsyncSession = Depends(get_db), user=Depends(require_role("program_manager")),
@@ -3868,7 +3873,7 @@ async def import_history(
     }
 
 
-@tefca_dashboard_router.get("/reports/{report_id}/download", summary="Download a report (pdf|docx)")
+@tefca_dashboard_router.get("/reports/{report_id}/download", deprecated=True, summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. Download a report (pdf|docx)")
 async def download_report(
     report_id: str,
     format: str = Query("pdf", description="pdf | docx"),

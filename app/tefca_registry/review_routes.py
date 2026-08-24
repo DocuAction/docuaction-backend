@@ -429,7 +429,9 @@ def _review_dict(r, include_results: bool = False) -> dict:
 
 # ── reports (Task 3.5) ───────────────────────────────────────────────────────
 
-@router.post("/reports/generate", dependencies=[Depends(require_role("admin"))])
+@router.post("/reports/generate", deprecated=True,
+             summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. Generate a report",
+             dependencies=[Depends(require_role("admin"))])
 async def generate_report(req: GenerateReport, db: AsyncSession = Depends(get_db),
                           user=Depends(require_role("admin"))):
     """Build and ARCHIVE a report. Immutable once stored."""
@@ -483,7 +485,9 @@ async def generate_report(req: GenerateReport, db: AsyncSession = Depends(get_db
             "period": {"start": start, "end": end}, "data": data}
 
 
-@router.get("/reports", dependencies=[Depends(require_role("viewer"))])
+@router.get("/reports", deprecated=True,
+            summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. List reports",
+            dependencies=[Depends(require_role("viewer"))])
 async def list_reports(report_type: Optional[str] = None,
                        limit: int = Query(50, ge=1, le=200),
                        db: AsyncSession = Depends(get_db)):
@@ -499,7 +503,9 @@ async def list_reports(report_type: Optional[str] = None,
          "generated_at": r.generated_at} for r in rows]}
 
 
-@router.get("/reports/{report_id}", dependencies=[Depends(require_role("viewer"))])
+@router.get("/reports/{report_id}", deprecated=True,
+            summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. Report detail",
+            dependencies=[Depends(require_role("viewer"))])
 async def get_report(report_id: str, db: AsyncSession = Depends(get_db)):
     r = (await db.execute(select(reg.ReviewReport)
                           .where(reg.ReviewReport.report_id == report_id))
@@ -512,7 +518,9 @@ async def get_report(report_id: str, db: AsyncSession = Depends(get_db)):
             "generated_at": r.generated_at, "data": r.report_data}
 
 
-@router.get("/reports/{report_id}/excel", dependencies=[Depends(require_role("viewer"))])
+@router.get("/reports/{report_id}/excel", deprecated=True,
+            summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. Report as Excel",
+            dependencies=[Depends(require_role("viewer"))])
 async def get_report_excel(report_id: str, db: AsyncSession = Depends(get_db)):
     """Excel form of an archived report.
 
@@ -569,7 +577,9 @@ async def get_report_excel(report_id: str, db: AsyncSession = Depends(get_db)):
         headers={"Content-Disposition": f'attachment; filename="{report_id}.xlsx"'})
 
 
-@router.get("/reports/{report_id}/html", dependencies=[Depends(require_role("viewer"))])
+@router.get("/reports/{report_id}/html", deprecated=True,
+            summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. Report as HTML",
+            dependencies=[Depends(require_role("viewer"))])
 async def get_report_html(report_id: str, db: AsyncSession = Depends(get_db)):
     from fastapi.responses import HTMLResponse
     r = (await db.execute(select(reg.ReviewReport)

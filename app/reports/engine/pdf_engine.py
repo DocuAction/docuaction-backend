@@ -57,11 +57,19 @@ def _probe() -> tuple:
             f"`pip install weasyprint`; it is already listed in requirements.txt."
         )
     except OSError as exc:
+        # This message used to say the libraries "are present in the project's
+        # Linux container image". They were not — the Dockerfile installed only
+        # ffmpeg, so PDF generation would have failed in the container exactly
+        # as it fails here. Phase 7.5 added the stack to the image and a build
+        # step that fails the build if the engine cannot start. Saying where
+        # something IS supposed to work has to stay true, or it stops anyone
+        # from looking.
         return False, (
             f"WeasyPrint is installed but its native libraries are missing: {exc}. "
-            f"WeasyPrint requires the Pango/Cairo/GObject stack. These are present "
-            f"in the project's Linux container image; on Windows they require the "
-            f"GTK3 runtime to be installed separately."
+            f"WeasyPrint requires the Pango/Cairo/GObject stack. The project "
+            f"Dockerfile installs it (libpango, libcairo, libgdk-pixbuf) and "
+            f"verifies the engine at build time; on Windows it requires the GTK3 "
+            f"runtime to be installed separately."
         )
     return True, "WeasyPrint and its native dependencies are available."
 
