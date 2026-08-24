@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import os
 import socket
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import pytest
 
@@ -103,12 +103,26 @@ def _database_reachable() -> bool:
 
         import asyncpg
 
+        # urlparse does NOT percent-decode userinfo. A password containing any
+        # URL-reserved character arrives here still encoded ("p+w" as "p%2Bw"),
+        # authentication fails, DB_AVAILABLE goes False, and ~41 database-backed
+        # tests skip with "No database reachable" against a database that is
+        # perfectly reachable. The suite then reports green while covering less.
+        #
+        # SQLAlchemy decodes correctly, so the application works and only this
+        # probe misreads the URL - which is what made it survive so long. Found
+        # 2026-08-24 when the DEV runtime credential was rotated to one
+        # containing '+' and '@'.
+        user = unquote(parsed.username or "")
+        password = unquote(parsed.password or "")
+        database = unquote((parsed.path or "/").lstrip("/")) or "postgres"
+
         async def _probe():
             conn = await asyncio.wait_for(
                 asyncpg.connect(
                     host=host, port=port,
-                    user=parsed.username or "", password=parsed.password or "",
-                    database=(parsed.path or "/").lstrip("/") or "postgres",
+                    user=user, password=password,
+                    database=database,
                 ),
                 timeout=4,
             )
