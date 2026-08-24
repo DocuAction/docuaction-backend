@@ -66,10 +66,17 @@ class TestVocabularyCannotDrift:
     """Content declares the terms it teaches; the terms must still exist."""
 
     def test_every_taught_term_still_exists_in_code(self):
+        # The Government discrepancy categories are module-level constants in
+        # sow_report_data rather than an enum, so they are a second source of
+        # truth the guard has to know about. Widening it, not weakening it:
+        # Module 6 teaches those four terms and they must still exist.
+        from app.reports.data.sow_report_data import GOVERNMENT_CATEGORIES
+
         live = ({s.value for s in ObservationState}
                 | {a.value for a in SourceApplicability}
                 | {t.value for t in Triage}
-                | {r.value for r in AddressResult})
+                | {r.value for r in AddressResult}
+                | set(GOVERNMENT_CATEGORIES))
         taught = set(REGISTRY.vocabulary())
         assert taught, "content must declare the vocabulary it teaches"
         missing = sorted(taught - live)
@@ -100,14 +107,18 @@ class TestVocabularyCannotDrift:
 
 class TestNavigationAndModules:
 
-    def test_all_eighteen_navigation_items_are_present(self):
-        assert len(NAVIGATION) == 18
+    def test_all_navigation_items_are_present(self):
+        # 19 since Phase 8 added "Discrepancy Categories" alongside
+        # the new methodology module.
+        assert len(NAVIGATION) == 19
         for item in ("Getting Started", "Analyst Guide", "QA Reviewer Guide",
                      "Source Limitations", "Glossary", "Program Manager Guide"):
             assert item in NAVIGATION
 
-    def test_seven_training_modules_exist(self):
-        assert len(MODULES) == 7
+    def test_every_training_module_exists(self):
+        # 8 since Phase 8 added discrepancies-and-methodology, the
+        # module where mislabelling has contractual consequences.
+        assert len(MODULES) == 8
 
     def test_every_module_has_objective_lesson_and_check(self):
         for m in MODULES:

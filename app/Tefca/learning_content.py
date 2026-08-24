@@ -18,7 +18,8 @@ WHAT THIS DELIBERATELY DOES NOT DUPLICATE
 from __future__ import annotations
 
 from app.core.evidence_vocabulary import ObservationState
-from app.core.learning import (
+from app.core.learning import (  # noqa: F401
+    PROGRAMS,
     ContextualHelp, Glossary, GlossaryTerm, KnowledgeCheck, LearningRegistry,
     Lesson, Module, ProhibitedConclusion, Role)
 from app.Tefca.address_comparison import AddressResult
@@ -30,7 +31,7 @@ NAVIGATION = [
     "Getting Started", "Program Overview", "Review Process",
     "Understanding Evidence", "Authoritative Sources", "Analyst Guide",
     "QA Reviewer Guide", "Reports & Deliverables", "Priority Reviews",
-    "Ongoing Reviews", "Retrospective Reviews", "Methodology", "Data Quality",
+    "Ongoing Reviews", "Retrospective Reviews", "Discrepancy Categories", "Methodology", "Data Quality",
     "Source Limitations", "Glossary", "FAQs", "Troubleshooting",
     "Program Manager Guide",
 ]
@@ -372,7 +373,12 @@ M7 = Module(
         "It answers 'what did the system observe on the day it ran' — the first "
         "question an audit asks.")])
 
-MODULES = [M1, M2, M3, M4, M5, M6, M7]
+from app.Tefca.learning_methodology import MODULE_6  # noqa: E402
+
+# Module 6 lives in learning_methodology.py. It is the module where mislabelling
+# has contractual consequences, so it is kept beside the decision register it
+# has to stay in step with rather than beside the other prose.
+MODULES = [M1, M2, M3, M4, M5, M6, M7, MODULE_6]
 
 # ── glossary ────────────────────────────────────────────────────────────────
 
@@ -419,21 +425,24 @@ HELP = [
         prohibited_conclusions=[ProhibitedConclusion(
             "This observation is a finding.",
             "A finding requires an analyst determination and a QA approval.")],
-        evidence_location="tefca_dimension_evidence, current rule_version only"),
+        evidence_location="tefca_dimension_evidence, current rule_version only",
+        learn_more="automated-observations"),
     ContextualHelp(
         key="evidence.address_conflict",
         what_is_this="The delivered address and a published practice location differ after normalisation.",
         why_am_i_seeing_it="Formatting differences were already excluded; this difference survived normalisation.",
         allowed_actions=["Compare normalised values", "View both source editions"],
         prohibited_conclusions=_ADDRESS_PROHIBITED,
-        evidence_location="dimension_disposition = CONFLICT, with field_conflicts and normalized_values"),
+        evidence_location="dimension_disposition = CONFLICT, with field_conflicts and normalized_values",
+        learn_more="discrepancies-and-methodology/what-blocks-a-category"),
     ContextualHelp(
         key="evidence.source_unavailable",
         what_is_this="An applicable source did not answer.",
         why_am_i_seeing_it="Access to the source is unavailable — for SAM.gov, no credential is configured.",
         allowed_actions=["Record the gap", "Escalate the access question"],
         prohibited_conclusions=_UNAVAILABLE_PROHIBITED,
-        evidence_location="observation_result = SOURCE_UNAVAILABLE"),
+        evidence_location="observation_result = SOURCE_UNAVAILABLE",
+        learn_more="discrepancies-and-methodology/what-blocks-a-category"),
     ContextualHelp(
         key="exception.queue_item",
         what_is_this="An observation triage marked as requiring human adjudication.",
@@ -443,7 +452,8 @@ HELP = [
             "I can approve my own determination.",
             "Segregation of duties: the QA reviewer must be a different person.")],
         evidence_location="review_records linked to the cited observations",
-        audience=[Role.ANALYST, Role.QA, Role.PROGRAM_MANAGER]),
+        audience=[Role.ANALYST, Role.QA, Role.PROGRAM_MANAGER],
+        learn_more="analyst-review"),
     ContextualHelp(
         key="qa.decision",
         what_is_this="The gate that makes a determination reportable.",
@@ -453,7 +463,8 @@ HELP = [
             "Approval is permanent.",
             "A later RETURN or ESCALATE revokes reportability.")],
         evidence_location="review_decision_events, append-only",
-        audience=[Role.QA, Role.PROGRAM_MANAGER]),
+        audience=[Role.QA, Role.PROGRAM_MANAGER],
+        learn_more="qa-review"),
     ContextualHelp(
         key="report.release_status",
         what_is_this="Whether this report may go to the COR.",
@@ -463,7 +474,8 @@ HELP = [
             "All tests pass, so the report is releasable.",
             "Dataset contractual provenance is not an engineering gate.",
             unblocked_by="documented sender, transmittal and control total")],
-        evidence_location="release gate evaluation attached to the report payload"),
+        evidence_location="release gate evaluation attached to the report payload",
+        learn_more="reports"),
     ContextualHelp(
         key="methodology.pending",
         what_is_this="A condition whose review requirement depends on a COR decision not yet made.",
@@ -472,15 +484,27 @@ HELP = [
         prohibited_conclusions=[ProhibitedConclusion(
             "Pending means no problem.",
             "It means undecided. It supports no conclusion in either direction.")],
-        evidence_location="COR Decision Register"),
+        evidence_location="COR Decision Register",
+        learn_more="discrepancies-and-methodology/what-blocks-a-category"),
     ContextualHelp(
         key="source.limitation",
         what_is_this="Something a source cannot tell us, distinct from something it told us.",
         why_am_i_seeing_it="The limit is in our key or our access, not in the entity.",
         allowed_actions=["View the limitation in the methodology"],
         prohibited_conclusions=_NOT_APPLICABLE_PROHIBITED + _UNAVAILABLE_PROHIBITED,
-        evidence_location="Methodology §23 Source limitations"),
+        evidence_location="Methodology §23 Source limitations",
+        learn_more="evidence-and-sources"),
 ]
 
-REGISTRY = LearningRegistry(modules=MODULES, glossary=GLOSSARY,
-                            help_topics=HELP, navigation=NAVIGATION)
+REGISTRY = LearningRegistry(
+    modules=MODULES, glossary=GLOSSARY, help_topics=HELP,
+    navigation=NAVIGATION,
+    program="TEFCA_ARC",
+    program_title="TEFCA ARC — Audit, Review and Compliance",
+    last_updated="2026-08-24")
+
+# Registering makes the content reachable by programme key rather than by
+# importing this module. That is what lets the API serve any programme without
+# knowing which ones exist, and it is the property that keeps the framework
+# reusable.
+PROGRAMS.register(REGISTRY)

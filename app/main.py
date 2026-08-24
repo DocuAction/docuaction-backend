@@ -508,6 +508,21 @@ from app.reports.routes import router as reports_router  # noqa: E402
 app.include_router(reports_router)
 logger.info("Loaded: reports (CANONICAL — /api/reports/*, unconditional registration)")
 
+# ═══ LEARNING CENTER ═══
+# Operator guidance at /api/learning/*. CORE and programme-agnostic: it serves
+# whatever programmes have registered content, and imports nothing from TEFCA.
+# Importing the TEFCA content module is what registers the TEFCA programme, so
+# it must happen before the first request rather than lazily.
+from app.core.learning.routes import router as learning_router  # noqa: E402
+# `from ... import` deliberately: `import app.Tefca.learning_content`
+# rebinds the local name `app` to the package and shadows the FastAPI
+# instance, which fails on the very next line.
+from app.Tefca import learning_content as _tefca_learning  # noqa: E402,F401
+from app.Tefca.learning_routes import router as tefca_methodology_router  # noqa: E402
+app.include_router(learning_router)
+app.include_router(tefca_methodology_router)
+logger.info("Loaded: learning-center (/api/learning/*) + tefca-methodology")
+
 # ═══ CASE MANAGEMENT ═══
 safe_load("app.case_management", "case-management")
 
