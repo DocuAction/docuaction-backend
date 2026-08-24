@@ -1,6 +1,23 @@
 # SAM.gov API Key — Setup Required
 
-**Contract:** 7571MN26F80064 · **Status:** BLOCKED — key not provisioned · **Date:** 2026-08-02
+**Contract:** 7571MN26F80064 · **Status:** ~~BLOCKED — key not provisioned~~ **SUPERSEDED — see correction** · **Date:** 2026-08-02
+
+> **CORRECTION — 2026-08-24.** The status line and the "What was checked" table
+> below describe the environment **as it stood on 2026-08-02** and are no longer
+> accurate. A `SAM_GOV_API_KEY` configuration value is now present in **both**
+> the `docuaction-dev` and `Docuaction` (prod) App Service settings. Operational
+> validity and Entity Management authorization have **not** been independently
+> validated; the credential is classified **UNDETERMINED** and SAM.gov Entity
+> Management must not be represented as operational until separately proven.
+>
+> The provisioning procedure and the measured-endpoint analysis further down
+> remain useful and are unchanged. The "Verify it works" call has **not** been
+> performed — doing so sends the credential to an external service and requires
+> explicit authorisation. Note also that the connector documents `api.sam.gov`
+> returning an empty 404 on every path from three independent networks, so a 404
+> from that call would be ambiguous rather than conclusive.
+>
+> Full analysis: `production_readiness_verification_2026-08-24.md` §B1.
 
 ## What was checked
 

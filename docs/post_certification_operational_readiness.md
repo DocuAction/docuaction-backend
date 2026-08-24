@@ -41,9 +41,23 @@ Excel round-trip derivative — same 23,566 records, but comma-padded and with 3
 
 ## Part O — SAM.gov gap
 
+> **CORRECTION — 2026-08-24.** The "Credential present? **No**" answer below was
+> accurate when written on 2026-08-23 and **is no longer accurate.** A
+> `SAM_GOV_API_KEY` configuration value is present in the Azure DEV and PROD App
+> Service settings. Operational validity and Entity Management authorization
+> have **not** been independently validated, and SAM.gov Entity Management must
+> not be represented as operational until separately proven.
+>
+> The rest of Part O still holds: SAM.gov answers are still recorded as
+> `SOURCE_UNAVAILABLE`, every entity still carries the source limitation, and D4
+> is still open. What changed is the **reason** given, not the outcome. The
+> certified evidence is unaffected — both certified runs recorded
+> "Applicability unresolved: D4" via a code path that reads no credential.
+> Full analysis: `production_readiness_verification_2026-08-24.md` §B1.
+
 | Question | Answer |
 | --- | --- |
-| Credential present? | **No.** `SAM_GOV_API_KEY` is not set |
+| Credential present? | ~~**No.** `SAM_GOV_API_KEY` is not set~~ — **superseded, see correction above** |
 | Connector ready? | Yes — applicability, lookup and disposition paths implemented |
 | Applicability implemented? | Yes — `UNKNOWN_PENDING_METHODOLOGY`, blocked by D4 |
 | Population requiring SAM? | **23,566** — the whole delivery |

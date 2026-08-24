@@ -22,7 +22,14 @@ The current control is already meaningful: an `UPDATE` against
 1. Verified backup **that has been restored somewhere and checked**. An untested
    backup is not a precondition, it is a hope.
 2. Maintenance window; application quiesced.
-3. `alembic current` equals head (`20260828_area1_grants`).
+3. `alembic current` equals head. **Re-derive head with `alembic heads`; do not
+   trust a revision id transcribed into a document.** This precondition
+   originally named `20260828_area1_grants`, which was head when this runbook
+   was written on 2026-08-23 and stopped being head when Phase 7.5A added
+   `20260829_report_artifacts`. A DBA checking against the transcribed value
+   would have accepted a database one migration behind head. As of 2026-08-24
+   head is `20260829_report_artifacts` and there is exactly one head — but
+   verify that, do not assume it.
 4. Area-1 content digest recorded before starting.
 
 ## Step 1 — create the role (idempotent)
