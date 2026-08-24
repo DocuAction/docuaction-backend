@@ -8,6 +8,32 @@
 
 ---
 
+> ## DATA IDENTITY — READ BEFORE ANY NUMBER IN THIS DOCUMENT
+>
+> **Every figure below describes DEVELOPMENT / TEST DATA.**
+>
+> The real Government entity CSV **has not been delivered and has not been
+> imported into DocuAction**. `is_running_mock()` is **TRUE**. The 23,566-record
+> dataset used throughout Phase 6 is a development artefact used to validate the
+> pipeline; it is **not** the ONC/RCE population and never became one.
+>
+> Consequently, and without exception:
+>
+> - **No count in this document is an ONC finding.** They are development-data
+>   validation results.
+> - **23,566 is not the Government population.** The contract population is
+>   **94,231 unique connections** (D2 §5.1), sampled to **383 entities**.
+> - **The address conflicts are not Government findings.** They are the output of
+>   a comparison rule exercised against development data.
+> - **Entities reviewed under the contract: 0 of 383.**
+>
+> These figures demonstrate that the evidence pipeline computes, reconciles and
+> versions correctly. That is the only claim they support. Anything presented to
+> the COR is governed by `OFFICIAL_FINDING_RELEASE_GATE.md`, whose conditions are
+> not met.
+
+---
+
 ## 0. Governing correction (read first)
 
 The authoritative ONC/RCE CSV **has not been provided to this workflow and has not

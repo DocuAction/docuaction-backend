@@ -7,6 +7,32 @@
 
 ---
 
+> ## DATA IDENTITY — READ BEFORE ANY NUMBER IN THIS DOCUMENT
+>
+> **Every figure below describes DEVELOPMENT / TEST DATA.**
+>
+> The real Government entity CSV **has not been delivered and has not been
+> imported into DocuAction**. `is_running_mock()` is **TRUE**. The 23,566-record
+> dataset used throughout Phase 6 is a development artefact used to validate the
+> pipeline; it is **not** the ONC/RCE population and never became one.
+>
+> Consequently, and without exception:
+>
+> - **No count in this document is an ONC finding.** They are development-data
+>   validation results.
+> - **23,566 is not the Government population.** The contract population is
+>   **94,231 unique connections** (D2 §5.1), sampled to **383 entities**.
+> - **The address conflicts are not Government findings.** They are the output of
+>   a comparison rule exercised against development data.
+> - **Entities reviewed under the contract: 0 of 383.**
+>
+> These figures demonstrate that the evidence pipeline computes, reconciles and
+> versions correctly. That is the only claim they support. Anything presented to
+> the COR is governed by `OFFICIAL_FINDING_RELEASE_GATE.md`, whose conditions are
+> not met.
+
+---
+
 ## 1. The original run
 
 One execution of `scripts/phase6_population_enrichment.py` against the verified
@@ -171,3 +197,95 @@ matching, file read-only). The 43 historical determinations — still 0
 `reportable_at`, 0 `reviewer_resolution`, 0 decision events. No PASS and no FAIL
 at either version. `app/bulletin_intelligence/` and `app/tefca_registry/ai/`
 untouched.
+
+---
+
+## Post-correction verification — 2026-08-23
+
+The correction is **complete and committed** as `285c560` ("fix: version Phase 6
+PPEF relationships and persist address evidence"). The figures below were
+recomputed **from persisted rows**, not read from the run's console output, and
+reconcile independently.
+
+### The historical run is intact
+
+| | Recomputed | Expected |
+| --- | --- | --- |
+| Observations at `phase6-bulk-1.0.0` | 164,962 | 164,962 |
+| Observation digest | `84384bcd7aef04b137e30eb88848e2ee` | unchanged |
+| Relationship hops at 1.0.0 | 39,749 | 39,749 |
+| Hop digest | `1cb09a1152d9af70423e3ab5dc514756` | unchanged |
+| Area-1 artefact digest | `24524f70c370d6c42a2b03d5385295a5` | unchanged |
+
+Nothing in the 1.0.0 set was updated or deleted. The defective run remains
+readable exactly as it executed.
+
+### Defect 1 — PPEF relationship provenance
+
+All 116,218 hops at `1.1.0` carry a relationship type from the controlled
+vocabulary, a PPEF component, a deterministic source row key and a source
+version. **Zero rows are missing either key.**
+
+| Relationship | Component | Hops |
+| --- | --- | --- |
+| `has_practice_location` | PRACTICE_LOCATION | 65,298 |
+| `enrolled_as` | ENROLLMENT | 42,890 |
+| `has_additional_npi` | ADDITIONAL_NPIS | 5,091 |
+| `reassigns_benefits_to` | REASSIGNMENT | 2,308 |
+| `has_secondary_specialty` | SECONDARY_SPECIALTY | 631 |
+
+### Defect 2 — address evidence now persisted
+
+Each source contributes exactly one address observation per record, and each
+column sums to the population:
+
+| Result | NPPES | PPEF |
+| --- | --- | --- |
+| EXACT_MATCH | 7,070 | — (PPEF publishes no street line) |
+| NORMALIZED_MATCH | 3,299 | 14,807 |
+| CONFLICT | 8,584 | 1,842 |
+| INSUFFICIENT_DATA | 23 | 6,917 |
+| SOURCE_UNAVAILABLE | 4,590 | — |
+| **Total** | **23,566** | **23,566** |
+
+**The three address numbers are different quantities and must not be
+interchanged:**
+
+- **8,584** — NPPES conflict observations.
+- **10,426** — conflict *observations* across both sources.
+- **9,032** — *distinct entities* with at least one conflict, of which **1,394**
+  conflict on both sources. `9,032 + 1,394 = 10,426` — the arithmetic closes.
+
+Any figure of 8,585 is a transcription error for 8,584. None of these is a
+Government finding; see the data-identity classification at the top.
+
+### Triage, recomputed over both versions
+
+| Disposition | 1.0.0 obs | 1.1.0 obs |
+| --- | --- | --- |
+| INFORMATIONAL_ONLY | 141,359 | 154,499 |
+| METHODOLOGY_PENDING | 23,566 | 33,992 |
+| READY_FOR_ANALYST | 28 | 28 |
+| SOURCE_LIMITATION | 9 | 9 |
+| DUPLICATE_CONSOLIDATED | 0 | 0 |
+| **Total** | **164,962** | **188,528** |
+
+The METHODOLOGY_PENDING increase is exactly 10,426 — the address conflicts,
+correctly blocked on `D4_ADDRESS_MATERIALITY` rather than asserted as failures.
+
+**READY_FOR_ANALYST stays at 28.** This is the check that matters for the
+dimension-scoping fix: triage rule 4 fires only on the IDENTITY dimension, so a
+missing NPPES *address* no longer reads as "this NPI does not exist". Without
+that scoping roughly 4,600 entities would have been queued as false identity
+anomalies.
+
+### Standing invariants
+
+- No automatic PASS or FAIL at either version — 0 rows.
+- 0 of 43 review records are reportable; 0 decision events. No determination,
+  QA approval or COR acceptance has been manufactured.
+- Superseded evidence is excluded once, in `_dimension_rows`, so reports cannot
+  double-count the two versions.
+
+Re-running `scripts/phase6_evidence_correction.py` is refused by its own guard;
+evidence is append-only and a second run would duplicate it.
