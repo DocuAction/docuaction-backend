@@ -378,6 +378,20 @@ def test_no_tefca_read_endpoint_sits_above_the_viewer_floor():
         # /api/tefca/arc/reviews/{review_id}/history is viewer, and returns the
         # full chain including superseded events.
         "/api/tefca/arc/qa-queue",
+        # Development-only diagnostic — reviewer (4). This route does not exist
+        # in production: app/Tefca/routes.py registers demo_router inside
+        # `if settings.is_development:`, and production runs
+        # ENVIRONMENT=production. It appears here only when the suite itself is
+        # run with a development ENVIRONMENT, which is why this test passed for
+        # a long time and then began failing the first time the suite was run
+        # against a development-configured environment.
+        #
+        # The exception is for the DEV-only case; it is not a relaxation of the
+        # production rule, which is asserted separately and conclusively by
+        # test_demo_router_is_absent_in_production below. Gating a diagnostic
+        # that executes the REAL pipeline above viewer is correct, so lowering
+        # it to satisfy this test would make the product worse.
+        "/api/v1/tefca/demo/validate-sample",
     }
 
     offenders = []
@@ -398,3 +412,40 @@ def test_no_tefca_read_endpoint_sits_above_the_viewer_floor():
     assert not offenders, (
         "TEFCA GET endpoints gated above viewer: "
         + ", ".join(f"{p} (level {l})" for p, l in sorted(offenders)))
+
+
+def test_demo_router_is_absent_in_production():
+    """The dev-only diagnostic must not exist under production configuration.
+
+    The exception granted above is only defensible if this holds. Asserted
+    against the registration CONDITION in the source rather than by importing
+    the app twice: `settings` is read at import time, so a second import under
+    a patched ENVIRONMENT would return the already-cached module and prove
+    nothing. Reading the guard is the honest check available here.
+
+    /api/v1/tefca/demo/validate-sample executes the real pipeline against the
+    bundled dataset. If it ever became reachable in production it would be a
+    production finding, not a test failure to be waived.
+    """
+    import inspect
+
+    from app.Tefca import routes as tefca_routes
+    from app.core.config import Settings
+
+    source = inspect.getsource(tefca_routes)
+    marker = "if settings.is_development:"
+    assert marker in source, (
+        "the demo router's development-only guard has been removed or renamed; "
+        "re-verify that /api/v1/tefca/demo/* cannot be registered in production")
+
+    guard_at = source.index(marker)
+    demo_at = source.index('"/validate-sample"')
+    assert guard_at < demo_at, (
+        "/validate-sample is no longer inside the `if settings.is_development:` "
+        "block — it would be registered in production")
+
+    # And the predicate itself must not treat production as development.
+    assert not Settings.is_development.fget(
+        type("S", (), {"ENVIRONMENT": "production"})())
+    assert Settings.is_development.fget(
+        type("S", (), {"ENVIRONMENT": "development"})())

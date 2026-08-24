@@ -45,6 +45,66 @@ END $$;
 
 `NOLOGIN` is the point. The role owns objects; nothing authenticates as it.
 
+### Step 1b — grant the owner schema rights (found in rehearsal, 2026-08-24)
+
+```sql
+GRANT USAGE, CREATE ON SCHEMA public TO docuaction_owner;
+```
+
+**Without this, Step 2 fails with `permission denied for schema public`.**
+PostgreSQL requires a prospective owner to hold CREATE on the containing
+schema before objects can be assigned to it. This grants no reachable
+capability — the role cannot authenticate — but the transfer cannot proceed
+without it, and the failure message names the schema rather than the missing
+grant, which is not obvious at 2am.
+
+### Step 1c — the runtime role, and why `<app_role>` is not `pgadmin`
+
+This runbook's `<app_role>` presumed a non-owning application role existed. As
+of 2026-08-24 **it did not**: DEV and PROD both connect as `pgadmin`, which owns
+every table. That is why the immutability control was inert — see the measured
+result in Step 3 below.
+
+```sql
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'docuaction_app') THEN
+    CREATE ROLE docuaction_app LOGIN PASSWORD '<from key vault>';
+  END IF;
+END $$;
+GRANT CONNECT ON DATABASE <db> TO docuaction_app;
+GRANT USAGE, CREATE ON SCHEMA public TO docuaction_app;
+```
+
+**`docuaction_app` MUST NOT be granted membership in `docuaction_owner`.** A
+member of the owning role inherits its rights, which would restore exactly the
+capability this runbook removes.
+
+**Partial ownership is deliberate.** `docuaction_app` owns the ordinary
+application tables and `docuaction_owner` owns only the four Area-1 tables. The
+application performs DDL at runtime — `app/main.py` startup runs
+`Base.metadata.create_all()` plus roughly 25
+`ALTER TABLE ... ADD COLUMN IF NOT EXISTS` statements against `users`,
+`audit_logs`, `documents`, `tefca_reg_entities` and `tefca_import_history`, and
+`bulletin_store.py` creates its own tables. `ALTER TABLE` is not a grantable
+privilege in PostgreSQL; only an owner may do it. A model where the runtime role
+owns nothing would therefore break startup. Verified by repository-wide search:
+**no runtime path performs DDL against any Area-1 table**, so the boundary holds
+where it matters.
+
+### Step 1d — migrations must name the runtime role
+
+```
+DB_APP_ROLE=docuaction_app alembic upgrade head
+```
+
+`20260828_area1_grants` derives its privilege target from `DB_APP_ROLE`, falling
+back to `current_user`. Run by an administrative identity that owns the tables,
+the fallback revokes from the owner — which changes nothing — and the revision
+reports success. The revision now **refuses to run** in that situation rather
+than enforcing nothing silently. Set the variable explicitly; do not rely on the
+fallback.
+
 ## Step 2 — transfer ownership and re-grant, in ONE transaction
 
 ```sql
@@ -75,6 +135,52 @@ GRANT UPDATE (status, error) ON rce_source_intakes TO <app_role>;
 ```
 
 **Do not commit yet.** Run Step 3 inside this transaction.
+
+## Rehearsal result — 2026-08-24, restored copy of DEV
+
+This procedure was executed end to end against a PITR-restored throwaway copy of
+`docuaction-db-dev`, not reasoned about. What it established:
+
+**Before the ownership transfer, with the migration run as the owning admin
+role, the control was inert.** The ACL looked correct —
+`{pgadmin=arxt/pgadmin}`, column-level UPDATE narrowed to exactly
+`promotion_status` and `canonical_entity_id` — and `TRUNCATE` was genuinely
+refused. But `UPDATE rce_source_records SET raw_line` and `DELETE` both
+succeeded, because `pgadmin` owned the tables.
+
+**After this runbook, connected as `docuaction_app`, 14 of 14 checks passed:**
+
+| Operation | Result |
+| --- | --- |
+| Area-1 SELECT | allowed |
+| Authorized ingestion INSERT (intake + record) | allowed |
+| `UPDATE raw_line` | **InsufficientPrivilegeError** |
+| `DELETE` | **InsufficientPrivilegeError** |
+| `TRUNCATE` | **InsufficientPrivilegeError** |
+| `UPDATE rce_source_intakes.sha256` | **InsufficientPrivilegeError** |
+| `UPDATE promotion_status` / `canonical_entity_id` | allowed |
+| `ALTER TABLE` / `DROP TABLE` | **InsufficientPrivilegeError** |
+| `SET ROLE docuaction_owner` | **InsufficientPrivilegeError** |
+| `ALTER TABLE ... OWNER TO docuaction_app` | **InsufficientPrivilegeError** |
+| Self-`GRANT UPDATE` | returns without error but **grants nothing** — ACL unchanged, `has_table_privilege` still false, UPDATE still refused |
+| Ordinary-table write and `ALTER` | allowed (startup DDL survives) |
+
+The self-GRANT line is worth knowing before someone tests it and misreads the
+result: PostgreSQL answers a GRANT from a grantor with nothing grantable with
+success and a warning, not an error. Measure the resulting privilege, not the
+statement's return.
+
+**Audit remained intact.** A workflow-column UPDATE produced no
+`area1_mutation_log` entry (no false tampering signal), while UPDATE and DELETE
+performed by an identity that still holds the rights were both recorded. The
+design is prevention for the application and auditability for everyone else.
+
+**The FK-lock case the runbook warns about did not bite**, because ownership
+moved to `docuaction_owner`: the referential check runs as the referenced
+table's owner, which kept its privileges, so ingestion INSERT still works with
+no extra grant.
+
+---
 
 ## Step 3 — the validation that catches the real failure
 

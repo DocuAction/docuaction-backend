@@ -102,14 +102,61 @@ def _has_table(name: str) -> bool:
     return name in set(sa.inspect(op.get_bind()).get_table_names())
 
 
+class Area1PrivilegeTargetError(RuntimeError):
+    """Refuses to apply Area-1 privileges to a role that owns the tables."""
+
+
 def _role() -> str:
-    """The application role whose privileges are being set."""
+    """The application role whose privileges are being set.
+
+    REFUSES TO GUESS WHEN GUESSING WOULD BE SILENTLY WRONG
+    ------------------------------------------------------
+    This used to fall back to `current_user` unconditionally. Migrations are
+    normally run by an administrative identity, and on Azure Flexible Server
+    that identity (`pgadmin`) also OWNS the tables it creates. Revoking UPDATE
+    and DELETE from the owner does not make the table immutable to the owner —
+    `has_table_privilege(..., 'UPDATE')` still answers true — so the revision
+    committed, reported success, and enforced nothing.
+
+    That was measured, not theorised: a full-chain rehearsal against a restored
+    copy of DEV on 2026-08-24 applied a correct-looking ACL
+    (`{pgadmin=arxt/pgadmin}`, column-level UPDATE narrowed to exactly
+    promotion_status and canonical_entity_id) and TRUNCATE was genuinely
+    refused — while `UPDATE rce_source_records SET raw_line` and `DELETE`
+    both still succeeded.
+
+    A control that looks applied and is not is worse than one that is plainly
+    absent, because nothing downstream ever questions it. So when the target
+    role would own the tables, this raises instead of proceeding. Set
+    DB_APP_ROLE to the non-owning runtime role.
+    """
     role = os.getenv("DB_APP_ROLE", "").strip()
-    if role:
-        return role
     if _offline():
-        return "docuaction"
-    return op.get_bind().execute(sa.text("SELECT current_user")).scalar()
+        return role or "docuaction"
+    bind = op.get_bind()
+    if not role:
+        role = bind.execute(sa.text("SELECT current_user")).scalar()
+        owned = [t for t in IMMUTABLE_TABLES if _owner_of(t) == role]
+        if owned:
+            raise Area1PrivilegeTargetError(
+                f"{revision}: DB_APP_ROLE is not set, so the privilege target "
+                f"defaulted to current_user {role!r} — which OWNS {owned}. "
+                f"Revoking from an owner does not make Area 1 immutable to it, "
+                f"and the revision would report success while enforcing "
+                f"nothing. Re-run with DB_APP_ROLE set to the non-owning "
+                f"application runtime role, e.g. "
+                f"DB_APP_ROLE=docuaction_app alembic upgrade head.")
+        log.info("%s: DB_APP_ROLE unset; using current_user %r, which owns "
+                 "none of %s.", revision, role, list(IMMUTABLE_TABLES))
+        return role
+    # Explicit target: still refuse if it owns the tables, for the same reason.
+    owned = [t for t in IMMUTABLE_TABLES if _owner_of(t) == role]
+    if owned:
+        raise Area1PrivilegeTargetError(
+            f"{revision}: DB_APP_ROLE={role!r} OWNS {owned}. An owner cannot be "
+            f"revoked into immutability. Move ownership to {OWNER_ROLE!r} "
+            f"(NOLOGIN) first, then re-run with the runtime role.")
+    return role
 
 
 def _owner_of(table: str):
