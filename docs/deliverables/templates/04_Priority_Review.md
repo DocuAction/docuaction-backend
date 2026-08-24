@@ -1,5 +1,18 @@
 # Priority Review — {{ priority_review_id }}
 
+> ## SAMPLE / DEVELOPMENT DATA
+> ## FOR METHODOLOGY REVIEW ONLY
+> ## NOT AN ONC FINDING
+>
+> Any rendering of this template produced before the Government population has
+> been received and reviewed under an accepted methodology contains development
+> or placeholder values. It is provided so the COR can assess the structure,
+> content and level of detail — not the numbers.
+>
+> Questions this sample is meant to let the COR answer: is this the information
+> you expect? Is the level of detail right? Is the format acceptable? What
+> should be added or removed?
+
 **{{ release_label }}**
 
 | | |
@@ -15,8 +28,16 @@
 | Evidence version | {{ evidence_version }} |
 
 > `at_risk` is set at two or fewer days remaining and `overdue` once the due
-> moment has passed. No monthly volume or surge target is asserted; the source
-> material available does not state one.
+> moment has passed, both measured against the deadline the COR set for this
+> request.
+>
+> **Volume.** The contract anticipates an average of twenty priority reviews per
+> month and requires the capability to exceed that average. That figure is the
+> Government's expectation of volume; it is not a turnaround target and is not
+> reported as performance against one.
+>
+> **Turnaround.** The contract sets the deadline per request, communicated by
+> the COR. No standing service level is asserted, because none is established.
 
 ## 1. Executive output
 

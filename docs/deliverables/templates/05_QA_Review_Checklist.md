@@ -1,5 +1,18 @@
 # QA Review Checklist
 
+> ## SAMPLE / DEVELOPMENT DATA
+> ## FOR METHODOLOGY REVIEW ONLY
+> ## NOT AN ONC FINDING
+>
+> Any rendering of this template produced before the Government population has
+> been received and reviewed under an accepted methodology contains development
+> or placeholder values. It is provided so the COR can assess the structure,
+> content and level of detail — not the numbers.
+>
+> Questions this sample is meant to let the COR answer: is this the information
+> you expect? Is the level of detail right? Is the format acceptable? What
+> should be added or removed?
+
 **Operational — internal use.** Completed by the QA lead before recording
 APPROVE, RETURN or ESCALATE. This is not a separate QA process: every item maps
 to a control already implemented in the decision-event workflow, and the outcome

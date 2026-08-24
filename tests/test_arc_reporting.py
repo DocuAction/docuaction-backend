@@ -161,11 +161,32 @@ class TestProhibitedLanguage:
                   "docs/deliverables/COR_Decision_Register.md"):
             assert "draft — not for cor release" in self._read(p)
 
-    def test_templates_do_not_hardcode_a_priority_volume_target(self):
-        """The source material states no monthly volume or surge threshold."""
-        text = self._read("docs/deliverables/templates/04_Priority_Review.md")
-        assert "does not state one" in text
-        for invented in ("20 per month", "20/month", "surge of"):
+    def test_priority_template_states_the_contract_volume_and_no_invented_sla(self):
+        """CORRECTED. This test previously asserted that the source material
+        "does not state one" — meaning a monthly volume. The solicitation does
+        state one: an anticipated average of twenty priority reviews per month,
+        with the capability to exceed it. The template said otherwise and a test
+        was holding it there.
+
+        What must not be invented is a TURNAROUND target. The contract sets the
+        priority deadline per request, communicated by the COR, and establishes
+        no standing service level. So the rule is: state the Government's volume
+        expectation, and assert no SLA.
+        """
+        import re
+
+        # Normalised for wrapping AND for blockquote markers: these phrases sit
+        # inside a "> " block and wrap mid-sentence, so the raw text contains
+        # "per > month". A test that breaks on re-wrapping tests the line width.
+        raw = self._read("docs/deliverables/templates/04_Priority_Review.md")
+        text = re.sub(r"\s+", " ", re.sub(r"(?m)^\s*>\s?", "", raw))
+        # the contract's own volume expectation, stated
+        assert "twenty priority reviews per month" in text
+        assert "capability to exceed" in text
+        # and it is not mistaken for a turnaround target
+        assert "not a turnaround target" in text
+        assert "no standing service level" in text
+        for invented in ("24-hour", "24 hour", "sla of", "within 24"):
             assert invented not in text
 
     def test_b1_b4_is_not_presented_as_a_federal_taxonomy(self):
