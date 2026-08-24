@@ -195,6 +195,18 @@ class ReportDataService:
 
     def __init__(self, db):
         self.db = db
+        #: Memo for `_dimension_rows`, keyed by review cycle.
+        #:
+        #: Safe because the evidence this reads is append-only and frozen: a
+        #: report is generated from one generation and nothing rewrites it
+        #: mid-request. Worth doing because the SOW envelope reads the evidence
+        #: twice per family — once for scope, once for source limitations — so
+        #: rendering all eight deliverables meant sixteen full reads of 188,528
+        #: rows, which took the certification run past two minutes.
+        #:
+        #: Per-instance, not global. A long-lived cache would be a correctness
+        #: problem the moment a new generation lands.
+        self._dimension_cache: Dict[Optional[str], List[Any]] = {}
         #: What the last evidence read actually covered — which rule version,
         #: which versions were excluded, how many observations were read and
         #: how many reached the report. Populated by `_dimension_rows`. A
@@ -248,6 +260,9 @@ class ReportDataService:
         from app.Tefca.evidence_version import (
             current_rule_version, historical_rule_versions)
         from app.Tefca.models import TEFCADimensionEvidence
+
+        if review_cycle_id in self._dimension_cache:
+            return self._dimension_cache[review_cycle_id]
 
         stmt = select(TEFCADimensionEvidence)
         if review_cycle_id:
@@ -314,6 +329,7 @@ class ReportDataService:
             "collapsed_duplicates": len(rows) - len(kept),
             "dedup_key": "entity_id + evidence_dimension + source",
         }
+        self._dimension_cache[review_cycle_id] = kept
         return kept
 
     @staticmethod

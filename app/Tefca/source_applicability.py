@@ -67,6 +67,24 @@ class SourceApplicability(str, Enum):
     NOT_APPLICABLE = "NOT_APPLICABLE"
     #: Applicability itself depends on a COR decision that has not been made.
     UNKNOWN_PENDING_METHODOLOGY = "UNKNOWN_PENDING_METHODOLOGY"
+    #: The question is meaningful and AGT is not authorised to ask it.
+    #:
+    #: Added for the IRS/TIN boundary, and deliberately distinct from
+    #: NOT_APPLICABLE. "Asking is meaningless" and "asking is meaningful but
+    #: restricted to the Government" are different facts with different
+    #: remedies, and collapsing them would let a reader conclude the question
+    #: does not matter. It matters; AGT cannot answer it.
+    #:
+    #: Confirming that a TIN/EIN belongs to a named organisation requires IRS
+    #: authority. There is no public IRS API for verifying a for-profit entity;
+    #: TEOS covers only tax-exempt organisations, and IRS data is keyed on EIN,
+    #: which the delivered records do not carry. This is a permanent boundary,
+    #: not a connector waiting to be built.
+    #:
+    #: An entity in this state is UNRESOLVED. It must never become PASS because
+    #: some other identifier matched, and never become FAIL, NO_MATCH or an
+    #: adverse category because AGT lacks access.
+    PENDING_GOVERNMENT_VERIFICATION = "PENDING_GOVERNMENT_VERIFICATION"
 
 
 class Source(str, Enum):
@@ -96,8 +114,11 @@ class SourceDecision:
     def should_query(self) -> bool:
         """Only REQUIRED and APPLICABLE are queried in a population run.
 
-        CONDITIONALLY_APPLICABLE waits for its precondition; the other two are
-        not questions this run can ask.
+        CONDITIONALLY_APPLICABLE waits for its precondition; the rest are not
+        questions this run can ask. PENDING_GOVERNMENT_VERIFICATION is not a
+        question ANY run of ours can ask — the authority to ask it sits with the
+        Government — so it is excluded here and stays unresolved rather than
+        being retried.
         """
         return self.applicability in (SourceApplicability.REQUIRED,
                                       SourceApplicability.APPLICABLE)
