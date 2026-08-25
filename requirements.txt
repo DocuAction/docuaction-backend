@@ -46,11 +46,17 @@ tenacity==9.0.0
 python-statemachine==3.2.0
 pandera==0.32.0
 # Report engine. weasyprint renders the PDF and needs the native Pango/Cairo/
-# GObject stack, which the python:3.12-slim image provides; matplotlib renders
+# GObject stack, which the Dockerfile installs explicitly (python:3.12-slim does
+# NOT ship it, and neither does the built-in Azure App Service Python runtime —
+# that is why PDF returns 503 on the non-container DEV deployment); matplotlib renders
 # the figures with the Agg backend (no display required). Jinja2 arrives via
 # fastapi but is a direct dependency of the report templates, so it is pinned
 # here rather than relied on transitively.
-weasyprint
+# Pinned: the renderer is a candidate format of record (D9), so the image
+# build, CI and a rebuild months from now must resolve the same version. 69.0 is
+# what the Oryx build actually installed on DEV and what the local environment
+# runs - pinned to the proven version, not to a newer or older guess.
+weasyprint==69.0
 matplotlib==3.11.1
 jinja2>=3.1.2
 # 0.6.3 -> 0.6.4 closes CVE-2026-59884/59885/59886. Transitive via python-jose,

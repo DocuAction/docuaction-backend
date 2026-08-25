@@ -39,5 +39,35 @@ assert pdf[:5] == b'%PDF-', 'WeasyPrint did not emit a PDF'; \
 print('PDF engine OK, %d bytes' % len(pdf))"
 
 COPY . .
+
+# Run as a non-root user. Nothing in the application writes outside UPLOAD_DIR
+# and /tmp, and the build steps above are already complete by this point.
+RUN useradd --create-home --uid 10001 appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
+# PORT ALIGNMENT - read this before changing it.
+#
+# Three places have to agree or the container starts and App Service never
+# routes to it:
+#
+#   1. this CMD / EXPOSE
+#   2. the App Service `appCommandLine` (Configuration > Startup Command),
+#      which OVERRIDES this CMD entirely when it is set
+#   3. the WEBSITES_PORT app setting, which tells App Service which port to
+#      probe inside the container
+#
+# On DEV as of 2026-08-24 they did NOT agree: appCommandLine bound gunicorn to
+# :8000 while this file exposed 8080 and WEBSITES_PORT was unset. Under the
+# built-in Python stack that was harmless because appCommandLine is simply the
+# startup command; in a container it means the app listens on 8000 while App
+# Service probes 8080, and the site never comes up.
+#
+# Before a container rehearsal: clear appCommandLine (so this CMD is used) and
+# set WEBSITES_PORT=8080, or align all three on one port.
 EXPOSE 8080
-CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}
+
+# gunicorn with the uvicorn worker, matching the startup command the built-in
+# stack has been running. The 600s timeout is not decorative: report generation
+# renders charts and a 300k+ document, and the default 30s kills it.
+CMD ["sh", "-c", "python -m gunicorn app.main:app -k uvicorn.workers.UvicornWorker --bind=0.0.0.0:${PORT:-8080} --timeout 600 --forwarded-allow-ips='*'"]
