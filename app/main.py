@@ -200,6 +200,27 @@ async def startup():
         # upload bytes were never retained.
         "ALTER TABLE tefca_import_history ADD COLUMN IF NOT EXISTS file_hash VARCHAR(64)",
     ]
+    # FAIL-CLOSED SCHEMA GATE.
+    #
+    # Everything below creates or alters database objects. In production that
+    # must not happen as a side effect of a process restart: the role that
+    # creates a table OWNS it, and an owner can always UPDATE and DELETE its own
+    # rows whatever the grants say. Production is missing the seven rce_* Area 1
+    # tables and connects as the server administrator, so an ungated start would
+    # create the immutability tables owned by an admin and make Area 1 inert
+    # before it ever held data. See app/core/schema_guard.py.
+    #
+    # Skipping is safe for the running application in the only case that matters:
+    # a database whose schema already matches the model, which is what an
+    # Alembic-managed production database is. A database that does NOT match will
+    # surface real errors instead of being silently repaired — which is the
+    # intended behaviour, because silent repair is what hid the drift.
+    from app.core.schema_guard import log_schema_mutation_skipped, schema_mutation_allowed
+
+    if not schema_mutation_allowed():
+        log_schema_mutation_skipped()
+        return await _startup_after_schema()
+
     for attempt in range(1, 8):
         try:
             async with engine.begin() as conn:
@@ -214,6 +235,18 @@ async def startup():
     else:
         logger.error("DB schema setup FAILED after retries — User queries/login may 500 until fixed")
 
+    return await _startup_after_schema()
+
+
+async def _startup_after_schema():
+    """Everything startup does that is NOT schema mutation.
+
+    Split out so the schema gate can skip the create_all/ALTER block and still
+    run the rest of boot unchanged. Nothing here creates or alters a table.
+    """
+    import asyncio, os  # noqa: F401  (same names the caller had in scope)
+    from app.core.schema_guard import schema_mutation_allowed
+
     # TEFCA QA framework — ensure audit table + run platform readiness check.
     # Non-blocking: a failed check logs a warning and startup continues (skip_http
     # avoids self-calling the API before this process is serving).
@@ -221,7 +254,11 @@ async def startup():
         from app.Tefca import qa_engine
         from app.core.database import async_session_maker as _qa_sm
         async with _qa_sm() as _qa_s:
-            await qa_engine.ensure_qa_table(_qa_s)
+            # ensure_qa_table CREATEs a table, so it obeys the same gate. In
+            # production the QA audit table is Alembic's to create; here it would
+            # be created by whatever role the app connects as.
+            if schema_mutation_allowed():
+                await qa_engine.ensure_qa_table(_qa_s)
             _readiness = await qa_engine.PlatformReadinessCheck().run(_qa_s, skip_http=True)
             _golden = await qa_engine.run_golden_regression(_qa_s)
         logger.info(f"TEFCA QA readiness: ready={_readiness['ready']} score={_readiness['score']} "
