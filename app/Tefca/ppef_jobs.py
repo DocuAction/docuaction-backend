@@ -32,6 +32,7 @@ smaller quarter, it is a misleading one.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -39,6 +40,85 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 logger = logging.getLogger(__name__)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FAIL-CLOSED GATE FOR BULK INGESTION
+#
+# PPEF bulk ingestion downloads a multi-hundred-megabyte quarterly CSV from CMS
+# and writes millions of rows. Nothing in the system enqueues that work on its
+# own — only an authenticated admin call does — but "no one has pressed the
+# button yet" is not a control. Production needs the load to be impossible
+# without a deliberate, recorded decision, not merely unlikely.
+#
+# WHY ABSENCE MEANS DISABLED IN PRODUCTION
+# A missing environment variable is the state a new deployment, a restored
+# configuration or a fresh slot starts in. If absence meant "allowed", the
+# safest-looking configuration would be the permissive one. So in production an
+# unset flag refuses, and enabling ingestion requires someone to set it —
+# which is the authorization record.
+#
+# WHY NON-PRODUCTION DEFAULTS TO ALLOWED
+# Development exists to run this pipeline. Defaulting dev to refuse would mean
+# every developer disables the control to do ordinary work, and a control that
+# is routinely switched off stops being read as a control. An explicit `false`
+# still refuses in ANY environment, so a developer can reproduce production
+# behaviour exactly.
+#
+# This gate is about BULK ingestion only. Per-entity verification lookups
+# (NPPES, PECOS, SAM.gov, OIG LEIE) are a different mechanism entirely — single
+# rows, keyed by NPI or TIN — and are deliberately untouched by it.
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: Environment variable controlling CMS PPEF BULK ingestion.
+PPEF_BULK_INGEST_FLAG = "PPEF_BULK_INGEST_ENABLED"
+
+_TRUTHY = {"1", "true", "yes", "on", "enabled"}
+_FALSY = {"0", "false", "no", "off", "disabled"}
+
+
+class BulkIngestDisabled(RuntimeError):
+    """Bulk ingestion is switched off for this environment."""
+
+
+def _is_production() -> bool:
+    return (os.getenv("ENVIRONMENT") or os.getenv("ENV") or "").strip().lower() in {
+        "production", "prod"}
+
+
+def bulk_ingest_enabled() -> bool:
+    """Whether CMS PPEF BULK ingestion may run in this environment."""
+    raw = (os.getenv(PPEF_BULK_INGEST_FLAG) or "").strip().lower()
+    if raw in _TRUTHY:
+        return True
+    if raw in _FALSY:
+        return False
+    # Unset, or set to something unrecognised. An unparseable value is treated
+    # as unset rather than as permission: a typo must never grant a capability.
+    return not _is_production()
+
+
+def bulk_ingest_refusal_reason() -> str:
+    """Why ingestion is refused, in terms an operator can act on."""
+    raw = (os.getenv(PPEF_BULK_INGEST_FLAG) or "").strip()
+    if raw and raw.lower() not in _TRUTHY and raw.lower() not in _FALSY:
+        setting = f"set to an unrecognised value (treated as disabled)"
+    elif raw:
+        setting = "set to a disabling value"
+    else:
+        setting = "not set"
+    where = "production" if _is_production() else "this environment"
+    return (f"CMS PPEF bulk ingestion is DISABLED in {where}: "
+            f"{PPEF_BULK_INGEST_FLAG} is {setting}. Bulk ingestion downloads a "
+            f"quarterly CMS extract and writes millions of rows, so it must be "
+            f"enabled deliberately for a specific authorized load rather than "
+            f"left available by default.")
+
+
+def require_bulk_ingest_enabled() -> None:
+    """Raise unless bulk ingestion is permitted. Call BEFORE any network work."""
+    if not bulk_ingest_enabled():
+        raise BulkIngestDisabled(bulk_ingest_refusal_reason())
 
 #: A job whose heartbeat is older than this is presumed dead. Comfortably longer
 #: than the gap between heartbeats (one per downloaded chunk / written batch) so

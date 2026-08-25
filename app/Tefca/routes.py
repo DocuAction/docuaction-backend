@@ -4320,6 +4320,25 @@ async def ppef_ingest_component(
     from app.Tefca.ppef_ingest import _as_of_label
     from app.Tefca.ppef_resources import EXPECTED_FIELDS, PPEFResourceCatalog
 
+    # ENFORCEMENT LAYER 1 — refuse before ANY outbound work.
+    #
+    # This check is first on purpose. A few lines below, PPEFResourceCatalog()
+    # .discover() calls data.cms.gov to resolve the current quarter. Placing the
+    # gate after that would mean a refused request had already reached CMS —
+    # a request the operator was told did not happen. Refusing here creates no
+    # job, no snapshot, no outbound call and no row.
+    #
+    # Deliberately NOT an authorization check: admin RBAC above is unchanged and
+    # still required. This is a separate environment capability gate, so 403
+    # carries a reason an operator can act on rather than looking like a
+    # permissions problem with their account.
+    if not ppef_jobs.bulk_ingest_enabled():
+        reason = ppef_jobs.bulk_ingest_refusal_reason()
+        logger.warning(
+            "PPEF bulk ingestion REFUSED for %s: %s",
+            getattr(user, "email", "unknown-user"), reason)
+        raise HTTPException(403, reason)
+
     component = (component or "").strip().upper()
     if component not in EXPECTED_FIELDS:
         raise HTTPException(400, f"Unknown PPEF component '{component}'. "

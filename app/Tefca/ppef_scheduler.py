@@ -46,6 +46,22 @@ logger = logging.getLogger(__name__)
 
 _scheduler = None
 _startup_task = None          # strong ref so the boot catch-up is not GC'd
+_refusal_logged_at = None     # throttles the "ingestion disabled" poller notice
+
+def _log_poller_refusal(reason: str) -> None:
+    """Log the refusal, but not 4,320 times a day.
+
+    The poller ticks every 20 seconds. An unthrottled warning would emit ~4,300
+    identical lines per day and drown the log that an operator reads to find out
+    what actually happened. Once an hour is enough to prove the control is live
+    and still leaves the evidence in every reasonable retention window.
+    """
+    global _refusal_logged_at
+    now = datetime.utcnow()
+    if _refusal_logged_at is None or (now - _refusal_logged_at).total_seconds() >= 3600:
+        _refusal_logged_at = now
+        logger.warning("PPEF poller did not claim any job — %s", reason)
+
 
 #: How often the poller looks for QUEUED work.
 POLL_INTERVAL_SECONDS = 20
@@ -93,6 +109,19 @@ async def run_job(job_id) -> None:
     from app.Tefca.ppef_store import copy_records
 
     import uuid as _uuid
+
+    # ENFORCEMENT LAYER 2b — the executor refuses on its own account.
+    #
+    # _poll_tick already refuses before claiming, so in normal operation this is
+    # unreachable. It is here because run_job is a public coroutine: a retry
+    # helper, an operational script or a future caller can invoke it directly
+    # with a job id, bypassing the poller entirely. The download begins a few
+    # lines below, so the last chance to stop it belongs to the function that
+    # performs it rather than to its usual caller.
+    if not ppef_jobs.bulk_ingest_enabled():
+        logger.warning("PPEF run_job(%s) refused — %s", job_id,
+                       ppef_jobs.bulk_ingest_refusal_reason())
+        return
 
     async with async_session_maker() as db:
         job = await db.get(TEFCAPPEFIngestJob, job_id)
@@ -343,6 +372,27 @@ async def _poll_tick():
     """
     from app.core.database import async_session_maker
     from app.Tefca import ppef_jobs
+
+    # ENFORCEMENT LAYER 2 — refuse before CLAIMING, not merely before running.
+    #
+    # Layer 1 stops the endpoint creating a job. This layer exists because a
+    # QUEUED row can arrive by routes Layer 1 never sees: a row already in the
+    # table when the flag was turned off, a restored backup, a manual INSERT, or
+    # a future code path someone adds without knowing about the gate. If bulk
+    # ingestion is disabled, such a row must sit untouched rather than execute on
+    # the next 20-second tick.
+    #
+    # The check precedes claim_next_queued() deliberately. Claiming mutates the
+    # row — it sets STARTED and takes the active-job slot — so claiming and then
+    # refusing would leave the job neither queued nor running, and would consume
+    # the slot that a later authorized retry needs.
+    #
+    # The reaper is NOT gated. It only marks dead jobs FAILED and downloads
+    # nothing; housekeeping must keep working while ingestion is switched off,
+    # otherwise disabling the flag would leave orphaned jobs looking alive.
+    if not ppef_jobs.bulk_ingest_enabled():
+        _log_poller_refusal(ppef_jobs.bulk_ingest_refusal_reason())
+        return
 
     try:
         async with async_session_maker() as db:
