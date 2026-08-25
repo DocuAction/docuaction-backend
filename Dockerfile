@@ -32,11 +32,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Fail the BUILD if the PDF engine cannot start. A container that boots happily
 # and then 503s on every PDF request is the worse outcome: the failure surfaces
 # to whoever asked for a deliverable rather than to whoever built the image.
-RUN python -c "\
-from weasyprint import HTML; \
-pdf = HTML(string='<html><body><h1>build check</h1></body></html>').write_pdf(); \
-assert pdf[:5] == b'%PDF-', 'WeasyPrint did not emit a PDF'; \
-print('PDF engine OK, %d bytes' % len(pdf))"
+#
+# Kept on ONE line deliberately. ACR Tasks runs a dependency scanner over the
+# Dockerfile before it builds anything, and that scanner cannot parse a
+# backslash-continued `RUN python -c "..."` block — it fails the whole run with
+# "unable to understand line from weasyprint import HTML; \" before Docker
+# starts. The assertion below is identical to the multi-line version it
+# replaces; only the formatting changed.
+RUN python -c "from weasyprint import HTML; pdf = HTML(string='<html><body><h1>build check</h1></body></html>').write_pdf(); assert pdf[:5] == b'%PDF-', 'WeasyPrint did not emit a PDF'; print('PDF engine OK, %d bytes' % len(pdf))"
 
 COPY . .
 
