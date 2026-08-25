@@ -23,12 +23,50 @@ def _normalize_url(url):
     rest = parts[1]
     return "postgresql+asyncpg://" + rest
 
+def _safe_dsn_description(url):
+    """Describe a connection URL without any part of the credential in it.
+
+    WHY THIS FUNCTION EXISTS
+    This line used to log `db_url[:35]`. A normalized URL begins
+    `postgresql+asyncpg://` — 21 characters — so after a short username the
+    slice runs into the password. With the production username the prefix
+    `postgresql+asyncpg://pgadmin:` is 29 characters, and the remaining six
+    characters of the slice were the first six characters of the database
+    password. Those were emitted at INFO on every engine creation and shipped
+    to Application Insights, which is read by a wider audience than the vault.
+
+    A truncated secret is still a secret: it shortens the search space for
+    anyone who reads it. So nothing derived from the credential is logged at
+    all. Host, database and port identify which server was reached, which is
+    the entire operational purpose of the line.
+    """
+    try:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        # Require a parsed hostname before echoing ANY component. Without a
+        # netloc, urlparse puts the whole string into `path` — so a malformed
+        # DATABASE_URL would be reproduced verbatim in the "db=" field, and a
+        # malformed URL can still be carrying a password. Describing it as
+        # unparseable is the only safe answer.
+        if not parsed.hostname:
+            return "unparseable-dsn"
+        port = parsed.port or 5432
+        database = (parsed.path or "/").lstrip("/") or "unknown-db"
+        driver = parsed.scheme or "unknown-driver"
+        return f"{driver} host={parsed.hostname} port={port} db={database}"
+    except Exception:
+        # Never let a description failure break engine creation, and never fall
+        # back to printing the URL.
+        return "unparseable-dsn"
+
+
 def _get_engine():
     global _engine
     if _engine is None:
         raw = os.getenv("DATABASE_URL", "")
         db_url = _normalize_url(raw)
-        logger.info(f"Creating DB engine: {db_url[:35]}...")
+        logger.info("Creating DB engine: %s", _safe_dsn_description(db_url))
         _engine = create_async_engine(db_url, echo=False, pool_size=5, max_overflow=10, pool_pre_ping=True)
     return _engine
 
