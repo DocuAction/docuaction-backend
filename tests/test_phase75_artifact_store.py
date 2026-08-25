@@ -242,3 +242,77 @@ class TestArtifactKeyNaming:
         from app.reports.data.artifact_registry import artifact_key
 
         assert validate_key(artifact_key("DA-ARC-2026-001", "text/html"))
+
+
+# ── the generator must actually register the artifact ─────────────────────────
+#
+# Regression guard, 2026-08-24. finalize_artifact() was complete and correct but
+# had NO caller: generate_report() wrote review_reports and stopped. Reports
+# generated normally, /api/reports/{id}/html served them, and
+# /api/reports/artifacts/{id} answered 404 because report_artifacts was empty
+# for every report ever issued. The immutable, content-addressed record that D8
+# retention depends on did not exist.
+
+def test_generator_calls_finalize_artifact():
+    """The wiring itself, asserted against the source.
+
+    A behavioural test needs a database and the full data service; this pins the
+    call site so the wiring cannot be dropped again without a failing test.
+    """
+    import inspect
+
+    from app.reports import generator
+
+    source = inspect.getsource(generator.generate_report)
+    assert "finalize_artifact" in source, (
+        "generate_report must register the delivered bytes in the durable "
+        "artifact registry; without it report_artifacts stays empty")
+    assert "store_report" in source
+    assert source.index("store_report") < source.index("finalize_artifact"), (
+        "the artifact must be registered after the report is stored")
+
+
+def test_generator_reports_artifact_outcome_to_caller():
+    """A failed registration must not vanish."""
+    import inspect
+
+    from app.reports import generator
+
+    source = inspect.getsource(generator.generate_report)
+    assert '"artifact": artifact' in source, (
+        "the artifact registration outcome must be returned to the caller")
+    assert "logger.error" in source, "a failed registration must be logged loudly"
+
+
+def test_finalize_artifact_is_idempotent_on_identical_bytes():
+    """Regenerating an unchanged report must not create a second version."""
+    from app.core.storage.artifact_store import LocalFilesystemArtifactStore
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as root:
+        store = LocalFilesystemArtifactStore(root)
+        a = store.put("DA-ARC-2026-999.html", b"<html>same</html>")
+        b = store.put("DA-ARC-2026-999.html", b"<html>same</html>")
+        assert b.deduplicated is True
+        assert a.content_sha256 == b.content_sha256
+        assert a.version == b.version
+        assert len(store.versions("DA-ARC-2026-999.html")) == 1
+
+
+def test_regeneration_with_changed_content_preserves_history():
+    """Different bytes create a NEW version; the old one stays retrievable."""
+    from app.core.storage.artifact_store import LocalFilesystemArtifactStore
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as root:
+        store = LocalFilesystemArtifactStore(root)
+        v1 = store.put("DA-ARC-2026-998.html", b"<html>first</html>")
+        v2 = store.put("DA-ARC-2026-998.html", b"<html>second</html>")
+
+        assert v2.version == v1.version + 1
+        assert v2.content_sha256 != v1.content_sha256
+        # The original bytes must still be there, unchanged.
+        assert store.get(v1.locator) == b"<html>first</html>"
+        assert store.verify(v1.locator) is True
+        assert store.verify(v2.locator) is True
+        assert len(store.versions("DA-ARC-2026-998.html")) == 2

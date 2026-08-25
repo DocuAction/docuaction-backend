@@ -142,8 +142,59 @@ async def generate_report(
     csv_text = report_to_csv(dataset, report_id, snapshot.generation_timestamp)
 
     stored_id = None
+    artifact = None
     if persist:
         stored_id = await store_report(db, snapshot, dataset, html)
+
+        # 8. Register the DELIVERED bytes in the durable artifact registry.
+        #
+        # store_report() above writes the report into `review_reports`, which is
+        # a mutable row in the application database. That answers "what do the
+        # numbers say now". It does not answer "what did the document we issued
+        # actually say", because a row can be updated and carries no content
+        # address.
+        #
+        # The artifact registry exists for the second question — content-hashed,
+        # write-once, versioned, with retention metadata — and finalize_artifact
+        # was written for exactly this call site but was never wired to it. The
+        # result was a registry that stayed empty while reports generated
+        # normally: /api/reports/{id}/html served the document and
+        # /api/reports/artifacts/{id} answered 404, so the immutable record that
+        # D8 retention depends on did not exist for any report ever issued.
+        #
+        # Every value below comes from the snapshot that is already inside the
+        # rendered document. Nothing is invented here, and nothing is recomputed
+        # — a provenance field that disagreed with the one in the document would
+        # be worse than none.
+        try:
+            from app.reports.data.artifact_registry import finalize_artifact
+
+            artifact = await finalize_artifact(
+                db,
+                report_id=report_id,
+                report_type=report_type,
+                content=html.encode("utf-8"),
+                content_type="text/html",
+                review_cycle_id=snapshot.review_cycle_id,
+                generated_by=generated_by,
+                template_version=snapshot.template_version,
+                evidence_rule_version=snapshot.b1_b4_rule_version,
+                report_data_hash=snapshot.data_payload_hash,
+                source_artifact_sha256=snapshot.rce_source_file_sha256,
+                data_classification=snapshot.data_classification,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Non-fatal, for the reason store_report gives: the analyst holding
+            # the document should not lose it because a secondary write failed.
+            # But LOUD, and reported to the caller — a silently missing
+            # immutable record is the failure this whole call site was added to
+            # correct, and swallowing it here would recreate it in a new place.
+            logger.error(
+                "report %s: durable artifact registration FAILED (%s: %s). The "
+                "report was generated and stored, but no immutable content-"
+                "addressed record exists for it.",
+                report_id, type(exc).__name__, exc)
+            artifact = {"registered": False, "error": f"{type(exc).__name__}: {exc}"}
 
     if not accessibility["automated_checks_passed"]:
         # Loud, and not fatal. The report is still returned — an analyst can see
@@ -157,6 +208,7 @@ async def generate_report(
         "report_id": report_id,
         "report_type": report_type,
         "stored_id": stored_id,
+        "artifact": artifact,
         "html": html,
         "csv": csv_text,
         "dataset": dataset,
