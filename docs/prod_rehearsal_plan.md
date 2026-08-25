@@ -21,13 +21,13 @@ the sequence is not safe to start until they are settled.
 | Health check path | `/health` | `/health` |
 | HTTPS only | true | true |
 | Managed identity | SystemAssigned | SystemAssigned |
-| MI role assignments | Key Vault Secrets User on DEV vault | **none** |
+| MI role assignments | Key Vault Secrets User on DEV vault | Key Vault Secrets User on PROD vault; **no AcrPull anywhere** |
 | VNet integration | `docuaction-vnet-dev/app-integration` | `docuaction-vnet/app-integration` |
 | Route all outbound | true | true |
 | FTPS | Disabled | Disabled |
 | SCM basic auth | n/a | Disabled (AAD only) |
 | PostgreSQL | `docuaction-db-dev`, PG16, B1ms, 7-day PITR, geo off | `docuaction-db-geo`, PG16, B1ms, **14-day** PITR, **geo on** |
-| DB public access | Enabled | Enabled |
+| DB public access | Enabled | Enabled — **no private endpoint, no VNet injection**; 32 single-IP `appsvc-*` firewall rules, no human workstation permitted |
 | Key Vault | `docuaction-kv-dev`, public disabled, RBAC on, 1 private endpoint | `docuaction-kv-prod` |
 | Reporting stack | WeasyPrint 69.0 proven in image | **absent** — no Pango/Cairo/GObject on the built-in runtime |
 | Container registry | `acrdocuactiondev` (Basic, admin disabled, DEV RG) | **none exists** |
@@ -51,8 +51,9 @@ because DEV had to override that default. Do not copy it to PROD.
    cutover needs either a PROD ACR, or `AcrPull` granted to the PROD managed
    identity on the DEV registry. The latter couples PROD to a DEV-owned resource
    and is the worse option; it is recorded here only so the choice is explicit.
-2. **The PROD managed identity holds no role assignments at all.** It cannot pull
-   an image and it cannot read a secret today.
+2. **The PROD managed identity holds no AcrPull anywhere.** It does hold Key
+   Vault Secrets User on `docuaction-kv-prod`, so per-environment secret isolation
+   is already correct; what it cannot do today is pull an image.
 3. **Key Vault migration is deferred.** PROD secrets (`DATABASE_URL`, `SECRET_KEY`,
    `AZURE_AD_CLIENT_SECRET`, and the API keys) are plaintext app settings. The
    rehearsal does not fix this and must not be described as fixing it.
@@ -63,9 +64,21 @@ because DEV had to override that default. Do not copy it to PROD.
 
 ### Why the PROD database inventory is still missing
 
-The intended path was the App Service container itself, which is VNet-integrated
-and already reaches `docuaction-db-geo` over its private endpoint — no firewall
-change required. The Kudu command API does authenticate with an ARM bearer token
+CORRECTION (2026-08-25): an earlier revision of this document said the PROD app
+reaches its database "over its private endpoint". That was wrong. Measured state:
+`docuaction-db-geo` has `delegatedSubnetResourceId: null` and
+`privateDnsZoneArmResourceId: null`, public network access **Enabled**, and 32
+firewall rules named `appsvc-01`..`appsvc-32`, each a single App Service outbound
+IP. There is **no private endpoint and no VNet injection** on the PROD database.
+The app reaches it over the PUBLIC endpoint, allowlisted by IP.
+
+This has two consequences. There is no private path to inventory the database.
+And no human workstation is permitted today — every rule is an Azure App Service
+IP — so the inventory cannot be run by an operator either without a firewall
+change.
+
+The intended path was therefore the App Service container itself, which is
+allowlisted and already connects. The Kudu command API does authenticate with an ARM bearer token
 (basic publishing credentials are disabled) and returns HTTP 200. But the Kudu
 container for a Linux built-in-runtime site is a *separate* container from the
 application, and it has no `python` on PATH, so it cannot open a database
