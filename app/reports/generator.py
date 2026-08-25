@@ -183,6 +183,16 @@ async def generate_report(
                 source_artifact_sha256=snapshot.rce_source_file_sha256,
                 data_classification=snapshot.data_classification,
             )
+            # finalize_artifact() flushes but does not commit, and the /generate
+            # route does not commit either — store_report() above commits its
+            # own write, which is why review_reports persisted while the
+            # artifact row was discarded at session close. Commit here, for the
+            # same reason and in the same place as store_report does: the write
+            # that owns the row owns its durability.
+            #
+            # finalize_artifact returns a plain dict, not an ORM instance, so
+            # nothing here is expired by the commit.
+            await db.commit()
         except Exception as exc:  # noqa: BLE001
             # Non-fatal, for the reason store_report gives: the analyst holding
             # the document should not lose it because a secondary write failed.

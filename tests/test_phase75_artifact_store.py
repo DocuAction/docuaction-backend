@@ -316,3 +316,21 @@ def test_regeneration_with_changed_content_preserves_history():
         assert store.verify(v1.locator) is True
         assert store.verify(v2.locator) is True
         assert len(store.versions("DA-ARC-2026-998.html")) == 2
+
+
+def test_generator_commits_the_artifact_row():
+    """finalize_artifact() flushes; somebody must commit.
+
+    review_reports persisted while report_artifacts stayed empty because
+    store_report() commits its own write and the /generate route commits
+    nothing. The artifact row was flushed into a session that was then closed.
+    """
+    import inspect
+
+    from app.reports import generator
+
+    source = inspect.getsource(generator.generate_report)
+    after = source[source.index("finalize_artifact"):]
+    assert "await db.commit()" in after, (
+        "the artifact registration must be committed, or the row is discarded "
+        "when the request session closes")
