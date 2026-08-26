@@ -43,6 +43,9 @@ async def upload_delivery(
     delimiter: Optional[str] = Query(
         None, description="Declare the delimiter explicitly: | , or tab. "
                           "Omit to detect."),
+    received_date: Optional[str] = Query(
+        None, description="ISO date the delivery was RECEIVED (e.g. 2026-08-21) "
+                          "when that differs from the upload date. Omit for now."),
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role("contributor")),
 ):
@@ -63,11 +66,26 @@ async def upload_delivery(
 
     declared = {"pipe": "|", "comma": ",", "tab": "\t"}.get(
         (delimiter or "").lower(), delimiter)
+    # The receipt date belongs to the record and is not always today: a
+    # Government delivery can arrive well before anyone is authorised to load it.
+    # Parsed strictly — a malformed date is refused rather than silently falling
+    # back to now(), which would record a receipt date that is simply wrong.
+    received_at = None
+    if received_date:
+        from datetime import datetime as _datetime
+        try:
+            received_at = _datetime.fromisoformat(received_date)
+        except ValueError:
+            raise HTTPException(
+                422, f"received_date {received_date!r} is not an ISO date "
+                     f"(expected e.g. 2026-08-21).")
+
     try:
         return await ingest_delivery(
             db, raw, filename=file.filename or "delivery",
             delivery_label=delivery_label, declared_delimiter=declared or None,
             received_by=getattr(user, "email", None) or "SYSTEM",
+            received_at=received_at,
             source_metadata={"ip": _client_ip(request)})
     except IntakeError as exc:
         raise HTTPException(422, str(exc))

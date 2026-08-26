@@ -57,6 +57,65 @@ class LineCountMismatch(IntakeError):
     """Rows written != lines read. The intake is aborted rather than committed."""
 
 
+class NotADelimitedFile(IntakeError):
+    """The delivery is a binary container, not delimited text."""
+
+
+#: Container signatures that are definitely not delimited text. The first one is
+#: the one that matters in practice: a ZIP header, and .xlsx is a ZIP.
+_BINARY_SIGNATURES = (
+    (bytes([0x50, 0x4B, 0x03, 0x04]), "an Office Open XML / ZIP container (.xlsx, .docx, .ods)"),
+    (bytes([0xD0, 0xCF, 0x11, 0xE0]), "a legacy OLE2 container (.xls, .doc)"),
+    (b"%PDF-", "a PDF"),
+    (bytes([0x7F]) + b"ELF", "an ELF binary"),
+    (bytes([0x89]) + b"PNG", "a PNG image"),
+    (bytes([0xFF, 0xD8, 0xFF]), "a JPEG image"),
+)
+
+#: A NUL never appears in the delimited text this pipeline accepts.
+_NUL = bytes([0])
+
+
+def reject_if_binary(raw: bytes, filename: str) -> None:
+    """Refuse a delivery that is not delimited text, BEFORE anything is written.
+
+    WHY THIS EXISTS
+    The reader is deliberately forgiving: handed bytes that are not clean UTF-8
+    it decodes with replacement and flags the anomaly rather than failing,
+    because a real delivery with a few bad bytes must not be lost.
+
+    Handed a BINARY file that tolerance becomes a hazard. An .xlsx fed to it
+    decodes to mojibake, a delimiter is "detected" in the noise, and a handful of
+    garbage lines parse successfully — verified: a ZIP header plus arbitrary
+    bytes yields delimiter='\\t' and three lines, with no error raised.
+
+    Those lines would then be written into Area 1, which is append-only and
+    immutable by design, so nothing could delete them afterwards. A wrong-format
+    upload would permanently contaminate the evidence store while showing the
+    operator a successful intake.
+
+    So this is a hard refusal placed before the original is preserved and before
+    any row is written. A rejected delivery leaves no trace at all, which is
+    correct: it was never a delivery, and the sender simply re-exports.
+
+    Detection is by container signature, not by file extension, because the
+    extension is typo- and caller-controlled while the magic bytes are what the
+    parser will actually meet.
+    """
+    head = raw[:8]
+    for signature, description in _BINARY_SIGNATURES:
+        if head.startswith(signature):
+            raise NotADelimitedFile(
+                f"{filename!r} is {description}, not delimited text. Area 1 is "
+                f"append-only, so a binary file cannot be accepted and then "
+                f"removed. Export the sheet to CSV or tab-delimited text and "
+                f"re-deliver.")
+    if _NUL in raw[:65536]:
+        raise NotADelimitedFile(
+            f"{filename!r} contains NUL bytes in its first 64 KB, so it is not "
+            f"delimited text. Export to CSV or tab-delimited text and re-deliver.")
+
+
 def storage_root() -> str:
     base = os.getenv("UPLOAD_DIR", os.path.join(os.getcwd(), "uploads"))
     if not os.path.isabs(base):
@@ -97,9 +156,15 @@ async def ingest_delivery(
     delivery_label: Optional[str] = None,
     declared_delimiter: Optional[str] = None,
     received_by: str = "SYSTEM",
+    received_at: Optional[datetime] = None,
     source_metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Accept one delivery into Area 1. Every line lands or the intake aborts."""
+    # 1b - refuse a binary container before ANYTHING is written. Area 1 is
+    # append-only, so a mis-parsed .xlsx could never be removed once its
+    # rows landed. See reject_if_binary.
+    reject_if_binary(raw, filename)
+
     sha256 = hashlib.sha256(raw).hexdigest()
 
     # 2 — preserve the original before anything else can go wrong.
@@ -164,6 +229,11 @@ async def ingest_delivery(
         schema_fingerprint=read.schema_fingerprint,
         record_count=read.record_count,
         received_by=received_by,
+        # The date the delivery was RECEIVED, which is not the date it was
+        # ingested. A Government delivery can sit before anyone is authorised
+        # to load it, and the receipt date is the one the record needs.
+        # Defaults to now() only when the caller genuinely has nothing better.
+        received_at=received_at or datetime.utcnow(),
         source_metadata=metadata,
         status="PARSED",
         duplicate_of_intake_id=duplicate_of,
