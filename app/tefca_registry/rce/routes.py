@@ -29,7 +29,15 @@ router = APIRouter(prefix="/api/tefca/rce", tags=["TEFCA RCE Pipeline"])
 
 
 def _client_ip(request: Request):
-    from app.core.security import get_client_ip
+    # get_client_ip lives in app.core.client_ip, not app.core.security.
+    #
+    # This import named the wrong module. Because it is deferred to call time it
+    # raised nothing at import, nothing at startup and nothing in any test that
+    # merely imported the router — it failed only when a delivery was actually
+    # uploaded, as an unhandled ImportError surfacing to the caller as a bare
+    # HTTP 500. It was found by ingesting the real ONC delivery into DEV, and it
+    # would have failed identically in production.
+    from app.core.client_ip import get_client_ip
     return get_client_ip(request)
 
 
