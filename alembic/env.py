@@ -47,7 +47,20 @@ if db_url:
         db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
     elif db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql+asyncpg://", 1)
-    config.set_main_option("sqlalchemy.url", db_url)
+    # Escape '%' for configparser.
+    #
+    # set_main_option() stores the value in a ConfigParser, which treats '%' as
+    # interpolation syntax and raises on anything that is not '%%' or a valid
+    # '%(name)s'. A URL-encoded password makes that certain: '@' becomes '%40',
+    # and configparser then fails with "invalid interpolation syntax" before a
+    # single migration runs.
+    #
+    # Found while rehearsing the production baseline against a copy of the
+    # production schema. Without this the whole cutover would have stopped at
+    # `alembic upgrade head` -- not on a schema problem, but on a punctuation
+    # character in a password, at the point in the sequence where the database
+    # is already half-migrated.
+    config.set_main_option("sqlalchemy.url", db_url.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
