@@ -56,6 +56,7 @@ async def generate_report(
     report_type: str = "verification",
     review_cycle_id: Optional[str] = None,
     generated_by: str = "SYSTEM",
+    generated_by_id=None,
     persist: bool = True,
     query_parameters: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
@@ -144,7 +145,8 @@ async def generate_report(
     stored_id = None
     artifact = None
     if persist:
-        stored_id = await store_report(db, snapshot, dataset, html)
+        stored_id = await store_report(db, snapshot, dataset, html,
+                                       generated_by_id=generated_by_id)
 
         # 8. Register the DELIVERED bytes in the durable artifact registry.
         #

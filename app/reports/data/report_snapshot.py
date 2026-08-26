@@ -248,7 +248,7 @@ async def build_snapshot(
 
 
 async def store_report(db, snapshot: ReportSnapshot, dataset: Dict[str, Any],
-                       html: str) -> Optional[str]:
+                       html: str, generated_by_id=None) -> Optional[str]:
     """Persist the report and its provenance. Returns the row id, or None.
 
     A storage failure does NOT fail generation. The analyst waiting on the
@@ -276,6 +276,20 @@ async def store_report(db, snapshot: ReportSnapshot, dataset: Dict[str, Any],
                 "dataset": _canonical(payload),
             },
             report_html=html,
+            # The authenticated principal, as a UUID.
+            #
+            # This column is UUID-typed while the rest of the provenance chain
+            # carries the principal as an EMAIL — snapshot.generated_by and
+            # report_artifacts.generated_by are both strings. That mismatch is
+            # why the column was simply never populated: the value at hand could
+            # not be assigned to it, so it was dropped and every stored report
+            # recorded a NULL author while its artifact recorded the right one.
+            #
+            # The id is taken from the authenticated request context by the
+            # route, never from the request body, so a caller cannot claim to be
+            # someone else. None stays None for unauthenticated/system runs
+            # rather than inventing an identity.
+            generated_by=generated_by_id,
         ))
         await db.commit()
         return str(row_id)

@@ -68,6 +68,7 @@ async def generate(
             report_type=request.report_type,
             review_cycle_id=request.review_cycle_id,
             generated_by=getattr(user, "email", None) or "SYSTEM",
+            generated_by_id=getattr(user, "id", None),
             query_parameters=request.parameters,
         )
     except ReportGenerationError as exc:
