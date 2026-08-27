@@ -138,6 +138,10 @@ async def list_reports(
         "report_id": r.report_id,
         "report_type": r.report_type,
         "generated_at": r.generated_at,
+        # The STORED principal, not the copy inside the snapshot. An auditor
+        # asking the API who generated a report must get the column the
+        # application wrote, or a populated row reads back as anonymous.
+        "generated_by": str(r.generated_by) if r.generated_by else None,
         "snapshot": (r.report_data or {}).get("snapshot", {}),
     } for r in rows]}
 
@@ -154,6 +158,7 @@ async def get_report(
         "report_id": row.report_id,
         "report_type": row.report_type,
         "generated_at": row.generated_at,
+        "generated_by": str(row.generated_by) if row.generated_by else None,
         "snapshot": data.get("snapshot", {}),
         "dataset": data.get("dataset", {}),
     }
