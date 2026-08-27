@@ -45,7 +45,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import func, select
+from sqlalchemy import true as sa_true, func, select
 
 from app.tefca_registry import models as reg
 from app.tefca_registry.rce import models as m
@@ -199,14 +199,35 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
     skipped_status: Dict[str, int] = {}
     oid_to_entity: Dict[str, uuid.UUID] = dict(existing_by_oid)
     promoted_pairs: List[Tuple[Any, uuid.UUID]] = []
+    #: Rows this run will never promote (HELD/REJECTED/missing key). Held so the
+    #: drain loop cannot re-select them forever.
+    unpromotable: set = set()
 
     # ── pass 1 — entities, identifiers, contacts ──
-    for offset in range(0, total, BATCH_SIZE):
+    #
+    # DRAIN, DO NOT PAGINATE. This loop commits every batch and sets
+    # canonical_entity_id as it goes, so it is walking a set it is itself
+    # shrinking. LIMIT/OFFSET over that re-presented a row that had already been
+    # promoted earlier in the same run: the second visit found no entry in
+    # oid_to_entity, created a SECOND entity for the same rce_org_oid, and died
+    # on the unique index over (identifier_type, identifier_value, system_uri) --
+    # partway through, with earlier batches already committed.
+    #
+    # Selecting only rows that still need promotion makes the loop idempotent:
+    # it terminates when nothing is left, a re-run after a failure resumes
+    # instead of restarting, and no row can be visited twice.
+    while True:
         rows = (await db.execute(
             select(m.RceCuratedRecord)
-            .where(m.RceCuratedRecord.source_intake_id == intake_id)
+            .where(m.RceCuratedRecord.source_intake_id == intake_id,
+                   m.RceCuratedRecord.canonical_entity_id.is_(None),
+                   m.RceCuratedRecord.id.notin_(unpromotable) if unpromotable
+                   else sa_true())
             .order_by(m.RceCuratedRecord.id)
-            .limit(BATCH_SIZE).offset(offset))).scalars().all()
+            .limit(BATCH_SIZE))).scalars().all()
+        if not rows:
+            break
+        progressed = False
 
         for row in rows:
             if row.record_status not in PROMOTABLE_STATUSES:
@@ -220,6 +241,20 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
             entity_id = oid_to_entity.get(row.rce_org_oid)
             entity_type = _HL7_ROLE_TO_ENTITY_TYPE.get(
                 (row.hl7_org_role or "").strip(), DEFAULT_ENTITY_TYPE)
+
+            if entity_id is None:
+                # Safety net, independent of the in-memory map. If an identifier
+                # row for this oid already exists, adopt its entity rather than
+                # creating a rival one -- creating the rival is what violated the
+                # unique index and aborted promotion mid-delivery.
+                found = (await db.execute(
+                    select(reg.TefcaEntityIdentifier.entity_id).where(
+                        reg.TefcaEntityIdentifier.identifier_type == "rce_org_oid",
+                        reg.TefcaEntityIdentifier.identifier_value == row.rce_org_oid)
+                    .limit(1))).scalar_one_or_none()
+                if found is not None:
+                    entity_id = found
+                    oid_to_entity[row.rce_org_oid] = entity_id
 
             if entity_id is None:
                 entity_id = uuid.uuid4()
@@ -326,8 +361,13 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
             row.canonical_entity_id = entity_id
             row.promoted_at = datetime.utcnow()
             promoted_pairs.append((row.source_record_id, entity_id))
+            progressed = True
 
         await db.commit()
+        if not progressed:
+            # Every row in this batch was unpromotable; the next iteration
+            # excludes them, so this cannot spin.
+            continue
 
     # Mark the Area 1 rows promoted — the only column on a source record that
     # the pipeline writes after intake, and deliberately so: it is a POINTER,
