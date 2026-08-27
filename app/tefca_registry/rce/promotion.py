@@ -45,7 +45,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import true as sa_true, func, select
+from sqlalchemy import or_, true as sa_true, func, select
 
 from app.tefca_registry import models as reg
 from app.tefca_registry.rce import models as m
@@ -372,9 +372,27 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
     # Mark the Area 1 rows promoted — the only column on a source record that
     # the pipeline writes after intake, and deliberately so: it is a POINTER,
     # not a change to delivered content.
-    for start in range(0, len(promoted_pairs), BATCH_SIZE):
-        chunk = promoted_pairs[start:start + BATCH_SIZE]
-        for source_record_id, entity_id in chunk:
+    # DERIVED FROM THE DATABASE, NOT FROM THIS RUN. Marking only the pairs this
+    # invocation happened to promote left Area 1 permanently behind Area 2 when
+    # an earlier run aborted partway: those records were promoted, but no later
+    # run knew to mark them, and reconciliation's "Area 1 promotion markers agree
+    # with Area 2" check failed with no way to recover. Re-deriving the work from
+    # rce_curated_records makes this loop self-healing and idempotent - it marks
+    # whatever is still unmarked, whichever run promoted it.
+    while True:
+        pending = (await db.execute(
+            select(m.RceCuratedRecord.source_record_id,
+                   m.RceCuratedRecord.canonical_entity_id)
+            .join(m.RceSourceRecord,
+                  m.RceSourceRecord.id == m.RceCuratedRecord.source_record_id)
+            .where(m.RceCuratedRecord.source_intake_id == intake_id,
+                   m.RceCuratedRecord.canonical_entity_id.isnot(None),
+                   or_(m.RceSourceRecord.promotion_status.is_(None),
+                       m.RceSourceRecord.promotion_status != "promoted"))
+            .limit(BATCH_SIZE))).all()
+        if not pending:
+            break
+        for source_record_id, entity_id in pending:
             record = await db.get(m.RceSourceRecord, source_record_id)
             if record is not None:
                 record.promotion_status = "promoted"
