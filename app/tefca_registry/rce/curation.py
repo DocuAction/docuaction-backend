@@ -67,6 +67,27 @@ CLEAN, CORRECTED, HELD, REJECTED = "CLEAN", "CORRECTED", "HELD", "REJECTED"
 #: an unresolved issue at one of these levels never reaches verification.
 HOLDING_SEVERITIES = frozenset({"CRITICAL", "HIGH"})
 
+#: Resolutions that mean the question is still open in substance. PROPOSED is in
+#: here deliberately: the state machine is
+#:     OPEN -> PROPOSED -> APPROVED | REJECTED | WAIVED -> RESOLVED
+#: so PROPOSED is an analyst's suggestion that nobody has decided on. Keying the
+#: hold on OPEN alone released a record the moment an analyst touched it, which
+#: is the opposite of what holding is for. A NULL resolution counts as undecided
+#: so the predicate fails closed.
+UNDECIDED_RESOLUTIONS = frozenset({"OPEN", "PROPOSED", "UNDER_REVIEW"})
+
+
+def blocks_promotion(severity: Optional[str], resolution: Optional[str]) -> bool:
+    """Does this issue hold its record back from promotion and verification?
+
+    One definition, used by both curate_delivery (at curation time) and
+    recompute_hold_status (afterwards). They set the same flag from different
+    code paths, and the original defect existed in only one of them - which is
+    what happens when the rule gets written out twice.
+    """
+    return (severity in HOLDING_SEVERITIES
+            and (resolution or "OPEN") in UNDECIDED_RESOLUTIONS)
+
 #: Fields whose modification is an identity or relationship change. Listed
 #: explicitly so the AUTO_SAFE guard is a membership test rather than a
 #: judgement call made per rule.
@@ -302,7 +323,7 @@ async def curate_delivery(db, intake_id, *, run_id=None,
                 applied += 1
 
             blocking = [i for i in issues
-                        if i.resolution == "OPEN" and i.severity in HOLDING_SEVERITIES]
+                        if blocks_promotion(i.severity, i.resolution)]
             row["issue_count"] = len(issues)
             row["correction_count"] = applied
             if blocking:
@@ -512,13 +533,13 @@ async def recompute_hold_status(db, intake_id) -> Dict[str, Any]:
     curated = (await db.execute(
         select(m.RceCuratedRecord).where(
             m.RceCuratedRecord.source_intake_id == intake_id))).scalars().all()
-    open_rows = (await db.execute(
-        select(m.RceIssue.source_record_id, m.RceIssue.severity)
-        .where(m.RceIssue.source_intake_id == intake_id,
-               m.RceIssue.resolution == "OPEN"))).all()
+    undecided_rows = (await db.execute(
+        select(m.RceIssue.source_record_id, m.RceIssue.severity,
+               m.RceIssue.resolution)
+        .where(m.RceIssue.source_intake_id == intake_id))).all()
     blocking: Dict[Any, int] = {}
-    for record_id, severity in open_rows:
-        if severity in HOLDING_SEVERITIES and record_id is not None:
+    for record_id, severity, resolution in undecided_rows:
+        if record_id is not None and blocks_promotion(severity, resolution):
             blocking[record_id] = blocking.get(record_id, 0) + 1
 
     changed = 0
