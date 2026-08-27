@@ -196,6 +196,33 @@ not re-adjudicated, and not presented as a fresh finding.
 
 ## 6. Known gaps to close before September
 
+0. **Promotion does not complete in one pass — the top blocker.** Measured
+   against the real August delivery on 2026-08-27, `promote_delivery()` aborts
+   partway with
+
+   ```
+   UniqueViolationError: duplicate key value violates unique constraint
+   "idx_tefca_ident_unique"
+   Key (identifier_type, identifier_value, system_uri)=(rce_org_oid, <oid>, ...)
+   ```
+
+   Pass 1 commits per batch, so every attempt leaves a **partial** promotion.
+   The loop has since been rewritten to DRAIN (select only rows still needing
+   promotion) rather than paginate with LIMIT/OFFSET over a set it is shrinking,
+   which makes repeated runs resume safely and converge — dev reached ~18,000 of
+   23,562 across several runs with duplicate identifiers 0, double-created
+   entities 0, and orphan entities 0 throughout. **The underlying abort is not
+   yet root-caused.** Ruled out by measurement: `rce_org_oid` is unique across
+   all 23,566 curated rows; LIMIT/OFFSET returned 23,566 distinct ids with 0
+   repeat visits; each colliding oid resolves to exactly one entity and one
+   curated row; and between runs no unpromoted row's oid already holds an
+   identifier. Fix this before September — a monthly delivery that needs an
+   unknown number of re-runs to promote is not an operable process.
+
+0b. **Promotion cannot run synchronously.** The endpoint promoted 1,000 records
+   in 217s against an App Service request ceiling of ~230s. A full delivery must
+   promote as a background job, not behind an HTTP request.
+
 1. **`curate_delivery()` has no re-run guard.** It inserts one curated row per
    source record with no check for rows it already created, so running it twice
    on one intake silently doubles Area 2 and breaks
