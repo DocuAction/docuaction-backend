@@ -216,11 +216,20 @@ class TestPdfEnvironment:
         source: the code comment deliberately quotes the old wording to explain
         what changed, and a source-wide grep would flag that as the defect.
         """
-        from app.reports.engine.pdf_engine import unavailable_reason
+        from app.reports.engine.pdf_engine import pdf_available, unavailable_reason
 
+        # Guarded on pdf_available(), NOT on the truthiness of the reason.
+        # _probe() returns a non-empty string on SUCCESS too ("WeasyPrint and
+        # its native dependencies are available."), so `if not reason` never
+        # fired, and on any host where the engine works this asserted the
+        # unavailable-message against the available-message. Which is exactly
+        # what happened in CI, where the engine does work; it passed locally
+        # only because WeasyPrint is unavailable on Windows. pdf_available() is
+        # the real predicate, and is what test_reports.py already uses.
+        if pdf_available():
+            pytest.skip("PDF engine is available here; there is no failure reason "
+                        "to assert on")
         reason = unavailable_reason() or ""
-        if not reason:
-            pytest.skip("PDF engine is available here; there is no reason string")
         assert "are present in the project's Linux container image" not in reason
         assert "Dockerfile installs it" in reason
 
