@@ -282,11 +282,37 @@ def test_all_8_roles_assignable_via_admin_api():
     assert len(VALID_ROLES) == 8
 
 
+#: The frontend lives in a SEPARATE git repository, checked out as a sibling of
+#: this one. CI checks out only the backend, so on a runner these paths cannot
+#: exist and the two tests below died with FileNotFoundError rather than telling
+#: anyone anything. Skipping with a named cause is the same choice conftest
+#: makes for a missing database: a skip that names its reason is honest, while a
+#: failure that only means "the other repo is not here" trains people to ignore
+#: a red build.
+#:
+#: The stronger fix is for CI to check out the frontend repository too, at which
+#: point these assertions regain their teeth in CI automatically - this skip
+#: disappears on its own the moment the file is present. Doing that needs
+#: cross-repository checkout credentials, which is a CI-configuration decision
+#: rather than a test one.
+FRONTEND_COMPONENTS = (Path(__file__).resolve().parents[2]
+                       / "frontend" / "src" / "components")
+
+
+def _frontend_source(filename: str) -> str:
+    path = FRONTEND_COMPONENTS / filename
+    if not path.is_file():
+        pytest.skip(
+            f"{filename} is not in this checkout: the frontend is a separate "
+            f"repository and only the backend is checked out here. This test "
+            f"asserts on frontend source and cannot run without it.")
+    return path.read_text(encoding="utf-8")
+
+
 def test_frontend_role_picker_offers_every_backend_role():
     """The picker and VALID_ROLES drifting apart is how Defect 1 stayed invisible:
     the UI simply never showed the roles it could not send."""
-    src = (Path(__file__).resolve().parents[2]
-           / "frontend" / "src" / "components" / "UsersAdmin.js").read_text(encoding="utf-8")
+    src = _frontend_source("UsersAdmin.js")
     block = re.search(r"const ROLES = \[(.*?)\]", src, re.S)
     assert block, "could not locate the ROLES list in UsersAdmin.js"
     offered = set(re.findall(r"'([a-z_]+)'", block.group(1)))
@@ -302,8 +328,7 @@ def test_bulletin_is_reachable_for_non_admins_in_the_app_shell():
     a new user's allowed_modules is []. Omitting bulletin_intelligence from
     ALWAYS_ALLOWED therefore made bulletin admin-only in the UI while its API was
     open to everyone. Checked here because no JS test runs in CI."""
-    src = (Path(__file__).resolve().parents[2]
-           / "frontend" / "src" / "components" / "AppLayout.js").read_text(encoding="utf-8")
+    src = _frontend_source("AppLayout.js")
     block = re.search(r"const ALWAYS_ALLOWED = \[(.*?)\];", src, re.S)
     assert block, "could not locate ALWAYS_ALLOWED in AppLayout.js"
     ids = set(re.findall(r"'([a-z_]+)'", block.group(1)))
