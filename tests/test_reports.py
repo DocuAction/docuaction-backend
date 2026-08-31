@@ -598,6 +598,57 @@ class TestPDF:
         assert report["structurally_tagged"], report["markers"]
         assert "NOT establish Section 508 conformance" in report["claim"]
 
+    def test_structure_markers_survive_pdf_compression(self):
+        """The detector must not depend on whether the writer compressed the file.
+
+        From PDF 1.5 a writer may put ordinary objects - the catalog included,
+        which is where /StructTreeRoot, /MarkInfo and /Lang live - inside a
+        zlib-compressed object stream. WeasyPrint compresses by default, so a
+        raw byte scan reported a correctly tagged PDF as untagged: every marker
+        False except has_pdf_header, which sits in the one region never
+        compressed. That was CI's exact signature.
+
+        Built with pydyf, the PDF writer WeasyPrint itself uses, so this runs
+        on a host with no native PDF stack - which is precisely the kind of host
+        where the original defect stayed invisible.
+        """
+        import io as _io
+
+        import pydyf
+
+        from app.reports.engine.accessibility import pdf_structure_report
+
+        def build(*, compress: bool, tagged: bool) -> bytes:
+            pdf = pydyf.PDF()
+            if tagged:
+                pdf.catalog["StructTreeRoot"] = "1 0 R"
+                pdf.catalog["MarkInfo"] = pydyf.Dictionary({"Marked": "true"})
+                pdf.catalog["Lang"] = "(en-US)"
+            out = _io.BytesIO()
+            pdf.write(out, version=b"1.7", compress=compress)
+            return out.getvalue()
+
+        for compress in (False, True):
+            report = pdf_structure_report(build(compress=compress, tagged=True))
+            assert report["structurally_tagged"], (
+                f"a tagged PDF read as untagged with compress={compress}: "
+                f"{report['markers']}")
+
+            # The other direction matters just as much. A detector that always
+            # says yes would also make this suite green, and would be worthless.
+            untagged = pdf_structure_report(build(compress=compress, tagged=False))
+            assert not untagged["structurally_tagged"], (
+                f"an UNTAGGED PDF read as tagged with compress={compress}")
+
+    def test_structure_report_survives_unparseable_input(self):
+        """Inflation must never turn a malformed file into an exception: the
+        detector is called on whatever the renderer produced."""
+        from app.reports.engine.accessibility import pdf_structure_report
+
+        for blob in (b"", b"not a pdf", b"%PDF-1.7\nstream\nnot-deflate-data"):
+            report = pdf_structure_report(blob)
+            assert report["manual_review_required"]
+
     def test_pdf_structure_report_never_claims_conformance(self):
         from app.reports.engine.accessibility import pdf_structure_report
 
