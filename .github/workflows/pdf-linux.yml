@@ -138,7 +138,15 @@ jobs:
           PY
 
       - name: Run the PDF-gated tests
-        run: pytest tests/test_phase75_cutover.py tests/test_reports.py -q
+        run: |
+          # requirements.txt carries the runtime only, so this step exited 127
+          # with "pytest: command not found" - and had done since it was
+          # written. Nobody saw it because the render step above always failed
+          # first, so the job never reached this line. pytest-asyncio is
+          # required by asyncio_mode=auto in pytest.ini; the set matches what
+          # deploy-backend.yml installs, so the two jobs run the same way.
+          pip install pytest pytest-asyncio httpx
+          python -m pytest tests/test_phase75_cutover.py tests/test_reports.py -q
 
       - name: Accessibility note
         run: |
