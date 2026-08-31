@@ -111,13 +111,27 @@ jobs:
           pdf = render_pdf(html, title="CI render")
           assert pdf[:5] == b"%PDF-", "output is not a PDF"
           assert len(pdf) > 2000, f"suspiciously small PDF: {len(pdf)} bytes"
-          # More than one page proves pagination ran.
-          assert pdf.count(b"/Type /Page") >= 1 or pdf.count(b"/Type/Page") >= 1
-          # A tagged structure tree is what pdf_variant="pdf/ua-1" asks for. Its
-          # presence is a PRECONDITION for accessibility, not conformance, and
-          # nothing here claims otherwise.
-          tagged = b"/StructTreeRoot" in pdf or b"/Marked" in pdf
-          print(f"rendered {len(pdf)} bytes; tagged structure present: {tagged}")
+
+          # Pagination, asserted against the renderer's own page list instead
+          # of a byte scan for "/Type /Page". WeasyPrint compresses by default
+          # and, from PDF 1.5, page dictionaries live inside a zlib-compressed
+          # object stream - so those bytes are not in the file to be counted.
+          # This assertion failed on every run for that reason, not because
+          # pagination was broken.
+          from weasyprint import HTML
+
+          assert len(HTML(string=html).render().pages) >= 1, "no pages rendered"
+
+          # The structure markers are inside that same compressed stream.
+          # pdf_structure_report inflates before it looks, and using it here
+          # keeps ONE detector in the project rather than a second copy in CI
+          # that drifts away from it - which is precisely what happened.
+          from app.reports.engine.accessibility import pdf_structure_report
+
+          report = pdf_structure_report(pdf)
+          tagged = report["structurally_tagged"]
+          print(f"rendered {len(pdf)} bytes; markers: {report['markers']}")
+          print(f"tagged structure present: {tagged}")
           if not tagged:
               print("::warning::No tagged structure tree found. PDF/UA was "
                     "requested; the renderer did not emit tags.")
