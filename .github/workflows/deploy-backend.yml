@@ -101,13 +101,32 @@ jobs:
       - name: Build pydeps (production artifact)
         run: |
           mkdir -p pydeps
-          pip install -r requirements.txt \
+          # langdetect is excluded here and installed below. It publishes NO
+          # wheel in ANY version - sdist only - so --only-binary=:all: cannot
+          # satisfy it and fails the step outright:
+          #   ERROR: Could not find a version that satisfies the requirement
+          #          langdetect==1.0.9 (from versions: none)
+          # Broken since langdetect was added on 2026-08-09; unseen because
+          # "Run tests" failed earlier in the job on every run since.
+          grep -v '^langdetect' requirements.txt > /tmp/requirements-wheels.txt
+          pip install -r /tmp/requirements-wheels.txt \
             --target pydeps \
             --only-binary=:all: \
             --platform manylinux2014_x86_64 \
             --python-version 3.12 \
             --implementation cp \
             --abi cp312
+          # Pure Python: no ABI to match, so the platform constraints are
+          # meaningless for it, and the runner IS the target platform
+          # (ubuntu-latest, x86_64, CPython 3.12) - building the sdist here
+          # produces exactly what the target needs.
+          #
+          # Deliberately the ONLY package installed this way, and named
+          # explicitly rather than by a fallback that retries failures without
+          # constraints: such a fallback would silently admit a native package
+          # built for the wrong platform. Dry-run resolution confirms langdetect
+          # is the only requirement that wheel-only cannot satisfy.
+          pip install langdetect==1.0.9 --target pydeps
           pip install gunicorn==22.0.0 \
             --target pydeps \
             --only-binary=:all: \
