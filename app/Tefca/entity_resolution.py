@@ -246,22 +246,43 @@ _RCE_FIELDS = _rce_field_names()
 _IDENTIFIER_PRIORITY = ("rce_org_oid", "tefcaid", "hcid", "npi", "aaid", "ccn")
 
 
-async def resolve_from_db(db, reference: str) -> Optional[Dict[str, Any]]:
-    """Resolve `reference` against the canonical registry, or return None.
+#: Controlled outcomes of resolving ONE reference to ONE canonical entity.
+#: These are states, not a boolean: "I found nothing" and "I found four" are
+#: different answers and only one of them is a data-quality problem.
+RESOLVED = "RESOLVED"
+AMBIGUOUS = "AMBIGUOUS"
+NOT_FOUND = "NOT_FOUND"
+INSUFFICIENT_INFORMATION = "INSUFFICIENT_INFORMATION"
 
-    Never raises. A database fault during resolution returns None, which the
-    caller reports as "not resolved" — the same honest answer as a genuine
-    miss, and far better than a 500 on a read that an analyst is waiting on.
+
+def _outcome(state, entity_id=None, matched_on=None, candidates=None):
+    return {"state": state, "entity_id": entity_id, "matched_on": matched_on,
+            "candidates": list(candidates or [])}
+
+
+async def resolve_reference_detail(db, reference: str) -> Dict[str, Any]:
+    """The resolution ladder, reporting WHY it ended where it did.
+
+    `resolve_from_db` answers "which entity is this" and returns None for every
+    kind of failure. That is the right shape for the evidence pipeline, which
+    can only proceed with an entity — but it collapses three different answers
+    into one, and a caller that has to act on the difference cannot.
+
+    A COR priority request is exactly such a caller. "No entity matches this
+    reference" needs the COR asked for more information; "four entities match"
+    needs a human to say which, and needs the candidates preserved so they can.
+    Returning None for both would turn an ambiguity into a silent miss.
+
+    Never raises: a database fault reports NOT_FOUND, the same honest answer as
+    a genuine miss, and far better than a 500 on a read an analyst is waiting on.
     """
     ref = (reference or "").strip()
     if not ref:
-        return None
+        return _outcome(INSUFFICIENT_INFORMATION)
 
     from app.tefca_registry import models as reg
 
     try:
-        entity_id = None
-
         # 1-3. By identifier, most specific first.
         rows = (await db.execute(
             select(reg.TefcaEntityIdentifier)
@@ -274,67 +295,91 @@ async def resolve_from_db(db, reference: str) -> Optional[Dict[str, Any]]:
                 if (r.identifier_type or "") in _IDENTIFIER_PRIORITY
                 else len(_IDENTIFIER_PRIORITY),
             )
-            entity_id = ranked[0].entity_id
+            return _outcome(RESOLVED, ranked[0].entity_id,
+                            matched_on=f"identifier:{ranked[0].identifier_type}")
 
         # 3b. By the RCE org OID / TEFCAID / HCID columns. These carry values
         #     that have no identifier row because they are shared across an
         #     organisation family, so a column lookup is the only way to find
         #     those entities at all.
-        if entity_id is None:
-            for column in ("rce_org_oid", "rce_tefcaid", "rce_hcid", "rce_aaid"):
-                attr = getattr(reg.TefcaRegEntity, column, None)
-                if attr is None:
-                    continue
-                found = (await db.execute(
-                    select(reg.TefcaRegEntity.id).where(attr == ref).limit(2)
-                )).scalars().all()
-                if len(found) == 1:
-                    entity_id = found[0]
-                    break
-                if len(found) > 1:
-                    # A family identifier matching several entities is not a
-                    # failure — but it does not identify ONE entity, so it
-                    # cannot resolve one.
-                    logger.info("reference %r matches %d entities on %s; "
-                                "refusing to pick one.", ref, len(found), column)
-                    return None
+        for column in ("rce_org_oid", "rce_tefcaid", "rce_hcid", "rce_aaid"):
+            attr = getattr(reg.TefcaRegEntity, column, None)
+            if attr is None:
+                continue
+            found = (await db.execute(
+                select(reg.TefcaRegEntity.id).where(attr == ref).limit(5)
+            )).scalars().all()
+            if len(found) == 1:
+                return _outcome(RESOLVED, found[0], matched_on=f"column:{column}")
+            if len(found) > 1:
+                # A family identifier matching several entities is not a
+                # failure — but it does not identify ONE entity, so it
+                # cannot resolve one.
+                logger.info("reference %r matches %d entities on %s; "
+                            "refusing to pick one.", ref, len(found), column)
+                return _outcome(AMBIGUOUS, matched_on=f"column:{column}",
+                                candidates=found)
 
         # 4. By the registry's own UUID.
-        if entity_id is None:
-            try:
-                import uuid as _uuid
-                candidate = _uuid.UUID(ref)
-            except (ValueError, AttributeError, TypeError):
-                candidate = None
-            if candidate is not None:
-                found = await db.get(reg.TefcaRegEntity, candidate)
-                if found is not None and not getattr(found, "is_deleted", False):
-                    entity_id = found.id
+        try:
+            import uuid as _uuid
+            candidate = _uuid.UUID(ref)
+        except (ValueError, AttributeError, TypeError):
+            candidate = None
+        if candidate is not None:
+            found = await db.get(reg.TefcaRegEntity, candidate)
+            if found is not None and not getattr(found, "is_deleted", False):
+                return _outcome(RESOLVED, found.id, matched_on="registry_uuid")
 
         # 5. Exact name, case-insensitive. Last, and only when it is
         #    UNAMBIGUOUS — two entities sharing a name resolve to neither.
         #    The registry already holds several rows called "Mayo Clinic";
         #    picking one would attach another organisation's evidence to this
         #    review.
-        if entity_id is None:
-            name_matches = (await db.execute(
-                select(reg.TefcaRegEntity.id)
-                .where(func.lower(reg.TefcaRegEntity.name) == ref.lower())
-                .where(or_(reg.TefcaRegEntity.is_deleted.is_(False),
-                           reg.TefcaRegEntity.is_deleted.is_(None)))
-                .limit(2)
-            )).scalars().all()
-            if len(name_matches) == 1:
-                entity_id = name_matches[0]
-            elif len(name_matches) > 1:
-                logger.info(
-                    "entity reference %r matches %d registry entities by name; "
-                    "refusing to guess.", ref, len(name_matches))
-                return None
+        name_matches = (await db.execute(
+            select(reg.TefcaRegEntity.id)
+            .where(func.lower(reg.TefcaRegEntity.name) == ref.lower())
+            .where(or_(reg.TefcaRegEntity.is_deleted.is_(False),
+                       reg.TefcaRegEntity.is_deleted.is_(None)))
+            .limit(5)
+        )).scalars().all()
+        if len(name_matches) == 1:
+            return _outcome(RESOLVED, name_matches[0], matched_on="exact_name")
+        if len(name_matches) > 1:
+            logger.info(
+                "entity reference %r matches %d registry entities by name; "
+                "refusing to guess.", ref, len(name_matches))
+            return _outcome(AMBIGUOUS, matched_on="exact_name",
+                            candidates=name_matches)
 
-        if entity_id is None:
-            return None
+        return _outcome(NOT_FOUND)
 
+    except Exception as exc:  # noqa: BLE001 — resolution must never 500 a read
+        logger.warning("registry entity resolution failed for %r: %s: %s",
+                       ref, type(exc).__name__, exc, exc_info=True)
+        return _outcome(NOT_FOUND)
+
+
+async def resolve_from_db(db, reference: str) -> Optional[Dict[str, Any]]:
+    """Resolve `reference` against the canonical registry, or return None.
+
+    The evidence pipeline can only proceed with an entity, so every non-RESOLVED
+    outcome is None here. The ladder itself lives in `resolve_reference_detail`
+    so there is ONE implementation of what a reference means, not two that can
+    drift apart.
+
+    Never raises. A database fault during resolution returns None, which the
+    caller reports as "not resolved" — the same honest answer as a genuine
+    miss, and far better than a 500 on a read that an analyst is waiting on.
+    """
+    outcome = await resolve_reference_detail(db, reference)
+    if outcome["state"] != RESOLVED:
+        return None
+
+    from app.tefca_registry import models as reg
+
+    try:
+        entity_id = outcome["entity_id"]
         entity_row = await db.get(reg.TefcaRegEntity, entity_id)
         if entity_row is None or getattr(entity_row, "is_deleted", False):
             return None
@@ -349,7 +394,7 @@ async def resolve_from_db(db, reference: str) -> Optional[Dict[str, Any]]:
 
     except Exception as exc:  # noqa: BLE001 — resolution must never 500 a read
         logger.warning("registry entity resolution failed for %r: %s: %s",
-                       ref, type(exc).__name__, exc, exc_info=True)
+                       reference, type(exc).__name__, exc, exc_info=True)
         return None
 
 

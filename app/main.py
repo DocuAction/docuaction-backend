@@ -317,6 +317,16 @@ async def _startup_after_schema():
     except Exception as e:
         logger.warning(f"PPEF scheduler not started: {e}")
 
+    # Controlled export generation, same reasoning as above: the workbook takes
+    # minutes at the delivered population, so the work lives in the database and
+    # a poller runs it. Without this the queue still accepts jobs — they simply
+    # sit QUEUED, which is visible rather than silent.
+    try:
+        from app.reports.export_scheduler import start_export_scheduler
+        start_export_scheduler()
+    except Exception as e:
+        logger.warning(f"Export scheduler not started: {e}")
+
     # ═══ EVIDENCE VOCABULARY CONTRACT (B5 / E1) ═══
     #
     # STAGE A: report-only at startup, FATAL in CI. `load_rules` already raises

@@ -756,6 +756,10 @@ class TestReportAPI:
             # Phase 7.5A — durable artifact storage
             "/api/reports/artifacts/{report_id}",
             "/api/reports/artifacts/{report_id}/download",
+            # Step #17 — the controlled Excel export
+            "/api/reports/exports/onc-review-workbook",
+            # Step #17C — its background job
+            "/api/reports/exports/jobs/{job_id}",
         }
 
     def test_report_endpoints_require_authentication(self):

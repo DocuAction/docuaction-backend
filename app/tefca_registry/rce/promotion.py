@@ -230,12 +230,20 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
         progressed = False
 
         for row in rows:
+            # A row that cannot be promoted keeps `canonical_entity_id` NULL, so
+            # it stays in the drain query's result set forever unless it is
+            # recorded here. Without this the last iteration — the one where only
+            # HELD rows are left — re-selects the same rows on every pass and the
+            # loop never terminates, so the Area 1 marking below and pass 2 are
+            # never reached.
             if row.record_status not in PROMOTABLE_STATUSES:
                 skipped_status[row.record_status] = \
                     skipped_status.get(row.record_status, 0) + 1
+                unpromotable.add(row.id)
                 continue
             if not row.rce_org_oid or not row.name:
                 skipped_status["MISSING_KEY"] = skipped_status.get("MISSING_KEY", 0) + 1
+                unpromotable.add(row.id)
                 continue
 
             entity_id = oid_to_entity.get(row.rce_org_oid)
@@ -365,8 +373,9 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
 
         await db.commit()
         if not progressed:
-            # Every row in this batch was unpromotable; the next iteration
-            # excludes them, so this cannot spin.
+            # Every row in this batch was unpromotable. They are now all in
+            # `unpromotable`, so the next iteration's query excludes them and the
+            # candidate set strictly shrinks — this cannot spin.
             continue
 
     # Mark the Area 1 rows promoted — the only column on a source record that

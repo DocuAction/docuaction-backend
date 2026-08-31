@@ -448,8 +448,46 @@ class ReviewRecord(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     review_id = Column(String(20), nullable=False, unique=True)   # REV-2026-000001
+
+    #: NULLABLE SINCE 20260831. A review may exist BEFORE a canonical entity does.
+    #:
+    #: A curated record is HELD precisely because it carries an unresolved
+    #: substantive problem, and a HELD record is never promoted — so it has no
+    #: entity. Requiring one here meant the records held BECAUSE they need human
+    #: judgement were the only ones human review could not represent. On the
+    #: delivered population that was all four HIGH-severity identity findings.
+    #:
+    #: The foreign key is retained: when an entity IS named it must be a real
+    #: one. Only the NOT NULL was lifted.
     entity_id = Column(UUID(as_uuid=True), ForeignKey("tefca_reg_entities.id"),
-                       nullable=False)
+                       nullable=True)
+
+    #: The Area 1 anchor: the delivered line this review is about.
+    #:
+    #: Deliberately no foreign key, matching `tefca_entity_contacts
+    #: .source_record_id` — the existing convention for a registry table
+    #: referencing Area 1. Area 1 has no delete path, so the reference cannot
+    #: dangle, and the registry does not take a dependency on Area 1's owner.
+    source_record_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+
+    #: WHO HOLDS THIS CASE. NULL means available.
+    #:
+    #: A plain UUID with no foreign key, matching `review_decision_events
+    #: .actor_user_id` and `reclassified_by`. That is the existing convention
+    #: and it is the right one here: a case must stay attributable after the
+    #: person who held it is deactivated, and a FK would make deactivation a
+    #: referential problem instead of an HR one.
+    #:
+    #: There is deliberately NO `case_status` column. Ownership is this column;
+    #: every other state — submitted, returned, escalated, approved — is already
+    #: owned by `review_decision_events` and derived from it. A second copy
+    #: would be a second answer to the same question.
+    assigned_to_user_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    #: When the current holder took it. Cleared on release. The MANNER of
+    #: acquisition — self-claim or supervisor assignment — is in the audit log,
+    #: not duplicated here.
+    assigned_at = Column(DateTime)
+
     sample_id = Column(UUID(as_uuid=True), ForeignKey("review_samples.id"))
     verification_results = Column(JSONB)
     classification_bucket = Column(String(2))
@@ -476,6 +514,14 @@ class ReviewRecord(Base):
         Index("idx_review_records_sample", "sample_id"),
         Index("idx_review_records_resolution", "reviewer_resolution"),
         Index("idx_review_records_created", "created_at"),
+        Index("idx_review_records_assignee", "assigned_to_user_id"),
+        Index("idx_review_records_source_record", "source_record_id"),
+        # A review is ABOUT something. With entity_id no longer mandatory, this
+        # is what stops a case from being about nothing at all — the one thing
+        # dropping the NOT NULL would otherwise have permitted.
+        CheckConstraint(
+            "entity_id IS NOT NULL OR source_record_id IS NOT NULL",
+            name="ck_review_record_has_subject"),
     )
 
 

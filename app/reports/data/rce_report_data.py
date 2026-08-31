@@ -128,7 +128,12 @@ class RceReportDataService:
         }
 
     async def get_issue_summary(self) -> Dict[str, Any]:
+        # Figures come from the CURRENT quality run only. A delivery may be
+        # quality-run more than once and each run writes a full set of issues,
+        # so filtering on the intake alone would report one population twice.
+        # See `app.tefca_registry.rce.run_selection`.
         from app.tefca_registry.rce import models as m
+        from app.tefca_registry.rce import run_selection
 
         intake = await self._intake()
         if intake is None:
@@ -140,10 +145,12 @@ class RceReportDataService:
                     "records_affected_pct": INSUFFICIENT_DATA,
                     "indicators": dict(SEVERITY_INDICATORS)}
 
+        scope = run_selection.current_issues_filter(intake.id)
+
         async def grouped(column):
             return dict((k or "(none)", int(v)) for k, v in (await self.db.execute(
                 select(column, func.count())
-                .where(m.RceIssue.source_intake_id == intake.id)
+                .where(scope)
                 .group_by(column))).all())
 
         by_severity = await grouped(m.RceIssue.severity)
@@ -156,7 +163,7 @@ class RceReportDataService:
         records = intake.record_count or 0
         affected = int((await self.db.execute(
             select(func.count(func.distinct(m.RceIssue.source_record_id)))
-            .where(m.RceIssue.source_intake_id == intake.id,
+            .where(scope,
                    m.RceIssue.source_record_id.isnot(None)))).scalar() or 0)
         return {
             "insufficient_data": total == 0,
@@ -175,6 +182,7 @@ class RceReportDataService:
 
     async def get_remediation_status(self) -> Dict[str, Any]:
         from app.tefca_registry.rce import models as m
+        from app.tefca_registry.rce import run_selection
 
         intake = await self._intake()
         if intake is None:
@@ -184,7 +192,7 @@ class RceReportDataService:
                     "resolved_pct": INSUFFICIENT_DATA}
         by_resolution = dict((k, int(v)) for k, v in (await self.db.execute(
             select(m.RceIssue.resolution, func.count())
-            .where(m.RceIssue.source_intake_id == intake.id)
+            .where(run_selection.current_issues_filter(intake.id))
             .group_by(m.RceIssue.resolution))).all())
         corrections = int((await self.db.execute(
             select(func.count()).select_from(m.RceCorrectionDetail)
