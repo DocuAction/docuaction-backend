@@ -253,16 +253,32 @@ class TestQualityRules:
         qr._assert_rule_ids_unique()  # restored set must still load
 
     def test_next_available_rule_ids_are_derived_not_hardcoded(self):
-        """FMT-005/006 are TAKEN. The next free ids must reflect that."""
+        """The next free id must follow the rule set, not a literal in a test.
+
+        This assertion used to name FMT-007 outright, which made it a
+        second hard-coded copy of the answer — and it went stale the moment
+        FMT-007 (Organisation phone complete) shipped. It now checks the
+        PROPERTY the function is for: for every prefix, the advertised id is
+        free, and it is exactly one past the highest id already taken.
+        """
         nxt = qr.next_available_rule_ids()
-        assert nxt["FMT"] == "FMT-007", (
-            "FMT-005 (Contact phone complete) and FMT-006 (Contact email "
-            "well-formed) already ship. A new FMT rule starts at FMT-007.")
-        assert nxt["CON"] == "CON-006"
-        assert nxt["BUS"] == "BUS-004"
+        assert nxt, "every rule prefix in use must advertise a next free id"
+
+        taken = {}
+        for rule in qr.RULES:
+            prefix, number = rule.rule_id.rsplit("-", 1)
+            taken.setdefault(prefix, set()).add(int(number))
+
+        assert set(nxt) == set(taken), (
+            "every prefix in use must be represented, and no prefix invented")
         for prefix, rule_id in nxt.items():
             assert rule_id not in qr.RULE_BY_ID, (
                 f"{rule_id} is advertised as free but already exists")
+            advertised_prefix, number = rule_id.rsplit("-", 1)
+            assert advertised_prefix == prefix
+            assert int(number) == max(taken[prefix]) + 1, (
+                f"{rule_id} skips or repeats an id: {prefix} already uses "
+                f"{sorted(taken[prefix])}")
 
     def test_auto_safe_rules_all_exist(self):
         """The allow-list cannot name a rule that is not in the set."""

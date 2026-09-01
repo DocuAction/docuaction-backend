@@ -411,7 +411,15 @@ async def resolve_review(review_id: str, req: ResolveReview, request: Request,
 
 
 def _review_dict(r, include_results: bool = False) -> dict:
-    d = {"review_id": r.review_id, "entity_id": str(r.entity_id),
+    # entity_id is NULL on a pre-promotion case (a HELD source record has no
+    # entity yet), so this must not str(None) into the string "None".
+    d = {"review_id": r.review_id,
+         "entity_id": str(r.entity_id) if r.entity_id else None,
+         "source_record_id": (str(r.source_record_id)
+                              if getattr(r, "source_record_id", None) else None),
+         "assigned_to_user_id": (str(r.assigned_to_user_id)
+                                 if getattr(r, "assigned_to_user_id", None)
+                                 else None),
          "sample_id": str(r.sample_id) if r.sample_id else None,
          "classification": {
              "bucket": r.classification_bucket, "rule_code": r.classification_rule,
@@ -968,3 +976,547 @@ async def get_review_history(review_id: str, db: AsyncSession = Depends(get_db))
     from app.tefca_registry.qa_gate import review_state
 
     return await review_state(db, review_id)
+
+
+# ── CASE ASSIGNMENT — the Step #10 service, now reachable ────────────────────
+#
+# `case_assignment` has existed since the human-workflow gate but had no HTTP
+# surface, so a case could be created and determined but never CLAIMED. These
+# endpoints are deliberately queue-agnostic: a DQ exception, a sampled record
+# and a COR priority request are all `review_records`, and all three need the
+# same ownership semantics. A priority-only claim endpoint would have been a
+# second implementation of a solved problem.
+
+
+class CaseAssign(BaseModel):
+    to_user_id: uuid.UUID
+    reason: Optional[str] = Field(None, max_length=4000)
+    #: Required only when the case is already held by someone. Assigning
+    #: unheld work needs nothing; taking work off a live holder must say why.
+    override_reason: Optional[str] = Field(None, max_length=4000)
+
+
+class CaseRelease(BaseModel):
+    reason: Optional[str] = Field(None, max_length=4000)
+
+
+# The three case READS below sit at the viewer floor, like every other TEFCA
+# read. None of them names an analyst — `available_cases` is unowned by
+# definition, `my_work` is scoped to the caller, and the most sensitive thing in
+# the analyst package is the decision chain, which is already viewer-readable at
+# `/reviews/{review_id}/history`. The AUTHORITY is on the writes: claiming and
+# releasing need `reviewer`, assigning needs `senior_analyst`.
+
+@router.get("/available-cases", dependencies=[Depends(require_role("viewer"))])
+async def available_cases(queue_source: Optional[str] = Query(None),
+                          limit: int = Query(100, ge=1, le=500),
+                          db: AsyncSession = Depends(get_db)):
+    """Unowned cases anyone may take."""
+    from app.tefca_registry.case_assignment import available_cases as _available
+
+    items = await _available(db, queue_source=queue_source, limit=limit)
+    return {"count": len(items), "cases": items}
+
+
+@router.get("/my-work", dependencies=[Depends(require_role("viewer"))])
+async def my_work(queue_source: Optional[str] = Query(None),
+                  limit: int = Query(100, ge=1, le=500),
+                  db: AsyncSession = Depends(get_db),
+                  user=Depends(require_role("viewer"))):
+    """Cases this user holds. Never another user's — the owner is the caller."""
+    from app.tefca_registry.case_assignment import my_work as _mine
+
+    items = await _mine(db, user=user, queue_source=queue_source, limit=limit)
+    return {"count": len(items), "cases": items}
+
+
+@router.post("/reviews/{review_id}/claim",
+             dependencies=[Depends(require_role("reviewer"))])
+async def claim_case(review_id: str, request: Request,
+                     db: AsyncSession = Depends(get_db),
+                     user=Depends(require_role("reviewer"))):
+    """Take an unowned case. Atomic: at most one claimer wins."""
+    from app.tefca_registry.case_assignment import AssignmentRefused, claim
+
+    try:
+        result = await claim(db, review_id, user=user,
+                             ip_address=get_client_ip(request))
+    except AssignmentRefused as exc:
+        raise HTTPException(409, str(exc))
+    await db.commit()
+    return result
+
+
+@router.post("/reviews/{review_id}/release",
+             dependencies=[Depends(require_role("reviewer"))])
+async def release_case(review_id: str, req: CaseRelease, request: Request,
+                       db: AsyncSession = Depends(get_db),
+                       user=Depends(require_role("reviewer"))):
+    """Give a case back. Only its holder, or a supervisor, may."""
+    from app.tefca_registry.case_assignment import AssignmentRefused, release
+
+    try:
+        result = await release(db, review_id, user=user, reason=req.reason,
+                               ip_address=get_client_ip(request))
+    except AssignmentRefused as exc:
+        raise HTTPException(409, str(exc))
+    await db.commit()
+    return result
+
+
+@router.post("/reviews/{review_id}/assign",
+             dependencies=[Depends(require_role("senior_analyst"))])
+async def assign_case(review_id: str, req: CaseAssign, request: Request,
+                      db: AsyncSession = Depends(get_db),
+                      user=Depends(require_role("senior_analyst"))):
+    """Supervisor assignment. The MANNER of acquisition lives in the audit log."""
+    from app.tefca_registry.case_assignment import AssignmentRefused, assign
+
+    try:
+        result = await assign(db, review_id, user=user, to_user_id=req.to_user_id,
+                              reason=req.reason,
+                              override_reason=req.override_reason,
+                              ip_address=get_client_ip(request))
+    except AssignmentRefused as exc:
+        raise HTTPException(409, str(exc))
+    await db.commit()
+    return result
+
+
+# ── TASK 5 PRIORITY REVIEWS (D5.1) ───────────────────────────────────────────
+#
+# The COR names the entities and states the deadline (para 146). Every field a
+# client may set is on the request model below and nothing else: reportability,
+# the reviewer, the audit actor and the determination are all set by the
+# workflow, and there is no request shape that can reach them.
+#
+# There is no deadline default here, and none anywhere else in this surface.
+# The contract sets the deadline per request; a default would be a service
+# level AGT invented and then reported against.
+
+
+class PriorityRequestCreate(BaseModel):
+    cor_reference: str = Field(min_length=1, max_length=100,
+                               description="The COR's own reference for the request")
+    target_reference: str = Field(min_length=1, max_length=500,
+                                  description="The organisation the COR named: "
+                                              "TEFCAID, HCID, NPI, org OID, "
+                                              "registry id or exact name")
+    issue_description: str = Field(min_length=1, max_length=8000)
+    requested_by: str = Field(min_length=1, max_length=255)
+    received_at: Optional[datetime] = Field(
+        None, description="When the request arrived. Defaults to now.")
+    deadline: Optional[datetime] = Field(
+        None, description="The deadline the COR stated. Omitted means the COR "
+                          "did not state one — it is NOT computed.")
+    instructions: Optional[str] = Field(None, max_length=8000)
+    qhin: Optional[str] = Field(None, max_length=100)
+
+
+class PriorityTargetResolve(BaseModel):
+    entity_id: uuid.UUID
+    rationale: str = Field(min_length=10, max_length=4000)
+
+
+class PriorityDeadlineAmend(BaseModel):
+    deadline: Optional[datetime] = None
+    reason: str = Field(min_length=10, max_length=4000)
+
+
+class PriorityWithdraw(BaseModel):
+    reason: str = Field(min_length=10, max_length=4000)
+
+
+class PriorityFinding(BaseModel):
+    severity: str = Field(description="CRITICAL | HIGH | MEDIUM | LOW")
+    rationale: str = Field(min_length=10, max_length=4000)
+    root_cause_determination: Optional[str] = Field(
+        None, max_length=50,
+        description="Omit when the root cause was NOT determined. The contract "
+                    "asks for it if determined; it is never manufactured.")
+    root_cause_description: Optional[str] = Field(None, max_length=8000)
+    recommendations: List[Dict[str, Any]] = Field(default_factory=list)
+    prevention_recommendation: Optional[str] = Field(None, max_length=8000)
+    resolution_notes: Optional[str] = Field(None, max_length=8000)
+
+
+def _priority_refused(exc) -> HTTPException:
+    return HTTPException(409, str(exc))
+
+
+@router.post("/priority-requests",
+             dependencies=[Depends(require_role("program_manager"))])
+async def create_priority_request(req: PriorityRequestCreate, request: Request,
+                                  db: AsyncSession = Depends(get_db),
+                                  user=Depends(require_role("program_manager"))):
+    """Log an authorized COR request. Idempotent on (reference, target)."""
+    from app.tefca_registry import priority_review as pr
+
+    try:
+        result = await pr.receive_request(
+            db, cor_reference=req.cor_reference,
+            target_reference=req.target_reference,
+            issue_description=req.issue_description,
+            requested_by=req.requested_by, received_at=req.received_at,
+            deadline=req.deadline, instructions=req.instructions, qhin=req.qhin,
+            actor=str(getattr(user, "email", "") or ""),
+            actor_id=getattr(user, "id", None))
+    except pr.PriorityRefused as exc:
+        raise _priority_refused(exc)
+    await db.commit()
+    return result
+
+
+@router.get("/priority-requests", dependencies=[Depends(require_role("viewer"))])
+async def list_priority_requests(include_withdrawn: bool = Query(False),
+                                 limit: int = Query(100, ge=1, le=500),
+                                 db: AsyncSession = Depends(get_db)):
+    from app.tefca_registry import priority_review as pr
+
+    items = await pr.open_requests(db, limit=limit,
+                                   include_withdrawn=include_withdrawn)
+    return {"count": len(items), "requests": items}
+
+
+# Registered BEFORE /priority-requests/{case_id}: FastAPI matches in
+# registration order, and the literal would otherwise be read as a case id.
+@router.get("/priority-requests/workload",
+            dependencies=[Depends(require_role("viewer"))])
+async def priority_workload(due_soon_within_hours: Optional[float] = Query(
+                                None, gt=0,
+                                description="Caller-supplied warning band. There "
+                                            "is no default: the contract sets no "
+                                            "standing turnaround."),
+                            db: AsyncSession = Depends(get_db)):
+    from app.tefca_registry import priority_review as pr
+
+    return await pr.workload_summary(db, due_soon_within_hours=due_soon_within_hours)
+
+
+@router.get("/priority-requests/{case_id}",
+            dependencies=[Depends(require_role("viewer"))])
+async def get_priority_request(case_id: uuid.UUID,
+                               db: AsyncSession = Depends(get_db)):
+    from app.tefca_registry import priority_review as pr
+
+    try:
+        return await pr.get_request(db, case_id)
+    except pr.PriorityRefused as exc:
+        raise HTTPException(404, str(exc))
+
+
+@router.get("/priority-requests/{case_id}/package",
+            dependencies=[Depends(require_role("viewer"))])
+async def get_priority_package(case_id: uuid.UUID,
+                               db: AsyncSession = Depends(get_db)):
+    """The analyst workspace for one request."""
+    from app.tefca_registry import priority_review as pr
+
+    try:
+        return await pr.analyst_package(db, case_id)
+    except pr.PriorityRefused as exc:
+        raise HTTPException(404, str(exc))
+
+
+@router.get("/priority-requests/{case_id}/result",
+            dependencies=[Depends(require_role("viewer"))])
+async def get_priority_result(case_id: uuid.UUID,
+                              db: AsyncSession = Depends(get_db)):
+    """The D5.1 content, withheld until a QA approval stands."""
+    from app.tefca_registry import priority_review as pr
+
+    try:
+        return await pr.reportable_result(db, case_id)
+    except pr.PriorityRefused as exc:
+        raise HTTPException(404, str(exc))
+
+
+@router.get("/priority-requests/{case_id}/deadline-history",
+            dependencies=[Depends(require_role("viewer"))])
+async def get_priority_deadline_history(case_id: uuid.UUID,
+                                        db: AsyncSession = Depends(get_db)):
+    from app.tefca_registry import priority_review as pr
+
+    try:
+        return await pr.deadline_history(db, case_id)
+    except pr.PriorityRefused as exc:
+        raise HTTPException(404, str(exc))
+
+
+@router.post("/priority-requests/{case_id}/resolve-target",
+             dependencies=[Depends(require_role("senior_analyst"))])
+async def resolve_priority_target(case_id: uuid.UUID, req: PriorityTargetResolve,
+                                  db: AsyncSession = Depends(get_db),
+                                  user=Depends(require_role("senior_analyst"))):
+    """Name the canonical entity an ambiguous or unmatched request meant."""
+    from app.tefca_registry import priority_review as pr
+
+    try:
+        result = await pr.resolve_target_manually(
+            db, case_id, entity_id=req.entity_id, rationale=req.rationale,
+            actor=str(getattr(user, "email", "") or ""),
+            actor_id=getattr(user, "id", None))
+    except pr.PriorityRefused as exc:
+        raise _priority_refused(exc)
+    await db.commit()
+    return result
+
+
+@router.post("/priority-requests/{case_id}/deadline",
+             dependencies=[Depends(require_role("program_manager"))])
+async def amend_priority_deadline(case_id: uuid.UUID, req: PriorityDeadlineAmend,
+                                  db: AsyncSession = Depends(get_db),
+                                  user=Depends(require_role("program_manager"))):
+    """Record a deadline the COR changed. The original is kept in the audit trail."""
+    from app.tefca_registry import priority_review as pr
+
+    try:
+        result = await pr.amend_deadline(
+            db, case_id, new_deadline=req.deadline, reason=req.reason,
+            actor=str(getattr(user, "email", "") or ""),
+            actor_id=getattr(user, "id", None))
+    except pr.PriorityRefused as exc:
+        raise _priority_refused(exc)
+    await db.commit()
+    return result
+
+
+@router.post("/priority-requests/{case_id}/withdraw",
+             dependencies=[Depends(require_role("program_manager"))])
+async def withdraw_priority_request(case_id: uuid.UUID, req: PriorityWithdraw,
+                                    db: AsyncSession = Depends(get_db),
+                                    user=Depends(require_role("program_manager"))):
+    """Record a COR withdrawal. Nothing is deleted."""
+    from app.tefca_registry import priority_review as pr
+
+    try:
+        result = await pr.withdraw_request(
+            db, case_id, reason=req.reason,
+            actor=str(getattr(user, "email", "") or ""),
+            actor_id=getattr(user, "id", None))
+    except pr.PriorityRefused as exc:
+        raise _priority_refused(exc)
+    await db.commit()
+    return result
+
+
+@router.post("/priority-requests/{case_id}/finding",
+             dependencies=[Depends(require_role("reviewer"))])
+async def record_priority_finding(case_id: uuid.UUID, req: PriorityFinding,
+                                  request: Request,
+                                  db: AsyncSession = Depends(get_db),
+                                  user=Depends(require_role("reviewer"))):
+    """The analyst's D5.1 content, recorded with its determination event.
+
+    Reportability is NOT set here and cannot be: it is set only by a QA APPROVE
+    at `POST /reviews/{review_id}/qa`, by a different person.
+    """
+    from app.tefca_registry import priority_review as pr
+    from app.tefca_registry.case_assignment import AssignmentRefused
+    from app.tefca_registry.qa_gate import QaGateRefused
+
+    try:
+        result = await pr.record_finding(
+            db, case_id, user=user,
+            root_cause_determination=req.root_cause_determination,
+            root_cause_description=req.root_cause_description,
+            severity=req.severity, recommendations=req.recommendations,
+            prevention_recommendation=req.prevention_recommendation,
+            resolution_notes=req.resolution_notes, rationale=req.rationale,
+            ip_address=get_client_ip(request))
+    except (pr.PriorityRefused, AssignmentRefused, QaGateRefused) as exc:
+        raise _priority_refused(exc)
+    await db.commit()
+    return result
+
+
+# ── SUPERVISOR OPERATIONS (Step #15) ─────────────────────────────────────────
+#
+# A CONTROL PLANE, not another engine. Every endpoint here is a READ derived
+# from review_records, review_decision_events, sample_entities and the priority
+# requests. The one write a supervisor legitimately owns — assignment — is the
+# existing `/reviews/{review_id}/assign` above, where the audit trail and the
+# override rule already live. There is deliberately no operations endpoint that
+# can record a determination, approve a QA review or set reportability.
+#
+# Reads sit at the viewer floor like every other TEFCA read
+# (`test_rbac_roles::test_no_tefca_read_endpoint_sits_above_the_viewer_floor`).
+# The authority is on the writes.
+
+
+@router.get("/operations/dashboard", dependencies=[Depends(require_role("viewer"))])
+async def operations_dashboard(
+        queue_source: Optional[str] = Query(
+            None, description="Scope the summary to one work source so it "
+                              "agrees with the queue being looked at."),
+        due_soon_within_hours: Optional[float] = Query(
+            None, gt=0, description="Caller-supplied warning band for COR "
+                                    "deadlines. No default: the contract sets "
+                                    "no standing turnaround."),
+        stale_after_days: Optional[float] = Query(
+            None, gt=0, description="Caller-supplied internal staleness band. "
+                                    "No default: no approved threshold exists."),
+        db: AsyncSession = Depends(get_db)):
+    """Supervisor summary. Every card counts something that actually exists."""
+    from app.tefca_registry.supervisor_ops import dashboard
+
+    return await dashboard(db, queue_source=queue_source,
+                           due_soon_within_hours=due_soon_within_hours,
+                           stale_after_days=stale_after_days)
+
+
+@router.get("/operations/work-queue", dependencies=[Depends(require_role("viewer"))])
+async def operations_work_queue(
+        queue_source: Optional[str] = Query(None),
+        work_reason: Optional[str] = Query(
+            None, description="HUMAN_REQUIRED | STATISTICAL_SAMPLE | "
+                              "PRIORITY_REQUEST | QA_RETURN | QA_ESCALATION"),
+        state: Optional[str] = Query(None),
+        assignee: Optional[uuid.UUID] = Query(None),
+        unassigned_only: bool = Query(False),
+        qhin_entity_id: Optional[uuid.UUID] = Query(None),
+        limited_only: bool = Query(False),
+        reportable: Optional[bool] = Query(None),
+        deadline_state: Optional[str] = Query(None),
+        search: Optional[str] = Query(None, max_length=200),
+        sort: str = Query("age"),
+        offset: int = Query(0, ge=0),
+        limit: int = Query(50, ge=1, le=200),
+        due_soon_within_hours: Optional[float] = Query(None, gt=0),
+        stale_after_days: Optional[float] = Query(None, gt=0),
+        db: AsyncSession = Depends(get_db)):
+    """The operational queue: filtered, sorted, paginated, deterministically."""
+    from app.tefca_registry.supervisor_ops import SupervisorRefused, work_queue
+
+    try:
+        return await work_queue(
+            db, queue_source=queue_source, work_reason=work_reason, state=state,
+            assignee=assignee, unassigned_only=unassigned_only,
+            qhin_entity_id=qhin_entity_id, limited_only=limited_only,
+            reportable=reportable, deadline_state=deadline_state, search=search,
+            sort=sort, offset=offset, limit=limit,
+            due_soon_within_hours=due_soon_within_hours,
+            stale_after_days=stale_after_days)
+    except SupervisorRefused as exc:
+        raise HTTPException(400, str(exc))
+
+
+@router.get("/operations/analyst-workload",
+            dependencies=[Depends(require_role("viewer"))])
+async def operations_analyst_workload(
+        queue_source: Optional[str] = Query(None),
+        stale_after_days: Optional[float] = Query(None, gt=0),
+        db: AsyncSession = Depends(get_db)):
+    """Open work in hand, per holder. Not a performance measure."""
+    from app.tefca_registry.supervisor_ops import analyst_workload
+
+    return await analyst_workload(db, queue_source=queue_source,
+                                  stale_after_days=stale_after_days)
+
+
+@router.get("/operations/qa-workload", dependencies=[Depends(require_role("viewer"))])
+async def operations_qa_workload(queue_source: Optional[str] = Query(None),
+                                 db: AsyncSession = Depends(get_db)):
+    """The independent QA view, kept separate from the analyst queue."""
+    from app.tefca_registry.supervisor_ops import qa_workload
+
+    return await qa_workload(db, queue_source=queue_source)
+
+
+@router.get("/operations/sampling", dependencies=[Depends(require_role("viewer"))])
+async def operations_sampling(db: AsyncSession = Depends(get_db)):
+    """Official sampling progress, or an honest statement that none exists."""
+    from app.tefca_registry.supervisor_ops import sampling_overview
+
+    return await sampling_overview(db)
+
+
+@router.get("/operations/priority", dependencies=[Depends(require_role("viewer"))])
+async def operations_priority(
+        due_soon_within_hours: Optional[float] = Query(None, gt=0),
+        db: AsyncSession = Depends(get_db)):
+    """Task 5 workload against the deadlines the COR actually set."""
+    from app.tefca_registry.supervisor_ops import priority_overview
+
+    return await priority_overview(db, due_soon_within_hours=due_soon_within_hours)
+
+
+@router.get("/operations/readiness", dependencies=[Depends(require_role("viewer"))])
+async def operations_readiness(db: AsyncSession = Depends(get_db)):
+    """Aggregate readiness. Reports DQ findings and cases SEPARATELY."""
+    from app.tefca_registry.supervisor_ops import government_readiness
+
+    return await government_readiness(db)
+
+
+# Registered AFTER the literal /operations/* paths above, so none of them is
+# swallowed as a review_id. FastAPI matches in registration order.
+@router.get("/operations/cases/{review_id}",
+            dependencies=[Depends(require_role("viewer"))])
+async def operations_case_detail(
+        review_id: str,
+        due_soon_within_hours: Optional[float] = Query(None, gt=0),
+        stale_after_days: Optional[float] = Query(None, gt=0),
+        db: AsyncSession = Depends(get_db)):
+    """One case, as a supervisor needs to see it. No evidence values."""
+    from app.tefca_registry.supervisor_ops import SupervisorRefused, case_detail
+
+    try:
+        return await case_detail(db, review_id,
+                                 due_soon_within_hours=due_soon_within_hours,
+                                 stale_after_days=stale_after_days)
+    except SupervisorRefused as exc:
+        raise HTTPException(404, str(exc))
+
+
+@router.get("/operations/cases/{review_id}/timeline",
+            dependencies=[Depends(require_role("viewer"))])
+async def operations_case_timeline(review_id: str,
+                                   db: AsyncSession = Depends(get_db)):
+    """What actually happened to this case. Nothing is inferred or filled in."""
+    from app.tefca_registry.supervisor_ops import (SupervisorRefused,
+                                                   audit_timeline)
+
+    try:
+        return {"review_id": review_id,
+                "timeline": await audit_timeline(db, review_id)}
+    except SupervisorRefused as exc:
+        raise HTTPException(404, str(exc))
+
+
+@router.get("/entities/{entity_id}/verification-coverage",
+            dependencies=[Depends(require_role("viewer"))],
+            summary="Control-based verification coverage for one entity")
+async def entity_verification_coverage(
+    entity_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """What the evidence methodology says about one entity. READS ONLY.
+
+    Replaces "N of M sources agree" as the headline. Source agreement is still
+    returned, but inside each control, where it is supporting evidence rather
+    than a determination — three databases answering three different questions
+    were never three votes on one.
+
+    The response separates two things the UI must never merge:
+
+        entity_verification    did we establish who this organisation is?
+        contractual_compliance does the requirement appear satisfied?
+
+    `contractual_compliance` can never be NON_COMPLIANT here. That value is
+    reachable only through an analyst determination an independent QA reviewer
+    has approved.
+    """
+    from app.tefca_registry.verification_coverage_service import (
+        coverage_for_entity)
+
+    try:
+        assessment = await coverage_for_entity(db, entity_id)
+    except Exception as exc:  # noqa: BLE001 - a malformed id is a 404, not a 500
+        logger.info("verification coverage lookup failed for %r: %s",
+                    entity_id, exc)
+        assessment = None
+
+    if assessment is None:
+        raise HTTPException(404, "No such entity.")
+    return assessment.to_dict()

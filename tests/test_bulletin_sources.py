@@ -1,8 +1,20 @@
-"""Bulletin public/guarded contract (Phase 5.5 + Day 3 hardening)."""
+"""Bulletin public/guarded contract (Phase 5.5 + Day 3 hardening).
+
+`test_run_requires_auth` below hung CI. With the auth flag off it asserted only
+"not 404", but POSTing /run schedules the real collection cycle and TestClient
+runs background tasks synchronously - so a routing assertion went to BlueSky,
+GDELT and C-SPAN. See tests/conftest.py for the two fixtures that close it and
+tests/test_bulletin.py for the full account.
+"""
 import os
+
+import pytest
+
 from conftest import GATED
 
 FLAG = os.environ.get("BULLETIN_AUTH_ENABLED", "").lower() == "true"
+
+pytestmark = pytest.mark.usefixtures("no_outbound_network")
 
 
 def test_sources_endpoint_public(client, db_required):
@@ -37,12 +49,19 @@ def test_costs_requires_auth(client):
         assert r.status_code != 404
 
 
-def test_run_requires_auth(client):
+def test_run_requires_auth(client, no_collection_cycle):
+    """The guard on /run, asserted without running a collection cycle."""
     r = client.post("/api/v1/bulletin/run/fcc")
     if FLAG:
         assert r.status_code in GATED
+        # Refused before the handler ran, so nothing was ever scheduled.
+        assert no_collection_cycle == []
     else:
         assert r.status_code != 404
+        # The route is reachable, so it must have scheduled the cycle it
+        # claims to - the coverage the mock would otherwise have removed.
+        assert no_collection_cycle == [
+            {"agency_id": "fcc", "auto_deliver": False, "lookback_hours": 72}]
 
 
 def test_archive_requires_auth(client):

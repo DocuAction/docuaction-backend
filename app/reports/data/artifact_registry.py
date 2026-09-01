@@ -150,6 +150,32 @@ class ReportArtifact(Base):
         }
 
 
+#: File extension per stored content type. ONE map, because there were two —
+#: the store key and the download filename each had their own copy, and when the
+#: workbook format arrived only one of them would have been remembered.
+ARTIFACT_SUFFIXES = {
+    "text/html": "html",
+    "application/pdf": "pdf",
+    "text/csv": "csv",
+    ("application/vnd.openxmlformats-officedocument"
+     ".spreadsheetml.sheet"): "xlsx",
+}
+
+
+#: Registry fields that describe WHERE the bytes live. They belong to the store,
+#: not to any caller: `storage_locator` is a filesystem path on the local backend
+#: and a container path on Azure, and neither tells a reviewer anything they can
+#: act on. `to_dict()` keeps them because retrieval needs them; the API boundary
+#: drops them.
+INTERNAL_ARTIFACT_FIELDS = ("storage_backend", "storage_locator")
+
+
+def public_artifact(artifact: Dict[str, Any]) -> Dict[str, Any]:
+    """One registry row, safe to hand to a client."""
+    return {k: v for k, v in artifact.items()
+            if k not in INTERNAL_ARTIFACT_FIELDS}
+
+
 def artifact_key(report_id: str, content_type: str) -> str:
     """The store key for one report in one format.
 
@@ -158,9 +184,7 @@ def artifact_key(report_id: str, content_type: str) -> str:
     documents, and a PDF that appeared to supersede its own HTML would be
     nonsense.
     """
-    suffix = {"text/html": "html", "application/pdf": "pdf",
-              "text/csv": "csv"}.get(content_type, "bin")
-    return f"{report_id}-{suffix}"
+    return f"{report_id}-{ARTIFACT_SUFFIXES.get(content_type, 'bin')}"
 
 
 async def finalize_artifact(

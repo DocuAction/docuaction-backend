@@ -221,6 +221,76 @@ def auth_headers(client, db_required):
     return {"Authorization": f"Bearer {token}"} if token else {}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Keeping API-boundary tests off the Internet
+#
+# `POST /api/v1/bulletin/run/{agency_id}` schedules the real collection cycle
+# with `background_tasks.add_task(run_daily_cycle, ...)`, and Starlette's
+# TestClient runs background tasks SYNCHRONOUSLY before returning the response.
+# So a test asserting only "this route is guarded" executed a full live cycle
+# against BlueSky, GDELT and C-SPAN. On a CI runner those hang, and the suite
+# never reached a terminal state. Two separate test files hit it; reproduced
+# identically on an earlier commit, which is how it was established as a harness
+# defect rather than a product one.
+#
+# Both fixtures are OPT-IN. Made autouse for the whole suite they would be a far
+# wider change than the defect warrants; a module asks for them with
+# `pytestmark = pytest.mark.usefixtures("no_outbound_network")`.
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: Addresses a test may legitimately open: the in-process TestClient transport
+#: and a local database. Everything else is the Internet.
+_LOCAL_ADDRESSES = {"127.0.0.1", "::1", "localhost", "0.0.0.0"}
+
+
+@pytest.fixture
+def no_outbound_network(monkeypatch):
+    """Turn an escaped network call into a failure rather than a hang.
+
+    `no_collection_cycle` is what keeps those modules deterministic; this is
+    what proves it is still holding. Without it, a regression reintroduces a
+    CI hang and nothing points at the cause.
+    """
+    real_connect = socket.socket.connect
+
+    def guarded(self, address, *args, **kwargs):
+        host = address[0] if isinstance(address, tuple) else address
+        if isinstance(host, str) and host not in _LOCAL_ADDRESSES:
+            raise AssertionError(
+                f"An API-boundary test attempted an outbound connection to "
+                f"{host!r}. These tests must not depend on any third-party "
+                f"service; mock at the narrowest boundary, or mark the test "
+                f"`network` so the normal suite skips it.")
+        return real_connect(self, address, *args, **kwargs)
+
+    monkeypatch.setattr(socket.socket, "connect", guarded)
+
+
+@pytest.fixture
+def no_collection_cycle(monkeypatch):
+    """Exercise the /run route without running a collection cycle.
+
+    Patched where the ROUTE resolves it - `routes.run_daily_cycle`, bound at
+    import - not in `engine`, so the substitution is exactly as wide as the one
+    endpoint under test. The route, its guard, its agency lookup and its
+    response all remain the real ones; only the work it schedules is replaced.
+
+    Yields the list of calls, so a test can assert what the route asked for.
+    """
+    import app.bulletin_intelligence.routes as routes
+
+    called = []
+
+    async def _recorded(agency_id, auto_deliver=False, lookback_hours=72,
+                        *args, **kwargs):
+        called.append({"agency_id": agency_id, "auto_deliver": auto_deliver,
+                       "lookback_hours": lookback_hours})
+        return {"status": "mocked", "agency_id": agency_id}
+
+    monkeypatch.setattr(routes, "run_daily_cycle", _recorded)
+    return called
+
+
 # Status codes that both mean "correctly gated". FastAPI 0.140 returns 401 for a
 # missing credential where 0.115 returned 403; role refusal for an authenticated
 # principal is still 403. Asserting on one alone breaks across that upgrade.

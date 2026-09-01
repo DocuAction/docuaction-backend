@@ -13,7 +13,8 @@ from __future__ import annotations
 import pytest
 
 from app.reports.data.source_provenance import (
-    CLASSIFICATION_DEVELOPMENT, CLASSIFICATION_GOVERNMENT, DEV_CYCLE_PREFIX,
+    CLASSIFICATION_DEVELOPMENT, CLASSIFICATION_GOVERNMENT,
+    CLASSIFICATION_NONE, DEV_CYCLE_PREFIX,
     REASON_NO_INTAKE, REASON_UNUSABLE, SourceProvenance,
     authoritative_source_provenance, development_cycle_id, is_real_sha256,
     resolve_cycle_id)
@@ -173,11 +174,16 @@ class TestAuthoritativeLookup:
             status = "PARSED"
 
         class _Junk:
+            # `all()` as well as `first()`: provenance now resolves the
+            # classification against the intake, which reads the intake LIST.
+            # A fake that answers only one query shape would send that lookup
+            # down its failure path and prove nothing about classification.
             async def execute(self, *_a, **_k):
                 class R:
                     def scalars(self):
                         class S:
                             def first(self_inner): return _Row()
+                            def all(self_inner): return [_Row()]
                         return S()
                 return R()
 
@@ -204,6 +210,7 @@ class TestAuthoritativeLookup:
                     def scalars(self):
                         class S:
                             def first(self_inner): return _Row()
+                            def all(self_inner): return [_Row()]
                         return S()
                 return R()
 
@@ -211,7 +218,12 @@ class TestAuthoritativeLookup:
         assert p.sha256 == REAL
         assert p.record_count == 23566
         assert p.has_authoritative_hash is True
-        # development until the Government delivery is what Area 1 holds
+        # DEVELOPMENT, and this is now the stronger statement it looks like.
+        # The row this fake returns is the Government delivery by every visible
+        # measure — real SHA-256, the delivered filename, 23,566 records, the
+        # expected schema fingerprint — and it carries no authorisation marker.
+        # Looking exactly like the Government delivery does not classify a
+        # dataset as Government.
         assert p.data_classification == CLASSIFICATION_DEVELOPMENT
 
 
@@ -234,9 +246,15 @@ class TestDevelopmentWatermark:
         monkeypatch.setattr(
             "app.reports.data.report_data_service.ReportDataService",
             PopulatedService)
+        # `_classification` is now the NO-SESSION fallback; the function that
+        # decides when a session exists is `resolve_classification`. Patching
+        # the old name would leave the test asserting on a value the report
+        # never sees.
+        async def _fixed(_db):
+            return classification
+
         monkeypatch.setattr(
-            "app.reports.data.source_provenance._classification",
-            lambda: classification)
+            "app.reports.data.source_provenance.resolve_classification", _fixed)
         result = await generator.generate_report(
             FakeDB(), report_type="verification", persist=False)
         return result["html"]
@@ -308,7 +326,11 @@ class TestSnapshotCarriesProvenance:
 
         # never null — every report stored before Phase 7 had a null cycle
         assert snap.review_cycle_id
-        assert snap.data_classification == CLASSIFICATION_DEVELOPMENT
+        # NO_DATASET_LOADED, not DEVELOPMENT_TEST. This database is empty, and
+        # "development test data" asserts that development evidence exists —
+        # the same class of untruth as claiming Government data, pointed the
+        # other way. The template carries a distinct banner for this state.
+        assert snap.data_classification == CLASSIFICATION_NONE
         # and never a placeholder hash
         assert snap.rce_source_file_sha256 != "cafe"
         if snap.rce_source_file_sha256 is not None:

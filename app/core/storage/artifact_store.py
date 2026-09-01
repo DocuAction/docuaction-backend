@@ -344,17 +344,30 @@ class LocalFilesystemArtifactStore(ReportArtifactStore):
 class AzureBlobArtifactStore(ReportArtifactStore):
     """Azure Blob backend.
 
-    NOT EXERCISED. There is no storage account in `infra/` and
-    `azure-storage-blob` is not in requirements.txt, so this has never run
-    against Azure and is not claimed to work. It exists so the seam is real
-    rather than hypothetical, and so the configuration contract is written down.
+    Implemented and exercised against a real account in Step #18B. Before that
+    it was a declared seam whose every method raised, which made the local
+    filesystem the only working backend — and on App Service that means the
+    container's own writable layer, which does not survive a restart.
+
+    LAYOUT mirrors the local backend exactly, so a locator is readable and the
+    two stores are diffable:
+
+        <container>/<key>/<version>/artifact.<ext>      the bytes
+        <container>/<key>/<version>/artifact.json       the StoredArtifact record
+
+    IMMUTABILITY is enforced by the SERVICE, not by a check. Every write uses
+    `overwrite=False`, so a second write to an existing blob is refused by Azure
+    with `ResourceExistsError`. A check-then-write would have a window between
+    the two calls; this has none, and it holds with several writers.
 
     Credentials are never taken as arguments and never read from source. The
     account comes from `REPORT_ARTIFACT_AZURE_ACCOUNT` and the container from
-    `REPORT_ARTIFACT_AZURE_CONTAINER`; authentication is `DefaultAzureCredential`,
-    which resolves managed identity in Azure. A connection string is deliberately
-    not supported — it is the form of this configuration most likely to end up
-    in a log or a commit.
+    `REPORT_ARTIFACT_AZURE_CONTAINER`; authentication is
+    `DefaultAzureCredential`, which resolves the managed identity in Azure. A
+    connection string and an account key are deliberately not supported — they
+    are the forms of this configuration most likely to end up in a log or a
+    commit, and the DEV storage account has shared-key access disabled outright
+    so neither would work even if someone added one.
     """
 
     backend = "azure_blob"
@@ -366,8 +379,7 @@ class AzureBlobArtifactStore(ReportArtifactStore):
         if not self.account or not self.container:
             raise ArtifactStoreUnconfigured(
                 "Azure artifact storage needs REPORT_ARTIFACT_AZURE_ACCOUNT and "
-                "REPORT_ARTIFACT_AZURE_CONTAINER. No storage account is currently "
-                "provisioned in infra/, so this backend is not yet usable.")
+                "REPORT_ARTIFACT_AZURE_CONTAINER.")
 
     def _client(self):
         try:
@@ -375,29 +387,145 @@ class AzureBlobArtifactStore(ReportArtifactStore):
             from azure.storage.blob import BlobServiceClient
         except ImportError as exc:  # pragma: no cover - package not installed
             raise ArtifactStoreUnconfigured(
-                "azure-storage-blob and azure-identity are not installed. They "
-                "are deliberately absent from requirements.txt until a storage "
-                "account exists to talk to.") from exc
+                "azure-storage-blob and azure-identity are required for the "
+                "Azure artifact backend.") from exc
         return BlobServiceClient(
             account_url=f"https://{self.account}.blob.core.windows.net",
             credential=DefaultAzureCredential()).get_container_client(self.container)
 
+    #: `local://` names the filesystem backend; this names the blob one. The
+    #: locator carries the container so a record stays readable if the account
+    #: is ever renamed in configuration.
+    _SCHEME = "azureblob://"
+
+    def _blob_names(self, key: str, version: int, content_type: str):
+        ext = LocalFilesystemArtifactStore._EXT.get(content_type, "bin")
+        base = f"{key}/{version}"
+        return f"{base}/artifact.{ext}", f"{base}/artifact.json"
+
+    def _parse(self, locator: str):
+        """Split a locator, refusing anything that is not one of ours.
+
+        The same discipline as the local backend's `_resolve`: no caller
+        supplies a locator — they come from the registry row — but a locator
+        that tried to escape the container is refused regardless. A control that
+        relies on nobody ever passing the wrong thing is not a control.
+        """
+        if not locator.startswith(self._SCHEME):
+            raise ArtifactNotFound(f"{locator!r} is not an Azure blob locator")
+        rest = locator[len(self._SCHEME):]
+        parts = rest.split("/")
+        # container / key / version / filename
+        if len(parts) != 4:
+            raise ArtifactNotFound(f"{locator!r} is not a well-formed locator")
+        container, key, version, filename = parts
+        if container != self.container:
+            raise ArtifactNotFound(
+                f"{locator!r} names a different container")
+        validate_key(key)
+        if not version.isdigit() or filename.startswith(".") or ".." in rest:
+            raise ArtifactNotFound(f"{locator!r} is not a well-formed locator")
+        return f"{key}/{version}/{filename}"
+
+    def _record_from_json(self, raw: bytes) -> StoredArtifact:
+        data = json.loads(raw.decode("utf-8"))
+        retention = data.pop("retention", None) or {}
+        data.pop("deduplicated", None)
+        return StoredArtifact(
+            **data,
+            retention=RetentionPolicy(
+                classification=retention.get("classification",
+                                             "DEVELOPMENT_TEST"),
+                period_days=retention.get("period_days", 0),
+                worm_locked=bool(retention.get("worm_locked", False)),
+                basis=retention.get("basis")))
+
+    def versions(self, key: str) -> list:
+        from azure.core.exceptions import ResourceNotFoundError
+
+        validate_key(key)
+        client = self._client()
+        out = []
+        for blob in client.list_blobs(name_starts_with=f"{key}/"):
+            if not blob.name.endswith("/artifact.json"):
+                continue
+            try:
+                raw = client.download_blob(blob.name).readall()
+            except ResourceNotFoundError:  # pragma: no cover - racing cleanup
+                continue
+            out.append(self._record_from_json(raw))
+        out.sort(key=lambda record: record.version)
+        return out
+
     def put(self, key: str, content: bytes, *, content_type: str = "text/html",
             metadata: Optional[Dict[str, Any]] = None,
             retention: Optional[RetentionPolicy] = None) -> StoredArtifact:
-        raise ArtifactStoreUnconfigured(  # pragma: no cover
-            "The Azure backend has never been exercised against a real account "
-            "and must not be used until it has been. Provision storage, add the "
-            "packages, then implement and test this method.")
+        from azure.core.exceptions import ResourceExistsError
 
-    def get(self, locator: str) -> bytes:  # pragma: no cover
-        raise ArtifactStoreUnconfigured("Azure backend not exercised.")
+        validate_key(key)
+        if not isinstance(content, (bytes, bytearray)):
+            raise ArtifactStoreError("artifact content must be bytes")
+        content = bytes(content)
+        digest = content_sha256(content)
 
-    def head(self, locator: str) -> StoredArtifact:  # pragma: no cover
-        raise ArtifactStoreUnconfigured("Azure backend not exercised.")
+        existing = self.versions(key)
+        for record in existing:
+            if record.content_sha256 == digest:
+                # Same bytes already stored. Regenerating an unchanged report is
+                # normal; treating it as a collision would make the safe case
+                # look like the dangerous one.
+                return StoredArtifact(**{**record.to_dict(),
+                                         "retention": record.retention,
+                                         "deduplicated": True})
 
-    def versions(self, key: str) -> list:  # pragma: no cover
-        raise ArtifactStoreUnconfigured("Azure backend not exercised.")
+        client = self._client()
+        version = len(existing) + 1
+        while True:
+            blob_name, record_name = self._blob_names(key, version, content_type)
+            try:
+                # overwrite=False is the immutability guarantee. Another writer
+                # taking this version loses the race here rather than silently
+                # replacing what they wrote.
+                client.upload_blob(name=blob_name, data=content,
+                                   overwrite=False)
+                break
+            except ResourceExistsError:
+                version += 1
+
+        record = StoredArtifact(
+            artifact_id=str(uuid.uuid4()), key=key, version=version,
+            locator=f"{self._SCHEME}{self.container}/{blob_name}",
+            content_sha256=digest, size_bytes=len(content),
+            content_type=content_type,
+            stored_at=datetime.now(timezone.utc).isoformat(),
+            retention=retention or RetentionPolicy(),
+            metadata=dict(metadata or {}))
+        client.upload_blob(
+            name=record_name,
+            data=json.dumps(record.to_dict(), indent=2, sort_keys=True,
+                            default=str).encode("utf-8"),
+            overwrite=False)
+        return record
+
+    def get(self, locator: str) -> bytes:
+        from azure.core.exceptions import ResourceNotFoundError
+
+        name = self._parse(locator)
+        try:
+            return self._client().download_blob(name).readall()
+        except ResourceNotFoundError:
+            raise ArtifactNotFound(locator) from None
+
+    def head(self, locator: str) -> StoredArtifact:
+        from azure.core.exceptions import ResourceNotFoundError
+
+        name = self._parse(locator)
+        record_name = name.rsplit("/", 1)[0] + "/artifact.json"
+        try:
+            raw = self._client().download_blob(record_name).readall()
+        except ResourceNotFoundError:
+            raise ArtifactNotFound(locator) from None
+        return self._record_from_json(raw)
 
 
 # ── selection ────────────────────────────────────────────────────────────────

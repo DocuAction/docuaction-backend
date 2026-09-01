@@ -290,6 +290,13 @@ async def list_issues(
     resolution: Optional[str] = None,
     rule_id: Optional[str] = None,
     correction_authority: Optional[str] = None,
+    run_id: Optional[str] = Query(
+        None, description="Issues from ONE specific quality run. Defaults to "
+                          "the current (most recently completed) run."),
+    all_runs: bool = Query(
+        False, description="Return issues from EVERY quality run this delivery "
+                           "has had. An audit view: counts will include "
+                           "superseded assessments of the same records."),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -298,8 +305,14 @@ async def list_issues(
     from sqlalchemy import select
     from app.tefca_registry.rce import models as m
     from app.tefca_registry.rce.quality_engine import issue_summary
+    from app.tefca_registry.rce.run_selection import current_run, issues_filter
 
-    stmt = select(m.RceIssue).where(m.RceIssue.source_intake_id == intake_id)
+    # DEFAULT IS THE CURRENT RUN. A delivery may be quality-run more than once,
+    # and each run writes a full set of issues; returning the union by default
+    # would hand a caller the same records twice.
+    current = await current_run(db, intake_id)
+    stmt = select(m.RceIssue).where(
+        issues_filter(intake_id, run_id=run_id, all_runs=all_runs))
     for column, value in (("severity", severity), ("resolution", resolution),
                           ("rule_id", rule_id),
                           ("correction_authority", correction_authority)):
@@ -309,7 +322,11 @@ async def list_issues(
         stmt.order_by(m.RceIssue.issue_code).limit(limit).offset(offset)
     )).scalars().all()
     return {
-        "summary": await issue_summary(db, intake_id),
+        "run_scope": ("all_runs" if all_runs
+                      else ("run" if run_id else "current")),
+        "current_run_id": str(current.id) if current else None,
+        "summary": await issue_summary(db, intake_id, run_id=run_id,
+                                       all_runs=all_runs),
         "items": [{
             "id": str(r.id), "issue_code": r.issue_code,
             "source_record_id": str(r.source_record_id) if r.source_record_id else None,
@@ -425,8 +442,13 @@ async def lineage(
     if curated is None:
         raise HTTPException(404, f"No curated record {curated_id}")
     source = await db.get(m.RceSourceRecord, curated.source_record_id)
+    # The lineage of a curated record is the assessment it was built from — the
+    # current run — not every assessment the delivery has ever had.
+    from app.tefca_registry.rce.run_selection import current_issues_filter
+
     issues = (await db.execute(
         select(m.RceIssue).where(
+            current_issues_filter(curated.source_intake_id),
             m.RceIssue.source_record_id == curated.source_record_id))).scalars().all()
     corrections = (await db.execute(
         select(m.RceCorrectionDetail).where(

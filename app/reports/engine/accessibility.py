@@ -32,6 +32,7 @@ which assurances have been machine-checked and which have not.
 from __future__ import annotations
 
 import re
+import zlib
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -352,6 +353,43 @@ def validate_css_has_no_remote_fonts(css: str) -> AccessibilityResult:
     return result
 
 
+def _searchable(pdf_bytes: bytes) -> bytes:
+    """The PDF's bytes, plus the inflated contents of its compressed streams.
+
+    WHY THIS EXISTS
+    ───────────────
+    Scanning raw PDF bytes for `/StructTreeRoot` silently fails on any
+    compressed PDF. From PDF 1.5 a writer may place ordinary objects — the
+    catalog included, which is exactly where the structure tree, `/MarkInfo`
+    and `/Lang` live — inside a zlib-compressed OBJECT STREAM. The markers are
+    then present in the document and absent from its bytes.
+
+    WeasyPrint compresses by default, so the detector reported a correctly
+    tagged PDF as untagged: every marker False except `has_pdf_header`, which
+    sits in the one part of the file that is never compressed. That signature —
+    a valid header and nothing else — is the fingerprint of this bug rather
+    than of an untagged document.
+
+    Inflating is additive and cannot flip a marker from True to False: the raw
+    bytes are still searched, and anything that does not inflate is skipped.
+    """
+    blob = pdf_bytes or b""
+    if b"stream" not in blob:
+        return blob
+
+    parts = [blob]
+    for payload in re.findall(rb"stream[\r\n]+(.*?)endstream", blob, re.S):
+        for attempt in (payload, payload.rstrip(b"\r\n")):
+            try:
+                # decompressobj tolerates the trailing EOL a writer may leave
+                # after the compressed data.
+                parts.append(zlib.decompressobj().decompress(attempt))
+                break
+            except zlib.error:
+                continue
+    return b"".join(parts)
+
+
 def pdf_structure_report(pdf_bytes: bytes) -> Dict[str, Any]:
     """What can be established about a PDF's structure from its bytes alone.
 
@@ -361,10 +399,15 @@ def pdf_structure_report(pdf_bytes: bytes) -> Dict[str, Any]:
     tree or evaluate reading order, and it therefore cannot conclude that the
     document is accessible. `manual_review_required` is returned alongside every
     result so the limitation travels with the finding.
+
+    Compressed object streams are inflated first — see `_searchable`. Without
+    that, this function's answer depends on whether the writer compressed the
+    file rather than on whether the document is tagged.
     """
-    blob = pdf_bytes or b""
+    raw = pdf_bytes or b""
+    blob = _searchable(raw)
     markers = {
-        "has_pdf_header": blob.startswith(b"%PDF-"),
+        "has_pdf_header": raw.startswith(b"%PDF-"),
         "has_structure_tree": b"/StructTreeRoot" in blob,
         "marked_as_tagged": b"/Marked" in blob,
         "has_language": b"/Lang" in blob,

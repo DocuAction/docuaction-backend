@@ -47,6 +47,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import func, select
 
 from app.tefca_registry.rce import models as m
+from app.tefca_registry.rce import run_selection
 from app.tefca_registry.rce.field_map import FIELD_MAP_VERSION
 from app.tefca_registry.rce.quality_rules import AUTO_SAFE_RULES
 
@@ -66,6 +67,27 @@ CLEAN, CORRECTED, HELD, REJECTED = "CLEAN", "CORRECTED", "HELD", "REJECTED"
 #: Severities that HOLD a record until a human resolves them. A record carrying
 #: an unresolved issue at one of these levels never reaches verification.
 HOLDING_SEVERITIES = frozenset({"CRITICAL", "HIGH"})
+
+#: Resolutions that mean the question is still open in substance. PROPOSED is in
+#: here deliberately: the state machine is
+#:     OPEN -> PROPOSED -> APPROVED | REJECTED | WAIVED -> RESOLVED
+#: so PROPOSED is an analyst's suggestion that nobody has decided on. Keying the
+#: hold on OPEN alone released a record the moment an analyst touched it, which
+#: is the opposite of what holding is for. A NULL resolution counts as undecided
+#: so the predicate fails closed.
+UNDECIDED_RESOLUTIONS = frozenset({"OPEN", "PROPOSED", "UNDER_REVIEW"})
+
+
+def blocks_promotion(severity: Optional[str], resolution: Optional[str]) -> bool:
+    """Does this issue hold its record back from promotion and verification?
+
+    One definition, used by both curate_delivery (at curation time) and
+    recompute_hold_status (afterwards). They set the same flag from different
+    code paths, and the original defect existed in only one of them - which is
+    what happens when the rule gets written out twice.
+    """
+    return (severity in HOLDING_SEVERITIES
+            and (resolution or "OPEN") in UNDECIDED_RESOLUTIONS)
 
 #: Fields whose modification is an identity or relationship change. Listed
 #: explicitly so the AUTO_SAFE guard is a membership test rather than a
@@ -201,10 +223,16 @@ async def curate_delivery(db, intake_id, *, run_id=None,
     if intake is None:
         raise ValueError(f"No intake {intake_id}")
 
-    # Issues by source record, fetched once.
+    # Issues by source record, fetched once — from ONE quality run.
+    #
+    # A delivery may be quality-run more than once, and every run writes a full
+    # set of issues. Filtering on the intake alone would build Area 2 from two
+    # assessments at once: issue_count doubled, and a record held by a finding
+    # that the newer run no longer makes. `run_id` was already a parameter here
+    # and was only echoed back; this is what it was for.
     issue_rows = (await db.execute(
         select(m.RceIssue).where(
-            m.RceIssue.source_intake_id == intake_id,
+            run_selection.issues_filter(intake_id, run_id=run_id),
             m.RceIssue.source_record_id.isnot(None)))).scalars().all()
     by_record: Dict[Any, List[Any]] = {}
     for issue in issue_rows:
@@ -302,7 +330,7 @@ async def curate_delivery(db, intake_id, *, run_id=None,
                 applied += 1
 
             blocking = [i for i in issues
-                        if i.resolution == "OPEN" and i.severity in HOLDING_SEVERITIES]
+                        if blocks_promotion(i.severity, i.resolution)]
             row["issue_count"] = len(issues)
             row["correction_count"] = applied
             if blocking:
@@ -503,22 +531,26 @@ async def apply_correction(db, issue_id, *, actor: str,
     }
 
 
-async def recompute_hold_status(db, intake_id) -> Dict[str, Any]:
+async def recompute_hold_status(db, intake_id, *, run_id=None) -> Dict[str, Any]:
     """Re-derive CLEAN/CORRECTED/HELD after issues have been resolved.
 
     A record stops being HELD when nothing at holding severity remains OPEN. Run
     after a batch of analyst resolutions so promotion sees current state.
+
+    Scoped to ONE quality run, for the same reason `curate_delivery` is: a
+    superseded run's unresolved finding must not hold a record the current run
+    no longer objects to.
     """
     curated = (await db.execute(
         select(m.RceCuratedRecord).where(
             m.RceCuratedRecord.source_intake_id == intake_id))).scalars().all()
-    open_rows = (await db.execute(
-        select(m.RceIssue.source_record_id, m.RceIssue.severity)
-        .where(m.RceIssue.source_intake_id == intake_id,
-               m.RceIssue.resolution == "OPEN"))).all()
+    undecided_rows = (await db.execute(
+        select(m.RceIssue.source_record_id, m.RceIssue.severity,
+               m.RceIssue.resolution)
+        .where(run_selection.issues_filter(intake_id, run_id=run_id)))).all()
     blocking: Dict[Any, int] = {}
-    for record_id, severity in open_rows:
-        if severity in HOLDING_SEVERITIES and record_id is not None:
+    for record_id, severity, resolution in undecided_rows:
+        if record_id is not None and blocks_promotion(severity, resolution):
             blocking[record_id] = blocking.get(record_id, 0) + 1
 
     changed = 0

@@ -52,6 +52,11 @@ TARGETS = [
     "app/tefca_registry/rce/routes.py",
     "app/reports/routes.py",
     "app/api/admin.py",
+    # Added with Task 5 priority reviews: this module now defers the imports of
+    # the priority service, the assignment service and the QA gate, and a typo
+    # in any of them would reach a COR-directed review as a bare 500.
+    "app/tefca_registry/review_routes.py",
+    "app/tefca_registry/priority_review.py",
 ]
 
 
@@ -82,7 +87,16 @@ def test_every_deferred_app_import_resolves(relpath):
         except Exception as exc:  # noqa: BLE001
             broken.append(f"{module_name} (import failed: {type(exc).__name__})")
             continue
-        if not hasattr(module, attr):
+        if hasattr(module, attr):
+            continue
+        # `from package import submodule` is the other legal form, and it is
+        # what most deferred imports in this codebase actually are. The
+        # submodule is NOT an attribute of the package until something imports
+        # it, so `hasattr` alone reported working code as broken. Import it and
+        # see: this asks the same question the real statement asks.
+        try:
+            importlib.import_module(f"{module_name}.{attr}")
+        except Exception:  # noqa: BLE001
             broken.append(f"{module_name}.{attr}")
 
     assert not broken, (

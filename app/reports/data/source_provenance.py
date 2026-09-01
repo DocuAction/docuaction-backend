@@ -115,8 +115,26 @@ class SourceProvenance:
         return d
 
 
+def _from_identity(identity) -> str:
+    """One mapping from data identity to report classification.
+
+    Shared by the database-backed path and the no-session fallback so the two
+    cannot answer differently for the same identity.
+    """
+    from app.Tefca.data_state import DataIdentity
+
+    if identity is DataIdentity.GOVERNMENT:
+        return CLASSIFICATION_GOVERNMENT
+    if identity is DataIdentity.NONE:
+        # Empty production. Saying DEVELOPMENT_TEST here would assert that
+        # development evidence exists, which is the same class of untruth this
+        # correction exists to remove — just pointing the other way.
+        return CLASSIFICATION_NONE
+    return CLASSIFICATION_DEVELOPMENT
+
+
 def _classification() -> str:
-    """GOVERNMENT only when an authorised Government dataset is actually loaded.
+    """The classification available WITHOUT a database session.
 
     This used to read `is_running_mock()` and treat "not mock" as "Government".
     Once that flag stopped meaning "no dataset configured" and started meaning
@@ -124,29 +142,55 @@ def _classification() -> str:
     a clean PRODUCTION report as GOVERNMENT — the opposite of the defect being
     corrected, and a worse one.
 
-    It now reads the data-state model, where GOVERNMENT requires a controlled
-    intake with complete provenance. Anything else is development: an empty
-    production deployment produces no Government-classified report, because it
-    has no Government data to report on.
+    It reads `data_state_sync()`, which by construction cannot verify an intake
+    and therefore NEVER returns GOVERNMENT. That is correct for a caller with no
+    session — understating is the safe direction — and it is why a caller that
+    HAS a session must use `resolve_classification` instead. See the note there.
     """
     try:
-        from app.Tefca.data_state import DataIdentity, data_state_sync
+        from app.Tefca.data_state import data_state_sync
 
-        identity = data_state_sync().data_identity
-        if identity is DataIdentity.GOVERNMENT:
-            return CLASSIFICATION_GOVERNMENT
-        if identity is DataIdentity.NONE:
-            # Empty production. Saying DEVELOPMENT_TEST here would assert that
-            # development evidence exists, which is the same class of untruth
-            # this correction exists to remove — just pointing the other way.
-            return CLASSIFICATION_NONE
-        return CLASSIFICATION_DEVELOPMENT
+        return _from_identity(data_state_sync().data_identity)
     except Exception as exc:  # noqa: BLE001
         # Unknown means development. Defaulting the other way would let an
         # import failure silently upgrade a development report to a
         # Government-labelled one.
         logger.warning("data classification unavailable, assuming development: %s", exc)
         return CLASSIFICATION_DEVELOPMENT
+
+
+async def resolve_classification(db) -> str:
+    """The classification, resolved against the intake itself.
+
+    THE DEFECT THIS CORRECTS
+    ────────────────────────
+    `authoritative_source_provenance` has a database session and was calling
+    `_classification()`, which has none. That helper reads `data_state_sync()`,
+    whose own docstring says it "never claims GOVERNMENT" — so no report on any
+    deployment could ever be classified GOVERNMENT, however properly authorised
+    its intake. In development the answer happened to be right; in a production
+    deployment holding an authorised delivery it would have been wrong, and
+    wrong in the direction that strips the handling the label exists to require.
+
+    WHAT THIS DOES NOT CHANGE
+    ─────────────────────────
+    `resolve_data_state` still requires a controlled intake carrying the
+    Government authorisation marker. Data that merely LOOKS like the Government
+    delivery — right hash, right schema, right record count — is not authorised
+    by looking right, and this function has no opinion about that. It asks; it
+    does not decide.
+
+    A failure to ask falls back to the no-session answer rather than guessing,
+    which can only ever understate.
+    """
+    try:
+        from app.Tefca.data_state import resolve_data_state
+
+        return _from_identity((await resolve_data_state(db)).data_identity)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("data state unavailable, falling back to the "
+                       "session-free classification: %s", exc)
+        return _classification()
 
 
 async def authoritative_source_provenance(db) -> SourceProvenance:
@@ -159,7 +203,7 @@ async def authoritative_source_provenance(db) -> SourceProvenance:
     """
     from app.tefca_registry.rce.models import RceSourceIntake
 
-    classification = _classification()
+    classification = await resolve_classification(db)
     try:
         row = (await db.execute(
             select(RceSourceIntake)

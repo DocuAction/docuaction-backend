@@ -55,10 +55,46 @@ BATCH_SIZE = 2000
 ISSUE_INSERT_BATCH = 2000
 
 
-def issue_code(sequence: int, when: Optional[datetime] = None) -> str:
-    """DQ-YYYYMMDD-NNNNNN."""
+def issue_code(sequence: int, when: Optional[datetime] = None,
+               run_ref: Optional[Any] = None) -> str:
+    """DQ-YYYYMMDD-RRRRRRRR-NNNNNN, where RRRRRRRR identifies the RUN.
+
+    THE DATE IS NOT A NAMESPACE
+    ───────────────────────────
+    `sequence` restarts at 1 on every run, so a code built from the date alone
+    is only unique while at most one run happens per calendar day.
+    `rce_issues.issue_code` is globally unique (`ix_rce_issues_issue_code`), so
+    the SECOND legitimate run on a date — a second ONC delivery, or a re-run
+    after a rule change — collides on its very first issue and is refused
+    outright. Measured: delivery A wrote 17 issues, delivery B on the same date
+    was refused with 0 rows persisted.
+
+    That is not a hypothetical. `RceIngestionRun` exists precisely because a
+    delivery "may be processed many times as rules improve", and September is
+    the first month two deliveries could plausibly be processed on one day.
+
+    THE RUN ID IS THE NAMESPACE, AND IT ALREADY EXISTS
+    `run_ref` is the run's own UUID — already generated, already stored on every
+    issue as `run_id`. Its first 8 hex characters discriminate concurrent and
+    same-day runs without a counter, a MAX()+1 read, a retry loop or a sleep,
+    none of which would be safe under concurrency. Two runs cannot share a
+    prefix by construction, and the unique index remains the final boundary
+    rather than something this format is trusted to replace.
+
+    Determinism is preserved WITHIN a run: the sequence is still assigned by
+    (line number, rule id) ordering, so two runs over the same delivery and rule
+    set remain diffable position by position.
+
+    `run_ref=None` keeps the historical two-part format. Nothing in the
+    application relies on it — no foreign key references `issue_code`, and no
+    code parses it — but the 36,916 delivered codes already written in that
+    shape are never rewritten, and this keeps the old form expressible.
+    """
     stamp = (when or datetime.now(timezone.utc)).strftime("%Y%m%d")
-    return f"DQ-{stamp}-{sequence:06d}"
+    if run_ref is None:
+        return f"DQ-{stamp}-{sequence:06d}"
+    ref = getattr(run_ref, "hex", None) or str(run_ref).replace("-", "")
+    return f"DQ-{stamp}-{ref[:8]}-{sequence:06d}"
 
 
 async def _build_dataset_context(db, intake_id) -> Dict[str, Any]:
@@ -274,7 +310,7 @@ def _issue_row(finding: Finding, intake_id, record_id, run_id, sequence: int,
 
     rule = RULE_BY_ID.get(finding.rule_id)
     return {
-        "issue_code": issue_code(sequence, stamp),
+        "issue_code": issue_code(sequence, stamp, run_ref=run_id),
         "source_intake_id": intake_id,
         "source_record_id": record_id,
         "run_id": run_id,
@@ -299,24 +335,31 @@ async def _flush_issues(db, rows: List[Dict[str, Any]]) -> None:
         await db.execute(m.RceIssue.__table__.insert(), rows)
 
 
-async def issue_summary(db, intake_id) -> Dict[str, Any]:
-    """Counts by severity, rule and resolution for one delivery."""
+async def issue_summary(db, intake_id, *, run_id=None,
+                        all_runs: bool = False) -> Dict[str, Any]:
+    """Counts by severity, rule and resolution for one delivery.
+
+    Scoped to the CURRENT quality run by default. Summing across every run a
+    delivery has ever had would report one population twice — see
+    `app.tefca_registry.rce.run_selection`. `all_runs=True` is the explicit
+    audit view.
+    """
+    from app.tefca_registry.rce import run_selection
+
+    scope = run_selection.issues_filter(intake_id, run_id=run_id,
+                                        all_runs=all_runs)
     by_severity = dict((await db.execute(
         select(m.RceIssue.severity, func.count())
-        .where(m.RceIssue.source_intake_id == intake_id)
-        .group_by(m.RceIssue.severity))).all())
+        .where(scope).group_by(m.RceIssue.severity))).all())
     by_rule = dict((await db.execute(
         select(m.RceIssue.rule_id, func.count())
-        .where(m.RceIssue.source_intake_id == intake_id)
-        .group_by(m.RceIssue.rule_id))).all())
+        .where(scope).group_by(m.RceIssue.rule_id))).all())
     by_resolution = dict((await db.execute(
         select(m.RceIssue.resolution, func.count())
-        .where(m.RceIssue.source_intake_id == intake_id)
-        .group_by(m.RceIssue.resolution))).all())
+        .where(scope).group_by(m.RceIssue.resolution))).all())
     by_authority = dict((await db.execute(
         select(m.RceIssue.correction_authority, func.count())
-        .where(m.RceIssue.source_intake_id == intake_id)
-        .group_by(m.RceIssue.correction_authority))).all())
+        .where(scope).group_by(m.RceIssue.correction_authority))).all())
     total = sum(by_severity.values())
     return {
         "total": total,
