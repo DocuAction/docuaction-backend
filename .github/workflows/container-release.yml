@@ -103,7 +103,18 @@ jobs:
       - name: Required runtime dependencies are present in the image
         run: |
           IMG="candidate:${{ steps.identity.outputs.tag }}"
-          docker run --rm --entrypoint python "$IMG" -c "import app.main; print('application imports OK')"
+          # app.main imports app.core.config, which fails CLOSED when SECRET_KEY
+          # or DATABASE_URL is absent. That is correct behaviour and is not being
+          # weakened here - the check simply has to supply configuration to observe
+          # an import at all. Synthetic throwaway values, the same shape the /health
+          # smoke below uses: no real credential, and nothing pointing at DEV, PROD
+          # or any Government database. Settings are validated at import; no
+          # connection is opened.
+          docker run --rm --entrypoint python -e ENVIRONMENT=test -e SECRET_KEY=smoke-test-not-a-real-key-0000000000000000000000000000000000000000 -e DATABASE_URL='postgresql+asyncpg://smoke:smoke@127.0.0.1:5432/smoke' "$IMG" -c "import app.main; print('application imports OK')"
+          # The remaining checks import third-party packages, or pdf_engine, which
+          # imports only the standard library. They deliberately get NO
+          # configuration: injecting it everywhere would hide a module that had
+          # quietly grown a settings dependency.
           docker run --rm --entrypoint python "$IMG" -c "import gunicorn, uvicorn; print('gunicorn + uvicorn OK')"
           docker run --rm --entrypoint python "$IMG" -c "import alembic; print('alembic OK')"
           docker run --rm --entrypoint python "$IMG" -c "import azure.storage.blob, azure.identity; print('azure deps OK')"
@@ -120,7 +131,7 @@ jobs:
           # --network host so the container can reach the Postgres service the
           # job published on the runner. Synthetic throwaway configuration only:
           # nothing here is a real credential, and nothing points at DEV or PROD.
-          docker run -d --name candidate --network host -e ENVIRONMENT=test -e SECRET_KEY=smoke-test-not-a-real-key-000000000000000000000000000000000000 -e ALLOWED_HOSTS='*' -e ALLOWED_ORIGINS='*' -e DATABASE_URL='postgresql+asyncpg://smoke:smoke@127.0.0.1:5432/smoke' -e PORT=8080 "$IMG"
+          docker run -d --name candidate --network host -e ENVIRONMENT=test -e SECRET_KEY=smoke-test-not-a-real-key-0000000000000000000000000000000000000000 -e ALLOWED_HOSTS='*' -e ALLOWED_ORIGINS='*' -e DATABASE_URL='postgresql+asyncpg://smoke:smoke@127.0.0.1:5432/smoke' -e PORT=8080 "$IMG"
           echo "waiting for /health ..."
           CODE=000
           for i in $(seq 1 40); do
