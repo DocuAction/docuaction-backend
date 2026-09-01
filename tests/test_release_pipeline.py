@@ -516,20 +516,25 @@ def test_the_deployment_emits_no_secret_values_to_the_log():
 
 def test_the_acceptance_probe_targets_a_route_the_application_defines():
     """The probe asserted an anonymous caller is refused, but aimed at
-    /api/tefca/arc/entities - a path the ARC router never defines. It returned
-    404, not 401, so the check failed and rolled a healthy candidate back
-    (run 33534309456). The assertion was right; the URL was wrong.
+    /api/tefca/arc/entities - which the ARC router does not serve. It defines
+    /entities/{entity_id}/verification-coverage, NOT an /entities collection, so
+    the probe got 404 instead of 401 and rolled back a candidate that had
+    already deployed and reported healthy (run 33534309456).
 
-    Pinned against the router source rather than a hardcoded list, so renaming
-    the route breaks this test instead of the next deployment."""
+    The path must be CONCRETE - no {placeholders} - because the probe sends a
+    fixed URL with no ids to substitute. Matching only the first segment is not
+    enough: that is what made `entities` look valid when it is merely the prefix
+    of a parameterised route.
+    """
     import re
     body = _steps_text(_job(DEPLOY, "deploy-dev"))
     probe = next(l for l in body.splitlines()
                  if "http_code" in l and "/api/tefca/arc/" in l)
-    path = re.search(r"/api/tefca/arc/([A-Za-z0-9\-_]+)", probe).group(1)
-    src = os.path.join(REPO, "app", "tefca_registry", "review_routes.py")
-    routes = set(re.findall(r'@router\.(?:get|post|put|patch|delete)\("/([A-Za-z0-9\-_]+)',
-                            io.open(src, encoding="utf-8").read()))
-    assert path in routes, (
-        f"the acceptance probe hits /api/tefca/arc/{path}, which the ARC router "
-        f"does not define; it defines {sorted(routes)}")
+    path = re.search(r"/api/tefca/arc/([^\"'\s)]*)", probe).group(1)
+    src = io.open(os.path.join(REPO, "app", "tefca_registry", "review_routes.py"),
+                  encoding="utf-8").read()
+    declared = re.findall(r'@router\.(?:get|post|put|patch|delete)\("/([^"]*)"', src)
+    concrete = {r for r in declared if "{" not in r}
+    assert path in concrete, (
+        f"the acceptance probe hits /api/tefca/arc/{path}, which is not a "
+        f"concrete route on the ARC router. Concrete routes: {sorted(concrete)}")
