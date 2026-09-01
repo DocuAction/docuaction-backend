@@ -281,6 +281,16 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Capture the current Alembic revision
+        # Gated on the SAME input as the migration below, because that is the
+        # only thing it exists to serve: it records the revision to come back
+        # to if a migration has to be undone. Ungated it made EVERY deployment
+        # require PostgreSQL connectivity, including image-only ones that touch
+        # no schema - and GitHub-hosted runners have no network path to the DEV
+        # database (its firewall lists App Service outbound addresses only).
+        # So an image-only deploy failed here, before the image ever changed,
+        # for a revision nobody was going to use. Migrations run out of band
+        # through the authorised DBA path; this deployment ships an image.
+        if: github.event.inputs.run_migrations == 'true'
         run: |
           # Recorded before migrating so the exact starting revision is known
           # if a downgrade is ever needed.

@@ -363,3 +363,44 @@ def test_every_input_reference_names_a_declared_input(path):
     assert not undeclared, (
         f"{os.path.basename(path)} reads workflow input(s) it never declares: "
         f"{sorted(undeclared)} (declared: {sorted(declared)})")
+
+
+# ── an image-only deployment must not need a database ────────────────────────
+
+def test_an_image_only_deployment_touches_no_database():
+    """With run_migrations=false the deploy job must open no PostgreSQL
+    connection at all.
+
+    The revision-capture step used to run unconditionally, so EVERY deployment
+    required MIGRATION_DATABASE_URL and DB connectivity - including image-only
+    ones that change no schema. GitHub-hosted runners have no route to the DEV
+    database: its firewall lists App Service outbound addresses only. The job
+    therefore died at that step, before the image changed, collecting a
+    revision nobody was going to use.
+
+    Migrations are run out of band through the authorised DBA path. Anything
+    here that speaks to the database must say so by being gated on
+    run_migrations, so that the image-only path stays database-free.
+    """
+    offenders = []
+    for step in _job(DEPLOY, "deploy-dev")["steps"]:
+        body = (step.get("run") or "")
+        if "alembic" in body or "MIGRATION_DATABASE_URL" in body:
+            if "run_migrations" not in str(step.get("if") or ""):
+                offenders.append(step.get("name"))
+    assert not offenders, (
+        f"deploy-dev step(s) {offenders} reach the database but are not gated "
+        f"on run_migrations, so an image-only deployment would still need "
+        f"database connectivity it does not have")
+
+
+def test_the_migration_path_is_still_fail_closed_when_requested():
+    """Gating must not have loosened the migration path itself: when migrations
+    ARE requested they still run as the schema owner, still name the runtime
+    role, and still refuse to swallow a failed revision read."""
+    body = _step_named(DEPLOY, "deploy-dev", "Capture the current Alembic")["run"]
+    assert "alembic current" in body
+    assert "||" not in body, "a swallowed failure records no starting revision"
+    migrate = _step_named(DEPLOY, "deploy-dev", "Run approved migrations")
+    assert migrate.get("env", {}).get("DB_APP_ROLE") == "docuaction_app"
+    assert "MIGRATION_DATABASE_URL" in (migrate.get("run") or "")
