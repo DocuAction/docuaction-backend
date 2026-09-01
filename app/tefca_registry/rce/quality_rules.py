@@ -47,7 +47,7 @@ from app.tefca_registry.rce.field_map import (
     SUSPECTED_PURPOSE_VARIANTS,
 )
 
-RULE_SET_VERSION = "1.0.0"
+RULE_SET_VERSION = "1.1.0"
 
 # ── categories ───────────────────────────────────────────────────────────────
 
@@ -442,6 +442,33 @@ def _fmt_005(ctx: RecordContext) -> List[Finding]:
         NO_CORRECTION, field_name="contact_phone", original_value=value)]
 
 
+def _fmt_007(ctx: RecordContext) -> List[Finding]:
+    """Organisation phone completeness. The exact counterpart of FMT-005.
+
+    `contact_phone` has had a digit-count observation since 1.0.0; the
+    organisation's own `phone` had none, so a fragment in one field was recorded
+    and the identical fragment in the other was not. The delivery populates
+    `phone` on 84 of 23,566 records, which is why the omission never surfaced.
+
+    This OBSERVES and never repairs: a partial number is preserved exactly as
+    delivered, the finding is INFORMATIONAL, and it carries NO_CORRECTION. It
+    says nothing about the organisation — only that the delivered value is too
+    short to be a complete number.
+    """
+    value = ctx.get("phone")
+    if not value:
+        return []
+    digits = re.sub(r"\D", "", value)
+    if len(digits) >= 10:
+        return []
+    return [Finding(
+        "FMT-007", "ORG_PHONE_FRAGMENT", INFO,
+        f"Organisation phone {value!r} holds {len(digits)} digits — too few for "
+        f"a complete number. Preserved as delivered; a partial number is never "
+        f"reconstructed.",
+        NO_CORRECTION, field_name="phone", original_value=value)]
+
+
 def _fmt_006(ctx: RecordContext) -> List[Finding]:
     value = ctx.get("contact_email")
     if not value or re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", value):
@@ -672,6 +699,8 @@ RULES: Tuple[Rule, ...] = (
          "Contact phone complete", _fmt_005, INFO),
     Rule("FMT-006", CAT_FORMAT, "1.0.0",
          "Contact email well-formed", _fmt_006, LOW),
+    Rule("FMT-007", CAT_FORMAT, "1.0.0",
+         "Organisation phone complete", _fmt_007, INFO),
     Rule("CON-001", CAT_CONTENT, "1.0.0", "domains value", _con_001, INFO),
     Rule("CON-002", CAT_CONTENT, "1.0.0",
          "Exchange Purpose present and canonical", _con_002, INFO),
@@ -725,9 +754,10 @@ def _assert_rule_ids_unique() -> None:
     nothing about rule ids. Failing at import turns that into a one-line error
     before anything runs.
 
-    NOTE FOR WHOEVER ADDS THE NEXT RULE: FMT-005 and FMT-006 are ALREADY TAKEN
-    ("Contact phone complete", "Contact email well-formed"). Next free ids are
-    FMT-007, CON-006 and BUS-004 — see `next_available_rule_ids()`.
+    NOTE FOR WHOEVER ADDS THE NEXT RULE: FMT-005, FMT-006 and FMT-007 are
+    ALREADY TAKEN ("Contact phone complete", "Contact email well-formed",
+    "Organisation phone complete"). Ask `next_available_rule_ids()` rather than
+    reading this line — it is derived, this note is not.
     """
     seen: Dict[str, int] = {}
     for rule in RULES:

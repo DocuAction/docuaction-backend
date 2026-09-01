@@ -45,7 +45,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import func, select
+from sqlalchemy import or_, true as sa_true, func, select
 
 from app.tefca_registry import models as reg
 from app.tefca_registry.rce import models as m
@@ -199,27 +199,70 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
     skipped_status: Dict[str, int] = {}
     oid_to_entity: Dict[str, uuid.UUID] = dict(existing_by_oid)
     promoted_pairs: List[Tuple[Any, uuid.UUID]] = []
+    #: Rows this run will never promote (HELD/REJECTED/missing key). Held so the
+    #: drain loop cannot re-select them forever.
+    unpromotable: set = set()
 
     # ── pass 1 — entities, identifiers, contacts ──
-    for offset in range(0, total, BATCH_SIZE):
+    #
+    # DRAIN, DO NOT PAGINATE. This loop commits every batch and sets
+    # canonical_entity_id as it goes, so it is walking a set it is itself
+    # shrinking. LIMIT/OFFSET over that re-presented a row that had already been
+    # promoted earlier in the same run: the second visit found no entry in
+    # oid_to_entity, created a SECOND entity for the same rce_org_oid, and died
+    # on the unique index over (identifier_type, identifier_value, system_uri) --
+    # partway through, with earlier batches already committed.
+    #
+    # Selecting only rows that still need promotion makes the loop idempotent:
+    # it terminates when nothing is left, a re-run after a failure resumes
+    # instead of restarting, and no row can be visited twice.
+    while True:
         rows = (await db.execute(
             select(m.RceCuratedRecord)
-            .where(m.RceCuratedRecord.source_intake_id == intake_id)
+            .where(m.RceCuratedRecord.source_intake_id == intake_id,
+                   m.RceCuratedRecord.canonical_entity_id.is_(None),
+                   m.RceCuratedRecord.id.notin_(unpromotable) if unpromotable
+                   else sa_true())
             .order_by(m.RceCuratedRecord.id)
-            .limit(BATCH_SIZE).offset(offset))).scalars().all()
+            .limit(BATCH_SIZE))).scalars().all()
+        if not rows:
+            break
+        progressed = False
 
         for row in rows:
+            # A row that cannot be promoted keeps `canonical_entity_id` NULL, so
+            # it stays in the drain query's result set forever unless it is
+            # recorded here. Without this the last iteration — the one where only
+            # HELD rows are left — re-selects the same rows on every pass and the
+            # loop never terminates, so the Area 1 marking below and pass 2 are
+            # never reached.
             if row.record_status not in PROMOTABLE_STATUSES:
                 skipped_status[row.record_status] = \
                     skipped_status.get(row.record_status, 0) + 1
+                unpromotable.add(row.id)
                 continue
             if not row.rce_org_oid or not row.name:
                 skipped_status["MISSING_KEY"] = skipped_status.get("MISSING_KEY", 0) + 1
+                unpromotable.add(row.id)
                 continue
 
             entity_id = oid_to_entity.get(row.rce_org_oid)
             entity_type = _HL7_ROLE_TO_ENTITY_TYPE.get(
                 (row.hl7_org_role or "").strip(), DEFAULT_ENTITY_TYPE)
+
+            if entity_id is None:
+                # Safety net, independent of the in-memory map. If an identifier
+                # row for this oid already exists, adopt its entity rather than
+                # creating a rival one -- creating the rival is what violated the
+                # unique index and aborted promotion mid-delivery.
+                found = (await db.execute(
+                    select(reg.TefcaEntityIdentifier.entity_id).where(
+                        reg.TefcaEntityIdentifier.identifier_type == "rce_org_oid",
+                        reg.TefcaEntityIdentifier.identifier_value == row.rce_org_oid)
+                    .limit(1))).scalar_one_or_none()
+                if found is not None:
+                    entity_id = found
+                    oid_to_entity[row.rce_org_oid] = entity_id
 
             if entity_id is None:
                 entity_id = uuid.uuid4()
@@ -326,15 +369,39 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
             row.canonical_entity_id = entity_id
             row.promoted_at = datetime.utcnow()
             promoted_pairs.append((row.source_record_id, entity_id))
+            progressed = True
 
         await db.commit()
+        if not progressed:
+            # Every row in this batch was unpromotable. They are now all in
+            # `unpromotable`, so the next iteration's query excludes them and the
+            # candidate set strictly shrinks — this cannot spin.
+            continue
 
     # Mark the Area 1 rows promoted — the only column on a source record that
     # the pipeline writes after intake, and deliberately so: it is a POINTER,
     # not a change to delivered content.
-    for start in range(0, len(promoted_pairs), BATCH_SIZE):
-        chunk = promoted_pairs[start:start + BATCH_SIZE]
-        for source_record_id, entity_id in chunk:
+    # DERIVED FROM THE DATABASE, NOT FROM THIS RUN. Marking only the pairs this
+    # invocation happened to promote left Area 1 permanently behind Area 2 when
+    # an earlier run aborted partway: those records were promoted, but no later
+    # run knew to mark them, and reconciliation's "Area 1 promotion markers agree
+    # with Area 2" check failed with no way to recover. Re-deriving the work from
+    # rce_curated_records makes this loop self-healing and idempotent - it marks
+    # whatever is still unmarked, whichever run promoted it.
+    while True:
+        pending = (await db.execute(
+            select(m.RceCuratedRecord.source_record_id,
+                   m.RceCuratedRecord.canonical_entity_id)
+            .join(m.RceSourceRecord,
+                  m.RceSourceRecord.id == m.RceCuratedRecord.source_record_id)
+            .where(m.RceCuratedRecord.source_intake_id == intake_id,
+                   m.RceCuratedRecord.canonical_entity_id.isnot(None),
+                   or_(m.RceSourceRecord.promotion_status.is_(None),
+                       m.RceSourceRecord.promotion_status != "promoted"))
+            .limit(BATCH_SIZE))).all()
+        if not pending:
+            break
+        for source_record_id, entity_id in pending:
             record = await db.get(m.RceSourceRecord, source_record_id)
             if record is not None:
                 record.promotion_status = "promoted"

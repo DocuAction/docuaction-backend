@@ -14,9 +14,11 @@ outcomes, so nothing here is public.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +29,67 @@ from app.core.security import require_role
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/reports", tags=["Reports"])
+
+
+# ── one place that builds a download response ────────────────────────────────
+#
+# There were four, and they disagreed. The CSV route set a filename from a
+# report id with no sanitising, the HTML route set no disposition at all, and
+# only the artifact route said anything about caching. A header that matters for
+# safety cannot be re-decided per route.
+
+#: Characters allowed in a download filename. A report identifier reaches the
+#: filename, and a header value carrying a quote, a newline or a semicolon is
+#: header injection — the browser would read whatever followed as another
+#: directive. Everything outside this set becomes an underscore.
+_FILENAME_SAFE = re.compile(r"[^A-Za-z0-9._-]")
+
+#: Longer than any identifier this system issues, short enough that no
+#: filesystem or header refuses it.
+MAX_FILENAME = 120
+
+
+def safe_filename(stem: str, extension: str) -> str:
+    """A filename that cannot escape the header it sits in.
+
+    Not decoration: `stem` comes from a stored report identifier, and the
+    disposition header is parsed by the browser. A leading dot is also stripped
+    so a download cannot arrive as a hidden file.
+    """
+    cleaned = _FILENAME_SAFE.sub("_", stem or "report").lstrip(".")[:MAX_FILENAME]
+    return f"{cleaned or 'report'}.{extension}"
+
+
+def download_headers(filename: str, *, inline: bool = False,
+                     sensitive: bool = True, extra=None) -> dict:
+    """The headers every artifact download carries, and why.
+
+    `Content-Disposition: attachment` — the browser saves the file instead of
+    rendering it. For stored HTML that is the difference between a download and
+    executing a report's markup on this origin.
+
+    `X-Content-Type-Options: nosniff` — the browser must believe the declared
+    type. Without it a file whose bytes look like HTML can be sniffed and
+    rendered whatever the Content-Type says, which is the same problem again by
+    a different route.
+
+    `Cache-Control: no-store` for anything carrying Government content. A
+    controlled export is served over an authenticated request; a copy left in a
+    shared or proxy cache outlives the authorisation that produced it. This is
+    per-response and deliberately does NOT touch the application's global cache
+    policy. `sensitive=False` exists for genuinely public payloads; nothing in
+    this router uses it today.
+    """
+    headers = {
+        "Content-Disposition":
+            f'{"inline" if inline else "attachment"}; filename="{filename}"',
+        "X-Content-Type-Options": "nosniff",
+    }
+    if sensitive:
+        headers["Cache-Control"] = "no-store, private"
+        headers["Pragma"] = "no-cache"
+    headers.update(extra or {})
+    return headers
 
 
 class GenerateReportRequest(BaseModel):
@@ -79,12 +142,13 @@ async def generate(
 
         return Response(
             content=to_bytes(result["csv"]), media_type="text/csv",
-            headers={"Content-Disposition":
-                     f'attachment; filename="{result["report_id"]}.csv"'})
+            headers=download_headers(safe_filename(result["report_id"], "csv")))
     if request.format == "pdf":
         return _pdf_response(result["html"], result["report_id"])
     if request.format == "html":
-        return Response(content=result["html"], media_type="text/html")
+        return Response(content=result["html"], media_type="text/html",
+                        headers=download_headers(
+                            safe_filename(result["report_id"], "html")))
     return _summary(result)
 
 
@@ -107,7 +171,7 @@ def _pdf_response(html: str, report_id: str) -> Response:
         raise HTTPException(503, str(exc))
     return Response(
         content=pdf, media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{report_id}.pdf"'})
+        headers=download_headers(safe_filename(report_id, "pdf")))
 
 
 async def _stored(db, report_id: str):
@@ -138,6 +202,10 @@ async def list_reports(
         "report_id": r.report_id,
         "report_type": r.report_type,
         "generated_at": r.generated_at,
+        # The STORED principal, not the copy inside the snapshot. An auditor
+        # asking the API who generated a report must get the column the
+        # application wrote, or a populated row reads back as anonymous.
+        "generated_by": str(r.generated_by) if r.generated_by else None,
         "snapshot": (r.report_data or {}).get("snapshot", {}),
     } for r in rows]}
 
@@ -154,6 +222,7 @@ async def get_report(
         "report_id": row.report_id,
         "report_type": row.report_type,
         "generated_at": row.generated_at,
+        "generated_by": str(row.generated_by) if row.generated_by else None,
         "snapshot": data.get("snapshot", {}),
         "dataset": data.get("dataset", {}),
     }
@@ -174,7 +243,11 @@ async def get_report_html(
     row = await _stored(db, report_id)
     if not row.report_html:
         raise HTTPException(404, f"Report {report_id} has no stored HTML.")
-    return Response(content=row.report_html, media_type="text/html")
+    # Served as an attachment, not rendered. A stored report is a document the
+    # recipient received; rendering it on this origin would execute whatever
+    # markup it contains with the application's own privileges.
+    return Response(content=row.report_html, media_type="text/html",
+                    headers=download_headers(safe_filename(report_id, "html")))
 
 
 @router.get("/{report_id}/pdf", summary="Download a report as PDF")
@@ -227,7 +300,7 @@ async def get_report_csv(
                              snapshot.get("generation_timestamp", ""))
     return Response(
         content=to_bytes(csv_text), media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{report_id}.csv"'})
+        headers=download_headers(safe_filename(report_id, "csv")))
 
 
 @router.get("/health/engine", summary="Report engine health (PDF availability)")
@@ -322,13 +395,15 @@ async def artifact_history(
     user=Depends(require_role("viewer")),
 ):
     """Every finalised version, oldest first. Nothing is ever replaced."""
-    from app.reports.data.artifact_registry import artifact_versions
+    from app.reports.data.artifact_registry import (artifact_versions,
+                                                     public_artifact)
 
     versions = await artifact_versions(db, report_id, content_type=content_type)
     if not versions:
         raise HTTPException(404, f"No stored artifact for {report_id}")
     return {"report_id": report_id, "content_type": content_type,
-            "versions": versions, "count": len(versions)}
+            "versions": [public_artifact(v) for v in versions],
+            "count": len(versions)}
 
 
 @router.get("/artifacts/{report_id}/download",
@@ -346,7 +421,8 @@ async def artifact_download(
     what was registered this raises rather than serving them — a silently
     altered deliverable is worse than a failed download.
     """
-    from app.reports.data.artifact_registry import retrieve_artifact
+    from app.reports.data.artifact_registry import (ARTIFACT_SUFFIXES,
+                                                     retrieve_artifact)
 
     try:
         got = await retrieve_artifact(db, report_id, content_type=content_type,
@@ -358,14 +434,232 @@ async def artifact_download(
         raise HTTPException(500, str(exc))
 
     artifact = got["artifact"]
-    ext = {"text/html": "html", "application/pdf": "pdf",
-           "text/csv": "csv"}.get(content_type, "bin")
+    ext = ARTIFACT_SUFFIXES.get(content_type, "bin")
+    # The stored content type, not one the caller asked for. `content_type` is a
+    # query parameter and selects WHICH artifact to fetch; echoing it back as the
+    # response type would let a caller name the type their browser sees.
+    served_type = artifact.get("content_type") or content_type
     return Response(
-        content=got["content"], media_type=content_type,
-        headers={
-            "Content-Disposition":
-                f'attachment; filename="{report_id}-v{artifact["artifact_version"]}.{ext}"',
-            "X-Artifact-SHA256": artifact["rendered_sha256"],
-            "X-Artifact-Version": str(artifact["artifact_version"]),
-            "X-Data-Classification": artifact["data_classification"],
-        })
+        content=got["content"], media_type=served_type,
+        headers=download_headers(
+            safe_filename(f"{report_id}-v{artifact['artifact_version']}", ext),
+            extra={
+                "X-Artifact-SHA256": artifact["rendered_sha256"],
+                "X-Artifact-Version": str(artifact["artifact_version"]),
+                "X-Data-Classification": artifact["data_classification"],
+            }))
+
+
+# ── the controlled Excel export ──────────────────────────────────────────────
+#
+# DocuAction is the system of record. The workbook is an EXPORT: a snapshot,
+# taken under a classification the caller does not choose, registered with its
+# own hash, and downloaded through the same integrity-verified path as every
+# other artefact. Nothing that happens in the spreadsheet comes back.
+
+
+class WorkbookExportRequest(BaseModel):
+    intake_id: Optional[str] = Field(
+        default=None,
+        description="Which delivery to export. Omit for the current one.")
+    preview: bool = Field(
+        default=False,
+        description="Ten rows per sheet, for checking shape. Not an artefact.")
+
+    # NOTE: there is deliberately no `classification` field. Classification is
+    # a property of the DATA, read from the data-state model, and a caller who
+    # could set it could label a Government export as development test — or the
+    # reverse, which is worse.
+
+
+PREVIEW_ROWS = 10
+
+#: Repeated here rather than imported so the status route stays a pure
+#: read; a test asserts it equals the engine's own constant.
+XLSX_CONTENT_TYPE_LITERAL = ("application/vnd.openxmlformats-officedocument"
+                             ".spreadsheetml.sheet")
+
+#: One export product today. Named so the job identity and the audit trail
+#: agree on what was asked for.
+EXPORT_TYPE = "onc_review_workbook"
+
+
+async def _export_classification(db) -> str:
+    """What this data IS, resolved against the intake — never from a caller.
+
+    Step #17 gave this route its own resolver because `source_provenance` was
+    classifying from the session-free fallback. Step #17C corrected that at the
+    source, so there is one resolver again and the export uses it: a workbook
+    and a report of the same population must not be able to disagree about what
+    the population is.
+    """
+    from app.reports.data.source_provenance import resolve_classification
+
+    return await resolve_classification(db)
+
+
+@router.post("/exports/onc-review-workbook",
+             summary="Generate the controlled ONC data review workbook")
+async def export_onc_review_workbook(
+    request: WorkbookExportRequest,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("qalead")),
+):
+    """Build, register and hash one review workbook.
+
+    `qalead`, not `viewer` or `contributor`. Reading a report inside DocuAction
+    keeps the platform's controls around it; a workbook is a file that leaves,
+    and once it has left, RBAC, the audit trail and the immutable source are all
+    behind it. The floor is therefore the role that already carries independent
+    responsibility for what may be relied upon.
+
+    The bytes are NOT returned here. They are stored, registered and fetched
+    from `/artifacts/{report_id}/download`, which re-hashes before serving — so
+    there is one download path and it is the verified one.
+    """
+    from app.reports.data.export_audit import (ACTION_REQUESTED, ACTION_REUSED,
+                                               record_export_event)
+    from app.reports.data.export_jobs import (ExportJobConflict, active_job,
+                                              job_identity, request_job)
+    from app.reports.data.onc_review_workbook import (WORKBOOK_VERSION,
+                                                      WorkbookRefused,
+                                                      build_workbook_dataset)
+    from app.reports.engine.xlsx_engine import (XLSX_CONTENT_TYPE,
+                                                XLSX_ENGINE_VERSION,
+                                                render_workbook)
+
+    generated_by = getattr(user, "email", None) or "SYSTEM"
+    classification = await _export_classification(db)
+
+    try:
+        dataset = await build_workbook_dataset(
+            db, intake_id=request.intake_id,
+            classification=classification,
+            generated_by=generated_by)
+    except WorkbookRefused as exc:
+        # The export refused itself — the delivered schema did not match the
+        # contract, or there is no delivery to export. That is a 409, not a
+        # 500: nothing failed, the export declined to assert something untrue.
+        raise HTTPException(409, str(exc))
+    except LookupError as exc:
+        raise HTTPException(404, str(exc))
+
+    if request.preview:
+        return _workbook_preview(dataset, render_workbook)
+
+    # The full export is QUEUED, not produced here. Step #17 measured the
+    # delivered population at roughly seven and a half minutes; a request that
+    # waited for it would be killed by a gateway long before it finished, and a
+    # user who refreshed would have no way to find out whether the first attempt
+    # was still running. What comes back is a receipt.
+    identity = job_identity(
+        intake_id=dataset["intake_id"], workbook_version=WORKBOOK_VERSION,
+        engine_version=XLSX_ENGINE_VERSION,
+        classification=dataset["classification"],
+        export_type=EXPORT_TYPE)
+
+    before = await active_job(db, identity)
+    try:
+        job = await request_job(
+            db, identity=identity, export_type=EXPORT_TYPE,
+            intake_id=dataset["intake_id"],
+            classification=dataset["classification"],
+            generator_version=(f"workbook {WORKBOOK_VERSION} / "
+                               f"engine {XLSX_ENGINE_VERSION}"),
+            requested_by=generated_by)
+    except ExportJobConflict as exc:
+        raise HTTPException(409, str(exc))
+
+    reused = before is not None and str(before.id) == str(job.id)
+    await record_export_event(
+        db, action=ACTION_REUSED if reused else ACTION_REQUESTED,
+        actor=generated_by, job_id=str(job.id),
+        detail=("An export for this delivery was already in flight; the "
+                "existing job was returned." if reused else
+                "A controlled export was requested."),
+        extra={"delivery": dataset["delivery_label"],
+               "intake_id": dataset["intake_id"],
+               "classification": dataset["classification"],
+               "generator_version": job.generator_version})
+
+    return {
+        **job.to_dict(),
+        "reused_existing_job": reused,
+        "delivery": dataset["delivery_label"],
+        "workbook_version": WORKBOOK_VERSION,
+        "engine_version": XLSX_ENGINE_VERSION,
+        "file_type": "Excel workbook (.xlsx)",
+        "rows_per_sheet": {name: len(sheet["rows"])
+                           for name, sheet in dataset["sheets"].items()},
+        "reconciliation": dataset["reconciliation"],
+        "status_url": f"/api/reports/exports/jobs/{job.id}",
+    }
+
+
+def _workbook_preview(dataset, render) -> Response:
+    """Ten rows a sheet, returned directly and registered nowhere.
+
+    A preview exists to answer "is this the right shape" before someone waits
+    for the whole delivery. It is therefore NOT an artefact: it has no registry
+    row, no version and no hash of record, and it says so on its own face — the
+    identifier ends in -PREVIEW and every sheet carries a note. A truncated file
+    that could be mistaken for the export would be worse than no preview.
+    """
+    from app.reports.engine.xlsx_engine import XLSX_CONTENT_TYPE
+
+    banner = (f"PREVIEW — the first {PREVIEW_ROWS} rows of each sheet. "
+              f"This file is not a registered artefact and is not the export.")
+    trimmed = dict(dataset)
+    trimmed["report_id"] = f"{dataset['report_id']}-PREVIEW"
+    trimmed["sheets"] = {
+        name: {**sheet,
+               "rows": sheet["rows"][:PREVIEW_ROWS],
+               "note": f"{banner} {sheet.get('note') or ''}".strip()}
+        for name, sheet in dataset["sheets"].items()}
+
+    return Response(
+        content=render(trimmed), media_type=XLSX_CONTENT_TYPE,
+        headers=download_headers(
+            safe_filename(trimmed["report_id"], "xlsx"),
+            extra={"X-Artifact-Preview": "true",
+                   "X-Data-Classification": dataset["classification"]}))
+
+
+@router.get("/exports/jobs/{job_id}",
+            summary="Status of one controlled export job")
+async def export_job_status(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("qalead")),
+):
+    """Where one export got to. READS ONLY.
+
+    Polling must never start work. A status endpoint that claimed, retried or
+    re-queued would mean a browser left open on this page generated exports all
+    afternoon, and a user who refreshed twice got two.
+
+    A job is readable by the person who requested it, and by a program manager
+    or administrator — who supervise the queue and have to be able to see a
+    failure that is not their own. Everyone else gets 404 rather than 403: an
+    identifier that answers "not yours" still confirms the job exists, which is
+    how a job id becomes an enumeration oracle.
+    """
+    from app.core.security import ROLE_HIERARCHY
+    from app.reports.data.export_jobs import get_job
+
+    job = await get_job(db, job_id)
+    if job is None:
+        raise HTTPException(404, "No such export job.")
+
+    email = (getattr(user, "email", None) or "").lower()
+    role = (getattr(user, "role", "") or "").lower()
+    supervises = ROLE_HIERARCHY.get(role, 0) >= ROLE_HIERARCHY["program_manager"]
+    if not supervises and (job.requested_by or "").lower() != email:
+        raise HTTPException(404, "No such export job.")
+
+    payload = job.to_dict()
+    if job.state == job.STATE_SUCCEEDED and job.report_id:
+        payload["download"] = (
+            f"/api/reports/artifacts/{job.report_id}/download"
+            f"?content_type={XLSX_CONTENT_TYPE_LITERAL}")
+    return payload

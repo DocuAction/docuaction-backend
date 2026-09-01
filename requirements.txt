@@ -67,3 +67,9 @@ pyasn1==0.6.4
 # Optional at runtime: engine.is_english() fails open if the import is missing,
 # so a briefing is never emptied by an absent detector.
 langdetect==1.0.9
+
+# Durable artifact storage (Step #18B). The report/export artifact store writes
+# to a private blob container using the App Service managed identity; shared-key
+# access is disabled on the account, so DefaultAzureCredential is the only way in.
+azure-storage-blob==12.30.1
+azure-identity==1.25.3

@@ -72,6 +72,9 @@ class SampleResult:
     random_seed: int
     strata_config: Optional[dict] = None
     strata_distribution: Dict[str, int] = field(default_factory=dict)
+    #: Per-stratum N and n. Populated only by `draw_per_stratum`, where each
+    #: stratum has its own calculation to show; empty for a single national draw.
+    stratum_sizing: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     def config(self) -> dict:
         """Everything needed to redraw this exact sample."""
@@ -85,6 +88,7 @@ class SampleResult:
             "random_seed": self.random_seed,
             "strata_config": self.strata_config,
             "strata_distribution": self.strata_distribution,
+            "stratum_sizing": self.stratum_sizing,
         }
 
 
@@ -168,6 +172,86 @@ class CochranSampler:
             proportion=proportion, use_fpc=use_fpc, random_seed=seed,
             strata_config=strata_config, strata_distribution=dist,
         )
+
+
+    def draw_per_stratum(self, population: Sequence[Any],
+                         stratum_of: Callable[[Any], str],
+                         seed: Optional[int] = None, confidence: float = 0.95,
+                         margin: float = 0.05, proportion: float = 0.5,
+                         use_fpc: bool = True,
+                         strata_config: Optional[dict] = None) -> "SampleResult":
+        """A sample sized INDEPENDENTLY for every stratum.
+
+        WHY THIS EXISTS ALONGSIDE `draw_sample`
+        ───────────────────────────────────────
+        `draw_sample` computes ONE sample size from the WHOLE population and
+        then allocates it across strata proportionally. That is correct when the
+        confidence statement is about the population as a whole.
+
+        It is NOT correct when confidence is required OF EACH STRATUM. Measured
+        against the delivered population — 23,562 records across 11 QHINs at
+        95%/±5% — proportional allocation gives the smallest QHIN (3 records)
+        ZERO selected records, and three others a single record each, while the
+        total (379) still reads as a 95% sample. Per-QHIN sizing gives 1,967 and
+        a census of the 3-record stratum.
+
+        So this method calls `calculate_sample_size` once per stratum, against
+        that stratum's own N. The formula is untouched — the same Cochran with
+        the same finite-population correction. What changes is WHAT IT IS
+        APPLIED TO, which is the whole of the difference.
+
+        Where a stratum's computed size reaches its population, the whole
+        stratum is taken. That is a census, and it is what the approved
+        methodology asks for: "where a QHIN's population is at or below the
+        computed size, review the whole stratum and disclose it". A 3-record
+        QHIN cannot be sampled.
+        """
+        pop = list(population)
+        n_pop = len(pop)
+
+        # One seed for the whole draw, generated here when absent and RETURNED,
+        # so the entire multi-stratum selection is reproducible from one value.
+        if seed is None:
+            seed = random.SystemRandom().randint(1, 2 ** 31 - 1)
+
+        groups: Dict[str, list] = {}
+        for item in pop:
+            groups.setdefault(str(stratum_of(item)), []).append(item)
+
+        selected: list = []
+        dist: Dict[str, int] = {}
+        sizing: Dict[str, Dict[str, Any]] = {}
+        for key in sorted(groups):
+            members = groups[key]
+            stratum_n = self.calculate_sample_size(
+                len(members), confidence=confidence, margin=margin,
+                proportion=proportion, use_fpc=use_fpc)
+            # A separate RNG per stratum, derived from the run seed and the
+            # stratum key. One shared generator would make every stratum's
+            # selection depend on how many were drawn before it, so adding a
+            # QHIN would silently change another QHIN's sample.
+            rng = random.Random(f"{seed}:{key}")
+            take = min(stratum_n, len(members))
+            selected.extend(rng.sample(members, take))
+            dist[key] = take
+            sizing[key] = {
+                "population_size": len(members),
+                "sample_size": take,
+                "census": take == len(members),
+            }
+
+        result = SampleResult(
+            sample_size=len(selected), population_size=n_pop, selected=selected,
+            confidence_level=confidence, margin_of_error=margin,
+            proportion=proportion, use_fpc=use_fpc, random_seed=seed,
+            strata_config={**(strata_config or {}),
+                           "allocation": "per_stratum_independent"},
+            strata_distribution=dist,
+            # Per-stratum N and n, so a reviewer can check each stratum's own
+            # calculation rather than only the total.
+            stratum_sizing=sizing,
+        )
+        return result
 
 
 def discrepancy_rate_ci(successes: int, n: int, confidence: float = 0.95) -> dict:

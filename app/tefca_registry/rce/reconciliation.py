@@ -100,16 +100,16 @@ async def reconcile_delivery(db, intake_id) -> Dict[str, Any]:
     orphan_curated = await _scalar(db, text(
         "SELECT count(*) FROM rce_curated_records c "
         "LEFT JOIN rce_source_records s ON s.id = c.source_record_id "
-        "WHERE c.source_intake_id = :i AND s.id IS NULL").bindparams(i=intake_id))
+        "WHERE c.source_intake_id = CAST(:i AS uuid) AND s.id IS NULL").bindparams(i=intake_id))
     orphan_promotion = await _scalar(db, text(
         "SELECT count(*) FROM rce_curated_records c "
         "LEFT JOIN tefca_reg_entities e ON e.id = c.canonical_entity_id "
-        "WHERE c.source_intake_id = :i AND c.canonical_entity_id IS NOT NULL "
+        "WHERE c.source_intake_id = CAST(:i AS uuid) AND c.canonical_entity_id IS NOT NULL "
         "AND e.id IS NULL").bindparams(i=intake_id))
     orphan_issue = await _scalar(db, text(
         "SELECT count(*) FROM rce_issues i "
         "LEFT JOIN rce_source_records s ON s.id = i.source_record_id "
-        "WHERE i.source_intake_id = :i AND i.source_record_id IS NOT NULL "
+        "WHERE i.source_intake_id = CAST(:i AS uuid) AND i.source_record_id IS NOT NULL "
         "AND s.id IS NULL").bindparams(i=intake_id))
     orphan_correction = await _scalar(db, text(
         "SELECT count(*) FROM rce_correction_details d "
@@ -118,13 +118,13 @@ async def reconcile_delivery(db, intake_id) -> Dict[str, Any]:
     corrections_total = await _scalar(db, text(
         "SELECT count(*) FROM rce_correction_details d "
         "JOIN rce_curated_records c ON c.id = d.curated_record_id "
-        "WHERE c.source_intake_id = :i").bindparams(i=intake_id))
+        "WHERE c.source_intake_id = CAST(:i AS uuid)").bindparams(i=intake_id))
     # A correction must cite an issue OR carry a documented reason. Both empty
     # would be an unexplained edit to delivered data.
     corrections_unexplained = await _scalar(db, text(
         "SELECT count(*) FROM rce_correction_details d "
         "JOIN rce_curated_records c ON c.id = d.curated_record_id "
-        "WHERE c.source_intake_id = :i AND d.issue_id IS NULL "
+        "WHERE c.source_intake_id = CAST(:i AS uuid) AND d.issue_id IS NULL "
         "AND (d.correction_reason IS NULL OR d.correction_reason = '')"
     ).bindparams(i=intake_id))
 
@@ -147,7 +147,7 @@ async def reconcile_delivery(db, intake_id) -> Dict[str, Any]:
     reviews_without_evidence = await _scalar(db, text(
         "SELECT count(*) FROM review_records r "
         "WHERE r.entity_id IN (SELECT canonical_entity_id FROM rce_curated_records "
-        "                      WHERE source_intake_id = :i "
+        "                      WHERE source_intake_id = CAST(:i AS uuid) "
         "                        AND canonical_entity_id IS NOT NULL) "
         "  AND (r.verification_results IS NULL "
         "       OR r.verification_results->'dimensions' IS NULL "
@@ -156,7 +156,7 @@ async def reconcile_delivery(db, intake_id) -> Dict[str, Any]:
     reviews_without_rule = await _scalar(db, text(
         "SELECT count(*) FROM review_records r "
         "WHERE r.entity_id IN (SELECT canonical_entity_id FROM rce_curated_records "
-        "                      WHERE source_intake_id = :i "
+        "                      WHERE source_intake_id = CAST(:i AS uuid) "
         "                        AND canonical_entity_id IS NOT NULL) "
         "  AND r.classification_bucket IS NOT NULL "
         "  AND r.classification_rule IS NULL").bindparams(i=intake_id))

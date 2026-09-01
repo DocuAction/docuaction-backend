@@ -48,9 +48,52 @@ _TRUTHY = {"1", "true", "yes", "on", "enabled"}
 _FALSY = {"0", "false", "no", "off", "disabled"}
 
 
+#: Variables App Service sets on every instance, which no developer machine has.
+#: Their presence is how this process knows it is DEPLOYED rather than running on
+#: someone's laptop.
+PLATFORM_MARKERS = ("WEBSITE_SITE_NAME", "WEBSITE_INSTANCE_ID")
+
+#: Environments that are explicitly not production. Staging is deliberately NOT
+#: here: a deployed staging host must not create tables at startup either.
+NON_PRODUCTION = {"development", "dev", "test", "testing", "local"}
+
+
+def _is_deployed() -> bool:
+    """Is this process running on the hosting platform rather than a laptop?"""
+    return any(os.getenv(marker) for marker in PLATFORM_MARKERS)
+
+
 def _is_production() -> bool:
-    return (os.getenv("ENVIRONMENT") or os.getenv("ENV") or "").strip().lower() in {
-        "production", "prod"}
+    """Whether this process must be treated as production.
+
+    THE GAP THIS CLOSES
+    ───────────────────
+    This used to answer the narrow question "does ENVIRONMENT say production?",
+    so an UNSET variable meant not-production, which meant startup schema
+    mutation was ALLOWED. Unset is precisely the state a restored configuration,
+    a new deployment slot or a mis-copied app setting begins in — so the most
+    likely way to lose the variable was also the way to grant the capability it
+    guards. On production that would let a container restart create the Area 1
+    tables, owned by the connecting role, which makes immutability inert on the
+    tables that hold Government data. That is the defect this module exists to
+    prevent, reached by a different door.
+
+    An explicit value is believed in both directions. Silence is read in the
+    light of WHERE the process is running: on a developer machine an unset
+    environment is ordinary and the startup repair stays available, which is the
+    convenience this guard deliberately preserved. On a deployed host it is a
+    configuration that has gone missing, and the safe reading of a missing
+    production marker is that this IS production.
+
+    An unrecognised value is treated the same way as unset — a typo must never
+    grant a capability.
+    """
+    raw = (os.getenv("ENVIRONMENT") or os.getenv("ENV") or "").strip().lower()
+    if raw in {"production", "prod"}:
+        return True
+    if raw in NON_PRODUCTION:
+        return False
+    return _is_deployed()
 
 
 def schema_mutation_allowed() -> bool:
@@ -72,7 +115,11 @@ def schema_mutation_allowed() -> bool:
 
 def schema_mutation_refusal_reason() -> str:
     """Why startup will not touch the schema, in operator terms."""
-    where = "production" if _is_production() else "this environment"
+    if (os.getenv("ENVIRONMENT") or os.getenv("ENV") or "").strip():
+        where = "production" if _is_production() else "this environment"
+    else:
+        where = ("this deployed host, whose ENVIRONMENT is not set and which is "
+                 "therefore treated as production")
     return (
         f"startup schema mutation is DISABLED in {where}: {STARTUP_SCHEMA_FLAG} is "
         f"not enabled. create_all() and the startup ALTER TABLE statements were "

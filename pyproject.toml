@@ -90,4 +90,5 @@ markers = [
     "security: security-specific regression tests",
     "bulletin: bulletin module regression tests",
     "e2e: end-to-end workflow tests",
+    "network: needs real Internet access to a third-party service. NOT run by the normal suite",
 ]

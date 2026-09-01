@@ -47,6 +47,7 @@ development data with no human decisions in it, not a defect.
 
 from __future__ import annotations
 
+from datetime import datetime
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -340,7 +341,77 @@ class SowReportDataService:
             "basis": ("Measured against the deadline communicated by the COR for "
                       "this request (¶146). There is no fixed contractual SLA."),
         }
+        data.update(await self._priority_case_content(case_id))
         return data
+
+    async def _priority_case_content(self, case_id):
+        """The five ¶147 elements for one request — THROUGH THE RELEASE GATE.
+
+        Without a case id this stays a family envelope, which is what it has
+        always been. With one, the content comes from
+        `priority_review.reportable_result`, and that withholds every
+        determination field until an independent QA approval stands.
+
+        A request existing is not a finding. An analyst determination is not a
+        finding. The report is the last place that distinction can still be
+        made, so it is made here rather than trusted to the caller.
+        """
+        import uuid as _uuid
+
+        blank = {"case": None,
+                 "release_gate": ("Only a QA-approved determination is "
+                                  "reportable content.")}
+        if not case_id or self.db is None:
+            return blank
+        try:
+            case_uuid = _uuid.UUID(str(case_id))
+        except (ValueError, AttributeError, TypeError):
+            # A development or placeholder label, not a request. Reporting an
+            # envelope for it is honest; inventing content for it would not be.
+            return blank
+
+        from app.tefca_registry import priority_review as pr
+
+        try:
+            result = await pr.reportable_result(self.db, case_uuid)
+            request = await pr.get_request(self.db, case_uuid)
+            history = await pr.deadline_history(self.db, case_uuid)
+        except pr.PriorityRefused as exc:
+            return {**blank, "case_error": str(exc)}
+
+        deadline = request["deadline"]
+        status = pr.deadline_status(
+            datetime.fromisoformat(deadline) if deadline else None)
+        return {
+            "case": {
+                "cor_reference": result["cor_reference"],
+                "requested_by": request["requested_by"],
+                "request_received_at": request["received_at"],
+                "target_reference": request["target_reference"],
+                "target_resolution": request["target_resolution"],
+                "review_id": result["review_id"],
+                "reportable": result["reportable"],
+                "reportable_at": result["reportable_at"],
+                # The five elements, in the order ¶147 names them. Every one is
+                # None until the gate opens.
+                "identified_issue": result["identified_issue"],
+                "root_cause": result["root_cause_determination"],
+                "root_cause_detail": result["root_cause_description"],
+                "severity": result["severity"],
+                "recommendations": result["recommendations"],
+                "prevention_recommendation": result["prevention_recommendation"],
+                "resolution": result["resolution_notes"],
+                "withheld_reason": result["withheld_reason"],
+                "deadline": deadline,
+                "original_deadline": history["original_deadline"],
+                "deadline_amendments": history["amendments"],
+                "deadline_status": status["status"],
+                "hours_remaining": status["hours_remaining"],
+                "compliance_conclusion": status["compliance_conclusion"],
+            },
+            "release_gate": ("Only a QA-approved determination is reportable "
+                             "content."),
+        }
 
     async def priority_quarterly(self, review_cycle_id=None,
                                  period_start=None, period_end=None):

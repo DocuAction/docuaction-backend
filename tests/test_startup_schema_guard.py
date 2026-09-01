@@ -200,3 +200,78 @@ def test_alembic_remains_the_authorized_path():
     text = env.read_text(encoding="utf-8", errors="ignore")
     assert schema_guard.STARTUP_SCHEMA_FLAG not in text
     assert "schema_mutation_allowed" not in text
+
+
+# ═══ a deployed host with no environment is production ══════════════════════
+#
+# Step #18. The guard answered "does ENVIRONMENT say production?", so an UNSET
+# variable meant not-production, which ALLOWED startup schema mutation. Unset is
+# the state a restored configuration or a new slot begins in — the most likely
+# way to lose the variable was also the way to grant the capability it guards.
+
+
+class TestUnsetEnvironmentOnADeployedHost:
+
+    @staticmethod
+    def _clear(monkeypatch):
+        for name in ("ENVIRONMENT", "ENV", "STARTUP_SCHEMA_MUTATION_ENABLED",
+                     "WEBSITE_SITE_NAME", "WEBSITE_INSTANCE_ID"):
+            monkeypatch.delenv(name, raising=False)
+
+    def test_a_developer_machine_keeps_the_startup_repair(self, monkeypatch):
+        """No environment and no platform markers is an ordinary laptop. The
+        convenience this guard deliberately preserved must survive."""
+        self._clear(monkeypatch)
+        assert schema_guard.schema_mutation_allowed() is True
+
+    def test_a_deployed_host_with_no_environment_refuses(self, monkeypatch):
+        """The gap. A container restart must not be able to create the Area 1
+        tables, because the creating role owns them and an owner can always
+        modify its own rows."""
+        self._clear(monkeypatch)
+        monkeypatch.setenv("WEBSITE_SITE_NAME", "docuaction-something")
+        assert schema_guard.schema_mutation_allowed() is False
+        assert "not set" in schema_guard.schema_mutation_refusal_reason()
+
+    def test_the_instance_marker_alone_is_enough(self, monkeypatch):
+        self._clear(monkeypatch)
+        monkeypatch.setenv("WEBSITE_INSTANCE_ID", "abc123")
+        assert schema_guard.schema_mutation_allowed() is False
+
+    def test_a_typo_does_not_grant_the_capability(self, monkeypatch):
+        """`producton`, `Prod-2`, `stage` — none of these is a recognised
+        non-production environment, and on a deployed host none may permit
+        schema mutation."""
+        self._clear(monkeypatch)
+        monkeypatch.setenv("WEBSITE_SITE_NAME", "docuaction-something")
+        for typo in ("producton", "Prod-2", "stage", "staging", "qa1", " "):
+            monkeypatch.setenv("ENVIRONMENT", typo)
+            assert schema_guard.schema_mutation_allowed() is False, typo
+
+    def test_an_explicit_development_deployment_is_still_believed(self, monkeypatch):
+        """The DEV App Service says `development` and means it. Reading silence
+        as production must not start reading speech as production too."""
+        self._clear(monkeypatch)
+        monkeypatch.setenv("WEBSITE_SITE_NAME", "docuaction-dev")
+        for spelling in ("development", "dev", "Development", " TEST "):
+            monkeypatch.setenv("ENVIRONMENT", spelling)
+            assert schema_guard.schema_mutation_allowed() is True, spelling
+
+    def test_an_explicit_flag_still_wins_in_both_directions(self, monkeypatch):
+        """The operator's explicit answer is never overridden by inference."""
+        self._clear(monkeypatch)
+        monkeypatch.setenv("WEBSITE_SITE_NAME", "docuaction-something")
+
+        monkeypatch.setenv("STARTUP_SCHEMA_MUTATION_ENABLED", "true")
+        assert schema_guard.schema_mutation_allowed() is True
+
+        monkeypatch.setenv("STARTUP_SCHEMA_MUTATION_ENABLED", "false")
+        monkeypatch.setenv("ENVIRONMENT", "development")
+        assert schema_guard.schema_mutation_allowed() is False
+
+    def test_production_is_unchanged(self, monkeypatch):
+        self._clear(monkeypatch)
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        assert schema_guard.schema_mutation_allowed() is False
+        monkeypatch.setenv("WEBSITE_SITE_NAME", "Docuaction")
+        assert schema_guard.schema_mutation_allowed() is False
