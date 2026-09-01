@@ -186,9 +186,42 @@ class FileScanner:
         if ext in _TEXT_EXTS:
             if self._looks_binary(content[:_SIGNATURE_SNIFF]):
                 return [f"binary_content_in_text:{ext}"]
+            # A text upload must actually BE decodable text. _looks_binary()
+            # counts every byte >= 0x80 as text so that UTF-8 documents are not
+            # flagged, which is right for unicode and wrong for arbitrary binary:
+            # a blob with no NUL bytes and plenty of high-bit noise passed both
+            # checks and reached the parser. Found by fixture during the QA gate
+            # (DEF-017): b"ÿþúû" repeated was ACCEPTED as CSV.
+            #
+            # So decode it. The property this restores is that a file is accepted
+            # because it is valid permitted text, not merely because it carries no
+            # signature we recognise. Only the sniff window is decoded, and on a
+            # boundary the tail is retried, so a multi-byte character straddling
+            # the cut is not mistaken for corruption.
+            if not self._decodes_as_text(content[:_SIGNATURE_SNIFF],
+                                         truncated=len(content) > _SIGNATURE_SNIFF):
+                return [f"undecodable_text:{ext}"]
             return []
         # Unknown/unhandled extension: no signature rule to enforce.
         return []
+
+    @staticmethod
+    def _decodes_as_text(head: bytes, *, truncated: bool) -> bool:
+        """True when `head` decodes as UTF-8 (which subsumes ASCII).
+
+        When the content was cut at the sniff boundary a trailing multi-byte
+        sequence can be split; up to three bytes are dropped and it is retried,
+        so a legitimate unicode file is not rejected for being long.
+        """
+        if not head:
+            return True
+        for trim in range(0, 4 if truncated else 1):
+            try:
+                (head[:len(head) - trim] if trim else head).decode("utf-8")
+                return True
+            except UnicodeDecodeError:
+                continue
+        return False
 
     @staticmethod
     def _looks_binary(head: bytes) -> bool:
