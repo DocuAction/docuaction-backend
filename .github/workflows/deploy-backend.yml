@@ -16,10 +16,18 @@ on:
         options:
           - dev
           - production
-      tag:
-        description: 'Tag or branch to deploy (e.g. sprint1.1-security-v1.0)'
+      image_tag:
+        description: 'Container image tag to deploy (the commit SHA, e.g. 62a9273). Resolved to an immutable digest before anything changes.'
         required: true
         type: string
+      run_migrations:
+        description: 'Run approved Alembic migrations as the schema owner before the image change'
+        required: true
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+        default: 'false'
 
   push:
     tags:
@@ -28,10 +36,15 @@ on:
       - 'platform*'
 
 env:
-  AZURE_PROD_APP: Docuaction
-  AZURE_PROD_RG: rg-docuaction-prod
-  AZURE_DEV_APP: docuaction-dev
-  AZURE_DEV_RG: rg-docuaction-dev
+  DEV_APP: docuaction-dev
+  DEV_RG: rg-docuaction-dev
+  PROD_APP: Docuaction
+  PROD_RG: rg-docuaction-prod
+  DEV_REGISTRY: acrdocuactiondev
+  DEV_LOGIN_SERVER: acrdocuactiondev.azurecr.io
+  PROD_REGISTRY: acrdocuactionprod
+  PROD_LOGIN_SERVER: acrdocuactionprod.azurecr.io
+  IMAGE_REPO: docuaction-backend
 
 jobs:
   build-and-test:
@@ -156,6 +169,11 @@ jobs:
           fi
           echo "=== Verification passed ==="
 
+      # NOTE: this ZIP is a RELEASE ARCHIVE and CI EVIDENCE - a verifiable
+      # record of the exact source and resolved dependency set behind a
+      # release. It is NOT the App Service deployment unit: these are custom
+      # container apps and the deployable unit is an OCI image digest. Do not
+      # deploy this ZIP to them.
       - name: Build deployment zip
         run: |
           zip -r deploy.zip \
@@ -178,103 +196,182 @@ jobs:
             pip-audit-results.json
           retention-days: 90
 
+  # ───────────────────────────────────────────────────────────────────────────
+  # DEPLOYMENT
+  #
+  # These apps are CUSTOM CONTAINER App Services. The deployable unit is an OCI
+  # image identified by an immutable DIGEST, never a ZIP and never a tag alone.
+  #
+  # The previous implementation ran `az webapp deploy --type zip`. That could
+  # not work here: the Dockerfile runs gunicorn from /app inside the image, and
+  # DEV has WEBSITES_ENABLE_APP_SERVICE_STORAGE=false, so the ZIP landed
+  # somewhere the running container cannot see. The deployment reported success
+  # while the app kept running the OLD image - a silent no-op recorded as a
+  # successful release. It has been replaced, not patched.
+  #
+  # A digest rather than a tag because a tag can be moved. The thing validated
+  # in DEV and the thing promoted to PROD must be provably the same bytes.
+  # ───────────────────────────────────────────────────────────────────────────
+
   deploy-dev:
     needs: build-and-test
     runs-on: ubuntu-latest
     environment: development
     if: github.event.inputs.environment == 'dev' || github.event.inputs.environment == 'production'
+    outputs:
+      previous_image: ${{ steps.capture.outputs.previous_image }}
+      deployed_digest: ${{ steps.resolve.outputs.digest }}
     steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: backend-deploy-${{ github.sha }}
-
       - name: Login to Azure
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Deploy to DEV
+      - name: Verify the candidate image exists in the DEV registry
+        id: resolve
         run: |
-          # NO --clean here, deliberately. docuaction-dev is an Oryx-build app;
-          # --clean wipes oryx-manifest.toml and puts it in a 503 crash loop.
-          # This was learned the hard way on 2026-07-26. See
-          # docs/deployment/azure-deployment-guide.md.
-          az webapp deploy \
-            --name ${{ env.AZURE_DEV_APP }} \
-            --resource-group ${{ env.AZURE_DEV_RG }} \
-            --type zip \
-            --src-path deploy.zip
+          # Fail before touching anything if the image is not there. Resolving
+          # the digest here also pins what follows: every later step uses this
+          # value, not the tag, so a tag moved mid-deploy cannot change what
+          # ships.
+          DIGEST=$(az acr manifest show-metadata "${DEV_LOGIN_SERVER}/${IMAGE_REPO}:${{ github.event.inputs.image_tag }}" --query digest -o tsv)
+          test -n "$DIGEST" || { echo "candidate image not found in ${DEV_REGISTRY}"; exit 1; }
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "candidate: ${IMAGE_REPO}:${{ github.event.inputs.image_tag }} -> $DIGEST"
 
-      - name: Smoke test DEV
+      - name: Capture the rollback point BEFORE any change
+        id: capture
         run: |
-          sleep 60
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            https://docuaction-dev.azurewebsites.net/health)
-          echo "DEV /health: $HTTP_CODE"
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "ERROR: DEV health check failed!"
-            exit 1
-          fi
-          echo "DEV deployment verified"
+          # Captured first, and by digest, so incident response never has to
+          # rebuild from source or trust that a tag still means what it meant.
+          PREV=$(az webapp config show -n "$DEV_APP" -g "$DEV_RG" --query linuxFxVersion -o tsv)
+          echo "previous_image=$PREV" >> "$GITHUB_OUTPUT"
+          echo "ROLLBACK POINT: $PREV"
+          {
+            echo "## Rollback point"
+            echo ""
+            echo "    $PREV"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Capture the current Alembic revision
+        run: |
+          # Recorded before migrating so the exact starting revision is known
+          # if a downgrade is ever needed.
+          python -m pip install --quiet alembic asyncpg sqlalchemy
+          echo "current revision:"
+          DATABASE_URL="${{ secrets.MIGRATION_DATABASE_URL }}" alembic current || echo "(could not read revision - resolve before continuing)"
+
+      - name: Run approved migrations as the schema owner
+        if: github.event.inputs.run_migrations == 'true'
+        run: |
+          # Deliberately gated on its own input, and deliberately BEFORE the
+          # image change: the new image expects the new schema. The owner
+          # identity is used because the runtime application role has no DDL
+          # rights, which is a control, not an inconvenience.
+          DATABASE_URL="${{ secrets.MIGRATION_DATABASE_URL }}" alembic upgrade head
+          DATABASE_URL="${{ secrets.MIGRATION_DATABASE_URL }}" alembic current
+
+      - name: Point DEV at the candidate image by digest
+        run: |
+          # THE deployment step. Note what it is NOT: there is no
+          # `az webapp deploy --type zip` anywhere in this job.
+          az webapp config container set --name "$DEV_APP" --resource-group "$DEV_RG" --docker-custom-image-name "${DEV_LOGIN_SERVER}/${IMAGE_REPO}@${{ steps.resolve.outputs.digest }}"
+          az webapp restart --name "$DEV_APP" --resource-group "$DEV_RG"
+
+      - name: Wait for a healthy start
+        id: health
+        run: |
+          echo "waiting for DEV to report healthy ..."
+          CODE=000
+          for i in $(seq 1 40); do
+            CODE=$(curl -s -o /tmp/h.json -w '%{http_code}' "https://${DEV_APP}.azurewebsites.net/health" || true)
+            if [ "$CODE" = "200" ]; then echo "healthy after $i attempt(s)"; break; fi
+            sleep 15
+          done
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          test "$CODE" = "200" || { echo "DEV did not become healthy (last: $CODE)"; exit 1; }
+
+      - name: Acceptance checks
+        id: acceptance
+        run: |
+          BASE="https://${DEV_APP}.azurewebsites.net"
+          echo "--- health ---"
+          curl -fsS "$BASE/health" > /dev/null && echo ok
+          echo "--- an unauthenticated caller must still be refused ---"
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/tefca/arc/entities")
+          echo "anonymous -> $CODE"
+          case "$CODE" in 401|403) echo "correctly gated";; *) echo "FAIL: expected 401/403, got $CODE"; exit 1;; esac
+
+      - name: Roll back to the previous image if acceptance failed
+        if: failure() && steps.capture.outputs.previous_image != ''
+        run: |
+          # The previous image, by the reference captured before the change. No
+          # rebuild, no dependence on a floating tag.
+          PREV="${{ steps.capture.outputs.previous_image }}"
+          echo "ROLLING BACK to $PREV"
+          az webapp config container set --name "$DEV_APP" --resource-group "$DEV_RG" --docker-custom-image-name "${PREV#DOCKER|}"
+          az webapp restart --name "$DEV_APP" --resource-group "$DEV_RG"
+          for i in $(seq 1 30); do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' "https://${DEV_APP}.azurewebsites.net/health" || true)
+            if [ "$CODE" = "200" ]; then echo "rollback healthy"; exit 0; fi
+            sleep 15
+          done
+          echo "ROLLBACK DID NOT REACH HEALTH - manual intervention required"
+          exit 1
 
   deploy-prod:
     needs: deploy-dev
     runs-on: ubuntu-latest
     environment: production
+    # PROD requires its OWN authorisation. A dispatch selecting 'dev' can never
+    # reach this job, so DEV-only authority cannot deploy production.
     if: github.event.inputs.environment == 'production'
     steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: backend-deploy-${{ github.sha }}
-
       - name: Login to Azure
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Pre-deploy Key Vault check
+      - name: Import the DEV-validated digest into the PROD registry
+        id: promote
         run: |
-          echo "Checking Key Vault references..."
-          SETTINGS=$(az webapp config appsettings list \
-            --name ${{ env.AZURE_PROD_APP }} \
-            --resource-group ${{ env.AZURE_PROD_RG }} \
-            --query "[?contains(value, '@Microsoft.KeyVault')]" -o json)
-          echo "KV references found: $(echo $SETTINGS | jq length)"
-          echo "All references must resolve before deploy continues"
+          # SAME BYTES. The digest validated in DEV is imported into the PROD
+          # registry rather than rebuilt from source, so what production runs is
+          # provably what DEV proved. Separate registries are why an import is
+          # needed at all; the import preserves image identity.
+          SRC="${DEV_LOGIN_SERVER}/${IMAGE_REPO}@${{ needs.deploy-dev.outputs.deployed_digest }}"
+          az acr import --name "$PROD_REGISTRY" --source "$SRC" --image "${IMAGE_REPO}:${{ github.event.inputs.image_tag }}" --force
+          PROD_DIGEST=$(az acr manifest show-metadata "${PROD_LOGIN_SERVER}/${IMAGE_REPO}:${{ github.event.inputs.image_tag }}" --query digest -o tsv)
+          echo "digest=$PROD_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "DEV digest : ${{ needs.deploy-dev.outputs.deployed_digest }}"
+          echo "PROD digest: $PROD_DIGEST"
 
-      - name: Deploy to PRODUCTION
+      - name: Capture the PROD rollback point BEFORE any change
+        id: capture
         run: |
-          # --clean IS correct here and only here. Docuaction is a pre-built-pydeps
-          # app, not Oryx. Without --clean, az webapp deploy overlays rather than
-          # replaces, leaving orphaned dist-info that corrupts pip-audit and SBOM
-          # accuracy on every subsequent scan.
-          az webapp deploy \
-            --name ${{ env.AZURE_PROD_APP }} \
-            --resource-group ${{ env.AZURE_PROD_RG }} \
-            --type zip \
-            --src-path deploy.zip \
-            --clean true
+          PREV=$(az webapp config show -n "$PROD_APP" -g "$PROD_RG" --query linuxFxVersion -o tsv)
+          echo "previous_image=$PREV" >> "$GITHUB_OUTPUT"
+          echo "PROD ROLLBACK POINT: $PREV"
 
-      - name: Smoke test PRODUCTION
+      - name: Point PROD at the promoted digest
         run: |
-          sleep 60
-          echo "=== Production Verification ==="
-          # Health
-          HTTP=$(curl -s -o /dev/null -w "%{http_code}" https://api-prod.docuaction.io/health)
-          echo "/health: $HTTP"
-          [ "$HTTP" = "200" ] || { echo "FAILED"; exit 1; }
-          # Case management auth gate
-          HTTP=$(curl -s -o /dev/null -w "%{http_code}" https://api-prod.docuaction.io/api/v1/case-management/patients)
-          echo "case-mgmt (no auth): $HTTP"
-          [ "$HTTP" = "401" ] || echo "WARNING: expected 401 (FastAPI 0.140 returns 401, not 403 - see docs/deployment/BREAKING_401_vs_403.md)"
-          # Bulletin
-          HTTP=$(curl -s -o /dev/null -w "%{http_code}" https://api-prod.docuaction.io/api/v1/bulletin/health)
-          echo "bulletin: $HTTP"
-          [ "$HTTP" = "200" ] || echo "WARNING: bulletin check failed"
-          # TEFCA
-          HTTP=$(curl -s -o /dev/null -w "%{http_code}" https://api-prod.docuaction.io/api/tefca/status)
-          echo "tefca: $HTTP"
-          [ "$HTTP" = "200" ] || echo "WARNING: tefca check failed"
-          echo "=== Verification complete ==="
+          az webapp config container set --name "$PROD_APP" --resource-group "$PROD_RG" --docker-custom-image-name "${PROD_LOGIN_SERVER}/${IMAGE_REPO}@${{ steps.promote.outputs.digest }}"
+          az webapp restart --name "$PROD_APP" --resource-group "$PROD_RG"
+
+      - name: Wait for a healthy start
+        run: |
+          CODE=000
+          for i in $(seq 1 40); do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' "https://${PROD_APP}.azurewebsites.net/health" || true)
+            if [ "$CODE" = "200" ]; then echo "healthy after $i attempt(s)"; break; fi
+            sleep 15
+          done
+          test "$CODE" = "200" || { echo "PROD did not become healthy (last: $CODE)"; exit 1; }
+
+      - name: Roll back PROD if the release did not come up
+        if: failure() && steps.capture.outputs.previous_image != ''
+        run: |
+          PREV="${{ steps.capture.outputs.previous_image }}"
+          echo "ROLLING BACK PROD to $PREV"
+          az webapp config container set --name "$PROD_APP" --resource-group "$PROD_RG" --docker-custom-image-name "${PREV#DOCKER|}"
+          az webapp restart --name "$PROD_APP" --resource-group "$PROD_RG"
