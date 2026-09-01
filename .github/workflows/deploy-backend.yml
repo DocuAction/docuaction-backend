@@ -51,9 +51,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
+        # github.ref, NOT image_tag. image_tag names an image in ACR and its
+        # value is a SHORT commit sha (`62a9273`); actions/checkout treats only
+        # a full 40-character sha as a commit and looks anything else up as a
+        # branch or tag, so checking it out fails - there is no ref by that
+        # name. The dispatch ref is the right source: main contains the release
+        # commit this candidate was built from.
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.image_tag || github.ref }}
+          ref: ${{ github.ref }}
           fetch-depth: 0
 
       - name: Set up Python 3.12

@@ -419,3 +419,19 @@ def test_an_image_only_deployment_needs_no_repository_checkout():
             assert "run_migrations" in str(step.get("if") or ""), (
                 f"{step.get('name')!r} runs on an image-only deployment, which "
                 f"needs neither the source tree nor Python")
+
+
+def test_image_tag_is_never_used_as_a_git_ref_outside_the_migration_path():
+    """`image_tag` is an ACR tag whose value is a SHORT commit sha. Handing it
+    to actions/checkout fails, because only a full 40-character sha is treated
+    as a commit; anything else is looked up as a branch or tag name. Any
+    ungated checkout must therefore resolve a real git ref."""
+    for job in ("build-and-test", "deploy-dev"):
+        for step in _job(DEPLOY, job)["steps"]:
+            if not str(step.get("uses") or "").startswith("actions/checkout"):
+                continue
+            ref = str((step.get("with") or {}).get("ref") or "")
+            if "image_tag" in ref:
+                assert "run_migrations" in str(step.get("if") or ""), (
+                    f"{job}/{step.get('name')!r} checks out image_tag, an ACR "
+                    f"tag rather than a git ref, on a path that always runs")
