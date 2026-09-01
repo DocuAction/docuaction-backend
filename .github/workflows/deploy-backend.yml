@@ -285,7 +285,13 @@ jobs:
         run: |
           # Captured first, and by digest, so incident response never has to
           # rebuild from source or trust that a tag still means what it meant.
-          PREV=$(az webapp config show -n "$DEV_APP" -g "$DEV_RG" --query linuxFxVersion -o tsv)
+          #
+          # Read straight off /config/web. linuxFxVersion lives there;
+          # /config/appsettings is a DIFFERENT resource holding the application's
+          # secret values, and this identity deliberately cannot read it. The
+          # value is stored WITH its `DOCKER|` prefix and is kept verbatim, so a
+          # rollback restores the byte-exact previous configuration.
+          PREV=$(az rest --method GET --url "https://management.azure.com/subscriptions/${{ vars.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${DEV_RG}/providers/Microsoft.Web/sites/${DEV_APP}/config/web?api-version=2023-12-01" --query properties.linuxFxVersion -o tsv)
           echo "previous_image=$PREV" >> "$GITHUB_OUTPUT"
           echo "ROLLBACK POINT: $PREV"
           {
@@ -339,7 +345,20 @@ jobs:
         run: |
           # THE deployment step. Note what it is NOT: there is no
           # `az webapp deploy --type zip` anywhere in this job.
-          az webapp config container set --name "$DEV_APP" --resource-group "$DEV_RG" --docker-custom-image-name "${DEV_LOGIN_SERVER}/${IMAGE_REPO}@${{ steps.resolve.outputs.digest }}"
+          #
+          # A direct PATCH of /config/web, NOT `az webapp config container set`.
+          # That CLI command reads and rewrites the DOCKER_REGISTRY_SERVER_*
+          # application settings alongside linuxFxVersion, so it invokes
+          # Microsoft.Web/sites/config/list/action against /config/appsettings -
+          # the action that returns SECRET VALUES. The deployment identity does
+          # not have it, and must not: adding it would let a release job read
+          # every credential the app holds. Run 33523427434 failed here for
+          # exactly that reason.
+          #
+          # linuxFxVersion is a property of /config/web, which this identity can
+          # already write with Microsoft.Web/sites/config/write. Patching that
+          # single property changes the image and touches nothing else.
+          az rest --method PATCH --url "https://management.azure.com/subscriptions/${{ vars.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${DEV_RG}/providers/Microsoft.Web/sites/${DEV_APP}/config/web?api-version=2023-12-01" --headers "Content-Type=application/json" --body "{\"properties\":{\"linuxFxVersion\":\"DOCKER|${DEV_LOGIN_SERVER}/${IMAGE_REPO}@${{ steps.resolve.outputs.digest }}\"}}"
           az webapp restart --name "$DEV_APP" --resource-group "$DEV_RG"
 
       - name: Wait for a healthy start
@@ -373,7 +392,12 @@ jobs:
           # rebuild, no dependence on a floating tag.
           PREV="${{ steps.capture.outputs.previous_image }}"
           echo "ROLLING BACK to $PREV"
-          az webapp config container set --name "$DEV_APP" --resource-group "$DEV_RG" --docker-custom-image-name "${PREV#DOCKER|}"
+          # Same least-privilege path as the deploy, and the value is restored
+          # VERBATIM - including its `DOCKER|` prefix - so what comes back is
+          # byte-identical to what was captured before anything moved. The old
+          # form stripped the prefix to satisfy the CLI, which is exactly the
+          # command that needed the appsettings read.
+          az rest --method PATCH --url "https://management.azure.com/subscriptions/${{ vars.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${DEV_RG}/providers/Microsoft.Web/sites/${DEV_APP}/config/web?api-version=2023-12-01" --headers "Content-Type=application/json" --body "{\"properties\":{\"linuxFxVersion\":\"${PREV}\"}}"
           az webapp restart --name "$DEV_APP" --resource-group "$DEV_RG"
           for i in $(seq 1 30); do
             CODE=$(curl -s -o /dev/null -w '%{http_code}' "https://${DEV_APP}.azurewebsites.net/health" || true)

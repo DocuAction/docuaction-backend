@@ -88,9 +88,14 @@ def test_container_deployment_never_uses_zip_deployment(job):
 
 @pytest.mark.parametrize("job", ["deploy-dev", "deploy-prod"])
 def test_deployment_sets_a_container_image(job):
+    """Either supported mechanism counts; what matters is that the job changes
+    the container image. DEV patches linuxFxVersion on /config/web directly,
+    because the CLI form needs an appsettings read this identity must not have.
+    PROD still uses the CLI and is unchanged - it fails closed at its login."""
     body = _steps_text(_job(DEPLOY, job))
-    assert "az webapp config container set" in body, (
-        f"{job} must deploy by setting the container image")
+    cli = "az webapp config container set" in body
+    patch = "az rest --method PATCH" in body and "linuxFxVersion" in body
+    assert cli or patch, f"{job} must deploy by setting the container image"
 
 
 # ── immutability ─────────────────────────────────────────────────────────────
@@ -109,7 +114,8 @@ def test_dev_resolves_a_tag_to_an_immutable_digest_before_changing_anything():
 
 def test_the_deployed_reference_is_a_digest_not_a_bare_tag():
     body = _steps_text(_job(DEPLOY, "deploy-dev"))
-    setter = next(l for l in body.splitlines() if "config container set" in l)
+    setter = next(l for l in body.splitlines()
+                  if "linuxFxVersion" in l and "steps.resolve.outputs.digest" in l)
     assert "@${{ steps.resolve.outputs.digest }}" in setter, (
         "DEV must be pointed at a digest, not a tag")
 
@@ -435,3 +441,74 @@ def test_image_tag_is_never_used_as_a_git_ref_outside_the_migration_path():
                 assert "run_migrations" in str(step.get("if") or ""), (
                     f"{job}/{step.get('name')!r} checks out image_tag, an ACR "
                     f"tag rather than a git ref, on a path that always runs")
+
+
+# ── the release identity must never be able to read application secrets ──────
+
+def _dev_steps():
+    return _job(DEPLOY, "deploy-dev")["steps"]
+
+
+def test_dev_deployment_never_uses_the_cli_that_reads_application_settings():
+    """`az webapp config container set` rewrites the DOCKER_REGISTRY_SERVER_*
+    APPLICATION SETTINGS alongside linuxFxVersion, so it invokes
+    Microsoft.Web/sites/config/list/action against /config/appsettings - the
+    action that returns secret VALUES. The deployment identity does not hold it
+    and must not: granting it would let a release job read every credential the
+    application has. Run 33523427434 failed on exactly that, and the fix was to
+    stop needing the permission rather than to grant it."""
+    # Comment-stripped, per _steps_text: the workflow EXPLAINS this defect in
+    # prose right next to the fix, and a naive substring search would flag the
+    # explanation as the defect.
+    body = _steps_text(_job(DEPLOY, "deploy-dev"))
+    assert "webapp config container set" not in body, (
+        "deploy-dev uses `az webapp config container set`, which reads "
+        "/config/appsettings and needs config/list/action")
+
+
+@pytest.mark.parametrize("needle", ["config/appsettings", "webapp config appsettings"])
+def test_dev_deployment_never_touches_the_appsettings_resource(needle):
+    """linuxFxVersion lives on /config/web. /config/appsettings is a different
+    resource holding secret values, and nothing in a container release has any
+    business reading it."""
+    body = _steps_text(_job(DEPLOY, "deploy-dev"))   # comments stripped
+    assert needle not in body, (
+        f"deploy-dev references {needle!r} in an executed command; the image "
+        f"lives on /config/web and this identity cannot read appsettings")
+
+
+def test_the_image_change_and_the_rollback_both_patch_web_config():
+    """Both mutations use the same least-privilege path, so the rollback cannot
+    be the thing that fails when it is needed most - which is what would have
+    happened before: it used the same over-privileged CLI as the deploy, so a
+    mid-deployment failure would have left DEV on the new image with no
+    automatic way back."""
+    deploy = _step_named(DEPLOY, "deploy-dev", "Point DEV at the candidate image")["run"]
+    rollback = _step_named(DEPLOY, "deploy-dev", "Roll back to the previous image")["run"]
+    for name, body in (("deploy", deploy), ("rollback", rollback)):
+        assert "az rest --method PATCH" in body, f"{name} does not PATCH directly"
+        assert "/config/web?api-version=" in body, f"{name} does not target /config/web"
+        assert "linuxFxVersion" in body, f"{name} does not set linuxFxVersion"
+
+
+def test_rollback_restores_the_captured_value_verbatim():
+    """The captured value includes its `DOCKER|` prefix, because that is how
+    linuxFxVersion is stored. Restoring it unmodified is what makes the rollback
+    byte-exact; the previous form stripped the prefix only to satisfy the CLI
+    that needed the appsettings read."""
+    body = _step_named(DEPLOY, "deploy-dev", "Roll back to the previous image")["run"]
+    assert "${PREV#DOCKER|}" not in body, (
+        "the rollback strips the DOCKER| prefix, so it no longer restores the "
+        "exact value that was captured")
+    assert "${PREV}" in body
+
+
+def test_the_deployment_emits_no_secret_values_to_the_log():
+    """A workflow log is readable by anyone with repository access."""
+    for step in _dev_steps():
+        for line in (step.get("run") or "").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#") or not stripped.startswith("echo"):
+                continue
+            assert "secrets." not in stripped, (
+                f"{step.get('name')!r} echoes a secret expression: {stripped!r}")
