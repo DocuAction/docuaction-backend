@@ -233,14 +233,22 @@ jobs:
       # deployment would have continued having recorded no starting revision at
       # all. The migration step would then have failed AFTER the rollback point
       # was captured but BEFORE the image changed.
+      # ...and ONLY then. image_tag is the ACR tag, a SHORT commit sha, which
+      # actions/checkout resolves as a branch or tag name rather than a commit
+      # (only a full 40-character sha is treated as one). There is no ref named
+      # `62a9273`, so this step fails outright on an image-only deployment that
+      # never needed the source in the first place.
       - name: Checkout the release source
+        if: github.event.inputs.run_migrations == 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.image_tag }}
 
       # `python` is not guaranteed to resolve on the runner image; `python3` is.
-      # Pinned to the version the release was built and verified against.
+      # Pinned to the version the release was built and verified against. Needed
+      # only by Alembic, so it follows the same gate.
       - name: Set up Python 3.12
+        if: github.event.inputs.run_migrations == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'

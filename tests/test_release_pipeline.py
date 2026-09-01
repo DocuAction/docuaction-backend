@@ -404,3 +404,18 @@ def test_the_migration_path_is_still_fail_closed_when_requested():
     migrate = _step_named(DEPLOY, "deploy-dev", "Run approved migrations")
     assert migrate.get("env", {}).get("DB_APP_ROLE") == "docuaction_app"
     assert "MIGRATION_DATABASE_URL" in (migrate.get("run") or "")
+
+
+def test_an_image_only_deployment_needs_no_repository_checkout():
+    """The checkout exists for Alembic - the job's own comment says so - and it
+    resolves `image_tag`, which is the ACR tag: a SHORT commit sha. Only a full
+    40-character sha is treated as a commit by actions/checkout; a short one is
+    looked up as a branch or tag name, and no ref named `62a9273` exists. So on
+    an image-only deployment this step failed on a source tree nothing was
+    going to read."""
+    for step in _job(DEPLOY, "deploy-dev")["steps"]:
+        uses = str(step.get("uses") or "")
+        if uses.startswith("actions/checkout") or uses.startswith("actions/setup-python"):
+            assert "run_migrations" in str(step.get("if") or ""), (
+                f"{step.get('name')!r} runs on an image-only deployment, which "
+                f"needs neither the source tree nor Python")
