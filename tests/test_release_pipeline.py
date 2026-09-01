@@ -329,3 +329,37 @@ def test_an_unreadable_alembic_revision_stops_the_deployment():
     assert "||" not in body, (
         "a swallowed failure here records no starting revision and lets the "
         "deployment continue anyway")
+
+
+# ── the pipeline must only read inputs it declares ───────────────────────────
+
+def _dispatch_inputs(path: str) -> set:
+    """The workflow_dispatch inputs a workflow declares.
+
+    PyYAML is YAML 1.1, where the bare key `on` parses as the boolean True
+    rather than the string "on" - hence the fallback. Reading doc["on"] here
+    would raise KeyError on every workflow in this repository.
+    """
+    doc = _doc(path)
+    trigger = doc.get("on", doc.get(True)) or {}
+    return set((trigger.get("workflow_dispatch") or {}).get("inputs") or {})
+
+
+@pytest.mark.parametrize("path", [DEPLOY, CONTAINER])
+def test_every_input_reference_names_a_declared_input(path):
+    """build-and-test read `github.event.inputs.tag` where only `image_tag` was
+    declared. An undeclared input is not an error anywhere in GitHub Actions:
+    the expression evaluates to empty, the `|| github.ref` fallback silently
+    took over, and the job verified whatever branch the dispatch was started
+    from instead of the release being deployed. Nothing failed, and a
+    deployment that tests the wrong source reports success just as loudly as
+    one that tests the right source - which is why this is asserted rather
+    than read.
+    """
+    declared = _dispatch_inputs(path)
+    referenced = set(re.findall(
+        r"(?:github\.event\.)?inputs\.([A-Za-z_][A-Za-z0-9_-]*)", _text(path)))
+    undeclared = referenced - declared
+    assert not undeclared, (
+        f"{os.path.basename(path)} reads workflow input(s) it never declares: "
+        f"{sorted(undeclared)} (declared: {sorted(declared)})")
