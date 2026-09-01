@@ -51,9 +51,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
+        # github.ref, NOT image_tag. image_tag names an image in ACR and its
+        # value is a SHORT commit sha (`62a9273`); actions/checkout treats only
+        # a full 40-character sha as a commit and looks anything else up as a
+        # branch or tag, so checking it out fails - there is no ref by that
+        # name. The dispatch ref is the right source: main contains the release
+        # commit this candidate was built from.
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.image_tag || github.ref }}
+          ref: ${{ github.ref }}
           fetch-depth: 0
 
       - name: Set up Python 3.12
@@ -233,14 +239,22 @@ jobs:
       # deployment would have continued having recorded no starting revision at
       # all. The migration step would then have failed AFTER the rollback point
       # was captured but BEFORE the image changed.
+      # ...and ONLY then. image_tag is the ACR tag, a SHORT commit sha, which
+      # actions/checkout resolves as a branch or tag name rather than a commit
+      # (only a full 40-character sha is treated as one). There is no ref named
+      # `62a9273`, so this step fails outright on an image-only deployment that
+      # never needed the source in the first place.
       - name: Checkout the release source
+        if: github.event.inputs.run_migrations == 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.image_tag }}
 
       # `python` is not guaranteed to resolve on the runner image; `python3` is.
-      # Pinned to the version the release was built and verified against.
+      # Pinned to the version the release was built and verified against. Needed
+      # only by Alembic, so it follows the same gate.
       - name: Set up Python 3.12
+        if: github.event.inputs.run_migrations == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -281,6 +295,16 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Capture the current Alembic revision
+        # Gated on the SAME input as the migration below, because that is the
+        # only thing it exists to serve: it records the revision to come back
+        # to if a migration has to be undone. Ungated it made EVERY deployment
+        # require PostgreSQL connectivity, including image-only ones that touch
+        # no schema - and GitHub-hosted runners have no network path to the DEV
+        # database (its firewall lists App Service outbound addresses only).
+        # So an image-only deploy failed here, before the image ever changed,
+        # for a revision nobody was going to use. Migrations run out of band
+        # through the authorised DBA path; this deployment ships an image.
+        if: github.event.inputs.run_migrations == 'true'
         run: |
           # Recorded before migrating so the exact starting revision is known
           # if a downgrade is ever needed.
