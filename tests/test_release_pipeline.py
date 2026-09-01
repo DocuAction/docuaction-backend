@@ -512,3 +512,24 @@ def test_the_deployment_emits_no_secret_values_to_the_log():
                 continue
             assert "secrets." not in stripped, (
                 f"{step.get('name')!r} echoes a secret expression: {stripped!r}")
+
+
+def test_the_acceptance_probe_targets_a_route_the_application_defines():
+    """The probe asserted an anonymous caller is refused, but aimed at
+    /api/tefca/arc/entities - a path the ARC router never defines. It returned
+    404, not 401, so the check failed and rolled a healthy candidate back
+    (run 33534309456). The assertion was right; the URL was wrong.
+
+    Pinned against the router source rather than a hardcoded list, so renaming
+    the route breaks this test instead of the next deployment."""
+    import re
+    body = _steps_text(_job(DEPLOY, "deploy-dev"))
+    probe = next(l for l in body.splitlines()
+                 if "http_code" in l and "/api/tefca/arc/" in l)
+    path = re.search(r"/api/tefca/arc/([A-Za-z0-9\-_]+)", probe).group(1)
+    src = os.path.join(REPO, "app", "tefca_registry", "review_routes.py")
+    routes = set(re.findall(r'@router\.(?:get|post|put|patch|delete)\("/([A-Za-z0-9\-_]+)',
+                            io.open(src, encoding="utf-8").read()))
+    assert path in routes, (
+        f"the acceptance probe hits /api/tefca/arc/{path}, which the ARC router "
+        f"does not define; it defines {sorted(routes)}")

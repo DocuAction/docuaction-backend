@@ -381,7 +381,17 @@ jobs:
           echo "--- health ---"
           curl -fsS "$BASE/health" > /dev/null && echo ok
           echo "--- an unauthenticated caller must still be refused ---"
-          CODE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/tefca/arc/entities")
+          # A route that ACTUALLY EXISTS. /api/tefca/arc/entities never did:
+          # the ARC router (app/tefca_registry/review_routes.py, prefix
+          # /api/tefca/arc) has review-rules, samples and reviews, but no
+          # entities. So this probe returned 404 rather than 401, and the check
+          # correctly refused to accept a deployment it could not verify -
+          # run 33534309456, after the candidate had already come up healthy.
+          #
+          # 404 stays a FAILURE below, deliberately: on a route that is supposed
+          # to exist, 404 means the router did not mount, which is exactly the
+          # kind of silent breakage this check is for.
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/tefca/arc/reviews")
           echo "anonymous -> $CODE"
           case "$CODE" in 401|403) echo "correctly gated";; *) echo "FAIL: expected 401/403, got $CODE"; exit 1;; esac
 
