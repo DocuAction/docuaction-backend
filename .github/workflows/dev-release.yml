@@ -102,6 +102,7 @@ jobs:
       id-token: write
       contents: read
     outputs:
+      readable: ${{ steps.snapshot.outputs.readable }}
       baseline_json: ${{ steps.snapshot.outputs.baseline_json }}
       intake_count: ${{ steps.snapshot.outputs.intake_count }}
     steps:
@@ -190,7 +191,12 @@ jobs:
   deploy:
     name: Deploy to Azure DEV
     needs: [build, migration-gate, gov-baseline]
-    if: needs.migration-gate.outputs.proceed == 'true'
+    # Both must hold: migration-gate confirms it is safe to deploy against
+    # DEV's schema, and gov-baseline confirms a real (not empty-because-
+    # unreadable) pre-deploy Government-data snapshot exists for gov-verify
+    # to compare against afterwards. Deploying with an empty baseline would
+    # make gov-verify's "no mutation found" trivially, meaninglessly true.
+    if: needs.migration-gate.outputs.proceed == 'true' && needs.gov-baseline.outputs.readable == 'true'
     uses: ./.github/workflows/deploy-backend.yml
     with:
       environment: dev
