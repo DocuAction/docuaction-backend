@@ -179,9 +179,14 @@ def test_both_deployments_are_bound_to_a_protected_environment():
 
 def test_a_tag_push_builds_but_cannot_deploy():
     """Both deploy jobs gate on an input that is empty for a push event, so a
-    tag push produces an artifact and stops."""
+    tag push produces an artifact and stops. `inputs.environment` (not
+    `github.event.inputs.environment`) is what makes this also work under a
+    workflow_call from dev-release.yml, which has no `github.event.inputs` at
+    all - the `inputs` context is what's shared between workflow_dispatch and
+    workflow_call, and it is empty for a push event exactly like the old
+    reference was."""
     for job in ("deploy-dev", "deploy-prod"):
-        assert "github.event.inputs.environment" in _job(DEPLOY, job)["if"]
+        assert "inputs.environment" in _job(DEPLOY, job)["if"]
 
 
 # ── promotion preserves identity ─────────────────────────────────────────────

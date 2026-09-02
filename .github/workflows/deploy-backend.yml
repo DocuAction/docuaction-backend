@@ -7,7 +7,7 @@ name: Deploy Backend
 # itself. Do not "fix" this by loosening the conditions unless you actually
 # want a tag push to reach production unattended.
 #
-# Every `inputs.X` reference below (previously `github.event.inputs.X`
+# Every `inputs.<name>` reference below (previously `github.event.inputs.<name>`
 # throughout) resolves identically under workflow_dispatch and workflow_call,
 # so dev-release.yml can invoke deploy-dev directly with a digest it just
 # built, instead of an operator copying a tag out of one run's summary into
