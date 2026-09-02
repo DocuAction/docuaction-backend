@@ -224,10 +224,23 @@ def do_run_migrations(connection):
 
 
 async def run_async_migrations():
+    # -- run as the owner role ---------------------------------------------
+    # docuaction_owner has no LOGIN. Migrations connect as a MEMBER of it (the
+    # dedicated migration identity) and must assume it BEFORE any DDL, or every
+    # object is created owned by the connecting principal instead - which is
+    # what happened to rce_delivery_jobs in Azure DEV on 2026-09-02 and needed
+    # a recorded ALTER OWNER afterwards. asyncpg sends server_settings in the
+    # startup packet, so `role` is in effect before Alembic issues a statement.
+    # Opt-in via DB_MIGRATION_ROLE; unset leaves behaviour exactly as before.
+    connect_args = {}
+    migration_role = os.getenv("DB_MIGRATION_ROLE", "").strip()
+    if migration_role:
+        connect_args["server_settings"] = {"role": migration_role}
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=connect_args,
     )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
