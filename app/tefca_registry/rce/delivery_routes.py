@@ -22,16 +22,21 @@ path; this is the operational one.
 
 WHO MAY REGISTER A DELIVERY
 ───────────────────────────
-`require_role("manager")`, which is ABOVE contributor. That is deliberate and it
-is a change from the synchronous route's `contributor` floor.
+`require_role("program_manager")`.
 
-`analyst` is an alias for `contributor` in `core/security.ROLE_ALIASES`, so a
-contributor-gated registration route is one an analyst can call. An analyst
-establishing what the official Government source data IS would collapse the
-separation this workflow is built on — Data Operations registers the delivery,
-the analyst reviews what it produced. The floor is set where it excludes the
-analyst role and nothing higher, because Data Operations is not a reviewer, a QA
-lead or a program manager.
+The first version set this to `manager` (level 3), reasoning from the
+`analyst -> contributor` alias. Independent review found that the CONTRACT
+Analyst is not that alias: `case_assignment.ROLE_ANALYST` is `reviewer`, level
+4, "Task 3/4/5 front-line reviewers" — and 4 is above 3. A manager floor would
+have let the actual analyst role establish what the official Government source
+data IS, which collapses the separation this workflow is built on.
+
+The hierarchy is linear, so the only floor that excludes reviewer (4),
+senior_analyst (5) and qalead (6) — every review-side role — is
+program_manager (7). §3 of the workflow names the page as for "authorized Data
+Operations/Program personnel", so that floor is the stated intent, not an
+over-restriction. If a dedicated Data Operations role is ever introduced it
+belongs between 6 and 7 and this constant is the one place to change.
 """
 
 from __future__ import annotations
@@ -53,8 +58,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/tefca/rce", tags=["TEFCA RCE Deliveries"])
 
 #: The role floor for establishing official Government source data. See the
-#: module docstring — this is above `contributor` on purpose.
-DATA_OPERATIONS_ROLE = "manager"
+#: module docstring — it must sit ABOVE every review-side role.
+DATA_OPERATIONS_ROLE = "program_manager"
 
 
 def _client_ip(request: Request):

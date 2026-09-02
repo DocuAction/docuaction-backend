@@ -510,8 +510,19 @@ async def verify(
     intake_id: str,
     body: VerifyRequest,
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("contributor")),
+    user=Depends(require_role("program_manager")),
 ):
+    """PROGRAM MANAGER, raised from contributor on independent review.
+
+    `verify_and_classify` mints ReviewRecord rows — it decides WHAT ENTERS THE
+    REVIEW QUEUE. At contributor, the contract Analyst (reviewer, level 4) could
+    call it and choose their own review population outside the frozen per-QHIN
+    sample. Shaping the population is the Program Manager's act; the analyst's
+    act is the determination on cases they hold. The official path is
+    `POST /api/tefca/workflow/deliveries/{id}/review-cycle`, which verifies the
+    sample members; this route remains for an explicitly chosen supplementary
+    run under the same authority.
+    """
     from sqlalchemy import select
     from app.tefca_registry.rce import models as m
     from app.tefca_registry.rce.arc_pipeline import verify_and_classify

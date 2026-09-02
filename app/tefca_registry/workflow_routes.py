@@ -15,9 +15,12 @@ is `qhin_sampling.finalize_plan` and is reached through the existing
 `POST /samples` — nothing here recalculates it, previews an alternative to it,
 or exposes a knob that would let a caller draw a different one.
 
-WHAT THIS ROUTER ADDS is the read surface those screens were missing, plus one
-write: bulk workload distribution, which routes every individual assignment
-through the existing audited `case_assignment.assign`.
+WHAT THIS ROUTER ADDS is the read surface those screens were missing, plus two
+writes: bulk workload distribution, which routes every individual assignment
+through the existing audited `case_assignment.assign`; and official review
+cycle creation, which independent review found had NO route at all — see
+`review_cycle.py` for what was missing and why this is the transition the
+workflow could not make without it.
 """
 
 from __future__ import annotations
@@ -32,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import require_role
+from app.tefca_registry.case_assignment import ROLE_SUPERVISOR
 
 logger = logging.getLogger(__name__)
 
@@ -141,9 +145,15 @@ async def distribute(
     body: DistributionRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("manager")),
+    user=Depends(require_role(ROLE_SUPERVISOR)),
 ):
     """Even workload distribution. MAKES NO COMPLIANCE DECISION.
+
+    Gated at `case_assignment.ROLE_SUPERVISOR` — the SAME floor `assign()`
+    enforces per case. The first version gated this at manager (3) while
+    `assign()` requires senior_analyst (5), so a manager's every distribution
+    would have been individually refused. One constant, imported, so the two
+    cannot drift again.
 
     It decides who LOOKS at a case, never what the case concludes. There is no
     scoring, no weighting by classification and no routing by finding — any of
@@ -188,6 +198,69 @@ async def distribute(
     result["preview"] = False
     result["skipped_already_held"] = len(body.review_ids) - len(plan)
     return result
+
+
+# ── official review cycle ────────────────────────────────────────────────────
+
+class ReviewCycleRequest(BaseModel):
+    review_type: str = Field("quarterly", max_length=40)
+    confidence_level: float = Field(0.95, gt=0.5, lt=1.0)
+    margin_of_error: float = Field(0.05, gt=0.0, lt=0.5)
+    proportion: float = Field(0.5, gt=0.0, lt=1.0)
+    use_fpc: bool = True
+    include_held: bool = Field(
+        False, description="HELD eligibility is an open ONC question; excluded "
+                           "by default and recorded on the plan either way.")
+    random_seed: Optional[int] = None
+    sample_name: Optional[str] = Field(None, max_length=200)
+    batch: int = Field(
+        200, ge=1, le=1000,
+        description="Members verified per call. Repeat until remaining is 0.")
+
+
+@router.post("/deliveries/{intake_id}/review-cycle",
+             summary="Create (or continue) the official review cycle for a delivery")
+async def create_review_cycle_route(
+    intake_id: str,
+    body: ReviewCycleRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("program_manager")),
+):
+    """Reconciliation gate → approved per-QHIN sample → verify members → link.
+
+    PROGRAM MANAGER: creating a review cycle is the act that decides what gets
+    reviewed, and §17 assigns it to program management.
+
+    Refused with 409 when reconciliation has not PASSED — server-side, on every
+    call, regardless of what any screen showed. Idempotent: the sample is drawn
+    once and never redrawn; verification runs only for members not yet linked
+    to a review case. Bounded per call; poll `remaining`.
+    """
+    from app.tefca_registry.review_cycle import CycleRefused, create_review_cycle
+
+    try:
+        return await create_review_cycle(
+            db, intake_id, user=user, review_type=body.review_type,
+            confidence=body.confidence_level, margin=body.margin_of_error,
+            proportion=body.proportion, use_fpc=body.use_fpc,
+            include_held=body.include_held, seed=body.random_seed,
+            sample_name=body.sample_name, batch=body.batch,
+            ip_address=_client_ip(request))
+    except CycleRefused as exc:
+        raise HTTPException(409, str(exc))
+
+
+@router.get("/deliveries/{intake_id}/review-cycle",
+            summary="The official plans drawn for a delivery, and their completion")
+async def read_review_cycle_route(
+    intake_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("viewer")),
+):
+    from app.tefca_registry.review_cycle import read_review_cycle
+
+    return await read_review_cycle(db, intake_id)
 
 
 # ── analyst verification workspace ───────────────────────────────────────────

@@ -21,20 +21,38 @@ never the entity's name, never its OID prefix. That is the same rule
 `qhin_sampling.resolve_qhin_strata` follows, and this module calls that function
 rather than restating it — one resolver, one answer.
 
+REVIEWS ARE SCOPED TO THE DELIVERY — THIS WAS WRONG THE FIRST TIME
+──────────────────────────────────────────────────────────────────
+The first version selected ReviewRecords by ENTITY only. Promotion reuses a
+canonical entity across deliveries (the same organisation delivered in
+September and October is one entity), so a rollup for October counted
+September's review cases as October's. Reviews are now scoped exactly as
+`case_assignment._queue` scopes them: `verification_results.source_intake_id`,
+which every review created through the official cycle carries, plus
+`sample_id` when a specific plan is asked for.
+
+WHY THERE ARE NO LARGE `IN (...)` LISTS
+───────────────────────────────────────
+The delivered population is 23,562 promoted entities and 100K is expected.
+asyncpg refuses a statement with more than 32,767 bind parameters, so an
+expanded `.in_(ids)` works on today's file and raises on the next size up.
+Entity sets are expressed as SUBQUERIES on the curated records the database
+already holds; the one place a Python list must be sent (case states for a
+list of review ids) is chunked.
+
 WHY THE CASE STATES ARE COMPUTED IN ONE PASS
 ────────────────────────────────────────────
 `case_assignment.case_state` answers for ONE case and issues its own query for
 that case's events. Correct, and completely unusable here: a rollup over a 25K
 delivery would issue 25K queries. So this loads every review record and every
-decision event for the population in TWO queries and applies the SAME rules
-`case_state` applies — `_latest_determination` and `_qa_after` are imported from
-`qa_gate` rather than reimplemented, so the two can never drift apart on the
-question of what supersedes what.
+decision event for the population in a handful of queries and applies the SAME
+rules `case_state` applies — `_latest_determination` and `_qa_after` are
+imported from `qa_gate` rather than reimplemented.
 
 NOTHING HERE MAKES A DECISION
 ─────────────────────────────
 Counting, grouping and workload distribution only. Which analyst holds a case is
-an operational matter; what the case CONCLUDES is a D1-D9 determination and a QA
+an operational matter; what the case CONCLUDES is a determination and a QA
 approval, and neither is touched.
 """
 
@@ -42,34 +60,67 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from sqlalchemy import select
 
 from app.tefca_registry import models as reg
+from app.tefca_registry.case_assignment import (APPROVED, AVAILABLE, CLAIMED,
+                                                ESCALATED, RETURNED,
+                                                SUBMITTED_FOR_QA)
 from app.tefca_registry.rce import models as m
 
 logger = logging.getLogger(__name__)
 
 UNRESOLVED_QHIN = "UNRESOLVED"
 
-#: The case states, in the order a Program Manager reads them. Same vocabulary
-#: as `case_assignment`; imported rather than redefined.
-from app.tefca_registry.case_assignment import (  # noqa: E402
-    APPROVED, AVAILABLE, CLAIMED, ESCALATED, RETURNED, SUBMITTED_FOR_QA)
-
 STATE_ORDER = (AVAILABLE, CLAIMED, SUBMITTED_FOR_QA, RETURNED, ESCALATED,
                APPROVED)
+
+#: Comfortably under asyncpg's 32,767 bind-parameter ceiling.
+CHUNK = 10_000
 
 
 class WorkloadRefused(RuntimeError):
     """The rollup could not be produced, and the reason is stated."""
 
 
+def _chunks(items: List[Any], size: int = CHUNK) -> Iterable[List[Any]]:
+    for start in range(0, len(items), size):
+        yield items[start:start + size]
+
+
+# ── the review population for a delivery ─────────────────────────────────────
+
+def _reviews_for(intake_id, sample_id=None):
+    """The SELECT for review records that belong to THIS delivery.
+
+    Scoped the way `case_assignment._queue` scopes: by the intake id the review
+    was created against, carried in `verification_results`. Reviews created by
+    the DQ bridge and by the official cycle both carry it. A review created by
+    the older manual `/verify` route does not, and is deliberately NOT counted
+    here — it was not created against a delivery, so it is not this delivery's
+    review population.
+    """
+    stmt = select(reg.ReviewRecord).where(
+        reg.ReviewRecord.verification_results["source_intake_id"].astext
+        == str(intake_id))
+    if sample_id is not None:
+        stmt = stmt.where(reg.ReviewRecord.sample_id == sample_id)
+    return stmt
+
+
+def _promoted_entities(intake_id):
+    """Subquery: canonical entity ids promoted from this delivery."""
+    return (select(m.RceCuratedRecord.canonical_entity_id)
+            .where(m.RceCuratedRecord.source_intake_id == intake_id,
+                   m.RceCuratedRecord.canonical_entity_id.isnot(None)))
+
+
 # ── set-based case state ─────────────────────────────────────────────────────
 
 async def case_states(db, review_ids: List[str]) -> Dict[str, str]:
-    """The workflow state of many cases, in two queries rather than 2N.
+    """The workflow state of many cases, in a handful of queries rather than 2N.
 
     Applies exactly the rules `case_assignment.case_state` applies:
 
@@ -77,24 +128,24 @@ async def case_states(db, review_ids: List[str]) -> Dict[str, str]:
       * a determination in force, with QA after it → that QA action
       * a determination in force, with no QA after it → SUBMITTED_FOR_QA
       * no determination → CLAIMED if held, else AVAILABLE
-
-    `_latest_determination` and `_qa_after` come from `qa_gate`, so "which
-    determination is in force" is decided in one place for the whole system.
     """
     from app.tefca_registry.qa_gate import _latest_determination, _qa_after
 
     if not review_ids:
         return {}
 
-    records = (await db.execute(
-        select(reg.ReviewRecord.review_id, reg.ReviewRecord.reportable_at,
-               reg.ReviewRecord.assigned_to_user_id)
-        .where(reg.ReviewRecord.review_id.in_(review_ids)))).all()
-
+    records: List[Tuple[str, Any, Any]] = []
+    events: List[Any] = []
     E = reg.ReviewDecisionEvent
-    events = (await db.execute(
-        select(E).where(E.review_id.in_(review_ids))
-        .order_by(E.review_id, E.sequence_number))).scalars().all()
+    for chunk in _chunks(list(review_ids)):
+        records.extend((await db.execute(
+            select(reg.ReviewRecord.review_id, reg.ReviewRecord.reportable_at,
+                   reg.ReviewRecord.assigned_to_user_id)
+            .where(reg.ReviewRecord.review_id.in_(chunk)))).all())
+        events.extend((await db.execute(
+            select(E).where(E.review_id.in_(chunk))
+            .order_by(E.review_id, E.sequence_number))).scalars().all())
+
     by_review: Dict[str, List[Any]] = {}
     for event in events:
         by_review.setdefault(event.review_id, []).append(event)
@@ -126,10 +177,9 @@ async def qhin_rollup(db, intake_id, *, sample_id=None,
                       include_held: bool = False) -> Dict[str, Any]:
     """Population and review progress for one delivery, grouped by QHIN.
 
-    `sample_id` narrows the REVIEW columns to one drawn sample — the review
-    population — while the POPULATION column stays the whole delivery. Those are
-    different numbers and a screen that showed only one of them would be
-    answering a different question from the one being asked.
+    `sample_id` narrows the REVIEW columns to one drawn plan while the
+    POPULATION column stays the whole delivery. Those are different numbers and
+    a screen that showed only one would be answering a different question.
     """
     from app.tefca_registry.qhin_sampling import resolve_qhin_strata
 
@@ -140,7 +190,6 @@ async def qhin_rollup(db, intake_id, *, sample_id=None,
     eligible, unresolved = await resolve_qhin_strata(
         db, intake_id, include_held=include_held)
 
-    # entity -> QHIN, from the canonical edge only.
     qhin_of: Dict[Any, str] = {}
     population: Dict[str, int] = {}
     for unit in eligible:
@@ -148,16 +197,9 @@ async def qhin_rollup(db, intake_id, *, sample_id=None,
         population[unit["qhin"]] = population.get(unit["qhin"], 0) + 1
 
     names = await qhin_names(db, list(population.keys()))
-    levels = await _entity_levels(db, list(qhin_of.keys()))
+    levels = await _entity_levels(db, intake_id)
 
-    # ── the review population ────────────────────────────────────────────────
-    stmt = select(reg.ReviewRecord).where(
-        reg.ReviewRecord.entity_id.in_(list(qhin_of.keys()))
-        if qhin_of else False)
-    if sample_id is not None:
-        stmt = stmt.where(reg.ReviewRecord.sample_id == sample_id)
-    reviews = (await db.execute(stmt)).scalars().all() if qhin_of else []
-
+    reviews = (await db.execute(_reviews_for(intake_id, sample_id))).scalars().all()
     states = await case_states(db, [r.review_id for r in reviews])
 
     per_qhin: Dict[str, Dict[str, Any]] = {}
@@ -233,6 +275,11 @@ async def qhin_rollup(db, intake_id, *, sample_id=None,
             "QHIN is the canonical managed_by_qhin edge written at promotion. "
             "Participant and Subparticipant are the delivered entity_level. No "
             "relationship is inferred from name, OID or address."),
+        "review_scope": (
+            "Review cases are those created against this delivery "
+            "(verification_results.source_intake_id), narrowed to sample_id "
+            "when given. Cases from other deliveries of the same entities are "
+            "not counted."),
     }
 
 
@@ -268,8 +315,7 @@ async def qhin_detail(db, intake_id, qhin_entity_id, *, sample_id=None,
 
     This is the screen a PM assigns from, so it carries what an assignment
     decision needs — the entity, its level, its parent, who holds the case and
-    what state it is in — and nothing else. Evidence and determinations live in
-    the analyst's workspace.
+    what state it is in — and nothing else.
     """
     from app.tefca_registry.qhin_sampling import resolve_qhin_strata
 
@@ -287,11 +333,9 @@ async def qhin_detail(db, intake_id, qhin_entity_id, *, sample_id=None,
         .where(reg.TefcaRegEntity.id.in_(page)))).scalars().all()}
     parents = await _parent_names(db, page)
 
-    stmt = select(reg.ReviewRecord).where(
-        reg.ReviewRecord.entity_id.in_(page))
-    if sample_id is not None:
-        stmt = stmt.where(reg.ReviewRecord.sample_id == sample_id)
-    reviews = (await db.execute(stmt)).scalars().all()
+    reviews = (await db.execute(
+        _reviews_for(intake_id, sample_id)
+        .where(reg.ReviewRecord.entity_id.in_(page)))).scalars().all()
     by_entity: Dict[Any, Any] = {r.entity_id: r for r in reviews}
     states = await case_states(db, [r.review_id for r in reviews])
 
@@ -339,31 +383,30 @@ async def plan_distribution(db, review_ids: List[str],
     It decides who LOOKS at a case, never what the case concludes. There is
     deliberately no scoring, no priority weighting by bucket, and no routing by
     finding — any of those would be the system forming a view about an entity
-    before an analyst has, and that view would then be the one the analyst is
-    arguing against.
+    before an analyst has.
 
     Cases already held by someone are skipped rather than reassigned: taking a
-    case out of an analyst's hands mid-review is a supervisor's act, and it has
-    its own audited route (`case_assignment.assign`).
+    case out of an analyst's hands mid-review is a supervisor's act with its
+    own audited route (`case_assignment.assign`).
 
-    Deterministic — cases in the order given, analysts round-robin — so the same
-    plan is produced twice and a PM can preview it before applying.
+    Deterministic — cases sorted, analysts round-robin — so the same plan is
+    produced twice and a PM can preview it before applying.
     """
     if not analyst_ids:
         raise WorkloadRefused("No analysts were given to distribute across.")
     if not review_ids:
         return []
 
-    records = (await db.execute(
-        select(reg.ReviewRecord.review_id, reg.ReviewRecord.assigned_to_user_id)
-        .where(reg.ReviewRecord.review_id.in_(review_ids)))).all()
-    unassigned = [rid for rid, holder in records if holder is None]
-    unassigned.sort()
+    records: List[Tuple[str, Any]] = []
+    for chunk in _chunks(list(review_ids)):
+        records.extend((await db.execute(
+            select(reg.ReviewRecord.review_id,
+                   reg.ReviewRecord.assigned_to_user_id)
+            .where(reg.ReviewRecord.review_id.in_(chunk)))).all())
+    unassigned = sorted(rid for rid, holder in records if holder is None)
 
-    plan: List[Tuple[str, uuid.UUID]] = []
-    for index, review_id in enumerate(unassigned):
-        plan.append((review_id, analyst_ids[index % len(analyst_ids)]))
-    return plan
+    return [(review_id, analyst_ids[index % len(analyst_ids)])
+            for index, review_id in enumerate(unassigned)]
 
 
 async def apply_distribution(db, plan: List[Tuple[str, uuid.UUID]], *, user,
@@ -375,10 +418,6 @@ async def apply_distribution(db, plan: List[Tuple[str, uuid.UUID]], *, user,
     same authorisation check, the same refusal rules and the same audit row a
     single manual assignment gets. Bulk is a convenience over the controlled
     act, never a way around it.
-
-    A refused assignment does not abort the batch — one case that cannot be
-    assigned should not cost the other two hundred — but every refusal is
-    returned with its reason.
     """
     from app.tefca_registry.case_assignment import AssignmentRefused, assign
 
@@ -424,12 +463,11 @@ async def qhin_names(db, qhin_ids: List[str]) -> Dict[str, str]:
     return {str(i): (display or name) for i, name, display in rows}
 
 
-async def _entity_levels(db, entity_ids: List[Any]) -> Dict[Any, str]:
-    if not entity_ids:
-        return {}
+async def _entity_levels(db, intake_id) -> Dict[Any, str]:
+    """entity_id -> entity_level for everything promoted from this delivery."""
     rows = (await db.execute(
         select(reg.TefcaRegEntity.id, reg.TefcaRegEntity.entity_level)
-        .where(reg.TefcaRegEntity.id.in_(entity_ids)))).all()
+        .where(reg.TefcaRegEntity.id.in_(_promoted_entities(intake_id))))).all()
     return {i: level for i, level in rows}
 
 

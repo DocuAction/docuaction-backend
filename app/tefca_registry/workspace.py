@@ -460,27 +460,34 @@ async def _section_usps(db, source, curated):
 
 
 def _address_of(source, curated) -> Optional[Dict[str, Any]]:
-    """The delivered address, from Area 1. Not a curated or normalised one."""
+    """The delivered address, from Area 1, by the locked 41-field map's names.
+
+    The first version guessed field names (`address`, `street`, `addressline1`)
+    and matched NONE of the delivered columns, so every record reached USPS
+    with no street and reported INSUFFICIENT_IDENTIFIER. Worse, the closest
+    fuzzy match would have been `address_text` — which `field_map` documents
+    as the literal label "Primary" on 75% of delivered rows and "must never be
+    parsed as an address". So the names come from the map, exactly, and
+    `address_text` is deliberately not read.
+    """
     parsed = dict(getattr(source, "parsed", None) or {})
     if not parsed:
         return None
 
-    def pick(*names):
-        for name in names:
-            for key in parsed:
-                if key.lower().replace("_", "") == name:
-                    value = (parsed.get(key) or "").strip()
-                    if value:
-                        return value
-        return None
+    def field(name):
+        value = parsed.get(name)
+        return value.strip() if isinstance(value, str) and value.strip() else None
 
     return {
-        "street": pick("address", "addressline1", "street", "addr1"),
-        "street2": pick("addressline2", "addr2"),
-        "city": pick("city", "addresscity"),
-        "state": pick("state", "addressstate"),
-        "zip": pick("zip", "zipcode", "postalcode", "addresspostalcode"),
-        "basis": "As delivered by ONC/RCE. Never a curated value.",
+        "street": field("address_line"),
+        "street2": None,
+        "city": field("address_city"),
+        "state": field("address_state"),
+        "zip": field("address_postalCode"),
+        "country": field("address_country"),
+        "basis": ("As delivered by ONC/RCE in address_line / address_city / "
+                  "address_state / address_postalCode. address_text is not an "
+                  "address on most rows and is not read. Never a curated value."),
     }
 
 

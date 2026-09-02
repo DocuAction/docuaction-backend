@@ -10,7 +10,7 @@ keeps the job row honest about where the run actually is.
     quality_engine.run_quality    the rule set and the Issue Ledger
     curation.curate_delivery      Area 2 and AUTO_SAFE corrections
     promotion.promote_delivery    canonical entities and the QHIN / parent edges
-    arc_pipeline.verify_and_classify   D1-D6, B1-B4, tier routing
+    (verification)                connector READINESS only — see below
     reconciliation.reconcile_delivery  the hard A-F gate
 
 None of that is reimplemented, wrapped or "improved" here. The 2,000-row
@@ -33,6 +33,37 @@ The judgements in this system are the D1-D9 analyst determination and the QA
 approval, and neither is touched here. `POST /deliveries/{id}/promote` remains
 exactly as it was for the reviewer-initiated case.
 
+WHY VERIFICATION IS NOT RUN HERE ANY MORE
+─────────────────────────────────────────
+The first version of this runner verified a bounded "seed" of promoted entities
+inside the delivery job. Independent review found that was wrong in three ways:
+
+  * `verify_and_classify` is not idempotent — every call mints NEW ReviewRecord
+    rows for the same entities. Re-registering a delivery, or re-running the
+    stage after a failure, doubled the review population.
+  * The seed was not the sample. The approved methodology is
+    `qhin_sampling.finalize_plan`; 250 arbitrary cases by OID order sat in the
+    analyst queue beside the official sample, indistinguishable from it.
+  * It spent shared Government source quota (NPPES, PECOS, SAM, LEIE) on
+    entities nobody had decided to review.
+
+Verification now runs where the methodology says it does: when the Program
+Manager creates the review cycle, against the members of the frozen sample —
+see `review_cycle.create_review_cycle`. The VERIFICATION stage here records
+connector readiness only, so the dashboard can still say whether the
+Government sources are reachable before a cycle is drawn. Reconciliation is
+unaffected: its F check is `F ⊆ E`, which holds with F = 0.
+
+THE HEARTBEAT RUNS ON ITS OWN SESSION
+─────────────────────────────────────
+`ingest_delivery` holds ONE transaction across every 2,000-row batch so that a
+crash rolls Area 1 back entirely — that is its line-count contract. Writing a
+heartbeat on that same session mid-stage would COMMIT the stage's partial work
+and destroy the contract. So the heartbeat is a background task with its own
+session from `async_session_maker`, and it touches nothing but the job row.
+Without it a 100K-row ingestion that legitimately runs past the stale
+threshold would be reaped while healthy.
+
 WHY A FAILED STAGE DOES NOT ALWAYS FAIL THE RUN
 ───────────────────────────────────────────────
 Two classes of stage, treated differently on purpose:
@@ -54,25 +85,12 @@ precisely when something went wrong.
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-#: How many promoted entities one automated verification pass covers.
-#:
-#: Verification calls external Government sources per entity. Running it across
-#: an entire 25K delivery inside the ingestion job would issue hundreds of
-#: thousands of upstream calls before a human has decided the delivery is even
-#: worth reviewing, and NPPES, PECOS, SAM and LEIE are shared Government
-#: services with quotas that are not ours to spend.
-#:
-#: So the automated pass is a BOUNDED SEED that makes the delivery immediately
-#: reviewable, and the real verification volume follows the sample: the review
-#: cycle draws the official per-QHIN sample and verification runs against the
-#: entities actually under review. `POST /deliveries/{id}/verify` remains
-#: available for a wider run when an operator wants one.
-AUTO_VERIFY_LIMIT = int(os.getenv("RCE_AUTO_VERIFY_LIMIT", "250"))
+#: How often the background heartbeat writes while a stage is running.
+from app.tefca_registry.rce.delivery_jobs import HEARTBEAT_INTERVAL_SECONDS  # noqa: E402
 
 
 async def run_delivery_job(db, job) -> str:
@@ -82,12 +100,27 @@ async def run_delivery_job(db, job) -> str:
     job keeps a heartbeat it no longer deserves. Everything is caught, recorded
     on the job and turned into FAILED.
     """
+    from app.tefca_registry.rce.delivery_job_model import RceDeliveryJob
+
+    detail: Dict[str, Any] = {}
+    pulse = _Heartbeat(job.id)
+    await pulse.start()
+    try:
+        return await _run_stages(db, job, detail)
+    except Exception as exc:  # noqa: BLE001 — the runner must not raise
+        logger.error("delivery job %s runner raised %s: %s", job.id,
+                     type(exc).__name__, exc)
+        return RceDeliveryJob.STATE_FAILED
+    finally:
+        await pulse.stop()
+
+
+async def _run_stages(db, job, detail: Dict[str, Any]) -> str:
     from app.tefca_registry.rce import delivery_jobs as jobs
     from app.tefca_registry.rce.delivery_job_model import RceDeliveryJob
 
     job_id = job.id
     actor = job.registered_by or "SYSTEM"
-    detail: Dict[str, Any] = {}
 
     # ── Area 1 — fatal if it does not land ───────────────────────────────────
     try:
@@ -95,6 +128,10 @@ async def run_delivery_job(db, job) -> str:
     except Exception as exc:  # noqa: BLE001
         reason = _reason("PARSING", exc)
         logger.error("delivery job %s failed at Area 1: %s", job_id, reason)
+        # The session may be inside a failed transaction. Every later write on
+        # it would raise PendingRollbackError and the failure reason would be
+        # lost — the job would sit RUNNING until the reaper guessed.
+        await _settle(db)
         await jobs.finish_failed(db, job_id, reason,
                                  detail={"PARSING": {"error": str(exc)[:1000]}})
         return RceDeliveryJob.STATE_FAILED
@@ -132,6 +169,7 @@ async def run_delivery_job(db, job) -> str:
                                   "completed": False}
             logger.error("delivery job %s stage %s did not complete: %s",
                          job_id, stage_name, exc)
+            await _settle(db)
             await jobs.heartbeat(db, job_id, detail={stage_name: detail[stage_name]})
             break
         await jobs.heartbeat(
@@ -150,6 +188,7 @@ async def run_delivery_job(db, job) -> str:
             "error": str(exc)[:1000], "completed": False}
         logger.error("delivery job %s reconciliation did not complete: %s",
                      job_id, exc)
+        await _settle(db)
 
     if stage_error:
         # The delivery is real and its Area 1 is intact; the RUN did not finish.
@@ -275,39 +314,38 @@ async def _stage_promotion(db, intake_id, actor):
 
 
 async def _stage_verification(db, intake_id, actor):
-    """A bounded automated verification seed. See AUTO_VERIFY_LIMIT."""
-    from sqlalchemy import select
+    """Connector readiness — NOT verification. See the module docstring.
 
-    from app.tefca_registry.rce import models as m
-    from app.tefca_registry.rce.arc_pipeline import verify_and_classify
+    Reports whether the Government and approved sources are configured and
+    reachable, so an operator can see before drawing a cycle that, say, USPS is
+    NOT CONFIGURED. It creates no evidence rows and no review cases; it calls
+    no external source for any entity.
+    """
+    readiness: Dict[str, Any] = {}
+    try:
+        from app.Tefca.connectors import data_source_labels
+        readiness["sources"] = data_source_labels()
+    except Exception as exc:  # noqa: BLE001
+        readiness["sources"] = {"error": type(exc).__name__}
+    try:
+        from app.tefca_registry.usps_client import get_usps_client
+        readiness["usps"] = get_usps_client().health()
+    except Exception as exc:  # noqa: BLE001
+        readiness["usps"] = {"status": "unknown", "error": type(exc).__name__}
+    try:
+        from app.tefca_registry import website_evidence
+        readiness["website"] = website_evidence.health()
+    except Exception as exc:  # noqa: BLE001
+        readiness["website"] = {"status": "unknown", "error": type(exc).__name__}
 
-    refs: List[str] = list((await db.execute(
-        select(m.RceCuratedRecord.rce_org_oid)
-        .where(m.RceCuratedRecord.source_intake_id == intake_id,
-               m.RceCuratedRecord.canonical_entity_id.isnot(None))
-        .order_by(m.RceCuratedRecord.rce_org_oid)
-        .limit(AUTO_VERIFY_LIMIT))).scalars().all())
-    if not refs:
-        return {"completed": True, "requested": 0, "verified": 0,
-                "note": ("Nothing was promoted, so there is nothing to verify. "
-                         "This is a consequence of the stages above, not a "
-                         "verification failure.")}
-
-    result = await verify_and_classify(db, refs, intake_id=intake_id,
-                                       actor=actor)
     return {
         "completed": True,
-        "requested": result.get("requested"),
-        "verified": result.get("verified"),
-        "unresolved": result.get("unresolved"),
-        "bucket_counts": result.get("bucket_counts") or {},
-        "tier_counts": result.get("tier_counts") or {},
-        "bounded": True,
-        "limit": AUTO_VERIFY_LIMIT,
-        "note": ("A bounded automated seed. The official verification volume "
-                 "follows the review cycle's per-QHIN sample; this exists so a "
-                 "delivery is immediately reviewable without spending shared "
-                 "Government source quota across the whole population."),
+        "deferred": True,
+        "readiness": readiness,
+        "note": ("Verification runs when the Program Manager creates the review "
+                 "cycle, against the members of the frozen per-QHIN sample. It "
+                 "is not run here: doing so minted review cases outside the "
+                 "approved sample and was not idempotent."),
     }
 
 
@@ -326,6 +364,71 @@ async def _stage_reconciliation(db, intake_id):
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+
+class _Heartbeat:
+    """A background pulse on its OWN session while a stage holds the main one.
+
+    Stops itself once the job is no longer RUNNING: `delivery_jobs.heartbeat`
+    declines to touch a settled job, so once the reaper has spoken this task
+    goes quiet rather than arguing with it.
+    """
+
+    def __init__(self, job_id):
+        self.job_id = job_id
+        self._task = None
+        self._stop = None
+
+    async def start(self):
+        import asyncio
+        self._stop = asyncio.Event()
+        self._task = asyncio.create_task(self._run())
+
+    async def stop(self):
+        if self._stop is not None:
+            self._stop.set()
+        if self._task is not None:
+            try:
+                await self._task
+            except Exception:  # noqa: BLE001 — a dead pulse must not fail the job
+                pass
+
+    async def _run(self):
+        import asyncio
+
+        from app.core.database import async_session_maker
+        from app.tefca_registry.rce import delivery_jobs as jobs
+        from app.tefca_registry.rce.delivery_job_model import RceDeliveryJob
+
+        while not self._stop.is_set():
+            try:
+                await asyncio.wait_for(self._stop.wait(),
+                                       timeout=HEARTBEAT_INTERVAL_SECONDS)
+                return
+            except asyncio.TimeoutError:
+                pass
+            try:
+                async with async_session_maker() as db:
+                    row = await db.get(RceDeliveryJob, self.job_id)
+                    if row is None or row.state != RceDeliveryJob.STATE_RUNNING:
+                        return
+                    await jobs.heartbeat(db, self.job_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("delivery job %s heartbeat failed: %s",
+                               self.job_id, type(exc).__name__)
+
+
+async def _settle(db) -> None:
+    """Roll back whatever a failed stage left open, so the job row can be written.
+
+    Harmless on a clean session. Essential on one whose transaction failed —
+    without it every subsequent write raises PendingRollbackError.
+    """
+    try:
+        await db.rollback()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("session rollback after stage failure failed: %s",
+                       type(exc).__name__)
+
 
 def _processed_count(observed: Dict[str, Any]) -> Optional[int]:
     """The most meaningful "rows handled" number a stage produced, if any."""

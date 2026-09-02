@@ -91,15 +91,34 @@ class TestWhoMayRegisterADelivery:
         assert role_level("analyst") < role_level(DATA_OPERATIONS_ROLE)
         assert role_level("contributor") < role_level(DATA_OPERATIONS_ROLE)
 
-    def test_registration_floor_is_not_raised_beyond_data_operations(self):
-        """Data Operations is not a reviewer, a QA lead or a program manager.
+    def test_registration_floor_excludes_the_CONTRACT_analyst_role(self):
+        """The contract Analyst is `reviewer` (4), not the `analyst` alias (2).
 
-        The floor exists to exclude the analyst, not to make delivery
-        registration a privileged act only management can perform.
+        The first version of this test asserted the floor sat BELOW reviewer,
+        reasoning that Data Operations is not a reviewer. Independent review
+        found that `case_assignment.ROLE_ANALYST` is `reviewer` — the role that
+        claims cases and records determinations — so a floor below it let the
+        actual analyst establish official Government source data. The floor
+        must exclude every review-side role.
         """
+        from app.tefca_registry.case_assignment import ROLE_ANALYST, ROLE_SUPERVISOR
         from app.tefca_registry.rce.delivery_routes import DATA_OPERATIONS_ROLE
 
-        assert role_level(DATA_OPERATIONS_ROLE) < role_level("reviewer")
+        assert role_level(ROLE_ANALYST) < role_level(DATA_OPERATIONS_ROLE)
+        assert role_level(ROLE_SUPERVISOR) < role_level(DATA_OPERATIONS_ROLE)
+        assert role_level("qalead") < role_level(DATA_OPERATIONS_ROLE)
+
+    def test_verification_is_not_an_analyst_act(self, app_spec):
+        """`/verify` mints review cases — it decides what enters the queue.
+
+        At contributor the contract Analyst could choose their own review
+        population outside the frozen sample. Raised to program_manager.
+        """
+        from app.tefca_registry.rce import routes as rce_routes
+
+        floors = _role_floors(rce_routes.router, "/deliveries/{intake_id}/verify",
+                              method="POST")
+        assert floors and max(floors) >= role_level("program_manager")
 
 
 # ── Area 1 immutability ──────────────────────────────────────────────────────
@@ -222,16 +241,108 @@ class TestDeliveryRunner:
         assert out["completed"] is False
         assert "declined, not failed" in out["note"]
 
-    def test_the_verification_seed_is_bounded(self):
-        """Verification calls shared Government sources; the auto pass is capped.
+    def test_the_delivery_job_creates_no_review_cases(self):
+        """Verification follows the SAMPLE, not the delivery.
 
-        An uncapped pass over a 25K delivery would issue hundreds of thousands
-        of upstream calls before anyone decided the delivery was worth
-        reviewing.
+        The first runner verified a 250-entity "seed" inside the job.
+        `verify_and_classify` mints a new ReviewRecord on every call, so the
+        seed doubled the review population on any re-run, and its cases were
+        never members of the approved sample. The stage now records connector
+        readiness and nothing else.
         """
-        from app.tefca_registry.rce.delivery_runner import AUTO_VERIFY_LIMIT
+        import inspect
 
-        assert 0 < AUTO_VERIFY_LIMIT <= 5000
+        from app.tefca_registry.rce import delivery_runner
+
+        source = inspect.getsource(delivery_runner._stage_verification)
+        assert "verify_and_classify" not in source
+        assert "AUTO_VERIFY_LIMIT" not in inspect.getsource(delivery_runner)
+        assert "readiness" in source
+
+    def test_a_reaped_job_cannot_be_resurrected_by_a_late_worker(self):
+        """The reaper's verdict stands; a slow worker does not overwrite it.
+
+        Once the reaper has failed a job and released its identity, a second
+        registration may already be running. A late `finish_succeeded` that
+        flipped the row back would leave two workers on one delivery.
+        """
+        import asyncio
+
+        from app.tefca_registry.rce import delivery_jobs as jobs
+        from app.tefca_registry.rce.delivery_job_model import RceDeliveryJob
+
+        class Row:
+            state = RceDeliveryJob.STATE_FAILED
+            error_reason = jobs.REAPED_REASON
+            stage = "QUALITY"
+            active_marker = None
+            source_intake_id = None
+            stage_detail = {}
+
+        row = Row()
+
+        class Db:
+            async def get(self, model, key):
+                return row
+
+            async def commit(self):
+                raise AssertionError("a settled job must not be written to")
+
+        asyncio.run(jobs.finish_succeeded(Db(), "job", reconciliation_passed=True))
+        asyncio.run(jobs.heartbeat(Db(), "job", stage="CURATION"))
+        asyncio.run(jobs.bind_intake(Db(), "job", "intake", records_received=1))
+        assert row.state == RceDeliveryJob.STATE_FAILED
+        assert row.active_marker is None
+
+    def test_a_running_job_is_still_written(self):
+        import asyncio
+
+        from app.tefca_registry.rce import delivery_jobs as jobs
+        from app.tefca_registry.rce.delivery_job_model import RceDeliveryJob
+
+        class Row:
+            state = RceDeliveryJob.STATE_RUNNING
+            stage = "QUALITY"
+            heartbeat_at = None
+            stage_detail = {}
+            records_received = None
+            records_processed = None
+
+        row = Row()
+        commits = []
+
+        class Db:
+            async def get(self, model, key):
+                return row
+
+            async def commit(self):
+                commits.append(True)
+
+        asyncio.run(jobs.heartbeat(Db(), "job", stage="CURATION"))
+        assert row.stage == "CURATION" and commits
+
+    def test_the_heartbeat_uses_its_own_session(self):
+        """Heartbeating on the stage's session would commit half an Area 1.
+
+        `ingest_delivery` holds one transaction across every batch so a crash
+        rolls the whole intake back. A mid-stage commit on that session — which
+        is what a same-session heartbeat is — would destroy that contract.
+        """
+        import inspect
+
+        from app.tefca_registry.rce import delivery_runner
+
+        source = inspect.getsource(delivery_runner._Heartbeat)
+        assert "async_session_maker" in source
+
+    def test_a_failed_stage_settles_the_session_before_writing_the_job(self):
+        """PendingRollbackError would otherwise swallow the failure reason."""
+        import inspect
+
+        from app.tefca_registry.rce import delivery_runner
+
+        source = inspect.getsource(delivery_runner._run_stages)
+        assert source.count("await _settle(db)") >= 3
 
 
 # ── website evidence: the SSRF guard ─────────────────────────────────────────
@@ -406,6 +517,14 @@ class TestDistributionMakesNoComplianceDecision:
         assert DistributionRequest(review_ids=[], analyst_user_ids=[]).preview \
             is True
 
+    def test_distribute_floor_equals_the_per_case_assign_floor(self):
+        """A route floor below `assign()`'s would refuse every case it touched."""
+        from app.tefca_registry import workflow_routes
+        from app.tefca_registry.case_assignment import ROLE_SUPERVISOR
+
+        floors = _role_floors(workflow_routes.router, "/distribute", method="POST")
+        assert floors and max(floors) == role_level(ROLE_SUPERVISOR)
+
 
 # ── the workspace keeps the layers apart ─────────────────────────────────────
 
@@ -555,15 +674,269 @@ class TestWorkspacePiiMasking:
 
 
 class TestReadsStayAtTheViewerFloor:
-    def test_every_workflow_read_admits_a_viewer(self, app_spec):
-        """The property `test_no_tefca_read_endpoint_sits_above_the_viewer_floor`
-        asserts globally, pinned here for this router specifically so a future
-        edit to one of these routes fails with a local, obvious message."""
+    def test_every_workflow_read_admits_a_viewer(self):
+        """Pinned locally so a future edit fails with an obvious message."""
         from app.tefca_registry import workflow_routes
 
-        floors = {}
+        checked = 0
         for route in workflow_routes.router.routes:
             if "GET" not in getattr(route, "methods", set()):
                 continue
-            floors[route.path] = route
-        assert floors, "no GET routes found on the workflow router"
+            floors = _role_floors(workflow_routes.router, route.path)
+            assert floors and max(floors) == role_level("viewer"), route.path
+            checked += 1
+        assert checked >= 5
+
+
+# ── the review cycle is the gate, server-side ────────────────────────────────
+
+class TestReviewCycleGate:
+    def test_the_official_sampler_now_has_a_route(self, app_spec):
+        """`finalize_plan` was reachable from nowhere. Now it is, and only via
+        a program-manager route that gates on reconciliation."""
+        from app.tefca_registry import workflow_routes
+
+        path = "/api/tefca/workflow/deliveries/{intake_id}/review-cycle"
+        assert "post" in app_spec["paths"][path]
+        floors = _role_floors(workflow_routes.router,
+                              "/deliveries/{intake_id}/review-cycle", method="POST")
+        assert floors and max(floors) == role_level("program_manager")
+
+    def test_an_unreconciled_delivery_is_refused_before_any_sampling(self, monkeypatch):
+        """No plan is drawn, nothing is verified, and the refusal is audited."""
+        import asyncio
+
+        from app.tefca_registry import review_cycle
+        from app.tefca_registry.rce import reconciliation
+
+        drawn = []
+
+        async def not_passed(db, intake_id):
+            return {"passed": False,
+                    "checks": [{"check": "D == A", "passed": False}]}
+
+        async def must_not_run(*a, **k):
+            drawn.append(True)
+
+        monkeypatch.setattr(reconciliation, "reconcile_delivery", not_passed)
+        import app.tefca_registry.qhin_sampling as qs
+        monkeypatch.setattr(qs, "finalize_plan", must_not_run)
+
+        audited = []
+
+        class Db:
+            async def get(self, model, key):
+                return object()  # an intake exists
+
+            async def commit(self):
+                pass
+
+            def add(self, row):
+                audited.append(row)
+
+        class User:
+            id = None
+            email = "pm@example.test"
+
+        with pytest.raises(review_cycle.CycleRefused) as refused:
+            asyncio.run(review_cycle.create_review_cycle(Db(), "intake", user=User()))
+        assert "not passed reconciliation" in str(refused.value)
+        assert drawn == [], "sampling must not run on an unreconciled delivery"
+        assert any(getattr(r, "action", "") == "review_cycle_refused" for r in audited)
+
+    def test_the_cycle_route_uses_the_approved_sampler_only(self):
+        """No Cochran call, no draw_sample, no formula — `finalize_plan` only."""
+        import inspect
+
+        from app.tefca_registry import review_cycle
+
+        source = inspect.getsource(review_cycle)
+        assert "finalize_plan" in source
+        assert "draw_sample" not in source
+        assert "CochranSampler" not in source
+
+    def test_every_cycle_review_case_is_scoped_to_its_delivery(self):
+        """The key `case_assignment._queue` and `qhin_workload` filter on."""
+        import inspect
+
+        from app.tefca_registry import review_cycle
+
+        source = inspect.getsource(review_cycle.create_review_cycle)
+        for key in ('"source_intake_id": str(intake_id)',
+                    '"queue_source": QUEUE_SOURCE',
+                    "record.sample_id = sample_id",
+                    "member.review_id = review_id"):
+            assert key in source, key
+
+
+class TestQhinRollupScoping:
+    def test_reviews_are_scoped_by_delivery_not_by_entity(self):
+        """An entity delivered twice is one entity; its reviews are not."""
+        from app.tefca_registry import qhin_workload
+
+        stmt = _sql(qhin_workload._reviews_for("abc"))
+        assert "source_intake_id" in stmt
+        assert "sample_id" not in stmt  # only when asked for
+
+    def test_a_sample_narrows_the_review_columns(self):
+        from app.tefca_registry import qhin_workload
+
+        stmt = _sql(qhin_workload._reviews_for("abc", sample_id="s"))
+        assert "sample_id" in stmt
+
+    def test_no_python_list_of_entity_ids_reaches_the_driver(self):
+        """asyncpg refuses more than 32,767 bind parameters; 100K is expected."""
+        import inspect
+
+        from app.tefca_registry import qhin_sampling, qhin_workload
+
+        assert "in_(promoted)" in inspect.getsource(qhin_sampling.resolve_qhin_strata)
+        assert "_promoted_entities(intake_id)" in inspect.getsource(
+            qhin_workload._entity_levels)
+        assert "_chunks(" in inspect.getsource(qhin_workload.case_states)
+
+
+# ── SSRF: the gaps independent review found ──────────────────────────────────
+
+class TestSsrfHardening:
+    def test_carrier_grade_nat_is_refused(self):
+        """Python's `is_private` excludes 100.64.0.0/10; Azure VNet uses it."""
+        ok, reason = web.check_url("http://100.64.0.1/")
+        assert ok is False and reason
+
+    @pytest.mark.parametrize("url", [
+        "http://198.18.0.1/",       # benchmarking
+        "http://192.0.0.9/",        # IETF protocol assignments
+        "http://[64:ff9b::7f00:1]/",  # NAT64 loopback
+        "http://[::ffff:169.254.169.254]/",  # IPv4-mapped metadata
+    ])
+    def test_the_other_non_public_ranges_are_refused(self, url):
+        ok, _ = web.check_url(url)
+        assert ok is False
+
+    def test_credentials_in_a_delivered_url_are_never_sent(self):
+        """A delivery file is not a credential store."""
+        assert "user" not in (web.normalize_url("https://user:pw@example.org/") or "")
+        ok, reason = web.check_url("https://user:pw@example.org/")
+        assert ok is False and "credentials" in reason
+
+    def test_the_connection_is_pinned_to_the_address_that_passed(self):
+        """DNS rebinding: the name is resolved once and never again."""
+        target = web.PinnedTarget("https://example.org/path", "example.org",
+                                  "93.184.216.34")
+        assert target.url == "https://93.184.216.34/path"
+        assert target.headers == {"Host": "example.org"}
+        assert target.extensions == {"sni_hostname": "example.org"}
+
+    def test_an_ipv6_pin_is_bracketed(self):
+        target = web.PinnedTarget("http://example.org/", "example.org",
+                                  "2606:2800:220:1:248:1893:25c8:1946")
+        assert target.url.startswith("http://[2606:2800:220:1:248:1893:25c8:1946]/")
+
+    def test_the_connector_dials_the_pinned_target(self):
+        """The guard is only a guard if the connection uses what it returned."""
+        import inspect
+
+        from app.Tefca import evidence_service
+
+        source = inspect.getsource(evidence_service.website_corroboration)
+        assert "pinned_target" in source
+        assert "target.url" in source and "target.headers" in source
+        assert "check_url_async" not in source, "the unpinned path must be gone"
+
+    def test_the_byte_cap_stops_reading_not_just_trims(self):
+        """The first version buffered the whole body and THEN sliced it."""
+        import asyncio
+
+        chunks_served = []
+
+        class Stream:
+            async def aiter_bytes(self):
+                for i in range(100):
+                    chunk = b"x" * 1024 * 1024  # 1 MiB
+                    chunks_served.append(i)
+                    yield chunk
+
+        body, truncated = asyncio.run(web.read_capped(Stream(), limit=3 * 1024 * 1024))
+        assert len(body) == 3 * 1024 * 1024
+        assert truncated is True
+        assert len(chunks_served) <= 4, "reading must stop at the cap"
+
+    def test_the_connector_streams(self):
+        import inspect
+
+        from app.Tefca import evidence_service
+
+        source = inspect.getsource(evidence_service.website_corroboration)
+        assert "client.stream(" in source and "read_capped" in source
+
+
+# ── the workspace reads the delivered address by its real name ───────────────
+
+class TestWorkspaceAddressFields:
+    def test_the_delivered_address_fields_are_read(self):
+        from app.tefca_registry import workspace
+
+        class Source:
+            parsed = {"address_line": "100 North Main Street",
+                      "address_city": "Austin", "address_state": "TX",
+                      "address_postalCode": "78701", "address_text": "Primary"}
+
+        out = workspace._address_of(Source(), None)
+        assert out["street"] == "100 North Main Street"
+        assert out["city"] == "Austin" and out["state"] == "TX"
+        assert out["zip"] == "78701"
+
+    def test_address_text_is_never_read_as_the_address(self):
+        """It is the literal label "Primary" on 75% of delivered rows."""
+        from app.tefca_registry import workspace
+
+        class Source:
+            parsed = {"address_text": "Primary", "address_line": ""}
+
+        out = workspace._address_of(Source(), None)
+        assert out["street"] is None
+        assert "Primary" not in str(out.values())
+
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+def _role_floors(router, path: str, method: str = "GET"):
+    """Every `require_role` level on a route, router-level floors included.
+
+    The checker `require_role` returns exposes `minimum_role` as an attribute —
+    the same hook `test_no_tefca_read_endpoint_sits_above_the_viewer_floor`
+    reads. Router routes carry the prefix, so the path is matched by suffix.
+    """
+    from app.core.security import ROLE_HIERARCHY
+
+    levels = []
+    for route in router.routes:
+        if not route.path.endswith(path):
+            continue
+        if method not in (getattr(route, "methods", None) or set()):
+            continue
+        for fn in _deps(route.dependant):
+            minimum = getattr(fn, "minimum_role", None)
+            if minimum in ROLE_HIERARCHY:
+                levels.append(ROLE_HIERARCHY[minimum])
+    return levels
+
+
+def _sql(stmt) -> str:
+    """The WHERE clause with literals inlined, so a JSON key is visible."""
+    from sqlalchemy.dialects import postgresql
+
+    return str(stmt.whereclause.compile(dialect=postgresql.dialect(),
+                                        compile_kwargs={"literal_binds": True}))
+
+
+def _deps(dependant, seen=None):
+    seen = seen if seen is not None else set()
+    if id(dependant) in seen:
+        return
+    seen.add(id(dependant))
+    if dependant.call is not None:
+        yield dependant.call
+    for sub in dependant.dependencies:
+        yield from _deps(sub, seen)

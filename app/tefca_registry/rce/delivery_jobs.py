@@ -182,6 +182,40 @@ async def claim_next_queued(db):
     return job
 
 
+async def _running_job(db, job_id, *, act: str):
+    """The job, ONLY if it is still RUNNING. None otherwise, and it says why.
+
+    WHY EVERY WRITE GOES THROUGH THIS
+    ─────────────────────────────────
+    The reaper fails a job whose heartbeat went stale. But a stale heartbeat is
+    not proof the worker is dead — it may be alive and deep inside a long stage.
+    When that worker finally surfaces and calls `finish_succeeded`, an unguarded
+    write would flip the reaped FAILED row back to SUCCEEDED, and worse, the
+    reaper had already cleared `active_marker`, so a SECOND registration of the
+    same delivery may have been accepted and may now be running in parallel.
+    Two workers ingesting the same bytes into Area 1 is exactly the duplication
+    the job table exists to prevent.
+
+    So a job that is no longer RUNNING is never written to by a worker. The late
+    worker's outcome is logged and discarded; the reaper's verdict stands. A
+    delivery that genuinely completed under a reaped job is visible in Area 1
+    regardless — `bind_intake` ran before the stages, so the intake id is on
+    the row and the dashboard reads the truth from reconciliation.
+    """
+    from app.tefca_registry.rce.delivery_job_model import RceDeliveryJob
+
+    job = await db.get(RceDeliveryJob, job_id)
+    if job is None:
+        return None
+    if job.state != RceDeliveryJob.STATE_RUNNING:
+        logger.warning(
+            "delivery job %s: %s refused — job is %s (%s), not RUNNING. A late "
+            "worker does not overwrite a settled job.",
+            job_id, act, job.state, job.error_reason or job.stage)
+        return None
+    return job
+
+
 async def heartbeat(db, job_id, *, stage: Optional[str] = None,
                     records_received: Optional[int] = None,
                     records_processed: Optional[int] = None,
@@ -192,9 +226,7 @@ async def heartbeat(db, job_id, *, stage: Optional[str] = None,
     counted. Nothing here is estimated: an operator watching a delivery is
     entitled to assume that a number on the screen was measured.
     """
-    from app.tefca_registry.rce.delivery_job_model import RceDeliveryJob
-
-    job = await db.get(RceDeliveryJob, job_id)
+    job = await _running_job(db, job_id, act="heartbeat")
     if job is None:
         return
     job.heartbeat_at = datetime.utcnow()
@@ -223,9 +255,7 @@ async def bind_intake(db, job_id, intake_id, *, records_received: int) -> None:
     whose Area 1 landed but whose quality run died must still be findable, not
     orphaned behind a FAILED job row.
     """
-    from app.tefca_registry.rce.delivery_job_model import RceDeliveryJob
-
-    job = await db.get(RceDeliveryJob, job_id)
+    job = await _running_job(db, job_id, act="bind_intake")
     if job is None:
         return
     job.source_intake_id = intake_id
@@ -251,7 +281,7 @@ async def finish_succeeded(db, job_id, *, reconciliation_passed: bool,
     """
     from app.tefca_registry.rce.delivery_job_model import RceDeliveryJob
 
-    job = await db.get(RceDeliveryJob, job_id)
+    job = await _running_job(db, job_id, act="finish_succeeded")
     if job is None:
         return
     now = datetime.utcnow()
@@ -281,7 +311,7 @@ async def finish_failed(db, job_id, reason: str, *,
     """
     from app.tefca_registry.rce.delivery_job_model import RceDeliveryJob
 
-    job = await db.get(RceDeliveryJob, job_id)
+    job = await _running_job(db, job_id, act="finish_failed")
     if job is None:
         return
     now = datetime.utcnow()
