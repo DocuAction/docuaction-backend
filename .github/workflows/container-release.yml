@@ -35,6 +35,32 @@ on:
         required: true
         type: boolean
         default: false
+  # Lets dev-release.yml invoke this as a reusable workflow and read its
+  # outputs directly via `needs.<job>.outputs`, instead of an operator
+  # copying the tag/digest out of a run summary into the next dispatch by
+  # hand. `inputs.*` below resolves identically under workflow_dispatch and
+  # workflow_call, so no step had to change to support this.
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Exact commit SHA or tag to build (not a branch name)'
+        required: true
+        type: string
+      push:
+        description: 'Push to the DEV registry (uses the DEV environment OIDC identity). Off = build and smoke only.'
+        required: true
+        type: boolean
+        default: false
+    outputs:
+      tag:
+        description: 'Short commit SHA used as the ACR image tag'
+        value: ${{ jobs.build-and-smoke.outputs.tag }}
+      sha:
+        description: 'Full commit SHA built'
+        value: ${{ jobs.build-and-smoke.outputs.sha }}
+      digest:
+        description: 'Immutable image digest pushed to the DEV registry (empty if push=false)'
+        value: ${{ jobs.push-to-dev-acr.outputs.digest }}
 
 permissions:
   contents: read
