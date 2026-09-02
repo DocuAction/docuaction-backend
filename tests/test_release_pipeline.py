@@ -41,6 +41,8 @@ except ImportError:  # pragma: no cover - yaml is a project dependency
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEPLOY = os.path.join(REPO, ".github", "workflows", "deploy-backend.yml")
 CONTAINER = os.path.join(REPO, ".github", "workflows", "container-release.yml")
+DEV_RELEASE = os.path.join(REPO, ".github", "workflows", "dev-release.yml")
+MIGRATION_PREFLIGHT = os.path.join(REPO, ".github", "workflows", "migration-preflight.yml")
 
 pytestmark = pytest.mark.skipif(yaml is None, reason="PyYAML unavailable")
 
@@ -543,3 +545,98 @@ def test_the_acceptance_probe_targets_a_route_the_application_defines():
     assert path in concrete, (
         f"the acceptance probe hits /api/tefca/arc/{path}, which is not a "
         f"concrete route on the ARC router. Concrete routes: {sorted(concrete)}")
+
+
+# ── the controlled migration gate (DEV Postgres is unreachable from CI) ──────
+#
+# GitHub-hosted runners cannot reach docuaction-db-dev.postgres.database.azure.com
+# - its firewall trusts only the docuaction-dev App Service's own outbound IPs,
+# confirmed by direct comparison, and this pipeline does not widen that.
+# migration-gate is what stands between "cannot verify the schema" and
+# deploying anyway; these tests pin its shape so a future edit cannot silently
+# turn it into an assume-it's-fine no-op.
+
+def test_migration_preflight_reports_readable_rather_than_only_failing():
+    """A connection timeout from CI is an expected, routine result of the
+    network boundary above, not a workflow defect - it must be reported as
+    data (readable=false) for migration-gate to act on, not just a failed
+    step with a stack trace."""
+    body = _steps_text(_job(MIGRATION_PREFLIGHT, "preflight"))
+    assert "OperationalError" in body, (
+        "the connection step must distinguish an unreachable DEV Postgres "
+        "from any other failure")
+    assert "readable=false" in body
+    assert "readable=true" in body
+    doc = _doc(MIGRATION_PREFLIGHT)
+    trigger = doc.get("on", doc.get(True))  # PyYAML 1.1: bare `on` parses as True
+    call_outputs = trigger["workflow_call"]["outputs"]
+    assert "readable" in call_outputs
+
+
+def test_deploy_cannot_run_without_the_migration_gates_permission():
+    """deploy must not be reachable except through migration-gate saying so -
+    otherwise an unreadable or mismatched DEV schema would silently be
+    deployed against."""
+    dev_release = _doc(DEV_RELEASE)
+    deploy = dev_release["jobs"]["deploy"]
+    needs = deploy["needs"]
+    assert "migration-gate" in (needs if isinstance(needs, list) else [needs])
+    assert "needs.migration-gate.outputs.proceed" in deploy["if"]
+
+
+def test_the_stop_message_is_exact():
+    """Pinned verbatim - this is what an operator greps for and what they are
+    told to look for in the run summary."""
+    body = _steps_text(_job(DEV_RELEASE, "migration-gate"))
+    assert "DEV DATABASE MIGRATION REQUIRED — CONTROLLED DBA/AZURE EXECUTION REQUIRED" in body
+
+
+def test_migration_gate_never_auto_proceeds_on_a_confirmed_mismatch():
+    """Even if migration-check somehow WERE readable and found a real
+    revision mismatch, the gate must still stop - Option D means every
+    schema change is a controlled, human-authorised step for now, not
+    something this pipeline runs by itself.
+
+    Verified structurally, not by a keyword search: the script is written as
+    two early-exit branches (each ending `exit 0`) that are the ONLY places
+    allowed to set proceed=true, followed by a fallback that always sets
+    proceed=false and exits 1. A future edit that adds a third way to reach
+    proceed=true, or that lets MIGRATION_NEEDED="true" fall into an
+    early-exit branch, breaks this test.
+    """
+    decide = next(s for s in _job(DEV_RELEASE, "migration-gate")["steps"]
+                  if s.get("id") == "decide")["run"]
+    lines = [l for l in decide.splitlines() if l.strip() and not l.strip().startswith("#")]
+
+    true_line_idxs = [i for i, l in enumerate(lines) if 'proceed=true' in l]
+    false_line_idxs = [i for i, l in enumerate(lines) if 'proceed=false' in l]
+
+    assert len(true_line_idxs) == 2, (
+        f"expected exactly two proceed=true sites (not-needed, and explicit "
+        f"operator confirmation), found {len(true_line_idxs)}")
+    assert len(false_line_idxs) == 1, (
+        "expected exactly one fallback that sets proceed=false")
+    assert all(t < false_line_idxs[0] for t in true_line_idxs), (
+        "both proceed=true branches must be resolved (and exit 0) before the "
+        "single proceed=false fallback - the fallback must be unconditional, "
+        "not one arm of a still-open if/else")
+
+    fallback_and_after = "\n".join(lines[false_line_idxs[0]:])
+    assert "exit 1" in fallback_and_after, (
+        "the fallback branch must actually fail the job, not just log a message")
+
+
+def test_the_confirmation_input_does_not_trigger_a_migration_itself():
+    """migration_confirmed_current is a human's attestation that they already
+    checked - not a request for this pipeline to run alembic upgrade head.
+    run_migrations must stay false on that path; the actual migration only
+    ever happens out-of-band, per the runbook."""
+    dev_release = _doc(DEV_RELEASE)
+    trigger = dev_release.get("on", dev_release.get(True))  # PyYAML 1.1 quirk
+    inputs = trigger["workflow_dispatch"]["inputs"]
+    assert "migration_confirmed_current" in inputs
+    assert inputs["migration_confirmed_current"]["type"] == "boolean"
+
+    body = _steps_text(_job(DEV_RELEASE, "migration-gate"))
+    confirmed_branch = body.split('CONFIRMED" = "true"')[1].split("exit 0")[0]
+    assert 'run_migrations=false' in confirmed_branch

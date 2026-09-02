@@ -215,7 +215,26 @@ jobs:
         run: |
           # DEV registry ONLY. Promotion to the PROD registry is a separate and
           # separately authorised step, and never happens here.
-          az acr build --registry ${{ env.DEV_REGISTRY }} --image ${{ env.IMAGE_REPO }}:${{ needs.build-and-smoke.outputs.tag }} --file Dockerfile .
+          #
+          # `az acr build` is an ACR Quick Task: it uploads the local build
+          # context and schedules a Run - the build and push execute server-side
+          # under ACR's own Task identity, not this job's. The caller therefore
+          # needs `Container Registry Tasks Contributor` (scheduleRun,
+          # listBuildSourceUploadUrl, runs:*), NOT AcrPush - a caller with only
+          # AcrPull/AcrPush and no Tasks role fails here with a generic
+          # "resource ... could not be found" (Azure returns 404, not 403, for
+          # this class of authorization gap, which is what made the ORIGINAL
+          # instance of this exact failure - run 33664852399 - hard to diagnose
+          # from the error text alone). Caught explicitly so a future
+          # regression (the role assignment revoked, or a new/renamed registry
+          # this identity was never granted access to) fails with a clear
+          # cause instead of a bare CLI stack trace.
+          if ! az acr build --registry ${{ env.DEV_REGISTRY }} --image ${{ env.IMAGE_REPO }}:${{ needs.build-and-smoke.outputs.tag }} --file Dockerfile . 2>&1 | tee /tmp/acr_build.log; then
+            if grep -qi "could not be found in subscription" /tmp/acr_build.log; then
+              echo "::error::az acr build failed with a 'resource not found' error, which is how Azure reports an RBAC gap here - not a missing registry. Verify this identity still holds 'Container Registry Tasks Contributor' scoped to ${{ env.DEV_REGISTRY }} (az role assignment list --assignee <this SP's object id> --all)."
+            fi
+            exit 1
+          fi
 
       - name: Capture the immutable digest
         id: digest

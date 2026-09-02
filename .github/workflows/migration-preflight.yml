@@ -23,14 +23,17 @@ on:
   # run_migrations dispatch input by hand.
   workflow_call:
     outputs:
+      readable:
+        description: '"true" if this runner could read alembic_version at all. DEV Postgres is deliberately not reachable from GitHub-hosted runners (its firewall trusts only the docuaction-dev App Service''s own outbound IPs) - "false" here is an EXPECTED, routine result, not a workflow defect.'
+        value: ${{ jobs.preflight.outputs.readable }}
       dev_revision:
-        description: 'Current alembic_version row(s) in Azure DEV'
+        description: 'Current alembic_version row in Azure DEV, or UNREACHABLE_FROM_CI'
         value: ${{ jobs.preflight.outputs.dev_revision }}
       target_head:
         description: 'The single head this checkout would migrate to'
         value: ${{ jobs.preflight.outputs.target_head }}
       migration_needed:
-        description: '"true" or "false" - DEV is not already at target_head'
+        description: '"true", "false", or "unknown" (when readable=false - cannot be determined from CI)'
         value: ${{ jobs.preflight.outputs.migration_needed }}
 
 permissions:
@@ -51,6 +54,7 @@ jobs:
       id-token: write
       contents: read
     outputs:
+      readable: ${{ steps.read.outputs.readable }}
       dev_revision: ${{ steps.read.outputs.dev_revision }}
       target_head: ${{ steps.target.outputs.target_head }}
       migration_needed: ${{ steps.compare.outputs.migration_needed }}
@@ -82,10 +86,33 @@ jobs:
           echo "token acquired (${#PGTOKEN} chars, not printed)"
           PGTOKEN="$PGTOKEN" python - <<'PY' >> "$GITHUB_OUTPUT"
           import os, sys, psycopg2
-          conn = psycopg2.connect(
-              host=os.environ["PGHOST"], dbname=os.environ["PGDATABASE"],
-              user=os.environ["PG_PRINCIPAL"], password=os.environ["PGTOKEN"],
-              sslmode="require", connect_timeout=20)   # TLS required, not optional
+
+          # DEV Postgres's firewall trusts only the docuaction-dev App Service's own
+          # outbound IPs (confirmed by direct comparison: `az webapp show
+          # --query outboundIpAddresses` is byte-identical to the firewall rule set).
+          # A GitHub-hosted runner is deliberately NOT on that list, and widening it
+          # to admit GitHub's own dynamic IP ranges would be exactly the kind of
+          # firewall weakening this pipeline must not do on its own. So a connection
+          # timeout here is an EXPECTED, routine outcome, not a bug - distinguished
+          # from every OTHER failure (bad auth, wrong role, unexpected schema state),
+          # which still fail loudly below. dev-release.yml's migration gate is what
+          # turns "readable=false" into the correct STOP-and-hand-off-to-a-controlled-
+          # DBA-path behaviour; this step's only job is to report the fact honestly.
+          try:
+              conn = psycopg2.connect(
+                  host=os.environ["PGHOST"], dbname=os.environ["PGDATABASE"],
+                  user=os.environ["PG_PRINCIPAL"], password=os.environ["PGTOKEN"],
+                  sslmode="require", connect_timeout=20)   # TLS required, not optional
+          except psycopg2.OperationalError as exc:
+              print(f"DEV Postgres is not reachable from this runner: {exc}",
+                    file=sys.stderr)
+              print("EXPECTED: this network boundary is deliberate (see comment "
+                    "above). Reporting readable=false rather than failing the job - "
+                    "dev-release.yml decides what to do with that.", file=sys.stderr)
+              print("readable=false")
+              print("dev_revision=UNREACHABLE_FROM_CI")
+              sys.exit(0)
+
           conn.autocommit = True
           c = conn.cursor()
           c.execute("select current_user"); print("authenticated as:", c.fetchone()[0], file=sys.stderr)
@@ -110,6 +137,7 @@ jobs:
               f"DEV alembic_version has {len(rows)} rows, expected exactly 1 "
               f"({rows!r}) - stop and resolve this by hand before automating "
               f"a migration decision on top of it")
+          print("readable=true")
           print(f"dev_revision={rows[0]}")
           print("PREFLIGHT OK - nothing was migrated", file=sys.stderr)
           PY
@@ -131,10 +159,17 @@ jobs:
       - name: Compare - is a migration actually needed
         id: compare
         run: |
+          READABLE="${{ steps.read.outputs.readable }}"
           DEV="${{ steps.read.outputs.dev_revision }}"
           TARGET="${{ steps.target.outputs.target_head }}"
+          echo "DEV readable from this runner: $READABLE"
           echo "DEV is at:    $DEV"
           echo "target head:  $TARGET"
+          if [ "$READABLE" != "true" ]; then
+            echo "migration_needed=unknown" >> "$GITHUB_OUTPUT"
+            echo "Cannot determine from CI whether a migration is needed - DEV is not reachable from this runner by design. dev-release.yml's migration gate decides how to handle this (controlled stop, or an operator's explicit migration_confirmed_current dispatch input)."
+            exit 0
+          fi
           if [ "$DEV" = "$TARGET" ]; then
             echo "migration_needed=false" >> "$GITHUB_OUTPUT"
             echo "DEV is already current - deploy-backend will be told run_migrations=false (a true no-op, not skipped-and-assumed-fine)"

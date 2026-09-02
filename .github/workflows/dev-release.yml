@@ -26,6 +26,17 @@ name: DEV Release (automated)
 # does not touch that protection rule and cannot bypass it. See the release
 # pipeline report for the exact, separate change that would reduce that to a
 # single approval per release instead of three.
+#
+# CONTROLLED MIGRATION GATE (Option D, deliberately - not a placeholder)
+# DEV Postgres's firewall trusts only the docuaction-dev App Service's own
+# outbound IPs (confirmed identical to the actual firewall rule set), and
+# widening it to admit GitHub-hosted runners is exactly the kind of network
+# weakening this pipeline must never do on its own. So migration-check almost
+# always reports readable=false, and migration-gate treats that the same way
+# it treats a confirmed revision mismatch: STOP, not "assume it's fine" -
+# unless the operator has independently verified DEV out-of-band and passed
+# migration_confirmed_current=true on a manual dispatch. This is the release
+# architecture's normal, expected shape today, not a bug to work around.
 
 on:
   push:
@@ -39,7 +50,13 @@ on:
       - '.github/workflows/deploy-backend.yml'
       - '.github/workflows/migration-preflight.yml'
       - '.github/workflows/dev-release.yml'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      migration_confirmed_current:
+        description: 'Set true ONLY after independently verifying, via an authorized out-of-band connection, that DEV is already at the target Alembic head. This does not run or trigger a migration - it tells the gate "a human already checked", nothing more. DEV Postgres is deliberately unreachable from GitHub-hosted runners, so this input exists because the pipeline cannot verify that fact itself.'
+        required: false
+        type: boolean
+        default: false
 
 # One DEV release in flight at a time. Queued, not cancelled: killing a run
 # mid-deploy could leave Azure pointed at a half-applied migration or an
@@ -103,14 +120,82 @@ jobs:
           test -n "$PGTOKEN" || { echo "FAIL: no PostgreSQL access token"; exit 1; }
           PGTOKEN="$PGTOKEN" python "$GITHUB_WORKSPACE/.github/scripts/gov_integrity_snapshot.py" >> "$GITHUB_OUTPUT"
 
+  migration-gate:
+    name: Controlled migration gate
+    # Decides ONE thing: is it safe to deploy this candidate's code against
+    # DEV's current schema right now. DEV Postgres is deliberately unreachable
+    # from this runner (its firewall trusts only the docuaction-dev App
+    # Service's own outbound IPs - confirmed identical to the firewall rule
+    # set), so migration-check.outputs.readable is "false" on every ordinary
+    # run today. That is not treated as "assume it's fine" - it is treated
+    # exactly like "a migration is needed": deploy does not proceed without
+    # either an automated readable+current result, or a human's explicit
+    # migration_confirmed_current dispatch input asserting they checked
+    # out-of-band. Never silently deploys against an unverified schema.
+    needs: migration-check
+    runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.decide.outputs.proceed }}
+      run_migrations: ${{ steps.decide.outputs.run_migrations }}
+    steps:
+      - name: Decide whether this release may proceed
+        id: decide
+        env:
+          READABLE: ${{ needs.migration-check.outputs.readable }}
+          DEV_REVISION: ${{ needs.migration-check.outputs.dev_revision }}
+          TARGET_HEAD: ${{ needs.migration-check.outputs.target_head }}
+          MIGRATION_NEEDED: ${{ needs.migration-check.outputs.migration_needed }}
+          CONFIRMED: ${{ inputs.migration_confirmed_current }}
+        run: |
+          echo "readable=$READABLE dev_revision=$DEV_REVISION target_head=$TARGET_HEAD migration_needed=$MIGRATION_NEEDED operator_confirmed=$CONFIRMED"
+
+          if [ "$MIGRATION_NEEDED" = "false" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "run_migrations=false" >> "$GITHUB_OUTPUT"
+            echo "DEV was read directly and is already at target_head ($TARGET_HEAD) - continuing automatically. Deploy runs with run_migrations=false, a verified no-op."
+            exit 0
+          fi
+
+          if [ "$CONFIRMED" = "true" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "run_migrations=false" >> "$GITHUB_OUTPUT"
+            echo "Operator explicitly set migration_confirmed_current=true - an out-of-band check confirmed DEV is already at $TARGET_HEAD. Continuing with run_migrations=false (the migration already happened outside this pipeline; this run does not attempt it again)."
+            exit 0
+          fi
+
+          echo "proceed=false" >> "$GITHUB_OUTPUT"
+          REASON="cannot verify from CI (DEV Postgres is not reachable from GitHub-hosted runners by design)"
+          if [ "$MIGRATION_NEEDED" = "true" ]; then
+            REASON="DEV is at $DEV_REVISION, candidate requires $TARGET_HEAD"
+          fi
+          {
+            echo "## :no_entry: DEV DATABASE MIGRATION REQUIRED — CONTROLLED DBA/AZURE EXECUTION REQUIRED"
+            echo ""
+            echo "**Reason:** $REASON"
+            echo ""
+            echo "**This pipeline will not deploy candidate code against a schema it cannot verify is compatible.**"
+            echo ""
+            echo "### Runbook"
+            echo "1. From an authorized network location that can reach \`docuaction-db-dev.postgres.database.azure.com\` (DEV Postgres's firewall trusts only the docuaction-dev App Service's own outbound IPs - this is deliberate and this pipeline does not widen it), connect as a principal that already **is**, or can \`SET ROLE\`, \`docuaction_owner\`."
+            echo "2. Run \`alembic current\` first and confirm the starting revision."
+            echo "3. If behind, run \`DB_APP_ROLE=docuaction_app alembic upgrade head\` (DB_APP_ROLE is required - some migrations grant privileges to that role by name, and refuse to guess if it is unset)."
+            echo "4. Run \`alembic current\` again and confirm exactly one head, equal to \`$TARGET_HEAD\`."
+            echo "5. Run \`alembic upgrade head\` a second time and confirm it is a true no-op."
+            echo "6. \`docuaction_owner\` / \`docuaction_app\` privilege boundaries and all Area-1 permissions are unaffected by this - migrations that touch them already assert their own preconditions and fail rather than silently proceed."
+            echo "7. Re-run this workflow (workflow_dispatch) with \`migration_confirmed_current: true\` to continue automatically."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::DEV DATABASE MIGRATION REQUIRED — CONTROLLED DBA/AZURE EXECUTION REQUIRED ($REASON)"
+          exit 1
+
   deploy:
     name: Deploy to Azure DEV
-    needs: [build, migration-check, gov-baseline]
+    needs: [build, migration-gate, gov-baseline]
+    if: needs.migration-gate.outputs.proceed == 'true'
     uses: ./.github/workflows/deploy-backend.yml
     with:
       environment: dev
       image_tag: ${{ needs.build.outputs.tag }}
-      run_migrations: ${{ needs.migration-check.outputs.migration_needed }}
+      run_migrations: ${{ needs.migration-gate.outputs.run_migrations }}
     permissions:
       contents: read
       id-token: write
@@ -167,7 +252,7 @@ jobs:
 
   summary:
     name: Release summary
-    needs: [build, migration-check, deploy, gov-verify, security-smoke]
+    needs: [build, migration-check, migration-gate, deploy, gov-verify, security-smoke]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -181,9 +266,10 @@ jobs:
             echo "| commit | ${{ github.sha }} |"
             echo "| image tag | ${{ needs.build.outputs.tag }} |"
             echo "| image digest | ${{ needs.build.outputs.digest }} |"
-            echo "| DEV revision before | ${{ needs.migration-check.outputs.dev_revision }} |"
+            echo "| DEV readable from CI | ${{ needs.migration-check.outputs.readable }} |"
+            echo "| DEV revision (last known) | ${{ needs.migration-check.outputs.dev_revision }} |"
             echo "| target head | ${{ needs.migration-check.outputs.target_head }} |"
-            echo "| migration ran | ${{ needs.migration-check.outputs.migration_needed }} |"
+            echo "| migration gate | ${{ needs.migration-gate.result }} (proceed=${{ needs.migration-gate.outputs.proceed }}) |"
             echo "| deployed digest | ${{ needs.deploy.outputs.deployed_digest }} |"
             echo "| previous image (rollback point) | ${{ needs.deploy.outputs.previous_image }} |"
             echo "| build result | ${{ needs.build.result }} |"
@@ -192,4 +278,8 @@ jobs:
             echo "| security smoke result | ${{ needs.security-smoke.result }} |"
             echo "| triggered by | ${{ github.actor }} via ${{ github.event_name }} |"
             echo "| run | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |"
+            if [ "${{ needs.migration-gate.outputs.proceed }}" != "true" ]; then
+              echo ""
+              echo "**BLOCKED at the controlled migration gate — see the migration-gate job's own summary for the exact runbook.**"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
