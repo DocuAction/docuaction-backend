@@ -187,7 +187,22 @@ async def record_analyst_determination(
     determined_bucket: Optional[str] = None, rationale: str,
     ip_address: Optional[str] = None, correlation_id: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
-    """Event #1 (or a fresh determination after a RETURN)."""
+    """Event #1 (or a fresh determination after a RETURN).
+
+    DELIBERATELY DOES NOT CHECK OWNERSHIP ITSELF. This is a shared primitive:
+    `priority_review.py` also calls it, and does its OWN `require_owner`
+    check at ITS call site before doing so — the established convention in
+    this codebase is that ownership is a CALL-SITE decision, not something
+    this shared function imposes on every caller. Many synthetic-fixture
+    test setups (and potentially other internal orchestration) legitimately
+    call this directly to seed a determination without going through
+    claim/release at all; forcing an ownership check in here broke every one
+    of them when first tried (2026-09-02 DEV certification) for no gain,
+    since the actual vulnerability is specific to the interactive HTTP route
+    a real analyst uses. See `review_routes.record_determination` for where
+    the check now lives, mirroring `priority_review.py`'s own pattern
+    exactly.
+    """
     await _review_or_refuse(db, review_id)
     actor_id, actor_email, actor_role = _actor(user)
     rationale = _require_rationale(rationale, "rationale")
