@@ -74,9 +74,38 @@ async def website_corroboration(entity: Dict[str, Any], timeout: float = 10.0) -
     No website is derived from an email domain or guessed from a name. Guessing
     at a URL and then treating what comes back as evidence about this entity is
     how an unrelated third party's site ends up in a federal audit trail.
+
+    SSRF GUARD
+    ──────────
+    The URL comes from a delivered Government data file, which is
+    attacker-influenced input in the general case. This previously dialled it
+    with `follow_redirects=True` and no address checking: a delivered value of
+    `http://169.254.169.254/` would have been fetched from inside the
+    deployment, and a redirect to it would have been followed silently.
+
+    Now every URL — the first one and every redirect hop — is resolved and
+    checked against private, loopback, link-local, reserved and multicast ranges
+    BEFORE a connection is attempted, by `website_evidence.check_url`. A refusal
+    is reported as UNAVAILABLE, which is the correct existing state for it: the
+    site was not read, and that is a fact about the fetch rather than about the
+    entity.
+
+    WHAT IS OBSERVED
+    ────────────────
+    The result now also carries the domain, whether the connection was HTTPS,
+    and any organisation name, address, phone and contact detail the page
+    published — `address` was previously always None with a note saying
+    extraction was not attempted. Every one of those keys ends in `_observed`
+    because that is what they are: what the site says, never what is true.
+
+    The `result` vocabulary, the existing keys and the "never affects the
+    determination" contract are UNCHANGED. Corroboration is still decided the
+    same way, by the organisation name appearing in the page text.
     """
-    url = _entity_website(entity)
-    if not url:
+    from app.tefca_registry import website_evidence as web
+
+    raw = _entity_website(entity)
+    if not raw:
         return {
             "result": WEBSITE_NOT_FOUND,
             "url": None,
@@ -85,19 +114,92 @@ async def website_corroboration(entity: Dict[str, Any], timeout: float = 10.0) -
             "note": ("ONC supplied no official website for this entity, and none is "
                      "inferred. Absence of a website never counts against an entity."),
             "checked_at": datetime.utcnow().isoformat(),
+            **web.observation_fields(None),
         }
-    if not url.lower().startswith(("http://", "https://")):
-        url = f"https://{url}"
 
+    url = web.normalize_url(raw)
+    if url is None:
+        return {
+            "result": WEBSITE_UNAVAILABLE, "url": raw, "unavailable": True,
+            "affects_determination": False,
+            "note": ("The delivered website value is not a usable http/https "
+                     "URL. Not a finding against the entity."),
+            "checked_at": datetime.utcnow().isoformat(),
+            **web.observation_fields(None),
+        }
+
+    permitted, refusal = await web.check_url_async(url)
+    if not permitted:
+        return {
+            "result": WEBSITE_UNAVAILABLE, "url": url, "unavailable": True,
+            "affects_determination": False,
+            "note": (f"Refused before connecting: {refusal}. A property of the "
+                     f"URL, not a finding against the entity."),
+            "checked_at": datetime.utcnow().isoformat(),
+            **web.observation_fields(url),
+        }
+
+    # Redirects are followed MANUALLY so each hop can be re-checked. Trusting
+    # the chain because the first URL passed is precisely the hole the guard
+    # exists to close.
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout), follow_redirects=True) as client:
-            resp = await client.get(url, headers={"User-Agent": "DocuAction-TEFCA-Review/1.0"})
+        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout),
+                                     follow_redirects=False) as client:
+            current = url
+            resp = None
+            for _ in range(web.MAX_REDIRECTS + 1):
+                resp = await client.get(
+                    current, headers={"User-Agent": "DocuAction-TEFCA-Review/1.0"})
+                if resp.status_code not in (301, 302, 303, 307, 308):
+                    break
+                nxt = web.resolve_redirect(
+                    current, resp.headers.get("location") or "")
+                if nxt is None:
+                    return {
+                        "result": WEBSITE_UNAVAILABLE, "url": current,
+                        "unavailable": True, "affects_determination": False,
+                        "note": ("Redirected to a URL that is not usable. Not a "
+                                 "finding against the entity."),
+                        "checked_at": datetime.utcnow().isoformat(),
+                        **web.observation_fields(current),
+                    }
+                permitted, refusal = await web.check_url_async(nxt)
+                if not permitted:
+                    return {
+                        "result": WEBSITE_UNAVAILABLE, "url": current,
+                        "unavailable": True, "affects_determination": False,
+                        "note": (f"Redirect refused: {refusal}. Not a finding "
+                                 f"against the entity."),
+                        "checked_at": datetime.utcnow().isoformat(),
+                        **web.observation_fields(current),
+                    }
+                current = nxt
+            else:
+                return {
+                    "result": WEBSITE_UNAVAILABLE, "url": current,
+                    "unavailable": True, "affects_determination": False,
+                    "note": ("Too many redirects. An availability fact about "
+                             "the site, not evidence about the entity."),
+                    "checked_at": datetime.utcnow().isoformat(),
+                    **web.observation_fields(current),
+                }
+            url = current
     except Exception as exc:
         return {
             "result": WEBSITE_UNAVAILABLE, "url": url, "unavailable": True,
             "affects_determination": False,
             "note": f"Website unreachable ({type(exc).__name__}). Not a finding against the entity.",
             "checked_at": datetime.utcnow().isoformat(),
+            **web.observation_fields(url),
+        }
+
+    if resp is None:
+        return {
+            "result": WEBSITE_UNAVAILABLE, "url": url, "unavailable": True,
+            "affects_determination": False,
+            "note": "No response. Not a finding against the entity.",
+            "checked_at": datetime.utcnow().isoformat(),
+            **web.observation_fields(url),
         }
 
     if resp.status_code in (403, 429) or resp.status_code >= 500:
@@ -107,6 +209,7 @@ async def website_corroboration(entity: Dict[str, Any], timeout: float = 10.0) -
             "note": (f"HTTP {resp.status_code} — blocked, rate-limited or server error. "
                      "An availability fact about the site, not evidence about the entity."),
             "checked_at": datetime.utcnow().isoformat(),
+            **web.observation_fields(url),
         }
     if resp.status_code >= 400:
         return {
@@ -114,9 +217,11 @@ async def website_corroboration(entity: Dict[str, Any], timeout: float = 10.0) -
             "affects_determination": False, "http_status": resp.status_code,
             "note": f"HTTP {resp.status_code}. Not a finding against the entity.",
             "checked_at": datetime.utcnow().isoformat(),
+            **web.observation_fields(url),
         }
 
-    text = (resp.text or "")[:200_000]
+    html = web.body_text(resp)
+    text = html[:200_000]
     name = (entity.get("name") or "").strip()
     corroborates_name = bool(name) and name.lower() in text.lower()
     return {
@@ -125,12 +230,12 @@ async def website_corroboration(entity: Dict[str, Any], timeout: float = 10.0) -
         "unavailable": False,
         "affects_determination": False,
         "http_status": resp.status_code,
-        "address": None,  # Address extraction from free HTML is not attempted; see note.
         "note": ("Organisation name found on the official site."
                  if corroborates_name else
                  "Site reachable but did not clearly corroborate the organisation name. "
                  "Supplemental only — never forced into PASS/FAIL."),
         "checked_at": datetime.utcnow().isoformat(),
+        **web.observation_fields(url, html, reachable=True),
     }
 
 
