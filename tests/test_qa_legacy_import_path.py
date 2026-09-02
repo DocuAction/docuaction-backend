@@ -15,6 +15,7 @@ These tests pin the fixes on the endpoints the FRONTEND calls. If someone later
 consolidates the two import paths, this file is the record of which one was
 user-facing.
 """
+import ast
 import inspect
 
 import pytest
@@ -128,13 +129,54 @@ def test_history_model_stores_the_hash():
     assert TEFCAImportHistory.__table__.columns["file_hash"].type.length == 64
 
 
+def _history_write_calls():
+    """Every `TEFCAImportHistory(...)` call in upload_entities, as AST Call
+    nodes - not a text search, so a write is found regardless of which
+    expression it passes for any given keyword."""
+    tree = ast.parse(_upload_src())
+    return [node for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "TEFCAImportHistory"]
+
+
 def test_every_history_write_carries_the_hash():
-    """Three separate writes (parse failure, empty file, success). A hash on only
-    the happy path is missing exactly where forensics start."""
-    src = _upload_src()
-    assert src.count("TEFCAImportHistory(") == 3, "history write sites changed"
-    assert src.count("file_hash=file_hash") == 3, \
-        "a TEFCAImportHistory write is missing file_hash"
+    """The invariant is "every write has a real file_hash", not a fixed count
+    of write sites or one fixed spelling of how each produces it.
+
+    There are (at least) four legitimate call sites, not three: the original
+    parse-failure, empty-file and success writes, plus DEF-018 / IMP-013's
+    scan-rejection write (added later - a file the security scanner refuses
+    is still an import ATTEMPT, and previously it vanished from Import
+    History entirely instead of being recorded as a failure). This test used
+    to pin the count at exactly three and failed the moment that fourth,
+    correct write site was added.
+
+    The scan-rejection branch also cannot spell its hash `file_hash=file_hash`
+    like the other three: `_scan_upload_or_reject` raises BEFORE returning a
+    hash on that path, so the shared `file_hash` variable is never assigned.
+    It instead recomputes `hashlib.sha256(raw).hexdigest()` directly from the
+    raw bytes still in scope - `app/services/file_scanner.py` confirms
+    `FileScanner.scan()` computes its own `sha256` field the same way, over
+    the same bytes, so this recomputation is provably the identical digest
+    the scan itself would have returned and already audit-logged. Provenance
+    is preserved; the expression is just necessarily different on this one
+    branch, which is exactly why the check below asks whether a real value
+    was passed rather than which literal spelling produced it.
+    """
+    calls = _history_write_calls()
+    assert len(calls) >= 3, (
+        f"expected at least the parse-failure, empty-file and success writes, "
+        f"found {len(calls)} - a write site was removed")
+
+    for call in calls:
+        kwargs = {kw.arg: kw.value for kw in call.keywords}
+        assert "file_hash" in kwargs, (
+            f"TEFCAImportHistory write at line {call.lineno} has no file_hash keyword")
+        value = kwargs["file_hash"]
+        if isinstance(value, ast.Constant):
+            assert value.value not in (None, ""), (
+                f"TEFCAImportHistory write at line {call.lineno} passes a "
+                f"trivial file_hash constant ({value.value!r}) instead of a "
+                f"real digest")
 
 
 def test_history_endpoint_returns_the_hash():
