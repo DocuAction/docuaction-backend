@@ -43,10 +43,24 @@ SNAPSHOT_SQL = """
 def main() -> None:
     baseline = json.loads(BASELINE_JSON) if BASELINE_JSON.strip() else {}
 
-    conn = psycopg2.connect(
-        host=PGHOST, dbname=PGDATABASE, user=PG_PRINCIPAL, password=PGTOKEN,
-        sslmode="require", connect_timeout=20,
-    )
+    # Unlike gov_integrity_snapshot.py, an unreachable DB HERE is not treated
+    # as routine: this step only ever runs after gov-baseline successfully
+    # captured a real (non-empty-because-unreadable) baseline and deploy
+    # actually happened, so DEV Postgres was reachable moments ago. Losing
+    # that reachability now means Government-data integrity cannot be
+    # confirmed post-deploy - which is itself something to stop and look at,
+    # not something to silently pass over.
+    try:
+        conn = psycopg2.connect(
+            host=PGHOST, dbname=PGDATABASE, user=PG_PRINCIPAL, password=PGTOKEN,
+            sslmode="require", connect_timeout=20,
+        )
+    except psycopg2.OperationalError as exc:
+        print(f"FAIL: DEV Postgres became unreachable from this runner during "
+              f"the deploy window - cannot confirm Government-data integrity "
+              f"post-deploy: {exc}", file=sys.stderr)
+        sys.exit(1)
+
     conn.autocommit = True
     cur = conn.cursor()
 
