@@ -327,6 +327,21 @@ async def _startup_after_schema():
     except Exception as e:
         logger.warning(f"Export scheduler not started: {e}")
 
+    # Official ONC/RCE delivery processing, same reasoning again: a delivery is
+    # minutes of work at 23K records and considerably more at 100K, so the work
+    # lives in the database and a poller runs it. Unconditional for the same
+    # reason PPEF is — duplicate execution is refused by the DATABASE (partial
+    # unique index over active jobs, FOR UPDATE SKIP LOCKED on the claim), and
+    # the reaper is what recovers deliveries orphaned by the recycle that just
+    # happened. Without this the queue still accepts registrations; they sit
+    # QUEUED, which is visible rather than silent.
+    try:
+        from app.tefca_registry.rce.delivery_scheduler import (
+            start_delivery_scheduler)
+        start_delivery_scheduler()
+    except Exception as e:
+        logger.warning(f"Delivery scheduler not started: {e}")
+
     # ═══ EVIDENCE VOCABULARY CONTRACT (B5 / E1) ═══
     #
     # STAGE A: report-only at startup, FATAL in CI. `load_rules` already raises
@@ -539,6 +554,19 @@ safe_load("app.tefca_registry.usps_routes", "usps-metrics")
 # Area 1 (immutable) -> quality -> Issue Ledger -> Area 2 -> canonical registry.
 # No mutating route exists for Area 1 — see app/tefca_registry/rce/repository.py.
 safe_load("app.tefca_registry.rce.routes", "tefca-rce-pipeline")
+
+# Official ONC/RCE delivery registration (asynchronous) + the operational
+# dashboard, at /api/tefca/rce/official-deliveries and /delivery-jobs/*.
+# Separate module from the pipeline routes above so that module's load-bearing
+# "Area 1 has no mutating route" guarantee stays small enough to verify by
+# reading it. Neither module mutates Area 1.
+safe_load("app.tefca_registry.rce.delivery_routes", "tefca-rce-deliveries")
+
+# Program Manager + Analyst workflow surface at /api/tefca/workflow/*:
+# QHIN work organisation, workload distribution, and the analyst verification
+# workspace. Read surface plus one audited bulk-assignment write; it creates no
+# second path for sampling, determination or QA — those stay in review_routes.
+safe_load("app.tefca_registry.workflow_routes", "tefca-arc-workflow")
 
 # ═══ REPORTS ═══
 # Federal reporting engine at /api/reports/*. Reads FROZEN verification results

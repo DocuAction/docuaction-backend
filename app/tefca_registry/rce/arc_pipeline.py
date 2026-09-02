@@ -251,6 +251,59 @@ def next_review_id(sequence: int, year: Optional[int] = None) -> str:
     return f"REV-{year or datetime.utcnow().year}-{sequence:06d}"
 
 
+async def _lock_review_id_allocation(db, year: Optional[int] = None) -> None:
+    """Serialise review-id allocation for one calendar year across ALL callers.
+
+    FOUND DURING DEV CERTIFICATION, 2026-09-02: `verify_and_classify` computed
+    every review id in a batch from ONE `count(*)` read taken before the loop
+    started, then formatted `count + offset + 1` locally with no further check.
+    Reproduced empirically: two concurrent `verify_and_classify` calls (as
+    `review_cycle.create_review_cycle` now legitimately makes possible — two
+    Program Managers creating review cycles for two different deliveries at the
+    same time) read the same starting count and computed overlapping ids. The
+    second caller's batch failed with `IntegrityError` on the unique
+    `review_id` column, losing that whole batch's verification work.
+
+    A SELECT-then-check retry (the pattern `dq_review_bridge._next_review_id`
+    and `priority_review._next_review_id` already use) does NOT fix this here:
+    `verify_and_classify` commits its whole batch in ONE transaction at the
+    end, and under READ COMMITTED a SELECT inside one open transaction cannot
+    see another still-open transaction's rows no matter how carefully it
+    checks — visibility requires the OTHER transaction to have committed
+    first, which a same-instant race by definition has not.
+
+    A transaction-scoped advisory lock (`pg_advisory_xact_lock`) fixes this
+    correctly: PostgreSQL releases it only at COMMIT or ROLLBACK of the
+    holding transaction, so a second caller blocked on this lock is
+    guaranteed — once it proceeds — to see the first caller's rows as
+    committed. This is the SAME primitive `qhin_sampling.finalize_plan`
+    already uses in this codebase for the identical shape of problem ("only
+    one transaction may run this critical section at a time"); this is not a
+    new mechanism.
+
+    Held for the WHOLE calling batch, not released between entities — the
+    numbering must stay contiguous within one call, and `review_cycle
+    .create_review_cycle`'s own batch cap (max 1000, default 200) bounds how
+    long any other caller can be made to wait.
+    """
+    await db.execute(text("select pg_advisory_xact_lock(hashtext(:k))"),
+                     {"k": f"review_id_alloc:{year or datetime.utcnow().year}"})
+
+
+def _format_review_id(sequence: int, year: Optional[int] = None) -> str:
+    return f"REV-{year or datetime.utcnow().year}-{sequence:06d}"
+
+
+async def _allocate_review_id(db, year: Optional[int] = None) -> str:
+    """REV-YYYY-NNNNNN. Caller MUST hold `_lock_review_id_allocation` first."""
+    prefix = f"REV-{year or datetime.utcnow().year}-"
+    top = (await db.execute(
+        select(func.max(reg.ReviewRecord.review_id))
+        .where(reg.ReviewRecord.review_id.like(f"{prefix}%")))).scalar()
+    nxt = (int(top.rsplit("-", 1)[1]) + 1) if top else 1
+    return f"{prefix}{nxt:06d}"
+
+
 async def _rule_set(db) -> List[Dict[str, Any]]:
     """Active B1-B4 rules, seeded if the table is empty."""
     from app.tefca_registry.bucket_classifier import ensure_rules_v2, ensure_seed_rules
@@ -298,15 +351,17 @@ async def verify_and_classify(
     classifier = BucketClassifier()
     service = EvidenceService(local_store=make_local_store(db))
 
-    existing = int((await db.execute(
-        select(func.count()).select_from(reg.ReviewRecord))).scalar() or 0)
-
     outcomes: List[Dict[str, Any]] = []
     buckets: Dict[str, int] = {}
     tiers: Dict[int, int] = {}
     unresolved: List[str] = []
 
-    for offset, ref in enumerate(entity_refs):
+    # Held for the whole batch — see `_lock_review_id_allocation`. Acquired
+    # even when entity_refs is empty or every ref is unresolved, which costs
+    # nothing (no id is ever allocated) and keeps this call site simple.
+    await _lock_review_id_allocation(db)
+
+    for ref in entity_refs:
         entity = await resolve_entity(db, ref)
         if entity is None:
             unresolved.append(ref)
@@ -325,7 +380,7 @@ async def verify_and_classify(
         verification_results = dimensions_to_verification_results(evidence)
         classification = classifier.classify(verification_results, rules=rules)
 
-        review_id = next_review_id(existing + offset + 1)
+        review_id = await _allocate_review_id(db)
         tier = BUCKET_TO_TIER.get(classification.bucket, 3)
 
         # THE UNMATCHED PATH STILL HAS TO CITE ITS PROVENANCE.

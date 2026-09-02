@@ -112,16 +112,25 @@ async def resolve_qhin_strata(db, intake_id, *, include_held: bool = False
                m.RceCuratedRecord.record_status)
         .where(m.RceCuratedRecord.source_intake_id == intake_id))).all()
 
-    entity_ids = [r[0] for r in rows if r[0] is not None]
     if not rows:
         return [], []
 
     # One query for every QHIN edge, then counted per child: two edges is an
     # ambiguity to report, not a coin to toss.
+    #
+    # A SUBQUERY, NOT `.in_(entity_ids)`. The delivered population is 23,562
+    # promoted entities and a 100K delivery is expected; asyncpg refuses a
+    # statement with more than 32,767 bind parameters, so an expanded IN list
+    # would work on today's file and raise on the next size up. The database
+    # already holds the id set — it is asked for the join rather than handed
+    # the list back.
+    promoted = (select(m.RceCuratedRecord.canonical_entity_id)
+                .where(m.RceCuratedRecord.source_intake_id == intake_id,
+                       m.RceCuratedRecord.canonical_entity_id.isnot(None)))
     edges = (await db.execute(
         select(reg.TefcaEntityRelationship.child_entity_id,
                reg.TefcaEntityRelationship.parent_entity_id)
-        .where(reg.TefcaEntityRelationship.child_entity_id.in_(entity_ids),
+        .where(reg.TefcaEntityRelationship.child_entity_id.in_(promoted),
                reg.TefcaEntityRelationship.relationship_type == "managed_by_qhin",
                reg.TefcaEntityRelationship.status == "active"))).all()
     by_child: Dict[Any, List[Any]] = {}

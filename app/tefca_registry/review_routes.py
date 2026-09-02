@@ -897,8 +897,41 @@ async def record_determination(review_id: str, req: AnalystDetermination,
                                request: Request,
                                db: AsyncSession = Depends(get_db),
                                user=Depends(require_role("reviewer"))):
-    """Record an analyst determination as a new immutable event."""
+    """Record an analyst determination as a new immutable event.
+
+    OWNERSHIP-GATED, ADDED HERE AT THE ROUTE — NOT INSIDE THE SHARED
+    FUNCTION. Found missing during DEV certification, 2026-09-02, and proven
+    live: an authenticated `reviewer` who had never claimed a case could
+    still record a determination on it, purely by knowing its id — the only
+    check was the caller's ROLE, never who actually held the case.
+
+    This mirrors `priority_review.py`'s own call site exactly: it fetches
+    the record and calls `case_assignment.require_owner(record, user)`
+    itself, immediately before calling this SAME shared
+    `record_analyst_determination`, rather than relying on that function to
+    enforce it. That is the established convention for a reason — a first
+    attempt at fixing this put the check INSIDE
+    `record_analyst_determination` and broke roughly fifty pre-existing
+    tests (workbook export, QA gate, sampling, supervisor dashboards — none
+    of them about ownership) whose fixtures legitimately call the shared
+    function directly to seed a determination without going through
+    claim/release, exactly as `priority_review.py`'s own usage shows is a
+    supported way to call it. Gating at the interactive HTTP route, where
+    the actual vulnerability was proven, fixes the real exposure without
+    disturbing that.
+    """
+    from app.tefca_registry.case_assignment import AssignmentRefused, require_owner
     from app.tefca_registry.qa_gate import QaGateRefused, record_analyst_determination
+
+    record = (await db.execute(
+        select(reg.ReviewRecord).where(reg.ReviewRecord.review_id == review_id)
+    )).scalars().first()
+    if record is None:
+        raise HTTPException(404, f"no review exists with id {review_id}")
+    try:
+        require_owner(record, user)
+    except AssignmentRefused as exc:
+        raise HTTPException(409, str(exc))
 
     try:
         result = await record_analyst_determination(
