@@ -3737,6 +3737,29 @@ async def upload_entities(
     # the caller was never told, so a re-import looked identical to a fresh one.
     # Counted and reported separately from `imported`.
     skipped_details = []
+    # ── ONE lookup for the whole file, not one per row ──────────────────────
+    # This loop used to run `select(...).where(rce_organization_id == rce_id)`
+    # per accepted row. Every one is a separate round trip to the database, and
+    # they are sequential, so a 1,000-row file spent a thousand latencies here
+    # before the registry bridge spent a thousand more. That is what made a
+    # 1,000-row upload time out with the request still pending, and it is why
+    # raising a timeout would not have helped: the cost grows with the file.
+    #
+    # Chunked rather than one enormous IN (...): PostgreSQL takes a bind
+    # parameter per element, and a 100,000-row file would blow the statement
+    # limit. 1,000 keeps every statement small while turning a five-figure
+    # number of round trips into a two-figure one.
+    _LOOKUP_CHUNK = 1000
+    rce_ids = [f"import-{a['npi']}" for a in accepted]
+    existing_by_id: dict = {}
+    for i in range(0, len(rce_ids), _LOOKUP_CHUNK):
+        chunk = rce_ids[i:i + _LOOKUP_CHUNK]
+        found = (await db.execute(
+            select(TEFCAEntity).where(TEFCAEntity.rce_organization_id.in_(chunk))
+        )).scalars().all()
+        for e in found:
+            existing_by_id[e.rce_organization_id] = e
+
     for a in accepted:
         etype = a["entity_type"]
         if etype not in ("QHIN", "PARTICIPANT", "SUBPARTICIPANT"):
@@ -3745,9 +3768,7 @@ async def upload_entities(
         # rce_organization_id is unique and NOT NULL. A re-import of the same NPI
         # updates the existing row rather than raising a unique violation.
         rce_id = f"import-{a['npi']}"
-        existing = (await db.execute(
-            select(TEFCAEntity).where(TEFCAEntity.rce_organization_id == rce_id)
-        )).scalar_one_or_none()
+        existing = existing_by_id.get(rce_id)
 
         if existing:
             existing.legal_name_submitted = a["entity_name"]
@@ -3761,7 +3782,7 @@ async def upload_entities(
                 "action": "updated_existing_entity",
             })
         else:
-            db.add(TEFCAEntity(
+            fresh = TEFCAEntity(
                 rce_organization_id=rce_id,
                 qhin_name=a["qhin"],
                 entity_type=EntityType(etype),
@@ -3772,7 +3793,16 @@ async def upload_entities(
                 # PENDING_REVIEW, not reviewed. An imported entity has been checked
                 # against nothing.
                 current_status=EntityStatus.PENDING_REVIEW,
-            ))
+            )
+            db.add(fresh)
+            # The same NPI twice in ONE file. The per-row SELECT this replaced
+            # would have found the first occurrence via autoflush; a lookup built
+            # before the loop cannot, so the second row would add a second entity
+            # with the same rce_organization_id and violate the unique
+            # constraint - turning a duplicate row into a failed import. Seeding
+            # the map keeps the previous behaviour: the second occurrence UPDATES
+            # the first and is counted as a duplicate, not inserted again.
+            existing_by_id[rce_id] = fresh
         imported += 1
 
     # ── Bridge into the registry ────────────────────────────────────────────
