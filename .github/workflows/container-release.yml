@@ -31,7 +31,7 @@ on:
         required: true
         type: string
       push:
-        description: 'Push to the DEV registry (needs AZURE_CREDENTIALS). Off = build and smoke only.'
+        description: 'Push to the DEV registry (uses the DEV environment OIDC identity). Off = build and smoke only.'
         required: true
         type: boolean
         default: false
@@ -103,7 +103,18 @@ jobs:
       - name: Required runtime dependencies are present in the image
         run: |
           IMG="candidate:${{ steps.identity.outputs.tag }}"
-          docker run --rm --entrypoint python "$IMG" -c "import app.main; print('application imports OK')"
+          # app.main imports app.core.config, which fails CLOSED when SECRET_KEY
+          # or DATABASE_URL is absent. That is correct behaviour and is not being
+          # weakened here - the check simply has to supply configuration to observe
+          # an import at all. Synthetic throwaway values, the same shape the /health
+          # smoke below uses: no real credential, and nothing pointing at DEV, PROD
+          # or any Government database. Settings are validated at import; no
+          # connection is opened.
+          docker run --rm --entrypoint python -e ENVIRONMENT=test -e SECRET_KEY=smoke-test-not-a-real-key-0000000000000000000000000000000000000000 -e DATABASE_URL='postgresql+asyncpg://smoke:smoke@127.0.0.1:5432/smoke' "$IMG" -c "import app.main; print('application imports OK')"
+          # The remaining checks import third-party packages, or pdf_engine, which
+          # imports only the standard library. They deliberately get NO
+          # configuration: injecting it everywhere would hide a module that had
+          # quietly grown a settings dependency.
           docker run --rm --entrypoint python "$IMG" -c "import gunicorn, uvicorn; print('gunicorn + uvicorn OK')"
           docker run --rm --entrypoint python "$IMG" -c "import alembic; print('alembic OK')"
           docker run --rm --entrypoint python "$IMG" -c "import azure.storage.blob, azure.identity; print('azure deps OK')"
@@ -120,7 +131,7 @@ jobs:
           # --network host so the container can reach the Postgres service the
           # job published on the runner. Synthetic throwaway configuration only:
           # nothing here is a real credential, and nothing points at DEV or PROD.
-          docker run -d --name candidate --network host -e ENVIRONMENT=test -e SECRET_KEY=smoke-test-not-a-real-key-000000000000000000000000000000000000 -e ALLOWED_HOSTS='*' -e ALLOWED_ORIGINS='*' -e DATABASE_URL='postgresql+asyncpg://smoke:smoke@127.0.0.1:5432/smoke' -e PORT=8080 "$IMG"
+          docker run -d --name candidate --network host -e ENVIRONMENT=test -e SECRET_KEY=smoke-test-not-a-real-key-0000000000000000000000000000000000000000 -e ALLOWED_HOSTS='*' -e ALLOWED_ORIGINS='*' -e DATABASE_URL='postgresql+asyncpg://smoke:smoke@127.0.0.1:5432/smoke' -e PORT=8080 "$IMG"
           echo "waiting for /health ..."
           CODE=000
           for i in $(seq 1 40); do
@@ -141,6 +152,17 @@ jobs:
     needs: build-and-smoke
     if: inputs.push
     runs-on: ubuntu-latest
+    # The DEV environment is the trust boundary, not a label. The federated
+    # credential in Entra is bound to the subject
+    #   repo:DocuAction/docuaction-backend:environment:development
+    # so a job that does NOT declare this environment gets a token Azure will
+    # refuse. A fork, a pull request or an arbitrary branch cannot borrow it.
+    environment: development
+    permissions:
+      # The ONLY reason this is here: azure/login needs to mint the short-lived
+      # GitHub OIDC token it exchanges for an Azure token. Nothing is stored.
+      id-token: write
+      contents: read
     outputs:
       digest: ${{ steps.digest.outputs.digest }}
     steps:
@@ -149,10 +171,19 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
-      - name: Login to Azure
+      - name: Login to Azure (OIDC - no stored client secret)
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          # Identifiers, not credentials: a client id, a tenant id and a
+          # subscription id are all discoverable from any resource in the
+          # tenant and authenticate nothing on their own. They are environment
+          # VARIABLES rather than secrets so that the audit trail shows which
+          # identity ran, which a masked secret would hide. The credential
+          # itself is the federated trust in Entra plus this job's OIDC token,
+          # which lives for minutes and cannot leave the runner.
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Build and push to the DEV registry only
         run: |

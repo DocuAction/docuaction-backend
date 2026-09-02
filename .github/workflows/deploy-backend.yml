@@ -51,9 +51,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
+        # github.ref, NOT image_tag. image_tag names an image in ACR and its
+        # value is a SHORT commit sha (`62a9273`); actions/checkout treats only
+        # a full 40-character sha as a commit and looks anything else up as a
+        # branch or tag, so checking it out fails - there is no ref by that
+        # name. The dispatch ref is the right source: main contains the release
+        # commit this candidate was built from.
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.ref }}
           fetch-depth: 0
 
       - name: Set up Python 3.12
@@ -218,14 +224,49 @@ jobs:
     runs-on: ubuntu-latest
     environment: development
     if: github.event.inputs.environment == 'dev' || github.event.inputs.environment == 'production'
+    permissions:
+      # azure/login mints a short-lived GitHub OIDC token and exchanges it for
+      # an Azure token. No client secret is stored anywhere in this repository.
+      id-token: write
+      contents: read
     outputs:
       previous_image: ${{ steps.capture.outputs.previous_image }}
       deployed_digest: ${{ steps.resolve.outputs.digest }}
     steps:
-      - name: Login to Azure
+      # This job RUNS ALEMBIC. Without a checkout there is no alembic.ini and no
+      # alembic/versions, and `alembic current` fails with "No config file
+      # found" - which the capture step swallowed into an `|| echo`, so the
+      # deployment would have continued having recorded no starting revision at
+      # all. The migration step would then have failed AFTER the rollback point
+      # was captured but BEFORE the image changed.
+      # ...and ONLY then. image_tag is the ACR tag, a SHORT commit sha, which
+      # actions/checkout resolves as a branch or tag name rather than a commit
+      # (only a full 40-character sha is treated as one). There is no ref named
+      # `62a9273`, so this step fails outright on an image-only deployment that
+      # never needed the source in the first place.
+      - name: Checkout the release source
+        if: github.event.inputs.run_migrations == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.image_tag }}
+
+      # `python` is not guaranteed to resolve on the runner image; `python3` is.
+      # Pinned to the version the release was built and verified against. Needed
+      # only by Alembic, so it follows the same gate.
+      - name: Set up Python 3.12
+        if: github.event.inputs.run_migrations == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Login to Azure (OIDC - no stored client secret)
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          # Identifiers, not credentials. See container-release.yml for why
+          # these are environment variables rather than secrets.
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Verify the candidate image exists in the DEV registry
         id: resolve
@@ -244,7 +285,13 @@ jobs:
         run: |
           # Captured first, and by digest, so incident response never has to
           # rebuild from source or trust that a tag still means what it meant.
-          PREV=$(az webapp config show -n "$DEV_APP" -g "$DEV_RG" --query linuxFxVersion -o tsv)
+          #
+          # Read straight off /config/web. linuxFxVersion lives there;
+          # /config/appsettings is a DIFFERENT resource holding the application's
+          # secret values, and this identity deliberately cannot read it. The
+          # value is stored WITH its `DOCKER|` prefix and is kept verbatim, so a
+          # rollback restores the byte-exact previous configuration.
+          PREV=$(az rest --method GET --url "https://management.azure.com/subscriptions/${{ vars.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${DEV_RG}/providers/Microsoft.Web/sites/${DEV_APP}/config/web?api-version=2023-12-01" --query properties.linuxFxVersion -o tsv)
           echo "previous_image=$PREV" >> "$GITHUB_OUTPUT"
           echo "ROLLBACK POINT: $PREV"
           {
@@ -254,12 +301,24 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Capture the current Alembic revision
+        # Gated on the SAME input as the migration below, because that is the
+        # only thing it exists to serve: it records the revision to come back
+        # to if a migration has to be undone. Ungated it made EVERY deployment
+        # require PostgreSQL connectivity, including image-only ones that touch
+        # no schema - and GitHub-hosted runners have no network path to the DEV
+        # database (its firewall lists App Service outbound addresses only).
+        # So an image-only deploy failed here, before the image ever changed,
+        # for a revision nobody was going to use. Migrations run out of band
+        # through the authorised DBA path; this deployment ships an image.
+        if: github.event.inputs.run_migrations == 'true'
         run: |
           # Recorded before migrating so the exact starting revision is known
           # if a downgrade is ever needed.
           python -m pip install --quiet alembic asyncpg sqlalchemy
           echo "current revision:"
-          DATABASE_URL="${{ secrets.MIGRATION_DATABASE_URL }}" alembic current || echo "(could not read revision - resolve before continuing)"
+          DATABASE_URL="${{ secrets.MIGRATION_DATABASE_URL }}" alembic current
+        env:
+          DB_APP_ROLE: docuaction_app
 
       - name: Run approved migrations as the schema owner
         if: github.event.inputs.run_migrations == 'true'
@@ -268,14 +327,38 @@ jobs:
           # image change: the new image expects the new schema. The owner
           # identity is used because the runtime application role has no DDL
           # rights, which is a control, not an inconvenience.
+          #
+          # DB_APP_ROLE is not optional. 20260830_run_lifecycle grants
+          # column-level UPDATE to the RUNTIME role, and it refuses to run if
+          # the role it is about to grant to already OWNS the table - because
+          # an owner can already update every column, so the grant would report
+          # success while enforcing nothing. This connection IS the owner, so
+          # without DB_APP_ROLE the migration raises RunLifecycleTargetError and
+          # the whole upgrade aborts. Naming the runtime role here is what makes
+          # the grant mean something.
           DATABASE_URL="${{ secrets.MIGRATION_DATABASE_URL }}" alembic upgrade head
           DATABASE_URL="${{ secrets.MIGRATION_DATABASE_URL }}" alembic current
+        env:
+          DB_APP_ROLE: docuaction_app
 
       - name: Point DEV at the candidate image by digest
         run: |
           # THE deployment step. Note what it is NOT: there is no
           # `az webapp deploy --type zip` anywhere in this job.
-          az webapp config container set --name "$DEV_APP" --resource-group "$DEV_RG" --docker-custom-image-name "${DEV_LOGIN_SERVER}/${IMAGE_REPO}@${{ steps.resolve.outputs.digest }}"
+          #
+          # A direct PATCH of /config/web, NOT `az webapp config container set`.
+          # That CLI command reads and rewrites the DOCKER_REGISTRY_SERVER_*
+          # application settings alongside linuxFxVersion, so it invokes
+          # Microsoft.Web/sites/config/list/action against /config/appsettings -
+          # the action that returns SECRET VALUES. The deployment identity does
+          # not have it, and must not: adding it would let a release job read
+          # every credential the app holds. Run 33523427434 failed here for
+          # exactly that reason.
+          #
+          # linuxFxVersion is a property of /config/web, which this identity can
+          # already write with Microsoft.Web/sites/config/write. Patching that
+          # single property changes the image and touches nothing else.
+          az rest --method PATCH --url "https://management.azure.com/subscriptions/${{ vars.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${DEV_RG}/providers/Microsoft.Web/sites/${DEV_APP}/config/web?api-version=2023-12-01" --headers "Content-Type=application/json" --body "{\"properties\":{\"linuxFxVersion\":\"DOCKER|${DEV_LOGIN_SERVER}/${IMAGE_REPO}@${{ steps.resolve.outputs.digest }}\"}}"
           az webapp restart --name "$DEV_APP" --resource-group "$DEV_RG"
 
       - name: Wait for a healthy start
@@ -298,7 +381,17 @@ jobs:
           echo "--- health ---"
           curl -fsS "$BASE/health" > /dev/null && echo ok
           echo "--- an unauthenticated caller must still be refused ---"
-          CODE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/tefca/arc/entities")
+          # A route that ACTUALLY EXISTS. /api/tefca/arc/entities never did:
+          # the ARC router (app/tefca_registry/review_routes.py, prefix
+          # /api/tefca/arc) has review-rules, samples and reviews, but no
+          # entities. So this probe returned 404 rather than 401, and the check
+          # correctly refused to accept a deployment it could not verify -
+          # run 33534309456, after the candidate had already come up healthy.
+          #
+          # 404 stays a FAILURE below, deliberately: on a route that is supposed
+          # to exist, 404 means the router did not mount, which is exactly the
+          # kind of silent breakage this check is for.
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/tefca/arc/reviews")
           echo "anonymous -> $CODE"
           case "$CODE" in 401|403) echo "correctly gated";; *) echo "FAIL: expected 401/403, got $CODE"; exit 1;; esac
 
@@ -309,7 +402,12 @@ jobs:
           # rebuild, no dependence on a floating tag.
           PREV="${{ steps.capture.outputs.previous_image }}"
           echo "ROLLING BACK to $PREV"
-          az webapp config container set --name "$DEV_APP" --resource-group "$DEV_RG" --docker-custom-image-name "${PREV#DOCKER|}"
+          # Same least-privilege path as the deploy, and the value is restored
+          # VERBATIM - including its `DOCKER|` prefix - so what comes back is
+          # byte-identical to what was captured before anything moved. The old
+          # form stripped the prefix to satisfy the CLI, which is exactly the
+          # command that needed the appsettings read.
+          az rest --method PATCH --url "https://management.azure.com/subscriptions/${{ vars.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${DEV_RG}/providers/Microsoft.Web/sites/${DEV_APP}/config/web?api-version=2023-12-01" --headers "Content-Type=application/json" --body "{\"properties\":{\"linuxFxVersion\":\"${PREV}\"}}"
           az webapp restart --name "$DEV_APP" --resource-group "$DEV_RG"
           for i in $(seq 1 30); do
             CODE=$(curl -s -o /dev/null -w '%{http_code}' "https://${DEV_APP}.azurewebsites.net/health" || true)
@@ -327,6 +425,13 @@ jobs:
     # reach this job, so DEV-only authority cannot deploy production.
     if: github.event.inputs.environment == 'production'
     steps:
+      # DELIBERATELY UNCHANGED. The DEV release identity is federated to the
+      # `development` environment only and has no PROD scope, so wiring it in
+      # here would be the one thing this job must never have: a path from DEV
+      # authority to production. `secrets.AZURE_CREDENTIALS` does not exist, so
+      # as written this job FAILS CLOSED at its first step. Production needs its
+      # own federated identity, its own RBAC and its own authorisation, and
+      # establishing those is a separate, explicitly approved piece of work.
       - name: Login to Azure
         uses: azure/login@v2
         with:

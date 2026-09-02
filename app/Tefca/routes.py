@@ -3622,8 +3622,36 @@ async def upload_entities(
     from app.api.routes import _scan_upload_or_reject
 
     ext = (file.filename or "").rsplit(".", 1)[-1].lower() if "." in (file.filename or "") else "csv"
-    file_hash = await _scan_upload_or_reject(
-        db, user, request, raw, file.filename, ext, "tefca_entity_import")
+    try:
+        file_hash = await _scan_upload_or_reject(
+            db, user, request, raw, file.filename, ext, "tefca_entity_import")
+    except HTTPException:
+        # DEF-018 / IMP-013 — a file the scanner refuses is still an import
+        # ATTEMPT, and Import History is where an operator looks to find out
+        # what happened to the file they just uploaded. Previously the scanner
+        # raised before any history row existed, so empty.csv,
+        # malicious_script.csv and renamed_executable.csv vanished from the
+        # table entirely: the newest visible entry was not the newest attempt,
+        # which is exactly the reading a reviewer would be misled by.
+        #
+        # This is the same reasoning the parse-failure branch below already
+        # applies. The rejection reason is deliberately the generic message the
+        # scanner raises - Import History must not become the oracle that tells
+        # an attacker which specific check tripped.
+        import hashlib
+        db.add(TEFCAImportHistory(
+            filename=file.filename,
+            record_count=0,
+            imported_count=0,
+            rejected_count=0,
+            uploaded_by=getattr(user, "email", None) or str(user),
+            status="failed",
+            file_hash=hashlib.sha256(raw).hexdigest(),
+            errors=[{"row": None, "field": "file",
+                     "reason": "File rejected: potentially malicious content"}],
+        ))
+        await db.commit()
+        raise
 
     # An unparseable file is a 400 — but it is STILL an import attempt, and the
     # audit trail must show it. Recording only the imports that parsed would make
