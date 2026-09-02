@@ -17,6 +17,21 @@ name: Migration Preflight (read-only)
 
 on:
   workflow_dispatch:
+  # Lets dev-release.yml ask "does this release need to migrate?" as data
+  # (jobs.preflight.outputs.migration_needed) instead of a human reading two
+  # printed revision strings and typing 'true'/'false' into deploy-backend's
+  # run_migrations dispatch input by hand.
+  workflow_call:
+    outputs:
+      dev_revision:
+        description: 'Current alembic_version row(s) in Azure DEV'
+        value: ${{ jobs.preflight.outputs.dev_revision }}
+      target_head:
+        description: 'The single head this checkout would migrate to'
+        value: ${{ jobs.preflight.outputs.target_head }}
+      migration_needed:
+        description: '"true" or "false" - DEV is not already at target_head'
+        value: ${{ jobs.preflight.outputs.migration_needed }}
 
 permissions:
   contents: read
@@ -35,6 +50,10 @@ jobs:
     permissions:
       id-token: write
       contents: read
+    outputs:
+      dev_revision: ${{ steps.read.outputs.dev_revision }}
+      target_head: ${{ steps.target.outputs.target_head }}
+      migration_needed: ${{ steps.compare.outputs.migration_needed }}
     steps:
       - uses: actions/checkout@v4
 
@@ -50,6 +69,7 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Token, connection and role assumption
+        id: read
         run: |
           python -m pip install --quiet psycopg2-binary
           # The token is minted here, stays a shell variable for the life of this
@@ -60,31 +80,65 @@ jobs:
             --query accessToken -o tsv)
           test -n "$PGTOKEN" || { echo "FAIL: no PostgreSQL access token"; exit 1; }
           echo "token acquired (${#PGTOKEN} chars, not printed)"
-          PGTOKEN="$PGTOKEN" python - <<'PY'
-          import os, psycopg2
+          PGTOKEN="$PGTOKEN" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import os, sys, psycopg2
           conn = psycopg2.connect(
               host=os.environ["PGHOST"], dbname=os.environ["PGDATABASE"],
               user=os.environ["PG_PRINCIPAL"], password=os.environ["PGTOKEN"],
               sslmode="require", connect_timeout=20)   # TLS required, not optional
           conn.autocommit = True
           c = conn.cursor()
-          c.execute("select current_user"); print("authenticated as:", c.fetchone()[0])
+          c.execute("select current_user"); print("authenticated as:", c.fetchone()[0], file=sys.stderr)
           c.execute("set role docuaction_owner")
           c.execute("select current_user"); assumed = c.fetchone()[0]
-          print("after SET ROLE   :", assumed)
+          print("after SET ROLE   :", assumed, file=sys.stderr)
           assert assumed == "docuaction_owner", "SET ROLE docuaction_owner did not take effect"
           c.execute("reset role")
-          c.execute("select current_user"); print("after RESET ROLE :", c.fetchone()[0])
+          c.execute("select current_user"); print("after RESET ROLE :", c.fetchone()[0], file=sys.stderr)
           # Schema metadata only. No Government business row is read.
           c.execute("select version_num from alembic_version")
-          print("DEV alembic revision:", [r[0] for r in c.fetchall()])
+          rows = [r[0] for r in c.fetchall()]
           conn.close()
-          print("PREFLIGHT OK - nothing was migrated")
+          print("DEV alembic_version rows:", rows, file=sys.stderr)
+          # A bare row count, not a business-data read: exactly one row is the
+          # only shape `alembic upgrade head` can safely start from. Zero means
+          # the schema was never stamped; more than one means a prior multi-head
+          # branch was never resolved. Either way this is a human decision, not
+          # something the automated pipeline should guess its way through by
+          # picking one of several revisions.
+          assert len(rows) == 1, (
+              f"DEV alembic_version has {len(rows)} rows, expected exactly 1 "
+              f"({rows!r}) - stop and resolve this by hand before automating "
+              f"a migration decision on top of it")
+          print(f"dev_revision={rows[0]}")
+          print("PREFLIGHT OK - nothing was migrated", file=sys.stderr)
           PY
 
       - name: Target head from the repository (offline)
+        id: target
         run: |
           # Offline: `alembic heads` reads the versions directory, not the
           # database. Exactly one head is a precondition for any upgrade.
           python -m pip install --quiet alembic
-          alembic heads
+          HEADS=$(alembic heads)
+          echo "$HEADS"
+          HEAD_LINES=$(echo "$HEADS" | grep '(head)' || true)
+          COUNT=$(echo "$HEAD_LINES" | grep -c . || true)
+          test "$COUNT" -eq 1 || { echo "FAIL: expected exactly one alembic head, found $COUNT - resolve the branch before this can run unattended"; exit 1; }
+          TARGET=$(echo "$HEAD_LINES" | awk '{print $1}')
+          echo "target_head=$TARGET" >> "$GITHUB_OUTPUT"
+
+      - name: Compare - is a migration actually needed
+        id: compare
+        run: |
+          DEV="${{ steps.read.outputs.dev_revision }}"
+          TARGET="${{ steps.target.outputs.target_head }}"
+          echo "DEV is at:    $DEV"
+          echo "target head:  $TARGET"
+          if [ "$DEV" = "$TARGET" ]; then
+            echo "migration_needed=false" >> "$GITHUB_OUTPUT"
+            echo "DEV is already current - deploy-backend will be told run_migrations=false (a true no-op, not skipped-and-assumed-fine)"
+          else
+            echo "migration_needed=true" >> "$GITHUB_OUTPUT"
+            echo "DEV is behind - deploy-backend will be told run_migrations=true"
+          fi

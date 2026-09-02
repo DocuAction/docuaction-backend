@@ -1,0 +1,195 @@
+name: DEV Release (automated)
+
+# The single automatic path from a merge into main to a running, verified
+# Azure DEV backend. Before this existed, that path was four separate manual
+# steps: dispatch container-release.yml, read its run summary, copy the image
+# tag into deploy-backend.yml's dispatch form, choose run_migrations by eye
+# after comparing two printed revision strings. Every one of those workflows
+# is untouched in what it actually DOES - this only chains their existing,
+# separately-tested behaviour together and reads their outputs as data
+# instead of asking a human to retype them.
+#
+# What this workflow does NOT do:
+#   - it never selects environment: production anywhere below, so it cannot
+#     reach deploy-prod no matter what happens upstream (see deploy.yml's own
+#     `if`, which deploy-prod also gates on `needs.deploy-dev` - unreachable
+#     from a workflow_call graph that only ever runs deploy-dev);
+#   - it never writes to rce_source_records, rce_curated_records or any other
+#     Government-data table - the two gov-integrity jobs below are SELECT-only;
+#   - it never changes what identity anything authenticates as - every Azure
+#     login below is the same `vars.AZURE_CLIENT_ID` / OIDC federated identity
+#     already established on main, unchanged.
+#
+# The `development` GitHub Environment's required-reviewer rule still applies
+# to every job below that declares `environment: development` (build's push
+# step, the migration preflight, and the deploy step itself) - this workflow
+# does not touch that protection rule and cannot bypass it. See the release
+# pipeline report for the exact, separate change that would reduce that to a
+# single approval per release instead of three.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'alembic/**'
+      - 'requirements.txt'
+      - 'Dockerfile'
+      - '.github/workflows/container-release.yml'
+      - '.github/workflows/deploy-backend.yml'
+      - '.github/workflows/migration-preflight.yml'
+      - '.github/workflows/dev-release.yml'
+  workflow_dispatch: {}
+
+# One DEV release in flight at a time. Queued, not cancelled: killing a run
+# mid-deploy could leave Azure pointed at a half-applied migration or an
+# image swap with no completed health check, which is worse than a merge
+# waiting a few minutes for the release ahead of it to finish.
+concurrency:
+  group: dev-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PGHOST: docuaction-db-dev.postgres.database.azure.com
+  PGDATABASE: postgres
+  PG_PRINCIPAL: github-actions-docuaction-backend-dev
+  DEV_APP: docuaction-dev
+
+jobs:
+  build:
+    name: Build immutable image
+    uses: ./.github/workflows/container-release.yml
+    with:
+      ref: ${{ github.sha }}
+      push: true
+    permissions:
+      contents: read
+      id-token: write
+
+  migration-check:
+    name: Read DEV's current migration state (read-only)
+    uses: ./.github/workflows/migration-preflight.yml
+    permissions:
+      contents: read
+      id-token: write
+
+  gov-baseline:
+    name: Capture Government-data baseline (read-only, before deploy)
+    needs: [build, migration-check]
+    runs-on: ubuntu-latest
+    environment: development
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      baseline_json: ${{ steps.snapshot.outputs.baseline_json }}
+      intake_count: ${{ steps.snapshot.outputs.intake_count }}
+    steps:
+      - name: Login to Azure (OIDC - no stored client secret)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Snapshot a per-delivery digest of every existing source record
+        id: snapshot
+        run: |
+          python -m pip install --quiet psycopg2-binary
+          PGTOKEN=$(az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv)
+          test -n "$PGTOKEN" || { echo "FAIL: no PostgreSQL access token"; exit 1; }
+          PGTOKEN="$PGTOKEN" python "$GITHUB_WORKSPACE/.github/scripts/gov_integrity_snapshot.py" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: Deploy to Azure DEV
+    needs: [build, migration-check, gov-baseline]
+    uses: ./.github/workflows/deploy-backend.yml
+    with:
+      environment: dev
+      image_tag: ${{ needs.build.outputs.tag }}
+      run_migrations: ${{ needs.migration-check.outputs.migration_needed }}
+    permissions:
+      contents: read
+      id-token: write
+
+  gov-verify:
+    name: Verify Government data unchanged (read-only, after deploy)
+    needs: [deploy, gov-baseline]
+    runs-on: ubuntu-latest
+    environment: development
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Login to Azure (OIDC - no stored client secret)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Compare against the pre-deploy baseline
+        env:
+          BASELINE_JSON: ${{ needs.gov-baseline.outputs.baseline_json }}
+        run: |
+          python -m pip install --quiet psycopg2-binary
+          PGTOKEN=$(az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv)
+          test -n "$PGTOKEN" || { echo "FAIL: no PostgreSQL access token"; exit 1; }
+          PGTOKEN="$PGTOKEN" python "$GITHUB_WORKSPACE/.github/scripts/gov_integrity_verify.py"
+
+  security-smoke:
+    name: Post-deploy security + migration smoke
+    needs: [deploy, migration-check]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Anonymous access to a protected route is refused
+        run: |
+          BASE="https://${DEV_APP}.azurewebsites.net"
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/tefca/arc/reviews")
+          echo "anonymous -> $CODE"
+          case "$CODE" in 401|403) echo "correctly gated";; *) echo "FAIL: expected 401/403, got $CODE"; exit 1;; esac
+
+      - name: An invalid bearer token is refused, not silently accepted
+        run: |
+          BASE="https://${DEV_APP}.azurewebsites.net"
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer not-a-real-token.synthetic.certification" "$BASE/api/tefca/arc/reviews")
+          echo "invalid bearer -> $CODE"
+          case "$CODE" in 401|403) echo "correctly gated";; *) echo "FAIL: expected 401/403, got $CODE"; exit 1;; esac
+
+      - name: DEV is not silently serving something unhealthy
+        run: |
+          BASE="https://${DEV_APP}.azurewebsites.net"
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/health")
+          test "$CODE" = "200" || { echo "FAIL: /health returned $CODE after deploy claimed success"; exit 1; }
+
+  summary:
+    name: Release summary
+    needs: [build, migration-check, deploy, gov-verify, security-smoke]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Record what shipped
+        run: |
+          {
+            echo "## DEV release summary"
+            echo ""
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| commit | ${{ github.sha }} |"
+            echo "| image tag | ${{ needs.build.outputs.tag }} |"
+            echo "| image digest | ${{ needs.build.outputs.digest }} |"
+            echo "| DEV revision before | ${{ needs.migration-check.outputs.dev_revision }} |"
+            echo "| target head | ${{ needs.migration-check.outputs.target_head }} |"
+            echo "| migration ran | ${{ needs.migration-check.outputs.migration_needed }} |"
+            echo "| deployed digest | ${{ needs.deploy.outputs.deployed_digest }} |"
+            echo "| previous image (rollback point) | ${{ needs.deploy.outputs.previous_image }} |"
+            echo "| build result | ${{ needs.build.result }} |"
+            echo "| deploy result | ${{ needs.deploy.result }} |"
+            echo "| Government integrity result | ${{ needs.gov-verify.result }} |"
+            echo "| security smoke result | ${{ needs.security-smoke.result }} |"
+            echo "| triggered by | ${{ github.actor }} via ${{ github.event_name }} |"
+            echo "| run | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

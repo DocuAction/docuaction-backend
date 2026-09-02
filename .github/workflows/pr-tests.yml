@@ -1,0 +1,53 @@
+name: Backend Tests
+
+# The one required check this repo did not already have on a pull request.
+# CodeQL, dependency-review, sast and render (pdf-linux) all already run on
+# `pull_request` (see their own workflow files); this adds `pytest tests/`,
+# which previously only ran inside deploy-backend.yml's build-and-test job -
+# that is, after a human had already chosen to deploy, not before a merge.
+#
+# No live database in CI. tests/conftest.py probes for one and skips the
+# DB-backed tests with an explicit reason rather than failing the run - the
+# same behaviour deploy-backend.yml's own "Run tests" step already relies on.
+# This is a merge gate, not a certification: DB-backed coverage is what the
+# DEV-database certification process (scale ladder, concurrency, Government
+# data integrity) already proves separately and this does not repeat.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx
+
+      - name: Run tests (no live database - boundary/routing/auth coverage)
+        run: python -m pytest tests/ -v --tb=short --junitxml=test-results.xml
+        env:
+          SECRET_KEY: ${{ github.sha }}${{ github.sha }}
+          ALLOWED_HOSTS: '*'
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-test-results-${{ github.sha }}
+          path: test-results.xml
+          retention-days: 30

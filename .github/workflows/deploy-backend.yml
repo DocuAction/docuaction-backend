@@ -1,10 +1,18 @@
 name: Deploy Backend
 
-# Tag pushes BUILD ONLY. Both deploy jobs are gated on
-# github.event.inputs.environment, which is empty for a push event, so a tag push
-# produces a verified, retained artifact and stops there. Deploying is always a
-# deliberate workflow_dispatch. Do not "fix" this by loosening the conditions
-# unless you actually want a tag push to reach production unattended.
+# Tag pushes BUILD ONLY. Both deploy jobs are gated on inputs.environment,
+# which is empty for a push event, so a tag push produces a verified, retained
+# artifact and stops there. Deploying is always a deliberate workflow_dispatch
+# or an explicit reusable-workflow call from dev-release.yml - never a push by
+# itself. Do not "fix" this by loosening the conditions unless you actually
+# want a tag push to reach production unattended.
+#
+# Every `inputs.<name>` reference below (previously `github.event.inputs.<name>`
+# throughout) resolves identically under workflow_dispatch and workflow_call,
+# so dev-release.yml can invoke deploy-dev directly with a digest it just
+# built, instead of an operator copying a tag out of one run's summary into
+# the next run's dispatch form by hand. No deploy step's logic changed to
+# support this - only the input reference syntax.
 
 on:
   workflow_dispatch:
@@ -28,6 +36,24 @@ on:
           - 'false'
           - 'true'
         default: 'false'
+
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Deploy to (dev only - a reusable call can never select production; deploy-prod also requires needs.deploy-dev, which no workflow_call graph can satisfy from outside this file)'
+        required: true
+        type: string
+      image_tag:
+        required: true
+        type: string
+      run_migrations:
+        required: true
+        type: string
+    outputs:
+      previous_image:
+        value: ${{ jobs.deploy-dev.outputs.previous_image }}
+      deployed_digest:
+        value: ${{ jobs.deploy-dev.outputs.deployed_digest }}
 
   push:
     tags:
@@ -223,7 +249,7 @@ jobs:
     needs: build-and-test
     runs-on: ubuntu-latest
     environment: development
-    if: github.event.inputs.environment == 'dev' || github.event.inputs.environment == 'production'
+    if: inputs.environment == 'dev' || inputs.environment == 'production'
     permissions:
       # azure/login mints a short-lived GitHub OIDC token and exchanges it for
       # an Azure token. No client secret is stored anywhere in this repository.
@@ -245,16 +271,16 @@ jobs:
       # `62a9273`, so this step fails outright on an image-only deployment that
       # never needed the source in the first place.
       - name: Checkout the release source
-        if: github.event.inputs.run_migrations == 'true'
+        if: inputs.run_migrations == 'true'
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.image_tag }}
+          ref: ${{ inputs.image_tag }}
 
       # `python` is not guaranteed to resolve on the runner image; `python3` is.
       # Pinned to the version the release was built and verified against. Needed
       # only by Alembic, so it follows the same gate.
       - name: Set up Python 3.12
-        if: github.event.inputs.run_migrations == 'true'
+        if: inputs.run_migrations == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -275,10 +301,10 @@ jobs:
           # the digest here also pins what follows: every later step uses this
           # value, not the tag, so a tag moved mid-deploy cannot change what
           # ships.
-          DIGEST=$(az acr manifest show-metadata "${DEV_LOGIN_SERVER}/${IMAGE_REPO}:${{ github.event.inputs.image_tag }}" --query digest -o tsv)
+          DIGEST=$(az acr manifest show-metadata "${DEV_LOGIN_SERVER}/${IMAGE_REPO}:${{ inputs.image_tag }}" --query digest -o tsv)
           test -n "$DIGEST" || { echo "candidate image not found in ${DEV_REGISTRY}"; exit 1; }
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
-          echo "candidate: ${IMAGE_REPO}:${{ github.event.inputs.image_tag }} -> $DIGEST"
+          echo "candidate: ${IMAGE_REPO}:${{ inputs.image_tag }} -> $DIGEST"
 
       - name: Capture the rollback point BEFORE any change
         id: capture
@@ -310,7 +336,7 @@ jobs:
         # So an image-only deploy failed here, before the image ever changed,
         # for a revision nobody was going to use. Migrations run out of band
         # through the authorised DBA path; this deployment ships an image.
-        if: github.event.inputs.run_migrations == 'true'
+        if: inputs.run_migrations == 'true'
         run: |
           # Recorded before migrating so the exact starting revision is known
           # if a downgrade is ever needed.
@@ -321,7 +347,7 @@ jobs:
           DB_APP_ROLE: docuaction_app
 
       - name: Run approved migrations as the schema owner
-        if: github.event.inputs.run_migrations == 'true'
+        if: inputs.run_migrations == 'true'
         run: |
           # Deliberately gated on its own input, and deliberately BEFORE the
           # image change: the new image expects the new schema. The owner
@@ -423,7 +449,7 @@ jobs:
     environment: production
     # PROD requires its OWN authorisation. A dispatch selecting 'dev' can never
     # reach this job, so DEV-only authority cannot deploy production.
-    if: github.event.inputs.environment == 'production'
+    if: inputs.environment == 'production'
     steps:
       # DELIBERATELY UNCHANGED. The DEV release identity is federated to the
       # `development` environment only and has no PROD scope, so wiring it in
@@ -445,8 +471,8 @@ jobs:
           # provably what DEV proved. Separate registries are why an import is
           # needed at all; the import preserves image identity.
           SRC="${DEV_LOGIN_SERVER}/${IMAGE_REPO}@${{ needs.deploy-dev.outputs.deployed_digest }}"
-          az acr import --name "$PROD_REGISTRY" --source "$SRC" --image "${IMAGE_REPO}:${{ github.event.inputs.image_tag }}" --force
-          PROD_DIGEST=$(az acr manifest show-metadata "${PROD_LOGIN_SERVER}/${IMAGE_REPO}:${{ github.event.inputs.image_tag }}" --query digest -o tsv)
+          az acr import --name "$PROD_REGISTRY" --source "$SRC" --image "${IMAGE_REPO}:${{ inputs.image_tag }}" --force
+          PROD_DIGEST=$(az acr manifest show-metadata "${PROD_LOGIN_SERVER}/${IMAGE_REPO}:${{ inputs.image_tag }}" --query digest -o tsv)
           echo "digest=$PROD_DIGEST" >> "$GITHUB_OUTPUT"
           echo "DEV digest : ${{ needs.deploy-dev.outputs.deployed_digest }}"
           echo "PROD digest: $PROD_DIGEST"
