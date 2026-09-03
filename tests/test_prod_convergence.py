@@ -33,6 +33,13 @@ def _code():
     return ast.unparse(tree)
 
 
+def _func(code, name):
+    """Body of one top-level function in the docstring-stripped source."""
+    marker = f"def {name}("
+    assert marker in code, f"{name} not found in utility"
+    return code.split(marker, 1)[1].split("\ndef ", 1)[0]
+
+
 def test_utility_exists():
     assert os.path.exists(CONV)
 
@@ -43,11 +50,24 @@ def test_no_destructive_sql_in_executable_code():
         assert banned not in up, f"convergence utility must never execute {banned}"
 
 
-def test_apply_is_gated_and_dry_run_is_default():
+def test_writes_are_gated_per_boundary_and_dry_run_is_default():
+    """Each boundary is a separate mode with its OWN write acknowledgement, and
+    the default (no write flag) is a read-only plan."""
     src = _src()
-    assert '"--apply"' in src and '"--i-understand-this-writes"' in src
-    assert "if not args.apply:" in src
-    assert "--apply requires --i-understand-this-writes" in src
+    for flag in ('"--bootstrap"', '"--i-understand-bootstrap-writes"',
+                 '"--migrate"', '"--i-understand-migration-writes"'):
+        assert flag in src, f"missing gate flag {flag}"
+    assert "if not args.i_understand_bootstrap_writes:" in src
+    assert "if not args.i_understand_migration_writes:" in src
+    # default path (neither boundary requested) is a dry-run plan
+    assert "if not args.bootstrap and not args.migrate:" in src
+    assert "DRY-RUN ONLY" in src
+
+
+def test_two_boundaries_are_mutually_exclusive():
+    src = _src()
+    assert "if args.bootstrap and args.migrate:" in src
+    assert "choose exactly ONE" in src
 
 
 def test_refuses_an_already_alembic_managed_database():
@@ -95,14 +115,42 @@ def test_bookkeeping_only_head_and_verified_no_stamp():
 
 def test_schema_comes_from_the_chain_not_a_pre_chain_create_all():
     """Correct order: the chain builds the schema, THEN create_all(checkfirst)
-    runs as a no-op safety net (as DEV does). apply() must not create_all before
-    the chain, and equivalence to the model must be asserted after."""
+    runs as a no-op safety net (as DEV does). Neither boundary runs create_all
+    before the chain, and equivalence to the model is asserted after."""
     code = _code()
-    assert "def apply(" in code
-    apply_body = code.split("def apply(", 1)[1].split("\ndef ", 1)[0]
-    assert "create_all" not in apply_body, "apply() must not create_all before the chain"
+    for fn in ("bootstrap_apply", "migration_apply"):
+        assert "create_all" not in _func(code, fn), f"{fn} must not create_all before the chain"
     assert "DB_MIGRATION_ROLE" in code, "chain must run as the owner role via DB_MIGRATION_ROLE"
     assert "missing_after" in code, "must assert schema equivalence to the model after convergence"
+
+
+def test_bootstrap_a_runs_no_alembic_and_no_schema_build():
+    """BOOTSTRAP A is owner-only prep: it must not run Alembic, create tables,
+    create_all, or add columns - those belong to Migration B."""
+    body = _func(_code(), "bootstrap_apply")
+    # operational constructs only (the word "Alembic" legitimately appears in the
+    # already-managed refusal message and the informational print).
+    for banned in ("command.upgrade", "create_all", "ADD COLUMN", "op.create", "run_chain"):
+        assert banned.lower() not in body.lower(), f"Bootstrap A must not contain {banned!r}"
+
+
+def test_migration_b_has_no_pgadmin_ownership_transfer():
+    """MIGRATION B never transfers ownership of the legacy tables (Bootstrap A
+    did that) and never runs as pgadmin: no 'OWNER TO' in its execution path."""
+    code = _code()
+    for fn in ("migration_apply", "run_chain_and_verify"):
+        assert "OWNER TO" not in _func(code, fn), f"{fn} must not transfer table ownership"
+    # and it proves the migration-identity boundary
+    assert "session_user" in code and "current_user" in code
+    assert '_prove_migration_identity' in code
+
+
+def test_migration_b_requires_bootstrap_first():
+    """Migration B refuses unless the owner role exists and the candidate tables
+    are already owned by it (i.e. Bootstrap A has run)."""
+    body = _func(_code(), "migration_apply")
+    assert "_tables_not_owned_by_owner" in body
+    assert "Bootstrap A" in body and "REFUSED" in body
 
 
 def test_runtime_principal_preservation_is_membership_only_and_opt_in():
