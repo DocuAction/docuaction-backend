@@ -95,6 +95,10 @@ def _build_legacy(url):
         c.execute(text(f"CREATE ROLE {RUNTIME_LEGACY} LOGIN PASSWORD 'x'"))
         legacy_tables = [t for t in md.sorted_tables if t.name not in ABSENT]
         md.create_all(bind=c, tables=legacy_tables, checkfirst=True)
+        # a genuine legacy-only table NOT in the current model, with a row, to
+        # prove convergence leaves such tables entirely untouched.
+        c.execute(text("CREATE TABLE bulletin_articles (id uuid primary key, title text)"))
+        c.execute(text("INSERT INTO bulletin_articles (id,title) VALUES (:i,'legacy-only')"), {"i": str(uuid.uuid4())})
     with eng.begin() as c:
         for t, cols in ADDITIVE.items():
             for cn in cols:
@@ -152,6 +156,24 @@ def test_full_convergence_and_all_gates(fixture_db):
         rev = c.execute(text("select version_num from alembic_version")).scalars().all()
         assert rev == ["20260903_delivery_grants"], rev
         assert insp(c).has_table("rce_source_records") and insp(c).has_table("rce_delivery_jobs")
+        # SCHEMA EQUIVALENCE: every model table AND every model column now exists
+        # (the chain must have re-added the additive columns the legacy DB lacked).
+        md = _md()
+        ins = insp(c)
+        actual_tables = set(ins.get_table_names(schema="public"))
+        model_tables = {t.name for t in md.sorted_tables}
+        assert model_tables <= actual_tables, f"missing model tables: {sorted(model_tables - actual_tables)}"
+        missing_cols = {}
+        for t in md.sorted_tables:
+            have = {col["name"] for col in ins.get_columns(t.name, schema="public")}
+            want = {c2.name for c2 in t.columns}
+            if want - have:
+                missing_cols[t.name] = sorted(want - have)
+        assert not missing_cols, f"model columns missing after convergence: {missing_cols}"
+        # the specific additive columns the fixture stripped must be restored by the chain
+        for cn in ADDITIVE["audit_logs"]:
+            assert cn in {col["name"] for col in ins.get_columns("audit_logs", schema="public")}, cn
+        assert "file_hash" in {col["name"] for col in ins.get_columns("tefca_import_history", schema="public")}
         # DATA preserved
         post_ids = set(x[0] for x in c.execute(text("select id from users")).all())
         assert post_ids == pre_ids and len(post_ids) == pre_users, "row/PK preservation failed"
@@ -159,9 +181,10 @@ def test_full_convergence_and_all_gates(fixture_db):
         # OWNERSHIP: candidate tables -> docuaction_owner; legacy-only stays pgadmin_legacy
         assert c.execute(text("select relowner::regrole::text from pg_class where relname='users'")).scalar() == "docuaction_owner"
         assert c.execute(text("select relowner::regrole::text from pg_class where relname='rce_delivery_jobs'")).scalar() == "docuaction_owner"
+        # legacy-only table: ownership unchanged AND its row preserved
         bull = c.execute(text("select relowner::regrole::text from pg_class where relname='bulletin_articles'")).scalar()
-        if bull:  # legacy-only, not in candidate metadata -> untouched
-            assert bull == "pgadmin_legacy", "legacy-only ownership must not change"
+        assert bull == "pgadmin_legacy", "legacy-only ownership must not change"
+        assert c.execute(text("select count(*) from bulletin_articles")).scalar() == 1, "legacy-only row must be preserved"
         # RUNTIME privileges on rce_delivery_jobs (S/I/U true, DELETE false)
         got = {p: c.execute(text("select has_table_privilege('docuaction_app','rce_delivery_jobs',:p)"), {"p": p}).scalar()
                for p in ("SELECT", "INSERT", "UPDATE", "DELETE")}
@@ -228,30 +251,21 @@ def test_full_convergence_and_all_gates(fixture_db):
 
 
 def test_forced_failure_is_fail_closed(fixture_db):
-    """Force a failure during apply and prove no false Alembic head / no partial
-    lineage: a mid-apply error must leave alembic_version absent."""
+    """Force a failure DURING the chain and prove no false Alembic head / no
+    partial lineage: a mid-chain error must not leave alembic_version at head."""
     import sqlalchemy as sa
     from sqlalchemy import text
     eng = _build_legacy(fixture_db)
-    # Sabotage: pre-create a NOLOGIN role name collision that makes CREATE ROLE fail?
-    # Instead, drop a table the chain needs mid-way by making create_all partially fail:
-    # simplest deterministic failure - revoke CREATE on schema from the apply's role path
-    # by pre-creating docuaction_owner WITHOUT letting CURRENT_USER grant it.
-    # Faithful approach: point the chain at a bad DB_APP_ROLE so a grant migration fails.
-    env = dict(os.environ, DATABASE_URL=fixture_db, SECRET_KEY="t" * 64, ALLOWED_HOSTS="*",
-               DB_APP_ROLE="")  # empty -> a grant migration that requires it fails closed
-    r = subprocess.run([sys.executable, CONV, "--apply", "--i-understand-this-writes", "--run-chain"],
-                       cwd=REPO, env=env, capture_output=True, text=True)
-    # convergence seeds schema/roles, then the chain step fails on the empty DB_APP_ROLE
+    # Deterministic injection: pre-create one of the tables the chain builds with
+    # an unguarded op.create_table (rce_delivery_jobs), so the chain collides and
+    # aborts partway. This exercises the real failure path, not an env quirk.
+    with eng.begin() as c:
+        c.execute(text("CREATE TABLE rce_delivery_jobs (id integer primary key)"))
+    r = _run_conv(fixture_db, "--apply", "--i-understand-this-writes", "--run-chain", expect_ok=False)
+    assert r.returncode != 0, f"expected the chain to fail on the decoy table:\n{r.stdout[-800:]}"
     with eng.connect() as c:
         has_alembic = sa.inspect(c).has_table("alembic_version")
-    if r.returncode != 0:
-        # fail-closed: either no alembic_version, or it did not reach head
-        rev = None
-        if has_alembic:
-            with eng.connect() as c:
-                rev = c.execute(text("select version_num from alembic_version")).scalars().all()
-        assert rev != ["20260903_delivery_grants"], "must not report head after a failed chain"
-        print("FORCED_FAILURE=FAIL_CLOSED recovery=EXPLICIT_REPAIR_OR_PITR")
-    else:
-        pytest.skip("empty DB_APP_ROLE did not fail the chain in this build; failure-path covered structurally")
+        rev = c.execute(text("select version_num from alembic_version")).scalars().all() if has_alembic else None
+    # fail-closed: the chain did not reach head
+    assert rev != ["20260903_delivery_grants"], "must not report head after a failed chain"
+    print(f"FORCED_FAILURE=FAIL_CLOSED alembic_at_head=False rev={rev} recovery=EXPLICIT_REPAIR_OR_PITR")
