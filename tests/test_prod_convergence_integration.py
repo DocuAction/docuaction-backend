@@ -128,13 +128,19 @@ CK = "ck_review_record_has_subject"
 
 
 def _ensure_roles(eng):
-    """Create the two roles the grant migrations reference by name (roles are
-    cluster-global; the fixture teardown drops them)."""
+    """Create the two roles the chain references by name and prepare them the way
+    DEV/convergence run the chain: the connecting user is a member of
+    docuaction_owner and the owner role can create in schema public, so the
+    chain (run with DB_MIGRATION_ROLE=docuaction_owner) creates objects owned by
+    docuaction_owner - which 20260903's ownership guard requires. Roles are
+    cluster-global; the fixture teardown drops them."""
     from sqlalchemy import text
     with eng.begin() as c:
         for r in ("docuaction_owner", "docuaction_app"):
             c.execute(text(f'DROP ROLE IF EXISTS "{r}"'))
             c.execute(text(f'CREATE ROLE "{r}" WITH NOLOGIN NOSUPERUSER NOBYPASSRLS'))
+        c.execute(text('GRANT "docuaction_owner" TO CURRENT_USER'))
+        c.execute(text('GRANT CREATE, USAGE ON SCHEMA public TO "docuaction_owner"'))
 
 
 def _ck_count(conn):
@@ -171,7 +177,7 @@ def test_fresh_alembic_upgrade_head_from_empty(fixture_db):
     _ensure_roles(eng)
     cfg = _alembic_cfg(fixture_db)
     os.environ["DB_APP_ROLE"] = "docuaction_app"
-    os.environ.pop("DB_MIGRATION_ROLE", None)  # plain fresh build as the connecting superuser
+    os.environ["DB_MIGRATION_ROLE"] = "docuaction_owner"  # build as the owner role, as DEV/convergence do
     command.upgrade(cfg, "head")
     heads = ScriptDirectory.from_config(cfg).get_heads()
     assert heads == ["20260903_delivery_grants"], f"expected single head, got {heads}"
@@ -196,7 +202,7 @@ def test_20260831_skips_ck_when_already_present(fixture_db):
     _ensure_roles(eng)
     cfg = _alembic_cfg(fixture_db)
     os.environ["DB_APP_ROLE"] = "docuaction_app"
-    os.environ.pop("DB_MIGRATION_ROLE", None)
+    os.environ["DB_MIGRATION_ROLE"] = "docuaction_owner"
     command.upgrade(cfg, "20260830_run_lifecycle")  # just before 20260831
     with eng.connect() as c:
         assert _ck_count(c) == 1, "create_all should have established the CHECK before 20260831"
@@ -217,7 +223,7 @@ def test_20260831_creates_ck_when_absent(fixture_db):
     _ensure_roles(eng)
     cfg = _alembic_cfg(fixture_db)
     os.environ["DB_APP_ROLE"] = "docuaction_app"
-    os.environ.pop("DB_MIGRATION_ROLE", None)
+    os.environ["DB_MIGRATION_ROLE"] = "docuaction_owner"
     command.upgrade(cfg, "20260830_run_lifecycle")
     with eng.begin() as c:
         c.execute(text(f'ALTER TABLE public.review_records DROP CONSTRAINT "{CK}"'))
