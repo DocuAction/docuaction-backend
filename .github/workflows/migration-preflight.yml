@@ -167,11 +167,16 @@ jobs:
           c.execute("select current_user"); assumed = c.fetchone()[0]
           print("after SET ROLE   :", assumed, file=sys.stderr)
           assert assumed == "docuaction_owner", "SET ROLE docuaction_owner did not take effect"
-          c.execute("reset role")
-          c.execute("select current_user"); print("after RESET ROLE :", c.fetchone()[0], file=sys.stderr)
-          # Schema metadata only. No Government business row is read.
+          # Schema metadata only. No Government business row is read. Read it
+          # WHILE the owner role is assumed: the dedicated identity holds no
+          # privilege of its own on alembic_version - only through
+          # docuaction_owner - and reading after RESET ROLE failed with
+          # "permission denied for table alembic_version" (run 33700590253),
+          # the first time this step ever reached the database from CI.
           c.execute("select version_num from alembic_version")
           rows = [r[0] for r in c.fetchall()]
+          c.execute("reset role")
+          c.execute("select current_user"); print("after RESET ROLE :", c.fetchone()[0], file=sys.stderr)
           conn.close()
           print("DEV alembic_version rows:", rows, file=sys.stderr)
           # Exactly one row is the only shape `alembic upgrade head` can safely
