@@ -300,16 +300,23 @@ def finalize_ownership(engine):
     application login, whose access is by ownership); the Area-1 tables and
     alembic_version stay docuaction_owner. Runs NO Alembic; the migration identity
     cannot do this (it is not a member of docuaction_app)."""
-    md = _candidate_metadata()
-    candidate = {t.name for t in md.sorted_tables}
     with engine.begin() as conn:
         if "alembic_version" not in _existing_tables(conn):
             raise SystemExit("REFUSED: alembic_version absent - run Migration B (--migrate) first.")
         for r in (OWNER_ROLE, APP_ROLE):
             if not _role_exists(conn, r):
                 raise SystemExit(f"REFUSED: {r} absent - Bootstrap A has not run.")
-        existing = _existing_tables(conn)
-        to_app = sorted((candidate & existing) - AREA1_OWNER_TABLES)
+        # After Migration B docuaction_owner owns everything the convergence built
+        # or re-owned. Reassign every base table it owns to docuaction_app EXCEPT
+        # the Area-1 set and alembic_version (these stay docuaction_owner). This is
+        # driven off actual ownership, so tables created by the chain but not on the
+        # imported model metadata (e.g. report_artifacts) are handled too. Legacy-
+        # only tables (owned by the legacy owner, not docuaction_owner) are untouched.
+        owned = conn.execute(text(
+            "select relname from pg_class where relnamespace='public'::regnamespace "
+            "and relkind='r' and relowner::regrole::text = :owner"), {"owner": OWNER_ROLE}).scalars().all()
+        keep = AREA1_OWNER_TABLES | {"alembic_version"}
+        to_app = sorted(set(owned) - keep)
         for t in to_app:
             conn.execute(text(f'ALTER TABLE public."{t}" OWNER TO "{APP_ROLE}"'))
         # A column-linked sequence (serial/identity) AUTOMATICALLY follows its
@@ -325,8 +332,8 @@ def finalize_ownership(engine):
             {"owner": OWNER_ROLE}).scalars().all()
         for s in seqs:
             conn.execute(text(f'ALTER SEQUENCE public."{s}" OWNER TO "{APP_ROLE}"'))
-        kept = sorted(AREA1_OWNER_TABLES & existing)
-        print(f"FINALIZE applied: {len(to_app)} non-Area-1 candidate tables (+ {len(seqs)} sequences) "
+        kept = sorted(AREA1_OWNER_TABLES & set(owned))
+        print(f"FINALIZE applied: {len(to_app)} non-Area-1 tables (+ {len(seqs)} standalone sequences) "
               f"re-owned to {APP_ROLE}; {len(kept)} Area-1 tables + alembic_version kept on {OWNER_ROLE}. "
               "No Alembic, no row change.")
     return to_app

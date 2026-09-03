@@ -105,9 +105,9 @@ def test_ownership_is_explicit_alter_not_reassign_owned():
 def test_finalize_gives_non_area1_to_app_and_keeps_area1_on_owner():
     code = _code()
     body = _func(code, "finalize_ownership")
-    assert "AREA1_OWNER_TABLES" in body
-    assert 'OWNER TO "{APP_ROLE}"' in body or "OWNER TO" in body and "APP_ROLE" in body
-    assert "- AREA1_OWNER_TABLES" in body, "must exclude the Area-1 set from the app reassignment"
+    assert "AREA1_OWNER_TABLES" in body, "Finalize must reference the Area-1 owner set it keeps"
+    assert "OWNER TO" in body and "APP_ROLE" in body, "Finalize reassigns to the app role"
+    assert "keep" in body and "- keep" in body, "must exclude the kept (Area-1 + alembic_version) set"
     assert "command.upgrade" not in body and "create_all" not in body, "Finalize must run no Alembic"
 
 
