@@ -105,6 +105,27 @@ def _column_names() -> set:
         "where table_name = :t"), {"t": TABLE})}
 
 
+def _constraint_exists(name: str) -> bool:
+    # This project's design has app-startup Base.metadata.create_all() run against
+    # the CURRENT models, and review_records is built by an earlier registry
+    # create_all migration - so on a freshly built database this CHECK constraint
+    # already exists (the model declares it). Guard its creation exactly as the
+    # column/index steps above are guarded, so the migration is idempotent against
+    # that create_all and a fresh `alembic upgrade head` does not fail.
+    #
+    # Scope the check to the intended public.review_records relation: PostgreSQL
+    # constraint names are unique only per-table, not globally, so a match by
+    # conname alone could be a same-named constraint on a different table.
+    if _offline():
+        return False
+    return op.get_bind().execute(sa.text(
+        "select 1 from pg_constraint c "
+        "join pg_class t on t.oid = c.conrelid "
+        "join pg_namespace n on n.oid = t.relnamespace "
+        "where c.conname = :n and t.relname = :t and n.nspname = 'public'"),
+        {"n": name, "t": TABLE}).first() is not None
+
+
 def upgrade() -> None:
     existing = _column_names()
 
@@ -132,18 +153,20 @@ def upgrade() -> None:
                     nullable=True)
 
     # ── the case must still be ABOUT something ───────────────────────────────
-    if not _offline():
-        orphans = op.get_bind().execute(sa.text(
-            f"select count(*) from {TABLE} "
-            f"where entity_id is null and source_record_id is null")).scalar()
-        if orphans:
-            raise SubjectAnchorViolation(
-                f"{orphans} row(s) in {TABLE} would have neither an entity nor "
-                f"a source record. Adding {CHECK_NAME} would leave stored rows "
-                f"violating it; anchor them first.")
-    op.create_check_constraint(
-        CHECK_NAME, TABLE,
-        "entity_id IS NOT NULL OR source_record_id IS NOT NULL")
+    # Skip if create_all already established it (idempotent from a fresh build).
+    if not _constraint_exists(CHECK_NAME):
+        if not _offline():
+            orphans = op.get_bind().execute(sa.text(
+                f"select count(*) from {TABLE} "
+                f"where entity_id is null and source_record_id is null")).scalar()
+            if orphans:
+                raise SubjectAnchorViolation(
+                    f"{orphans} row(s) in {TABLE} would have neither an entity nor "
+                    f"a source record. Adding {CHECK_NAME} would leave stored rows "
+                    f"violating it; anchor them first.")
+        op.create_check_constraint(
+            CHECK_NAME, TABLE,
+            "entity_id IS NOT NULL OR source_record_id IS NOT NULL")
 
 
 def downgrade() -> None:

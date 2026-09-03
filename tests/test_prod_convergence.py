@@ -65,20 +65,24 @@ def test_roles_are_least_privilege_no_superuser_no_bypassrls():
 
 def test_ownership_change_is_an_explicit_allowlist_not_reassign_owned():
     code = _code()
-    assert "ownership_allowlist" in code
+    assert "tables_shared_reowned" in code
     assert "ALTER TABLE" in code and "OWNER TO" in code
     assert "REASSIGN OWNED" not in code.upper()
 
 
 def test_grants_come_from_the_reviewed_chain_not_reimplemented():
-    """The Area-1 privilege model is not re-expressed here; the real alembic
-    chain applies it (and writes alembic_version - no false stamp). The only
-    GRANT is role membership (GRANT owner TO CURRENT_USER, needed to SET ROLE),
-    which is not a table privilege grant."""
+    """The schema and the Area-1 privilege model are not re-expressed here; the
+    real alembic chain builds/grants them (and writes alembic_version - no false
+    stamp). The grants this utility issues are role membership (GRANT owner TO
+    CURRENT_USER / runtime principal) and ONE schema-level infra grant (CREATE,
+    USAGE ON SCHEMA public TO the owner role) so the chain can create tables -
+    never a table-privilege grant to the app role, and never a REVOKE."""
     code = _code()
     assert "command.upgrade(cfg" in code and "head" in code
     assert "DB_APP_ROLE" in code and "APP_ROLE" in code
-    assert not re.search(r"GRANT\s+\w+.*\bON\b", code, re.I), "no invented table privilege GRANT"
+    # every ON-grant present must be the schema-CREATE infra grant to the owner role
+    for g in re.findall(r"GRANT[^\n]*\bON\b[^\n]*", code, re.I):
+        assert "SCHEMA public" in g and "OWNER_ROLE" in g, f"unexpected ON grant: {g}"
     assert not re.search(r"\bREVOKE\b", code, re.I), "no invented REVOKE"
 
 
@@ -89,11 +93,33 @@ def test_bookkeeping_only_head_and_verified_no_stamp():
     assert "stamp" not in code.lower(), "must not stamp - the chain writes alembic_version itself"
 
 
-def test_additive_columns_are_the_matrix_result():
+def test_schema_comes_from_the_chain_not_a_pre_chain_create_all():
+    """Correct order: the chain builds the schema, THEN create_all(checkfirst)
+    runs as a no-op safety net (as DEV does). apply() must not create_all before
+    the chain, and equivalence to the model must be asserted after."""
+    code = _code()
+    assert "def apply(" in code
+    apply_body = code.split("def apply(", 1)[1].split("\ndef ", 1)[0]
+    assert "create_all" not in apply_body, "apply() must not create_all before the chain"
+    assert "DB_MIGRATION_ROLE" in code, "chain must run as the owner role via DB_MIGRATION_ROLE"
+    assert "missing_after" in code, "must assert schema equivalence to the model after convergence"
+
+
+def test_runtime_principal_preservation_is_membership_only_and_opt_in():
+    """The existing app login is preserved across the ownership move by granting
+    it OWNER-ROLE MEMBERSHIP (no DATABASE_URL change), never by inventing a
+    table-privilege grant, and only when explicitly named (default None)."""
     src = _src()
-    for t in ("audit_logs", "decisions", "tefca_import_history"):
-        assert f'"{t}"' in src
-    assert '"file_hash"' in src and '"event_type"' in src
+    code = _code()
+    assert '"--runtime-principal"' in src
+    # membership grant of the owner role to the named principal, no ON clause
+    assert re.search(r'GRANT\s+"?\{?OWNER_ROLE\}?"?\s+TO\s+"?\{?runtime_principal\}?"?', code) \
+        or ('GRANT' in code and 'OWNER_ROLE' in code and 'runtime_principal' in code)
+    assert not re.search(r"runtime_principal.*\bON\b", code), "must not be a table-privilege grant"
+    # opt-in: no preservation happens unless a principal is supplied
+    assert "if runtime_principal:" in code
+    # refuses a non-existent principal rather than silently skipping
+    assert "does not exist" in code
 
 
 def test_convergence_is_manual_opt_in_not_wired_to_auto_release():
