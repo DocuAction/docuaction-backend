@@ -148,13 +148,18 @@ def apply(engine, runtime_principal=None):
                          (APP_ROLE, "NOLOGIN NOSUPERUSER NOBYPASSRLS")):
             if not _role_exists(conn, r):
                 conn.execute(text(f'CREATE ROLE "{r}" WITH {attrs}'))
-        # 2. become the owner role so new objects are owned by it
+        # 2. membership in the owner role - needed to reassign ownership to it in
+        #    step 5, and so the reviewed migration chain can SET ROLE to it. This
+        #    does NOT create objects (see step 3).
         conn.execute(text(f'GRANT "{OWNER_ROLE}" TO CURRENT_USER'))
-        conn.execute(text(f'SET ROLE "{OWNER_ROLE}"'))
-        # 3. seed the model schema (create_all is idempotent: checkfirst skips existing)
+        # 3. seed the model schema as CURRENT_USER - the existing schema owner /
+        #    admin (PROD: pgadmin), which holds CREATE on schema public. A fresh
+        #    NOLOGIN owner role does NOT (PostgreSQL 15+ removed the default
+        #    PUBLIC CREATE grant), so creating as the owner role would fail. New
+        #    tables land owned by CURRENT_USER and are normalised to the owner
+        #    role in step 5. create_all is idempotent: checkfirst skips existing.
         md.create_all(bind=conn, checkfirst=True)
         # 4. additive columns the legacy create_all predates (all nullable -> safe on data)
-        conn.execute(text("RESET ROLE"))
         for t, cols in p["additive_columns"].items():
             model = md.tables[t]
             for cn in cols:

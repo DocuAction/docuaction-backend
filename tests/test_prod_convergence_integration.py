@@ -70,6 +70,13 @@ def fixture_db():
             c = c.execution_options(isolation_level="AUTOCOMMIT")
             c.execute(text(f"select pg_terminate_backend(pid) from pg_stat_activity where datname='{name}' and pid<>pg_backend_pid()"))
             c.execute(text(f'DROP DATABASE IF EXISTS "{name}"'))
+            # Roles are cluster-global, not per-DB, so drop the ones each test
+            # creates to keep the two tests isolated (order: dependents first).
+            for role in ("mig_test", "docuaction_app", "docuaction_owner", RUNTIME_LEGACY):
+                try:
+                    c.execute(text(f'DROP ROLE IF EXISTS "{role}"'))
+                except Exception:  # noqa: BLE001 - best-effort cleanup
+                    pass
 
 
 def _build_legacy(url):
@@ -83,7 +90,8 @@ def _build_legacy(url):
     with eng.begin() as c:
         # The runtime principal IS the legacy owner (a LOGIN role), exactly like
         # PROD's pgadmin. Ownership and the app login are the same role, which is
-        # the whole Gate-2 risk.
+        # the whole Gate-2 risk. (Defensive drop: roles are cluster-global.)
+        c.execute(text(f'DROP ROLE IF EXISTS "{RUNTIME_LEGACY}"'))
         c.execute(text(f"CREATE ROLE {RUNTIME_LEGACY} LOGIN PASSWORD 'x'"))
         legacy_tables = [t for t in md.sorted_tables if t.name not in ABSENT]
         md.create_all(bind=c, tables=legacy_tables, checkfirst=True)
