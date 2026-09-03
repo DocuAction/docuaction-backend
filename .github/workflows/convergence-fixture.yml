@@ -1,0 +1,52 @@
+name: Convergence Fixture Test
+
+# Executes the REAL scripts/prod_legacy_convergence.py against a disposable,
+# superuser postgres:16 service (never PROD, never DEV, never Azure). Builds a
+# faithful legacy-PROD fixture, runs the full convergence + reviewed Alembic
+# chain, and proves schema/data/ownership/privilege/identity/idempotency and
+# fail-closed behaviour. No secret, no Azure, no Government data.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/prod_legacy_convergence.py'
+      - 'tests/test_prod_convergence_integration.py'
+      - '.github/workflows/convergence-fixture.yml'
+      - 'alembic/**'
+      - 'app/**'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  fixture:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: convtest
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+      - name: Run the convergence fixture integration test (real convergence, disposable DB)
+        env:
+          CONV_SUPERUSER_URL: postgresql://postgres:convtest@127.0.0.1:5432/postgres
+          SECRET_KEY: convtestconvtestconvtestconvtestconvtestconvtestconvtestconvtest
+          ALLOWED_HOSTS: '*'
+        run: |
+          python -m pytest tests/test_prod_convergence_integration.py -v -s --tb=short
