@@ -93,7 +93,7 @@ def test_deployment_sets_a_container_image(job):
     """Either supported mechanism counts; what matters is that the job changes
     the container image. DEV patches linuxFxVersion on /config/web directly,
     because the CLI form needs an appsettings read this identity must not have.
-    PROD still uses the CLI and is unchanged - it fails closed at its login."""
+    PROD now patches /config/web the same way, via its own OIDC identity."""
     body = _steps_text(_job(DEPLOY, job))
     cli = "az webapp config container set" in body
     patch = "az rest --method PATCH" in body and "linuxFxVersion" in body
@@ -295,13 +295,23 @@ def test_the_oidc_job_can_mint_a_token_and_is_bound_to_the_dev_environment(path,
     assert j["environment"] == "development"
 
 
-def test_production_is_not_given_the_dev_release_identity():
-    """The DEV identity has no production scope. Wiring it into the prod job
-    would create a path from DEV authority to production; as written that job
-    fails closed instead."""
+def test_production_uses_its_own_dedicated_oidc_identity_not_a_stored_secret():
+    """deploy-prod authenticates by OIDC as the DEDICATED production identity,
+    not the old fail-closed `secrets.AZURE_CREDENTIALS` and not the DEV
+    identity. The DEV/PROD split is the ENVIRONMENT: both jobs reference
+    `vars.AZURE_CLIENT_ID`, but deploy-prod declares `environment: production`,
+    so the value resolves to the production-environment client id, and the
+    federated credential's subject is bound to `…:environment:production`
+    (gated by the required reviewer). No stored client secret on this path."""
     with_ = _login_step(DEPLOY, "deploy-prod")["with"]
-    assert "client-id" not in with_
-    assert _job(DEPLOY, "deploy-prod").get("permissions") is None
+    assert "creds" not in with_, "the long-lived AZURE_CREDENTIALS form must be gone"
+    assert {"client-id", "tenant-id", "subscription-id"} <= set(with_)
+    assert "AZURE_CREDENTIALS" not in _text(DEPLOY)
+    assert "AZURE_CLIENT_SECRET" not in _text(DEPLOY)
+    prod = _job(DEPLOY, "deploy-prod")
+    assert prod["permissions"]["id-token"] == "write"
+    assert prod["environment"] == "production"
+    assert prod["concurrency"]["group"] == "docuaction-prod-release"
 
 
 # ── the migration steps must be able to run at all ───────────────────────────

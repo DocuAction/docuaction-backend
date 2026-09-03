@@ -66,6 +66,10 @@ env:
   DEV_RG: rg-docuaction-dev
   PROD_APP: Docuaction
   PROD_RG: rg-docuaction-prod
+  # The App Service default hostname carries a regional uniqueness suffix
+  # (<app>.azurewebsites.net is NOT this app). Resolved at runtime from
+  # `az webapp show --query defaultHostName`; named here as the fallback.
+  PROD_HOSTNAME: docuaction-emffhfgwc0gffgc9.eastus2-01.azurewebsites.net
   DEV_REGISTRY: acrdocuactiondev
   DEV_LOGIN_SERVER: acrdocuactiondev.azurecr.io
   PROD_REGISTRY: acrdocuactionprod
@@ -448,20 +452,29 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     # PROD requires its OWN authorisation. A dispatch selecting 'dev' can never
-    # reach this job, so DEV-only authority cannot deploy production.
+    # reach this job. The `production` GitHub environment (required reviewer,
+    # main-only) is the human release gate in front of everything below.
     if: inputs.environment == 'production'
+    concurrency:
+      group: docuaction-prod-release
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+      contents: read
     steps:
-      # DELIBERATELY UNCHANGED. The DEV release identity is federated to the
-      # `development` environment only and has no PROD scope, so wiring it in
-      # here would be the one thing this job must never have: a path from DEV
-      # authority to production. `secrets.AZURE_CREDENTIALS` does not exist, so
-      # as written this job FAILS CLOSED at its first step. Production needs its
-      # own federated identity, its own RBAC and its own authorisation, and
-      # establishing those is a separate, explicitly approved piece of work.
-      - name: Login to Azure
+      # OIDC as the DEDICATED production identity: client id is the
+      # production-environment vars.AZURE_CLIENT_ID (distinct from the DEV
+      # identity used by the development-environment jobs), federated subject
+      # bound to repo:DocuAction/docuaction-backend:environment:production, so
+      # the token is issued only to a job that declares environment: production
+      # (gated by the required reviewer). The former stored client-secret login
+      # is gone: no long-lived secret on this path.
+      - name: Login to Azure (OIDC - no stored client secret)
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Import the DEV-validated digest into the PROD registry
         id: promote
@@ -486,14 +499,23 @@ jobs:
 
       - name: Point PROD at the promoted digest
         run: |
-          az webapp config container set --name "$PROD_APP" --resource-group "$PROD_RG" --docker-custom-image-name "${PROD_LOGIN_SERVER}/${IMAGE_REPO}@${{ steps.promote.outputs.digest }}"
+          # Direct PATCH of /config/web, NOT `az webapp config container set`.
+          # The CLI form reads /config/appsettings (secret values); the dedicated
+          # PROD release identity deliberately cannot. linuxFxVersion lives on
+          # /config/web, writable with sites/config/write alone - the exact scope
+          # of the custom "DocuAction PROD Container Release Operator" role. Same
+          # least-privilege path DEV uses.
+          az rest --method PATCH --url "https://management.azure.com/subscriptions/${{ vars.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${PROD_RG}/providers/Microsoft.Web/sites/${PROD_APP}/config/web?api-version=2023-12-01" --headers "Content-Type=application/json" --body "{\"properties\":{\"linuxFxVersion\":\"DOCKER|${PROD_LOGIN_SERVER}/${IMAGE_REPO}@${{ steps.promote.outputs.digest }}\"}}"
           az webapp restart --name "$PROD_APP" --resource-group "$PROD_RG"
 
       - name: Wait for a healthy start
         run: |
+          HOST=$(az webapp show -n "$PROD_APP" -g "$PROD_RG" --query defaultHostName -o tsv)
+          test -n "$HOST" || HOST="$PROD_HOSTNAME"
+          echo "resolved PROD host: $HOST"
           CODE=000
           for i in $(seq 1 40); do
-            CODE=$(curl -s -o /dev/null -w '%{http_code}' "https://${PROD_APP}.azurewebsites.net/health" || true)
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' "https://${HOST}/health" || true)
             if [ "$CODE" = "200" ]; then echo "healthy after $i attempt(s)"; break; fi
             sleep 15
           done
@@ -502,7 +524,9 @@ jobs:
       - name: Roll back PROD if the release did not come up
         if: failure() && steps.capture.outputs.previous_image != ''
         run: |
+          # Restore the byte-exact previous linuxFxVersion (DOCKER| prefix kept)
+          # via the same least-privilege PATCH. No appsettings read.
           PREV="${{ steps.capture.outputs.previous_image }}"
           echo "ROLLING BACK PROD to $PREV"
-          az webapp config container set --name "$PROD_APP" --resource-group "$PROD_RG" --docker-custom-image-name "${PREV#DOCKER|}"
+          az rest --method PATCH --url "https://management.azure.com/subscriptions/${{ vars.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${PROD_RG}/providers/Microsoft.Web/sites/${PROD_APP}/config/web?api-version=2023-12-01" --headers "Content-Type=application/json" --body "{\"properties\":{\"linuxFxVersion\":\"${PREV}\"}}"
           az webapp restart --name "$PROD_APP" --resource-group "$PROD_RG"
