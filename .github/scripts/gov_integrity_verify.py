@@ -64,10 +64,20 @@ def main() -> None:
     conn.autocommit = True
     cur = conn.cursor()
 
+    # Same role as gov_integrity_snapshot.py, from the same DB_INTEGRITY_ROLE
+    # variable, so before/after digests are computed under identical visibility
+    # (RLS is off on rce_source_records and both candidate roles hold plain
+    # SELECT - see the snapshot script's docstring for the reviewed evidence).
+    role = os.environ.get("DB_INTEGRITY_ROLE", "").strip()
+    if not role:
+        print("FAIL: DB_INTEGRITY_ROLE is not set - refusing to read Government "
+              "records under an unspecified role.", file=sys.stderr)
+        conn.close()
+        sys.exit(1)
     try:
-        cur.execute("set role docuaction_app")
+        cur.execute("set role " + role)
     except Exception as exc:  # noqa: BLE001
-        print(f"FAIL: could not SET ROLE docuaction_app as {PG_PRINCIPAL}: {exc}",
+        print(f"FAIL: could not SET ROLE {role} as {PG_PRINCIPAL}: {exc}",
               file=sys.stderr)
         conn.close()
         sys.exit(1)

@@ -67,6 +67,13 @@ env:
   PG_PRINCIPAL: github-actions-docuaction-backend-dev
   DB_MIGRATION_ROLE: docuaction_owner
   DB_APP_ROLE: docuaction_app
+  # Read-only role for the Government-integrity snapshot (SELECT only on
+  # rce_source_records). Reviewed 2026-09-03: RLS off, no policies, no
+  # BYPASSRLS - owner and runtime visibility are identical for that query,
+  # and this is the only role the dedicated identity can assume without a
+  # new grant. Deliberately its own variable; not DB_APP_ROLE, not
+  # DB_MIGRATION_ROLE.
+  DB_INTEGRITY_ROLE: docuaction_owner
 
 jobs:
   preflight:

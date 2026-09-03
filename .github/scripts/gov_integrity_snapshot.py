@@ -8,11 +8,27 @@ CI job ever holding or logging the underlying Government data.
 
 Connects with the token minted by the workflow's own `az account
 get-access-token` step (passed in via PGTOKEN, never written to a file or
-echoed) and assumes `docuaction_app` - the same role the running application
-already reads this table as. This does not request a new grant: if the CI
-OIDC principal cannot SET ROLE docuaction_app, that is a real gap to close
-(grant docuaction_app to `github-actions-docuaction-backend-dev`) rather than
-something this script should route around by reading as a broader role.
+echoed) and assumes the role named by DB_INTEGRITY_ROLE before reading.
+
+WHICH ROLE, AND WHY IT DOES NOT CHANGE THE ANSWER
+-------------------------------------------------
+The gate proves a DATA invariant - every pre-existing delivery's Area-1
+record_sha256 digest is unchanged across a deploy - not "what the runtime
+role can see". Reviewed read-only in Azure DEV on 2026-09-03 before this
+role was chosen: public.rce_source_records is a plain table owned by
+docuaction_owner with ACL {docuaction_owner=arwdDxt, docuaction_app=ar};
+row-level security is OFF, FORCE ROW LEVEL SECURITY is OFF, there are no
+policies, no views, and neither role has BYPASSRLS or SUPERUSER; the four
+functions used are pg_catalog built-ins, none SECURITY DEFINER. Reading as
+docuaction_owner therefore yields exactly the rows and bytes docuaction_app
+would see, and this script issues SELECT only.
+
+The dedicated release identity (github-actions-docuaction-backend-dev) is a
+member of docuaction_owner and, deliberately, NOT of docuaction_app - so
+docuaction_owner is the only role it can assume without a new grant or
+membership. DB_INTEGRITY_ROLE is its own variable, on purpose: it must never
+be silently coupled to DB_APP_ROLE (which names the GRANT target inside
+migrations) or DB_MIGRATION_ROLE (which puts DDL under the owner role).
 """
 import json
 import os
@@ -66,14 +82,19 @@ def main() -> None:
     conn.autocommit = True
     cur = conn.cursor()
 
+    role = os.environ.get("DB_INTEGRITY_ROLE", "").strip()
+    if not role:
+        print("FAIL: DB_INTEGRITY_ROLE is not set - refusing to read Government "
+              "records under an unspecified role.", file=sys.stderr)
+        conn.close()
+        sys.exit(1)
     try:
-        cur.execute("set role docuaction_app")
+        cur.execute("set role " + role)   # role name validated by the DB, never by this script
     except Exception as exc:  # noqa: BLE001
         print(
-            f"FAIL: could not SET ROLE docuaction_app as {PG_PRINCIPAL}: {exc}\n"
-            f"This is a permission gap, not a code defect - grant docuaction_app "
-            f"to {PG_PRINCIPAL} before this check can run. Refusing to read "
-            f"rce_source_records under any broader role instead.",
+            f"FAIL: could not SET ROLE {role} as {PG_PRINCIPAL}: {exc}\n"
+            f"This is a permission gap, not a code defect. Refusing to read "
+            f"rce_source_records under any other role instead.",
             file=sys.stderr,
         )
         conn.close()

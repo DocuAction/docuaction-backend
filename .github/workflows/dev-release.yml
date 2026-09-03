@@ -89,6 +89,12 @@ env:
   PGDATABASE: postgres
   PG_PRINCIPAL: github-actions-docuaction-backend-dev
   DEV_APP: docuaction-dev
+  # Read-only role for the post-deploy Government-integrity comparison. Must
+  # equal the role migration-preflight.yml used for the baseline so both
+  # digests are computed under identical visibility (RLS is off on
+  # rce_source_records; reviewed 2026-09-03). Not DB_APP_ROLE, not
+  # DB_MIGRATION_ROLE - its own variable, on purpose.
+  DB_INTEGRITY_ROLE: docuaction_owner
 
 jobs:
   build:
