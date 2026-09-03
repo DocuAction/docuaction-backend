@@ -1,11 +1,9 @@
-"""Static safety properties of the one-time legacy-PROD convergence utility.
+"""Static safety properties of the three-step legacy-PROD convergence utility.
 
-The utility mutates a production database only under --apply and only after a
-fail-closed guard, so its SHAPE is what these assert - no live DB required, so
-they run in ordinary CI. Live apply behaviour is validated separately against a
-throwaway fixture on a cluster that permits CREATE DATABASE (see PR notes); the
-read-only --dry-run was exercised against the real PROD database and produced a
-non-destructive plan.
+The utility mutates a production database only under an explicit per-step write
+acknowledgement and only after a fail-closed guard, so its SHAPE is what these
+assert - no live DB required, so they run in ordinary CI. Live behaviour is
+validated separately against a throwaway fixture (see the integration test).
 """
 import ast
 import io
@@ -21,8 +19,7 @@ def _src():
 
 
 def _code():
-    """Executable source with all docstrings removed (SQL string literals kept),
-    so prose describing the safety rules is never mistaken for a violation."""
+    """Executable source with all docstrings removed (SQL string literals kept)."""
     tree = ast.parse(_src())
     for node in ast.walk(tree):
         if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -34,7 +31,6 @@ def _code():
 
 
 def _func(code, name):
-    """Body of one top-level function in the docstring-stripped source."""
     marker = f"def {name}("
     assert marker in code, f"{name} not found in utility"
     return code.split(marker, 1)[1].split("\ndef ", 1)[0]
@@ -50,24 +46,22 @@ def test_no_destructive_sql_in_executable_code():
         assert banned not in up, f"convergence utility must never execute {banned}"
 
 
-def test_writes_are_gated_per_boundary_and_dry_run_is_default():
-    """Each boundary is a separate mode with its OWN write acknowledgement, and
-    the default (no write flag) is a read-only plan."""
+def test_three_steps_are_gated_and_dry_run_is_default():
     src = _src()
     for flag in ('"--bootstrap"', '"--i-understand-bootstrap-writes"',
-                 '"--migrate"', '"--i-understand-migration-writes"'):
+                 '"--migrate"', '"--i-understand-migration-writes"',
+                 '"--finalize"', '"--i-understand-finalize-writes"'):
         assert flag in src, f"missing gate flag {flag}"
     assert "if not args.i_understand_bootstrap_writes:" in src
     assert "if not args.i_understand_migration_writes:" in src
-    # default path (neither boundary requested) is a dry-run plan
-    assert "if not args.bootstrap and not args.migrate:" in src
+    assert "if not args.i_understand_finalize_writes:" in src
+    assert "if not (args.bootstrap or args.migrate or args.finalize):" in src
     assert "DRY-RUN ONLY" in src
 
 
-def test_two_boundaries_are_mutually_exclusive():
+def test_steps_are_mutually_exclusive():
     src = _src()
-    assert "if args.bootstrap and args.migrate:" in src
-    assert "choose exactly ONE" in src
+    assert "> 1" in src and "choose exactly ONE" in src
 
 
 def test_refuses_an_already_alembic_managed_database():
@@ -76,33 +70,72 @@ def test_refuses_an_already_alembic_managed_database():
     assert "REFUSED" in code and "already Alembic-managed" in code
 
 
-def test_roles_are_least_privilege_no_superuser_no_bypassrls():
+def test_roles_are_least_privilege():
     code = _code()
-    assert "NOSUPERUSER NOBYPASSRLS" in code
+    for tok in ("NOSUPERUSER", "NOCREATEDB", "NOCREATEROLE", "NOBYPASSRLS"):
+        assert tok in code, f"roles must be created {tok}"
     assert "SUPERUSER" not in code.replace("NOSUPERUSER", "")
     assert "BYPASSRLS" not in code.replace("NOBYPASSRLS", "")
 
 
-def test_ownership_change_is_an_explicit_allowlist_not_reassign_owned():
+def test_docuaction_app_is_the_login_application_identity():
+    """docuaction_app is created as a LOGIN role with the application password
+    (the DEV/baseline model); its access to non-Area-1 tables is by ownership."""
+    code = _code()
+    assert re.search(r'CREATE ROLE[^\n]*APP_ROLE[^\n]*LOGIN PASSWORD', code), \
+        "docuaction_app must be created LOGIN with a password"
+    # the password is passed in, never a literal in the source
+    assert "app_password" in code and "CONV_APP_PASSWORD" in _src()
+
+
+def test_password_is_never_logged():
+    code = _code()
+    for line in code.splitlines():
+        if "print(" in line:
+            assert "app_password" not in line and "_lit(" not in line, f"password must not be logged: {line}"
+
+
+def test_ownership_is_explicit_alter_not_reassign_owned():
     code = _code()
     assert "tables_shared_reowned" in code
     assert "ALTER TABLE" in code and "OWNER TO" in code
     assert "REASSIGN OWNED" not in code.upper()
 
 
+def test_finalize_gives_non_area1_to_app_and_keeps_area1_on_owner():
+    code = _code()
+    body = _func(code, "finalize_ownership")
+    assert "AREA1_OWNER_TABLES" in body, "Finalize must reference the Area-1 owner set it keeps"
+    assert "OWNER TO" in body and "APP_ROLE" in body, "Finalize reassigns to the app role"
+    assert "keep" in body and "- keep" in body, "must exclude the kept (Area-1 + alembic_version) set"
+    assert "command.upgrade" not in body and "create_all" not in body, "Finalize must run no Alembic"
+
+
+def test_area1_owner_set_is_the_documented_five():
+    src = _src()
+    for t in ("rce_source_records", "rce_source_intakes", "rce_ingestion_runs",
+              "rce_rule_execution_history", "rce_delivery_jobs"):
+        assert f'"{t}"' in src
+
+
+def test_app_and_owner_are_not_members_of_each_other():
+    code = _code()
+    assert 'GRANT "{OWNER_ROLE}" TO "{APP_ROLE}"' not in code
+    assert 'GRANT "{APP_ROLE}" TO "{OWNER_ROLE}"' not in code
+    # the only role-membership grants target the operator (CURRENT_USER)
+    for m in re.findall(r'GRANT "\{(?:OWNER_ROLE|APP_ROLE)\}" TO [^\n\']+', code):
+        assert "CURRENT_USER" in m, f"unexpected role-membership grant: {m}"
+
+
 def test_grants_come_from_the_reviewed_chain_not_reimplemented():
-    """The schema and the Area-1 privilege model are not re-expressed here; the
-    real alembic chain builds/grants them (and writes alembic_version - no false
-    stamp). The grants this utility issues are role membership (GRANT owner TO
-    CURRENT_USER / runtime principal) and ONE schema-level infra grant (CREATE,
-    USAGE ON SCHEMA public TO the owner role) so the chain can create tables -
-    never a table-privilege grant to the app role, and never a REVOKE."""
+    """The Area-1 table-privilege model comes from the reviewed chain. The utility
+    itself only issues CONNECT/schema (infra) grants and operator role-membership
+    grants - never a table-privilege grant to the app role, never a REVOKE."""
     code = _code()
     assert "command.upgrade(cfg" in code and "head" in code
     assert "DB_APP_ROLE" in code and "APP_ROLE" in code
-    # every ON-grant present must be the schema-CREATE infra grant to the owner role
     for g in re.findall(r"GRANT[^\n]*\bON\b[^\n]*", code, re.I):
-        assert "SCHEMA public" in g and "OWNER_ROLE" in g, f"unexpected ON grant: {g}"
+        assert ("ON SCHEMA" in g) or ("ON DATABASE" in g), f"only DB/SCHEMA infra ON-grants allowed: {g}"
     assert not re.search(r"\bREVOKE\b", code, re.I), "no invented REVOKE"
 
 
@@ -114,60 +147,31 @@ def test_bookkeeping_only_head_and_verified_no_stamp():
 
 
 def test_schema_comes_from_the_chain_not_a_pre_chain_create_all():
-    """Correct order: the chain builds the schema, THEN create_all(checkfirst)
-    runs as a no-op safety net (as DEV does). Neither boundary runs create_all
-    before the chain, and equivalence to the model is asserted after."""
     code = _code()
-    for fn in ("bootstrap_apply", "migration_apply"):
+    for fn in ("bootstrap_apply", "migration_apply", "finalize_ownership"):
         assert "create_all" not in _func(code, fn), f"{fn} must not create_all before the chain"
     assert "DB_MIGRATION_ROLE" in code, "chain must run as the owner role via DB_MIGRATION_ROLE"
-    assert "missing_after" in code, "must assert schema equivalence to the model after convergence"
+    assert "missing_after" in code, "must assert schema equivalence after convergence"
 
 
 def test_bootstrap_a_runs_no_alembic_and_no_schema_build():
-    """BOOTSTRAP A is owner-only prep: it must not run Alembic, create tables,
-    create_all, or add columns - those belong to Migration B."""
     body = _func(_code(), "bootstrap_apply")
-    # operational constructs only (the word "Alembic" legitimately appears in the
-    # already-managed refusal message and the informational print).
     for banned in ("command.upgrade", "create_all", "ADD COLUMN", "op.create", "run_chain"):
         assert banned.lower() not in body.lower(), f"Bootstrap A must not contain {banned!r}"
 
 
-def test_migration_b_has_no_pgadmin_ownership_transfer():
-    """MIGRATION B never transfers ownership of the legacy tables (Bootstrap A
-    did that) and never runs as pgadmin: no 'OWNER TO' in its execution path."""
+def test_migration_b_has_no_ownership_transfer_and_proves_identity():
     code = _code()
     for fn in ("migration_apply", "run_chain_and_verify"):
         assert "OWNER TO" not in _func(code, fn), f"{fn} must not transfer table ownership"
-    # and it proves the migration-identity boundary
     assert "session_user" in code and "current_user" in code
-    assert '_prove_migration_identity' in code
+    assert "_prove_migration_identity" in code
 
 
 def test_migration_b_requires_bootstrap_first():
-    """Migration B refuses unless the owner role exists and the candidate tables
-    are already owned by it (i.e. Bootstrap A has run)."""
     body = _func(_code(), "migration_apply")
-    assert "_tables_not_owned_by_owner" in body
+    assert "_tables_not_owned_by" in body
     assert "Bootstrap A" in body and "REFUSED" in body
-
-
-def test_runtime_principal_preservation_is_membership_only_and_opt_in():
-    """The existing app login is preserved across the ownership move by granting
-    it OWNER-ROLE MEMBERSHIP (no DATABASE_URL change), never by inventing a
-    table-privilege grant, and only when explicitly named (default None)."""
-    src = _src()
-    code = _code()
-    assert '"--runtime-principal"' in src
-    # membership grant of the owner role to the named principal, no ON clause
-    assert re.search(r'GRANT\s+"?\{?OWNER_ROLE\}?"?\s+TO\s+"?\{?runtime_principal\}?"?', code) \
-        or ('GRANT' in code and 'OWNER_ROLE' in code and 'runtime_principal' in code)
-    assert not re.search(r"runtime_principal.*\bON\b", code), "must not be a table-privilege grant"
-    # opt-in: no preservation happens unless a principal is supplied
-    assert "if runtime_principal:" in code
-    # refuses a non-existent principal rather than silently skipping
-    assert "does not exist" in code
 
 
 def test_convergence_is_manual_opt_in_not_wired_to_auto_release():
