@@ -1,0 +1,119 @@
+name: Migration Apply (DEV, dedicated identity)
+
+# Applies approved Alembic migrations to Azure DEV as the DEDICATED migration
+# identity (github-actions-docuaction-backend-dev, OIDC, no stored secret),
+# assuming docuaction_owner via DB_MIGRATION_ROLE before any DDL.
+#
+# Network: DEV Postgres trusts only docuaction-dev's outbound IPs. This job has
+# no Azure permission to change firewall rules (deliberately). It reports its
+# own runner IP on the run's PR/issue comment, then WAITS, bounded, for an
+# operator to add a single /32 rule out of band; the operator removes it as
+# soon as the job finishes. Nothing here widens anything.
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_current:
+        description: 'Revision DEV must be at before applying (HARD STOP otherwise)'
+        required: true
+        type: string
+      expected_target:
+        description: 'The single head that must result'
+        required: true
+        type: string
+      handshake_issue:
+        description: 'PR/issue number where the runner posts its public IP'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  PGHOST: docuaction-db-dev.postgres.database.azure.com
+  PGDATABASE: postgres
+  PG_PRINCIPAL: github-actions-docuaction-backend-dev
+  DB_MIGRATION_ROLE: docuaction_owner
+  DB_APP_ROLE: docuaction_app
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    environment: development
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Login to Azure (OIDC - no stored client secret)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Report runner public IP for the operator's temporary /32
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          IP=$(curl -s https://api.ipify.org)
+          echo "runner_ip=$IP" >> "$GITHUB_ENV"
+          gh issue comment "${{ inputs.handshake_issue }}" --repo "${{ github.repository }}" \
+            --body "migration-apply run ${{ github.run_id }}: runner public IP **$IP** - waiting up to 20 min for a temporary /32. Remove it when this run finishes."
+
+      - name: Wait for DEV Postgres reachability (bounded)
+        run: |
+          python -m pip install --quiet psycopg2-binary alembic asyncpg sqlalchemy
+          for i in $(seq 1 80); do
+            if python -c "import socket;s=socket.socket();s.settimeout(5);s.connect(('$PGHOST',5432))" 2>/dev/null; then echo "reachable after $i attempt(s)"; exit 0; fi
+            sleep 15
+          done
+          echo "::error::DEV Postgres not reachable within 20 minutes - no /32 was added; stopping"; exit 1
+
+      - name: Precheck as the dedicated identity (read-only)
+        run: |
+          pip install -r requirements.txt --quiet
+          PGTOKEN=$(az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv)
+          export DATABASE_URL="postgresql://${PG_PRINCIPAL}:${PGTOKEN}@${PGHOST}/${PGDATABASE}?ssl=require"
+          export SECRET_KEY="${{ github.sha }}${{ github.sha }}" ALLOWED_HOSTS='*'
+          echo "--- session_user / current_user via the approved role mechanism ---"
+          PGTOKEN="$PGTOKEN" python - <<'PY'
+          import asyncio, os, asyncpg
+          async def m():
+              c = await asyncpg.connect(host=os.environ["PGHOST"], database=os.environ["PGDATABASE"], user=os.environ["PG_PRINCIPAL"],
+                                        password=os.environ["PGTOKEN"], ssl="require", server_settings={"role": os.environ["DB_MIGRATION_ROLE"]})
+              r = await c.fetchrow("select session_user, current_user"); print("session_user =", r[0], "| current_user =", r[1])
+              assert r[1] == os.environ["DB_MIGRATION_ROLE"], "role mechanism did not take effect"; await c.close()
+          asyncio.run(m())
+          PY
+          echo "--- alembic current (must equal expected_current) ---"
+          CUR=$(alembic current 2>/dev/null | awk '{print $1}'); echo "current=$CUR"
+          test "$CUR" = "${{ inputs.expected_current }}" || { echo "::error::DEV at $CUR, expected ${{ inputs.expected_current }}"; exit 1; }
+          echo "--- exactly one pending migration ---"
+          PENDING=$(alembic history -r "${CUR}:heads" 2>/dev/null | grep -c -- '->' || true); echo "pending=$PENDING"
+          test "$PENDING" -eq 1 || { echo "::error::expected exactly 1 pending migration, found $PENDING"; exit 1; }
+          alembic heads | grep -c '(head)' | grep -qx 1 || { echo "::error::multiple heads"; exit 1; }
+
+      - name: Apply (alembic upgrade head) as docuaction_owner, then verify
+        run: |
+          PGTOKEN=$(az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv)
+          export DATABASE_URL="postgresql://${PG_PRINCIPAL}:${PGTOKEN}@${PGHOST}/${PGDATABASE}?ssl=require"
+          export SECRET_KEY="${{ github.sha }}${{ github.sha }}" ALLOWED_HOSTS='*'
+          alembic upgrade head
+          CUR=$(alembic current 2>/dev/null | awk '{print $1}'); echo "after=$CUR"
+          test "$CUR" = "${{ inputs.expected_target }}" || { echo "::error::after upgrade at $CUR, expected ${{ inputs.expected_target }}"; exit 1; }
+          echo "--- second run must be a no-op ---"
+          alembic upgrade head 2>&1 | tee /tmp/second.log; ! grep -q "Running upgrade" /tmp/second.log || { echo "::error::second run was not a no-op"; exit 1; }
+          echo "--- privileges and ownership ---"
+          PGTOKEN="$PGTOKEN" python - <<'PY'
+          import os, psycopg2
+          c = psycopg2.connect(host=os.environ["PGHOST"], dbname=os.environ["PGDATABASE"], user=os.environ["PG_PRINCIPAL"], password=os.environ["PGTOKEN"], sslmode="require").cursor()
+          for p in ("SELECT","INSERT","UPDATE","DELETE"):
+              c.execute("select has_table_privilege('docuaction_app','rce_delivery_jobs',%s)", (p,)); print(p, c.fetchone()[0])
+          c.execute("select relowner::regrole, relacl from pg_class where relname='rce_delivery_jobs'"); print("owner, acl:", c.fetchone())
+          PY
