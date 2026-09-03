@@ -1,0 +1,88 @@
+name: PROD Convergence - Step B (Migration)
+
+# MIGRATION B of the certified three-step PROD convergence (PR #36). Runs the
+# reviewed Alembic chain AS the dedicated, secretless migration identity
+# (federated OIDC), never as pgadmin. Manual, production-environment gated (a
+# human reviewer must approve the run). Prerequisites, done separately:
+#   * Bootstrap A already executed (docuaction_owner present; candidate tables
+#     temporarily owned by it) - otherwise the utility refuses.
+#   * The migration service principal is mapped as a PostgreSQL principal and is
+#     a member of docuaction_owner.
+# The runner has a dynamic egress IP; it prints that IP and then waits (retrying
+# the DB connection) while an operator adds ONE temporary /32 firewall rule
+# (Option-D). The workflow identity is NOT granted firewall-management authority.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    environment: production            # required-reviewer gate (human approval)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install psycopg2-binary
+      - name: Azure login as the dedicated migration OIDC identity (secretless)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_MIGRATION_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          # The migration identity holds NO subscription RBAC (DB-access-only);
+          # authenticate without a subscription context - it still receives an
+          # Entra token for the PostgreSQL resource, which is all it needs.
+          allow-no-subscriptions: true
+      - name: Report runner egress IP (operator adds a temporary /32)
+        run: |
+          IP=$(curl -s https://api.ipify.org)
+          echo "RUNNER_PUBLIC_IP=$IP"
+          echo "::notice title=Add temporary /32::Operator: az postgres flexible-server firewall-rule create -g rg-docuaction-prod -s docuaction-db -n stepB-<ts> --start-ip-address $IP --end-ip-address $IP  (remove immediately after this job)"
+      - name: Migration B - prove identity, SET ROLE, run the reviewed chain
+        env:
+          PGHOST: docuaction-db.postgres.database.azure.com
+          PGUSER: github-actions-docuaction-backend-prod-migration
+          SECRET_KEY: prodmigrationprodmigrationprodmigrationprodmigration000000
+          ALLOWED_HOSTS: '*'
+        run: |
+          set -euo pipefail
+          TOKEN=$(az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv)
+          export CONV_PGTOKEN="$TOKEN"
+          python - <<'PY'
+          import os, time, sys, urllib.parse as up, psycopg2
+          host=os.environ["PGHOST"]; user=os.environ["PGUSER"]; tok=os.environ["CONV_PGTOKEN"]
+          # Wait for the operator's temporary /32 (retry the connection up to ~12 min).
+          deadline=time.time()+720; conn=None; last=""
+          while time.time()<deadline:
+              try:
+                  conn=psycopg2.connect(host=host,dbname="postgres",user=user,password=tok,sslmode="require",connect_timeout=10)
+                  break
+              except Exception as e:
+                  last=str(e)[:100]; print("waiting for firewall /32 ...", last); time.sleep(15)
+          if not conn:
+              sys.exit(f"firewall /32 not opened in time; last error: {last}")
+          cur=conn.cursor()
+          cur.execute("select session_user"); su=cur.fetchone()[0]; print("session_user =", su)
+          assert su==user, f"session_user {su!r} != migration identity {user!r}"
+          cur.execute("select rolsuper,rolcreatedb,rolcreaterole,rolbypassrls from pg_roles where rolname=%s",(user,))
+          attrs=cur.fetchone(); print("attrs(super,createdb,createrole,bypassrls) =", attrs)
+          assert attrs==(False,False,False,False), f"migration identity not least privilege: {attrs}"
+          cur.execute("select pg_has_role(%s,'pgadmin','MEMBER')",(user,)); assert cur.fetchone()[0] is False, "must NOT be a member of pgadmin"
+          cur.execute("set role docuaction_owner"); cur.execute("select current_user"); cu=cur.fetchone()[0]
+          print("current_user (after SET ROLE) =", cu); assert cu=="docuaction_owner", cu
+          conn.close()
+          print("IDENTITY PROVEN: session_user=migration identity; current_user=docuaction_owner")
+          PY
+          echo "Running Migration B (reviewed Alembic chain) as the migration identity"
+          export DATABASE_URL="postgresql://${PGUSER}:${TOKEN}@${PGHOST}:5432/postgres?sslmode=require"
+          python scripts/prod_legacy_convergence.py --migrate --i-understand-migration-writes
+          echo "MIGRATION B COMPLETE (revision should be 20260903_delivery_grants)"
