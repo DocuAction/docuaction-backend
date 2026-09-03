@@ -237,8 +237,12 @@ jobs:
           CUR="${{ steps.read.outputs.dev_revision }}"; TARGET="${{ steps.target.outputs.target_head }}"
           test "$CUR" = "${{ inputs.expected_current }}" || { echo "::error::DEV is at $CUR, operator expected ${{ inputs.expected_current }} - nothing executed"; exit 1; }
           python -m pip install --quiet -r requirements.txt
-          # Exactly ONE pending migration, or nothing runs.
-          PENDING=$(alembic history -r "${CUR}:heads" 2>/dev/null | grep -c -- '->' || true)
+          # Exactly ONE pending migration, or nothing runs. Counted from the
+          # script directory (revisions strictly above CUR up to heads) - not
+          # from `alembic history -r CUR:heads`, whose output also lists CUR's
+          # own line and so reported 2 for one pending migration (run 33703759483,
+          # which correctly refused to execute anything).
+          PENDING=$(python -c "from alembic.config import Config; from alembic.script import ScriptDirectory; print(len(list(ScriptDirectory.from_config(Config('alembic.ini')).iterate_revisions('heads', '${CUR}'))))")
           echo "pending migrations: $PENDING"
           test "$PENDING" -eq 1 || { echo "::error::expected exactly 1 pending migration, found $PENDING - nothing executed"; exit 1; }
           PGTOKEN=$(az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv)
