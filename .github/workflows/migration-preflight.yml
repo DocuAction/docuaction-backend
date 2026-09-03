@@ -1,40 +1,62 @@
-name: Migration Preflight (read-only)
+name: Migration Preflight / Controlled Apply (dedicated identity)
 
-# Proves the DEV migration path WITHOUT migrating.
+# The ONE database phase of the DEV release, on ONE runner.
 #
-# The deployment runs Alembic against the Government DEV database. Before that
-# is ever authorised, four things have to be true, and each is asserted here:
+# Read-only by default (preflight): proves the dedicated OIDC identity can mint
+# a short-lived Entra token for PostgreSQL, authenticate, SET ROLE
+# docuaction_owner, and read alembic_version. It never migrates unless the
+# caller passes `apply: true` - which dev-release.yml only does from an
+# explicit, human-authorised workflow_dispatch, never from a push.
 #
-#   1. the GitHub OIDC identity can obtain a short-lived Entra token for
-#      PostgreSQL - no stored password anywhere;
-#   2. that token authenticates against the DEV server;
-#   3. the principal can SET ROLE docuaction_owner, so migrations create objects
-#      owned by the owner role rather than by whoever happened to connect;
-#   4. the schema revision it would migrate FROM is what we think it is.
-#
-# It never calls `alembic upgrade`. It opens one read-only connection, reads
-# alembic_version, and exits. No Government business row is selected.
+# Everything that needs the same temporary runner IP lives in this single job
+# deliberately: report IP -> operator adds one /32 -> connectivity -> read ->
+# (apply -> verify) -> Government-integrity baseline. Spreading that across
+# jobs would need one firewall window per runner. This identity holds NO
+# permission to change firewall rules; the /32 is added and removed by an
+# operator, out of band, for the life of this job only.
 
 on:
   workflow_dispatch:
-  # Lets dev-release.yml ask "does this release need to migrate?" as data
-  # (jobs.preflight.outputs.migration_needed) instead of a human reading two
-  # printed revision strings and typing 'true'/'false' into deploy-backend's
-  # run_migrations dispatch input by hand.
   workflow_call:
+    inputs:
+      apply:
+        description: 'Execute pending approved migrations (dedicated identity, SET ROLE docuaction_owner). Default false = read-only preflight.'
+        required: false
+        type: boolean
+        default: false
+      expected_current:
+        description: 'When apply=true: DEV must be at exactly this revision before anything runs (HARD STOP otherwise)'
+        required: false
+        type: string
+        default: ''
+      handshake_issue:
+        description: 'When apply=true: PR/issue number where this job posts its runner IPv4 for the operator /32'
+        required: false
+        type: string
+        default: ''
     outputs:
       readable:
-        description: '"true" if this runner could read alembic_version at all. DEV Postgres is deliberately not reachable from GitHub-hosted runners (its firewall trusts only the docuaction-dev App Service''s own outbound IPs) - "false" here is an EXPECTED, routine result, not a workflow defect.'
+        description: '"true" if this runner could read alembic_version. Unreachable is an EXPECTED, routine result on push-triggered runs, not a workflow defect.'
         value: ${{ jobs.preflight.outputs.readable }}
       dev_revision:
-        description: 'Current alembic_version row in Azure DEV, or UNREACHABLE_FROM_CI'
+        description: 'alembic_version in Azure DEV after this job (or UNREACHABLE_FROM_CI)'
         value: ${{ jobs.preflight.outputs.dev_revision }}
       target_head:
-        description: 'The single head this checkout would migrate to'
+        description: 'The single head this checkout migrates to'
         value: ${{ jobs.preflight.outputs.target_head }}
       migration_needed:
-        description: '"true", "false", or "unknown" (when readable=false - cannot be determined from CI)'
+        description: '"true", "false", or "unknown" - evaluated AFTER any apply'
         value: ${{ jobs.preflight.outputs.migration_needed }}
+      applied:
+        description: '"true" if a migration was executed in this run'
+        value: ${{ jobs.preflight.outputs.applied }}
+      baseline_readable:
+        description: '"true" only if a real pre-deploy Government-integrity baseline was captured'
+        value: ${{ jobs.preflight.outputs.baseline_readable }}
+      baseline_json:
+        value: ${{ jobs.preflight.outputs.baseline_json }}
+      intake_count:
+        value: ${{ jobs.preflight.outputs.intake_count }}
 
 permissions:
   contents: read
@@ -43,21 +65,31 @@ env:
   PGHOST: docuaction-db-dev.postgres.database.azure.com
   PGDATABASE: postgres
   PG_PRINCIPAL: github-actions-docuaction-backend-dev
+  DB_MIGRATION_ROLE: docuaction_owner
+  DB_APP_ROLE: docuaction_app
 
 jobs:
   preflight:
     runs-on: ubuntu-latest
     # The federated credential is bound to this environment's subject. A job
-    # that does not declare it gets a token Azure refuses.
+    # that does not declare it gets a token Azure refuses. Its required-reviewer
+    # rule is also the human approval that stands in front of any apply.
     environment: development
     permissions:
       id-token: write
       contents: read
+      # Only to post the runner IPv4 handshake comment (to an ISSUE, not a PR)
+      # when apply=true. Nothing else in this job writes to GitHub.
+      issues: write
     outputs:
       readable: ${{ steps.read.outputs.readable }}
-      dev_revision: ${{ steps.read.outputs.dev_revision }}
+      dev_revision: ${{ steps.final.outputs.dev_revision }}
       target_head: ${{ steps.target.outputs.target_head }}
-      migration_needed: ${{ steps.compare.outputs.migration_needed }}
+      migration_needed: ${{ steps.final.outputs.migration_needed }}
+      applied: ${{ steps.final.outputs.applied }}
+      baseline_readable: ${{ steps.baseline.outputs.readable }}
+      baseline_json: ${{ steps.baseline.outputs.baseline_json }}
+      intake_count: ${{ steps.baseline.outputs.intake_count }}
     steps:
       - uses: actions/checkout@v4
 
@@ -71,6 +103,26 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Report runner IPv4 and wait for the operator's temporary /32 (bounded)
+        if: inputs.apply == true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test -n "${{ inputs.handshake_issue }}" || { echo "::error::apply=true requires handshake_issue"; exit 1; }
+          test -n "${{ inputs.expected_current }}" || { echo "::error::apply=true requires expected_current"; exit 1; }
+          IP=$(curl -s https://api.ipify.org)
+          echo "runner public IPv4: $IP"
+          gh issue comment "${{ inputs.handshake_issue }}" --repo "${{ github.repository }}" \
+            --body "dev-release run ${{ github.run_id }}: runner public IPv4 **$IP** - waiting up to 20 min for a temporary /32 (start = end = this address). Remove it when this run finishes."
+          for i in $(seq 1 80); do
+            if python -c "import socket;s=socket.socket();s.settimeout(5);s.connect(('$PGHOST',5432))" 2>/dev/null; then
+              echo "DEV Postgres reachable after $i attempt(s)"; exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::DEV Postgres not reachable within 20 minutes - no /32 was authorised. Failing closed; nothing was migrated."
+          exit 1
 
       - name: Token, connection and role assumption
         id: read
@@ -88,16 +140,12 @@ jobs:
           import os, sys, psycopg2
 
           # DEV Postgres's firewall trusts only the docuaction-dev App Service's own
-          # outbound IPs (confirmed by direct comparison: `az webapp show
-          # --query outboundIpAddresses` is byte-identical to the firewall rule set).
-          # A GitHub-hosted runner is deliberately NOT on that list, and widening it
-          # to admit GitHub's own dynamic IP ranges would be exactly the kind of
-          # firewall weakening this pipeline must not do on its own. So a connection
-          # timeout here is an EXPECTED, routine outcome, not a bug - distinguished
-          # from every OTHER failure (bad auth, wrong role, unexpected schema state),
-          # which still fail loudly below. dev-release.yml's migration gate is what
-          # turns "readable=false" into the correct STOP-and-hand-off-to-a-controlled-
-          # DBA-path behaviour; this step's only job is to report the fact honestly.
+          # outbound IPs. A GitHub-hosted runner is deliberately NOT on that list,
+          # and widening it to admit GitHub's dynamic IP ranges would be exactly the
+          # kind of firewall weakening this pipeline must not do on its own. So a
+          # connection timeout here is an EXPECTED, routine outcome on push runs -
+          # distinguished from every OTHER failure (bad auth, wrong role, unexpected
+          # schema state), which still fail loudly below.
           try:
               conn = psycopg2.connect(
                   host=os.environ["PGHOST"], dbname=os.environ["PGDATABASE"],
@@ -106,9 +154,8 @@ jobs:
           except psycopg2.OperationalError as exc:
               print(f"DEV Postgres is not reachable from this runner: {exc}",
                     file=sys.stderr)
-              print("EXPECTED: this network boundary is deliberate (see comment "
-                    "above). Reporting readable=false rather than failing the job - "
-                    "dev-release.yml decides what to do with that.", file=sys.stderr)
+              print("EXPECTED on push-triggered runs: reporting readable=false; "
+                    "dev-release.yml's migration gate decides what to do.", file=sys.stderr)
               print("readable=false")
               print("dev_revision=UNREACHABLE_FROM_CI")
               sys.exit(0)
@@ -127,12 +174,9 @@ jobs:
           rows = [r[0] for r in c.fetchall()]
           conn.close()
           print("DEV alembic_version rows:", rows, file=sys.stderr)
-          # A bare row count, not a business-data read: exactly one row is the
-          # only shape `alembic upgrade head` can safely start from. Zero means
-          # the schema was never stamped; more than one means a prior multi-head
-          # branch was never resolved. Either way this is a human decision, not
-          # something the automated pipeline should guess its way through by
-          # picking one of several revisions.
+          # Exactly one row is the only shape `alembic upgrade head` can safely
+          # start from. Zero or several is a human decision, not something the
+          # pipeline should guess its way through.
           assert len(rows) == 1, (
               f"DEV alembic_version has {len(rows)} rows, expected exactly 1 "
               f"({rows!r}) - stop and resolve this by hand before automating "
@@ -167,13 +211,92 @@ jobs:
           echo "target head:  $TARGET"
           if [ "$READABLE" != "true" ]; then
             echo "migration_needed=unknown" >> "$GITHUB_OUTPUT"
-            echo "Cannot determine from CI whether a migration is needed - DEV is not reachable from this runner by design. dev-release.yml's migration gate decides how to handle this (controlled stop, or an operator's explicit migration_confirmed_current dispatch input)."
+            echo "Cannot determine from CI whether a migration is needed - DEV is not reachable from this runner by design."
             exit 0
           fi
           if [ "$DEV" = "$TARGET" ]; then
             echo "migration_needed=false" >> "$GITHUB_OUTPUT"
-            echo "DEV is already current - deploy-backend will be told run_migrations=false (a true no-op, not skipped-and-assumed-fine)"
+            echo "DEV is already current."
           else
             echo "migration_needed=true" >> "$GITHUB_OUTPUT"
-            echo "DEV is behind - deploy-backend will be told run_migrations=true"
+            echo "DEV is behind."
           fi
+
+      - name: Apply the approved migration as docuaction_owner, then verify
+        id: apply
+        if: inputs.apply == true && steps.compare.outputs.migration_needed == 'true'
+        env:
+          SECRET_KEY: ${{ github.sha }}${{ github.sha }}
+          ALLOWED_HOSTS: '*'
+        run: |
+          CUR="${{ steps.read.outputs.dev_revision }}"; TARGET="${{ steps.target.outputs.target_head }}"
+          test "$CUR" = "${{ inputs.expected_current }}" || { echo "::error::DEV is at $CUR, operator expected ${{ inputs.expected_current }} - nothing executed"; exit 1; }
+          python -m pip install --quiet -r requirements.txt
+          # Exactly ONE pending migration, or nothing runs.
+          PENDING=$(alembic history -r "${CUR}:heads" 2>/dev/null | grep -c -- '->' || true)
+          echo "pending migrations: $PENDING"
+          test "$PENDING" -eq 1 || { echo "::error::expected exactly 1 pending migration, found $PENDING - nothing executed"; exit 1; }
+          PGTOKEN=$(az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv)
+          export DATABASE_URL="postgresql://${PG_PRINCIPAL}:${PGTOKEN}@${PGHOST}/${PGDATABASE}?ssl=require"
+          echo "--- identity check via the approved DB_MIGRATION_ROLE mechanism (startup-packet role) ---"
+          PGTOKEN="$PGTOKEN" python - <<'PY'
+          import asyncio, os, asyncpg
+          async def m():
+              c = await asyncpg.connect(host=os.environ["PGHOST"], database=os.environ["PGDATABASE"],
+                                        user=os.environ["PG_PRINCIPAL"], password=os.environ["PGTOKEN"], ssl="require",
+                                        server_settings={"role": os.environ["DB_MIGRATION_ROLE"]})
+              r = await c.fetchrow("select session_user, current_user"); await c.close()
+              print("session_user =", r[0], "| current_user =", r[1])
+              assert r[0] == os.environ["PG_PRINCIPAL"], "session_user is not the dedicated migration identity"
+              assert r[1] == os.environ["DB_MIGRATION_ROLE"], "current_user is not docuaction_owner - refusing to run DDL"
+          asyncio.run(m())
+          PY
+          echo "--- alembic upgrade head (DB_MIGRATION_ROLE=$DB_MIGRATION_ROLE DB_APP_ROLE=$DB_APP_ROLE) ---"
+          alembic upgrade head
+          AFTER=$(alembic current 2>/dev/null | awk '{print $1}'); echo "after: $AFTER"
+          test "$AFTER" = "$TARGET" || { echo "::error::after upgrade DEV is at $AFTER, expected $TARGET"; exit 1; }
+          test "$(alembic heads | grep -c '(head)')" -eq 1 || { echo "::error::multiple heads after upgrade"; exit 1; }
+          echo "--- second run must be a true no-op ---"
+          alembic upgrade head 2>&1 | tee /tmp/second.log
+          if grep -q "Running upgrade" /tmp/second.log; then echo "::error::second alembic upgrade head was not a no-op"; exit 1; fi
+          echo "--- runtime privileges on rce_delivery_jobs (S/I/U must be true, DELETE must be false) ---"
+          PGTOKEN="$PGTOKEN" python - <<'PY'
+          import os, psycopg2
+          c = psycopg2.connect(host=os.environ["PGHOST"], dbname=os.environ["PGDATABASE"], user=os.environ["PG_PRINCIPAL"],
+                               password=os.environ["PGTOKEN"], sslmode="require").cursor()
+          c.execute("select to_regclass('public.rce_delivery_jobs') is not null"); exists = c.fetchone()[0]
+          if exists:
+              got = {}
+              for p in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                  c.execute("select has_table_privilege(%s,'rce_delivery_jobs',%s)", (os.environ["DB_APP_ROLE"], p)); got[p] = c.fetchone()[0]
+              c.execute("select tableowner from pg_tables where tablename='rce_delivery_jobs'"); owner = c.fetchone()[0]
+              print("privileges:", got, "| owner:", owner)
+              assert got == {"SELECT": True, "INSERT": True, "UPDATE": True, "DELETE": False}, "runtime privileges are not the approved least-privilege set"
+              assert owner == os.environ["DB_MIGRATION_ROLE"], "rce_delivery_jobs is not owned by docuaction_owner"
+          else:
+              print("rce_delivery_jobs not present - privilege invariant not applicable")
+          PY
+          echo "applied=true" >> "$GITHUB_OUTPUT"
+          echo "dev_revision_after=$AFTER" >> "$GITHUB_OUTPUT"
+
+      - name: Capture Government-integrity baseline (read-only, before deploy)
+        id: baseline
+        if: steps.read.outputs.readable == 'true'
+        run: |
+          PGTOKEN=$(az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv)
+          test -n "$PGTOKEN" || { echo "FAIL: no PostgreSQL access token"; exit 1; }
+          PGTOKEN="$PGTOKEN" python "$GITHUB_WORKSPACE/.github/scripts/gov_integrity_snapshot.py" >> "$GITHUB_OUTPUT"
+
+      - name: Final gate inputs (after any apply)
+        id: final
+        run: |
+          if [ "${{ steps.apply.outputs.applied }}" = "true" ]; then
+            echo "applied=true" >> "$GITHUB_OUTPUT"
+            echo "migration_needed=false" >> "$GITHUB_OUTPUT"
+            echo "dev_revision=${{ steps.apply.outputs.dev_revision_after }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "applied=false" >> "$GITHUB_OUTPUT"
+            echo "migration_needed=${{ steps.compare.outputs.migration_needed }}" >> "$GITHUB_OUTPUT"
+            echo "dev_revision=${{ steps.read.outputs.dev_revision }}" >> "$GITHUB_OUTPUT"
+          fi
+          echo "baseline_readable=${{ steps.baseline.outputs.readable }}"

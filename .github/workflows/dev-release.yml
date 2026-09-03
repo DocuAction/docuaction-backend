@@ -53,10 +53,25 @@ on:
   workflow_dispatch:
     inputs:
       migration_confirmed_current:
-        description: 'Set true ONLY after independently verifying, via an authorized out-of-band connection, that DEV is already at the target Alembic head. This does not run or trigger a migration - it tells the gate "a human already checked", nothing more. DEV Postgres is deliberately unreachable from GitHub-hosted runners, so this input exists because the pipeline cannot verify that fact itself.'
+        description: 'Set true ONLY after independently verifying, via an authorized out-of-band connection, that DEV is already at the target Alembic head. This does not run or trigger a migration - it tells the gate "a human already checked", nothing more.'
         required: false
         type: boolean
         default: false
+      apply_migrations:
+        description: 'Execute pending approved migrations in the database phase (dedicated OIDC identity, SET ROLE docuaction_owner). Requires expected_current and handshake_issue. Never happens on a push.'
+        required: false
+        type: boolean
+        default: false
+      expected_current:
+        description: 'With apply_migrations: the revision DEV must be at before anything executes (hard stop otherwise)'
+        required: false
+        type: string
+        default: ''
+      handshake_issue:
+        description: 'With apply_migrations: PR/issue number where the database job posts its runner IPv4 for the operator-added temporary /32'
+        required: false
+        type: string
+        default: ''
 
 # One DEV release in flight at a time. Queued, not cancelled: killing a run
 # mid-deploy could leave Azure pointed at a half-applied migration or an
@@ -87,39 +102,20 @@ jobs:
       id-token: write
 
   migration-check:
-    name: Read DEV's current migration state (read-only)
+    # The ONE database phase, on ONE runner: read -> (controlled apply) ->
+    # Government-integrity baseline. `apply` is only ever true from an explicit
+    # workflow_dispatch; a push event has no inputs, so it can never migrate.
+    name: Database phase (read-only unless apply_migrations was dispatched)
     uses: ./.github/workflows/migration-preflight.yml
+    with:
+      apply: ${{ inputs.apply_migrations == true }}
+      expected_current: ${{ inputs.expected_current || '' }}
+      handshake_issue: ${{ inputs.handshake_issue || '' }}
     permissions:
       contents: read
       id-token: write
-
-  gov-baseline:
-    name: Capture Government-data baseline (read-only, before deploy)
-    needs: [build, migration-check]
-    runs-on: ubuntu-latest
-    environment: development
-    permissions:
-      id-token: write
-      contents: read
-    outputs:
-      readable: ${{ steps.snapshot.outputs.readable }}
-      baseline_json: ${{ steps.snapshot.outputs.baseline_json }}
-      intake_count: ${{ steps.snapshot.outputs.intake_count }}
-    steps:
-      - name: Login to Azure (OIDC - no stored client secret)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Snapshot a per-delivery digest of every existing source record
-        id: snapshot
-        run: |
-          python -m pip install --quiet psycopg2-binary
-          PGTOKEN=$(az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv)
-          test -n "$PGTOKEN" || { echo "FAIL: no PostgreSQL access token"; exit 1; }
-          PGTOKEN="$PGTOKEN" python "$GITHUB_WORKSPACE/.github/scripts/gov_integrity_snapshot.py" >> "$GITHUB_OUTPUT"
+      # Only for the runner-IPv4 handshake comment (to an issue) when apply_migrations=true.
+      issues: write
 
   migration-gate:
     name: Controlled migration gate
@@ -183,20 +179,20 @@ jobs:
             echo "4. Run \`alembic current\` again and confirm exactly one head, equal to \`$TARGET_HEAD\`."
             echo "5. Run \`alembic upgrade head\` a second time and confirm it is a true no-op."
             echo "6. \`docuaction_owner\` / \`docuaction_app\` privilege boundaries and all Area-1 permissions are unaffected by this - migrations that touch them already assert their own preconditions and fail rather than silently proceed."
-            echo "7. Re-run this workflow (workflow_dispatch) with \`migration_confirmed_current: true\` to continue automatically."
+            echo "7. Preferred: dispatch this workflow with \`apply_migrations: true\`, \`expected_current: <revision from step 2>\`, \`handshake_issue: <PR/issue number>\` - the database phase then runs the migration as the dedicated OIDC identity (SET ROLE docuaction_owner) on one runner, after you add that runner's temporary /32. Alternative: after an out-of-band migration, dispatch with \`migration_confirmed_current: true\`."
           } >> "$GITHUB_STEP_SUMMARY"
           echo "::error::DEV DATABASE MIGRATION REQUIRED — CONTROLLED DBA/AZURE EXECUTION REQUIRED ($REASON)"
           exit 1
 
   deploy:
     name: Deploy to Azure DEV
-    needs: [build, migration-gate, gov-baseline]
+    needs: [build, migration-gate, migration-check]
     # Both must hold: migration-gate confirms it is safe to deploy against
-    # DEV's schema, and gov-baseline confirms a real (not empty-because-
-    # unreadable) pre-deploy Government-data snapshot exists for gov-verify
+    # DEV's schema, and the database phase confirms a real (not empty-because-
+    # unreadable) pre-deploy Government-data baseline exists for gov-verify
     # to compare against afterwards. Deploying with an empty baseline would
     # make gov-verify's "no mutation found" trivially, meaninglessly true.
-    if: needs.migration-gate.outputs.proceed == 'true' && needs.gov-baseline.outputs.readable == 'true'
+    if: needs.migration-gate.outputs.proceed == 'true' && needs.migration-check.outputs.baseline_readable == 'true'
     uses: ./.github/workflows/deploy-backend.yml
     with:
       environment: dev
@@ -208,13 +204,20 @@ jobs:
 
   gov-verify:
     name: Verify Government data unchanged (read-only, after deploy)
-    needs: [deploy, gov-baseline]
+    # A different runner (and IP) from the database phase, unavoidably - it
+    # runs after deploy. So it reports its own IPv4 and waits, bounded, for
+    # the operator's second temporary /32. It never manufactures a PASS: no
+    # connectivity within the window fails the job, and the release with it.
+    needs: [deploy, migration-check]
     runs-on: ubuntu-latest
     environment: development
     permissions:
       id-token: write
       contents: read
+      issues: write
     steps:
+      - uses: actions/checkout@v4
+
       - name: Login to Azure (OIDC - no stored client secret)
         uses: azure/login@v2
         with:
@@ -222,9 +225,25 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Report runner IPv4 and wait for the operator's temporary /32 (bounded)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          IP=$(curl -s https://api.ipify.org); echo "runner public IPv4: $IP"
+          if [ -n "${{ inputs.handshake_issue }}" ]; then
+            gh issue comment "${{ inputs.handshake_issue }}" --repo "${{ github.repository }}" \
+              --body "dev-release run ${{ github.run_id }} (post-deploy verify): runner public IPv4 **$IP** - waiting up to 20 min for a temporary /32. Remove it when this run finishes."
+          fi
+          for i in $(seq 1 80); do
+            if python -c "import socket;s=socket.socket();s.settimeout(5);s.connect(('$PGHOST',5432))" 2>/dev/null; then echo "reachable after $i attempt(s)"; exit 0; fi
+            sleep 15
+          done
+          echo "::error::DEV Postgres not reachable within 20 minutes - post-deploy Government-integrity verification could not run. Release FAILS; nothing is assumed."
+          exit 1
+
       - name: Compare against the pre-deploy baseline
         env:
-          BASELINE_JSON: ${{ needs.gov-baseline.outputs.baseline_json }}
+          BASELINE_JSON: ${{ needs.migration-check.outputs.baseline_json }}
         run: |
           python -m pip install --quiet psycopg2-binary
           PGTOKEN=$(az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv)
@@ -275,6 +294,8 @@ jobs:
             echo "| DEV readable from CI | ${{ needs.migration-check.outputs.readable }} |"
             echo "| DEV revision (last known) | ${{ needs.migration-check.outputs.dev_revision }} |"
             echo "| target head | ${{ needs.migration-check.outputs.target_head }} |"
+            echo "| migration applied this run | ${{ needs.migration-check.outputs.applied }} |"
+            echo "| Government baseline captured | ${{ needs.migration-check.outputs.baseline_readable }} (intakes=${{ needs.migration-check.outputs.intake_count }}) |"
             echo "| migration gate | ${{ needs.migration-gate.result }} (proceed=${{ needs.migration-gate.outputs.proceed }}) |"
             echo "| deployed digest | ${{ needs.deploy.outputs.deployed_digest }} |"
             echo "| previous image (rollback point) | ${{ needs.deploy.outputs.previous_image }} |"
