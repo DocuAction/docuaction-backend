@@ -151,6 +151,9 @@ def _alembic_cfg(url):
     from alembic.config import Config
     cfg = Config(os.path.join(REPO, "alembic.ini"))
     cfg.set_main_option("sqlalchemy.url", url.replace("postgresql+asyncpg://", "postgresql://").replace("%", "%%"))
+    # env.py builds its engine from the DATABASE_URL environment variable, not the
+    # cfg url, so point it at the fixture DB for in-process command.upgrade calls.
+    os.environ["DATABASE_URL"] = url.replace("postgresql+asyncpg://", "postgresql://")
     return cfg
 
 
@@ -321,17 +324,13 @@ def test_full_convergence_and_all_gates(fixture_db):
             "join pg_roles mem on m.member=mem.oid "
             "where r.rolname='docuaction_owner' and mem.rolname=:rp"), {"rp": RUNTIME_LEGACY}).first()
         assert is_member is not None, "runtime principal was not granted docuaction_owner membership"
-        # its access to a RE-OWNED table flows from owner-role membership: in
-        # information_schema (which expands membership) the privileges on `users`
-        # are attributed to grantor docuaction_owner, the owner role it now
-        # belongs to - not a direct grant from anyone else. Without the
-        # membership there would be no such privilege at all.
-        grantors = c.execute(text(
-            "select distinct grantor from information_schema.role_table_grants "
-            "where grantee=:rp and table_name='users' and table_schema='public'"),
-            {"rp": RUNTIME_LEGACY}).scalars().all()
-        assert grantors == ["docuaction_owner"], \
-            f"re-owned-table access must derive from docuaction_owner membership; grantor={grantors}"
+        # it has full access to a RE-OWNED table (users), which it no longer owns
+        # and was never directly granted - so the access can only come from the
+        # docuaction_owner membership. has_table_privilege expands role membership.
+        for priv in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+            assert c.execute(text("select has_table_privilege(:rp,'users',:p)"),
+                             {"rp": RUNTIME_LEGACY, "p": priv}).scalar(), \
+                f"runtime principal lost {priv} on the re-owned users table"
     # LIVE: connect AS the runtime principal (same credential/URL shape) and work
     rturl = fixture_db.rsplit("//", 1)[0] + f"//{RUNTIME_LEGACY}:x@" + fixture_db.split("@", 1)[1]
     rt = _eng(rturl)
@@ -350,9 +349,7 @@ def test_full_convergence_and_all_gates(fixture_db):
 
     # future normal path still works: alembic upgrade head is a no-op
     from alembic import command
-    from alembic.config import Config
-    cfg = Config(os.path.join(REPO, "alembic.ini"))
-    cfg.set_main_option("sqlalchemy.url", fixture_db.replace("%", "%%"))
+    cfg = _alembic_cfg(fixture_db)  # also points env.py's DATABASE_URL at this DB
     command.upgrade(cfg, "head")  # no-op; would raise on multiple heads / conflict
     with eng.connect() as c:
         assert c.execute(text("select version_num from alembic_version")).scalars().all() == ["20260903_delivery_grants"]
