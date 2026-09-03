@@ -312,16 +312,17 @@ def finalize_ownership(engine):
         to_app = sorted((candidate & existing) - AREA1_OWNER_TABLES)
         for t in to_app:
             conn.execute(text(f'ALTER TABLE public."{t}" OWNER TO "{APP_ROLE}"'))
-        # ALTER TABLE OWNER does not move owned sequences; reassign the sequences
-        # of the non-Area-1 tables too (a sequence tied to an Area-1 table stays on
-        # docuaction_owner) so docuaction_app can use them (nextval).
+        # A column-linked sequence (serial/identity) AUTOMATICALLY follows its
+        # table's owner on ALTER TABLE OWNER above - and PostgreSQL refuses a
+        # direct ALTER SEQUENCE OWNER on it. So only STANDALONE sequences (not
+        # tied to a table column) owned by docuaction_owner need a manual move.
         seqs = conn.execute(text(
             "select c.relname from pg_class c "
             "where c.relnamespace='public'::regnamespace and c.relkind='S' "
             "and c.relowner::regrole::text = :owner and not exists ("
-            "  select 1 from pg_depend d join pg_class t on t.oid=d.refobjid "
-            "  where d.objid=c.oid and t.relname = any(:area1))"),
-            {"owner": OWNER_ROLE, "area1": list(AREA1_OWNER_TABLES)}).scalars().all()
+            "  select 1 from pg_depend d where d.objid=c.oid "
+            "  and d.deptype in ('a','i') and d.refobjsubid > 0)"),
+            {"owner": OWNER_ROLE}).scalars().all()
         for s in seqs:
             conn.execute(text(f'ALTER SEQUENCE public."{s}" OWNER TO "{APP_ROLE}"'))
         kept = sorted(AREA1_OWNER_TABLES & existing)
