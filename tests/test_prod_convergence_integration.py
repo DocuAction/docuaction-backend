@@ -29,7 +29,14 @@ ABSENT = {"rce_source_intakes", "rce_source_records", "rce_ingestion_runs", "rce
           "sample_entities", "report_export_jobs", "report_artifacts", "rce_delivery_jobs",
           "tefca_dimension_evidence", "source_version_snapshots", "evidence_relationship_path"}
 ADDITIVE = {"audit_logs": ["event_type", "outcome", "correlation_id"], "tefca_import_history": ["file_hash"]}
-RUNTIME_LEGACY = "app_runtime"  # models the current PROD app login principal
+# Models the discovered PROD reality: the running app logs in as the same role
+# that OWNS the legacy tables (PROD: pgadmin). This is the hard Gate-2 case -
+# an owner-based principal accesses tables by owner-implicit rights with NO
+# explicit self-grants, so it loses all access when ownership moves unless
+# convergence actively preserves it. Because the fixture never grants this role
+# any table privilege, any post-convergence access it retains can ONLY come from
+# the docuaction_owner membership the convergence adds.
+RUNTIME_LEGACY = "pgadmin_legacy"
 
 
 def _md():
@@ -74,7 +81,9 @@ def _build_legacy(url):
     md = _md()
     eng = _eng(url)
     with eng.begin() as c:
-        c.execute(text("CREATE ROLE pgadmin_legacy NOLOGIN"))
+        # The runtime principal IS the legacy owner (a LOGIN role), exactly like
+        # PROD's pgadmin. Ownership and the app login are the same role, which is
+        # the whole Gate-2 risk.
         c.execute(text(f"CREATE ROLE {RUNTIME_LEGACY} LOGIN PASSWORD 'x'"))
         legacy_tables = [t for t in md.sorted_tables if t.name not in ABSENT]
         md.create_all(bind=c, tables=legacy_tables, checkfirst=True)
@@ -83,12 +92,12 @@ def _build_legacy(url):
             for cn in cols:
                 c.execute(text(f'ALTER TABLE public."{t}" DROP COLUMN IF EXISTS "{cn}"'))
         c.execute(text("DROP TABLE IF EXISTS alembic_version"))
-        # legacy ownership: every existing table -> pgadmin_legacy; runtime gets DML
+        # legacy ownership: every existing table -> the runtime principal itself
+        # (owner == app login), with NO explicit self-grants (owners don't need
+        # them). This is exactly PROD's pgadmin position.
         rows = c.execute(text("select tablename from pg_tables where schemaname='public'")).scalars().all()
         for tn in rows:
-            c.execute(text(f'ALTER TABLE public."{tn}" OWNER TO pgadmin_legacy'))
-            c.execute(text(f'GRANT SELECT,INSERT,UPDATE,DELETE ON public."{tn}" TO {RUNTIME_LEGACY}'))
-        c.execute(text("GRANT USAGE ON SCHEMA public TO " + RUNTIME_LEGACY))
+            c.execute(text(f'ALTER TABLE public."{tn}" OWNER TO {RUNTIME_LEGACY}'))
         # synthetic rows in two populated tables
         c.execute(text("insert into users (id,tenant_id,email,password_hash,full_name,company,role,plan,allowed_modules,is_active,is_verified,status,created_at,updated_at,last_active_at) "
                        "values (:i,'legacy','fix@synthetic.invalid','x','L','C','viewer','free','[]'::json,true,true,'active',now(),now(),now())"), {"i": str(uuid.uuid4())})
@@ -122,9 +131,11 @@ def test_full_convergence_and_all_gates(fixture_db):
     with eng.connect() as c:
         assert not insp(c).has_table("alembic_version"), "dry-run must not write"
 
-    # APPLY + real chain, timed
+    # APPLY + real chain, timed. --runtime-principal preserves the existing app
+    # login (which is also the legacy owner) across the ownership move.
     t0 = time.time()
-    r = _run_conv(fixture_db, "--apply", "--i-understand-this-writes", "--run-chain")
+    r = _run_conv(fixture_db, "--apply", "--i-understand-this-writes", "--run-chain",
+                  "--runtime-principal", RUNTIME_LEGACY)
     elapsed = time.time() - t0
     print(f"CONVERGENCE_ELAPSED_SECONDS={elapsed:.1f}")
 
@@ -163,14 +174,36 @@ def test_full_convergence_and_all_gates(fixture_db):
         cu, su = c.execute(text("select current_user, session_user")).first()
         assert cu == "docuaction_owner" and su == "mig_test", (cu, su)
 
-    # OLD-APP COMPAT: the modeled runtime principal still reads/writes legacy tables
+    # GATE 2 - OLD-APP / RUNTIME-PRINCIPAL SURVIVAL.
+    # The runtime principal owned every table and had no explicit self-grants.
+    # After convergence it is NO LONGER the owner (ownership moved to
+    # docuaction_owner), yet it must still read and write the same tables with
+    # the SAME connection string. Prove the mechanism, then prove it live.
+    with eng.connect() as c:
+        # it is genuinely no longer the owner of a re-owned table ...
+        assert c.execute(text("select relowner::regrole::text from pg_class where relname='users'")).scalar() == "docuaction_owner"
+        # ... but it IS now a member of docuaction_owner (the only access source)
+        is_member = c.execute(text(
+            "select 1 from pg_auth_members m join pg_roles r on m.roleid=r.oid "
+            "join pg_roles mem on m.member=mem.oid "
+            "where r.rolname='docuaction_owner' and mem.rolname=:rp"), {"rp": RUNTIME_LEGACY}).first()
+        assert is_member is not None, "runtime principal was not granted docuaction_owner membership"
+        # no direct table grant to it exists -> access can only be via membership
+        direct = c.execute(text(
+            "select count(*) from information_schema.role_table_grants "
+            "where grantee=:rp and table_schema='public'"), {"rp": RUNTIME_LEGACY}).scalar()
+        assert direct == 0, f"unexpected direct grants ({direct}); membership would not be the proven path"
+    # LIVE: connect AS the runtime principal (same credential/URL shape) and work
     rturl = fixture_db.rsplit("//", 1)[0] + f"//{RUNTIME_LEGACY}:x@" + fixture_db.split("@", 1)[1]
     rt = _eng(rturl)
     with rt.begin() as c:
-        assert c.execute(text("select count(*) from users")).scalar() == pre_users
-        c.execute(text("insert into audit_logs (id,tenant_id,action,created_at) values (:i,'legacy','conv-oldapp-check',now())"), {"i": str(uuid.uuid4())})
-        c.execute(text("select count(*) from tefca_reviews"))
-    print("OLD_APP_COMPAT=PASS")
+        assert c.execute(text("select current_user")).scalar() == RUNTIME_LEGACY
+        assert c.execute(text("select count(*) from users")).scalar() == pre_users            # SELECT re-owned
+        c.execute(text("update users set last_active_at=now()"))                              # UPDATE re-owned
+        c.execute(text("insert into audit_logs (id,tenant_id,action,created_at) values (:i,'legacy','conv-oldapp-check',now())"),
+                  {"i": str(uuid.uuid4())})                                                    # INSERT re-owned
+        c.execute(text("select count(*) from rce_delivery_jobs"))                             # SELECT newly-created
+    print("GATE2_RUNTIME_SURVIVAL=PASS (access via docuaction_owner membership; no DATABASE_URL change)")
 
     # IDEMPOTENCY: second apply refuses (alembic_version now present)
     r2 = _run_conv(fixture_db, "--apply", "--i-understand-this-writes", expect_ok=False)

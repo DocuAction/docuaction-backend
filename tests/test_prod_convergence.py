@@ -96,6 +96,23 @@ def test_additive_columns_are_the_matrix_result():
     assert '"file_hash"' in src and '"event_type"' in src
 
 
+def test_runtime_principal_preservation_is_membership_only_and_opt_in():
+    """The existing app login is preserved across the ownership move by granting
+    it OWNER-ROLE MEMBERSHIP (no DATABASE_URL change), never by inventing a
+    table-privilege grant, and only when explicitly named (default None)."""
+    src = _src()
+    code = _code()
+    assert '"--runtime-principal"' in src
+    # membership grant of the owner role to the named principal, no ON clause
+    assert re.search(r'GRANT\s+"?\{?OWNER_ROLE\}?"?\s+TO\s+"?\{?runtime_principal\}?"?', code) \
+        or ('GRANT' in code and 'OWNER_ROLE' in code and 'runtime_principal' in code)
+    assert not re.search(r"runtime_principal.*\bON\b", code), "must not be a table-privilege grant"
+    # opt-in: no preservation happens unless a principal is supplied
+    assert "if runtime_principal:" in code
+    # refuses a non-existent principal rather than silently skipping
+    assert "does not exist" in code
+
+
 def test_convergence_is_manual_opt_in_not_wired_to_auto_release():
     dev = io.open(os.path.join(REPO, ".github", "workflows", "dev-release.yml"), encoding="utf-8").read()
     assert "prod_legacy_convergence" not in dev

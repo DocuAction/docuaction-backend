@@ -133,13 +133,16 @@ def print_plan(p):
     print("Additive-only plan: no existing table is removed or emptied; no destructive change.")
 
 
-def apply(engine):
+def apply(engine, runtime_principal=None):
     md = _candidate_metadata()
     with engine.begin() as conn:
         p = plan(conn)
         if p["alembic_present"]:
             raise SystemExit("REFUSED: alembic_version already present - this DB is already "
                              "Alembic-managed; use the normal migration path.")
+        if runtime_principal and not _role_exists(conn, runtime_principal):
+            raise SystemExit(f"REFUSED: --runtime-principal {runtime_principal!r} does not exist; "
+                             "cannot preserve its access.")
         # 1. role model
         for r, attrs in ((OWNER_ROLE, "NOLOGIN NOSUPERUSER NOBYPASSRLS"),
                          (APP_ROLE, "NOLOGIN NOSUPERUSER NOBYPASSRLS")):
@@ -162,6 +165,15 @@ def apply(engine):
         for t in p["ownership_allowlist"]:
             conn.execute(text(f'ALTER TABLE public."{t}" OWNER TO "{OWNER_ROLE}"'))
         print(f"seeded schema + reconciled ownership of {len(p['ownership_allowlist'])} tables to {OWNER_ROLE}")
+        # 6. preserve the existing runtime principal's access across the ownership
+        #    move: grant it MEMBERSHIP in the new owner role (a role-membership
+        #    grant, not a table privilege) so the running app keeps working with no
+        #    DATABASE_URL / credential change. Least-priv hardening to a dedicated
+        #    login is a separate, later, connection-string-changing step.
+        if runtime_principal:
+            conn.execute(text(f'GRANT "{OWNER_ROLE}" TO "{runtime_principal}"'))
+            print(f"preserved runtime access: granted {OWNER_ROLE} membership to {runtime_principal} "
+                  "(inherits ownership rights; no DATABASE_URL change)")
     return p
 
 
@@ -195,6 +207,10 @@ def main():
     ap.add_argument("--i-understand-this-writes", action="store_true")
     ap.add_argument("--run-chain", action="store_true",
                     help="after --apply, run the reviewed alembic chain and verify head")
+    ap.add_argument("--runtime-principal", default=os.getenv("CONV_RUNTIME_PRINCIPAL"),
+                    help="existing app login role to preserve across the ownership move "
+                         "(granted owner-role membership so its DB access survives with no "
+                         "DATABASE_URL change)")
     args = ap.parse_args()
     if not args.database_url:
         raise SystemExit("DATABASE_URL required")
@@ -204,11 +220,15 @@ def main():
     if not args.apply:
         with engine.connect() as conn:
             print_plan(plan(conn))
+            if args.runtime_principal:
+                exists = _role_exists(conn, args.runtime_principal)
+                print(f"runtime principal to preserve      : {args.runtime_principal} "
+                      f"(exists={exists}; will receive {OWNER_ROLE} membership, no DATABASE_URL change)")
         print("\nDRY-RUN ONLY. No changes made. Re-run with --apply --i-understand-this-writes to execute.")
         return
     if not args.i_understand_this_writes:
         raise SystemExit("--apply requires --i-understand-this-writes")
-    apply(engine)
+    apply(engine, runtime_principal=args.runtime_principal)
     if args.run_chain:
         run_chain_and_verify(sync_url)
     print("CONVERGENCE APPLIED")

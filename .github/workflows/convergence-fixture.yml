@@ -42,7 +42,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-asyncio
+          pip install pytest pytest-asyncio psycopg2-binary
       - name: Run the convergence fixture integration test (real convergence, disposable DB)
         env:
           CONV_SUPERUSER_URL: postgresql://postgres:convtest@127.0.0.1:5432/postgres
