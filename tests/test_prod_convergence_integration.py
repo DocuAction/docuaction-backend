@@ -124,6 +124,108 @@ def _run_conv(url, *args, expect_ok=True):
     return r
 
 
+CK = "ck_review_record_has_subject"
+
+
+def _ensure_roles(eng):
+    """Create the two roles the grant migrations reference by name (roles are
+    cluster-global; the fixture teardown drops them)."""
+    from sqlalchemy import text
+    with eng.begin() as c:
+        for r in ("docuaction_owner", "docuaction_app"):
+            c.execute(text(f'DROP ROLE IF EXISTS "{r}"'))
+            c.execute(text(f'CREATE ROLE "{r}" WITH NOLOGIN NOSUPERUSER NOBYPASSRLS'))
+
+
+def _ck_count(conn):
+    from sqlalchemy import text
+    return conn.execute(text(
+        "select count(*) from pg_constraint c "
+        "join pg_class t on t.oid = c.conrelid "
+        "join pg_namespace n on n.oid = t.relnamespace "
+        "where c.conname = :n and t.relname = 'review_records' and n.nspname = 'public'"),
+        {"n": CK}).scalar()
+
+
+def _alembic_cfg(url):
+    from alembic.config import Config
+    cfg = Config(os.path.join(REPO, "alembic.ini"))
+    cfg.set_main_option("sqlalchemy.url", url.replace("postgresql+asyncpg://", "postgresql://").replace("%", "%%"))
+    return cfg
+
+
+def test_fresh_alembic_upgrade_head_from_empty(fixture_db):
+    """A completely fresh, empty PostgreSQL taken through `alembic upgrade head`
+    must reach exactly 20260903_delivery_grants, one head, zero pending, with the
+    review_records CHECK constraint present exactly once - and a second upgrade
+    must be a true no-op. This is the chain's own idempotency, independent of
+    convergence."""
+    import sqlalchemy as sa
+    from sqlalchemy import text
+    from alembic import command
+    from alembic.script import ScriptDirectory
+    eng = _eng(fixture_db)
+    _ensure_roles(eng)
+    cfg = _alembic_cfg(fixture_db)
+    os.environ["DB_APP_ROLE"] = "docuaction_app"
+    os.environ.pop("DB_MIGRATION_ROLE", None)  # plain fresh build as the connecting superuser
+    command.upgrade(cfg, "head")
+    heads = ScriptDirectory.from_config(cfg).get_heads()
+    assert heads == ["20260903_delivery_grants"], f"expected single head, got {heads}"
+    with eng.connect() as c:
+        assert c.execute(text("select version_num from alembic_version")).scalars().all() == ["20260903_delivery_grants"]
+        assert _ck_count(c) == 1, "review_records CHECK must exist exactly once after a fresh build"
+    command.upgrade(cfg, "head")  # idempotent re-run: no-op, no error
+    with eng.connect() as c:
+        assert c.execute(text("select version_num from alembic_version")).scalars().all() == ["20260903_delivery_grants"]
+        assert _ck_count(c) == 1
+    print("FRESH_ALEMBIC_BUILD=PASS head=20260903_delivery_grants ck_count=1 rerun=no-op")
+
+
+def test_20260831_skips_ck_when_already_present(fixture_db):
+    """Regression: with review_records already carrying the CHECK (as a fresh
+    create_all build leaves it), advancing THROUGH 20260831 must not error and
+    must leave exactly one CHECK - the guard skips re-creation."""
+    import sqlalchemy as sa
+    from sqlalchemy import text
+    from alembic import command
+    eng = _eng(fixture_db)
+    _ensure_roles(eng)
+    cfg = _alembic_cfg(fixture_db)
+    os.environ["DB_APP_ROLE"] = "docuaction_app"
+    os.environ.pop("DB_MIGRATION_ROLE", None)
+    command.upgrade(cfg, "20260830_run_lifecycle")  # just before 20260831
+    with eng.connect() as c:
+        assert _ck_count(c) == 1, "create_all should have established the CHECK before 20260831"
+    command.upgrade(cfg, "20260831_review_case")  # must be a no-op for the CHECK, no DuplicateObject
+    with eng.connect() as c:
+        assert _ck_count(c) == 1, "CHECK must remain exactly once (guard skipped re-creation)"
+    print("REGRESSION_SKIP_WHEN_PRESENT=PASS")
+
+
+def test_20260831_creates_ck_when_absent(fixture_db):
+    """Regression: if the CHECK is genuinely absent at the 20260831 point (an
+    upgraded/legacy DB where create_all had not established it), 20260831 must
+    CREATE it - proving the guard did not disable the migration's real work."""
+    import sqlalchemy as sa
+    from sqlalchemy import text
+    from alembic import command
+    eng = _eng(fixture_db)
+    _ensure_roles(eng)
+    cfg = _alembic_cfg(fixture_db)
+    os.environ["DB_APP_ROLE"] = "docuaction_app"
+    os.environ.pop("DB_MIGRATION_ROLE", None)
+    command.upgrade(cfg, "20260830_run_lifecycle")
+    with eng.begin() as c:
+        c.execute(text(f'ALTER TABLE public.review_records DROP CONSTRAINT "{CK}"'))
+    with eng.connect() as c:
+        assert _ck_count(c) == 0, "precondition: CHECK made absent at the 20260831 point"
+    command.upgrade(cfg, "20260831_review_case")
+    with eng.connect() as c:
+        assert _ck_count(c) == 1, "20260831 must create the CHECK when it is absent"
+    print("REGRESSION_CREATE_WHEN_ABSENT=PASS")
+
+
 def test_full_convergence_and_all_gates(fixture_db):
     import sqlalchemy as sa
     from sqlalchemy import text
@@ -219,11 +321,17 @@ def test_full_convergence_and_all_gates(fixture_db):
             "join pg_roles mem on m.member=mem.oid "
             "where r.rolname='docuaction_owner' and mem.rolname=:rp"), {"rp": RUNTIME_LEGACY}).first()
         assert is_member is not None, "runtime principal was not granted docuaction_owner membership"
-        # no direct table grant to it exists -> access can only be via membership
-        direct = c.execute(text(
-            "select count(*) from information_schema.role_table_grants "
-            "where grantee=:rp and table_schema='public'"), {"rp": RUNTIME_LEGACY}).scalar()
-        assert direct == 0, f"unexpected direct grants ({direct}); membership would not be the proven path"
+        # its access to a RE-OWNED table flows from owner-role membership: in
+        # information_schema (which expands membership) the privileges on `users`
+        # are attributed to grantor docuaction_owner, the owner role it now
+        # belongs to - not a direct grant from anyone else. Without the
+        # membership there would be no such privilege at all.
+        grantors = c.execute(text(
+            "select distinct grantor from information_schema.role_table_grants "
+            "where grantee=:rp and table_name='users' and table_schema='public'"),
+            {"rp": RUNTIME_LEGACY}).scalars().all()
+        assert grantors == ["docuaction_owner"], \
+            f"re-owned-table access must derive from docuaction_owner membership; grantor={grantors}"
     # LIVE: connect AS the runtime principal (same credential/URL shape) and work
     rturl = fixture_db.rsplit("//", 1)[0] + f"//{RUNTIME_LEGACY}:x@" + fixture_db.split("@", 1)[1]
     rt = _eng(rturl)

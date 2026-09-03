@@ -112,10 +112,18 @@ def _constraint_exists(name: str) -> bool:
     # already exists (the model declares it). Guard its creation exactly as the
     # column/index steps above are guarded, so the migration is idempotent against
     # that create_all and a fresh `alembic upgrade head` does not fail.
+    #
+    # Scope the check to the intended public.review_records relation: PostgreSQL
+    # constraint names are unique only per-table, not globally, so a match by
+    # conname alone could be a same-named constraint on a different table.
     if _offline():
         return False
     return op.get_bind().execute(sa.text(
-        "select 1 from pg_constraint where conname = :n"), {"n": name}).first() is not None
+        "select 1 from pg_constraint c "
+        "join pg_class t on t.oid = c.conrelid "
+        "join pg_namespace n on n.oid = t.relnamespace "
+        "where c.conname = :n and t.relname = :t and n.nspname = 'public'"),
+        {"n": name, "t": TABLE}).first() is not None
 
 
 def upgrade() -> None:
