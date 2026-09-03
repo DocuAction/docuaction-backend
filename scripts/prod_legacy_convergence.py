@@ -97,6 +97,22 @@ def plan(conn):
     shared = sorted(candidate & existing)
     legacy_only = sorted(existing - candidate - {"alembic_version"})
 
+    # model-only columns: columns the current model defines on an EXISTING table
+    # that the legacy DB lacks. These were added to models without a migration
+    # (DEV gets them from create_all on fresh tables); the chain's later index/
+    # constraint migrations assume they exist, and create_all(checkfirst) cannot
+    # retrofit a column onto an existing table - so they must be added first, as
+    # nullable columns. The chain's own column-adds on these tables are guarded
+    # (has_column), so a pre-add is a safe no-op for them.
+    by_name = {t.name: t for t in md.sorted_tables}
+    add_columns = {}
+    for tname in shared:
+        have = _existing_columns(conn, tname)
+        need = [(c.name, c.type.compile(dialect=conn.engine.dialect))
+                for c in by_name[tname].columns if c.name not in have]
+        if need:
+            add_columns[tname] = need
+
     return {
         "alembic_present": alembic_present,
         "owner_present": owner_present,
@@ -104,6 +120,7 @@ def plan(conn):
         "tables_the_chain_will_create": missing,
         "tables_shared_reowned": shared,
         "legacy_only_preserved_untouched": legacy_only,
+        "model_only_columns_to_add": add_columns,
     }
 
 
@@ -116,6 +133,8 @@ def print_plan(p):
     for t in p["tables_the_chain_will_create"]:
         print(f"    + {t}")
     print(f"existing candidate tables re-owned to {OWNER_ROLE}: {len(p['tables_shared_reowned'])}")
+    total_cols = sum(len(v) for v in p["model_only_columns_to_add"].values())
+    print(f"model-only columns to add (nullable): {total_cols}  { { t: [c for c, _ in v] for t, v in p['model_only_columns_to_add'].items() } }")
     print(f"legacy-only tables preserved    : {len(p['legacy_only_preserved_untouched'])}  {p['legacy_only_preserved_untouched']}")
     print("Chain-first plan: the reviewed Alembic chain creates the missing tables "
           "and adds columns to existing ones (its guarded migrations no-op on what "
@@ -155,8 +174,18 @@ def apply(engine, runtime_principal=None):
         #    tables (not in the model) are deliberately left untouched.
         for t in p["tables_shared_reowned"]:
             conn.execute(text(f'ALTER TABLE public."{t}" OWNER TO "{OWNER_ROLE}"'))
-        print(f"prepared roles + re-owned {len(p['tables_shared_reowned'])} existing candidate tables to {OWNER_ROLE}; "
-              "the reviewed chain will create the missing tables and add columns")
+        # 4b. add model-only columns the legacy tables lack, as NULLABLE columns,
+        #     BEFORE the chain (its index/constraint migrations assume they exist;
+        #     create_all(checkfirst) cannot retrofit them onto existing tables).
+        #     Nullable + IF NOT EXISTS -> safe on stored data and a no-op for any
+        #     column the chain's guarded migrations also add.
+        n_cols = 0
+        for t, cols in p["model_only_columns_to_add"].items():
+            for cn, coltype in cols:
+                conn.execute(text(f'ALTER TABLE public."{t}" ADD COLUMN IF NOT EXISTS "{cn}" {coltype}'))
+                n_cols += 1
+        print(f"prepared roles + re-owned {len(p['tables_shared_reowned'])} existing candidate tables to {OWNER_ROLE} "
+              f"+ added {n_cols} model-only column(s); the reviewed chain will create the missing tables and grants")
         # 5. preserve the existing runtime principal's access across the ownership
         #    move: grant it MEMBERSHIP in the owner role (role-membership grant,
         #    not a table privilege) so the running app keeps working with no
