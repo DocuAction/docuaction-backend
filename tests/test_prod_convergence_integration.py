@@ -42,7 +42,7 @@ LEGACY_OWNER = "legacy_owner"
 MIGRATION_ID = "migration_identity"
 APP_PW = "app_pw_synthetic_9x!"        # synthetic test password for docuaction_app LOGIN
 CK = "ck_review_record_has_subject"
-_ALL_ROLES = ("mig_test", "docuaction_app", "docuaction_owner", MIGRATION_ID, LEGACY_OWNER)
+_ALL_ROLES = ("mig_test", "docuaction_app", "docuaction_owner", MIGRATION_ID, LEGACY_OWNER, "entra_admin")
 
 
 def _md():
@@ -273,6 +273,43 @@ def test_three_step_convergence_and_all_gates(fixture_db):
     r2 = _run_conv(mig_url, "--migrate", "--i-understand-migration-writes", expect_ok=False)
     assert r2.returncode != 0 and "already present" in (r2.stdout + r2.stderr)
     print("THREE_STEP_CONVERGENCE=PASS")
+
+
+def test_bootstrap_via_secretless_admin_set_role(fixture_db):
+    """Prove the Entra-admin alternative: a NON-superuser admin that can SET ROLE
+    to the legacy owner (modelling imran -> SET ROLE pgadmin via azure_pg_admin)
+    executes Bootstrap A WITHOUT the legacy owner's password. Equivalent non-
+    superuser Azure-admin semantics: entra_admin is NOINHERIT and not a superuser;
+    it can become the owner only for the operation, holds none of its privileges
+    permanently, and is never escalated."""
+    import sqlalchemy as sa
+    from sqlalchemy import text
+    su = _build_prod_like(fixture_db)   # legacy_owner owns schema+tables; migration_identity exists
+    with su.begin() as c:
+        # non-superuser admin that can SET ROLE legacy_owner but does NOT inherit it
+        c.execute(text("CREATE ROLE entra_admin LOGIN PASSWORD 'x' NOSUPERUSER NOINHERIT CREATEROLE NOCREATEDB NOBYPASSRLS"))
+        c.execute(text(f"GRANT {LEGACY_OWNER} TO entra_admin"))
+    with su.connect() as c:
+        assert _attrs(c, "entra_admin")[0] is False, "entra_admin must be non-superuser"
+    ea_url = _url_as(fixture_db, "entra_admin")
+    with _eng(ea_url).begin() as c:   # capability: can become the owner
+        c.execute(text(f"SET ROLE {LEGACY_OWNER}"))
+        assert c.execute(text("select current_user")).scalar() == LEGACY_OWNER
+        assert c.execute(text("select session_user")).scalar() == "entra_admin"
+    # Bootstrap A executed AS entra_admin, SET ROLE legacy_owner - NO owner password
+    r = _run_conv(ea_url, "--bootstrap", "--i-understand-bootstrap-writes",
+                  "--bootstrap-as-role", LEGACY_OWNER, extra_env={"CONV_APP_PASSWORD": APP_PW})
+    assert "BOOTSTRAP A COMPLETE" in r.stdout, r.stdout[-400:]
+    assert f"session_user=entra_admin" in r.stdout and f"current_user(after SET ROLE)={LEGACY_OWNER}" in r.stdout
+    with su.connect() as c:
+        assert _attrs(c, "docuaction_app")[4] is True, "docuaction_app created as LOGIN"
+        assert _attrs(c, "docuaction_owner")[4] is False, "docuaction_owner NOLOGIN"
+        assert _owner(c, "users") == "docuaction_owner", "ownership transferred by entra_admin via SET ROLE"
+        assert _owner(c, "bulletin_articles") == LEGACY_OWNER, "legacy-only untouched"
+        assert not sa.inspect(c).has_table("alembic_version"), "no Alembic in Bootstrap A"
+        assert _attrs(c, "entra_admin")[:4] == (False, False, True, False), "no privilege escalation (still non-super)"
+        assert not _member(c, "docuaction_app", "docuaction_owner")  # boundary intact
+    print("ENTRA_ADMIN_SETROLE_BOOTSTRAP=PASS (owner ops via SET ROLE; no owner password; non-superuser; boundary intact)")
 
 
 def test_forced_failure_is_fail_closed(fixture_db):
