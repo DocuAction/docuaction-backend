@@ -174,13 +174,20 @@ def print_plan(p):
           "the reviewed chain writes its own version row (no historical revision is faked).")
 
 
-def bootstrap_apply(engine, app_password=None):
+def bootstrap_apply(engine, app_password=None, become_role=None):
     """BOOTSTRAP A - owner-only prep, executed by the existing owner-capable
-    identity (PROD: pgadmin). Creates the two roles (docuaction_app LOGIN with the
-    application password; docuaction_owner NOLOGIN), grants CONNECT + schema
-    privileges, and TEMPORARILY re-owns the existing candidate tables to
-    docuaction_owner so the chain (run as that role) can build/alter them.
-    Finalize later moves the non-Area-1 tables to docuaction_app.
+    identity. Creates the two roles (docuaction_app LOGIN with the application
+    password; docuaction_owner NOLOGIN), grants CONNECT + schema privileges, and
+    TEMPORARILY re-owns the existing candidate tables to docuaction_owner so the
+    chain (run as that role) can build/alter them. Finalize later moves the
+    non-Area-1 tables to docuaction_app.
+
+    become_role (optional): SET ROLE to this owner role for the whole operation.
+    Lets a secretless admin who can SET ROLE to the legacy owner (PROD: the Entra
+    admin, who can SET ROLE pgadmin via azure_pg_admin) run Bootstrap A WITHOUT
+    the legacy owner's password. It is a session-local role switch, not a new
+    grant. When unset, the operation runs as the connecting user (e.g. pgadmin
+    authenticated by password).
 
     Runs NO Alembic, creates NO application tables/columns, changes NO rows, and
     never DROP/TRUNCATE/REASSIGN OWNED."""
@@ -191,6 +198,16 @@ def bootstrap_apply(engine, app_password=None):
         if not p["app_present"] and not app_password:
             raise SystemExit("REFUSED: docuaction_app must be created as a LOGIN role but no app "
                              "password was supplied (set CONV_APP_PASSWORD). It is never logged.")
+        # 0. optionally become the owner role (session-local SET ROLE; no password,
+        #    no new privilege). All owner-only operations below then run as it.
+        if become_role:
+            session_user = conn.execute(text("select session_user")).scalar()
+            conn.execute(text(f'SET ROLE "{become_role}"'))
+            current_user = conn.execute(text("select current_user")).scalar()
+            if current_user != become_role:
+                raise SystemExit(f"REFUSED: SET ROLE {become_role} did not take effect "
+                                 f"(current_user={current_user}); the connecting identity cannot become it.")
+            print(f"owner context: session_user={session_user}  current_user(after SET ROLE)={current_user}")
         # 1. roles. docuaction_app is the application LOGIN identity (least priv);
         #    docuaction_owner is the NOLOGIN ownership/migration role.
         if not p["app_present"]:
@@ -294,13 +311,18 @@ def run_chain_and_verify(db_url):
     assert cur == list(heads), "alembic_version != head after convergence"
 
 
-def finalize_ownership(engine):
-    """FINALIZE - owner-run (pgadmin). Reassign ownership to the certified DEV
-    model: every candidate table EXCEPT the Area-1 set -> docuaction_app (the
-    application login, whose access is by ownership); the Area-1 tables and
-    alembic_version stay docuaction_owner. Runs NO Alembic; the migration identity
-    cannot do this (it is not a member of docuaction_app)."""
+def finalize_ownership(engine, become_role=None):
+    """FINALIZE - owner-run (pgadmin, or a secretless admin via become_role SET
+    ROLE). Reassign ownership to the certified DEV model: every candidate table
+    EXCEPT the Area-1 set -> docuaction_app (the application login, whose access
+    is by ownership); the Area-1 tables and alembic_version stay docuaction_owner.
+    Runs NO Alembic; the migration identity cannot do this (not a member of
+    docuaction_app)."""
     with engine.begin() as conn:
+        if become_role:
+            conn.execute(text(f'SET ROLE "{become_role}"'))
+            if conn.execute(text("select current_user")).scalar() != become_role:
+                raise SystemExit(f"REFUSED: SET ROLE {become_role} did not take effect.")
         if "alembic_version" not in _existing_tables(conn):
             raise SystemExit("REFUSED: alembic_version absent - run Migration B (--migrate) first.")
         for r in (OWNER_ROLE, APP_ROLE):
@@ -348,6 +370,10 @@ def main():
     ap.add_argument("--i-understand-migration-writes", action="store_true")
     ap.add_argument("--finalize", action="store_true", help="FINALIZE: owner-run ownership reconciliation to DEV model")
     ap.add_argument("--i-understand-finalize-writes", action="store_true")
+    ap.add_argument("--bootstrap-as-role", default=os.getenv("CONV_BOOTSTRAP_ROLE"),
+                    help="(Bootstrap A / Finalize) SET ROLE to this owner role for the operation "
+                         "(e.g. pgadmin), so a secretless admin that can SET ROLE to the legacy "
+                         "owner runs it without the owner's password. Session-local; not a new grant.")
     args = ap.parse_args()
     if not args.database_url:
         raise SystemExit("DATABASE_URL required")
@@ -369,7 +395,8 @@ def main():
             print("\nBOOTSTRAP A DRY-RUN. Re-run with --bootstrap --i-understand-bootstrap-writes "
                   "(as the owner-capable identity, CONV_APP_PASSWORD set) to execute.")
             return
-        bootstrap_apply(engine, app_password=os.getenv("CONV_APP_PASSWORD"))
+        bootstrap_apply(engine, app_password=os.getenv("CONV_APP_PASSWORD"),
+                        become_role=args.bootstrap_as_role)
         print("BOOTSTRAP A COMPLETE")
         return
 
@@ -389,7 +416,7 @@ def main():
         print("FINALIZE DRY-RUN. Re-run with --finalize --i-understand-finalize-writes "
               "(as the owner-capable identity) to execute.")
         return
-    finalize_ownership(engine)
+    finalize_ownership(engine, become_role=args.bootstrap_as_role)
     print("FINALIZE COMPLETE")
 
 

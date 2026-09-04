@@ -174,6 +174,20 @@ def test_migration_b_requires_bootstrap_first():
     assert "Bootstrap A" in body and "REFUSED" in body
 
 
+def test_bootstrap_can_run_via_setrole_secretless_admin():
+    """--bootstrap-as-role lets a secretless admin that can SET ROLE to the legacy
+    owner run Bootstrap A / Finalize without the owner's password (session-local
+    SET ROLE, not a new grant), and proves the role switch actually took effect."""
+    src = _src(); code = _code()
+    assert '"--bootstrap-as-role"' in src
+    assert "become_role" in code
+    body = _func(code, "bootstrap_apply")
+    assert "SET ROLE" in body and "become_role" in body
+    assert "current_user" in body and "did not take effect" in body
+    # it is a session-local SET ROLE, not a permanent GRANT of the owner role
+    assert "GRANT" not in body.split("SET ROLE", 1)[1].split("\n")[0]
+
+
 def test_convergence_is_manual_opt_in_not_wired_to_auto_release():
     dev = io.open(os.path.join(REPO, ".github", "workflows", "dev-release.yml"), encoding="utf-8").read()
     assert "prod_legacy_convergence" not in dev
