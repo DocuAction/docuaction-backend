@@ -25,6 +25,7 @@ MANAGED MIGRATE (migration identity) -> FINALIZE (owner) - plus every fail-
 closed gate. Skips unless CONV_SUPERUSER_URL is set.
 """
 import os
+import subprocess
 import sys
 import uuid
 
@@ -32,7 +33,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from test_prod_convergence_integration import (  # noqa: E402
-    SU, CONV, APP_PW, LEGACY_OWNER, MIGRATION_ID, _ALL_ROLES, _md, _eng, _url_as, fixture_db,  # noqa: F401
+    SU, REPO, CONV, APP_PW, LEGACY_OWNER, MIGRATION_ID, _ALL_ROLES, _md, _eng, _url_as, fixture_db,  # noqa: F401
     _run_conv, _expect_db_error, _run_sql_as, _attrs, _member, _owner,
 )
 
@@ -92,6 +93,23 @@ def _role_count(conn):
     return conn.execute(text("select count(*) from pg_roles")).scalar()
 
 
+def _candidate_names():
+    """The utility's OWN candidate table set (72 in PROD), computed in a clean
+    subprocess. The pytest process imports the whole application through
+    conftest, so its Base.metadata carries extra models (e.g. output_templates)
+    that the convergence utility never considers candidates - building the
+    fixture from that would create tables PROD holds only as legacy-only."""
+    code = ("import sys; sys.path.insert(0, %r); import prod_legacy_convergence as c; "
+            "print('\\n'.join(sorted(t.name for t in c._candidate_metadata().sorted_tables)))"
+            % os.path.join(REPO, "scripts"))
+    r = subprocess.run([sys.executable, "-c", code], cwd=REPO, capture_output=True, text=True, check=True,
+                       env=dict(os.environ, SECRET_KEY="t" * 64, ALLOWED_HOSTS="*"))
+    names = set(r.stdout.split())
+    assert len(names) == 72, f"candidate set must be the measured 72 tables, got {len(names)}"
+    assert names.isdisjoint(LEGACY_ONLY), sorted(names & set(LEGACY_ONLY))
+    return names
+
+
 def _build_managed_prod_like(url):
     """The REAL docuaction-db-geo starting shape (see module docstring)."""
     from sqlalchemy import text
@@ -118,7 +136,8 @@ def _build_managed_prod_like(url):
         c.execute(text("GRANT USAGE, CREATE ON SCHEMA public TO docuaction_app"))
         # docuaction_owner's schema privileges are deliberately NOT granted here:
         # PREPARE must ensure them (the live value was not measured).
-        md.create_all(bind=c)                                    # the 72 candidate tables
+        candidate = _candidate_names()
+        md.create_all(bind=c, tables=[t for t in md.sorted_tables if t.name in candidate])   # the 72 candidate tables
         c.execute(text("CREATE TABLE alembic_version (version_num varchar(32) NOT NULL PRIMARY KEY)"))
         c.execute(text("INSERT INTO alembic_version VALUES (:v)"), {"v": EXPECTED})
         for t in LEGACY_ONLY:
