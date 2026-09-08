@@ -1,13 +1,19 @@
 name: PROD Convergence - Step B (Migration)
 
-# MIGRATION B of the certified three-step PROD convergence (PR #36). Runs the
-# reviewed Alembic chain AS the dedicated, secretless migration identity
+# MANAGED MIGRATE for the AUTHORITATIVE PROD database docuaction-db-geo, which
+# is already Alembic-managed (measured read-only 2026-09-08: alembic_version =
+# 20260829_report_artifacts, five revisions pending). Runs the reviewed Alembic
+# chain expected -> head AS the dedicated, secretless migration identity
 # (federated OIDC), never as pgadmin. Manual, production-environment gated (a
-# human reviewer must approve the run). Prerequisites, done separately:
-#   * Bootstrap A already executed (docuaction_owner present; candidate tables
-#     temporarily owned by it) - otherwise the utility refuses.
+# human reviewer must approve the run). The utility's managed gate fails closed
+# unless alembic_version is exactly the expected revision and the measured
+# roles/ownership/schema fingerprint matches. Prerequisites, done separately:
+#   * MANAGED PREPARE already executed by the owner-capable identity
+#     (--managed-prepare: decisions model-only columns, alembic_version owned by
+#     docuaction_owner) - otherwise the utility refuses.
 #   * The migration service principal is mapped as a PostgreSQL principal and is
-#     a member of docuaction_owner.
+#     a member of docuaction_owner ONLY.
+# docuaction-db (same resource group) is the STALE, idle server: never target it.
 # The runner has a dynamic egress IP; it prints that IP and then waits (retrying
 # the DB connection) while an operator adds ONE temporary /32 firewall rule
 # (Option-D). The workflow identity is NOT granted firewall-management authority.
@@ -46,10 +52,10 @@ jobs:
         run: |
           IP=$(curl -s https://api.ipify.org)
           echo "RUNNER_PUBLIC_IP=$IP"
-          echo "::notice title=Add temporary /32::Operator: az postgres flexible-server firewall-rule create -g rg-docuaction-prod -s docuaction-db -n stepB-<ts> --start-ip-address $IP --end-ip-address $IP  (remove immediately after this job)"
-      - name: Migration B - prove identity, SET ROLE, run the reviewed chain
+          echo "::notice title=Add temporary /32::Operator: az postgres flexible-server firewall-rule create -g rg-docuaction-prod -s docuaction-db-geo -n stepB-<ts> --start-ip-address $IP --end-ip-address $IP  (remove immediately after this job)"
+      - name: Managed Migrate - prove identity, SET ROLE, run the reviewed chain expected -> head
         env:
-          PGHOST: docuaction-db.postgres.database.azure.com
+          PGHOST: docuaction-db-geo.postgres.database.azure.com
           PGUSER: github-actions-docuaction-backend-prod-migration
           SECRET_KEY: prodmigrationprodmigrationprodmigrationprodmigration000000
           ALLOWED_HOSTS: '*'
@@ -82,7 +88,7 @@ jobs:
           conn.close()
           print("IDENTITY PROVEN: session_user=migration identity; current_user=docuaction_owner")
           PY
-          echo "Running Migration B (reviewed Alembic chain) as the migration identity"
+          echo "Running MANAGED MIGRATE (reviewed Alembic chain 20260829_report_artifacts -> head) as the migration identity"
           export DATABASE_URL="postgresql://${PGUSER}:${TOKEN}@${PGHOST}:5432/postgres?sslmode=require"
-          python scripts/prod_legacy_convergence.py --migrate --i-understand-migration-writes
-          echo "MIGRATION B COMPLETE (revision should be 20260903_delivery_grants)"
+          python scripts/prod_legacy_convergence.py --managed-migrate --i-understand-migration-writes --expected-revision 20260829_report_artifacts --admin-role pgadmin
+          echo "MANAGED MIGRATE COMPLETE (revision must be 20260903_delivery_grants; second upgrade proven no-op)"

@@ -134,8 +134,17 @@ def test_grants_come_from_the_reviewed_chain_not_reimplemented():
     code = _code()
     assert "command.upgrade(cfg" in code and "head" in code
     assert "DB_APP_ROLE" in code and "APP_ROLE" in code
-    for g in re.findall(r"GRANT[^\n]*\bON\b[^\n]*", code, re.I):
+    prep = _func(code, "managed_prepare")
+    for g in re.findall(r"GRANT[^\n]*\bON\b[^\n]*", code.replace(prep, ""), re.I):
         assert ("ON SCHEMA" in g) or ("ON DATABASE" in g), f"only DB/SCHEMA infra ON-grants allowed: {g}"
+    # The ONE exception, scoped and pinned: managed PREPARE temporarily re-owns the
+    # single non-Area-1 table a pending revision ALTERs (MANAGED_CHAIN_ALTERS) and
+    # keeps the application's former owner-level access on it for the window.
+    # Area-1 privileges still come only from the chain (asserted at import).
+    for g in re.findall(r"GRANT[^\n]*\bON\b[^\n]*", prep, re.I):
+        assert ("ON SCHEMA" in g) or ('ON public."{t}" TO "{APP_ROLE}"' in g), f"unexpected grant in PREPARE: {g}"
+    assert "for t in MANAGED_CHAIN_ALTERS:" in prep
+    assert "assert not set(MANAGED_CHAIN_ALTERS) & AREA1_OWNER_TABLES" in code
     assert not re.search(r"\bREVOKE\b", code, re.I), "no invented REVOKE"
 
 
@@ -186,6 +195,65 @@ def test_bootstrap_can_run_via_setrole_secretless_admin():
     assert "current_user" in body and "did not take effect" in body
     # it is a session-local SET ROLE, not a permanent GRANT of the owner role
     assert "GRANT" not in body.split("SET ROLE", 1)[1].split("\n")[0]
+
+
+def test_managed_prod_mode_shape():
+    """The already-managed PROD path (docuaction-db-geo, measured 2026-09-08):
+    pinned expected revision, fail-closed lineage/fingerprint gate, owner-run
+    PREPARE that touches only the measured model-only columns + alembic_version
+    ownership, migration-identity MIGRATE with a full identity proof and a
+    proven no-op re-run. Never stamps; never creates roles; never re-owns broadly."""
+    src = _src(); code = _code()
+    assert 'EXPECTED_MANAGED_REVISION = "20260829_report_artifacts"' in src
+    for flag in ('"--managed-prepare"', '"--i-understand-prepare-writes"', '"--managed-migrate"',
+                 '"--expected-revision"', '"--admin-role"'):
+        assert flag in src, f"missing managed flag {flag}"
+    assert "if not args.i_understand_prepare_writes:" in src
+    assert "command.stamp" not in code and ".stamp(" not in code, "the managed path must never stamp"
+    gate = _func(code, "managed_gate")
+    for needle in ("expected exactly one", "certified expected revision", "unknown to this repository",
+                   "already at head", "AHEAD of the expected revision", "not an ancestor of head",
+                   "owned by neither", "already present before the chain",
+                   "legacy-only table set differs", "unexpected model-only drift", "prohibited cross-membership"):
+        assert needle in gate, f"managed gate must refuse on: {needle}"
+    for banned in ("CREATE ROLE", "OWNER TO", "GRANT ", "ALTER TABLE", "command.upgrade", "create_all"):
+        assert banned not in gate, f"managed_gate must be read-only ({banned!r})"
+    prep = _func(code, "managed_prepare")
+    assert "CREATE ROLE" not in prep and "CONV_APP_PASSWORD" not in prep and "REASSIGN" not in prep
+    assert prep.count("OWNER TO") == 2 and 'alembic_version" OWNER TO' in prep and "MANAGED_CHAIN_ALTERS" in prep, \
+        "PREPARE may re-own alembic_version and the single-table MANAGED_CHAIN_ALTERS set only"
+    assert "MANAGED_CHAIN_ALTERS = ('review_records',)" in code, "only review_records is ALTERed by a pending revision"
+    assert "ADD COLUMN IF NOT EXISTS" in prep and "MANAGED_PREPARE_TABLES" in prep
+    assert "command.upgrade" not in prep and "create_all" not in prep
+    assert "MANAGED_PREPARE_TABLES = ('decisions',)" in code, "review_records columns belong to 20260831_review_case"
+    mig = _func(code, "managed_migrate")
+    assert "OWNER TO" not in mig and "CREATE ROLE" not in mig and "ADD COLUMN" not in mig
+    assert "after_prepare=True" in mig and "_prove_managed_migration_identity" in mig
+    assert "run_chain_and_verify" in mig and "NO-OP" in mig
+    proof = _func(code, "_prove_managed_migration_identity")
+    assert "direct != {OWNER_ROLE}" in proof and "boundary broken" in proof
+    assert "for forbidden in (admin_role, APP_ROLE)" in proof
+    # legacy guards untouched
+    assert "REFUSED: alembic_version already present" in _func(code, "bootstrap_apply")
+    assert "REFUSED: alembic_version already present" in _func(code, "migration_apply")
+
+
+def test_prod_migration_workflow_targets_the_authoritative_server():
+    """PROD Step B must target docuaction-db-geo (the authoritative PROD write DB)
+    with the managed path, and no executable migration path may still name the
+    stale server docuaction-db."""
+    wf_dir = os.path.join(REPO, ".github", "workflows")
+    prod = io.open(os.path.join(wf_dir, "prod-migration.yml"), encoding="utf-8").read()
+    assert "PGHOST: docuaction-db-geo.postgres.database.azure.com" in prod
+    assert "-s docuaction-db-geo" in prod
+    assert "--managed-migrate --i-understand-migration-writes" in prod
+    assert "--expected-revision 20260829_report_artifacts" in prod
+    assert "docuaction-db.postgres" not in prod and "-s docuaction-db " not in prod
+    for name in os.listdir(wf_dir):
+        body = io.open(os.path.join(wf_dir, name), encoding="utf-8").read()
+        for line in body.splitlines():
+            if "docuaction-db.postgres" in line or re.search(r"(-s|-n|--name|--server-name)\s+docuaction-db\b(?!-)", line):
+                raise AssertionError(f"{name} still targets the stale PROD server: {line.strip()[:120]}")
 
 
 def test_convergence_is_manual_opt_in_not_wired_to_auto_release():
