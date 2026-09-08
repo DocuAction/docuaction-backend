@@ -4,7 +4,10 @@ name: Convergence Fixture Test
 # superuser postgres:16 service (never PROD, never DEV, never Azure). Builds a
 # faithful legacy-PROD fixture, runs the full convergence + reviewed Alembic
 # chain, and proves schema/data/ownership/privilege/identity/idempotency and
-# fail-closed behaviour. No secret, no Azure, no Government data.
+# fail-closed behaviour. Also builds the faithful ALREADY-MANAGED fixture that
+# reproduces the measured docuaction-db-geo starting state and proves the
+# managed PREPARE -> MIGRATE -> FINALIZE path. No secret, no Azure, no
+# Government data.
 
 on:
   pull_request:
@@ -12,6 +15,7 @@ on:
     paths:
       - 'scripts/prod_legacy_convergence.py'
       - 'tests/test_prod_convergence_integration.py'
+      - 'tests/test_prod_managed_migration_integration.py'
       - '.github/workflows/convergence-fixture.yml'
       - 'alembic/**'
       - 'app/**'
@@ -49,4 +53,4 @@ jobs:
           SECRET_KEY: convtestconvtestconvtestconvtestconvtestconvtestconvtestconvtest
           ALLOWED_HOSTS: '*'
         run: |
-          python -m pytest tests/test_prod_convergence_integration.py -v -s --tb=short
+          python -m pytest tests/test_prod_convergence_integration.py tests/test_prod_managed_migration_integration.py -v -s --tb=short
