@@ -465,7 +465,13 @@ def managed_gate(conn, expected_revision, after_prepare=False):
     # 1. Alembic lineage: exactly one row, exactly the expected, known, strictly behind ONE head.
     if "alembic_version" not in existing:
         _refuse("alembic_version is ABSENT - this is not the already-managed database (legacy path only).")
-    rows = conn.execute(text("select version_num from alembic_version")).scalars().all()
+    av_owner = _table_owner(conn, "alembic_version")
+    who = conn.execute(text("select session_user, current_user")).first()
+    try:
+        rows = conn.execute(text("select version_num from alembic_version")).scalars().all()
+    except Exception as e:  # noqa: BLE001 - e.g. the migration identity before PREPARE re-owned it
+        _refuse(f"alembic_version (owner={av_owner}) is not readable as {tuple(who)} - run --managed-prepare first "
+                f"(it moves alembic_version to {OWNER_ROLE}): {str(e).splitlines()[0][:120]}")
     if len(rows) != 1:
         _refuse(f"alembic_version holds {len(rows)} rows; expected exactly one.")
     current = rows[0]
@@ -567,6 +573,21 @@ def print_managed_plan(p):
           "the chain writes alembic_version itself.")
 
 
+def _become(conn, become_role):
+    """Session-local SET ROLE to the owner role (PROD: pgadmin, from the NOINHERIT
+    Entra admin, which holds no table privilege of its own until it does). Done
+    BEFORE the gate so the gate's catalog/table reads run with the owner's
+    privileges. Not a grant; verified to have taken effect."""
+    if not become_role:
+        return
+    session_user = conn.execute(text("select session_user")).scalar()
+    conn.execute(text(f'SET ROLE "{become_role}"'))
+    current_user = conn.execute(text("select current_user")).scalar()
+    if current_user != become_role:
+        raise SystemExit(f"REFUSED: SET ROLE {become_role} did not take effect (current_user={current_user}).")
+    print(f"owner context: session_user={session_user}  current_user(after SET ROLE)={current_user}")
+
+
 def managed_prepare(engine, expected_revision, become_role=None):
     """MANAGED PREPARE - owner-run (pgadmin, reached by session-local SET ROLE from
     the Entra admin). Adds ONLY the measured model-only columns on the tables in
@@ -575,14 +596,8 @@ def managed_prepare(engine, expected_revision, become_role=None):
     so the chain can write it. Nothing else: no CREATE ROLE, no table re-ownership
     beyond alembic_version, no Alembic, no row change."""
     with engine.begin() as conn:
+        _become(conn, become_role)
         p = managed_gate(conn, expected_revision)
-        if become_role:
-            session_user = conn.execute(text("select session_user")).scalar()
-            conn.execute(text(f'SET ROLE "{become_role}"'))
-            current_user = conn.execute(text("select current_user")).scalar()
-            if current_user != become_role:
-                raise SystemExit(f"REFUSED: SET ROLE {become_role} did not take effect (current_user={current_user}).")
-            print(f"owner context: session_user={session_user}  current_user(after SET ROLE)={current_user}")
         md = _candidate_metadata()
         n_cols = 0
         for t in MANAGED_PREPARE_TABLES:
@@ -707,6 +722,7 @@ def main():
     if args.managed_prepare:
         if not args.i_understand_prepare_writes:
             with engine.connect() as conn:
+                _become(conn, args.bootstrap_as_role)
                 print_managed_plan(managed_gate(conn, args.expected_revision))
             print("\nMANAGED PREPARE DRY-RUN. Re-run with --managed-prepare --i-understand-prepare-writes "
                   "(as the owner-capable identity, e.g. --bootstrap-as-role pgadmin) to execute.")
