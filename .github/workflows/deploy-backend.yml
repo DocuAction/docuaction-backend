@@ -483,8 +483,19 @@ jobs:
           # registry rather than rebuilt from source, so what production runs is
           # provably what DEV proved. Separate registries are why an import is
           # needed at all; the import preserves image identity.
-          SRC="${DEV_LOGIN_SERVER}/${IMAGE_REPO}@${{ needs.deploy-dev.outputs.deployed_digest }}"
-          az acr import --name "$PROD_REGISTRY" --source "$SRC" --image "${IMAGE_REPO}:${{ inputs.image_tag }}" --force
+          # The source registry is named by its Azure RESOURCE ID (`--registry`),
+          # not by login server inside `--source`: with a login-server source the
+          # PROD registry service fetches the manifest anonymously, and the DEV
+          # registry (anonymous pull off, admin user off) answers 401 - PROD run
+          # 34312130203 failed exactly there, before any App Service change. With
+          # `--registry` the import is authorised through this identity's existing
+          # ARM RBAC: AcrPull on the DEV registry (source) and Container Registry
+          # Data Importer and Data Reader on the PROD registry (target). No
+          # credential, admin user, or anonymous pull is involved. The resource ID
+          # is built from the same identifiers the rest of this job already uses.
+          SRC_REGISTRY_ID="/subscriptions/${{ vars.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${DEV_RG}/providers/Microsoft.ContainerRegistry/registries/${DEV_REGISTRY}"
+          SRC="${IMAGE_REPO}@${{ needs.deploy-dev.outputs.deployed_digest }}"
+          az acr import --name "$PROD_REGISTRY" --registry "$SRC_REGISTRY_ID" --source "$SRC" --image "${IMAGE_REPO}:${{ inputs.image_tag }}" --force
           PROD_DIGEST=$(az acr manifest show-metadata "${PROD_LOGIN_SERVER}/${IMAGE_REPO}:${{ inputs.image_tag }}" --query digest -o tsv)
           echo "digest=$PROD_DIGEST" >> "$GITHUB_OUTPUT"
           echo "DEV digest : ${{ needs.deploy-dev.outputs.deployed_digest }}"

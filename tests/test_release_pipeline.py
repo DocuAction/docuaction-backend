@@ -201,6 +201,23 @@ def test_prod_promotes_the_dev_validated_digest_rather_than_rebuilding():
     assert "docker build" not in body
 
 
+def test_prod_import_authenticates_by_source_registry_resource_id():
+    """PROD run 34312130203 (2026-09-09) failed with 401 at `az acr import` because
+    the source was given by login server, which the PROD registry fetches
+    anonymously (the DEV registry has anonymous pull and the admin user
+    disabled). Naming the source registry by its Azure resource ID makes the
+    import use the caller's ARM RBAC - AcrPull on DEV, Data Importer on PROD -
+    with no credential, admin user, or anonymous pull."""
+    body = _steps_text(_job(DEPLOY, "deploy-prod"))
+    line = next(l for l in body.splitlines() if "az acr import" in l)
+    assert '--registry "$SRC_REGISTRY_ID"' in line, "source registry must be passed by resource ID"
+    assert "Microsoft.ContainerRegistry/registries/${DEV_REGISTRY}" in body
+    assert "resourceGroups/${DEV_RG}/providers" in body
+    assert 'SRC="${IMAGE_REPO}@${{ needs.deploy-dev.outputs.deployed_digest }}"' in body,         "with --registry the source is the bare repo@digest"
+    for banned in ("--username", "--password", "admin-enabled", "anonymous-pull", "acr login"):
+        assert banned not in body, f"import must not use credentials/anonymous pull: {banned}"
+
+
 # ── the candidate pipeline ───────────────────────────────────────────────────
 
 def test_a_candidate_reaches_the_registry_only_after_its_smoke_test():
