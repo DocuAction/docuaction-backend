@@ -67,8 +67,10 @@ env:
   PROD_APP: Docuaction
   PROD_RG: rg-docuaction-prod
   # The App Service default hostname carries a regional uniqueness suffix
-  # (<app>.azurewebsites.net is NOT this app). Resolved at runtime from
-  # `az webapp show --query defaultHostName`; named here as the fallback.
+  # (<app>.azurewebsites.net is NOT this app). Used directly by the PROD
+  # health probe; it is NOT resolved at runtime, because `az webapp show`
+  # needs Microsoft.Web/sites/publishxml/action, which the release identity
+  # deliberately lacks (run 34374773445).
   PROD_HOSTNAME: docuaction-emffhfgwc0gffgc9.eastus2-01.azurewebsites.net
   DEV_REGISTRY: acrdocuactiondev
   DEV_LOGIN_SERVER: acrdocuactiondev.azurecr.io
@@ -521,16 +523,31 @@ jobs:
 
       - name: Wait for a healthy start
         run: |
-          HOST=$(az webapp show -n "$PROD_APP" -g "$PROD_RG" --query defaultHostName -o tsv)
-          test -n "$HOST" || HOST="$PROD_HOSTNAME"
-          echo "resolved PROD host: $HOST"
-          CODE=000
+          # The PROD hostname is the workflow's own env (regional-suffix form,
+          # validated on every release). It is deliberately NOT resolved with
+          # `az webapp show`: current Azure CLI fills ftpPublishingUrl through
+          # Microsoft.Web/sites/publishxml/action, which the least-privilege
+          # release identity does not hold. Run 34374773445 failed on exactly
+          # that call, under `bash -e`, before a single probe ran - and the
+          # rollback step then replaced the image while the new container was
+          # still being pulled. Nothing here needs more than HTTPS reachability.
+          HOST="$PROD_HOSTNAME"
+          echo "PROD host: $HOST"
+          # Settle first: for a few seconds after the restart is accepted the
+          # previous container can still answer 200, which is not evidence about
+          # the new one. Then require three consecutive 200s over the same
+          # 40 x 15 s window as before (~10 min in total), so a container that
+          # crash-loops after its first answer is not accepted.
+          sleep 30
+          CODE=000; STREAK=0
           for i in $(seq 1 40); do
-            CODE=$(curl -s -o /dev/null -w '%{http_code}' "https://${HOST}/health" || true)
-            if [ "$CODE" = "200" ]; then echo "healthy after $i attempt(s)"; break; fi
+            CODE=$(curl -s -m 20 -o /dev/null -w '%{http_code}' "https://${HOST}/health" || true)
+            if [ "$CODE" = "200" ]; then STREAK=$((STREAK + 1)); else STREAK=0; fi
+            echo "probe $i: $CODE (consecutive 200s: $STREAK)"
+            if [ "$STREAK" -ge 3 ]; then echo "healthy: 3 consecutive 200s by probe $i"; break; fi
             sleep 15
           done
-          test "$CODE" = "200" || { echo "PROD did not become healthy (last: $CODE)"; exit 1; }
+          test "$STREAK" -ge 3 || { echo "PROD did not become healthy (last: $CODE)"; exit 1; }
 
       - name: Roll back PROD if the release did not come up
         if: failure() && steps.capture.outputs.previous_image != ''
