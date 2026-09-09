@@ -65,8 +65,10 @@ GUARDS (fail closed)
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import sys
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import sqlalchemy as sa
 from sqlalchemy import text
@@ -282,6 +284,57 @@ def migration_apply(sync_url):
     run_chain_and_verify(sync_url)
 
 
+# TLS parameter names differ between the two drivers this utility uses. Its own
+# engines are psycopg2/libpq, which spell transport security `sslmode=`. The
+# Alembic environment (alembic/env.py) rewrites the same URL to asyncpg, whose
+# connect() has an `ssl` argument and no `sslmode` - PROD run 34307375621 stopped
+# on exactly that TypeError, after the identity proof and before any DDL. asyncpg
+# accepts the libpq mode words for `ssl` ('require', 'verify-ca', 'verify-full',
+# 'prefer', ...), so only the KEY is renamed; the value is carried over.
+_ASYNCPG_TLS_KEY = "ssl"
+_LIBPQ_TLS_KEY = "sslmode"
+_TLS_MODES_REFUSED = {"disable", "allow"}     # never weaken transport security for the chain
+
+
+def _alembic_url(db_url: str) -> str:
+    """The URL handed to the Alembic/asyncpg environment. Renames the libpq
+    `sslmode` query key to asyncpg's `ssl`, preserving scheme, credentials, host,
+    port, database and every other query parameter byte-for-byte where possible
+    (only the query string is rebuilt). A URL without a TLS parameter is returned
+    unchanged (the fixture / a local database); a URL that asks to weaken TLS is
+    refused rather than translated."""
+    parts = urlsplit(db_url)
+    if not parts.query:
+        return db_url
+    pairs = parse_qsl(parts.query, keep_blank_values=True)
+    if not any(k == _LIBPQ_TLS_KEY for k, _ in pairs):
+        return db_url
+    out = []
+    for k, v in pairs:
+        if k == _LIBPQ_TLS_KEY:
+            if v in _TLS_MODES_REFUSED:
+                raise SystemExit(f"REFUSED: sslmode={v!r} would weaken transport security for the migration chain.")
+            k = _ASYNCPG_TLS_KEY
+        out.append((k, v))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(out), parts.fragment))
+
+
+@contextlib.contextmanager
+def _alembic_environment(db_url: str):
+    """alembic/env.py prefers DATABASE_URL from the environment over
+    sqlalchemy.url, so the asyncpg-compatible URL must be there while the chain
+    runs - and ONLY while it runs. The previous value is restored afterwards."""
+    previous = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = _alembic_url(db_url)
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = previous
+
+
 def run_chain_and_verify(db_url):
     """Run the reviewed Alembic chain AS the owner role (env.py DB_MIGRATION_ROLE
     SET ROLE), then create_all(checkfirst) as the same no-op safety net (also as
@@ -291,10 +344,11 @@ def run_chain_and_verify(db_url):
     from alembic.config import Config
     from alembic.script import ScriptDirectory
     cfg = Config("alembic.ini")
-    cfg.set_main_option("sqlalchemy.url", db_url.replace("%", "%%"))
+    cfg.set_main_option("sqlalchemy.url", _alembic_url(db_url).replace("%", "%%"))
     os.environ["DB_MIGRATION_ROLE"] = OWNER_ROLE
     os.environ["DB_APP_ROLE"] = APP_ROLE
-    command.upgrade(cfg, "head")
+    with _alembic_environment(db_url):
+        command.upgrade(cfg, "head")
     script = ScriptDirectory.from_config(cfg)
     heads = script.get_heads()
     print("alembic heads:", heads)
@@ -673,8 +727,9 @@ def managed_migrate(sync_url, expected_revision, admin_role):
     run_chain_and_verify(sync_url)
     # second upgrade must be a NO-OP: version unchanged, pending == 0, one head.
     cfg = Config("alembic.ini")
-    cfg.set_main_option("sqlalchemy.url", sync_url.replace("%", "%%"))
-    command.upgrade(cfg, "head")
+    cfg.set_main_option("sqlalchemy.url", _alembic_url(sync_url).replace("%", "%%"))
+    with _alembic_environment(sync_url):
+        command.upgrade(cfg, "head")
     script = ScriptDirectory.from_config(cfg)
     with engine.connect() as conn:
         cur = conn.execute(text("select version_num from alembic_version")).scalars().all()

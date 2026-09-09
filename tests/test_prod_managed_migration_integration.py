@@ -304,8 +304,15 @@ def test_managed_prepare_migrate_finalize_end_to_end(fixture_db):
     print("MIGRATION_IDENTITY_LEAST_PRIVILEGE=PASS (cannot SET ROLE admin/app; cannot ALTER app-owned tables)")
 
     # ── MANAGED MIGRATE (migration_identity) ──
-    rm = _run_conv(mig_url, "--managed-migrate", "--i-understand-migration-writes",
+    # The PROD workflow URL carries a libpq TLS parameter (`sslmode=require`). PROD run
+    # 34307375621 failed because the Alembic/asyncpg environment received it verbatim
+    # (asyncpg has `ssl`, not `sslmode`). The CI postgres has no TLS, so `prefer` is the
+    # strongest libpq mode that can connect here - it exercises the identical code path:
+    # psycopg2 receives sslmode=prefer, the chain must receive ssl=prefer.
+    rm = _run_conv(mig_url + "?sslmode=prefer", "--managed-migrate", "--i-understand-migration-writes",
                    extra_env={"CONV_ADMIN_ROLE": LEGACY_OWNER})
+    assert "unexpected keyword argument 'sslmode'" not in (rm.stdout + rm.stderr)
+    print("ASYNCPG_TLS_REGRESSION_TEST=PASS (sslmode=prefer through the real Alembic/asyncpg path)")
     assert "MANAGED MIGRATE COMPLETE" in rm.stdout, rm.stdout[-800:]
     assert f"identity proof: session_user={MIGRATION_ID}" in rm.stdout
     assert "direct_memberships=['docuaction_owner']" in rm.stdout
