@@ -256,6 +256,85 @@ def test_prod_migration_workflow_targets_the_authoritative_server():
                 raise AssertionError(f"{name} still targets the stale PROD server: {line.strip()[:120]}")
 
 
+def _conv_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("conv_under_test", CONV)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_alembic_url_renames_only_the_tls_key():
+    """psycopg2 keeps `sslmode=`; the Alembic/asyncpg URL gets `ssl=` with the same
+    mode. Everything else is preserved: scheme, encoded credentials, host, port,
+    database, unrelated parameters, and their order."""
+    conv = _conv_module()
+    psycopg = "postgresql://imran%40agtbi.com:eyJ0eXAi.Oi-JKV1Q_%2B%3D@docuaction-db-geo.postgres.database.azure.com:5432/postgres?sslmode=require"
+    out = conv._alembic_url(psycopg)
+    assert out == "postgresql://imran%40agtbi.com:eyJ0eXAi.Oi-JKV1Q_%2B%3D@docuaction-db-geo.postgres.database.azure.com:5432/postgres?ssl=require"
+    assert "sslmode" not in out and psycopg.split("?")[0] == out.split("?")[0]
+    # other parameters and order preserved; only the key is renamed
+    assert conv._alembic_url("postgresql://u:p@h/db?application_name=x&sslmode=verify-full&connect_timeout=10") == \
+        "postgresql://u:p@h/db?application_name=x&ssl=verify-full&connect_timeout=10"
+    # the psycopg URL object itself is never mutated by the helper (pure function)
+    assert psycopg.endswith("sslmode=require")
+
+
+def test_alembic_url_without_tls_parameter_is_unchanged_and_weakening_is_refused():
+    conv = _conv_module()
+    for u in ("postgresql://u:p@127.0.0.1:5432/conv_fix", "postgresql://u:p@h/db?application_name=x", "postgresql://u:p@h/db?"):
+        assert conv._alembic_url(u) == u, "no TLS parameter -> deterministic, unchanged (fixture / local database)"
+    import pytest
+    for weak in ("disable", "allow"):
+        with pytest.raises(SystemExit):
+            conv._alembic_url(f"postgresql://u:p@h/db?sslmode={weak}")
+    assert "sslmode=disable" not in _code()
+
+
+def test_alembic_url_is_accepted_by_the_real_asyncpg_dialect():
+    """Regression for PROD run 34307375621: build the actual asyncpg connect
+    arguments through SQLAlchemy's dialect (the path alembic/env.py takes) and
+    check them against the installed asyncpg's connect() signature. The raw
+    psycopg URL must be REJECTED by that check and the translated one ACCEPTED."""
+    import inspect
+    import asyncpg
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.dialects.postgresql.asyncpg import dialect as AsyncpgDialect
+    conv = _conv_module()
+    accepted = set(inspect.signature(asyncpg.connect).parameters)
+    assert "ssl" in accepted and "sslmode" not in accepted
+
+    def connect_kwargs(url):
+        u = make_url(url.replace("postgresql://", "postgresql+asyncpg://", 1))   # exactly what env.py does
+        _, cparams = AsyncpgDialect().create_connect_args(u)
+        return cparams
+
+    raw = "postgresql://sp:tok@docuaction-db-geo.postgres.database.azure.com:5432/postgres?sslmode=require"
+    bad = connect_kwargs(raw)
+    assert "sslmode" in bad and set(bad) - accepted, "the untranslated URL must be caught by this test"
+    good = connect_kwargs(conv._alembic_url(raw))
+    assert good.get("ssl") == "require" and "sslmode" not in good
+    assert not (set(good) - accepted), f"asyncpg would reject: {set(good) - accepted}"
+
+
+def test_both_chain_paths_use_the_helper_and_scope_the_environment():
+    code = _code()
+    for fn in ("run_chain_and_verify", "managed_migrate"):
+        body = _func(code, fn)
+        assert "set_main_option('sqlalchemy.url', _alembic_url(" in body, f"{fn} must hand Alembic the translated URL"
+        assert "with _alembic_environment(" in body, f"{fn} must scope DATABASE_URL to the Alembic call"
+        assert "os.environ['DATABASE_URL'] =" not in body, f"{fn} must not set DATABASE_URL outside the scoped context"
+    env_body = _func(code, "_alembic_environment")
+    assert "previous = os.environ.get('DATABASE_URL')" in env_body and "finally:" in env_body
+    # the psycopg engines still receive the caller's URL untouched
+    assert "sa.create_engine(db_url)" in _func(code, "run_chain_and_verify")
+    assert "sa.create_engine(sync_url)" in _func(code, "managed_migrate")
+    # never logged
+    for line in code.splitlines():
+        if "print(" in line:
+            assert "_alembic_url(" not in line and "DATABASE_URL" not in line, f"URL must not be logged: {line}"
+
+
 def test_convergence_is_manual_opt_in_not_wired_to_auto_release():
     dev = io.open(os.path.join(REPO, ".github", "workflows", "dev-release.yml"), encoding="utf-8").read()
     assert "prod_legacy_convergence" not in dev
