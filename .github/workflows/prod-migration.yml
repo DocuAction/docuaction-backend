@@ -14,16 +14,25 @@ name: PROD Convergence - Step B (Migration)
 #   * The migration service principal is mapped as a PostgreSQL principal and is
 #     a member of docuaction_owner ONLY.
 # docuaction-db (same resource group) is the STALE, idle server: never target it.
-# The runner has a dynamic egress IP; it prints that IP and then waits (retrying
-# the DB connection) while an operator adds ONE temporary /32 firewall rule
-# (Option-D). The workflow identity is NOT granted firewall-management authority.
+# The runner has a dynamic egress IP. GitHub does NOT expose in-progress job logs
+# through its API (run 34262050210 timed out at this wait on 2026-09-09 for that
+# reason), so the job posts its IP as a comment on the handshake issue - readable
+# during the run - and then waits (retrying the DB connection, up to 20 min)
+# while an operator adds ONE temporary /32 firewall rule (Option-D). The
+# workflow identity is NOT granted firewall-management authority.
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      handshake_issue:
+        description: 'Issue number where this job posts its runner IPv4 for the operator temporary /32'
+        required: true
+        type: string
 
 permissions:
   id-token: write
   contents: read
+  issues: write
 
 jobs:
   migrate:
@@ -49,10 +58,13 @@ jobs:
           # Entra token for the PostgreSQL resource, which is all it needs.
           allow-no-subscriptions: true
       - name: Report runner egress IP (operator adds a temporary /32)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           IP=$(curl -s https://api.ipify.org)
           echo "RUNNER_PUBLIC_IP=$IP"
           echo "::notice title=Add temporary /32::Operator: az postgres flexible-server firewall-rule create -g rg-docuaction-prod -s docuaction-db-geo -n stepB-<ts> --start-ip-address $IP --end-ip-address $IP  (remove immediately after this job)"
+          gh issue comment "${{ inputs.handshake_issue }}" --repo "${{ github.repository }}"             --body "prod-migration run ${{ github.run_id }}: RUNNER_PUBLIC_IP=$IP - waiting up to 20 min for a temporary /32 on docuaction-db-geo (start = end = this address). Remove it when this run finishes."
       - name: Managed Migrate - prove identity, SET ROLE, run the reviewed chain expected -> head
         env:
           PGHOST: docuaction-db-geo.postgres.database.azure.com
@@ -66,8 +78,8 @@ jobs:
           python - <<'PY'
           import os, time, sys, urllib.parse as up, psycopg2
           host=os.environ["PGHOST"]; user=os.environ["PGUSER"]; tok=os.environ["CONV_PGTOKEN"]
-          # Wait for the operator's temporary /32 (retry the connection up to ~12 min).
-          deadline=time.time()+720; conn=None; last=""
+          # Wait for the operator's temporary /32 (retry the connection up to 20 min).
+          deadline=time.time()+1200; conn=None; last=""
           while time.time()<deadline:
               try:
                   conn=psycopg2.connect(host=host,dbname="postgres",user=user,password=tok,sslmode="require",connect_timeout=10)
