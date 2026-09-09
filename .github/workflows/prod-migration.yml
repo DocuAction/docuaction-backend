@@ -69,10 +69,15 @@ jobs:
         env:
           PGHOST: docuaction-db-geo.postgres.database.azure.com
           PGUSER: github-actions-docuaction-backend-prod-migration
-          SECRET_KEY: prodmigrationprodmigrationprodmigrationprodmigration000000
           ALLOWED_HOSTS: '*'
         run: |
           set -euo pipefail
+          # The convergence utility imports the application models (candidate metadata);
+          # app.core.config refuses to import unless SECRET_KEY is >= 64 chars of
+          # high-entropy data. Nothing here signs anything with it, so a throwaway
+          # value generated for this job is correct (run 34305410967 failed in the
+          # read-only gate on the former 58-char static placeholder, before any DDL).
+          export SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(64))')"
           TOKEN=$(az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv)
           export CONV_PGTOKEN="$TOKEN"
           python - <<'PY'
