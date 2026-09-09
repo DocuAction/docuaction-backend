@@ -618,7 +618,7 @@ async def _section_recommendation(db, record):
                      "deliberately not collapsed into one code."),
         },
         "submit_to_qa": {
-            "route": f"/api/tefca/reviews/{record.review_id}/determination",
+            "route": f"/api/tefca/arc/reviews/{record.review_id}/determination",
             "then": ("QA approves, returns or escalates. Only a QA APPROVE "
                      "makes the finding reportable, and the approving QA actor "
                      "must not be the analyst."),
