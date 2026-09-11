@@ -30,7 +30,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.core.learning.framework import PROGRAMS, LearningRegistry, Role
+from app.core.learning.framework import Authority, PROGRAMS, LearningRegistry, Role
 from app.core.security import require_role
 
 logger = logging.getLogger(__name__)
@@ -161,7 +161,90 @@ async def contextual_help(program: str, key: str,
         payload["deep_link_url"] = (
             f"/api/learning/{registry.program}/modules/{topic.module_slug}"
             + (f"/{topic.lesson_slug}" if topic.lesson_slug else ""))
+        payload["learning_center_path"] = registry.learning_center_path(
+            topic.module_slug, topic.lesson_slug)
+        module = registry.module(topic.module_slug)
+        payload["module_title"] = module.title if module else None
     return payload
+
+
+@router.get("/{program}/paths", summary="Role-based learning paths")
+async def paths(program: str, user=Depends(require_role("viewer"))):
+    """Every path, the caller's own first. Module titles are resolved so the
+    client can render a path without a second round trip."""
+    registry = _registry(program)
+    role = _role_of(user)
+    titles = {m.slug: m.title for m in registry.modules}
+    visible = {m.slug for m in registry.modules_for(role)}
+    return {
+        "program": registry.program, "role": role.value,
+        "knowledge_version": registry.to_dict()["knowledge_version"],
+        "paths": [{**p.to_dict(),
+                   "modules": [{"slug": s, "title": titles.get(s),
+                                "visible_to_me": s in visible}
+                               for s in p.module_slugs]}
+                  for p in registry.paths_for(role)],
+    }
+
+
+@router.get("/{program}/paths/{slug}", summary="One learning path")
+async def path(program: str, slug: str, user=Depends(require_role("viewer"))):
+    registry = _registry(program)
+    found = registry.path(slug)
+    if found is None:
+        raise HTTPException(404, f"No learning path {slug!r} in {registry.program}")
+    role = _role_of(user)
+    modules = []
+    for module_slug in found.module_slugs:
+        module = registry.module(module_slug)
+        if module and (Role.ANY in module.audience or role in module.audience):
+            modules.append(module.to_dict())
+        else:
+            modules.append({"slug": module_slug, "title": module.title if module else None,
+                            "restricted": True})
+    return {**found.to_dict(), "program": registry.program, "modules": modules}
+
+
+@router.get("/{program}/traceability", summary="Feature → training traceability")
+async def traceability(program: str, route: Optional[str] = Query(None),
+                       user=Depends(require_role("viewer"))):
+    """The matrix that says which module teaches which screen, and when it was
+    last verified against the shipped version. Stale rows are listed rather
+    than hidden."""
+    registry = _registry(program)
+    rows = registry.features_for_route(route) if route else registry.features
+    titles = {m.slug: m.title for m in registry.modules}
+    return {
+        "program": registry.program,
+        "knowledge_version": registry.to_dict()["knowledge_version"],
+        "rule": ("When a listed feature changes, its module changes in the same "
+                 "pull request and last_verified_version is set to the shipped "
+                 "knowledge version."),
+        "count": len(rows),
+        "features": [{**f.to_dict(), "module_title": titles.get(f.module_slug),
+                      "learning_center_path": registry.learning_center_path(f.module_slug, f.lesson_slug)}
+                     for f in rows],
+        "stale": [f.to_dict() for f in registry.stale_features()],
+    }
+
+
+@router.get("/{program}/library", summary="Research and reference library")
+async def library(program: str, authority: Optional[str] = Query(None),
+                  user=Depends(require_role("viewer"))):
+    """Every reference with its authority classification. Only CONTRACT_SOW
+    items are contractual; the payload says so per item so a client cannot
+    present research as a requirement by accident."""
+    registry = _registry(program)
+    items = registry.library
+    if authority:
+        items = [i for i in items if i.authority.value == authority.strip().upper()]
+    return {
+        "program": registry.program,
+        "authorities": [{"value": a.value, "label": a.label, "contractual": a.is_contractual}
+                        for a in Authority],
+        "count": len(items),
+        "items": [i.to_dict() for i in items],
+    }
 
 
 @router.get("/{program}/glossary", summary="Programme glossary")

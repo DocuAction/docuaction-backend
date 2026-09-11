@@ -80,13 +80,29 @@
 
 @page {
   size: letter;
-  margin: 20mm 18mm 18mm 18mm;
+  margin: 22mm 18mm 20mm 18mm;
+  @top-left {
+    content: string(doc-title);
+    font-family: var(--report-font);
+    font-size: 8pt;
+    color: var(--report-muted);
+  }
+  @top-right {
+    content: string(doc-contract);
+    font-family: var(--report-font);
+    font-size: 8pt;
+    color: var(--report-muted);
+  }
   @bottom-center {
     content: "Page " counter(page) " of " counter(pages);
     font-family: var(--report-font);
     font-size: 8pt;
     color: var(--report-muted);
   }
+}
+@page :first {
+  @top-left { content: none; }
+  @top-right { content: none; }
 }
 
 /* ── Base ─────────────────────────────────────────────────────────────────── */
@@ -371,3 +387,32 @@ figcaption {
   font-size: 9pt;
   color: #1b1b1b;
 }
+
+
+/* ── Contract deliverable: cover and document control ─────────────────────── */
+
+.cover {
+  min-height: 210mm;
+  padding-top: 18mm;
+  border-top: 6px solid var(--report-primary);
+  break-after: page; page-break-after: always;
+}
+.cover-identity { margin-bottom: 26mm; }
+.cover-org { font-size: 12pt; font-weight: 700; letter-spacing: .04em; margin: 0; }
+.cover-logo { max-height: 18mm; width: auto; }
+.cover-gov-mark { max-height: 16mm; width: auto; margin-top: 4pt; }
+.cover-kicker { font-size: 10pt; letter-spacing: .12em; color: var(--report-muted); margin: 0 0 2pt; }
+.cover-task { font-size: 12pt; letter-spacing: .08em; font-weight: 700; margin: 14pt 0 4pt; }
+.cover-title { font-size: 26pt; line-height: 1.15; margin: 0 0 6pt; string-set: doc-title content(); }
+.cover-deliverable { font-size: 13pt; font-weight: 700; color: var(--report-primary); margin: 0 0 18pt; }
+.cover-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 8pt 18pt; margin: 0 0 18pt; max-width: 150mm; }
+.cover-facts div { break-inside: avoid; }
+.cover-facts dt { font-size: 8pt; letter-spacing: .08em; text-transform: uppercase; color: var(--report-muted); margin: 0; }
+.cover-facts dd { margin: 1pt 0 0; font-size: 10.5pt; string-set: none; }
+.cover-facts div:nth-child(2) dd { string-set: doc-contract "Contract " content(); }
+.cover-note { font-size: 8.5pt; color: var(--report-muted); max-width: 150mm; border-top: 1px solid var(--report-border); padding-top: 6pt; }
+.doc-control table { margin-bottom: 14pt; }
+.contents { columns: 1; padding-left: 18pt; }
+.contents li { margin: 0 0 3pt; }
+.contents ol { padding-left: 16pt; }
+.report-header h1 { string-set: doc-title content(); }

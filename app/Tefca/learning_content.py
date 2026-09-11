@@ -80,7 +80,7 @@ _NOT_APPLICABLE_PROHIBITED = [
 # ── modules ─────────────────────────────────────────────────────────────────
 
 M1 = Module(
-    slug="tefca-arc-overview", title="1. TEFCA ARC and DocuAction",
+    slug="tefca-arc-overview", title="TEFCA ARC and DocuAction",
     audience=[Role.ANY],
     objective="Explain what the programme reviews and what the system does not decide.",
     lessons=[Lesson(
@@ -112,7 +112,7 @@ M1 = Module(
         "determination and a QA APPROVE.")])
 
 M2 = Module(
-    slug="evidence-and-sources", title="2. Evidence and Sources",
+    slug="evidence-and-sources", title="Evidence and Sources",
     audience=[Role.ANY],
     objective="Know which source answers which question, and what it cannot answer.",
     lessons=[Lesson(
@@ -170,7 +170,7 @@ M2 = Module(
         "PPEF publishes no street line, so street-level agreement was never assessed.")])
 
 M3 = Module(
-    slug="automated-observations", title="3. Automated Observations",
+    slug="automated-observations", title="Automated Observations",
     audience=[Role.ANY],
     objective="Read the eight observation states precisely.",
     lessons=[Lesson(
@@ -227,7 +227,7 @@ M3 = Module(
         "SOURCE_UNAVAILABLE is a fact about access, never about the entity.")])
 
 M4 = Module(
-    slug="analyst-review", title="4. Analyst Review",
+    slug="analyst-review", title="Analyst Review",
     audience=[Role.ANALYST, Role.QA, Role.PROGRAM_MANAGER],
     objective="Work an exception correctly, and know what you may not conclude.",
     lessons=[Lesson(
@@ -272,7 +272,7 @@ M4 = Module(
         "reportable_at is set only by a QA APPROVE event.")])
 
 M5 = Module(
-    slug="qa-review", title="5. QA Review",
+    slug="qa-review", title="QA Review",
     audience=[Role.QA, Role.PROGRAM_MANAGER],
     objective="Apply the gate that makes a finding reportable.",
     lessons=[Lesson(
@@ -302,7 +302,7 @@ M5 = Module(
         "Reportability requires an APPROVE that still stands.")])
 
 M6 = Module(
-    slug="reports", title="6. Reports and Deliverables",
+    slug="reports", title="Reports and Deliverables",
     audience=[Role.ANY],
     objective="Read a report without over-reading it.",
     lessons=[Lesson(
@@ -346,7 +346,7 @@ M6 = Module(
         "Automated evidence collection is not human review.")])
 
 M7 = Module(
-    slug="auditability", title="7. Auditability and Provenance",
+    slug="auditability", title="Auditability and Provenance",
     audience=[Role.ANY],
     objective="Know how any number is defended six months later.",
     lessons=[Lesson(
@@ -378,7 +378,19 @@ from app.Tefca.learning_methodology import MODULE_6  # noqa: E402
 # Module 6 lives in learning_methodology.py. It is the module where mislabelling
 # has contractual consequences, so it is kept beside the decision register it
 # has to stay in step with rather than beside the other prose.
-MODULES = [M1, M2, M3, M4, M5, M6, M7, MODULE_6]
+from dataclasses import replace as _replace  # noqa: E402
+
+from app.Tefca.learning_path_content import (  # noqa: E402
+    EFFECTIVE, EXTRA_HELP, FEATURES, GUIDES, LIBRARY, NEW_MODULES, PATH_ORDER, PATHS)
+
+# The evidence-vocabulary modules above are reference content; the operational
+# path in learning_path_content completes the 16-step programme. Every module
+# carries the seven-part guide (the content standard) and a version.
+_BASE = [_replace(m, guide=GUIDES[m.slug], version=m.version,
+                  effective_date=m.effective_date or EFFECTIVE)
+         for m in (M1, M2, M3, M4, M5, M6, M7, MODULE_6)]
+_BY_SLUG = {m.slug: m for m in _BASE + NEW_MODULES}
+MODULES = [_BY_SLUG[slug] for slug in PATH_ORDER]
 
 # ── glossary ────────────────────────────────────────────────────────────────
 
@@ -497,11 +509,13 @@ HELP = [
 ]
 
 REGISTRY = LearningRegistry(
-    modules=MODULES, glossary=GLOSSARY, help_topics=HELP,
+    modules=MODULES, glossary=GLOSSARY, help_topics=HELP + EXTRA_HELP,
     navigation=NAVIGATION,
     program="TEFCA_ARC",
     program_title="TEFCA ARC — Audit, Review and Compliance",
-    last_updated="2026-08-24")
+    last_updated=EFFECTIVE,
+    paths=PATHS, features=FEATURES, library=LIBRARY,
+    learning_center_route="/tefca-arc/help")
 
 # Registering makes the content reachable by programme key rather than by
 # importing this module. That is what lets the API serve any programme without

@@ -495,9 +495,14 @@ class SowReportDataService:
             data = await method(review_cycle_id=review_cycle_id,
                                 period_start=period_start, period_end=period_end)
 
-        from app.reports.data.release import CONTRACT_NUMBER
+        from app.reports.branding import current_branding
+
+        branding = current_branding()
+        CONTRACT_NUMBER = branding.contract_number
 
         data.update({
+            # Identity as text (no images in the frozen dataset).
+            "branding": branding.to_dict(),
             "report_type": report_type,
             "deliverable": meta["deliverable"],
             "deliverable_title": meta["title"],

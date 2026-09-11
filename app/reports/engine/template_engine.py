@@ -150,6 +150,16 @@ def render_html(template_name: str, context: Dict[str, Any]) -> str:
     template = env.get_template(template_name)
     full_context = {
         "css": base_css(),
+        # Defaults the base template needs; a report family overrides them.
+        "pdf_author": "Alliance Global Tech Inc.",
+        "pdf_keywords": "DocuAction; TEFCA ARC",
+        "document_status": "Draft — awaiting PM review",
+        "reviewed_by": None,
+        "branding": {"product_name": "DocuAction", "program_name": "",
+                     "prepared_by": "Alliance Global Tech Inc.",
+                     "prepared_for": [], "agt_logo": None,
+                     "government_branding_authorized": False,
+                     "government_logo": None, "contract_number": ""},
         "generated_at": datetime.now(timezone.utc),
         "generated_at_display": datetime.now(timezone.utc).strftime(
             "%d %B %Y at %H:%M UTC"),

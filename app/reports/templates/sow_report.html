@@ -1,34 +1,140 @@
 {#
-  The contract's report families as a delivered document.
+  Contract deliverable — D3.1 / D3.2 / D4.1 / D4.2 / D5.1 / D5.2.
 
-  One template for D3.1, D3.2, D4.1, D4.2, D5.1 and D5.2. The families differ in
-  cadence and in which change sections they carry; they share the thing the
-  contract actually asks for — "a stratified list of Participants and
-  Subparticipants" under the four Government categories — so that list is the
-  body of every one of them, as a LIST, with one row per review record.
+  A federal-contractor report: cover, document control, contents, numbered
+  body. The body of every family is the stratified list of Participants and
+  Subparticipants under the four Government categories — a LIST, one row per
+  review record — because that is what Section C asks for.
 
-  Every category heading is the Government's wording from Section C. B1–B4
-  never appears in the body; the rule that produced a category is shown as a
-  rule code because that is provenance, not a label.
+  Identity: the recipient is named in text. A Government mark appears ONLY when
+  branding.government_branding_authorized is true (see app/reports/branding.py
+  for the HHS policy this follows). The contractor's mark is text unless an AGT
+  logo file was supplied. Nothing here implies Government authorship.
+
+  Every category heading is the Government's wording. B1–B4 never appears as a
+  heading; the rule that produced a category is shown as provenance only.
 #}
 {% extends "base.html" %}
 
 {% block title %}{{ deliverable_title }} {{ snapshot.report_id }} — Contract {{ contract_number }}{% endblock %}
-{% block description %}{{ deliverable }} {{ deliverable_title }} for contract {{ contract_number }}{% endblock %}
-{% block kicker %}TEFCA ARC &middot; {{ task }} &middot; Deliverable {{ deliverable }} &middot; Contract {{ contract_number }}{% endblock %}
+{% block description %}{{ deliverable }} {{ deliverable_title }}, {{ task }}, contract {{ contract_number }}, reporting period {{ reporting_period_start or 'unspecified' }} to {{ reporting_period_end or 'unspecified' }}{% endblock %}
+{% block kicker %}{{ branding.product_name }} &middot; {{ branding.program_name }} &middot; {{ task }} &middot; Deliverable {{ deliverable }}{% endblock %}
 {% block heading %}{{ deliverable_title }}{% endblock %}
+
+{% block cover %}
+<section class="cover" aria-labelledby="cover-heading">
+  <div class="cover-identity">
+    {% if branding.agt_logo %}
+      <img class="cover-logo" src="{{ branding.agt_logo }}" alt="{{ branding.prepared_by }} logo">
+    {% else %}
+      <p class="cover-org">{{ branding.prepared_by }}</p>
+    {% endif %}
+  </div>
+  <p class="cover-kicker">{{ branding.product_name|upper }}</p>
+  <p class="cover-kicker">{{ branding.program_name|upper }}</p>
+  <p class="cover-task">{{ task|upper }}</p>
+  <h1 id="cover-heading" class="cover-title">{{ deliverable_title }}</h1>
+  <p class="cover-deliverable">Deliverable {{ deliverable }}</p>
+  <dl class="cover-facts">
+    <div><dt>Reporting period</dt><dd>
+      {%- if reporting_period_start or reporting_period_end -%}
+        {{ reporting_period_start|date }} &ndash; {{ reporting_period_end|date }}
+      {%- else -%}Not specified{%- endif -%}
+    </dd></div>
+    <div><dt>Contract</dt><dd>{{ contract_number }}</dd></div>
+    <div><dt>Prepared for</dt><dd>
+      {% for line in branding.prepared_for %}{{ line }}{% if not loop.last %}<br>{% endif %}{% endfor %}
+      {% if branding.government_branding_authorized and branding.government_logo %}
+        <br><img class="cover-gov-mark" src="{{ branding.government_logo }}" alt="Authorized U.S. Department of Health and Human Services mark">
+      {% endif %}
+    </dd></div>
+    <div><dt>Prepared by</dt><dd>{{ branding.prepared_by }}</dd></div>
+    <div><dt>Version</dt><dd>{{ snapshot.template_version or '1.0' }}</dd></div>
+    <div><dt>Date</dt><dd>{{ generated_at_display }}</dd></div>
+    <div><dt>Document status</dt><dd>{{ document_status }}</dd></div>
+    <div><dt>Report ID</dt><dd>{{ snapshot.report_id }}</dd></div>
+  </dl>
+  <p class="cover-note">Prepared by {{ branding.prepared_by }} under contract {{ contract_number }}. This is a contractor deliverable; it is not a publication of the U.S. Department of Health and Human Services.</p>
+</section>
+
+<section class="page-break doc-control" aria-labelledby="control-heading">
+  <h2 id="control-heading">Document Control</h2>
+  <table>
+    <caption>Document control record for {{ snapshot.report_id }}</caption>
+    <thead><tr><th scope="col">Item</th><th scope="col">Value</th></tr></thead>
+    <tbody>
+      <tr><th scope="row">Contract number</th><td>{{ contract_number }}</td></tr>
+      <tr><th scope="row">Program</th><td>{{ branding.program_name }}</td></tr>
+      <tr><th scope="row">Task</th><td>{{ task }}</td></tr>
+      <tr><th scope="row">Deliverable</th><td>{{ deliverable }} &mdash; {{ deliverable_title }}</td></tr>
+      <tr><th scope="row">Reporting period</th><td>
+        {%- if reporting_period_start or reporting_period_end -%}
+          {{ reporting_period_start|date }} &ndash; {{ reporting_period_end|date }}
+        {%- else -%}Not specified{%- endif -%}
+      </td></tr>
+      <tr><th scope="row">Report ID</th><td>{{ snapshot.report_id }}</td></tr>
+      <tr><th scope="row">Version</th><td>{{ snapshot.template_version or '1.0' }}</td></tr>
+      <tr><th scope="row">Prepared by</th><td>{{ snapshot.generated_by }} ({{ branding.prepared_by }})</td></tr>
+      <tr><th scope="row">Reviewed by</th><td>{{ reviewed_by or 'Awaiting programme manager review' }}</td></tr>
+      <tr><th scope="row">QA status of listed reviews</th><td>Independent QA approved &mdash; only approved reviews are listed</td></tr>
+      <tr><th scope="row">PM release status</th><td>{{ document_status }}</td></tr>
+      <tr><th scope="row">Generated (UTC)</th><td>{{ snapshot.generation_timestamp }}</td></tr>
+      <tr><th scope="row">Source delivery reference</th><td>{{ snapshot.source_provenance.get('original_filename') or 'Not recorded' }}</td></tr>
+      <tr><th scope="row">Methodology version</th><td>{{ evidence_rule_version or 'Not recorded' }}</td></tr>
+      <tr><th scope="row">Rule set version</th><td>{{ snapshot.b1_b4_rule_version or 'Not recorded' }}</td></tr>
+      <tr><th scope="row">Data classification</th><td>
+        {%- if snapshot.data_classification == 'GOVERNMENT' -%}Government data
+        {%- else -%}DEVELOPMENT / TEST &mdash; not for Government delivery{%- endif -%}
+      </td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="contents-heading">Contents</h2>
+  <ol class="contents">
+    <li>Executive Summary</li>
+    <li>Reporting Period and Scope</li>
+    <li>Review Activity</li>
+    <li>Population and Sampling Context</li>
+    <li>QHIN Stratification Summary</li>
+    <li>Review Results
+      <ol>
+        {% for category in categories %}<li>{{ government_labels[category] }}</li>{% endfor %}
+      </ol>
+    </li>
+    <li>Significant Observations</li>
+    <li>Suggested Methodology / Control Framework Changes</li>
+    <li>Issues, Dependencies and COR Decisions</li>
+    <li>Supporting Traceability</li>
+  </ol>
+</section>
+{% endblock %}
 
 {% block content %}
 
-<section class="scope-box" aria-labelledby="contract-heading">
-  <h2 id="contract-heading">Contract reference</h2>
+<section class="panel page-break" aria-labelledby="s1-heading">
+  <h2 id="s1-heading">1. Executive Summary</h2>
+  <p>
+    This {{ deliverable_title|lower }} covers
+    {%- if reporting_period_start or reporting_period_end %} {{ reporting_period_start|date }} to {{ reporting_period_end|date }}{% else %} all records on record{% endif %}
+    under contract {{ contract_number }}. {{ list_counts.listed_total|number }} Participant/Subparticipant
+    review(s) with a standing independent QA approval are listed under the four contractual discrepancy
+    categories. {{ list_counts.pending_qa|number }} review record(s) remain pending independent QA and are
+    reported separately as work in progress, not as findings.
+  </p>
+  <p class="figure-notes">{{ contract_citation }}</p>
+  <h3>Required content for this deliverable</h3>
+  <ul>
+    {% for item in required_content %}<li>{{ item }}</li>{% endfor %}
+  </ul>
+</section>
+
+<section class="panel" aria-labelledby="s2-heading">
+  <h2 id="s2-heading">2. Reporting Period and Scope</h2>
   <div class="scope-grid">
-    <div class="scope-item"><span class="label">Contract number</span><span class="value">{{ contract_number }}</span></div>
-    <div class="scope-item"><span class="label">Deliverable</span><span class="value">{{ deliverable }} &mdash; {{ deliverable_title }}</span></div>
     <div class="scope-item"><span class="label">Reporting period</span><span class="value">
       {%- if reporting_period_start or reporting_period_end -%}
         {{ reporting_period_start|date }} &ndash; {{ reporting_period_end|date }}
-      {%- else -%}Not specified &mdash; all records on record{%- endif -%}
+      {%- else -%}Not specified{%- endif -%}
     </span></div>
     <div class="scope-item"><span class="label">Review cycle</span><span class="value">{{ snapshot.review_cycle_id or 'All records' }}</span></div>
     <div class="scope-item"><span class="label">Records considered</span><span class="value">{{ stratification.records_considered|number }}</span></div>
@@ -36,150 +142,24 @@
     <div class="scope-item"><span class="label">Pending QA</span><span class="value">{{ list_counts.pending_qa|number }}</span></div>
     <div class="scope-item"><span class="label">Evidence rule version</span><span class="value">{{ evidence_rule_version or 'Not recorded' }}</span></div>
   </div>
-  <p class="figure-notes">{{ contract_citation }}</p>
-</section>
-
-<section class="panel" aria-labelledby="required-heading">
-  <h3 id="required-heading">Required content for this deliverable</h3>
-  <ul>
-    {% for item in required_content %}
-      <li>{{ item }}</li>
-    {% endfor %}
-  </ul>
-</section>
-
-<section class="panel" aria-labelledby="summary-heading">
-  <h3 id="summary-heading">Stratification summary</h3>
-  <table>
-    <caption>Participants and Subparticipants by Government discrepancy category</caption>
-    <thead>
-      <tr>
-        <th scope="col">No.</th>
-        <th scope="col">Category</th>
-        <th scope="col">Listed in this report</th>
-        <th scope="col">Pending QA (not findings)</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for category in categories %}
-        <tr>
-          <th scope="row">{{ category_numbers[category] }}</th>
-          <td>{{ government_labels[category] }}</td>
-          <td>{{ list_counts[category]|number }}</td>
-          <td>{{ stratification.pending_qa[category]|number }}</td>
-        </tr>
-      {% endfor %}
-    </tbody>
-  </table>
   <p class="figure-notes">{{ stratification.gate }}</p>
 </section>
 
-{% for category in categories %}
-<section class="panel" aria-labelledby="cat-{{ loop.index }}-heading">
-  <h3 id="cat-{{ loop.index }}-heading">{{ category_numbers[category] }}) {{ government_labels[category] }}</h3>
-  {% set rows = entity_lists[category] %}
-  {% if rows %}
-    <table>
-      <caption>{{ government_labels[category] }} &mdash; {{ rows|length }} Participant(s) / Subparticipant(s)</caption>
-      <thead>
-        <tr>
-          {% for column in entity_columns %}
-            <th scope="col">{{ column.label }}</th>
-          {% endfor %}
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in rows %}
-          <tr>
-            {% for column in entity_columns %}
-              {% if loop.first %}
-                <th scope="row">{{ row[column.key] or '—' }}</th>
-              {% else %}
-                <td>{{ row[column.key] or '—' }}</td>
-              {% endif %}
-            {% endfor %}
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  {% else %}
-    <p class="insufficient-data">No Participant or Subparticipant is listed under this category for the reporting period.</p>
-  {% endif %}
-</section>
-{% endfor %}
-
-<section class="panel" aria-labelledby="pending-heading">
-  <h3 id="pending-heading">Reviews pending independent QA (not findings)</h3>
-  {% if pending_qa %}
-    <table>
-      <caption>Review records without a standing QA approval &mdash; {{ pending_qa|length }} record(s)</caption>
-      <thead>
-        <tr>
-          <th scope="col">Case</th>
-          <th scope="col">Participant / Subparticipant</th>
-          <th scope="col">QHIN</th>
-          <th scope="col">System recommendation</th>
-          <th scope="col">Why pending</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in pending_qa %}
-          <tr>
-            <th scope="row">{{ row.review_id or '—' }}</th>
-            <td>{{ row.entity_name }}</td>
-            <td>{{ row.qhin }}</td>
-            <td>{{ row.category_label }} ({{ row.rule }})</td>
-            <td>{{ row.pending_reason }}</td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  {% else %}
-    <p class="insufficient-data">No review record is pending QA.</p>
-  {% endif %}
-  <p class="figure-notes">{{ list_note }}</p>
-</section>
-
-<section class="panel" aria-labelledby="changes-heading">
-  <h3 id="changes-heading">Changes to the methodology and control framework</h3>
-  <h4>Suggested changes</h4>
-  {% if methodology_changes.suggested %}
-    <ul>{% for item in methodology_changes.suggested %}<li>{{ item }}</li>{% endfor %}</ul>
-  {% else %}
-    <p>No suggested change was recorded for this reporting period.</p>
-  {% endif %}
-  {% if methodology_changes.includes_implemented %}
-    <h4>Implemented changes</h4>
-    {% if methodology_changes.implemented %}
-      <ul>{% for item in methodology_changes.implemented %}<li>{{ item }}</li>{% endfor %}</ul>
-    {% else %}
-      <p>No implemented change was recorded for this reporting period.</p>
-    {% endif %}
-  {% endif %}
-  <p class="figure-notes">{{ methodology_changes.basis }}</p>
-</section>
-
-<section class="panel" aria-labelledby="limits-heading">
-  <h3 id="limits-heading">Source limitations and open methodology items</h3>
+<section class="panel" aria-labelledby="s3-heading">
+  <h2 id="s3-heading">3. Review Activity</h2>
   <table>
-    <caption>Sources that could not answer during evidence collection</caption>
-    <thead><tr><th scope="col">Source</th><th scope="col">Observations affected</th></tr></thead>
+    <caption>Review activity in the reporting period</caption>
+    <thead><tr><th scope="col">Measure</th><th scope="col">Value</th></tr></thead>
     <tbody>
-      {% if source_limitations.sources_unavailable %}
-        {% for source, count in source_limitations.sources_unavailable.items() %}
-          <tr><th scope="row">{{ source }}</th><td>{{ count|number }}</td></tr>
-        {% endfor %}
-      {% else %}
-        <tr><th scope="row">None recorded</th><td>0</td></tr>
-      {% endif %}
+      <tr><th scope="row">Reviews listed (independent QA approved)</th><td>{{ list_counts.listed_total|number }}</td></tr>
+      <tr><th scope="row">Reviews pending independent QA</th><td>{{ list_counts.pending_qa|number }}</td></tr>
+      <tr><th scope="row">Records considered</th><td>{{ stratification.records_considered|number }}</td></tr>
     </tbody>
   </table>
-  <p class="figure-notes">{{ source_limitations.note }}</p>
-  <p class="figure-notes">{{ methodology_pending.note }}</p>
 </section>
 
-<section class="panel" aria-labelledby="sampling-heading">
-  <h3 id="sampling-heading">Sampling</h3>
+<section class="panel" aria-labelledby="s4-heading">
+  <h2 id="s4-heading">4. Population and Sampling Context</h2>
   <p>Confidence: {{ sampling.confidence_floor }}. Stratification: {{ sampling.stratification_requirement }}.</p>
   <p class="figure-notes">{{ sampling.parameters_status }}</p>
   {% if sampling.plans %}
@@ -211,6 +191,136 @@
   {% else %}
     <p class="insufficient-data">No official sampling plan has been drawn.</p>
   {% endif %}
+</section>
+
+<section class="panel" aria-labelledby="s5-heading">
+  <h2 id="s5-heading">5. QHIN Stratification Summary</h2>
+  <table>
+    <caption>Participants and Subparticipants by Government discrepancy category</caption>
+    <thead>
+      <tr>
+        <th scope="col">No.</th>
+        <th scope="col">Category</th>
+        <th scope="col">Listed in this report</th>
+        <th scope="col">Pending QA (not findings)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for category in categories %}
+        <tr>
+          <th scope="row">{{ category_numbers[category] }}</th>
+          <td>{{ government_labels[category] }}</td>
+          <td>{{ list_counts[category]|number }}</td>
+          <td>{{ stratification.pending_qa[category]|number }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel" aria-labelledby="s6-heading">
+  <h2 id="s6-heading">6. Review Results</h2>
+  <p>Each category lists the Participants and Subparticipants with a standing independent QA approval, with the QHIN named by the delivered relationship. A list, not a count.</p>
+  {% for category in categories %}
+    <h3 id="s6-{{ loop.index }}-heading">6.{{ loop.index }} {{ government_labels[category] }}</h3>
+    {% set rows = entity_lists[category] %}
+    {% if rows %}
+      <table>
+        <caption>{{ government_labels[category] }} &mdash; {{ rows|length }} Participant(s) / Subparticipant(s)</caption>
+        <thead>
+          <tr>
+            {% for column in entity_columns %}<th scope="col">{{ column.label }}</th>{% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+            <tr>
+              {% for column in entity_columns %}
+                {% if loop.first %}<th scope="row">{{ row[column.key] or '—' }}</th>
+                {% else %}<td>{{ row[column.key] or '—' }}</td>{% endif %}
+              {% endfor %}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="insufficient-data">No Participant or Subparticipant is listed under this category for the reporting period.</p>
+    {% endif %}
+  {% endfor %}
+</section>
+
+<section class="panel" aria-labelledby="s7-heading">
+  <h2 id="s7-heading">7. Significant Observations</h2>
+  <table>
+    <caption>Sources that could not answer during evidence collection</caption>
+    <thead><tr><th scope="col">Source</th><th scope="col">Observations affected</th></tr></thead>
+    <tbody>
+      {% if source_limitations.sources_unavailable %}
+        {% for source, count in source_limitations.sources_unavailable.items() %}
+          <tr><th scope="row">{{ source }}</th><td>{{ count|number }}</td></tr>
+        {% endfor %}
+      {% else %}
+        <tr><th scope="row">None recorded</th><td>0</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+  <p class="figure-notes">{{ source_limitations.note }}</p>
+</section>
+
+<section class="panel" aria-labelledby="s8-heading">
+  <h2 id="s8-heading">8. Suggested Methodology / Control Framework Changes</h2>
+  {% if methodology_changes.suggested %}
+    <ul>{% for item in methodology_changes.suggested %}<li>{{ item }}</li>{% endfor %}</ul>
+  {% else %}
+    <p>No suggested change was recorded for this reporting period.</p>
+  {% endif %}
+  {% if methodology_changes.includes_implemented %}
+    <h3>Implemented changes</h3>
+    {% if methodology_changes.implemented %}
+      <ul>{% for item in methodology_changes.implemented %}<li>{{ item }}</li>{% endfor %}</ul>
+    {% else %}
+      <p>No implemented change was recorded for this reporting period.</p>
+    {% endif %}
+  {% endif %}
+  <p class="figure-notes">{{ methodology_changes.basis }}</p>
+</section>
+
+<section class="panel" aria-labelledby="s9-heading">
+  <h2 id="s9-heading">9. Issues, Dependencies and COR Decisions</h2>
+  <p class="figure-notes">{{ methodology_pending.note }}</p>
+  {% if pending_qa %}
+    <table>
+      <caption>Reviews pending independent QA &mdash; {{ pending_qa|length }} record(s); not findings</caption>
+      <thead>
+        <tr>
+          <th scope="col">Case</th>
+          <th scope="col">Participant / Subparticipant</th>
+          <th scope="col">QHIN</th>
+          <th scope="col">System recommendation</th>
+          <th scope="col">Why pending</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in pending_qa %}
+          <tr>
+            <th scope="row">{{ row.review_id or '—' }}</th>
+            <td>{{ row.entity_name }}</td>
+            <td>{{ row.qhin }}</td>
+            <td>{{ row.category_label }} ({{ row.rule }})</td>
+            <td>{{ row.pending_reason }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="insufficient-data">No review record is pending QA.</p>
+  {% endif %}
+  <p class="figure-notes">{{ list_note }}</p>
+</section>
+
+<section class="panel" aria-labelledby="s10-heading">
+  <h2 id="s10-heading">10. Supporting Traceability</h2>
+  <p>The provenance record in the appendix identifies the report, its generation time and author, the evidence rule version, the source delivery hash and the data payload hash. Every listed review traces to its case identifier, and each case's determination and independent QA are recorded as append-only decision events in DocuAction.</p>
 </section>
 
 {% endblock %}
