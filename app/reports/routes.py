@@ -350,11 +350,8 @@ async def get_package(
     """ZIP of the stored HTML, the CSV, the PDF where available, a README and a
     manifest with SHA-256 of every member. Assembled from the STORED report;
     nothing is regenerated and nothing is transmitted."""
-    from app.reports.charts import build_all_charts
     from app.reports.data.release import build_package, current_release
-    from app.reports.engine.csv_engine import report_to_csv, sow_report_to_csv
     from app.reports.engine.pdf_engine import pdf_available, render_pdf, unavailable_reason
-    from app.reports.generator import SOW_TYPES
 
     row = await _stored(db, report_id)
     data = row.report_data or {}
@@ -363,18 +360,7 @@ async def get_package(
     if not row.report_html:
         raise HTTPException(404, f"Report {report_id} has no stored HTML.")
 
-    if row.report_type in SOW_TYPES:
-        csv_text = sow_report_to_csv(dataset, report_id, snapshot.get("generation_timestamp", ""))
-    else:
-        try:
-            dataset["chart_list"] = build_all_charts(
-                dataset.get("buckets") or {}, dataset.get("coverage") or {},
-                dataset.get("dimensions") or {}, dataset.get("entity_status") or {},
-                dataset.get("qhins") or {})
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("package: charts not rebuilt for %s: %s", report_id, exc)
-            dataset["chart_list"] = []
-        csv_text = report_to_csv(dataset, report_id, snapshot.get("generation_timestamp", ""))
+    csv_text = csv_for_stored_report(row)
 
     pdf_bytes = None
     pdf_reason = None
@@ -434,24 +420,23 @@ async def get_report_pdf(
     return _pdf_response(row.report_html, report_id)
 
 
-@router.get("/{report_id}/csv", summary="Download a report's figures as CSV")
-async def get_report_csv(
-    report_id: str,
-    db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("viewer")),
-):
-    """Regenerated from the STORED dataset, not from a fresh query.
+def csv_for_stored_report(row) -> str:
+    """The CSV of one STORED report, regenerated from its stored dataset.
 
-    The numbers therefore match the stored report exactly, including when the
-    live data has since moved on.
+    SOW deliverables get the stratified Participant/Subparticipant list; the
+    technical reports get their figure data. One helper, used by the standalone
+    CSV download and by the package, so the two can never disagree about what
+    the CSV of a report is.
     """
-    from app.reports.engine.csv_engine import report_to_csv, to_bytes
+    from app.reports.engine.csv_engine import report_to_csv, sow_report_to_csv
+    from app.reports.generator import SOW_TYPES
 
-    row = await _stored(db, report_id)
     data = row.report_data or {}
     dataset = dict(data.get("dataset") or {})
-    if not dataset:
-        raise HTTPException(404, f"Report {report_id} has no stored dataset.")
+    snapshot = data.get("snapshot") or {}
+    generated_at = snapshot.get("generation_timestamp", "")
+    if row.report_type in SOW_TYPES:
+        return sow_report_to_csv(dataset, row.report_id, generated_at)
 
     # Charts were excluded from the stored payload (they are presentation, not
     # data), so rebuild them from the stored numbers for the figure sections.
@@ -463,14 +448,30 @@ async def get_report_csv(
             dataset.get("dimensions") or {}, dataset.get("entity_status") or {},
             dataset.get("qhins") or {})
     except Exception as exc:  # noqa: BLE001
-        logger.warning("csv export: charts not rebuilt for %s: %s", report_id, exc)
+        logger.warning("csv export: charts not rebuilt for %s: %s", row.report_id, exc)
         dataset["chart_list"] = []
+    return report_to_csv(dataset, row.report_id, generated_at)
 
-    snapshot = data.get("snapshot") or {}
-    csv_text = report_to_csv(dataset, report_id,
-                             snapshot.get("generation_timestamp", ""))
+
+@router.get("/{report_id}/csv", summary="Download a report's data as CSV")
+async def get_report_csv(
+    report_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("viewer")),
+):
+    """Regenerated from the STORED dataset, not from a fresh query.
+
+    The numbers therefore match the stored report exactly, including when the
+    live data has since moved on. For a SOW deliverable this is the stratified
+    entity list; for a technical report it is the figure data.
+    """
+    from app.reports.engine.csv_engine import to_bytes
+
+    row = await _stored(db, report_id)
+    if not (row.report_data or {}).get("dataset"):
+        raise HTTPException(404, f"Report {report_id} has no stored dataset.")
     return Response(
-        content=to_bytes(csv_text), media_type="text/csv",
+        content=to_bytes(csv_for_stored_report(row)), media_type="text/csv",
         headers=download_headers(safe_filename(report_id, "csv")))
 
 
