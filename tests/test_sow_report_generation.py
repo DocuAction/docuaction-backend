@@ -276,3 +276,36 @@ class TestReleaseControl:
         assert ("/api/reports/{report_id}/release", ("GET",)) in paths
         assert ("/api/reports/{report_id}/release", ("POST",)) in paths
         assert ("/api/reports/{report_id}/package", ("GET",)) in paths
+
+
+class TestStoredCsv:
+    """The register's CSV of a SOW report is the entity list, not figure data."""
+
+    class _Row:
+        def __init__(self, report_type, dataset):
+            self.report_id = "DA-ARC-2026-777"
+            self.report_type = report_type
+            self.report_data = {"dataset": dataset,
+                                "snapshot": {"generation_timestamp": "2026-09-11T00:00:00+00:00"}}
+
+    def test_sow_report_csv_is_the_stratified_list(self):
+        from app.reports.routes import csv_for_stored_report
+
+        dataset = {
+            "deliverable": "D3.1", "deliverable_title": "Task 3 Weekly Progress Report",
+            "contract_number": "7571MN26F80064", "service_version": "1.0.0",
+            "categories": ["no_discrepancy", "minor_administrative", "inexplicable", "non_compliant"],
+            "category_numbers": {"inexplicable": 3},
+            "entity_columns": [{"key": "review_id", "label": "Case"}, {"key": "entity_name", "label": "Entity"}],
+            "entity_lists": {"inexplicable": [{"review_id": "REV-1", "entity_name": "SYNTH"}]},
+            "pending_qa": [], "methodology_changes": {"suggested": ["s"], "includes_implemented": False},
+        }
+        csv_text = csv_for_stored_report(self._Row("retrospective_weekly", dataset))
+        assert "# Contract number: 7571MN26F80064" in csv_text
+        assert any(line.startswith("3,REV-1,SYNTH") for line in csv_text.splitlines())
+
+    def test_technical_report_csv_still_uses_the_figure_path(self):
+        from app.reports.routes import csv_for_stored_report
+
+        csv_text = csv_for_stored_report(self._Row("verification", {"scope": {}, "service_version": "1.0.0"}))
+        assert "Scope at a Glance" in csv_text
