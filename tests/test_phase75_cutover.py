@@ -152,13 +152,20 @@ class TestFrontendCutover:
     def test_generation_goes_through_the_canonical_endpoint(self):
         assert "/api/reports/generate" in self._source()
 
-    def test_it_does_not_offer_a_format_the_canonical_path_cannot_serve(self):
-        """DOCX is served only by the deprecated path and is not a contract
-        requirement. A download button that 404s is worse than no button."""
+    def test_it_offers_only_formats_the_canonical_path_serves(self):
+        """A download button that 404s is worse than no button. Every format
+        the page offers must be a route on the canonical reports router —
+        DOCX included, since the editable copy is now served there."""
+        from app.reports.routes import router
+
+        served = {r.path.rsplit("/", 1)[-1] for r in router.routes
+                  if r.path.startswith("/api/reports/{report_id}/")}
         source = self._source()
         code = "\n".join(line for line in source.splitlines()
                          if not line.lstrip().startswith(("*", "/*", "//")))
-        assert "'docx'" not in code
+        offered = set(re.findall(r"'(docx|pdf|html|csv|xlsx)'", code)) - {"xlsx"}
+        assert offered, "the page offers no download format"
+        assert offered <= served, f"offered {offered - served} but the router does not serve it"
 
     def test_the_development_banner_is_rendered(self):
         source = self._source()

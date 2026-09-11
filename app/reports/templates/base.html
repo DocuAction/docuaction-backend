@@ -20,6 +20,11 @@
   <title>{% block title %}DocuAction TEFCA ARC Report{% endblock %}</title>
   <meta name="description" content="{% block description %}TEFCA ARC verification report{% endblock %}">
   <meta name="generator" content="DocuAction Report Engine {{ template_version }}">
+  {# PDF metadata: WeasyPrint writes author/keywords/dates from these. #}
+  <meta name="author" content="{{ pdf_author }}">
+  <meta name="keywords" content="{{ pdf_keywords }}">
+  <meta name="dcterms.created" content="{{ snapshot.generation_timestamp }}">
+  <meta name="dcterms.modified" content="{{ snapshot.generation_timestamp }}">
   <style>{{ css }}</style>
   {#
     The banner in <body> covers page one. A multi-page PDF needs the notice on
@@ -126,6 +131,8 @@
     </div>
   </section>
 {% endmacro %}
+
+{% block cover %}{% endblock %}
 
 <header class="report-header">
   <p class="report-kicker">{% block kicker %}DocuAction TEFCA ARC{% endblock %}</p>

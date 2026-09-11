@@ -116,9 +116,9 @@ class TestNavigationAndModules:
             assert item in NAVIGATION
 
     def test_every_training_module_exists(self):
-        # 8 since Phase 8 added discrepancies-and-methodology, the
-        # module where mislabelling has contractual consequences.
-        assert len(MODULES) == 8
+        # 16: the full TEFCA ARC learning path (product completion sprint,
+        # 2026-09-11) — overview through security and data handling.
+        assert len(MODULES) == 16
 
     def test_every_module_has_objective_lesson_and_check(self):
         for m in MODULES:

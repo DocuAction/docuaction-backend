@@ -340,7 +340,7 @@ L6_2 = Lesson(
 
 MODULE_6 = Module(
     slug="discrepancies-and-methodology",
-    title="6. Discrepancy Categories and Methodology",
+    title="Discrepancy Categories and Methodology",
     audience=[Role.ANY],
     objective=("Use the contractual categories correctly, and know which "
                "questions the system is not allowed to answer."),

@@ -98,7 +98,9 @@ def render_pdf(html: str, *, title: Optional[str] = None,
 
     document = HTML(string=html)
     try:
-        return document.write_pdf(pdf_variant=variant)
+        # pdf_tags: the structure tree assistive technology reads. PDF/UA
+        # implies it, but stating it keeps the intent visible.
+        return document.write_pdf(pdf_variant=variant, pdf_tags=True)
     except (TypeError, ValueError) as exc:
         # An older WeasyPrint may not know this variant name. Falling back to an
         # untagged PDF is acceptable ONLY because it is reported loudly — an

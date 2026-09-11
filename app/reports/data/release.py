@@ -122,20 +122,26 @@ def _sha256(data: bytes) -> str:
 def build_package(*, report_id: str, html: str, csv_text: str,
                   pdf_bytes: Optional[bytes], snapshot: Dict[str, Any],
                   release: Dict[str, Any], deliverable: Dict[str, Any],
-                  pdf_unavailable_reason: Optional[str] = None) -> Dict[str, Any]:
+                  pdf_unavailable_reason: Optional[str] = None,
+                  docx_bytes: Optional[bytes] = None,
+                  stem: Optional[str] = None) -> Dict[str, Any]:
     """Assemble the email-ready ZIP. Returns {"bytes", "manifest", "filename"}.
 
     Every member is hashed and the hashes are written into README.txt and
     manifest.json, so the person who receives the package can verify it without
-    access to DocuAction.
+    access to DocuAction. `stem` is the traceable file stem
+    (contract_task_deliverable_kind_period_reportid); members and the archive
+    share it so a detached file still says what it is.
     """
     classification = snapshot.get("data_classification") or "DEVELOPMENT_TEST"
-    members: List[Tuple[str, bytes]] = [
-        (f"{report_id}.html", html.encode("utf-8")),
-        (f"{report_id}.csv", csv_text.encode("utf-8-sig")),
-    ]
+    stem = stem or report_id
+    members: List[Tuple[str, bytes]] = []
+    if docx_bytes:
+        members.append((f"{stem}.docx", docx_bytes))
     if pdf_bytes:
-        members.append((f"{report_id}.pdf", pdf_bytes))
+        members.append((f"{stem}.pdf", pdf_bytes))
+    members.append((f"{stem}.html", html.encode("utf-8")))
+    members.append((f"{stem}.csv", csv_text.encode("utf-8-sig")))
 
     hashes = {name: _sha256(data) for name, data in members}
 
@@ -167,9 +173,10 @@ def build_package(*, report_id: str, html: str, csv_text: str,
         + "".join(f"  {name}  {digest}\n" for name, digest in hashes.items())
         + ("  (PDF not included: "
            f"{pdf_unavailable_reason})\n" if not pdf_bytes and pdf_unavailable_reason else "")
-        + "\nThe HTML file is the editable electronic copy; the CSV is the "
-          "stratified Participant/Subparticipant list; the PDF, where present, "
-          "is rendered from the same stored HTML.\n"
+        + "\nThe DOCX, where present, is the editable electronic copy (Section E); "
+          "the PDF is the customer-ready rendering; the HTML is the archive copy; "
+          "the CSV is the stratified Participant/Subparticipant list. All are "
+          "produced from the same stored report record.\n"
           "This package was assembled by DocuAction for the programme manager. "
           "It has not been transmitted to anyone; delivery to the COR is a "
           "human action and remains under PM control.\n"
@@ -195,4 +202,4 @@ def build_package(*, report_id: str, html: str, csv_text: str,
         for name, data in members:
             archive.writestr(name, data)
     return {"bytes": buffer.getvalue(), "manifest": manifest,
-            "filename": f"{report_id}-package.zip"}
+            "filename": f"{stem}.zip"}

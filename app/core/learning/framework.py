@@ -17,7 +17,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 #: Bump when content changes materially, so a screenshot can be dated.
-KNOWLEDGE_VERSION = "1.0.0"
+KNOWLEDGE_VERSION = "1.1.0"
 
 
 class Role(str, Enum):
@@ -182,6 +182,53 @@ class Lesson:
 
 
 @dataclass(frozen=True)
+class ModuleGuide:
+    """The fixed seven-part content standard every module answers.
+
+    The order is the order an operator needs it: what the thing is, why it
+    matters to the contract, what the software already did, what the person
+    must do, how, what not to do, and what happens after. A module without a
+    guide is a reference, not training.
+    """
+
+    what_is_this: str
+    why_it_matters: str
+    what_automation_does: str
+    what_human_does: str
+    steps: List[str]
+    what_not_to_do: List[str]
+    what_happens_next: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"what_is_this": self.what_is_this,
+                "why_it_matters": self.why_it_matters,
+                "what_automation_does": self.what_automation_does,
+                "what_human_does": self.what_human_does,
+                "steps": list(self.steps),
+                "what_not_to_do": list(self.what_not_to_do),
+                "what_happens_next": self.what_happens_next}
+
+
+@dataclass(frozen=True)
+class ModuleRevision:
+    """One entry in a module's version history. History is preserved, not
+    overwritten: a superseded version stays listed with its effective date so
+    a reader can tell which version they were trained on."""
+
+    version: str
+    effective_date: str
+    summary: str
+    status: str = "superseded"  # superseded | current | draft
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"version": self.version, "effective_date": self.effective_date,
+                "summary": self.summary, "status": self.status}
+
+
+MODULE_STATUSES = ("current", "draft", "superseded")
+
+
+@dataclass(frozen=True)
 class Module:
     slug: str
     title: str
@@ -189,6 +236,20 @@ class Module:
     objective: str
     lessons: List[Lesson] = field(default_factory=list)
     checks: List[KnowledgeCheck] = field(default_factory=list)
+    #: Content versioning. `version` is this text; `history` lists earlier
+    #: versions and is never pruned.
+    version: str = "1.0.0"
+    effective_date: Optional[str] = None
+    status: str = "current"
+    history: List[ModuleRevision] = field(default_factory=list)
+    #: The seven-part content standard. Optional in the type so a programme
+    #: can register reference-only modules; the TEFCA content test requires it.
+    guide: Optional[ModuleGuide] = None
+
+    def __post_init__(self) -> None:
+        if self.status not in MODULE_STATUSES:
+            raise ValueError(f"module {self.slug!r}: status must be one of "
+                             f"{MODULE_STATUSES}, not {self.status!r}")
 
     @property
     def vocabulary(self) -> List[str]:
@@ -206,7 +267,119 @@ class Module:
                 "lessons": [l.to_dict() for l in self.lessons],
                 "checks": [c.to_dict(include_answer=include_answers)
                            for c in self.checks],
+                "version": self.version,
+                "effective_date": self.effective_date,
+                "status": self.status,
+                "history": [h.to_dict() for h in self.history],
+                "guide": self.guide.to_dict() if self.guide else None,
                 "knowledge_version": KNOWLEDGE_VERSION}
+
+
+@dataclass(frozen=True)
+class LearningPath:
+    """An ordered route through modules for one role. The modules are shared;
+    the order and the emphasis are the role's."""
+
+    slug: str
+    title: str
+    role: Role
+    description: str
+    module_slugs: List[str]
+    #: Read-only audiences (a COR or viewer) get a path too — one that
+    #: explains what they are looking at without teaching them to operate it.
+    read_only: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"slug": self.slug, "title": self.title, "role": self.role.value,
+                "description": self.description,
+                "module_slugs": list(self.module_slugs),
+                "read_only": self.read_only}
+
+
+class Authority(str, Enum):
+    """Where a library item's authority comes from.
+
+    Only CONTRACT_SOW binds the programme contractually. Everything else is
+    context — accepted methodology, RCE governing material, guidance, source
+    documentation, reporting standards, training, or industry research — and
+    the UI is expected to say so, because a research paper shelved next to the
+    SOW starts to look like a requirement.
+    """
+
+    CONTRACT_SOW = "CONTRACT_SOW"
+    ACCEPTED_METHODOLOGY = "ACCEPTED_METHODOLOGY"
+    RCE_GOVERNING_MATERIAL = "RCE_GOVERNING_MATERIAL"
+    PROGRAM_GUIDANCE = "PROGRAM_GUIDANCE"
+    EVIDENCE_SOURCE_GUIDE = "EVIDENCE_SOURCE_GUIDE"
+    REPORTING_GUIDE = "REPORTING_GUIDE"
+    TRAINING = "TRAINING"
+    RESEARCH_INDUSTRY = "RESEARCH_INDUSTRY"
+
+    @property
+    def is_contractual(self) -> bool:
+        return self is Authority.CONTRACT_SOW
+
+    @property
+    def label(self) -> str:
+        return {
+            Authority.CONTRACT_SOW: "Contract / SOW",
+            Authority.ACCEPTED_METHODOLOGY: "Accepted methodology",
+            Authority.RCE_GOVERNING_MATERIAL: "RCE governing material",
+            Authority.PROGRAM_GUIDANCE: "Program guidance",
+            Authority.EVIDENCE_SOURCE_GUIDE: "Evidence source guide",
+            Authority.REPORTING_GUIDE: "Reporting guide",
+            Authority.TRAINING: "Training",
+            Authority.RESEARCH_INDUSTRY: "Research / industry",
+        }[self]
+
+
+@dataclass(frozen=True)
+class LibraryItem:
+    """One reference in the research/reference library."""
+
+    title: str
+    authority: Authority
+    summary: str
+    #: A URL, a document identifier, or a location on file.
+    reference: str
+    module_slugs: List[str] = field(default_factory=list)
+    #: Anything the reader must know before relying on it — "proposed, not
+    #: yet accepted", "external, not contractual".
+    note: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"title": self.title, "authority": self.authority.value,
+                "authority_label": self.authority.label,
+                "contractual": self.authority.is_contractual,
+                "summary": self.summary, "reference": self.reference,
+                "module_slugs": list(self.module_slugs), "note": self.note}
+
+
+@dataclass(frozen=True)
+class FeatureLink:
+    """One row of the feature-to-training traceability matrix.
+
+    When a feature changes, this row is what tells the team which module has
+    to change in the same pull request — and `last_verified_version` is what
+    tells a reader whether anyone did.
+    """
+
+    feature: str
+    screen: str
+    route: str
+    roles: List[Role]
+    module_slug: str
+    last_verified_version: str
+    last_updated: str
+    owner: str
+    lesson_slug: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"feature": self.feature, "screen": self.screen, "route": self.route,
+                "roles": [r.value for r in self.roles],
+                "module_slug": self.module_slug, "lesson_slug": self.lesson_slug,
+                "last_verified_version": self.last_verified_version,
+                "last_updated": self.last_updated, "owner": self.owner}
 
 
 @dataclass(frozen=True)
@@ -305,10 +478,45 @@ class LearningRegistry:
     def __init__(self, *, modules: List[Module], glossary: Glossary,
                  help_topics: List[ContextualHelp], navigation: List[str],
                  program: str = "DEFAULT", program_title: str = "",
-                 last_updated: Optional[str] = None):
+                 last_updated: Optional[str] = None,
+                 paths: Optional[List[LearningPath]] = None,
+                 features: Optional[List[FeatureLink]] = None,
+                 library: Optional[List[LibraryItem]] = None,
+                 learning_center_route: str = "/learning"):
+        #: Where the client renders this programme's Learning Center. The
+        #: programme owns its routes; the core only formats the deep link.
+        self.learning_center_route = learning_center_route
         slugs = [m.slug for m in modules]
         if len(slugs) != len(set(slugs)):
             raise ValueError("duplicate module slug")
+        known_slugs = set(slugs)
+
+        # A path, a feature row or a library item that points at a module that
+        # does not exist is the LMS equivalent of a dead link.
+        self.paths = list(paths or [])
+        if len({p.slug for p in self.paths}) != len(self.paths):
+            raise ValueError("duplicate learning path slug")
+        for path in self.paths:
+            missing = [s for s in path.module_slugs if s not in known_slugs]
+            if missing:
+                raise ValueError(f"learning path {path.slug!r} names unknown "
+                                 f"modules {missing}")
+        self.features = list(features or [])
+        for link in self.features:
+            if link.module_slug not in known_slugs:
+                raise ValueError(f"feature {link.feature!r} maps to unknown "
+                                 f"module {link.module_slug!r}")
+            if link.lesson_slug:
+                module = next(m for m in modules if m.slug == link.module_slug)
+                if link.lesson_slug not in {l.slug for l in module.lessons}:
+                    raise ValueError(f"feature {link.feature!r} maps to unknown "
+                                     f"lesson {link.lesson_slug!r}")
+        self.library = list(library or [])
+        for item in self.library:
+            missing = [s for s in item.module_slugs if s not in known_slugs]
+            if missing:
+                raise ValueError(f"library item {item.title!r} names unknown "
+                                 f"modules {missing}")
         keys = [h.key for h in help_topics]
         if len(keys) != len(set(keys)):
             raise ValueError("duplicate contextual-help key")
@@ -344,6 +552,36 @@ class LearningRegistry:
     def modules_for(self, role: Role) -> List[Module]:
         return [m for m in self.modules
                 if Role.ANY in m.audience or role in m.audience]
+
+    def path(self, slug: str) -> Optional[LearningPath]:
+        return next((p for p in self.paths if p.slug == slug), None)
+
+    def paths_for(self, role: Role) -> List[LearningPath]:
+        """Every path, with the caller's own first. A QA lead benefits from
+        seeing the analyst path; nothing in a path is role-secret, because the
+        modules it lists are still filtered by audience when opened."""
+        mine = [p for p in self.paths if p.role == role]
+        others = [p for p in self.paths if p.role != role]
+        return mine + others
+
+    def learning_center_path(self, module_slug: Optional[str],
+                             lesson_slug: Optional[str] = None) -> Optional[str]:
+        """In-app deep link to a module or lesson."""
+        if not module_slug:
+            return None
+        path = f"{self.learning_center_route}?module={module_slug}"
+        if lesson_slug:
+            path += f"&lesson={lesson_slug}"
+        return path
+
+    def features_for_route(self, route: str) -> List[FeatureLink]:
+        return [f for f in self.features if f.route == route]
+
+    def stale_features(self) -> List[FeatureLink]:
+        """Rows whose last verification predates the current knowledge
+        version. Served so the gap is visible instead of silent."""
+        return [f for f in self.features
+                if f.last_verified_version != KNOWLEDGE_VERSION]
 
     def help_for(self, key: str) -> Optional[ContextualHelp]:
         return self._help.get(key)
@@ -434,6 +672,9 @@ class LearningRegistry:
                 "modules": [m.to_dict() for m in modules],
                 "glossary": self.glossary.to_dict(),
                 "contextual_help": [h.to_dict() for h in self._help.values()],
+                "paths": [p.to_dict() for p in (self.paths_for(role) if role else self.paths)],
+                "features": [f.to_dict() for f in self.features],
+                "library": [i.to_dict() for i in self.library],
                 "statement_classifications": self.statements_by_classification()}
 
 

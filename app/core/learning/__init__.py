@@ -25,14 +25,20 @@ WHERE THE UI LIVES
 from .framework import (  # noqa: F401
     KNOWLEDGE_VERSION,
     PROGRAMS,
+    Authority,
     Classification,
     ContextualHelp,
+    FeatureLink,
     Glossary,
     GlossaryTerm,
     KnowledgeCheck,
+    LearningPath,
     LearningRegistry,
     Lesson,
+    LibraryItem,
     Module,
+    ModuleGuide,
+    ModuleRevision,
     ProgramRegistry,
     ProhibitedConclusion,
     Role,
@@ -40,7 +46,9 @@ from .framework import (  # noqa: F401
 )
 
 __all__ = [
-    "KNOWLEDGE_VERSION", "PROGRAMS", "Classification", "ContextualHelp",
-    "Glossary", "GlossaryTerm", "KnowledgeCheck", "LearningRegistry", "Lesson",
-    "Module", "ProgramRegistry", "ProhibitedConclusion", "Role", "Statement",
+    "KNOWLEDGE_VERSION", "PROGRAMS", "Authority", "Classification",
+    "ContextualHelp", "FeatureLink", "Glossary", "GlossaryTerm",
+    "KnowledgeCheck", "LearningPath", "LearningRegistry", "Lesson",
+    "LibraryItem", "Module", "ModuleGuide", "ModuleRevision",
+    "ProgramRegistry", "ProhibitedConclusion", "Role", "Statement",
 ]

@@ -242,6 +242,27 @@ def _deliverable_meta(report_type: str) -> Dict[str, Any]:
             "title": meta["title"], "cadence": meta["cadence"]}
 
 
+def _stem_for(row) -> str:
+    """Traceable file stem for one stored report (contract, task, deliverable,
+    cadence, period, report id). Falls back to the bare report id for report
+    families that are not contract deliverables."""
+    from app.reports.branding import deliverable_filename_stem
+
+    data = row.report_data or {}
+    dataset = data.get("dataset") or {}
+    meta = _deliverable_meta(row.report_type)
+    branding = dataset.get("branding") or {}
+    contract = branding.get("contract_number") or dataset.get("contract_number")
+    if not (meta.get("deliverable") and contract):
+        return row.report_id
+    return deliverable_filename_stem(
+        contract_number=contract, task=meta.get("task"),
+        deliverable=meta.get("deliverable"), kind=meta.get("cadence"),
+        period_start=str(row.period_start) if row.period_start else None,
+        period_end=str(row.period_end) if row.period_end else None,
+        report_id=row.report_id)
+
+
 def _listing_extras(r) -> Dict[str, Any]:
     """Deliverable, period and PM release state for one stored report."""
     from app.reports.data.release import current_release
@@ -253,6 +274,7 @@ def _listing_extras(r) -> Dict[str, Any]:
         "period_start": r.period_start,
         "period_end": r.period_end,
         "release": current_release(data),
+        "file_stem": _stem_for(r),
         **_deliverable_meta(r.report_type),
     }
 
@@ -364,12 +386,18 @@ async def get_package(
         raise HTTPException(404, f"Report {report_id} has no stored HTML.")
 
     csv_text = csv_for_stored_report(row)
+    stem = _stem_for(row)
+    docx_bytes = None
+    try:
+        docx_bytes = await run_in_threadpool(docx_for_stored_report, row)
+    except Exception as exc:  # noqa: BLE001  — the package still ships without it
+        logger.warning("DOCX omitted from package %s: %s", report_id, exc)
 
     pdf_bytes = None
     pdf_reason = None
     if pdf_available():
         try:
-            pdf_bytes = await run_in_threadpool(render_pdf, row.report_html, title=report_id)
+            pdf_bytes = await run_in_threadpool(render_pdf, row.report_html, title=stem)
         except Exception as exc:  # noqa: BLE001
             pdf_reason = str(exc)
     else:
@@ -379,11 +407,11 @@ async def get_package(
         report_id=report_id, html=row.report_html, csv_text=csv_text,
         pdf_bytes=pdf_bytes, snapshot=snapshot, release=current_release(data),
         deliverable=_deliverable_meta(row.report_type),
-        pdf_unavailable_reason=pdf_reason)
+        pdf_unavailable_reason=pdf_reason, docx_bytes=docx_bytes, stem=stem)
     return Response(
         content=package["bytes"], media_type="application/zip",
         headers=download_headers(
-            safe_filename(f"{report_id}-package", "zip"),
+            safe_filename(stem, "zip"),
             extra={"X-Data-Classification": snapshot.get("data_classification") or "DEVELOPMENT_TEST",
                    "X-Release-Status": package["manifest"]["release"].get("status", "DRAFT")}))
 
@@ -407,7 +435,7 @@ async def get_report_html(
     # recipient received; rendering it on this origin would execute whatever
     # markup it contains with the application's own privileges.
     return Response(content=row.report_html, media_type="text/html",
-                    headers=download_headers(safe_filename(report_id, "html")))
+                    headers=download_headers(safe_filename(_stem_for(row), "html")))
 
 
 @router.get("/{report_id}/pdf", summary="Download a report as PDF")
@@ -420,7 +448,55 @@ async def get_report_pdf(
     row = await _stored(db, report_id)
     if not row.report_html:
         raise HTTPException(404, f"Report {report_id} has no stored HTML to render.")
-    return _pdf_response(row.report_html, report_id)
+    return _pdf_response(row.report_html, _stem_for(row))
+
+
+def docx_for_stored_report(row) -> Optional[bytes]:
+    """The editable (DOCX) copy of a stored contract deliverable, built from
+    the STORED dataset — never from a fresh query — so it matches the HTML,
+    PDF and CSV of the same report id. None for report families that have no
+    DOCX form."""
+    from app.reports.data.release import current_release
+    from app.reports.data.sow_report_data import SOW_REPORT_TYPES
+    from app.reports.engine.docx_engine import docx_available, render_sow_docx
+
+    if row.report_type not in SOW_REPORT_TYPES or not docx_available():
+        return None
+    data = row.report_data or {}
+    dataset = dict(data.get("dataset") or {})
+    if not dataset:
+        return None
+    snapshot = data.get("snapshot") or {}
+    branding = dataset.get("branding") or {}
+    return render_sow_docx(dataset, snapshot, current_release(data), branding)
+
+
+@router.get("/{report_id}/docx", summary="Download the editable (DOCX) deliverable")
+async def get_report_docx(
+    report_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("viewer")),
+):
+    """Word document with real styles (Title, Heading 1–3), accessible tables
+    with repeating header rows, a TOC field, header/footer with contract and
+    page numbers, and document properties. Built from the stored dataset."""
+    from app.reports.engine.docx_engine import DOCX_CONTENT_TYPE, docx_available
+
+    row = await _stored(db, report_id)
+    if not docx_available():
+        raise HTTPException(503, "DOCX generation is unavailable: python-docx is not installed.")
+    if not (row.report_data or {}).get("dataset"):
+        raise HTTPException(404, f"Report {report_id} has no stored dataset.")
+    docx_bytes = await run_in_threadpool(docx_for_stored_report, row)
+    if docx_bytes is None:
+        raise HTTPException(404, f"Report type '{row.report_type}' has no DOCX form.")
+    return Response(
+        content=docx_bytes, media_type=DOCX_CONTENT_TYPE,
+        headers=download_headers(
+            safe_filename(_stem_for(row), "docx"),
+            extra={"X-Data-Classification":
+                   ((row.report_data or {}).get("snapshot") or {}).get("data_classification")
+                   or "DEVELOPMENT_TEST"}))
 
 
 def csv_for_stored_report(row) -> str:
@@ -475,7 +551,7 @@ async def get_report_csv(
         raise HTTPException(404, f"Report {report_id} has no stored dataset.")
     return Response(
         content=to_bytes(csv_for_stored_report(row)), media_type="text/csv",
-        headers=download_headers(safe_filename(report_id, "csv")))
+        headers=download_headers(safe_filename(_stem_for(row), "csv")))
 
 
 @router.get("/health/engine", summary="Report engine health (PDF availability)")
