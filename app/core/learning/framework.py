@@ -17,7 +17,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 #: Bump when content changes materially, so a screenshot can be dated.
-KNOWLEDGE_VERSION = "1.1.0"
+KNOWLEDGE_VERSION = "1.2.0"
 
 
 class Role(str, Enum):
@@ -245,6 +245,10 @@ class Module:
     #: The seven-part content standard. Optional in the type so a programme
     #: can register reference-only modules; the TEFCA content test requires it.
     guide: Optional[ModuleGuide] = None
+    #: Plain words an operator would type to find this module ("ingestion",
+    #: "QHIN", "D3.1"). Searched alongside titles and bodies; never rendered as
+    #: a taxonomy.
+    keywords: List[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.status not in MODULE_STATUSES:
@@ -272,7 +276,18 @@ class Module:
                 "status": self.status,
                 "history": [h.to_dict() for h in self.history],
                 "guide": self.guide.to_dict() if self.guide else None,
+                "keywords": list(self.keywords),
                 "knowledge_version": KNOWLEDGE_VERSION}
+
+    def search_text(self) -> str:
+        parts = [self.title, self.objective, *self.keywords]
+        if self.guide:
+            g = self.guide
+            parts += [g.what_is_this, g.why_it_matters, g.what_automation_does,
+                      g.what_human_does, g.what_happens_next, *g.steps, *g.what_not_to_do]
+        for lesson in self.lessons:
+            parts.append(lesson.search_text())
+        return " ".join(parts).lower()
 
 
 @dataclass(frozen=True)
@@ -308,10 +323,13 @@ class Authority(str, Enum):
 
     CONTRACT_SOW = "CONTRACT_SOW"
     ACCEPTED_METHODOLOGY = "ACCEPTED_METHODOLOGY"
-    RCE_GOVERNING_MATERIAL = "RCE_GOVERNING_MATERIAL"
+    #: Submitted by the contractor, not yet accepted in writing. Kept apart from
+    #: ACCEPTED so nothing is labelled accepted before acceptance exists.
+    PROPOSED_METHODOLOGY = "PROPOSED_METHODOLOGY"
     PROGRAM_GUIDANCE = "PROGRAM_GUIDANCE"
+    RCE_GOVERNING_MATERIAL = "RCE_GOVERNING_MATERIAL"
+    FEDERAL_GUIDANCE = "FEDERAL_GUIDANCE"
     EVIDENCE_SOURCE_GUIDE = "EVIDENCE_SOURCE_GUIDE"
-    REPORTING_GUIDE = "REPORTING_GUIDE"
     TRAINING = "TRAINING"
     RESEARCH_INDUSTRY = "RESEARCH_INDUSTRY"
 
@@ -324,12 +342,13 @@ class Authority(str, Enum):
         return {
             Authority.CONTRACT_SOW: "Contract / SOW",
             Authority.ACCEPTED_METHODOLOGY: "Accepted methodology",
+            Authority.PROPOSED_METHODOLOGY: "Proposed methodology (awaiting COR acceptance)",
+            Authority.PROGRAM_GUIDANCE: "COR / program guidance",
             Authority.RCE_GOVERNING_MATERIAL: "RCE governing material",
-            Authority.PROGRAM_GUIDANCE: "Program guidance",
+            Authority.FEDERAL_GUIDANCE: "Federal guidance",
             Authority.EVIDENCE_SOURCE_GUIDE: "Evidence source guide",
-            Authority.REPORTING_GUIDE: "Reporting guide",
             Authority.TRAINING: "Training",
-            Authority.RESEARCH_INDUSTRY: "Research / industry",
+            Authority.RESEARCH_INDUSTRY: "Research / industry reference",
         }[self]
 
 
@@ -641,8 +660,17 @@ class LearningRegistry:
 
         modules = self.modules_for(role) if role else self.modules
         titled: List[Dict[str, Any]] = []
+        module_hits: List[Dict[str, Any]] = []
         bodied: List[Dict[str, Any]] = []
         for module in modules:
+            # A module is found by its title, its search keywords or its guide;
+            # it ranks after lesson-title matches and before body matches.
+            if (needle in module.title.lower()
+                    or any(needle in k.lower() for k in module.keywords)
+                    or needle in module.search_text()):
+                module_hits.append({"type": "module", "module_slug": module.slug,
+                                    "module_title": module.title, "title": module.title,
+                                    "objective": module.objective, "deep_link": module.slug})
             for lesson in module.lessons:
                 hit = {"type": "lesson", "module_slug": module.slug,
                        "module_title": module.title, "lesson_slug": lesson.slug,
@@ -659,7 +687,7 @@ class LearningRegistry:
             for t in self.glossary.all()
             if needle in t.term.lower() or needle in t.definition.lower()
         ]
-        return (titled + bodied + glossary_hits)[:limit]
+        return (titled + module_hits + bodied + glossary_hits)[:limit]
 
     def to_dict(self, *, role: Optional[Role] = None) -> Dict[str, Any]:
         modules = self.modules_for(role) if role else self.modules
