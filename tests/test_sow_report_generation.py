@@ -297,6 +297,27 @@ class TestReleaseControl:
         assert {"README.txt", "manifest.json"} <= set(names)
 
 
+class TestStoredFileStem:
+
+    def test_listing_stem_uses_the_one_word_family_label(self):
+        """DEV showed '..._Weekly_during_the_first_120_days_...': the cadence
+        sentence had leaked into the file name. The stem carries the family
+        label only."""
+        import datetime as dt
+        from types import SimpleNamespace
+
+        from app.reports.routes import _stem_for
+        from app.reports.data.sow_report_data import SOW_REPORT_TYPES
+
+        for rtype, meta in SOW_REPORT_TYPES.items():
+            assert meta.get("kind") and " " not in meta["kind"], rtype
+        row = SimpleNamespace(
+            report_id="DA-ARC-2026-016", report_type="retrospective_weekly",
+            period_start=dt.date(2026, 9, 5), period_end=dt.date(2026, 9, 11),
+            report_data={"dataset": {"contract_number": "7571MN26F80064"}})
+        assert _stem_for(row) ==             "7571MN26F80064_Task3_D3.1_Weekly_2026-09-05_2026-09-11_DA-ARC-2026-016"
+
+
 class TestDeliverableIdentity:
     """Cover, document control, and the Government-mark rule."""
 

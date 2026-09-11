@@ -239,7 +239,10 @@ def _deliverable_meta(report_type: str) -> Dict[str, Any]:
     if not meta:
         return {"deliverable": None, "task": None, "title": None}
     return {"deliverable": meta["deliverable"], "task": meta["task"],
-            "title": meta["title"], "cadence": meta["cadence"]}
+            "title": meta["title"], "cadence": meta["cadence"],
+            # One-word family label for file names ("Weekly"); the cadence
+            # sentence is for people, not paths.
+            "kind": meta.get("kind")}
 
 
 def _stem_for(row) -> str:
@@ -257,7 +260,7 @@ def _stem_for(row) -> str:
         return row.report_id
     return deliverable_filename_stem(
         contract_number=contract, task=meta.get("task"),
-        deliverable=meta.get("deliverable"), kind=meta.get("cadence"),
+        deliverable=meta.get("deliverable"), kind=meta.get("kind"),
         period_start=str(row.period_start) if row.period_start else None,
         period_end=str(row.period_end) if row.period_end else None,
         report_id=row.report_id)
