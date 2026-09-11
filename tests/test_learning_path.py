@@ -172,12 +172,16 @@ class TestReferenceLibrary:
 
     def test_the_hhs_logo_policy_is_shelved_as_a_reporting_guide(self):
         item = next(i for i in LIBRARY if "HHS logo policy" in i.title)
-        assert item.authority is Authority.REPORTING_GUIDE
+        assert item.authority is Authority.FEDERAL_GUIDANCE
         assert "may not use the HHS logo" in item.summary
 
     def test_the_library_covers_the_required_classes(self):
+        """Every class except ACCEPTED_METHODOLOGY, which stays empty until a
+        written acceptance exists — labelling D2 accepted would be a fabricated
+        Government decision."""
         present = {i.authority for i in LIBRARY}
-        assert present == set(Authority)
+        assert present == set(Authority) - {Authority.ACCEPTED_METHODOLOGY}
+        assert Authority.ACCEPTED_METHODOLOGY not in present
 
 
 class TestApi:
@@ -194,7 +198,7 @@ class TestApi:
 
     def test_registry_payload_carries_paths_features_and_library(self):
         payload = REGISTRY.to_dict(role=Role.PROGRAM_MANAGER)
-        assert payload["knowledge_version"] == "1.1.0"
+        assert payload["knowledge_version"] == "1.2.0"
         assert len(payload["paths"]) == len(PATHS)
         assert len(payload["features"]) == len(FEATURES)
         assert len(payload["library"]) == len(LIBRARY)

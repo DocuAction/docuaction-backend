@@ -190,7 +190,7 @@ DECISIONS: List[Dict[str, Any]] = [
     {"id": "D9", "topic": "Official deliverable format and 508 checklist",
      "status": GUIDANCE_REQUESTED,
      "consequence": ("No file format is contractually mandated. AGT produces "
-                     "HTML, PDF and CSV pending direction."),
+                     "DOCX, PDF, HTML and CSV pending direction."),
      "affects": ["All deliverables"]},
 ]
 

@@ -487,9 +487,12 @@ class TestNoUnsupportedPolicyWording:
             assert invented not in code, f"invented deadline still shown: {invented}"
 
     def test_the_sample_is_not_described_as_drawn(self):
+        """Since the Learning Center became API-driven (2026-09-11) the page
+        carries no static sampling claim at all; the registry does, classified."""
         code = _frontend_code("help/page.js")
         assert "fixed, auditable seed" not in code
-        assert "awaiting COR confirmation" in code
+        assert "383 entities" not in code
+        assert any("awaiting COR" in st.text for st in REGISTRY.statements())
 
     def test_b1_b4_is_qualified_wherever_it_appears(self):
         code = _frontend_code("help/page.js")
@@ -498,11 +501,16 @@ class TestNoUnsupportedPolicyWording:
                 "B1-B4 appears without being identified as AGT shorthand")
 
     def test_the_government_categories_use_contract_wording(self):
+        """The page renders what the registry serves; the registry's category
+        lesson must carry the contract wording, and the page must not carry a
+        static bucket taxonomy of its own."""
         from app.reports.data.sow_report_data import GOVERNMENT_CATEGORY_LABELS
 
-        code = _frontend_code("help/page.js").lower()
+        lesson_text = " ".join(l.body for m in REGISTRY.modules for l in m.lessons).lower()
         for label in GOVERNMENT_CATEGORY_LABELS.values():
-            assert label.lower() in code, f"missing contract wording: {label}"
+            assert label.lower() in lesson_text, f"missing contract wording: {label}"
+        code = _frontend_code("help/page.js")
+        assert "B2 = " not in code and "disposition bucket" not in code
 
     def test_the_help_page_points_at_the_authoritative_guidance(self):
         code = _frontend_code("help/page.js")

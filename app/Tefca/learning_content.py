@@ -241,8 +241,10 @@ M4 = Module(
               "SOURCE_LIMITATION — the limit is in our key or our access.\n"
               "DUPLICATE_CONSOLIDATED — already represented by another item.\n\n"
               "Triage assigns work. It never assigns an answer."),
-        example=("Current: 28 ready for analyst · 33,992 methodology-pending · "
-                 "154,499 informational · 9 source limitation."),
+        example=("At the first evidence run over the development delivery: 28 ready "
+                 "for analyst · 33,992 methodology-pending · 154,499 informational · "
+                 "9 source limitation. The live queue on Supervisor Operations is "
+                 "the current figure."),
         common_mistakes=["Assuming METHODOLOGY_PENDING means 'ignore'."],
         prohibited=[], vocabulary=_TRI),
         Lesson(
@@ -288,8 +290,9 @@ M5 = Module(
               "You may not QA a determination you made. An exception requires a "
               "grant from a different, more senior person with a written reason; "
               "both are recorded permanently and counted in reconciliation."),
-        example="Current state: 43 review records, 0 QA-approved, 0 decision "
-                "events. No finding is reportable, which is accurate.",
+        example=("A case shows APPROVE on Tuesday and RETURN on Thursday. On "
+                 "Friday's report it is listed under 'pending independent QA', not "
+                 "under a category, because no approval stands."),
         common_mistakes=["Assuming an earlier APPROVE survives a later RETURN."],
         prohibited=[ProhibitedConclusion(
             "The finding was approved once, so it stays reportable.",
@@ -315,30 +318,46 @@ M6 = Module(
               "QA-approved finding is the only kind that is reportable.\n\n"
               "Every reported figure carries its denominator, the evidence "
               "version, the source scope and the calculation used."),
-        example=("188,528 observations · 23,566 entities · 0 findings · 0 "
-                 "QA-approved. All four are correct and none may be substituted "
-                 "for another."),
+        example=("At the first evidence run: 188,528 observations · 23,566 entities "
+                 "· 0 findings · 0 QA-approved. All four were correct that day and "
+                 "none may be substituted for another; the report's own counts are "
+                 "the current figures."),
         common_mistakes=["Quoting an observation count as an entity count."],
         prohibited=[], vocabulary=[]),
         Lesson(
-        slug="release-gates", title="Why every report says DRAFT",
-        objective="Understand the five gates and which one is closed.",
-        body=("Evidence version · Human QA · Methodology · Dataset contractual "
-              "provenance · Report QA.\n\n"
-              "Any closed gate watermarks the report **DRAFT — NOT FOR COR "
-              "RELEASE**. Gates are not bypassed; the audience changes.\n\n"
-              "Currently one gate is closed: dataset contractual provenance. The "
-              "delivery's schema, lineage and content are verified, but its "
-              "sender, transmittal and ONC-issued control total are not "
-              "documented. That is a contracts question and no engineering work "
-              "closes it."),
-        example="The internal population report is watermarked DRAFT with exactly "
-                "one closed gate.",
-        common_mistakes=["Removing the watermark to circulate a report."],
+        slug="release-gates", title="Why a report says DRAFT, and what release means",
+        objective="Read the three labels on a report: data classification, QA basis, and PM release status.",
+        body=("Every generated report carries three labels.\n\n"
+              "**Data classification.** GOVERNMENT means the report was built "
+              "from a registered ONC/RCE delivery. DEVELOPMENT_TEST means it was "
+              "not, and the report says NOT FOR GOVERNMENT DELIVERY on its cover, "
+              "in its document control and in its package README. Nothing "
+              "removes that label except generating from Government data.\n\n"
+              "**QA basis.** Only determinations with a standing independent QA "
+              "approval are listed under a category. Everything else appears "
+              "under 'pending independent QA' as work in progress, never as a "
+              "finding.\n\n"
+              "**PM release status.** A report starts as DRAFT. The programme "
+              "manager records PM_REVIEWED after reading it, then "
+              "READY_FOR_DELIVERY; either can be returned to draft with a note. "
+              "Each transition is an audit event with the actor's identity. "
+              "READY_FOR_DELIVERY is a state inside DocuAction; transmission to "
+              "the COR happens outside it and is recorded by the programme "
+              "manager.\n\n"
+              "Whether the delivery's contractual provenance (sender, transmittal, "
+              "control total) is documented is a contracts question the "
+              "programme manager answers before release; the software does not "
+              "decide it."),
+        example="A D3.1 generated over the synthetic end-to-end delivery is "
+                "DEVELOPMENT_TEST and DRAFT: readable by the team, never deliverable.",
+        common_mistakes=["Sending a DRAFT.",
+                         "Reading READY_FOR_DELIVERY as 'delivered'.",
+                         "Reading a pending-QA row as a finding."],
         prohibited=[ProhibitedConclusion(
-            "The data passed all checks, so the report can go to the COR.",
-            "Technical verification does not open the contractual provenance "
-            "gate.", unblocked_by="documented sender, transmittal and control total")],
+            "The tests pass, so the report can go to the COR.",
+            "Only a GOVERNMENT-classified report, released by the programme "
+            "manager and transmitted through the agreed channel, is a deliverable.",
+            unblocked_by="Government data, PM release, documented transmittal")],
         vocabulary=[])],
     checks=[KnowledgeCheck(
         "A report shows 188,528 observations. How many entities were reviewed by a person?",
@@ -381,12 +400,15 @@ from app.Tefca.learning_methodology import MODULE_6  # noqa: E402
 from dataclasses import replace as _replace  # noqa: E402
 
 from app.Tefca.learning_path_content import (  # noqa: E402
-    EFFECTIVE, EXTRA_HELP, FEATURES, GUIDES, LIBRARY, NEW_MODULES, PATH_ORDER, PATHS)
+    BASE_VERSIONS, EFFECTIVE, EXTRA_HELP, FEATURES, GUIDES, KEYWORDS, LIBRARY,
+    NEW_MODULES, PATH_ORDER, PATHS)
 
 # The evidence-vocabulary modules above are reference content; the operational
 # path in learning_path_content completes the 16-step programme. Every module
 # carries the seven-part guide (the content standard) and a version.
-_BASE = [_replace(m, guide=GUIDES[m.slug], version=m.version,
+_BASE = [_replace(m, guide=GUIDES[m.slug], keywords=KEYWORDS.get(m.slug, []),
+                  version=BASE_VERSIONS.get(m.slug, {}).get("version", m.version),
+                  history=BASE_VERSIONS.get(m.slug, {}).get("history", list(m.history)),
                   effective_date=m.effective_date or EFFECTIVE)
          for m in (M1, M2, M3, M4, M5, M6, M7, MODULE_6)]
 _BY_SLUG = {m.slug: m for m in _BASE + NEW_MODULES}
@@ -479,15 +501,17 @@ HELP = [
         learn_more="qa-review"),
     ContextualHelp(
         key="report.release_status",
-        what_is_this="Whether this report may go to the COR.",
-        why_am_i_seeing_it="Five gates are evaluated on every generation and any closed gate watermarks the report.",
-        allowed_actions=["View which gate is closed and its remedy", "Circulate internally"],
+        what_is_this="The programme manager's release state for this report: DRAFT, PM_REVIEWED, READY_FOR_DELIVERY, or returned to draft.",
+        why_am_i_seeing_it="Every generated report starts as DRAFT; only the programme manager moves it, and each move is an audit event.",
+        allowed_actions=["Read the draft (DOCX or PDF)", "Programme manager: record PM review, mark ready, or return to draft with a note", "Download the package once ready"],
         prohibited_conclusions=[ProhibitedConclusion(
-            "All tests pass, so the report is releasable.",
-            "Dataset contractual provenance is not an engineering gate.",
-            unblocked_by="documented sender, transmittal and control total")],
-        evidence_location="release gate evaluation attached to the report payload",
-        learn_more="reports"),
+            "READY_FOR_DELIVERY means the COR has it.",
+            "Delivery is the transmittal outside DocuAction, recorded by the programme manager."),
+            ProhibitedConclusion(
+            "A DEVELOPMENT_TEST report can be released.",
+            "Only a report generated from a registered Government delivery is a deliverable.")],
+        evidence_location="release history on the report record; audit events REPORT_RELEASE_*",
+        learn_more="reports/release-gates"),
     ContextualHelp(
         key="methodology.pending",
         what_is_this="A condition whose review requirement depends on a COR decision not yet made.",

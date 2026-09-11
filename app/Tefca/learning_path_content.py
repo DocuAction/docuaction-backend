@@ -29,7 +29,7 @@ from app.core.learning import (
 
 CONTRACT = "Contract 7571MN26F80064"
 EFFECTIVE = "2026-09-11"
-CONTENT_VERSION = "1.1.0"
+CONTENT_VERSION = "1.2.0"
 OWNER = "AGT product owner (TEFCA ARC)"
 
 _SOW_TASK3 = f"{CONTRACT}, Section C, Task 3"
@@ -55,6 +55,7 @@ def _open(text: str) -> Statement:
 DELIVERY = Module(
     slug="delivery-and-ingestion",
     title="ONC/RCE Delivery and Ingestion",
+    keywords=["ingestion", "delivery", "ONC", "RCE", "register", "intake", "Area 1", "source file"],
     audience=[Role.ANY],
     objective="Register an official delivery correctly and understand what the system does with it before any review exists.",
     version=CONTENT_VERSION, effective_date=EFFECTIVE,
@@ -116,6 +117,7 @@ DELIVERY = Module(
 RELATIONSHIPS = Module(
     slug="qhin-relationships",
     title="QHIN, Participant and Subparticipant Relationships",
+    keywords=["QHIN", "Participant", "Subparticipant", "relationship", "unresolved", "hierarchy"],
     audience=[Role.ANY],
     objective="Read the delivered relationship correctly and never invent one.",
     version=CONTENT_VERSION, effective_date=EFFECTIVE,
@@ -165,6 +167,7 @@ RELATIONSHIPS = Module(
 SAMPLING = Module(
     slug="stratification-and-sampling",
     title="Stratification and Sampling",
+    keywords=["sampling", "sample", "stratification", "95%", "confidence", "plan", "population"],
     audience=[Role.ANY],
     objective="Know what the contract requires of the sample, what AGT has proposed, and what is still open.",
     version=CONTENT_VERSION, effective_date=EFFECTIVE,
@@ -218,6 +221,8 @@ SAMPLING = Module(
 WORK = Module(
     slug="work-creation-and-assignment",
     title="Review Work Creation and Assignment",
+    keywords=["assignment", "assign", "work queue", "operations", "supervisor", "workload",
+              "case", "claim", "unassigned", "deadline"],
     audience=[Role.ANY],
     objective="Create review work from a plan or a priority request and distribute it visibly.",
     version=CONTENT_VERSION, effective_date=EFFECTIVE,
@@ -271,6 +276,7 @@ WORK = Module(
 DETERMINATION = Module(
     slug="determination-and-rationale",
     title="Analyst Determination and Rationale",
+    keywords=["determination", "rationale", "analyst", "workbench", "workspace", "category"],
     audience=[Role.ANALYST, Role.QA, Role.PROGRAM_MANAGER, Role.ADMIN],
     objective="Record a determination that a different person can approve and the Government can read.",
     version=CONTENT_VERSION, effective_date=EFFECTIVE,
@@ -325,6 +331,7 @@ DETERMINATION = Module(
 MAKER_CHECKER = Module(
     slug="maker-checker",
     title="Maker / Checker Control",
+    keywords=["maker checker", "maker/checker", "segregation of duties", "same person", "reportable"],
     audience=[Role.ANY],
     objective="Understand the segregation of duties that makes a determination reportable.",
     version=CONTENT_VERSION, effective_date=EFFECTIVE,
@@ -379,6 +386,8 @@ PM_DELIVERY = Module(
     audience=[Role.PROGRAM_MANAGER, Role.ADMIN, Role.QA],
     objective="Take a generated contract report through PM review to a delivery-ready package.",
     version=CONTENT_VERSION, effective_date=EFFECTIVE,
+    keywords=["PM release", "release", "package", "delivery package", "DOCX", "PDF",
+              "transmittal", "COR", "logo"],
     history=[ModuleRevision("1.0.0", "2026-09-11",
                             "First version: DRAFT → PM_REVIEWED → READY_FOR_DELIVERY, "
                             "package with HTML/CSV/PDF.", status="superseded")],
@@ -439,6 +448,7 @@ PM_DELIVERY = Module(
 SECURITY = Module(
     slug="security-and-data-handling",
     title="Security and Government Data Handling",
+    keywords=["security", "credentials", "password", "DEV", "PROD", "classification", "PII", "roles", "RBAC"],
     audience=[Role.ANY],
     objective="Handle Government data, credentials and environments correctly.",
     version=CONTENT_VERSION, effective_date=EFFECTIVE,
@@ -492,6 +502,37 @@ SECURITY = Module(
 
 NEW_MODULES = [DELIVERY, RELATIONSHIPS, SAMPLING, WORK, DETERMINATION,
                MAKER_CHECKER, PM_DELIVERY, SECURITY]
+
+#: Search words for the evidence-vocabulary modules defined elsewhere.
+KEYWORDS = {
+    "tefca-arc-overview": ["overview", "TEFCA", "ARC", "DocuAction", "programme", "program", "start here"],
+    "automated-observations": ["automated processing", "automation", "observation", "processing",
+                               "background", "address", "conflict", "source unavailable"],
+    "analyst-review": ["analyst", "BA", "review", "triage", "exception", "My Reviews"],
+    "evidence-and-sources": ["evidence", "sources", "NPPES", "PECOS", "PPEF", "LEIE", "SAM.gov",
+                             "applicability", "external"],
+    "qa-review": ["QA", "independent QA", "approve", "return", "escalate", "quality assurance"],
+    "discrepancies-and-methodology": ["categories", "discrepancy", "contractual", "B1-B4",
+                                      "methodology", "COR decision", "non-compliant", "inexplicable"],
+    "auditability": ["audit", "lineage", "provenance", "decision history", "reconstruct"],
+    "reports": ["reports", "contract reports", "D3.1", "D3.2", "D4.1", "D5.1", "weekly", "CSV",
+                "HTML", "PDF", "DOCX", "stratified list", "draft"],
+}
+
+#: Versions of the evidence-vocabulary modules. A module whose text changed in
+#: the LMS hardening (2026-09-11) carries the change in its history.
+BASE_VERSIONS = {
+    "analyst-review": {"version": "1.0.1", "history": [ModuleRevision(
+        "1.0.0", "2026-08-24", "Triage counts described as 'current'.", status="superseded")]},
+    "qa-review": {"version": "1.1.0", "history": [ModuleRevision(
+        "1.0.0", "2026-08-24", "Example described a zero-approval state as current.",
+        status="superseded")]},
+    "reports": {"version": "1.2.0", "history": [
+        ModuleRevision("1.0.0", "2026-08-24", "Five-gate release lesson (superseded control).",
+                       status="superseded"),
+        ModuleRevision("1.1.0", "2026-09-11", "Guide added; stratified lists, DOCX/PDF/HTML/CSV.",
+                       status="superseded")]},
+}
 
 # ── the 16-step programme path, in order ────────────────────────────────────
 
@@ -674,11 +715,11 @@ LIBRARY = [
         module_slugs=["tefca-arc-overview", "stratification-and-sampling", "discrepancies-and-methodology", "reports"]),
     LibraryItem(
         title="AGT Review Methodology (Deliverable D2)",
-        authority=Authority.ACCEPTED_METHODOLOGY,
+        authority=Authority.PROPOSED_METHODOLOGY,
         summary="AGT's methodology submission: sampling parameters, source applicability, address materiality, category mapping.",
         reference="Deliverable D2 on file.",
         module_slugs=["stratification-and-sampling", "discrepancies-and-methodology"],
-        note="Sampling parameters are proposed and awaiting COR confirmation. Accepted portions bind AGT, not the Government."),
+        note="Submitted, not accepted: no written COR acceptance is on file. It binds AGT's own practice only and is never cited as a Government requirement."),
     LibraryItem(
         title="COR Decision Register (open methodology decisions)",
         authority=Authority.PROGRAM_GUIDANCE,
@@ -719,28 +760,28 @@ LIBRARY = [
         note="Source limitation: unavailable in the current configuration."),
     LibraryItem(
         title="HHS logo policy for contractors",
-        authority=Authority.REPORTING_GUIDE,
+        authority=Authority.FEDERAL_GUIDANCE,
         summary="Contractors may not use the HHS logo, seal or symbol on proposals or consulting deliverables; the exception is an HHS publication produced under the project officer's direction with ASPA approval.",
         reference="hhs.gov › Web policies › Logo policies: contractors",
         module_slugs=["pm-review-and-delivery"],
         note="Why DocuAction reports name the recipient in text and place no Government mark by default."),
     LibraryItem(
         title="Section 508 — creating accessible documents",
-        authority=Authority.REPORTING_GUIDE,
+        authority=Authority.FEDERAL_GUIDANCE,
         summary="Federal guidance on accessible Word and PDF documents: headings, reading order, table headers, document title and language.",
         reference="https://www.section508.gov/create/documents/",
         module_slugs=["reports", "pm-review-and-delivery"],
         note="DocuAction designs for these criteria. Full Section 508 conformance is not claimed from automated checks alone."),
     LibraryItem(
         title="U.S. Web Design System (USWDS)",
-        authority=Authority.REPORTING_GUIDE,
+        authority=Authority.FEDERAL_GUIDANCE,
         summary="Design system for federal websites; the report stylesheet borrows its typographic and colour conventions.",
         reference="https://designsystem.digital.gov/",
         module_slugs=["reports"],
         note="A design reference, not a contractual requirement for ARC deliverables."),
     LibraryItem(
         title="WCAG 2.2",
-        authority=Authority.REPORTING_GUIDE,
+        authority=Authority.FEDERAL_GUIDANCE,
         summary="Web Content Accessibility Guidelines; the standard the application and report HTML are checked against.",
         reference="https://www.w3.org/TR/WCAG22/",
         module_slugs=["reports"]),
