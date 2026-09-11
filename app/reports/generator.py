@@ -36,7 +36,20 @@ TEMPLATES = {
     "executive": "executive_cor.html",
     "data_quality": "data_quality.html",
     "intake": "source_intake.html",
+    # The contract's report families (Section C, Tasks 3-5). One template; the
+    # body is the stratified Participant/Subparticipant list under the four
+    # Government categories, which is what every one of them must contain.
+    "retrospective_weekly": "sow_report.html",
+    "retrospective_final": "sow_report.html",
+    "ongoing_biweekly": "sow_report.html",
+    "ongoing_quarterly": "sow_report.html",
+    "priority_status": "sow_report.html",
+    "priority_quarterly": "sow_report.html",
 }
+
+#: Report types produced by the SOW data service (stratified entity lists).
+SOW_TYPES = ("retrospective_weekly", "retrospective_final", "ongoing_biweekly",
+             "ongoing_quarterly", "priority_status", "priority_quarterly")
 
 AVAILABLE_TYPES = tuple(TEMPLATES)
 
@@ -80,7 +93,14 @@ async def generate_report(
             f"{list(AVAILABLE_TYPES)}.")
 
     # 1. Frozen data.
-    if report_type in RCE_TYPES:
+    if report_type in SOW_TYPES:
+        from app.reports.data.sow_report_data import SowReportDataService
+
+        dataset = await SowReportDataService(db).build_report_dataset(
+            report_type, review_cycle_id=review_cycle_id,
+            query_parameters=query_parameters)
+        dataset["review_cycle_id"] = review_cycle_id
+    elif report_type in RCE_TYPES:
         from app.reports.data.rce_report_data import RceReportDataService
 
         rce_service = RceReportDataService(
@@ -140,7 +160,12 @@ async def generate_report(
             final_accessibility["errors"])
     accessibility = final_accessibility
 
-    csv_text = report_to_csv(dataset, report_id, snapshot.generation_timestamp)
+    if report_type in SOW_TYPES:
+        from app.reports.engine.csv_engine import sow_report_to_csv
+
+        csv_text = sow_report_to_csv(dataset, report_id, snapshot.generation_timestamp)
+    else:
+        csv_text = report_to_csv(dataset, report_id, snapshot.generation_timestamp)
 
     stored_id = None
     artifact = None

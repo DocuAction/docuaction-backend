@@ -801,6 +801,8 @@ class TestReportAPI:
             "/api/reports/{report_id}/html",
             "/api/reports/{report_id}/pdf",
             "/api/reports/{report_id}/csv",
+            "/api/reports/{report_id}/release",
+            "/api/reports/{report_id}/package",
             # Phase 7.5B — the contract's report families
             "/api/reports/sow",
             "/api/reports/sow/{deliverable}",

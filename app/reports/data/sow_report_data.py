@@ -51,7 +51,8 @@ from datetime import datetime
 import logging
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
+from sqlalchemy.orm import aliased
 
 logger = logging.getLogger(__name__)
 
@@ -220,6 +221,8 @@ class SowReportDataService:
 
         strat = await self.stratification(review_cycle_id)
         scope = await self.evidence_scope(review_cycle_id)
+        lists = await self.stratified_entities(
+            review_cycle_id, period_start=period_start, period_end=period_end)
         return {
             "family": family,
             "review_cycle_id": review_cycle_id,
@@ -228,6 +231,11 @@ class SowReportDataService:
             "evidence_rule_version": current_rule_version(),
             "evidence_scope": scope,
             "stratification": strat,
+            "entity_lists": lists["entity_lists"],
+            "entity_columns": lists["columns"],
+            "pending_qa": lists["pending_qa"],
+            "list_counts": lists["counts"],
+            "list_note": lists["note"],
             "methodology_pending": await self.methodology_pending(),
             "source_limitations": await self.source_limitations(review_cycle_id),
             "sow_data_version": self.version,
@@ -269,6 +277,250 @@ class SowReportDataService:
                      "entity. These are recorded as limitations of the lookup."),
         }
 
+
+    # ── the stratified LIST the contract asks for ────────────────────────────
+
+    ENTITY_COLUMNS = (
+        ("review_id", "Case"),
+        ("entity_name", "Participant / Subparticipant"),
+        ("entity_level", "Level"),
+        ("rce_org_oid", "RCE organisation OID"),
+        ("qhin", "QHIN"),
+        ("category_label", "Category"),
+        ("rule", "Rule"),
+        ("reportable_at", "QA approved (UTC)"),
+    )
+
+    async def stratified_entities(self, review_cycle_id: Optional[str] = None,
+                                  period_start=None, period_end=None
+                                  ) -> Dict[str, Any]:
+        """The stratified list of Participants and Subparticipants.
+
+        Section C, Tasks 3 and 4: every weekly, final and bi-weekly report
+        "includes a stratified list of Participants and Subparticipants" in the
+        four Government categories. A list, not counts. Each row is one review
+        record joined to its entity and to the QHIN the canonical
+        `managed_by_qhin` edge names — never a QHIN inferred from a column.
+
+        Only records with a standing QA approval (`reportable_at`) enter a
+        category list. Everything else is returned separately as pending, with
+        the reason, so nothing disappears and nothing is promoted.
+
+        `period_start` / `period_end` (ISO dates) restrict the CATEGORY lists to
+        approvals inside the period — a weekly report lists the week's approved
+        reviews. Pending rows are the current backlog and are not period-filtered.
+        """
+        import uuid as _uuid
+
+        from app.tefca_registry import models as reg
+
+        Qhin = aliased(reg.TefcaRegEntity)
+        stmt = (
+            select(reg.ReviewRecord, reg.TefcaRegEntity, Qhin)
+            .outerjoin(reg.TefcaRegEntity,
+                       reg.TefcaRegEntity.id == reg.ReviewRecord.entity_id)
+            .outerjoin(reg.TefcaEntityRelationship, and_(
+                reg.TefcaEntityRelationship.child_entity_id == reg.ReviewRecord.entity_id,
+                reg.TefcaEntityRelationship.relationship_type == "managed_by_qhin",
+                reg.TefcaEntityRelationship.status == "active"))
+            .outerjoin(Qhin, Qhin.id == reg.TefcaEntityRelationship.parent_entity_id)
+            .order_by(reg.ReviewRecord.review_id)
+        )
+        if review_cycle_id:
+            try:
+                stmt = stmt.where(
+                    reg.ReviewRecord.sample_id == _uuid.UUID(str(review_cycle_id)))
+            except (ValueError, TypeError):
+                # Not a sample id (the snapshot cycle label is a rule/version
+                # anchor). No sample filter applies.
+                pass
+        try:
+            rows = list((await self.db.execute(stmt)).all())
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("sow report: stratified list unavailable: %s", exc)
+            rows = []
+
+        start = _parse_iso_date(period_start)
+        end = _parse_iso_date(period_end)
+
+        lists: Dict[str, List[Dict[str, Any]]] = {c: [] for c in GOVERNMENT_CATEGORIES}
+        pending: List[Dict[str, Any]] = []
+        seen = set()
+        for row in rows:
+            record, entity, qhin = _unpack_row(row)
+            review_id = getattr(record, "review_id", None)
+            if review_id in seen:
+                continue  # a second managed_by_qhin edge; the first is reported
+            seen.add(review_id)
+
+            bucket = (getattr(record, "reclassified_to", None)
+                      or getattr(record, "classification_bucket", None))
+            category = category_for_bucket(bucket)
+            reportable_at = getattr(record, "reportable_at", None)
+            rule = getattr(record, "classification_rule", None)
+            version = getattr(record, "classification_rule_version", None)
+            item = {
+                "review_id": review_id,
+                "entity_name": (getattr(entity, "display_name", None)
+                                or getattr(entity, "name", None)
+                                or "Entity not promoted (held record)"),
+                "entity_level": (getattr(entity, "sequoia_org_type", None)
+                                 or getattr(entity, "entity_level", None) or "—"),
+                "rce_org_oid": getattr(entity, "rce_org_oid", None) or "—",
+                "qhin": (getattr(qhin, "name", None)
+                         or getattr(entity, "org_managing_org", None) or "Unresolved"),
+                "category": category,
+                "category_label": government_label(category) if category else "—",
+                "category_number": GOVERNMENT_CATEGORY_NUMBER.get(category) if category else None,
+                "rule": f"{rule} v{version}" if rule else "—",
+                "reportable_at": _iso(reportable_at),
+                "reviewed_at": _iso(getattr(record, "reviewed_at", None)),
+            }
+            if reportable_at is None or category is None:
+                item["pending_reason"] = (
+                    "No standing QA approval" if reportable_at is None
+                    else "QA approved but no category recorded")
+                pending.append(item)
+                continue
+            approved_on = _parse_iso_date(reportable_at)
+            if start and approved_on and approved_on < start:
+                continue
+            if end and approved_on and approved_on > end:
+                continue
+            lists[category].append(item)
+
+        return {
+            "columns": [{"key": k, "label": v} for k, v in self.ENTITY_COLUMNS],
+            "entity_lists": lists,
+            "pending_qa": pending,
+            "counts": {**{c: len(lists[c]) for c in GOVERNMENT_CATEGORIES},
+                       "listed_total": sum(len(v) for v in lists.values()),
+                       "pending_qa": len(pending)},
+            "note": ("Each row is one review record joined to its entity and to "
+                     "the QHIN named by the canonical managed_by_qhin edge. A row "
+                     "enters a category only on a standing QA approval; pending "
+                     "rows are shown separately and are not findings."),
+        }
+
+    async def sampling_summary(self, review_cycle_id: Optional[str] = None
+                               ) -> Dict[str, Any]:
+        """The official sampling plans on record, as parameters — not a claim.
+
+        The contract fixes the 95% floor and "from each QHIN". Margin,
+        population and small-stratum handling are AGT methodology under D2 and
+        are reported as the parameters actually recorded on each plan.
+        """
+        from app.tefca_registry import models as reg
+
+        plans: List[Dict[str, Any]] = []
+        try:
+            rows = list((await self.db.execute(
+                select(reg.ReviewSample).order_by(reg.ReviewSample.drawn_at.desc())
+            )).scalars().all())
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("sow report: sampling plans unavailable: %s", exc)
+            rows = []
+        for plan in rows[:10]:
+            strata = getattr(plan, "strata_config", None) or {}
+            plans.append({
+                "sample_id": str(getattr(plan, "id", "")),
+                "name": getattr(plan, "sample_name", None),
+                "review_type": getattr(plan, "review_type", None),
+                "population_size": getattr(plan, "population_size", None),
+                "sample_size": getattr(plan, "sample_size", None),
+                "confidence_level": getattr(plan, "confidence_level", None),
+                "margin_of_error": getattr(plan, "margin_of_error", None),
+                "use_fpc": bool(getattr(plan, "use_fpc", False)),
+                "stratify_by": strata.get("stratify_by") if isinstance(strata, dict) else None,
+                "status": getattr(plan, "status", None),
+                "drawn_at": _iso(getattr(plan, "drawn_at", None)),
+            })
+        return {
+            "confidence_floor": "At or above 95% (CONTRACT REQUIREMENT — Section C, Tasks 3 and 4)",
+            "stratification_requirement": "From each QHIN (CONTRACT REQUIREMENT — Section C, Tasks 3 and 4)",
+            "parameters_status": ("AGT METHODOLOGY — margin of error, population "
+                                  "definition and small-stratum handling are "
+                                  "submitted under D2, awaiting COR confirmation, and "
+                                  "are reported as recorded on each plan."),
+            "plans_on_record": len(rows),
+            "plans": plans,
+        }
+
+    @staticmethod
+    def methodology_changes(query_parameters: Optional[Dict[str, Any]],
+                            include_implemented: bool) -> Dict[str, Any]:
+        """The methodology / control-framework change section.
+
+        Human-authored. The contract asks the report to carry suggested changes
+        (weekly: as needed) and implemented changes (final, bi-weekly, status,
+        quarterly). No table records these yet, so the generating PM supplies
+        them as parameters and the report says so; an empty section states that
+        none were recorded rather than leaving a blank.
+        """
+        params = query_parameters or {}
+
+        def _items(value) -> List[str]:
+            if not value:
+                return []
+            if isinstance(value, str):
+                return [line.strip() for line in value.splitlines() if line.strip()]
+            return [str(v).strip() for v in value if str(v).strip()]
+
+        return {
+            "suggested": _items(params.get("suggested_changes")),
+            "implemented": _items(params.get("implemented_changes")) if include_implemented else [],
+            "includes_implemented": include_implemented,
+            "basis": ("Authored by the programme manager at generation time and "
+                      "recorded in the report's provenance parameters. Not derived "
+                      "from review data."),
+        }
+
+    async def build_report_dataset(self, report_type: str, *,
+                                   review_cycle_id: Optional[str] = None,
+                                   query_parameters: Optional[Dict[str, Any]] = None
+                                   ) -> Dict[str, Any]:
+        """Everything the SOW report template needs, frozen, for one family."""
+        meta = SOW_REPORT_TYPES[report_type]
+        params = dict(query_parameters or {})
+        period_start = params.get("period_start") or None
+        period_end = params.get("period_end") or None
+        method = getattr(self, meta["method"])
+        if meta["deliverable"] == "D5.1":
+            data = await method(case_id=params.get("case_id"),
+                                review_cycle_id=review_cycle_id)
+            if period_start or period_end:
+                data["reporting_period_start"] = period_start
+                data["reporting_period_end"] = period_end
+        else:
+            data = await method(review_cycle_id=review_cycle_id,
+                                period_start=period_start, period_end=period_end)
+
+        from app.reports.data.release import CONTRACT_NUMBER
+
+        data.update({
+            "report_type": report_type,
+            "deliverable": meta["deliverable"],
+            "deliverable_title": meta["title"],
+            "task": meta["task"],
+            "contract_number": CONTRACT_NUMBER,
+            "contract_citation": ("All reports reference and cite the contract "
+                                  "number (RFQ 7571MN26Q00038, Section F)."),
+            "government_labels": dict(GOVERNMENT_CATEGORY_LABELS),
+            "category_numbers": dict(GOVERNMENT_CATEGORY_NUMBER),
+            "categories": list(GOVERNMENT_CATEGORIES),
+            "methodology_changes": self.methodology_changes(
+                params, include_implemented=meta["implemented_changes"]),
+            "sampling": data.get("sampling") or await self.sampling_summary(review_cycle_id),
+            "scope": {
+                "reporting_period_start": period_start,
+                "reporting_period_end": period_end,
+                "review_cycle_id": review_cycle_id,
+            },
+            "service_version": self.version,
+            "chart_list": [],
+        })
+        return data
+
     # ── the contract's families ──────────────────────────────────────────────
 
     async def retrospective_weekly(self, review_cycle_id=None,
@@ -292,12 +544,7 @@ class SowReportDataService:
             "Stratified list across the four Government categories",
             "All suggested AND implemented changes to the methodology and control framework",
         ]
-        data["sampling"] = {
-            "confidence_floor": "95% (CONTRACT REQUIREMENT, ¶128)",
-            "parameters_status": "AGT METHODOLOGY — D2 §5.1, awaiting COR confirmation",
-            "note": ("Per-QHIN sample draw is not implemented; it requires "
-                     "approved sampling parameters."),
-        }
+        data["sampling"] = await self.sampling_summary(review_cycle_id)
         return data
 
     async def ongoing_biweekly(self, review_cycle_id=None,
@@ -468,4 +715,64 @@ SOW_FAMILIES = {
     "D5.2": "priority_quarterly",
     "D6.1": "closeout_framework",
     "D6.2": "closeout_presentation",
+}
+
+
+def _iso(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+
+def _parse_iso_date(value: Any):
+    """A date from an ISO string or date/datetime; None when absent or malformed."""
+    if value is None or value == "":
+        return None
+    if hasattr(value, "date") and not isinstance(value, str):
+        return value.date()
+    if hasattr(value, "year") and not isinstance(value, str):
+        return value
+    try:
+        return datetime.fromisoformat(str(value)[:19]).date()
+    except ValueError:
+        return None
+
+
+def _unpack_row(row):
+    """(record, entity, qhin) from a joined result row or a bare record."""
+    try:
+        record, entity, qhin = row[0], row[1], row[2]
+        return record, entity, qhin
+    except (TypeError, IndexError, KeyError):
+        return row, None, None
+
+
+#: Generated-document report types for the SOW families. Keys are the
+#: `report_type` accepted by the generator (each at most 20 characters, the
+#: width of `review_reports.report_type`).
+SOW_REPORT_TYPES: Dict[str, Dict[str, Any]] = {
+    "retrospective_weekly": {
+        "deliverable": "D3.1", "task": "Task 3", "method": "retrospective_weekly",
+        "title": "Task 3 Weekly Progress Report", "implemented_changes": False,
+        "cadence": "Weekly during the first 120 days"},
+    "retrospective_final": {
+        "deliverable": "D3.2", "task": "Task 3", "method": "retrospective_final",
+        "title": "Task 3 Final Report", "implemented_changes": True,
+        "cadence": "Within thirty days following completion of the retrospective review"},
+    "ongoing_biweekly": {
+        "deliverable": "D4.1", "task": "Task 4", "method": "ongoing_biweekly",
+        "title": "Task 4 Bi-Weekly Progress Report", "implemented_changes": True,
+        "cadence": "Every two weeks"},
+    "ongoing_quarterly": {
+        "deliverable": "D4.2", "task": "Task 4", "method": "ongoing_quarterly",
+        "title": "Task 4 Quarterly Report", "implemented_changes": True,
+        "cadence": "Every calendar quarter, covering the previous ninety days"},
+    "priority_status": {
+        "deliverable": "D5.1", "task": "Task 5", "method": "priority_status",
+        "title": "Task 5 Priority Review Status Report", "implemented_changes": True,
+        "cadence": "At the direction of the COR"},
+    "priority_quarterly": {
+        "deliverable": "D5.2", "task": "Task 5", "method": "priority_quarterly",
+        "title": "Task 5 Quarterly Report", "implemented_changes": True,
+        "cadence": "Every calendar quarter, covering the previous ninety days"},
 }

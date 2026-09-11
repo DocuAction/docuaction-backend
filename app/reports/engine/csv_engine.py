@@ -111,6 +111,66 @@ def report_to_csv(dataset: Dict[str, Any], report_id: str,
     return buffer.getvalue()
 
 
+def sow_report_to_csv(dataset: Dict[str, Any], report_id: str,
+                      generated_at: str) -> str:
+    """The stratified Participant/Subparticipant list of a SOW report, as data.
+
+    One row per review record, with the Government category as text. The
+    category number and wording are the contract's; the rule column is
+    provenance. Pending records follow under their own header so the file can
+    never be read as "everything below is a finding".
+    """
+    buffer = io.StringIO(newline="")
+    writer = csv.writer(buffer, lineterminator="\r\n")
+    writer.writerow([f"# DocuAction TEFCA ARC {dataset.get('deliverable_title', 'report')} {report_id}"])
+    writer.writerow([f"# Contract number: {dataset.get('contract_number', '')}"])
+    writer.writerow([f"# Deliverable: {dataset.get('deliverable', '')}"])
+    writer.writerow([f"# Generated (UTC): {generated_at}"])
+    writer.writerow([f"# Reporting period: {dataset.get('reporting_period_start') or '-'} "
+                     f"to {dataset.get('reporting_period_end') or '-'}"])
+    writer.writerow([f"# SOW data service version: {dataset.get('service_version')}"])
+    writer.writerow(["# A row is listed under a category only on a standing "
+                     "independent QA approval. Pending rows are not findings."])
+    writer.writerow([])
+
+    columns = dataset.get("entity_columns") or []
+    keys = [c["key"] for c in columns]
+    labels = [c["label"] for c in columns]
+    writer.writerow(["## Stratified list of Participants and Subparticipants"])
+    writer.writerow(["Category no.", *labels])
+    listed = 0
+    for category in dataset.get("categories") or []:
+        number = (dataset.get("category_numbers") or {}).get(category, "")
+        for row in (dataset.get("entity_lists") or {}).get(category, []):
+            writer.writerow([number, *[row.get(k, "") or "" for k in keys]])
+            listed += 1
+    if not listed:
+        writer.writerow(["No Participant or Subparticipant is listed for this reporting period"])
+    writer.writerow([])
+
+    writer.writerow(["## Pending independent QA (not findings)"])
+    writer.writerow(["Case", "Participant / Subparticipant", "QHIN",
+                     "System recommendation", "Rule", "Why pending"])
+    pending = dataset.get("pending_qa") or []
+    if not pending:
+        writer.writerow(["No review record is pending QA"])
+    for row in pending:
+        writer.writerow([row.get("review_id", ""), row.get("entity_name", ""),
+                         row.get("qhin", ""), row.get("category_label", ""),
+                         row.get("rule", ""), row.get("pending_reason", "")])
+    writer.writerow([])
+
+    changes = dataset.get("methodology_changes") or {}
+    writer.writerow(["## Suggested changes to the methodology / control framework"])
+    for item in changes.get("suggested") or ["None recorded for this reporting period"]:
+        writer.writerow([item])
+    if changes.get("includes_implemented"):
+        writer.writerow(["## Implemented changes to the methodology / control framework"])
+        for item in changes.get("implemented") or ["None recorded for this reporting period"]:
+            writer.writerow([item])
+    return buffer.getvalue()
+
+
 def to_bytes(csv_text: str) -> bytes:
     """UTF-8 with a BOM — see the module docstring on Excel."""
     return csv_text.encode("utf-8-sig")
