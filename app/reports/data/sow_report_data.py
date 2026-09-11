@@ -756,27 +756,27 @@ def _unpack_row(row):
 #: `report_type` accepted by the generator (each at most 20 characters, the
 #: width of `review_reports.report_type`).
 SOW_REPORT_TYPES: Dict[str, Dict[str, Any]] = {
-    "retrospective_weekly": {
+    "retrospective_weekly": {"kind": "Weekly", 
         "deliverable": "D3.1", "task": "Task 3", "method": "retrospective_weekly",
         "title": "Task 3 Weekly Progress Report", "implemented_changes": False,
         "cadence": "Weekly during the first 120 days"},
-    "retrospective_final": {
+    "retrospective_final": {"kind": "Final", 
         "deliverable": "D3.2", "task": "Task 3", "method": "retrospective_final",
         "title": "Task 3 Final Report", "implemented_changes": True,
         "cadence": "Within thirty days following completion of the retrospective review"},
-    "ongoing_biweekly": {
+    "ongoing_biweekly": {"kind": "Biweekly", 
         "deliverable": "D4.1", "task": "Task 4", "method": "ongoing_biweekly",
         "title": "Task 4 Bi-Weekly Progress Report", "implemented_changes": True,
         "cadence": "Every two weeks"},
-    "ongoing_quarterly": {
+    "ongoing_quarterly": {"kind": "Quarterly", 
         "deliverable": "D4.2", "task": "Task 4", "method": "ongoing_quarterly",
         "title": "Task 4 Quarterly Report", "implemented_changes": True,
         "cadence": "Every calendar quarter, covering the previous ninety days"},
-    "priority_status": {
+    "priority_status": {"kind": "Status", 
         "deliverable": "D5.1", "task": "Task 5", "method": "priority_status",
         "title": "Task 5 Priority Review Status Report", "implemented_changes": True,
         "cadence": "At the direction of the COR"},
-    "priority_quarterly": {
+    "priority_quarterly": {"kind": "Quarterly", 
         "deliverable": "D5.2", "task": "Task 5", "method": "priority_quarterly",
         "title": "Task 5 Quarterly Report", "implemented_changes": True,
         "cadence": "Every calendar quarter, covering the previous ninety days"},
