@@ -93,12 +93,24 @@ def download_headers(filename: str, *, inline: bool = False,
 
 
 class GenerateReportRequest(BaseModel):
-    report_type: str = Field(default="verification",
-                             description="verification | verification_brief | executive")
+    report_type: str = Field(
+        default="verification",
+        description=("verification | verification_brief | executive | data_quality | "
+                     "intake | retrospective_weekly (D3.1) | retrospective_final (D3.2) | "
+                     "ongoing_biweekly (D4.1) | ongoing_quarterly (D4.2) | "
+                     "priority_status (D5.1) | priority_quarterly (D5.2)"))
     review_cycle_id: Optional[str] = Field(
         default=None, description="Scope to one review cycle. Omit for all records.")
     format: str = Field(default="html", description="html | pdf | csv")
     parameters: Dict[str, Any] = Field(default_factory=dict)
+    #: SOW families: the reporting period the stratified list covers, and the
+    #: human-authored change sections the contract asks for.
+    period_start: Optional[str] = Field(default=None, description="ISO date")
+    period_end: Optional[str] = Field(default=None, description="ISO date")
+    suggested_changes: Optional[str] = Field(
+        default=None, description="One suggested methodology/control change per line")
+    implemented_changes: Optional[str] = Field(
+        default=None, description="One implemented methodology/control change per line")
 
 
 def _summary(result) -> Dict[str, Any]:
@@ -125,6 +137,14 @@ async def generate(
 ):
     from app.reports.generator import ReportGenerationError, generate_report
 
+    parameters = dict(request.parameters or {})
+    for key in ("period_start", "period_end", "suggested_changes", "implemented_changes"):
+        value = getattr(request, key)
+        if value:
+            parameters[key] = value
+    if request.review_cycle_id and "review_cycle_id" not in parameters:
+        parameters["review_cycle_id"] = request.review_cycle_id
+
     try:
         result = await generate_report(
             db,
@@ -132,7 +152,7 @@ async def generate(
             review_cycle_id=request.review_cycle_id,
             generated_by=getattr(user, "email", None) or "SYSTEM",
             generated_by_id=getattr(user, "id", None),
-            query_parameters=request.parameters,
+            query_parameters=parameters,
         )
     except ReportGenerationError as exc:
         raise HTTPException(400, str(exc))
@@ -207,7 +227,34 @@ async def list_reports(
         # application wrote, or a populated row reads back as anonymous.
         "generated_by": str(r.generated_by) if r.generated_by else None,
         "snapshot": (r.report_data or {}).get("snapshot", {}),
+        **_listing_extras(r),
     } for r in rows]}
+
+
+def _deliverable_meta(report_type: str) -> Dict[str, Any]:
+    """Which contract deliverable a report type produces, if any."""
+    from app.reports.data.sow_report_data import SOW_REPORT_TYPES
+
+    meta = SOW_REPORT_TYPES.get(report_type)
+    if not meta:
+        return {"deliverable": None, "task": None, "title": None}
+    return {"deliverable": meta["deliverable"], "task": meta["task"],
+            "title": meta["title"], "cadence": meta["cadence"]}
+
+
+def _listing_extras(r) -> Dict[str, Any]:
+    """Deliverable, period and PM release state for one stored report."""
+    from app.reports.data.release import current_release
+
+    data = r.report_data or {}
+    snapshot = data.get("snapshot", {})
+    return {
+        "generated_by_email": snapshot.get("generated_by"),
+        "period_start": r.period_start,
+        "period_end": r.period_end,
+        "release": current_release(data),
+        **_deliverable_meta(r.report_type),
+    }
 
 
 @router.get("/{report_id}", summary="Report metadata and snapshot provenance")
@@ -225,7 +272,131 @@ async def get_report(
         "generated_by": str(row.generated_by) if row.generated_by else None,
         "snapshot": data.get("snapshot", {}),
         "dataset": data.get("dataset", {}),
+        **_listing_extras(row),
     }
+
+
+# ── PM release control ───────────────────────────────────────────────────────
+#
+# QA-approved data -> report draft -> PM review -> ready for delivery ->
+# download / email-ready package. The programme manager keeps external release:
+# nothing here transmits a deliverable, and no status says "sent".
+
+
+class ReleaseRequest(BaseModel):
+    action: str = Field(description="PM_REVIEWED | READY_FOR_DELIVERY | RETURNED_TO_DRAFT")
+    note: str = Field(default="", max_length=2000)
+
+
+@router.get("/{report_id}/release", summary="Release status and decision history")
+async def get_release(
+    report_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("viewer")),
+):
+    from app.reports.data.release import current_release
+
+    row = await _stored(db, report_id)
+    return {"report_id": report_id, "release": current_release(row.report_data)}
+
+
+@router.post("/{report_id}/release", summary="Record a PM release decision")
+async def post_release(
+    report_id: str,
+    request: ReleaseRequest,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("program_manager")),
+):
+    """Append one release decision. `program_manager` and above only.
+
+    The snapshot, dataset and stored HTML are untouched; only the `release`
+    block is written. Every decision is also written to the platform audit
+    trail so "who released this report" is a query, not a search.
+    """
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from app.models.database import AuditLog
+    from app.reports.data.release import (ReleaseTransitionError,
+                                          apply_transition, current_release)
+
+    row = await _stored(db, report_id)
+    actor = getattr(user, "email", None) or "SYSTEM"
+    try:
+        new_data, entry = apply_transition(
+            row.report_data, action=request.action, actor=actor, note=request.note)
+    except ReleaseTransitionError as exc:
+        raise HTTPException(409, str(exc))
+
+    row.report_data = new_data
+    flag_modified(row, "report_data")
+    db.add(AuditLog(
+        action=f"REPORT_RELEASE_{entry['status']}",
+        event_type="reporting",
+        outcome="success",
+        resource_type="report",
+        resource_id=report_id,
+        details={"actor": actor, "note": entry["note"], "report_type": row.report_type},
+    ))
+    await db.commit()
+    return {"report_id": report_id, "release": current_release(new_data)}
+
+
+@router.get("/{report_id}/package", summary="Download the email-ready deliverable package")
+async def get_package(
+    report_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("viewer")),
+):
+    """ZIP of the stored HTML, the CSV, the PDF where available, a README and a
+    manifest with SHA-256 of every member. Assembled from the STORED report;
+    nothing is regenerated and nothing is transmitted."""
+    from app.reports.charts import build_all_charts
+    from app.reports.data.release import build_package, current_release
+    from app.reports.engine.csv_engine import report_to_csv, sow_report_to_csv
+    from app.reports.engine.pdf_engine import pdf_available, render_pdf, unavailable_reason
+    from app.reports.generator import SOW_TYPES
+
+    row = await _stored(db, report_id)
+    data = row.report_data or {}
+    snapshot = data.get("snapshot") or {}
+    dataset = dict(data.get("dataset") or {})
+    if not row.report_html:
+        raise HTTPException(404, f"Report {report_id} has no stored HTML.")
+
+    if row.report_type in SOW_TYPES:
+        csv_text = sow_report_to_csv(dataset, report_id, snapshot.get("generation_timestamp", ""))
+    else:
+        try:
+            dataset["chart_list"] = build_all_charts(
+                dataset.get("buckets") or {}, dataset.get("coverage") or {},
+                dataset.get("dimensions") or {}, dataset.get("entity_status") or {},
+                dataset.get("qhins") or {})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("package: charts not rebuilt for %s: %s", report_id, exc)
+            dataset["chart_list"] = []
+        csv_text = report_to_csv(dataset, report_id, snapshot.get("generation_timestamp", ""))
+
+    pdf_bytes = None
+    pdf_reason = None
+    if pdf_available():
+        try:
+            pdf_bytes = await run_in_threadpool(render_pdf, row.report_html, title=report_id)
+        except Exception as exc:  # noqa: BLE001
+            pdf_reason = str(exc)
+    else:
+        pdf_reason = unavailable_reason()
+
+    package = build_package(
+        report_id=report_id, html=row.report_html, csv_text=csv_text,
+        pdf_bytes=pdf_bytes, snapshot=snapshot, release=current_release(data),
+        deliverable=_deliverable_meta(row.report_type),
+        pdf_unavailable_reason=pdf_reason)
+    return Response(
+        content=package["bytes"], media_type="application/zip",
+        headers=download_headers(
+            safe_filename(f"{report_id}-package", "zip"),
+            extra={"X-Data-Classification": snapshot.get("data_classification") or "DEVELOPMENT_TEST",
+                   "X-Release-Status": package["manifest"]["release"].get("status", "DRAFT")}))
 
 
 @router.get("/{report_id}/html", summary="Download a report as HTML")

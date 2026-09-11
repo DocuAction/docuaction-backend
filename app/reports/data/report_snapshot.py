@@ -38,7 +38,10 @@ from sqlalchemy import func, select
 
 logger = logging.getLogger(__name__)
 
-REPORT_TYPES = ("verification", "data_quality", "executive", "intake")
+REPORT_TYPES = ("verification", "verification_brief", "data_quality", "executive",
+                "intake", "retrospective_weekly", "retrospective_final",
+                "ongoing_biweekly", "ongoing_quarterly", "priority_status",
+                "priority_quarterly")
 
 #: DA-ARC-YYYY-NNN
 REPORT_ID_PREFIX = "DA-ARC"
@@ -266,8 +269,11 @@ async def store_report(db, snapshot: ReportSnapshot, dataset: Dict[str, Any],
             id=row_id,
             report_id=snapshot.report_id,
             report_type=snapshot.report_type,
-            period_start=None,
-            period_end=None,
+            # The period the report was scoped to, when one was given. Stored
+            # on the row so the register can show it without opening the
+            # snapshot.
+            period_start=_as_date(getattr(snapshot, 'reporting_period_start', None)),
+            period_end=_as_date(getattr(snapshot, 'reporting_period_end', None)),
             rule_set_version=(int(snapshot.b1_b4_rule_version)
                               if (snapshot.b1_b4_rule_version or "").isdigit()
                               else None),
@@ -309,3 +315,13 @@ def verify_reproducible(snapshot: ReportSnapshot, dataset: Dict[str, Any]) -> bo
     flagged rather than absorbed.
     """
     return data_payload_hash(dataset) == snapshot.data_payload_hash
+
+
+def _as_date(value):
+    """A date column value from an ISO string, or None."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value)[:19]).date()
+    except ValueError:
+        return None

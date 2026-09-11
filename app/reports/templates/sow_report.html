@@ -1,0 +1,216 @@
+{#
+  The contract's report families as a delivered document.
+
+  One template for D3.1, D3.2, D4.1, D4.2, D5.1 and D5.2. The families differ in
+  cadence and in which change sections they carry; they share the thing the
+  contract actually asks for — "a stratified list of Participants and
+  Subparticipants" under the four Government categories — so that list is the
+  body of every one of them, as a LIST, with one row per review record.
+
+  Every category heading is the Government's wording from Section C. B1–B4
+  never appears in the body; the rule that produced a category is shown as a
+  rule code because that is provenance, not a label.
+#}
+{% extends "base.html" %}
+
+{% block title %}{{ deliverable_title }} {{ snapshot.report_id }} — Contract {{ contract_number }}{% endblock %}
+{% block description %}{{ deliverable }} {{ deliverable_title }} for contract {{ contract_number }}{% endblock %}
+{% block kicker %}TEFCA ARC &middot; {{ task }} &middot; Deliverable {{ deliverable }} &middot; Contract {{ contract_number }}{% endblock %}
+{% block heading %}{{ deliverable_title }}{% endblock %}
+
+{% block content %}
+
+<section class="scope-box" aria-labelledby="contract-heading">
+  <h2 id="contract-heading">Contract reference</h2>
+  <div class="scope-grid">
+    <div class="scope-item"><span class="label">Contract number</span><span class="value">{{ contract_number }}</span></div>
+    <div class="scope-item"><span class="label">Deliverable</span><span class="value">{{ deliverable }} &mdash; {{ deliverable_title }}</span></div>
+    <div class="scope-item"><span class="label">Reporting period</span><span class="value">
+      {%- if reporting_period_start or reporting_period_end -%}
+        {{ reporting_period_start|date }} &ndash; {{ reporting_period_end|date }}
+      {%- else -%}Not specified &mdash; all records on record{%- endif -%}
+    </span></div>
+    <div class="scope-item"><span class="label">Review cycle</span><span class="value">{{ snapshot.review_cycle_id or 'All records' }}</span></div>
+    <div class="scope-item"><span class="label">Records considered</span><span class="value">{{ stratification.records_considered|number }}</span></div>
+    <div class="scope-item"><span class="label">Listed (QA approved)</span><span class="value">{{ list_counts.listed_total|number }}</span></div>
+    <div class="scope-item"><span class="label">Pending QA</span><span class="value">{{ list_counts.pending_qa|number }}</span></div>
+    <div class="scope-item"><span class="label">Evidence rule version</span><span class="value">{{ evidence_rule_version or 'Not recorded' }}</span></div>
+  </div>
+  <p class="figure-notes">{{ contract_citation }}</p>
+</section>
+
+<section class="panel" aria-labelledby="required-heading">
+  <h3 id="required-heading">Required content for this deliverable</h3>
+  <ul>
+    {% for item in required_content %}
+      <li>{{ item }}</li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section class="panel" aria-labelledby="summary-heading">
+  <h3 id="summary-heading">Stratification summary</h3>
+  <table>
+    <caption>Participants and Subparticipants by Government discrepancy category</caption>
+    <thead>
+      <tr>
+        <th scope="col">No.</th>
+        <th scope="col">Category</th>
+        <th scope="col">Listed in this report</th>
+        <th scope="col">Pending QA (not findings)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for category in categories %}
+        <tr>
+          <th scope="row">{{ category_numbers[category] }}</th>
+          <td>{{ government_labels[category] }}</td>
+          <td>{{ list_counts[category]|number }}</td>
+          <td>{{ stratification.pending_qa[category]|number }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="figure-notes">{{ stratification.gate }}</p>
+</section>
+
+{% for category in categories %}
+<section class="panel" aria-labelledby="cat-{{ loop.index }}-heading">
+  <h3 id="cat-{{ loop.index }}-heading">{{ category_numbers[category] }}) {{ government_labels[category] }}</h3>
+  {% set rows = entity_lists[category] %}
+  {% if rows %}
+    <table>
+      <caption>{{ government_labels[category] }} &mdash; {{ rows|length }} Participant(s) / Subparticipant(s)</caption>
+      <thead>
+        <tr>
+          {% for column in entity_columns %}
+            <th scope="col">{{ column.label }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            {% for column in entity_columns %}
+              {% if loop.first %}
+                <th scope="row">{{ row[column.key] or '—' }}</th>
+              {% else %}
+                <td>{{ row[column.key] or '—' }}</td>
+              {% endif %}
+            {% endfor %}
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="insufficient-data">No Participant or Subparticipant is listed under this category for the reporting period.</p>
+  {% endif %}
+</section>
+{% endfor %}
+
+<section class="panel" aria-labelledby="pending-heading">
+  <h3 id="pending-heading">Reviews pending independent QA (not findings)</h3>
+  {% if pending_qa %}
+    <table>
+      <caption>Review records without a standing QA approval &mdash; {{ pending_qa|length }} record(s)</caption>
+      <thead>
+        <tr>
+          <th scope="col">Case</th>
+          <th scope="col">Participant / Subparticipant</th>
+          <th scope="col">QHIN</th>
+          <th scope="col">System recommendation</th>
+          <th scope="col">Why pending</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in pending_qa %}
+          <tr>
+            <th scope="row">{{ row.review_id or '—' }}</th>
+            <td>{{ row.entity_name }}</td>
+            <td>{{ row.qhin }}</td>
+            <td>{{ row.category_label }} ({{ row.rule }})</td>
+            <td>{{ row.pending_reason }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="insufficient-data">No review record is pending QA.</p>
+  {% endif %}
+  <p class="figure-notes">{{ list_note }}</p>
+</section>
+
+<section class="panel" aria-labelledby="changes-heading">
+  <h3 id="changes-heading">Changes to the methodology and control framework</h3>
+  <h4>Suggested changes</h4>
+  {% if methodology_changes.suggested %}
+    <ul>{% for item in methodology_changes.suggested %}<li>{{ item }}</li>{% endfor %}</ul>
+  {% else %}
+    <p>No suggested change was recorded for this reporting period.</p>
+  {% endif %}
+  {% if methodology_changes.includes_implemented %}
+    <h4>Implemented changes</h4>
+    {% if methodology_changes.implemented %}
+      <ul>{% for item in methodology_changes.implemented %}<li>{{ item }}</li>{% endfor %}</ul>
+    {% else %}
+      <p>No implemented change was recorded for this reporting period.</p>
+    {% endif %}
+  {% endif %}
+  <p class="figure-notes">{{ methodology_changes.basis }}</p>
+</section>
+
+<section class="panel" aria-labelledby="limits-heading">
+  <h3 id="limits-heading">Source limitations and open methodology items</h3>
+  <table>
+    <caption>Sources that could not answer during evidence collection</caption>
+    <thead><tr><th scope="col">Source</th><th scope="col">Observations affected</th></tr></thead>
+    <tbody>
+      {% if source_limitations.sources_unavailable %}
+        {% for source, count in source_limitations.sources_unavailable.items() %}
+          <tr><th scope="row">{{ source }}</th><td>{{ count|number }}</td></tr>
+        {% endfor %}
+      {% else %}
+        <tr><th scope="row">None recorded</th><td>0</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+  <p class="figure-notes">{{ source_limitations.note }}</p>
+  <p class="figure-notes">{{ methodology_pending.note }}</p>
+</section>
+
+<section class="panel" aria-labelledby="sampling-heading">
+  <h3 id="sampling-heading">Sampling</h3>
+  <p>Confidence: {{ sampling.confidence_floor }}. Stratification: {{ sampling.stratification_requirement }}.</p>
+  <p class="figure-notes">{{ sampling.parameters_status }}</p>
+  {% if sampling.plans %}
+    <table>
+      <caption>Official sampling plans on record ({{ sampling.plans_on_record|number }})</caption>
+      <thead>
+        <tr>
+          <th scope="col">Plan</th><th scope="col">Type</th><th scope="col">Population</th>
+          <th scope="col">Sample</th><th scope="col">Confidence</th><th scope="col">Margin</th>
+          <th scope="col">FPC</th><th scope="col">Stratified by</th><th scope="col">Drawn (UTC)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for plan in sampling.plans %}
+          <tr>
+            <th scope="row">{{ plan.name or plan.sample_id }}</th>
+            <td>{{ plan.review_type or '—' }}</td>
+            <td>{{ plan.population_size|number }}</td>
+            <td>{{ plan.sample_size|number }}</td>
+            <td>{{ plan.confidence_level }}</td>
+            <td>{{ plan.margin_of_error }}</td>
+            <td>{{ 'Yes' if plan.use_fpc else 'No' }}</td>
+            <td>{{ plan.stratify_by or '—' }}</td>
+            <td>{{ plan.drawn_at or '—' }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="insufficient-data">No official sampling plan has been drawn.</p>
+  {% endif %}
+</section>
+
+{% endblock %}
