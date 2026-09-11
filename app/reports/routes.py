@@ -330,6 +330,9 @@ async def post_release(
     row.report_data = new_data
     flag_modified(row, "report_data")
     db.add(AuditLog(
+        # The authenticated principal, so the Audit Trail's User column names
+        # the programme manager who released the report rather than "System".
+        user_id=getattr(user, "id", None),
         action=f"REPORT_RELEASE_{entry['status']}",
         event_type="reporting",
         outcome="success",
