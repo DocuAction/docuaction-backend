@@ -70,3 +70,19 @@ Feature OFF means: no external call (no network code exists), no processing (ser
 ## Future UI (documented only)
 
 An entity 360 view: ONC/RCE delivered values · independent evidence per source · system observations · prior review · what changed · analyst determination · QA · audit history. Not built.
+
+
+## Additions from the overnight hardening sprint (2026-09-12)
+
+- `SourceAuthority` extended (RCE_PROVIDED_THIRD_PARTY, DOCUACTION_HISTORICAL, PRIOR_HUMAN_DETERMINATION); descriptive only, tested non-weighted.
+- `ValueHandling` on `Provenance` (RAW_PERMITTED / HASHED_REFERENCE_ONLY / TRANSIENT_ONLY / RESTRICTED_DISPLAY) applied by `EvidenceObservation.to_dict()`; `schema_version` on provenance.
+- `DataRights` / `DataRightsClass` / `RightsStatus` on `AdapterDescriptor`; register in `EVIDENCE_SOURCE_DATA_RIGHTS_MODEL.md`.
+- `CapabilityAvailability` for state registries.
+- `DeltaScope` and careful wording; `EntityIntelligenceRun.status` and `prior_review_reference` passthrough.
+- `ParseReport.status` (OK / PARTIAL / FAILED), `rows_skipped`, `stopped_at_line`; csv errors end reading with a note, never an exception mid-file.
+- CMS pointer code 6 and `<UNAVAIL>` placeholder handling (verified against the public weekly sample).
+- `flags._as_bool`: only True / "true" / "1" / "yes" / "on" enable; the master flag wins over every sub-flag.
+- `intake_safety.py`: zip-slip, archive-bomb, allowlist, CSV-injection, limits, decoding, log redaction helpers (isolated; no caller in the platform).
+- Assessment vocabulary guard is a `RuntimeError` at import (holds under `python -O`), not an `assert`.
+
+Model review conclusions (how the model handles each case): multiple names → one NAME observation per name with its source-stated kind; multiple NPIs → MULTIPLE_CANDIDATE_ENTITIES; multiple locations → one LOCATION observation per role, roles never merged; role changes → new observation, delta by (source, type, role); history → deltas with scope; disagreeing sources → CONFLICTING_EVIDENCE with both visible; stale sources → `observed_at` / dataset edition on every observation, freshness is shown not judged; unavailable sources → unavailability observation → SOURCE_UNAVAILABLE signal, run status COMPLETED_WITH_UNAVAILABLE_SOURCES; relationship types → compared only within one kind code; effective dates → `effective_from` / `effective_to` from the source where published (NPPES enumeration/deactivation); corrections → a new edition produces EVIDENCE deltas, prior observations are never rewritten; removals → REMOVED_VALUE delta, never deletion; new entities → NEW_ENTITY, nothing to compare; ambiguity → AMBIGUOUS_* signals, never resolved by the engine.

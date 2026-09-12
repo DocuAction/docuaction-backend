@@ -30,17 +30,26 @@ from typing import Dict, List, Optional
 
 from app.core.entity_intelligence import flags
 from app.core.entity_intelligence.observations import EvidenceObservation, Provenance
-from app.core.entity_intelligence.ports import AdapterDescriptor, AdapterStatus, SchemaInventory
+from app.core.entity_intelligence.observations import ValueHandling
+from app.core.entity_intelligence.ports import (AdapterDescriptor, AdapterStatus, DataRights,
+                                                 DataRightsClass, RightsStatus, SchemaInventory)
 
 SOURCE_ID = "IQVIA_ONEKEY_RCE_DELIVERY"
 SOURCE_OWNER = "IQVIA OneKey"
 DELIVERY_PATH_NOTE = "RCE-provided delivery, received by AGT / DocuAction"
 STATUS = AdapterStatus.AWAITING_SCHEMA
 
+#: Terms are unknown until the RCE delivery arrives with its conditions of use.
+#: Until then: transient processing only, nothing persisted, nothing displayed.
+DATA_RIGHTS = DataRights(
+    rights_class=DataRightsClass.COMMERCIAL_LICENSED, status=RightsStatus.AWAITING_DELIVERY_TERMS,
+    value_handling=ValueHandling.TRANSIENT_ONLY,
+    basis="No delivery terms received; IQVIA OneKey is a licensed commercial product")
+
 DESCRIPTOR = AdapterDescriptor(
     source_id=SOURCE_ID, source_owner=SOURCE_OWNER, status=STATUS, feature_flag=flags.IQVIA,
     description="Awaiting the authoritative RCE-delivered file layout. Preserve + inventory only.",
-    makes_external_calls=False, requires_credential=False)
+    makes_external_calls=False, requires_credential=False, data_rights=DATA_RIGHTS)
 
 #: Publicly described OneKey CONCEPTS (IQVIA OneKey Reference Data fact sheet,
 #: 2025): persistent OneKey ID for HCPs/HCOs; HCO names; addresses; corporate
@@ -84,6 +93,43 @@ class IQVIAOneKeyDeliveryAdapter:
         return SchemaInventory(source_id=SOURCE_ID, schema_fingerprint=fp, fields=header,
                                record_count=count, sample_values=samples,
                                note="Inventory only. Mapping requires human review and approval.")
+
+    @staticmethod
+    def profile(text: str, *, max_rows: int = 100_000) -> Dict[str, Dict[str, object]]:
+        """Per-column data profile for the human mapping review: fill rate,
+        distinct count (capped), max length, and whether every value is
+        numeric. No value is echoed beyond length/shape; samples come from
+        `inventory`, which is the reviewer's controlled peek."""
+        reader = csv.reader(io.StringIO(text))
+        header = next(reader, []) or []
+        stats = {h: {"filled": 0, "distinct": set(), "max_len": 0, "all_numeric": True} for h in header}
+        rows = 0
+        for row in reader:
+            rows += 1
+            if rows > max_rows:
+                break
+            for h, v in zip(header, row):
+                s = stats[h]
+                if v.strip():
+                    s["filled"] += 1
+                    if len(s["distinct"]) < 1000:
+                        s["distinct"].add(v)
+                    s["max_len"] = max(s["max_len"], len(v))
+                    if not v.strip().replace(".", "", 1).isdigit():
+                        s["all_numeric"] = False
+        out: Dict[str, Dict[str, object]] = {}
+        for h, s in stats.items():
+            out[h] = {"fill_rate": (s["filled"] / rows) if rows else 0.0,
+                      "distinct_capped": len(s["distinct"]), "max_len": s["max_len"],
+                      "all_numeric": s["all_numeric"] if s["filled"] else None}
+        return out
+
+    @staticmethod
+    def unknown_field_report(inventory: SchemaInventory, approved_mapping: Optional[Dict[str, str]]) -> List[str]:
+        """Delivered fields with no approved concept. With no mapping at all,
+        every field is unknown — which is the truthful state today."""
+        mapped = set((approved_mapping or {}).keys())
+        return [f for f in inventory.fields if f not in mapped]
 
     def propose_mapping(self, inventory: SchemaInventory) -> Dict[str, Optional[str]]:
         """An EMPTY proposal: every delivered field listed, no concept assigned.

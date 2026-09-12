@@ -58,3 +58,14 @@ Example — delivered Frederick, NPPES primary Baltimore, additional practice lo
 > The delivered location differs from the NPPES_V2 primary practice location but corresponds to an available non-primary practice-location record for the matched NPI. Human review required.
 
 Templates are deterministic; a missing fact renders "unstated". No language model is involved.
+
+
+## Normalisation hardening (2026-09-12)
+
+Normalisation removes formatting only. Verified equivalences: case; dots inside abbreviations ("L.L.C." = "LLC"); punctuation → space; whitespace collapse; trailing organisational suffix spelling (Incorporated = Inc, Corporation = Corp, Company = Co, Limited = Ltd); Unicode casefold (ß = SS; É = é). Verified **non**-equivalences (no false equivalence): "ABC Health LLC" ≠ "ABC Health Foundation" (NAME_CONFLICT); "ABC Health LLC" vs "ABC Health Inc" → AMBIGUOUS_NAME, never a match; "Cafe" ≠ "Café" (diacritics are not folded); "St" ≠ "Saint" (no word expansion); "ABC Health" ≠ "ABC Health LLC". Locations: ZIP+4 = ZIP5; suite on line 2 = suite inside line 1; a different suite number or a different ZIP is not a match. Invariant tests (seeded, 500 cases each) cover idempotence, formatting-equivalence, word-change-never-equivalent and no-exception-on-garbage.
+
+NORMALIZED_SIMILARITY != IDENTITY_PROOF: no similarity metric exists in the engine; "normalised match" means byte-equality after formatting normalisation. There is no fuzzy identity.
+
+## Source authority (descriptive, not weighted)
+
+`SourceAuthority` now distinguishes PROGRAM_DELIVERY (subject), RCE_PROVIDED_THIRD_PARTY, FEDERAL_REGISTRY, STATE_REGISTRY, COMMERCIAL_REFERENCE, SUPPLEMENTAL, DOCUACTION_HISTORICAL, PRIOR_HUMAN_DETERMINATION, UNKNOWN. A test swaps the authority class of a conflicting source through every value and shows the assessment is unchanged: there is no ranking to exploit and no voting.

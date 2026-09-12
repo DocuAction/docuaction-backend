@@ -33,14 +33,28 @@ class ObservationType(str, Enum):
 
 
 class SourceAuthority(str, Enum):
-    """Whose statement it is. Program delivery is the SUBJECT under review and
-    is never corroborating evidence for itself."""
-    PROGRAM_DELIVERY = "PROGRAM_DELIVERY"
-    FEDERAL_REGISTRY = "FEDERAL_REGISTRY"
-    STATE_REGISTRY = "STATE_REGISTRY"
-    COMMERCIAL_REFERENCE = "COMMERCIAL_REFERENCE"
-    SUPPLEMENTAL = "SUPPLEMENTAL"
+    """Whose statement it is — a controlled DESCRIPTIVE classification, not a
+    ranking. No numeric weight exists and none is derived from this enum.
+    Program delivery is the SUBJECT under review and never corroborates itself."""
+    PROGRAM_DELIVERY = "PROGRAM_DELIVERY"                      # ONC/RCE delivered data
+    RCE_PROVIDED_THIRD_PARTY = "RCE_PROVIDED_THIRD_PARTY"      # e.g. IQVIA file handed over by the RCE
+    FEDERAL_REGISTRY = "FEDERAL_REGISTRY"                      # NPPES and other federal public reference data
+    STATE_REGISTRY = "STATE_REGISTRY"                          # state public business registries
+    COMMERCIAL_REFERENCE = "COMMERCIAL_REFERENCE"              # licensed commercial evidence obtained by AGT
+    SUPPLEMENTAL = "SUPPLEMENTAL"                              # website, geocoding and similar corroboration
+    DOCUACTION_HISTORICAL = "DOCUACTION_HISTORICAL"            # DocuAction's own prior observation
+    PRIOR_HUMAN_DETERMINATION = "PRIOR_HUMAN_DETERMINATION"    # a recorded analyst/QA decision (reference only)
     UNKNOWN = "UNKNOWN"
+
+
+class ValueHandling(str, Enum):
+    """How the observed value may be held. Public data may be stored raw;
+    licensed or restricted sources may only permit a hash or a reference, or
+    transient processing with nothing persisted."""
+    RAW_PERMITTED = "RAW_PERMITTED"
+    HASHED_REFERENCE_ONLY = "HASHED_REFERENCE_ONLY"
+    TRANSIENT_ONLY = "TRANSIENT_ONLY"
+    RESTRICTED_DISPLAY = "RESTRICTED_DISPLAY"
 
 
 class DeliveryPath(str, Enum):
@@ -104,6 +118,9 @@ class Provenance:
     source_file_sha256: Optional[str] = None
     source_record_ref: Optional[str] = None   # line number, row key, API request
     parser_version: Optional[str] = None
+    schema_version: Optional[str] = None
+    #: How the observed value may be held (see ValueHandling).
+    value_handling: ValueHandling = ValueHandling.RAW_PERMITTED
     note: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -115,6 +132,8 @@ class Provenance:
             "source_file_sha256": self.source_file_sha256,
             "source_record_ref": self.source_record_ref,
             "parser_version": self.parser_version,
+            "schema_version": self.schema_version,
+            "value_handling": self.value_handling.value,
             "note": self.note,
         }
 
@@ -148,6 +167,18 @@ class EvidenceObservation:
             "role": self.role, "value": self.observed_value,
             "record": self.source_record_id, "field": self.source_field})
 
+    def safe_value(self) -> Dict[str, Any]:
+        """The value as it may be persisted or displayed under the source's
+        value-handling rule. RAW_PERMITTED returns the value; HASHED returns a
+        hash only; TRANSIENT returns nothing; RESTRICTED returns the value
+        (display control is the consumer's duty and is flagged)."""
+        vh = self.provenance.value_handling
+        if vh is ValueHandling.RAW_PERMITTED or vh is ValueHandling.RESTRICTED_DISPLAY:
+            return dict(self.observed_value)
+        if vh is ValueHandling.HASHED_REFERENCE_ONLY:
+            return {"value_hash": observation_hash(self.observed_value), "kind": self.observed_value.get("kind")}
+        return {"withheld": "TRANSIENT_ONLY", "kind": self.observed_value.get("kind")}
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "observation_id": self.observation_id,
@@ -158,7 +189,7 @@ class EvidenceObservation:
             "source_field": self.source_field,
             "observation_type": self.observation_type.value,
             "role": self.role,
-            "observed_value": dict(self.observed_value),
+            "observed_value": self.safe_value(),
             "normalized_value": dict(self.normalized_value) if self.normalized_value else None,
             "observed_at": self.observed_at,
             "effective_from": self.effective_from,

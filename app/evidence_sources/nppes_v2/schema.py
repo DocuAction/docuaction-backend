@@ -114,3 +114,20 @@ def other_name_kind(type_code: str) -> str:
     everything else is what CMS says it is, never re-labelled."""
     return {"3": "DOING_BUSINESS_AS", "4": "FORMER_LEGAL_BUSINESS_NAME", "5": "OTHER_NAME",
             "1": "OTHER_NAME", "2": "OTHER_NAME"}.get((type_code or "").strip(), "UNKNOWN")
+
+
+#: Literal placeholder CMS writes where a value is withheld or not available.
+#: NOT documented in the readme v.2 or the CodeValues PDF; VERIFIED in the
+#: weekly V2 bundle 083126_090626: every Type 2 row carries "<UNAVAIL>" in
+#: Employer Identification Number (EIN) (8,588/8,588), in Provider Other
+#: Organization Name whenever the type code is 6 (3,127/3,127), and in Parent
+#: Organization TIN (2,824). A placeholder is an ABSENCE, never a name.
+PLACEHOLDER_VALUES = frozenset({"<UNAVAIL>"})
+
+#: Readme v.2 (main-file layout note): "If a 6 is seen in the Provider Other
+#: Organization Name Type Code column, there are other names for that
+#: Organization in the Other Name Reference File." Code 6 is a POINTER, not an
+#: Other Provider Name Type Code (Exhibit 1-6 lists only 1-5). The name field
+#: beside it is "<UNAVAIL>" in the verified sample. The kinds live in the
+#: reference file and only there.
+OTHER_NAME_REFERENCE_POINTER_CODE = "6"

@@ -1,6 +1,6 @@
 # IQVIA OneKey — adapter contract (RCE-provided delivery)
 
-STATUS = AWAITING_SCHEMA. IQVIA_API_CALLED = NO. IQVIA_CREDENTIAL_REQUIRED = NO. IQVIA_SCHEMA_INVENTED = NO.
+STATUS = AWAITING_SCHEMA. IQVIA_API_CALLED = NO. IQVIA_CREDENTIAL_REQUIRED = NO. IQVIA_SCHEMA_INVENTED = NO. Data rights: COMMERCIAL_LICENSED / AWAITING_DELIVERY_TERMS / TRANSIENT_ONLY. Source authority when delivered: `RCE_PROVIDED_THIRD_PARTY` (program to confirm; see checklist Q28).
 
 ## Program context
 
@@ -9,6 +9,28 @@ ONC has indicated that an IQVIA-related data file is expected from the RCE/vendo
 ## Public research (capability vocabulary only)
 
 From IQVIA's public OneKey Reference Data material (fact sheet, 2025; iqvia.com OneKey pages): a persistent OneKey ID assigned to every HCP and HCO; coverage figures (746,211 HCOs, 11.3M HCPs, 6.2M HCP-to-HCO affiliations, 26,557 corporate parents, 1,116 IDNs); attributes described as names, addresses, organisation classifications/types, affiliations and corporate hierarchies, other identifiers; delivery "with APIs, portals, and integrated data services". **These are potential capabilities. None is an assumed RCE-delivered column.**
+
+## Public research re-verified 2026-09-12
+
+IQVIA's public OneKey page (iqvia.com, read 2026-09-12) describes: "unique identifiers" linking to other IQVIA datasets; HCP and HCO reference data with a "best address" capability; "Integrated Delivery Networks (IDNs), hospitals, clinics, group purchasing organizations (GPOs)"; "B2B and B2P affiliations"; "physician employment indicators"; "over 1,000 attributes"; "More than 1.5M updates are made globally each month"; delivery via "a variety of delivery options" including API and portal. Nothing on the page describes a file layout. `POTENTIAL_CONCEPTS` remains a vocabulary, not a schema.
+
+## Receiving pipeline (tested with generic synthetic headers only)
+
+```
+RECEIVE → PRESERVE → HASH → PROVENANCE → FINGERPRINT → INVENTORY → PROFILE → UNKNOWN-FIELD REPORT → PROPOSE → HUMAN REVIEW → APPROVED → OBSERVATIONS
+```
+
+| Stage | Implemented | Notes |
+|---|---|---|
+| PRESERVE / HASH | `preserve(bytes)` | SHA-256 + size of the bytes as received |
+| FINGERPRINT / INVENTORY | `inventory(text)` | header hash, field list, record count, ≤ 3 sample values per field |
+| PROFILE | `profile(text)` | per-column fill rate, capped distinct count, max length, all-numeric flag; no values echoed |
+| UNKNOWN-FIELD REPORT | `unknown_field_report(inventory, approved_mapping)` | every field without an approved concept; with no mapping, every field — the truthful state |
+| PROPOSE | `propose_mapping(inventory)` | empty by design |
+| HUMAN REVIEW / APPROVED | outside the system | recorded mapping becomes `approved_mapping` |
+| OBSERVATIONS | `observations_for` | refuses (`SchemaUnknown`) until approved; still refuses after, until the real layout is implemented |
+
+All stages are behind `ENTITY_INTELLIGENCE_ENABLED` + `IQVIA_EVIDENCE_ENABLED` where they touch observations; preserve/inventory/profile are pure functions usable for the intake review.
 
 ## Adapter responsibilities
 

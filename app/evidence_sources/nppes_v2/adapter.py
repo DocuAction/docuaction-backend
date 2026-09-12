@@ -30,13 +30,15 @@ from app.core.entity_intelligence.observations import (DeliveryPath, EvidenceApp
                                                         EvidenceObservation, LocationRole,
                                                         NameKind, ObservationType, Provenance,
                                                         SourceAuthority)
-from app.core.entity_intelligence.ports import AdapterDescriptor, AdapterStatus
+from app.core.entity_intelligence.observations import ValueHandling
+from app.core.entity_intelligence.ports import (AdapterDescriptor, AdapterStatus, DataRights,
+                                                 DataRightsClass, RightsStatus)
 from app.core.evidence_provenance import RetrievalMethod, SourceVersionRef, file_sha256
 
 from .parser import (NppesOrganizationRow, NppesOtherNameRow, NppesPracticeLocationRow,
                      PARSER_VERSION, parse_main_file, parse_other_name_file,
                      parse_practice_location_file)
-from .schema import SCHEMA_VERSION, other_name_kind
+from .schema import OTHER_NAME_REFERENCE_POINTER_CODE, SCHEMA_VERSION, other_name_kind
 
 SOURCE_ID = "NPPES_V2"
 SOURCE_OWNER = "CMS NPPES (National Plan and Provider Enumeration System)"
@@ -49,11 +51,22 @@ OBS_ADDITIONAL_LOCATION = "NPPES_ADDITIONAL_PRACTICE_LOCATION_OBSERVED"
 OBS_MAILING_LOCATION = "NPPES_MAILING_LOCATION_OBSERVED"
 SIGNAL_DBA = "DBA_RELATIONSHIP_IDENTIFIED"   # emitted only for type code 3
 
+#: CMS publishes the NPPES Data Dissemination files as public data for
+#: download ("NPPES Downloadable File" — download.cms.gov/nppes). Recorded as
+#: PUBLIC with raw storage; no attribution or credential is required.
+DATA_RIGHTS = DataRights(
+    rights_class=DataRightsClass.PUBLIC, status=RightsStatus.DOCUMENTED,
+    storage_allowed=True, raw_storage_allowed=True, display_allowed=True,
+    redistribution_allowed=True, external_call_allowed=False, credential_required=False,
+    attribution_required=False, retention_rule="retain each preserved edition for reproducibility",
+    value_handling=ValueHandling.RAW_PERMITTED,
+    basis="CMS NPPES Data Dissemination public download (NPI_Files.html), readme v.2 May 12, 2026")
+
 DESCRIPTOR = AdapterDescriptor(
     source_id=SOURCE_ID, source_owner=SOURCE_OWNER, status=AdapterStatus.IMPLEMENTED,
     feature_flag=flags.NPPES,
     description="NPPES Data Dissemination V2 main, Other Name and Practice Location files.",
-    makes_external_calls=False, requires_credential=False)
+    makes_external_calls=False, requires_credential=False, data_rights=DATA_RIGHTS)
 
 
 @dataclass
@@ -114,7 +127,8 @@ class NppesV2Adapter:
         return Provenance(source_owner=SOURCE_OWNER, delivery_path=DeliveryPath.FILE_DOWNLOAD,
                           source_version=version, source_file_sha256=self.bundle.file_hashes.get(file_kind),
                           source_record_ref=f"{file_kind}:line {line_number}:{field_name}",
-                          parser_version=PARSER_VERSION, note=f"schema {SCHEMA_VERSION}")
+                          parser_version=PARSER_VERSION, schema_version=SCHEMA_VERSION,
+                          value_handling=ValueHandling.RAW_PERMITTED)
 
     def observations_for(self, *, canonical_entity_id: Optional[str], identifier: str,
                          provenance: Optional[Provenance] = None) -> List[EvidenceObservation]:
@@ -132,12 +146,17 @@ class NppesV2Adapter:
                       source_record_id=npi, applicability=EvidenceApplicability.APPLICABLE,
                       observed_at=org.last_update_date, effective_from=org.enumeration_date,
                       effective_to=org.deactivation_date)
+        points_to_reference_file = org.other_organization_name_type_code == OTHER_NAME_REFERENCE_POINTER_CODE
         out.append(EvidenceObservation(
             observation_type=ObservationType.IDENTIFIER, role="NPI",
             observed_value={"value": npi, "entity_type": org.entity_type_code, "kind": OBS_NPI,
                             "replacement_npi": org.replacement_npi,
                             "deactivation_date": org.deactivation_date,
-                            "reactivation_date": org.reactivation_date},
+                            "reactivation_date": org.reactivation_date,
+                            # type code 6: NPPES says other names exist in the reference file.
+                            # Stated so an analyst can see it even if that file was not supplied.
+                            "other_names_in_reference_file": points_to_reference_file,
+                            "other_name_reference_rows_loaded": len(self.bundle.other_names.get(npi, []))},
             source_field="NPI", provenance=self._provenance("npidata", org.line_number, "NPI"), **common))
         if org.legal_business_name:
             out.append(EvidenceObservation(
@@ -148,8 +167,12 @@ class NppesV2Adapter:
                 provenance=self._provenance("npidata", org.line_number, "Provider Organization Name (Legal Business Name)"),
                 **common))
         # Other names: the one on the main record plus the reference file rows.
-        extra = [(org.other_organization_name, org.other_organization_name_type_code, "npidata",
-                  org.line_number, "Provider Other Organization Name", None)]
+        # Pointer code 6 carries no name (the field is a placeholder); the kinds
+        # are stated only in the reference file, so nothing is emitted for it.
+        extra = []
+        if not points_to_reference_file:
+            extra.append((org.other_organization_name, org.other_organization_name_type_code, "npidata",
+                          org.line_number, "Provider Other Organization Name", None))
         for row in self.bundle.other_names.get(npi, []):
             extra.append((row.other_organization_name, row.type_code, "othername", row.line_number,
                           "Provider Other Organization Name", row.created_date))

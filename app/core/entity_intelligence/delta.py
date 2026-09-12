@@ -36,6 +36,15 @@ class DeltaType(str, Enum):
     UNCHANGED = "UNCHANGED"
 
 
+class DeltaScope(str, Enum):
+    """What the delta is ABOUT. The system only knows what its sources
+    observed; a changed delivered value is not a real-world change."""
+    DELIVERED_VALUE = "DELIVERED_VALUE"        # the program delivery changed
+    EVIDENCE = "EVIDENCE"                      # an independent source's statement changed
+    SOURCE_VERSION = "SOURCE_VERSION"          # same statement, newer source edition
+    NONE = "NONE"
+
+
 class VariationSignal(str, Enum):
     EXPLAINABLE_VARIATION_SIGNAL = "EXPLAINABLE_VARIATION_SIGNAL"
     EXPLAINABLE_LOCATION_VARIATION_SIGNAL = "EXPLAINABLE_LOCATION_VARIATION_SIGNAL"
@@ -60,6 +69,7 @@ class HistoricalDelta:
     #: change in what an evidence source says is reported but never analysed
     #: as a "variation" of the delivered identity.
     subject: bool = False
+    scope: DeltaScope = DeltaScope.NONE
     rules_version: str = DELTA_RULES_VERSION
 
     def to_dict(self) -> Dict[str, Any]:
@@ -69,7 +79,7 @@ class HistoricalDelta:
                 "current_observation_id": self.current_observation_id,
                 "explanation": self.explanation, "variation": self.variation.value,
                 "variation_basis": list(self.variation_basis), "subject": self.subject,
-                "rules_version": self.rules_version}
+                "scope": self.scope.value, "rules_version": self.rules_version}
 
 
 _CHANGE_TYPE = {ObservationType.NAME: DeltaType.NAME_CHANGED,
@@ -117,6 +127,17 @@ def _is_subject(*obs: Optional[EvidenceObservation]) -> bool:
     return any(o is not None and o.source_authority is SourceAuthority.PROGRAM_DELIVERY for o in obs)
 
 
+def _scope(*obs: Optional[EvidenceObservation]) -> DeltaScope:
+    return DeltaScope.DELIVERED_VALUE if _is_subject(*obs) else DeltaScope.EVIDENCE
+
+
+def _what_label(kind: ObservationType, scope: DeltaScope) -> str:
+    """'delivered organisation name' vs 'NPPES_V2-stated name': the wording
+    names what changed — a value in a delivery or a statement by a source —
+    never the organisation itself."""
+    return ("delivered " if scope is DeltaScope.DELIVERED_VALUE else "source-stated ") + _WHAT[kind]
+
+
 def compute_deltas(prior: List[EvidenceObservation], current: List[EvidenceObservation]) -> List[HistoricalDelta]:
     """Slot = (source, type, role). Within a slot, values are compared by
     normalised content; single-valued slots produce CHANGED, multi-valued slots
@@ -135,34 +156,44 @@ def compute_deltas(prior: List[EvidenceObservation], current: List[EvidenceObser
         c_by = {_norm(o): o for o in c}
         if p_by.keys() == c_by.keys():
             for n, o in c_by.items():
+                sc = _scope(o)
                 deltas.append(HistoricalDelta(DeltaType.UNCHANGED, kind, source_id, role,
                                               {"value": _display(p_by[n])}, {"value": _display(o)},
                                               p_by[n].observation_id, o.observation_id,
-                                              explain("DELTA_UNCHANGED", what=what), subject=_is_subject(o)))
+                                              explain("DELTA_UNCHANGED", what=_what_label(kind, sc)),
+                                              subject=_is_subject(o), scope=sc))
             continue
         if len(p) == 1 and len(c) == 1:
+            sc = _scope(p[0], c[0])
             deltas.append(HistoricalDelta(_CHANGE_TYPE[kind], kind, source_id, role,
                                           {"value": _display(p[0])}, {"value": _display(c[0])},
                                           p[0].observation_id, c[0].observation_id,
-                                          explain("DELTA_CHANGED", what=what, before=_display(p[0]), after=_display(c[0])),
-                                          subject=_is_subject(p[0], c[0])))
+                                          explain("DELTA_CHANGED", what=_what_label(kind, sc),
+                                                  before=_display(p[0]), after=_display(c[0])),
+                                          subject=_is_subject(p[0], c[0]), scope=sc))
             continue
         for n, o in c_by.items():
             if n not in p_by:
+                sc = _scope(o)
                 deltas.append(HistoricalDelta(DeltaType.NEW_VALUE, kind, source_id, role, None,
                                               {"value": _display(o)}, None, o.observation_id,
-                                              explain("DELTA_NEW_VALUE", what=what, after=_display(o)), subject=_is_subject(o)))
+                                              explain("DELTA_NEW_VALUE", what=_what_label(kind, sc), after=_display(o)),
+                                              subject=_is_subject(o), scope=sc))
         for n, o in p_by.items():
             if n not in c_by:
+                sc = _scope(o)
                 deltas.append(HistoricalDelta(DeltaType.REMOVED_VALUE, kind, source_id, role,
                                               {"value": _display(o)}, None, o.observation_id, None,
-                                              explain("DELTA_REMOVED_VALUE", what=what, before=_display(o)), subject=_is_subject(o)))
+                                              explain("DELTA_REMOVED_VALUE", what=_what_label(kind, sc), before=_display(o)),
+                                              subject=_is_subject(o), scope=sc))
         for n, o in c_by.items():
             if n in p_by:
+                sc = _scope(o)
                 deltas.append(HistoricalDelta(DeltaType.UNCHANGED, kind, source_id, role,
                                               {"value": _display(p_by[n])}, {"value": _display(o)},
                                               p_by[n].observation_id, o.observation_id,
-                                              explain("DELTA_UNCHANGED", what=what), subject=_is_subject(o)))
+                                              explain("DELTA_UNCHANGED", what=_what_label(kind, sc)),
+                                              subject=_is_subject(o), scope=sc))
     return deltas
 
 

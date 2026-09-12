@@ -36,10 +36,25 @@ def _settings():
     return settings
 
 
+TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
+def _as_bool(value) -> bool:
+    """Strict: only True or a recognised true-string enables. Anything else —
+    including the strings "false", "no", "maybe", "" and None — is False.
+    `bool("false")` is True in Python, which is exactly the mistake this
+    prevents."""
+    if value is True:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in TRUE_VALUES
+    return False
+
+
 def flag_enabled(name: str) -> bool:
     if name not in ALL_FLAGS:
         raise ValueError(f"unknown entity-intelligence flag {name!r}")
-    return bool(getattr(_settings(), name, False))
+    return _as_bool(getattr(_settings(), name, False))
 
 
 def entity_intelligence_enabled() -> bool:

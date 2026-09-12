@@ -41,12 +41,15 @@ TEMPLATES = {
     "RELATIONSHIP_CORROBORATED": "{source} records the same {kind} relationship as delivered.",
     "RELATIONSHIP_CONFLICT": "{source} records a different {kind} relationship from the one delivered.",
     # deltas
-    "DELTA_UNCHANGED": "No change in {what} between the prior and current delivery.",
-    "DELTA_CHANGED": "{what} changed between the prior and current delivery: '{before}' → '{after}'.",
-    "DELTA_NEW_VALUE": "A new {what} appears in the current delivery: '{after}'.",
-    "DELTA_REMOVED_VALUE": "A {what} present in the prior delivery is absent from the current one: '{before}'.",
-    "DELTA_NEW_ENTITY": "The entity has no prior delivery to compare against.",
-    "DELTA_SOURCE_CHANGED": "The {what} is stated by a different source than before ({before} → {after}).",
+    # Careful language: the system knows what its sources observed, never what
+    # the organisation did. "The delivered organisation address changed
+    # between the compared deliveries", not "the organisation moved".
+    "DELTA_UNCHANGED": "The {what} is unchanged between the compared observations.",
+    "DELTA_CHANGED": "The {what} changed between the compared observations: '{before}' → '{after}'. This records a change in what was stated, not a real-world event.",
+    "DELTA_NEW_VALUE": "A {what} appears in the current observations that was absent from the prior ones: '{after}'.",
+    "DELTA_REMOVED_VALUE": "A {what} present in the prior observations is absent from the current ones: '{before}'.",
+    "DELTA_NEW_ENTITY": "No prior observations exist for this entity; nothing can be compared.",
+    "DELTA_SOURCE_CHANGED": "The {what} is now stated by a different source edition ({before} → {after}).",
     "EXPLAINABLE_VARIATION": "The change is consistent with independent evidence ({signal}); it may be explainable. Human review required.",
     "UNEXPLAINED_VARIATION": "No available evidence explains the change ({signal}). Human review required.",
 }

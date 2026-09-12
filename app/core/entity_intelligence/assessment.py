@@ -44,7 +44,9 @@ class SystemEvidenceAssessment(str, Enum):
 
 
 for _member in SystemEvidenceAssessment:
-    assert not (set(_member.value.split("_")) & FORBIDDEN_TERMS), _member
+    # An import-time guard, not an assert: it must hold under `python -O` too.
+    if set(_member.value.split("_")) & FORBIDDEN_TERMS:
+        raise RuntimeError(f"forbidden assessment vocabulary: {_member.value}")
 
 
 @dataclass(frozen=True)

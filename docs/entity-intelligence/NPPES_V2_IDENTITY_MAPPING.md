@@ -1,6 +1,6 @@
 # NPPES Data Dissemination V2 — identity mapping
 
-Sources verified 2026-09-11 from the CMS weekly bundle `NPPES_Data_Dissemination_083126_090626_Weekly_V2.zip` (download.cms.gov/nppes/NPI_Files.html): `NPPES_Data_Dissemination_Readme_v.2.pdf` (Updated May 12, 2026), `NPPES_Data_Dissemination_CodeValues.pdf` (February 1, 2025), and the four `*_fileheader.csv` files.
+Sources verified 2026-09-11 and re-verified 2026-09-12 from the CMS weekly bundle `NPPES_Data_Dissemination_083126_090626_Weekly_V2.zip` (download.cms.gov/nppes/NPI_Files.html): `NPPES_Data_Dissemination_Readme_v.2.pdf` (Updated May 12, 2026), `NPPES_Data_Dissemination_CodeValues.pdf` (February 1, 2025), and the four `*_fileheader.csv` files.
 
 ## Versions and cadence
 
@@ -75,6 +75,40 @@ Provenance on every observation: source owner "CMS NPPES", delivery path FILE_DO
 ## What NPPES does not establish
 
 An NPI proves enumeration. Nothing here represents NPPES as proving licensure, credentialing, Medicare enrolment or TEFCA compliance; the identifier explanation template says so.
+
+## Per-code traceability table (re-verified 2026-09-12 against primary sources)
+
+| SOURCE | DOCUMENT | VERSION / DATE | TABLE / SECTION | CODE | CMS DEFINITION (verbatim) | DOCUACTION INTERPRETATION |
+|---|---|---|---|---|---|---|
+| CMS NPPES | NPPES_Data_Dissemination_CodeValues.pdf | February 1, 2025 | 1.1 Entity Type Codes, Exhibit 1-1 | 1 | "Individual" | Type 1; skipped by `parse_main_file(organizations_only=True)`, counted in `rows_skipped` |
+| CMS NPPES | CodeValues.pdf | February 1, 2025 | Exhibit 1-1 | 2 | "Organization" | Type 2; the only entity type observed |
+| CMS NPPES | CodeValues.pdf | February 1, 2025 | 1.6 Other Provider Name Type Codes, Exhibit 1-6 | 1 | "Former Name", I (Individual) | `OTHER_NAME` kind if ever seen on a Type 2 row; never DBA |
+| CMS NPPES | CodeValues.pdf | February 1, 2025 | Exhibit 1-6 | 2 | "Professional Name", I (Individual) | `OTHER_NAME`; never DBA |
+| CMS NPPES | CodeValues.pdf | February 1, 2025 | Exhibit 1-6 | 3 | "Doing Business As", O (Organization) | `DOING_BUSINESS_AS`; the ONLY code that emits `DBA_RELATIONSHIP_IDENTIFIED` |
+| CMS NPPES | CodeValues.pdf | February 1, 2025 | Exhibit 1-6 | 4 | "Former Legal Business Name", O (Organization) | `FORMER_LEGAL_BUSINESS_NAME` → FORMER_NAME_MATCH signal; never DBA |
+| CMS NPPES | CodeValues.pdf | February 1, 2025 | Exhibit 1-6 | 5 | "Other Name", B (Both) | `OTHER_NAME` → OTHER_NAME_MATCH with explicit "not classified as DBA" wording |
+| CMS NPPES | NPPES_Data_Dissemination_Readme_v.2.pdf | Updated May 12, 2026 | Data file layout note under "Provider Other Organization Name Type Code" | 6 | "If a 6 is seen in the Provider Other Organization Name Type Code column, there are other names for that Organization in the Other Name Reference File." | **Pointer, not a name type.** No name observation is emitted; the IDENTIFIER observation carries `other_names_in_reference_file = true`; kinds come from the reference file only |
+| CMS NPPES (observed) | weekly V2 bundle 083126_090626, npidata_pfile | 2026-08-31..09-06 | columns EIN (idx 3), Provider Other Organization Name (idx 11), Parent Organization TIN (idx 310) | `<UNAVAIL>` | not documented in readme or CodeValues; observed 8,588 / 3,127 / 2,824 times | Placeholder = absence. Blanked by the parser (`PLACEHOLDER_VALUES`); never a name or address |
+| CMS NPPES | CodeValues.pdf | February 1, 2025 | 1.5 Deactivation Reason Codes, Exhibit 1-5 | DT / DB / FR / OT | "Death", "Disbandment", "Fraud", "Other" | **Not read.** Readme v.2 marks "NPI Deactivation Reason Code" as "This is not publicly disseminated." Only the deactivation/reactivation dates and replacement NPI are observed, as values, with no inference |
+| CMS NPPES | Readme v.2 | May 12, 2026 | Introduction | — | "As of 12/24/2024, two versions … Version 1 (original) will provide only the original field lengths while Version 2 (v.2) will include the extended field lengths" | V2 only; `MAIN_FILE_COLUMN_COUNT = 330`; LBN length 100 |
+| CMS NPPES | NPI_Files.html | read 2026-09-12 | page banner | — | "Effective 03/03/2026 NPPES will no longer support Version 1 of the Monthly and Weekly Downloadable File." | V1 never acquired |
+| CMS NPPES | Readme v.2 | May 12, 2026 | 1.1 About the Data File | — | "Every data value (between the commas) is enclosed within double quotes." | csv module, quoted fields; embedded quotes handled by the reader |
+| CMS NPPES | Readme v.2 | May 12, 2026 | File list items 3, 5 | — | Other Name Reference File "contains additional Other Names associated with Type 2 NPIs"; Practice Location Reference File "contains all of the non-primary Practice Locations associated with Type 1 and Type 2 NPIs" | `OTHER_NAME_COLUMNS`, `PRACTICE_LOCATION_COLUMNS` (verbatim headers incl. irregular spacing) |
+| CMS NPPES | Readme v.2 | May 12, 2026 | Introduction | — | "Per the NPPES Data Dissemination Notice, CMS-6060-N, posted on the Federal Register on May 30, 2007, FOIA-disclosable NPPES health care provider data will be provided in a downloadable file format." | Basis for `DataRights(PUBLIC, DOCUMENTED, raw_storage_allowed=True)` |
+
+### Observed in the sample (public CMS data, counts only)
+
+| Observation | Count |
+|---|---|
+| Type 2 rows in the weekly file | 8,588 |
+| Type 2 rows with Other Organization Name Type Code 6 (and `<UNAVAIL>` name) | 3,127 (3,127 / 3,127 placeholder) |
+| Type 2 rows with any other main-file other-name code | 0 |
+| Other Name Reference File rows by code | 3: 5,369 · 5: 213 · 4: 110 |
+| NPIs with > 1 reference-file name | 1,396; NPIs with names of 2 kinds: 88; of 3 kinds: 1 |
+| Legal Business Name longer than 70 characters (needs V2) | 8 |
+| Duplicate reference rows (same NPI, name, code) | present; kept, treated as one kind |
+
+Implication: in current CMS data the main file's other-name field is effectively a pointer for organisations; **the Other Name Reference File is mandatory** for any DBA/former-name evidence. A bundle parsed without it yields no other-name observations and the identifier observation says so.
 
 ## Not yet built
 

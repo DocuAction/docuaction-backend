@@ -32,3 +32,10 @@ These are system observations. "Explainable" means *the available evidence is co
 ## Task 4 use (future)
 
 Current-vs-prior delivery comparison: run the delta over PROGRAM_DELIVERY observations from the two deliveries plus the current evidence set; surface subject deltas with their variation signal and the prior analyst determination / QA result alongside (the program supplies those; Core does not read review tables).
+
+
+## Scope and wording (2026-09-12)
+
+Every delta carries `scope`: **DELIVERED_VALUE** (the program delivery changed), **EVIDENCE** (a source's statement changed), **SOURCE_VERSION** (same statement, newer edition; designed, produced by the acquisition job), NONE. `PRIOR_DECISION_EXISTS` is answered by the run (`prior_decision_exists`, `prior_review_reference`) and is never a delta.
+
+Wording is careful by construction: templates say "The delivered organisation address changed between the compared observations … This records a change in what was stated, not a real-world event." and "The source-stated legal business name changed …". Tests forbid "moved", "relocated", "closed", "opened", "renamed" in any delta explanation. Only subject (DELIVERED_VALUE) deltas are analysed for explainable/unexplained variation; evidence-side deltas remain NOT_APPLICABLE.
