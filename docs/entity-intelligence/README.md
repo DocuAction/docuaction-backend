@@ -1,0 +1,15 @@
+# Entity Identity & Location Intelligence — engineering artifacts
+
+Isolated foundation, feature OFF, DEV engineering only. Start with the architecture, then the rules.
+
+1. [ENTITY_IDENTITY_INTELLIGENCE_ARCHITECTURE.md](ENTITY_IDENTITY_INTELLIGENCE_ARCHITECTURE.md)
+2. [NPPES_V2_IDENTITY_MAPPING.md](NPPES_V2_IDENTITY_MAPPING.md)
+3. [IQVIA_ONEKEY_ADAPTER_CONTRACT.md](IQVIA_ONEKEY_ADAPTER_CONTRACT.md)
+4. [GOOGLE_ADDRESS_COMPLIANCE_BLUEPRINT.md](GOOGLE_ADDRESS_COMPLIANCE_BLUEPRINT.md)
+5. [STATE_REGISTRY_CONNECTOR_DESIGN.md](STATE_REGISTRY_CONNECTOR_DESIGN.md)
+6. [IDENTITY_COMPARISON_RULES.md](IDENTITY_COMPARISON_RULES.md)
+7. [HISTORICAL_DELTA_RULES.md](HISTORICAL_DELTA_RULES.md)
+8. [SYSTEM_EVIDENCE_ASSESSMENT_MODEL.md](SYSTEM_EVIDENCE_ASSESSMENT_MODEL.md)
+9. [QA_BASELINE_ISOLATION_PROOF.md](QA_BASELINE_ISOLATION_PROOF.md)
+
+Code: `app/core/entity_intelligence/` (Core), `app/evidence_sources/` (adapters), `tests/test_entity_intelligence_*.py`, `tests/ei_fixtures.py` (synthetic only).
