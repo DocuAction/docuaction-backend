@@ -40,8 +40,12 @@ class DeltaScope(str, Enum):
     """What the delta is ABOUT. The system only knows what its sources
     observed; a changed delivered value is not a real-world change."""
     DELIVERED_VALUE = "DELIVERED_VALUE"        # the program delivery changed
-    EVIDENCE = "EVIDENCE"                      # an independent source's statement changed
+    EVIDENCE = "EVIDENCE"                      # an independent reference source's statement changed
+    PROGRAM_ENROLLMENT = "PROGRAM_ENROLLMENT"  # a program-participation observation changed (evidence side)
+    RELATIONSHIP = "RELATIONSHIP"              # a relationship observation changed (evidence side)
     SOURCE_VERSION = "SOURCE_VERSION"          # same statement, newer source edition
+    RULE_VERSION = "RULE_VERSION"              # the applicable rule changed (policy register; not produced by compute_deltas)
+    PRIOR_HUMAN_DECISION = "PRIOR_HUMAN_DECISION"  # reference only; never produced by compute_deltas
     NONE = "NONE"
 
 
@@ -85,9 +89,13 @@ class HistoricalDelta:
 _CHANGE_TYPE = {ObservationType.NAME: DeltaType.NAME_CHANGED,
                 ObservationType.LOCATION: DeltaType.ADDRESS_CHANGED,
                 ObservationType.IDENTIFIER: DeltaType.IDENTIFIER_CHANGED,
-                ObservationType.RELATIONSHIP: DeltaType.RELATIONSHIP_CHANGED}
+                ObservationType.RELATIONSHIP: DeltaType.RELATIONSHIP_CHANGED,
+    ObservationType.PROGRAM_PARTICIPATION: DeltaType.RELATIONSHIP_CHANGED,
+}
 _WHAT = {ObservationType.NAME: "name", ObservationType.LOCATION: "address",
-         ObservationType.IDENTIFIER: "identifier", ObservationType.RELATIONSHIP: "relationship"}
+         ObservationType.IDENTIFIER: "identifier", ObservationType.RELATIONSHIP: "relationship",
+    ObservationType.PROGRAM_PARTICIPATION: "program-participation observation",
+}
 
 
 def _norm(o: EvidenceObservation) -> str:
@@ -128,7 +136,14 @@ def _is_subject(*obs: Optional[EvidenceObservation]) -> bool:
 
 
 def _scope(*obs: Optional[EvidenceObservation]) -> DeltaScope:
-    return DeltaScope.DELIVERED_VALUE if _is_subject(*obs) else DeltaScope.EVIDENCE
+    if _is_subject(*obs):
+        return DeltaScope.DELIVERED_VALUE
+    kinds = {o.observation_type for o in obs if o is not None}
+    if ObservationType.PROGRAM_PARTICIPATION in kinds:
+        return DeltaScope.PROGRAM_ENROLLMENT
+    if ObservationType.RELATIONSHIP in kinds:
+        return DeltaScope.RELATIONSHIP
+    return DeltaScope.EVIDENCE
 
 
 def _what_label(kind: ObservationType, scope: DeltaScope) -> str:

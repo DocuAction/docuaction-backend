@@ -32,3 +32,10 @@ The assessment is an input to the analyst. It cannot place an entity in a Govern
 ## Preserved on every source observation
 
 source · source date (observed_at / effective dates where the source publishes them) · source authority · applicability · role · provenance (owner, delivery path, received-by, version, hash, record reference, parser version). Conflicting evidence stays visible; nothing is suppressed by agreement elsewhere.
+
+
+## Additions (2026-09-12)
+
+- Participation signals join the rule sets: PARTICIPATION_OBSERVED is corroborating; PARTICIPATION_CONFLICT is a conflict; PARTICIPATION_EVIDENCE_NOT_FOUND, INSUFFICIENT_PARTICIPATION_EVIDENCE and PARTICIPATION_NOT_COMPARABLE are insufficient-class (never adverse); SOURCE_UNAVAILABLE as before.
+- `cross_source_notes[]`: the MULTI-SOURCE NAME VARIATION CORROBORATION note (template `MULTI_SOURCE_NAME_VARIATION_CORROBORATION`) appears only under EXPLAINABLE_VARIATION_IDENTIFIED and only when every explaining source resolved the same delivered identifier uniquely. Tested with a differing NPI in the second source and with multiple candidates: no note.
+- Unchanged: no arithmetic, no voting; one conflict from any source dominates; authority is never a weight.

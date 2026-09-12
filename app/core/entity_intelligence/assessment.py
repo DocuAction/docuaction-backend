@@ -27,6 +27,7 @@ from .comparison import (AMBIGUOUS_SIGNALS, CONFLICT_SIGNALS, CORROBORATING_SIGN
                          EXPLAINING_LOCATION_SIGNALS, EXPLAINING_NAME_SIGNALS,
                          INSUFFICIENT_SIGNALS, UNAVAILABLE_SIGNALS, ComparisonResult)
 from .delta import HistoricalDelta, VariationSignal
+from .explanations import explain
 
 ASSESSMENT_RULES_VERSION = "1.0"
 
@@ -56,6 +57,10 @@ class AssessmentResult:
     comparisons: List[ComparisonResult]
     deltas: List[HistoricalDelta]
     open_questions: List[str] = field(default_factory=list)   # what still needs a person
+    #: Cross-source notes: produced only when more than one source explains the
+    #: same delivered value AND every such source resolved the same delivered
+    #: identifier. Never produced across ambiguous or differing identifiers.
+    cross_source_notes: List[str] = field(default_factory=list)
     requires_human_review: bool = True
     rules_version: str = ASSESSMENT_RULES_VERSION
 
@@ -64,14 +69,37 @@ class AssessmentResult:
                 "comparisons": [c.to_dict() for c in self.comparisons],
                 "deltas": [d.to_dict() for d in self.deltas],
                 "open_questions": list(self.open_questions),
+                "cross_source_notes": list(self.cross_source_notes),
                 "requires_human_review": True, "rules_version": self.rules_version,
                 "note": ("System evidence assessment. Not a determination, not a contractual "
                          "category, not a verdict.")}
 
 
+def multi_source_name_variation(comparisons: List[ComparisonResult]) -> Optional[str]:
+    """MULTI-SOURCE NAME VARIATION CORROBORATION.
+
+    Returned only when at least two sources each explain the delivered name
+    through a source-stated non-legal name (DBA / other / former) AND each of
+    those sources corroborated the delivered identifier uniquely. If any of
+    those sources reports MULTIPLE_CANDIDATE_ENTITIES, an identifier conflict,
+    or no identifier corroboration, nothing is returned: the names may belong
+    to different entities and the engine must not stitch them together.
+    """
+    from .comparison import Dimension, IdentifierSignal
+    explained_by = {c.source_id for c in comparisons
+                    if c.dimension is Dimension.NAME_IDENTITY and c.signal in EXPLAINING_NAME_SIGNALS}
+    if len(explained_by) < 2:
+        return None
+    ident = {c.source_id: c.signal for c in comparisons if c.dimension is Dimension.ORGANIZATION_IDENTITY}
+    if not all(ident.get(s) is IdentifierSignal.IDENTIFIER_CORROBORATED for s in explained_by):
+        return None
+    return explain("MULTI_SOURCE_NAME_VARIATION_CORROBORATION", sources=" and ".join(sorted(explained_by)))
+
+
 def assess(comparisons: List[ComparisonResult],
            deltas: Optional[List[HistoricalDelta]] = None) -> AssessmentResult:
     deltas = deltas or []
+    cross = [n for n in [multi_source_name_variation(comparisons)] if n]
     signals = [c.signal for c in comparisons]
     basis = [s.value for s in signals]
     questions: List[str] = []
@@ -95,7 +123,7 @@ def assess(comparisons: List[ComparisonResult],
         for d in explainable_deltas:
             questions.append(f"{d.delta_type.value}: {d.explanation}")
         return AssessmentResult(SystemEvidenceAssessment.EXPLAINABLE_VARIATION_IDENTIFIED, basis,
-                                comparisons, deltas, questions)
+                                comparisons, deltas, questions, cross_source_notes=cross)
 
     corroborated = [c for c in comparisons if c.signal in CORROBORATING_SIGNALS]
     others = [c for c in comparisons if c.signal not in CORROBORATING_SIGNALS]

@@ -30,6 +30,11 @@ class Dimension(str, Enum):
     NAME_IDENTITY = "NAME_IDENTITY"
     LOCATION_IDENTITY = "LOCATION_IDENTITY"
     RELATIONSHIP_IDENTITY = "RELATIONSHIP_IDENTITY"
+    #: Historical identity is expressed through deltas (delta.py), not a comparison.
+    #: Participation: the entity's observed relationship to a program. Compared
+    #: only within one "<PROGRAM>:<KIND>" role; a Medicare enrollment is never
+    #: evidence for or against a TEFCA Participant relationship.
+    PARTICIPATION_IDENTITY = "PARTICIPATION_IDENTITY"
 
 
 class IdentifierSignal(str, Enum):
@@ -73,20 +78,32 @@ class RelationshipSignal(str, Enum):
 
 #: Signals that mean "the evidence explains the delivered value even though
 #: it is not the source's primary value".
+class ParticipationSignal(str, Enum):
+    PARTICIPATION_OBSERVED = "PARTICIPATION_OBSERVED"                      # source records the same program relationship
+    PARTICIPATION_CONFLICT = "PARTICIPATION_CONFLICT"                      # source records a different value for the same kind
+    PARTICIPATION_NOT_COMPARABLE = "PARTICIPATION_NOT_COMPARABLE"          # source only has other programs/kinds
+    PARTICIPATION_EVIDENCE_NOT_FOUND = "PARTICIPATION_EVIDENCE_NOT_FOUND"  # searched; the applicable dataset has no record
+    INSUFFICIENT_PARTICIPATION_EVIDENCE = "INSUFFICIENT_PARTICIPATION_EVIDENCE"
+    SOURCE_UNAVAILABLE = "SOURCE_UNAVAILABLE"
+
+
 EXPLAINING_NAME_SIGNALS = {NameSignal.DBA_MATCH_IDENTIFIED, NameSignal.OTHER_NAME_MATCH,
                            NameSignal.FORMER_NAME_MATCH}
 EXPLAINING_LOCATION_SIGNALS = {LocationSignal.ADDITIONAL_PRACTICE_LOCATION_MATCH,
                                LocationSignal.MAILING_LOCATION_MATCH}
-CORROBORATING_SIGNALS = {IdentifierSignal.IDENTIFIER_CORROBORATED,
+CORROBORATING_SIGNALS = {ParticipationSignal.PARTICIPATION_OBSERVED, IdentifierSignal.IDENTIFIER_CORROBORATED,
                          NameSignal.DIRECT_NAME_MATCH, NameSignal.NORMALIZED_NAME_MATCH,
                          LocationSignal.PRIMARY_LOCATION_MATCH,
                          LocationSignal.NORMALIZED_LOCATION_MATCH,
                          RelationshipSignal.RELATIONSHIP_CORROBORATED}
-CONFLICT_SIGNALS = {IdentifierSignal.IDENTIFIER_CONFLICT, NameSignal.NAME_CONFLICT,
+CONFLICT_SIGNALS = {ParticipationSignal.PARTICIPATION_CONFLICT, IdentifierSignal.IDENTIFIER_CONFLICT, NameSignal.NAME_CONFLICT,
                     LocationSignal.LOCATION_CONFLICT, RelationshipSignal.RELATIONSHIP_CONFLICT}
-UNAVAILABLE_SIGNALS = {IdentifierSignal.SOURCE_UNAVAILABLE, NameSignal.SOURCE_UNAVAILABLE,
+UNAVAILABLE_SIGNALS = {ParticipationSignal.SOURCE_UNAVAILABLE, IdentifierSignal.SOURCE_UNAVAILABLE, NameSignal.SOURCE_UNAVAILABLE,
                        LocationSignal.SOURCE_UNAVAILABLE, RelationshipSignal.SOURCE_UNAVAILABLE}
-INSUFFICIENT_SIGNALS = {IdentifierSignal.MISSING_IDENTIFIER, NameSignal.INSUFFICIENT_NAME_EVIDENCE,
+INSUFFICIENT_SIGNALS = {ParticipationSignal.PARTICIPATION_EVIDENCE_NOT_FOUND,
+                        ParticipationSignal.INSUFFICIENT_PARTICIPATION_EVIDENCE,
+                        ParticipationSignal.PARTICIPATION_NOT_COMPARABLE,
+                        IdentifierSignal.MISSING_IDENTIFIER, NameSignal.INSUFFICIENT_NAME_EVIDENCE,
                         LocationSignal.INSUFFICIENT_LOCATION_EVIDENCE,
                         RelationshipSignal.INSUFFICIENT_RELATIONSHIP_EVIDENCE,
                         RelationshipSignal.RELATIONSHIP_NOT_COMPARABLE}
@@ -365,12 +382,80 @@ def compare_relationships(observations: List[EvidenceObservation], *, source_id:
                             detail={"delivered": sorted(d_targets), "source": sorted(s_targets)})
 
 
+# ── participation / program identity ────────────────────────────────────────
+
+def _participation_value(o: EvidenceObservation) -> str:
+    v = o.observed_value
+    return normalize_name(str(v.get("status") or v.get("value") or v.get("related_entity_name") or ""))
+
+
+def compare_participation(observations: List[EvidenceObservation], *, source_id: str,
+                          participation_role: str) -> ComparisonResult:
+    """Compare a delivered program relationship with a source's statement of
+    the SAME "<PROGRAM>:<KIND>" role only.
+
+    An absence observation (observed_value["absent"]) becomes
+    PARTICIPATION_EVIDENCE_NOT_FOUND with its reason and applicability echoed —
+    never a conflict and never "not enrolled". A source that carries only other
+    programs or kinds is NOT_COMPARABLE.
+    """
+    dim = Dimension.PARTICIPATION_IDENTITY
+    delivered = [o for o in observations if o.observation_type is ObservationType.PROGRAM_PARTICIPATION
+                 and o.source_authority is SourceAuthority.PROGRAM_DELIVERY and o.role == participation_role]
+    if _unavailable(observations, source_id):
+        return ComparisonResult(dim, ParticipationSignal.SOURCE_UNAVAILABLE, source_id,
+                                delivered[0].observation_id if delivered else None,
+                                explanation=explain("SOURCE_UNAVAILABLE", source=source_id))
+    source_obs = [o for o in observations if o.observation_type is ObservationType.PROGRAM_PARTICIPATION
+                  and o.source_id == source_id]
+    same_role = [o for o in source_obs if o.role == participation_role]
+    absent = [o for o in same_role if o.observed_value.get("absent")]
+    present = [o for o in same_role if not o.observed_value.get("absent")]
+    if absent and not present:
+        a = absent[0]
+        return ComparisonResult(dim, ParticipationSignal.PARTICIPATION_EVIDENCE_NOT_FOUND, source_id,
+                                delivered[0].observation_id if delivered else None,
+                                candidate_observation_ids=[a.observation_id],
+                                explanation=explain("PARTICIPATION_EVIDENCE_NOT_FOUND", source=source_id,
+                                                    role=participation_role, reason=a.observed_value.get("reason"),
+                                                    applicability=a.applicability.value,
+                                                    dataset_version=a.observed_value.get("dataset_version")),
+                                detail={"reason": a.observed_value.get("reason"), "applicability": a.applicability.value})
+    if not delivered:
+        # Nothing delivered to compare against: a source statement alone is context, not corroboration.
+        return ComparisonResult(dim, ParticipationSignal.INSUFFICIENT_PARTICIPATION_EVIDENCE, source_id, None,
+                                candidate_observation_ids=[o.observation_id for o in present],
+                                explanation=explain("NO_DELIVERED_PARTICIPATION", role=participation_role))
+    if not present:
+        signal = (ParticipationSignal.PARTICIPATION_NOT_COMPARABLE if source_obs
+                  else ParticipationSignal.INSUFFICIENT_PARTICIPATION_EVIDENCE)
+        key = "PARTICIPATION_NOT_COMPARABLE" if source_obs else "NO_SOURCE_PARTICIPATION"
+        return ComparisonResult(dim, signal, source_id, delivered[0].observation_id,
+                                candidate_observation_ids=[o.observation_id for o in source_obs],
+                                explanation=explain(key, source=source_id, role=participation_role,
+                                                    other_roles=", ".join(sorted({o.role or "UNKNOWN" for o in source_obs}))))
+    d_values = {_participation_value(o) for o in delivered}
+    hits = [o for o in present if _participation_value(o) in d_values or not _participation_value(o)]
+    if hits:
+        return ComparisonResult(dim, ParticipationSignal.PARTICIPATION_OBSERVED, source_id,
+                                delivered[0].observation_id, hits[0].observation_id,
+                                candidate_observation_ids=[o.observation_id for o in hits],
+                                explanation=explain("PARTICIPATION_OBSERVED", source=source_id, role=participation_role))
+    return ComparisonResult(dim, ParticipationSignal.PARTICIPATION_CONFLICT, source_id, delivered[0].observation_id,
+                            candidate_observation_ids=[o.observation_id for o in present],
+                            explanation=explain("PARTICIPATION_CONFLICT", source=source_id, role=participation_role),
+                            detail={"delivered": sorted(d_values), "source": sorted({_participation_value(o) for o in present})})
+
+
 def compare_all(observations: List[EvidenceObservation], *, source_id: str,
                 identifier_system: str = "NPI",
-                relationship_kinds: Optional[List[str]] = None) -> List[ComparisonResult]:
+                relationship_kinds: Optional[List[str]] = None,
+                participation_roles: Optional[List[str]] = None) -> List[ComparisonResult]:
     results = [compare_identifier(observations, source_id=source_id, identifier_system=identifier_system),
                compare_names(observations, source_id=source_id),
                compare_locations(observations, source_id=source_id)]
     for kind in relationship_kinds or []:
         results.append(compare_relationships(observations, source_id=source_id, kind_code=kind))
+    for role in participation_roles or []:
+        results.append(compare_participation(observations, source_id=source_id, participation_role=role))
     return results

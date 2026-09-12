@@ -30,21 +30,41 @@ class ObservationType(str, Enum):
     NAME = "NAME"
     LOCATION = "LOCATION"
     RELATIONSHIP = "RELATIONSHIP"
+    #: The entity's observed relationship to a PROGRAM (e.g. a Medicare
+    #: enrollment observed in a CMS public file, a TEFCA Participant listing
+    #: delivered by the RCE). `role` carries "<PROGRAM>:<KIND>" so no program
+    #: vocabulary is hard-coded here; "MEDICARE:ENROLLMENT" and
+    #: "TEFCA:PARTICIPANT" are never compared with each other.
+    PROGRAM_PARTICIPATION = "PROGRAM_PARTICIPATION"
 
 
 class SourceAuthority(str, Enum):
     """Whose statement it is — a controlled DESCRIPTIVE classification, not a
     ranking. No numeric weight exists and none is derived from this enum.
     Program delivery is the SUBJECT under review and never corroborates itself."""
-    PROGRAM_DELIVERY = "PROGRAM_DELIVERY"                      # ONC/RCE delivered data
+    PROGRAM_DELIVERY = "PROGRAM_DELIVERY"                      # ONC/RCE delivered data (the subject)
+    RCE_GOVERNING_MATERIAL = "RCE_GOVERNING_MATERIAL"          # Common Agreement / SOP text: establishes RULES, never facts
     RCE_PROVIDED_THIRD_PARTY = "RCE_PROVIDED_THIRD_PARTY"      # e.g. IQVIA file handed over by the RCE
-    FEDERAL_REGISTRY = "FEDERAL_REGISTRY"                      # NPPES and other federal public reference data
+    FEDERAL_REGISTRY = "FEDERAL_REGISTRY"                      # federal IDENTITY reference (NPPES)
+    FEDERAL_PROGRAM_ENROLLMENT = "FEDERAL_PROGRAM_ENROLLMENT"  # federal program enrollment data (CMS PPEF, provider-type files)
+    FEDERAL_EXCLUSION_OR_INTEGRITY = "FEDERAL_EXCLUSION_OR_INTEGRITY"  # OIG LEIE, SAM exclusions, CMS revocations
     STATE_REGISTRY = "STATE_REGISTRY"                          # state public business registries
     COMMERCIAL_REFERENCE = "COMMERCIAL_REFERENCE"              # licensed commercial evidence obtained by AGT
     SUPPLEMENTAL = "SUPPLEMENTAL"                              # website, geocoding and similar corroboration
     DOCUACTION_HISTORICAL = "DOCUACTION_HISTORICAL"            # DocuAction's own prior observation
     PRIOR_HUMAN_DETERMINATION = "PRIOR_HUMAN_DETERMINATION"    # a recorded analyst/QA decision (reference only)
     UNKNOWN = "UNKNOWN"
+
+
+class AbsenceReason(str, Enum):
+    """Why a source produced no record. Absence is an observation with a
+    reason, never a finding: NO CMS ENROLLMENT RECORD != NOT ENROLLED."""
+    NOT_APPLICABLE = "NOT_APPLICABLE"                  # the source cannot answer for this kind of entity
+    NOT_IN_POPULATION = "NOT_IN_POPULATION"            # the source's population does not include this entity type
+    SOURCE_LIMITATION = "SOURCE_LIMITATION"            # the source omits this field/edition/history
+    IDENTIFIER_NOT_AVAILABLE = "IDENTIFIER_NOT_AVAILABLE"  # no key to search with
+    NOT_FOUND = "NOT_FOUND"                            # searched with a valid key; nothing returned
+    DATA_ISSUE = "DATA_ISSUE"                          # the source flagged or omitted the record for quality reasons
 
 
 class ValueHandling(str, Enum):
@@ -201,6 +221,21 @@ class EvidenceObservation:
             "content_hash": self.content_hash,
             "model_version": OBSERVATION_MODEL_VERSION,
         }
+
+
+def absence(*, canonical_entity_id: Optional[str], source_id: str, observation_type: ObservationType,
+            reason: AbsenceReason, source_authority: SourceAuthority, provenance: Provenance,
+            role: Optional[str] = None, applicability: EvidenceApplicability = EvidenceApplicability.APPLICABLE,
+            note: Optional[str] = None, dataset_version: Optional[str] = None) -> EvidenceObservation:
+    """A recorded absence. Carries the reason and the applicability so the
+    comparison engine can say 'not found in the applicable current CMS public
+    enrollment dataset' and never 'not enrolled'."""
+    return EvidenceObservation(canonical_entity_id=canonical_entity_id, source_id=source_id,
+                               observation_type=observation_type, role=role,
+                               observed_value={"absent": True, "reason": reason.value, "note": note,
+                                               "dataset_version": dataset_version},
+                               source_authority=source_authority, provenance=provenance,
+                               applicability=applicability)
 
 
 def observations_of(observations: List[EvidenceObservation],

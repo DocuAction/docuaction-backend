@@ -29,7 +29,21 @@ Isolated foundation, feature OFF, DEV engineering only. Draft PR #54; not merged
 20. [HUMAN_AND_AI_BOUNDARY.md](HUMAN_AND_AI_BOUNDARY.md)
 21. [ACTIVE_FALSIFICATION_FUTURE_EXTENSION.md](ACTIVE_FALSIFICATION_FUTURE_EXTENSION.md) — design note
 
-Code: `app/core/entity_intelligence/` (Core incl. `intake_safety.py`), `app/evidence_sources/` (adapters), `tests/test_entity_intelligence_*.py` (8 files, 342 tests), `tests/ei_fixtures.py` (synthetic only), `scripts/ei_perf.py`, `scripts/ei_pg_isolated_validation.py`.
+## RCE + CMS research, policy traceability & architecture expansion sprint (2026-09-12, later the same day)
+
+22. [RCE_CMS_RESEARCH_EXECUTIVE_DECISION.md](RCE_CMS_RESEARCH_EXECUTIVE_DECISION.md) — read first; answers 1–16 and the source tiers
+23. [RCE_POLICY_VERSION_REGISTER.md](RCE_POLICY_VERSION_REGISTER.md) — current / approved-future / draft / under consideration, verified 2026-09-12
+24. [PROPOSED_KYP_PRODUCT_ALIGNMENT.md](PROPOSED_KYP_PRODUCT_ALIGNMENT.md) — proposal status preserved
+25. [RCE_CMS_TASK_2_5_AUTHORITY_MATRIX.md](RCE_CMS_TASK_2_5_AUTHORITY_MATRIX.md)
+26. [CMS_PUBLIC_EVIDENCE_SOURCE_CATALOG.md](CMS_PUBLIC_EVIDENCE_SOURCE_CATALOG.md)
+27. [CMS_PECOS_EVIDENCE_LIMITATIONS.md](CMS_PECOS_EVIDENCE_LIMITATIONS.md)
+28. [CMS_PROVIDER_EVIDENCE_ADAPTER_DESIGN.md](CMS_PROVIDER_EVIDENCE_ADAPTER_DESIGN.md) — reads existing snapshots; not built
+29. [FEDERAL_LOCATION_EVIDENCE_RESEARCH.md](FEDERAL_LOCATION_EVIDENCE_RESEARCH.md)
+30. [ORGANIZATION_PARTICIPATION_INTELLIGENCE_ARCHITECTURE.md](ORGANIZATION_PARTICIPATION_INTELLIGENCE_ARCHITECTURE.md) — sixth dimension; evidence graph decision
+31. [SOURCE_AUTHORITY_AND_APPLICABILITY_MODEL.md](SOURCE_AUTHORITY_AND_APPLICABILITY_MODEL.md)
+32. [POLICY_RULE_VERSIONING_ARCHITECTURE.md](POLICY_RULE_VERSIONING_ARCHITECTURE.md)
+
+Code: `app/core/entity_intelligence/` (Core incl. `intake_safety.py`, `policy.py`, `rce_policy_register.py`), `app/evidence_sources/` (adapters), `tests/test_entity_intelligence_*.py` (9 files, 382 tests), `tests/ei_fixtures.py` (synthetic only), `scripts/ei_perf.py`, `scripts/ei_pg_isolated_validation.py`.
 
 ## OVERNIGHT VALIDATION SUMMARY
 

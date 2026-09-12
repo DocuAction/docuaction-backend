@@ -66,13 +66,15 @@ class EntityIntelligenceService:
                  source_ids: List[str],
                  identifier_system: str = "NPI",
                  relationship_kinds: Optional[List[str]] = None,
+                 participation_roles: Optional[List[str]] = None,
                  prior_review_reference: Optional[Dict[str, Any]] = None) -> EntityIntelligenceRun:
         flags.require_enabled(boundary="EntityIntelligenceService.evaluate")
         comparisons: List[ComparisonResult] = []
         for source_id in source_ids:
             comparisons.extend(compare_all(current, source_id=source_id,
                                            identifier_system=identifier_system,
-                                           relationship_kinds=relationship_kinds))
+                                           relationship_kinds=relationship_kinds,
+                                           participation_roles=participation_roles))
         deltas = explain_deltas(compute_deltas(prior or [], current), comparisons) if prior is not None else []
         result = assess(comparisons, deltas)
         unavailable = any(o.observed_value.get("unavailable") for o in current)

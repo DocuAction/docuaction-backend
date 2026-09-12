@@ -69,3 +69,10 @@ NORMALIZED_SIMILARITY != IDENTITY_PROOF: no similarity metric exists in the engi
 ## Source authority (descriptive, not weighted)
 
 `SourceAuthority` now distinguishes PROGRAM_DELIVERY (subject), RCE_PROVIDED_THIRD_PARTY, FEDERAL_REGISTRY, STATE_REGISTRY, COMMERCIAL_REFERENCE, SUPPLEMENTAL, DOCUACTION_HISTORICAL, PRIOR_HUMAN_DETERMINATION, UNKNOWN. A test swaps the authority class of a conflicting source through every value and shows the assessment is unchanged: there is no ranking to exploit and no voting.
+
+
+## Participation / program identity (2026-09-12)
+
+`compare_participation(observations, source_id, participation_role)` — order: source unavailable → SOURCE_UNAVAILABLE; source absence observation for the role → PARTICIPATION_EVIDENCE_NOT_FOUND (reason, applicability and dataset edition echoed); no delivered relationship of that role → INSUFFICIENT (a source statement alone is context); source has only other programs/kinds → PARTICIPATION_NOT_COMPARABLE ("enrollment in one program is not participation in another"); same role with consistent value → PARTICIPATION_OBSERVED (template disclaims eligibility, licensure and compliance); same role with different value → PARTICIPATION_CONFLICT. Roles are `"<PROGRAM>:<KIND>"` strings supplied by adapters and callers.
+
+Multi-source cases (brief §19) are tested: A explainable name variation across two sources with the same NPI (cross-source note); B identifier conflict between sources (CONFLICTING, both signals visible); C location evidence differing by source (NPPES additional location vs CMS locality conflict → CONFLICTING, no majority); D absent CMS record → NOT_FOUND with reason, never "not enrolled".

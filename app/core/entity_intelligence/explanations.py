@@ -40,6 +40,14 @@ TEMPLATES = {
     "RELATIONSHIP_NOT_COMPARABLE": "{source} relationships ({other_kinds}) are of a different kind from the delivered relationship ({kind}) and are not compared; a corporate relationship is not a program relationship.",
     "RELATIONSHIP_CORROBORATED": "{source} records the same {kind} relationship as delivered.",
     "RELATIONSHIP_CONFLICT": "{source} records a different {kind} relationship from the one delivered.",
+    # participation / program identity
+    "NO_DELIVERED_PARTICIPATION": "The delivered record carries no {role} program relationship to compare.",
+    "NO_SOURCE_PARTICIPATION": "{source} provides no {role} observation for this entity.",
+    "PARTICIPATION_NOT_COMPARABLE": "{source} program observations ({other_roles}) are of a different program or kind from the delivered {role} relationship and are not compared; enrollment in one program is not participation in another.",
+    "PARTICIPATION_EVIDENCE_NOT_FOUND": "The applicable {source} dataset ({dataset_version}) contains no {role} observation for this entity (reason: {reason}; applicability: {applicability}). Absence in this dataset is a statement about the dataset, not about the entity's enrollment or participation status.",
+    "PARTICIPATION_OBSERVED": "{source} records a {role} observation consistent with the delivered relationship. This states what the source's current dataset reports; it does not establish eligibility, licensure or compliance under any other program.",
+    "PARTICIPATION_CONFLICT": "{source} records a {role} observation that differs from the delivered relationship.",
+    "MULTI_SOURCE_NAME_VARIATION_CORROBORATION": "The delivered organisation name differs from the legal business name. Available {sources} evidence, each resolved to the same delivered identifier, associates the delivered name with the organisation as a source-stated DBA or other supported name.",
     # deltas
     # Careful language: the system knows what its sources observed, never what
     # the organisation did. "The delivered organisation address changed

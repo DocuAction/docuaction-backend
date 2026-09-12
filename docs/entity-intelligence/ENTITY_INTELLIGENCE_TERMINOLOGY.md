@@ -54,3 +54,20 @@ PRIOR DECISION EXISTS        != PRIOR DECISION APPLIES
 ## Spelling
 
 Documentation uses the program's US spelling for controlled terms that appear in code (`ORGANIZATION_IDENTITY`) and either spelling in prose; enum values are never changed for spelling.
+
+
+## Additional invariants (2026-09-12)
+
+```
+NOT FOUND                    != NON-COMPLIANT
+NPI FOUND                    != CREDENTIALED
+CMS ENROLLMENT FOUND         != TEFCA ELIGIBLE
+ADDRESS FOUND                != ORGANIZATION OPERATING THERE TODAY
+RELATIONSHIP FOUND           != TEFCA RELATIONSHIP
+NO CMS ENROLLMENT RECORD     != NOT ENROLLED
+RCE POLICY                   != FACTUAL IDENTITY      (rules are not evidence about an entity)
+PROPOSED / UNDER CONSIDERATION != REQUIRED
+RCE REQUIREMENT              != ARC CONTRACT REQUIREMENT
+```
+
+Preferred sentence for CMS evidence: "The applicable current CMS public enrollment dataset (edition) contains this practice-location observation for the linked enrollment." Not: "PECOS proves this organization has always operated at this address."

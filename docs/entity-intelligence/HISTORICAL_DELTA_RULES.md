@@ -39,3 +39,8 @@ Current-vs-prior delivery comparison: run the delta over PROGRAM_DELIVERY observ
 Every delta carries `scope`: **DELIVERED_VALUE** (the program delivery changed), **EVIDENCE** (a source's statement changed), **SOURCE_VERSION** (same statement, newer edition; designed, produced by the acquisition job), NONE. `PRIOR_DECISION_EXISTS` is answered by the run (`prior_decision_exists`, `prior_review_reference`) and is never a delta.
 
 Wording is careful by construction: templates say "The delivered organisation address changed between the compared observations … This records a change in what was stated, not a real-world event." and "The source-stated legal business name changed …". Tests forbid "moved", "relocated", "closed", "opened", "renamed" in any delta explanation. Only subject (DELIVERED_VALUE) deltas are analysed for explainable/unexplained variation; evidence-side deltas remain NOT_APPLICABLE.
+
+
+## Scope refinement (2026-09-12)
+
+`DeltaScope` now: DELIVERED_VALUE · EVIDENCE · PROGRAM_ENROLLMENT · RELATIONSHIP · SOURCE_VERSION · RULE_VERSION · PRIOR_HUMAN_DECISION · NONE. `compute_deltas` assigns DELIVERED_VALUE to subject deltas and PROGRAM_ENROLLMENT / RELATIONSHIP / EVIDENCE to evidence-side deltas by observation type. RULE_VERSION and PRIOR_HUMAN_DECISION are vocabulary for the integration layer (policy register, review record) and are never produced from observations. Example from the brief: prior delivered "ABC Healthcare LLC", current delivered "ABC Mobile Clinic", NPPES current DBA "ABC Mobile Clinic" → DELIVERED_VALUE NAME_CHANGED with "not a real-world event" wording and an EXPLAINABLE_VARIATION_SIGNAL from the DBA comparison; the words "changed its legal name" never appear (tested).
