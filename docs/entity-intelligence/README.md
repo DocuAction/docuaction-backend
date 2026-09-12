@@ -43,7 +43,7 @@ Isolated foundation, feature OFF, DEV engineering only. Draft PR #54; not merged
 31. [SOURCE_AUTHORITY_AND_APPLICABILITY_MODEL.md](SOURCE_AUTHORITY_AND_APPLICABILITY_MODEL.md)
 32. [POLICY_RULE_VERSIONING_ARCHITECTURE.md](POLICY_RULE_VERSIONING_ARCHITECTURE.md)
 
-Code: `app/core/entity_intelligence/` (Core incl. `intake_safety.py`, `policy.py`, `rce_policy_register.py`), `app/evidence_sources/` (adapters), `tests/test_entity_intelligence_*.py` (9 files, 382 tests), `tests/ei_fixtures.py` (synthetic only), `scripts/ei_perf.py`, `scripts/ei_pg_isolated_validation.py`.
+Code: `app/core/entity_intelligence/` (Core incl. `intake_safety.py`, `policy.py`, `rce_policy_register.py`), `app/evidence_sources/` (adapters), `tests/test_entity_intelligence_*.py` (9 files, 396 tests), `tests/ei_fixtures.py` (synthetic only), `scripts/ei_perf.py`, `scripts/ei_pg_isolated_validation.py`.
 
 ## OVERNIGHT VALIDATION SUMMARY
 
