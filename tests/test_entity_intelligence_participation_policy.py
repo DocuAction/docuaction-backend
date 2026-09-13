@@ -224,7 +224,10 @@ class TestMultiSourceCases:
         assert multi_source_name_variation(comps) is None
 
     def test_A_guard_multiple_candidates_blocks_note(self):
-        cur = self._dba_both() + src(CMS, name="SYNTHETIC OTHER ENTITY", authority=SourceAuthority.FEDERAL_PROGRAM_ENROLLMENT)
+        # A second NPI value associated with the entity by the CMS source makes the identifier match
+        # non-unique (MULTIPLE_CANDIDATE_ENTITIES), which must block the cross-source name note.
+        cur = self._dba_both() + src(CMS, npi="9999900002", name="SYNTHETIC OTHER ENTITY",
+                                     authority=SourceAuthority.FEDERAL_PROGRAM_ENROLLMENT)
         res, comps = run(cur, [NPPES, CMS])
         assert res.cross_source_notes == []
 
