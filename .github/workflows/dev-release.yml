@@ -11,9 +11,9 @@ name: DEV Release (automated)
 #
 # What this workflow does NOT do:
 #   - it never selects environment: production anywhere below, so it cannot
-#     reach deploy-prod no matter what happens upstream (see deploy.yml's own
-#     `if`, which deploy-prod also gates on `needs.deploy-dev` - unreachable
-#     from a workflow_call graph that only ever runs deploy-dev);
+#     reach deploy-prod no matter what happens upstream: deploy-backend.yml's
+#     deploy-prod job runs only for github.event_name == 'workflow_dispatch'
+#     with environment == 'production', so a workflow_call can never reach it;
 #   - it never writes to rce_source_records, rce_curated_records or any other
 #     Government-data table - the two gov-integrity jobs below are SELECT-only;
 #   - it never changes what identity anything authenticates as - every Azure
@@ -222,10 +222,10 @@ jobs:
       contents: read
       issues: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Login to Azure (OIDC - no stored client secret)
-        uses: azure/login@v2
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -233,11 +233,13 @@ jobs:
 
       - name: Report runner IPv4 and wait for the operator's temporary /32 (bounded)
         env:
+          HANDSHAKE_ISSUE: ${{ inputs.handshake_issue }}
           GH_TOKEN: ${{ github.token }}
         run: |
           IP=$(curl -s https://api.ipify.org); echo "runner public IPv4: $IP"
-          if [ -n "${{ inputs.handshake_issue }}" ]; then
-            gh issue comment "${{ inputs.handshake_issue }}" --repo "${{ github.repository }}" \
+          if [ -n "$HANDSHAKE_ISSUE" ]; then
+            case "$HANDSHAKE_ISSUE" in ''|*[!0-9]*) echo "::error::handshake_issue must be a plain issue number"; exit 1;; esac
+            gh issue comment "$HANDSHAKE_ISSUE" --repo "${{ github.repository }}" \
               --body "dev-release run ${{ github.run_id }} (post-deploy verify): runner public IPv4 **$IP** - waiting up to 20 min for a temporary /32. Remove it when this run finishes."
           fi
           for i in $(seq 1 80); do

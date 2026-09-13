@@ -93,7 +93,7 @@ jobs:
 
     steps:
       - name: Checkout the exact ref
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.ref }}
 
@@ -193,12 +193,12 @@ jobs:
       digest: ${{ steps.digest.outputs.digest }}
     steps:
       - name: Checkout the exact ref
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.ref }}
 
       - name: Login to Azure (OIDC - no stored client secret)
-        uses: azure/login@v2
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
         with:
           # Identifiers, not credentials: a client id, a tenant id and a
           # subscription id are all discoverable from any resource in the
@@ -244,6 +244,8 @@ jobs:
           echo "$DIGEST"
 
       - name: Publish release metadata
+        env:
+          REF_BUILT: ${{ inputs.ref }}
         run: |
           {
             echo "## Container release candidate"
@@ -251,7 +253,7 @@ jobs:
             echo "| field | value |"
             echo "|---|---|"
             echo "| commit | ${{ needs.build-and-smoke.outputs.sha }} |"
-            echo "| ref built | ${{ inputs.ref }} |"
+            echo "| ref built | ${REF_BUILT} |"
             echo "| image tag | ${{ needs.build-and-smoke.outputs.tag }} |"
             echo "| digest | ${{ steps.digest.outputs.digest }} |"
             echo "| registry | ${{ env.DEV_LOGIN_SERVER }} |"

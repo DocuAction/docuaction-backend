@@ -3,9 +3,15 @@
 #
 # This file designates code ownership for the DocuAction AI backend repository.
 # The owners listed below are automatically requested for review when a pull
-# request modifies matching files. At least one owner review is required to
-# merge, in accordance with AGT's secure software development lifecycle
-# (NIST SP 800-53 SA-15) and the repository branch-protection policy.
+# request modifies matching files. AGT's secure software development lifecycle
+# (NIST SP 800-53 SA-15) requires at least one owner review before a merge.
+#
+# ENFORCEMENT STATUS (2026-09-13): GitHub enforces that requirement only when
+# branch protection or a ruleset for `main` requires code-owner review. As of
+# audit finding AUD-20260913-02 no such protection is configured, so this file
+# documents intent and routes review requests; it does not block a merge. A
+# repository administrator must enable the protection described in
+# docs/governance/DOCUACTION_INDEPENDENT_AI_AUDIT.md section 8.
 #
 # CMMI Level 3 | ISO 27001 | ISO 9001 certified
 # Security contact: security@agtbi.com
