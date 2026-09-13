@@ -425,7 +425,8 @@ def test_an_image_only_deployment_touches_no_database():
     offenders = []
     for step in _job(DEPLOY, "deploy-dev")["steps"]:
         body = (step.get("run") or "")
-        if "alembic" in body or "MIGRATION_DATABASE_URL" in body:
+        env_text = str(step.get("env") or {})
+        if "alembic" in body or "MIGRATION_DATABASE_URL" in body or "MIGRATION_DATABASE_URL" in env_text:
             if "run_migrations" not in str(step.get("if") or ""):
                 offenders.append(step.get("name"))
     assert not offenders, (
@@ -443,7 +444,12 @@ def test_the_migration_path_is_still_fail_closed_when_requested():
     assert "||" not in body, "a swallowed failure records no starting revision"
     migrate = _step_named(DEPLOY, "deploy-dev", "Run approved migrations")
     assert migrate.get("env", {}).get("DB_APP_ROLE") == "docuaction_app"
-    assert "MIGRATION_DATABASE_URL" in (migrate.get("run") or "")
+    # The owner connection string reaches alembic as the step's DATABASE_URL environment
+    # variable and is never expanded on a command line, where a process listing or an
+    # error trace could show it (AUD-20260913-04).
+    assert "secrets.MIGRATION_DATABASE_URL" in str(migrate.get("env", {}).get("DATABASE_URL", ""))
+    assert "MIGRATION_DATABASE_URL" not in (migrate.get("run") or "")
+    assert "alembic upgrade head" in (migrate.get("run") or "")
 
 
 def test_an_image_only_deployment_needs_no_repository_checkout():
