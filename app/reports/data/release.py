@@ -39,7 +39,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 #: Contract reference every report must cite (RFQ 7571MN26Q00038, Section F:
 #: "All reports shall reference and cite the contract number.")
-CONTRACT_NUMBER = "7571MN26F80064"
+# One source for the contract number: the branding module (env-overridable).
+from app.reports.branding import CONTRACT_NUMBER  # noqa: E402
 
 STATUS_DRAFT = "DRAFT"
 STATUS_PM_REVIEWED = "PM_REVIEWED"
