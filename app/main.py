@@ -436,6 +436,9 @@ async def health():
     return {
         "status": "healthy",
         "version": "6.0.0",
+        # Commit baked into the image at build time (Dockerfile ARG GIT_SHA); "unknown" means
+        # the image was not built by the release workflow and cannot be attributed to a commit.
+        "git_sha": os.environ.get("GIT_SHA", "unknown"),
         "platform": "DocuAction AI",
         "scheduler": scheduler,
         "usps": usps,
