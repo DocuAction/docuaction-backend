@@ -136,7 +136,10 @@
 
 <header class="report-header">
   <p class="report-kicker">{% block kicker %}DocuAction TEFCA ARC{% endblock %}</p>
-  <h1>{% block heading %}Report{% endblock %}</h1>
+  {#- A report with a cover page already carries its single document-level <h1> there; the running
+      header then repeats the title as a paragraph so assistive technology hears one h1 per document
+      (AUD-20260913-14). Reports without a cover keep the <h1> here. -#}
+  {% if self.cover()|trim %}<p class="report-title" role="doc-subtitle">{% block heading %}Report{% endblock %}</p>{% else %}<h1>{{ self.heading() }}</h1>{% endif %}
   <p class="report-meta">
     Report {{ snapshot.report_id }} &middot; Generated {{ generated_at_display }}
     &middot; Report Data Service v{{ snapshot.report_data_service_version }}
