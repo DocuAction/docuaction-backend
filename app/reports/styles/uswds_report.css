@@ -415,4 +415,7 @@ figcaption {
 .contents { columns: 1; padding-left: 18pt; }
 .contents li { margin: 0 0 3pt; }
 .contents ol { padding-left: 16pt; }
-.report-header h1 { string-set: doc-title content(); }
+.report-header h1, .report-header .report-title { string-set: doc-title content(); }
+/* Running-header title when the cover page already owns the document's single <h1>
+   (AUD-20260913-14): same face and size as h1, but a paragraph for assistive technology. */
+.report-header .report-title { font-family: var(--report-font); font-weight: 700; color: var(--report-text); line-height: 1.3; font-size: 20pt; margin: 0 0 4pt; break-after: avoid; }
