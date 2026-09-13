@@ -30,7 +30,7 @@ AUDIT_RESULT                       = FAIL  (driven by two HIGH repository-contro
 
 ## A. Severity
 
-CRITICAL = 0, HIGH = 2, MEDIUM = 10, LOW = 4, INFORMATIONAL = 3 (19 findings, section O).
+CRITICAL = 0, HIGH = 2, MEDIUM = 10, LOW = 4, INFORMATIONAL = 5 (21 findings, sections O and 7D).
 
 ## B. Safety / contract baseline
 
@@ -144,6 +144,24 @@ Common fields: AFFECTED_SHA as listed; RETEST_REQUIRED = YES unless stated.
 **AUD-20260913-18 | INFORMATIONAL | ei** Non-boolean flag strings ("", "maybe") cause a startup `ValidationError` (fail-closed). Document in the ops runbook so a typo is diagnosed quickly. RETEST_REQUIRED = NO.
 
 **AUD-20260913-19 | INFORMATIONAL | governance** No AGENTS.md, CLAUDE.md, copilot-instructions or path instructions exist in either repository; no conflicting AI instructions; this audit created `docs/governance/DOCUACTION_INDEPENDENT_AI_AUDIT.md` (documentation only). RETEST_REQUIRED = NO.
+
+## 7D. Entity / Decision Intelligence truth invariants (reconciled 2026-09-13)
+
+The 18 minimum truth invariants were reconciled against the 31 governing invariants without redefining any existing one: 12 map to existing invariants, 6 are new (I-32 to I-37). The authoritative map is `docs/governance/DOCUACTION_INVARIANT_MAP.md`. Each of the 18 was tested independently against EI head 4ef1bba: 16 by an auditor probe over the authority matrix, location-role comparison, assessment vocabulary and service code; 2 (D-12, D-18) by running the committed database-backed maker-checker and release-control tests against an ephemeral, credential-free local Postgres migrated to Alembic head `20260903_delivery_grants` (12 passed, 3 skipped for missing seed data; cluster deleted afterwards).
+
+```
+GOVERNING_INVARIANTS_TOTAL        = 37
+INVARIANTS_TESTED                 = 36
+INVARIANTS_PASS                   = 36
+INVARIANTS_FAIL                   = 0
+INVARIANTS_MISSING_TEST_COVERAGE  = 11  (I-3, I-12, I-15, I-16, I-21, I-27, I-30, I-31, I-33, I-34, I-36)
+```
+
+Caveat: D-9 / I-32 passes for every named role but UNKNOWN_SOURCE_ROLE still yields a location match (AUD-11).
+
+**AUD-20260913-20 | INFORMATIONAL | tests** Eleven governing invariants have no committed executable test (probe or source verification only). FIX: builder converts the auditor probe cases for I-31, I-33, I-34, I-36 and the UNKNOWN_SOURCE_ROLE case into `tests/test_entity_intelligence_invariants.py`. RETEST_REQUIRED = YES (test presence and pass).
+
+**AUD-20260913-21 | INFORMATIONAL | tests** `tests/test_human_review_workflow.py::test_government_rows_are_untouched` asserts at least 43 pre-existing review records and fails on any freshly migrated empty database (observed on the ephemeral cluster: 1 failed, 202 passed, 5 skipped across the six workflow files). It measures shared-QA state, not code. FIX: seed a fixture row set or skip when the table is empty. RETEST_REQUIRED = NO.
 
 ## P. AI / GitHub governance
 
