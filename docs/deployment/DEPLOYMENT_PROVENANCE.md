@@ -63,3 +63,7 @@ Backend: `development` and `production` each require reviewer `DocuAction`; bran
 ## 7. Frontend chain
 
 Frontend hardening PR (separate repository) writes `out/build-info.json` (git_sha, run_id, run_attempt, ref, environment) into every workflow build and the DEV verification step checks that the served file names the workflow's commit. The current DEV SWA content (Last-Modified 2026-09-12 02:56:48 GMT) was uploaded with the SWA CLI by hand and is therefore MANUAL / UNATTRIBUTED until the next workflow deployment.
+
+## 8. Runtime environment flags fail closed (AUD-20260913-18, documentation)
+
+Boolean settings such as `ENTITY_INTELLIGENCE_ENABLED` accept only `true/false/1/0/yes/no/on/off` (case-insensitive). Any other string (an empty value, a typo such as `maybe`) makes `Settings()` raise a validation error at process start, so the container exits instead of guessing. Operators diagnosing a container that restarts immediately after an app-settings change should check the flag values first; the App Service log shows the pydantic `ValidationError` naming the field. The default for every Entity Intelligence flag is `false`; the flag is deliberately absent from the DEV App Service settings.
