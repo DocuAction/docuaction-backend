@@ -9,12 +9,21 @@ result carries `requires_human_review = True`.
 NO SOURCE VOTING
     A conflict from one authoritative source is reported as a conflict even if
     two other sources agree. Agreement is recorded per source, never counted.
+
+DUPLICATE EVIDENCE != MULTIPLE ENTITIES
+    The same source statement delivered twice (a re-read file, a repeated row,
+    an adapter called twice) is ONE observation. Two observations are duplicates
+    only when source, type, role, comparison value, effective period and source
+    record identity are all equal; anything that differs in any of those is a
+    distinct observation and is preserved (several enrollment rows for one NPI,
+    several locations, several relationships, a historical value with a
+    different period). Collapsing is recorded in the result detail.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .explanations import explain
 from .normalize import (address_is_usable, name_core, normalize_address,
@@ -22,7 +31,10 @@ from .normalize import (address_is_usable, name_core, normalize_address,
 from .observations import (ADMINISTRATIVE_ROLES, CARE_SITE_ROLES, EvidenceObservation, LocationRole, NameKind,
                            ObservationType, SourceAuthority)
 
-COMPARISON_RULES_VERSION = "1.0"
+#: 1.1: exact duplicate observations collapse before candidate counting; the
+#: identifier dimension counts candidate ENTITIES, not source rows; an address
+#: whose source role is unstated yields SOURCE_ROLE_UNKNOWN, never a match.
+COMPARISON_RULES_VERSION = "1.1"
 
 
 class Dimension(str, Enum):
@@ -66,6 +78,10 @@ class LocationSignal(str, Enum):
     #: The address is the same but the source assigns it a non-care role
     #: (registered agent, headquarters, principal office). Not a match, not a conflict.
     ROLE_ASSIGNMENT_DIFFERS = "ROLE_ASSIGNMENT_DIFFERS"
+    #: The address is the same but the source states NO role for it. An unstated
+    #: role is never promoted to practice, headquarters, agent, site-of-care or
+    #: mailing; it cannot corroborate a role-specific question. Not a match, not a conflict.
+    SOURCE_ROLE_UNKNOWN = "SOURCE_ROLE_UNKNOWN"
     AMBIGUOUS_LOCATION = "AMBIGUOUS_LOCATION"
     INSUFFICIENT_LOCATION_EVIDENCE = "INSUFFICIENT_LOCATION_EVIDENCE"
     SOURCE_UNAVAILABLE = "SOURCE_UNAVAILABLE"
@@ -112,9 +128,14 @@ INSUFFICIENT_SIGNALS = {ParticipationSignal.PARTICIPATION_EVIDENCE_NOT_FOUND,
                         LocationSignal.INSUFFICIENT_LOCATION_EVIDENCE,
                         RelationshipSignal.INSUFFICIENT_RELATIONSHIP_EVIDENCE,
                         RelationshipSignal.RELATIONSHIP_NOT_COMPARABLE}
-AMBIGUOUS_SIGNALS = {LocationSignal.ROLE_ASSIGNMENT_DIFFERS, RelationshipSignal.RELATIONSHIP_PERIOD_DIFFERS,
+AMBIGUOUS_SIGNALS = {LocationSignal.ROLE_ASSIGNMENT_DIFFERS, LocationSignal.SOURCE_ROLE_UNKNOWN,
+                     RelationshipSignal.RELATIONSHIP_PERIOD_DIFFERS,
                      IdentifierSignal.MULTIPLE_CANDIDATE_ENTITIES, NameSignal.AMBIGUOUS_NAME,
                      LocationSignal.AMBIGUOUS_LOCATION}
+
+#: Location roles the source has NOT stated. Kept explicit so a new role added
+#: to the enum without a classification is treated as unstated, never as a match.
+_UNSTATED_ROLES = frozenset({LocationRole.UNKNOWN_SOURCE_ROLE.value, LocationRole.UNKNOWN.value, ""})
 
 
 @dataclass(frozen=True)
@@ -156,10 +177,64 @@ def _unavailable(observations: List[EvidenceObservation], source_id: str) -> boo
     return any(o.source_id == source_id and o.observed_value.get("unavailable") for o in observations)
 
 
+# ── duplicate evidence ──────────────────────────────────────────────────────
+
+def _comparison_value(o: EvidenceObservation) -> Tuple[Any, ...]:
+    """The part of an observation that the comparison engine actually reads,
+    in normalized form. Two observations with equal comparison values, equal
+    role/period and equal record identity are the same statement."""
+    v = o.observed_value
+    if v.get("unavailable"):
+        return ("unavailable",)
+    if v.get("absent"):
+        return ("absent", v.get("reason"), v.get("dataset_version"))
+    if o.observation_type is ObservationType.IDENTIFIER:
+        return ("identifier", str(v.get("value", "")).strip(), str(v.get("entity_type") or ""))
+    if o.observation_type is ObservationType.NAME:
+        return ("name", normalize_name(v.get("name")))
+    if o.observation_type is ObservationType.LOCATION:
+        n = _loc_norm(o)
+        return ("location", n["street"], n["city"], n["state"], n["zip5"])
+    if o.observation_type is ObservationType.RELATIONSHIP:
+        return ("relationship", normalize_name(v.get("related_entity_name")), v.get("valid_from"), v.get("valid_to"))
+    if o.observation_type is ObservationType.PROGRAM_PARTICIPATION:
+        return ("participation", _participation_value(o), v.get("dataset_version"))
+    return ("other", repr(sorted(v.items())))
+
+
+def observation_identity_key(o: EvidenceObservation) -> Tuple[Any, ...]:
+    """Everything that must be equal for two observations to be ONE statement:
+    source, subject entity, type, role, comparison value, effective period,
+    and the source record identity (record id, delivery id, record reference)."""
+    return (o.source_id, o.canonical_entity_id, o.observation_type.value, o.role, _comparison_value(o),
+            o.effective_from, o.effective_to, o.source_record_id, o.source_delivery_id,
+            o.provenance.source_record_ref)
+
+
+def deduplicate_observations(observations: List[EvidenceObservation]) -> Tuple[List[EvidenceObservation], int]:
+    """Collapse exact duplicates, keeping the first occurrence and order.
+    Returns (unique observations, number collapsed). Observations that differ
+    in ANY identity component are kept: distinct evidence is never merged."""
+    seen = set()
+    unique: List[EvidenceObservation] = []
+    for o in observations:
+        key = observation_identity_key(o)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(o)
+    return unique, len(observations) - len(unique)
+
+
+def _record_identity(o: EvidenceObservation) -> str:
+    return o.source_record_id or o.provenance.source_record_ref or o.source_delivery_id or o.observation_id
+
+
 # ── organisation identity (identifier) ─────────────────────────────────────
 
 def compare_identifier(observations: List[EvidenceObservation], *, source_id: str,
                        identifier_system: str = "NPI") -> ComparisonResult:
+    observations, collapsed = deduplicate_observations(observations)
     delivered = _delivered(observations, ObservationType.IDENTIFIER, identifier_system)
     dim = Dimension.ORGANIZATION_IDENTITY
     if _unavailable(observations, source_id):
@@ -172,21 +247,42 @@ def compare_identifier(observations: List[EvidenceObservation], *, source_id: st
     value = str(delivered.observed_value["value"]).strip()
     found = [o for o in observations
              if o.source_id == source_id and o.observation_type is ObservationType.IDENTIFIER
-             and o.role == identifier_system]
+             and o.role == identifier_system and not o.observed_value.get("absent")]
     same = [o for o in found if str(o.observed_value.get("value", "")).strip() == value]
-    if len(same) == 1:
+    same_ids = {o.observation_id for o in same}
+    others = [o for o in found if o.observation_id not in same_ids]
+    dup_detail = {"duplicate_observations_collapsed": collapsed} if collapsed else {}
+    if same:
+        # CANDIDATE ENTITIES, NOT SOURCE ROWS. One identifier stated in several
+        # source records (e.g. several enrollment rows) is one entity. The match
+        # is not unique only when the source's records for this identifier
+        # describe different entities (entity types disagree) or the source
+        # also associates the entity with other identifiers of the same system.
+        entity_types = {str(o.observed_value.get("entity_type") or "") for o in same}
+        records = sorted({_record_identity(o) for o in same})
+        if len(entity_types) > 1 or others:
+            reason = ("the source records for this identifier state different entity types"
+                      if len(entity_types) > 1 else
+                      f"the source also associates this entity with {len(others)} other {identifier_system} value(s)")
+            candidates = same + others
+            return ComparisonResult(dim, IdentifierSignal.MULTIPLE_CANDIDATE_ENTITIES, source_id,
+                                    delivered.observation_id,
+                                    candidate_observation_ids=[o.observation_id for o in candidates],
+                                    explanation=explain("MULTIPLE_CANDIDATE_ENTITIES", system=identifier_system,
+                                                        source=source_id, reason=reason,
+                                                        count=len(entity_types) if len(entity_types) > 1 else 1 + len(others)),
+                                    detail={"entity_types": sorted(entity_types), "source_record_ids": records,
+                                            "other_identifier_values": [o.observed_value.get("value") for o in others],
+                                            **dup_detail})
         entity_type = same[0].observed_value.get("entity_type")
+        key = "IDENTIFIER_CORROBORATED_MULTIPLE_RECORDS" if len(same) > 1 else "IDENTIFIER_CORROBORATED"
         return ComparisonResult(dim, IdentifierSignal.IDENTIFIER_CORROBORATED, source_id,
                                 delivered.observation_id, same[0].observation_id,
-                                explanation=explain("IDENTIFIER_CORROBORATED", system=identifier_system,
-                                                    source=source_id, entity_type=entity_type or "unstated"),
-                                detail={"entity_type": entity_type})
-    if len(same) > 1:
-        return ComparisonResult(dim, IdentifierSignal.MULTIPLE_CANDIDATE_ENTITIES, source_id,
-                                delivered.observation_id,
-                                candidate_observation_ids=[o.observation_id for o in same],
-                                explanation=explain("MULTIPLE_CANDIDATE_ENTITIES", system=identifier_system,
-                                                    source=source_id, count=len(same)))
+                                candidate_observation_ids=[o.observation_id for o in same] if len(same) > 1 else [],
+                                explanation=explain(key, system=identifier_system, source=source_id,
+                                                    entity_type=entity_type or "unstated", count=len(same)),
+                                detail={"entity_type": entity_type, "source_record_count": len(same),
+                                        "source_record_ids": records, **dup_detail})
     if found:
         return ComparisonResult(dim, IdentifierSignal.IDENTIFIER_CONFLICT, source_id,
                                 delivered.observation_id,
@@ -211,6 +307,7 @@ _NAME_KIND_SIGNAL = {
 
 
 def compare_names(observations: List[EvidenceObservation], *, source_id: str) -> ComparisonResult:
+    observations, _ = deduplicate_observations(observations)
     delivered = _delivered(observations, ObservationType.NAME)
     dim = Dimension.NAME_IDENTITY
     if _unavailable(observations, source_id):
@@ -301,6 +398,7 @@ def _same_locality(a: Dict[str, str], b: Dict[str, str]) -> bool:
 
 
 def compare_locations(observations: List[EvidenceObservation], *, source_id: str) -> ComparisonResult:
+    observations, collapsed = deduplicate_observations(observations)
     delivered = _delivered(observations, ObservationType.LOCATION)
     dim = Dimension.LOCATION_IDENTITY
     if _unavailable(observations, source_id):
@@ -321,29 +419,47 @@ def compare_locations(observations: List[EvidenceObservation], *, source_id: str
                                 explanation=explain("NO_SOURCE_ADDRESSES", source=source_id))
     exact = [o for o in usable if _same_address(_loc_norm(o), d)]
     if exact:
-        # Prefer the primary role if several roles carry the same address.
+        dup_detail = {"duplicate_observations_collapsed": collapsed} if collapsed else {}
+        delivered_role = delivered.role or LocationRole.DELIVERED_LOCATION.value
+        # SAME ADDRESS != SAME ROLE. The signal follows the role the SOURCE stated:
+        # a care-site role is a location match (the primary role first if several
+        # carry the same address); a mailing role is a mailing match; an
+        # administrative role is ROLE_ASSIGNMENT_DIFFERS; an unstated role is
+        # SOURCE_ROLE_UNKNOWN. Nothing is promoted from one class to another.
         order = [LocationRole.PRIMARY_PRACTICE_LOCATION.value, LocationRole.SITE_OF_CARE.value,
                  LocationRole.ADDITIONAL_PRACTICE_LOCATION.value, LocationRole.BRANCH_LOCATION.value,
-                 LocationRole.MOBILE_HOME_BASE.value, LocationRole.MOBILE_FACILITY.value,
-                 LocationRole.MAILING_LOCATION.value]
-        exact.sort(key=lambda o: order.index(o.role) if o.role in order else 99)
-        hit = exact[0]
-        if (hit.role or "") in ADMINISTRATIVE_ROLES and not any((o.role or "") in CARE_SITE_ROLES or o.role == LocationRole.MAILING_LOCATION.value for o in exact):
-            # SAME ADDRESS != SAME ROLE: a registered-agent or corporate address that equals the
-            # delivered site is neither a site-of-care match nor a conflict.
+                 LocationRole.MOBILE_HOME_BASE.value, LocationRole.MOBILE_FACILITY.value]
+        care = sorted((o for o in exact if (o.role or "") in CARE_SITE_ROLES),
+                      key=lambda o: order.index(o.role) if o.role in order else 99)
+        mailing = [o for o in exact if o.role == LocationRole.MAILING_LOCATION.value]
+        administrative = [o for o in exact if (o.role or "") in ADMINISTRATIVE_ROLES]
+        if care or mailing:
+            hit = (care or mailing)[0]
+            signal = _ROLE_SIGNAL.get(hit.role or "", LocationSignal.NORMALIZED_LOCATION_MATCH)
+            key = {LocationSignal.PRIMARY_LOCATION_MATCH: "PRIMARY_LOCATION_MATCH",
+                   LocationSignal.ADDITIONAL_PRACTICE_LOCATION_MATCH: "ADDITIONAL_PRACTICE_LOCATION_MATCH",
+                   LocationSignal.MAILING_LOCATION_MATCH: "MAILING_LOCATION_MATCH"}.get(signal, "NORMALIZED_LOCATION_MATCH")
+            return ComparisonResult(dim, signal, source_id, delivered.observation_id, hit.observation_id,
+                                    candidate_observation_ids=[o.observation_id for o in exact],
+                                    explanation=explain(key, source=source_id, role=hit.role),
+                                    detail={"matched_role": hit.role, "normalized": d, **dup_detail})
+        if administrative:
+            hit = administrative[0]
+            # A registered-agent or corporate address that equals the delivered
+            # site is neither a site-of-care match nor a conflict.
             return ComparisonResult(dim, LocationSignal.ROLE_ASSIGNMENT_DIFFERS, source_id, delivered.observation_id,
                                     hit.observation_id, candidate_observation_ids=[o.observation_id for o in exact],
                                     explanation=explain("ROLE_ASSIGNMENT_DIFFERS", source=source_id, role=hit.role,
-                                                        delivered_role=delivered.role or LocationRole.DELIVERED_LOCATION.value),
-                                    detail={"matched_role": hit.role, "delivered_role": delivered.role, "normalized": d})
-        signal = _ROLE_SIGNAL.get(hit.role or "", LocationSignal.NORMALIZED_LOCATION_MATCH)
-        key = {LocationSignal.PRIMARY_LOCATION_MATCH: "PRIMARY_LOCATION_MATCH",
-               LocationSignal.ADDITIONAL_PRACTICE_LOCATION_MATCH: "ADDITIONAL_PRACTICE_LOCATION_MATCH",
-               LocationSignal.MAILING_LOCATION_MATCH: "MAILING_LOCATION_MATCH"}.get(signal, "NORMALIZED_LOCATION_MATCH")
-        return ComparisonResult(dim, signal, source_id, delivered.observation_id, hit.observation_id,
-                                candidate_observation_ids=[o.observation_id for o in exact],
-                                explanation=explain(key, source=source_id, role=hit.role or "UNKNOWN"),
-                                detail={"matched_role": hit.role, "normalized": d})
+                                                        delivered_role=delivered_role),
+                                    detail={"matched_role": hit.role, "delivered_role": delivered.role, "normalized": d,
+                                            **dup_detail})
+        hit = exact[0]
+        return ComparisonResult(dim, LocationSignal.SOURCE_ROLE_UNKNOWN, source_id, delivered.observation_id,
+                                hit.observation_id, candidate_observation_ids=[o.observation_id for o in exact],
+                                explanation=explain("SOURCE_ROLE_UNKNOWN", source=source_id, delivered_role=delivered_role),
+                                detail={"matched_role": hit.role or LocationRole.UNKNOWN_SOURCE_ROLE.value,
+                                        "stated_roles": sorted({o.role or "" for o in exact}),
+                                        "delivered_role": delivered.role, "normalized": d, **dup_detail})
     locality = [o for o in usable if _same_locality(_loc_norm(o), d)]
     if locality:
         return ComparisonResult(dim, LocationSignal.AMBIGUOUS_LOCATION, source_id, delivered.observation_id,
@@ -365,6 +481,7 @@ def compare_relationships(observations: List[EvidenceObservation], *, source_id:
     corporate-parent relationship from a commercial source is never compared
     with a program's QHIN→Participant relationship."""
     dim = Dimension.RELATIONSHIP_IDENTITY
+    observations, _ = deduplicate_observations(observations)
     delivered = [o for o in observations if o.observation_type is ObservationType.RELATIONSHIP
                  and o.source_authority is SourceAuthority.PROGRAM_DELIVERY and o.role == kind_code]
     if _unavailable(observations, source_id):
@@ -427,6 +544,7 @@ def compare_participation(observations: List[EvidenceObservation], *, source_id:
     programs or kinds is NOT_COMPARABLE.
     """
     dim = Dimension.PARTICIPATION_IDENTITY
+    observations, _ = deduplicate_observations(observations)
     delivered = [o for o in observations if o.observation_type is ObservationType.PROGRAM_PARTICIPATION
                  and o.source_authority is SourceAuthority.PROGRAM_DELIVERY and o.role == participation_role]
     if _unavailable(observations, source_id):
@@ -478,6 +596,7 @@ def compare_all(observations: List[EvidenceObservation], *, source_id: str,
                 identifier_system: str = "NPI",
                 relationship_kinds: Optional[List[str]] = None,
                 participation_roles: Optional[List[str]] = None) -> List[ComparisonResult]:
+    observations, _ = deduplicate_observations(observations)
     results = [compare_identifier(observations, source_id=source_id, identifier_system=identifier_system),
                compare_names(observations, source_id=source_id),
                compare_locations(observations, source_id=source_id)]

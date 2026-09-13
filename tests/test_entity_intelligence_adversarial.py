@@ -140,8 +140,28 @@ class TestAdversarialCorpus:
         _, comps = run(delivered("S", BALTIMORE, npi=None) + src("S", BALTIMORE))
         assert sig(comps, Dimension.ORGANIZATION_IDENTITY) == [IdentifierSignal.MISSING_IDENTIFIER]
 
-    def test_O_two_source_records_same_npi_is_multiple_candidates(self):
-        cur = delivered("S", BALTIMORE) + src("S", BALTIMORE) + src("S TWO", BALTIMORE_ALT_STREET)
+    def test_O_two_source_records_same_npi_is_one_entity_not_multiple_candidates(self):
+        # AUD-09: one identifier stated in two distinct source records (different record ids) is ONE
+        # candidate entity; the second record's other name/address evidence is kept and compared.
+        from dataclasses import replace
+        second = [replace(o, source_record_id="row-2") for o in src("S TWO", BALTIMORE_ALT_STREET)]
+        cur = delivered("S", BALTIMORE) + [replace(o, source_record_id="row-1") for o in src("S", BALTIMORE)] + second
+        _, comps = run(cur)
+        ident = [c for c in comps if c.dimension is Dimension.ORGANIZATION_IDENTITY][0]
+        assert ident.signal is IdentifierSignal.IDENTIFIER_CORROBORATED
+        assert ident.detail["source_record_count"] == 2 and ident.detail["source_record_ids"] == ["row-1", "row-2"]
+        assert "not several entities" in ident.explanation
+
+    def test_O2_records_with_different_entity_types_are_multiple_candidates(self):
+        from dataclasses import replace
+        other_type = [replace(o, observed_value={"value": "9999900001", "entity_type": "1"}, source_record_id="row-2")
+                      for o in src(npi="9999900001") if o.observation_type is ObservationType.IDENTIFIER]
+        cur = delivered("S", BALTIMORE) + src("S", BALTIMORE) + other_type
+        _, comps = run(cur)
+        assert sig(comps, Dimension.ORGANIZATION_IDENTITY) == [IdentifierSignal.MULTIPLE_CANDIDATE_ENTITIES]
+
+    def test_O3_second_npi_value_from_the_same_source_is_multiple_candidates(self):
+        cur = delivered("S", BALTIMORE) + src("S", BALTIMORE) + src(npi="9999900002")
         _, comps = run(cur)
         assert sig(comps, Dimension.ORGANIZATION_IDENTITY) == [IdentifierSignal.MULTIPLE_CANDIDATE_ENTITIES]
 

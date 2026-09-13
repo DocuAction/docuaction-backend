@@ -111,7 +111,12 @@ class TestIdentifiers:
         assert compare_identifier(delivered("N") + [npi("9999900001")], source_id=SRC).signal is IdentifierSignal.IDENTIFIER_CORROBORATED
         r = compare_identifier(delivered("N") + [npi("9999900001")], source_id=SRC)
         assert "does not establish licensure" in r.explanation
-        assert compare_identifier(delivered("N") + [npi("9999900001"), npi("9999900001")], source_id=SRC).signal is IdentifierSignal.MULTIPLE_CANDIDATE_ENTITIES
+        # AUD-09: the same statement twice is duplicate evidence, not two candidate entities
+        dup = compare_identifier(delivered("N") + [npi("9999900001"), npi("9999900001")], source_id=SRC)
+        assert dup.signal is IdentifierSignal.IDENTIFIER_CORROBORATED and dup.detail["duplicate_observations_collapsed"] == 1
+        # ...but records that disagree on entity type, or a second NPI value for the entity, ARE multiple candidates
+        assert compare_identifier(delivered("N") + [npi("9999900001"), npi("9999900001", et="1")], source_id=SRC).signal is IdentifierSignal.MULTIPLE_CANDIDATE_ENTITIES
+        assert compare_identifier(delivered("N") + [npi("9999900001"), npi("9999900777")], source_id=SRC).signal is IdentifierSignal.MULTIPLE_CANDIDATE_ENTITIES
         assert compare_identifier(delivered("N") + [npi("9999900777")], source_id=SRC).signal is IdentifierSignal.IDENTIFIER_CONFLICT
         assert compare_identifier(delivered("N", npi=None) + [npi("9999900001")], source_id=SRC).signal is IdentifierSignal.MISSING_IDENTIFIER
         assert compare_identifier(delivered("N") + [unavailable(SRC)], source_id=SRC).signal is IdentifierSignal.SOURCE_UNAVAILABLE
