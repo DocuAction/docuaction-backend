@@ -133,6 +133,9 @@ def run(n: int) -> dict:
     svc = EntityIntelligenceService()
     obs_count = 0
     assessments = Counter()
+    signals = Counter()
+    comparisons = 0
+    collapsed = 0
     for npi, d in deliveries.items():
         obs = adapter.observations_for(canonical_entity_id=npi, identifier=npi)
         obs_count += len(obs)
@@ -140,16 +143,21 @@ def run(n: int) -> dict:
         # prior delivery = the same delivery (a stable entity) → deltas mostly UNCHANGED
         run_ = svc.evaluate(canonical_entity_id=npi, current=current, prior=current, source_ids=[SOURCE_ID])
         assessments[run_.assessment.assessment.value] += 1
+        comparisons += len(run_.comparisons)
+        for c in run_.comparisons:
+            signals[c.signal.value] += 1
+            collapsed += int(c.detail.get("duplicate_observations_collapsed", 0) or 0)
     t3 = time.perf_counter()
     _, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
     rss_after = rss_mb()
     review_candidates = n - assessments.get("EVIDENCE_CORROBORATES", 0)
-    comparisons = sum(3 for _ in deliveries)   # identifier + name + location per entity per source
     return {"n": n, "main_file_mb": round(len(main_text) / 1e6, 1),
             "source_records": plan.source_record_count, "canonical_candidates": plan.canonical_candidate_count,
             "duplicates_removed": plan.duplicate_record_count, "plan_s": round(plan_s, 3),
             "deduplicated_lookups": dict(plan.lookups_by_source), "comparisons": comparisons,
+            "assessment_count": sum(assessments.values()), "signals": dict(signals),
+            "duplicate_observations_collapsed": collapsed,
             "entities_per_sec": round(n / max(1e-9, (t3 - t2)), 1), "rss_mb_before": rss_before, "rss_mb_after": rss_after,
             "rows_read": bundle.reports[0].rows_read, "rows_skipped_type1": bundle.reports[0].rows_skipped,
             "parse_status": [r.status for r in bundle.reports],

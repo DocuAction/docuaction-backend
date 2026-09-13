@@ -75,3 +75,27 @@ Pipeline measured: source records (with 30% exact duplicates) → normalize → 
 - No O(n²) path: candidates and slots are dict-keyed; normalisation runs once per record (`normalizations_performed == source_record_count`).
 - RSS: the Windows psapi call in the script returned no value on this host (reported as −1); tracemalloc peak is the memory figure. Fix queued (use `GetProcessMemoryInfo` with an explicit handle type).
 - 25K source records ≠ 25K human reviews: 30% of entities arrive with a stated reason to look; the rest arrive corroborated with a basis. Both still require human review under the methodology.
+
+## Lane D remediation — scale regression after AUD-09/10/11 (2026-09-13)
+
+**Synthetic domain-processing performance only. External acquisition performance is not represented. 25,000 source records != 25,000 human reviews.**
+
+Branch `fix/ei-correctness` (base 4ef1bba). Same pipeline and synthetic mix as the Architecture v1.0 run, now with exact-duplicate collapsing in the comparison engine (`COMPARISON_RULES_VERSION` 1.1), the non-raising normaliser (`addr-norm-1.2`) and the `SOURCE_ROLE_UNKNOWN` location signal. `scripts/ei_perf.py` now reports the ACTUAL comparison and assessment counts returned by the service and the number of duplicate observations collapsed, instead of an assumed 3 per entity.
+
+First pass (2K–50K) ran while other remediation lanes' test suites and builds were executing on the same laptop; the 25K/50K sizes were re-run alone afterwards. Both are reported; the quieter re-run is the reference.
+
+| Organisations | Source records | Canonical candidates | Duplicate records removed (plan) | Evaluate (s) | ms / entity | entities / s | Comparisons | Assessments | Duplicate observations collapsed | tracemalloc peak (MB) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 2,000 | 2,600 | 2,000 | 600 | 6.84 | 3.418 | 292.6 | 6,000 | 2,000 | 0 | 12.9 |
+| 5,000 | 6,500 | 5,000 | 1,500 | 14.38 | 2.875 | 347.8 | 15,000 | 5,000 | 0 | 32.2 |
+| 10,000 | 13,000 | 10,000 | 3,000 | 21.88 | 2.188 | 457.0 | 30,000 | 10,000 | 0 | 64.4 |
+| 25,000 | 32,500 | 25,000 | 7,500 | 44.34 | 1.774 | 563.8 | 75,000 | 25,000 | 0 | 161.2 |
+| 50,000 (contended) | 65,000 | 50,000 | 15,000 | 143.48 | 2.870 | 348.5 | 150,000 | 50,000 | 0 | 322.5 |
+| 25,000 (re-run, quieter host) | 32,500 | 25,000 | 7,500 | 48.36 | 1.935 | 516.9 | 75,000 | 25,000 | 0 | 161.2 |
+| 50,000 (re-run, quieter host) | 65,000 | 50,000 | 15,000 | 102.07 | 2.041 | 489.8 | 150,000 | 50,000 | 0 | 322.5 |
+
+- Comparison and assessment counts are exactly linear (3 comparisons and 1 assessment per entity per source); the dedup pass adds no measurable cost and collapses nothing in this corpus because the synthetic adapter never repeats a statement (duplicates exist at the source-record level and are resolved by the evidence plan: 65,000 records → 50,000 candidates).
+- Memory is linear: tracemalloc peak is 6.4–6.5 MB per 1,000 entities at every size, identical to the pre-remediation run; no growth attributable to the identity-key set (it is per call and discarded).
+- Per-entity time on the quieter re-run is flat from 25K to 50K (1.94 → 2.04 ms), in line with the Architecture v1.0 run (2.10 / 2.09 ms). The 2.87 ms figure at 50K in the first pass is host contention, not engine behaviour; an independent checker should re-run on a quiet host before quoting any absolute number.
+- Assessment mix is unchanged by the remediation (50K: 35,117 corroborated / 12,388 explainable variation / 2,495 conflicting; 29.8% with a stated reason to look). Every entity still requires human review under the methodology.
+- RSS via psapi still reports −1 on this host (known harness limitation, unchanged); tracemalloc peak is the memory figure.
