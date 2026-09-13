@@ -45,7 +45,9 @@ class TestDelta:
         d = compute_deltas(prior, cur)
         assert len(_by(d, DeltaType.NEW_VALUE)) == 1 and len(_by(d, DeltaType.UNCHANGED)) == 1
         d2 = compute_deltas(cur, prior)
-        assert len(_by(d2, DeltaType.REMOVED_VALUE)) == 1
+        # evidence-side removal: the source no longer reports it (never "removed", never adverse)
+        assert len(_by(d2, DeltaType.SOURCE_NO_LONGER_REPORTS_OBSERVATION)) == 1
+        assert len(_by(d2, DeltaType.REMOVED_VALUE)) == 0
 
     def test_source_side_change_is_reported_with_its_source(self):
         d = compute_deltas([legal("SYNTHETIC HEALTHCARE LLC")], [legal("SYNTHETIC HEALTHCARE GROUP LLC")])

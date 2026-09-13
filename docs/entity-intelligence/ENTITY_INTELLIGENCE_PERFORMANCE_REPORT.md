@@ -55,3 +55,23 @@ SQLite validation (test suite) remains in place for every run.
 | ReDoS | the only regexes are `[^\w\s]`, `\s+`, `\D` — linear; no user-supplied patterns |
 | Path traversal | `safe_extract_path` resolves and checks containment; tested |
 | pip-audit | not run against the whole platform tonight (out of scope; no new dependency was added) |
+
+## Architecture v1.0 — 25K scale run (2026-09-13)
+
+**Domain processing performance — synthetic data only. External source acquisition performance is not represented.**
+
+Pipeline measured: source records (with 30% exact duplicates) → normalize → entity resolution by NPI / name+ZIP5 → deduplicate → canonical candidates → deduplicated evidence questions → (adapter observations) → comparisons → assessments. Same laptop as the overnight run, but with a frontend build and two research agents running concurrently, so absolute times are ~1.8× the overnight figures; scaling stays linear.
+
+| Organisations | Source records | Canonical candidates | Duplicates removed | Plan (s) | Parse (s) | Evaluate (s) | ms / entity | entities / s | Comparisons | Assessments | tracemalloc peak (MB) |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2,000 | 2,600 | 2,000 | 600 | 0.021 | 0.09 | 2.29 | 1.144 | 874.0 | 6,000 | 2,000 | 12.9 |
+| 5,000 | 6,500 | 5,000 | 1,500 | 0.133 | 0.38 | 8.15 | 1.629 | 613.8 | 15,000 | 5,000 | 32.2 |
+| 10,000 | 13,000 | 10,000 | 3,000 | 0.159 | 0.59 | 17.66 | 1.766 | 566.3 | 30,000 | 10,000 | 64.4 |
+| 25,000 | 32,500 | 25,000 | 7,500 | 0.513 | 1.66 | 52.48 | 2.099 | 476.3 | 75,000 | 25,000 | 161.2 |
+| 50,000 | 65,000 | 50,000 | 15,000 | 0.919 | 4.09 | 104.5 | 2.09 | 478.5 | 150,000 | 50,000 | 322.5 |
+
+- Deduplication: every duplicate record resolved to its candidate by exact NPI key; 32,500 records → 25,000 candidates; the evidence plan issues one question set per candidate, not per record.
+- Linear: ms/entity is flat from 10k to 50k (1.8 → 2.1); peak memory grows linearly (≈6.4 KB per entity with the whole synthetic bundle in memory).
+- No O(n²) path: candidates and slots are dict-keyed; normalisation runs once per record (`normalizations_performed == source_record_count`).
+- RSS: the Windows psapi call in the script returned no value on this host (reported as −1); tracemalloc peak is the memory figure. Fix queued (use `GetProcessMemoryInfo` with an explicit handle type).
+- 25K source records ≠ 25K human reviews: 30% of entities arrive with a stated reason to look; the rest arrive corroborated with a basis. Both still require human review under the methodology.

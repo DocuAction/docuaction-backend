@@ -61,3 +61,11 @@ This is distinct from "DocuAction queried IQVIA" and the two are never blurred.
 ## Stop rule
 
 When the actual RCE file arrives: preserve → inventory → schema/mapping proposal for human review. No automatic mapping. No observation production until approval.
+
+## Arrival protocol (Architecture v1.0, 2026-09-13)
+
+Status flags: AWAITING_SCHEMA · AWAITING_TERMS · AWAITING_ACTUAL_DELIVERY (`ARRIVAL_STATUS`). When the actual ONC/RCE IQVIA data arrives:
+
+1 RECEIVE → 2 PRESERVE ORIGINAL → 3 HASH → 4 INVENTORY → 5 PROFILE (read-only) → 6 RIGHTS / LICENSE REVIEW → 7 MAP TO EXISTING CORE → 8 GAP ANALYSIS → 9 HUMAN DECISION → 10 CONTROLLED IMPLEMENTATION AFTER AUTHORIZATION (`ARRIVAL_PROTOCOL`).
+
+During steps 1–9 no IQVIA value enters an operational Entity Evidence Profile, evidence interpretation, explain-difference, historical delta, System Assessment, finding, analyst workflow, QA step or report. `operational_use_permitted()` is False without a recorded human authorization reference and REVIEWED rights (tested). First understand IQVIA, then authorize its use, then adapt IQVIA to DocuAction Core. DocuAction Core must not become an IQVIA data model.

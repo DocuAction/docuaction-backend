@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 from .explanations import explain
 from .normalize import (address_is_usable, name_core, normalize_address,
                         normalize_name)
-from .observations import (EvidenceObservation, LocationRole, NameKind,
+from .observations import (ADMINISTRATIVE_ROLES, CARE_SITE_ROLES, EvidenceObservation, LocationRole, NameKind,
                            ObservationType, SourceAuthority)
 
 COMPARISON_RULES_VERSION = "1.0"
@@ -63,6 +63,9 @@ class LocationSignal(str, Enum):
     NORMALIZED_LOCATION_MATCH = "NORMALIZED_LOCATION_MATCH"
     MAILING_LOCATION_MATCH = "MAILING_LOCATION_MATCH"
     LOCATION_CONFLICT = "LOCATION_CONFLICT"
+    #: The address is the same but the source assigns it a non-care role
+    #: (registered agent, headquarters, principal office). Not a match, not a conflict.
+    ROLE_ASSIGNMENT_DIFFERS = "ROLE_ASSIGNMENT_DIFFERS"
     AMBIGUOUS_LOCATION = "AMBIGUOUS_LOCATION"
     INSUFFICIENT_LOCATION_EVIDENCE = "INSUFFICIENT_LOCATION_EVIDENCE"
     SOURCE_UNAVAILABLE = "SOURCE_UNAVAILABLE"
@@ -71,6 +74,8 @@ class LocationSignal(str, Enum):
 class RelationshipSignal(str, Enum):
     RELATIONSHIP_CORROBORATED = "RELATIONSHIP_CORROBORATED"
     RELATIONSHIP_CONFLICT = "RELATIONSHIP_CONFLICT"
+    #: Same relationship, same object, but the sources state different validity periods.
+    RELATIONSHIP_PERIOD_DIFFERS = "RELATIONSHIP_PERIOD_DIFFERS"
     RELATIONSHIP_NOT_COMPARABLE = "RELATIONSHIP_NOT_COMPARABLE"   # different kinds
     INSUFFICIENT_RELATIONSHIP_EVIDENCE = "INSUFFICIENT_RELATIONSHIP_EVIDENCE"
     SOURCE_UNAVAILABLE = "SOURCE_UNAVAILABLE"
@@ -107,7 +112,8 @@ INSUFFICIENT_SIGNALS = {ParticipationSignal.PARTICIPATION_EVIDENCE_NOT_FOUND,
                         LocationSignal.INSUFFICIENT_LOCATION_EVIDENCE,
                         RelationshipSignal.INSUFFICIENT_RELATIONSHIP_EVIDENCE,
                         RelationshipSignal.RELATIONSHIP_NOT_COMPARABLE}
-AMBIGUOUS_SIGNALS = {IdentifierSignal.MULTIPLE_CANDIDATE_ENTITIES, NameSignal.AMBIGUOUS_NAME,
+AMBIGUOUS_SIGNALS = {LocationSignal.ROLE_ASSIGNMENT_DIFFERS, RelationshipSignal.RELATIONSHIP_PERIOD_DIFFERS,
+                     IdentifierSignal.MULTIPLE_CANDIDATE_ENTITIES, NameSignal.AMBIGUOUS_NAME,
                      LocationSignal.AMBIGUOUS_LOCATION}
 
 
@@ -316,10 +322,20 @@ def compare_locations(observations: List[EvidenceObservation], *, source_id: str
     exact = [o for o in usable if _same_address(_loc_norm(o), d)]
     if exact:
         # Prefer the primary role if several roles carry the same address.
-        order = [LocationRole.PRIMARY_PRACTICE_LOCATION.value, LocationRole.ADDITIONAL_PRACTICE_LOCATION.value,
+        order = [LocationRole.PRIMARY_PRACTICE_LOCATION.value, LocationRole.SITE_OF_CARE.value,
+                 LocationRole.ADDITIONAL_PRACTICE_LOCATION.value, LocationRole.BRANCH_LOCATION.value,
+                 LocationRole.MOBILE_HOME_BASE.value, LocationRole.MOBILE_FACILITY.value,
                  LocationRole.MAILING_LOCATION.value]
         exact.sort(key=lambda o: order.index(o.role) if o.role in order else 99)
         hit = exact[0]
+        if (hit.role or "") in ADMINISTRATIVE_ROLES and not any((o.role or "") in CARE_SITE_ROLES or o.role == LocationRole.MAILING_LOCATION.value for o in exact):
+            # SAME ADDRESS != SAME ROLE: a registered-agent or corporate address that equals the
+            # delivered site is neither a site-of-care match nor a conflict.
+            return ComparisonResult(dim, LocationSignal.ROLE_ASSIGNMENT_DIFFERS, source_id, delivered.observation_id,
+                                    hit.observation_id, candidate_observation_ids=[o.observation_id for o in exact],
+                                    explanation=explain("ROLE_ASSIGNMENT_DIFFERS", source=source_id, role=hit.role,
+                                                        delivered_role=delivered.role or LocationRole.DELIVERED_LOCATION.value),
+                                    detail={"matched_role": hit.role, "delivered_role": delivered.role, "normalized": d})
         signal = _ROLE_SIGNAL.get(hit.role or "", LocationSignal.NORMALIZED_LOCATION_MATCH)
         key = {LocationSignal.PRIMARY_LOCATION_MATCH: "PRIMARY_LOCATION_MATCH",
                LocationSignal.ADDITIONAL_PRACTICE_LOCATION_MATCH: "ADDITIONAL_PRACTICE_LOCATION_MATCH",
@@ -373,6 +389,17 @@ def compare_relationships(observations: List[EvidenceObservation], *, source_id:
     s_targets = {normalize_name(o.observed_value.get("related_entity_name")) for o in same_kind}
     if d_targets & s_targets:
         hit = next(o for o in same_kind if normalize_name(o.observed_value.get("related_entity_name")) in d_targets)
+        d_hit = next(o for o in delivered if normalize_name(o.observed_value.get("related_entity_name")) in s_targets)
+        d_period = (d_hit.observed_value.get("valid_from"), d_hit.observed_value.get("valid_to"))
+        s_period = (hit.observed_value.get("valid_from"), hit.observed_value.get("valid_to"))
+        if any(d_period) and any(s_period) and d_period != s_period:
+            # DIFFERENT VALIDITY PERIODS != AUTOMATIC CONTRADICTION
+            return ComparisonResult(dim, RelationshipSignal.RELATIONSHIP_PERIOD_DIFFERS, source_id,
+                                    delivered[0].observation_id, hit.observation_id,
+                                    explanation=explain("RELATIONSHIP_PERIOD_DIFFERS", source=source_id, kind=kind_code,
+                                                        delivered_period=f"{d_period[0] or 'unstated'}..{d_period[1] or 'open'}",
+                                                        source_period=f"{s_period[0] or 'unstated'}..{s_period[1] or 'open'}"),
+                                    detail={"delivered_period": d_period, "source_period": s_period})
         return ComparisonResult(dim, RelationshipSignal.RELATIONSHIP_CORROBORATED, source_id,
                                 delivered[0].observation_id, hit.observation_id,
                                 explanation=explain("RELATIONSHIP_CORROBORATED", source=source_id, kind=kind_code))

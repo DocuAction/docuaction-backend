@@ -43,7 +43,14 @@ Isolated foundation, feature OFF, DEV engineering only. Draft PR #54; not merged
 31. [SOURCE_AUTHORITY_AND_APPLICABILITY_MODEL.md](SOURCE_AUTHORITY_AND_APPLICABILITY_MODEL.md)
 32. [POLICY_RULE_VERSIONING_ARCHITECTURE.md](POLICY_RULE_VERSIONING_ARCHITECTURE.md)
 
-Code: `app/core/entity_intelligence/` (Core incl. `intake_safety.py`, `policy.py`, `rce_policy_register.py`), `app/evidence_sources/` (adapters), `tests/test_entity_intelligence_*.py` (9 files, 396 tests), `tests/ei_fixtures.py` (synthetic only), `scripts/ei_perf.py`, `scripts/ei_pg_isolated_validation.py`.
+## Architecture v1.0 foundation sprint (2026-09-13)
+
+33. [ARCHITECTURE_V1_AUDIT_MATRIX.md](ARCHITECTURE_V1_AUDIT_MATRIX.md) — REQUIREMENT / EXISTS / PARTIAL / MISSING / REUSE / MODIFY / NEW
+34. [GATE_H_RECOMMENDATION.md](GATE_H_RECOMMENDATION.md) — recommendation only; GATE_H_AUTHORIZED_BY_IMRAN = PENDING
+
+New Core modules: `authority_matrix.py` (SOURCE_QUESTION_AUTHORITY_MATRIX v1.0, no voting), `profile.py` (evidence inquiry + Entity Evidence Profile), `evidence_plan.py` (25K scale planning). Platform-wide `tests/test_core_boundary.py` enforces CORE → TEFCA prohibited (AST, dynamic imports).
+
+Code: `app/core/entity_intelligence/` (Core incl. `intake_safety.py`, `policy.py`, `rce_policy_register.py`), `app/evidence_sources/` (adapters), `tests/test_entity_intelligence_*.py` (10 files, 436 tests), `tests/ei_fixtures.py` (synthetic only), `scripts/ei_perf.py`, `scripts/ei_pg_isolated_validation.py`.
 
 ## OVERNIGHT VALIDATION SUMMARY
 

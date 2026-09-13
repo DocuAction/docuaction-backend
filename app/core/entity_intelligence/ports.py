@@ -23,9 +23,31 @@ class DataRightsClass(str, Enum):
 
 
 class RightsStatus(str, Enum):
-    DOCUMENTED = "DOCUMENTED"                     # terms reviewed and recorded
-    NOT_YET_APPROVED = "NOT_YET_APPROVED"         # implementation must not persist
+    REVIEWED = "REVIEWED"                         # a named human reviewed the terms and recorded the decision
+    ASSUMED_PUBLIC_DOMAIN = "ASSUMED_PUBLIC_DOMAIN"  # public by all appearances; NOT the same as REVIEWED
+    TERMS_REVIEW_REQUIRED = "TERMS_REVIEW_REQUIRED"
+    PENDING = "PENDING"                           # review requested, decision not made
+    NOT_PERMITTED = "NOT_PERMITTED"
+    UNKNOWN = "UNKNOWN"                           # UNKNOWN != PERMITTED
+    # foundation-era names, kept so stored values still read; new code uses the six above
+    DOCUMENTED = "DOCUMENTED"
+    NOT_YET_APPROVED = "NOT_YET_APPROVED"
     AWAITING_DELIVERY_TERMS = "AWAITING_DELIVERY_TERMS"
+
+
+#: Identities that can never authorise a right. RESEARCHED != AUTHORIZED.
+NON_AUTHORIZING_REVIEWERS = ("system", "ai", "fable", "claude", "docuaction", "automation", "bot", "agent")
+
+
+class AcquisitionMode(str, Enum):
+    OFFICIAL_API = "OFFICIAL_API"
+    OFFICIAL_BULK_DATA = "OFFICIAL_BULK_DATA"
+    PERMITTED_OFFICIAL_SEARCH = "PERMITTED_OFFICIAL_SEARCH"
+    OFFICIAL_DOCUMENT_RETRIEVAL = "OFFICIAL_DOCUMENT_RETRIEVAL"
+    PAID_OFFICIAL_SERVICE = "PAID_OFFICIAL_SERVICE"
+    CONTROLLED_MANUAL_VERIFICATION = "CONTROLLED_MANUAL_VERIFICATION"
+    LICENSED_COMMERCIAL_SOURCE = "LICENSED_COMMERCIAL_SOURCE"
+    UNSUPPORTED = "UNSUPPORTED"
 
 
 @dataclass(frozen=True)
@@ -45,6 +67,28 @@ class DataRights:
     retention_rule: Optional[str] = None
     value_handling: ValueHandling = ValueHandling.TRANSIENT_ONLY
     basis: Optional[str] = None                   # the document/term relied on
+    # provenance of the rights decision itself
+    official_reference: Optional[str] = None      # the terms/notice relied on
+    reference_version: Optional[str] = None       # version or date of that reference
+    review_date: Optional[str] = None
+    reviewed_by: Optional[str] = None             # an authorized AGT human or designated legal/compliance authority
+    snapshot_retention_allowed: bool = False
+    historical_comparison_allowed: bool = False
+    derived_observation_permission: bool = False
+    client_display_allowed: bool = False
+    limitations: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        """Fable/System/AI may not self-authorize. Any of the three retention
+        or redistribution rights requires a named human reviewer."""
+        if self.snapshot_retention_allowed or self.historical_comparison_allowed or self.redistribution_allowed:
+            who = (self.reviewed_by or "").strip()
+            if not who or any(tag in who.lower() for tag in NON_AUTHORIZING_REVIEWERS):
+                raise ValueError("snapshot retention, historical comparison and redistribution rights require "
+                                 "reviewed_by to name an authorized AGT human or designated legal/compliance "
+                                 f"authority (got {self.reviewed_by!r})")
+            if self.status is not RightsStatus.REVIEWED:
+                raise ValueError("those rights can only be granted with status REVIEWED")
 
     def to_dict(self) -> Dict[str, Any]:
         return {"rights_class": self.rights_class.value, "status": self.status.value,
@@ -53,7 +97,13 @@ class DataRights:
                 "external_call_allowed": self.external_call_allowed,
                 "credential_required": self.credential_required,
                 "attribution_required": self.attribution_required, "retention_rule": self.retention_rule,
-                "value_handling": self.value_handling.value, "basis": self.basis}
+                "value_handling": self.value_handling.value, "basis": self.basis,
+                "official_reference": self.official_reference, "reference_version": self.reference_version,
+                "review_date": self.review_date, "reviewed_by": self.reviewed_by,
+                "snapshot_retention_allowed": self.snapshot_retention_allowed,
+                "historical_comparison_allowed": self.historical_comparison_allowed,
+                "derived_observation_permission": self.derived_observation_permission,
+                "client_display_allowed": self.client_display_allowed, "limitations": self.limitations}
 
 
 class AdapterStatus(str, Enum):
@@ -126,6 +176,7 @@ class StateRegistryCapability:
     source_reference: CapabilityAvailability = _NS
     source_timestamp: CapabilityAvailability = _NS
     acquisition: CapabilityAvailability = _NS      # the connector as a whole
+    acquisition_mode: AcquisitionMode = AcquisitionMode.UNSUPPORTED
 
     def supported_fields(self) -> List[str]:
         return [f for f in ("legal_name", "trade_name", "entity_identifier", "entity_status",

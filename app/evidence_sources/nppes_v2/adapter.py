@@ -55,12 +55,19 @@ SIGNAL_DBA = "DBA_RELATIONSHIP_IDENTIFIED"   # emitted only for type code 3
 #: download ("NPPES Downloadable File" — download.cms.gov/nppes). Recorded as
 #: PUBLIC with raw storage; no attribution or credential is required.
 DATA_RIGHTS = DataRights(
-    rights_class=DataRightsClass.PUBLIC, status=RightsStatus.DOCUMENTED,
+    rights_class=DataRightsClass.PUBLIC, status=RightsStatus.ASSUMED_PUBLIC_DOMAIN,
     storage_allowed=True, raw_storage_allowed=True, display_allowed=True,
-    redistribution_allowed=True, external_call_allowed=False, credential_required=False,
-    attribution_required=False, retention_rule="retain each preserved edition for reproducibility",
+    # ASSUMED_PUBLIC_DOMAIN != REVIEWED: retention, historical comparison and
+    # redistribution rights stay False until a named AGT decision-maker reviews.
+    redistribution_allowed=False, snapshot_retention_allowed=False, historical_comparison_allowed=False,
+    derived_observation_permission=True, client_display_allowed=False,
+    external_call_allowed=False, credential_required=False,
+    attribution_required=False, retention_rule="retain each preserved edition for reproducibility (pending review)",
     value_handling=ValueHandling.RAW_PERMITTED,
-    basis="CMS NPPES Data Dissemination public download (NPI_Files.html), readme v.2 May 12, 2026")
+    basis="CMS NPPES Data Dissemination public download (NPI_Files.html), readme v.2 May 12, 2026",
+    official_reference="CMS NPPES Data Dissemination Notice CMS-6060-N (Federal Register, May 30, 2007); NPI_Files.html",
+    reference_version="readme v.2 May 12, 2026", review_date=None, reviewed_by=None,
+    limitations="Rights recorded by research; no human review yet")
 
 DESCRIPTOR = AdapterDescriptor(
     source_id=SOURCE_ID, source_owner=SOURCE_OWNER, status=AdapterStatus.IMPLEMENTED,

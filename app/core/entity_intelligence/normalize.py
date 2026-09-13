@@ -13,6 +13,10 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Optional
 
+#: Bump when any normalisation rule changes. Every normalized address key
+#: carries it so a comparison can be re-derived and a rule change is visible.
+NORMALIZATION_VERSION = "addr-norm-1.1"
+
 _PUNCT = re.compile(r"[^\w\s]")
 _WS = re.compile(r"\s+")
 
@@ -83,6 +87,7 @@ def normalize_address(address: Dict[str, Any]) -> Dict[str, str]:
         "city": normalize_line(address.get("city")),
         "state": normalize_state(address.get("state")),
         "zip5": normalize_zip5(address.get("postal_code") or address.get("zip")),
+        "normalization_version": NORMALIZATION_VERSION,
     }
 
 

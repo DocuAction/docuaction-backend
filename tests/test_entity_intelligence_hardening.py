@@ -352,9 +352,12 @@ class TestValueHandling:
         p = Provenance(source_owner="o", delivery_path=DeliveryPath.FILE_DOWNLOAD, schema_version="V2").to_dict()
         assert p["value_handling"] == "RAW_PERMITTED" and p["schema_version"] == "V2"
 
-    def test_nppes_data_rights_documented_public(self):
-        assert DATA_RIGHTS.rights_class is DataRightsClass.PUBLIC and DATA_RIGHTS.status is RightsStatus.DOCUMENTED
+    def test_nppes_data_rights_assumed_public_not_self_authorized(self):
+        assert DATA_RIGHTS.rights_class is DataRightsClass.PUBLIC and DATA_RIGHTS.status is RightsStatus.ASSUMED_PUBLIC_DOMAIN
         assert DATA_RIGHTS.raw_storage_allowed and not DATA_RIGHTS.external_call_allowed
+        # ASSUMED_PUBLIC_DOMAIN != REVIEWED: nothing that needs a human decision is granted
+        assert not DATA_RIGHTS.redistribution_allowed and not DATA_RIGHTS.snapshot_retention_allowed
+        assert not DATA_RIGHTS.historical_comparison_allowed and DATA_RIGHTS.reviewed_by is None
 
     def test_default_rights_are_most_restrictive(self):
         r = DataRights(DataRightsClass.RESTRICTED, RightsStatus.NOT_YET_APPROVED)

@@ -26,6 +26,32 @@ import time
 import tracemalloc
 from collections import Counter
 
+
+def rss_mb() -> float:
+    """Resident set size in MB without psutil: Windows via psapi, POSIX via /proc."""
+    try:
+        import ctypes, ctypes.wintypes  # noqa
+        class PMC(ctypes.Structure):
+            _fields_ = [("cb", ctypes.c_uint32), ("PageFaultCount", ctypes.c_uint32), ("PeakWorkingSetSize", ctypes.c_size_t),
+                        ("WorkingSetSize", ctypes.c_size_t), ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                        ("QuotaPagedPoolUsage", ctypes.c_size_t), ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                        ("QuotaNonPagedPoolUsage", ctypes.c_size_t), ("PagefileUsage", ctypes.c_size_t),
+                        ("PeakPagefileUsage", ctypes.c_size_t)]
+        pmc = PMC(); pmc.cb = ctypes.sizeof(PMC)
+        h = ctypes.windll.kernel32.GetCurrentProcess()
+        if ctypes.windll.psapi.GetProcessMemoryInfo(h, ctypes.byref(pmc), pmc.cb):
+            return round(pmc.WorkingSetSize / 1e6, 1)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        with open("/proc/self/status") as fh:
+            for line in fh:
+                if line.startswith("VmRSS:"):
+                    return round(int(line.split()[1]) / 1000, 1)
+    except OSError:
+        pass
+    return -1.0
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "tests"))
@@ -88,8 +114,15 @@ def to_csv(header, rows):
 
 
 def run(n: int) -> dict:
+    from app.core.entity_intelligence.evidence_plan import SourceRecord, plan_evidence
     t0 = time.perf_counter()
     main_rows, on_rows, pl_rows, deliveries, kinds = build(n)
+    # 25K SOURCE RECORDS != 25K REVIEW CASES: 30% duplicate source records resolve to the same candidates
+    records = [SourceRecord(f"r{i}", npi=npi, name=d[0].observed_value["name"], address=next((o.observed_value for o in d if o.observation_type.value == "LOCATION"), None))
+               for i, (npi, d) in enumerate(deliveries.items())]
+    records += [SourceRecord(f"dup{i}", npi=r.npi, name=r.name, address=r.address) for i, r in enumerate(records[: int(n * 0.3)])]
+    tp = time.perf_counter(); plan = plan_evidence(records); plan_s = time.perf_counter() - tp
+    rss_before = rss_mb()
     main_text, on_text, pl_text = to_csv(MAIN_HEADER, main_rows), to_csv(OTHER_NAME_HEADER, on_rows), to_csv(PL_HEADER, pl_rows)
     t1 = time.perf_counter()
     tracemalloc.start()
@@ -110,8 +143,14 @@ def run(n: int) -> dict:
     t3 = time.perf_counter()
     _, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
+    rss_after = rss_mb()
     review_candidates = n - assessments.get("EVIDENCE_CORROBORATES", 0)
+    comparisons = sum(3 for _ in deliveries)   # identifier + name + location per entity per source
     return {"n": n, "main_file_mb": round(len(main_text) / 1e6, 1),
+            "source_records": plan.source_record_count, "canonical_candidates": plan.canonical_candidate_count,
+            "duplicates_removed": plan.duplicate_record_count, "plan_s": round(plan_s, 3),
+            "deduplicated_lookups": dict(plan.lookups_by_source), "comparisons": comparisons,
+            "entities_per_sec": round(n / max(1e-9, (t3 - t2)), 1), "rss_mb_before": rss_before, "rss_mb_after": rss_after,
             "rows_read": bundle.reports[0].rows_read, "rows_skipped_type1": bundle.reports[0].rows_skipped,
             "parse_status": [r.status for r in bundle.reports],
             "build_synthetic_s": round(t1 - t0, 2), "parse_bundle_s": round(t2 - t1, 2),
@@ -128,10 +167,12 @@ def main(argv=None):
     p.add_argument("--json")
     a = p.parse_args(argv)
     results = [run(n) for n in a.sizes]
-    print(f"{'N':>7} {'parse s':>8} {'eval s':>8} {'ms/ent':>7} {'peak MB':>8} {'file MB':>8} {'review%':>8}")
+    print("Domain processing performance — synthetic data only. External source acquisition performance is not represented.")
+    print(f"{'N':>7} {'records':>8} {'canon':>7} {'plan s':>7} {'parse s':>8} {'eval s':>8} {'ms/ent':>7} {'ent/s':>8} {'peak MB':>8} {'RSS MB':>7} {'review%':>8}")
     for r in results:
-        print(f"{r['n']:>7} {r['parse_bundle_s']:>8} {r['evaluate_all_s']:>8} {r['evaluate_per_entity_ms']:>7} "
-              f"{r['peak_mb']:>8} {r['main_file_mb']:>8} {r['human_review_pct']:>8}")
+        print(f"{r['n']:>7} {r['source_records']:>8} {r['canonical_candidates']:>7} {r['plan_s']:>7} {r['parse_bundle_s']:>8} "
+              f"{r['evaluate_all_s']:>8} {r['evaluate_per_entity_ms']:>7} {r['entities_per_sec']:>8} {r['peak_mb']:>8} "
+              f"{r['rss_mb_after']:>7} {r['human_review_pct']:>8}")
     if a.json:
         with open(a.json, "w", encoding="utf-8") as fh:
             json.dump(results, fh, indent=2)

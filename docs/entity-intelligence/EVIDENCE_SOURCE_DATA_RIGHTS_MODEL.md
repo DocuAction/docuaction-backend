@@ -46,3 +46,11 @@ Every evidence source carries a `DataRights` descriptor (`app/core/entity_intell
 3. A source's `retention_rule` is enforced by a purge job that does not exist yet; until it exists, no source with a finite retention may be enabled.
 4. Attribution obligations belong to the display layer; the observation carries `attribution_required` so a future UI cannot omit it by oversight.
 5. Synthetic test data is never sent to any external service (Google's USPS "artificially created address" clause is one reason; the program's data-handling terms are the other).
+
+## Human authorization of rights (Architecture v1.0, 2026-09-13)
+
+Statuses are now REVIEWED · ASSUMED_PUBLIC_DOMAIN · TERMS_REVIEW_REQUIRED · PENDING · NOT_PERMITTED · UNKNOWN (the foundation names DOCUMENTED / NOT_YET_APPROVED / AWAITING_DELIVERY_TERMS remain readable). Each `DataRights` carries the provenance of the decision itself: `official_reference`, `reference_version`, `review_date`, `reviewed_by`, plus `snapshot_retention_allowed`, `historical_comparison_allowed`, `derived_observation_permission`, `client_display_allowed`, `limitations`.
+
+Rule, enforced in code (`DataRights.__post_init__`, tested): if any of `snapshot_retention_allowed`, `historical_comparison_allowed` or `redistribution_allowed` is true, `reviewed_by` must name an authorized AGT human decision-maker or designated legal/compliance authority and the status must be REVIEWED. "system", "AI", "Fable", "Claude", "DocuAction", "automation", "bot" and "agent" are rejected. UNKNOWN ≠ PERMITTED. ASSUMED_PUBLIC_DOMAIN ≠ REVIEWED. RESEARCHED ≠ AUTHORIZED.
+
+Consequence for the register: NPPES is now **ASSUMED_PUBLIC_DOMAIN** (official reference: CMS-6060-N and NPI_Files.html; reviewed_by: none) with raw storage and display for internal engineering, but **no** snapshot-retention, historical-comparison or redistribution right until a named reviewer records one. IQVIA is TERMS_REVIEW_REQUIRED. Google stays PENDING (persistence not approved).

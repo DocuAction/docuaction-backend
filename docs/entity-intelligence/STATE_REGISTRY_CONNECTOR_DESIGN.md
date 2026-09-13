@@ -52,3 +52,7 @@ Official bulk data downloads where a state publishes them; official APIs with te
 ## Not in scope
 
 EIN/TIN verification (explicitly excluded by the program). Fifty-state coverage. Any implementation in this sprint.
+
+## Acquisition modes (Architecture v1.0, 2026-09-13)
+
+`AcquisitionMode`: OFFICIAL_API · OFFICIAL_BULK_DATA · PERMITTED_OFFICIAL_SEARCH · OFFICIAL_DOCUMENT_RETRIEVAL · PAID_OFFICIAL_SERVICE · CONTROLLED_MANUAL_VERIFICATION · LICENSED_COMMERCIAL_SOURCE · UNSUPPORTED (default on every `StateRegistryCapability`). No generic 50-state scraper; no Delaware automated mining/scraping. State evidence may help establish corporate legal name, registration, domestic/foreign role, registered agent, corporate status and filing observations (authority matrix); it does not alone establish healthcare licensure, practice location, site of care, Medicare enrollment or TEFCA eligibility. Location roles for registry addresses: REGISTERED_AGENT_ADDRESS, PRINCIPAL_OFFICE, CORPORATE_HEADQUARTERS — never a site of care (`ROLE_ASSIGNMENT_DIFFERS`).

@@ -42,9 +42,32 @@ STATUS = AdapterStatus.AWAITING_SCHEMA
 #: Terms are unknown until the RCE delivery arrives with its conditions of use.
 #: Until then: transient processing only, nothing persisted, nothing displayed.
 DATA_RIGHTS = DataRights(
-    rights_class=DataRightsClass.COMMERCIAL_LICENSED, status=RightsStatus.AWAITING_DELIVERY_TERMS,
+    rights_class=DataRightsClass.COMMERCIAL_LICENSED, status=RightsStatus.TERMS_REVIEW_REQUIRED,
     value_handling=ValueHandling.TRANSIENT_ONLY,
-    basis="No delivery terms received; IQVIA OneKey is a licensed commercial product")
+    basis="No delivery terms received; IQVIA OneKey is a licensed commercial product",
+    limitations="AWAITING_SCHEMA, AWAITING_TERMS, AWAITING_ACTUAL_DELIVERY")
+
+#: Arrival status flags — all three must clear, in order, before any IQVIA
+#: value may enter an operational profile, comparison, delta, assessment,
+#: finding, analyst workflow, QA step or report.
+ARRIVAL_STATUS = ("AWAITING_SCHEMA", "AWAITING_TERMS", "AWAITING_ACTUAL_DELIVERY")
+
+#: The protocol when the real ONC/RCE IQVIA delivery arrives. Steps 1–9 are
+#: read-only with respect to DocuAction's operational evidence; step 10 needs
+#: a recorded human authorization. DocuAction Core must not become an IQVIA
+#: data model: IQVIA is adapted to Core, never the reverse.
+ARRIVAL_PROTOCOL = (
+    (1, "RECEIVE"), (2, "PRESERVE_ORIGINAL"), (3, "HASH"), (4, "INVENTORY"), (5, "PROFILE_READ_ONLY"),
+    (6, "RIGHTS_LICENSE_REVIEW"), (7, "MAP_TO_EXISTING_CORE"), (8, "GAP_ANALYSIS"), (9, "HUMAN_DECISION"),
+    (10, "CONTROLLED_IMPLEMENTATION_AFTER_AUTHORIZATION"),
+)
+
+
+def operational_use_permitted(*, human_authorization_reference: Optional[str] = None,
+                              rights_status: RightsStatus = DATA_RIGHTS.status) -> bool:
+    """False during steps 1–9. True only with a recorded human authorization
+    reference AND reviewed rights. The adapter never decides this itself."""
+    return bool(human_authorization_reference) and rights_status is RightsStatus.REVIEWED
 
 DESCRIPTOR = AdapterDescriptor(
     source_id=SOURCE_ID, source_owner=SOURCE_OWNER, status=STATUS, feature_flag=flags.IQVIA,

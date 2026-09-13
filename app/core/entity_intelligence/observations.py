@@ -106,14 +106,44 @@ class NameKind(str, Enum):
 
 class LocationRole(str, Enum):
     """Assigned ONLY when the source says so. A mobile facility is never
-    inferred from an address string."""
+    inferred from an address string. SAME ADDRESS != SAME ROLE."""
     DELIVERED_LOCATION = "DELIVERED_LOCATION"
+    CORPORATE_HEADQUARTERS = "CORPORATE_HEADQUARTERS"
+    PRINCIPAL_OFFICE = "PRINCIPAL_OFFICE"
     PRIMARY_PRACTICE_LOCATION = "PRIMARY_PRACTICE_LOCATION"
     ADDITIONAL_PRACTICE_LOCATION = "ADDITIONAL_PRACTICE_LOCATION"
+    SITE_OF_CARE = "SITE_OF_CARE"
+    MOBILE_HOME_BASE = "MOBILE_HOME_BASE"
+    REGISTERED_AGENT_ADDRESS = "REGISTERED_AGENT_ADDRESS"
+    MAILING_ADDRESS = "MAILING_ADDRESS"
+    BRANCH_LOCATION = "BRANCH_LOCATION"
+    UNKNOWN_SOURCE_ROLE = "UNKNOWN_SOURCE_ROLE"
+    # retained from the foundation (NPPES mailing block; generic registered location; source-stated mobile)
     MAILING_LOCATION = "MAILING_LOCATION"
     REGISTERED_LOCATION = "REGISTERED_LOCATION"
     MOBILE_FACILITY = "MOBILE_FACILITY"
     UNKNOWN = "UNKNOWN"
+
+
+#: Roles at which care is delivered or a service site is stated. A match on a
+#: role outside this set is ROLE_ASSIGNMENT_DIFFERS, never a location match.
+CARE_SITE_ROLES = frozenset({
+    LocationRole.DELIVERED_LOCATION.value, LocationRole.PRIMARY_PRACTICE_LOCATION.value,
+    LocationRole.ADDITIONAL_PRACTICE_LOCATION.value, LocationRole.SITE_OF_CARE.value,
+    LocationRole.BRANCH_LOCATION.value, LocationRole.MOBILE_HOME_BASE.value, LocationRole.MOBILE_FACILITY.value,
+})
+#: Roles that describe a legal/administrative address, not a site of care.
+ADMINISTRATIVE_ROLES = frozenset({
+    LocationRole.CORPORATE_HEADQUARTERS.value, LocationRole.PRINCIPAL_OFFICE.value,
+    LocationRole.REGISTERED_AGENT_ADDRESS.value, LocationRole.REGISTERED_LOCATION.value,
+    LocationRole.MAILING_ADDRESS.value,
+})
+
+
+class RelationshipDirection(str, Enum):
+    SUBJECT_TO_OBJECT = "SUBJECT_TO_OBJECT"
+    OBJECT_TO_SUBJECT = "OBJECT_TO_SUBJECT"
+    UNDIRECTED = "UNDIRECTED"
 
 
 @dataclass(frozen=True)
@@ -221,6 +251,50 @@ class EvidenceObservation:
             "content_hash": self.content_hash,
             "model_version": OBSERVATION_MODEL_VERSION,
         }
+
+
+def location_observation(*, canonical_entity_id: Optional[str], source_id: str, role: str, raw_address: Dict[str, Any],
+                         source_authority: SourceAuthority, provenance: Provenance, kind: Optional[str] = None,
+                         effective_from: Optional[str] = None, effective_to: Optional[str] = None,
+                         observed_at: Optional[str] = None, source_delivery_id: Optional[str] = None,
+                         applicability: EvidenceApplicability = EvidenceApplicability.APPLICABLE) -> EvidenceObservation:
+    """An address observation that preserves the RAW address exactly as the
+    source stated it and carries the normalized comparison key beside it, with
+    the normalisation rule version. Normalisation assists comparison; it never
+    rewrites the source evidence."""
+    from .normalize import normalize_address
+    value = {"raw_address": dict(raw_address), **{k: raw_address.get(k) for k in ("line1", "line2", "city", "state", "postal_code", "country_code")}}
+    if kind:
+        value["kind"] = kind
+    return EvidenceObservation(canonical_entity_id=canonical_entity_id, source_id=source_id,
+                               observation_type=ObservationType.LOCATION, role=role, observed_value=value,
+                               normalized_value=normalize_address(raw_address), source_authority=source_authority,
+                               provenance=provenance, effective_from=effective_from, effective_to=effective_to,
+                               observed_at=observed_at, source_delivery_id=source_delivery_id, applicability=applicability)
+
+
+def relationship_observation(*, canonical_entity_id: Optional[str], source_id: str, program_context: str, kind: str,
+                             subject: str, obj: str, source_authority: SourceAuthority, provenance: Provenance,
+                             direction: RelationshipDirection = RelationshipDirection.SUBJECT_TO_OBJECT,
+                             raw_relationship: Optional[str] = None, valid_from: Optional[str] = None,
+                             valid_to: Optional[str] = None, observed_at: Optional[str] = None,
+                             source_delivery_id: Optional[str] = None) -> EvidenceObservation:
+    """A typed relationship. role = "<PROGRAM_CONTEXT>:<KIND>" so kinds from
+    different programs are never compared. Preserves subject, relationship,
+    object, direction, validity, observation time, raw and normalized forms."""
+    from .normalize import normalize_name
+    role = f"{program_context}:{kind}"
+    value = {"subject": subject, "relationship": kind, "object": obj, "related_entity_name": obj,
+             "direction": direction.value, "program_context": program_context,
+             "raw_relationship": raw_relationship or f"{subject} {kind} {obj}",
+             "normalized_relationship": f"{normalize_name(subject)}|{kind.lower()}|{normalize_name(obj)}",
+             "valid_from": valid_from, "valid_to": valid_to}
+    return EvidenceObservation(canonical_entity_id=canonical_entity_id, source_id=source_id,
+                               observation_type=ObservationType.RELATIONSHIP, role=role, observed_value=value,
+                               normalized_value={"normalized_relationship": value["normalized_relationship"]},
+                               source_authority=source_authority, provenance=provenance,
+                               effective_from=valid_from, effective_to=valid_to, observed_at=observed_at,
+                               source_delivery_id=source_delivery_id)
 
 
 def absence(*, canonical_entity_id: Optional[str], source_id: str, observation_type: ObservationType,

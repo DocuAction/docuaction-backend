@@ -31,6 +31,8 @@ class DeltaType(str, Enum):
     RELATIONSHIP_CHANGED = "RELATIONSHIP_CHANGED"
     NEW_VALUE = "NEW_VALUE"
     REMOVED_VALUE = "REMOVED_VALUE"
+    #: Evidence-side only: a source's newer edition no longer carries a statement it made before.
+    SOURCE_NO_LONGER_REPORTS_OBSERVATION = "SOURCE_NO_LONGER_REPORTS_OBSERVATION"
     NEW_ENTITY = "NEW_ENTITY"
     SOURCE_CHANGED = "SOURCE_CHANGED"
     UNCHANGED = "UNCHANGED"
@@ -197,10 +199,17 @@ def compute_deltas(prior: List[EvidenceObservation], current: List[EvidenceObser
         for n, o in p_by.items():
             if n not in c_by:
                 sc = _scope(o)
-                deltas.append(HistoricalDelta(DeltaType.REMOVED_VALUE, kind, source_id, role,
-                                              {"value": _display(o)}, None, o.observation_id, None,
-                                              explain("DELTA_REMOVED_VALUE", what=_what_label(kind, sc), before=_display(o)),
-                                              subject=_is_subject(o), scope=sc))
+                if sc is DeltaScope.DELIVERED_VALUE:
+                    deltas.append(HistoricalDelta(DeltaType.REMOVED_VALUE, kind, source_id, role,
+                                                  {"value": _display(o)}, None, o.observation_id, None,
+                                                  explain("DELTA_REMOVED_VALUE", what=_what_label(kind, sc), before=_display(o)),
+                                                  subject=True, scope=sc))
+                else:
+                    deltas.append(HistoricalDelta(DeltaType.SOURCE_NO_LONGER_REPORTS_OBSERVATION, kind, source_id, role,
+                                                  {"value": _display(o)}, None, o.observation_id, None,
+                                                  explain("DELTA_SOURCE_NO_LONGER_REPORTS", what=_what_label(kind, sc),
+                                                          source=source_id, before=_display(o)),
+                                                  subject=False, scope=sc))
         for n, o in c_by.items():
             if n in p_by:
                 sc = _scope(o)
