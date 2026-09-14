@@ -286,14 +286,25 @@ async def _startup_after_schema():
     except Exception as e:
         logger.warning(f"TEFCA QA startup check skipped: {e}")
 
-    # Bulletin Intelligence — durable store + restore prior state across restarts
-    try:
-        from app.bulletin_intelligence.bulletin_store import init_store
-        from app.bulletin_intelligence.engine import hydrate_from_store
-        if await init_store():
-            await hydrate_from_store()
-    except Exception as e:
-        logger.warning(f"Bulletin store init/hydrate skipped: {e}")
+    # Bulletin Intelligence — durable store + restore prior state across restarts.
+    # PROFILE-GATED: a deployment whose program profile does not serve the
+    # bulletin module (e.g. TEFCA_ARC) must not initialise its store, hydrate
+    # its briefings or run its scheduler. The HTTP gate alone (404 before
+    # routing) did not stop these background services (independent checker
+    # finding, 2026-09-14). Default profile ALL: unchanged behaviour.
+    from app.core.modules import module_enabled as _module_enabled
+    if not _module_enabled("bulletin_intelligence"):
+        logger.info("Bulletin store/scheduler skipped: module disabled in the deployment profile")
+        _bulletin_served = False
+    else:
+        _bulletin_served = True
+        try:
+            from app.bulletin_intelligence.bulletin_store import init_store
+            from app.bulletin_intelligence.engine import hydrate_from_store
+            if await init_store():
+                await hydrate_from_store()
+        except Exception as e:
+            logger.warning(f"Bulletin store init/hydrate skipped: {e}")
 
     # Bulletin Intelligence — 6AM daily delivery scheduler.
     # Gated behind ENABLE_SCHEDULER so multiple identical deployments can share
@@ -301,7 +312,9 @@ async def _startup_after_schema():
     # duplicate briefings to the DB and email subscribers two copies of each
     # briefing. Set ENABLE_SCHEDULER=true on exactly ONE box (the live one);
     # leave it unset on any spare/duplicate box. Default off = safe (no sends).
-    if os.getenv("ENABLE_SCHEDULER", "false").strip().lower() == "true":
+    if not _bulletin_served:
+        logger.info("Bulletin scheduler DISABLED (module not served by the deployment profile)")
+    elif os.getenv("ENABLE_SCHEDULER", "false").strip().lower() == "true":
         try:
             from app.bulletin_intelligence.scheduler import start_scheduler
             start_scheduler()
@@ -450,6 +463,14 @@ async def health():
         usps = get_usps_client().health()
     except Exception as e:
         usps = {"status": "unavailable", "error": str(e)}
+    # A module the deployment profile does not serve answers 404 at the gate, so
+    # /health must not advertise it as "active" (independent checker finding,
+    # 2026-09-14). Core keys stay "active"; profile-gated keys report "disabled".
+    from app.core.modules import module_enabled
+
+    def _profiled(module_id: str) -> str:
+        return "active" if module_enabled(module_id) else "disabled"
+
     return {
         "status": "healthy",
         "version": "6.0.0",
@@ -458,16 +479,16 @@ async def health():
         "usps": usps,
         "modules": {
             "documents": "active",
-            "audio": "active",
-            "healthcare": "active",
+            "audio": _profiled("meeting_intelligence"),
+            "healthcare": _profiled("healthcare_claims"),
             "data_systems": "active",
-            "comparison": "active",
-            "extraction": "active",
-            "automation": "active",
+            "comparison": _profiled("document_automation"),
+            "extraction": _profiled("document_automation"),
+            "automation": _profiled("document_automation"),
             # Real probe result — "active" only if core connectors responded (FIX 1).
             "tefca_review_protocol": tefca["status"],
-            "case_management": "active",
-            "bulletin_intelligence": "active",
+            "case_management": _profiled("case_management"),
+            "bulletin_intelligence": _profiled("bulletin_intelligence"),
         },
         "tefca_connectors": tefca["connectors"],
     }
@@ -485,13 +506,19 @@ async def get_config(request: Request):
     authenticating.
     """
     from app.core.modules import profile_summary
+    summary = profile_summary()
     return {
         "environment": os.getenv("ENVIRONMENT", "unknown"),
         "version": "6.0.0",
         "api_host": request.url.hostname,
-        # Deployment program profile: module ids only (public-safe). Lets a
-        # frontend built for one program detect a backend serving another.
-        **profile_summary(),
+        # Deployment program profile: the program name and the module ids this
+        # deployment SERVES (public-safe). Lets a frontend built for one program
+        # detect a backend serving another. The list of modules the deployment
+        # does NOT serve is deliberately not published: a module that is absent
+        # from a deployment answers 404 and is not meant to be discoverable from
+        # it (independent checker finding, 2026-09-14).
+        "program": summary["program"],
+        "enabled_modules": summary["enabled_modules"],
     }
 
 

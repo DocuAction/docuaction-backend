@@ -239,10 +239,38 @@ async def submit_feedback(
 @router.get("/feedback/stats")
 async def get_feedback_stats(user=Depends(get_current_user)):
     """Get aggregated feedback statistics for system reliability."""
-    from app.services.decision_intel_engine import aggregate_feedback_stats
+    try:
+        from app.services.decision_intel_engine import aggregate_feedback_stats
+    except ImportError:
+        # `app.services.decision_intel_engine` is not part of this repository
+        # (the import raised ModuleNotFoundError on every call and the Core
+        # /analytics and /trust pages logged a 500 — independent checker finding
+        # L7, 2026-09-14). The statistics this endpoint reports are derived from
+        # the in-memory feedback store, so they are computed here instead of
+        # failing. Nothing is invented: an empty store reports zero feedback.
+        aggregate_feedback_stats = _aggregate_feedback_stats_local
 
     stats = aggregate_feedback_stats(_feedback_store)
     return stats
+
+
+def _aggregate_feedback_stats_local(store) -> dict:
+    """Counts and averages over the in-memory feedback records."""
+    items = list(store or [])
+    ratings = [f.get("rating") for f in items if isinstance(f.get("rating"), (int, float))]
+    adjustments = [f.get("confidence_adjustment") for f in items
+                   if isinstance(f.get("confidence_adjustment"), (int, float))]
+    by_type: dict = {}
+    for f in items:
+        key = str(f.get("feedback_type") or f.get("type") or "unspecified")
+        by_type[key] = by_type.get(key, 0) + 1
+    return {
+        "total_feedbacks": len(items),
+        "average_rating": (sum(ratings) / len(ratings)) if ratings else None,
+        "avg_confidence_adjustment": (sum(adjustments) / len(adjustments)) if adjustments else 0,
+        "by_type": by_type,
+        "basis": "in-memory feedback store for this process; not persisted",
+    }
 
 
 @router.get("/feedback/{output_id}")

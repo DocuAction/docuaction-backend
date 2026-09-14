@@ -89,8 +89,10 @@ def test_unpromotable_rows_are_recorded_so_the_drain_terminates():
 
 # ── fixtures ─────────────────────────────────────────────────────────────────
 
-def _rows():
-    """8 synthetic records: 6 Participants, 1 Subparticipant, 1 HELD."""
+def _rows(arc: str = "9.99.888.1", npi: str | None = None):
+    """8 synthetic records: 6 Participants, 1 Subparticipant, 1 HELD.
+    `arc` places the OIDs under a distinct synthetic arc so two deliveries can
+    coexist; `npi` (ten digits) is written on row 1 only."""
     base = {f: "" for f in RCE_FIELDS}
     base.update({
         "domains": "RCE", "orgManagingOrg": QHIN_OID, "purposesofuse": "T-TRTMNT",
@@ -102,20 +104,22 @@ def _rows():
     out = []
     for i in range(1, N_ROWS + 1):
         r = dict(base)
-        r["id"] = f"9.99.888.1.{i}"
-        r["TEFCAID"] = f"{SYN}-TEFCAID-{i:04d}"
-        r["HCID"] = f"urn:oid:9.99.888.1.{i}"
-        r["name"] = f"{SYN} ORG {i}"
+        r["id"] = f"{arc}.{i}"
+        r["TEFCAID"] = f"{SYN}-{arc}-TEFCAID-{i:04d}"
+        r["HCID"] = f"urn:oid:{arc}.{i}"
+        r["name"] = f"{SYN} {arc} ORG {i}"
         out.append(r)
+    if npi:
+        out[0]["NPI"] = npi
     # Row 7 is a Subparticipant of row 1, so pass 2 has a real parent edge to build.
     out[6]["sequoiaorgtype"] = "Subparticipant"
-    out[6]["partOf"] = "9.99.888.1.1"
+    out[6]["partOf"] = f"{arc}.1"
     return out
 
 
-async def _seed(db):
+async def _seed(db, arc: str = "9.99.888.1", npi: str | None = None):
     """One synthetic intake with 7 promotable curated rows and 1 HELD."""
-    rows = _rows()
+    rows = _rows(arc, npi)
     blob = ("\r\n".join(["|".join(RCE_FIELDS)]
                         + ["|".join(r[f] for f in RCE_FIELDS) for r in rows])
             + "\r\n").encode("utf-8")
@@ -139,6 +143,7 @@ async def _seed(db):
             raw_line=raw, parsed=r,
             record_sha256=hashlib.sha256(raw.encode("utf-8")).hexdigest(),
             source_rce_id=r["id"], tefcaid=r["TEFCAID"], hcid=r["HCID"],
+            npi=(r.get("NPI") or None),
             field_count=len(RCE_FIELDS), parse_status="ok",
             promotion_status="pending"))
         await db.flush()
@@ -150,6 +155,7 @@ async def _seed(db):
             issue_count=1 if held else 0, correction_count=0,
             status_reason="synthetic hold" if held else None,
             rce_org_oid=r["id"], tefcaid=r["TEFCAID"], hcid=r["HCID"],
+            npi=(r.get("NPI") or None),
             name=r["name"], entity_level="participant",
             sequoia_org_type=r["sequoiaorgtype"], operational_status="active",
             is_active=True, address_line=r["address_line"],
@@ -467,3 +473,36 @@ def test_no_government_data_is_used_by_these_fixtures():
         assert r["TEFCAID"].startswith(SYN)
         assert r["NPI"] == "", "no NPI, real or invented, belongs in a fixture"
     assert QHIN_OID.startswith("9.99.888.")
+
+
+async def test_an_identifier_already_registered_by_an_earlier_delivery_does_not_fail_promotion(
+        rolled_back_db, monkeypatch):
+    """Release 1.0 closure (2026-09-14): a second delivery whose row carries an
+    NPI that an EARLIER delivery already registered on a different organisation
+    failed at stage PROMOTION with an IntegrityError on `idx_tefca_ident_unique`
+    and the whole delivery job went FAILED. The value must be treated exactly
+    like a value shared within one delivery: kept on the entity columns, no
+    second identifier row, every eligible record still promoted."""
+    monkeypatch.setattr(promotion_module, "BATCH_SIZE", 1000)
+    db = rolled_back_db
+    first = await _seed(db, arc="9.99.888.1", npi="1234567893")
+    await _promote(db, first)
+    second = await _seed(db, arc="9.99.888.2", npi="1234567893")
+    await _promote(db, second)          # must not raise
+    promoted = (await db.execute(
+        select(func.count()).select_from(m.RceCuratedRecord).where(
+            m.RceCuratedRecord.source_intake_id == second,
+            m.RceCuratedRecord.canonical_entity_id.isnot(None)))).scalar()
+    assert promoted == N_ROWS - 1, "every eligible record of the second delivery is promoted"
+    rows = (await db.execute(
+        select(func.count()).select_from(reg.TefcaEntityIdentifier).where(
+            reg.TefcaEntityIdentifier.identifier_type == "npi",
+            reg.TefcaEntityIdentifier.identifier_value == "1234567893"))).scalar()
+    assert rows == 1, "the NPI keeps exactly one identifier row"
+    entity = (await db.execute(
+        select(reg.TefcaRegEntity).join(
+            m.RceCuratedRecord,
+            m.RceCuratedRecord.canonical_entity_id == reg.TefcaRegEntity.id)
+        .where(m.RceCuratedRecord.source_intake_id == second,
+               m.RceCuratedRecord.rce_org_oid == "9.99.888.2.1"))).scalars().first()
+    assert entity is not None and getattr(entity, "npi", "1234567893") == "1234567893",         "the delivered NPI is still recorded on the second organisation's entity"

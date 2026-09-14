@@ -131,3 +131,16 @@ Refresh-flow activation (changes the login contract); Entra migration; cookie/BF
 ## Appendix — generated inventories
 
 See `docs/architecture/MODULE_INVENTORY_2026-09-14.md` (frontend routes, backend endpoints with mount status, tables, roles, connectors, jobs; generated from the sprint worktrees by `sh_inventory.py`, output reviewed but not hand-edited).
+
+## Addendum (2026-09-14, Release 1.0 QA closure) — independent-checker omissions and their disposition
+
+The independent checker (separate session, 2026-09-14) verified sections 1–16 and recorded four omissions. Status of this document is unchanged (v0.1, PENDING_REVIEW; human review still required).
+
+| # | Omission | Disposition |
+|---|---|---|
+| 1 | The GovCon *pricing* page kept a page-local `fetch` helper, so `/pricing?rfq=<id>` issued three GovCon API requests under `TEFCA_ARC` (the backend answered 404; no data left the server). Other GovCon pages' local fetches sit behind user actions the "not available" shell never renders. | Fixed on the closure branch: the helper honours the profile and a UI guardrail pins it. |
+| 2 | `GET /api/config` published `disabled_modules`, which contradicts the 404 concealment argument in section 7. | Fixed: only `program` and `enabled_modules` are published. |
+| 3 | `GET /health` reported profile-gated modules as `active`. | Fixed: gated modules report `disabled`. |
+| 4 | Background services were environment-gated, not profile-gated: the bulletin store was initialised and hydrated under `TEFCA_ARC`. | Fixed: bulletin store, hydration and scheduler are skipped when the module is not served. |
+
+Still open for human decision (section 16): whether the Core document-automation routes (`/documents`, `/decisions`, `/validation`, `/analytics`, `/compare`, `/actions-inbox`) ship in the federal profile. The frontend keeps them while the backend gates `/api/compare-documents`, `/api/extract-structured` and `/api/transcribe`, so under `TEFCA_ARC` the compare page and the transcription action answer 404 until the two profiles are aligned one way or the other. This is a scope decision, not a defect the closure branch may decide.

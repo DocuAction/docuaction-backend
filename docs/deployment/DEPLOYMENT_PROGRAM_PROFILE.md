@@ -35,7 +35,9 @@ Profile `TEFCA_ARC` enables `tefca_arc` (+ implicit Core) on the backend; the fr
 
 - Disabled module → `404 {"error":"Not Found","code":"NOT_FOUND","request_id":…}` for every method, identical to an unmounted route, before authentication runs. A module that is absent from a deployment is not discoverable from it.
 - Enabled module → unchanged: `401` unauthenticated, `403` authenticated but below role, `200` otherwise.
-- `GET /api/config` (public) reports `program`, `enabled_modules`, `disabled_modules` as module ids only, so a frontend built for one program can detect a backend serving another.
+- `GET /api/config` (public) reports `program` and `enabled_modules` as module ids only, so a frontend built for one program can detect a backend serving another. The modules a deployment does *not* serve are not published (they answer 404 and are not meant to be discoverable) — closure 2026-09-14.
+- `GET /health` reports a profile-gated module as `"disabled"` rather than `"active"` — closure 2026-09-14.
+- Background services follow the profile: the Bulletin Intelligence store, hydration and scheduler do not start when `bulletin_intelligence` is not served, whatever `ENABLE_SCHEDULER` says — closure 2026-09-14. The TEFCA schedulers (PPEF, export, delivery) are unaffected.
 
 ## Verification (2026-09-14, local synthetic runtime, backend on the sprint branch)
 

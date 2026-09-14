@@ -192,6 +192,34 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
         shared[key] = {value for value, _count in rows}
     logger.info("shared identifier values in delivery: %s",
                 {k: len(v) for k, v in shared.items()})
+    # ACROSS DELIVERIES, THE SAME RULE. An identifier value that already has a
+    # row in `tefca_entity_identifiers` — because an EARLIER delivery promoted a
+    # different organisation carrying the same NPI, TEFCAID, HCID or AAID —
+    # would violate the same unique index at flush time. Before this check the
+    # collision surfaced as an IntegrityError inside the promotion batch and the
+    # whole delivery job FAILED at stage PROMOTION (reproduced 2026-09-14 with a
+    # second synthetic delivery). The value is still written to the entity
+    # columns; only the identifier ROW is withheld, exactly as for a value shared
+    # within one delivery. Nothing is merged and nothing is inferred: two
+    # organisations that both declare an NPI remain two entities, and the
+    # collision is visible in the promotion summary.
+    for column, key in (("tefcaid", "tefcaid"), ("hcid", "hcid"),
+                        ("aaid", "aaid"), ("npi", "npi")):
+        delivered = {value for (value,) in (await db.execute(
+            select(getattr(m.RceCuratedRecord, column)).distinct().where(
+                m.RceCuratedRecord.source_intake_id == intake_id,
+                getattr(m.RceCuratedRecord, column).isnot(None)))).all()
+            if value}
+        if not delivered:
+            continue
+        already = {value for (value,) in (await db.execute(
+            select(reg.TefcaEntityIdentifier.identifier_value).where(
+                reg.TefcaEntityIdentifier.identifier_type == key,
+                reg.TefcaEntityIdentifier.identifier_value.in_(delivered)))).all()}
+        if already:
+            shared[key] |= already
+    logger.info("identifier values already registered by an earlier delivery: %s",
+                {k: len(v) for k, v in shared.items()})
 
     promoted = 0
     updated = 0

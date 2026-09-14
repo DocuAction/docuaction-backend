@@ -38,12 +38,46 @@ def test_health_has_no_operator_email_or_secrets(client):
     _assert_no_secret_shapes(r.text)
 
 
+def test_health_does_not_advertise_a_module_the_profile_disables(monkeypatch):
+    """Under TEFCA_ARC the gate answers 404 for healthcare, case management,
+    bulletin, meetings and document automation, so /health must report them
+    "disabled", not "active" (independent checker finding L2, 2026-09-14)."""
+    from app.core.modules import reset_profile_cache
+    from app.main import app
+    monkeypatch.setenv("DOCUACTION_PROGRAM", "TEFCA_ARC")
+    reset_profile_cache()
+    try:
+        body = TestClient(app).get("/health").json()
+    finally:
+        monkeypatch.delenv("DOCUACTION_PROGRAM", raising=False)
+        reset_profile_cache()
+    modules = body["modules"]
+    for key in ("healthcare", "case_management", "bulletin_intelligence",
+                "comparison", "extraction", "automation", "audio"):
+        assert modules[key] == "disabled", key
+    assert modules["documents"] == "active" and modules["data_systems"] == "active"
+    assert "tefca_review_protocol" in modules
+
+
+def test_health_reports_every_module_active_under_the_default_profile():
+    from app.core.modules import reset_profile_cache
+    from app.main import app
+    reset_profile_cache()
+    modules = TestClient(app).get("/health").json()["modules"]
+    for key in ("healthcare", "case_management", "bulletin_intelligence", "documents"):
+        assert modules[key] == "active", key
+
+
 def test_config_is_public_safe_and_names_the_program_profile(client):
     r = client.get("/api/config")
     assert r.status_code == 200
     body = r.json()
-    assert set(body) >= {"environment", "version", "api_host", "program", "enabled_modules", "disabled_modules"}
+    assert set(body) >= {"environment", "version", "api_host", "program", "enabled_modules"}
     assert body["program"] in ("ALL", "TEFCA_ARC")
+    # A module the deployment does not serve answers 404 and must not be
+    # discoverable from the deployment, so the public config names only what
+    # is served (independent checker finding L1, 2026-09-14).
+    assert "disabled_modules" not in body
     _assert_no_secret_shapes(r.text)
 
 
