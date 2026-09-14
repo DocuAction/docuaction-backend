@@ -42,7 +42,7 @@ Branches produced (stacked on the unmerged PRs, draft, no merge):
 | R23 | QA ISO-001 (new) | Medium | Federal isolation | No TEFCA_ARC deployment slot exists; the shared DEV slot runs profile ALL | — | Deployment topology | NO | BLOCKED on shared DEV | YES: approve a TEFCA_ARC DEV slot | YES | NO | BLOCKED (human) |
 | R24 | Checker L11 | Low | GovCon | `/pricing` has two page files; `page.tsx` shadows the marketing `page.js` | YES | Legacy | NO (GovCon, out of Release 1.0 scope) | — | NO | NO | NO | DEFERRED (Release 1.1) |
 
-Counts: TOTAL_OPEN_ITEMS = 24 · FIXED = 13 (R1, R3, R4, R5, R6, R7, R8, R9, R10, R11, R12, R13 + R2 as data-path/documentation) · QA_RETEST_REQUIRED = 12 · HUMAN_ACTION_REQUIRED = 7 (R14, R15, R16, R17, R18, R19, R23) · BLOCKED = 3 (R18, R20, R23) · DEFERRED = 3 (R19, R21, R24).
+Counts: TOTAL_OPEN_ITEMS = 25 (R11-b added) · FIXED = 13 (R1, R3, R4, R5, R6, R7, R8, R9, R10, R11, R12, R13 + R2 as data-path/documentation) · QA_RETEST_REQUIRED = 12 · HUMAN_ACTION_REQUIRED = 7 (R14, R15, R16, R17, R18, R19, R23) · BLOCKED = 3 (R18, R20, R23) · DEFERRED = 4 (R19, R21, R24, R11-b).
 
 ## B. QA screen coverage
 
@@ -74,7 +74,27 @@ TEFCA_FUNCTIONAL_GATE = PASS (journey C) · TEFCA_ZERO_REGRESSION_GATE = PASS (s
 - Browser (remediated TEFCA_ARC export + TEFCA_ARC backend): role probe (PM, reviewer, qalead, viewer, admin × 20 TEFCA routes; 24 GovCon routes; Core routes), UI check of R1/R2/R3/R4/R12, route matrix (TEFCA + Core-required + fixed Core routes, light/dark, five widths, axe, keyboard) — results in §F.
 - Journey: `scratchpad/journey.py` against the closure backend (26/31 script assertions; the five "failures" were script expectations — SUCCEEDED vs READY_FOR_REVIEW, state on `case.state` not on `history`, sha of a reused intake — each verified by direct reads).
 
-## F. Browser matrix at the closure head (filled by the run — see the addendum below)
+## F. Browser matrix at the closure head (remediated TEFCA_ARC export, TEFCA_ARC backend, admin session; light + dark; 1366 / 834 / 390 / 640 / 320 px; axe wcag2a/aa/21aa/22aa; eight-stop keyboard walk)
+
+49 routes: every TEFCA route (31 incl. the legacy `/tefca-dashboard` redirect), the Core routes offered in the TEFCA shell, and representative GovCon / Core-optional routes.
+
+| Class | PASS | PARTIAL | FAIL | Notes |
+|---|---|---|---|---|
+| TEFCA (31) | 30 | 1 | 0 | `/tefca-arc/dashboard/` CSS-zoom-400 proxy only (unchanged from 52f91d5 and bfa7902). 0 serious/critical axe nodes, 0 contrast nodes, 0 horizontal overflow at five widths, one h1, main landmark, focus visible. TEFCA_REGRESSIONS = 0. |
+| Core offered in the TEFCA shell | 5 + 3 after the second pass (addendum) | 2 (`/dashboard`, `/actions-inbox`: zoom proxy) | 4 → 2 after the second contrast pass (addendum: `/validation` 1 node, `/analytics` residual) | `/intelligence` 6/4 → 1/0 → 0/0, `/validation` 6/4 → 2/0 → 1/0, `/analytics` 19/12 → 13/6 → 10/5, `/trust` 20/0 → 11/0 → 0/0, `/compare` 1/0 → 0/0 (light/dark contrast nodes at bfa7902 → first pass → second pass). |
+| GovCon under TEFCA_ARC | `/rfqs`, `/ats`, `/pricing` render "Not available in this deployment" (one h1, one main) | — | 0 | 0 GovCon API requests observed on 24 GovCon routes (role probe). |
+| Core-optional under TEFCA_ARC | `/healthcare`, `/bulletin` render the unavailable state | — | 0 | |
+| Public | `/`, `/login` zoom proxy only | 2 | 0 | Legacy public/GovCon contrast on routes outside the TEFCA shell is unchanged (deferred, Release 1.1 design system). |
+
+Role probe on the same build (20 TEFCA routes × PM, reviewer, qalead, viewer, admin): PM 20/20, qalead 20/20, admin 20/20; reviewer and viewer 18/20 with the two qalead-gated screens (no longer offered in their navigation; a direct visit renders the "Insufficient permissions" heading). Navigation offered to a viewer contains 18 entries (no Audit & Decision History, no Platform Health); to a QA Lead 20.
+
+UI checks (Playwright, same build): Deliveries → synthetic delivery card shows Provenance with Delivery ID, full SHA-256, received by, declared count and "41 (documented field map)"; Verification Workspace Section A shows the same Delivery ID and hash, "View all 41 delivered fields", canonical QHIN/parent relationship; QA Lead sees the APPROVE / RETURN / ESCALATE select on a SUBMITTED FOR QA case, reviewer and viewer do not; Audit & Decision History search "REV-2026-000001" lists 5 lineage rows (claim, two determinations, return, approve) with the case id; reviewer direct visit to the audit route renders the "Insufficient permissions" heading.
+
+Actual browser zoom 200 % / 400 % remains NOT_VERIFIED (viewport and CSS-zoom proxies only). No Section 508 claim is made.
+
+### F.1 Addendum — second contrast pass on the Core routes offered in the TEFCA shell
+
+Residual literals (`#CBD5E1` empty-state text, `#16A34A` / `#D97706` status text) moved to `--text-secondary` and the theme-aware `--status-*` tokens. Final targeted matrix on the rebuilt export (light/dark contrast nodes): `/intelligence` 0/0 (offered to every TEFCA user — clean), `/trust` 0/0, `/compare` 0/0, `/validation` 1/0 (one 11 px `#DC2626` error-text node at the 4.5:1 boundary), `/analytics` 10/5 (bold 11 px coloured list text and one metric tile in dark). The two admin-only Core routes therefore keep a small contrast residual, recorded here as OPEN ITEM R11-b (LOW, pre-existing, Release 1.1 design-system work); they are not TEFCA routes and are not on the QA path.
 
 ## G. Remaining human actions
 
