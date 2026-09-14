@@ -22,6 +22,36 @@ RATE_LIMITS = {
     "default": {"requests_per_minute": 60, "burst_max": 10},
 }
 
+# Role -> tier. Every role the platform defines (app/core/security.py
+# ROLE_HIERARCHY) is listed on purpose: an unlisted role silently fell into the
+# free tier (60/min, burst 10 per 5 s), which is what happened to every TEFCA
+# operational role — program_manager, qalead, senior_analyst, reviewer — whose
+# Mission Control fan-out alone can exceed a 10-request burst. Unknown roles
+# still fall to "free" (fail closed); this table only makes the known ones
+# explicit. Limits are not raised globally and the limiter is never disabled.
+TIER_BY_ROLE = {
+    "admin": "enterprise",
+    "program_manager": "business",
+    "qalead": "business",
+    "senior_analyst": "business",
+    "reviewer": "business",
+    "manager": "business",
+    "contributor": "pro",
+    "viewer": "free",
+}
+
+
+def tier_for_role(role) -> str:
+    """Tier for a JWT role claim, resolving the platform's role aliases
+    ("pm", "qa lead", "senior analyst", ...) the same way RBAC does."""
+    try:
+        from app.core.security import canonical_role
+        key = canonical_role(role)
+    except Exception:
+        key = str(role or "").strip().lower()
+    return TIER_BY_ROLE.get(key, "free")
+
+
 # Sliding window storage: {user_key: [timestamp, timestamp, ...]}
 _request_log = defaultdict(list)
 _burst_log = defaultdict(list)
@@ -88,6 +118,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if path in self.EXEMPT_PATHS or path.startswith("/docs") or path.startswith("/redoc"):
             return await call_next(request)
 
+        # CORS preflights carry no credentials, change no state and are answered
+        # by the CORS middleware without reaching a router. Counting them against
+        # the caller's IP bucket meant that every real request from a browser
+        # (which preflights each Authorization-bearing call) spent two units, and
+        # a shared office egress address hit the free-tier burst on preflights
+        # alone — surfacing in the browser as a CORS failure, not as a 429. The
+        # actual requests behind the preflights are still limited below.
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
         # Determine user key and tier
         user_key, tier = self._extract_identity(request)
 
@@ -118,10 +158,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 payload = decode_token(auth.replace("Bearer ", ""))
                 user_id = payload.get("sub", "unknown")
                 role = payload.get("role", "contributor")
-                # Map role to tier
-                tier_map = {"admin": "enterprise", "manager": "business", "contributor": "pro", "viewer": "free"}
-                tier = tier_map.get(role, "free")
-                return f"user:{user_id}", tier
+                return f"user:{user_id}", tier_for_role(role)
             except Exception:
                 pass
 

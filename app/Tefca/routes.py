@@ -1304,9 +1304,26 @@ def _review_status(status: str) -> str:
 
 
 def _connector_health_snapshot(health: dict) -> dict:
+    """Public connector states. Vocabulary is the frontend's resolveStatus():
+    available -> Live, partial -> Partial, unavailable -> Unavailable.
+
+    PECOS is never reported "available": the probe behind that key reaches the
+    NPPES proxy, not a PECOS feed, so a reachable proxy is "partial" (NPPES-proxy
+    verification only) and the backing is named explicitly. A source that is
+    not connected must not read as connected."""
+    from app.Tefca.connectors import PECOS_BACKING
+
     def s(k):
         return "available" if health.get(k, {}).get("live") else "unavailable"
-    return {"sam_gov": s("SAM_GOV"), "pecos": s("PECOS"), "leie": s("OIG_LEIE"), "nppes": s("NPPES")}
+
+    pecos_live = bool(health.get("PECOS", {}).get("live"))
+    return {
+        "sam_gov": s("SAM_GOV"),
+        "pecos": "partial" if pecos_live else "unavailable",
+        "pecos_backing": PECOS_BACKING,
+        "leie": s("OIG_LEIE"),
+        "nppes": s("NPPES"),
+    }
 
 
 @tefca_dashboard_router.get("/dashboard/summary", summary="Executive dashboard summary (aggregate, viewer role required)", dependencies=[Depends(require_role("viewer"))])

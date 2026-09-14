@@ -32,6 +32,26 @@ app = FastAPI(
     openapi_url="/openapi.json" if _docs_enabled else None,
 )
 
+# ── Middleware order (Starlette wraps in reverse add order: the LAST added is the
+#    OUTERMOST). Innermost first:
+#      ModuleGate  -> a path owned by a module disabled in this deployment profile
+#                     answers 404 before any router (server-side module boundary;
+#                     app/core/modules.py).
+#      RateLimit   -> tiered limiter; CORS preflights are exempt inside it.
+#      CORS        -> outside the limiter so a 429 carries CORS headers and the
+#                     browser reports the real status instead of a CORS failure.
+#      TrustedHost -> outermost: Host-header spoofing is rejected before anything
+#                     else runs (FIX 8 — NIST SC-7).
+from app.core.modules import ModuleGateMiddleware  # noqa: E402
+app.add_middleware(ModuleGateMiddleware)
+
+# ── Global API rate limiting (NIST SC-5 / DoS + third-party AI cost abuse). Uses the
+#    existing in-memory tiered limiter (Free 60/min .. Enterprise high; identity from
+#    the JWT, else client IP). Health/docs are exempt inside the middleware. This
+#    complements the stricter, dedicated limits already on the auth endpoints. ──
+from app.core.rate_limiter import RateLimitMiddleware  # noqa: E402
+app.add_middleware(RateLimitMiddleware)
+
 # ── CORS (FIX 8 — NIST SC-7). Wildcard removed; restricted to configured
 #    origins. Credentials are not needed (auth is via the Authorization bearer
 #    header, not cookies), and allow_credentials must never be True with a
@@ -46,13 +66,6 @@ app.add_middleware(
 
 # ── Trusted Host (FIX 8 — NIST SC-7) — reject Host-header spoofing. ──
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.trusted_hosts)
-
-# ── Global API rate limiting (NIST SC-5 / DoS + third-party AI cost abuse). Uses the
-#    existing in-memory tiered limiter (Free 60/min .. Enterprise high; identity from
-#    the JWT, else client IP). Health/docs are exempt inside the middleware. This
-#    complements the stricter, dedicated limits already on the auth endpoints. ──
-from app.core.rate_limiter import RateLimitMiddleware  # noqa: E402
-app.add_middleware(RateLimitMiddleware)
 
 
 # ── Request-level NUL-byte rejection (AGT-SA-001 F-002 / Block 3 Suite A test A9).
@@ -424,6 +437,10 @@ async def health():
     try:
         from app.bulletin_intelligence.scheduler import scheduler_status
         scheduler = scheduler_status()
+        # /health is unauthenticated: the operator alert address is an
+        # operational contact, not a health fact, and must not be public.
+        if isinstance(scheduler, dict):
+            scheduler = {k: v for k, v in scheduler.items() if k != "alert_email"}
     except Exception as e:
         scheduler = {"running": False, "error": str(e)}
     # USPS address standardization is optional — reported from client state only,
@@ -467,10 +484,14 @@ async def get_config(request: Request):
     host it dialled) plus the environment name, so there is nothing here worth
     authenticating.
     """
+    from app.core.modules import profile_summary
     return {
         "environment": os.getenv("ENVIRONMENT", "unknown"),
         "version": "6.0.0",
         "api_host": request.url.hostname,
+        # Deployment program profile: module ids only (public-safe). Lets a
+        # frontend built for one program detect a backend serving another.
+        **profile_summary(),
     }
 
 
