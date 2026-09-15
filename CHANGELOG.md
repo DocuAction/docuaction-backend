@@ -16,7 +16,7 @@ Copyright © 2024–2026 Alliance Global Tech, Inc. All rights reserved.
 - Placeholder for changes staged for the next release.
 
 ### Changed
-- _None yet._
+- Source-derived name columns widened from `VARCHAR(500)` to `TEXT` (migration `20260915_curated_text_columns`): `rce_curated_records.name`, `tefca_reg_entities.name` / `display_name`, `tefca_entity_contacts.company` / `name`. A delivered organisation name longer than 500 characters failed the whole CURATION stage of a DEV delivery (`StringDataRightTruncationError`) although Area 1 held it unbounded; the curated and registry projections are 1:1 copies of the delivered value and no contractual maximum exists for it. Catalogue-only change, no row touched; the downgrade refuses to run while any value longer than 500 characters exists rather than truncate. Identifier, code, status and address-component limits are unchanged. Regression: `tests/test_curated_text_columns.py`.
 
 ### Fixed
 - _None yet._
