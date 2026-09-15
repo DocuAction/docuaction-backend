@@ -809,6 +809,13 @@ class SAMGovConnector:
 
 # ─── PECOS Provider Enrollment (CMS) ─────────────────────────────────────────
 
+# The one sentence every PECOS-keyed status carries. A constant so the health
+# probe, the public status snapshot and the tests state the same fact.
+PECOS_BACKING_NOTE = ("Provider Enrollment — NOT CONNECTED. NPPES (CMS NPI Registry) proxy answers this "
+                      "probe; a PECOS feed (payment suspension) requires a COR-provisioned source.")
+PECOS_BACKING = "nppes_proxy"
+
+
 class PECOSConnector:
     """
     Provider enrollment verification via the free, key-less CMS NPPES NPI
@@ -1182,7 +1189,11 @@ class SourceConnectorManager:
             "NPPES": "NPI Registry — CMS/HHS",
             "OIG_LEIE": "Exclusion List — OIG/HHS",
             "SAM_GOV": sam_note,
-            "PECOS": "Provider Enrollment — CMS",
+            # Truth in labelling: this probe reaches the CMS NPI Registry (NPPES),
+            # which stands in for PECOS. No PECOS feed is connected; payment-
+            # suspension data needs a COR-provisioned feed (PECOS_BACKING_NOTE).
+            # Said here so a "live" under this key is never read as a PECOS link.
+            "PECOS": PECOS_BACKING_NOTE,
         }
         status: Dict[str, Dict[str, Any]] = {}
         for name, probe in zip(names, probes):
