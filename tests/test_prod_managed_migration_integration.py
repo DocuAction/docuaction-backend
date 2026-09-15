@@ -4,7 +4,7 @@ disposable PostgreSQL (superuser test DB, e.g. the CI postgres:16 service).
 Reproduces the REAL measured PROD starting state (read-only Gate 3 discovery of
 docuaction-db-geo, 2026-09-08 - metadata only, no Government data):
 
-  * alembic_version = 20260829_report_artifacts (repo head 20260903_delivery_grants,
+  * alembic_version = 20260829_report_artifacts (repo head 20260915_curated_text_columns,
     exactly five revisions pending)
   * 93 public tables: the 72 candidate tables + 20 legacy-only + alembic_version
   * docuaction_app  LOGIN, least privilege, OWNS 89 tables incl. alembic_version
@@ -40,9 +40,14 @@ from test_prod_convergence_integration import (  # noqa: E402
 pytestmark = pytest.mark.skipif(not SU, reason="CONV_SUPERUSER_URL not set (needs a superuser test DB)")
 
 EXPECTED = "20260829_report_artifacts"
-HEAD = "20260903_delivery_grants"
+HEAD = "20260915_curated_text_columns"
+#: Tables the pending chain ALTERs that docuaction_app owns in PROD; PREPARE
+#: temporarily re-owns exactly these (in this order) and FINALIZE returns them.
+#: Mirrors scripts/prod_legacy_convergence.MANAGED_CHAIN_ALTERS.
+CHAIN_ALTERS = ["review_records", "rce_curated_records", "tefca_reg_entities", "tefca_entity_contacts"]
 PENDING = ["20260830_run_lifecycle", "20260831_review_case", "20260831_export_jobs",
-           "20260902_delivery_jobs", "20260903_delivery_grants"]
+           "20260902_delivery_jobs", "20260903_delivery_grants",
+           "20260915_curated_text_columns"]
 DECISIONS_COLS = ["approval_justification", "rejection_reason", "rejection_category", "supersedes", "sla_hours",
                   "deadline", "escalation_level", "escalated_to", "escalated_at", "is_overdue", "outcome_text",
                   "outcome_date", "outcome_matched", "outcome_notes", "outcome_recorded_by",
@@ -191,7 +196,7 @@ def test_managed_gate_fails_closed_on_every_lineage_deviation(fixture_db):
 
     # expected-revision gate PASS (dry-run, writes nothing)
     r = _run_conv(admin, "--managed-prepare", "--bootstrap-as-role", LEGACY_OWNER)
-    assert "gate PASSED" in r.stdout and f"pending revisions (5)   : {PENDING}" in r.stdout, r.stdout[-600:]
+    assert "gate PASSED" in r.stdout and f"pending revisions ({len(PENDING)})   : {PENDING}" in r.stdout, r.stdout[-600:]
     assert "MANAGED PREPARE DRY-RUN" in r.stdout
     with _eng(fixture_db).connect() as c:
         assert _version(c) == [EXPECTED] and set(DECISIONS_COLS).isdisjoint(_cols(c, "decisions"))
@@ -268,15 +273,16 @@ def test_managed_prepare_migrate_finalize_end_to_end(fixture_db):
     assert "MANAGED PREPARE COMPLETE" in rp.stdout, rp.stdout[-500:]
     assert f"owner context: session_user={ENTRA_ADMIN}  current_user(after SET ROLE)={LEGACY_OWNER}" in rp.stdout
     assert "18 model-only column(s) added on ('decisions',)" in rp.stdout and "alembic_version re-owned=True" in rp.stdout
-    assert "temporarily re-owned for the chain=['review_records']" in rp.stdout
+    assert f"temporarily re-owned for the chain={CHAIN_ALTERS}" in rp.stdout
     with su.connect() as c:
         assert set(DECISIONS_COLS) <= _cols(c, "decisions")
         assert set(REVIEW_COLS).isdisjoint(_cols(c, "review_records")), "review_records columns belong to the chain"
         assert _owner(c, "alembic_version") == "docuaction_owner" and _version(c) == [EXPECTED]
-        assert _owner(c, "review_records") == "docuaction_owner", "single-table temporary re-own for 20260831_review_case"
+        for t_ in CHAIN_ALTERS:
+            assert _owner(c, t_) == "docuaction_owner", f"temporary re-own for the chain: {t_}"
         assert _role_count(c) == pre_roles, "PREPARE must create no role"
         now = _tables(c)
-        touched = {"alembic_version", "review_records"}
+        touched = {"alembic_version", *CHAIN_ALTERS}
         assert {t: o for t, o in now.items() if t not in touched} == {t: o for t, o in pre_tables.items() if t not in touched}
         assert all(now[t] == "docuaction_app" for t in LEGACY_ONLY) and all(now[t] == "docuaction_owner" for t in AREA1_PRESENT)
         assert _anchors(c) == pre
@@ -318,7 +324,7 @@ def test_managed_prepare_migrate_finalize_end_to_end(fixture_db):
     assert "direct_memberships=['docuaction_owner']" in rm.stdout
     assert f"cannot SET ROLE {LEGACY_OWNER}/docuaction_app=proven" in rm.stdout
     assert "current_user(after SET ROLE)=docuaction_owner" in rm.stdout
-    assert f"chain: {EXPECTED} -> {HEAD} (5 pending: {PENDING})" in rm.stdout
+    assert f"chain: {EXPECTED} -> {HEAD} ({len(PENDING)} pending: {PENDING})" in rm.stdout
     assert f"second upgrade head: NO-OP (version={HEAD}, heads=1, pending=0)" in rm.stdout
     cfg = Config(os.path.join(os.path.dirname(CONV), "..", "alembic.ini"))
     assert ScriptDirectory.from_config(cfg).get_heads() == [HEAD]
@@ -340,7 +346,8 @@ def test_managed_prepare_migrate_finalize_end_to_end(fixture_db):
 
     # ── FINALIZE (entra_admin -> SET ROLE legacy_owner) ──
     rf = _run_conv(admin, "--finalize", "--i-understand-finalize-writes", "--bootstrap-as-role", LEGACY_OWNER)
-    assert "FINALIZE COMPLETE" in rf.stdout and "2 non-Area-1 tables" in rf.stdout, rf.stdout[-400:]
+    # report_export_jobs (chain-created, non-Area-1) + every temporarily re-owned chain table
+    assert "FINALIZE COMPLETE" in rf.stdout and f"{1 + len(CHAIN_ALTERS)} non-Area-1 tables" in rf.stdout, rf.stdout[-400:]
     with su.connect() as c:
         final = _tables(c)
         assert len(final) == 95
@@ -348,7 +355,8 @@ def test_managed_prepare_migrate_finalize_end_to_end(fixture_db):
             assert final[t] == "docuaction_owner", f"{t} must be docuaction_owner"
         assert final["alembic_version"] == "docuaction_owner"
         assert final["report_export_jobs"] == "docuaction_app"
-        assert final["review_records"] == "docuaction_app", "FINALIZE returns the temporarily re-owned table"
+        for t_ in CHAIN_ALTERS:
+            assert final[t_] == "docuaction_app", f"FINALIZE returns the temporarily re-owned table {t_}"
         assert all(final[t] == "docuaction_app" for t in LEGACY_ONLY), "legacy-only untouched"
         assert sorted(t for t, o in final.items() if o == "docuaction_owner") == sorted(AREA1_FINAL + ["alembic_version"])
         assert _anchors(c) == pre and _version(c) == [HEAD]

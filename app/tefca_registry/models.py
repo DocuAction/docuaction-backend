@@ -32,8 +32,10 @@ class TefcaRegEntity(Base):
     __tablename__ = "tefca_reg_entities"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name = Column(String(500), nullable=False)
-    display_name = Column(String(500))
+    #: TEXT: promoted 1:1 from rce_curated_records.name, which is itself the
+    #: unbounded delivered value. Migration 20260915_curated_text_columns.
+    name = Column(Text, nullable=False)
+    display_name = Column(Text)
     # qhin, participant, sub_participant, child
     entity_level = Column(String(50), nullable=False)
     # health_information_network, hospital_system, health_plan,

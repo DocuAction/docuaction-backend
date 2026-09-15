@@ -474,7 +474,13 @@ MANAGED_PREPARE_TABLES = ("decisions",)
 # returns them to docuaction_app. The app keeps its runtime privileges on them
 # throughout via explicit grants. This is the single-table form of the
 # certified "temporary re-own for the chain" - never a broad re-ownership.
-MANAGED_CHAIN_ALTERS = ("review_records",)
+#
+# 20260915_curated_text_columns widens five source-derived name columns from
+# VARCHAR(500) to TEXT (ALTER COLUMN ... TYPE only; catalogue change, no row
+# touched) on three more docuaction_app-owned tables, so the same temporary
+# re-own applies to them for exactly that ALTER. None is an Area-1 table.
+MANAGED_CHAIN_ALTERS = ("review_records", "rce_curated_records",
+                        "tefca_reg_entities", "tefca_entity_contacts")
 assert not set(MANAGED_CHAIN_ALTERS) & AREA1_OWNER_TABLES, "Area-1 tables are never re-owned or re-granted here"
 MANAGED_CHAIN_CREATES = {"report_export_jobs", "rce_delivery_jobs"}
 MANAGED_LEGACY_ONLY = [

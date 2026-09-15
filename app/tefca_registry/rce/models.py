@@ -357,7 +357,12 @@ class RceCuratedRecord(Base):
     hcid = Column(String(100), index=True)
     aaid = Column(String(100))
     npi = Column(String(40), index=True)
-    name = Column(String(500))
+    #: TEXT, not VARCHAR(500). Area 1 stores the delivered name unbounded
+    #: (raw_line / parsed are TEXT / JSONB) and Area 2 is a 1:1 projection of
+    #: it; a length cap here made one over-long delivered value fail the whole
+    #: CURATION stage (DEV, 2026-09-15). No contractual maximum exists for the
+    #: field, so none is imposed. Migration 20260915_curated_text_columns.
+    name = Column(Text)
     entity_level = Column(String(50))
     sequoia_org_type = Column(String(50))
     org_node_type = Column(String(100))
@@ -461,8 +466,10 @@ class TefcaEntityContact(Base):
     source_record_id = Column(UUID(as_uuid=True), nullable=True, index=True)
 
     contact_purpose = Column(String(100))
-    company = Column(String(500))
-    name = Column(String(500))
+    #: TEXT: contact_company / contact_name are delivered free text projected
+    #: 1:1 from Area 1 (see RceCuratedRecord.name).
+    company = Column(Text)
+    name = Column(Text)
     phone = Column(String(50))
     email = Column(String(320))
     address_text = Column(Text)

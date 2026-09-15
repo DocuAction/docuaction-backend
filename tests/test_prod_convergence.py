@@ -138,8 +138,8 @@ def test_grants_come_from_the_reviewed_chain_not_reimplemented():
     for g in re.findall(r"GRANT[^\n]*\bON\b[^\n]*", code.replace(prep, ""), re.I):
         assert ("ON SCHEMA" in g) or ("ON DATABASE" in g), f"only DB/SCHEMA infra ON-grants allowed: {g}"
     # The ONE exception, scoped and pinned: managed PREPARE temporarily re-owns the
-    # single non-Area-1 table a pending revision ALTERs (MANAGED_CHAIN_ALTERS) and
-    # keeps the application's former owner-level access on it for the window.
+    # non-Area-1 tables a pending revision ALTERs (MANAGED_CHAIN_ALTERS) and
+    # keeps the application's former owner-level access on them for the window.
     # Area-1 privileges still come only from the chain (asserted at import).
     for g in re.findall(r"GRANT[^\n]*\bON\b[^\n]*", prep, re.I):
         assert ("ON SCHEMA" in g) or ('ON public."{t}" TO "{APP_ROLE}"' in g), f"unexpected grant in PREPARE: {g}"
@@ -221,8 +221,11 @@ def test_managed_prod_mode_shape():
     prep = _func(code, "managed_prepare")
     assert "CREATE ROLE" not in prep and "CONV_APP_PASSWORD" not in prep and "REASSIGN" not in prep
     assert prep.count("OWNER TO") == 2 and 'alembic_version" OWNER TO' in prep and "MANAGED_CHAIN_ALTERS" in prep, \
-        "PREPARE may re-own alembic_version and the single-table MANAGED_CHAIN_ALTERS set only"
-    assert "MANAGED_CHAIN_ALTERS = ('review_records',)" in code, "only review_records is ALTERed by a pending revision"
+        "PREPARE may re-own alembic_version and the MANAGED_CHAIN_ALTERS set only"
+    # _code() runs ast.unparse, so the tuple is one line with single quotes.
+    _alters = re.search(r"MANAGED_CHAIN_ALTERS = \(([^)]*)\)", code)
+    assert _alters and {"review_records", "rce_curated_records", "tefca_reg_entities",
+                        "tefca_entity_contacts"} == set(re.findall(r"['\"]([^'\"]+)['\"]", _alters.group(1))),         "the pending chain ALTERs review_records (20260831) and the three name columns (20260915), and nothing else"
     assert "ADD COLUMN IF NOT EXISTS" in prep and "MANAGED_PREPARE_TABLES" in prep
     assert "command.upgrade" not in prep and "create_all" not in prep
     assert "MANAGED_PREPARE_TABLES = ('decisions',)" in code, "review_records columns belong to 20260831_review_case"

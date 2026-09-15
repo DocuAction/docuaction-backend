@@ -215,7 +215,7 @@ def test_three_step_convergence_and_all_gates(fixture_db):
     assert "MIGRATION B COMPLETE" in rm.stdout
     assert f"session_user={MIGRATION_ID}" in rm.stdout and "current_user(after SET ROLE)=docuaction_owner" in rm.stdout
     with su.connect() as c:
-        assert c.execute(text("select version_num from alembic_version")).scalars().all() == ["20260903_delivery_grants"]
+        assert c.execute(text("select version_num from alembic_version")).scalars().all() == ["20260915_curated_text_columns"]
     print("MIGRATION_B=PASS")
 
     # FINALIZE (legacy_owner) - reassign to DEV ownership model
@@ -328,7 +328,7 @@ def test_forced_failure_is_fail_closed(fixture_db):
     with _eng(SU).connect() as c:
         has = sa.inspect(c).has_table("alembic_version")
         rev = c.execute(text("select version_num from alembic_version")).scalars().all() if has else None
-    assert rev != ["20260903_delivery_grants"], "must not report head after a failed chain"
+    assert rev != ["20260915_curated_text_columns"], "must not report head after a failed chain"
     print(f"FORCED_FAILURE=FAIL_CLOSED rev={rev} recovery=EXPLICIT_REPAIR_OR_PITR")
 
 
@@ -370,14 +370,14 @@ def test_fresh_alembic_upgrade_head_from_empty(fixture_db):
     os.environ["DB_APP_ROLE"] = "docuaction_app"
     os.environ["DB_MIGRATION_ROLE"] = "docuaction_owner"
     command.upgrade(cfg, "head")
-    assert ScriptDirectory.from_config(cfg).get_heads() == ["20260903_delivery_grants"]
+    assert ScriptDirectory.from_config(cfg).get_heads() == ["20260915_curated_text_columns"]
     with eng.connect() as c:
-        assert c.execute(text("select version_num from alembic_version")).scalars().all() == ["20260903_delivery_grants"]
+        assert c.execute(text("select version_num from alembic_version")).scalars().all() == ["20260915_curated_text_columns"]
         assert _ck_count(c) == 1
     command.upgrade(cfg, "head")
     with eng.connect() as c:
         assert _ck_count(c) == 1
-    print("FRESH_ALEMBIC_BUILD=PASS head=20260903_delivery_grants ck_count=1 rerun=no-op")
+    print("FRESH_ALEMBIC_BUILD=PASS head=20260915_curated_text_columns ck_count=1 rerun=no-op")
 
 
 def test_20260831_skips_ck_when_already_present(fixture_db):
