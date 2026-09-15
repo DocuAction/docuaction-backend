@@ -1824,8 +1824,19 @@ async def tefca_audit_trail(
 
     q = q.order_by(AuditLog.created_at.desc())
     total = len((await db.execute(q)).scalars().all())
-    rows = (await db.execute(q.limit(limit).offset(offset))).scalars().all()
-
+    # Both stores are read: the platform log (authentication, administration,
+    # imports) and the registry audit log, where the ARC workflow records the
+    # decision lineage — claim, analyst determination, QA approve / return /
+    # escalate, supersession. Until 2026-09-14 this screen read only the
+    # platform log, so "filter by case" showed a case's denied requests but not
+    # its determinations (QA AUD-001). Rows are merged newest-first and paged
+    # over the union.
+    window = limit + offset
+    rows = (await db.execute(q.limit(window))).scalars().all()
+    reg_rows, reg_total = await _registry_audit_rows(
+        db, event_type=event_type, action=action, correlation_id=correlation_id,
+        search=search, window=window)
+    total += reg_total
     user_ids = {r.user_id for r in rows if r.user_id}
     actors = {}
     if user_ids:
@@ -1833,9 +1844,6 @@ async def tefca_audit_trail(
         actors = {str(u.id): u.email for u in found}
 
     def outcome_of(r):
-        # AT-001 — the stored column is authoritative. The derivation below is
-        # retained only for rows written before the column existed, so an old
-        # row still reads correctly instead of showing a blank outcome.
         if getattr(r, "outcome", None):
             return r.outcome
         details = r.details if isinstance(r.details, dict) else {}
@@ -1851,26 +1859,93 @@ async def tefca_audit_trail(
             return r.correlation_id
         return (r.details or {}).get("correlation_id") if isinstance(r.details, dict) else None
 
+    entries = [{
+        "id": str(r.id),
+        "timestamp": r.created_at.isoformat() if r.created_at else None,
+        "correlation_id": correlation_of(r),
+        "user": actors.get(str(r.user_id)) or (
+            (r.details or {}).get("email") if isinstance(r.details, dict) else None) or "System",
+        "event_type": getattr(r, "event_type", None) or _audit_event_type(r.action),
+        "action": r.action,
+        "outcome": outcome_of(r),
+        "ip_address": r.ip_address,
+        "resource_type": r.resource_type,
+        "resource_id": r.resource_id,
+        "details": _safe_audit_details(r.details),
+        "source": "platform",
+    } for r in rows] + reg_rows
+    entries.sort(key=lambda e: e.get("timestamp") or "", reverse=True)
     return {
         "total": total,
         "limit": limit,
         "offset": offset,
         "event_types": sorted(_AUDIT_EVENT_TYPES) + ["other"],
-        "entries": [{
+        "entries": entries[offset:offset + limit],
+    }
+
+
+async def _registry_audit_rows(db, *, event_type, action, correlation_id, search, window):
+    """Registry audit rows (tefca_reg_audit_log) in the platform trail's shape.
+
+    The registry log has no correlation id, so a correlation-id query never
+    returns registry rows. `search` matches the action, the review id and the
+    metadata text so "REV-2026-000245" finds the case's whole decision chain.
+    """
+    from sqlalchemy import cast, String
+    from app.tefca_registry import models as reg
+
+    if correlation_id:
+        return [], 0
+    q = select(reg.TefcaRegAuditLog)
+    if event_type and event_type.strip().lower() not in ("", "all"):
+        key = event_type.strip().lower()
+        if key == "other":
+            known = [a for actions in _AUDIT_EVENT_TYPES.values() for a in actions]
+            q = q.where(func.lower(reg.TefcaRegAuditLog.action).notin_(known))
+        elif key in _AUDIT_EVENT_TYPES:
+            q = q.where(func.lower(reg.TefcaRegAuditLog.action).in_(_AUDIT_EVENT_TYPES[key]))
+        else:
+            return [], 0
+    if action:
+        q = q.where(func.lower(reg.TefcaRegAuditLog.action) == action.strip().lower())
+    if search:
+        term = f"%{search.strip().lower()}%"
+        q = q.where(or_(
+            func.lower(reg.TefcaRegAuditLog.action).like(term),
+            func.lower(cast(reg.TefcaRegAuditLog.metadata_, String)).like(term),
+        ))
+    total = int((await db.execute(
+        select(func.count()).select_from(q.subquery()))).scalar() or 0)
+    rows = (await db.execute(
+        q.order_by(reg.TefcaRegAuditLog.created_at.desc()).limit(window))).scalars().all()
+    out = []
+    for r in rows:
+        meta = r.metadata_
+        if isinstance(meta, str):
+            # JSONB can arrive as text on a connection without the JSON codecs
+            # (the test harness's NullPool engine); decode rather than drop.
+            try:
+                meta = json.loads(meta)
+            except ValueError:
+                meta = {}
+        if not isinstance(meta, dict):
+            meta = {}
+        review_id = meta.get("review_id")
+        out.append({
             "id": str(r.id),
             "timestamp": r.created_at.isoformat() if r.created_at else None,
-            "correlation_id": correlation_of(r),
-            "user": actors.get(str(r.user_id)) or (
-                (r.details or {}).get("email") if isinstance(r.details, dict) else None) or "System",
-            "event_type": getattr(r, "event_type", None) or _audit_event_type(r.action),
+            "correlation_id": None,
+            "user": r.actor_email or "System",
+            "event_type": _audit_event_type(r.action),
             "action": r.action,
-            "outcome": outcome_of(r),
+            "outcome": "success",
             "ip_address": r.ip_address,
-            "resource_type": r.resource_type,
-            "resource_id": r.resource_id,
-            "details": _safe_audit_details(r.details),
-        } for r in rows],
-    }
+            "resource_type": "review" if review_id else ("entity" if r.entity_id else None),
+            "resource_id": review_id or (str(r.entity_id) if r.entity_id else None),
+            "details": _safe_audit_details(meta),
+            "source": "registry",
+        })
+    return out, total
 
 
 @tefca_dashboard_router.get("/status", summary="Module status + data provenance (public)")

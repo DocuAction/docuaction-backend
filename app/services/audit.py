@@ -77,6 +77,15 @@ EVENT_TYPE_ACTIONS = {
     "review": [
         "review_executed", "review_decision", "entity_verified", "bucket_override",
         "verification_started", "verification_completed",
+        # Decision lineage written by the ARC workflow to the registry audit log
+        # (app/tefca_registry/qa_gate.py, case_assignment.py, review_cycle.py).
+        # Listed here so the Audit & Decision History screen files them under
+        # "review" and the event-type filter can select them (QA AUD-001,
+        # 2026-09-14: the screen showed only platform authentication events).
+        "analyst_determination_recorded", "qa_approve", "qa_return", "qa_escalate",
+        "determination_superseded", "review_case_claimed", "review_case_released",
+        "review_case_assigned", "review_case_reassigned",
+        "review_cycle_members_verified", "review_cycle_plan_drawn",
     ],
     "data_change": [
         "entity_created", "entity_updated", "status_changed",

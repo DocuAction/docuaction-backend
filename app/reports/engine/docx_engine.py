@@ -118,13 +118,19 @@ def _table(document, caption: str, headers: List[str], rows: Iterable[List[Any]]
 
 
 def _fmt_date(value: Any) -> str:
+    """One display form for every format. The DOCX previously printed
+    "September 07, 2026" while the HTML printed "07 September 2026"; the
+    cross-format reconciliation test (which accepts the un-padded day) failed
+    on both head and base whenever the period started on a single-digit day.
+    Both engines now print "7 September 2026" (see template_engine)."""
     if not value:
         return "Not specified"
     text = str(value)[:10]
     try:
-        return datetime.fromisoformat(text).strftime("%B %d, %Y")
+        parsed = datetime.fromisoformat(text)
     except ValueError:
         return text
+    return f"{parsed.day} {parsed.strftime('%B %Y')}"
 
 
 # ── the document ─────────────────────────────────────────────────────────────

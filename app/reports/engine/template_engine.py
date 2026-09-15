@@ -92,12 +92,14 @@ def base_css() -> str:
 
 
 def _format_date(value: Any) -> str:
+    """"7 September 2026" — the one display form shared with the DOCX engine
+    (`docx_engine._fmt_date`), so every format states the same period text."""
     if value is None:
         return "Not specified"
     if isinstance(value, str):
         return value
     try:
-        return value.strftime("%d %B %Y")
+        return f"{value.day} {value.strftime('%B %Y')}"
     except (AttributeError, ValueError):
         return str(value)
 
