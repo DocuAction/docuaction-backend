@@ -15,7 +15,7 @@ Correct date: 2026-09-16 UTC. The earlier package and some file names used 2026-
 
 | Repository | Branch | Base | Head |
 |---|---|---|---|
-| docuaction-backend | fix/delivery-workflow-remediation | main 51b8735 (current) | effc015 = the single remediation commit (on top of PR #59's abf52bc, 35df1c4); branch tip 6d24c16 adds only this package and the non-restricted screenshots |
+| docuaction-backend | fix/delivery-workflow-remediation | main 51b8735 (current) | effc015 = the single remediation commit (on top of PR #59's abf52bc, 35df1c4); later commits add only this package, the non-restricted screenshots and a CI skip guard for the seeding helper; branch tip is the last commit on PR #65 |
 | docuaction-frontend | fix/delivery-workflow-remediation | main 04d7af7 (current) | 473e773 (single commit) |
 
 Histories were squashed before publishing so no commit contains the removed credential. Git status clean in both worktrees (untracked: ignored restricted evidence and build output only).
@@ -52,6 +52,8 @@ Fresh isolated PostgreSQL 18 cluster, database dropped and migrated from empty t
 | **Total** | **3,567** | **75** | **0** |
 
 Skipped tests by exact reason (counted, not passed): Azure artifact backend not configured (21), superuser convergence DB not set (9; those 9 run green on a pristine cluster separately), populated development evidence dataset absent (6), no authenticated test account (6), sandbox concurrency database absent (6), no available review case (2), viewer has no lower role (4), bulletin auth guard off (9), WeasyPrint native libraries absent on Windows (4), populated legacy population absent (1), populated review baseline absent (1), no Area 1 rows / no review rows / no delivery / no briefing (5), live demo credentials absent (1). Blocked by unavailable external service: none (network-marked tests are excluded by design).
+
+CI on the pull request (GitHub-hosted runner, no PostgreSQL service): pytest 3,135 passed, 666 skipped, 0 failed, 0 errors; CodeQL, SAST, dependency review, convergence fixture and both Linux PDF render checks pass. The first CI run had 48 setup errors from the delivery-API seeding helper connecting without a database; the helper now skips with a stated reason (`tests/support_delivery_api.py`).
 
 ## 9. Frontend test results
 
