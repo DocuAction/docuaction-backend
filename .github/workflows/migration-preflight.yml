@@ -34,6 +34,11 @@ on:
         required: false
         type: string
         default: ''
+      target_revision:
+        description: 'When apply=true: the exact revision to upgrade to. Must be the direct child of expected_current - one controlled migration per apply, never "head".'
+        required: false
+        type: string
+        default: ''
     outputs:
       readable:
         description: '"true" if this runner could read alembic_version. Unreachable is an EXPECTED, routine result on push-triggered runs, not a workflow defect.'
@@ -118,6 +123,7 @@ jobs:
         run: |
           test -n "${{ inputs.handshake_issue }}" || { echo "::error::apply=true requires handshake_issue"; exit 1; }
           test -n "${{ inputs.expected_current }}" || { echo "::error::apply=true requires expected_current"; exit 1; }
+          test -n "${{ inputs.target_revision }}" || { echo "::error::apply=true requires target_revision"; exit 1; }
           IP=$(curl -s https://api.ipify.org)
           echo "runner public IPv4: $IP"
           gh issue comment "${{ inputs.handshake_issue }}" --repo "${{ github.repository }}" \
@@ -217,7 +223,11 @@ jobs:
         run: |
           READABLE="${{ steps.read.outputs.readable }}"
           DEV="${{ steps.read.outputs.dev_revision }}"
-          TARGET="${{ steps.target.outputs.target_head }}"
+          # A targeted apply compares against the one revision it was asked to
+          # reach; a read-only/push-triggered run has no target_revision and
+          # falls back to the repository's single head, unchanged from before.
+          TARGET="${{ inputs.target_revision }}"
+          if [ -z "$TARGET" ]; then TARGET="${{ steps.target.outputs.target_head }}"; fi
           echo "DEV readable from this runner: $READABLE"
           echo "DEV is at:    $DEV"
           echo "target head:  $TARGET"
@@ -241,17 +251,29 @@ jobs:
           SECRET_KEY: ${{ github.sha }}${{ github.sha }}
           ALLOWED_HOSTS: '*'
         run: |
-          CUR="${{ steps.read.outputs.dev_revision }}"; TARGET="${{ steps.target.outputs.target_head }}"
+          CUR="${{ steps.read.outputs.dev_revision }}"; TARGET="${{ inputs.target_revision }}"
           test "$CUR" = "${{ inputs.expected_current }}" || { echo "::error::DEV is at $CUR, operator expected ${{ inputs.expected_current }} - nothing executed"; exit 1; }
           python -m pip install --quiet -r requirements.txt
-          # Exactly ONE pending migration, or nothing runs. Counted from the
-          # script directory (revisions strictly above CUR up to heads) - not
-          # from `alembic history -r CUR:heads`, whose output also lists CUR's
-          # own line and so reported 2 for one pending migration (run 33703759483,
-          # which correctly refused to execute anything).
-          PENDING=$(python -c "from alembic.config import Config; from alembic.script import ScriptDirectory; print(len(list(ScriptDirectory.from_config(Config('alembic.ini')).iterate_revisions('heads', '${CUR}'))))")
-          echo "pending migrations: $PENDING"
-          test "$PENDING" -eq 1 || { echo "::error::expected exactly 1 pending migration, found $PENDING - nothing executed"; exit 1; }
+          # target_revision must be the DIRECT CHILD of CUR - one controlled
+          # migration per apply, never zero (target == CUR, its own node has no
+          # down_revision equal to itself) and never more than one (a revision
+          # further down the chain, or an unrelated branch). Replaces an earlier
+          # "count pending revisions to heads" check, which conflated "how many
+          # migrations to head" with "is this specific target one step away" -
+          # the two only agree when the target IS head, which a controlled apply
+          # to an intermediate revision must not assume (run 35154986185, which
+          # correctly refused to execute anything against a two-step gap).
+          PARENT=$(python -c "
+          from alembic.config import Config
+          from alembic.script import ScriptDirectory
+          sd = ScriptDirectory.from_config(Config('alembic.ini'))
+          down = sd.get_revision('${TARGET}').down_revision
+          if isinstance(down, tuple):
+              down = down[0] if len(down) == 1 else None
+          print(down or '')
+          ")
+          echo "target_revision $TARGET has parent: $PARENT"
+          test "$PARENT" = "$CUR" || { echo "::error::target_revision $TARGET is not the direct child of $CUR (its parent is '$PARENT') - nothing executed"; exit 1; }
           PGTOKEN=$(az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv)
           export DATABASE_URL="postgresql://${PG_PRINCIPAL}:${PGTOKEN}@${PGHOST}/${PGDATABASE}?ssl=require"
           echo "--- identity check via the approved DB_MIGRATION_ROLE mechanism (startup-packet role) ---"
@@ -267,14 +289,14 @@ jobs:
               assert r[1] == os.environ["DB_MIGRATION_ROLE"], "current_user is not docuaction_owner - refusing to run DDL"
           asyncio.run(m())
           PY
-          echo "--- alembic upgrade head (DB_MIGRATION_ROLE=$DB_MIGRATION_ROLE DB_APP_ROLE=$DB_APP_ROLE) ---"
-          alembic upgrade head
+          echo "--- alembic upgrade $TARGET (DB_MIGRATION_ROLE=$DB_MIGRATION_ROLE DB_APP_ROLE=$DB_APP_ROLE) ---"
+          alembic upgrade "$TARGET"
           AFTER=$(alembic current 2>/dev/null | awk '{print $1}'); echo "after: $AFTER"
           test "$AFTER" = "$TARGET" || { echo "::error::after upgrade DEV is at $AFTER, expected $TARGET"; exit 1; }
           test "$(alembic heads | grep -c '(head)')" -eq 1 || { echo "::error::multiple heads after upgrade"; exit 1; }
           echo "--- second run must be a true no-op ---"
-          alembic upgrade head 2>&1 | tee /tmp/second.log
-          if grep -q "Running upgrade" /tmp/second.log; then echo "::error::second alembic upgrade head was not a no-op"; exit 1; fi
+          alembic upgrade "$TARGET" 2>&1 | tee /tmp/second.log
+          if grep -q "Running upgrade" /tmp/second.log; then echo "::error::second alembic upgrade $TARGET was not a no-op"; exit 1; fi
           echo "--- runtime privileges on rce_delivery_jobs (S/I/U must be true, DELETE must be false) ---"
           PGTOKEN="$PGTOKEN" python - <<'PY'
           import os, psycopg2
