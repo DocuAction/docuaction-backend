@@ -20,7 +20,7 @@ Severity is the reviewer's; "Blocks" is the reviewer's DEV-merge verdict.
 | F3 | Medium | backend | `stage_events.close_stage`, runner `detail[*].error`, `job.error_reason`; served at viewer floor | Raw exception text (asyncpg `DETAIL: Key (...)=(value)`, SQL, parameters) persisted into evidence readable by a viewer. | No | **Fixed.** `logging_config.safe_exception_text`: domain exceptions keep a redacted message; driver/library exceptions keep the class name plus correlation id pointer. Used by `stage_events.safe_failure_text`, `_reason`, every runner error site and span exception events. | `test_stage_event_failure_reason_never_carries_sql_or_parameters`, `test_stage_events.py` |
 | M-1 | Medium | backend | `curation.apply_correction` (unconditional CORRECTED); legacy `PATCH /issues` + `POST /promote` | A record with a second undecided HIGH finding was released and then promoted (probe D). | Yes unless legacy path gated | **Fixed.** `apply_correction` derives HELD/CORRECTED from `_blocking_by_record`; `promote_delivery` independently holds any record whose current run has an undecided HIGH/CRITICAL finding. | `test_apply_correction_keeps_the_record_held_while_another_high_finding_is_open` |
 | M-2 | Medium | backend | `curation.apply_disposition` CORRECT on a conflict; `promotion._identifier_conflicts` | CORRECT never reached the registry and re-promotion re-raised the conflict forever (probe C). | No | **Fixed.** CORRECTED now writes the registry through the same validated path as CONFIRM_SUBMITTED; the decided-value skip also honours `selected_value`. | `test_corrected_writes_the_registry_and_does_not_reraise_the_conflict` |
-| M-3 | Medium | backend | `verification_findings` writes NPI-005/006 under the current run; `recompute_hold_status`; reconciliation E == C | A post-promotion HIGH verification finding re-holds a promoted Area 2 row and makes reconciliation fail permanently (probe E). | No; decide before a review cycle runs on DEV | **Open decision (section 3).** | — |
+| M-3 | Medium | backend | `verification_findings` writes NPI-005/006 under the current run; `recompute_hold_status`; reconciliation E == C | A post-promotion HIGH verification finding re-holds a promoted Area 2 row and makes reconciliation fail permanently (probe E). | No; decide before a review cycle runs on DEV | **Fixed (Decision 2, sections 3, 9, 10).** `recompute_hold_status` never rewrites a promoted record; blocking findings route through `post_promotion_verification`; sampling frame excludes `in_review` entities. | `test_post_promotion_verification.py`, `test_sampling_eligibility_review_required.py` |
 | M-4 | Medium | backend | `promotion._add_missing_identifiers` NPI-only | A delivered TEFCAID/HCID/AAID for a matched entity that has none is silently ignored (probe H). | No | Partially: `apply_confirmed_submitted` now updates the entity mirror column. Family-identifier addition at promotion remains a follow-up. | — |
 | M-5 / F7 | Medium/Low | backend | in-request `promote_delivery` from the two POST routes; max+1 sequences | Concurrent promotions of one intake are unguarded; duplicate-sequence race surfaced as 500. | No | Partially: `IntegrityError` → 409 with guidance on both routes; unique constraints already prevent duplicates. Advisory lock around the drain is a follow-up. | — |
 | M-6 | Medium | frontend | `login/page.tsx` `?next=` | Prefix filter admitted `/\t/evil.com` (parser strips tab) → open redirect after a real sign-in. | No (DEV) / Yes (prod) | **Fixed.** Control characters refused; destination taken from the URL parser only when the resolved origin and protocol equal ours. | `login-next.test.jsx` (9 tests) |
@@ -29,7 +29,7 @@ Severity is the reviewer's; "Blocks" is the reviewer's DEV-merge verdict.
 | M3 (obs) | Medium | backend | `telemetry.span` default `record_exception=True` | Exception events exported message and stack trace verbatim. | Before `OTEL_ENABLED=true` | **Fixed.** `record_exception=False`; redacted event with class + `safe_exception_text`; no stack trace. | `test_span_exception_event_carries_no_message_payload_or_stacktrace` |
 | M4 (obs) | Medium | backend | distro `LoggingHandler` on `docuaction` logger | Second, unredacted log export path to App Insights. | Before `OTEL_ENABLED=true` | **Fixed.** `RedactingLogRecordProcessor` via `log_record_processors`. | `test_exported_log_records_are_redacted_and_carry_no_stacktrace` |
 | M5 (obs) | Medium | backend | `logging_config._KV_SECRET` | Missed `client_secret=`, `access_token=`, `key: value`, JSON, Basic, URL credentials. | No (condition) | **Fixed** (all probed forms). | `test_redact_text_masks_every_probed_credential_form` |
-| M6 (obs) | Medium | backend | `reports/routes.py` legacy `/html|pdf|csv|docx` at viewer vs artifact download at reviewer | Same bytes reachable by a viewer through legacy routes; reviewer floor rationale misleading. | No (decision) | **Open decision (section 3).** | — |
+| M6 (obs) | Medium | backend | `reports/routes.py` legacy `/html|pdf|csv|docx` at viewer vs artifact download at reviewer | Same bytes reachable by a viewer through legacy routes; reviewer floor rationale misleading. | No (decision) | **Fixed (Decision 1, sections 3, 8).** Every content route, current and legacy, raised to `reviewer` and audited on denial. | `test_report_authorization.py` |
 | F4 / L1 | Low | backend | `exception_ledger.dispositions_csv`, `csv_engine` | CSV formula injection via delivered names / reviewer text. | No | **Fixed.** `csv_engine.neutralise_row` on every data row (dispositions CSV, delivery processing CSV, SOW CSV). | `test_csv_cells_that_look_like_formulas_are_neutralised` |
 | F5 | Low | backend | dispositions CSV response | No `Cache-Control: no-store, private`; AST guard scanned one file. | No | **Fixed.** `download_headers()` used; guard extended to `delivery_routes.py`. | `test_every_download_response_in_the_router_uses_the_helper` |
 | F6 / L-6 | Low | tests | `seed_entity` vs acceptance rows | 13 tests failed on the shared isolated DB (unique index spans every status). | No | **Fixed.** Fixture removes colliding rows inside the rolled-back transaction. | `test_identifier_conflict.py` green |
@@ -316,14 +316,8 @@ three named exclusions are implemented and tested: `Completed — Clean`
 which `delivery_jobs._open_findings`/`status_model` already count without
 any code change) and final classification (`qa_gate.submit_qa_review`'s
 `QA_APPROVE` now refuses when the review's entity is `in_review`). The third
-— excluding an entity from a **new approved sample draw** — is intentionally
-**not** implemented: the actual draw (`qhin_sampling.finalize_plan`) is a
-separate, methodology-governed statistical algorithm (confidence, margin,
-proportion, finite-population correction) that this review did not audit,
-and modifying its eligibility criteria under this authorization risked
-changing sampling validity in a way I could not verify in the time available.
-Recorded here as an explicit, honest gap and a recommended fast follow, not
-silently dropped.
+— excluding an entity from a **new approved sample draw** — implemented in the
+follow-up round the same day under explicit authorization; see section 10.
 
 **Tests**: `tests/test_post_promotion_verification.py` (12 tests covering
 blocking/nonblocking, duplicate delivery, repeated verification after
@@ -336,3 +330,69 @@ four nullable audit columns to `rce_issues` (`correlation_id`, `build_sha`,
 `before_state`, `after_state`) and widens `rce_reconciliation_snapshots`'s
 trigger vocabulary for the two new snapshot triggers this decision needs,
 with a downgrade that refuses rather than orphaning existing evidence rows.
+
+
+## 10. Sample-draw eligibility (Decision 2 follow-up, authorized 2026-09-16)
+
+**Where the rule lives.** `qhin_sampling.resolve_qhin_strata` is the one
+function that decides the sampling FRAME for a delivery; it already excluded
+HELD records by default and reported them as "unresolved" units with a
+reason rather than filtering them away. The new rule is added in exactly that
+shape: an entity whose `verification_status` is `in_review` (set only by
+`post_promotion_verification.record_finding` for a BLOCKING finding, cleared
+only by its resolve path after the analyst/QA workflow) is returned as an
+unresolved unit with `exclusion = REVIEW_REQUIRED` and a stated reason. It is
+never held, hidden, resolved, or rewritten; `record_status`,
+`canonical_entity_id`, its findings, its work item and its disposition
+history are untouched, and it stays in the delivery ledger, the analyst
+queue, reconciliation and every report.
+
+**What is deliberately untouched.** The engine (`sampling_engine.
+CochranSampler`) is not modified: sample size, per-QHIN strata,
+confidence/margin/proportion, finite-population correction, the
+randomisation method and seed handling all run exactly as before on the
+eligible frame (a test pins that the engine source contains none of this
+change). `finalize_plan` is idempotent and never redraws: a plan drawn before
+a finding keeps its membership, seed and `sample_entities` rows forever; only
+a NEW plan (new parameters) sees the exclusion. Historical samples are
+therefore unchanged by construction, not by a special case.
+
+**Audit.** Every `sampling_plan_finalized` row now carries
+`excluded_review_required` (count). When the count is non-zero a dedicated
+`sampling_eligibility_excluded` row is written for that plan naming the
+excluded entity ids, the exclusion code and the reason: the eligibility
+decision as its own audit fact. `preview_plan` and the plan's
+`strata_config` report the count too.
+
+**Reconciliation correction found on the way.** The check "Every
+determination traces to evidence" counted the analyst WORK ITEM the bridge
+opens (a `review_records` row) as a determination without dimension
+evidence, flipping the whole delivery's `passed` verdict, and therefore the
+review-cycle gate, for one entity's open question. Work items are questions
+by design (`classification_bucket`, `reviewer_resolution` and
+`reportable_at` all NULL); both "determination" checks now exempt rows whose
+`queue_source` is either bridge's. The disposition equation was never
+affected (it balanced throughout; a test asserts it is identical before and
+after a finding).
+
+**No duplicate work items.** Sampling eligibility only reads; the single work
+item per finding is opened once by `record_finding` and keyed on the
+finding's `issue_code`. Repeated eligibility resolution and previews never
+open another (tested).
+
+**Tests**: `tests/test_sampling_eligibility_review_required.py` (9): unresolved
+blocking finding excluded from a new draw (and `finalize_plan` refuses an
+empty frame); nonblocking finding still eligible and drawn; resolved
+blocking finding (independent QA required; same actor refused) restores
+eligibility and the existing methodology decides membership; excluded entity
+still visible in the exception ledger, `record_status` unchanged, and
+`reconcile_delivery` still passes with an identical equation; historical
+draw unchanged and never redrawn (same sample id, seed and members; a new
+plan then has no eligible unit); repeated resolution/preview opens no second
+work item; the eligibility decision and the plan's audit rows carry the
+count, ids, code, reason and seed; the only route that draws an official
+sample is `program_manager`-gated; the engine source is untouched.
+
+**Remaining limitation.** `include_held` remains an explicit parameter for
+the separate, still-open ONC question of whether HELD records belong in a
+frame; this change does not answer it and does not interact with it.

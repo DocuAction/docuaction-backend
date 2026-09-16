@@ -104,9 +104,11 @@ On a finding: **Decide** → `{decision, reason, corrected_value?}`
 (`POST /api/tefca/rce/issues/{issue_id}/dispositions`). On an identifier
 conflict: `CONFIRM_EXISTING`, `CONFIRM_SUBMITTED`, `CORRECTED`,
 `REQUEST_EVIDENCE`, `DEFERRED`, `ESCALATED`, `REJECTED` with a reason
-(`POST /api/tefca/rce/identifier-decisions`). Only `CONFIRM_SUBMITTED` changes
-the registry, and it writes an entity version and an audit row in the same
-transaction. Every decision appends; nothing is edited.
+(`POST /api/tefca/rce/identifier-decisions`). Only `CONFIRM_SUBMITTED` and
+`CORRECTED` change the registry — only in answer to a raised conflict, only
+with a value that passes the identifier validator and is not another
+entity's active identifier — and each writes an entity version and an audit
+row in the same transaction. Every decision appends; nothing is edited.
 
 ### 15. Send to QA
 When every open item on the delivery has a determination the review state
@@ -261,4 +263,7 @@ delivery's review state becomes `Closed` when the QA Lead closes the case.
    entity's verification status to "in review," opens exactly one analyst
    work item, blocks a final QA classification of that entity until resolved,
    and produces a NEW reconciliation snapshot — the earlier snapshot is
-   untouched. See `docs/rce/PREMERGE_REVIEW_2026-09-16.md` section 9.
+   untouched. While such a finding is unresolved the entity is also left out
+   of the frame of any NEW sample draw (reported as an unresolved unit with
+   a reason, never hidden); earlier draws are never redrawn. See
+   `docs/rce/PREMERGE_REVIEW_2026-09-16.md` sections 9 and 10.

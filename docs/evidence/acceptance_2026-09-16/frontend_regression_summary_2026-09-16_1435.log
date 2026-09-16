@@ -1,0 +1,16 @@
+      Tests  62 passed (62)
+   Start at  14:35:23
+   Duration  15.78s (transform 15.36s, setup 18.90s, import 22.11s, tests 24.06s, environment 59.10s)
+
+=== guardrails ===
+
+UI guardrails: all checks passed
+=== build ===
+
+place-assets: copied C:\Imran_Coding projects\DocuAction\frontend-remediation\out\_next -> C:\Imran_Coding projects\DocuAction\frontend-remediation\out\a1\_next
+=== e2e ===
+  1 failed
+  2 skipped
+  8 passed (15.5s)
+=== audit ===
+found 0 vulnerabilities

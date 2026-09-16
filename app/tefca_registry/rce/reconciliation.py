@@ -226,11 +226,23 @@ async def reconcile_delivery(db, intake_id) -> Dict[str, Any]:
         .where(reg.TefcaEntityRelationship.child_entity_id.in_(promoted_ids)))
 
     # ── determinations trace to evidence ──
+    # Analyst WORK ITEMS opened by the two bridges (queue_source
+    # RCE_DQ_HUMAN_REQUIRED / RCE_POST_PROMOTION_VERIFICATION) are questions,
+    # not determinations: classification_bucket, reviewer_resolution and
+    # reportable_at are NULL by design and no dimension evidence is ever
+    # attached to them (that belongs to verify_and_classify's sampled
+    # reviews). They must not read as "a determination without evidence" -
+    # which would flip the delivery's verdict for one entity's open question
+    # (pre-merge review Decision 2 follow-up, 2026-09-16).
+    _not_work_item = (
+        "  AND COALESCE(r.verification_results->>'queue_source', '') NOT IN "
+        "      ('RCE_DQ_HUMAN_REQUIRED', 'RCE_POST_PROMOTION_VERIFICATION') ")
     reviews_without_evidence = await _scalar(db, text(
         "SELECT count(*) FROM review_records r "
         "WHERE r.entity_id IN (SELECT canonical_entity_id FROM rce_curated_records "
         "                      WHERE source_intake_id = CAST(:i AS uuid) "
         "                        AND canonical_entity_id IS NOT NULL) "
+        + _not_work_item +
         "  AND (r.verification_results IS NULL "
         "       OR r.verification_results->'dimensions' IS NULL "
         "       OR jsonb_array_length(r.verification_results->'dimensions') = 0)"
@@ -240,6 +252,7 @@ async def reconcile_delivery(db, intake_id) -> Dict[str, Any]:
         "WHERE r.entity_id IN (SELECT canonical_entity_id FROM rce_curated_records "
         "                      WHERE source_intake_id = CAST(:i AS uuid) "
         "                        AND canonical_entity_id IS NOT NULL) "
+        + _not_work_item +
         "  AND r.classification_bucket IS NOT NULL "
         "  AND r.classification_rule IS NULL").bindparams(i=intake_id))
 
