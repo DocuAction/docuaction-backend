@@ -496,6 +496,15 @@ async def apply_correction(db, issue_id, *, actor: str,
     if new_value is None:
         raise CorrectionRefused(
             f"Issue {issue.issue_code} carries no corrected value to apply.")
+    if column == "npi":
+        # A correction is a human write of an identifier; it passes the same
+        # validator promotion applies (review finding L-1, 2026-09-16).
+        from app.services.npi_validator import validate_npi
+        ok, message = validate_npi(new_value)
+        if not ok:
+            raise CorrectionRefused(
+                f"Corrected NPI {new_value!r} is not a valid NPI ({message}); a "
+                f"correction cannot register an invalid identifier.")
 
     db.add(m.RceCorrectionDetail(
         curated_record_id=curated.id,
@@ -518,10 +527,24 @@ async def apply_correction(db, issue_id, *, actor: str,
     ))
     setattr(curated, column, new_value)
     curated.correction_count = (curated.correction_count or 0) + 1
-    curated.record_status = CORRECTED
     curated.reviewed_by = actor
     curated.reviewed_at = datetime.utcnow()
     issue.resolution = "RESOLVED"
+    await db.flush()
+    # The corrected record is promotable only if NOTHING ELSE holds it. An
+    # independent review (2026-09-16, M-1) showed the unconditional CORRECTED
+    # assignment releasing a record that still carried a second undecided HIGH
+    # finding, which the legacy promote route then promoted.
+    still_blocking = (await _blocking_by_record(
+        db, curated.source_intake_id)).get(curated.source_record_id)
+    if still_blocking:
+        curated.record_status = HELD
+        curated.status_reason = (
+            f"Correction applied; still held by {still_blocking['issues']} undecided "
+            f"holding-severity issue(s) and {still_blocking['conflicts']} unresolved "
+            f"identifier conflict(s).")
+    else:
+        curated.record_status = CORRECTED
     await db.commit()
 
     return {

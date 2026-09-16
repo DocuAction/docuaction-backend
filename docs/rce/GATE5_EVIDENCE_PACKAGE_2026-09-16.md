@@ -153,3 +153,14 @@ Frontend: redeploy 04d7af7. Backend: PATCH `linuxFxVersion` to the previous dige
 ## 27. Request
 
 Gate 5 approval to deploy to DEV per section 24 is requested. No production deployment is requested.
+
+
+## 28. Pre-merge independent review (added 2026-09-16)
+
+Three non-authoring reviewer agents performed a read-only review of the frozen
+SHAs (backend 1dbd014, frontend 473e773). Two High findings (an unvalidated
+identifier write through CONFIRM_SUBMITTED; migration ownership adoption), ten
+Medium and a dozen Low findings were recorded; all blocking and every
+telemetry-related finding were corrected on the branch, with tests, before any
+merge. The matrix, corrections, open decisions and follow-ups are in
+`docs/rce/PREMERGE_REVIEW_2026-09-16.md`.

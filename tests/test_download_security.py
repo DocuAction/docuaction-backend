@@ -121,19 +121,20 @@ def test_every_download_response_in_the_router_uses_the_helper():
 
     import app.reports.routes as routes
 
-    tree = ast.parse(io.open("app/reports/routes.py", encoding="utf-8").read())
     offenders = []
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                and node.func.id == "Response"):
-            continue
-        for keyword in node.keywords:
-            if keyword.arg != "headers":
+    for path in ("app/reports/routes.py", "app/tefca_registry/rce/delivery_routes.py"):
+        tree = ast.parse(io.open(path, encoding="utf-8").read())
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "Response"):
                 continue
-            # A headers= that is a literal dict is a response building its own
-            # security headers by hand.
-            if isinstance(keyword.value, ast.Dict):
-                offenders.append(node.lineno)
+            for keyword in node.keywords:
+                if keyword.arg != "headers":
+                    continue
+                # A headers= that is a literal dict is a response building its
+                # own security headers by hand.
+                if isinstance(keyword.value, ast.Dict):
+                    offenders.append(f"{path}:{node.lineno}")
     assert not offenders, (
         f"Response(headers=<literal dict>) at line(s) {offenders} — a download "
         f"is constructing its own headers instead of using download_headers()")

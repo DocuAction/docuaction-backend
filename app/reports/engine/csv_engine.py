@@ -21,6 +21,24 @@ import io
 from typing import Any, Dict, List
 
 
+#: Characters a spreadsheet may treat as the start of a formula (kept in step
+#: with xlsx_engine.FORMULA_LEADERS). A delivered organisation name or a
+#: reviewer's free-text reason that begins with one of these must not execute
+#: when the CSV is opened in Excel (review findings F4/L1, 2026-09-16).
+FORMULA_LEADERS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def neutralise_cell(value: Any) -> Any:
+    """Prefix a formula-looking string with an apostrophe; leave other values."""
+    if isinstance(value, str) and value.startswith(FORMULA_LEADERS):
+        return "'" + value
+    return value
+
+
+def neutralise_row(row) -> List[Any]:
+    return [neutralise_cell(v) for v in row]
+
+
 def chart_to_rows(chart) -> List[List[Any]]:
     """One chart as a header row plus one row per category."""
     header = ["Category"] + [s.label for s in chart.series]
@@ -142,7 +160,7 @@ def sow_report_to_csv(dataset: Dict[str, Any], report_id: str,
     for category in dataset.get("categories") or []:
         number = (dataset.get("category_numbers") or {}).get(category, "")
         for row in (dataset.get("entity_lists") or {}).get(category, []):
-            writer.writerow([number, *[row.get(k, "") or "" for k in keys]])
+            writer.writerow(neutralise_row([number, *[row.get(k, "") or "" for k in keys]]))
             listed += 1
     if not listed:
         writer.writerow(["No Participant or Subparticipant is listed for this reporting period"])
@@ -155,9 +173,9 @@ def sow_report_to_csv(dataset: Dict[str, Any], report_id: str,
     if not pending:
         writer.writerow(["No review record is pending QA"])
     for row in pending:
-        writer.writerow([row.get("review_id", ""), row.get("entity_name", ""),
+        writer.writerow(neutralise_row([row.get("review_id", ""), row.get("entity_name", ""),
                          row.get("qhin", ""), row.get("category_label", ""),
-                         row.get("rule", ""), row.get("pending_reason", "")])
+                         row.get("rule", ""), row.get("pending_reason", "")]))
     writer.writerow([])
 
     changes = dataset.get("methodology_changes") or {}
@@ -264,8 +282,8 @@ def delivery_processing_to_csv(dataset: Dict[str, Any], report_id: str,
     if not rows:
         writer.writerow(["No disposition events are persisted for this delivery"])
     for row in rows:
-        writer.writerow(["" if row.get(key) is None else row.get(key)
-                         for key, _ in DELIVERY_DISPOSITION_COLUMNS])
+        writer.writerow(neutralise_row(["" if row.get(key) is None else row.get(key)
+                                        for key, _ in DELIVERY_DISPOSITION_COLUMNS]))
     writer.writerow([])
 
     writer.writerow(["## Evidence limitations"])

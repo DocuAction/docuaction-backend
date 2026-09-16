@@ -202,7 +202,8 @@ async def reconcile_delivery(db, intake_id) -> Dict[str, Any]:
     if latest_run is not None:
         rule_rows = (await db.execute(
             select(m.RceRuleExecutionHistory).where(
-                m.RceRuleExecutionHistory.run_id == latest_run.id))).scalars().all()
+                m.RceRuleExecutionHistory.run_id == latest_run.id)
+            .order_by(m.RceRuleExecutionHistory.rule_id))).scalars().all()
     rules_under_evaluated = [
         r.rule_id for r in rule_rows if (r.records_evaluated or 0) != a_received]
     rules_failed = [r.rule_id for r in rule_rows if r.execution_status != "COMPLETE"]

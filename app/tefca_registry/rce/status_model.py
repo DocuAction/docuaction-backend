@@ -144,7 +144,7 @@ def processing_outcome(*, job_state: Optional[str], job_stage: Optional[str],
 
     checks = (
         ("no_unresolved_findings", _n(unresolved_findings) == 0,
-         f"{_n(unresolved_findings)} unresolved finding(s)"),
+         f"{_n(unresolved_findings)} undecided holding-severity (HIGH/CRITICAL) finding(s)"),
         ("no_held_records", _n(eq.get("held")) == 0, f"{_n(eq.get('held'))} held"),
         ("no_rejected_records", _n(eq.get("rejected")) == 0, f"{_n(eq.get('rejected'))} rejected"),
         ("no_missing_key_records", _n(eq.get("missing_key")) == 0,
@@ -164,8 +164,10 @@ def processing_outcome(*, job_state: Optional[str], job_stage: Optional[str],
         clean = clean and held
     if clean:
         return _result(OUTCOME_CLEAN, basis,
-                       "Every received record reconciled; no findings, holds, "
-                       "rejections, missing keys, conflicts or failed verifications remain.")
+                       "Every received record reconciled; no undecided holding-severity "
+                       "findings, holds, rejections, missing keys, conflicts or failed "
+                       "verifications remain. Lower-severity findings may remain and are "
+                       "listed in the exception ledger.")
     failed = [b["detail"] for b in basis if not b["held"]]
     return _result(OUTCOME_EXCEPTIONS, basis,
                    "Processing completed and reconciled; exceptions remain: "

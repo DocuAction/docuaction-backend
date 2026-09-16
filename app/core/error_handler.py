@@ -23,13 +23,17 @@ from app.core import request_context
 logger = logging.getLogger("docuaction.errors")
 
 
-def _resolve_request_id(request_id: Optional[str]) -> str:
+def _resolve_request_id(request_id: Optional[str], request=None) -> str:
     if request_id:
         return request_id
     try:
         bound = request_context.get("request_id")
     except Exception:  # noqa: BLE001 - never let correlation break an error body
         bound = None
+    if not bound and request is not None:
+        # The generic 500 handler runs outside RequestContextMiddleware; the
+        # middleware left the accepted id on request.state for exactly this.
+        bound = getattr(getattr(request, "state", None), "request_id", None)
     return str(bound) if bound else str(uuid.uuid4())
 
 
@@ -47,12 +51,17 @@ def create_error_response(status_code: int, error: str, code: str,
     if extra:
         content.update({k: v for k, v in extra.items()
                         if k not in ("error", "code", "request_id")})
+    resolved = _resolve_request_id(request_id)
     content.update({
         "error": error,
         "code": code,
-        "request_id": _resolve_request_id(request_id),
+        "request_id": resolved,
     })
-    return JSONResponse(status_code=status_code, content=content, headers=headers or None)
+    # The header always agrees with the body, including on a 500 that never
+    # passes back through the middleware that normally echoes it.
+    out_headers = dict(headers or {})
+    out_headers.setdefault("X-Request-ID", resolved)
+    return JSONResponse(status_code=status_code, content=content, headers=out_headers)
 
 
 # Standard error codes
@@ -189,7 +198,7 @@ def register_exception_handlers(app):
 
     @app.exception_handler(Exception)
     async def generic_exception_handler(request: Request, exc: Exception):
-        request_id = _resolve_request_id(None)
+        request_id = _resolve_request_id(None, request)
         logger.error("Unhandled: request_id=%s error_class=%s", request_id,
                      type(exc).__name__, exc_info=True)
         return create_error_response(

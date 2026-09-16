@@ -127,7 +127,10 @@ async def finalize_report_renderings(
                 await db.rollback()
             except Exception:  # noqa: BLE001
                 pass
-            out["errors"].append(f"{kind}: {type(exc).__name__}: {exc}")
+            # Class only: a store exception names the local path or blob URL
+            # (review finding L2, 2026-09-16); the full text is in the log above.
+            out["errors"].append(
+                f"{kind}: {type(exc).__name__} (storage detail withheld; see the server log)")
 
     if html_artifact and html_artifact.get("registered") is not False:
         out["html"] = html_artifact

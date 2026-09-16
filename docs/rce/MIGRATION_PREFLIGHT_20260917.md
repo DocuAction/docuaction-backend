@@ -101,3 +101,16 @@ The tables are additive; the previous application image ignores them. Roll
 back by redeploying the previous image digest and leave the tables and their
 rows in place. `alembic downgrade` is only possible while the tables are empty,
 by design: evidence is never dropped by a rollback.
+
+
+## Ownership precheck (added 2026-09-16 after independent review F2)
+
+The revision now refuses to run when any of the five evidence tables, or the
+`rce_current_dispositions` view, already exists and is **not owned by the role
+running the migration** (`TraceabilityOwnershipError`, naming the object and
+its owner). Nothing is applied in that case. Startup `create_all` excludes the
+five tables (`schema_guard.create_all_except_migration_owned`), so the runtime
+role can no longer create them even where startup schema mutation is enabled;
+on DEV `STARTUP_SCHEMA_MUTATION_ENABLED=false` in any case. Sequence for DEV
+remains: apply the migration as `docuaction_owner` **before** the image switch
+(`apply_migrations=true`), then deploy.

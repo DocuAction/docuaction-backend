@@ -800,7 +800,8 @@ async def artifact_history(
 async def artifact_download(
     report_id: str,
     content_type: str = Query("text/html"),
-    version: Optional[int] = Query(None, description="Omit for the latest"),
+    version: Optional[int] = Query(None, ge=1, le=2_147_483_647,
+                                   description="Omit for the latest"),
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role("reviewer")),
 ):

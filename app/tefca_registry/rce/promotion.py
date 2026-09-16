@@ -319,7 +319,8 @@ async def _identifier_conflicts(db, row, entity_id, *, intake_id, run_id,
 
         latest = await identifier_decisions.latest_event(db, entity_id, itype)
         if latest is not None and latest.decision != identifier_decisions.CONFLICT_RAISED \
-                and (latest.submitted_value or None) == submitted:
+                and submitted in {latest.submitted_value or None,
+                                  latest.selected_value or None}:
             # A human has already decided this exact submitted value. Whatever
             # they chose, the registry reflects it; re-raising would re-hold a
             # record on a question that has been answered.
@@ -637,6 +638,14 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
     # Selecting only rows that still need promotion makes the loop idempotent:
     # it terminates when nothing is left, a re-run after a failure resumes
     # instead of restarting, and no row can be visited twice.
+    # Independent of record_status: a record whose current quality run still
+    # carries an undecided HIGH/CRITICAL finding is held, whatever a legacy path
+    # wrote into record_status (review finding M-1, 2026-09-16).
+    from app.tefca_registry.rce.curation import _blocking_by_record
+    undecided_holding = {
+        record_id for record_id, entry in (await _blocking_by_record(db, intake_id)).items()
+        if entry["issues"]}
+
     while True:
         rows = (await db.execute(
             select(m.RceCuratedRecord)
@@ -683,7 +692,12 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
                     stamp=stamp)
                 conflicts_raised += sum(1 for c in conflicts if c["newly_raised"])
 
-            quality_hold = row.record_status not in PROMOTABLE_STATUSES
+            quality_hold = (row.record_status not in PROMOTABLE_STATUSES
+                            or row.source_record_id in undecided_holding)
+            if quality_hold and row.record_status in PROMOTABLE_STATUSES:
+                row.record_status = "HELD"
+                row.status_reason = ("Held: an undecided holding-severity finding "
+                                     "remains in the current quality run.")
 
             if conflicts:
                 records_in_conflict += 1

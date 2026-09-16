@@ -109,6 +109,7 @@ logger = logging.getLogger(__name__)
 
 #: How often the background heartbeat writes while a stage is running.
 from app.tefca_registry.rce.delivery_jobs import HEARTBEAT_INTERVAL_SECONDS  # noqa: E402
+from app.tefca_registry.rce import stage_events  # noqa: E402
 
 #: Job stage name → stage-event stage name, where the two vocabularies differ.
 _EVENT_STAGE = {"VERIFICATION": "VERIFICATION_READINESS"}
@@ -182,7 +183,7 @@ async def _run_stages(db, job, detail: Dict[str, Any]) -> str:
             await _close(db, ev_schema, "FAILED", failure=exc)
             await _close(db, ev_parse, "FAILED", failure=exc)
             await jobs.finish_failed(db, job_id, reason,
-                                     detail={"PARSING": {"error": str(exc)[:1000]}})
+                                     detail={"PARSING": {"error": stage_events.safe_failure_text(exc, 1000)}})
             return RceDeliveryJob.STATE_FAILED
 
         for ev in (ev_schema, ev_parse):
@@ -258,7 +259,7 @@ async def _run_after_area1(db, job, detail: Dict[str, Any], intake_id,
                 observed = await runner(db, intake_id, actor)
             except Exception as exc:  # noqa: BLE001
                 stage_error = _reason(stage_name, exc)
-                detail[stage_name] = {"error": str(exc)[:1000],
+                detail[stage_name] = {"error": stage_events.safe_failure_text(exc, 1000),
                                       "completed": False}
                 logger.error("delivery job %s stage %s did not complete: %s",
                              job_id, stage_name, type(exc).__name__, exc_info=True)
@@ -317,7 +318,7 @@ async def _run_after_area1(db, job, detail: Dict[str, Any], intake_id,
             passed = bool(recon.get("passed"))
         except Exception as exc:  # noqa: BLE001
             detail[RceDeliveryJob.STAGE_RECONCILIATION] = {
-                "error": str(exc)[:1000], "completed": False}
+                "error": stage_events.safe_failure_text(exc, 1000), "completed": False}
             logger.error("delivery job %s reconciliation did not complete: %s",
                          job_id, type(exc).__name__, exc_info=True)
             await _settle(db)
@@ -334,7 +335,7 @@ async def _run_after_area1(db, job, detail: Dict[str, Any], intake_id,
                 logger.error("delivery job %s: reconciliation snapshot not persisted: %s",
                              job_id, type(exc).__name__, exc_info=True)
                 await _settle(db)
-                recon["snapshot_error"] = f"{type(exc).__name__}: {str(exc)[:500]}"
+                recon["snapshot_error"] = stage_events.safe_failure_text(exc, 500)
             detail[RceDeliveryJob.STAGE_RECONCILIATION] = recon
             eq = (full.get("equation") or {})
             await _close(db, ev, "COMPLETED",
@@ -570,7 +571,7 @@ async def _bridge(db, intake_id, actor) -> Dict[str, Any]:
         logger.error("delivery %s: review bridge did not complete: %s", intake_id,
                      type(exc).__name__, exc_info=True)
         await _settle(db)
-        return {"completed": False, "error": f"{type(exc).__name__}: {str(exc)[:500]}"}
+        return {"completed": False, "error": stage_events.safe_failure_text(exc, 500)}
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -714,9 +715,10 @@ def _reconciled_count(recon: Optional[Dict[str, Any]]) -> Optional[int]:
 def _reason(stage: str, exc: Exception) -> str:
     """A controlled failure string.
 
-    Names the stage and the exception TYPE, and includes the message only
-    because these are our own domain errors carrying operator-actionable text
-    (`IntakeError`, `LineCountMismatch`, `ValueError` from promotion). It is
+    Names the stage and the exception TYPE, and includes the message only for
+    our own domain errors carrying operator-actionable text (`IntakeError`,
+    `LineCountMismatch`, `ValueError` from promotion); a driver or library
+    exception contributes its class name only (`safe_failure_text`). It is
     truncated, and it is the only place an exception's text reaches a caller.
     """
-    return f"{stage} did not complete: {type(exc).__name__}: {str(exc)[:800]}"
+    return f"{stage} did not complete: {stage_events.safe_failure_text(exc, 800)}"

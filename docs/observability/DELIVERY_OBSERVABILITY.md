@@ -244,6 +244,20 @@ Both switches are required so that a connection string left in an App Service
 slot cannot start exporting on its own, and a flag flipped without a
 destination fails closed rather than buffering to disk.
 
+### 9.1a What leaves the process (redaction points)
+
+Three export paths exist when telemetry is on, and each is redacted
+independently (independent review M3/M4, 2026-09-16):
+
+| Path | Redaction |
+|---|---|
+| Span attributes | `RedactingSpanProcessor` (start and end): headers dropped, query strings stripped, credential-shaped keys masked, SQL literals stripped |
+| Span `exception` events | `telemetry.span` records the exception itself with `record_exception=False`: class name plus `safe_exception_text` (domain message redacted; driver/library message withheld); **no stack trace is exported** |
+| Log records (`docuaction*` loggers via the distro's `LoggingHandler`) | `RedactingLogRecordProcessor` registered through `log_record_processors`: body through `redact_text`, attributes through the span rules, `exception.stacktrace` withheld, `exception.message` redacted |
+
+Stack traces stay in the container log (stdout JSON, itself redacted) under
+the correlation id.
+
 ### 9.2 Sampling
 
 `ErrorKeepingSampler` (parent-based `TraceIdRatioBased`), installed on the
@@ -252,7 +266,13 @@ accepts a sampler by name only, not an object):
 
 1. a span whose **name or initial attributes mark an error** (`error=true`,
    `exception.*`, `otel.status_code=ERROR`, HTTP status >= 500, or a name
-   containing error/fail/exception) is **always kept**, whatever its parent;
+   containing error/fail/exception) is **always kept**, whatever its parent.
+   **Limit (independent review M2, 2026-09-16):** the decision is made when
+   the span STARTS. A FastAPI server span learns its status only at its end,
+   so a request that fails with a 5xx is kept at the ratio, not always. The
+   redacted error LOG line is exported for every 5xx regardless. On DEV set
+   `OTEL_TRACES_SAMPLER_ARG=1.0` (the volume is small) so every request trace
+   is kept; a lower ratio is a production cost decision, not a DEV default;
 2. a span carrying `docuaction.always_sample=true` is always kept. The
    `rce.delivery_job` root sets it, so every delivery's stage spans are
    exported in full (they are the evidence trail; section 5 already says the

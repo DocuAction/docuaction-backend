@@ -33,6 +33,14 @@ def worker_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}"[:128]
 
 
+def safe_failure_text(exc: BaseException, limit: int = 2000) -> str:
+    """Failure text for stage events and job detail: domain messages redacted,
+    driver/library exceptions reduced to their class name. Served at viewer
+    floor, so it must never carry SQL, parameters or delivered values."""
+    from app.core.logging_config import safe_exception_text
+    return safe_exception_text(exc, limit)
+
+
 async def _next_attempt(db, job_id, stage: str) -> int:
     current = (await db.execute(
         select(func.max(tm.RceDeliveryStageEvent.attempt)).where(
@@ -90,7 +98,7 @@ async def close_stage(db, event: tm.RceDeliveryStageEvent, status: str, *,
     event.rejected_count = rejected_count
     if failure is not None:
         event.failure_class = type(failure).__name__[:128]
-        event.failure_reason = (failure_reason or str(failure))[:2000]
+        event.failure_reason = (failure_reason or safe_failure_text(failure))[:2000]
     elif failure_reason:
         event.failure_reason = failure_reason[:2000]
     if detail:

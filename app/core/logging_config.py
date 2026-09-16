@@ -30,15 +30,59 @@ from app.core import request_context
 
 _SENSITIVE_KEY = re.compile(
     r"(token|secret|password|passwd|authorization|api[_-]?key|connection[_-]?string|"
-    r"cookie|set-cookie|client[_-]?secret|sas|signature)", re.IGNORECASE)
+    r"cookie|set-cookie|client[_-]?secret|(?:^|[_.-])sas(?:[_.-]|$)|signature)",
+    re.IGNORECASE)
 _BEARER = re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{8,}")
 #: `instrumentationkey` / `sharedaccesskey` / `accountkey`: the credential
 #: halves of an Application Insights, Service Bus or Storage connection string,
 #: which an Azure SDK exception message can echo back verbatim (found by
 #: tests/test_telemetry.py, 2026-09-17).
+#: `client_secret=`, `access_token=`, `"password": "x"`, `PASSWORD: x` and
+#: `key = x` forms are all matched: the key may carry a word prefix joined by
+#: `_` or `-`, may be quoted, and the separator may be `=` or `:` with spaces
+#: (independent review M5, 2026-09-16, found the `\b...=` form missed every
+#: OAuth/Entra spelling).
 _KV_SECRET = re.compile(
-    r"(?i)\b(password|passwd|secret|token|api[_-]?key|sig|sas|instrumentationkey|"
-    r"sharedaccesskey|accountkey)=([^\s&;'\"]+)")
+    r"(?i)(?<![A-Za-z0-9])((?:[A-Za-z0-9]+[_-])*(?:password|passwd|pwd|secret|token|"
+    r"api[_-]?key|sig|sas|instrumentationkey|sharedaccesskey|accountkey))"
+    r"[\"']?\s*[:=]\s*[\"']?([^\s&;,'\"]+)")
+_BASIC = re.compile(r"(?i)basic\s+[A-Za-z0-9+/=]{8,}")
+#: `scheme://user:password@host` - the password half of a URL credential.
+_URL_CREDENTIAL = re.compile(r"(://[^/\s:@]+:)([^@\s]+)@")
+
+#: Exception classes whose messages are ours to show: raised by our own code
+#: (module under `app.`) or the plain ValueError/LookupError the pipeline uses
+#: for domain refusals. Driver and library exceptions echo SQL, bound
+#: parameters, URLs and delivered values; only their class name is kept.
+_DRIVER_MODULES = ("sqlalchemy", "asyncpg", "psycopg", "httpx", "aiohttp",
+                   "azure", "requests", "urllib", "ssl", "socket", "botocore")
+
+
+def _is_domain_exception(exc: BaseException) -> bool:
+    for cls in type(exc).__mro__:
+        module = cls.__module__ or ""
+        if module.startswith(_DRIVER_MODULES):
+            return False
+    module = type(exc).__module__ or ""
+    return module.startswith("app.") or isinstance(exc, (ValueError, LookupError))
+
+
+def safe_exception_text(exc: BaseException, limit: int = 800) -> str:
+    """Exception text fit for evidence that a viewer can read.
+
+    Domain exceptions keep their (redacted) message; anything else keeps only
+    the class name and a pointer to the server log, where the full traceback is
+    kept under the correlation id (review finding F3, 2026-09-16).
+    """
+    name = type(exc).__name__
+    if _is_domain_exception(exc):
+        return redact_text(f"{name}: {exc}")[:limit]
+    try:
+        correlation = request_context.correlation_id()[:64]
+    except Exception:  # noqa: BLE001
+        correlation = "unknown"
+    return (f"{name} (message withheld from evidence; see the server log for "
+            f"correlation id {correlation})")[:limit]
 
 #: Attributes every LogRecord has; anything else on the record was passed via
 #: `extra=` and is emitted as a field.
@@ -48,6 +92,8 @@ _STANDARD = set(vars(logging.LogRecord("", 0, "", 0, "", (), None)).keys()) | {
 
 def redact_text(text: str) -> str:
     text = _BEARER.sub("Bearer [REDACTED]", text)
+    text = _BASIC.sub("Basic [REDACTED]", text)
+    text = _URL_CREDENTIAL.sub(lambda m: f"{m.group(1)}[REDACTED]@", text)
     return _KV_SECRET.sub(lambda m: f"{m.group(1)}=[REDACTED]", text)
 
 

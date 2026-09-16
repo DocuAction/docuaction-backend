@@ -39,11 +39,23 @@ async def test_failed_close_records_class_reason_and_duration(rolled_back_db):
 
     ev = await stage_events.open_stage(db, job.id, "PROMOTION", intake_id=intake_id)
     closed = await stage_events.close_stage(db, ev, "FAILED",
-                                            failure=RuntimeError("x" * 3000))
+                                            failure=ValueError("x" * 3000))
     d = closed.to_dict()
     assert d["status"] == "FAILED"
-    assert d["failure_class"] == "RuntimeError"
+    assert d["failure_class"] == "ValueError"
     assert len(d["failure_reason"]) == 2000, "reason is truncated, never dropped"
+    assert d["failure_reason"].startswith("ValueError: xxx")
+    # A driver/library exception keeps its class only: its message carries SQL,
+    # parameters and delivered values (independent review F3, 2026-09-16).
+    from sqlalchemy.exc import IntegrityError
+    ev2 = await stage_events.open_stage(db, job.id, "PROMOTION", intake_id=intake_id)
+    closed2 = await stage_events.close_stage(
+        db, ev2, "FAILED", failure=IntegrityError(
+            "INSERT INTO t VALUES (1982916078)", {"npi": "1982916078"},
+            Exception("Key (npi)=(1982916078)")))
+    d2 = closed2.to_dict()
+    assert d2["failure_class"] == "IntegrityError"
+    assert "1982916078" not in d2["failure_reason"] and "INSERT" not in d2["failure_reason"]
     assert d["duration_ms"] is not None and d["duration_ms"] >= 0
     assert d["completed_at"] >= d["started_at"]
 

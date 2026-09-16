@@ -122,7 +122,9 @@ def test_gate_precedes_create_all_in_startup():
 
     src = _code_only(main.startup)
     gate = src.index("schema_mutation_allowed()")
-    create = src.index("Base.metadata.create_all")
+    # create_all now runs through schema_guard.create_all_except_migration_owned
+    # (evidence tables are Alembic-owned); the ordering property is unchanged.
+    create = src.index("create_all_except_migration_owned, Base.metadata")
     alters = src.index("ALTER TABLE users ADD COLUMN")
     assert gate < create, "the gate must precede create_all"
     # The ALTER list is *defined* above the gate but only *executed* below it;

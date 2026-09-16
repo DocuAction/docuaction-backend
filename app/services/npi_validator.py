@@ -23,7 +23,9 @@ import re
 # ISO 7812 issuer identifier for CMS. Not arbitrary and not configurable.
 CMS_PREFIX = "80840"
 
-_DIGITS_ONLY = re.compile(r"^\d{10}$")
+#: ASCII digits only: `\d` and `str.isdigit()` accept other scripts' digits,
+#: which the quality engine rejects (review finding L-5, 2026-09-16).
+_DIGITS_ONLY = re.compile(r"^[0-9]{10}$")
 
 
 def _luhn_total(number: str) -> int:
@@ -54,7 +56,7 @@ def validate_npi(npi: str) -> tuple[bool, str]:
         return False, "NPI is empty"
 
     if not _DIGITS_ONLY.match(value):
-        if not value.isdigit():
+        if not (value.isascii() and value.isdigit()):
             return False, f"NPI must contain digits only (got {len(value)} characters)"
         return False, f"NPI must be exactly 10 digits (got {len(value)})"
 

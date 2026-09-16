@@ -256,7 +256,8 @@ async def startup():
     # Alembic-managed production database is. A database that does NOT match will
     # surface real errors instead of being silently repaired — which is the
     # intended behaviour, because silent repair is what hid the drift.
-    from app.core.schema_guard import log_schema_mutation_skipped, schema_mutation_allowed
+    from app.core.schema_guard import (create_all_except_migration_owned,
+                                       log_schema_mutation_skipped, schema_mutation_allowed)
 
     if not schema_mutation_allowed():
         log_schema_mutation_skipped()
@@ -265,7 +266,7 @@ async def startup():
     for attempt in range(1, 8):
         try:
             async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)  # create any missing tables
+                await conn.run_sync(create_all_except_migration_owned, Base.metadata)
                 for stmt in user_columns:
                     await conn.execute(text(stmt))
             logger.info("DB schema verified (tables + all users columns; existing users grandfathered)")

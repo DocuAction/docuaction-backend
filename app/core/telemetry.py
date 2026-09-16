@@ -71,7 +71,12 @@ from opentelemetry.trace import Link, SpanKind, TraceState, get_current_span
 from opentelemetry.util.types import Attributes
 
 from app.core import request_context
-from app.core.logging_config import _SENSITIVE_KEY, redact_text
+from app.core.logging_config import _SENSITIVE_KEY, redact, redact_text, safe_exception_text
+
+try:  # the logs signal is stable enough to import, but never required
+    from opentelemetry.sdk._logs import LogRecordProcessor as _LogRecordProcessor
+except Exception:  # noqa: BLE001 - pragma: no cover
+    _LogRecordProcessor = object  # type: ignore[assignment,misc]
 
 logger = logging.getLogger("docuaction.telemetry")
 
@@ -139,7 +144,17 @@ def _marks_error(name: str, attributes: Attributes) -> bool:
 
 
 class ErrorKeepingSampler(Sampler):
-    """Parent-based ratio sampler that never drops an error.
+    """Parent-based ratio sampler that never drops a span that is an error
+    WHEN IT STARTS.
+
+    Sampling is decided at span start from the initial attributes. A server
+    span learns its HTTP status only at its end, so a request that fails with
+    a 5xx is kept at the ratio, not always (independent review M2, 2026-09-16).
+    What IS always kept: spans created with an error marker, the delivery-job
+    tree (`docuaction.always_sample`), and every child of a sampled parent.
+    Operators who need every failed request keep the ratio at 1.0 - the DEV
+    volume makes that cheap - and rely on the redacted error LOG, which is
+    exported for every 5xx regardless of the trace decision.
 
     Decision order for every span:
       1. name/attributes mark an error, or `docuaction.always_sample` is set
@@ -330,16 +345,93 @@ def safe_attributes(attrs: Mapping[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def record_redacted_exception(current: trace.Span, exc: BaseException) -> None:
+    """An `exception` event carrying the class and a controlled message only.
+
+    The SDK's default `record_exception=True` exports `exception.message` and
+    the full `exception.stacktrace` verbatim; driver messages and stack frames
+    carry SQL parameters, connection strings and delivered values (review
+    finding M3, 2026-09-16). No stack trace is exported; it stays in the log.
+    """
+    try:
+        if not current.is_recording():
+            return
+        current.add_event("exception", attributes={
+            "exception.type": f"{type(exc).__module__}.{type(exc).__qualname__}",
+            "exception.message": safe_exception_text(exc, 512),
+            "exception.escaped": "True",
+        })
+    except Exception:  # noqa: BLE001 - never let telemetry break the caller
+        logger.debug("exception event not recorded", exc_info=True)
+
+
 @contextmanager
 def span(name: str, **attributes: Any) -> Iterator[trace.Span]:
     """`with telemetry.span("rce.stage.QUALITY", job_id=..., stage=...):`
 
     A no-op when telemetry is disabled. Exceptions propagate unchanged (the
-    span records them and is marked ERROR first).
+    span is marked ERROR and carries a REDACTED exception event first).
     """
     with get_tracer().start_as_current_span(
-            name, attributes=safe_attributes(attributes)) as current:
-        yield current
+            name, attributes=safe_attributes(attributes),
+            record_exception=False, set_status_on_exception=True) as current:
+        try:
+            yield current
+        except BaseException as exc:
+            record_redacted_exception(current, exc)
+            raise
+
+
+class RedactingLogRecordProcessor(_LogRecordProcessor):  # type: ignore[misc]
+    """Runs before the Azure Monitor log exporter.
+
+    The distro attaches an OpenTelemetry `LoggingHandler` to the `docuaction`
+    logger and exports the raw LogRecord - message, `extra` fields and the
+    exception - WITHOUT the JSON formatter's redaction that protects stdout
+    (review finding M4, 2026-09-16). This processor applies the same redaction
+    to the exported record, and withholds stack traces entirely: they stay in
+    the container log under the correlation id.
+    """
+
+    def on_emit(self, log_record) -> None:  # SDK >= 1.35 signature
+        self._scrub(getattr(log_record, "log_record", log_record))
+
+    def emit(self, log_data) -> None:  # older SDK signature
+        self._scrub(getattr(log_data, "log_record", log_data))
+
+    def shutdown(self) -> None:
+        return None
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return True
+
+    @staticmethod
+    def _scrub(record) -> None:
+        try:
+            body = getattr(record, "body", None)
+            if isinstance(body, str):
+                record.body = redact_text(body)
+            elif isinstance(body, (dict, list)):
+                record.body = redact(body)
+            attrs = getattr(record, "attributes", None)
+            if isinstance(attrs, MutableMapping):
+                was_immutable = getattr(attrs, "_immutable", None)
+                if was_immutable:
+                    attrs._immutable = False  # type: ignore[attr-defined]
+                try:
+                    redact_attributes(attrs)
+                    if "exception.stacktrace" in attrs:
+                        attrs["exception.stacktrace"] = "[withheld; see container log]"
+                    if "exception.message" in attrs:
+                        attrs["exception.message"] = redact_text(
+                            str(attrs["exception.message"]))[:512]
+                finally:
+                    if was_immutable is not None:
+                        attrs._immutable = was_immutable  # type: ignore[attr-defined]
+            elif isinstance(attrs, dict):
+                redact_attributes(attrs)
+        except Exception:  # noqa: BLE001 - never let a scrub break logging
+            logger.debug("log record redaction skipped", exc_info=True)
 
 
 # ── configuration ────────────────────────────────────────────────────────────
@@ -373,6 +465,7 @@ def configure_telemetry(app) -> Dict[str, Any]:
         configure_azure_monitor(
             resource=build_resource(),
             span_processors=[RedactingSpanProcessor()],
+            log_record_processors=[RedactingLogRecordProcessor()],
             # FastAPI is instrumented below on THIS app with the excluded urls;
             # the distro's global FastAPI patch would only catch apps created
             # later and would trace the health probes.

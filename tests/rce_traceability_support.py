@@ -80,6 +80,16 @@ async def rolled_back_db(db_required):
     session = AsyncSession(bind=connection,
                            join_transaction_mode="create_savepoint",
                            expire_on_commit=False)
+    # Hermetic against rows other modules committed to the shared database:
+    # the synthetic contract NPIs must not pre-exist on any entity (the unique
+    # index spans every status, and the create path skips a shared value).
+    # Removed inside the outer transaction, so it is rolled back with the rest.
+    from sqlalchemy import delete as _delete
+    await session.execute(_delete(reg.TefcaEntityIdentifier).where(
+        reg.TefcaEntityIdentifier.identifier_type == "npi",
+        reg.TefcaEntityIdentifier.identifier_value.in_(
+            (NPI_REGISTERED, NPI_VALID_OTHER, NPI_BAD_CHECKSUM))))
+    await session.flush()
     try:
         yield session
     finally:
@@ -165,6 +175,16 @@ async def seed_entity(db, *, oid: str, name: str, npi: Optional[str] = None,
         system_uri="urn:docuaction:tefca/identifier/rce-org-oid",
         is_primary=True, identifier_status="active"))
     if npi:
+        # Hermetic against rows left in a shared database (the acceptance
+        # harness persists the contract NPI, and idx_tefca_ident_unique spans
+        # every status): remove any row with this value inside the test
+        # transaction, which is rolled back afterwards.
+        from sqlalchemy import select as _select
+        for row in (await db.execute(_select(reg.TefcaEntityIdentifier).where(
+                reg.TefcaEntityIdentifier.identifier_type == "npi",
+                reg.TefcaEntityIdentifier.identifier_value == npi))).scalars():
+            await db.delete(row)
+        await db.flush()
         db.add(reg.TefcaEntityIdentifier(
             id=uuid.uuid4(), entity_id=entity_id, identifier_type="npi",
             identifier_value=npi, system_uri="http://hl7.org/fhir/sid/us-npi",

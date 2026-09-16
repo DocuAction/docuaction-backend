@@ -193,9 +193,52 @@ def _uuid():
     return postgresql.UUID(as_uuid=True)
 
 
+class TraceabilityOwnershipError(RuntimeError):
+    """An evidence table exists but is not owned by the migration role."""
+
+
+_EVIDENCE_TABLES = (
+    "rce_delivery_stage_events", "rce_disposition_events",
+    "rce_reconciliation_snapshots", "tefca_identifier_decision_events",
+    "rce_delivery_report_links",
+)
+
+
+def _check_existing_ownership() -> None:
+    """A pre-existing evidence table must belong to the role running this.
+
+    `_table_exists` skips creation of a table that is already there. If that
+    table was created by anyone else (a runtime create_all, a manual DDL), the
+    GRANTs below would be issued by a non-owner - PostgreSQL warns and does
+    nothing - and the append-only guarantee would silently not hold. Refuse.
+    """
+    if _offline():
+        return
+    bind = op.get_bind()
+    current = bind.execute(sa.text("select current_user")).scalar()
+    rows = bind.execute(
+        sa.text("select tablename, tableowner from pg_tables "
+                "where schemaname = current_schema() and tablename in :names")
+        .bindparams(sa.bindparam("names", expanding=True)),
+        {"names": list(_EVIDENCE_TABLES)}).all()
+    wrong = [f"{name} (owner {owner})" for name, owner in rows if owner != current]
+    view = bind.execute(
+        sa.text("select viewowner from pg_views where schemaname = current_schema() "
+                "and viewname = :v"), {"v": "rce_current_dispositions"}).scalar()
+    if view is not None and view != current:
+        wrong.append(f"rce_current_dispositions (view owner {view})")
+    if wrong:
+        raise TraceabilityOwnershipError(
+            "Refusing to continue: evidence objects exist that are not owned by the "
+            f"migration role {current!r}: {', '.join(wrong)}. The grants this revision "
+            "issues would be void. Transfer ownership (ALTER TABLE ... OWNER TO) or "
+            "drop the objects if they hold no evidence, then rerun.")
+
+
 def upgrade() -> None:
     role = _app_role()
     _check_references_privilege()
+    _check_existing_ownership()
 
     # ── rce_delivery_stage_events ────────────────────────────────────────────
     if not _table_exists("rce_delivery_stage_events"):

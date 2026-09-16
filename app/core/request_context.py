@@ -177,6 +177,14 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         request_id = accept_request_id(request.headers.get(REQUEST_ID_HEADER))
+        # Also on the request itself: Starlette's ServerErrorMiddleware runs
+        # OUTSIDE this middleware, so by the time the generic 500 handler
+        # executes the context variables are already reset. The handler reads
+        # the id from here (review finding M1, 2026-09-16).
+        try:
+            request.state.request_id = request_id
+        except Exception:  # noqa: BLE001
+            pass
         # When telemetry is enabled the OpenTelemetry server span is already
         # open (its middleware is outside this one) and its ids are the ones
         # App Insights indexes as operation_Id; the header is the fallback.

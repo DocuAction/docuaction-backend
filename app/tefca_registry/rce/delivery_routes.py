@@ -73,6 +73,8 @@ from __future__ import annotations
 
 import hashlib
 
+from sqlalchemy.exc import IntegrityError
+
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -932,11 +934,12 @@ async def dispositions_csv_route(
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     body = dispositions_csv(rows)
+    from app.reports.routes import download_headers
     return Response(
         content=body, media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition":
-                 f'attachment; filename="dispositions-{intake.id}.csv"',
-                 "X-Total-Rows": str(total), "X-Returned-Rows": str(len(rows))})
+        headers=download_headers(f"dispositions-{intake.id}.csv",
+                                 extra={"X-Total-Rows": str(total),
+                                        "X-Returned-Rows": str(len(rows))}))
 
 
 # ═══ exceptions ══════════════════════════════════════════════════════════════
@@ -1156,9 +1159,20 @@ async def post_issue_disposition(
                 actor=actor, corrected_value=body.corrected_value)
             path = "delivery_routes._fallback_apply_disposition"
     except curation.CorrectionRefused as exc:
+        await db.rollback()
         raise HTTPException(409, str(exc))
     except ValueError as exc:
+        # Includes identifier_decisions.IdentifierAlreadyRegistered (409) and
+        # the value/conflict refusals (422) from the decision gate.
+        await db.rollback()
+        from app.tefca_registry.rce import identifier_decisions as _idd
+        if isinstance(exc, _idd.IdentifierAlreadyRegistered):
+            raise HTTPException(409, str(exc))
         raise HTTPException(422, str(exc))
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(409, "A concurrent change was recorded for this record; "
+                                 "refresh and review the current state.")
 
     await _audit(db, "analyst_disposition", user, request, {
         "issue_id": str(issue.id), "issue_code": issue.issue_code,
@@ -1262,14 +1276,23 @@ async def post_identifier_decision(
 
     actor = getattr(user, "email", None) or "SYSTEM"
     actor_id = getattr(user, "id", None)
+    from sqlalchemy.exc import IntegrityError
     try:
         decided = await identifier_decisions.decide(
             db, entity_id=entity_uuid, identifier_type=body.identifier_type.strip().lower(),
             decision=decision, reason=body.reason.strip(),
             actor=actor, actor_id=actor_id, selected_value=body.selected_value,
             issue_id=_as_uuid(body.issue_id), source_record_id=_as_uuid(body.source_record_id))
+    except identifier_decisions.IdentifierAlreadyRegistered as exc:
+        await db.rollback()
+        raise HTTPException(409, str(exc))
     except ValueError as exc:
+        await db.rollback()
         raise HTTPException(422, str(exc))
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(409, "A concurrent decision was recorded for this "
+                                 "identifier; refresh and review the current state.")
 
     event = decided["event"]
     intake_id = _as_uuid(event.get("intake_id"))

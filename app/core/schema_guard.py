@@ -132,3 +132,20 @@ def schema_mutation_refusal_reason() -> str:
 
 def log_schema_mutation_skipped() -> None:
     logger.warning("%s", schema_mutation_refusal_reason())
+
+
+def create_all_except_migration_owned(sync_conn, metadata) -> list:
+    """`metadata.create_all` minus the append-only evidence tables.
+
+    Those tables are created by Alembic 20260917_delivery_traceability as the
+    migration role and granted to the runtime without DELETE. If startup
+    created them the runtime role would own them and the grants would be
+    meaningless (independent review finding F2, 2026-09-16). Returns the names
+    that were excluded, for the log line and for tests.
+    """
+    from app.tefca_registry.rce import traceability_models as tm
+
+    excluded = set(tm.MIGRATION_OWNED_TABLES)
+    tables = [t for t in metadata.sorted_tables if t.name not in excluded]
+    metadata.create_all(sync_conn, tables=tables)
+    return sorted(excluded & {t.name for t in metadata.sorted_tables})

@@ -522,6 +522,8 @@ DISPOSITION_CSV_COLUMNS = (
 
 
 def dispositions_csv(rows: Iterable[Dict[str, Any]]) -> str:
+    from app.reports.engine.csv_engine import neutralise_row
+
     """RFC 4180 CSV of the disposition rows, columns fixed by DISPOSITION_CSV_COLUMNS."""
     buf = io.StringIO()
     writer = csv.writer(buf, lineterminator="\r\n")
@@ -535,5 +537,5 @@ def dispositions_csv(rows: Iterable[Dict[str, Any]]) -> str:
             elif isinstance(value, dict):
                 value = str(value)
             out.append("" if value is None else value)
-        writer.writerow(out)
+        writer.writerow(neutralise_row(out))
     return buf.getvalue()
