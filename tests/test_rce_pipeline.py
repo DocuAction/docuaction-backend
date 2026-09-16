@@ -236,7 +236,9 @@ class TestQualityRules:
         ids = [rule.rule_id for rule in qr.RULES]
         duplicates = sorted({rid for rid in ids if ids.count(rid) > 1})
         assert not duplicates, f"duplicate rule_id(s): {duplicates}"
-        assert len(qr.RULE_BY_ID) == len(qr.RULES), (
+        # RULE_BY_ID also names the metadata-only rules (NPI-005/006/008/009,
+        # written by promotion and verification, never executed here).
+        assert len(qr.RULE_BY_ID) == len(qr.ALL_RULES) == len(qr.RULES) + len(qr.NON_QUALITY_RULES), (
             "RULE_BY_ID lost entries to deduplication — a duplicate rule_id "
             "exists that the list check above should have caught.")
 
@@ -265,7 +267,8 @@ class TestQualityRules:
         assert nxt, "every rule prefix in use must advertise a next free id"
 
         taken = {}
-        for rule in qr.RULES:
+        # ALL_RULES: the metadata-only NPI-005..009 are taken ids too.
+        for rule in qr.ALL_RULES:
             prefix, number = rule.rule_id.rsplit("-", 1)
             taken.setdefault(prefix, set()).add(int(number))
 
@@ -299,10 +302,17 @@ class TestQualityRules:
         assert findings("NPI-001", ctx(row())) == []
 
     def test_malformed_npi_requires_a_human(self):
+        # Rule set 1.2.0: a wrong-length value is NPI_LENGTH_INVALID on NPI-002
+        # (format and checksum are then not evaluated). Still HUMAN_REQUIRED,
+        # still never auto-repaired.
         result = findings("NPI-002", ctx(row(NPI="854565")))
+        assert result[0].issue_type == "NPI_LENGTH_INVALID"
+        assert result[0].severity == qr.HIGH
         assert result[0].correction_authority == qr.HUMAN_REQUIRED
         assert result[0].suggested_value is None, \
             "an identity field is never auto-repaired"
+        assert findings("NPI-004", ctx(row(NPI="854565"))) == []
+        assert findings("NPI-003", ctx(row(NPI="854565"))) == []
 
     def test_two_npis_in_one_cell_is_not_split_automatically(self):
         result = findings("NPI-002", ctx(row(NPI="1780787176, 1770559767")))

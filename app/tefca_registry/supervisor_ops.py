@@ -454,6 +454,7 @@ async def work_queue(db, *, queue_source: Optional[str] = None,
                      work_reason: Optional[str] = None,
                      state: Optional[str] = None,
                      assignee: Optional[uuid.UUID] = None,
+                     intake_id: Optional[Any] = None,
                      unassigned_only: bool = False,
                      qhin_entity_id: Optional[uuid.UUID] = None,
                      limited_only: bool = False,
@@ -491,6 +492,14 @@ async def work_queue(db, *, queue_source: Optional[str] = None,
         stmt = stmt.where(reg.ReviewRecord.assigned_to_user_id.is_(None))
     if assignee is not None:
         stmt = stmt.where(reg.ReviewRecord.assigned_to_user_id == assignee)
+    if intake_id is not None:
+        # One delivery's work. The DQ bridge stamps `source_intake_id` on every
+        # case it creates (dq_review_bridge.build_cases), so a delivery's
+        # exceptions can be worked as one queue (contract section 10:
+        # queue_source=RCE_DQ_HUMAN_REQUIRED&intake_id=...).
+        stmt = stmt.where(
+            reg.ReviewRecord.verification_results["source_intake_id"].astext
+            == str(intake_id))
     if reportable is True:
         stmt = stmt.where(reg.ReviewRecord.reportable_at.isnot(None))
     if reportable is False:

@@ -221,6 +221,7 @@ def _dimension_identity(
     items: List[EvidenceItem] = []
 
     # Primary authority: NPPES.
+    nppes_review_reason = "NPI was not found in NPPES."
     if not _ok(nppes):
         items.append(EvidenceItem(
             dimension=dim, source="NPPES", disposition=Disposition.UNAVAILABLE.value,
@@ -232,6 +233,13 @@ def _dimension_identity(
     else:
         nppes_data = nppes.data or {}
         found = bool(nppes_data.get("found"))
+        # Found is not the same as active. NPPES reports a deactivated NPI with
+        # a status / deactivation date; that is a finding of its own
+        # (NPI_DEACTIVATED), distinct from not found and from unavailable.
+        deactivated = found and (
+            str(nppes_data.get("status") or "").upper() in ("DEACTIVATED", "D")
+            or (bool(nppes_data.get("deactivation_date"))
+                and not nppes_data.get("reactivation_date")))
         submitted_name = entity.get("name") or ""
         name_match = (
             bool(submitted_name) and bool(nppes_data.get("legal_name"))
@@ -239,7 +247,9 @@ def _dimension_identity(
         )
         items.append(EvidenceItem(
             dimension=dim, source="NPPES",
-            disposition=Disposition.PASS.value if found else Disposition.NOT_FOUND.value,
+            disposition=(Disposition.REVIEW.value if deactivated
+                         else Disposition.PASS.value if found
+                         else Disposition.NOT_FOUND.value),
             source_record_identifier=nppes_data.get("npi"),
             query_timestamp=nppes.query_timestamp,
             dataset_version_anchor=nppes.api_version,
@@ -252,11 +262,19 @@ def _dimension_identity(
                                "nppes": nppes_data.get("legal_name"), "result": "DIFFERS"}]
                              if found and submitted_name and not name_match else []),
             original_values={k: nppes_data.get(k) for k in
-                             ("npi", "legal_name", "enumeration_type", "taxonomy", "taxonomy_code", "status")},
-            rule_applied="NPPES_PRIMARY_IDENTITY_AUTHORITY",
-            note=None if found else "NPI not present in NPPES.",
+                             ("npi", "legal_name", "enumeration_type", "taxonomy",
+                              "taxonomy_code", "status", "deactivation_date",
+                              "reactivation_date")},
+            rule_applied=("NPPES_NPI_DEACTIVATED" if deactivated
+                          else "NPPES_PRIMARY_IDENTITY_AUTHORITY"),
+            note=(("NPI deactivated in NPPES"
+                   + (f" on {nppes_data.get('deactivation_date')}"
+                      if nppes_data.get("deactivation_date") else "") + ".")
+                  if deactivated else None if found else "NPI not present in NPPES."),
         ))
-        nppes_disposition = Disposition.PASS if found else Disposition.REVIEW
+        nppes_disposition = Disposition.PASS if found and not deactivated else Disposition.REVIEW
+        nppes_review_reason = ("NPI is deactivated in NPPES." if deactivated
+                               else "NPI was not found in NPPES.")
 
     # Corroboration: PECOS. Explicitly labelled so it can never read as primary.
     alignment = _npi_alignment(rce_npi, nppes, pecos)
@@ -308,7 +326,7 @@ def _dimension_identity(
         requires_analyst = True
     elif nppes_disposition == Disposition.REVIEW:
         disposition = Disposition.REVIEW
-        rationale = "NPI was not found in NPPES."
+        rationale = nppes_review_reason
         requires_analyst = True
     elif alignment["unresolved"]:
         disposition = Disposition.REVIEW

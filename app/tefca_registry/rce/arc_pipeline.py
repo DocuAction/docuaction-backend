@@ -311,8 +311,19 @@ async def _rule_set(db) -> List[Dict[str, Any]]:
     count = int((await db.execute(
         select(func.count()).select_from(reg.ReviewRule))).scalar() or 0)
     if count == 0:
-        await ensure_seed_rules(db)
-        await ensure_rules_v2(db)
+        # First-time seeding under concurrency: two callers that both read
+        # count == 0 would both insert RULE-001 and one would die on the
+        # (rule_code, version) unique index. Serialise the seed on a
+        # transaction-scoped advisory lock and re-check inside it, exactly as
+        # review-id allocation does (found 2026-09-17 when the concurrency
+        # tests first ran against an empty rule table).
+        await db.execute(text("select pg_advisory_xact_lock(hashtext(:k))"),
+                         {"k": "review_rules_seed"})
+        count = int((await db.execute(
+            select(func.count()).select_from(reg.ReviewRule))).scalar() or 0)
+        if count == 0:
+            await ensure_seed_rules(db)
+            await ensure_rules_v2(db)
         await db.commit()
     rows = (await db.execute(
         select(reg.ReviewRule).where(reg.ReviewRule.is_active.is_(True)))).scalars().all()
@@ -321,6 +332,14 @@ async def _rule_set(db) -> List[Dict[str, Any]]:
         "priority": r.priority, "conditions": r.conditions,
         "description": r.description, "version": r.version,
     } for r in rows]
+
+
+def _entity_npi(entity) -> Optional[str]:
+    """The NPI on a resolved (FHIR-shaped) entity, or None."""
+    for ident in (entity or {}).get("identifier") or []:
+        if "us-npi" in str(ident.get("system") or ""):
+            return (ident.get("value") or "").strip() or None
+    return None
 
 
 async def verify_and_classify(
@@ -379,6 +398,18 @@ async def verify_and_classify(
 
         verification_results = dimensions_to_verification_results(evidence)
         classification = classifier.classify(verification_results, rules=rules)
+
+        # NPPES outcome to the delivery's issue ledger (NPI-005/006/009). One
+        # open issue per outcome per record; a repeat cycle adds nothing.
+        if entity_uuid is not None:
+            try:
+                from app.tefca_registry.rce import verification_findings as vf
+                await vf.record_from_evidence(
+                    db, entity_id=entity_uuid,
+                    npi=_entity_npi(entity), evidence=evidence)
+            except Exception as exc:  # noqa: BLE001 — ledger must not fail a cycle
+                logger.error("NPI verification outcome not recorded for %s: %s",
+                             entity_uuid, type(exc).__name__, exc_info=True)
 
         review_id = await _allocate_review_id(db)
         tier = BUCKET_TO_TIER.get(classification.bucket, 3)

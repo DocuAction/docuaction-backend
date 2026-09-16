@@ -341,7 +341,11 @@ class TestDeliveryRunner:
 
         from app.tefca_registry.rce import delivery_runner
 
-        source = inspect.getsource(delivery_runner._run_stages)
+        # 2026-09-17: the runner is split into the Area 1 part (`_run_stages`)
+        # and the recoverable stages (`_run_after_area1`); together they settle
+        # the session on every failure path, as before.
+        source = (inspect.getsource(delivery_runner._run_stages)
+                  + inspect.getsource(delivery_runner._run_after_area1))
         assert source.count("await _settle(db)") >= 3
 
 

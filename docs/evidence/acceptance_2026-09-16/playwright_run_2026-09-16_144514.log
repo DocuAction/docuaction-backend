@@ -1,0 +1,21 @@
+
+> docuaction-frontend@1.1.0 test:e2e
+> playwright test --config playwright.config.mjs
+
+
+Running 11 tests using 1 worker
+
+  ok  1 tests\e2e\deliveries.spec.mjs:31:1 › direct navigation to the job-keyed detail URL renders the delivery (1.9s)
+  ok  2 tests\e2e\deliveries.spec.mjs:41:1 › reload keeps the job and the active tab (1.3s)
+  ok  3 tests\e2e\deliveries.spec.mjs:50:1 › the URL without a trailing slash reaches the same page (669ms)
+  ok  4 tests\e2e\deliveries.spec.mjs:58:1 › tabs are keyboard operable and the tab is mirrored into the URL (1.1s)
+  ok  5 tests\e2e\deliveries.spec.mjs:71:1 › list -> processed delivery -> Back restores the list state (1.8s)
+  ok  6 tests\e2e\deliveries.spec.mjs:89:1 › a FAILED delivery opens from the row (Enter) and states the failure (938ms)
+  ok  7 tests\e2e\deliveries.spec.mjs:104:1 › a missing job and an ambiguous intake are explained (1.4s)
+  ok  8 tests\e2e\deliveries.spec.mjs:112:1 › the deliveries list has no WCAG A/AA axe violations (1.8s)
+  ok  9 tests\e2e\deliveries.spec.mjs:119:1 › the delivery detail page has no WCAG A/AA axe violations (1.4s)
+  -  10 tests\e2e\live-smoke.spec.mjs:62:1 › live: list, explicit link, detail, exceptions, failed job, request id
+  -  11 tests\e2e\live-smoke.spec.mjs:118:1 › live: viewer sees gated evidence blocks, not values
+
+  2 skipped
+  9 passed (14.8s)

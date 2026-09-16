@@ -72,6 +72,18 @@ class SamplingRefused(RuntimeError):
     """A sampling act was refused, and the reason is stated."""
 
 
+#: Eligibility exclusion for an entity with an unresolved BLOCKING
+#: post-promotion finding (pre-merge review Decision 2 follow-up, 2026-09-16).
+#: The record is not held, hidden, resolved or rewritten by this - it is only
+#: not in the frame of a NEW draw until the finding is resolved. Historical
+#: samples are never touched: `finalize_plan` never redraws an existing plan.
+EXCLUSION_REVIEW_REQUIRED = "REVIEW_REQUIRED"
+REVIEW_REQUIRED_REASON = ("unresolved blocking post-promotion finding "
+                          "(verification_status=in_review); excluded from new "
+                          "sample draws until resolved through the analyst/QA "
+                          "workflow. Record, findings and history unchanged.")
+
+
 def plan_key(intake_id: Any, review_type: str, *, confidence: float,
              margin: float, proportion: float, use_fpc: bool,
              include_held: bool) -> str:
@@ -137,6 +149,22 @@ async def resolve_qhin_strata(db, intake_id, *, include_held: bool = False
     for child, parent in edges:
         by_child.setdefault(child, []).append(parent)
 
+    # Entities carrying an UNRESOLVED blocking post-promotion finding
+    # (verification_status = "in_review", set only by
+    # `rce.post_promotion_verification.record_finding` and cleared only by
+    # its resolve path after the authorised analyst/QA workflow) are not
+    # eligible for a NEW draw. Same subquery discipline as the edge query.
+    # Reported as UNRESOLVED with a reason, never filtered away silently: the
+    # entity stays in the ledger, the queue, reconciliation and the reports.
+    from app.tefca_registry.rce.post_promotion_verification import (
+        REVIEW_REQUIRED_STATUS)
+
+    review_required = {
+        row[0] for row in (await db.execute(
+            select(reg.TefcaRegEntity.id).where(
+                reg.TefcaRegEntity.id.in_(promoted),
+                reg.TefcaRegEntity.verification_status == REVIEW_REQUIRED_STATUS))).all()}
+
     eligible: List[Dict[str, Any]] = []
     unresolved: List[Dict[str, Any]] = []
     for entity_id, org_oid, record_status in rows:
@@ -159,8 +187,19 @@ async def resolve_qhin_strata(db, intake_id, *, include_held: bool = False
                                "reason": "HELD; eligibility is an open ONC "
                                          "question and is excluded by default"})
             continue
+        if entity_id in review_required:
+            unresolved.append({**unit, "qhin": str(parents[0]),
+                               "exclusion": EXCLUSION_REVIEW_REQUIRED,
+                               "reason": REVIEW_REQUIRED_REASON})
+            continue
         eligible.append({**unit, "qhin": str(parents[0])})
     return eligible, unresolved
+
+
+def review_required_exclusions(unresolved: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The units `resolve_qhin_strata` kept out of the frame because of an
+    unresolved blocking post-promotion finding."""
+    return [u for u in unresolved if u.get("exclusion") == EXCLUSION_REVIEW_REQUIRED]
 
 
 async def preview_plan(db, intake_id, *, review_type: str = "quarterly",
@@ -202,6 +241,7 @@ async def preview_plan(db, intake_id, *, review_type: str = "quarterly",
         "qhin_strata": len(strata),
         "eligible_population": len(eligible),
         "unresolved_units": len(unresolved),
+        "excluded_review_required": len(review_required_exclusions(unresolved)),
         "total_sample_size": sum(s["sample_size"] for s in strata.values()),
         "per_qhin": dict(sorted(strata.items())),
         "note": ("Margin of error and stratification remain subject to COR "
@@ -250,6 +290,7 @@ async def finalize_plan(db, intake_id, *, review_type: str = "quarterly",
 
     eligible, unresolved = await resolve_qhin_strata(
         db, intake_id, include_held=include_held)
+    excluded = review_required_exclusions(unresolved)
     if not eligible:
         raise SamplingRefused(
             f"Delivery {intake_id} has no eligible population to sample under "
@@ -267,7 +308,8 @@ async def finalize_plan(db, intake_id, *, review_type: str = "quarterly",
                        "selection_algorithm": SELECTION_ALGORITHM,
                        "source_intake_id": str(intake_id),
                        "include_held": include_held,
-                       "unresolved_units": len(unresolved)})
+                       "unresolved_units": len(unresolved),
+                       "excluded_review_required": len(excluded)})
 
     sample = reg.ReviewSample(
         id=uuid.uuid4(),
@@ -309,10 +351,26 @@ async def finalize_plan(db, intake_id, *, review_type: str = "quarterly",
                   "qhin_strata": len(result.strata_distribution),
                   "selection_algorithm": SELECTION_ALGORITHM,
                   "random_seed": result.random_seed,
-                  "unresolved_units": len(unresolved)})
+                  "unresolved_units": len(unresolved),
+                  "excluded_review_required": len(excluded)})
+    if excluded:
+        # The eligibility decision itself, as its own audit fact: which
+        # entities were kept out of THIS plan's frame and why. One row per
+        # plan (ids listed), not one per entity - the per-entity finding and
+        # its work item are already audited where they were recorded.
+        reg_audit.record(
+            db, "sampling_eligibility_excluded", None,
+            actor_id=actor_id, actor_email=actor,
+            metadata={"sample_id": str(sample.id), "plan_key": key,
+                      "source_intake_id": str(intake_id),
+                      "exclusion": EXCLUSION_REVIEW_REQUIRED,
+                      "reason": REVIEW_REQUIRED_REASON,
+                      "entity_ids": [str(u["entity_id"]) for u in excluded],
+                      "count": len(excluded)})
 
     return {**await get_plan(db, sample.id), "already_finalized": False,
-            "unresolved_units": len(unresolved)}
+            "unresolved_units": len(unresolved),
+            "excluded_review_required": len(excluded)}
 
 
 async def get_plan(db, sample_id) -> Dict[str, Any]:

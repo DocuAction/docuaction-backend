@@ -756,13 +756,27 @@ class TestReportTypes:
 
         assert "data_quality" in generator.AVAILABLE_TYPES
         assert "intake" in generator.AVAILABLE_TYPES
-        assert set(generator.RCE_TYPES) == {"data_quality", "intake"}
+        assert "delivery_processing" in generator.AVAILABLE_TYPES
+        assert set(generator.RCE_TYPES) == {"data_quality", "intake", "delivery_processing"}
 
     @pytest.mark.asyncio
     async def test_all_available_types_render(self, populated):
+        """Every non-delivery type renders from the populated stub.
+
+        UPDATED 2026-09-17: the RCE types describe ONE named delivery and
+        refuse to run without parameters.job_id / intake_id (there is no
+        newest-delivery default any more). Their rendering is covered against
+        a synthetic delivery in test_delivery_processing_report.py; here it is
+        pinned that they refuse loudly rather than render the wrong delivery.
+        """
         import app.reports.generator as generator
 
         for report_type in generator.AVAILABLE_TYPES:
+            if report_type in generator.RCE_TYPES:
+                with pytest.raises(generator.ReportParameterError) as excinfo:
+                    await _generate(populated, report_type)
+                assert excinfo.value.code == "DELIVERY_IDENTIFIER_REQUIRED"
+                continue
             result = await _generate(populated, report_type)
             assert result["html"].startswith("<!DOCTYPE html>")
             assert result["accessibility"]["automated_checks_passed"], \
@@ -804,6 +818,8 @@ class TestReportAPI:
             "/api/reports/{report_id}/docx",
             "/api/reports/{report_id}/release",
             "/api/reports/{report_id}/package",
+            # 2026-09-17 remediation — reports linked to one delivery job
+            "/api/reports/by-delivery/{job_id}",
             # Phase 7.5B — the contract's report families
             "/api/reports/sow",
             "/api/reports/sow/{deliverable}",
@@ -835,14 +851,17 @@ class TestReportAPI:
                 f"{path} answered {response.status_code} unauthenticated; reports "
                 f"carry entity names and review outcomes and are never public")
 
-    def test_generate_requires_contributor_not_viewer(self):
-        """Generating a report creates an artefact and a provenance record, so
-        it sits above read-only access."""
+    def test_generate_requires_reviewer_not_viewer(self):
+        """Generating a report returns the report's content in the same
+        response (dataset or rendered bytes), so it needs the same floor as a
+        download -- raised from `contributor` to `reviewer` on 2026-09-16
+        (pre-merge review Decision 1); see `test_report_authorization.py` for
+        the end-to-end behavioural proof."""
         import inspect
         from app.reports import routes
 
         source = inspect.getsource(routes.generate)
-        assert 'require_role("contributor")' in source
+        assert 'require_role_audited("reviewer"' in source
         assert 'require_role("viewer")' in inspect.getsource(routes.list_reports)
 
     def test_engine_health_reports_pdf_availability(self):

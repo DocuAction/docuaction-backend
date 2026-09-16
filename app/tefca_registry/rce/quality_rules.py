@@ -47,7 +47,7 @@ from app.tefca_registry.rce.field_map import (
     SUSPECTED_PURPOSE_VARIANTS,
 )
 
-RULE_SET_VERSION = "1.1.0"
+RULE_SET_VERSION = "1.2.0"
 
 # ── categories ───────────────────────────────────────────────────────────────
 
@@ -114,6 +114,11 @@ class Rule:
     #: (record_context) -> list of Findings. Pure and deterministic.
     evaluate: Callable[["RecordContext"], List[Finding]]
     default_severity: str = MEDIUM
+    #: Where the rule fires. QUALITY rules are executed by the quality engine
+    #: over Area 1; VERIFICATION and PROMOTION rules are metadata for findings
+    #: written by later stages (NPPES outcomes, identifier conflicts) so that
+    #: the one ledger can name their rule id, version and severity.
+    stage: str = "QUALITY"
 
     def severity(self) -> str:
         return SEVERITY_OVERRIDES.get(self.rule_id, self.default_severity)
@@ -230,15 +235,67 @@ def _id_006(ctx: RecordContext) -> List[Finding]:
 
 
 # ── NPI ──────────────────────────────────────────────────────────────────────
+#
+# RULE SET 1.2.0 — ONE PRIMARY FINDING PER VALUE
+# ─────────────────────────────────────────────
+# Order of evaluation: applicability → presence → length → numeric format →
+# Luhn (80840). A value that fails length is not evaluated for format or
+# checksum; a value that fails format is not evaluated for checksum. Each rule
+# below guards on the stages before it, so the engine — which executes the rules
+# independently — still produces exactly one primary NPI finding per value.
+#
+# Historical rows written under 1.1.0 keep their issue types; the mapping to the
+# 1.2.0 vocabulary is `LEGACY_ISSUE_TYPES`.
+
+NPI_FORMAT = re.compile(r"^[0-9]{10}$")
+
+#: Issue types written by 1.0.0/1.1.0 and what they became in 1.2.0. Existing
+#: rows are never rewritten; readers use this to present both generations in
+#: one vocabulary.
+LEGACY_ISSUE_TYPES: Dict[str, List[str]] = {
+    "NPI_MALFORMED": ["NPI_LENGTH_INVALID", "NPI_FORMAT_INVALID"],
+    "NPI_CHECK_DIGIT_FAILED": ["NPI_CHECKSUM_INVALID"],
+}
+
+#: Organisation classes that can be expected to hold an NPI at all.
+_NPI_BEARING_ORG_TYPES = frozenset({"Participant", "Subparticipant"})
+
+
+def npi_required(ctx: RecordContext) -> bool:
+    """Does this record's profile REQUIRE an NPI?
+
+    Required when the record is a Participant or Subparticipant AND its
+    `hl7orgrole` explicitly indicates a provider organisation — that is, the
+    role is populated and is not one of `NON_PROVIDER_HL7_ROLES` (payer,
+    agency, HIE/HIO).
+
+    An EMPTY `hl7orgrole` does not impose the requirement. The field is
+    populated on 0.25% of the profiled delivery, and a field that sparse must
+    not create requirements (the same principle BUS-001 records): 19.45% of
+    delivered organisations carry no NPI, and most of them — networks,
+    clearinghouses, public-health agencies — have no reason to. Absence of an
+    NPI on such a record is a fact (NPI_NOT_SUPPLIED, INFORMATIONAL), never a
+    failure. This predicate is the single place that decision lives.
+    """
+    if ctx.get("sequoiaorgtype") not in _NPI_BEARING_ORG_TYPES:
+        return False
+    role = ctx.get("hl7orgrole")
+    return bool(role) and role not in NON_PROVIDER_HL7_ROLES
+
 
 def _npi_001(ctx: RecordContext) -> List[Finding]:
-    """A missing NPI is a FACT, never a failure.
-
-    19.45% of the delivered population carries none. Whether Medicare evidence
-    applies is decided by the applicability engine in D2, not here.
-    """
+    """Presence. Required by the profile → HIGH; otherwise a recorded fact."""
     if ctx.get("NPI"):
         return []
+    if npi_required(ctx):
+        return [Finding(
+            "NPI-001", "NPI_REQUIRED", HIGH,
+            f"No NPI supplied, and the record's profile requires one: "
+            f"sequoiaorgtype={ctx.get('sequoiaorgtype')!r} with "
+            f"hl7orgrole={ctx.get('hl7orgrole')!r} indicates a provider "
+            f"organisation. Held for analyst determination; an NPI is never "
+            f"inferred or looked up on the organisation's behalf.",
+            HUMAN_REQUIRED, field_name="NPI")]
     return [Finding(
         "NPI-001", "NPI_NOT_SUPPLIED", INFO,
         "No NPI supplied. This is legitimate for a large share of TEFCA "
@@ -249,31 +306,48 @@ def _npi_001(ctx: RecordContext) -> List[Finding]:
 
 
 def _npi_002(ctx: RecordContext) -> List[Finding]:
+    """Length. A comma-separated cell is a multi-value cell, not a long NPI."""
     value = ctx.get("NPI")
     if not value:
         return []
-    findings: List[Finding] = []
     if "," in value:
-        findings.append(Finding(
+        return [Finding(
             "NPI-002", "MULTIPLE_NPI_IN_ONE_FIELD", HIGH,
             f"The NPI field holds more than one value ({value!r}). Splitting it "
             f"automatically would assert which NPI belongs to this entity — an "
             f"identity decision. Held for analyst determination.",
             HUMAN_REQUIRED, field_name="NPI", original_value=value,
-            suggested_confidence="LOW"))
-    elif len(value) != 10 or not value.isdigit():
-        findings.append(Finding(
-            "NPI-002", "NPI_MALFORMED", HIGH,
-            f"NPI {value!r} is not 10 digits (length {len(value)}). Preserved "
-            f"unaltered; an NPI is an identity field and is never repaired "
-            f"automatically.",
-            HUMAN_REQUIRED, field_name="NPI", original_value=value))
-    return findings
+            suggested_confidence="LOW")]
+    if len(value) != 10:
+        return [Finding(
+            "NPI-002", "NPI_LENGTH_INVALID", HIGH,
+            f"NPI {value!r} is {len(value)} characters; an NPI is exactly 10 "
+            f"digits. Preserved unaltered; an NPI is an identity field and is "
+            f"never repaired automatically. Format and check digit were not "
+            f"evaluated because the length is wrong.",
+            HUMAN_REQUIRED, field_name="NPI", original_value=value)]
+    return []
+
+
+def _npi_004(ctx: RecordContext) -> List[Finding]:
+    """Numeric format, evaluated only on a value of the right length."""
+    value = ctx.get("NPI")
+    if not value or "," in value or len(value) != 10:
+        return []
+    if NPI_FORMAT.match(value):
+        return []
+    return [Finding(
+        "NPI-004", "NPI_FORMAT_INVALID", HIGH,
+        f"NPI {value!r} is 10 characters but is not 10 digits (pattern "
+        f"^[0-9]{{10}}$). Preserved unaltered; the check digit was not "
+        f"evaluated because the value is not numeric.",
+        HUMAN_REQUIRED, field_name="NPI", original_value=value)]
 
 
 def _npi_003(ctx: RecordContext) -> List[Finding]:
+    """Luhn check digit with the CMS 80840 prefix, on a well-formed value only."""
     value = ctx.get("NPI")
-    if not value or len(value) != 10 or not value.isdigit():
+    if not value or not NPI_FORMAT.match(value):
         return []
     try:
         from app.services.npi_validator import validate_npi
@@ -283,11 +357,16 @@ def _npi_003(ctx: RecordContext) -> List[Finding]:
     if ok:
         return []
     return [Finding(
-        "NPI-003", "NPI_CHECK_DIGIT_FAILED", MEDIUM,
+        "NPI-003", "NPI_CHECKSUM_INVALID", HIGH,
         f"NPI {value} fails the CMS check digit ({message}). The value is "
-        f"preserved; NPPES remains the identity authority and will be consulted "
-        f"during verification.",
+        f"preserved and is NOT promoted as an identifier; NPPES remains the "
+        f"identity authority. Held for analyst determination.",
         HUMAN_REQUIRED, field_name="NPI", original_value=value)]
+
+
+def _not_a_quality_rule(ctx: RecordContext) -> List[Finding]:
+    """Metadata-only rules are never executed over Area 1."""
+    return []
 
 
 # ── REQ — required fields ────────────────────────────────────────────────────
@@ -682,9 +761,13 @@ RULES: Tuple[Rule, ...] = (
     Rule("ID-005", CAT_IDENTIFIER, "1.0.0", "TEFCAID present", _id_005, HIGH),
     Rule("ID-006", CAT_IDENTIFIER, "1.0.0",
          "TEFCAID shared across records", _id_006, INFO),
-    Rule("NPI-001", CAT_NPI, "1.0.0", "NPI supplied", _npi_001, INFO),
-    Rule("NPI-002", CAT_NPI, "1.0.0", "NPI well-formed", _npi_002, HIGH),
-    Rule("NPI-003", CAT_NPI, "1.0.0", "NPI check digit", _npi_003, MEDIUM),
+    Rule("NPI-001", CAT_NPI, "1.2.0", "NPI supplied (required by profile, "
+         "else recorded)", _npi_001, INFO),
+    Rule("NPI-002", CAT_NPI, "1.2.0", "NPI length (and single value)", _npi_002,
+         HIGH),
+    Rule("NPI-004", CAT_NPI, "1.2.0", "NPI numeric format", _npi_004, HIGH),
+    Rule("NPI-003", CAT_NPI, "1.2.0", "NPI check digit (Luhn 80840)", _npi_003,
+         HIGH),
     Rule("REQ-001", CAT_REQUIRED, "1.0.0",
          "sequoiaorgtype present and known", _req_001, CRITICAL),
     Rule("REQ-002", CAT_REQUIRED, "1.0.0", "Name present", _req_002, CRITICAL),
@@ -722,7 +805,51 @@ RULES: Tuple[Rule, ...] = (
          "Participant parent is its QHIN", _bus_003, INFO),
 )
 
-RULE_BY_ID: Dict[str, Rule] = {rule.rule_id: rule for rule in RULES}
+#: Rules that are NOT executed by the quality engine. Their findings are
+#: written by promotion (NPI-008) and by verification (NPI-005/006/009) into the
+#: same `rce_issues` ledger, and the ledger needs their id, version and severity
+#: from one place. `stage` says which stage writes them.
+NON_QUALITY_RULES: Tuple[Rule, ...] = (
+    Rule("NPI-005", CAT_NPI, "1.2.0", "NPI not found in NPPES",
+         _not_a_quality_rule, MEDIUM, stage="VERIFICATION"),
+    Rule("NPI-006", CAT_NPI, "1.2.0", "NPI deactivated in NPPES",
+         _not_a_quality_rule, HIGH, stage="VERIFICATION"),
+    Rule("NPI-008", CAT_NPI, "1.2.0",
+         "Delivered identifier differs from the registered value",
+         _not_a_quality_rule, HIGH, stage="PROMOTION"),
+    Rule("NPI-009", CAT_NPI, "1.2.0", "NPI verification source unavailable",
+         _not_a_quality_rule, INFO, stage="VERIFICATION"),
+)
+
+#: Every rule the ledger can name: executed and metadata-only.
+ALL_RULES: Tuple[Rule, ...] = RULES + NON_QUALITY_RULES
+
+RULE_BY_ID: Dict[str, Rule] = {rule.rule_id: rule for rule in ALL_RULES}
+
+#: issue_type -> (rule_id, severity, correction_authority) for findings written
+#: outside the quality engine. One vocabulary, declared once.
+NON_QUALITY_ISSUE_TYPES: Dict[str, Tuple[str, str, str]] = {
+    "NPI_NOT_FOUND": ("NPI-005", MEDIUM, HUMAN_REQUIRED),
+    # QA_REQUIRED (2026-09-18, pre-merge review Decision 2): NPI_DEACTIVATED is
+    # written ONLY by a post-promotion verification cycle (never pre-promotion
+    # — see verification_findings.py's own docstring), so raising its
+    # authority here cannot affect any pre-promotion path. A confirmed
+    # deactivation is one of the three named BLOCKING triggers; QA_REQUIRED
+    # gives it curation.transition_issue's existing independent-QA gate for
+    # free, with no new gate to write or trust.
+    "NPI_DEACTIVATED": ("NPI-006", HIGH, QA_REQUIRED),
+    "NPI_EXISTING_VALUE_CONFLICT": ("NPI-008", HIGH, HUMAN_REQUIRED),
+    "IDENTIFIER_EXISTING_VALUE_CONFLICT": ("NPI-008", HIGH, HUMAN_REQUIRED),
+    "NPI_VERIFICATION_UNAVAILABLE": ("NPI-009", INFO, NO_CORRECTION),
+    # Added 2026-09-18, pre-merge review Decision 2. Distinct issue_type
+    # strings from the pre-promotion identifier-conflict types above, so a
+    # query can always tell which regime wrote a given row; QA_REQUIRED for
+    # the same reason as NPI_DEACTIVATED. Written only by
+    # `post_promotion_verification.py`, only against an ALREADY-promoted
+    # record (`canonical_entity_id` set) — never by promotion's own drain.
+    "INVALID_ACTIVE_IDENTIFIER": ("NPI-003", HIGH, QA_REQUIRED),
+    "MATERIAL_IDENTIFIER_CONFLICT": ("NPI-008", HIGH, QA_REQUIRED),
+}
 
 #: Rules whose findings may ever be applied without a human. Enforced in
 #: `curation.py`; listed here so the set is reviewable in one place.
@@ -760,7 +887,7 @@ def _assert_rule_ids_unique() -> None:
     reading this line — it is derived, this note is not.
     """
     seen: Dict[str, int] = {}
-    for rule in RULES:
+    for rule in RULES + NON_QUALITY_RULES:
         seen[rule.rule_id] = seen.get(rule.rule_id, 0) + 1
     duplicates = sorted(rid for rid, n in seen.items() if n > 1)
     if duplicates:
@@ -774,7 +901,7 @@ def _assert_rule_ids_unique() -> None:
 def next_available_rule_ids() -> Dict[str, str]:
     """The next unused id per category prefix. Derived, never hand-maintained."""
     highest: Dict[str, int] = {}
-    for rule in RULES:
+    for rule in RULES + NON_QUALITY_RULES:
         prefix, _, number = rule.rule_id.rpartition("-")
         if prefix and number.isdigit():
             highest[prefix] = max(highest.get(prefix, 0), int(number))

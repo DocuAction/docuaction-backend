@@ -121,19 +121,20 @@ def test_every_download_response_in_the_router_uses_the_helper():
 
     import app.reports.routes as routes
 
-    tree = ast.parse(io.open("app/reports/routes.py", encoding="utf-8").read())
     offenders = []
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                and node.func.id == "Response"):
-            continue
-        for keyword in node.keywords:
-            if keyword.arg != "headers":
+    for path in ("app/reports/routes.py", "app/tefca_registry/rce/delivery_routes.py"):
+        tree = ast.parse(io.open(path, encoding="utf-8").read())
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "Response"):
                 continue
-            # A headers= that is a literal dict is a response building its own
-            # security headers by hand.
-            if isinstance(keyword.value, ast.Dict):
-                offenders.append(node.lineno)
+            for keyword in node.keywords:
+                if keyword.arg != "headers":
+                    continue
+                # A headers= that is a literal dict is a response building its
+                # own security headers by hand.
+                if isinstance(keyword.value, ast.Dict):
+                    offenders.append(f"{path}:{node.lineno}")
     assert not offenders, (
         f"Response(headers=<literal dict>) at line(s) {offenders} — a download "
         f"is constructing its own headers instead of using download_headers()")
@@ -269,3 +270,62 @@ def test_the_store_refuses_a_locator_that_leaves_the_root(store):
                     "local://a/1/.hidden"):
         with pytest.raises(ArtifactNotFound):
             store._resolve(hostile)
+
+
+# ═══ missing bytes, failed downloads, the role floor (2026-09-16) ═══════════
+#
+# The download used to know two outcomes: served, or 500. A registered artifact
+# whose blob or file had been removed fell into the integrity branch — the
+# store's ArtifactNotFound subclasses RuntimeError — and answered as a server
+# fault, unaudited. Three things hold now, pinned on the parsed handler:
+#   * missing bytes are 410 ARTIFACT_MISSING, caught BEFORE the RuntimeError
+#     branch, and the registry row stands as the record of issue;
+#   * every non-served outcome writes `report_download_failed`;
+#   * `reviewer` is the floor for the download and for the delivery listing.
+
+def test_missing_bytes_are_gone_not_a_server_fault():
+    import app.reports.routes as routes
+
+    source = inspect.getsource(routes.artifact_download)
+    assert "except ArtifactNotFound" in source
+    assert source.index("except ArtifactNotFound") < source.index("except RuntimeError"), (
+        "ArtifactNotFound subclasses RuntimeError; caught after it, a missing "
+        "blob becomes a 500")
+    assert "create_error_response(410" in source and "ARTIFACT_MISSING" in source
+    assert "create_error_response(404" in source and "ARTIFACT_NOT_REGISTERED" in source
+
+
+def test_every_failed_download_is_audited():
+    import app.reports.routes as routes
+    from app.reports.data import delivery_report_links as links
+
+    source = inspect.getsource(routes.artifact_download)
+    assert "record_report_download_failure" in source
+    # one failure audit per refusal branch: not registered, missing, integrity
+    assert source.count("await _failed(") >= 3
+    assert links.ACTION_DOWNLOAD_FAILED == "report_download_failed"
+    body = inspect.getsource(links.record_report_download_failure)
+    assert '"failure"' in body
+
+
+def test_the_artifact_download_and_delivery_listing_require_reviewer():
+    """A listing of hashes and download paths is the doorway to the files; it
+    sits with the role that fetches them. Roles are global on this platform —
+    there is no per-delivery scoping to enforce, and none is claimed."""
+    import app.reports.routes as routes
+
+    for handler in (routes.artifact_download, routes.reports_by_delivery):
+        # Decision 1 of the pre-merge review (2026-09-16) wrapped the floor in
+        # an audited dependency; the floor itself is unchanged.
+        assert 'require_role_audited("reviewer"' in inspect.getsource(handler), handler.__name__
+    assert "get_tenant" not in inspect.getsource(routes)
+
+
+def test_a_failed_download_body_never_names_the_store():
+    """The 410/404 bodies are built in the route; they must carry the code, the
+    report id and a controlled sentence — never a locator."""
+    import app.reports.routes as routes
+
+    source = inspect.getsource(routes.artifact_download)
+    for leak in ("storage_locator", "local://", "blob.core.windows.net", "os.path"):
+        assert leak not in source, leak

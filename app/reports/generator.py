@@ -36,6 +36,10 @@ TEMPLATES = {
     "executive": "executive_cor.html",
     "data_quality": "data_quality.html",
     "intake": "source_intake.html",
+    # One delivery, end to end, from persisted evidence: identity, outcome,
+    # timeline, reconciliation snapshot, record-level dispositions, findings,
+    # identifier decisions, verification coverage, analyst actions, lineage.
+    "delivery_processing": "delivery_processing.html",
     # The contract's report families (Section C, Tasks 3-5). One template; the
     # body is the stratified Participant/Subparticipant list under the four
     # Government categories, which is what every one of them must contain.
@@ -56,11 +60,41 @@ AVAILABLE_TYPES = tuple(TEMPLATES)
 #: Report types served by the RCE Report Data Service rather than the ARC one.
 #: They read Area 1, the Issue Ledger and Area 2, all frozen — the same
 #: read-only, deterministic contract as every other report.
-RCE_TYPES = ("data_quality", "intake")
+RCE_TYPES = ("data_quality", "intake", "delivery_processing")
 
 
 class ReportGenerationError(RuntimeError):
     pass
+
+
+class ReportParameterError(ReportGenerationError):
+    """The request named no delivery, a delivery that does not exist, or a
+    snapshot that does not belong to it.
+
+    Every RCE report describes ONE delivery. `parameters.job_id` or
+    `parameters.intake_id` is REQUIRED; there is no newest-delivery default.
+    `code` is a stable machine token the API returns beside the message;
+    `status` is the HTTP status the route maps it to (422 by default).
+    """
+
+    def __init__(self, message: str, *, code: str = "DELIVERY_IDENTIFIER_REQUIRED",
+                 status: int = 422):
+        super().__init__(message)
+        self.code = code
+        self.status = status
+
+
+def _delivery_identity(query_parameters):
+    """(job_id, intake_id, snapshot_id) from the request, or raise."""
+    params = query_parameters or {}
+    job_id = params.get("job_id") or None
+    intake_id = params.get("intake_id") or None
+    if not job_id and not intake_id:
+        raise ReportParameterError(
+            "This report describes ONE delivery and needs parameters.job_id or "
+            "parameters.intake_id. It never defaults to the newest delivery.",
+            code="DELIVERY_IDENTIFIER_REQUIRED", status=422)
+    return job_id, intake_id, params.get("snapshot_id") or None
 
 
 async def generate_report(
@@ -80,6 +114,7 @@ async def generate_report(
     host without WeasyPrint's native libraries, taking the HTML and CSV down with
     it for no reason.
     """
+    from app.core import request_context, telemetry
     from app.reports.data.report_data_service import ReportDataService
     from app.reports.data.report_snapshot import build_snapshot, next_report_id, store_report
     from app.reports.engine import chart_engine
@@ -101,13 +136,43 @@ async def generate_report(
             query_parameters=query_parameters)
         dataset["review_cycle_id"] = review_cycle_id
     elif report_type in RCE_TYPES:
-        from app.reports.data.rce_report_data import RceReportDataService
+        # Every RCE report names its delivery. A job id is resolved to the
+        # intake it produced (rce_delivery_jobs.source_intake_id); an intake id
+        # is accepted when it belongs to at most one job.
+        job_id, intake_id, snapshot_id = _delivery_identity(query_parameters)
+        if report_type == "delivery_processing":
+            from app.reports.data.delivery_processing_data import (
+                DeliveryProcessingDataService)
 
-        rce_service = RceReportDataService(
-            db, intake_id=(query_parameters or {}).get("intake_id"))
-        dataset = (await rce_service.build_data_quality_dataset()
-                   if report_type == "data_quality"
-                   else await rce_service.build_source_intake_dataset())
+            dataset = await DeliveryProcessingDataService(
+                db, job_id=job_id, intake_id=intake_id,
+                snapshot_id=snapshot_id).build_dataset()
+        else:
+            from app.reports.data.delivery_processing_data import (
+                resolve_delivery, select_snapshot)
+            from app.reports.data.rce_report_data import RceReportDataService
+
+            resolved = await resolve_delivery(db, job_id=job_id, intake_id=intake_id)
+            intake = resolved["intake"]
+            if intake is None:
+                raise ReportParameterError(
+                    f"Job {job_id} produced no intake (it failed before Area 1 was "
+                    f"written); a {report_type} report has nothing to describe. Use "
+                    f"report_type=delivery_processing for the failure record.",
+                    code="DELIVERY_HAS_NO_INTAKE", status=422)
+            rce_service = RceReportDataService(db, intake_id=intake.id)
+            dataset = (await rce_service.build_data_quality_dataset()
+                       if report_type == "data_quality"
+                       else await rce_service.build_source_intake_dataset())
+            snapshot, _history, _latest = await select_snapshot(
+                db, job=resolved["job"], intake=intake, snapshot_id=snapshot_id)
+            dataset["delivery"] = {
+                "resolved_from": resolved["resolved_from"],
+                "job_id": str(resolved["job"].id) if resolved["job"] else None,
+                "intake_id": str(intake.id),
+            }
+            dataset["snapshot_id"] = snapshot.get("id") if snapshot else None
+            dataset["snapshot_created_at"] = snapshot.get("created_at") if snapshot else None
         dataset["review_cycle_id"] = review_cycle_id
     else:
         service = ReportDataService(db)
@@ -134,115 +199,168 @@ async def generate_report(
     report_id = await next_report_id(db, report_type)
     template = TEMPLATES[report_type]
 
-    # 3-4. Render, then validate what was actually produced.
-    provisional_snapshot = _empty_snapshot(report_id, report_type, dataset,
-                                           generated_by, TEMPLATE_VERSION)
-    first_pass = render_html(template, {**context, "snapshot": provisional_snapshot})
-    accessibility = validate_html(first_pass, chart_engine.TOKENS).to_dict()
+    # One span for the whole generation — render, validate, snapshot, persist,
+    # register, link. Identifiers only as attributes; never report content.
+    with telemetry.span("report.generate", report_id=report_id,
+                        report_type=report_type,
+                        job_id=(dataset.get("delivery") or {}).get("job_id")):
 
-    # 5. Provenance, carrying the accessibility result.
-    snapshot = await build_snapshot(
-        db, report_id=report_id, report_type=report_type, dataset=dataset,
-        query_parameters=query_parameters or {"review_cycle_id": review_cycle_id},
-        generated_by=generated_by, template_version=TEMPLATE_VERSION,
-        accessibility=accessibility,
-    )
+        # 3-4. Render, then validate what was actually produced.
+        provisional_snapshot = _empty_snapshot(report_id, report_type, dataset,
+                                               generated_by, TEMPLATE_VERSION)
+        first_pass = render_html(template, {**context, "snapshot": provisional_snapshot})
+        accessibility = validate_html(first_pass, chart_engine.TOKENS).to_dict()
 
-    # 6. Final render, with the snapshot inside the document.
-    html = render_html(template, {**context, "snapshot": snapshot.to_dict()})
+        # 5. Provenance, carrying the accessibility result.
+        snapshot = await build_snapshot(
+            db, report_id=report_id, report_type=report_type, dataset=dataset,
+            query_parameters=query_parameters or {"review_cycle_id": review_cycle_id},
+            generated_by=generated_by, template_version=TEMPLATE_VERSION,
+            accessibility=accessibility,
+        )
 
-    # Re-validate the document that is ACTUALLY delivered.
-    #
-    # Step 4 validated the first pass, whose result had to exist before the
-    # snapshot could carry it. But the first pass is not the artefact anyone
-    # receives, and validating only it would leave the delivered document
-    # unchecked — including the accessibility statement the second render adds.
-    # The two renders differ only in the content of the provenance table, so
-    # they should agree; when they do not, the DELIVERED document's result wins
-    # and the divergence is logged rather than smoothed over.
-    final_accessibility = validate_html(html, chart_engine.TOKENS).to_dict()
-    if final_accessibility["automated_checks_passed"] != accessibility["automated_checks_passed"]:
-        logger.error(
-            "report %s: accessibility verdict changed between the validation "
-            "render (%s) and the delivered render (%s). The delivered result is "
-            "authoritative. Errors: %s",
-            report_id, accessibility["automated_checks_passed"],
-            final_accessibility["automated_checks_passed"],
-            final_accessibility["errors"])
-    accessibility = final_accessibility
+        # 6. Final render, with the snapshot inside the document.
+        html = render_html(template, {**context, "snapshot": snapshot.to_dict()})
 
-    if report_type in SOW_TYPES:
-        from app.reports.engine.csv_engine import sow_report_to_csv
-
-        csv_text = sow_report_to_csv(dataset, report_id, snapshot.generation_timestamp)
-    else:
-        csv_text = report_to_csv(dataset, report_id, snapshot.generation_timestamp)
-
-    stored_id = None
-    artifact = None
-    if persist:
-        stored_id = await store_report(db, snapshot, dataset, html,
-                                       generated_by_id=generated_by_id)
-
-        # 8. Register the DELIVERED bytes in the durable artifact registry.
+        # Re-validate the document that is ACTUALLY delivered.
         #
-        # store_report() above writes the report into `review_reports`, which is
-        # a mutable row in the application database. That answers "what do the
-        # numbers say now". It does not answer "what did the document we issued
-        # actually say", because a row can be updated and carries no content
-        # address.
-        #
-        # The artifact registry exists for the second question — content-hashed,
-        # write-once, versioned, with retention metadata — and finalize_artifact
-        # was written for exactly this call site but was never wired to it. The
-        # result was a registry that stayed empty while reports generated
-        # normally: /api/reports/{id}/html served the document and
-        # /api/reports/artifacts/{id} answered 404, so the immutable record that
-        # D8 retention depends on did not exist for any report ever issued.
-        #
-        # Every value below comes from the snapshot that is already inside the
-        # rendered document. Nothing is invented here, and nothing is recomputed
-        # — a provenance field that disagreed with the one in the document would
-        # be worse than none.
-        try:
-            from app.reports.data.artifact_registry import finalize_artifact
-
-            artifact = await finalize_artifact(
-                db,
-                report_id=report_id,
-                report_type=report_type,
-                content=html.encode("utf-8"),
-                content_type="text/html",
-                review_cycle_id=snapshot.review_cycle_id,
-                generated_by=generated_by,
-                template_version=snapshot.template_version,
-                evidence_rule_version=snapshot.b1_b4_rule_version,
-                report_data_hash=snapshot.data_payload_hash,
-                source_artifact_sha256=snapshot.rce_source_file_sha256,
-                data_classification=snapshot.data_classification,
-            )
-            # finalize_artifact() flushes but does not commit, and the /generate
-            # route does not commit either — store_report() above commits its
-            # own write, which is why review_reports persisted while the
-            # artifact row was discarded at session close. Commit here, for the
-            # same reason and in the same place as store_report does: the write
-            # that owns the row owns its durability.
-            #
-            # finalize_artifact returns a plain dict, not an ORM instance, so
-            # nothing here is expired by the commit.
-            await db.commit()
-        except Exception as exc:  # noqa: BLE001
-            # Non-fatal, for the reason store_report gives: the analyst holding
-            # the document should not lose it because a secondary write failed.
-            # But LOUD, and reported to the caller — a silently missing
-            # immutable record is the failure this whole call site was added to
-            # correct, and swallowing it here would recreate it in a new place.
+        # Step 4 validated the first pass, whose result had to exist before the
+        # snapshot could carry it. But the first pass is not the artefact anyone
+        # receives, and validating only it would leave the delivered document
+        # unchecked — including the accessibility statement the second render adds.
+        # The two renders differ only in the content of the provenance table, so
+        # they should agree; when they do not, the DELIVERED document's result wins
+        # and the divergence is logged rather than smoothed over.
+        final_accessibility = validate_html(html, chart_engine.TOKENS).to_dict()
+        if final_accessibility["automated_checks_passed"] != accessibility["automated_checks_passed"]:
             logger.error(
-                "report %s: durable artifact registration FAILED (%s: %s). The "
-                "report was generated and stored, but no immutable content-"
-                "addressed record exists for it.",
-                report_id, type(exc).__name__, exc)
-            artifact = {"registered": False, "error": f"{type(exc).__name__}: {exc}"}
+                "report %s: accessibility verdict changed between the validation "
+                "render (%s) and the delivered render (%s). The delivered result is "
+                "authoritative. Errors: %s",
+                report_id, accessibility["automated_checks_passed"],
+                final_accessibility["automated_checks_passed"],
+                final_accessibility["errors"])
+        accessibility = final_accessibility
+
+        if report_type in SOW_TYPES:
+            from app.reports.engine.csv_engine import sow_report_to_csv
+
+            csv_text = sow_report_to_csv(dataset, report_id, snapshot.generation_timestamp)
+        elif report_type == "delivery_processing":
+            from app.reports.engine.csv_engine import delivery_processing_to_csv
+
+            csv_text = delivery_processing_to_csv(dataset, report_id, snapshot.generation_timestamp)
+        else:
+            csv_text = report_to_csv(dataset, report_id, snapshot.generation_timestamp)
+
+        stored_id = None
+        artifact = None
+        artifacts = None
+        delivery_link = None
+        if persist:
+            stored_id = await store_report(db, snapshot, dataset, html,
+                                           generated_by_id=generated_by_id)
+
+            # 8. Register the DELIVERED bytes in the durable artifact registry.
+            #
+            # store_report() above writes the report into `review_reports`, which is
+            # a mutable row in the application database. That answers "what do the
+            # numbers say now". It does not answer "what did the document we issued
+            # actually say", because a row can be updated and carries no content
+            # address.
+            #
+            # The artifact registry exists for the second question — content-hashed,
+            # write-once, versioned, with retention metadata — and finalize_artifact
+            # was written for exactly this call site but was never wired to it. The
+            # result was a registry that stayed empty while reports generated
+            # normally: /api/reports/{id}/html served the document and
+            # /api/reports/artifacts/{id} answered 404, so the immutable record that
+            # D8 retention depends on did not exist for any report ever issued.
+            #
+            # Every value below comes from the snapshot that is already inside the
+            # rendered document. Nothing is invented here, and nothing is recomputed
+            # — a provenance field that disagreed with the one in the document would
+            # be worse than none.
+            try:
+                from app.reports.data.artifact_registry import finalize_artifact
+                from app.reports.data.delivery_report_artifacts import (
+                    source_delivery_sha256)
+
+                artifact = await finalize_artifact(
+                    db,
+                    report_id=report_id,
+                    report_type=report_type,
+                    content=html.encode("utf-8"),
+                    content_type="text/html",
+                    review_cycle_id=snapshot.review_cycle_id,
+                    generated_by=generated_by,
+                    template_version=snapshot.template_version,
+                    evidence_rule_version=snapshot.b1_b4_rule_version,
+                    report_data_hash=snapshot.data_payload_hash,
+                    # The hash of the delivery THIS report describes. For a
+                    # delivery-scoped report that is the named job's file, which a
+                    # regeneration may pin to something other than the current
+                    # authoritative delivery the snapshot records.
+                    source_artifact_sha256=source_delivery_sha256(dataset, snapshot),
+                    data_classification=snapshot.data_classification,
+                )
+                # finalize_artifact() flushes but does not commit, and the /generate
+                # route does not commit either — store_report() above commits its
+                # own write, which is why review_reports persisted while the
+                # artifact row was discarded at session close. Commit here, for the
+                # same reason and in the same place as store_report does: the write
+                # that owns the row owns its durability.
+                #
+                # finalize_artifact returns a plain dict, not an ORM instance, so
+                # nothing here is expired by the commit.
+                await db.commit()
+            except Exception as exc:  # noqa: BLE001
+                # Non-fatal, for the reason store_report gives: the analyst holding
+                # the document should not lose it because a secondary write failed.
+                # But LOUD, and reported to the caller — a silently missing
+                # immutable record is the failure this whole call site was added to
+                # correct, and swallowing it here would recreate it in a new place.
+                logger.error(
+                    "report %s: durable artifact registration FAILED (%s: %s). The "
+                    "report was generated and stored, but no immutable content-"
+                    "addressed record exists for it.",
+                    report_id, type(exc).__name__, exc)
+                artifact = {"registered": False, "error": f"{type(exc).__name__}: {exc}"}
+
+            # 8b. Every rendering a delivery report is issued in — not only the HTML.
+            #
+            # For the delivery-scoped types the CSV (and the PDF, when the engine's
+            # native libraries are present) are registered through the same store
+            # with their own hashes, so "which file was the reviewer handed" has a
+            # row for every format. Without a PDF engine the reason is recorded and
+            # /pdf keeps rendering on demand. Never fails the generation.
+            if report_type in RCE_TYPES and dataset.get("delivery"):
+                from app.reports.data.delivery_report_artifacts import (
+                    finalize_report_renderings)
+
+                artifacts = await finalize_report_renderings(
+                    db, report_id=report_id, report_type=report_type, html=html,
+                    csv_text=csv_text, snapshot=snapshot, dataset=dataset,
+                    generated_by=generated_by, html_artifact=artifact)
+                if artifact is None or artifact.get("registered") is False:
+                    artifact = artifacts.get("html") or artifact
+
+            # 9. Delivery linkage and the audit event of record.
+            #
+            # For a delivery-scoped report the generation is itself evidence: an
+            # audit_logs row (written FIRST), one rce_delivery_report_links row per
+            # stored artifact pointing at it, and a REPORT_GENERATION stage event on
+            # the job. See delivery_report_links for the order and the failure policy.
+            if report_type in RCE_TYPES and dataset.get("delivery"):
+                from app.reports.data.delivery_report_links import record_report_generation
+
+                with request_context.bind(report_id=report_id):
+                    delivery_link = await record_report_generation(
+                        db, report_id=report_id, report_type=report_type, dataset=dataset,
+                        template_version=TEMPLATE_VERSION, generated_by=generated_by,
+                        generated_by_id=generated_by_id, artifact=artifact,
+                        artifacts=(artifacts or {}).get("artifacts"),
+                        storage=artifacts)
 
     if not accessibility["automated_checks_passed"]:
         # Loud, and not fatal. The report is still returned — an analyst can see
@@ -257,6 +375,15 @@ async def generate_report(
         "report_type": report_type,
         "stored_id": stored_id,
         "artifact": artifact,
+        # Every rendering registered for a delivery-scoped report (HTML, CSV,
+        # PDF when available), the backend they went to and whether that
+        # backend is a durable home. None for the non-delivery report types.
+        "artifacts": artifacts,
+        # Which persisted reconciliation snapshot the numbers rest on (RCE
+        # types only). Stated so a regeneration can never silently use newer
+        # live data without the response saying so.
+        "snapshot_id": dataset.get("snapshot_id"),
+        "delivery_link": delivery_link,
         "html": html,
         "csv": csv_text,
         "dataset": dataset,

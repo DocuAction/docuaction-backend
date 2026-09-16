@@ -1406,6 +1406,8 @@ async def operations_work_queue(
                               "PRIORITY_REQUEST | QA_RETURN | QA_ESCALATION"),
         state: Optional[str] = Query(None),
         assignee: Optional[uuid.UUID] = Query(None),
+        intake_id: Optional[uuid.UUID] = Query(
+            None, description="Only cases raised from this delivery (intake id)."),
         unassigned_only: bool = Query(False),
         qhin_entity_id: Optional[uuid.UUID] = Query(None),
         limited_only: bool = Query(False),
@@ -1424,7 +1426,7 @@ async def operations_work_queue(
     try:
         return await work_queue(
             db, queue_source=queue_source, work_reason=work_reason, state=state,
-            assignee=assignee, unassigned_only=unassigned_only,
+            assignee=assignee, intake_id=intake_id, unassigned_only=unassigned_only,
             qhin_entity_id=qhin_entity_id, limited_only=limited_only,
             reportable=reportable, deadline_state=deadline_state, search=search,
             sort=sort, offset=offset, limit=limit,

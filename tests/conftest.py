@@ -23,6 +23,7 @@ exercises routing and middleware without provisioning schema anywhere.
 from __future__ import annotations
 
 import os
+import sys
 import socket
 from urllib.parse import unquote, urlparse
 
@@ -71,7 +72,14 @@ def _use_null_pool() -> None:
     for eng in engines:
         try:
             sync = eng.sync_engine
-            sync.pool = NullPool(sync.pool._creator, dialect=sync.dialect)
+            # `_dispatch` carries the existing pool's event listeners across.
+            # Without it the asyncpg dialect's connect-time json/jsonb codec
+            # registration is lost and every JSONB column read inside a
+            # TestClient request comes back as a str ('{}' instead of {}),
+            # which surfaces as a 500 in any route that reads one
+            # (found 2026-09-17 via the delivery dashboard under test).
+            sync.pool = NullPool(sync.pool._creator, dialect=sync.dialect,
+                                 _dispatch=sync.pool.dispatch)
         except Exception:
             pass
 
@@ -295,3 +303,23 @@ def no_collection_cycle(monkeypatch):
 # missing credential where 0.115 returned 403; role refusal for an authenticated
 # principal is still 403. Asserting on one alone breaks across that upgrade.
 GATED = (401, 403)
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _remove_seeded_delivery_rows():
+    """After each module, delete rows the delivery-API seeding helper committed.
+
+    tests/support_delivery_api.py seeds real jobs, intakes, records and issues
+    so the HTTP layer can be exercised; those rows are committed and would
+    otherwise be visible to later modules that assert on the whole estate
+    (supervisor operations, legacy population counts). Modules that never
+    imported the helper are unaffected.
+    """
+    yield
+    helper = sys.modules.get("support_delivery_api") or sys.modules.get(
+        "tests.support_delivery_api")
+    if helper is not None and hasattr(helper, "cleanup"):
+        try:
+            helper.cleanup()
+        except Exception as exc:  # noqa: BLE001 - never fail a module on cleanup
+            print(f"support_delivery_api.cleanup failed: {type(exc).__name__}: {exc}")

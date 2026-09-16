@@ -1,0 +1,50 @@
+﻿# DocuAction TEFCA ARC Delivery Processing Report DA-ARC-2026-002
+# Generated (UTC): 2026-09-16T08:51:10.319182+00:00
+# Job id: 70d176da-d559-4d83-8210-0964276893d2
+# Intake id: bee5fa9b-c9e4-449a-9b3b-fb0cf6b8868e
+# Delivery: Gate4-B b74dcc / DocuAction_ONC_RCE_3_Record_Invalid_NPI_Test.csv
+# Source file SHA-256: 06ddc1be78e31e2c50603aa54be58fa719deefd40cd6aa298f506871df48ea8e
+# Reconciliation snapshot id: 462abc2e-0784-4233-a1eb-92b562990fee
+# Reconciliation snapshot hash: 9fa736a7100f11e8548c52387224cf6f8ffdd99ada267d7a93e7dfa1aa5916c7
+# Reconciliation snapshot created (UTC): 2026-09-16T08:51:08.792451+00:00
+# Build SHA: localgate5
+# Migration revision: 20260917_delivery_traceability
+# Template version: 1.0.0
+# Report Data Service version: 1.0.0
+# Every value below is read from persisted evidence. No rule is re-run and no reconciliation is recomputed while this file is produced.
+
+## Reconciliation equation (pinned snapshot)
+Measure,Value
+Received,3
+CREATED,0
+UPDATED,0
+MATCHED_UNCHANGED,0
+HELD,3
+REJECTED,0
+MISSING_KEY,0
+EXCLUDED,0
+Accounted,3
+Equation holds,True
+Snapshot passed,True
+
+## Disposition totals (current table)
+Disposition,Records
+CREATED,0
+UPDATED,0
+MATCHED_UNCHANGED,0
+HELD,3
+REJECTED,0
+MISSING_KEY,0
+EXCLUDED,0
+Total,3
+Records received,3
+Records without a disposition,0
+
+## Record-level dispositions (all rows)
+Line,Source record id,Source id (RCE OID),Name,Submitted NPI,Curated NPI,Disposition,Reason code,Entity id,Findings,Warnings,Sequence,Actor type,Actor,Decided (UTC),Reconstructed
+2,e18b7617-e026-4ad3-97ae-304409d071c8,1.2.840.114350.1.13.10.2.7.3.688884.100,Buffalo   Medical Group,188165950,188165950,HELD,HELD_QUALITY_ISSUE,3ff0be30-5440-4d1a-9f9b-8e80b0225ce2,2,1,1,SYSTEM,acceptance-pm@synthetic.test,2026-09-16T08:51:05.771091+00:00,False
+3,e904d371-8a5f-42a1-bc1c-cb2f8641da90,1.2.840.114350.1.13.104.2.7.3.688884.100,UTMB   - Health,1982916079,1982916079,HELD,HELD_QUALITY_ISSUE,eba60f78-bea9-43e2-be53-2fd82c8be748,2,1,1,SYSTEM,acceptance-pm@synthetic.test,2026-09-16T08:51:05.771091+00:00,False
+4,c5c68a04-e707-48e2-88ca-785bead1b7a2,1.2.840.114350.1.13.105.2.7.3.688884.100,Hawaii   Pacific Health,A124071014,A124071014,HELD,HELD_QUALITY_ISSUE,17170326-3165-4549-bf7c-11b3703588ee,2,1,1,SYSTEM,acceptance-pm@synthetic.test,2026-09-16T08:51:05.771091+00:00,False
+
+## Evidence limitations
+None recorded

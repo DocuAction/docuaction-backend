@@ -21,6 +21,24 @@ import io
 from typing import Any, Dict, List
 
 
+#: Characters a spreadsheet may treat as the start of a formula (kept in step
+#: with xlsx_engine.FORMULA_LEADERS). A delivered organisation name or a
+#: reviewer's free-text reason that begins with one of these must not execute
+#: when the CSV is opened in Excel (review findings F4/L1, 2026-09-16).
+FORMULA_LEADERS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def neutralise_cell(value: Any) -> Any:
+    """Prefix a formula-looking string with an apostrophe; leave other values."""
+    if isinstance(value, str) and value.startswith(FORMULA_LEADERS):
+        return "'" + value
+    return value
+
+
+def neutralise_row(row) -> List[Any]:
+    return [neutralise_cell(v) for v in row]
+
+
 def chart_to_rows(chart) -> List[List[Any]]:
     """One chart as a header row plus one row per category."""
     header = ["Category"] + [s.label for s in chart.series]
@@ -142,7 +160,7 @@ def sow_report_to_csv(dataset: Dict[str, Any], report_id: str,
     for category in dataset.get("categories") or []:
         number = (dataset.get("category_numbers") or {}).get(category, "")
         for row in (dataset.get("entity_lists") or {}).get(category, []):
-            writer.writerow([number, *[row.get(k, "") or "" for k in keys]])
+            writer.writerow(neutralise_row([number, *[row.get(k, "") or "" for k in keys]]))
             listed += 1
     if not listed:
         writer.writerow(["No Participant or Subparticipant is listed for this reporting period"])
@@ -155,9 +173,9 @@ def sow_report_to_csv(dataset: Dict[str, Any], report_id: str,
     if not pending:
         writer.writerow(["No review record is pending QA"])
     for row in pending:
-        writer.writerow([row.get("review_id", ""), row.get("entity_name", ""),
+        writer.writerow(neutralise_row([row.get("review_id", ""), row.get("entity_name", ""),
                          row.get("qhin", ""), row.get("category_label", ""),
-                         row.get("rule", ""), row.get("pending_reason", "")])
+                         row.get("rule", ""), row.get("pending_reason", "")]))
     writer.writerow([])
 
     changes = dataset.get("methodology_changes") or {}
@@ -168,6 +186,109 @@ def sow_report_to_csv(dataset: Dict[str, Any], report_id: str,
         writer.writerow(["## Implemented changes to the methodology / control framework"])
         for item in changes.get("implemented") or ["None recorded for this reporting period"]:
             writer.writerow([item])
+    return buffer.getvalue()
+
+
+#: Record-level disposition columns, in order. The header row of the CSV and
+#: the record table in the HTML are both driven from the dataset rows, so a
+#: column cannot exist in one and not the other.
+DELIVERY_DISPOSITION_COLUMNS = (
+    ("line_number", "Line"),
+    ("source_record_id", "Source record id"),
+    ("source_rce_id", "Source id (RCE OID)"),
+    ("name", "Name"),
+    ("submitted_npi", "Submitted NPI"),
+    ("curated_npi", "Curated NPI"),
+    ("disposition", "Disposition"),
+    ("reason_code", "Reason code"),
+    ("entity_id", "Entity id"),
+    ("finding_count", "Findings"),
+    ("warning_count", "Warnings"),
+    ("sequence", "Sequence"),
+    ("actor_type", "Actor type"),
+    ("actor", "Actor"),
+    ("decided_at", "Decided (UTC)"),
+    ("reconstructed", "Reconstructed"),
+)
+
+#: The accounting categories, in the order the equation states them.
+DELIVERY_DISPOSITION_ORDER = ("CREATED", "UPDATED", "MATCHED_UNCHANGED", "HELD",
+                              "REJECTED", "MISSING_KEY", "EXCLUDED")
+
+
+def delivery_processing_to_csv(dataset: Dict[str, Any], report_id: str,
+                               generated_at: str) -> str:
+    """The Delivery Processing Report as data: EVERY record-level disposition.
+
+    Not paged, not sampled. The preamble pins the same identity the HTML
+    prints on page one (job, intake, snapshot id + hash, build, template), the
+    totals block restates the equation, and then one row per received record
+    follows. The totals and the rows come from the SAME dataset dict the HTML
+    was rendered from, so the three cannot disagree.
+    """
+    buffer = io.StringIO(newline="")
+    writer = csv.writer(buffer, lineterminator="\r\n")
+    delivery = dataset.get("delivery") or {}
+    build = dataset.get("build") or {}
+    disp = dataset.get("dispositions") or {}
+    recon = dataset.get("reconciliation") or {}
+
+    writer.writerow([f"# DocuAction TEFCA ARC Delivery Processing Report {report_id}"])
+    writer.writerow([f"# Generated (UTC): {generated_at}"])
+    writer.writerow([f"# Job id: {delivery.get('job_id') or '-'}"])
+    writer.writerow([f"# Intake id: {delivery.get('intake_id') or '-'}"])
+    writer.writerow([f"# Delivery: {delivery.get('delivery_label') or '-'} / "
+                     f"{delivery.get('filename') or '-'}"])
+    writer.writerow([f"# Source file SHA-256: {delivery.get('sha256') or '-'}"])
+    writer.writerow([f"# Reconciliation snapshot id: {dataset.get('snapshot_id') or 'none'}"])
+    writer.writerow([f"# Reconciliation snapshot hash: {dataset.get('snapshot_hash') or '-'}"])
+    writer.writerow([f"# Reconciliation snapshot created (UTC): "
+                     f"{dataset.get('snapshot_created_at') or '-'}"])
+    writer.writerow([f"# Build SHA: {build.get('git_sha') or 'unknown'}"])
+    writer.writerow([f"# Migration revision: {build.get('migration_revision') or 'unknown'}"])
+    writer.writerow([f"# Template version: {dataset.get('template_version')}"])
+    writer.writerow([f"# Report Data Service version: {dataset.get('service_version')}"])
+    writer.writerow(["# Every value below is read from persisted evidence. No rule is "
+                     "re-run and no reconciliation is recomputed while this file is produced."])
+    writer.writerow([])
+
+    eq = (recon.get("equation") or {}) if recon.get("available") else {}
+    writer.writerow(["## Reconciliation equation (pinned snapshot)"])
+    writer.writerow(["Measure", "Value"])
+    if eq:
+        writer.writerow(["Received", eq.get("received", "")])
+        for key in DELIVERY_DISPOSITION_ORDER:
+            writer.writerow([key, eq.get(key.lower(), "")])
+        writer.writerow(["Accounted", eq.get("accounted", "")])
+        writer.writerow(["Equation holds", eq.get("holds", "")])
+        writer.writerow(["Snapshot passed", recon.get("passed", "")])
+    else:
+        writer.writerow(["No reconciliation snapshot is persisted for this delivery", ""])
+    writer.writerow([])
+
+    counts = disp.get("counts") or {}
+    writer.writerow(["## Disposition totals (current table)"])
+    writer.writerow(["Disposition", "Records"])
+    for key in DELIVERY_DISPOSITION_ORDER:
+        writer.writerow([key, counts.get(key, 0)])
+    writer.writerow(["Total", counts.get("total", 0)])
+    writer.writerow(["Records received", disp.get("records_received", "")])
+    writer.writerow(["Records without a disposition", disp.get("records_without_disposition", "")])
+    writer.writerow([])
+
+    writer.writerow(["## Record-level dispositions (all rows)"])
+    writer.writerow([label for _, label in DELIVERY_DISPOSITION_COLUMNS])
+    rows = disp.get("rows") or []
+    if not rows:
+        writer.writerow(["No disposition events are persisted for this delivery"])
+    for row in rows:
+        writer.writerow(neutralise_row(["" if row.get(key) is None else row.get(key)
+                                        for key, _ in DELIVERY_DISPOSITION_COLUMNS]))
+    writer.writerow([])
+
+    writer.writerow(["## Evidence limitations"])
+    for item in dataset.get("limitations") or ["None recorded"]:
+        writer.writerow([item])
     return buffer.getvalue()
 
 

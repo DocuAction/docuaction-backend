@@ -4,8 +4,8 @@ disposable PostgreSQL (superuser test DB, e.g. the CI postgres:16 service).
 Reproduces the REAL measured PROD starting state (read-only Gate 3 discovery of
 docuaction-db-geo, 2026-09-08 - metadata only, no Government data):
 
-  * alembic_version = 20260829_report_artifacts (repo head 20260915_curated_text_columns,
-    exactly five revisions pending)
+  * alembic_version = 20260829_report_artifacts (repo head 20260917_delivery_traceability,
+    exactly seven revisions pending)
   * 93 public tables: the 72 candidate tables + 20 legacy-only + alembic_version
   * docuaction_app  LOGIN, least privilege, OWNS 89 tables incl. alembic_version
   * docuaction_owner NOLOGIN, least privilege, OWNS exactly the four Area-1 tables
@@ -18,7 +18,8 @@ docuaction-db-geo, 2026-09-08 - metadata only, no Government data):
     a member of docuaction_owner ONLY by an explicit mapping step)
   * decisions is missing its 18 model-only columns; review_records is missing
     its 3 (those three are added, with their indexes, by 20260831_review_case)
-  * rce_delivery_jobs and report_export_jobs are absent (created by the chain)
+  * rce_delivery_jobs, report_export_jobs and the five traceability tables are
+    absent (created by the chain)
 
 Proves the certified sequence for that state - MANAGED PREPARE (owner) ->
 MANAGED MIGRATE (migration identity) -> FINALIZE (owner) - plus every fail-
@@ -40,14 +41,19 @@ from test_prod_convergence_integration import (  # noqa: E402
 pytestmark = pytest.mark.skipif(not SU, reason="CONV_SUPERUSER_URL not set (needs a superuser test DB)")
 
 EXPECTED = "20260829_report_artifacts"
-HEAD = "20260915_curated_text_columns"
+# Read from the actual chain rather than hardcoded, so this never goes stale
+# the next time a migration is added.
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+
+_SCRIPTS = ScriptDirectory.from_config(Config("alembic.ini"))
+HEAD = _SCRIPTS.get_current_head()
 #: Tables the pending chain ALTERs that docuaction_app owns in PROD; PREPARE
 #: temporarily re-owns exactly these (in this order) and FINALIZE returns them.
 #: Mirrors scripts/prod_legacy_convergence.MANAGED_CHAIN_ALTERS.
 CHAIN_ALTERS = ["review_records", "rce_curated_records", "tefca_reg_entities", "tefca_entity_contacts"]
-PENDING = ["20260830_run_lifecycle", "20260831_review_case", "20260831_export_jobs",
-           "20260902_delivery_jobs", "20260903_delivery_grants",
-           "20260915_curated_text_columns"]
+PENDING = [rev.revision for rev in
+          reversed(list(_SCRIPTS.iterate_revisions(HEAD, EXPECTED)))]
 DECISIONS_COLS = ["approval_justification", "rejection_reason", "rejection_category", "supersedes", "sla_hours",
                   "deadline", "escalation_level", "escalated_to", "escalated_at", "is_overdue", "outcome_text",
                   "outcome_date", "outcome_matched", "outcome_notes", "outcome_recorded_by",
@@ -60,7 +66,11 @@ LEGACY_ONLY = ["area1_mutation_log", "automation_rules", "bulletin_articles", "b
                "document_relationships", "output_templates", "report_artifacts", "structured_extractions",
                "tefca_qa_audit", "validation_queue"]
 AREA1_PRESENT = ["rce_source_records", "rce_source_intakes", "rce_ingestion_runs", "rce_rule_execution_history"]
-AREA1_FINAL = AREA1_PRESENT + ["rce_delivery_jobs"]
+#: Owner-owned after the chain: Area-1 plus the five traceability evidence tables
+#: (20260917), which the app may only SELECT/INSERT (UPDATE on stage events).
+TRACEABILITY = ["rce_delivery_stage_events", "rce_disposition_events", "rce_reconciliation_snapshots",
+                "tefca_identifier_decision_events", "rce_delivery_report_links"]
+AREA1_FINAL = AREA1_PRESENT + ["rce_delivery_jobs"] + TRACEABILITY
 ENTRA_ADMIN = "entra_admin"
 CK = "ck_review_record_has_subject"
 
@@ -98,6 +108,17 @@ def _role_count(conn):
     return conn.execute(text("select count(*) from pg_roles")).scalar()
 
 
+def _chain_creates():
+    """scripts/prod_legacy_convergence.MANAGED_CHAIN_CREATES, read from the utility."""
+    code = ("import sys; sys.path.insert(0, %r); import prod_legacy_convergence as c; "
+            "print(*sorted(c.MANAGED_CHAIN_CREATES))" % os.path.join(REPO, "scripts"))
+    r = subprocess.run([sys.executable, "-c", code], cwd=REPO, capture_output=True, text=True, check=True,
+                       env=dict(os.environ, SECRET_KEY="t" * 64, ALLOWED_HOSTS="*"))
+    names = set(r.stdout.split())
+    assert {"report_export_jobs", "rce_delivery_jobs"} <= names, names
+    return names
+
+
 def _candidate_names():
     """The utility's OWN candidate table set (72 in PROD), computed in a clean
     subprocess. The pytest process imports the whole application through
@@ -109,7 +130,7 @@ def _candidate_names():
             % os.path.join(REPO, "scripts"))
     r = subprocess.run([sys.executable, "-c", code], cwd=REPO, capture_output=True, text=True, check=True,
                        env=dict(os.environ, SECRET_KEY="t" * 64, ALLOWED_HOSTS="*"))
-    names = set(r.stdout.split())
+    names = set(r.stdout.split()) - _chain_creates()
     assert len(names) == 72, f"candidate set must be the measured 72 tables, got {len(names)}"
     assert names.isdisjoint(LEGACY_ONLY), sorted(names & set(LEGACY_ONLY))
     return names
@@ -333,6 +354,11 @@ def test_managed_prepare_migrate_finalize_end_to_end(fixture_db):
         assert set(REVIEW_COLS) <= _cols(c, "review_records")
         assert c.execute(text("select count(*) from pg_constraint where conname=:n"), {"n": CK}).scalar() == 1
         assert _owner(c, "rce_delivery_jobs") == "docuaction_owner" and _owner(c, "report_export_jobs") == "docuaction_owner"
+        for t_ in TRACEABILITY:
+            assert _owner(c, t_) == "docuaction_owner", f"{t_} created by the chain as the owner role"
+            tp = {p: c.execute(text("select has_table_privilege('docuaction_app',:t,:p)"), {"t": t_, "p": p}).scalar()
+                  for p in ("SELECT", "INSERT", "UPDATE", "DELETE")}
+            assert tp == {"SELECT": True, "INSERT": True, "UPDATE": t_ == "rce_delivery_stage_events", "DELETE": False}, (t_, tp)
         privs = {p: c.execute(text("select has_table_privilege('docuaction_app','rce_delivery_jobs',:p)"), {"p": p}).scalar()
                  for p in ("SELECT", "INSERT", "UPDATE", "DELETE")}
         assert privs == {"SELECT": True, "INSERT": True, "UPDATE": True, "DELETE": False}, privs
@@ -342,7 +368,7 @@ def test_managed_prepare_migrate_finalize_end_to_end(fixture_db):
     rm2 = _run_conv(mig_url, "--managed-migrate", "--i-understand-migration-writes", expect_ok=False,
                     extra_env={"CONV_ADMIN_ROLE": LEGACY_OWNER})
     assert rm2.returncode != 0 and "already at head" in (rm2.stdout + rm2.stderr)
-    print(f"MANAGED_MIGRATE=PASS (5 revisions -> {HEAD}; heads=1; pending=0; rerun no-op)")
+    print(f"MANAGED_MIGRATE=PASS ({len(PENDING)} revisions -> {HEAD}; heads=1; pending=0; rerun no-op)")
 
     # ── FINALIZE (entra_admin -> SET ROLE legacy_owner) ──
     rf = _run_conv(admin, "--finalize", "--i-understand-finalize-writes", "--bootstrap-as-role", LEGACY_OWNER)
@@ -350,7 +376,7 @@ def test_managed_prepare_migrate_finalize_end_to_end(fixture_db):
     assert "FINALIZE COMPLETE" in rf.stdout and f"{1 + len(CHAIN_ALTERS)} non-Area-1 tables" in rf.stdout, rf.stdout[-400:]
     with su.connect() as c:
         final = _tables(c)
-        assert len(final) == 95
+        assert len(final) == 93 + len(_chain_creates())
         for t in AREA1_FINAL:
             assert final[t] == "docuaction_owner", f"{t} must be docuaction_owner"
         assert final["alembic_version"] == "docuaction_owner"

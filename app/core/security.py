@@ -7,7 +7,7 @@ import bcrypt
 import logging
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -89,6 +89,22 @@ def canonical_role(role) -> str:
 def role_level(role) -> int:
     """The privilege level of a role name, after alias normalisation. 0 = unknown."""
     return ROLE_HIERARCHY.get(canonical_role(role), 0)
+
+
+def role_at_least(user, minimum_role: str) -> bool:
+    """Field-level authorization: does `user`'s DATABASE role reach `minimum_role`?
+
+    Additive (2026-09-17 remediation). `require_role` decides whether a route
+    may be called at all; this decides whether one BLOCK of an otherwise
+    viewer-readable response may be filled in. The job detail endpoint uses it
+    to return evidence blocks to a reviewer and `null` plus
+    `availability.<block> = "requires_role:reviewer"` to a viewer. Same
+    fail-closed rule as `require_role`: an unknown or missing role is level 0.
+    """
+    required = ROLE_HIERARCHY.get(minimum_role)
+    if required is None:
+        return False
+    return role_level(getattr(user, "role", None)) >= required
 
 SAML_CONFIG = {
     "enabled": False,
@@ -235,9 +251,15 @@ def require_role(minimum_role):
         required_level = ROLE_HIERARCHY.get(minimum_role, 0)
         db_role = getattr(user, "role", None)
         if role_level(db_role) < required_level:
-            raise HTTPException(
+            exc = HTTPException(
                 403, f"Required: {minimum_role}, Current: {canonical_role(db_role)}"
             )
+            # Structured copy of the same two facts, read by the 403 handler in
+            # app/core/error_handler.py so a client can act on `required_role`
+            # without parsing the message. The message itself is unchanged.
+            exc.required_role = minimum_role
+            exc.current_role = canonical_role(db_role)
+            raise exc
         # Same disable/approval/session-revocation enforcement as get_current_user, so
         # role-gated endpoints (e.g. TEFCA) cannot be reached by a disabled or
         # logged-out account holding a still-unexpired token.
@@ -250,6 +272,65 @@ def require_role(minimum_role):
     # that only checks the deny direction on one role.
     role_checker.minimum_role = minimum_role
     return role_checker
+
+
+def require_role_audited(minimum_role, *, resource_type: str, action: str = "access_denied"):
+    """`require_role`, plus an audit row on every 403.
+
+    Added for Decision 1 of the pre-merge review (2026-09-16): a denied
+    attempt to reach protected report content must be a recorded fact, not
+    just a response the caller saw. `require_role` itself stays as it is
+    (used by hundreds of routes; widening its blast radius was not asked for)
+    — this wraps it for the specific routes a caller marks as needing the
+    record. The 403 body and status are unchanged; only a row is added.
+    """
+    base_checker = require_role(minimum_role)
+
+    async def audited_checker(
+        request: Request,
+        creds: HTTPAuthorizationCredentials = Depends(security),
+        db: AsyncSession = Depends(get_db),
+    ):
+        try:
+            return await base_checker(creds=creds, db=db)
+        except HTTPException as exc:
+            if exc.status_code == 403:
+                await _record_denied_access(
+                    db, request, exc, creds, resource_type=resource_type, action=action)
+            raise
+
+    audited_checker.minimum_role = minimum_role
+    return audited_checker
+
+
+async def _record_denied_access(db, request, exc, creds, *, resource_type: str,
+                                 action: str) -> None:
+    """Best-effort audit row for a role-floor denial. Never raises: a denied
+    request must still get its 403, even if the audit write itself fails."""
+    try:
+        from app.core import request_context
+        from app.models.database import AuditLog
+
+        actor_id = None
+        actor_email = None
+        try:
+            payload = decode_token(creds.credentials)
+            actor_id = payload.get("sub")
+            actor_email = payload.get("email")
+        except Exception:  # noqa: BLE001 - the token may itself be why this is 403
+            pass
+        db.add(AuditLog(
+            user_id=actor_id, action=action, event_type="security", outcome="blocked",
+            resource_type=resource_type, resource_id=str(request.url.path),
+            correlation_id=request_context.correlation_id()[:64],
+            details={"required_role": getattr(exc, "required_role", None),
+                     "current_role": getattr(exc, "current_role", None),
+                     "actor_email": actor_email, "method": request.method,
+                     "path": request.url.path}))
+        await db.commit()
+    except Exception:  # noqa: BLE001
+        logger.warning("denied-access audit row not written", exc_info=True)
+
 
 async def refresh_access_token(refresh_token, db):
     payload = decode_token(refresh_token)

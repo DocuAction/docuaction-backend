@@ -417,6 +417,42 @@ def test_no_tefca_read_endpoint_sits_above_the_viewer_floor():
         # that executes the REAL pipeline above viewer is correct, so lowering
         # it to satisfy this test would make the product worse.
         "/api/v1/tefca/demo/validate-sample",
+        # ── Delivery workflow remediation (contract 2026-09-17, section 6) ──
+        # Reads that return DELIVERED VALUES - a delivered line, its curated
+        # copy, its lineage, the Issue Ledger rows, record dispositions, the
+        # exception ledger and the per-delivery audit union - sit at reviewer
+        # (4). A viewer keeps every read that carries no Government data value:
+        # delivery metadata, integrity, runs, reconciliation, the job list, the
+        # job detail (whose value-bearing blocks are null for a viewer with
+        # `availability = requires_role:reviewer`), the timeline, the dashboard
+        # and verification coverage. Same principle as the audit-trail and
+        # export exceptions above: the viewer role exists so that a person can
+        # follow the work without seeing the identifiers.
+        "/api/tefca/rce/deliveries/{intake_id}/records",
+        "/api/tefca/rce/deliveries/{intake_id}/curated",
+        "/api/tefca/rce/curated/{curated_id}/lineage",
+        "/api/tefca/rce/deliveries/{intake_id}/issues",
+        "/api/tefca/rce/deliveries/{intake_id}/dispositions",
+        "/api/tefca/rce/deliveries/{intake_id}/dispositions.csv",
+        "/api/tefca/rce/deliveries/{intake_id}/exceptions",
+        "/api/tefca/rce/deliveries/{intake_id}/audit",
+        # ── Pre-merge review Decision 1 (2026-09-16) ──
+        # Deprecated legacy aliases for the current /api/reports/* content
+        # routes, which the same review raised from viewer to reviewer
+        # (`app/reports/routes.py`, tested in `test_report_authorization.py`).
+        # Each of these renders or returns the SAME report content — record-
+        # level values and delivered evidence — through a different renderer;
+        # leaving a deprecated path at viewer would reopen exactly the door
+        # the current routes just closed. Same principle as the delivery-
+        # workflow exceptions immediately above: a viewer keeps every read
+        # that carries no delivered value (the two /api/tefca/reports list
+        # routes stay viewer — metadata only, no report_data).
+        "/api/tefca/reports/{report_id}",
+        "/api/tefca/reports/{report_id}/csv",
+        "/api/tefca/reports/{report_id}/pdf",
+        "/api/tefca/reports/{report_id}/docx",
+        "/api/tefca/reports/{report_id}/download",
+        "/api/tefca/priority/{case_id}/report",
     }
 
     offenders = []

@@ -406,6 +406,22 @@ jobs:
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
           test "$CODE" = "200" || { echo "DEV did not become healthy (last: $CODE)"; exit 1; }
 
+      - name: Runtime reports the deployed commit (provenance gate)
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          # /health carries git_sha from the image build (Dockerfile ARG GIT_SHA). The value must
+          # be the commit the image tag names. "unknown" means a manual build: reported, not
+          # attributed to CI, and refused here so DEV never runs an unattributable image again
+          # (AUD-20260913-07).
+          SEEN=$(python -c "import json; print(json.load(open('/tmp/h.json')).get('git_sha', 'missing'))")
+          echo "runtime git_sha: $SEEN  (image tag: $IMAGE_TAG)"
+          case "$SEEN" in
+            "$IMAGE_TAG"*) echo "provenance: runtime commit matches the deployed image tag" ;;
+            unknown|missing) echo "::error::runtime does not report a commit - the image was not built by container-release.yml"; exit 1 ;;
+            *) echo "::error::runtime reports $SEEN but the deployed tag is $IMAGE_TAG"; exit 1 ;;
+          esac
+
       - name: Acceptance checks
         id: acceptance
         run: |

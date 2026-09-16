@@ -283,11 +283,25 @@ class NPPESConnector:
         )
         taxonomies = r.get("taxonomies", []) or []
         primary_tax = next((t for t in taxonomies if t.get("primary")), (taxonomies[0] if taxonomies else {}))
+        # NPPES v2.1 `basic.status` is "A" for an active NPI; a deactivated NPI
+        # carries `basic.deactivation_date` (and `reactivation_date` once it
+        # is reinstated). Normalised here to ACTIVE / DEACTIVATED so every
+        # consumer reads one vocabulary; the raw value is kept beside it.
+        status_raw = basic.get("status")
+        deactivation_date = basic.get("deactivation_date")
+        reactivation_date = basic.get("reactivation_date")
+        if str(status_raw or "").upper() in ("D", "DEACTIVATED") or (
+                deactivation_date and not reactivation_date):
+            status = "DEACTIVATED"
+        else:
+            status = "ACTIVE"
         return {
             "found": True,
             "npi": str(r.get("number", npi_fallback)),
             "enumeration_type": r.get("enumeration_type"),  # NPI-1 / NPI-2
-            "status": (basic.get("status") or "ACTIVE"),
+            "status": status,
+            "status_raw": status_raw,
+            "npi_active": status == "ACTIVE",
             "legal_name": org_name,
             "organization_name": basic.get("organization_name"),
             "credential": basic.get("credential"),

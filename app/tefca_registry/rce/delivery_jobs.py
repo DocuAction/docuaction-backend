@@ -23,6 +23,15 @@ different: two registrations of the SAME bytes under the SAME label while one is
 still in flight — a double-click, a refresh, a second browser tab. Once a job is
 terminal its `active_marker` is NULL, the index no longer applies, and a genuine
 re-delivery registers normally.
+
+TWO-AXIS STATUS (2026-09-17)
+────────────────────────────
+`state` and `stage` are what the worker wrote. `status_for_job` derives the
+PROCESSING OUTCOME and the REVIEW STATE from persisted evidence — the latest
+reconciliation snapshot, the stage events, the open findings, the unresolved
+identifier conflicts and the review records — through `status_model`, which is
+the only place that vocabulary lives. `to_dict()` stays cheap and unchanged;
+routes call `status_for_job` when they want the derived view.
 """
 
 from __future__ import annotations
@@ -32,7 +41,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 
 logger = logging.getLogger(__name__)
@@ -267,13 +276,18 @@ async def bind_intake(db, job_id, intake_id, *, records_received: int) -> None:
 async def finish_succeeded(db, job_id, *, reconciliation_passed: bool,
                            records_processed: Optional[int] = None,
                            detail: Optional[Dict[str, Any]] = None) -> None:
-    """Terminal success: the delivery is processed and ready for review.
+    """Terminal success: the pipeline ran to completion.
 
     SUCCEEDED means the pipeline RAN to completion, not that reconciliation
     passed. Those are different facts and they are reported separately:
     a delivery can process cleanly end-to-end and still fail the A–F gate, and
     collapsing the two would hide exactly the condition the gate exists to
     surface. The dashboard shows both.
+
+    The STAGE says the same thing honestly: READY_FOR_REVIEW is written only
+    when reconciliation passed. A job that finished but did not reconcile stays
+    at RECONCILIATION — because that is where the delivery actually is — and the
+    derived processing outcome reads Partially Processed.
 
     `active_marker` is cleared LAST and in the same commit: while it is set the
     partial unique index refuses another job for this identity, and clearing it
@@ -286,7 +300,8 @@ async def finish_succeeded(db, job_id, *, reconciliation_passed: bool,
         return
     now = datetime.utcnow()
     job.state = RceDeliveryJob.STATE_SUCCEEDED
-    job.stage = RceDeliveryJob.STAGE_READY
+    job.stage = (RceDeliveryJob.STAGE_READY if reconciliation_passed
+                 else RceDeliveryJob.STAGE_RECONCILIATION)
     job.completed_at = now
     job.heartbeat_at = now
     job.reconciliation_passed = reconciliation_passed
@@ -398,3 +413,205 @@ async def job_for_intake(db, intake_id):
         select(RceDeliveryJob)
         .where(RceDeliveryJob.source_intake_id == intake_id)
         .order_by(RceDeliveryJob.created_at.desc()))).scalars().first()
+
+
+# ── two-axis status, derived from evidence ───────────────────────────────────
+#
+# REVIEW COUNT MAPPING (documented here because status_model is pure and does
+# not know the tables):
+#
+#   population   review_records tied to the delivery: rows whose entity_id is a
+#                canonical entity of the intake's curated records, OR whose
+#                verification_results->>'source_intake_id' names the intake
+#                (DQ bridge cases, including pre-promotion cases with no entity)
+#   open         reviewer_resolution IS NULL and assigned_to_user_id IS NULL
+#   claimed      reviewer_resolution IS NULL and assigned_to_user_id IS NOT NULL
+#   determined   reviewer_resolution IS NOT NULL (an analyst has decided)
+#   qa_approved  reportable_at IS NOT NULL — only a QA APPROVE event sets it
+#   qa_in_progress  determined, not yet approved, and the latest QA_REVIEW event
+#                is RETURN or ESCALATE (QA has acted and the case is back in
+#                motion)
+#   qa_pending   determined, not yet approved, and no QA_REVIEW event yet
+#   closed       never derived here: there is no delivery-level closure event.
+#
+# `determined_items` passed to status_model is the count of determined cases
+# that are neither pending, in progress nor approved — with the mapping above
+# that is always zero, and it is passed explicitly so the arithmetic is visible.
+
+async def _review_counts(db, intake_id) -> Dict[str, int]:
+    from app.tefca_registry import models as reg
+    from app.tefca_registry.rce import models as m
+
+    if intake_id is None:
+        return {"open": 0, "claimed": 0, "determined": 0, "qa_pending": 0,
+                "qa_in_progress": 0, "qa_approved": 0, "total": 0}
+
+    promoted_ids = select(m.RceCuratedRecord.canonical_entity_id).where(
+        m.RceCuratedRecord.source_intake_id == intake_id,
+        m.RceCuratedRecord.canonical_entity_id.isnot(None))
+    scope = (reg.ReviewRecord.entity_id.in_(promoted_ids)
+             | (reg.ReviewRecord.verification_results["source_intake_id"].astext
+                == str(intake_id)))
+    rows = (await db.execute(
+        select(reg.ReviewRecord.review_id, reg.ReviewRecord.assigned_to_user_id,
+               reg.ReviewRecord.reviewer_resolution, reg.ReviewRecord.reportable_at)
+        .where(scope))).all()
+
+    counts = {"open": 0, "claimed": 0, "determined": 0, "qa_pending": 0,
+              "qa_in_progress": 0, "qa_approved": 0, "total": len(rows)}
+    determined_ids = [r.review_id for r in rows
+                      if r.reviewer_resolution is not None and r.reportable_at is None]
+    latest_qa: Dict[str, Optional[str]] = {}
+    if determined_ids:
+        qa_rows = (await db.execute(text("""
+            SELECT DISTINCT ON (review_id) review_id, qa_action
+            FROM review_decision_events
+            WHERE review_id = ANY(:ids) AND event_type = 'QA_REVIEW'
+            ORDER BY review_id, sequence_number DESC"""),
+            {"ids": determined_ids})).all()
+        latest_qa = {rid: action for rid, action in qa_rows}
+    for r in rows:
+        if r.reportable_at is not None:
+            counts["qa_approved"] += 1
+        elif r.reviewer_resolution is not None:
+            action = latest_qa.get(r.review_id)
+            if action in ("RETURN", "ESCALATE"):
+                counts["qa_in_progress"] += 1
+            else:
+                counts["qa_pending"] += 1
+        elif r.assigned_to_user_id is not None:
+            counts["claimed"] += 1
+        else:
+            counts["open"] += 1
+    return counts
+
+
+async def _invalid_identifiers_promoted(db, intake_id) -> int:
+    """Active NPI identifier rows of the intake's entities failing validate_npi."""
+    from app.services.npi_validator import validate_npi
+    from app.tefca_registry import models as reg
+    from app.tefca_registry.rce import models as m
+
+    if intake_id is None:
+        return 0
+    promoted_ids = select(m.RceCuratedRecord.canonical_entity_id).where(
+        m.RceCuratedRecord.source_intake_id == intake_id,
+        m.RceCuratedRecord.canonical_entity_id.isnot(None))
+    values = (await db.execute(
+        select(reg.TefcaEntityIdentifier.identifier_value).where(
+            reg.TefcaEntityIdentifier.entity_id.in_(promoted_ids),
+            reg.TefcaEntityIdentifier.identifier_type == "npi",
+            reg.TefcaEntityIdentifier.identifier_status == "active"))).scalars().all()
+    return sum(1 for v in values if not validate_npi(v)[0])
+
+
+async def _failed_required_verification(db, intake_id) -> int:
+    """Dimension evidence rows with disposition FAIL for the intake's entities.
+
+    `tefca_dimension_evidence.entity_id` is a string column; the comparison is
+    against the text form of the canonical entity ids. Zero when the table
+    holds nothing for this delivery.
+    """
+    if intake_id is None:
+        return 0
+    try:
+        return int((await db.execute(text("""
+            SELECT count(*) FROM tefca_dimension_evidence e
+            WHERE e.disposition = 'FAIL'
+              AND e.entity_id IN (
+                SELECT CAST(canonical_entity_id AS text) FROM rce_curated_records
+                WHERE source_intake_id = CAST(:i AS uuid)
+                  AND canonical_entity_id IS NOT NULL)"""),
+            {"i": str(intake_id)})).scalar() or 0)
+    except Exception as exc:  # noqa: BLE001 — an absent table is zero evidence, not an error
+        logger.warning("failed-verification count unavailable: %s",
+                       type(exc).__name__, exc_info=True)
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return 0
+
+
+async def _open_findings(db, intake_id) -> int:
+    from app.tefca_registry.rce import models as m
+    from app.tefca_registry.rce import run_selection
+
+    if intake_id is None:
+        return 0
+    return int((await db.execute(
+        select(func.count()).select_from(m.RceIssue).where(
+            run_selection.issues_filter(intake_id),
+            m.RceIssue.severity.in_(("CRITICAL", "HIGH")),
+            m.RceIssue.resolution.in_(("OPEN", "PROPOSED", "UNDER_REVIEW"))))
+    ).scalar() or 0)
+
+
+async def status_for_job(db, job) -> Dict[str, Any]:
+    """Assemble the inputs and derive `processing_outcome` and `review_state`.
+
+    Every input is read from persisted rows: the latest snapshot for the job,
+    the stage-event timeline, the current run's open HIGH/CRITICAL findings,
+    the unresolved identifier conflicts, invalid identifiers that reached the
+    registry, failed required verifications and the review records tied to the
+    delivery. Nothing is recomputed from the job's own counters.
+    """
+    from app.tefca_registry.rce import dispositions as disp
+    from app.tefca_registry.rce import identifier_decisions, stage_events
+    from app.tefca_registry.rce import reconciliation, status_model
+
+    intake_id = job.source_intake_id
+    snapshot = await reconciliation.latest_snapshot(db, job.id)
+    snapshot_dict = snapshot.to_dict() if snapshot is not None else None
+    events = await stage_events.timeline(db, job.id)
+    summary = stage_events.summarise(events)
+
+    unresolved_findings = await _open_findings(db, intake_id)
+    unresolved_conflicts = (await identifier_decisions.unresolved_for_intake(db, intake_id)
+                            if intake_id is not None else 0)
+    invalid_promoted = await _invalid_identifiers_promoted(db, intake_id)
+    failed_verification = await _failed_required_verification(db, intake_id)
+    unexplained = (await disp.records_without_disposition(db, intake_id)
+                   if intake_id is not None else 0)
+
+    outcome = status_model.processing_outcome(
+        job_state=job.state, job_stage=job.stage,
+        failed_stage=summary.get("failed_stage"),
+        error_reason=job.error_reason,
+        snapshot=snapshot_dict,
+        stages_completed=summary.get("completed_stages") or [],
+        unresolved_findings=unresolved_findings,
+        unresolved_conflicts=unresolved_conflicts,
+        invalid_identifiers_promoted=invalid_promoted,
+        failed_required_verification=failed_verification,
+        unexplained_records=unexplained,
+    )
+    review_counts = await _review_counts(db, intake_id)
+    review = status_model.review_state(
+        outcome_code=outcome["code"],
+        snapshot_passed=bool(snapshot_dict and snapshot_dict.get("passed")),
+        open_work_items=review_counts["open"],
+        claimed_work_items=review_counts["claimed"],
+        determined_items=0,
+        qa_pending=review_counts["qa_pending"],
+        qa_in_progress=review_counts["qa_in_progress"],
+        qa_approved=review_counts["qa_approved"],
+        closed=False,
+    )
+    return {
+        "processing_outcome": outcome,
+        "review_state": review,
+        "inputs": {
+            "snapshot_id": snapshot_dict.get("id") if snapshot_dict else None,
+            "snapshot_passed": snapshot_dict.get("passed") if snapshot_dict else None,
+            "stage_attempts": summary.get("attempts", 0),
+            "completed_stages": summary.get("completed_stages") or [],
+            "failed_stage": summary.get("failed_stage"),
+            "unresolved_findings": unresolved_findings,
+            "unresolved_conflicts": unresolved_conflicts,
+            "invalid_identifiers_promoted": invalid_promoted,
+            "failed_required_verification": failed_verification,
+            "records_without_disposition": unexplained,
+            "review_counts": review_counts,
+        },
+    }

@@ -301,6 +301,17 @@ class RceIssue(Base):
     qa_approved_by = Column(Text)
     qa_approved_at = Column(DateTime)
 
+    #: Added 2026-09-18 for post-promotion verification findings (pre-merge
+    #: review Decision 2): the request/trace correlation and the build that
+    #: recorded this finding, and the before/after state of what a BLOCKING
+    #: finding changed (never the original promotion event — that stays
+    #: untouched). NULL on every issue recorded before this column existed,
+    #: and on any issue where nothing changed (e.g. a nonblocking finding).
+    correlation_id = Column(String(64))
+    build_sha = Column(String(40))
+    before_state = Column(JSONB)
+    after_state = Column(JSONB)
+
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
     __table_args__ = (
@@ -498,3 +509,9 @@ RCE_TABLE_ORDER = [
     "rce_correction_details",
     "tefca_entity_contacts",
 ]
+
+
+# Traceability evidence tables (2026-09-17). Imported here so that any code
+# importing the RCE models - the app, the Alembic environment, create_all -
+# registers them on the same Base.
+import app.tefca_registry.rce.traceability_models  # noqa: E402,F401

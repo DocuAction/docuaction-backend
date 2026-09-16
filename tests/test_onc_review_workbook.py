@@ -667,6 +667,15 @@ def _dependency_roles(route):
     floors = []
     for dependency in route.dependant.dependencies:
         call = dependency.call
+        # Both `require_role` and `require_role_audited` (2026-09-16, pre-merge
+        # review Decision 1) set this attribute explicitly for exactly this
+        # kind of introspection; checking it first means a wrapper whose own
+        # closure only holds the WRAPPED checker (not the role string itself)
+        # is still detected without recursing through closures.
+        floor = getattr(call, "minimum_role", None)
+        if isinstance(floor, str) and floor in ROLE_HIERARCHY:
+            floors.append(floor)
+            continue
         closure = getattr(call, "__closure__", None) or ()
         for cell in closure:
             value = cell.cell_contents

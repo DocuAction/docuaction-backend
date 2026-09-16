@@ -204,6 +204,7 @@ _FIELD_TO_CURATED_COLUMN = {
     "NPI": "npi",
     "TEFCAID": "tefcaid",
     "HCID": "hcid",
+    "AAID": "aaid",
     "partOf": "part_of",
     "orgManagingOrg": "org_managing_org",
     "sequoiaorgtype": "sequoia_org_type",
@@ -495,6 +496,15 @@ async def apply_correction(db, issue_id, *, actor: str,
     if new_value is None:
         raise CorrectionRefused(
             f"Issue {issue.issue_code} carries no corrected value to apply.")
+    if column == "npi":
+        # A correction is a human write of an identifier; it passes the same
+        # validator promotion applies (review finding L-1, 2026-09-16).
+        from app.services.npi_validator import validate_npi
+        ok, message = validate_npi(new_value)
+        if not ok:
+            raise CorrectionRefused(
+                f"Corrected NPI {new_value!r} is not a valid NPI ({message}); a "
+                f"correction cannot register an invalid identifier.")
 
     db.add(m.RceCorrectionDetail(
         curated_record_id=curated.id,
@@ -517,10 +527,24 @@ async def apply_correction(db, issue_id, *, actor: str,
     ))
     setattr(curated, column, new_value)
     curated.correction_count = (curated.correction_count or 0) + 1
-    curated.record_status = CORRECTED
     curated.reviewed_by = actor
     curated.reviewed_at = datetime.utcnow()
     issue.resolution = "RESOLVED"
+    await db.flush()
+    # The corrected record is promotable only if NOTHING ELSE holds it. An
+    # independent review (2026-09-16, M-1) showed the unconditional CORRECTED
+    # assignment releasing a record that still carried a second undecided HIGH
+    # finding, which the legacy promote route then promoted.
+    still_blocking = (await _blocking_by_record(
+        db, curated.source_intake_id)).get(curated.source_record_id)
+    if still_blocking:
+        curated.record_status = HELD
+        curated.status_reason = (
+            f"Correction applied; still held by {still_blocking['issues']} undecided "
+            f"holding-severity issue(s) and {still_blocking['conflicts']} unresolved "
+            f"identifier conflict(s).")
+    else:
+        curated.record_status = CORRECTED
     await db.commit()
 
     return {
@@ -531,40 +555,375 @@ async def apply_correction(db, issue_id, *, actor: str,
     }
 
 
-async def recompute_hold_status(db, intake_id, *, run_id=None) -> Dict[str, Any]:
-    """Re-derive CLEAN/CORRECTED/HELD after issues have been resolved.
+async def _conflict_held_records(db, intake_id) -> Dict[Any, int]:
+    """source_record_id -> unresolved identifier conflicts (latest CONFLICT_RAISED)."""
+    from sqlalchemy import text
 
-    A record stops being HELD when nothing at holding severity remains OPEN. Run
-    after a batch of analyst resolutions so promotion sees current state.
+    rows = (await db.execute(text("""
+        SELECT x.source_record_id, count(*) AS n FROM (
+          SELECT DISTINCT ON (entity_id, identifier_type) decision, source_record_id
+          FROM tefca_identifier_decision_events
+          WHERE intake_id = CAST(:i AS uuid)
+          ORDER BY entity_id, identifier_type, sequence DESC) x
+        WHERE x.decision = 'CONFLICT_RAISED' AND x.source_record_id IS NOT NULL
+        GROUP BY x.source_record_id"""), {"i": str(intake_id)})).all()
+    return {record_id: int(n) for record_id, n in rows}
 
-    Scoped to ONE quality run, for the same reason `curate_delivery` is: a
-    superseded run's unresolved finding must not hold a record the current run
-    no longer objects to.
-    """
-    curated = (await db.execute(
-        select(m.RceCuratedRecord).where(
-            m.RceCuratedRecord.source_intake_id == intake_id))).scalars().all()
+
+async def _blocking_by_record(db, intake_id, *, run_id=None) -> Dict[Any, Dict[str, int]]:
+    """Everything that holds a record: undecided holding-severity issues of the
+    current run, plus unresolved identifier conflicts."""
     undecided_rows = (await db.execute(
         select(m.RceIssue.source_record_id, m.RceIssue.severity,
                m.RceIssue.resolution)
         .where(run_selection.issues_filter(intake_id, run_id=run_id)))).all()
-    blocking: Dict[Any, int] = {}
+    blocking: Dict[Any, Dict[str, int]] = {}
     for record_id, severity, resolution in undecided_rows:
         if record_id is not None and blocks_promotion(severity, resolution):
-            blocking[record_id] = blocking.get(record_id, 0) + 1
+            entry = blocking.setdefault(record_id, {"issues": 0, "conflicts": 0})
+            entry["issues"] += 1
+    for record_id, n in (await _conflict_held_records(db, intake_id)).items():
+        entry = blocking.setdefault(record_id, {"issues": 0, "conflicts": 0})
+        entry["conflicts"] += n
+    return blocking
+
+
+async def recompute_hold_status(db, intake_id, *, run_id=None) -> Dict[str, Any]:
+    """Re-derive CLEAN/CORRECTED/HELD after issues have been resolved.
+
+    A record stops being HELD when nothing at holding severity remains OPEN AND
+    no identifier conflict raised against it is still undecided (latest
+    decision event CONFLICT_RAISED). Run after a batch of analyst resolutions
+    so promotion sees current state.
+
+    Scoped to ONE quality run, for the same reason `curate_delivery` is: a
+    superseded run's unresolved finding must not hold a record the current run
+    no longer objects to. Identifier conflicts are not run-scoped — they are
+    statements about the registry, decided per entity and identifier type.
+
+    This function writes NO disposition event. Terminal accounting for a
+    released record is written by `promotion.promote_delivery` when the record
+    is re-promoted (see `apply_disposition`).
+    """
+    curated = (await db.execute(
+        select(m.RceCuratedRecord).where(
+            m.RceCuratedRecord.source_intake_id == intake_id))).scalars().all()
+    blocking = await _blocking_by_record(db, intake_id, run_id=run_id)
 
     changed = 0
+    released: List[str] = []
     for row in curated:
         if row.record_status == REJECTED:
+            continue
+        if row.canonical_entity_id is not None:
+            # Independent review finding M-3 (2026-09-16): a record already
+            # PROMOTED must never have `record_status` rewritten again by this
+            # function. A post-promotion finding (e.g. NPI-006, written by
+            # `verification_findings.record_npi_outcome` under this SAME run
+            # id) would otherwise flip an already-promoted record to HELD,
+            # contradicting its own disposition with no path to clear it. Its
+            # BLOCKING consequences go through
+            # `post_promotion_verification.record_finding` instead — entity
+            # verification_status, a work item, a new snapshot — never
+            # `record_status`. Once promoted, `record_status` is history.
             continue
         should_hold = row.source_record_id in blocking
         if should_hold and row.record_status != HELD:
             row.record_status = HELD
+            entry = blocking[row.source_record_id]
+            row.status_reason = (
+                f"{entry['issues']} unresolved holding-severity issue(s) and "
+                f"{entry['conflicts']} unresolved identifier conflict(s). Held "
+                f"from promotion until resolved.")
             changed += 1
         elif not should_hold and row.record_status == HELD:
             row.record_status = CORRECTED if row.correction_count else CLEAN
-            row.status_reason = "All holding-severity issues resolved."
+            row.status_reason = ("All holding-severity issues and identifier "
+                                 "conflicts resolved.")
             changed += 1
+            released.append(str(row.id))
     await db.commit()
+    # Counted from the records this function actually holds (pre-promotion
+    # only), not from raw `blocking`: a promoted record's source_record_id can
+    # appear in `blocking` (a post-promotion finding under the same run) while
+    # never being HELD by this function, per the skip above.
+    still_held_ids = {row.source_record_id for row in curated
+                      if row.canonical_entity_id is None and row.record_status == HELD}
     return {"curated_records": len(curated), "status_changed": changed,
-            "still_held": len(blocking)}
+            "still_held": len(still_held_ids), "released": released,
+            "held_by_conflict_only": sum(
+                1 for record_id, e in blocking.items()
+                if record_id in still_held_ids and e["issues"] == 0 and e["conflicts"])}
+
+
+async def release_check(db, intake_id, *, run_id=None) -> List[Dict[str, Any]]:
+    """HELD records that nothing holds any more — releasable, not yet released.
+
+    Read-only: it reports what `recompute_hold_status` WOULD release, so a
+    reviewer can see the effect of a batch of decisions before applying it.
+    """
+    curated = (await db.execute(
+        select(m.RceCuratedRecord).where(
+            m.RceCuratedRecord.source_intake_id == intake_id,
+            m.RceCuratedRecord.record_status == HELD))).scalars().all()
+    blocking = await _blocking_by_record(db, intake_id, run_id=run_id)
+    return [{
+        "curated_record_id": str(row.id),
+        "source_record_id": str(row.source_record_id),
+        "rce_org_oid": row.rce_org_oid,
+        "name": row.name,
+        "would_become": CORRECTED if row.correction_count else CLEAN,
+    } for row in curated if row.source_record_id not in blocking]
+
+
+# ── the analyst disposition ──────────────────────────────────────────────────
+
+#: What a reviewer may decide about one issue, exactly as the UI sends it.
+#: Each maps onto the existing issue state machine (`transition_issue` /
+#: `apply_correction`) and, for an identifier conflict, onto
+#: `identifier_decisions.decide`. Lower-case spellings are accepted too.
+DISPOSITION_DECISIONS = ("ACCEPT", "REJECT", "CORRECT", "CONFIRM_EXISTING",
+                         "CONFIRM_SUBMITTED", "REQUEST_EVIDENCE", "DEFER",
+                         "ESCALATE")
+
+#: Issue types raised by promotion for identifier conflicts (rule NPI-008).
+_CONFLICT_ISSUE_TYPES = frozenset({"NPI_EXISTING_VALUE_CONFLICT",
+                                   "IDENTIFIER_EXISTING_VALUE_CONFLICT"})
+
+#: Reviewer decision -> identifier decision event, for conflict issues.
+_CONFLICT_DECISION = {
+    "CONFIRM_EXISTING": "CONFIRM_EXISTING",
+    "CONFIRM_SUBMITTED": "CONFIRM_SUBMITTED",
+    "CORRECT": "CORRECTED",
+    "REJECT": "REJECTED",
+    "REQUEST_EVIDENCE": "REQUEST_EVIDENCE",
+    "DEFER": "DEFERRED",
+    "ESCALATE": "ESCALATED",
+}
+
+
+async def _walk(db, issue_id, path, *, actor: str, notes: str,
+                qa_actor: Optional[str]) -> None:
+    """Move an issue along `path`, skipping states it is already at or past."""
+    issue = await db.get(m.RceIssue, issue_id)
+    for to_status in path:
+        current = issue.resolution or "OPEN"
+        if current == to_status:
+            continue
+        if to_status not in _ALLOWED_TRANSITIONS.get(current, set()):
+            # Already past this step (e.g. PROPOSED when asked for OPEN→PROPOSED).
+            if to_status in {"PROPOSED", "UNDER_REVIEW"} and current in (
+                    "PROPOSED", "UNDER_REVIEW", "APPROVED"):
+                continue
+            raise CorrectionRefused(
+                f"Cannot move issue {issue.issue_code} from {current} to "
+                f"{to_status}; allowed: "
+                f"{sorted(_ALLOWED_TRANSITIONS.get(current, set()))}.")
+        await transition_issue(db, issue_id, to_status=to_status, actor=actor,
+                               notes=notes, qa_actor=qa_actor)
+        await db.refresh(issue)
+
+
+async def _flag_review_case_escalated(db, issue, *, actor: str, reason: str) -> Optional[str]:
+    """Mark the DQ review case that cites this issue as escalated, if one exists.
+
+    The case has no status column by design (`review_decision_events` owns
+    workflow state), so the flag lives in the case snapshot and the audit log.
+    """
+    from app.tefca_registry import audit as reg_audit
+    from app.tefca_registry import models as reg
+    from app.tefca_registry.rce.dq_review_bridge import QUEUE_SOURCE
+
+    record = (await db.execute(
+        select(reg.ReviewRecord).where(
+            reg.ReviewRecord.verification_results["queue_source"].astext == QUEUE_SOURCE,
+            reg.ReviewRecord.source_record_id == issue.source_record_id,
+            reg.ReviewRecord.verification_results["issue_ids"].astext.contains(
+                str(issue.id)))
+        .limit(1))).scalar_one_or_none()
+    if record is None:
+        return None
+    payload = dict(record.verification_results or {})
+    payload["escalated"] = {"by": actor, "reason": reason,
+                            "issue_code": issue.issue_code,
+                            "at": datetime.utcnow().isoformat()}
+    payload["priority"] = max(int(payload.get("priority") or 0), 95)
+    record.verification_results = payload
+    reg_audit.record(db, "review_case_escalated", record.entity_id, actor_email=actor,
+                     metadata={"review_id": record.review_id, "issue_code": issue.issue_code,
+                               "reason": reason})
+    await db.flush()
+    return record.review_id
+
+
+async def apply_disposition(db, issue_id, *, decision: str, reason: str,
+                            actor: str, corrected_value: Optional[str] = None,
+                            actor_id=None, qa_actor: Optional[str] = None
+                            ) -> Dict[str, Any]:
+    """One analyst decision about one issue, end to end.
+
+        decision            non-conflict issue                  conflict issue (NPI-008)
+        ─────────────────   ─────────────────────────────────   ────────────────────────
+        ACCEPT              PROPOSED → APPROVED → apply          (same)
+                            (NO_CORRECTION: WAIVED → RESOLVED)
+        REJECT              UNDER_REVIEW; hold STAYS,            decide REJECTED (releases;
+                            reason recorded                      registry unchanged)
+        CORRECT             PROPOSED → APPROVED → apply(value)   + decide CORRECTED
+        CONFIRM_EXISTING    refused                              decide CONFIRM_EXISTING;
+                                                                 issue REJECTED → RESOLVED
+        CONFIRM_SUBMITTED   refused                              decide CONFIRM_SUBMITTED
+                                                                 (identifier + version +
+                                                                 audit); issue RESOLVED
+        REQUEST_EVIDENCE    UNDER_REVIEW; hold stays             + decide REQUEST_EVIDENCE
+        DEFER               UNDER_REVIEW; hold stays             + decide DEFERRED
+        ESCALATE            UNDER_REVIEW; hold stays; review     + decide ESCALATED
+                            case flagged escalated
+
+    A non-blank reason is required (ValueError, so the API maps it to 422).
+    After the decision the record's hold is recomputed; if the record is
+    released it is re-promoted through the idempotent drain with a HUMAN
+    disposition event (reason ANALYST_DISPOSITION) and a reconciliation
+    snapshot is persisted with trigger DISPOSITION. Area 1 is never touched.
+    """
+    decision = (decision or "").strip().upper()
+    if decision not in DISPOSITION_DECISIONS:
+        raise ValueError(
+            f"unknown decision {decision!r}; one of {DISPOSITION_DECISIONS}")
+    if not (reason or "").strip():
+        raise ValueError("a disposition reason is required")
+    reason = reason.strip()
+    if decision == "CORRECT" and (corrected_value is None or not str(corrected_value).strip()):
+        raise ValueError("CORRECT requires corrected_value")
+
+    issue = await db.get(m.RceIssue, issue_id)
+    if issue is None:
+        raise CorrectionRefused(f"No issue {issue_id}")
+    if issue.source_record_id is None:
+        raise CorrectionRefused(
+            f"Issue {issue.issue_code} names no source record; it is a "
+            f"delivery-level finding and has no record disposition.")
+    intake_id = issue.source_intake_id
+    curated = (await db.execute(
+        select(m.RceCuratedRecord).where(
+            m.RceCuratedRecord.source_record_id == issue.source_record_id)
+    )).scalar_one_or_none()
+    status_before = curated.record_status if curated is not None else None
+    is_conflict = issue.issue_type in _CONFLICT_ISSUE_TYPES
+    if decision in ("CONFIRM_EXISTING", "CONFIRM_SUBMITTED") and not is_conflict:
+        raise CorrectionRefused(
+            f"{decision} applies only to identifier conflicts; issue "
+            f"{issue.issue_code} is {issue.issue_type}.")
+
+    from app.tefca_registry.rce import dispositions as disp
+    history_before = len(await disp.history_for_record(db, issue.source_record_id))
+
+    notes = f"[{decision}] {reason}"
+    identifier_event = None
+    correction = None
+    escalated_case = None
+
+    # ── the identifier decision, when the issue is a conflict ──
+    if is_conflict and decision in _CONFLICT_DECISION:
+        from app.tefca_registry.rce import identifier_decisions
+        from app.tefca_registry.rce import traceability_models as tm
+
+        latest = (await db.execute(
+            select(tm.TefcaIdentifierDecisionEvent).where(
+                tm.TefcaIdentifierDecisionEvent.issue_id == issue.id)
+            .order_by(tm.TefcaIdentifierDecisionEvent.sequence.desc())
+            .limit(1))).scalar_one_or_none()
+        if latest is None:
+            raise CorrectionRefused(
+                f"Issue {issue.issue_code} is an identifier conflict but no "
+                f"conflict event names it; the ledger and the decision table "
+                f"disagree and must be reconciled before a decision is recorded.")
+        identifier_event = await identifier_decisions.decide(
+            db, entity_id=latest.entity_id,
+            identifier_type=latest.identifier_type,
+            decision=_CONFLICT_DECISION[decision], reason=reason, actor=actor,
+            selected_value=(corrected_value if decision == "CORRECT" else None),
+            source_record_id=issue.source_record_id, intake_id=intake_id,
+            issue_id=issue.id, actor_id=actor_id)
+
+    # ── the issue state machine ──
+    if decision == "ACCEPT":
+        if issue.correction_authority == NO_CORRECTION or (
+                issue.suggested_value is None and corrected_value is None):
+            await _walk(db, issue.id, ("WAIVED", "RESOLVED"), actor=actor,
+                        notes=notes, qa_actor=qa_actor)
+        else:
+            await _walk(db, issue.id, ("PROPOSED", "APPROVED"), actor=actor,
+                        notes=notes, qa_actor=qa_actor)
+            correction = await apply_correction(db, issue.id, actor=actor)
+    elif decision == "CORRECT":
+        await _walk(db, issue.id, ("PROPOSED", "APPROVED"), actor=actor,
+                    notes=notes, qa_actor=qa_actor)
+        correction = await apply_correction(db, issue.id, actor=actor,
+                                            corrected_value=corrected_value)
+    elif decision == "CONFIRM_EXISTING" or (decision == "REJECT" and is_conflict):
+        # The submitted value is not adopted; the finding is settled.
+        await _walk(db, issue.id, ("REJECTED", "RESOLVED"), actor=actor,
+                    notes=notes, qa_actor=qa_actor)
+    elif decision == "CONFIRM_SUBMITTED":
+        # The registry change was made by identifier_decisions.decide; the
+        # curated value already IS the submitted value, so nothing is applied.
+        await _walk(db, issue.id, ("PROPOSED", "APPROVED", "RESOLVED"),
+                    actor=actor, notes=notes, qa_actor=qa_actor)
+    else:
+        # REJECT (non-conflict), REQUEST_EVIDENCE, DEFER, ESCALATE: the record
+        # stays HELD. The question is still open in substance, so the issue
+        # stays undecided (UNDER_REVIEW) and the reason is recorded on it.
+        await _walk(db, issue.id, ("UNDER_REVIEW",), actor=actor, notes=notes,
+                    qa_actor=qa_actor)
+        if decision == "ESCALATE":
+            escalated_case = await _flag_review_case_escalated(
+                db, issue, actor=actor, reason=reason)
+            await db.commit()
+
+    # ── hold, re-promotion, snapshot ──
+    hold = await recompute_hold_status(db, intake_id)
+    if curated is not None:
+        await db.refresh(curated)
+    status_after = curated.record_status if curated is not None else None
+    promotion_result = None
+    snapshot_id = None
+    if curated is not None and status_after != status_before:
+        from app.tefca_registry.rce import promotion as promotion_module
+        from app.tefca_registry.rce import reconciliation
+        from app.tefca_registry.rce.delivery_jobs import job_for_intake
+
+        promotion_result = await promotion_module.promote_delivery(
+            db, intake_id, actor=actor, actor_id=actor_id,
+            disposition_actor_type="HUMAN",
+            disposition_reason=f"Analyst decision {decision}: {reason}")
+        job = await job_for_intake(db, intake_id)
+        if job is not None:
+            full = await reconciliation.reconcile_delivery(db, intake_id)
+            snapshot = await reconciliation.persist_snapshot(
+                db, intake_id, full, job_id=job.id, actor=actor,
+                trigger="DISPOSITION")
+            snapshot_id = str(snapshot.id)
+        await db.refresh(curated)
+
+    history = await disp.history_for_record(db, issue.source_record_id)
+    disposition_event = history[-1] if len(history) > history_before else None
+    await db.refresh(issue)
+    return {
+        "issue_id": str(issue.id), "issue_code": issue.issue_code,
+        "decision": decision, "resolution": issue.resolution,
+        "identifier_decision": identifier_event["event"] if identifier_event else None,
+        "registry_changed": bool(identifier_event and identifier_event["registry_changed"]),
+        "correction": correction,
+        "escalated_review_id": escalated_case,
+        "record_status_before": status_before,
+        "record_status_after": (curated.record_status if curated is not None else None),
+        "hold_released": status_before == HELD and status_after != HELD,
+        "hold": hold,
+        "re_promoted": promotion_result is not None,
+        "promotion": ({k: promotion_result[k] for k in (
+            "entities_created", "entities_updated", "entities_unchanged",
+            "conflicts_raised", "dispositions_written_this_run")}
+                      if promotion_result else None),
+        "disposition_event": disposition_event,
+        "snapshot_id": snapshot_id,
+    }

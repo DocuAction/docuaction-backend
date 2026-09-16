@@ -84,6 +84,11 @@ async def delivery_dashboard(db, intake_id) -> Dict[str, Any]:
 
     stages = _stages(job, recon, integrity)
     status = _status(job, recon)
+    # Two-axis status (contract section 4) beside the legacy single word, which
+    # is kept for compatibility. Both derive from persisted evidence.
+    status.update(await _two_axis_status(db, job))
+    dispositions = await _dispositions(db, intake.id, received)
+    snapshot = await _latest_snapshot(db, job)
 
     return {
         "intake_id": str(intake.id),
@@ -128,6 +133,8 @@ async def delivery_dashboard(db, intake_id) -> Dict[str, Any]:
         },
         "integrity": integrity,
         "actions": _actions(status, recon, status_counts),
+        "dispositions": dispositions,
+        "snapshot": snapshot,
     }
 
 
@@ -309,3 +316,54 @@ async def _integrity(db, intake_id) -> Dict[str, Any]:
             if intact
             else "Area 1 integrity check FAILED — see the mismatch counts."),
     }
+
+
+# ── 2026-09-17 remediation: two-axis status, dispositions, snapshot ──────────
+
+async def _two_axis_status(db, job) -> Dict[str, Any]:
+    """`processing_outcome` and `review_state` for the delivery's job.
+
+    Delegates to `delivery_jobs.status_for_job` (lane P) through the delivery
+    routes' resolver, which falls back to a direct computation from the
+    traceability tables when that function is not present. Never raises: a
+    dashboard panel that cannot be built says so.
+    """
+    if job is None:
+        return {"processing_outcome": None, "review_state": None,
+                "status_note": "No job exists for this delivery (synchronous ingest)."}
+    try:
+        from app.tefca_registry.rce.delivery_routes import status_for_job
+        derived = await status_for_job(db, job)
+        return {"processing_outcome": derived.get("processing_outcome"),
+                "review_state": derived.get("review_state")}
+    except Exception as exc:  # noqa: BLE001
+        logger.info("dashboard two-axis status unavailable: %s", type(exc).__name__)
+        return {"processing_outcome": None, "review_state": None,
+                "status_note": "Status derivation unavailable."}
+
+
+async def _dispositions(db, intake_id, received) -> Dict[str, Any]:
+    """Current disposition counts and the accounting identity, evaluated."""
+    from app.tefca_registry.rce import dispositions as disp
+
+    try:
+        counts = await disp.counts_for_intake(db, intake_id)
+        return {**counts,
+                "equation": disp.equation(counts, int(received or 0)),
+                "unexplained": await disp.records_without_disposition(db, intake_id)}
+    except Exception as exc:  # noqa: BLE001
+        logger.info("dashboard dispositions unavailable for %s: %s", intake_id,
+                    type(exc).__name__)
+        return {"equation": None, "note": "Disposition counts unavailable."}
+
+
+async def _latest_snapshot(db, job) -> Optional[Dict[str, Any]]:
+    if job is None:
+        return None
+    try:
+        from app.tefca_registry.rce.delivery_routes import latest_snapshot
+        snapshot = await latest_snapshot(db, job.id)
+        return snapshot.to_dict() if snapshot is not None else None
+    except Exception as exc:  # noqa: BLE001
+        logger.info("dashboard snapshot unavailable: %s", type(exc).__name__)
+        return None

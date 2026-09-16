@@ -12,7 +12,11 @@ from sqlalchemy import text
 from app.core.config import settings
 from app.core.database import engine, Base
 
-logging.basicConfig(level=logging.INFO)
+# Structured JSON logging with request/job/build correlation and credential
+# redaction (app/core/logging_config.py). DOCUACTION_LOG_FORMAT=plain restores
+# the pre-remediation basicConfig shape. Installed before anything else logs.
+from app.core.logging_config import configure_logging  # noqa: E402
+configure_logging()
 logger = logging.getLogger("docuaction")
 
 # Interactive API docs are disabled in production (info-disclosure hardening) unless
@@ -40,8 +44,14 @@ app = FastAPI(
 #      RateLimit   -> tiered limiter; CORS preflights are exempt inside it.
 #      CORS        -> outside the limiter so a 429 carries CORS headers and the
 #                     browser reports the real status instead of a CORS failure.
-#      TrustedHost -> outermost: Host-header spoofing is rejected before anything
+#      TrustedHost -> Host-header spoofing is rejected before anything
 #                     else runs (FIX 8 — NIST SC-7).
+#      (null-byte rejection, security headers: the two @app.middleware("http")
+#       functions below, added after TrustedHost and therefore outside it)
+#      RequestContext -> OUTERMOST (added last, below): binds X-Request-ID /
+#                     traceparent for the whole request so every log line,
+#                     error body and evidence row written inside carries the
+#                     same id, and echoes X-Request-ID on every response.
 from app.core.modules import ModuleGateMiddleware  # noqa: E402
 app.add_middleware(ModuleGateMiddleware)
 
@@ -99,6 +109,24 @@ async def security_headers(request, call_next):
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
     return response
+
+
+# ── Request correlation (2026-09-17 remediation). Added LAST so it is the
+#    OUTERMOST middleware: the request id exists before TrustedHost, the rate
+#    limiter or the module gate answer, and their error bodies carry it. ──
+from app.core.request_context import RequestContextMiddleware  # noqa: E402
+app.add_middleware(RequestContextMiddleware)
+
+
+# ── OpenTelemetry / Azure Monitor export (2026-09-17 observability increment,
+#    app/core/telemetry.py). Enabled only when OTEL_ENABLED=true AND
+#    APPLICATIONINSIGHTS_CONNECTION_STRING is set; otherwise a documented no-op
+#    (telemetry_status() says why). When enabled, the FastAPI instrumentation is
+#    added here, AFTER RequestContextMiddleware, so the server span is open by
+#    the time the request context binds trace_id/span_id from it. Safe failure:
+#    a configuration error is logged once at WARNING and the app starts. ──
+from app.core.telemetry import configure_telemetry  # noqa: E402
+_telemetry = configure_telemetry(app)
 
 
 # ── Global exception handlers — production never leaks stack traces, DB errors,
@@ -228,7 +256,8 @@ async def startup():
     # Alembic-managed production database is. A database that does NOT match will
     # surface real errors instead of being silently repaired — which is the
     # intended behaviour, because silent repair is what hid the drift.
-    from app.core.schema_guard import log_schema_mutation_skipped, schema_mutation_allowed
+    from app.core.schema_guard import (create_all_except_migration_owned,
+                                       log_schema_mutation_skipped, schema_mutation_allowed)
 
     if not schema_mutation_allowed():
         log_schema_mutation_skipped()
@@ -237,7 +266,7 @@ async def startup():
     for attempt in range(1, 8):
         try:
             async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)  # create any missing tables
+                await conn.run_sync(create_all_except_migration_owned, Base.metadata)
                 for stmt in user_columns:
                     await conn.execute(text(stmt))
             logger.info("DB schema verified (tables + all users columns; existing users grandfathered)")
@@ -444,39 +473,40 @@ async def _probe_tefca():
 
 @app.get("/health")
 async def health():
-    tefca = await _probe_tefca()
-    # Bulletin scheduler observability — confirms whether ENABLE_SCHEDULER is set and
-    # the daily/self-heal jobs actually started on this box. Never breaks /health.
-    try:
-        from app.bulletin_intelligence.scheduler import scheduler_status
-        scheduler = scheduler_status()
-        # /health is unauthenticated: the operator alert address is an
-        # operational contact, not a health fact, and must not be public.
-        if isinstance(scheduler, dict):
-            scheduler = {k: v for k, v in scheduler.items() if k != "alert_email"}
-    except Exception as e:
-        scheduler = {"running": False, "error": str(e)}
-    # USPS address standardization is optional — reported from client state only,
-    # never probed, because /health must not depend on an external API answering.
-    try:
-        from app.tefca_registry.usps_client import get_usps_client
-        usps = get_usps_client().health()
-    except Exception as e:
-        usps = {"status": "unavailable", "error": str(e)}
-    # A module the deployment profile does not serve answers 404 at the gate, so
-    # /health must not advertise it as "active" (independent checker finding,
-    # 2026-09-14). Core keys stay "active"; profile-gated keys report "disabled".
+    """Liveness and build identity. PUBLIC, so it says only what a load balancer
+    and a deploy gate need (remediation contract 2026-09-17, section 8):
+
+        status, service, version, git_sha, build_time, environment,
+        modules{name: active|disabled}
+
+    Nothing else: no connector probe results, no scheduler state, no USPS client
+    state, no migration revision. Those are operational facts and live on
+    `GET /api/admin/health` (admin). The deploy workflows read `status` and
+    `git_sha` from here; both are kept.
+
+    A module the deployment profile does not serve answers 404 at the gate, so
+    it is reported "disabled", never "active" (independent checker finding,
+    2026-09-14). `tefca_review_protocol` is now profile-derived as well: whether
+    the TEFCA module is SERVED is a fact about this deployment; whether its
+    upstream sources answer is a connector fact and is reported on admin health.
+    """
+    from app.core import request_context
     from app.core.modules import module_enabled
 
     def _profiled(module_id: str) -> str:
         return "active" if module_enabled(module_id) else "disabled"
 
+    identity = request_context.build_identity()
     return {
         "status": "healthy",
-        "version": "6.0.0",
-        "platform": "DocuAction AI",
-        "scheduler": scheduler,
-        "usps": usps,
+        "service": request_context.SERVICE_NAME,
+        "version": identity["version"],
+        # Commit and build time baked into the image (Dockerfile ARG GIT_SHA /
+        # BUILD_TIME); "unknown" means the image was not built by the release
+        # workflow and cannot be attributed to a commit.
+        "git_sha": identity["git_sha"],
+        "build_time": identity["build_time"],
+        "environment": identity["environment"],
         "modules": {
             "documents": "active",
             "audio": _profiled("meeting_intelligence"),
@@ -485,12 +515,10 @@ async def health():
             "comparison": _profiled("document_automation"),
             "extraction": _profiled("document_automation"),
             "automation": _profiled("document_automation"),
-            # Real probe result — "active" only if core connectors responded (FIX 1).
-            "tefca_review_protocol": tefca["status"],
+            "tefca_review_protocol": _profiled("tefca_arc"),
             "case_management": _profiled("case_management"),
             "bulletin_intelligence": _profiled("bulletin_intelligence"),
         },
-        "tefca_connectors": tefca["connectors"],
     }
 
 
@@ -510,6 +538,9 @@ async def get_config(request: Request):
     return {
         "environment": os.getenv("ENVIRONMENT", "unknown"),
         "version": "6.0.0",
+        # Same value /health reports; lets a frontend show which backend build
+        # it is talking to before login (contract section 6 `build` block).
+        "git_sha": os.environ.get("GIT_SHA", "unknown"),
         "api_host": request.url.hostname,
         # Deployment program profile: the program name and the module ids this
         # deployment SERVES (public-safe). Lets a frontend built for one program
@@ -544,6 +575,14 @@ safe_load("app.api.audio_routes", "audio")
 
 # ═══ ADMIN — USER & AREA ACCESS MANAGEMENT ═══
 safe_load("app.api.admin_users", "admin-users")
+
+# ═══ ADMIN — OPERATIONAL HEALTH (admin role) ═══
+# Connector probe, scheduler, USPS client state, migration revision and database
+# reachability moved here from the public /health (contract section 8). Registered
+# directly, not through safe_load: if the operator view cannot import, that is a
+# startup failure worth seeing rather than a 404 the operator chases later.
+from app.api.admin_health import router as admin_health_router  # noqa: E402
+app.include_router(admin_health_router)
 
 # ═══ ENTERPRISE ROUTES ═══
 safe_load("app.api.enterprise_routes", "enterprise")

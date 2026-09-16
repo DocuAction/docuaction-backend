@@ -1,0 +1,50 @@
+﻿# DocuAction TEFCA ARC Delivery Processing Report DA-ARC-2026-001
+# Generated (UTC): 2026-09-16T08:50:59.169234+00:00
+# Job id: 07b56a30-11f6-4fff-939e-a3d52d1a76df
+# Intake id: c33e987e-d7e7-4ea9-8168-b9b7b083eb5f
+# Delivery: Gate4-A 309440 / DocuAction_ONC_RCE_3_Unique_Entity_Invalid_NPI_Test.csv
+# Source file SHA-256: 3c8f9d2547f369491e788cdd5a27ef3d06804ad99a34bda2c8ec41c1f5099edb
+# Reconciliation snapshot id: 4ef331ee-2bb5-4d1f-b3b5-52d08f31eee4
+# Reconciliation snapshot hash: 35f633dbeeb90ec79280a43b9ab01ee33c6b98fc951038ac3ec2e247faee4b40
+# Reconciliation snapshot created (UTC): 2026-09-16T08:50:54.954034+00:00
+# Build SHA: localgate5
+# Migration revision: 20260917_delivery_traceability
+# Template version: 1.0.0
+# Report Data Service version: 1.0.0
+# Every value below is read from persisted evidence. No rule is re-run and no reconciliation is recomputed while this file is produced.
+
+## Reconciliation equation (pinned snapshot)
+Measure,Value
+Received,3
+CREATED,0
+UPDATED,0
+MATCHED_UNCHANGED,0
+HELD,3
+REJECTED,0
+MISSING_KEY,0
+EXCLUDED,0
+Accounted,3
+Equation holds,True
+Snapshot passed,True
+
+## Disposition totals (current table)
+Disposition,Records
+CREATED,0
+UPDATED,0
+MATCHED_UNCHANGED,0
+HELD,3
+REJECTED,0
+MISSING_KEY,0
+EXCLUDED,0
+Total,3
+Records received,3
+Records without a disposition,0
+
+## Record-level dispositions (all rows)
+Line,Source record id,Source id (RCE OID),Name,Submitted NPI,Curated NPI,Disposition,Reason code,Entity id,Findings,Warnings,Sequence,Actor type,Actor,Decided (UTC),Reconstructed
+2,82e9eea7-6c38-4a2f-ab2f-5ab466825ce3,2.16.840.1.113883.3.99999.20260915.101,AGT NPI VALIDATION TEST 01 - LENGTH,188165950,188165950,HELD,HELD_QUALITY_ISSUE,,2,1,1,SYSTEM,acceptance-pm@synthetic.test,2026-09-16T08:50:53.165118+00:00,False
+3,cd83c0ac-b1c9-43ab-bcdc-c4c6ff1d85b8,2.16.840.1.113883.3.99999.20260915.102,AGT NPI VALIDATION TEST 02 - CHECKSUM,1982916079,1982916079,HELD,HELD_QUALITY_ISSUE,,2,1,1,SYSTEM,acceptance-pm@synthetic.test,2026-09-16T08:50:53.165118+00:00,False
+4,3a7fabc2-49d5-42c3-b539-481aa7b61e43,2.16.840.1.113883.3.99999.20260915.103,AGT NPI VALIDATION TEST 03 - FORMAT,A124071014,A124071014,HELD,HELD_QUALITY_ISSUE,,2,1,1,SYSTEM,acceptance-pm@synthetic.test,2026-09-16T08:50:53.165118+00:00,False
+
+## Evidence limitations
+None recorded

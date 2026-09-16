@@ -158,8 +158,11 @@ async def test_evidence_edit_is_audited_and_promotion_write_is_not(db_required):
             await session.execute(sa.text(
                 "update rce_source_records set promotion_status = promotion_status "
                 "where id = :i"), {"i": row_id})
+            # Scoped to THIS row: the log is shared with every other test's
+            # audited cleanup DELETEs (a global count is not hermetic).
             audited = (await session.execute(
-                sa.text("select count(*) from area1_mutation_log"))).scalar()
+                sa.text("select count(*) from area1_mutation_log where row_id = :i"),
+                {"i": row_id})).scalar()
             assert audited == 0, "the column filter must exempt the promotion marker"
 
             # An evidence edit MUST be audited, with both images.
@@ -168,8 +171,8 @@ async def test_evidence_edit_is_audited_and_promotion_write_is_not(db_required):
                 "where id = :i"), {"i": row_id})
             entry = (await session.execute(sa.text(
                 "select operation, table_name, before_image is not null as b, "
-                "after_image is not null as a from area1_mutation_log"
-            ))).mappings().first()
+                "after_image is not null as a from area1_mutation_log "
+                "where row_id = :i order by id desc"), {"i": row_id})).mappings().first()
             assert entry is not None, "an edit to raw_line must be recorded"
             assert entry["operation"] == "UPDATE"
             assert entry["table_name"] == "rce_source_records"

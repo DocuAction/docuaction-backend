@@ -302,6 +302,23 @@ async def submit_qa_review(
     await db.flush()
 
     # `reportable_at` is DERIVED state, written only on an approve that stands.
+    #
+    # Pre-merge review Decision 2 (2026-09-18), "final classification"
+    # exclusion: an entity with an UNRESOLVED post-promotion blocking finding
+    # (`TefcaRegEntity.verification_status == "in_review"`, set by
+    # `post_promotion_verification.record_finding`) must not be finalized as
+    # reportable on this pass — the finding may itself change the answer.
+    # Checked here, not earlier, so a REJECT/RETURN/ESCALATE (which never sets
+    # reportable_at) is never blocked by this.
+    if qa_action == E.QA_APPROVE and review.entity_id is not None:
+        entity = await db.get(reg.TefcaRegEntity, review.entity_id)
+        if entity is not None and entity.verification_status == "in_review":
+            raise QaGateRefused(
+                f"{review_id} names entity {review.entity_id}, which has an "
+                f"unresolved post-promotion verification finding "
+                f"(verification_status=in_review). Resolve that finding "
+                f"first; approving a final classification over it would rest "
+                f"on state that may itself be about to change.")
     review.reportable_at = datetime.utcnow() if qa_action == E.QA_APPROVE else None
 
     reg_audit.record(db, f"qa_{qa_action.lower()}", review.entity_id,

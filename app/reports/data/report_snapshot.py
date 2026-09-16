@@ -39,9 +39,9 @@ from sqlalchemy import func, select
 logger = logging.getLogger(__name__)
 
 REPORT_TYPES = ("verification", "verification_brief", "data_quality", "executive",
-                "intake", "retrospective_weekly", "retrospective_final",
-                "ongoing_biweekly", "ongoing_quarterly", "priority_status",
-                "priority_quarterly")
+                "intake", "delivery_processing", "retrospective_weekly",
+                "retrospective_final", "ongoing_biweekly", "ongoing_quarterly",
+                "priority_status", "priority_quarterly")
 
 #: DA-ARC-YYYY-NNN
 REPORT_ID_PREFIX = "DA-ARC"
