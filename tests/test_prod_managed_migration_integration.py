@@ -41,14 +41,19 @@ from test_prod_convergence_integration import (  # noqa: E402
 pytestmark = pytest.mark.skipif(not SU, reason="CONV_SUPERUSER_URL not set (needs a superuser test DB)")
 
 EXPECTED = "20260829_report_artifacts"
-HEAD = "20260917_delivery_traceability"
+# Read from the actual chain rather than hardcoded, so this never goes stale
+# the next time a migration is added.
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+
+_SCRIPTS = ScriptDirectory.from_config(Config("alembic.ini"))
+HEAD = _SCRIPTS.get_current_head()
 #: Tables the pending chain ALTERs that docuaction_app owns in PROD; PREPARE
 #: temporarily re-owns exactly these (in this order) and FINALIZE returns them.
 #: Mirrors scripts/prod_legacy_convergence.MANAGED_CHAIN_ALTERS.
 CHAIN_ALTERS = ["review_records", "rce_curated_records", "tefca_reg_entities", "tefca_entity_contacts"]
-PENDING = ["20260830_run_lifecycle", "20260831_review_case", "20260831_export_jobs",
-           "20260902_delivery_jobs", "20260903_delivery_grants",
-           "20260915_curated_text_columns", "20260917_delivery_traceability"]
+PENDING = [rev.revision for rev in
+          reversed(list(_SCRIPTS.iterate_revisions(HEAD, EXPECTED)))]
 DECISIONS_COLS = ["approval_justification", "rejection_reason", "rejection_category", "supersedes", "sla_hours",
                   "deadline", "escalation_level", "escalated_to", "escalated_at", "is_overdue", "outcome_text",
                   "outcome_date", "outcome_matched", "outcome_notes", "outcome_recorded_by",
