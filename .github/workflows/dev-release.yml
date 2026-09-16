@@ -72,6 +72,11 @@ on:
         required: false
         type: string
         default: ''
+      target_revision:
+        description: 'With apply_migrations: the exact revision to upgrade to. Must be the direct child of expected_current - one controlled migration per dispatch, never "head".'
+        required: false
+        type: string
+        default: ''
 
 # One DEV release in flight at a time. Queued, not cancelled: killing a run
 # mid-deploy could leave Azure pointed at a half-applied migration or an
@@ -117,6 +122,7 @@ jobs:
       apply: ${{ inputs.apply_migrations == true }}
       expected_current: ${{ inputs.expected_current || '' }}
       handshake_issue: ${{ inputs.handshake_issue || '' }}
+      target_revision: ${{ inputs.target_revision || '' }}
     permissions:
       contents: read
       id-token: write

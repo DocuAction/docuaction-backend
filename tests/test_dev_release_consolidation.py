@@ -84,7 +84,8 @@ def test_apply_runs_as_the_dedicated_identity_with_the_owner_role():
     assert env["PG_PRINCIPAL"] == "github-actions-docuaction-backend-dev"
     assert 'assert r[0] == os.environ["PG_PRINCIPAL"]' in apply, "session_user must be the dedicated identity"
     assert 'assert r[1] == os.environ["DB_MIGRATION_ROLE"]' in apply, "current_user must be docuaction_owner before DDL"
-    assert 'test "$PENDING" -eq 1' in apply, "exactly one pending migration, or nothing runs"
+    assert 'test "$PARENT" = "$CUR"' in apply, (
+        "target_revision must be the direct child of the current revision, or nothing runs")
     assert "Running upgrade" in apply, "second-run no-op must be proven"
     assert "imran@agtbi.com" not in apply
 
