@@ -196,6 +196,45 @@ def test_unknown_intake_is_404(client):
     assert r.status_code == 404
 
 
+# -- cross-delivery isolation (P0-4, 2026-09-16) -----------------------------------------
+#
+# DEV report: clicking "Exception" for one delivery showed another delivery's
+# entities. The frontend fix scopes the Exceptions tab strictly by the loaded
+# job's own intake id; this pins the server-side guarantee it depends on: the
+# ledger for one intake never contains another intake's issues, even when both
+# exist in the same database at once.
+
+@pytest.fixture(scope="module")
+def second_delivery():
+    return seed_delivery(state="SUCCEEDED", issues=1)
+
+
+def test_one_deliverys_ledger_never_contains_anothers_issues(client, delivery, second_delivery):
+    assert delivery["intake_id"] != second_delivery["intake_id"]
+
+    r_a = client.get(f"{BASE}/deliveries/{delivery['intake_id']}/exceptions",
+                     headers=headers_for("reviewer")).json()
+    r_b = client.get(f"{BASE}/deliveries/{second_delivery['intake_id']}/exceptions",
+                     headers=headers_for("reviewer")).json()
+
+    ids_a = {row["issue_id"] for row in r_a["items"]}
+    ids_b = {row["issue_id"] for row in r_b["items"]}
+    assert ids_a and ids_b and ids_a.isdisjoint(ids_b)
+
+    # Every row is tagged with its own delivery's identity, and only its own.
+    assert r_a["totals"]["total"] == 2
+    for row in r_a["items"]:
+        assert row["delivery"] == {"job_id": delivery["job_id"], "intake_id": delivery["intake_id"]}
+        assert row["source_record_id"] in delivery["record_ids"]
+        assert row["source_record_id"] not in second_delivery["record_ids"]
+
+    assert r_b["totals"]["total"] == 1
+    for row in r_b["items"]:
+        assert row["delivery"] == {"job_id": second_delivery["job_id"], "intake_id": second_delivery["intake_id"]}
+        assert row["source_record_id"] in second_delivery["record_ids"]
+        assert row["source_record_id"] not in delivery["record_ids"]
+
+
 # -- dispositions -----------------------------------------------------------------------
 
 def test_dispositions_listing_and_filters(client, delivery):
