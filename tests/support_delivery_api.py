@@ -306,3 +306,14 @@ async def _cleanup():
 
 def cleanup() -> None:
     run(_cleanup())
+
+
+def alembic_head() -> str:
+    """The migration chain's current head, read the same way, everywhere a
+    test needs to assert against "whatever revision is current" instead of a
+    literal string that goes stale the next time a migration is added."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    cfg = Config("alembic.ini")
+    return ScriptDirectory.from_config(cfg).get_current_head()

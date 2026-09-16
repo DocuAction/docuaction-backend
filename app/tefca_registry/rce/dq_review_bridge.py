@@ -65,6 +65,16 @@ from app.tefca_registry.rce import run_selection
 #: from the Phase-6 exception queue and from ARC classification recommendations.
 QUEUE_SOURCE = "RCE_DQ_HUMAN_REQUIRED"
 
+#: Post-promotion verification findings (pre-merge review Decision 2,
+#: 2026-09-18): a SEPARATE queue_source from `QUEUE_SOURCE` above, because
+#: `build_cases`' idempotency key (run_id, source_record_id, classification)
+#: would otherwise match an already-resolved pre-promotion case for the same
+#: record and silently create no work item for a genuinely new finding. Here
+#: the key is the ISSUE's own `issue_code` — unique per finding, so "exactly
+#: one work item per unresolved finding, no duplicates on repeated
+#: verification" holds without depending on run/record grouping at all.
+POST_PROMOTION_QUEUE_SOURCE = "RCE_POST_PROMOTION_VERIFICATION"
+
 BRIDGE_VERSION = "1.1.0"
 
 #: Correction authorities that require a human. AUTO_SAFE is applied
@@ -361,6 +371,68 @@ async def build_cases(db, intake_id, *, run_id=None,
         "by_classification": plan["by_classification"],
         "created_review_ids": created,
     }
+
+
+async def _existing_case_by_key(db, queue_source: str, key: str) -> Optional[reg.ReviewRecord]:
+    return (await db.execute(
+        select(reg.ReviewRecord)
+        .where(reg.ReviewRecord.verification_results["queue_source"].astext
+               == queue_source,
+               reg.ReviewRecord.verification_results["case_key"].astext == key)
+        .limit(1))).scalars().first()
+
+
+async def open_post_promotion_case(db, issue, *, entity_id, actor: Optional[str] = None
+                                   ) -> Dict[str, Any]:
+    """Exactly one analyst work item for one post-promotion BLOCKING finding.
+
+    IDEMPOTENT per `issue.issue_code` (unique per finding, unlike the
+    (run, record, classification) key `build_cases` uses — see
+    `POST_PROMOTION_QUEUE_SOURCE`'s docstring for why that key would not do
+    here). A second call for the SAME issue finds the case it already made
+    and creates nothing; a genuinely new finding on the same record, even one
+    whose earlier pre-promotion case is long resolved, gets its own case.
+    """
+    key = f"issue:{issue.issue_code}"
+    await db.execute(
+        text("select pg_advisory_xact_lock(hashtext(:k))"),
+        {"k": f"dq_review_bridge_pp:{issue.issue_code}"})
+    found = await _existing_case_by_key(db, POST_PROMOTION_QUEUE_SOURCE, key)
+    if found is not None:
+        return {"review_id": found.review_id, "created": False}
+
+    review_id = await _next_review_id(db)
+    record = reg.ReviewRecord(
+        id=uuid.uuid4(), review_id=review_id, entity_id=entity_id,
+        source_record_id=issue.source_record_id,
+        verification_results={
+            "queue_source": POST_PROMOTION_QUEUE_SOURCE,
+            "bridge_version": BRIDGE_VERSION,
+            "case_key": key,
+            "case_classification": classification_for(issue.rule_id),
+            "source_intake_id": str(issue.source_intake_id),
+            "source_record_id": str(issue.source_record_id) if issue.source_record_id else None,
+            "pre_promotion": False,
+            "issue_ids": [str(issue.id)], "issue_codes": [issue.issue_code],
+            "rule_ids": [issue.rule_id], "issue_types": [issue.issue_type],
+            "severity": issue.severity, "priority": SEVERITY_PRIORITY.get(issue.severity, 50),
+            "queued_at": datetime.utcnow().isoformat(),
+            "note": ("A finding discovered AFTER this entity was promoted. The "
+                     "original promotion is unchanged; this case is the "
+                     "question of what to do about the new finding."),
+        },
+        classification_bucket=None, reviewer_resolution=None, reportable_at=None)
+    db.add(record)
+    await db.flush()
+
+    from app.tefca_registry import audit as reg_audit
+
+    reg_audit.record(
+        db, "post_promotion_review_case_created", entity_id, actor_email=actor,
+        metadata={"review_id": review_id, "queue_source": POST_PROMOTION_QUEUE_SOURCE,
+                  "issue_code": issue.issue_code, "issue_type": issue.issue_type,
+                  "severity": issue.severity})
+    return {"review_id": review_id, "created": True}
 
 
 def reg_audit_record(db, record, group, actor) -> None:

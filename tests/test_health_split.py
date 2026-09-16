@@ -142,11 +142,12 @@ def test_admin_health_serves_admin_with_operational_fields(as_role):
 
 def test_admin_health_reads_the_real_migration_revision(client, db_required):
     """Against the isolated database the revision is the Alembic head."""
-    from support_delivery_api import headers_for
+    from support_delivery_api import alembic_head, headers_for
 
     r = client.get("/api/admin/health", headers=headers_for("admin"))
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["migration_revision"] == "20260917_delivery_traceability"
+    assert body["migration_revision"] == alembic_head()
     assert body["database"]["reachable"] is True
     assert isinstance(body["database"]["latency_ms"], int)
+

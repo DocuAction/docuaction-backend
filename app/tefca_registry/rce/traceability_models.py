@@ -51,7 +51,14 @@ IDENTIFIER_DECISIONS = (
     "REQUEST_EVIDENCE", "DEFERRED", "ESCALATED", "REJECTED",
 )
 
-SNAPSHOT_TRIGGERS = ("PIPELINE", "DISPOSITION", "MANUAL", "RECONSTRUCTION")
+SNAPSHOT_TRIGGERS = ("PIPELINE", "DISPOSITION", "MANUAL", "RECONSTRUCTION",
+                    # Added 2026-09-18 (pre-merge review Decision 2): a NEW
+                    # snapshot created because a post-promotion finding was
+                    # recorded or resolved, distinct from a re-promotion
+                    # DISPOSITION snapshot — no disposition changed either
+                    # time. See migration 20260918_pp_verification for the
+                    # CHECK constraint that must widen alongside this tuple.
+                    "POST_PROMOTION_VERIFICATION", "POST_PROMOTION_RESOLUTION")
 
 ACTOR_TYPES = ("SYSTEM", "HUMAN")
 

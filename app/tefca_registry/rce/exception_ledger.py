@@ -53,7 +53,14 @@ STAGES = (STAGE_QUALITY, STAGE_PROMOTION, STAGE_VERIFICATION)
 PROMOTION_RULES = ("NPI-008",)
 PROMOTION_TYPES = ("NPI_EXISTING_VALUE_CONFLICT", "IDENTIFIER_EXISTING_VALUE_CONFLICT")
 VERIFICATION_RULES = ("NPI-005", "NPI-006", "NPI-009")
-VERIFICATION_TYPES = ("NPI_NOT_FOUND", "NPI_DEACTIVATED", "NPI_VERIFICATION_UNAVAILABLE")
+#: `INVALID_ACTIVE_IDENTIFIER` and `MATERIAL_IDENTIFIER_CONFLICT` (added
+#: 2026-09-18, pre-merge review Decision 2) reuse the QUALITY rule NPI-003 and
+#: the PROMOTION rule NPI-008 respectively, because they are the same kind of
+#: defect discovered at a different time — but by rule_id alone they would be
+#: misclassified. `stage_for`/`stage_expr` check issue_type before rule_id for
+#: exactly this reason.
+VERIFICATION_TYPES = ("NPI_NOT_FOUND", "NPI_DEACTIVATED", "NPI_VERIFICATION_UNAVAILABLE",
+                      "INVALID_ACTIVE_IDENTIFIER", "MATERIAL_IDENTIFIER_CONFLICT")
 
 #: `rce_issues.resolution` values that mean "still someone's work".
 OPEN_RESOLUTIONS = ("OPEN", "PROPOSED", "UNDER_REVIEW")
@@ -76,10 +83,20 @@ def legacy_issue_types() -> Dict[str, List[str]]:
 
 
 def stage_for(rule_id: Optional[str], issue_type: Optional[str]) -> str:
-    """The pipeline stage a finding belongs to, from its rule and type."""
-    if rule_id in PROMOTION_RULES or issue_type in PROMOTION_TYPES:
+    """The pipeline stage a finding belongs to, from its rule and type.
+
+    `issue_type` is checked before `rule_id`: a post-promotion finding
+    (`INVALID_ACTIVE_IDENTIFIER`, `MATERIAL_IDENTIFIER_CONFLICT`) reuses a
+    QUALITY/PROMOTION rule id for a defect discovered at a different time, and
+    the specific type is what actually disambiguates that.
+    """
+    if issue_type in VERIFICATION_TYPES:
+        return STAGE_VERIFICATION
+    if issue_type in PROMOTION_TYPES:
         return STAGE_PROMOTION
-    if rule_id in VERIFICATION_RULES or issue_type in VERIFICATION_TYPES:
+    if rule_id in PROMOTION_RULES:
+        return STAGE_PROMOTION
+    if rule_id in VERIFICATION_RULES:
         return STAGE_VERIFICATION
     return STAGE_QUALITY
 
@@ -87,10 +104,10 @@ def stage_for(rule_id: Optional[str], issue_type: Optional[str]) -> str:
 def stage_expr():
     """The same derivation as `stage_for`, as a SQL expression for filtering."""
     return case(
-        (or_(m.RceIssue.rule_id.in_(PROMOTION_RULES),
-             m.RceIssue.issue_type.in_(PROMOTION_TYPES)), STAGE_PROMOTION),
-        (or_(m.RceIssue.rule_id.in_(VERIFICATION_RULES),
-             m.RceIssue.issue_type.in_(VERIFICATION_TYPES)), STAGE_VERIFICATION),
+        (m.RceIssue.issue_type.in_(VERIFICATION_TYPES), STAGE_VERIFICATION),
+        (m.RceIssue.issue_type.in_(PROMOTION_TYPES), STAGE_PROMOTION),
+        (m.RceIssue.rule_id.in_(PROMOTION_RULES), STAGE_PROMOTION),
+        (m.RceIssue.rule_id.in_(VERIFICATION_RULES), STAGE_VERIFICATION),
         else_=STAGE_QUALITY,
     )
 

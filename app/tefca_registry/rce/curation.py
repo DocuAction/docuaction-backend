@@ -615,6 +615,18 @@ async def recompute_hold_status(db, intake_id, *, run_id=None) -> Dict[str, Any]
     for row in curated:
         if row.record_status == REJECTED:
             continue
+        if row.canonical_entity_id is not None:
+            # Independent review finding M-3 (2026-09-16): a record already
+            # PROMOTED must never have `record_status` rewritten again by this
+            # function. A post-promotion finding (e.g. NPI-006, written by
+            # `verification_findings.record_npi_outcome` under this SAME run
+            # id) would otherwise flip an already-promoted record to HELD,
+            # contradicting its own disposition with no path to clear it. Its
+            # BLOCKING consequences go through
+            # `post_promotion_verification.record_finding` instead — entity
+            # verification_status, a work item, a new snapshot — never
+            # `record_status`. Once promoted, `record_status` is history.
+            continue
         should_hold = row.source_record_id in blocking
         if should_hold and row.record_status != HELD:
             row.record_status = HELD
@@ -631,10 +643,17 @@ async def recompute_hold_status(db, intake_id, *, run_id=None) -> Dict[str, Any]
             changed += 1
             released.append(str(row.id))
     await db.commit()
+    # Counted from the records this function actually holds (pre-promotion
+    # only), not from raw `blocking`: a promoted record's source_record_id can
+    # appear in `blocking` (a post-promotion finding under the same run) while
+    # never being HELD by this function, per the skip above.
+    still_held_ids = {row.source_record_id for row in curated
+                      if row.canonical_entity_id is None and row.record_status == HELD}
     return {"curated_records": len(curated), "status_changed": changed,
-            "still_held": len(blocking), "released": released,
+            "still_held": len(still_held_ids), "released": released,
             "held_by_conflict_only": sum(
-                1 for e in blocking.values() if e["issues"] == 0 and e["conflicts"])}
+                1 for record_id, e in blocking.items()
+                if record_id in still_held_ids and e["issues"] == 0 and e["conflicts"])}
 
 
 async def release_check(db, intake_id, *, run_id=None) -> List[Dict[str, Any]]:

@@ -436,6 +436,23 @@ def test_no_tefca_read_endpoint_sits_above_the_viewer_floor():
         "/api/tefca/rce/deliveries/{intake_id}/dispositions.csv",
         "/api/tefca/rce/deliveries/{intake_id}/exceptions",
         "/api/tefca/rce/deliveries/{intake_id}/audit",
+        # ── Pre-merge review Decision 1 (2026-09-16) ──
+        # Deprecated legacy aliases for the current /api/reports/* content
+        # routes, which the same review raised from viewer to reviewer
+        # (`app/reports/routes.py`, tested in `test_report_authorization.py`).
+        # Each of these renders or returns the SAME report content — record-
+        # level values and delivered evidence — through a different renderer;
+        # leaving a deprecated path at viewer would reopen exactly the door
+        # the current routes just closed. Same principle as the delivery-
+        # workflow exceptions immediately above: a viewer keeps every read
+        # that carries no delivered value (the two /api/tefca/reports list
+        # routes stay viewer — metadata only, no report_data).
+        "/api/tefca/reports/{report_id}",
+        "/api/tefca/reports/{report_id}/csv",
+        "/api/tefca/reports/{report_id}/pdf",
+        "/api/tefca/reports/{report_id}/docx",
+        "/api/tefca/reports/{report_id}/download",
+        "/api/tefca/priority/{case_id}/report",
     }
 
     offenders = []

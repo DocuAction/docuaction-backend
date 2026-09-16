@@ -851,14 +851,17 @@ class TestReportAPI:
                 f"{path} answered {response.status_code} unauthenticated; reports "
                 f"carry entity names and review outcomes and are never public")
 
-    def test_generate_requires_contributor_not_viewer(self):
-        """Generating a report creates an artefact and a provenance record, so
-        it sits above read-only access."""
+    def test_generate_requires_reviewer_not_viewer(self):
+        """Generating a report returns the report's content in the same
+        response (dataset or rendered bytes), so it needs the same floor as a
+        download -- raised from `contributor` to `reviewer` on 2026-09-16
+        (pre-merge review Decision 1); see `test_report_authorization.py` for
+        the end-to-end behavioural proof."""
         import inspect
         from app.reports import routes
 
         source = inspect.getsource(routes.generate)
-        assert 'require_role("contributor")' in source
+        assert 'require_role_audited("reviewer"' in source
         assert 'require_role("viewer")' in inspect.getsource(routes.list_reports)
 
     def test_engine_health_reports_pdf_availability(self):

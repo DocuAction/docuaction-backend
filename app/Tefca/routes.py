@@ -27,7 +27,7 @@ from sqlalchemy import select, text, func, cast, or_, and_, String, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db, async_session_maker
-from app.core.security import require_role, get_current_user, ADMIN_EMAILS
+from app.core.security import require_role, require_role_audited, get_current_user, ADMIN_EMAILS
 from app.core.config import settings
 from app.services.audit import log_tefca_event
 
@@ -2545,7 +2545,11 @@ async def list_tefca_reports(
 
 @tefca_dashboard_router.get("/reports/{report_id}", deprecated=True, summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. Full report detail")
 async def get_tefca_report(
-    report_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
+    # reviewer, audited (Decision 1, pre-merge review, 2026-09-16): returns the
+    # full `report_data` -- a legacy alias for exactly the content the current
+    # report routes gate at reviewer. A deprecated path must not reopen it.
+    report_id: str, db: AsyncSession = Depends(get_db),
+    user=Depends(require_role_audited("reviewer", resource_type="report")),
 ):
     rid = _parse_uuid(report_id)
     r = (await db.execute(select(TEFCAReport).where(TEFCAReport.report_id == rid))).scalar_one_or_none()
@@ -2563,7 +2567,9 @@ async def get_tefca_report(
 
 @tefca_dashboard_router.get("/reports/{report_id}/csv", deprecated=True, summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. Report as CSV")
 async def get_tefca_report_csv(
-    report_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
+    # reviewer, audited (Decision 1, 2026-09-16).
+    report_id: str, db: AsyncSession = Depends(get_db),
+    user=Depends(require_role_audited("reviewer", resource_type="report")),
 ):
     rid = _parse_uuid(report_id)
     r = (await db.execute(select(TEFCAReport).where(TEFCAReport.report_id == rid))).scalar_one_or_none()
@@ -2584,7 +2590,9 @@ async def _load_report_or_404(report_id: str, db: AsyncSession) -> TEFCAReport:
 
 @tefca_dashboard_router.get("/reports/{report_id}/pdf", deprecated=True, summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. Report as PDF")
 async def get_tefca_report_pdf(
-    report_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
+    # reviewer, audited (Decision 1, 2026-09-16).
+    report_id: str, db: AsyncSession = Depends(get_db),
+    user=Depends(require_role_audited("reviewer", resource_type="report")),
 ):
     """Render a persisted report as an AGT-branded PDF (contains PII — role-gated,
     like the CSV export). MOCK reports carry a prominent MOCK-DATA banner."""
@@ -2601,7 +2609,9 @@ async def get_tefca_report_pdf(
 
 @tefca_dashboard_router.get("/reports/{report_id}/docx", deprecated=True, summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/*. Report as DOCX. DOCX is not a contract requirement (matrix §4).")
 async def get_tefca_report_docx(
-    report_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
+    # reviewer, audited (Decision 1, 2026-09-16).
+    report_id: str, db: AsyncSession = Depends(get_db),
+    user=Depends(require_role_audited("reviewer", resource_type="report")),
 ):
     """Render a persisted report as an AGT-branded editable Word document (PII —
     role-gated). MOCK reports carry a prominent MOCK-DATA banner."""
@@ -2800,7 +2810,10 @@ async def priority_detail(
 @tefca_dashboard_router.get("/priority/{case_id}/report", deprecated=True,
                             summary="DEPRECATED / COMPATIBILITY ONLY — use /api/reports/sow/*. D5.1 priority status report")
 async def priority_report(
-    case_id: str, db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
+    # reviewer, audited (Decision 1, 2026-09-16): returns the generated
+    # case-level report content, not metadata.
+    case_id: str, db: AsyncSession = Depends(get_db),
+    user=Depends(require_role_audited("reviewer", resource_type="report")),
 ):
     cid = _parse_uuid(case_id)
     report = await reporting.generate_priority_status_report(db, cid)
@@ -3998,7 +4011,9 @@ async def download_report(
     report_id: str,
     format: str = Query("pdf", description="pdf | docx"),
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("viewer")),
+    # reviewer, audited (Decision 1, 2026-09-16): a generic alias for the same
+    # renderers the format-specific legacy routes above already gate.
+    user=Depends(require_role_audited("reviewer", resource_type="report")),
 ):
     """Generic download. Delegates to the existing renderers rather than
     duplicating them — one renderer, one output, no second implementation to

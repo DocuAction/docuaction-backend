@@ -543,7 +543,11 @@ def test_reviewer_is_the_floor_and_roles_are_global(committed, client):
             assert client.get(path, headers=headers_for(role)).status_code == 200, (path, role)
 
     for handler in (routes.reports_by_delivery, routes.artifact_download):
-        assert 'require_role("reviewer")' in inspect.getsource(handler), handler.__name__
+        # Decision 1 of the pre-merge review (2026-09-16) added an audit row
+        # on every denial; the floor is still `reviewer`, now via the
+        # audited wrapper. `test_report_authorization.py` proves the row is
+        # actually written.
+        assert 'require_role_audited("reviewer"' in inspect.getsource(handler), handler.__name__
     # nothing in the reports package pretends to scope by tenant or delivery
     source = inspect.getsource(routes)
     assert "get_tenant" not in source and "TenantContext" not in source

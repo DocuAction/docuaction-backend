@@ -35,6 +35,7 @@ GUARDED_REVISIONS = [
     # 2026-09-17: five append-only evidence tables + a view. Guards every
     # create/drop with an inspector check and tolerates offline --sql mode.
     "20260917_delivery_traceability.py",
+    "20260918_post_promotion_verification.py",
 ]
 
 # DDL that creates something. Calling these unconditionally is the defect.

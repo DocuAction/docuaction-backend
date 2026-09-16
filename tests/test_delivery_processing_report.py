@@ -433,14 +433,16 @@ async def test_report_is_built_from_the_persisted_evidence_of_the_named_delivery
     assert any(b["criterion"] == "no_unresolved_findings" and not b["held"] for b in ds["outcome"]["basis"])
     assert ds["review"]["code"] in ("READY_FOR_ANALYST_REVIEW", "UNDER_REVIEW")
     assert isinstance(ds["limitations"], list)
-    assert ds["build"]["migration_revision"] == "20260917_delivery_traceability"
+    from support_delivery_api import alembic_head
+    assert ds["build"]["migration_revision"] == alembic_head()
     assert ds["template_version"] == TEMPLATE_VERSION
     assert ds["chart_list"] == [] and ds["service_version"]
 
     # page one prints the identity block
     html = result["html"]
+    from support_delivery_api import alembic_head as _head
     for needle in (str(ids["job_id"]), str(ids["intake_id"]), ids["sha256"], latest,
-                   ds["snapshot_hash"], ds["build"]["git_sha"], "20260917_delivery_traceability",
+                   ds["snapshot_hash"], ds["build"]["git_sha"], _head(),
                    TEMPLATE_VERSION, "synthetic_dpr.psv", SYN, "Delivery Identity",
                    "Evidence limitations", "Audit note"):
         assert needle in html, needle
@@ -483,7 +485,8 @@ async def test_totals_agree_across_csv_html_and_dataset(rolled_back_db):
     assert f"# Reconciliation snapshot hash: {ds['snapshot_hash']}" in csv_text
     assert f"# Job id: {ids['job_id']}" in csv_text and f"# Intake id: {ids['intake_id']}" in csv_text
     assert f"# Build SHA: {ds['build']['git_sha']}" in csv_text
-    assert "# Migration revision: 20260917_delivery_traceability" in csv_text
+    from support_delivery_api import alembic_head as _head2
+    assert f"# Migration revision: {_head2()}" in csv_text
     eq_rows = {r[0]: r[1] for r in sections["Reconciliation equation (pinned snapshot)"]}
     assert eq_rows["Received"] == "5" and eq_rows["Accounted"] == "5" and eq_rows["Equation holds"] == "True"
     # every record row names the same line numbers as the dataset

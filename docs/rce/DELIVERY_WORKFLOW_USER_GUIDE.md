@@ -176,6 +176,21 @@ report linked to the job with its artifacts — id, `content_type`,
 `rendered_sha256`, `size_bytes`, `storage_backend`, `download_url` — and a
 `storage` block for the job.
 
+### 18a. Reports role floor (raised 2026-09-16, pre-merge review Decision 1)
+
+Generating a report and every way of downloading one (`/api/reports/generate`,
+`/{id}/html`, `/pdf`, `/docx`, `/csv`, `/package`, `/artifacts/{id}`,
+`/artifacts/{id}/download`, `/sow/{deliverable}`, and their deprecated
+`/api/tefca/reports/*` aliases) require **reviewer**. A viewer reaches the
+report listing, one report's metadata (`GET /api/reports/{id}`, with `dataset`,
+`delivery_links` and `artifacts` null and an `availability` reason), release
+status, the SOW family list, and engine health — never a report's actual
+content. A denial below reviewer writes an audit row
+(`event_type=security`, `outcome=blocked`, `resource_type=report`). The
+Contract Reports page and the delivery detail Reports tab both hide
+generation and download controls below reviewer and state the reason; the
+server enforces the floor regardless of what the browser shows.
+
 ### 19. Download the evidence
 Reports tab → HTML / PDF / CSV / package. Downloads are served from the
 **stored** document, byte for byte; each download writes an audit row. The
@@ -240,3 +255,10 @@ delivery's review state becomes `Closed` when the QA Lead closes the case.
 4. Downloads serve the stored document. Regeneration produces a new report id
    with its own snapshot pin and its own link.
 5. `Completed — Clean` is shown only when every criterion in the basis holds.
+6. A finding discovered AFTER a record is promoted never rewrites the
+   promotion. A confirmed NPI deactivation, an invalid active identifier, or a
+   material identifier conflict found by a later verification pass sets the
+   entity's verification status to "in review," opens exactly one analyst
+   work item, blocks a final QA classification of that entity until resolved,
+   and produces a NEW reconciliation snapshot — the earlier snapshot is
+   untouched. See `docs/rce/PREMERGE_REVIEW_2026-09-16.md` section 9.

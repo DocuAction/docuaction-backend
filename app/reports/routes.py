@@ -6,9 +6,15 @@ source lookup, or a classification. `POST /generate` is a POST because it
 CREATES a report artefact and its provenance record, not because it changes any
 verification state.
 
-RBAC follows the existing platform floors: viewing a report needs `viewer`,
-generating one needs `contributor`. Reports carry entity names and review
-outcomes, so nothing here is public.
+RBAC (revised 2026-09-16, Decision 1 of the pre-merge review): a report's
+CONTENT - generating one, and every download form of one (html/pdf/docx/csv/
+package/artifact-history/artifact-download, and the SOW deliverable data) -
+needs `reviewer`. `viewer` reaches only metadata and availability: the listing
+(`GET ""`), one report's metadata (`GET /{report_id}`, with content fields
+null and an `availability` reason below reviewer), release/workflow status,
+the SOW family list (names and descriptions, no data), and engine health.
+Reports carry entity names and review outcomes, so nothing that returns
+delivered values is reachable below `reviewer`.
 """
 
 from __future__ import annotations
@@ -24,7 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import require_role
+from app.core.security import require_role, require_role_audited
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +183,11 @@ def _artifacts_summary(finalised: Optional[Dict[str, Any]]) -> Optional[Dict[str
 async def generate(
     request: GenerateReportRequest,
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("contributor")),
+    # `reviewer` (Decision 1, 2026-09-16): the response can carry the report's
+    # full dataset or rendered bytes, the same protected content the download
+    # routes carry. Generating a report must not be a lower-privileged way to
+    # read one.
+    user=Depends(require_role_audited("reviewer", resource_type="report")),
 ):
     from app.reports.generator import (ReportGenerationError, ReportParameterError,
                                        generate_report)
@@ -336,7 +346,7 @@ def _listing_extras(r) -> Dict[str, Any]:
 async def reports_by_delivery(
     job_id: str,
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("reviewer")),
+    user=Depends(require_role_audited("reviewer", resource_type="report")),
 ):
     """Every rce_delivery_report_links row for the job, newest first, each
     joined to the artifact it names (hash, type, size, backend name, verified
@@ -386,20 +396,52 @@ async def get_report(
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role("viewer")),
 ):
-    from app.reports.data.artifact_registry import (artifacts_for_report,
-                                                    link_artifact_summary)
-    from app.reports.data.delivery_report_links import links_for_report
+    """Metadata and availability to everyone at `viewer`; the report's
+    content (dataset, delivery links, artifact listing) only from `reviewer`.
+
+    AUTHORISATION (Decision 1, pre-merge directive, 2026-09-16). A viewer may
+    see that a report exists, its type, when it was generated and by whom, its
+    provenance/classification, and its release status — none of that is
+    delivery evidence. The `dataset` block is the report's actual content
+    (record-level values); `delivery_link(s)` and `artifacts` name and can
+    reach the stored bytes. Those three are null with an explicit
+    `availability` reason below `reviewer`, exactly as the delivery-detail
+    endpoint already does for the same floor (`delivery_routes.py`).
+    """
+    from app.core.security import role_at_least
 
     row = await _stored(db, report_id)
     data = row.report_data or {}
-    links = await links_for_report(db, report_id)
-    artifacts = [link_artifact_summary(a) for a in await artifacts_for_report(db, report_id)]
-    return {
+    base = {
         "report_id": row.report_id,
         "report_type": row.report_type,
         "generated_at": row.generated_at,
         "generated_by": str(row.generated_by) if row.generated_by else None,
         "snapshot": data.get("snapshot", {}),
+        **_listing_extras(row),
+    }
+    if not role_at_least(user, "reviewer"):
+        return {
+            **base,
+            "dataset": None,
+            "delivery_link": None,
+            "delivery_links": [],
+            "artifacts": [],
+            "availability": {
+                "dataset": "requires_role:reviewer",
+                "delivery_links": "requires_role:reviewer",
+                "artifacts": "requires_role:reviewer",
+            },
+        }
+
+    from app.reports.data.artifact_registry import (artifacts_for_report,
+                                                    link_artifact_summary)
+    from app.reports.data.delivery_report_links import links_for_report
+
+    links = await links_for_report(db, report_id)
+    artifacts = [link_artifact_summary(a) for a in await artifacts_for_report(db, report_id)]
+    return {
+        **base,
         "dataset": data.get("dataset", {}),
         # Present only when the report was generated for a named delivery and
         # a reconciliation snapshot existed to link it to. One link per stored
@@ -410,7 +452,8 @@ async def get_report(
         # Every registered rendering of this report (all formats, all
         # versions) with hash, size, backend name and verified download path.
         "artifacts": artifacts,
-        **_listing_extras(row),
+        "availability": {"dataset": "available", "delivery_links": "available",
+                         "artifacts": "available"},
     }
 
 
@@ -496,7 +539,9 @@ async def post_release(
 async def get_package(
     report_id: str,
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("viewer")),
+    # `reviewer` (Decision 1, 2026-09-16): the package is the report's raw
+    # evidence in every format at once.
+    user=Depends(require_role_audited("reviewer", resource_type="report")),
 ):
     """ZIP of the stored HTML, the CSV, the PDF where available, a README and a
     manifest with SHA-256 of every member. Assembled from the STORED report;
@@ -549,7 +594,10 @@ async def get_package(
 async def get_report_html(
     report_id: str,
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("viewer")),
+    # `reviewer` (Decision 1, 2026-09-16): identical bytes to the artifact
+    # download route, which is already reviewer-gated; a legacy alias must not
+    # reopen the same door at a lower floor.
+    user=Depends(require_role_audited("reviewer", resource_type="report")),
 ):
     """The STORED HTML, byte for byte.
 
@@ -572,7 +620,8 @@ async def get_report_html(
 async def get_report_pdf(
     report_id: str,
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("viewer")),
+    # `reviewer` (Decision 1, 2026-09-16): same document as /html, rendered.
+    user=Depends(require_role_audited("reviewer", resource_type="report")),
 ):
     """PDF rendered from the STORED HTML — same document, different container."""
     row = await _stored(db, report_id)
@@ -607,7 +656,8 @@ def docx_for_stored_report(row) -> Optional[bytes]:
 async def get_report_docx(
     report_id: str,
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("viewer")),
+    # `reviewer` (Decision 1, 2026-09-16): built from the same stored dataset.
+    user=Depends(require_role_audited("reviewer", resource_type="report")),
 ):
     """Word document with real styles (Title, Heading 1–3), accessible tables
     with repeating header rows, a TOC field, header/footer with contract and
@@ -673,7 +723,9 @@ def csv_for_stored_report(row) -> str:
 async def get_report_csv(
     report_id: str,
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("viewer")),
+    # `reviewer` (Decision 1, 2026-09-16): regenerated from the same stored
+    # dataset as HTML/PDF/DOCX.
+    user=Depends(require_role_audited("reviewer", resource_type="report")),
 ):
     """Regenerated from the STORED dataset, not from a fresh query.
 
@@ -746,7 +798,9 @@ async def sow_deliverable(
     review_cycle_id: Optional[str] = Query(None),
     case_id: Optional[str] = Query(None, description="D5.1 only"),
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("viewer")),
+    # `reviewer` (Decision 1, 2026-09-16): this IS the stratified evidence,
+    # unlike `/sow` (the family list, names and descriptions only, no data).
+    user=Depends(require_role_audited("reviewer", resource_type="report")),
 ):
     from app.reports.data.sow_report_data import SowReportDataService
 
@@ -781,7 +835,10 @@ async def artifact_history(
     report_id: str,
     content_type: str = Query("text/html"),
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("viewer")),
+    # `reviewer` (Decision 1, 2026-09-16): matches `/artifacts/{id}/download`,
+    # which is already reviewer-gated; the version listing names hashes and
+    # sizes of Government-derived documents and is the doorway to them.
+    user=Depends(require_role_audited("reviewer", resource_type="report")),
 ):
     """Every finalised version, oldest first. Nothing is ever replaced."""
     from app.reports.data.artifact_registry import (artifact_versions,
@@ -803,7 +860,7 @@ async def artifact_download(
     version: Optional[int] = Query(None, ge=1, le=2_147_483_647,
                                    description="Omit for the latest"),
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("reviewer")),
+    user=Depends(require_role_audited("reviewer", resource_type="report")),
 ):
     """Fetch stored bytes and re-hash them before handing them over.
 

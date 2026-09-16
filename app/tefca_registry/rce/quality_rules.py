@@ -830,10 +830,25 @@ RULE_BY_ID: Dict[str, Rule] = {rule.rule_id: rule for rule in ALL_RULES}
 #: outside the quality engine. One vocabulary, declared once.
 NON_QUALITY_ISSUE_TYPES: Dict[str, Tuple[str, str, str]] = {
     "NPI_NOT_FOUND": ("NPI-005", MEDIUM, HUMAN_REQUIRED),
-    "NPI_DEACTIVATED": ("NPI-006", HIGH, HUMAN_REQUIRED),
+    # QA_REQUIRED (2026-09-18, pre-merge review Decision 2): NPI_DEACTIVATED is
+    # written ONLY by a post-promotion verification cycle (never pre-promotion
+    # — see verification_findings.py's own docstring), so raising its
+    # authority here cannot affect any pre-promotion path. A confirmed
+    # deactivation is one of the three named BLOCKING triggers; QA_REQUIRED
+    # gives it curation.transition_issue's existing independent-QA gate for
+    # free, with no new gate to write or trust.
+    "NPI_DEACTIVATED": ("NPI-006", HIGH, QA_REQUIRED),
     "NPI_EXISTING_VALUE_CONFLICT": ("NPI-008", HIGH, HUMAN_REQUIRED),
     "IDENTIFIER_EXISTING_VALUE_CONFLICT": ("NPI-008", HIGH, HUMAN_REQUIRED),
     "NPI_VERIFICATION_UNAVAILABLE": ("NPI-009", INFO, NO_CORRECTION),
+    # Added 2026-09-18, pre-merge review Decision 2. Distinct issue_type
+    # strings from the pre-promotion identifier-conflict types above, so a
+    # query can always tell which regime wrote a given row; QA_REQUIRED for
+    # the same reason as NPI_DEACTIVATED. Written only by
+    # `post_promotion_verification.py`, only against an ALREADY-promoted
+    # record (`canonical_entity_id` set) — never by promotion's own drain.
+    "INVALID_ACTIVE_IDENTIFIER": ("NPI-003", HIGH, QA_REQUIRED),
+    "MATERIAL_IDENTIFIER_CONFLICT": ("NPI-008", HIGH, QA_REQUIRED),
 }
 
 #: Rules whose findings may ever be applied without a human. Enforced in

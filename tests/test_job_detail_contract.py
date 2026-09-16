@@ -22,7 +22,7 @@ import uuid
 
 import pytest
 
-from support_delivery_api import add_stage_events, headers_for, seed_delivery
+from support_delivery_api import add_stage_events, alembic_head, headers_for, seed_delivery
 
 pytestmark = pytest.mark.usefixtures("db_required")
 
@@ -187,7 +187,7 @@ def test_build_block_is_present_with_migration_revision(client, succeeded, monke
     assert build["git_sha"] == "deadbeefcafe"
     assert build["build_time"] == "2026-09-17T00:00:00Z"
     assert build["version"]
-    assert build["migration_revision"] == "20260917_delivery_traceability"
+    assert build["migration_revision"] == alembic_head()
 
 
 # -- status derivation ------------------------------------------------------------------
@@ -247,3 +247,4 @@ def test_dashboard_carries_two_axis_status_dispositions_and_snapshot(client, suc
     assert body["status"]["review_state"]["code"] == "NOT_READY"
     assert body["dispositions"]["equation"]["received"] == 3
     assert body["snapshot"] is None
+

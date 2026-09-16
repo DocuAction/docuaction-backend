@@ -62,21 +62,39 @@ See the PR description for the exact counts at the corrected SHAs (full backend
 suite in two batches on the isolated cluster; frontend unit, guardrails, e2e
 with axe, build, audit).
 
-## 3. Decisions requested before merge
+## 3. Decisions — resolved by directive (2026-09-16, second round)
 
-1. **M6 (report download floor).** Options: (a) raise the legacy per-format
-   routes and artifact history to `reviewer` so viewers see report metadata
-   but no report bytes (consistent with "viewer sees no delivered values";
-   the frontend already shows a permission notice on 403); (b) lower the new
-   artifact download to `viewer` and rewrite the rationale. Recommendation:
-   (a), as a small follow-up commit before DEV journeys, since it changes what
-   the viewer account can do today.
-2. **M-3 (post-promotion verification holds).** Options: (a) verification
-   findings do not change Area 2 `record_status`; they surface through the
-   exception ledger and the `no_failed_required_verification` criterion;
-   (b) they hold, and the equation grows a "held after promotion" population.
-   Recommendation: (a). Not needed for the DEV acceptance journeys, which do
-   not run a verification cycle.
+Both open decisions from section 3 were resolved by explicit instruction
+rather than left to a recommendation, and are now implemented:
+
+1. **Decision 1 — legacy report authorization.** Every current, legacy, alias,
+   direct-artifact and regeneration route that can return a report's actual
+   content is raised to `reviewer` — not just the M6 items, but a second
+   legacy subsystem this directive's own audit surfaced
+   (`app/Tefca/routes.py`'s deprecated `/api/tefca/reports/*` and
+   `/api/tefca/priority/{case_id}/report`, which rendered the SAME content
+   through a different renderer, still at `viewer`). `GET /{report_id}`
+   answers with metadata and a stated `availability` reason below reviewer,
+   never a partial or silently-empty body. Denials are audited
+   (`require_role_audited`, a wrapper around the existing `require_role`, not
+   a new authorization mechanism). Frontend controls on both consumers
+   (`ReportsTab.js`, the delivery detail Reports tab; `reports/page.js`, the
+   Contract Reports page, which had **no** client-side gate at all) now hide
+   generation and download below reviewer with a stated reason. Full detail,
+   including the exact consumer-impact list: section 8.
+2. **Decision 2 — append-only post-promotion verification.** A finding
+   discovered after promotion never rewrites `rce_disposition_events` or
+   `record_status` again (the M-3 defect: `curation.recompute_hold_status`
+   now explicitly skips any record with `canonical_entity_id` set). BLOCKING
+   findings (confirmed deactivation, an invalid active identifier, a material
+   identifier conflict) set the entity's `verification_status` to
+   `in_review`, open exactly one analyst work item (idempotent per finding),
+   exclude the entity from a QA final-classification approval
+   (`qa_gate.submit_qa_review`) while unresolved, and create a new
+   reconciliation snapshot — the original snapshot is never modified.
+   NONBLOCKING findings (NPI not found, verification unavailable) are written
+   and visible but never hold, exclude or force a work item. Full detail:
+   section 9.
 
 ## 4. Corrected SHAs
 
@@ -164,6 +182,13 @@ finding**, 23 records are entirely clean.
 Severity totals: HIGH 1, MEDIUM 21 (across 20 unique records), LOW 11 (11
 records, auto-corrected), INFORMATIONAL 343 (150 unique records).
 
+**Confirming the arithmetic you asked about explicitly:** 376 total − 1 HIGH −
+343 INFORMATIONAL = 32 remaining — that subtraction is correct. Those 32 are
+**not** all one severity: they split into **21 MEDIUM** (BUS-002 1, FMT-003 2,
+INT-002 17, SCH-004 1) **and 11 LOW** (FMT-001, auto-corrected). 21 + 11 = 32.
+The table above is the authoritative source; this paragraph exists only to
+state the split in the terms your question used.
+
 **Curation outcome:** CLEAN 173, CORRECTED 10 (the FMT-001 auto-corrections,
 minus the one landing on the held row), HELD 1. **Disposition outcome:**
 CREATED 180, MATCHED_UNCHANGED 3, HELD 1 — 184 total, matching the acceptance
@@ -213,3 +238,101 @@ either promote an existing account to program_manager or create a new one;
 qalead@ should not be used as a silent substitute, since it would not
 exercise the program_manager floor this remediation actually added (the
 deprecated sync-upload path, deliverable submission, full audit log).
+
+**Provisioning mechanism, fully determined (2026-09-16), not executed.**
+Account creation and role assignment both go through the live DEV admin HTTP
+API (`app/api/admin_users.py`: `POST /api/admin/users/invite`, admin-only),
+not a direct database write. `program_manager` is already a first-class role
+throughout the codebase (`ROLE_HIERARCHY`, `DEFAULT_MODULES_BY_ROLE`,
+`scripts/verify_rbac_matrix.py`) — no code change is needed to create the
+account. `scripts/reset_qa_passwords.py` only rotates passwords of accounts
+already in its `ACCOUNTS` list; the correct sequence is (1) invite
+`program_manager@docuaction.io` with `role: "program_manager"` via the admin
+API, then (2) add that address to `ACCOUNTS` and run the reset script, which
+generates a random password and writes it only to the gitignored
+`docs/QA_CREDENTIALS.md` — the same safe, already-established pattern used
+for every other QA account. **This was not executed**: it requires an admin
+bearer token (`DOCUACTION_ADMIN_TOKEN` or an admin login), and no such
+credential is available in this session. Obtaining one is an operator action,
+the same category as the temporary firewall `/32` earlier in this
+remediation — it needs you or another admin-token holder, not a workaround.
+
+## 8. Decision 1 — consumer impact (requirement 10)
+
+| Consumer | Before | After this change |
+|---|---|---|
+| `src/app/tefca-arc/deliveries/detail/tabs/ReportsTab.js` (delivery detail Reports tab) | Gated generation/download on `isContributor`, matching the OLD floor | Gated on `isReviewer`; download buttons replaced with a stated reason below reviewer |
+| `src/app/tefca-arc/reports/page.js` (Contract Reports page) | **No client-side role gate at all** on generation or on any download button (table row actions, side-panel footer) | Generation and every download button gated on `atLeast(user.role, 'reviewer')`, with a stated reason; the client-side `generate()` call also refuses to fire below the floor as a second line of defence |
+| `app/Tefca/routes.py` legacy `/api/tefca/reports/*` and `/api/tefca/priority/{case_id}/report` | `viewer` — reachable by any authenticated account, returning the same report content the current routes protect | `reviewer`, audited |
+| `POST /api/reports/generate` | `contributor` (2), below reviewer (4) | `reviewer` |
+| `docs/rce/DELIVERY_WORKFLOW_USER_GUIDE.md` | Silent on the report role floor | Section 18a documents the floor and the exception list |
+| `tests/test_rbac_roles.py::test_no_tefca_read_endpoint_sits_above_the_viewer_floor` | Would have failed the six newly-raised legacy routes as an unreviewed regression | Extended the repository's own established `ALLOWED_ABOVE_VIEWER` exception list, with the same justification style as its existing entries |
+| Nothing found reachable at a role between viewer and reviewer (`manager`, level 3) that called any of these routes | — | — |
+
+No other consumer of any raised route was found (`grep` across both
+repositories for every route path this decision touches).
+
+## 9. Decision 2 — implementation detail
+
+**New module** `app/tefca_registry/rce/post_promotion_verification.py`:
+`record_finding` (the single entry point — writes the append-only finding,
+and for a BLOCKING outcome, its consequences), `check_active_identifier_validity`,
+`record_post_promotion_conflict`, `resolve_post_promotion_finding`.
+
+**Vocabulary** (`quality_rules.NON_QUALITY_ISSUE_TYPES`): `NPI_DEACTIVATED`
+(existing, authority raised from `HUMAN_REQUIRED` to `QA_REQUIRED` — safe,
+since this outcome is exclusively post-promotion by construction),
+`INVALID_ACTIVE_IDENTIFIER` and `MATERIAL_IDENTIFIER_CONFLICT` (new, both
+`QA_REQUIRED`). `QA_REQUIRED` is reused deliberately: `curation.
+transition_issue`'s existing independent-QA gate (a `qa_actor` distinct from
+the resolving analyst) applies to these findings for free, with no new gate
+to write or trust.
+
+**The M-3 fix, precisely**: `curation.recompute_hold_status` now skips every
+curated record with `canonical_entity_id is not None` — once promoted, that
+function never touches `record_status` again, for any reason, including a
+post-promotion finding sharing the same quality run. Its `still_held` count
+is now computed only from records it actually still holds, not from the raw
+blocking map (which can still legitimately include a promoted record's
+finding for other purposes).
+
+**Idempotency, exactly as required.** The work item is keyed on the
+finding's own `issue_code` (`dq_review_bridge.open_post_promotion_case`,
+under a transaction-scoped advisory lock) — deliberately NOT the
+`(run, record, classification)` key `build_cases` uses for pre-promotion
+work, which would have matched an already-resolved case for the same record
+and silently created nothing for a genuinely new finding. A repeated
+verification producing the identical outcome reuses the same issue (dedup
+already existed in `verification_findings.record_npi_outcome`) and therefore
+the same case — "exactly one," proven by
+`test_duplicate_finding_delivery_writes_one_issue_and_one_case` and
+`test_repeated_verification_after_resolution_opens_a_new_finding` (the
+second one specifically proves a NEW finding after the first is resolved is
+NOT swallowed by the older case-key scheme's ambiguity).
+
+**Exclusion mechanisms, and what was deliberately not touched.** Two of the
+three named exclusions are implemented and tested: `Completed — Clean`
+(automatic — these findings are HIGH severity on the intake's current run,
+which `delivery_jobs._open_findings`/`status_model` already count without
+any code change) and final classification (`qa_gate.submit_qa_review`'s
+`QA_APPROVE` now refuses when the review's entity is `in_review`). The third
+— excluding an entity from a **new approved sample draw** — is intentionally
+**not** implemented: the actual draw (`qhin_sampling.finalize_plan`) is a
+separate, methodology-governed statistical algorithm (confidence, margin,
+proportion, finite-population correction) that this review did not audit,
+and modifying its eligibility criteria under this authorization risked
+changing sampling validity in a way I could not verify in the time available.
+Recorded here as an explicit, honest gap and a recommended fast follow, not
+silently dropped.
+
+**Tests**: `tests/test_post_promotion_verification.py` (12 tests covering
+blocking/nonblocking, duplicate delivery, repeated verification after
+resolution, resolved-by-analyst with independent QA required, returned-by-QA,
+external verification unavailable, historical snapshot unchanged, new
+snapshot created, queue item created once, entity excluded while unresolved,
+entity restored only after every blocking finding clears, and the
+final-classification refusal). Migration `20260918_pp_verification` adds
+four nullable audit columns to `rce_issues` (`correlation_id`, `build_sha`,
+`before_state`, `after_state`) and widens `rce_reconciliation_snapshots`'s
+trigger vocabulary for the two new snapshot triggers this decision needs,
+with a downgrade that refuses rather than orphaning existing evidence rows.

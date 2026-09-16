@@ -24,7 +24,11 @@ from datetime import datetime, timezone
 import pytest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-HEAD = "20260917_delivery_traceability"
+#: The chain's actual head. 20260918 (Decision 2, added 2026-09-18) only adds
+#: nullable columns to `rce_issues` and widens the snapshot trigger CHECK; it
+#: does not touch the five evidence tables' grants this module tests, so
+#: "upgrade to head" testing those grants stays valid with the head moved.
+HEAD = "20260918_pp_verification"
 PREVIOUS = "20260915_curated_text_columns"
 MIG_DB = "mig_test"
 OWNER, APP = "docuaction_owner", "docuaction_app"
@@ -137,7 +141,10 @@ def test_traceability_migration_end_to_end(throwaway_db):
     print("UPGRADE_HEAD=PASS")
 
     # 2. downgrade succeeds while the tables are empty, and upgrade rebuilds
-    _alembic(url, "downgrade", "-1")
+    # Targets PREVIOUS by name, not "-1": HEAD may now be more than one
+    # revision past 20260917 (20260918 stacks on top of it), and this test
+    # is specifically about 20260917's own up/down behaviour.
+    _alembic(url, "downgrade", PREVIOUS)
     with eng.connect() as c:
         assert _version(c) == [PREVIOUS]
         tables, views = _tables(c)
@@ -206,7 +213,10 @@ def test_traceability_migration_end_to_end(throwaway_db):
     print("APPEND_ONLY_BY_GRANT=PASS")
 
     # 5. downgrade now refuses: evidence exists
-    r = _alembic(url, "downgrade", "-1", expect_ok=False)
+    # Targets PREVIOUS (see the note above): the refusal must come from
+    # 20260917's own downgrade, which the CLI reaches on the way to PREVIOUS
+    # whether or not another revision now sits on top of it.
+    r = _alembic(url, "downgrade", PREVIOUS, expect_ok=False)
     assert r.returncode != 0
     assert "DowngradeWouldDestroyEvidenceError" in (r.stdout + r.stderr)
     assert "rce_disposition_events (1 rows)" in (r.stdout + r.stderr)

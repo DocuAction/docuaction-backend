@@ -315,7 +315,9 @@ def test_the_artifact_download_and_delivery_listing_require_reviewer():
     import app.reports.routes as routes
 
     for handler in (routes.artifact_download, routes.reports_by_delivery):
-        assert 'require_role("reviewer")' in inspect.getsource(handler), handler.__name__
+        # Decision 1 of the pre-merge review (2026-09-16) wrapped the floor in
+        # an audited dependency; the floor itself is unchanged.
+        assert 'require_role_audited("reviewer"' in inspect.getsource(handler), handler.__name__
     assert "get_tenant" not in inspect.getsource(routes)
 
 

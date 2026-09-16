@@ -213,7 +213,11 @@ def test_quality_rules_are_stage_quality():
 
 def test_non_quality_issue_types_name_their_rules():
     assert qr.NON_QUALITY_ISSUE_TYPES["NPI_NOT_FOUND"] == ("NPI-005", qr.MEDIUM, qr.HUMAN_REQUIRED)
-    assert qr.NON_QUALITY_ISSUE_TYPES["NPI_DEACTIVATED"] == ("NPI-006", qr.HIGH, qr.HUMAN_REQUIRED)
+    # QA_REQUIRED since 2026-09-18 (pre-merge review Decision 2): confirmed
+    # deactivation is a named BLOCKING trigger and needs independent QA.
+    # Exclusively post-promotion (verification_findings.py never writes it
+    # pre-promotion), so this cannot affect any pre-promotion path.
+    assert qr.NON_QUALITY_ISSUE_TYPES["NPI_DEACTIVATED"] == ("NPI-006", qr.HIGH, qr.QA_REQUIRED)
     assert qr.NON_QUALITY_ISSUE_TYPES["NPI_EXISTING_VALUE_CONFLICT"] == ("NPI-008", qr.HIGH, qr.HUMAN_REQUIRED)
     assert qr.NON_QUALITY_ISSUE_TYPES["IDENTIFIER_EXISTING_VALUE_CONFLICT"][0] == "NPI-008"
     assert qr.NON_QUALITY_ISSUE_TYPES["NPI_VERIFICATION_UNAVAILABLE"] == ("NPI-009", qr.INFO, qr.NO_CORRECTION)
