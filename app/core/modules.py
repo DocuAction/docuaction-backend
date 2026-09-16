@@ -57,7 +57,11 @@ logger = logging.getLogger("docuaction.modules")
 # app/routers declare prefixes without "/api" (e.g. "/ats"); both spellings are
 # listed so the gate holds whichever way those routers are ever mounted.
 MODULE_REGISTRY: Dict[str, Tuple[str, Tuple[str, ...]]] = {
-    "tefca_arc": ("TEFCA", ("/api/tefca", "/api/reports", "/api/learning", "/api/v1/usps")),
+    # "/api/v1/tefca" is the legacy TEFCA review-protocol router (app/Tefca/routes.py).
+    # It was absent from this tuple, so a TEFCA-disabled profile still served it
+    # (remediation contract 2026-09-17, section 9).
+    "tefca_arc": ("TEFCA", ("/api/tefca", "/api/v1/tefca", "/api/reports", "/api/learning",
+                            "/api/v1/usps")),
     "govcon": ("GOVCON", tuple(
         p for base in (
             "ats", "rfq", "rfqs", "quotes", "deals", "deal-registrations", "deal-tracker",

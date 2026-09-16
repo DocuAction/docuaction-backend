@@ -1,0 +1,485 @@
+{#
+  Delivery Processing Report — one registered ONC/RCE delivery, end to end.
+
+  Every value is a template variable read from the Delivery Processing data
+  service, which reads persisted evidence only. There is no literal count
+  anywhere in this file. Page one carries the identity block: what was
+  delivered, which job and intake, which reconciliation snapshot the numbers
+  rest on, and which build produced the document — so a regenerated report
+  can be told apart from the original by reading it.
+#}
+{% extends "base.html" %}
+
+{% block title %}Delivery Processing Report {{ snapshot.report_id }}{% endblock %}
+{% block description %}Processing outcome, reconciliation, record-level dispositions and evidence for one ONC/RCE delivery{% endblock %}
+{% block kicker %}DocuAction TEFCA ARC &middot; Delivery Processing{% endblock %}
+{% block heading %}RCE Delivery Processing Report{% endblock %}
+
+{% macro flag(ok, yes_text, no_text) %}
+  {%- if ok -%}
+    <span class="status status-b1"><span class="glyph" aria-hidden="true">●</span><span class="text">{{ yes_text }}</span></span>
+  {%- else -%}
+    <span class="status status-b4"><span class="glyph" aria-hidden="true">■</span><span class="text">{{ no_text }}</span></span>
+  {%- endif -%}
+{% endmacro %}
+
+{% block content %}
+
+<section class="scope-box" aria-labelledby="dp-identity">
+  <h2 id="dp-identity">Delivery Identity</h2>
+  <table>
+    <caption>Identity of the delivery, the evidence it rests on, and the build that produced this document</caption>
+    <thead>
+      <tr><th scope="col">Attribute</th><th scope="col">Value</th></tr>
+    </thead>
+    <tbody>
+      <tr><th scope="row">Delivery</th><td>{{ delivery.delivery_label or 'Not labelled' }}</td></tr>
+      <tr><th scope="row">Job id</th><td>{{ delivery.job_id or 'No job row (legacy synchronous upload)' }}</td></tr>
+      <tr><th scope="row">Intake id</th><td>{{ delivery.intake_id or 'No intake (the job failed before Area 1 was written)' }}</td></tr>
+      <tr><th scope="row">Resolved from</th><td>{{ delivery.resolved_from }}</td></tr>
+      <tr><th scope="row">File</th><td>{{ delivery.filename or 'Not recorded' }}</td></tr>
+      <tr><th scope="row">SHA-256</th><td>{{ delivery.sha256 or 'Not recorded' }}</td></tr>
+      <tr><th scope="row">Size (bytes)</th><td>{{ delivery.file_size_bytes|number }}</td></tr>
+      <tr><th scope="row">Records delivered (Area 1)</th><td>{{ delivery.record_count|number }}</td></tr>
+      <tr><th scope="row">Registrant</th><td>{{ delivery.registrant or 'Not recorded' }}</td></tr>
+      <tr><th scope="row">Government reference</th><td>{{ delivery.government_reference or 'None recorded' }}</td></tr>
+      <tr><th scope="row">Received from ONC/RCE</th><td>{{ delivery.received_date or 'Not recorded' }}</td></tr>
+      <tr><th scope="row">Registered (UTC)</th><td>{{ delivery.registered_at or 'Not recorded' }}</td></tr>
+      <tr><th scope="row">Processing started (UTC)</th><td>{{ delivery.started_at or 'Not recorded' }}</td></tr>
+      <tr><th scope="row">Processing completed (UTC)</th><td>{{ delivery.completed_at or delivery.failed_at or 'Not completed' }}</td></tr>
+      <tr><th scope="row">Job state / stage</th><td>{{ delivery.state or '—' }} / {{ delivery.stage or '—' }} (attempts: {{ delivery.attempt_count|number }})</td></tr>
+      <tr><th scope="row">Build SHA</th><td>{{ build.git_sha }} (built {{ build.build_time }}, version {{ build.version }}, {{ build.environment }})</td></tr>
+      <tr><th scope="row">Migration revision</th><td>{{ build.migration_revision }}</td></tr>
+      <tr><th scope="row">Reconciliation snapshot id</th><td>{{ snapshot_id or 'NONE — no reconciliation snapshot is persisted' }}</td></tr>
+      <tr><th scope="row">Reconciliation snapshot hash</th><td>{{ snapshot_hash or '—' }}</td></tr>
+      <tr><th scope="row">Reconciliation snapshot created (UTC)</th><td>{{ snapshot_created_at or '—' }}</td></tr>
+      <tr><th scope="row">Snapshot sequence</th><td>
+        {%- if snapshot_id -%}{{ snapshot_sequence }} of {{ reconciliation.history_count }} &mdash;
+          {% if snapshot_is_latest %}latest{% else %}NOT the latest (regeneration from an earlier snapshot){% endif %}
+        {%- else -%}—{%- endif -%}
+      </td></tr>
+      <tr><th scope="row">Template version</th><td>{{ template_version }}</td></tr>
+      <tr><th scope="row">Report generated (UTC)</th><td>{{ snapshot.generation_timestamp }}</td></tr>
+      <tr><th scope="row">Report id</th><td>{{ snapshot.report_id }}</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<h2>1. Processing outcome and review state</h2>
+<p>
+  <strong>Processing outcome:</strong> {{ outcome.value }} ({{ outcome.code }}). {{ outcome.detail }}
+</p>
+<p>
+  <strong>Review state:</strong> {{ review.value }} ({{ review.code }}). {{ review.detail }}
+</p>
+{% if outcome.basis %}
+<table>
+  <caption>Basis for the processing outcome: each criterion and whether it held against persisted evidence</caption>
+  <thead>
+    <tr><th scope="col">Criterion</th><th scope="col">Held</th><th scope="col">Evidence</th></tr>
+  </thead>
+  <tbody>
+    {% for item in outcome.basis %}
+    <tr>
+      <th scope="row">{{ item.criterion }}</th>
+      <td>{{ flag(item.held, 'Held', 'Not held') }}</td>
+      <td>{{ item.detail }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No clean-criteria basis applies to this outcome (the delivery did not reach a reconciled state).</p>
+{% endif %}
+
+<h2>2. Processing timeline</h2>
+{% if timeline.available %}
+<p>{{ timeline.summary.attempts|number }} stage attempt(s) recorded.
+  {% if timeline.summary.failed_stage %}Failed stage: {{ timeline.summary.failed_stage }}.{% endif %}
+  Completed stages: {{ timeline.summary.completed_stages|join(', ') or 'none' }}.</p>
+<table>
+  <caption>Every stage attempt, oldest first</caption>
+  <thead>
+    <tr>
+      <th scope="col">Stage</th><th scope="col">Attempt</th><th scope="col">Status</th>
+      <th scope="col">Started (UTC)</th><th scope="col">Completed (UTC)</th><th scope="col">Duration (ms)</th>
+      <th scope="col">In</th><th scope="col">Out</th><th scope="col">Warnings</th><th scope="col">Held</th><th scope="col">Rejected</th>
+      <th scope="col">Failure</th><th scope="col">Build</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for ev in timeline.events %}
+    <tr>
+      <th scope="row">{{ ev.stage }}</th>
+      <td>{{ ev.attempt }}</td>
+      <td>{{ ev.status }}</td>
+      <td>{{ ev.started_at or '—' }}</td>
+      <td>{{ ev.completed_at or '—' }}</td>
+      <td>{{ ev.duration_ms|number }}</td>
+      <td>{{ ev.input_count|number }}</td>
+      <td>{{ ev.output_count|number }}</td>
+      <td>{{ ev.warning_count|number }}</td>
+      <td>{{ ev.held_count|number }}</td>
+      <td>{{ ev.rejected_count|number }}</td>
+      <td>{% if ev.failure_class %}{{ ev.failure_class }}: {{ ev.failure_reason or '' }}{% else %}—{% endif %}</td>
+      <td>{{ ev.build_sha }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="insufficient-data">No stage events are persisted for this delivery. Stage timings cannot be reconstructed; see the limitations section.</p>
+{% endif %}
+
+<h2>3. Reconciliation</h2>
+{% if reconciliation.available %}
+<p>
+  Snapshot {{ reconciliation.id }} (sequence {{ reconciliation.sequence }}, trigger {{ reconciliation.trigger }}, actor {{ reconciliation.actor }}),
+  written {{ reconciliation.created_at }} by build {{ reconciliation.build_sha }} at migration {{ reconciliation.migration_revision }}.
+  Result: {{ flag(reconciliation.passed, 'PASSED', 'FAILED') }}
+  {% if not reconciliation.passed %}&mdash; {{ reconciliation.failure_reason or 'no reason recorded' }}{% endif %}
+  {% if reconciliation.reconstructed %}<strong>This snapshot is marked RECONSTRUCTED.</strong>{% endif %}
+</p>
+<table>
+  <caption>Accounting equation as persisted in the pinned snapshot: Received = Created + Updated + Matched/Unchanged + Held + Rejected + Missing Key + Excluded</caption>
+  <thead>
+    <tr><th scope="col">Term</th><th scope="col">Value</th></tr>
+  </thead>
+  <tbody>
+    {% set eq = reconciliation.equation %}
+    <tr><th scope="row">Received</th><td>{{ eq.get('received')|number }}</td></tr>
+    <tr><th scope="row">Created</th><td>{{ eq.get('created')|number }}</td></tr>
+    <tr><th scope="row">Updated</th><td>{{ eq.get('updated')|number }}</td></tr>
+    <tr><th scope="row">Matched / unchanged</th><td>{{ eq.get('matched_unchanged')|number }}</td></tr>
+    <tr><th scope="row">Held</th><td>{{ eq.get('held')|number }}</td></tr>
+    <tr><th scope="row">Rejected</th><td>{{ eq.get('rejected')|number }}</td></tr>
+    <tr><th scope="row">Missing key</th><td>{{ eq.get('missing_key')|number }}</td></tr>
+    <tr><th scope="row">Excluded</th><td>{{ eq.get('excluded')|number }}</td></tr>
+    <tr><th scope="row">Accounted</th><td>{{ eq.get('accounted')|number }}</td></tr>
+    <tr><th scope="row">Equation holds</th><td>{{ flag(eq.get('holds'), 'Yes', 'No') }}</td></tr>
+  </tbody>
+</table>
+{% if reconciliation.checks %}
+<table>
+  <caption>Reconciliation checks recorded in the snapshot</caption>
+  <thead>
+    <tr><th scope="col">Check</th><th scope="col">Result</th><th scope="col">Detail</th></tr>
+  </thead>
+  <tbody>
+    {% for c in reconciliation.checks %}
+    <tr>
+      <th scope="row">{{ c.get('name') or c.get('check') or c.get('id') or loop.index }}</th>
+      <td>{{ c.get('passed') if c.get('passed') is not none else (c.get('result') or c.get('status') or '—') }}</td>
+      <td>{{ c.get('detail') or c.get('message') or '' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% else %}
+<p class="insufficient-data">No reconciliation snapshot is persisted for this delivery. No reconciliation of record exists, and this report does not compute one.</p>
+{% endif %}
+
+<h2>4. Dispositions</h2>
+<p>
+  The current disposition of every received record, read from the append-only disposition ledger
+  (highest sequence per record). {{ dispositions.records_received|number }} record(s) received;
+  {{ dispositions.counts.get('total')|number }} carry a disposition;
+  {{ dispositions.records_without_disposition|number }} carry none.
+  {{ dispositions.human_count|number }} current disposition(s) were set by an analyst;
+  {{ dispositions.reconstructed_count|number }} are marked reconstructed.
+  {% if dispositions.agrees_with_snapshot is not none %}
+    The current table {% if dispositions.agrees_with_snapshot %}agrees with{% else %}DIFFERS from{% endif %} the pinned reconciliation snapshot.
+  {% endif %}
+</p>
+<table>
+  <caption>Disposition totals (current table) and the equation evaluated over them</caption>
+  <thead>
+    <tr><th scope="col">Disposition</th><th scope="col">Records</th></tr>
+  </thead>
+  <tbody>
+    {% for key in ('CREATED', 'UPDATED', 'MATCHED_UNCHANGED', 'HELD', 'REJECTED', 'MISSING_KEY', 'EXCLUDED') %}
+    <tr><th scope="row">{{ key }}</th><td>{{ dispositions.counts.get(key, 0)|number }}</td></tr>
+    {% endfor %}
+    <tr><th scope="row">Total with a disposition</th><td>{{ dispositions.counts.get('total', 0)|number }}</td></tr>
+    <tr><th scope="row">Records received</th><td>{{ dispositions.records_received|number }}</td></tr>
+    <tr><th scope="row">Equation holds on the current table</th><td>{{ flag(dispositions.equation.get('holds'), 'Yes', 'No') }} (difference {{ dispositions.equation.get('difference')|number }})</td></tr>
+  </tbody>
+</table>
+
+{% if dispositions.rows %}
+<table>
+  <caption>Record-level dispositions, every received record, by delivered line number</caption>
+  <thead>
+    <tr>
+      <th scope="col">Line</th><th scope="col">Source id (RCE OID)</th><th scope="col">Name</th>
+      <th scope="col">Submitted NPI</th><th scope="col">Curated NPI</th><th scope="col">Disposition</th>
+      <th scope="col">Reason code</th><th scope="col">Entity id</th><th scope="col">Findings</th><th scope="col">Warnings</th>
+      <th scope="col">Seq</th><th scope="col">Actor</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in dispositions.rows %}
+    <tr>
+      <th scope="row">{{ r.line_number }}</th>
+      <td>{{ r.source_rce_id or '—' }}</td>
+      <td>{{ r.name or '—' }}</td>
+      <td>{{ r.submitted_npi or '—' }}</td>
+      <td>{{ r.curated_npi or '—' }}</td>
+      <td>{{ r.disposition }}</td>
+      <td>{{ r.reason_code }}</td>
+      <td>{{ r.entity_id or '—' }}</td>
+      <td>{{ r.finding_count|number }}</td>
+      <td>{{ r.warning_count|number }}</td>
+      <td>{{ r.sequence }}</td>
+      <td>{{ r.actor_type }}{% if r.reconstructed %} (reconstructed){% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="insufficient-data">No disposition events are persisted for this delivery; per-record outcomes cannot be stated from evidence.</p>
+{% endif %}
+
+<h2>5. Findings</h2>
+{% if findings.available %}
+<p>{{ findings.total|number }} finding(s) in the current quality run {{ findings.run_id }} (rule set {{ findings.rule_set_version or 'not recorded' }});
+  {{ findings.open_high|number }} open at HIGH or CRITICAL severity.</p>
+<table>
+  <caption>Findings by rule, issue type and severity</caption>
+  <thead>
+    <tr><th scope="col">Rule</th><th scope="col">Issue type</th><th scope="col">Severity</th><th scope="col">Count</th></tr>
+  </thead>
+  <tbody>
+    {% for f in findings.by_code %}
+    <tr><th scope="row">{{ f.rule_id }}</th><td>{{ f.issue_type }}</td><td>{{ f.severity }}</td><td>{{ f.count|number }}</td></tr>
+    {% else %}
+    <tr><th scope="row">None</th><td>—</td><td>—</td><td>0</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% if findings.rows %}
+<table>
+  <caption>Every finding of the current run, by delivered line</caption>
+  <thead>
+    <tr>
+      <th scope="col">Issue code</th><th scope="col">Line</th><th scope="col">Rule</th><th scope="col">Issue type</th>
+      <th scope="col">Severity</th><th scope="col">Column</th><th scope="col">Authority</th><th scope="col">Resolution</th><th scope="col">Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for f in findings.rows %}
+    <tr>
+      <th scope="row">{{ f.issue_code }}</th>
+      <td>{{ f.line_number|number }}</td>
+      <td>{{ f.rule_id }}</td>
+      <td>{{ f.issue_type }}</td>
+      <td>{{ f.severity }}</td>
+      <td>{{ f.field_name or '—' }}</td>
+      <td>{{ f.correction_authority }}</td>
+      <td>{{ f.resolution }}</td>
+      <td>{{ f.description }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% else %}
+<p class="insufficient-data">No completed quality run exists for this delivery; findings cannot be stated.</p>
+{% endif %}
+
+<h2>6. Identifier conflicts and decisions</h2>
+{% if identifiers.available and identifiers.conflicts %}
+<p>{{ identifiers.conflicts|length }} identifier conflict(s) raised for this delivery; {{ identifiers.unresolved|number }} unresolved; {{ identifiers.events_total|number }} event(s) in total.</p>
+<table>
+  <caption>Each identifier conflict with its current decision</caption>
+  <thead>
+    <tr>
+      <th scope="col">Entity id</th><th scope="col">Identifier</th><th scope="col">Submitted</th><th scope="col">Existing</th>
+      <th scope="col">Verified</th><th scope="col">Selected</th><th scope="col">Current decision</th><th scope="col">Decided (UTC)</th><th scope="col">Actor</th><th scope="col">Reason</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for c in identifiers.conflicts %}
+    <tr>
+      <th scope="row">{{ c.entity_id }}</th>
+      <td>{{ c.identifier_type }}</td>
+      <td>{{ c.submitted_value or '—' }}</td>
+      <td>{{ c.existing_value or '—' }}</td>
+      <td>{{ c.verified_value or '—' }}</td>
+      <td>{{ c.selected_value or '—' }}</td>
+      <td>{{ c.current_decision }}</td>
+      <td>{{ c.decided_at or '—' }}</td>
+      <td>{{ c.actor }}</td>
+      <td>{{ c.reason }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% elif identifiers.available %}
+<p>No identifier conflicts were raised for this delivery.</p>
+{% else %}
+<p class="insufficient-data">Identifier decisions are unavailable: the delivery has no intake.</p>
+{% endif %}
+
+<h2>7. Verification coverage</h2>
+<p>State: {{ verification.state }} (source: {{ verification.source }}){% if verification.reason %} &mdash; {{ verification.reason }}{% endif %}.
+  Coverage is counted from evidence rows for this delivery's entities; connector readiness is not coverage.</p>
+<table>
+  <caption>Coverage per verification source</caption>
+  <thead>
+    <tr>
+      <th scope="col">Source</th><th scope="col">State</th><th scope="col">Eligible</th><th scope="col">Attempted</th>
+      <th scope="col">Verified</th><th scope="col">Not found</th><th scope="col">Unavailable</th><th scope="col">Failed</th><th scope="col">Coverage</th><th scope="col">Note</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for s in verification.sources %}
+    <tr>
+      <th scope="row">{{ s.name|upper }}</th>
+      <td>{{ s.state }}</td>
+      <td>{{ s.eligible|number }}</td>
+      <td>{{ s.attempted|number }}</td>
+      <td>{{ s.verified|number }}</td>
+      <td>{{ s.not_found|number }}</td>
+      <td>{{ s.unavailable|number }}</td>
+      <td>{{ s.failed|number }}</td>
+      <td>{% if s.coverage_pct is none %}Not run{% else %}{{ s.coverage_pct }}%{% endif %}</td>
+      <td>{{ s.note or '' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2>8. Analyst actions</h2>
+<p>{{ analyst.counts.disposition_events|number }} analyst disposition(s), {{ analyst.counts.issue_resolutions|number }} finding resolution(s),
+  {{ analyst.counts.review_records|number }} review record(s) ({{ analyst.counts.open|number }} open, {{ analyst.counts.claimed|number }} claimed,
+  {{ analyst.counts.qa_pending|number }} awaiting QA, {{ analyst.counts.qa_approved|number }} QA approved).</p>
+{% if analyst.disposition_events %}
+<table>
+  <caption>Analyst disposition decisions (HUMAN actor), oldest first</caption>
+  <thead>
+    <tr><th scope="col">Line</th><th scope="col">Seq</th><th scope="col">Disposition</th><th scope="col">Reason code</th><th scope="col">Reason</th><th scope="col">Actor</th><th scope="col">Decided (UTC)</th></tr>
+  </thead>
+  <tbody>
+    {% for ev in analyst.disposition_events %}
+    <tr>
+      <th scope="row">{{ ev.line_number }}</th>
+      <td>{{ ev.sequence }}</td>
+      <td>{{ ev.disposition }}</td>
+      <td>{{ ev.reason_code }}</td>
+      <td>{{ ev.reason or '' }}</td>
+      <td>{{ ev.actor }}</td>
+      <td>{{ ev.decided_at }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% if analyst.issue_resolutions %}
+<table>
+  <caption>Finding resolutions recorded by analysts</caption>
+  <thead>
+    <tr><th scope="col">Issue code</th><th scope="col">Rule</th><th scope="col">Severity</th><th scope="col">Resolution</th><th scope="col">Resolved by</th><th scope="col">Resolved (UTC)</th><th scope="col">QA approved by</th></tr>
+  </thead>
+  <tbody>
+    {% for i in analyst.issue_resolutions %}
+    <tr>
+      <th scope="row">{{ i.issue_code }}</th>
+      <td>{{ i.rule_id }}</td>
+      <td>{{ i.severity }}</td>
+      <td>{{ i.resolution }}</td>
+      <td>{{ i.resolved_by or '—' }}</td>
+      <td>{{ i.resolved_at or '—' }}</td>
+      <td>{{ i.qa_approved_by or '—' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% if analyst.review_records %}
+<table>
+  <caption>Review records tied to this delivery's records</caption>
+  <thead>
+    <tr><th scope="col">Review id</th><th scope="col">Category</th><th scope="col">Resolution</th><th scope="col">Assigned</th><th scope="col">Reviewed (UTC)</th><th scope="col">QA approved (UTC)</th></tr>
+  </thead>
+  <tbody>
+    {% for r in analyst.review_records %}
+    <tr>
+      <th scope="row">{{ r.review_id }}</th>
+      <td>{{ r.bucket or '—' }}</td>
+      <td>{{ r.resolution or 'Pending' }}{% if r.reclassified_to %} → {{ r.reclassified_to }}{% endif %}</td>
+      <td>{{ 'Yes' if r.assigned else 'No' }}</td>
+      <td>{{ r.reviewed_at or '—' }}</td>
+      <td>{{ r.reportable_at or '—' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% if not analyst.available %}
+<p>No analyst action has been recorded for this delivery.</p>
+{% endif %}
+
+<h2>9. Lineage</h2>
+{% if lineage.available %}
+<p>{{ lineage.corrections_total|number }} correction(s) applied to delivered values, each preserving the original;
+  {{ lineage.entities_promoted|number }} distinct entity/entities promoted to the registry;
+  {% if lineage.entity_versions_in_window is none %}registry version history not scoped (see limitations){% else %}{{ lineage.entity_versions_in_window|number }} registry version(s) written within the job window{% endif %}.</p>
+<table>
+  <caption>Corrections by authority and by column</caption>
+  <thead>
+    <tr><th scope="col">Measure</th><th scope="col">Count</th></tr>
+  </thead>
+  <tbody>
+    {% for a, n in lineage.by_authority.items() %}
+    <tr><th scope="row">Corrections under {{ a }}</th><td>{{ n|number }}</td></tr>
+    {% endfor %}
+    {% for col, n in lineage.by_column.items() %}
+    <tr><th scope="row">Column {{ col }}</th><td>{{ n|number }}</td></tr>
+    {% endfor %}
+    {% if not lineage.by_authority %}
+    <tr><th scope="row">No corrections were applied</th><td>0</td></tr>
+    {% endif %}
+  </tbody>
+</table>
+{% if lineage.rows %}
+<table>
+  <caption>Correction detail ({{ lineage.rows_shown|number }} of {{ lineage.corrections_total|number }} shown)</caption>
+  <thead>
+    <tr><th scope="col">Line</th><th scope="col">Column</th><th scope="col">Original</th><th scope="col">Corrected</th><th scope="col">Rule</th><th scope="col">Authority</th><th scope="col">By</th><th scope="col">QA</th></tr>
+  </thead>
+  <tbody>
+    {% for c in lineage.rows %}
+    <tr>
+      <th scope="row">{{ c.line_number|number }}</th>
+      <td>{{ c.column_name }}</td>
+      <td>{{ c.original_value if c.original_value is not none else '—' }}</td>
+      <td>{{ c.corrected_value if c.corrected_value is not none else '—' }}</td>
+      <td>{{ c.correction_rule_id or '—' }}</td>
+      <td>{{ c.correction_authority }}</td>
+      <td>{{ c.corrected_by }}</td>
+      <td>{{ c.qa_status or '—' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% else %}
+<p class="insufficient-data">Lineage is unavailable: the delivery has no intake.</p>
+{% endif %}
+
+<h2>10. Evidence limitations</h2>
+<p>What this report could not state from persisted evidence, and why. This list is never omitted.</p>
+<ul>
+  {% for item in limitations %}
+  <li>{{ item }}</li>
+  {% else %}
+  <li>No limitation was recorded: every section above was read from persisted evidence for this delivery.</li>
+  {% endfor %}
+</ul>
+
+<h2>11. Audit note</h2>
+<p>{{ audit_note }}</p>
+
+{% endblock %}

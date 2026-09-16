@@ -498,3 +498,9 @@ RCE_TABLE_ORDER = [
     "rce_correction_details",
     "tefca_entity_contacts",
 ]
+
+
+# Traceability evidence tables (2026-09-17). Imported here so that any code
+# importing the RCE models - the app, the Alembic environment, create_all -
+# registers them on the same Base.
+import app.tefca_registry.rce.traceability_models  # noqa: E402,F401

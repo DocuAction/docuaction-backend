@@ -199,6 +199,35 @@ async def rolled_back_db(db_required):
 
 
 @pytest.fixture
+async def dev_review_baseline(db_required):
+    """Skip unless the committed database carries the DEV review baseline.
+
+    test_government_rows_are_untouched asserts that at least 43 review records
+    without a queue_source are still present AFTER the fixture wrote its own
+    cases. That figure is the development database's pre-existing population
+    (docs/analyst_queue_wiring_plan.md: review_records = 43). Where fewer are
+    committed BEFORE the fixture runs, the assertion could not tell "the
+    fixture destroyed rows" from "the rows were never there", so the
+    precondition is measured on committed state and reported exactly. An
+    environment that carries the baseline runs the assertion unchanged.
+    """
+    from sqlalchemy import text
+
+    from app.core.database import async_session_maker
+
+    async with async_session_maker() as db:
+        committed = (await db.execute(text(
+            "select count(*) from review_records "
+            "where verification_results->>'queue_source' is null"))).scalar() or 0
+    if committed < 43:
+        pytest.skip(
+            f"requires the populated DEV dataset: review_records carries "
+            f"{committed} committed rows without queue_source before the "
+            f"fixture ran; the test's pre-existing baseline is 43")
+    return committed
+
+
+@pytest.fixture
 async def bridged(rolled_back_db):
     """A synthetic delivery, quality-run once, with its DQ cases built."""
     db = rolled_back_db
@@ -744,7 +773,7 @@ async def test_supervisor_workload_counts_are_available(bridged):
 
 # ═══ INTEGRITY ═══════════════════════════════════════════════════════════════
 
-async def test_government_rows_are_untouched(bridged):
+async def test_government_rows_are_untouched(dev_review_baseline, bridged):
     """TEST 34-36: the fixtures write only their own delivery."""
     db, intake_id, result = bridged
 

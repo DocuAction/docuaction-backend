@@ -417,6 +417,25 @@ def test_no_tefca_read_endpoint_sits_above_the_viewer_floor():
         # that executes the REAL pipeline above viewer is correct, so lowering
         # it to satisfy this test would make the product worse.
         "/api/v1/tefca/demo/validate-sample",
+        # ── Delivery workflow remediation (contract 2026-09-17, section 6) ──
+        # Reads that return DELIVERED VALUES - a delivered line, its curated
+        # copy, its lineage, the Issue Ledger rows, record dispositions, the
+        # exception ledger and the per-delivery audit union - sit at reviewer
+        # (4). A viewer keeps every read that carries no Government data value:
+        # delivery metadata, integrity, runs, reconciliation, the job list, the
+        # job detail (whose value-bearing blocks are null for a viewer with
+        # `availability = requires_role:reviewer`), the timeline, the dashboard
+        # and verification coverage. Same principle as the audit-trail and
+        # export exceptions above: the viewer role exists so that a person can
+        # follow the work without seeing the identifiers.
+        "/api/tefca/rce/deliveries/{intake_id}/records",
+        "/api/tefca/rce/deliveries/{intake_id}/curated",
+        "/api/tefca/rce/curated/{curated_id}/lineage",
+        "/api/tefca/rce/deliveries/{intake_id}/issues",
+        "/api/tefca/rce/deliveries/{intake_id}/dispositions",
+        "/api/tefca/rce/deliveries/{intake_id}/dispositions.csv",
+        "/api/tefca/rce/deliveries/{intake_id}/exceptions",
+        "/api/tefca/rce/deliveries/{intake_id}/audit",
     }
 
     offenders = []

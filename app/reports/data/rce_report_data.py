@@ -60,14 +60,24 @@ class RceReportDataService:
         self.intake_id = intake_id
 
     async def _intake(self):
+        """The named delivery. NEVER the newest one.
+
+        Until 2026-09-17 a missing `intake_id` silently selected the most
+        recently received intake, so a Data Quality or Source Intake report
+        generated without an identifier described whichever delivery happened
+        to be newest - and nothing on the page said so. An identifier is now
+        required; the generator resolves a job id to its intake before this
+        service is constructed.
+        """
+        from app.reports.generator import ReportParameterError
         from app.tefca_registry.rce import models as m
 
-        if self.intake_id:
-            return await self.db.get(m.RceSourceIntake, self.intake_id)
-        return (await self.db.execute(
-            select(m.RceSourceIntake)
-            .order_by(m.RceSourceIntake.received_at.desc()).limit(1)
-        )).scalar_one_or_none()
+        if not self.intake_id:
+            raise ReportParameterError(
+                "This report describes ONE delivery and needs parameters.job_id or "
+                "parameters.intake_id. It never defaults to the newest delivery.",
+                code="DELIVERY_IDENTIFIER_REQUIRED", status=422)
+        return await self.db.get(m.RceSourceIntake, self.intake_id)
 
     async def get_intake_summary(self) -> Dict[str, Any]:
         from app.tefca_registry.rce import models as m

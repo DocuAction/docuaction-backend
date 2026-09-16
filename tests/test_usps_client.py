@@ -396,6 +396,46 @@ def test_parse_maps_dpv_codes_to_deliverability():
 
 # ── Endpoints (Task 4) ────────────────────────────────────────────────────────
 
+# 2026-09-17 remediation (contract section 8): the USPS client state is no
+# longer on the PUBLIC /health, which now carries build identity and module
+# state only. It lives on GET /api/admin/health (admin). The two tests below
+# keep their assertions and move to that route, calling as an admin through a
+# stubbed session (the same technique tests/test_rbac_roles.py uses).
+
+def _admin_health(client, monkeypatch):
+    import uuid as _uuid
+
+    from app.core.database import get_db
+    from app.core.security import create_access_token
+    from app.main import app
+
+    class _User:
+        id = str(_uuid.uuid4()); email = "admin@test.local"; role = "admin"
+        is_active = True; status = "active"; tokens_revoked_at = None
+
+    class _Result:
+        def scalar_one_or_none(self): return _User()
+        def scalar(self): return None
+
+    class _Session:
+        async def execute(self, *a, **k): return _Result()
+        async def commit(self): return None
+        async def rollback(self): return None
+        async def close(self): return None
+        def add(self, *a, **k): return None
+
+    async def _override():
+        yield _Session()
+
+    app.dependency_overrides[get_db] = _override
+    try:
+        token = create_access_token({"sub": _User.id, "role": "admin"}, is_admin=True)
+        return client.get("/api/admin/health",
+                          headers={"Authorization": f"Bearer {token}"}).json()
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
 def test_health_reports_usps_as_not_configured(client, monkeypatch):
     """The state the system ships in. Anything else here would misreport an
     unconfigured optional integration as a degraded one."""
@@ -403,24 +443,26 @@ def test_health_reports_usps_as_not_configured(client, monkeypatch):
     monkeypatch.delenv("USPS_CLIENT_SECRET", raising=False)
     uc.reset_usps_client()
 
-    body = client.get("/health").json()
+    body = _admin_health(client, monkeypatch)
     assert body["usps"]["status"] == "Not configured — code normalization active"
     assert body["usps"]["configured"] is False
     assert body["usps"]["circuit_breaker"] == "closed"
+    # And the public probe no longer carries it at all.
+    assert "usps" not in client.get("/health").json()
 
 
 def test_health_never_calls_usps(client, monkeypatch):
-    """/health is a liveness probe. If it awaited an external API, USPS being
+    """Health is a liveness probe. If it awaited an external API, USPS being
     slow would make this instance look unhealthy to Azure."""
     monkeypatch.setenv("USPS_CLIENT_ID", "cid")
     monkeypatch.setenv("USPS_CLIENT_SECRET", "sec")
     uc.reset_usps_client()
 
     def _explode(*a, **kw):
-        raise AssertionError("/health must not make a network call")
+        raise AssertionError("health must not make a network call")
 
     monkeypatch.setattr(uc.USPSClient, "standardize", _explode)
-    body = client.get("/health").json()
+    body = _admin_health(client, monkeypatch)
     assert body["usps"]["status"] == "Operational"
     uc.reset_usps_client()
 

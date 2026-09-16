@@ -129,7 +129,12 @@ def test_endpoint_exposes_received_date_and_refuses_a_malformed_one():
     """
     import app.tefca_registry.rce.routes as routes
 
+    # The route is a thin deprecation wrapper around `_upload_delivery_body`
+    # (2026-09-17); the guard lives in the body, so both sources are inspected.
     src = inspect.getsource(routes.upload_delivery)
+    body = getattr(routes, "_upload_delivery_body", None)
+    if body is not None:
+        src += inspect.getsource(body)
     assert "received_date" in src
     assert "fromisoformat" in src
     assert "422" in src

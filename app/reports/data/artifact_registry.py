@@ -118,6 +118,10 @@ class ReportArtifact(Base):
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            #: The REGISTRY row id — what `rce_delivery_report_links.artifact_id`
+            #: stores and what a download URL may name. Distinct from
+            #: `artifact_id`, which is the core store's identifier for the bytes.
+            "id": str(self.id) if self.id else None,
             "artifact_id": self.artifact_id,
             "artifact_version": self.artifact_version,
             "storage_backend": self.storage_backend,
@@ -174,6 +178,70 @@ def public_artifact(artifact: Dict[str, Any]) -> Dict[str, Any]:
     """One registry row, safe to hand to a client."""
     return {k: v for k, v in artifact.items()
             if k not in INTERNAL_ARTIFACT_FIELDS}
+
+
+#: Which backends hold an artifact somewhere that outlives the process that
+#: wrote it. The local filesystem backend is for tests and single-host
+#: development: on App Service it writes to the container's own writable layer,
+#: which does not survive a restart or a slot swap, so a report registered there
+#: is NOT a durable record and every response that names the backend says so.
+DURABLE_BACKENDS = frozenset({"azure_blob"})
+
+STORAGE_NOTES = {
+    "local": ("Local filesystem backend: for tests and single-host development "
+              "only. Not durable on App Service; set REPORT_ARTIFACT_BACKEND=azure "
+              "with REPORT_ARTIFACT_AZURE_ACCOUNT / _CONTAINER for a durable copy."),
+    "azure_blob": ("Azure Blob backend: write-once blobs (overwrite refused by the "
+                   "service), content-addressed, retention pending programme "
+                   "guidance (D8)."),
+}
+
+
+def storage_durability(backend: Optional[str]) -> Dict[str, Any]:
+    """The backend NAME and whether it is a durable home — never the locator."""
+    name = (backend or "unknown").strip().lower()
+    return {
+        "storage_backend": name,
+        "durable": name in DURABLE_BACKENDS,
+        "storage_note": STORAGE_NOTES.get(
+            name, f"Unknown artifact backend {name!r}; durability not established."),
+    }
+
+
+def artifact_download_url(artifact: Dict[str, Any]) -> str:
+    """The integrity-verified download path for one registry row.
+
+    Keyed by report id, content type and version — the identifiers a reader
+    already has — so the URL is reproducible from a link row alone.
+    """
+    from urllib.parse import quote
+
+    return (f"/api/reports/artifacts/{quote(str(artifact['report_id']), safe='')}/download"
+            f"?content_type={quote(str(artifact['content_type']), safe='')}"
+            f"&version={int(artifact.get('artifact_version') or 1)}")
+
+
+def link_artifact_summary(artifact: Dict[str, Any]) -> Dict[str, Any]:
+    """What a delivery link tells a reviewer about one stored rendering.
+
+    The hash, the type, the size and the backend NAME, plus where to fetch it
+    through the verified path. Never the locator.
+    """
+    return {
+        "id": artifact.get("id"),
+        "report_id": artifact.get("report_id"),
+        "content_type": artifact.get("content_type"),
+        "artifact_version": artifact.get("artifact_version"),
+        "rendered_sha256": artifact.get("rendered_sha256"),
+        "size_bytes": artifact.get("size_bytes"),
+        "template_version": artifact.get("template_version"),
+        "report_data_hash": artifact.get("report_data_hash"),
+        "source_artifact_sha256": artifact.get("source_artifact_sha256"),
+        "data_classification": artifact.get("data_classification"),
+        "generated_at": artifact.get("generated_at"),
+        **storage_durability(artifact.get("storage_backend")),
+        "download_url": artifact_download_url(artifact),
+    }
 
 
 def artifact_key(report_id: str, content_type: str) -> str:
@@ -291,10 +359,36 @@ async def retrieve_artifact(db, report_id: str, *,
         raise LookupError(
             f"no stored artifact for {report_id} ({content_type}"
             f"{f', version {version}' if version else ''})")
+    return _verified(row, store)
 
-    content = store.get(row.storage_locator)
+
+async def retrieve_artifact_by_id(db, artifact_row_id, *, store=None) -> Dict[str, Any]:
+    """Fetch by REGISTRY row id — the value a delivery link carries — with the
+    same re-hash as `retrieve_artifact`. Raises LookupError for an unknown id,
+    `ArtifactNotFound` when the registry row exists but the bytes are gone, and
+    RuntimeError on an integrity failure."""
+    store = store or get_artifact_store()
+    if not isinstance(artifact_row_id, uuid.UUID):
+        try:
+            artifact_row_id = uuid.UUID(str(artifact_row_id))
+        except ValueError:
+            raise LookupError(f"{artifact_row_id!r} is not an artifact id") from None
+    row = await db.get(ReportArtifact, artifact_row_id)
+    if row is None:
+        raise LookupError(f"no registered artifact with id {artifact_row_id}")
+    return _verified(row, store)
+
+
+def _verified(row: ReportArtifact, store) -> Dict[str, Any]:
+    """The bytes behind one registry row, re-hashed against what was recorded.
+
+    `store.get` raises `ArtifactNotFound` when the blob or file no longer
+    exists; that is allowed to propagate so the caller can say "the record is
+    registered but its bytes are missing" rather than "server error".
+    """
     from app.core.storage.artifact_store import content_sha256
 
+    content = store.get(row.storage_locator)
     actual = content_sha256(content)
     if actual != row.rendered_sha256:
         # Loud, not a warning. The bytes are not the bytes that were issued.
@@ -302,3 +396,14 @@ async def retrieve_artifact(db, report_id: str, *,
             f"INTEGRITY FAILURE: {row.storage_locator} hashes to {actual}, "
             f"registered as {row.rendered_sha256}.")
     return {"content": content, "artifact": row.to_dict(), "verified": True}
+
+
+async def artifacts_for_report(db, report_id: str) -> List[Dict[str, Any]]:
+    """Every registered rendering of one report, all content types, oldest first."""
+    rows = (await db.execute(
+        select(ReportArtifact)
+        .where(ReportArtifact.report_id == report_id)
+        .order_by(ReportArtifact.generated_at, ReportArtifact.content_type,
+                  ReportArtifact.artifact_version)
+    )).scalars().all()
+    return [r.to_dict() for r in rows]

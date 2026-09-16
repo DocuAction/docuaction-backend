@@ -59,6 +59,14 @@ class Settings(BaseSettings):
     MICROSOFT_CLIENT_SECRET: str = ""
     MICROSOFT_TENANT_ID: str = "common"
 
+    # ── ONC/RCE delivery pipeline ─────────────────────────────────────────────
+    # When true, curated records flagged `is_test_record` (BUS-002 name pattern)
+    # are EXCLUDED from promotion and accounted as EXCLUDED / EXCLUDED_TEST_RECORD
+    # in the disposition ledger. Default false: a real organisation may carry
+    # "Test" in its name, and dropping on a substring is the silent loss the
+    # pipeline exists to prevent. Excluded rows stay in Area 1 and Area 2.
+    RCE_EXCLUDE_TEST_RECORDS: bool = False
+
     class Config:
         env_file = ".env"
         extra = "allow"

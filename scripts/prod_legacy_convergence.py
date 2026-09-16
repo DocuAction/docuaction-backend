@@ -86,6 +86,15 @@ AREA1_OWNER_TABLES = {
     "rce_ingestion_runs",
     "rce_rule_execution_history",
     "rce_delivery_jobs",
+    # 20260917_delivery_traceability: five append-only evidence tables. Created by
+    # the chain AS the owner role and kept there: the app holds SELECT+INSERT
+    # (UPDATE on stage events only) from the reviewed chain, never ownership -
+    # ownership would let it edit or erase disposition history.
+    "rce_delivery_stage_events",
+    "rce_disposition_events",
+    "rce_reconciliation_snapshots",
+    "tefca_identifier_decision_events",
+    "rce_delivery_report_links",
 }
 
 
@@ -482,7 +491,26 @@ MANAGED_PREPARE_TABLES = ("decisions",)
 MANAGED_CHAIN_ALTERS = ("review_records", "rce_curated_records",
                         "tefca_reg_entities", "tefca_entity_contacts")
 assert not set(MANAGED_CHAIN_ALTERS) & AREA1_OWNER_TABLES, "Area-1 tables are never re-owned or re-granted here"
-MANAGED_CHAIN_CREATES = {"report_export_jobs", "rce_delivery_jobs"}
+# Tables the pending chain CREATES. None may exist before the chain runs (the
+# gate refuses), and none counts as a "candidate table missing from the
+# database": the candidate metadata now carries them (rce.models imports the
+# traceability models, which import the delivery-job model), so the gate
+# subtracts this set before deciding that PROD is missing something.
+MANAGED_CHAIN_CREATES = {
+    "report_export_jobs", "rce_delivery_jobs",
+    # 20260917_delivery_traceability
+    "rce_delivery_stage_events", "rce_disposition_events", "rce_reconciliation_snapshots",
+    "tefca_identifier_decision_events", "rce_delivery_report_links",
+}
+# Tables the 20260917 revision declares FOREIGN KEYS to that docuaction_app owns
+# in PROD and that no pending revision ALTERs (so they are not re-owned). CREATE
+# TABLE ... REFERENCES needs the REFERENCES privilege on the referenced table;
+# PREPARE grants exactly that, to the owner role, and nothing else. REFERENCES
+# lets a role declare a foreign key pointing at the table - it confers no read,
+# write or ownership - so it is left in place after the chain.
+MANAGED_CHAIN_REFERENCES = ("rce_issues", "tefca_entity_versions", "audit_logs")
+assert not set(MANAGED_CHAIN_REFERENCES) & AREA1_OWNER_TABLES
+assert not set(MANAGED_CHAIN_REFERENCES) & set(MANAGED_CHAIN_ALTERS)
 MANAGED_LEGACY_ONLY = [
     "area1_mutation_log", "automation_rules", "bulletin_articles", "bulletin_audit_log", "bulletin_briefings",
     "bulletin_cost_logs", "bulletin_delivery_log", "bulletin_recipients", "bulletin_run_log",
@@ -583,8 +611,9 @@ def managed_gate(conn, expected_revision, after_prepare=False):
         _refuse(f"{sorted(prepared - owner_owned)} not yet owned by {OWNER_ROLE} - run --managed-prepare first.")
     # 4. Schema fingerprint against candidate metadata.
     p = plan(conn)
-    if p["tables_the_chain_will_create"]:
-        _refuse(f"candidate tables missing from the database: {p['tables_the_chain_will_create'][:8]}")
+    missing_candidates = sorted(set(p["tables_the_chain_will_create"]) - MANAGED_CHAIN_CREATES)
+    if missing_candidates:
+        _refuse(f"candidate tables missing from the database: {missing_candidates[:8]}")
     present_chain = sorted(MANAGED_CHAIN_CREATES & existing)
     if present_chain:
         _refuse(f"chain-created table(s) already present before the chain ran: {present_chain}")
@@ -628,6 +657,7 @@ def print_managed_plan(p):
     print(f"[PREPARE] temporary re-own for the chain (returned by FINALIZE): "
           f"{[t for t, o in m['chain_alter_owners'].items() if o != OWNER_ROLE]}")
     print(f"[MIGRATE] chain creates : {sorted(MANAGED_CHAIN_CREATES)} (review_records columns added by 20260831_review_case)")
+    print(f"[PREPARE] REFERENCES for the 20260917 foreign keys -> {OWNER_ROLE} on {list(MANAGED_CHAIN_REFERENCES)}")
     print(f"legacy-only preserved   : {len(p['legacy_only_preserved_untouched'])}")
     print("No role creation, no broad re-ownership, no destructive DDL, no row change; "
           "the chain writes alembic_version itself.")
@@ -678,9 +708,14 @@ def managed_prepare(engine, expected_revision, become_role=None):
                 reowned.append(t)
             # the application keeps exactly its former (owner-level) runtime access for the window
             conn.execute(text(f'GRANT SELECT, INSERT, UPDATE, DELETE ON public."{t}" TO "{APP_ROLE}"'))
+        # 20260917 declares FKs to three app-owned tables no revision ALTERs; the
+        # owner role needs REFERENCES on each to create them (MANAGED_CHAIN_REFERENCES).
+        for t in MANAGED_CHAIN_REFERENCES:
+            conn.execute(text(f'GRANT REFERENCES ON public."{t}" TO "{OWNER_ROLE}"'))
         print(f"MANAGED PREPARE applied: {n_cols} model-only column(s) added on {MANAGED_PREPARE_TABLES}, "
               f"schema privileges ensured for {OWNER_ROLE}, alembic_version re-owned={moved}, "
-              f"temporarily re-owned for the chain={reowned} (app privileges retained; FINALIZE returns them). "
+              f"temporarily re-owned for the chain={reowned} (app privileges retained; FINALIZE returns them), "
+              f"REFERENCES privilege given to {OWNER_ROLE} for {list(MANAGED_CHAIN_REFERENCES)}. "
               "No roles created, no other ownership change, no Alembic, no row change.")
     return p
 

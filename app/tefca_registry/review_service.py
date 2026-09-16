@@ -125,6 +125,9 @@ async def probe_sources(db, entity_id) -> Dict[str, dict]:
                 out[key] = {"status": UNAVAILABLE,
                             "reason": str(err or "source did not complete")[:200],
                             "label": SOURCE_LABELS.get(key)}
+                if key == "nppes":
+                    out[key]["npi_outcome"] = "NPI_VERIFICATION_UNAVAILABLE"
+                    out[key]["npi_outcome_detail"] = out[key]["reason"]
             elif key == "oig_leie":
                 # Exclusion list: a hit is bad news, absence is the good outcome.
                 # `excluded` counts only ACTIVE exclusions — a reinstated
@@ -137,6 +140,19 @@ async def probe_sources(db, entity_id) -> Dict[str, dict]:
                 # is what distinguishes them.
                 out[key] = {"status": VERIFIED if data.get("found", False) else NOT_FOUND,
                             "label": SOURCE_LABELS.get(key)}
+                if key == "nppes":
+                    # Found + active, found + DEACTIVATED, not found, unavailable
+                    # are four different statements. `status` keeps the
+                    # five-state vocabulary the classifier reads; `npi_outcome`
+                    # carries the finer distinction to the issue ledger.
+                    from app.tefca_registry.rce import verification_findings as vf
+                    derived = vf.npi_outcome_from_nppes(data, ok=True)
+                    out[key]["npi_outcome"] = derived["outcome"]
+                    out[key]["npi_outcome_detail"] = derived.get("detail")
+                    if derived["outcome"] == vf.NPI_DEACTIVATED:
+                        out[key]["npi_status"] = "DEACTIVATED"
+                        out[key]["deactivation_date"] = derived.get("deactivation_date")
+                        out[key]["reason"] = derived.get("detail")
                 # Carry the authoritative record forward.
                 #
                 # Without this, `data` never left this function, and
@@ -163,6 +179,9 @@ async def probe_sources(db, entity_id) -> Dict[str, dict]:
         except Exception as exc:  # noqa: BLE001 — one source must not sink the run
             out[key] = {"status": FAILED, "reason": f"{type(exc).__name__}: {exc}"[:200],
                         "label": SOURCE_LABELS.get(key)}
+            if key == "nppes":
+                out[key]["npi_outcome"] = "NPI_VERIFICATION_UNAVAILABLE"
+                out[key]["npi_outcome_detail"] = out[key]["reason"]
         out[key]["verified_at"] = datetime.utcnow().isoformat() + "Z"
         out[key]["lookup_identifier"] = npi
     return out
@@ -444,6 +463,16 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
                      ip_address=ip_address, metadata={"trigger": trigger})
 
     sources = await probe_sources(db, entity.id)
+
+    # The NPPES outcome goes to the delivery's issue ledger too (NPI-005/006/
+    # 009), so the exception view shows every NPI question in one place. A
+    # repeat verification with the same outcome writes nothing new.
+    try:
+        from app.tefca_registry.rce import verification_findings as vf
+        await vf.record_from_sources(db, entity_id=entity.id, sources=sources)
+    except Exception as exc:  # noqa: BLE001 — the ledger must not fail a review
+        logger.error("NPI verification outcome not recorded for %s: %s",
+                     entity.id, type(exc).__name__, exc_info=True)
 
     npi = (await db.execute(
         select(reg.TefcaEntityIdentifier.identifier_value).where(

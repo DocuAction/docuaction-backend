@@ -9,14 +9,26 @@ keeps the job row honest about where the run actually is.
     intake.ingest_delivery        Area 1, 2,000-row batching, line-count contract
     quality_engine.run_quality    the rule set and the Issue Ledger
     curation.curate_delivery      Area 2 and AUTO_SAFE corrections
-    promotion.promote_delivery    canonical entities and the QHIN / parent edges
+    dq_review_bridge.build_cases  HUMAN_REQUIRED findings → review work queue
+    promotion.promote_delivery    canonical entities, dispositions, QHIN / parent edges
     (verification)                connector READINESS only — see below
-    reconciliation.reconcile_delivery  the hard A-F gate
+    reconciliation.reconcile_delivery  the hard A-F gate + the disposition equation
+    reconciliation.persist_snapshot    the verdict, hashed and persisted
 
 None of that is reimplemented, wrapped or "improved" here. The 2,000-row
 batching inside `ingest_delivery` in particular is untouched — it is proven, and
 the reason this module exists is that the BROWSER should not wait for it, not
 that it is wrong.
+
+EVERY STAGE ATTEMPT IS A ROW (2026-09-17)
+─────────────────────────────────────────
+Each stage is opened STARTED and closed COMPLETED / FAILED / SKIPPED in
+`rce_delivery_stage_events` (see `stage_events.py`), with the counts the stage
+itself produced. A retried job writes attempt+1; nothing is overwritten. The
+per-stage `stage_detail` JSON on the job row is still written for backward
+compatibility, but the durable timeline is the event table. The runner binds
+`request_context` (job, intake, stage, attempt) so every log line and every
+evidence row written during the run can be tied back to this job.
 
 WHY PROMOTION IS AUTOMATED HERE
 ───────────────────────────────
@@ -74,12 +86,13 @@ Two classes of stage, treated differently on purpose:
     stage raised is still a delivery with a complete, hashed, reconcilable
     Area 1, and burying that behind a FAILED job would hide real evidence
     because a downstream connector was unavailable. The stage error is written
-    to `stage_detail`, reconciliation still runs, and the operator sees exactly
-    which stage did not complete.
+    to the stage event and to `stage_detail`, reconciliation still runs, and the
+    operator sees exactly which stage did not complete.
 
 Reconciliation runs LAST and ALWAYS, including after a stage error — it is the
 gate that says whether the populations close, and its answer is most needed
-precisely when something went wrong.
+precisely when something went wrong. READY_FOR_REVIEW is recorded only when the
+reconciliation snapshot was persisted and passed.
 """
 
 from __future__ import annotations
@@ -87,10 +100,18 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
+from app.core import request_context
+# Spans are no-ops unless telemetry is configured (app/core/telemetry.py):
+# with tracing off, every `telemetry.span` block is a plain `with` block.
+from app.core import telemetry
+
 logger = logging.getLogger(__name__)
 
 #: How often the background heartbeat writes while a stage is running.
 from app.tefca_registry.rce.delivery_jobs import HEARTBEAT_INTERVAL_SECONDS  # noqa: E402
+
+#: Job stage name → stage-event stage name, where the two vocabularies differ.
+_EVENT_STAGE = {"VERIFICATION": "VERIFICATION_READINESS"}
 
 
 async def run_delivery_job(db, job) -> str:
@@ -98,18 +119,36 @@ async def run_delivery_job(db, job) -> str:
 
     Never raises: a runner that raises takes the poller's tick with it and the
     job keeps a heartbeat it no longer deserves. Everything is caught, recorded
-    on the job and turned into FAILED.
+    on the job — as FAILED, persisted — and returned.
     """
+    from app.tefca_registry.rce import delivery_jobs as jobs
     from app.tefca_registry.rce.delivery_job_model import RceDeliveryJob
 
     detail: Dict[str, Any] = {}
     pulse = _Heartbeat(job.id)
     await pulse.start()
     try:
-        return await _run_stages(db, job, detail)
+        # The job span is ALWAYS sampled (docuaction.always_sample): a delivery
+        # is minutes of work producing a handful of spans, and those spans are
+        # the evidence trail, not a 20 % sample of it. Identifiers only.
+        with request_context.bind(job_id=job.id, attempt=int(job.attempt_count or 1)), \
+                telemetry.span("rce.delivery_job", job_id=job.id,
+                               attempt=int(job.attempt_count or 1),
+                               **{telemetry.ALWAYS_SAMPLE_ATTRIBUTE: True}):
+            return await _run_stages(db, job, detail)
     except Exception as exc:  # noqa: BLE001 — the runner must not raise
-        logger.error("delivery job %s runner raised %s: %s", job.id,
-                     type(exc).__name__, exc)
+        logger.error("delivery job %s runner raised %s", job.id,
+                     type(exc).__name__, exc_info=True)
+        # The failure must be PERSISTED, not just returned: a job left RUNNING
+        # here would sit with a heartbeat it no longer deserves until the reaper
+        # guessed, and the operator would never see the reason.
+        await _settle(db)
+        try:
+            await jobs.finish_failed(db, job.id, _reason("RUNNER", exc),
+                                     detail=detail)
+        except Exception:  # noqa: BLE001
+            logger.error("delivery job %s: could not persist FAILED after runner "
+                         "error", job.id, exc_info=True)
         return RceDeliveryJob.STATE_FAILED
     finally:
         await pulse.stop()
@@ -117,24 +156,58 @@ async def run_delivery_job(db, job) -> str:
 
 async def _run_stages(db, job, detail: Dict[str, Any]) -> str:
     from app.tefca_registry.rce import delivery_jobs as jobs
+    from app.tefca_registry.rce import stage_events
     from app.tefca_registry.rce.delivery_job_model import RceDeliveryJob
 
     job_id = job.id
     actor = job.registered_by or "SYSTEM"
+    attempt = int(job.attempt_count or 1)
 
     # ── Area 1 — fatal if it does not land ───────────────────────────────────
-    try:
-        intake_id, received = await _stage_area1(db, job)
-    except Exception as exc:  # noqa: BLE001
-        reason = _reason("PARSING", exc)
-        logger.error("delivery job %s failed at Area 1: %s", job_id, reason)
-        # The session may be inside a failed transaction. Every later write on
-        # it would raise PendingRollbackError and the failure reason would be
-        # lost — the job would sit RUNNING until the reaper guessed.
-        await _settle(db)
-        await jobs.finish_failed(db, job_id, reason,
-                                 detail={"PARSING": {"error": str(exc)[:1000]}})
-        return RceDeliveryJob.STATE_FAILED
+    with request_context.bind(stage="PARSING"), \
+            telemetry.span("rce.stage.PARSING", job_id=job_id, stage="PARSING",
+                           attempt=attempt) as parsing_span:
+        ev_schema = await stage_events.open_stage(db, job_id, "SCHEMA_VALIDATION")
+        ev_parse = await stage_events.open_stage(db, job_id, "PARSING")
+        try:
+            intake_id, received = await _stage_area1(db, job)
+        except Exception as exc:  # noqa: BLE001
+            reason = _reason("PARSING", exc)
+            logger.error("delivery job %s failed at Area 1: %s", job_id, reason,
+                         exc_info=True)
+            # The session may be inside a failed transaction. Every later write on
+            # it would raise PendingRollbackError and the failure reason would be
+            # lost — the job would sit RUNNING until the reaper guessed.
+            await _settle(db)
+            await _close(db, ev_schema, "FAILED", failure=exc)
+            await _close(db, ev_parse, "FAILED", failure=exc)
+            await jobs.finish_failed(db, job_id, reason,
+                                     detail={"PARSING": {"error": str(exc)[:1000]}})
+            return RceDeliveryJob.STATE_FAILED
+
+        for ev in (ev_schema, ev_parse):
+            ev.intake_id = intake_id
+        parsing_span.set_attribute("intake_id", str(intake_id))
+        drift = bool(received.get("schema_drift"))
+        await _close(db, ev_schema, "COMPLETED",
+                     input_count=received.get("record_count"),
+                     output_count=received.get("record_count"),
+                     warning_count=1 if drift else 0,
+                     detail={"schema_fingerprint": received.get("schema_fingerprint"),
+                             "schema_drift": drift,
+                             "delimiter": received.get("delimiter"),
+                             "encoding": received.get("encoding"),
+                             "line_terminator": received.get("line_terminator")})
+        await _close(db, ev_parse, "COMPLETED",
+                     input_count=received.get("record_count"),
+                     output_count=received.get("records_stored"),
+                     rejected_count=received.get("parse_malformed"),
+                     warning_count=(received.get("mojibake_cells") or 0)
+                     + (received.get("embedded_tab_cells") or 0),
+                     detail={"parse_ok": received.get("parse_ok"),
+                             "parse_malformed": received.get("parse_malformed"),
+                             "every_line_stored": received.get("every_line_stored"),
+                             "duplicate_content": received.get("duplicate_content")})
 
     detail["PARSING"] = received
     await jobs.bind_intake(db, job_id, intake_id,
@@ -143,6 +216,20 @@ async def _run_stages(db, job, detail: Dict[str, Any]) -> str:
                          records_received=received.get("record_count"),
                          records_processed=received.get("records_stored"),
                          detail={"PARSING": received})
+
+    with request_context.bind(intake_id=intake_id):
+        return await _run_after_area1(db, job, detail, intake_id, received, actor)
+
+
+async def _run_after_area1(db, job, detail: Dict[str, Any], intake_id,
+                           received: Dict[str, Any], actor: str) -> str:
+    from app.tefca_registry.rce import delivery_jobs as jobs
+    from app.tefca_registry.rce import stage_events
+    from app.tefca_registry.rce.delivery_job_model import RceDeliveryJob
+
+    job_id = job.id
+    record_count = received.get("record_count")
+    attempt = int(job.attempt_count or 1)
 
     # ── the recoverable stages ───────────────────────────────────────────────
     # Ordered. Each runs only if the one before it did not raise, because
@@ -160,18 +247,56 @@ async def _run_stages(db, job, detail: Dict[str, Any]) -> str:
         (RceDeliveryJob.STAGE_VERIFICATION, RceDeliveryJob.STAGE_RECONCILIATION,
          _stage_verification),
     ):
-        try:
-            observed = await runner(db, intake_id, actor)
+        event_stage = _EVENT_STAGE.get(stage_name, stage_name)
+        with request_context.bind(stage=stage_name), \
+                telemetry.span(f"rce.stage.{stage_name}", job_id=job_id,
+                               intake_id=intake_id, stage=stage_name, attempt=attempt):
+            ev = await stage_events.open_stage(db, job_id, event_stage,
+                                               intake_id=intake_id,
+                                               input_count=record_count)
+            try:
+                observed = await runner(db, intake_id, actor)
+            except Exception as exc:  # noqa: BLE001
+                stage_error = _reason(stage_name, exc)
+                detail[stage_name] = {"error": str(exc)[:1000],
+                                      "completed": False}
+                logger.error("delivery job %s stage %s did not complete: %s",
+                             job_id, stage_name, type(exc).__name__, exc_info=True)
+                await _settle(db)
+                await _close(db, ev, "FAILED", failure=exc)
+                await jobs.heartbeat(db, job_id, detail={stage_name: detail[stage_name]})
+                break
+
+            # Work that follows a stage and belongs to its attempt.
+            if stage_name == RceDeliveryJob.STAGE_CURATION:
+                observed["review_bridge"] = await _bridge(db, intake_id, actor)
+            elif stage_name == RceDeliveryJob.STAGE_PROMOTION and observed.get("completed"):
+                await stage_events.record_instant(
+                    db, job_id, "MATCHING", intake_id=intake_id,
+                    input_count=observed.get("curated_records"),
+                    output_count=observed.get("entities_matched"),
+                    detail={"entities_updated": observed.get("entities_updated"),
+                            "entities_unchanged": observed.get("entities_unchanged"),
+                            "records_in_identifier_conflict":
+                                observed.get("records_in_identifier_conflict"),
+                            "conflicts_raised": observed.get("conflicts_raised")})
+                await stage_events.record_instant(
+                    db, job_id, "RELATIONSHIPS", intake_id=intake_id,
+                    output_count=(observed.get("relationships_managed_by_qhin") or 0)
+                    + (observed.get("relationships_sub_participant_of") or 0),
+                    detail={"managed_by_qhin": observed.get("relationships_managed_by_qhin"),
+                            "sub_participant_of":
+                                observed.get("relationships_sub_participant_of"),
+                            "unresolved_parents": observed.get("unresolved_parents"),
+                            "qhin_entities": observed.get("qhin_entities")})
+                observed["review_bridge"] = await _bridge(db, intake_id, actor)
+
             detail[stage_name] = observed
-        except Exception as exc:  # noqa: BLE001
-            stage_error = _reason(stage_name, exc)
-            detail[stage_name] = {"error": str(exc)[:1000],
-                                  "completed": False}
-            logger.error("delivery job %s stage %s did not complete: %s",
-                         job_id, stage_name, exc)
-            await _settle(db)
-            await jobs.heartbeat(db, job_id, detail={stage_name: detail[stage_name]})
-            break
+            if observed.get("held"):
+                await _close(db, ev, "SKIPPED", failure_reason=observed.get("reason"),
+                             detail={"held": True, "completed": False})
+            else:
+                await _close(db, ev, "COMPLETED", **_event_counts(stage_name, observed))
         await jobs.heartbeat(
             db, job_id, stage=next_stage,
             records_processed=_processed_count(observed),
@@ -179,22 +304,63 @@ async def _run_stages(db, job, detail: Dict[str, Any]) -> str:
 
     # ── reconciliation — always, even after a stage error ────────────────────
     passed = False
-    try:
-        recon = await _stage_reconciliation(db, intake_id)
-        detail[RceDeliveryJob.STAGE_RECONCILIATION] = recon
-        passed = bool(recon.get("passed"))
-    except Exception as exc:  # noqa: BLE001
-        detail[RceDeliveryJob.STAGE_RECONCILIATION] = {
-            "error": str(exc)[:1000], "completed": False}
-        logger.error("delivery job %s reconciliation did not complete: %s",
-                     job_id, exc)
-        await _settle(db)
+    snapshot = None
+    with request_context.bind(stage=RceDeliveryJob.STAGE_RECONCILIATION), \
+            telemetry.span(f"rce.stage.{RceDeliveryJob.STAGE_RECONCILIATION}",
+                           job_id=job_id, intake_id=intake_id,
+                           stage=RceDeliveryJob.STAGE_RECONCILIATION, attempt=attempt):
+        ev = await stage_events.open_stage(db, job_id, "RECONCILIATION",
+                                           intake_id=intake_id,
+                                           input_count=record_count)
+        try:
+            recon, full = await _stage_reconciliation(db, intake_id)
+            passed = bool(recon.get("passed"))
+        except Exception as exc:  # noqa: BLE001
+            detail[RceDeliveryJob.STAGE_RECONCILIATION] = {
+                "error": str(exc)[:1000], "completed": False}
+            logger.error("delivery job %s reconciliation did not complete: %s",
+                         job_id, type(exc).__name__, exc_info=True)
+            await _settle(db)
+            await _close(db, ev, "FAILED", failure=exc)
+        else:
+            try:
+                from app.tefca_registry.rce.reconciliation import persist_snapshot
+                snapshot = await persist_snapshot(db, intake_id, full, job_id=job_id,
+                                                  actor=actor, trigger="PIPELINE")
+                recon["snapshot_id"] = str(snapshot.id)
+                recon["snapshot_sequence"] = snapshot.sequence
+                recon["snapshot_hash"] = snapshot.hash
+            except Exception as exc:  # noqa: BLE001
+                logger.error("delivery job %s: reconciliation snapshot not persisted: %s",
+                             job_id, type(exc).__name__, exc_info=True)
+                await _settle(db)
+                recon["snapshot_error"] = f"{type(exc).__name__}: {str(exc)[:500]}"
+            detail[RceDeliveryJob.STAGE_RECONCILIATION] = recon
+            eq = (full.get("equation") or {})
+            await _close(db, ev, "COMPLETED",
+                         output_count=eq.get("accounted"),
+                         held_count=eq.get("held"),
+                         rejected_count=eq.get("rejected"),
+                         warning_count=len(full.get("failed_checks") or []),
+                         detail={"passed": passed,
+                                 "snapshot_id": recon.get("snapshot_id"),
+                                 "snapshot_error": recon.get("snapshot_error"),
+                                 "failed_checks": [c["check"] for c in
+                                                   (full.get("failed_checks") or [])][:20],
+                                 "equation": eq})
 
     if stage_error:
         # The delivery is real and its Area 1 is intact; the RUN did not finish.
         await jobs.finish_failed(db, job_id, stage_error, detail=detail)
         return RceDeliveryJob.STATE_FAILED
 
+    if passed and snapshot is not None:
+        await stage_events.record_instant(
+            db, job_id, "READY_FOR_REVIEW", intake_id=intake_id,
+            output_count=record_count,
+            detail={"snapshot_id": str(snapshot.id),
+                    "note": ("Readiness for review is a workflow state, not a "
+                             "statement that the data is clean.")})
     await jobs.finish_succeeded(
         db, job_id, reconciliation_passed=passed,
         records_processed=_reconciled_count(
@@ -303,6 +469,11 @@ async def _stage_promotion(db, intake_id, actor):
         "curated_records": result.get("curated_records"),
         "entities_created": result.get("entities_created"),
         "entities_updated": result.get("entities_updated"),
+        "entities_unchanged": result.get("entities_unchanged"),
+        "entities_matched": result.get("entities_matched"),
+        "conflicts_raised": result.get("conflicts_raised"),
+        "records_in_identifier_conflict": result.get(
+            "records_in_identifier_conflict"),
         "qhin_entities": result.get("qhin_entities"),
         "relationships_managed_by_qhin": result.get(
             "relationships_managed_by_qhin"),
@@ -310,6 +481,7 @@ async def _stage_promotion(db, intake_id, actor):
             "relationships_sub_participant_of"),
         "unresolved_parents": result.get("unresolved_parents"),
         "not_promoted_by_status": result.get("not_promoted_by_status"),
+        "dispositions": result.get("dispositions"),
     }
 
 
@@ -326,16 +498,21 @@ async def _stage_verification(db, intake_id, actor):
         from app.Tefca.connectors import data_source_labels
         readiness["sources"] = data_source_labels()
     except Exception as exc:  # noqa: BLE001
+        logger.error("connector readiness: source labels unavailable",
+                     exc_info=True)
         readiness["sources"] = {"error": type(exc).__name__}
     try:
         from app.tefca_registry.usps_client import get_usps_client
         readiness["usps"] = get_usps_client().health()
     except Exception as exc:  # noqa: BLE001
+        logger.error("connector readiness: USPS health unavailable", exc_info=True)
         readiness["usps"] = {"status": "unknown", "error": type(exc).__name__}
     try:
         from app.tefca_registry import website_evidence
         readiness["website"] = website_evidence.health()
     except Exception as exc:  # noqa: BLE001
+        logger.error("connector readiness: website health unavailable",
+                     exc_info=True)
         readiness["website"] = {"status": "unknown", "error": type(exc).__name__}
 
     return {
@@ -350,17 +527,50 @@ async def _stage_verification(db, intake_id, actor):
 
 
 async def _stage_reconciliation(db, intake_id):
+    """Returns (summary for stage_detail, full result for the snapshot)."""
     from app.tefca_registry.rce.reconciliation import reconcile_delivery
 
     result = await reconcile_delivery(db, intake_id)
-    return {
+    summary = {
         "completed": True,
         "passed": bool(result.get("passed")),
         "populations": result.get("populations") or {},
         "curated_status_counts": result.get("curated_status_counts") or {},
+        "dispositions": result.get("dispositions") or {},
+        "equation": result.get("equation") or {},
         "corrections": result.get("corrections") or {},
         "rule_execution": result.get("rule_execution") or {},
+        "failed_checks": [c["check"] for c in (result.get("failed_checks") or [])],
     }
+    return summary, result
+
+
+async def _bridge(db, intake_id, actor) -> Dict[str, Any]:
+    """Raise review work for the current run's HUMAN_REQUIRED findings.
+
+    Idempotent (`build_cases` finds existing cases by key), so it is safe to
+    call after curation AND after promotion: the second pass adds only the cases
+    that promotion itself justified (identifier conflicts). A bridge failure is
+    recorded, not fatal — the stage that preceded it did complete.
+    """
+    from app.tefca_registry.rce.dq_review_bridge import build_cases
+
+    try:
+        result = await build_cases(db, intake_id, actor=actor)
+        await db.commit()
+        return {
+            "completed": True,
+            "cases_created": result.get("cases_created"),
+            "cases_already_present": result.get("cases_already_present"),
+            "planned_cases": result.get("planned_cases"),
+            "human_required_issues": result.get("human_required_issues"),
+            "pre_promotion_cases": result.get("pre_promotion_cases"),
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.error("delivery %s: review bridge did not complete: %s", intake_id,
+                     type(exc).__name__, exc_info=True)
+        await _settle(db)
+        return {"completed": False, "error": f"{type(exc).__name__}: {str(exc)[:500]}"}
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -414,7 +624,7 @@ class _Heartbeat:
                     await jobs.heartbeat(db, self.job_id)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("delivery job %s heartbeat failed: %s",
-                               self.job_id, type(exc).__name__)
+                               self.job_id, type(exc).__name__, exc_info=True)
 
 
 async def _settle(db) -> None:
@@ -427,7 +637,59 @@ async def _settle(db) -> None:
         await db.rollback()
     except Exception as exc:  # noqa: BLE001
         logger.warning("session rollback after stage failure failed: %s",
-                       type(exc).__name__)
+                       type(exc).__name__, exc_info=True)
+
+
+async def _close(db, event, status: str, **kwargs) -> None:
+    """Close a stage event without ever letting the bookkeeping fail the run."""
+    from app.tefca_registry.rce import stage_events
+
+    try:
+        await stage_events.close_stage(db, event, status, **kwargs)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("stage event %s/%s could not be closed as %s: %s",
+                     getattr(event, "stage", "?"), getattr(event, "attempt", "?"),
+                     status, type(exc).__name__, exc_info=True)
+        await _settle(db)
+
+
+def _event_counts(stage_name: str, observed: Dict[str, Any]) -> Dict[str, Any]:
+    """The stage-event count columns for one stage's observation."""
+    if not isinstance(observed, dict):
+        return {}
+    if stage_name == "QUALITY":
+        return {"output_count": observed.get("records_evaluated"),
+                "warning_count": observed.get("issues_generated"),
+                "detail": {"run_id": observed.get("run_id"),
+                           "rules_failed": observed.get("rules_failed") or [],
+                           "rule_set_version": observed.get("rule_set_version")}}
+    if stage_name == "CURATION":
+        counts = observed.get("status_counts") or {}
+        return {"output_count": observed.get("curated_records"),
+                "held_count": counts.get("HELD"),
+                "rejected_count": counts.get("REJECTED"),
+                "warning_count": observed.get("auto_safe_corrections_applied"),
+                "detail": {"status_counts": counts,
+                           "review_bridge": observed.get("review_bridge")}}
+    if stage_name == "PROMOTION":
+        dispositions = observed.get("dispositions") or {}
+        return {"output_count": (observed.get("entities_created") or 0)
+                + (observed.get("entities_updated") or 0)
+                + (observed.get("entities_unchanged") or 0),
+                "held_count": dispositions.get("HELD"),
+                "rejected_count": dispositions.get("REJECTED"),
+                "warning_count": observed.get("conflicts_raised"),
+                "detail": {"entities_created": observed.get("entities_created"),
+                           "entities_updated": observed.get("entities_updated"),
+                           "entities_unchanged": observed.get("entities_unchanged"),
+                           "conflicts_raised": observed.get("conflicts_raised"),
+                           "not_promoted_by_status":
+                               observed.get("not_promoted_by_status"),
+                           "dispositions": dispositions,
+                           "review_bridge": observed.get("review_bridge")}}
+    if stage_name == "VERIFICATION":
+        return {"detail": {"deferred": True, "readiness": observed.get("readiness")}}
+    return {}
 
 
 def _processed_count(observed: Dict[str, Any]) -> Optional[int]:

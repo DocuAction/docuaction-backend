@@ -1,0 +1,37 @@
+# Traceability matrix — P0 delivery remediation (2026-09-16, UTC)
+
+One row per approved requirement. Backend paths are in the backend repository,
+frontend paths in the frontend repository. "Evidence" refers to
+`docs/evidence/acceptance_2026-09-16/` (folder name kept; contents dated UTC
+2026-09-16) and the sanitized evidence file committed there.
+
+| P0 | Requirement | Backend files | Frontend files | Migration objects | Automated tests | Acceptance evidence | Status | Remaining limitation |
+|---|---|---|---|---|---|---|---|---|
+| P0-1 | Reliable job-keyed delivery navigation | `app/tefca_registry/rce/delivery_routes.py` (list carries status, detail resolves any job) | `src/app/tefca-arc/deliveries/page.js`, `src/app/tefca-arc/deliveries/detail/{page,layout,lib}.js`, `src/platform/components/DataTable.js` | none | frontend `tests/unit/deliveries-list.test.jsx`, `tests/unit/datatable.test.jsx`, `tests/e2e/deliveries.spec.mjs` (direct nav, reload, trailing slash, back-state, Enter on FAILED), live smoke | screenshots 01, 02, 08; scenario D `no_intake_job_opens`, `unknown_job_is_404` | Done | Friendly path without query string deferred (static export) |
+| P0-2 | Unified job-keyed detail API | `delivery_routes.py` (`/delivery-jobs/{id}/detail`, `/timeline`), `delivery_jobs.py` (`status_for_job`), `exception_ledger.py`, `verification_coverage.py`, `stage_events.py`, `dispositions.py`, `reconciliation.py` (`latest_snapshot`) | consumers above | five tables + view | `tests/test_job_detail_contract.py`, `tests/test_stage_events.py`, `tests/test_delivery_runner_events.py` | scenarios A–D `detail` blocks; `resolved_from` | Done | — |
+| P0-3 | Delivery detail experience (8 sections) | as P0-2 | `detail/tabs/{Overview,Timeline,Records,Exceptions,Verification,Lineage,Audit,Reports}Tab.js`, `src/platform/components/Tabs.js` | — | `tests/unit/delivery-detail.test.jsx`, `tests/unit/tabs.test.jsx`, e2e keyboard tabs, axe | screenshots 02–07 (04/05 restricted), 09 | Done | Lineage tab reads decision history from the lineage payload |
+| P0-4 | Unified delivery exception ledger | `exception_ledger.py`, `delivery_routes.py` (`/exceptions`, filters), `dq_review_bridge.py`, `supervisor_ops.py` (intake filter) | `detail/tabs/ExceptionsTab.js`, `src/app/tefca-arc/exceptions/{page,layout}.js`, `src/app/tefca-arc/validation/page.js`, `src/components/AppLayout.js` (Registry Findings, Delivery Exceptions) | — | `tests/test_exception_ledger.py`, `tests/test_held_queue.py`, frontend `tests/unit/exceptions-tab.test.jsx` | scenarios A/B exception codes; screenshot 09 | Done | — |
+| P0-5 | Complete NPI validation | `quality_rules.py` (1.2.0), `promotion.py` (validator screen, conflicts), `verification_findings.py`, `review_service.py`, `app/Tefca/connectors.py`, `app/Tefca/evidence_assembly.py`, `arc_pipeline.py` | — | — | `tests/test_npi_rule_codes.py`, `tests/test_promotion_identifier_guard.py`, `tests/test_verification_findings.py`, updated `tests/test_rce_pipeline.py` | scenario A codes; scenario B conflict | Done | `npi_required` predicate treats empty hl7orgrole as not required (documented) |
+| P0-6 | Held-record analyst workflow | `delivery_runner.py` (bridge calls), `dq_review_bridge.py`, `curation.py` (`apply_disposition`, `recompute_hold_status`, `release_check`), `identifier_decisions.py` | Validation Queue page, Exceptions tab disposition form | `tefca_identifier_decision_events` | `tests/test_held_queue.py`, `tests/test_identifier_conflict.py` | scenario B decision accepted / reason required / viewer refused | Done | Sampling still excludes held records by design |
+| P0-7 | Record-level reconciliation | `dispositions.py`, `promotion.py`, `reconciliation.py` (`persist_snapshot`) | Overview equation block | `rce_disposition_events`, `rce_reconciliation_snapshots` (+CHECK) | `tests/test_disposition_events.py`, `tests/test_reconciliation_equation.py`, `tests/test_traceability_migration.py` | scenarios A–D equation rows | Done | — |
+| P0-8 | Two-axis status model | `status_model.py`, `delivery_jobs.py`, `delivery_dashboard.py` | list columns, detail badges | — | `tests/test_status_derivation.py` | outcomes/review states in every scenario | Done | — |
+| P0-9 | Processing timeline with attempts | `stage_events.py`, `delivery_runner.py`, `delivery_routes.py` (registration events) | `TimelineTab.js` | `rce_delivery_stage_events` | `tests/test_stage_events.py`, `tests/test_delivery_runner_events.py` | timeline arrays; screenshot 03 | Done | — |
+| P0-10 | Delivery-specific reporting | `app/reports/generator.py`, `routes.py`, `data/delivery_processing_data.py`, `data/delivery_report_links.py`, `engine/csv_engine.py`, `templates/delivery_processing.html` | `ReportsTab.js`, `src/app/tefca-arc/reports/page.js` | `rce_delivery_report_links` | `tests/test_delivery_processing_report.py`, `tests/test_report_links.py`, `tests/test_report_storage_durable.py` | report ids, snapshot ids, artefact hashes in sanitized evidence | Done (durable storage lane in progress at time of writing) | PDF needs the container's font stack |
+| P0-11 | Durable delivery-to-report linkage | `data/delivery_report_links.py`, artifact registry | — | `rce_delivery_report_links` | `tests/test_report_links.py`, `tests/test_report_storage_durable.py` | `delivery_link` in evidence | Done | — |
+| P0-12 | Historical 184-record evidence | `scripts/dryrun_reconstruct_dispositions.py` | — | — | `tests/test_dryrun_reconstruction.py` | not run on DEV | Tool built; DEV dry run pending | Needs DEV read access |
+| P0-13 | Security and authorization | `app/core/security.py`, `app/core/modules.py`, `app/core/error_handler.py`, `routes.py` floors, `app/api/admin_health.py`, `app/main.py` | `PermissionBoundary.js`, `AccessDenied.js`, login notice | — | `tests/test_rbac_delivery_fields.py`, `tests/test_module_gate_v1.py`, `tests/test_health_split.py`, `tests/test_rbac_roles.py` | viewer gating checks | Done | Sync upload deprecated, not removed |
+| P0-14 | Automated testing | 21 new backend test files | Vitest suite (10 files), Playwright suite, guardrails | — | see sections above | — | Done | No ESLint gate exists in the repository |
+| P0-15 | Demo acceptance scenarios | `tests/acceptance/isolated_acceptance.py`, fixtures | `tests/e2e/live-smoke.spec.mjs`, `tests/e2e/live-screenshots.mjs` | — | harness checks (42) | sanitized evidence + screenshots | Done | Credential from environment only |
+| Obs. | Observability | `app/core/request_context.py`, `app/core/logging_config.py`, `app/core/telemetry.py`, `app/main.py`, `Dockerfile`, `container-release.yml` | `lib/api.js` (X-Request-ID), footer, deploy workflow build-info | — | `tests/test_request_context.py`, `tests/test_telemetry.py`, `tests/test_health_split.py` | X-Request-ID echo checked live | Telemetry lane in progress at time of writing | — |
+
+## Why the diff is large
+
+Backend: 37 test files (21 new, 16 updated), 23 pipeline modules, 8 report
+modules, 6 core modules, 1 migration, 2 workflow files and the Dockerfile
+(build identity), 2 scripts, and documentation and sanitized evidence. No
+formatting-only or whitespace-only file changes remain (verified with
+`git diff --ignore-all-space --ignore-blank-lines` per file). Frontend: the
+detail page and its eight tabs, the new Tabs component, the exceptions picker,
+the rewritten validation page, the list page, API client and shell, plus the
+test infrastructure (Vitest config, 10 unit test files, Playwright config and
+three e2e files) and the lockfile.

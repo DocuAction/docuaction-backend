@@ -96,13 +96,19 @@ class GenerateReportRequest(BaseModel):
     report_type: str = Field(
         default="verification",
         description=("verification | verification_brief | executive | data_quality | "
-                     "intake | retrospective_weekly (D3.1) | retrospective_final (D3.2) | "
+                     "intake | delivery_processing | "
+                     "retrospective_weekly (D3.1) | retrospective_final (D3.2) | "
                      "ongoing_biweekly (D4.1) | ongoing_quarterly (D4.2) | "
                      "priority_status (D5.1) | priority_quarterly (D5.2)"))
     review_cycle_id: Optional[str] = Field(
         default=None, description="Scope to one review cycle. Omit for all records.")
     format: str = Field(default="html", description="html | pdf | csv")
-    parameters: Dict[str, Any] = Field(default_factory=dict)
+    parameters: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=("RCE types (delivery_processing, data_quality, intake) REQUIRE "
+                     "job_id or intake_id here; snapshot_id pins a regeneration to one "
+                     "persisted reconciliation snapshot. There is no newest-delivery "
+                     "default."))
     #: SOW families: the reporting period the stratified list covers, and the
     #: human-authored change sections the contract asks for.
     period_start: Optional[str] = Field(default=None, description="ISO date")
@@ -113,12 +119,30 @@ class GenerateReportRequest(BaseModel):
         default=None, description="One implemented methodology/control change per line")
 
 
+def parameter_error_http(exc) -> HTTPException:
+    """A ReportParameterError as the HTTP answer: its own status (422 by
+    default) and a body naming the machine code beside the message, so a
+    client can act on `code` without parsing prose."""
+    return HTTPException(
+        getattr(exc, "status", 422),
+        detail={"error": str(exc),
+                "code": getattr(exc, "code", "DELIVERY_IDENTIFIER_REQUIRED")})
+
+
 def _summary(result) -> Dict[str, Any]:
     snapshot = result["snapshot"]
     return {
         "report_id": result["report_id"],
         "report_type": result["report_type"],
         "stored_id": result["stored_id"],
+        # RCE types: which persisted reconciliation snapshot the report rests
+        # on, and the delivery linkage/audit written for it.
+        "snapshot_id": result.get("snapshot_id"),
+        "delivery_link": result.get("delivery_link"),
+        # The durable renderings registered for a delivery-scoped report: one
+        # entry per format with its hash, size, backend NAME and verified
+        # download path. `durable` is false on the local (test/dev) backend.
+        "artifacts": _artifacts_summary(result.get("artifacts")),
         "snapshot": snapshot.to_dict(),
         "accessibility": result["accessibility"],
         "formats": {
@@ -129,13 +153,34 @@ def _summary(result) -> Dict[str, Any]:
     }
 
 
+def _artifacts_summary(finalised: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The generator's finalisation record, shaped for a client: per-format
+    summaries through `link_artifact_summary` (no locator), the backend name
+    and durability, the PDF reason when no PDF was registered, and any
+    registration errors — a silently missing durable copy is the failure this
+    exists to surface."""
+    if not finalised:
+        return None
+    from app.reports.data.artifact_registry import link_artifact_summary
+
+    return {
+        "items": [link_artifact_summary(a) for a in finalised.get("artifacts") or []],
+        "storage_backend": finalised.get("storage_backend"),
+        "durable": finalised.get("durable"),
+        "storage_note": finalised.get("storage_note"),
+        "pdf_unavailable_reason": finalised.get("pdf_unavailable_reason"),
+        "errors": list(finalised.get("errors") or []),
+    }
+
+
 @router.post("/generate", summary="Generate a report from frozen verification results")
 async def generate(
     request: GenerateReportRequest,
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role("contributor")),
 ):
-    from app.reports.generator import ReportGenerationError, generate_report
+    from app.reports.generator import (ReportGenerationError, ReportParameterError,
+                                       generate_report)
 
     parameters = dict(request.parameters or {})
     for key in ("period_start", "period_end", "suggested_changes", "implemented_changes"):
@@ -154,6 +199,10 @@ async def generate(
             generated_by_id=getattr(user, "id", None),
             query_parameters=parameters,
         )
+    except ReportParameterError as exc:
+        # The request named no delivery, a delivery that does not exist, or a
+        # snapshot that is not the delivery's. 422/404/409 with a machine code.
+        raise parameter_error_http(exc)
     except ReportGenerationError as exc:
         raise HTTPException(400, str(exc))
 
@@ -282,14 +331,69 @@ def _listing_extras(r) -> Dict[str, Any]:
     }
 
 
+@router.get("/by-delivery/{job_id}",
+            summary="Reports generated for one delivery job")
+async def reports_by_delivery(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("reviewer")),
+):
+    """Every rce_delivery_report_links row for the job, newest first, each
+    joined to the artifact it names (hash, type, size, backend name, verified
+    download path), plus the same rows folded to one entry per report.
+
+    The link is the deterministic answer to "which report was produced from
+    which snapshot of this delivery"; nothing is inferred from timestamps.
+
+    AUTHORISATION. `reviewer` is the floor: a listing of hashes and download
+    paths for Government-derived documents is the doorway to the files, and it
+    sits with the role that fetches them. The platform's roles are GLOBAL —
+    `app.core.tenant` scopes only the enterprise document tables, and no RCE or
+    report table carries a tenant or delivery ownership column — so a reviewer
+    who may read one delivery's reports may read every delivery's. There is no
+    per-delivery scoping to enforce here and none is invented; the role floor
+    plus the audit row on every download is the control.
+    """
+    import uuid as _uuid
+
+    from app.reports.data.artifact_registry import storage_durability
+    from app.reports.data.delivery_report_links import (group_links_by_report,
+                                                        links_for_job)
+
+    try:
+        key = _uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(422, {"error": f"{job_id!r} is not a valid job id",
+                                  "code": "DELIVERY_IDENTIFIER_INVALID"})
+    links = await links_for_job(db, key)
+    artifacts = [link["artifact"] for link in links if link.get("artifact")]
+    backends = sorted({a["storage_backend"] for a in artifacts})
+    storage = (storage_durability(backends[0]) if len(backends) == 1
+               else {"storage_backend": backends or None,
+                     "durable": bool(artifacts) and all(a["durable"] for a in artifacts),
+                     "storage_note": ("No artifacts registered for this job." if not artifacts
+                                      else "Artifacts span more than one backend.")})
+    return {"job_id": str(key), "count": len(links), "items": links,
+            "reports": group_links_by_report(links),
+            "artifacts": artifacts, "storage": storage,
+            "scope": {"model": "global_roles", "minimum_role": "reviewer",
+                      "per_delivery_scoping": False}}
+
+
 @router.get("/{report_id}", summary="Report metadata and snapshot provenance")
 async def get_report(
     report_id: str,
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role("viewer")),
 ):
+    from app.reports.data.artifact_registry import (artifacts_for_report,
+                                                    link_artifact_summary)
+    from app.reports.data.delivery_report_links import links_for_report
+
     row = await _stored(db, report_id)
     data = row.report_data or {}
+    links = await links_for_report(db, report_id)
+    artifacts = [link_artifact_summary(a) for a in await artifacts_for_report(db, report_id)]
     return {
         "report_id": row.report_id,
         "report_type": row.report_type,
@@ -297,8 +401,27 @@ async def get_report(
         "generated_by": str(row.generated_by) if row.generated_by else None,
         "snapshot": data.get("snapshot", {}),
         "dataset": data.get("dataset", {}),
+        # Present only when the report was generated for a named delivery and
+        # a reconciliation snapshot existed to link it to. One link per stored
+        # rendering; `delivery_link` is the first (the HTML) for callers that
+        # read a single object, `delivery_links` is all of them.
+        "delivery_link": links[0] if links else None,
+        "delivery_links": links,
+        # Every registered rendering of this report (all formats, all
+        # versions) with hash, size, backend name and verified download path.
+        "artifacts": artifacts,
         **_listing_extras(row),
     }
+
+
+async def _audit_download(db, row, fmt: str, user, **extra) -> None:
+    """One report_downloaded audit row per served download. Never raises."""
+    from app.reports.data.delivery_report_links import record_report_download
+
+    await record_report_download(
+        db, report_id=row.report_id, report_type=row.report_type, fmt=fmt,
+        actor=getattr(user, "email", None) or "SYSTEM",
+        actor_id=getattr(user, "id", None), extra=extra or None)
 
 
 # ── PM release control ───────────────────────────────────────────────────────
@@ -411,6 +534,9 @@ async def get_package(
         pdf_bytes=pdf_bytes, snapshot=snapshot, release=current_release(data),
         deliverable=_deliverable_meta(row.report_type),
         pdf_unavailable_reason=pdf_reason, docx_bytes=docx_bytes, stem=stem)
+    await _audit_download(db, row, "package", user,
+                          pdf_included=pdf_bytes is not None,
+                          docx_included=docx_bytes is not None)
     return Response(
         content=package["bytes"], media_type="application/zip",
         headers=download_headers(
@@ -434,6 +560,7 @@ async def get_report_html(
     row = await _stored(db, report_id)
     if not row.report_html:
         raise HTTPException(404, f"Report {report_id} has no stored HTML.")
+    await _audit_download(db, row, "html", user)
     # Served as an attachment, not rendered. A stored report is a document the
     # recipient received; rendering it on this origin would execute whatever
     # markup it contains with the application's own privileges.
@@ -451,7 +578,9 @@ async def get_report_pdf(
     row = await _stored(db, report_id)
     if not row.report_html:
         raise HTTPException(404, f"Report {report_id} has no stored HTML to render.")
-    return _pdf_response(row.report_html, _stem_for(row))
+    response = _pdf_response(row.report_html, _stem_for(row))
+    await _audit_download(db, row, "pdf", user)
+    return response
 
 
 def docx_for_stored_report(row) -> Optional[bytes]:
@@ -493,6 +622,7 @@ async def get_report_docx(
     docx_bytes = await run_in_threadpool(docx_for_stored_report, row)
     if docx_bytes is None:
         raise HTTPException(404, f"Report type '{row.report_type}' has no DOCX form.")
+    await _audit_download(db, row, "docx", user)
     return Response(
         content=docx_bytes, media_type=DOCX_CONTENT_TYPE,
         headers=download_headers(
@@ -510,7 +640,8 @@ def csv_for_stored_report(row) -> str:
     CSV download and by the package, so the two can never disagree about what
     the CSV of a report is.
     """
-    from app.reports.engine.csv_engine import report_to_csv, sow_report_to_csv
+    from app.reports.engine.csv_engine import (delivery_processing_to_csv,
+                                               report_to_csv, sow_report_to_csv)
     from app.reports.generator import SOW_TYPES
 
     data = row.report_data or {}
@@ -519,6 +650,9 @@ def csv_for_stored_report(row) -> str:
     generated_at = snapshot.get("generation_timestamp", "")
     if row.report_type in SOW_TYPES:
         return sow_report_to_csv(dataset, row.report_id, generated_at)
+    if row.report_type == "delivery_processing":
+        # The record-level disposition table, every row, from the STORED dataset.
+        return delivery_processing_to_csv(dataset, row.report_id, generated_at)
 
     # Charts were excluded from the stored payload (they are presentation, not
     # data), so rebuild them from the stored numbers for the figure sections.
@@ -552,6 +686,7 @@ async def get_report_csv(
     row = await _stored(db, report_id)
     if not (row.report_data or {}).get("dataset"):
         raise HTTPException(404, f"Report {report_id} has no stored dataset.")
+    await _audit_download(db, row, "csv", user)
     return Response(
         content=to_bytes(csv_for_stored_report(row)), media_type="text/csv",
         headers=download_headers(safe_filename(_stem_for(row), "csv")))
@@ -667,39 +802,124 @@ async def artifact_download(
     content_type: str = Query("text/html"),
     version: Optional[int] = Query(None, description="Omit for the latest"),
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("viewer")),
+    user=Depends(require_role("reviewer")),
 ):
     """Fetch stored bytes and re-hash them before handing them over.
 
     A stored hash nobody recomputes is a claim. If the bytes no longer match
     what was registered this raises rather than serving them — a silently
     altered deliverable is worse than a failed download.
-    """
-    from app.reports.data.artifact_registry import (ARTIFACT_SUFFIXES,
-                                                     retrieve_artifact)
 
+    `report_id` is normally the report identifier (DA-ARC-YYYY-NNN) selected
+    with `content_type` and `version`; it may also be the REGISTRY ROW ID a
+    delivery link carries (a UUID — no report id is one), in which case the
+    query parameters are ignored and that exact row is served.
+
+    OUTCOMES, ALL AUDITED. Served → `report_downloaded`. Registered but the
+    bytes are gone from the store (deleted blob or file) → 410 with
+    `code: ARTIFACT_MISSING`, never a 500: the registry row is the record that
+    the artefact existed, and "gone" is a fact about the store, not a fault in
+    the request. Never registered → 404 `ARTIFACT_NOT_REGISTERED`. Bytes
+    present but hash mismatch → 500, refused (the platform's handler scrubs
+    5xx bodies; the code lives in the audit row). Every non-served outcome
+    writes `report_download_failed`.
+
+    The 4xx bodies are built with the platform's standard error shape
+    (`error`, `code`, `request_id`) directly, because the global HTTPException
+    handler assigns `code` from the status alone and would flatten a machine
+    code carried in `detail` into prose.
+
+    AUTHORISATION. `reviewer` floor. Roles are global (no per-delivery
+    scoping exists on the platform); see `reports_by_delivery`.
+    """
+    import uuid as _uuid
+
+    from app.core.error_handler import create_error_response
+    from app.core.storage.artifact_store import ArtifactNotFound
+    from app.reports.data.artifact_registry import (ARTIFACT_SUFFIXES,
+                                                     ReportArtifact,
+                                                     retrieve_artifact,
+                                                     retrieve_artifact_by_id)
+    from app.reports.data.delivery_report_links import (
+        record_report_download, record_report_download_failure)
+
+    actor = getattr(user, "email", None) or "SYSTEM"
+    actor_id = getattr(user, "id", None)
+    by_row_id = None
     try:
-        got = await retrieve_artifact(db, report_id, content_type=content_type,
-                                      version=version)
+        by_row_id = _uuid.UUID(report_id)
+    except ValueError:
+        pass
+
+    async def _failed(code: str, reason: str, registered=None) -> Dict[str, Any]:
+        """Write the `report_download_failed` audit row; return the body."""
+        known = registered or {}
+        await record_report_download_failure(
+            db, report_id=known.get("report_id") or report_id,
+            report_type=known.get("report_type"),
+            fmt=f"artifact:{ARTIFACT_SUFFIXES.get(known.get('content_type') or content_type, 'bin')}",
+            actor=actor, actor_id=actor_id, code=code, reason=reason,
+            extra={"artifact_row_id": str(by_row_id) if by_row_id else None,
+                   "content_type": content_type, "version": version,
+                   "artifact_version": known.get("artifact_version"),
+                   "rendered_sha256": known.get("rendered_sha256")})
+        return {"code": code, "error": reason,
+                "report_id": known.get("report_id") or report_id}
+
+    registered = None
+    try:
+        if by_row_id is not None:
+            row = await db.get(ReportArtifact, by_row_id)
+            registered = row.to_dict() if row is not None else None
+            got = await retrieve_artifact_by_id(db, by_row_id)
+        else:
+            got = await retrieve_artifact(db, report_id, content_type=content_type,
+                                          version=version)
     except LookupError as exc:
-        raise HTTPException(404, str(exc))
+        body = await _failed("ARTIFACT_NOT_REGISTERED", str(exc))
+        return create_error_response(404, error=body["error"], code=body["code"],
+                                     extra={"report_id": body["report_id"]})
+    except ArtifactNotFound:
+        # Registered, hashed, and no longer in the store. The row stands as the
+        # record that it existed; the bytes do not. 410 Gone, not 500.
+        body = await _failed(
+            "ARTIFACT_MISSING",
+            "The artifact is registered but its stored bytes are missing from the "
+            "artifact store. The registry row is retained as the record of issue.",
+            registered)
+        return create_error_response(410, error=body["error"], code=body["code"],
+                                     extra={"report_id": body["report_id"]})
     except RuntimeError as exc:
         logger.error("artifact integrity failure for %s: %s", report_id, exc)
-        raise HTTPException(500, str(exc))
+        raise HTTPException(500, await _failed(
+            "ARTIFACT_INTEGRITY_FAILURE",
+            "The stored bytes do not hash to the registered SHA-256; the artifact "
+            "is refused rather than served.", registered))
 
     artifact = got["artifact"]
-    ext = ARTIFACT_SUFFIXES.get(content_type, "bin")
+    served_type = artifact.get("content_type") or content_type
+    ext = ARTIFACT_SUFFIXES.get(served_type, "bin")
+
+    await record_report_download(
+        db, report_id=artifact.get("report_id") or report_id,
+        report_type=artifact.get("report_type"),
+        fmt=f"artifact:{ext}", actor=actor, actor_id=actor_id,
+        extra={"artifact_row_id": artifact.get("id"),
+               "artifact_version": artifact.get("artifact_version"),
+               "rendered_sha256": artifact.get("rendered_sha256"),
+               "verified": bool(got.get("verified"))})
     # The stored content type, not one the caller asked for. `content_type` is a
     # query parameter and selects WHICH artifact to fetch; echoing it back as the
     # response type would let a caller name the type their browser sees.
-    served_type = artifact.get("content_type") or content_type
     return Response(
         content=got["content"], media_type=served_type,
         headers=download_headers(
-            safe_filename(f"{report_id}-v{artifact['artifact_version']}", ext),
+            safe_filename(f"{artifact.get('report_id') or report_id}"
+                          f"-v{artifact['artifact_version']}", ext),
             extra={
                 "X-Artifact-SHA256": artifact["rendered_sha256"],
                 "X-Artifact-Version": str(artifact["artifact_version"]),
+                "X-Artifact-Verified": "true" if got.get("verified") else "false",
                 "X-Data-Classification": artifact["data_classification"],
             }))
 

@@ -756,13 +756,27 @@ class TestReportTypes:
 
         assert "data_quality" in generator.AVAILABLE_TYPES
         assert "intake" in generator.AVAILABLE_TYPES
-        assert set(generator.RCE_TYPES) == {"data_quality", "intake"}
+        assert "delivery_processing" in generator.AVAILABLE_TYPES
+        assert set(generator.RCE_TYPES) == {"data_quality", "intake", "delivery_processing"}
 
     @pytest.mark.asyncio
     async def test_all_available_types_render(self, populated):
+        """Every non-delivery type renders from the populated stub.
+
+        UPDATED 2026-09-17: the RCE types describe ONE named delivery and
+        refuse to run without parameters.job_id / intake_id (there is no
+        newest-delivery default any more). Their rendering is covered against
+        a synthetic delivery in test_delivery_processing_report.py; here it is
+        pinned that they refuse loudly rather than render the wrong delivery.
+        """
         import app.reports.generator as generator
 
         for report_type in generator.AVAILABLE_TYPES:
+            if report_type in generator.RCE_TYPES:
+                with pytest.raises(generator.ReportParameterError) as excinfo:
+                    await _generate(populated, report_type)
+                assert excinfo.value.code == "DELIVERY_IDENTIFIER_REQUIRED"
+                continue
             result = await _generate(populated, report_type)
             assert result["html"].startswith("<!DOCTYPE html>")
             assert result["accessibility"]["automated_checks_passed"], \
@@ -804,6 +818,8 @@ class TestReportAPI:
             "/api/reports/{report_id}/docx",
             "/api/reports/{report_id}/release",
             "/api/reports/{report_id}/package",
+            # 2026-09-17 remediation — reports linked to one delivery job
+            "/api/reports/by-delivery/{job_id}",
             # Phase 7.5B — the contract's report families
             "/api/reports/sow",
             "/api/reports/sow/{deliverable}",

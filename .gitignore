@@ -58,3 +58,9 @@ prod-deploy-seed-guard.zip
 # Phase 6 authoritative bulk artefacts — 1.7 GB of CMS/NPPES/OIG downloads.
 # Retained locally for reproducibility (hashes recorded in the DB), never committed.
 var/authoritative/
+
+# Gate 4 evidence derived from the 184-record client demo file stays local; the
+# file itself is never copied into the repository and neither are its rows.
+docs/evidence/**/C_*
+docs/evidence/**/restricted/
+docs/evidence/**/isolated_acceptance_evidence.json

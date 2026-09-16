@@ -3,6 +3,7 @@ FROM python:3.12-slim
 # a manual build that does not pass it produces 'unknown', which /health then reports
 # and the deploy gate refuses to attribute to a commit (AUD-20260913-07).
 ARG GIT_SHA=unknown
+ARG BUILD_TIME=unknown
 WORKDIR /app
 
 # WeasyPrint renders every PDF deliverable, and it is a binding to the
@@ -73,6 +74,7 @@ USER appuser
 # Before a container rehearsal: clear appCommandLine (so this CMD is used) and
 # set WEBSITES_PORT=8080, or align all three on one port.
 ENV GIT_SHA=${GIT_SHA}
+ENV BUILD_TIME=${BUILD_TIME}
 LABEL org.opencontainers.image.revision=${GIT_SHA}
 EXPOSE 8080
 

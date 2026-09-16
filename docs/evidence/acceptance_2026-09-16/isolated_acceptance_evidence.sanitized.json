@@ -1,0 +1,1138 @@
+{
+  "generated_at": "2026-09-16T08:50:50.377175+00:00",
+  "health": {
+    "status": "healthy",
+    "service": "docuaction-backend",
+    "version": "6.0.0",
+    "git_sha": "localgate5",
+    "build_time": "2026-09-16T12:00:00Z",
+    "environment": "test",
+    "modules": {
+      "documents": "active",
+      "audio": "active",
+      "healthcare": "active",
+      "data_systems": "active",
+      "comparison": "active",
+      "extraction": "active",
+      "automation": "active",
+      "tefca_review_protocol": "active",
+      "case_management": "active",
+      "bulletin_intelligence": "active"
+    }
+  },
+  "database": "127.0.0.1",
+  "scenarios": {
+    "A": {
+      "scenario": "A",
+      "fixture": "DocuAction_ONC_RCE_3_Unique_Entity_Invalid_NPI_Test.csv",
+      "fixture_sha256": "3c8f9d2547f369491e788cdd5a27ef3d06804ad99a34bda2c8ec41c1f5099edb",
+      "fixture_lines": null,
+      "error": null,
+      "skipped": null,
+      "processing": [
+        {
+          "job_id": "07b56a30-11f6-4fff-939e-a3d52d1a76df",
+          "state": "SUCCEEDED"
+        }
+      ],
+      "detail": {
+        "job_id": "07b56a30-11f6-4fff-939e-a3d52d1a76df",
+        "intake_id": "c33e987e-d7e7-4ea9-8168-b9b7b083eb5f",
+        "state": "SUCCEEDED",
+        "stage": "READY_FOR_REVIEW",
+        "processing_outcome": "Completed \u2014 With Exceptions",
+        "review_state": "Ready for Analyst Review",
+        "dispositions": {
+          "created": 0,
+          "updated": 0,
+          "matched_unchanged": 0,
+          "held": 3,
+          "rejected": 0,
+          "missing_key": 0,
+          "excluded": 0,
+          "total": 3,
+          "equation": {
+            "received": 3,
+            "accounted": 3,
+            "created": 0,
+            "updated": 0,
+            "matched_unchanged": 0,
+            "held": 3,
+            "rejected": 0,
+            "missing_key": 0,
+            "excluded": 0,
+            "holds": true,
+            "difference": 0
+          },
+          "unexplained": 0
+        },
+        "reconciliation": {
+          "id": "4ef331ee-2bb5-4d1f-b3b5-52d08f31eee4",
+          "passed": true,
+          "equation": {
+            "received": 3,
+            "created": 0,
+            "updated": 0,
+            "matched_unchanged": 0,
+            "held": 3,
+            "rejected": 0,
+            "missing_key": 0,
+            "excluded": 0,
+            "accounted": 3,
+            "holds": true
+          },
+          "hash": "35f633dbeeb90ec79280a43b9ab01ee33c6b98fc951038ac3ec2e247faee4b40",
+          "build_sha": "localgate5",
+          "migration_revision": "20260917_delivery_traceability"
+        },
+        "build": {
+          "git_sha": "localgate5",
+          "build_time": "2026-09-16T12:00:00Z",
+          "version": "6.0.0",
+          "environment": "test",
+          "migration_revision": "20260917_delivery_traceability"
+        },
+        "failed_stage": null,
+        "correlation": {
+          "request_id": "82ce69ae-1597-4d79-a2da-490822c88894",
+          "job_correlation_id": "3fd9e995-5be7-48f6-acc0-7e11c3a29d00",
+          "job_id": "07b56a30-11f6-4fff-939e-a3d52d1a76df",
+          "intake_id": "c33e987e-d7e7-4ea9-8168-b9b7b083eb5f"
+        },
+        "availability": {
+          "records": "available",
+          "exceptions": "available",
+          "lineage": "available",
+          "audit": "available",
+          "verification": "never_ran",
+          "reports": "not_yet"
+        }
+      },
+      "timeline": [
+        {
+          "stage": "REGISTERED",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:50:51.210509+00:00",
+          "completed_at": "2026-09-16T08:50:51.210509+00:00",
+          "duration_ms": 0
+        },
+        {
+          "stage": "RECEIPT_PRESERVED",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:50:51.245906+00:00",
+          "completed_at": "2026-09-16T08:50:51.245906+00:00",
+          "duration_ms": 0
+        },
+        {
+          "stage": "SHA256",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:50:51.346438+00:00",
+          "completed_at": "2026-09-16T08:50:51.346438+00:00",
+          "duration_ms": 0
+        },
+        {
+          "stage": "SCHEMA_VALIDATION",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:50:51.643925+00:00",
+          "completed_at": "2026-09-16T08:50:51.861754+00:00",
+          "duration_ms": 217
+        },
+        {
+          "stage": "PARSING",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:50:51.703488+00:00",
+          "completed_at": "2026-09-16T08:50:51.874020+00:00",
+          "duration_ms": 170
+        },
+        {
+          "stage": "QUALITY",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:50:52.109308+00:00",
+          "completed_at": "2026-09-16T08:50:52.276682+00:00",
+          "duration_ms": 167
+        },
+        {
+          "stage": "CURATION",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:50:52.468569+00:00",
+          "completed_at": "2026-09-16T08:50:52.777006+00:00",
+          "duration_ms": 308
+        },
+        {
+          "stage": "PROMOTION",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:50:52.953424+00:00",
+          "completed_at": "2026-09-16T08:50:53.685045+00:00",
+          "duration_ms": 731
+        },
+        {
+          "stage": "MATCHING",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:50:53.500230+00:00",
+          "completed_at": "2026-09-16T08:50:53.500230+00:00",
+          "duration_ms": 0
+        },
+        {
+          "stage": "RELATIONSHIPS",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:50:53.521208+00:00",
+          "completed_at": "2026-09-16T08:50:53.521208+00:00",
+          "duration_ms": 0
+        },
+        {
+          "stage": "VERIFICATION_READINESS",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:50:53.850893+00:00",
+          "completed_at": "2026-09-16T08:50:54.679372+00:00",
+          "duration_ms": 828
+        },
+        {
+          "stage": "RECONCILIATION",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:50:54.884493+00:00",
+          "completed_at": "2026-09-16T08:50:55.457704+00:00",
+          "duration_ms": 573
+        },
+        {
+          "stage": "READY_FOR_REVIEW",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:50:55.481297+00:00",
+          "completed_at": "2026-09-16T08:50:55.481297+00:00",
+          "duration_ms": 0
+        }
+      ],
+      "exception_codes": [
+        "NPI_CHECKSUM_INVALID",
+        "NPI_FORMAT_INVALID",
+        "NPI_LENGTH_INVALID"
+      ],
+      "exception_totals": {
+        "total": 10,
+        "open": null,
+        "by_code": null,
+        "by_severity": null
+      },
+      "disposition_counts": {},
+      "row_count": null,
+      "unique_line_numbers": null,
+      "held_rows_summary": null,
+      "artefact_sha256": null,
+      "report": {
+        "report_id": "DA-ARC-2026-001",
+        "report_type": "delivery_processing",
+        "snapshot_id": "4ef331ee-2bb5-4d1f-b3b5-52d08f31eee4",
+        "csv_rows": 3,
+        "csv_dispositions": {
+          "HELD": 3
+        },
+        "downloads": {
+          "html": 200,
+          "pdf": 503,
+          "csv": 200
+        },
+        "no_identifier_status": 422,
+        "delivery_link": {
+          "written": true,
+          "audit_id": "1c9fbd63-cd08-4c07-b4a4-b5e62731c0b0",
+          "link_id": "31a2cf8c-dad5-42df-ba2b-85170652fa82",
+          "link_ids": [
+            "31a2cf8c-dad5-42df-ba2b-85170652fa82",
+            "933caaec-1a70-4094-b763-6a7cfd4aab7d"
+          ],
+          "stage_event_id": "0ae065f1-f3fc-4b74-9e0d-b6588149648a",
+          "job_id": "07b56a30-11f6-4fff-939e-a3d52d1a76df",
+          "intake_id": "c33e987e-d7e7-4ea9-8168-b9b7b083eb5f",
+          "snapshot_id": "4ef331ee-2bb5-4d1f-b3b5-52d08f31eee4",
+          "artifact_id": "1c31b327-44c7-4e5e-b69e-34ebcbdb8289",
+          "artifact_ids": [
+            "1c31b327-44c7-4e5e-b69e-34ebcbdb8289",
+            "edc55cd4-f853-45aa-9b5c-71bb732f81df"
+          ],
+          "artifacts": [
+            {
+              "id": "1c31b327-44c7-4e5e-b69e-34ebcbdb8289",
+              "report_id": "DA-ARC-2026-001",
+              "content_type": "text/html",
+              "artifact_version": 1,
+              "rendered_sha256": "ce847cf4ad29053e9ae557554a836ad4c6213e2635a1cb80f7dd992f757b44ab",
+              "size_bytes": 187099,
+              "template_version": "1.0.0",
+              "report_data_hash": "fd9bfc22787f36cf88711f49049a6a6714d0439b6e013d8a5aeebaea75cead88",
+              "source_artifact_sha256": "3c8f9d2547f369491e788cdd5a27ef3d06804ad99a34bda2c8ec41c1f5099edb",
+              "data_classification": "DEVELOPMENT_TEST",
+              "generated_at": "2026-09-16T08:50:59.634746+00:00",
+              "storage_backend": "local",
+              "durable": false,
+              "storage_note": "Local filesystem backend: for tests and single-host development only. Not durable on App Service; set REPORT_ARTIFACT_BACKEND=azure with REPORT_ARTIFACT_AZURE_ACCOUNT / _CONTAINER for a durable copy.",
+              "download_url": "/api/reports/artifacts/DA-ARC-2026-001/download?content_type=text%2Fhtml&version=1"
+            },
+            {
+              "id": "edc55cd4-f853-45aa-9b5c-71bb732f81df",
+              "report_id": "DA-ARC-2026-001",
+              "content_type": "text/csv",
+              "artifact_version": 1,
+              "rendered_sha256": "33c069a6bbf7a37d579b2b14b38faea9b34372addbc5b64d4ce216a0dd056d6c",
+              "size_bytes": 2348,
+              "template_version": "1.0.0",
+              "report_data_hash": "fd9bfc22787f36cf88711f49049a6a6714d0439b6e013d8a5aeebaea75cead88",
+              "source_artifact_sha256": "3c8f9d2547f369491e788cdd5a27ef3d06804ad99a34bda2c8ec41c1f5099edb",
+              "data_classification": "DEVELOPMENT_TEST",
+              "generated_at": "2026-09-16T08:50:59.702710+00:00",
+              "storage_backend": "local",
+              "durable": false,
+              "storage_note": "Local filesystem backend: for tests and single-host development only. Not durable on App Service; set REPORT_ARTIFACT_BACKEND=azure with REPORT_ARTIFACT_AZURE_ACCOUNT / _CONTAINER for a durable copy.",
+              "download_url": "/api/reports/artifacts/DA-ARC-2026-001/download?content_type=text%2Fcsv&version=1"
+            }
+          ],
+          "storage_backend": "local",
+          "durable": false,
+          "storage_note": "Local filesystem backend: for tests and single-host development only. Not durable on App Service; set REPORT_ARTIFACT_BACKEND=azure with REPORT_ARTIFACT_AZURE_ACCOUNT / _CONTAINER for a durable copy.",
+          "pdf_unavailable_reason": "WeasyPrint is installed but its native libraries are missing: cannot load library 'libgobject-2.0-0': error 0x7e.  Additionally, ctypes.util.find_library() did not manage to locate a library called 'libgobject-2.0-0'. WeasyPrint requires the Pango/Cairo/GObject stack. The project Dockerfile installs it (libpango, libcairo, libgdk-pixbuf) and verifies the engine at build time; on Windows it requires the GTK3 runtime to be installed separately.",
+          "correlation_id": "9a5c867b-51eb-4193-8028-176a8d22c639",
+          "reason": null
+        },
+        "artefact_sha256": {
+          "A_DA-ARC-2026-001.html": "ce847cf4ad29053e9ae557554a836ad4c6213e2635a1cb80f7dd992f757b44ab",
+          "A_DA-ARC-2026-001.csv": "33c069a6bbf7a37d579b2b14b38faea9b34372addbc5b64d4ce216a0dd056d6c"
+        }
+      },
+      "decision": null,
+      "checks": {
+        "three_received": true,
+        "three_held": true,
+        "distinct_codes": true,
+        "outcome_with_exceptions": true,
+        "review_ready_for_analyst": true,
+        "equation_holds": true,
+        "no_invalid_identifier_promoted": true,
+        "report_generated": true,
+        "report_csv_three_rows": true,
+        "report_requires_identifier": true,
+        "viewer_blocks_gated": true
+      }
+    },
+    "B": {
+      "scenario": "B",
+      "fixture": "DocuAction_ONC_RCE_3_Record_Invalid_NPI_Test.csv",
+      "fixture_sha256": "06ddc1be78e31e2c50603aa54be58fa719deefd40cd6aa298f506871df48ea8e",
+      "fixture_lines": null,
+      "error": null,
+      "skipped": null,
+      "processing": [
+        {
+          "job_id": "70d176da-d559-4d83-8210-0964276893d2",
+          "state": "SUCCEEDED"
+        }
+      ],
+      "detail": {
+        "job_id": "70d176da-d559-4d83-8210-0964276893d2",
+        "intake_id": "bee5fa9b-c9e4-449a-9b3b-fb0cf6b8868e",
+        "state": "SUCCEEDED",
+        "stage": "READY_FOR_REVIEW",
+        "processing_outcome": "Completed \u2014 With Exceptions",
+        "review_state": "Ready for Analyst Review",
+        "dispositions": {
+          "created": 0,
+          "updated": 0,
+          "matched_unchanged": 0,
+          "held": 3,
+          "rejected": 0,
+          "missing_key": 0,
+          "excluded": 0,
+          "total": 3,
+          "equation": {
+            "received": 3,
+            "accounted": 3,
+            "created": 0,
+            "updated": 0,
+            "matched_unchanged": 0,
+            "held": 3,
+            "rejected": 0,
+            "missing_key": 0,
+            "excluded": 0,
+            "holds": true,
+            "difference": 0
+          },
+          "unexplained": 0
+        },
+        "reconciliation": {
+          "id": "9f67ebb7-464d-4c28-9875-2e056fbffc73",
+          "passed": true,
+          "equation": {
+            "received": 3,
+            "created": 0,
+            "updated": 0,
+            "matched_unchanged": 0,
+            "held": 3,
+            "rejected": 0,
+            "missing_key": 0,
+            "excluded": 0,
+            "accounted": 3,
+            "holds": true
+          },
+          "hash": "7fac54b2718a93d3899da8ff3b0f2db2bc76f5b45e36e2462a020948f7a53881",
+          "build_sha": "localgate5",
+          "migration_revision": "20260917_delivery_traceability"
+        },
+        "build": {
+          "git_sha": "localgate5",
+          "build_time": "2026-09-16T12:00:00Z",
+          "version": "6.0.0",
+          "environment": "test",
+          "migration_revision": "20260917_delivery_traceability"
+        },
+        "failed_stage": null,
+        "correlation": {
+          "request_id": "3b4303f0-804c-4343-ac40-7c2f7e8d8f11",
+          "job_correlation_id": "f7157afc-7ea2-4c1a-9c23-f4456d60f739",
+          "job_id": "70d176da-d559-4d83-8210-0964276893d2",
+          "intake_id": "bee5fa9b-c9e4-449a-9b3b-fb0cf6b8868e"
+        },
+        "availability": {
+          "records": "available",
+          "exceptions": "available",
+          "lineage": "available",
+          "audit": "available",
+          "verification": "never_ran",
+          "reports": "not_yet"
+        }
+      },
+      "timeline": [
+        {
+          "stage": "REGISTERED",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:04.035462+00:00",
+          "completed_at": "2026-09-16T08:51:04.035462+00:00",
+          "duration_ms": 0
+        },
+        {
+          "stage": "RECEIPT_PRESERVED",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:04.045955+00:00",
+          "completed_at": "2026-09-16T08:51:04.045955+00:00",
+          "duration_ms": 0
+        },
+        {
+          "stage": "SHA256",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:04.112004+00:00",
+          "completed_at": "2026-09-16T08:51:04.112004+00:00",
+          "duration_ms": 0
+        },
+        {
+          "stage": "SCHEMA_VALIDATION",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:04.361051+00:00",
+          "completed_at": "2026-09-16T08:51:04.569865+00:00",
+          "duration_ms": 208
+        },
+        {
+          "stage": "PARSING",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:04.423858+00:00",
+          "completed_at": "2026-09-16T08:51:04.582061+00:00",
+          "duration_ms": 158
+        },
+        {
+          "stage": "QUALITY",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:04.798479+00:00",
+          "completed_at": "2026-09-16T08:51:04.907964+00:00",
+          "duration_ms": 109
+        },
+        {
+          "stage": "CURATION",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:05.192545+00:00",
+          "completed_at": "2026-09-16T08:51:05.425680+00:00",
+          "duration_ms": 233
+        },
+        {
+          "stage": "PROMOTION",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:05.604898+00:00",
+          "completed_at": "2026-09-16T08:51:06.286607+00:00",
+          "duration_ms": 681
+        },
+        {
+          "stage": "MATCHING",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:06.129405+00:00",
+          "completed_at": "2026-09-16T08:51:06.129405+00:00",
+          "duration_ms": 0
+        },
+        {
+          "stage": "RELATIONSHIPS",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:06.148829+00:00",
+          "completed_at": "2026-09-16T08:51:06.148829+00:00",
+          "duration_ms": 0
+        },
+        {
+          "stage": "VERIFICATION_READINESS",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:06.435455+00:00",
+          "completed_at": "2026-09-16T08:51:06.450214+00:00",
+          "duration_ms": 14
+        },
+        {
+          "stage": "RECONCILIATION",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:06.602833+00:00",
+          "completed_at": "2026-09-16T08:51:06.868867+00:00",
+          "duration_ms": 266
+        },
+        {
+          "stage": "READY_FOR_REVIEW",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:06.879891+00:00",
+          "completed_at": "2026-09-16T08:51:06.879891+00:00",
+          "duration_ms": 0
+        }
+      ],
+      "exception_codes": [
+        "NPI_CHECKSUM_INVALID",
+        "NPI_EXISTING_VALUE_CONFLICT",
+        "NPI_FORMAT_INVALID",
+        "NPI_LENGTH_INVALID"
+      ],
+      "exception_totals": null,
+      "disposition_counts": {},
+      "row_count": null,
+      "unique_line_numbers": null,
+      "held_rows_summary": null,
+      "artefact_sha256": null,
+      "report": {
+        "report_id": "DA-ARC-2026-002",
+        "report_type": "delivery_processing",
+        "snapshot_id": "462abc2e-0784-4233-a1eb-92b562990fee",
+        "csv_rows": 3,
+        "csv_dispositions": {
+          "HELD": 3
+        },
+        "downloads": {
+          "html": 200,
+          "pdf": 503,
+          "csv": 200
+        },
+        "no_identifier_status": 422,
+        "delivery_link": {
+          "written": true,
+          "audit_id": "67fb27ed-92a4-4336-a463-89e787a2bd29",
+          "link_id": "906ae5e7-ecdc-4e83-94a9-6fef5091af21",
+          "link_ids": [
+            "906ae5e7-ecdc-4e83-94a9-6fef5091af21",
+            "d25e9667-e03e-49a0-bfd0-84169e13623e"
+          ],
+          "stage_event_id": "bd3fb11f-e3b7-485f-a506-8935f71a3853",
+          "job_id": "70d176da-d559-4d83-8210-0964276893d2",
+          "intake_id": "bee5fa9b-c9e4-449a-9b3b-fb0cf6b8868e",
+          "snapshot_id": "462abc2e-0784-4233-a1eb-92b562990fee",
+          "artifact_id": "ce01e3a4-3f07-4e4c-964d-dbe397a2e7a0",
+          "artifact_ids": [
+            "ce01e3a4-3f07-4e4c-964d-dbe397a2e7a0",
+            "e938e7c7-ca70-4f0e-b794-919a04788fbb"
+          ],
+          "artifacts": [
+            {
+              "id": "ce01e3a4-3f07-4e4c-964d-dbe397a2e7a0",
+              "report_id": "DA-ARC-2026-002",
+              "content_type": "text/html",
+              "artifact_version": 1,
+              "rendered_sha256": "237a0b2b2c039f460b4c5feb508457b90b06c37c5407085b214ba397c44e8ff7",
+              "size_bytes": 189193,
+              "template_version": "1.0.0",
+              "report_data_hash": "8369262a4751928a1992db9324aaa95a720e3a00058a1a75e2ba3a4eff2b866c",
+              "source_artifact_sha256": "06ddc1be78e31e2c50603aa54be58fa719deefd40cd6aa298f506871df48ea8e",
+              "data_classification": "DEVELOPMENT_TEST",
+              "generated_at": "2026-09-16T08:51:10.426142+00:00",
+              "storage_backend": "local",
+              "durable": false,
+              "storage_note": "Local filesystem backend: for tests and single-host development only. Not durable on App Service; set REPORT_ARTIFACT_BACKEND=azure with REPORT_ARTIFACT_AZURE_ACCOUNT / _CONTAINER for a durable copy.",
+              "download_url": "/api/reports/artifacts/DA-ARC-2026-002/download?content_type=text%2Fhtml&version=1"
+            },
+            {
+              "id": "e938e7c7-ca70-4f0e-b794-919a04788fbb",
+              "report_id": "DA-ARC-2026-002",
+              "content_type": "text/csv",
+              "artifact_version": 1,
+              "rendered_sha256": "61f9803f45d3f0b77290f262c97ff614aac0d16fbc0cf1c44054b250d01f9518",
+              "size_bytes": 2408,
+              "template_version": "1.0.0",
+              "report_data_hash": "8369262a4751928a1992db9324aaa95a720e3a00058a1a75e2ba3a4eff2b866c",
+              "source_artifact_sha256": "06ddc1be78e31e2c50603aa54be58fa719deefd40cd6aa298f506871df48ea8e",
+              "data_classification": "DEVELOPMENT_TEST",
+              "generated_at": "2026-09-16T08:51:10.497248+00:00",
+              "storage_backend": "local",
+              "durable": false,
+              "storage_note": "Local filesystem backend: for tests and single-host development only. Not durable on App Service; set REPORT_ARTIFACT_BACKEND=azure with REPORT_ARTIFACT_AZURE_ACCOUNT / _CONTAINER for a durable copy.",
+              "download_url": "/api/reports/artifacts/DA-ARC-2026-002/download?content_type=text%2Fcsv&version=1"
+            }
+          ],
+          "storage_backend": "local",
+          "durable": false,
+          "storage_note": "Local filesystem backend: for tests and single-host development only. Not durable on App Service; set REPORT_ARTIFACT_BACKEND=azure with REPORT_ARTIFACT_AZURE_ACCOUNT / _CONTAINER for a durable copy.",
+          "pdf_unavailable_reason": "WeasyPrint is installed but its native libraries are missing: cannot load library 'libgobject-2.0-0': error 0x7e.  Additionally, ctypes.util.find_library() did not manage to locate a library called 'libgobject-2.0-0'. WeasyPrint requires the Pango/Cairo/GObject stack. The project Dockerfile installs it (libpango, libcairo, libgdk-pixbuf) and verifies the engine at build time; on Windows it requires the GTK3 runtime to be installed separately.",
+          "correlation_id": "1ba84d90-bd3c-4554-ac72-c800b9c42600",
+          "reason": null
+        },
+        "artefact_sha256": {
+          "B_DA-ARC-2026-002.html": "237a0b2b2c039f460b4c5feb508457b90b06c37c5407085b214ba397c44e8ff7",
+          "B_DA-ARC-2026-002.csv": "61f9803f45d3f0b77290f262c97ff614aac0d16fbc0cf1c44054b250d01f9518"
+        }
+      },
+      "decision": {
+        "status": 200,
+        "no_reason_status": 422,
+        "viewer_status": 403
+      },
+      "checks": {
+        "conflict_raised_for_utmb": true,
+        "both_values_visible": true,
+        "record_held": true,
+        "no_overwrite_before_decision": true,
+        "submitted_not_discarded": true,
+        "decision_accepted": true,
+        "decision_requires_reason": true,
+        "viewer_cannot_decide": true,
+        "no_registry_change_on_confirm_existing": true
+      }
+    },
+    "C": {
+      "scenario": "C",
+      "fixture": "DocuAction_ONC_RCE_Client_Demo_Master.csv",
+      "fixture_sha256": "d486a93dcbe625b18fd3dd9bb503f8e7299912cbe7cd8262143bcc6718e03b66",
+      "fixture_lines": 185,
+      "error": null,
+      "skipped": null,
+      "processing": [
+        {
+          "job_id": "8c5f2774-aca2-4ecd-abca-510b4e45a1a0",
+          "state": "SUCCEEDED"
+        }
+      ],
+      "detail": {
+        "job_id": "8c5f2774-aca2-4ecd-abca-510b4e45a1a0",
+        "intake_id": "749f1edc-b874-4ffd-aff7-d4316ae23c09",
+        "state": "SUCCEEDED",
+        "stage": "READY_FOR_REVIEW",
+        "processing_outcome": "Completed \u2014 With Exceptions",
+        "review_state": "Ready for Analyst Review",
+        "dispositions": {
+          "created": 180,
+          "updated": 0,
+          "matched_unchanged": 3,
+          "held": 1,
+          "rejected": 0,
+          "missing_key": 0,
+          "excluded": 0,
+          "total": 184,
+          "equation": {
+            "received": 184,
+            "accounted": 184,
+            "created": 180,
+            "updated": 0,
+            "matched_unchanged": 3,
+            "held": 1,
+            "rejected": 0,
+            "missing_key": 0,
+            "excluded": 0,
+            "holds": true,
+            "difference": 0
+          },
+          "unexplained": 0
+        },
+        "reconciliation": {
+          "id": "0a85dd6f-ee15-45e8-85a2-e070f6f12f4e",
+          "passed": true,
+          "equation": {
+            "received": 184,
+            "created": 180,
+            "updated": 0,
+            "matched_unchanged": 3,
+            "held": 1,
+            "rejected": 0,
+            "missing_key": 0,
+            "excluded": 0,
+            "accounted": 184,
+            "holds": true
+          },
+          "hash": "e7bacde564a6431a59e9ec3aab0081992b489589e01bec64a94bc1ce3e036a5d",
+          "build_sha": "localgate5",
+          "migration_revision": "20260917_delivery_traceability"
+        },
+        "build": {
+          "git_sha": "localgate5",
+          "build_time": "2026-09-16T12:00:00Z",
+          "version": "6.0.0",
+          "environment": "test",
+          "migration_revision": "20260917_delivery_traceability"
+        },
+        "failed_stage": null,
+        "correlation": {
+          "request_id": "b88ede94-3f9c-4d1e-971c-3384b0e59589",
+          "job_correlation_id": "d0bef2a2-93fc-4096-8f13-34b6631a4cda",
+          "job_id": "8c5f2774-aca2-4ecd-abca-510b4e45a1a0",
+          "intake_id": "749f1edc-b874-4ffd-aff7-d4316ae23c09"
+        },
+        "availability": {
+          "records": "available",
+          "exceptions": "available",
+          "lineage": "available",
+          "audit": "available",
+          "verification": "never_ran",
+          "reports": "not_yet"
+        }
+      },
+      "timeline": [
+        {
+          "stage": "REGISTERED",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:11.202950+00:00",
+          "completed_at": "2026-09-16T08:51:11.202950+00:00",
+          "duration_ms": 0
+        },
+        {
+          "stage": "RECEIPT_PRESERVED",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:11.214381+00:00",
+          "completed_at": "2026-09-16T08:51:11.214381+00:00",
+          "duration_ms": 0
+        },
+        {
+          "stage": "SHA256",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:11.291254+00:00",
+          "completed_at": "2026-09-16T08:51:11.291254+00:00",
+          "duration_ms": 0
+        },
+        {
+          "stage": "SCHEMA_VALIDATION",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:11.543425+00:00",
+          "completed_at": "2026-09-16T08:51:11.854668+00:00",
+          "duration_ms": 311
+        },
+        {
+          "stage": "PARSING",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:11.601336+00:00",
+          "completed_at": "2026-09-16T08:51:11.867828+00:00",
+          "duration_ms": 266
+        },
+        {
+          "stage": "QUALITY",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:12.229930+00:00",
+          "completed_at": "2026-09-16T08:51:12.567532+00:00",
+          "duration_ms": 337
+        },
+        {
+          "stage": "CURATION",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:12.857403+00:00",
+          "completed_at": "2026-09-16T08:51:13.282306+00:00",
+          "duration_ms": 424
+        },
+        {
+          "stage": "PROMOTION",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:13.458986+00:00",
+          "completed_at": "2026-09-16T08:51:17.464683+00:00",
+          "duration_ms": 4005
+        },
+        {
+          "stage": "MATCHING",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:17.210853+00:00",
+          "completed_at": "2026-09-16T08:51:17.210853+00:00",
+          "duration_ms": 0
+        },
+        {
+          "stage": "RELATIONSHIPS",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:17.233618+00:00",
+          "completed_at": "2026-09-16T08:51:17.233618+00:00",
+          "duration_ms": 0
+        },
+        {
+          "stage": "VERIFICATION_READINESS",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:17.671417+00:00",
+          "completed_at": "2026-09-16T08:51:17.692172+00:00",
+          "duration_ms": 20
+        },
+        {
+          "stage": "RECONCILIATION",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:17.898190+00:00",
+          "completed_at": "2026-09-16T08:51:18.201478+00:00",
+          "duration_ms": 303
+        },
+        {
+          "stage": "READY_FOR_REVIEW",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:18.212712+00:00",
+          "completed_at": "2026-09-16T08:51:18.212712+00:00",
+          "duration_ms": 0
+        }
+      ],
+      "exception_codes": [],
+      "exception_totals": {
+        "total": 376,
+        "open": null,
+        "by_code": null,
+        "by_severity": null
+      },
+      "disposition_counts": {
+        "HELD": 1,
+        "MATCHED_UNCHANGED": 3,
+        "CREATED": 180
+      },
+      "row_count": 184,
+      "unique_line_numbers": 184,
+      "held_rows_summary": [
+        {
+          "line_number": 2,
+          "rule_codes": [
+            "BUS-002",
+            "CON-002",
+            "CON-003",
+            "CON-005",
+            "FMT-001",
+            "NPI-002"
+          ],
+          "issue_types": [
+            "ADDRESS_TEXT_IS_A_LABEL",
+            "INACTIVE_RECORD",
+            "MISSING_PURPOSES_OF_USE",
+            "NPI_LENGTH_INVALID",
+            "TEST_RECORD_SUSPECTED",
+            "ZIP_LEADING_ZERO_STRIPPED"
+          ],
+          "reason_code": "HELD_QUALITY_ISSUE"
+        }
+      ],
+      "artefact_sha256": null,
+      "report": {
+        "report_id": "DA-ARC-2026-003",
+        "report_type": "delivery_processing",
+        "snapshot_id": "0a85dd6f-ee15-45e8-85a2-e070f6f12f4e",
+        "csv_rows": 184,
+        "csv_dispositions": {
+          "HELD": 1,
+          "MATCHED_UNCHANGED": 3,
+          "CREATED": 180
+        },
+        "downloads": {
+          "html": 200,
+          "pdf": 503,
+          "csv": 200
+        },
+        "no_identifier_status": 422,
+        "delivery_link": {
+          "written": true,
+          "audit_id": "33ca5a17-2e3a-46bc-a4b7-e28b1aedaeaa",
+          "link_id": "818396c2-3f69-432d-b968-c8333a1d6857",
+          "link_ids": [
+            "818396c2-3f69-432d-b968-c8333a1d6857",
+            "8814ad6b-19a5-4662-b75c-639c4b9e78ac"
+          ],
+          "stage_event_id": "3e81666b-d990-4fed-b7a5-aec4ebf93ac6",
+          "job_id": "8c5f2774-aca2-4ecd-abca-510b4e45a1a0",
+          "intake_id": "749f1edc-b874-4ffd-aff7-d4316ae23c09",
+          "snapshot_id": "0a85dd6f-ee15-45e8-85a2-e070f6f12f4e",
+          "artifact_id": "01be5e15-95e0-4fac-9045-3136df44c9f9",
+          "artifact_ids": [
+            "01be5e15-95e0-4fac-9045-3136df44c9f9",
+            "95035969-1b16-418e-b9be-5cdc8ef9dc7a"
+          ],
+          "artifacts": [
+            {
+              "id": "01be5e15-95e0-4fac-9045-3136df44c9f9",
+              "report_id": "DA-ARC-2026-003",
+              "content_type": "text/html",
+              "artifact_version": 1,
+              "rendered_sha256": "14de0f659045c5816170a6b6a9526f3f8b9826b3e7923280c19752adbdae4c2b",
+              "size_bytes": 464978,
+              "template_version": "1.0.0",
+              "report_data_hash": "7cc73a193be740a86469b88c006861d95e290e3008f2a746dc9f6d068d914edc",
+              "source_artifact_sha256": "d486a93dcbe625b18fd3dd9bb503f8e7299912cbe7cd8262143bcc6718e03b66",
+              "data_classification": "DEVELOPMENT_TEST",
+              "generated_at": "2026-09-16T08:51:19.697597+00:00",
+              "storage_backend": "local",
+              "durable": false,
+              "storage_note": "Local filesystem backend: for tests and single-host development only. Not durable on App Service; set REPORT_ARTIFACT_BACKEND=azure with REPORT_ARTIFACT_AZURE_ACCOUNT / _CONTAINER for a durable copy.",
+              "download_url": "/api/reports/artifacts/DA-ARC-2026-003/download?content_type=text%2Fhtml&version=1"
+            },
+            {
+              "id": "95035969-1b16-418e-b9be-5cdc8ef9dc7a",
+              "report_id": "DA-ARC-2026-003",
+              "content_type": "text/csv",
+              "artifact_version": 1,
+              "rendered_sha256": "621d8fc7ff798a82ec04c02e5ae8657c08fe655e0b6f88aa72fcd55196a85a1f",
+              "size_bytes": 62283,
+              "template_version": "1.0.0",
+              "report_data_hash": "7cc73a193be740a86469b88c006861d95e290e3008f2a746dc9f6d068d914edc",
+              "source_artifact_sha256": "d486a93dcbe625b18fd3dd9bb503f8e7299912cbe7cd8262143bcc6718e03b66",
+              "data_classification": "DEVELOPMENT_TEST",
+              "generated_at": "2026-09-16T08:51:19.763316+00:00",
+              "storage_backend": "local",
+              "durable": false,
+              "storage_note": "Local filesystem backend: for tests and single-host development only. Not durable on App Service; set REPORT_ARTIFACT_BACKEND=azure with REPORT_ARTIFACT_AZURE_ACCOUNT / _CONTAINER for a durable copy.",
+              "download_url": "/api/reports/artifacts/DA-ARC-2026-003/download?content_type=text%2Fcsv&version=1"
+            }
+          ],
+          "storage_backend": "local",
+          "durable": false,
+          "storage_note": "Local filesystem backend: for tests and single-host development only. Not durable on App Service; set REPORT_ARTIFACT_BACKEND=azure with REPORT_ARTIFACT_AZURE_ACCOUNT / _CONTAINER for a durable copy.",
+          "pdf_unavailable_reason": "WeasyPrint is installed but its native libraries are missing: cannot load library 'libgobject-2.0-0': error 0x7e.  Additionally, ctypes.util.find_library() did not manage to locate a library called 'libgobject-2.0-0'. WeasyPrint requires the Pango/Cairo/GObject stack. The project Dockerfile installs it (libpango, libcairo, libgdk-pixbuf) and verifies the engine at build time; on Windows it requires the GTK3 runtime to be installed separately.",
+          "correlation_id": "256f7af9-f46b-4829-a377-663883bfc275",
+          "reason": null
+        },
+        "artefact_sha256": {
+          "C_DA-ARC-2026-003.html": "14de0f659045c5816170a6b6a9526f3f8b9826b3e7923280c19752adbdae4c2b",
+          "C_DA-ARC-2026-003.csv": "621d8fc7ff798a82ec04c02e5ae8657c08fe655e0b6f88aa72fcd55196a85a1f"
+        }
+      },
+      "decision": null,
+      "checks": {
+        "received_184": true,
+        "accounted_184": true,
+        "equation_holds": true,
+        "rows_184": true,
+        "unique_lines_184": true,
+        "api_rows_agree": true,
+        "csv_agrees": true,
+        "timeline_has_durations": true,
+        "outcome_derived": true,
+        "pecos_data_driven": true,
+        "build_sha_present": true,
+        "report_linked": true
+      }
+    },
+    "D": {
+      "scenario": "D",
+      "fixture": "DocuAction_ONC_RCE_3_Unique_Entity_Invalid_NPI_Test.csv",
+      "fixture_sha256": null,
+      "fixture_lines": null,
+      "error": null,
+      "skipped": null,
+      "processing": [
+        {
+          "job_id": "b2dad656-ef0f-4d0c-b17d-2f7dd59a5fe9",
+          "state": "FAILED"
+        }
+      ],
+      "detail": {
+        "job_id": "b2dad656-ef0f-4d0c-b17d-2f7dd59a5fe9",
+        "intake_id": "87c700e9-f44a-45a0-9d69-8f1bf0a080f8",
+        "state": "FAILED",
+        "stage": "CURATION",
+        "processing_outcome": "Failed",
+        "review_state": "Not Ready",
+        "dispositions": {
+          "created": 0,
+          "updated": 0,
+          "matched_unchanged": 0,
+          "held": 0,
+          "rejected": 0,
+          "missing_key": 0,
+          "excluded": 0,
+          "total": 0,
+          "equation": {
+            "received": 3,
+            "accounted": 0,
+            "created": 0,
+            "updated": 0,
+            "matched_unchanged": 0,
+            "held": 0,
+            "rejected": 0,
+            "missing_key": 0,
+            "excluded": 0,
+            "holds": false,
+            "difference": 3
+          },
+          "unexplained": 3
+        },
+        "reconciliation": {
+          "id": "68ca191a-565a-442a-8165-28382eb4f566",
+          "passed": false,
+          "equation": {
+            "received": 3,
+            "created": 0,
+            "updated": 0,
+            "matched_unchanged": 0,
+            "held": 0,
+            "rejected": 0,
+            "missing_key": 0,
+            "excluded": 0,
+            "accounted": 0,
+            "holds": false
+          },
+          "hash": "be4e40902740600ca0e9bd8aa663ab248ddb4548e749c71d413fd9f4cc2bd852",
+          "build_sha": "localgate5",
+          "migration_revision": "20260917_delivery_traceability"
+        },
+        "build": {
+          "git_sha": "localgate5",
+          "build_time": "2026-09-16T12:00:00Z",
+          "version": "6.0.0",
+          "environment": "test",
+          "migration_revision": "20260917_delivery_traceability"
+        },
+        "failed_stage": "CURATION",
+        "correlation": {
+          "request_id": "5eee7d61-ded2-404e-a549-2fad2d4ce758",
+          "job_correlation_id": "307344fa-054a-4587-8977-9d79d6be4ec6",
+          "job_id": "b2dad656-ef0f-4d0c-b17d-2f7dd59a5fe9",
+          "intake_id": "87c700e9-f44a-45a0-9d69-8f1bf0a080f8"
+        },
+        "availability": {
+          "records": "available",
+          "exceptions": "available",
+          "lineage": "available",
+          "audit": "available",
+          "verification": "never_ran",
+          "reports": "not_yet"
+        }
+      },
+      "timeline": [
+        {
+          "stage": "REGISTERED",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:20.472930+00:00",
+          "completed_at": "2026-09-16T08:51:20.472930+00:00",
+          "duration_ms": 0
+        },
+        {
+          "stage": "RECEIPT_PRESERVED",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:20.482147+00:00",
+          "completed_at": "2026-09-16T08:51:20.482147+00:00",
+          "duration_ms": 0
+        },
+        {
+          "stage": "SHA256",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:20.547349+00:00",
+          "completed_at": "2026-09-16T08:51:20.547349+00:00",
+          "duration_ms": 0
+        },
+        {
+          "stage": "SCHEMA_VALIDATION",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:20.781660+00:00",
+          "completed_at": "2026-09-16T08:51:20.981868+00:00",
+          "duration_ms": 200
+        },
+        {
+          "stage": "PARSING",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:20.843982+00:00",
+          "completed_at": "2026-09-16T08:51:20.992702+00:00",
+          "duration_ms": 148
+        },
+        {
+          "stage": "QUALITY",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:21.204497+00:00",
+          "completed_at": "2026-09-16T08:51:21.316548+00:00",
+          "duration_ms": 112
+        },
+        {
+          "stage": "CURATION",
+          "attempt": 1,
+          "status": "FAILED",
+          "started_at": "2026-09-16T08:51:21.489935+00:00",
+          "completed_at": "2026-09-16T08:51:21.513213+00:00",
+          "duration_ms": 23
+        },
+        {
+          "stage": "RECONCILIATION",
+          "attempt": 1,
+          "status": "COMPLETED",
+          "started_at": "2026-09-16T08:51:21.682704+00:00",
+          "completed_at": "2026-09-16T08:51:21.942933+00:00",
+          "duration_ms": 260
+        }
+      ],
+      "exception_codes": [],
+      "exception_totals": null,
+      "disposition_counts": {},
+      "row_count": null,
+      "unique_line_numbers": null,
+      "held_rows_summary": null,
+      "artefact_sha256": null,
+      "report": {
+        "report_id": null,
+        "report_type": null,
+        "snapshot_id": null,
+        "csv_rows": null,
+        "csv_dispositions": null,
+        "downloads": null,
+        "no_identifier_status": null,
+        "delivery_link": null,
+        "artefact_sha256": null
+      },
+      "decision": null,
+      "checks": {
+        "outcome_failed": true,
+        "review_not_ready": true,
+        "failed_stage_curation": true,
+        "error_reason_present": true,
+        "guidance_present": true,
+        "timeline_shows_failure": true,
+        "correlation_present": true,
+        "area1_evidence_readable": true,
+        "no_intake_job_opens": true,
+        "unknown_job_is_404": true
+      }
+    }
+  }
+}

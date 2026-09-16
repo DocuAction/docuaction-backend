@@ -751,6 +751,13 @@ async def test_partial_unique_index_refuses_a_second_active_job(db_required):
         first = await ppef_jobs.queue_job(db, component=component,
                                           resource_version=version,
                                           requested_by="test@test.local")
+        # Read the id NOW. queue_job answers the refused insert with
+        # `db.rollback()`, and a rollback expires every instance in the
+        # session - `first` included. Touching `first.id` afterwards would
+        # lazy-load it, which in an AsyncSession is sync I/O outside a
+        # greenlet and raises MissingGreenlet, masking the result of the
+        # constraint that this test exists to exercise.
+        first_id = first.id
         try:
             with pytest.raises(ppef_jobs.JobConflict):
                 await ppef_jobs.queue_job(db, component=component,
@@ -758,11 +765,11 @@ async def test_partial_unique_index_refuses_a_second_active_job(db_required):
                                           requested_by="test@test.local")
 
             # Terminal -> slot released -> a retry is accepted.
-            await ppef_jobs.finish_failed(db, first.id, "test cleanup")
+            await ppef_jobs.finish_failed(db, first_id, "test cleanup")
             retry = await ppef_jobs.queue_job(db, component=component,
                                               resource_version=version,
                                               requested_by="test@test.local")
-            assert retry.id != first.id
+            assert retry.id != first_id
             await ppef_jobs.finish_failed(db, retry.id, "test cleanup")
         finally:
             await db.execute(delete(TEFCAPPEFIngestJob)

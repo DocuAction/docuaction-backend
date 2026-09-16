@@ -61,7 +61,9 @@ def test_adding_the_rule_versioned_the_rule_set():
     The delivered population was assessed under 1.0.0 and stays explicable at
     1.0.0; this is a new version, not a rewrite of the old one.
     """
-    assert RULE_SET_VERSION == "1.1.0"
+    # FMT-007 shipped in 1.1.0; the NPI rule split (2026-09-17) moved the set
+    # to 1.2.0. The property is that the set IS versioned and at least 1.1.0.
+    assert tuple(int(x) for x in RULE_SET_VERSION.split(".")) >= (1, 1, 0)
     assert len(rule_config_hash()) == 64
 
 
@@ -149,4 +151,5 @@ def test_every_rule_still_has_a_unique_id():
     from app.tefca_registry.rce.quality_rules import _assert_rule_ids_unique
 
     _assert_rule_ids_unique()      # raises on a duplicate
-    assert len({r.rule_id for r in RULES}) == len(RULES) == 32
+    # 33 since rule set 1.2.0 added NPI-004 (numeric format).
+    assert len({r.rule_id for r in RULES}) == len(RULES) == 33

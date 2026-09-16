@@ -90,6 +90,22 @@ def role_level(role) -> int:
     """The privilege level of a role name, after alias normalisation. 0 = unknown."""
     return ROLE_HIERARCHY.get(canonical_role(role), 0)
 
+
+def role_at_least(user, minimum_role: str) -> bool:
+    """Field-level authorization: does `user`'s DATABASE role reach `minimum_role`?
+
+    Additive (2026-09-17 remediation). `require_role` decides whether a route
+    may be called at all; this decides whether one BLOCK of an otherwise
+    viewer-readable response may be filled in. The job detail endpoint uses it
+    to return evidence blocks to a reviewer and `null` plus
+    `availability.<block> = "requires_role:reviewer"` to a viewer. Same
+    fail-closed rule as `require_role`: an unknown or missing role is level 0.
+    """
+    required = ROLE_HIERARCHY.get(minimum_role)
+    if required is None:
+        return False
+    return role_level(getattr(user, "role", None)) >= required
+
 SAML_CONFIG = {
     "enabled": False,
     "sp_entity_id": "https://api.docuaction.io/saml/metadata",
@@ -235,9 +251,15 @@ def require_role(minimum_role):
         required_level = ROLE_HIERARCHY.get(minimum_role, 0)
         db_role = getattr(user, "role", None)
         if role_level(db_role) < required_level:
-            raise HTTPException(
+            exc = HTTPException(
                 403, f"Required: {minimum_role}, Current: {canonical_role(db_role)}"
             )
+            # Structured copy of the same two facts, read by the 403 handler in
+            # app/core/error_handler.py so a client can act on `required_role`
+            # without parsing the message. The message itself is unchanged.
+            exc.required_role = minimum_role
+            exc.current_role = canonical_role(db_role)
+            raise exc
         # Same disable/approval/session-revocation enforcement as get_current_user, so
         # role-gated endpoints (e.g. TEFCA) cannot be reached by a disabled or
         # logged-out account holding a still-unexpired token.

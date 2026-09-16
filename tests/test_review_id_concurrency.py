@@ -169,7 +169,10 @@ async def _promoted_refs(db, intake_id, limit: int):
         .limit(limit))).scalars().all())
 
 
-async def test_concurrent_verify_and_classify_does_not_collide(db_required):
+async def test_concurrent_verify_and_classify_does_not_collide(db_required, monkeypatch):
+    # The promoted entities live in the registry; the resolver must read it.
+    # (Default is the bundled fixture set, which cannot know a fresh delivery.)
+    monkeypatch.setenv("ENTITY_RESOLVER_SOURCE", "db")
     """Two truly concurrent batches on real Postgres must both succeed with
     disjoint review ids — this is the exact scenario that raised
     IntegrityError before `_lock_review_id_allocation` existed."""
@@ -196,7 +199,10 @@ async def test_concurrent_verify_and_classify_does_not_collide(db_required):
         f"review id collision between concurrent batches: {ids_a} vs {ids_b}")
 
 
-async def test_four_concurrent_batches_all_unique(db_required):
+async def test_four_concurrent_batches_all_unique(db_required, monkeypatch):
+    # The promoted entities live in the registry; the resolver must read it.
+    # (Default is the bundled fixture set, which cannot know a fresh delivery.)
+    monkeypatch.setenv("ENTITY_RESOLVER_SOURCE", "db")
     """A slightly heavier version of the same proof: 4 concurrent callers."""
     from app.core.database import async_session_maker
     from app.tefca_registry.rce.arc_pipeline import verify_and_classify

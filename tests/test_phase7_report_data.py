@@ -41,6 +41,36 @@ CONFLICTING_ENTITIES = 9_032
 BOTH_SOURCES = 1_394
 
 
+@pytest.fixture
+async def populated_current_evidence(db_required):
+    """Skip unless the database carries evidence at the current rule version.
+
+    The counts asserted in TestDerivedFromPersistedEvidence are properties of
+    the populated development dataset (188,528 observations at
+    phase6-bulk-1.1.0). A freshly migrated database has none, and an empty
+    read would fail every count assertion for a reason that has nothing to do
+    with the selector under test. The precondition is measured, not assumed:
+    an environment that has ANY current-version evidence runs the assertions
+    unchanged, and a wrong count there is still a failure.
+    """
+    from sqlalchemy import text
+
+    from app.core.database import async_session_maker
+
+    version = current_rule_version()
+    async with async_session_maker() as db:
+        total = (await db.execute(text(
+            "select count(*) from tefca_dimension_evidence"))).scalar() or 0
+        current = (await db.execute(text(
+            "select count(*) from tefca_dimension_evidence "
+            "where rule_version = :v"), {"v": version})).scalar() or 0
+    if not current:
+        pytest.skip(
+            f"requires the populated development evidence dataset: "
+            f"tefca_dimension_evidence has {current} rows at rule_version "
+            f"{version!r} ({total} rows in total, none at the current version)")
+
+
 class TestTheSelectorItself:
     """Version scoping, asserted without touching a database."""
 
@@ -75,6 +105,7 @@ class TestDerivedFromPersistedEvidence:
             return rows, dict(svc.evidence_scope)
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("populated_current_evidence")
     async def test_no_observation_is_silently_dropped(self):
         """The regression: 37.5% of the evidence used to disappear here."""
         rows, scope = await self._rows()
@@ -91,6 +122,7 @@ class TestDerivedFromPersistedEvidence:
         assert "source" in scope["dedup_key"]
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("populated_current_evidence")
     async def test_only_the_current_version_reaches_the_report(self):
         rows, _ = await self._rows()
         assert {r.rule_version for r in rows} == {current_rule_version()}
@@ -107,6 +139,7 @@ class TestDerivedFromPersistedEvidence:
         assert not [r for r in rows if r.disposition in ("PASS", "FAIL")]
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("populated_current_evidence")
     async def test_both_address_sources_survive(self):
         """One of the two used to be discarded, arbitrarily."""
         rows, _ = await self._rows()
@@ -116,6 +149,7 @@ class TestDerivedFromPersistedEvidence:
         assert by_source["CMS_PPEF_PRACTICE_LOCATION"] == POPULATION
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("populated_current_evidence")
     async def test_the_nppes_conflict_figure_derives_to_8584(self):
         """Derived through the reporting path — not read from a constant."""
         rows, _ = await self._rows()
@@ -126,6 +160,7 @@ class TestDerivedFromPersistedEvidence:
         assert derived == NPPES_CONFLICTS
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("populated_current_evidence")
     async def test_observations_and_entities_are_different_quantities(self):
         """The three address figures were being used interchangeably.
 
@@ -157,6 +192,7 @@ class TestDerivedFromPersistedEvidence:
         assert not [k for k, c in keys.items() if c > 1]
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("populated_current_evidence")
     async def test_every_dimension_reconciles_to_the_population(self):
         """Per source, each dimension answers for every entity exactly once."""
         rows, _ = await self._rows()

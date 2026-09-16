@@ -9,6 +9,15 @@ a route that does not exist cannot be called with the wrong arguments.
 
 Issues DO mutate: an analyst resolving one is the workflow. Corrections mutate
 Area 2, never Area 1.
+
+ROLE FLOORS (remediation contract 2026-09-17, section 6)
+The reads that return DELIVERED VALUES - source records, curated records, a
+record's lineage and the Issue Ledger rows - sit at `reviewer`. A viewer keeps
+the delivery list, the delivery metadata, integrity, runs, reconciliation and
+the field map, none of which carries a Government data value. The synchronous
+upload sits at `program_manager`, the same floor as the official registration
+route, and is DEPRECATED in favour of it: it answers with `Deprecation`,
+`Sunset` and `Link` headers and writes a registry audit row each time it is used.
 """
 
 from __future__ import annotations
@@ -16,7 +25,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import (APIRouter, Depends, File, HTTPException, Query, Request,
+                     Response, UploadFile)
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,6 +36,18 @@ from app.core.security import require_role
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/tefca/rce", tags=["TEFCA RCE Pipeline"])
+
+#: Floor for reads that return delivered values (contract section 6).
+VALUES_ROLE = "reviewer"
+#: The official registration route the synchronous upload is deprecated in favour of.
+OFFICIAL_DELIVERY_ROUTE = "/api/tefca/rce/official-deliveries"
+#: RFC 8594 Sunset for the synchronous upload. A date, so callers can plan.
+SYNC_UPLOAD_SUNSET = "Wed, 31 Mar 2027 00:00:00 GMT"
+DEPRECATION_HEADERS = {
+    "Deprecation": "true",
+    "Sunset": SYNC_UPLOAD_SUNSET,
+    "Link": f'<{OFFICIAL_DELIVERY_ROUTE}>; rel="successor-version"',
+}
 
 
 def _client_ip(request: Request):
@@ -43,9 +65,12 @@ def _client_ip(request: Request):
 
 # ── P2 — deliveries ──────────────────────────────────────────────────────────
 
-@router.post("/deliveries", summary="Upload an RCE delivery into immutable Area 1")
+@router.post("/deliveries", summary="Upload an RCE delivery into immutable Area 1 "
+                                    "(DEPRECATED: use /official-deliveries)",
+             deprecated=True)
 async def upload_delivery(
     request: Request,
+    response: Response,
     file: UploadFile = File(...),
     delivery_label: Optional[str] = Query(None),
     delimiter: Optional[str] = Query(
@@ -55,17 +80,38 @@ async def upload_delivery(
         None, description="ISO date the delivery was RECEIVED (e.g. 2026-08-21) "
                           "when that differs from the upload date. Omit for now."),
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("contributor")),
+    user=Depends(require_role("program_manager")),
 ):
     """Accept a delivery. Every line lands in Area 1 or the intake aborts.
 
     A byte-identical re-delivery is ACCEPTED as its own intake and linked to the
     earlier one — ONC may legitimately resend, and a rejected re-delivery would
     leave no record that it arrived.
+
+    PROGRAM MANAGER (was contributor) and DEPRECATED. Establishing what the
+    official Government source data IS belongs to the same floor as the
+    official registration route; the `analyst -> contributor` alias let the
+    analyst role do it here. Each use is audited (`rce_sync_upload_deprecated_used`)
+    so the migration to the official route can be verified from the trail.
     """
     from app.api.routes import _scan_upload_or_reject
     from app.tefca_registry.rce.intake import IntakeError, ingest_delivery
 
+    response.headers.update(DEPRECATION_HEADERS)
+    await _audit_deprecated_use(db, user, request, file.filename)
+    try:
+        return await _upload_delivery_body(
+            request, file, delivery_label, delimiter, received_date, db, user,
+            _scan_upload_or_reject, IntakeError, ingest_delivery)
+    except HTTPException as exc:
+        # The refusal is still an answer from a deprecated route.
+        exc.headers = {**(exc.headers or {}), **DEPRECATION_HEADERS}
+        raise
+
+
+async def _upload_delivery_body(request, file, delivery_label, delimiter, received_date,
+                                db, user, _scan_upload_or_reject, IntakeError,
+                                ingest_delivery):
     raw = await file.read()
     extension = (file.filename or "").rsplit(".", 1)[-1].lower() \
         if "." in (file.filename or "") else "csv"
@@ -163,7 +209,7 @@ async def list_records(
     promotion_status: Optional[str] = None,
     include_raw: bool = Query(False, description="Include the raw delivered line"),
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("viewer")),
+    user=Depends(require_role(VALUES_ROLE)),
 ):
     from app.tefca_registry.rce import repository as repo
 
@@ -300,7 +346,7 @@ async def list_issues(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("viewer")),
+    user=Depends(require_role(VALUES_ROLE)),
 ):
     from sqlalchemy import select
     from app.tefca_registry.rce import models as m
@@ -399,7 +445,7 @@ async def list_curated(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("viewer")),
+    user=Depends(require_role(VALUES_ROLE)),
 ):
     from sqlalchemy import select
     from app.tefca_registry.rce import models as m
@@ -433,7 +479,7 @@ async def list_curated(
 async def lineage(
     curated_id: str,
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("viewer")),
+    user=Depends(require_role(VALUES_ROLE)),
 ):
     from sqlalchemy import select
     from app.tefca_registry.rce import models as m
@@ -453,7 +499,23 @@ async def lineage(
     corrections = (await db.execute(
         select(m.RceCorrectionDetail).where(
             m.RceCorrectionDetail.curated_record_id == curated.id))).scalars().all()
+    # 2026-09-17: the append-only accounting for this line and the identifier
+    # decisions about its entity (narrowed to this delivered line when the
+    # events name it; the entity's whole history otherwise).
+    from app.tefca_registry.rce import dispositions, identifier_decisions
+    from app.tefca_registry.rce import traceability_models as tm
+
+    disposition_history = await dispositions.history_for_record(db, curated.source_record_id)
+    identifier_events = [r.to_dict() for r in (await db.execute(
+        select(tm.TefcaIdentifierDecisionEvent)
+        .where(tm.TefcaIdentifierDecisionEvent.source_record_id == curated.source_record_id)
+        .order_by(tm.TefcaIdentifierDecisionEvent.identifier_type,
+                  tm.TefcaIdentifierDecisionEvent.sequence))).scalars().all()]
+    if not identifier_events and curated.canonical_entity_id is not None:
+        identifier_events = await identifier_decisions.history(db, curated.canonical_entity_id)
     return {
+        "disposition_history": disposition_history,
+        "identifier_decisions": identifier_events,
         "area1": {
             "id": str(source.id), "line_number": source.line_number,
             "raw_line": source.raw_line, "record_sha256": source.record_sha256,
@@ -580,3 +642,25 @@ async def field_map(user=Depends(require_role("viewer"))):
                  "interpretation are carried separately on every field. A "
                  "column name is never treated as its definition."),
     }
+
+
+# ── deprecation audit ────────────────────────────────────────────────────────
+
+async def _audit_deprecated_use(db, user, request, filename) -> None:
+    """One registry audit row per use of the deprecated synchronous upload.
+
+    Never the delivered data: the actor, the address, the filename and the
+    route it should have been. Never raises, never fails the upload.
+    """
+    try:
+        from app.tefca_registry import audit as reg_audit
+
+        actor_id, actor_email = reg_audit.actor_of(user)
+        reg_audit.record(db, "rce_sync_upload_deprecated_used", actor_id=actor_id,
+                         actor_email=actor_email, ip_address=_client_ip(request),
+                         metadata={"original_filename": filename,
+                                   "successor": OFFICIAL_DELIVERY_ROUTE,
+                                   "sunset": SYNC_UPLOAD_SUNSET})
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not audit deprecated sync upload use: %s", type(exc).__name__)

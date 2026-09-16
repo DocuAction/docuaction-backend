@@ -111,11 +111,24 @@ def test_finalize_gives_non_area1_to_app_and_keeps_area1_on_owner():
     assert "command.upgrade" not in body and "create_all" not in body, "Finalize must run no Alembic"
 
 
-def test_area1_owner_set_is_the_documented_five():
+def test_area1_owner_set_is_the_documented_five_plus_traceability():
+    """The five Area-1 tables, plus the five 20260917 evidence tables: created by
+    the chain as the owner role and KEPT there so the app can never edit or
+    erase disposition history (it holds append-only grants from the chain)."""
     src = _src()
+    traceability = {"rce_delivery_stage_events", "rce_disposition_events",
+                    "rce_reconciliation_snapshots", "tefca_identifier_decision_events",
+                    "rce_delivery_report_links"}
     for t in ("rce_source_records", "rce_source_intakes", "rce_ingestion_runs",
-              "rce_rule_execution_history", "rce_delivery_jobs"):
+              "rce_rule_execution_history", "rce_delivery_jobs", *sorted(traceability)):
         assert f'"{t}"' in src
+    code = _code()
+    owner_set = re.search(r"AREA1_OWNER_TABLES = \{([^}]*)\}", code)
+    creates = re.search(r"MANAGED_CHAIN_CREATES = \{([^}]*)\}", code)
+    assert owner_set and traceability <= set(re.findall(r"['\"]([^'\"]+)['\"]", owner_set.group(1)))
+    assert creates and traceability <= set(re.findall(r"['\"]([^'\"]+)['\"]", creates.group(1)))
+    assert "- MANAGED_CHAIN_CREATES" in _func(code, "managed_gate"), \
+        "the gate must not call a chain-created table a missing candidate"
 
 
 def test_app_and_owner_are_not_members_of_each_other():
@@ -141,9 +154,18 @@ def test_grants_come_from_the_reviewed_chain_not_reimplemented():
     # non-Area-1 tables a pending revision ALTERs (MANAGED_CHAIN_ALTERS) and
     # keeps the application's former owner-level access on them for the window.
     # Area-1 privileges still come only from the chain (asserted at import).
+    # ...and the REFERENCES privilege the 20260917 foreign keys need on the three
+    # app-owned tables no revision ALTERs (MANAGED_CHAIN_REFERENCES): granted to the
+    # OWNER role only, never a table-privilege grant to the app role.
     for g in re.findall(r"GRANT[^\n]*\bON\b[^\n]*", prep, re.I):
-        assert ("ON SCHEMA" in g) or ('ON public."{t}" TO "{APP_ROLE}"' in g), f"unexpected grant in PREPARE: {g}"
+        assert ("ON SCHEMA" in g) or ('ON public."{t}" TO "{APP_ROLE}"' in g) \
+            or ('GRANT REFERENCES ON public."{t}" TO "{OWNER_ROLE}"' in g), f"unexpected grant in PREPARE: {g}"
     assert "for t in MANAGED_CHAIN_ALTERS:" in prep
+    assert "for t in MANAGED_CHAIN_REFERENCES:" in prep
+    _refs = re.search(r"MANAGED_CHAIN_REFERENCES = \(([^)]*)\)", code)
+    assert _refs and {"rce_issues", "tefca_entity_versions", "audit_logs"} == set(
+        re.findall(r"['\"]([^'\"]+)['\"]", _refs.group(1))), \
+        "20260917 declares FKs to exactly these app-owned, never-ALTERed tables"
     assert "assert not set(MANAGED_CHAIN_ALTERS) & AREA1_OWNER_TABLES" in code
     assert not re.search(r"\bREVOKE\b", code, re.I), "no invented REVOKE"
 

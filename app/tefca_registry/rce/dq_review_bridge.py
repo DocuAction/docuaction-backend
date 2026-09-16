@@ -65,7 +65,7 @@ from app.tefca_registry.rce import run_selection
 #: from the Phase-6 exception queue and from ARC classification recommendations.
 QUEUE_SOURCE = "RCE_DQ_HUMAN_REQUIRED"
 
-BRIDGE_VERSION = "1.0.0"
+BRIDGE_VERSION = "1.1.0"
 
 #: Correction authorities that require a human. AUTO_SAFE is applied
 #: deterministically and NO_CORRECTION is recorded and preserved — neither is a
@@ -85,6 +85,12 @@ RULE_CLASSIFICATION: Dict[str, str] = {
     "ID-001": "IDENTITY", "ID-002": "IDENTITY", "ID-003": "IDENTITY",
     "ID-004": "IDENTITY", "ID-005": "IDENTITY", "ID-006": "IDENTITY",
     "NPI-001": "IDENTITY", "NPI-002": "IDENTITY", "NPI-003": "IDENTITY",
+    "NPI-004": "IDENTITY",
+    # Written outside the quality engine (rule set 1.2.0): identifier conflicts
+    # at promotion and NPPES outcomes at verification. HUMAN_REQUIRED HIGH /
+    # MEDIUM, so they enter the queue through the same bridge.
+    "NPI-005": "IDENTITY", "NPI-006": "IDENTITY", "NPI-008": "IDENTITY",
+    "NPI-009": "IDENTITY",
     "INT-001": "RELATIONSHIP", "INT-002": "RELATIONSHIP",
     "INT-003": "RELATIONSHIP",
     "BUS-001": "METHODOLOGY", "BUS-002": "METHODOLOGY",
@@ -178,7 +184,9 @@ async def plan_cases(db, intake_id, *, run_id=None) -> Dict[str, Any]:
                m.RceIssue.issue_type, m.RceIssue.severity,
                m.RceIssue.source_record_id, m.RceIssue.run_id,
                m.RceCuratedRecord.canonical_entity_id,
-               m.RceCuratedRecord.record_status)
+               m.RceCuratedRecord.record_status,
+               m.RceIssue.field_name, m.RceIssue.original_value,
+               m.RceIssue.suggested_value)
         .join(m.RceCuratedRecord,
               m.RceCuratedRecord.source_record_id == m.RceIssue.source_record_id,
               isouter=True)
@@ -189,7 +197,8 @@ async def plan_cases(db, intake_id, *, run_id=None) -> Dict[str, Any]:
     groups: Dict[str, Dict[str, Any]] = {}
     unmappable: List[Dict[str, Any]] = []
     for (issue_id, code, rule_id, issue_type, severity, source_record_id,
-         issue_run_id, entity_id, record_status) in rows:
+         issue_run_id, entity_id, record_status, field_name, original_value,
+         suggested_value) in rows:
         if source_record_id is None:
             # No Area 1 anchor and no entity: nothing to review. Reported,
             # never silently dropped.
@@ -212,7 +221,20 @@ async def plan_cases(db, intake_id, *, run_id=None) -> Dict[str, Any]:
             "pre_promotion": entity_id is None,
             "run_id": issue_run_id, "issue_ids": [], "issue_codes": [],
             "rule_ids": [], "issue_types": [], "severities": [],
+            # The values the question is ABOUT, so the case can show the
+            # submitted and the registered identifier side by side without a
+            # second read. Identifiers only; never a copy of the delivered row.
+            "values": [], "submitted_value": None, "existing_value": None,
         })
+        group["values"].append({
+            "issue_code": code, "rule_id": rule_id, "issue_type": issue_type,
+            "field_name": field_name, "submitted_value": original_value,
+            "existing_value": (suggested_value if rule_id == "NPI-008" else None),
+        })
+        if rule_id == "NPI-008" or group["submitted_value"] is None:
+            group["submitted_value"] = original_value
+            group["existing_value"] = (suggested_value if rule_id == "NPI-008"
+                                       else group["existing_value"])
         group["issue_ids"].append(issue_id)
         group["issue_codes"].append(code)
         group["rule_ids"].append(rule_id)
@@ -306,6 +328,9 @@ async def build_cases(db, intake_id, *, run_id=None,
                 "issue_types": sorted(set(group["issue_types"])),
                 "severity": group["severity"],
                 "priority": group["priority"],
+                "submitted_value": group.get("submitted_value"),
+                "existing_value": group.get("existing_value"),
+                "values": group.get("values") or [],
                 "queued_at": datetime.utcnow().isoformat(),
                 "note": ("A data-quality finding requiring human judgement. No "
                          "classification, no determination and no "

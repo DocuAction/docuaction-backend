@@ -33,10 +33,17 @@ ABSENT = {"rce_source_intakes", "rce_source_records", "rce_ingestion_runs", "rce
           "rce_issues", "rce_rule_execution_history", "rce_correction_details", "review_records",
           "review_decision_events", "review_cycles", "review_reports", "review_rules", "review_samples",
           "sample_entities", "report_export_jobs", "report_artifacts", "rce_delivery_jobs",
-          "tefca_dimension_evidence", "source_version_snapshots", "evidence_relationship_path"}
+          "tefca_dimension_evidence", "source_version_snapshots", "evidence_relationship_path",
+          # 20260917_delivery_traceability: five append-only evidence tables the chain creates
+          "rce_delivery_stage_events", "rce_disposition_events", "rce_reconciliation_snapshots",
+          "tefca_identifier_decision_events", "rce_delivery_report_links"}
 ADDITIVE = {"audit_logs": ["event_type", "outcome", "correlation_id"], "tefca_import_history": ["file_hash"]}
 AREA1 = {"rce_source_records", "rce_source_intakes", "rce_ingestion_runs",
-         "rce_rule_execution_history", "rce_delivery_jobs"}
+         "rce_rule_execution_history", "rce_delivery_jobs",
+         # the traceability evidence tables stay owner-owned: the app holds only
+         # append-only grants from the chain (20260917_delivery_traceability)
+         "rce_delivery_stage_events", "rce_disposition_events", "rce_reconciliation_snapshots",
+         "tefca_identifier_decision_events", "rce_delivery_report_links"}
 
 LEGACY_OWNER = "legacy_owner"
 MIGRATION_ID = "migration_identity"
@@ -215,7 +222,7 @@ def test_three_step_convergence_and_all_gates(fixture_db):
     assert "MIGRATION B COMPLETE" in rm.stdout
     assert f"session_user={MIGRATION_ID}" in rm.stdout and "current_user(after SET ROLE)=docuaction_owner" in rm.stdout
     with su.connect() as c:
-        assert c.execute(text("select version_num from alembic_version")).scalars().all() == ["20260915_curated_text_columns"]
+        assert c.execute(text("select version_num from alembic_version")).scalars().all() == ["20260917_delivery_traceability"]
     print("MIGRATION_B=PASS")
 
     # FINALIZE (legacy_owner) - reassign to DEV ownership model
@@ -328,7 +335,7 @@ def test_forced_failure_is_fail_closed(fixture_db):
     with _eng(SU).connect() as c:
         has = sa.inspect(c).has_table("alembic_version")
         rev = c.execute(text("select version_num from alembic_version")).scalars().all() if has else None
-    assert rev != ["20260915_curated_text_columns"], "must not report head after a failed chain"
+    assert rev != ["20260917_delivery_traceability"], "must not report head after a failed chain"
     print(f"FORCED_FAILURE=FAIL_CLOSED rev={rev} recovery=EXPLICIT_REPAIR_OR_PITR")
 
 
@@ -370,14 +377,14 @@ def test_fresh_alembic_upgrade_head_from_empty(fixture_db):
     os.environ["DB_APP_ROLE"] = "docuaction_app"
     os.environ["DB_MIGRATION_ROLE"] = "docuaction_owner"
     command.upgrade(cfg, "head")
-    assert ScriptDirectory.from_config(cfg).get_heads() == ["20260915_curated_text_columns"]
+    assert ScriptDirectory.from_config(cfg).get_heads() == ["20260917_delivery_traceability"]
     with eng.connect() as c:
-        assert c.execute(text("select version_num from alembic_version")).scalars().all() == ["20260915_curated_text_columns"]
+        assert c.execute(text("select version_num from alembic_version")).scalars().all() == ["20260917_delivery_traceability"]
         assert _ck_count(c) == 1
     command.upgrade(cfg, "head")
     with eng.connect() as c:
         assert _ck_count(c) == 1
-    print("FRESH_ALEMBIC_BUILD=PASS head=20260915_curated_text_columns ck_count=1 rerun=no-op")
+    print("FRESH_ALEMBIC_BUILD=PASS head=20260917_delivery_traceability ck_count=1 rerun=no-op")
 
 
 def test_20260831_skips_ck_when_already_present(fixture_db):

@@ -74,16 +74,27 @@ def test_unpromotable_rows_are_recorded_so_the_drain_terminates():
     import inspect
 
     source = inspect.getsource(promote_delivery)
-    assert source.count("unpromotable.add(") == 2, (
-        "both non-promotable paths (status, and missing key) must record the "
-        "row, or the drain loop re-selects it on every pass and never ends"
+    # 2026-09-17: the recording moved into ONE helper, `_park`, so that every
+    # non-promotable branch (REJECTED, identifier conflict, quality hold,
+    # MISSING_KEY, EXCLUDED, missing entity) records the row the same way.
+    assert source.count("unpromotable.add(") == 1, (
+        "the row must be recorded in exactly one place (`_park`), or the drain "
+        "loop re-selects it on every pass and never ends"
     )
-    # Populated before the `continue`, not after it.
-    for marker in ("skipped_status.get(row.record_status, 0) + 1",
-                   'skipped_status.get("MISSING_KEY", 0) + 1'):
-        tail = source.split(marker, 1)[1][:200]
-        assert "unpromotable.add(" in tail.split("continue", 1)[0], (
-            f"the row is not recorded before `continue` after {marker!r}"
+    park = source.split("def _park(", 1)[1].split("# ── pass 1", 1)[0]
+    assert "unpromotable.add(row.id)" in park
+    # Every `continue` in pass 1's row loop is preceded by a `_park(` call.
+    pass1 = source.split("# ── pass 1", 1)[1].split(
+        "# Mark the Area 1 rows promoted", 1)[0]
+    for_body = pass1.split("for row in rows:", 1)[1]
+    needle = "\n                continue"
+    continues = [i for i in range(len(for_body)) if for_body.startswith(needle, i)]
+    assert len(continues) >= 5, "pass 1 has fewer non-promotable branches than expected"
+    for at in continues:
+        window = for_body[max(0, at - 1400):at]
+        assert "_park(row," in window, (
+            "a non-promotable branch reaches `continue` without recording the "
+            "row via _park()"
         )
 
 
