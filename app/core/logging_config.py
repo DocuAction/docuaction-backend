@@ -42,13 +42,17 @@ _BEARER = re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{8,}")
 #: `_` or `-`, may be quoted, and the separator may be `=` or `:` with spaces
 #: (independent review M5, 2026-09-16, found the `\b...=` form missed every
 #: OAuth/Entra spelling).
+#: Every quantifier here is bounded (CodeQL py/polynomial-redos, 2026-09-16):
+#: an unbounded repeated group next to an unbounded tail let a long
+#: credential-shaped log line take polynomial time to reject. The bounds are
+#: generous for a real key/URL and turn the worst case into a constant.
 _KV_SECRET = re.compile(
-    r"(?i)(?<![A-Za-z0-9])((?:[A-Za-z0-9]+[_-])*(?:password|passwd|pwd|secret|token|"
+    r"(?i)(?<![A-Za-z0-9])((?:[A-Za-z0-9]{1,40}[_-]){0,4}(?:password|passwd|pwd|secret|token|"
     r"api[_-]?key|sig|sas|instrumentationkey|sharedaccesskey|accountkey))"
-    r"[\"']?\s*[:=]\s*[\"']?([^\s&;,'\"]+)")
-_BASIC = re.compile(r"(?i)basic\s+[A-Za-z0-9+/=]{8,}")
+    r"[\"']?\s*[:=]\s*[\"']?([^\s&;,'\"]{1,4096})")
+_BASIC = re.compile(r"(?i)basic\s+[A-Za-z0-9+/=]{8,64}")
 #: `scheme://user:password@host` - the password half of a URL credential.
-_URL_CREDENTIAL = re.compile(r"(://[^/\s:@]+:)([^@\s]+)@")
+_URL_CREDENTIAL = re.compile(r"(://[^/\s:@]{1,256}:)([^@\s]{1,512})@")
 
 #: Exception classes whose messages are ours to show: raised by our own code
 #: (module under `app.`) or the plain ValueError/LookupError the pipeline uses
