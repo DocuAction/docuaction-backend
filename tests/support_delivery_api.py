@@ -39,9 +39,29 @@ def register_review_record(review_record_id) -> None:
     _SEEDED["review_records"].append(str(review_record_id))
 
 
+def _database_available() -> bool:
+    """The same probe result tests/conftest.py computed at import time."""
+    try:
+        import conftest  # tests/ is on sys.path under pytest
+        return bool(getattr(conftest, "DB_AVAILABLE", False))
+    except Exception:  # noqa: BLE001 - outside pytest, let the connection decide
+        return True
+
+
 def run(coro):
     """Run a coroutine from a synchronous test. NullPool (conftest) keeps a
-    connection inside the loop that opened it, so this is safe per call."""
+    connection inside the loop that opened it, so this is safe per call.
+
+    Skips, rather than errors, when no database is reachable: these helpers
+    seed real rows, and a module-scoped fixture that raised ConnectionRefused
+    turned every test in the module into a setup ERROR on CI runners without
+    PostgreSQL (2026-09-16). The skip reason names the condition exactly.
+    """
+    if not _database_available():
+        import pytest
+        coro.close()
+        pytest.skip("No database reachable at DATABASE_URL; this module seeds "
+                    "real delivery rows and needs PostgreSQL (see tests/conftest.py)")
     return asyncio.run(coro)
 
 
