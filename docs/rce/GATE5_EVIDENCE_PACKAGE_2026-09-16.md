@@ -15,7 +15,7 @@ Correct date: 2026-09-16 UTC. The earlier package and some file names used 2026-
 
 | Repository | Branch | Base | Head |
 |---|---|---|---|
-| docuaction-backend | fix/delivery-workflow-remediation | main 51b8735 (current) | effc015 (one remediation commit on top of PR #59's abf52bc, 35df1c4) |
+| docuaction-backend | fix/delivery-workflow-remediation | main 51b8735 (current) | effc015 = the single remediation commit (on top of PR #59's abf52bc, 35df1c4); branch tip 6d24c16 adds only this package and the non-restricted screenshots |
 | docuaction-frontend | fix/delivery-workflow-remediation | main 04d7af7 (current) | 473e773 (single commit) |
 
 Histories were squashed before publishing so no commit contains the removed credential. Git status clean in both worktrees (untracked: ignored restricted evidence and build output only).
