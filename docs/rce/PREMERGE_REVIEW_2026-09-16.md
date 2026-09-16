@@ -82,3 +82,134 @@ with axe, build, audit).
 
 Recorded in the PR descriptions at push time and in the final pre-merge
 response.
+
+## 5. Azure Blob storage RBAC — scope correction analysis (read-only; no assignment changed)
+
+**Current assignment.** Principal `f5d178b9-287e-42d9-a528-05aa3fdea434` (the
+`docuaction-dev` App Service system-assigned identity) holds **Storage Blob
+Data Contributor** at the **account** scope on `stdocuactiondev4065`
+(`rg-docuaction-DEV`). No other identity holds a data-plane Storage role at
+or under that scope.
+
+**What the app actually does with it.** The account has exactly one
+container, `report-artifacts`, used exclusively by
+`app/core/storage/artifact_store.py` (`AzureBlobArtifactStore`) through
+`app/reports/data/artifact_registry.py`. Every write uses `overwrite=False`;
+there is no `delete_blob`, `os.remove`, or any other delete/overwrite call
+anywhere in the application against a store path (grep confirmed). Blob
+names are `<report_id>-<ext>/<version>/artifact.<ext>`, unique per version
+and never reused. **The application has no functional need for delete**, at
+the container or the blob level.
+
+**Storage Blob Data Contributor's actual grant** (from the role definition):
+container read/write/delete, `blobServices/generateUserDelegationKey`, and
+blob read/write/delete/move/add. Delete and the container-level create and
+delete are entirely unused by this application.
+
+**Protection currently in place at the storage layer** (read 2026-09-16):
+versioning disabled, blob soft delete disabled, container soft delete
+disabled, no immutability policy or legal hold on `report-artifacts`. That
+means the account-scope role is not the only gap: **even the account owner
+has no recovery path today** if a credential were ever misused to delete a
+blob, independent of which identity holds which role.
+
+**Least-privilege proposal (not applied — decision only):**
+1. **Container-scope the assignment.** Storage Blob Data Contributor scoped
+   to the `report-artifacts` container resource id, replacing the
+   account-scope assignment. Azure supports RBAC at container granularity
+   for this role, and no code change is needed since the SDK call is
+   unaffected by scope. This alone removes the identity's ability to touch
+   any future container added to the account.
+2. **Prefer a custom role without delete**, scoped to the container: blob
+   read, blob write, blob add, and container read as its only actions. This
+   removes blob delete, container delete, and generate-user-delegation-key —
+   none of which the code calls — while keeping everything
+   `AzureBlobArtifactStore` needs (`list_blobs`, `download_blob`,
+   `upload_blob` with `overwrite=False`).
+3. **Independent of the RBAC question, enable storage-layer protection now**:
+   blob soft delete (for example, seven days) and container soft delete on
+   the account. This is the higher-value, no-regret control — it protects
+   against misconfiguration or a compromised credential even under the
+   current account-scope role, and needs no application change.
+
+**Recommendation:** apply items 1 and 3 as part of the Gate 5 controlled DEV
+sequence (after `merge`), before `REPORT_ARTIFACT_BACKEND=azure` is set;
+item 2 (the custom role) as a fast follow so the identity's Storage grant on
+DEV never includes delete. None of this is applied by this response.
+
+## 6. 184-record delivery — exact findings breakdown (isolated database)
+
+Intake `749f1edc-b874-4ffd-aff7-d4316ae23c09` (job `8c5f2774-aca2-4ecd-abca-510b4e45a1a0`,
+run `dd242602-a497-4df4-9526-05549404c822`). 184 source records, **376
+findings total**, **161 of 184 records (87.5 percent) carry at least one
+finding**, 23 records are entirely clean.
+
+| Rule | Name | Severity | Correction authority | Occurrences | Unique records | Undecided | Resolved |
+|---|---|---|---|---|---|---|---|
+| NPI-002 | NPI_LENGTH_INVALID | HIGH | HUMAN_REQUIRED | 1 | 1 | 1 | 0 |
+| BUS-002 | TEST_RECORD_SUSPECTED | MEDIUM | HUMAN_REQUIRED | 1 | 1 | 1 | 0 |
+| FMT-003 | ZIP_STATE_MISMATCH | MEDIUM | HUMAN_REQUIRED | 2 | 2 | 2 | 0 |
+| INT-002 | PART_OF_UNRESOLVED | MEDIUM | HUMAN_REQUIRED | 17 | 17 | 17 | 0 |
+| SCH-004 | ENCODING_ANOMALY | MEDIUM | HUMAN_REQUIRED | 1 | 0 (intake-level) | 1 | 0 |
+| FMT-001 | ZIP_LEADING_ZERO_STRIPPED | LOW | AUTO_SAFE (auto-corrected) | 11 | 11 | 0 | 11 |
+| BUS-003 | PARTICIPANT_PARENT_IS_QHIN | INFORMATIONAL | NO_CORRECTION | 118 | 118 | 118 | 0 |
+| CON-002 | MISSING_PURPOSES_OF_USE | INFORMATIONAL | NO_CORRECTION | 32 | 32 | 32 | 0 |
+| CON-003 | INACTIVE_RECORD | INFORMATIONAL | NO_CORRECTION | 17 | 17 | 17 | 0 |
+| CON-005 | ADDRESS_TEXT_IS_A_LABEL | INFORMATIONAL | NO_CORRECTION | 123 | 123 | 123 | 0 |
+| FMT-005 | CONTACT_PHONE_FRAGMENT | INFORMATIONAL | NO_CORRECTION | 3 | 3 | 3 | 0 |
+| NPI-001 | NPI_NOT_SUPPLIED | INFORMATIONAL | NO_CORRECTION | 49 | 49 | 49 | 0 |
+| SCH-002 | COLUMN_EMPTY_IN_DELIVERY | INFORMATIONAL | NO_CORRECTION | 1 | 0 (intake-level) | 1 | 0 |
+| **Total** | | | | **376** | | 365 undecided + 11 resolved | |
+
+Severity totals: HIGH 1, MEDIUM 21 (across 20 unique records), LOW 11 (11
+records, auto-corrected), INFORMATIONAL 343 (150 unique records).
+
+**Curation outcome:** CLEAN 173, CORRECTED 10 (the FMT-001 auto-corrections,
+minus the one landing on the held row), HELD 1. **Disposition outcome:**
+CREATED 180, MATCHED_UNCHANGED 3, HELD 1 — 184 total, matching the acceptance
+evidence.
+
+**Why only one record is held.** `blocks_promotion()` holds a record only
+when an issue at CRITICAL or HIGH severity is still undecided
+(OPEN, PROPOSED, or UNDER_REVIEW). Exactly one finding in this entire
+184-record delivery is HIGH: NPI-002 NPI_LENGTH_INVALID, on source line 2.
+Every other finding — the 21 MEDIUM, 11 LOW, and 343 INFORMATIONAL — is below
+the holding threshold by rule design: MEDIUM findings such as INT-002 and
+FMT-003 are HUMAN_REQUIRED and remain visible and actionable in the
+exception ledger but do not block promotion; LOW FMT-001 is AUTO_SAFE and
+was already corrected automatically; INFORMATIONAL findings such as the 123
+CON-005 and 118 BUS-003 rows are evidentiary, NO_CORRECTION. The held row
+(line 2) also carries six of these lower-severity findings, but only the
+HIGH NPI-002 is why it is held — releasing it requires only a decision on
+that one finding through the corrected identifier and disposition path.
+
+**Resolved/unresolved:** every finding is OPEN except the 11 FMT-001
+auto-corrections (RESOLVED by the AUTO_SAFE path at curation time). No
+analyst action has been taken on this delivery in DEV yet — this is the
+delivery exactly as it arrived.
+
+**Analyst action required to close:** one decision on the line-2 NPI-002
+finding, now correctly gated (it must go through a raised conflict or a
+validated correction; there is no registered NPI for this OID, so the
+correct path is CORRECT with a valid NPI, or REJECT / REQUEST_EVIDENCE if
+the true value cannot be confirmed). Nothing else in the 376 findings blocks
+promotion.
+
+## 7. Role-account readiness (DEV, no passwords or tokens)
+
+| Directive role | Account | Effective role | Level | Ready? |
+|---|---|---|---|---|
+| Test Admin | testadmin@docuaction.io | admin (test) | 8 | Usable for admin-only steps only — per instruction, admin must not substitute for a lower-privilege journey. |
+| Program Manager | none at level 7 | — | — | Gap. qalead@docuaction.io is level 6 (QA Lead), one below program_manager (7). The Program Manager journey (deliverable submission, full audit log, cycle management, and the now program_manager-floored sync upload) cannot be exercised on a correctly-scoped account until one is created or an existing account is promoted. |
+| Analyst (the disposition-writing role — this remediation's reviewer floor) | reviewer@docuaction.io | reviewer | 4 | Ready — matches the new reviewer floor on records, exceptions, dispositions and audit exactly. |
+| Separate QA Lead (maker-checker, distinct from the analyst account) | qalead@docuaction.io | qalead | 6 | Ready — distinct account and role from reviewer@, satisfying the separation requirement. |
+| Viewer / COR | viewer@docuaction.io | viewer | 1 | Ready — matches the viewer floor being tested (null evidence blocks, availability requires_role reviewer). |
+
+**Net: 3 of 5 roles have a correctly-scoped account ready today** — Analyst
+(reviewer), separate QA Lead, and Viewer/COR. Test Admin exists but is
+admin-level, usable only for genuinely admin-scoped steps. **Program Manager
+has no account at the correct level** — before that specific journey step,
+either promote an existing account to program_manager or create a new one;
+qalead@ should not be used as a silent substitute, since it would not
+exercise the program_manager floor this remediation actually added (the
+deprecated sync-upload path, deliverable submission, full audit log).
