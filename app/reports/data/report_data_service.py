@@ -536,26 +536,65 @@ class ReportDataService:
 
     async def get_scope_summary(self, review_cycle_id: Optional[str] = None
                                 ) -> Dict[str, Any]:
-        """The Scope at a Glance box. Every figure counted, none estimated."""
+        """The Scope at a Glance box. Every figure counted, none estimated.
+
+        SCOPED TO THE CYCLE. `received` and `issues` used to be unconditional
+        `COUNT(*)` queries over the WHOLE registry — every entity and every
+        open finding ever created, regardless of `review_cycle_id` — which is
+        exactly how a report requested for one delivery's ~50-entity review
+        cycle showed a system-wide 25,983/1,129 instead of that cycle's own
+        population (found 2026-09-17, tracing report DA-ARC-2026-014). Every
+        OTHER figure in this function was already scoped via `_review_records`;
+        these two were the only ones that were not. `received` now reads the
+        cycle's own drawn population size (`ReviewSample.population_size` —
+        the number Cochran's formula was actually run over), and `issues`
+        counts findings only for the entities in that same sample. When no
+        `review_cycle_id` is given at all, both intentionally fall back to the
+        registry-wide count — that is the documented "all records" system-wide
+        report (see `GenerateReportRequest.review_cycle_id`), a different,
+        deliberately-chosen report, not this bug.
+        """
         from app.tefca_registry import models as reg
 
         cycle = await self._cycle(review_cycle_id)
         records = await self._review_records(review_cycle_id)
         qhins = await self.get_qhin_comparison(review_cycle_id)
 
+        sample = None
+        if cycle is not None and getattr(cycle, "sample_id", None) is not None:
+            try:
+                sample = await self.db.get(reg.ReviewSample, cycle.sample_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("report: sample for cycle %s unavailable: %s",
+                               review_cycle_id, exc)
+
         try:
-            received = int((await self.db.execute(
-                select(func.count()).select_from(reg.TefcaRegEntity)
-                .where(reg.TefcaRegEntity.is_deleted.is_(False))
-            )).scalar() or 0)
+            if review_cycle_id:
+                # Scoped: the cycle's own drawn population, never the registry.
+                # A cycle that resolved but whose sample is unavailable reports
+                # 0, not a silent registry-wide fallback.
+                received = int(sample.population_size) if sample is not None else 0
+            else:
+                received = int((await self.db.execute(
+                    select(func.count()).select_from(reg.TefcaRegEntity)
+                    .where(reg.TefcaRegEntity.is_deleted.is_(False))
+                )).scalar() or 0)
         except Exception:  # noqa: BLE001
             received = 0
 
         try:
-            issues = int((await self.db.execute(
-                select(func.count()).select_from(reg.TefcaEntityFinding)
-                .where(reg.TefcaEntityFinding.status == "open")
-            )).scalar() or 0)
+            if review_cycle_id:
+                entity_ids = [r.entity_id for r in records if getattr(r, "entity_id", None)]
+                issues = int((await self.db.execute(
+                    select(func.count()).select_from(reg.TefcaEntityFinding)
+                    .where(reg.TefcaEntityFinding.status == "open",
+                           reg.TefcaEntityFinding.entity_id.in_(entity_ids))
+                )).scalar() or 0) if entity_ids else 0
+            else:
+                issues = int((await self.db.execute(
+                    select(func.count()).select_from(reg.TefcaEntityFinding)
+                    .where(reg.TefcaEntityFinding.status == "open")
+                )).scalar() or 0)
         except Exception:  # noqa: BLE001
             issues = 0
 

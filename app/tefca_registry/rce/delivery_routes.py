@@ -1005,13 +1005,92 @@ async def verification_coverage_route(
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role("viewer")),
 ):
-    """Viewer: counts of entities per source and outcome, never a value."""
+    """Viewer: counts of entities per source and outcome, never a value.
+
+    `automated_coverage` is the whole-population figure (every eligible entity,
+    every source) — the ONLY thing `sources.*` below already counted, restated
+    as one eligible/covered/remaining triple so a screen does not have to sum
+    four cards to answer "is this delivery done". `analyst_sample` is the
+    SEPARATE, methodologically-approved statistical sample (see
+    `qhin_sampling.CochranSampler`); it is deliberately not merged into
+    `automated_coverage` — conflating "the whole population has been looked
+    up" with "the audit sample is complete" is exactly the ambiguity this
+    response exists to remove.
+    """
     from app.tefca_registry.rce import delivery_jobs as jobs
     from app.tefca_registry.rce import verification_coverage as vc
+    from app.tefca_registry.rce import automated_verification as av
 
     intake = await _intake_or_404(db, intake_id)
     job = await jobs.job_for_intake(db, intake.id)
-    return await vc.coverage_for_intake(db, intake.id, job=job)
+    result = await vc.coverage_for_intake(db, intake.id, job=job)
+    result["automated_coverage"] = await av.coverage_progress(db, intake.id)
+    result["automated_coverage"]["automatic_scheduling_enabled"] = av.automated_coverage_enabled()
+    result["analyst_sample"] = await _analyst_sample_summary(db, intake.id)
+    return result
+
+
+async def _analyst_sample_summary(db, intake_id) -> Dict[str, Any]:
+    """Calculated vs. actual analyst-review sample size for one delivery,
+    read-only (never draws or persists a plan). Distinct from
+    `automated_coverage` above: this is Cochran's formula over the delivery's
+    eligible population, and the ACTUAL figure is only nonzero once a Program
+    Manager has actually created a review cycle for this delivery."""
+    from app.tefca_registry.rce.reconciliation import reconcile_delivery
+    from app.tefca_registry.rce.verification_coverage import _eligible_count
+    from app.tefca_registry.sampling_engine import CochranSampler
+    from app.tefca_registry import review_cycle as rc
+
+    eligible = await _eligible_count(db, intake_id)
+    calculated = CochranSampler().calculate_sample_size(eligible) if eligible else 0
+
+    cycles = await rc.read_review_cycle(db, intake_id)
+    plans = cycles.get("plans") or []
+    latest = plans[0] if plans else None
+    actual_sample_size = latest.get("sample_size") if latest else 0
+    linked = (latest.get("membership_count", 0) - latest.get("unlinked_members", 0)) if latest else 0
+
+    recon = None
+    try:
+        recon = await reconcile_delivery(db, intake_id)
+    except Exception:  # noqa: BLE001 - this summary must not fail the coverage read
+        recon = None
+
+    return {
+        "eligible_population": eligible,
+        "calculated_sample_size": calculated,
+        "review_cycle_exists": latest is not None,
+        "actual_sample_size": actual_sample_size,
+        "actual_sample_verified": linked,
+        "reconciliation_passed": bool(recon.get("passed")) if recon else None,
+        "note": ("Calculated from Cochran's formula (95% confidence, 5% margin, "
+                 "finite-population correction) over this delivery's eligible "
+                 "population. The sample is smaller than the population by "
+                 "design when the approved methodology says so; that is not a "
+                 "processing gap."),
+    }
+
+
+@router.post("/deliveries/{intake_id}/verification-coverage/run",
+             summary="Run one batch of automated verification coverage over eligible entities")
+async def run_verification_coverage(
+    intake_id: str,
+    batch_size: int = Query(100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("program_manager")),
+):
+    """PROGRAM MANAGER — an explicit, human-authorized batch, regardless of
+    whether unattended scheduling (`ENABLE_AUTOMATED_VERIFICATION_COVERAGE`)
+    is on. Never creates a ReviewRecord or a review cycle; see
+    `automated_verification.py` for why that separation is deliberate. Call
+    again (or let the scheduler, if enabled) until the response's `remaining`
+    is 0."""
+    from app.tefca_registry.rce import automated_verification as av
+
+    intake = await _intake_or_404(db, intake_id)
+    return await av.run_coverage_batch(
+        db, intake.id, batch_size=batch_size,
+        actor=getattr(user, "email", None) or "SYSTEM")
 
 
 # ═══ audit ═══════════════════════════════════════════════════════════════════

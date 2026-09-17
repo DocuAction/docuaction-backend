@@ -175,6 +175,26 @@ async def generate_report(
             dataset["snapshot_created_at"] = snapshot.get("created_at") if snapshot else None
         dataset["review_cycle_id"] = review_cycle_id
     else:
+        # `review_cycle_id` omitted here means "every ReviewRecord in the
+        # system" — a real, intentional, already-tested report (a system-wide/
+        # period figure for an executive audience spanning many deliveries;
+        # see TestRendering::test_verification_report_generates_html and
+        # friends in tests/test_reports.py). That default is preserved here
+        # exactly as it was.
+        #
+        # A `review_cycle_id` supplied directly but not resolvable is refused
+        # rather than silently falling through to the all-records default —
+        # see the module-level note above `_delivery_identity` for the sibling
+        # rule this mirrors for the RCE report family.
+        if review_cycle_id:
+            from app.tefca_registry import models as reg
+
+            cycle = await db.get(reg.ReviewCycle, review_cycle_id)
+            if cycle is None:
+                raise ReportParameterError(
+                    f"review_cycle_id {review_cycle_id!r} does not name a "
+                    f"review cycle that exists. Nothing was generated.",
+                    code="REVIEW_CYCLE_NOT_FOUND", status=404)
         service = ReportDataService(db)
         dataset = await service.build_report_dataset(review_cycle_id)
 
