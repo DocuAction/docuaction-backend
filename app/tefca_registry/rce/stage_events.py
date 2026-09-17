@@ -117,6 +117,27 @@ async def close_stage(db, event: tm.RceDeliveryStageEvent, status: str, *,
     return event
 
 
+async def close_dangling_started(db, job_id, stage: str, status: str = "COMPLETED",
+                                 **kwargs) -> Optional[tm.RceDeliveryStageEvent]:
+    """Close the newest STARTED attempt of `stage` for one job, if one exists.
+
+    For a job the reaper is recovering: its worker died mid-stage, so the
+    event never got its own close call and would otherwise sit at STARTED
+    forever - a permanently dangling row even after the job itself reaches a
+    terminal state.
+    """
+    event = (await db.execute(
+        select(tm.RceDeliveryStageEvent)
+        .where(tm.RceDeliveryStageEvent.job_id == job_id,
+               tm.RceDeliveryStageEvent.stage == stage,
+               tm.RceDeliveryStageEvent.status == "STARTED")
+        .order_by(tm.RceDeliveryStageEvent.attempt.desc())
+        .limit(1))).scalar_one_or_none()
+    if event is None:
+        return None
+    return await close_stage(db, event, status, **kwargs)
+
+
 async def record_instant(db, job_id, stage: str, status: str = "COMPLETED", *,
                          intake_id=None, input_count: Optional[int] = None,
                          output_count: Optional[int] = None,

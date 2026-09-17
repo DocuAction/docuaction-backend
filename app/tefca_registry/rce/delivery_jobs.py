@@ -344,12 +344,21 @@ async def finish_failed(db, job_id, reason: str, *,
 
 async def reap_stale_jobs(db, threshold_seconds: int = STALE_HEARTBEAT_SECONDS
                           ) -> List[Dict[str, Any]]:
-    """Fail jobs whose worker stopped saying anything.
+    """Fail jobs whose worker stopped saying anything - unless the work it was
+    doing actually finished first.
 
     A process that dies cannot report that it died; the only signal it emits is
-    silence. Reading that silence is what turns "RUNNING forever, needs a human"
-    into "FAILED, and the identity is free to be registered again".
+    silence. Usually that silence means FAILED. But a worker can die AFTER
+    reconciliation ran and persisted a real, evidenced snapshot and BEFORE it
+    wrote that outcome onto the job row (run 2026-09-17, job bb116cd7 - the
+    delivery reconciled 7/7 and passed; the worker never got to say so).
+    Declaring that a plain FAILED would discard completed work and contradict
+    the snapshot sitting right next to it. So: if a snapshot already exists for
+    this job, finalize it the same way the runner itself would have, and close
+    out the stage event the dead worker left at STARTED. Only a job with no
+    snapshot - one that genuinely never got that far - is marked FAILED.
     """
+    from app.tefca_registry.rce import reconciliation, stage_events
     from app.tefca_registry.rce.delivery_job_model import RceDeliveryJob
 
     cutoff = datetime.utcnow() - timedelta(seconds=threshold_seconds)
@@ -360,6 +369,26 @@ async def reap_stale_jobs(db, threshold_seconds: int = STALE_HEARTBEAT_SECONDS
 
     reaped = []
     for job in stale:
+        snapshot = await reconciliation.latest_snapshot(db, job.id)
+        if snapshot is not None:
+            outcome = "recovered_succeeded"
+            job.state = RceDeliveryJob.STATE_SUCCEEDED
+            job.stage = (RceDeliveryJob.STAGE_READY if snapshot.passed
+                         else RceDeliveryJob.STAGE_RECONCILIATION)
+            job.completed_at = datetime.utcnow()
+            job.reconciliation_passed = snapshot.passed
+            job.active_marker = None
+            await stage_events.close_dangling_started(
+                db, job.id, "RECONCILIATION",
+                detail={"note": "closed by the reaper: a passing snapshot "
+                                 "already existed when the worker's "
+                                 "heartbeat went stale"})
+        else:
+            outcome = "failed"
+            job.state = RceDeliveryJob.STATE_FAILED
+            job.failed_at = datetime.utcnow()
+            job.error_reason = REAPED_REASON
+            job.active_marker = None
         reaped.append({
             "job_id": str(job.id), "identity": job.identity, "state": job.state,
             "stage": job.stage, "registered_by": job.registered_by,
@@ -368,11 +397,8 @@ async def reap_stale_jobs(db, threshold_seconds: int = STALE_HEARTBEAT_SECONDS
                           if job.source_intake_id else None),
             "last_heartbeat": (job.heartbeat_at.isoformat()
                                if job.heartbeat_at else None),
+            "outcome": outcome,
         })
-        job.state = RceDeliveryJob.STATE_FAILED
-        job.failed_at = datetime.utcnow()
-        job.error_reason = REAPED_REASON
-        job.active_marker = None
     if reaped:
         await db.commit()
         logger.warning("reaped %d stale delivery job(s)", len(reaped))
