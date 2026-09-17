@@ -583,6 +583,20 @@ async def delivery_job_detail(
     if job.source_intake_id is not None:
         intake = await db.get(m.RceSourceIntake, job.source_intake_id)
 
+    # Captured now, not re-read from `job`/`intake` later: _verification_block
+    # below rolls back the session on a caught exception, and
+    # AsyncSession.rollback() expires every attribute of every tracked
+    # instance regardless of expire_on_commit. A later bare (non-awaited)
+    # attribute access on an expired instance asks the ORM to reload it,
+    # which needs a greenlet bridge that only exists inside an active
+    # `await`, and raises MissingGreenlet instead (run 35169275292: 503 on
+    # every delivery, reproduced live and root-caused via container logs).
+    # Every block called after _verification_block must use these captured
+    # values instead of reading `job`/`intake` attributes directly.
+    job_id = job.id
+    job_state = job.state
+    intake_id = intake.id if intake is not None else None
+
     events = await stage_events.timeline(db, job.id)
     summary = stage_events.summarise(events)
     failed_stage = summary["failed_stage"] or (job.stage if job.state == "FAILED" else None)
@@ -634,14 +648,15 @@ async def delivery_job_detail(
                               "audit": None, "verification": verification,
                               "reports": reports}
     if reviewer_ok and intake is not None:
-        blocks["records"] = await _records_block(db, intake.id)
-        blocks["exceptions"] = await _exceptions_block(db, intake.id)
-        blocks["lineage"] = await _lineage_block(db, intake.id, identifier_decisions)
-        blocks["audit"] = await _audit_block(db, job, intake)
+        blocks["records"] = await _records_block(db, intake_id)
+        blocks["exceptions"] = await _exceptions_block(db, intake_id)
+        blocks["lineage"] = await _lineage_block(db, intake_id, identifier_decisions)
+        blocks["audit"] = await _audit_block(db, job_id, intake_id)
 
     availability = {
-        block: _availability(block, job=job, intake=intake, reviewer_ok=reviewer_ok,
-                             value=blocks[block], snapshot=snapshot_dict)
+        block: _availability(block, job_state=job_state, intake_id=intake_id,
+                             reviewer_ok=reviewer_ok, value=blocks[block],
+                             snapshot=snapshot_dict)
         for block in ALL_BLOCKS}
 
     return {
@@ -664,8 +679,8 @@ async def delivery_job_detail(
         "correlation": {
             "request_id": request_context.get("request_id"),
             "job_correlation_id": events[0]["correlation_id"] if events else None,
-            "job_id": str(job.id),
-            "intake_id": str(intake.id) if intake is not None else None,
+            "job_id": str(job_id),
+            "intake_id": str(intake_id) if intake_id is not None else None,
         },
         "availability": availability,
     }
@@ -675,14 +690,14 @@ def _guidance(failed_stage: Optional[str]) -> str:
     return REMEDIATION_GUIDANCE.get((failed_stage or "").upper(), GUIDANCE_UNKNOWN)
 
 
-def _availability(block: str, *, job, intake, reviewer_ok: bool, value,
+def _availability(block: str, *, job_state: str, intake_id, reviewer_ok: bool, value,
                   snapshot: Optional[Dict[str, Any]]) -> str:
     if block in REVIEWER_BLOCKS and not reviewer_ok:
         return REQUIRES_REVIEWER
-    if intake is None:
-        if job.state == "QUEUED":
+    if intake_id is None:
+        if job_state == "QUEUED":
             return NOT_YET
-        if job.state == "RUNNING":
+        if job_state == "RUNNING":
             return PROCESSING
         return NEVER_RAN  # failed before Area 1 existed
     if block == "verification":
@@ -698,7 +713,7 @@ def _availability(block: str, *, job, intake, reviewer_ok: bool, value,
         return AVAILABLE
     if block == "reports":
         return AVAILABLE if value else NOT_YET
-    if job.state == "RUNNING" and block in ("exceptions", "lineage"):
+    if job_state == "RUNNING" and block in ("exceptions", "lineage"):
         return PROCESSING
     if snapshot and snapshot.get("reconstructed") and block in ("exceptions", "lineage"):
         return RECONSTRUCTED
@@ -803,11 +818,11 @@ async def _lineage_block(db, intake_id, identifier_decisions) -> Dict[str, Any]:
             "entity_versions": versions}
 
 
-async def _audit_block(db, job, intake) -> Dict[str, Any]:
+async def _audit_block(db, job_id, intake_id) -> Dict[str, Any]:
     from app.models.database import AuditLog
     from app.tefca_registry import models as reg
 
-    ids = [str(job.id), str(intake.id)]
+    ids = [str(job_id), str(intake_id)]
     registry = int((await db.execute(
         select(func.count()).select_from(reg.TefcaRegAuditLog).where(or_(
             cast(reg.TefcaRegAuditLog.metadata_, Text).ilike(f"%{ids[0]}%"),
@@ -817,10 +832,10 @@ async def _audit_block(db, job, intake) -> Dict[str, Any]:
             AuditLog.resource_id.in_(ids), AuditLog.correlation_id == ids[0])))).scalar() or 0)
     disposition_events = int((await db.execute(
         select(func.count()).select_from(tm.RceDispositionEvent)
-        .where(tm.RceDispositionEvent.intake_id == intake.id))).scalar() or 0)
+        .where(tm.RceDispositionEvent.intake_id == intake_id))).scalar() or 0)
     return {"registry_audit_rows": registry, "platform_audit_rows": platform,
             "disposition_events": disposition_events,
-            "endpoint": f"/api/tefca/rce/deliveries/{intake.id}/audit"}
+            "endpoint": f"/api/tefca/rce/deliveries/{intake_id}/audit"}
 
 
 # ═══ timeline ════════════════════════════════════════════════════════════════
