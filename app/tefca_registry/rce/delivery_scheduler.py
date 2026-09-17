@@ -109,6 +109,17 @@ async def _audit_reaped(job) -> None:
     try:
         from app.tefca_registry import audit as reg_audit
 
+        recovered = job.get("outcome") == "recovered_succeeded"
+        note = (
+            "No heartbeat within the stale threshold, but a passing "
+            "reconciliation snapshot already existed - the delivery had "
+            "finished before the worker went silent, so the job was "
+            "finalized as succeeded rather than failed."
+            if recovered else
+            "No heartbeat within the stale threshold; the job "
+            "was marked failed and its registration slot "
+            "released. Any Area 1 already written is intact "
+            "and remains addressable.")
         async with async_session_maker() as db:
             reg_audit.record(
                 db,
@@ -120,10 +131,8 @@ async def _audit_reaped(job) -> None:
                     "intake_id": job.get("intake_id"),
                     "stage_reached": job.get("stage"),
                     "last_heartbeat": job.get("last_heartbeat"),
-                    "note": ("No heartbeat within the stale threshold; the job "
-                             "was marked failed and its registration slot "
-                             "released. Any Area 1 already written is intact "
-                             "and remains addressable."),
+                    "outcome": job.get("outcome"),
+                    "note": note,
                 })
             await db.commit()
     except Exception as exc:  # noqa: BLE001

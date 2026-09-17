@@ -227,3 +227,96 @@ async def test_runner_exception_path_persists_failed(rolled_back_db, monkeypatch
     await db.refresh(job)
     assert job.state == RceDeliveryJob.STATE_FAILED
     assert "RUNNER did not complete: RuntimeError" in job.error_reason
+
+
+async def test_reaper_recovers_a_job_whose_worker_died_after_reconciliation_passed(
+        rolled_back_db):
+    """Reproduces DEV job bb116cd7-d579-4cd4-9f97-bf7e9d31ef4a (2026-09-17).
+
+    The delivery reconciled 7/7 and persisted a passing snapshot; the worker
+    then went silent (its heartbeat never advanced again) before it could
+    write SUCCEEDED onto the job row or close the RECONCILIATION stage event.
+    The reaper found it 30+ minutes later and, under the old logic, declared
+    it FAILED ("worker_stopped_without_reporting") - discarding real, evidenced
+    work and leaving the RECONCILIATION stage event stuck at STARTED forever.
+
+    A snapshot already existing is exactly the signal the reaper can use to
+    tell "died before finishing" apart from "died after finishing, before
+    saying so". It must finalize the second case as SUCCEEDED, the same way
+    the runner itself would have, and close out the dangling stage event.
+    """
+    db = rolled_back_db
+    rows = make_rows(3, arc="9.99.777.66")
+    intake_id, job = await seed_intake(db, rows)
+
+    # Run the real pipeline to a genuine, passing completion first.
+    state, _ = await _run_recoverable(db, job, intake_id, 3)
+    assert state == RceDeliveryJob.STATE_SUCCEEDED
+    await db.refresh(job)
+    assert job.state == RceDeliveryJob.STATE_SUCCEEDED
+    assert job.stage == RceDeliveryJob.STAGE_READY
+
+    # Now simulate exactly what the incident showed: the worker died between
+    # persisting the snapshot and writing that outcome back onto the job -
+    # the job reverts to RUNNING/RECONCILIATION with a stale heartbeat, and
+    # its RECONCILIATION stage event reverts to STARTED/open.
+    from datetime import timedelta
+    recon_event = (await db.execute(
+        select(tm.RceDeliveryStageEvent).where(
+            tm.RceDeliveryStageEvent.job_id == job.id,
+            tm.RceDeliveryStageEvent.stage == "RECONCILIATION"))).scalar_one()
+    recon_event.status = "STARTED"
+    recon_event.completed_at = None
+    job.state = RceDeliveryJob.STATE_RUNNING
+    job.stage = RceDeliveryJob.STAGE_RECONCILIATION
+    job.completed_at = None
+    job.reconciliation_passed = None
+    job.active_marker = True
+    job.heartbeat_at = datetime.utcnow() - timedelta(seconds=jobs.STALE_HEARTBEAT_SECONDS + 1)
+    await db.commit()
+
+    reaped = await jobs.reap_stale_jobs(db)
+    assert len(reaped) == 1 and reaped[0]["job_id"] == str(job.id)
+    assert reaped[0]["outcome"] == "recovered_succeeded"
+
+    await db.refresh(job)
+    assert job.state == RceDeliveryJob.STATE_SUCCEEDED
+    assert job.stage == RceDeliveryJob.STAGE_READY
+    assert job.completed_at is not None
+    assert job.reconciliation_passed is True
+    assert job.active_marker is None
+    assert job.error_reason is None
+
+    events = {e["stage"]: e for e in await stage_events.timeline(db, job.id)}
+    assert events["RECONCILIATION"]["status"] == "COMPLETED"
+
+
+async def test_reaper_still_fails_a_job_that_never_reached_reconciliation(
+        rolled_back_db):
+    """A worker that dies before any snapshot exists must still be FAILED.
+
+    The recovery path in reap_stale_jobs is keyed on a snapshot existing for
+    the job; without one, a stale job is exactly what it always was - dead
+    with nothing to show for it - and must not be silently upgraded.
+    """
+    db = rolled_back_db
+    from datetime import timedelta
+    job = RceDeliveryJob(
+        id=uuid.uuid4(), identity=uuid.uuid4().hex, delivery_label=f"{SYN}-STUCK",
+        original_filename="stuck.csv", storage_path="(synthetic)", sha256="1" * 64,
+        file_size_bytes=1, state=RceDeliveryJob.STATE_RUNNING,
+        stage=RceDeliveryJob.STAGE_CURATION, active_marker=True, registered_by=SYN,
+        created_at=datetime.utcnow(), started_at=datetime.utcnow(),
+        heartbeat_at=datetime.utcnow() - timedelta(seconds=jobs.STALE_HEARTBEAT_SECONDS + 1),
+        attempt_count=1, stage_detail={})
+    db.add(job)
+    await db.commit()
+
+    reaped = await jobs.reap_stale_jobs(db)
+    assert len(reaped) == 1
+    assert reaped[0]["outcome"] == "failed"
+
+    await db.refresh(job)
+    assert job.state == RceDeliveryJob.STATE_FAILED
+    assert job.error_reason == jobs.REAPED_REASON
+    assert job.active_marker is None
