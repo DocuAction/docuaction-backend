@@ -175,18 +175,73 @@ async def generate_report(
             dataset["snapshot_created_at"] = snapshot.get("created_at") if snapshot else None
         dataset["review_cycle_id"] = review_cycle_id
     else:
-        # `review_cycle_id` omitted here means "every ReviewRecord in the
-        # system" — a real, intentional, already-tested report (a system-wide/
-        # period figure for an executive audience spanning many deliveries;
-        # see TestRendering::test_verification_report_generates_html and
-        # friends in tests/test_reports.py). That default is preserved here
-        # exactly as it was.
+        # `review_cycle_id` omitted AND no delivery named below means "every
+        # ReviewRecord in the system" — a real, intentional, already-tested
+        # report (a system-wide/period figure for an executive audience
+        # spanning many deliveries; see
+        # TestRendering::test_verification_report_generates_html and friends
+        # in tests/test_reports.py). That default is preserved exactly as it
+        # was for a caller that names neither.
         #
-        # A `review_cycle_id` supplied directly but not resolvable is refused
-        # rather than silently falling through to the all-records default —
-        # see the module-level note above `_delivery_identity` for the sibling
-        # rule this mirrors for the RCE report family.
-        if review_cycle_id:
+        # `parameters.job_id`/`parameters.intake_id` — the SAME fields
+        # `_delivery_identity` already requires for the RCE report family —
+        # are the delivery-scoped path now that `review_cycle.
+        # create_review_cycle` actually persists a `ReviewCycle` row per
+        # sample (it did not before 2026-09-17; see that module). Naming a
+        # delivery here is a promise this report describes THAT delivery's
+        # review cycle and no other's; every way that promise can be broken
+        # is refused rather than silently substituted.
+        params = query_parameters or {}
+        delivery_job_id = params.get("job_id") or None
+        delivery_intake_id = params.get("intake_id") or None
+        resolved_intake_id = None
+
+        if delivery_job_id or delivery_intake_id:
+            from app.reports.data.delivery_processing_data import resolve_delivery
+            from app.tefca_registry.review_cycle import read_review_cycle
+
+            resolved = await resolve_delivery(db, job_id=delivery_job_id, intake_id=delivery_intake_id)
+            intake = resolved["intake"]
+            if intake is None:
+                raise ReportParameterError(
+                    f"Delivery {delivery_job_id or delivery_intake_id!r} produced "
+                    f"no intake; a {report_type} report has nothing to describe.",
+                    code="DELIVERY_HAS_NO_INTAKE", status=422)
+            resolved_intake_id = str(intake.id)
+
+            cycles = await read_review_cycle(db, intake.id)
+            plans = cycles.get("plans") or []
+            delivery_cycle_id = next(
+                (p.get("review_cycle_id") for p in plans if p.get("review_cycle_id")), None)
+
+            if review_cycle_id and str(review_cycle_id) != str(delivery_cycle_id):
+                # The exact cross-delivery hazard this fix exists to close: a
+                # caller naming ONE delivery but a review_cycle_id that
+                # belongs to a DIFFERENT one (or to none at all).
+                raise ReportParameterError(
+                    f"review_cycle_id {review_cycle_id!r} does not belong to "
+                    f"delivery {intake.id} (its own review cycle is "
+                    f"{delivery_cycle_id!r}). A report cannot mix one "
+                    f"delivery's identity with another delivery's — or no "
+                    f"delivery's — review cycle.",
+                    code="REVIEW_CYCLE_DELIVERY_MISMATCH", status=409)
+            if not review_cycle_id:
+                if delivery_cycle_id is None:
+                    raise ReportParameterError(
+                        f"Delivery {intake.id} has no review cycle yet. A "
+                        f"{report_type} report describes a review cycle's "
+                        f"sample; generating one now for a NAMED delivery with "
+                        f"no cycle would either be empty or — the defect this "
+                        f"refusal exists to prevent — silently substitute "
+                        f"every OTHER delivery's data. Create this delivery's "
+                        f"review cycle first.",
+                        code="REVIEW_CYCLE_NOT_FOUND", status=422)
+                review_cycle_id = delivery_cycle_id
+        elif review_cycle_id:
+            # A cycle id was supplied directly, with no delivery identifier at
+            # all: refuse if it does not resolve, rather than silently return
+            # an empty or (via the None-falls-through-to-all-records path)
+            # wrong report.
             from app.tefca_registry import models as reg
 
             cycle = await db.get(reg.ReviewCycle, review_cycle_id)
@@ -195,8 +250,11 @@ async def generate_report(
                     f"review_cycle_id {review_cycle_id!r} does not name a "
                     f"review cycle that exists. Nothing was generated.",
                     code="REVIEW_CYCLE_NOT_FOUND", status=404)
+
         service = ReportDataService(db)
         dataset = await service.build_report_dataset(review_cycle_id)
+        dataset["delivery"] = ({"job_id": delivery_job_id, "intake_id": resolved_intake_id}
+                               if resolved_intake_id else None)
 
     # 2. Charts from that same data.
     chart_images = chart_engine.render_all(dataset["chart_list"])
