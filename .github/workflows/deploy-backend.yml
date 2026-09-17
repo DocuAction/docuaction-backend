@@ -393,18 +393,41 @@ jobs:
           az rest --method PATCH --url "https://management.azure.com/subscriptions/${{ vars.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${DEV_RG}/providers/Microsoft.Web/sites/${DEV_APP}/config/web?api-version=2023-12-01" --headers "Content-Type=application/json" --body "{\"properties\":{\"linuxFxVersion\":\"DOCKER|${DEV_LOGIN_SERVER}/${IMAGE_REPO}@${{ steps.resolve.outputs.digest }}\"}}"
           az webapp restart --name "$DEV_APP" --resource-group "$DEV_RG"
 
-      - name: Wait for a healthy start
+      - name: Wait for the candidate itself to be live (bounded)
         id: health
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
-          echo "waiting for DEV to report healthy ..."
+          # A bare 200 is not evidence the CANDIDATE is answering: for a few
+          # seconds after `az webapp restart` is accepted, the outgoing
+          # container can still serve /health (PROD's deploy job hit this
+          # exact class of failure and now requires three consecutive 200s -
+          # see its "Wait for a healthy start" step). DEV's /health also
+          # carries git_sha, which is a strictly stronger signal than a
+          # status-code streak: poll until it actually matches this
+          # candidate's own tag, not just until *something* answers 200.
+          # Run 35162134889 rolled back on exactly this - "healthy after 1
+          # attempt(s)" was almost certainly the still-warm outgoing
+          # container, which predates git_sha in /health entirely.
+          echo "waiting for DEV to report healthy AND running candidate $IMAGE_TAG ..."
           CODE=000
+          SEEN=missing
           for i in $(seq 1 40); do
             CODE=$(curl -s -o /tmp/h.json -w '%{http_code}' "https://${DEV_APP}.azurewebsites.net/health" || true)
-            if [ "$CODE" = "200" ]; then echo "healthy after $i attempt(s)"; break; fi
+            if [ "$CODE" = "200" ]; then
+              SEEN=$(python -c "import json; print(json.load(open('/tmp/h.json')).get('git_sha', 'missing'))" 2>/dev/null || echo missing)
+              case "$SEEN" in
+                "$IMAGE_TAG"*) echo "candidate live and reporting its own commit after $i attempt(s)"; break ;;
+                *) echo "attempt $i: healthy (200) but runtime git_sha is '$SEEN', not yet '$IMAGE_TAG' - outgoing container or still starting" ;;
+              esac
+            else
+              echo "attempt $i: not yet healthy (code=$CODE)"
+            fi
             sleep 15
           done
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
-          test "$CODE" = "200" || { echo "DEV did not become healthy (last: $CODE)"; exit 1; }
+          echo "seen_git_sha=$SEEN" >> "$GITHUB_OUTPUT"
+          test "$CODE" = "200" || { echo "::error::DEV did not become healthy (last: $CODE)"; exit 1; }
 
       - name: Runtime reports the deployed commit (provenance gate)
         env:
@@ -413,12 +436,14 @@ jobs:
           # /health carries git_sha from the image build (Dockerfile ARG GIT_SHA). The value must
           # be the commit the image tag names. "unknown" means a manual build: reported, not
           # attributed to CI, and refused here so DEV never runs an unattributable image again
-          # (AUD-20260913-07).
-          SEEN=$(python -c "import json; print(json.load(open('/tmp/h.json')).get('git_sha', 'missing'))")
+          # (AUD-20260913-07). By this point the previous step has already polled until this
+          # matched or the bound expired, so this gate reports that outcome rather than
+          # re-reading a single, possibly stale, /tmp/h.json.
+          SEEN="${{ steps.health.outputs.seen_git_sha }}"
           echo "runtime git_sha: $SEEN  (image tag: $IMAGE_TAG)"
           case "$SEEN" in
             "$IMAGE_TAG"*) echo "provenance: runtime commit matches the deployed image tag" ;;
-            unknown|missing) echo "::error::runtime does not report a commit - the image was not built by container-release.yml"; exit 1 ;;
+            unknown|missing) echo "::error::runtime never reported this candidate's commit within the wait bound - either the image was not built by container-release.yml, or it never became live"; exit 1 ;;
             *) echo "::error::runtime reports $SEEN but the deployed tag is $IMAGE_TAG"; exit 1 ;;
           esac
 

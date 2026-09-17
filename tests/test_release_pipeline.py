@@ -667,3 +667,74 @@ def test_the_confirmation_input_does_not_trigger_a_migration_itself():
     body = _steps_text(_job(DEV_RELEASE, "migration-gate"))
     confirmed_branch = body.split('CONFIRMED" = "true"')[1].split("exit 0")[0]
     assert 'run_migrations=false' in confirmed_branch
+
+
+# ── health-wait / provenance race (run 35162134889) ─────────────────────────
+#
+# Run 35162134889 rolled back a good candidate: the "Wait for a healthy
+# start" step accepted the FIRST 200 from /health, regardless of which
+# container answered, then a separate one-shot step read /tmp/h.json and
+# found no git_sha - because the still-warm OUTGOING container (which
+# predates git_sha in /health entirely) answered first, not the candidate.
+# PROD's equivalent step already defends against this class of race
+# (three consecutive 200s, with an explicit comment naming the same failure
+# mode); DEV's had no equivalent defense at all. These pin the fix.
+
+def test_health_wait_checks_git_sha_inside_the_retry_loop_not_after():
+    """The candidate's own identity must be polled FOR, not assumed from the
+    first 200. If the case/break on a matching git_sha sits outside the
+    `for ... done` loop, a stale answer from the outgoing container during
+    the Azure transition window is accepted as success - exactly what
+    happened in run 35162134889."""
+    body = _step_named(DEPLOY, "deploy-dev", "Wait for the candidate itself to be live")["run"]
+    loop_start = body.index("for i in $(seq 1 40); do")
+    loop_end = body.index("\ndone", loop_start)
+    loop_body = body[loop_start:loop_end]
+    assert "curl" in loop_body, "the loop no longer probes /health at all"
+    assert '"$IMAGE_TAG"*) echo "candidate live' in loop_body, (
+        "the git_sha match-and-break must be INSIDE the polling loop, so a "
+        "stale answer from the outgoing container is retried, not accepted")
+    assert "break" in loop_body
+
+
+def test_health_wait_stays_bounded():
+    """The retry bound must stay finite - a candidate that never reports its
+    own commit (a genuinely broken image) must still fail the deployment,
+    not hang forever."""
+    body = _step_named(DEPLOY, "deploy-dev", "Wait for the candidate itself to be live")["run"]
+    assert "seq 1 40" in body, "the bounded retry count changed or was removed"
+    assert "sleep 15" in body
+
+
+def test_provenance_gate_reads_the_polled_result_not_a_fresh_probe():
+    """The provenance gate must consume the SAME poll the health-wait step
+    already ran to completion (or exhaustion), not re-parse /tmp/h.json on
+    its own - a second, independent read could still race the container
+    swap even if the first one is fixed."""
+    health = _step_named(DEPLOY, "deploy-dev", "Wait for the candidate itself to be live")["run"]
+    gate = _step_named(DEPLOY, "deploy-dev", "Runtime reports the deployed commit")["run"]
+    assert "seen_git_sha" in health and 'echo "seen_git_sha=$SEEN"' in health
+    assert "steps.health.outputs.seen_git_sha" in gate
+    assert "open('/tmp/h.json')" not in gate, (
+        "the provenance gate must not independently re-read /tmp/h.json - "
+        "that reintroduces the exact race this fix closes")
+
+
+def test_provenance_gate_still_rejects_unknown_missing_and_a_wrong_sha():
+    """The fix must not have widened what counts as a pass: an image that
+    never reports a commit, or reports someone else's, still fails."""
+    gate = _step_named(DEPLOY, "deploy-dev", "Runtime reports the deployed commit")["run"]
+    assert "unknown|missing)" in gate and "exit 1" in gate
+    lines = gate.splitlines()
+    catch_all = [i for i, line in enumerate(lines) if line.strip().startswith("*)")]
+    assert catch_all, "no catch-all branch for a mismatched git_sha"
+    assert "exit 1" in lines[catch_all[0]]
+
+
+def test_rollback_is_unaffected_by_the_health_wait_fix():
+    """The rollback step's own trigger and target must be untouched by this
+    fix - it still fires on any failure() in this job and restores the
+    captured previous image verbatim."""
+    rollback = _step_named(DEPLOY, "deploy-dev", "Roll back to the previous image")
+    assert rollback.get("if", "").startswith("failure()")
+    assert "${PREV}" in rollback["run"]
