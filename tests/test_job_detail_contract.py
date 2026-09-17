@@ -248,3 +248,48 @@ def test_dashboard_carries_two_axis_status_dispositions_and_snapshot(client, suc
     assert body["dispositions"]["equation"]["received"] == 3
     assert body["snapshot"] is None
 
+
+# -- MissingGreenlet after a mid-request rollback (run 35169275292) ---------------------
+#
+# Every delivery-detail request 503'd in DEV. Root cause, proven from the
+# container's own stdout (WEBSITES_ENABLE_APP_SERVICE_STORAGE enabled
+# temporarily, then restored): _verification_block catches an exception from
+# coverage_for_intake and calls `await db.rollback()` to keep one failing
+# panel from breaking the whole page. AsyncSession.rollback() expires every
+# attribute of every tracked instance regardless of expire_on_commit. The
+# final correlation block then read `job.id` / `intake.id` as a bare
+# (non-awaited) attribute access, which needs a greenlet bridge that does not
+# exist outside an `await`, and raised MissingGreenlet - a 500 from the
+# app's own perspective, which Azure's front end reported to callers as 503.
+#
+# These force that exact rollback deterministically (rather than depending on
+# whatever made coverage_for_intake fail live) against a five-record delivery
+# and a larger one, so the mechanism is proven independent of data volume.
+
+@pytest.fixture(scope="module")
+def larger_delivery():
+    d = seed_delivery(state="SUCCEEDED", issues=20)
+    add_stage_events(d["job_id"], d["intake_id"])
+    return d
+
+
+@pytest.mark.parametrize("delivery_fixture", ["succeeded", "larger_delivery"])
+def test_detail_survives_a_mid_request_rollback(client, monkeypatch, request, delivery_fixture):
+    from app.tefca_registry.rce import verification_coverage as vc
+
+    delivery = request.getfixturevalue(delivery_fixture)
+
+    async def boom(*a, **kw):
+        raise RuntimeError("synthetic: force _verification_block's except+rollback path")
+
+    monkeypatch.setattr(vc, "coverage_for_intake", boom)
+
+    r = client.get(f"{BASE}/delivery-jobs/{delivery['job_id']}/detail",
+                   headers=headers_for("reviewer"))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["job"]["job_id"] == delivery["job_id"]
+    assert body["correlation"]["job_id"] == delivery["job_id"]
+    assert body["correlation"]["intake_id"] == delivery["intake_id"]
+    assert body["verification"] == {}  # the panel that failed, not the page
+
