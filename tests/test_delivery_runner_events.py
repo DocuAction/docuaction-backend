@@ -320,3 +320,56 @@ async def test_reaper_still_fails_a_job_that_never_reached_reconciliation(
     assert job.state == RceDeliveryJob.STATE_FAILED
     assert job.error_reason == jobs.REAPED_REASON
     assert job.active_marker is None
+
+
+async def test_migration_revision_probe_failure_does_not_hang_the_job(
+        rolled_back_db, monkeypatch):
+    """Reproduces DEV job fb32f946 (2026-09-17, third occurrence of the same
+    seven-record mixed-NPI delivery).
+
+    Live container logs proved the exact trigger: `migration_revision()`,
+    called from inside `persist_snapshot()` as a constructor keyword
+    argument on the pipeline's own long-lived session, hit
+    `InsufficientPrivilegeError: permission denied for table
+    alembic_version` (DEV's `docuaction_app` role carries no grant on that
+    table at all - confirmed read-only, not something this fix changes).
+    The exception was individually caught and rolled back inside
+    `migration_revision` itself, but that left the pipeline's session
+    unable to complete the reconciliation stage's later work: no exception
+    ever reached the job's own error handling, the RECONCILIATION stage
+    event never closed, and the job sat at RUNNING forever. A
+    MissingGreenlet-class error surfaced moments later in an unrelated
+    scheduler poll tick on a different session - a session/connection
+    stayed unusable, not merely a caught-and-handled failure.
+
+    `migration_revision()` now runs on its own throwaway session
+    (`_migration_revision_isolated`), so a failure there can never touch
+    the caller's session. This test forces that exact failure and asserts
+    the job still finalizes normally, with "unknown" recorded as the
+    revision - the same honest fallback the function already promised.
+    """
+    db = rolled_back_db
+    rows = make_rows(3, arc="9.99.777.67")
+    intake_id, job = await seed_intake(db, rows)
+
+    async def boom(db_):
+        raise RuntimeError(
+            "synthetic: permission denied for table alembic_version")
+
+    monkeypatch.setattr(reconciliation, "migration_revision", boom)
+
+    state, detail = await _run_recoverable(db, job, intake_id, 3)
+    assert state == RceDeliveryJob.STATE_SUCCEEDED
+    await db.refresh(job)
+    assert job.state == RceDeliveryJob.STATE_SUCCEEDED
+    assert job.completed_at is not None
+    assert job.reconciliation_passed is True
+    assert job.stage == RceDeliveryJob.STAGE_READY
+
+    snapshot = await reconciliation.latest_snapshot(db, job.id)
+    assert snapshot is not None and snapshot.passed is True
+    assert snapshot.migration_revision == "unknown"
+
+    events = {e["stage"]: e for e in await stage_events.timeline(db, job.id)}
+    assert events["RECONCILIATION"]["status"] == "COMPLETED"
+    assert "READY_FOR_REVIEW" in events

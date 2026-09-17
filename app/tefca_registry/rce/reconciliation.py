@@ -435,6 +435,32 @@ async def migration_revision(db) -> str:
         return "unknown"
 
 
+async def _migration_revision_isolated() -> str:
+    """`migration_revision`, on its own throwaway session.
+
+    A delivery job (run 2026-09-17: job fb32f946, 7-record mixed-NPI
+    delivery, DEV `docuaction_app` role - confirmed read-only, no grant
+    lacks SELECT on alembic_version) never recovered from this probe
+    failing on the pipeline's own long-lived session: the caught exception
+    and its own `db.rollback()` still left that session's connection unable
+    to complete the reconciliation stage's later work, and the job hung at
+    RECONCILIATION with no further log output and no exception ever
+    reaching the job's own error handling. This value is purely
+    informational provenance on the snapshot - not worth risking the
+    pipeline's transaction for - so it runs on an isolated session that can
+    fail and be discarded without touching the caller's session at all.
+    """
+    from app.core.database import async_session_maker
+
+    try:
+        async with async_session_maker() as probe_db:
+            return await migration_revision(probe_db)
+    except Exception:  # noqa: BLE001 — informational only; never the pipeline's problem
+        logger.warning("migration revision probe failed on its own session",
+                       exc_info=True)
+        return "unknown"
+
+
 async def persist_snapshot(db, intake_id, result: Dict[str, Any], *, job_id,
                            actor: str, trigger: str,
                            reconstructed: bool = False) -> tm.RceReconciliationSnapshot:
@@ -462,6 +488,7 @@ async def persist_snapshot(db, intake_id, result: Dict[str, Any], *, job_id,
     sequence = int((await db.execute(
         select(func.max(tm.RceReconciliationSnapshot.sequence)).where(
             tm.RceReconciliationSnapshot.job_id == job_id))).scalar() or 0) + 1
+    revision = await _migration_revision_isolated()
 
     snapshot = tm.RceReconciliationSnapshot(
         job_id=job_id, intake_id=intake_id, sequence=sequence,
@@ -491,7 +518,7 @@ async def persist_snapshot(db, intake_id, result: Dict[str, Any], *, job_id,
         actor=(actor or "SYSTEM")[:320], trigger=trigger,
         hash=snapshot_hash(equation, dimensions, checks),
         build_sha=request_context.build_sha(),
-        migration_revision=await migration_revision(db),
+        migration_revision=revision,
         correlation_id=request_context.correlation_id()[:64],
         reconstructed=bool(reconstructed),
     )
