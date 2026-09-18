@@ -97,6 +97,50 @@ def _delivery_identity(query_parameters):
     return job_id, intake_id, params.get("snapshot_id") or None
 
 
+def _normalize_report_scope(query_parameters, review_cycle_id):
+    """THE one path for job_id/intake_id/review_cycle_id, wherever the
+    caller put them.
+
+    `review_cycle_id` can arrive two ways: the top-level `generate_report`
+    keyword (what `app/reports/routes.py`'s `GenerateReportRequest.
+    review_cycle_id` populates) or nested inside `query_parameters` — the
+    same dict `job_id`/`intake_id` are read from, and the one place a
+    caller talking to this function directly (or a future route) might
+    reasonably put it, since that is where the OTHER two delivery
+    identifiers already live.
+
+    Before 2026-09-18 only the top-level keyword was ever read here: a
+    review_cycle_id nested in `query_parameters` was silently ignored, so
+    the cross-delivery mismatch check below never even saw it — a caller
+    could name delivery A and bury delivery B's review_cycle_id in
+    `parameters` and the request would succeed, quietly substituting
+    delivery A's own cycle rather than rejecting the caller's inconsistent
+    request (confirmed via
+    test_report_rejects_delivery_a_paired_with_delivery_bs_review_cycle,
+    which failed for exactly this reason against a real database).
+
+    Both locations are read now. If both are present and DISAGREE, the
+    request is refused outright — naming two different review cycles for
+    one report is not something either value can safely win by default.
+    A caller using only one location (either one) is unaffected; this is a
+    backward-compatible normalization, not a new required field.
+    """
+    params = query_parameters or {}
+    job_id = params.get("job_id") or None
+    intake_id = params.get("intake_id") or None
+    nested_cycle_id = params.get("review_cycle_id") or None
+    top_cycle_id = review_cycle_id or None
+
+    if top_cycle_id and nested_cycle_id and str(top_cycle_id) != str(nested_cycle_id):
+        raise ReportParameterError(
+            f"review_cycle_id was supplied twice with different values — "
+            f"{top_cycle_id!r} and {nested_cycle_id!r}. A report cannot be "
+            f"generated for two different review cycles in one request.",
+            code="REVIEW_CYCLE_IDENTIFIER_CONFLICT", status=422)
+
+    return job_id, intake_id, (top_cycle_id or nested_cycle_id)
+
+
 async def generate_report(
     db,
     *,
@@ -191,9 +235,8 @@ async def generate_report(
         # delivery here is a promise this report describes THAT delivery's
         # review cycle and no other's; every way that promise can be broken
         # is refused rather than silently substituted.
-        params = query_parameters or {}
-        delivery_job_id = params.get("job_id") or None
-        delivery_intake_id = params.get("intake_id") or None
+        delivery_job_id, delivery_intake_id, review_cycle_id = _normalize_report_scope(
+            query_parameters, review_cycle_id)
         resolved_intake_id = None
 
         if delivery_job_id or delivery_intake_id:
@@ -423,22 +466,31 @@ async def generate_report(
                 if artifact is None or artifact.get("registered") is False:
                     artifact = artifacts.get("html") or artifact
 
-            # 9. Delivery linkage and the audit event of record.
+            # 9. The audit event of record — for EVERY report, delivery-scoped
+            # or global.
             #
-            # For a delivery-scoped report the generation is itself evidence: an
-            # audit_logs row (written FIRST), one rce_delivery_report_links row per
-            # stored artifact pointing at it, and a REPORT_GENERATION stage event on
-            # the job. See delivery_report_links for the order and the failure policy.
-            if report_type in RCE_TYPES and dataset.get("delivery"):
-                from app.reports.data.delivery_report_links import record_report_generation
+            # Before 2026-09-18 this only ran for RCE_TYPES: a delivery-scoped
+            # `verification` report — PR #76's own delivery-scoped type —
+            # produced no audit_logs row at all. For RCE_TYPES with a resolved
+            # delivery this still also writes the rce_delivery_report_links
+            # rows and the job's REPORT_GENERATION stage event, unchanged from
+            # before. For every other report type, `record_report_generation`
+            # takes its own already-existing early-return path (job_id/
+            # intake_id/snapshot_id not all present) and writes only the
+            # audit row — see that function's docstring.
+            delivery_info = dataset.get("delivery") or {}
+            scope_type = "DELIVERY" if delivery_info else "GLOBAL"
+            from app.reports.data.delivery_report_links import record_report_generation
 
-                with request_context.bind(report_id=report_id):
-                    delivery_link = await record_report_generation(
-                        db, report_id=report_id, report_type=report_type, dataset=dataset,
-                        template_version=TEMPLATE_VERSION, generated_by=generated_by,
-                        generated_by_id=generated_by_id, artifact=artifact,
-                        artifacts=(artifacts or {}).get("artifacts"),
-                        storage=artifacts)
+            with request_context.bind(report_id=report_id):
+                delivery_link = await record_report_generation(
+                    db, report_id=report_id, report_type=report_type, dataset=dataset,
+                    template_version=TEMPLATE_VERSION, generated_by=generated_by,
+                    generated_by_id=generated_by_id, artifact=artifact,
+                    artifacts=(artifacts or {}).get("artifacts"),
+                    storage=artifacts,
+                    review_cycle_id=dataset.get("review_cycle_id"),
+                    scope_type=scope_type)
 
     if not accessibility["automated_checks_passed"]:
         # Loud, and not fatal. The report is still returned — an analyst can see
