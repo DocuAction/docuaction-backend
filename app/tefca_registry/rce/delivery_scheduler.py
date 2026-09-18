@@ -160,6 +160,15 @@ def start_delivery_scheduler():
                            IntervalTrigger(seconds=REAP_INTERVAL_SECONDS),
                            id="rce_delivery_reaper",
                            name="Stale delivery job reaper", **defaults)
+
+        # Automated verification coverage (see automated_verification.py's
+        # module docstring for why this is separate from the review-cycle
+        # sample). Registration is unconditional and cheap; the tick itself
+        # is a no-op unless ENABLE_AUTOMATED_VERIFICATION_COVERAGE is set, so
+        # turning it on/off never requires a scheduler restart.
+        from app.tefca_registry.rce import automated_verification
+        automated_verification.register_with_scheduler(_scheduler)
+
         _scheduler.start()
         logger.info("delivery scheduler started — poller %ss, reaper %ss",
                     POLL_INTERVAL_SECONDS, REAP_INTERVAL_SECONDS)
