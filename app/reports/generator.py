@@ -97,6 +97,50 @@ def _delivery_identity(query_parameters):
     return job_id, intake_id, params.get("snapshot_id") or None
 
 
+def _normalize_report_scope(query_parameters, review_cycle_id):
+    """THE one path for job_id/intake_id/review_cycle_id, wherever the
+    caller put them.
+
+    `review_cycle_id` can arrive two ways: the top-level `generate_report`
+    keyword (what `app/reports/routes.py`'s `GenerateReportRequest.
+    review_cycle_id` populates) or nested inside `query_parameters` — the
+    same dict `job_id`/`intake_id` are read from, and the one place a
+    caller talking to this function directly (or a future route) might
+    reasonably put it, since that is where the OTHER two delivery
+    identifiers already live.
+
+    Before 2026-09-18 only the top-level keyword was ever read here: a
+    review_cycle_id nested in `query_parameters` was silently ignored, so
+    the cross-delivery mismatch check below never even saw it — a caller
+    could name delivery A and bury delivery B's review_cycle_id in
+    `parameters` and the request would succeed, quietly substituting
+    delivery A's own cycle rather than rejecting the caller's inconsistent
+    request (confirmed via
+    test_report_rejects_delivery_a_paired_with_delivery_bs_review_cycle,
+    which failed for exactly this reason against a real database).
+
+    Both locations are read now. If both are present and DISAGREE, the
+    request is refused outright — naming two different review cycles for
+    one report is not something either value can safely win by default.
+    A caller using only one location (either one) is unaffected; this is a
+    backward-compatible normalization, not a new required field.
+    """
+    params = query_parameters or {}
+    job_id = params.get("job_id") or None
+    intake_id = params.get("intake_id") or None
+    nested_cycle_id = params.get("review_cycle_id") or None
+    top_cycle_id = review_cycle_id or None
+
+    if top_cycle_id and nested_cycle_id and str(top_cycle_id) != str(nested_cycle_id):
+        raise ReportParameterError(
+            f"review_cycle_id was supplied twice with different values — "
+            f"{top_cycle_id!r} and {nested_cycle_id!r}. A report cannot be "
+            f"generated for two different review cycles in one request.",
+            code="REVIEW_CYCLE_IDENTIFIER_CONFLICT", status=422)
+
+    return job_id, intake_id, (top_cycle_id or nested_cycle_id)
+
+
 async def generate_report(
     db,
     *,
@@ -175,18 +219,72 @@ async def generate_report(
             dataset["snapshot_created_at"] = snapshot.get("created_at") if snapshot else None
         dataset["review_cycle_id"] = review_cycle_id
     else:
-        # `review_cycle_id` omitted here means "every ReviewRecord in the
-        # system" — a real, intentional, already-tested report (a system-wide/
-        # period figure for an executive audience spanning many deliveries;
-        # see TestRendering::test_verification_report_generates_html and
-        # friends in tests/test_reports.py). That default is preserved here
-        # exactly as it was.
+        # `review_cycle_id` omitted AND no delivery named below means "every
+        # ReviewRecord in the system" — a real, intentional, already-tested
+        # report (a system-wide/period figure for an executive audience
+        # spanning many deliveries; see
+        # TestRendering::test_verification_report_generates_html and friends
+        # in tests/test_reports.py). That default is preserved exactly as it
+        # was for a caller that names neither.
         #
-        # A `review_cycle_id` supplied directly but not resolvable is refused
-        # rather than silently falling through to the all-records default —
-        # see the module-level note above `_delivery_identity` for the sibling
-        # rule this mirrors for the RCE report family.
-        if review_cycle_id:
+        # `parameters.job_id`/`parameters.intake_id` — the SAME fields
+        # `_delivery_identity` already requires for the RCE report family —
+        # are the delivery-scoped path now that `review_cycle.
+        # create_review_cycle` actually persists a `ReviewCycle` row per
+        # sample (it did not before 2026-09-17; see that module). Naming a
+        # delivery here is a promise this report describes THAT delivery's
+        # review cycle and no other's; every way that promise can be broken
+        # is refused rather than silently substituted.
+        delivery_job_id, delivery_intake_id, review_cycle_id = _normalize_report_scope(
+            query_parameters, review_cycle_id)
+        resolved_intake_id = None
+
+        if delivery_job_id or delivery_intake_id:
+            from app.reports.data.delivery_processing_data import resolve_delivery
+            from app.tefca_registry.review_cycle import read_review_cycle
+
+            resolved = await resolve_delivery(db, job_id=delivery_job_id, intake_id=delivery_intake_id)
+            intake = resolved["intake"]
+            if intake is None:
+                raise ReportParameterError(
+                    f"Delivery {delivery_job_id or delivery_intake_id!r} produced "
+                    f"no intake; a {report_type} report has nothing to describe.",
+                    code="DELIVERY_HAS_NO_INTAKE", status=422)
+            resolved_intake_id = str(intake.id)
+
+            cycles = await read_review_cycle(db, intake.id)
+            plans = cycles.get("plans") or []
+            delivery_cycle_id = next(
+                (p.get("review_cycle_id") for p in plans if p.get("review_cycle_id")), None)
+
+            if review_cycle_id and str(review_cycle_id) != str(delivery_cycle_id):
+                # The exact cross-delivery hazard this fix exists to close: a
+                # caller naming ONE delivery but a review_cycle_id that
+                # belongs to a DIFFERENT one (or to none at all).
+                raise ReportParameterError(
+                    f"review_cycle_id {review_cycle_id!r} does not belong to "
+                    f"delivery {intake.id} (its own review cycle is "
+                    f"{delivery_cycle_id!r}). A report cannot mix one "
+                    f"delivery's identity with another delivery's — or no "
+                    f"delivery's — review cycle.",
+                    code="REVIEW_CYCLE_DELIVERY_MISMATCH", status=409)
+            if not review_cycle_id:
+                if delivery_cycle_id is None:
+                    raise ReportParameterError(
+                        f"Delivery {intake.id} has no review cycle yet. A "
+                        f"{report_type} report describes a review cycle's "
+                        f"sample; generating one now for a NAMED delivery with "
+                        f"no cycle would either be empty or — the defect this "
+                        f"refusal exists to prevent — silently substitute "
+                        f"every OTHER delivery's data. Create this delivery's "
+                        f"review cycle first.",
+                        code="REVIEW_CYCLE_NOT_FOUND", status=422)
+                review_cycle_id = delivery_cycle_id
+        elif review_cycle_id:
+            # A cycle id was supplied directly, with no delivery identifier at
+            # all: refuse if it does not resolve, rather than silently return
+            # an empty or (via the None-falls-through-to-all-records path)
+            # wrong report.
             from app.tefca_registry import models as reg
 
             cycle = await db.get(reg.ReviewCycle, review_cycle_id)
@@ -195,8 +293,11 @@ async def generate_report(
                     f"review_cycle_id {review_cycle_id!r} does not name a "
                     f"review cycle that exists. Nothing was generated.",
                     code="REVIEW_CYCLE_NOT_FOUND", status=404)
+
         service = ReportDataService(db)
         dataset = await service.build_report_dataset(review_cycle_id)
+        dataset["delivery"] = ({"job_id": delivery_job_id, "intake_id": resolved_intake_id}
+                               if resolved_intake_id else None)
 
     # 2. Charts from that same data.
     chart_images = chart_engine.render_all(dataset["chart_list"])
@@ -365,22 +466,31 @@ async def generate_report(
                 if artifact is None or artifact.get("registered") is False:
                     artifact = artifacts.get("html") or artifact
 
-            # 9. Delivery linkage and the audit event of record.
+            # 9. The audit event of record — for EVERY report, delivery-scoped
+            # or global.
             #
-            # For a delivery-scoped report the generation is itself evidence: an
-            # audit_logs row (written FIRST), one rce_delivery_report_links row per
-            # stored artifact pointing at it, and a REPORT_GENERATION stage event on
-            # the job. See delivery_report_links for the order and the failure policy.
-            if report_type in RCE_TYPES and dataset.get("delivery"):
-                from app.reports.data.delivery_report_links import record_report_generation
+            # Before 2026-09-18 this only ran for RCE_TYPES: a delivery-scoped
+            # `verification` report — PR #76's own delivery-scoped type —
+            # produced no audit_logs row at all. For RCE_TYPES with a resolved
+            # delivery this still also writes the rce_delivery_report_links
+            # rows and the job's REPORT_GENERATION stage event, unchanged from
+            # before. For every other report type, `record_report_generation`
+            # takes its own already-existing early-return path (job_id/
+            # intake_id/snapshot_id not all present) and writes only the
+            # audit row — see that function's docstring.
+            delivery_info = dataset.get("delivery") or {}
+            scope_type = "DELIVERY" if delivery_info else "GLOBAL"
+            from app.reports.data.delivery_report_links import record_report_generation
 
-                with request_context.bind(report_id=report_id):
-                    delivery_link = await record_report_generation(
-                        db, report_id=report_id, report_type=report_type, dataset=dataset,
-                        template_version=TEMPLATE_VERSION, generated_by=generated_by,
-                        generated_by_id=generated_by_id, artifact=artifact,
-                        artifacts=(artifacts or {}).get("artifacts"),
-                        storage=artifacts)
+            with request_context.bind(report_id=report_id):
+                delivery_link = await record_report_generation(
+                    db, report_id=report_id, report_type=report_type, dataset=dataset,
+                    template_version=TEMPLATE_VERSION, generated_by=generated_by,
+                    generated_by_id=generated_by_id, artifact=artifact,
+                    artifacts=(artifacts or {}).get("artifacts"),
+                    storage=artifacts,
+                    review_cycle_id=dataset.get("review_cycle_id"),
+                    scope_type=scope_type)
 
     if not accessibility["automated_checks_passed"]:
         # Loud, and not fatal. The report is still returned — an analyst can see

@@ -84,6 +84,8 @@ async def record_report_generation(
     artifact: Optional[Dict[str, Any]] = None,
     artifacts: Optional[List[Dict[str, Any]]] = None,
     storage: Optional[Dict[str, Any]] = None,
+    review_cycle_id: Optional[str] = None,
+    scope_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Audit row, then one link per artifact, then stage event. Never raises.
 
@@ -94,6 +96,35 @@ async def record_report_generation(
     `storage` carries `storage_backend` / `durable` / `pdf_unavailable_reason`
     from the finalisation step and is echoed on the summary and in the audit
     details.
+
+    `scope_type` is `"DELIVERY"` (this report names one delivery's review
+    cycle) or `"GLOBAL"` (the documented all-records default — no delivery
+    identifier at all). The caller states it explicitly rather than this
+    function inferring it from which fields happen to be present, so an
+    audit reader never has to reverse-engineer scope from a null check.
+    `review_cycle_id` is echoed for a DELIVERY-scoped report so the audit
+    trail names the exact sample the report described, not only the
+    delivery.
+
+    THE ONE AUDIT EVENT FOR EVERY REPORT, NOT ONLY RCE TYPES: before
+    2026-09-18 this was called only for report_type in RCE_TYPES
+    (data_quality, intake, delivery_processing) — a delivery-scoped
+    `verification` report (the type PR #76 itself delivery-scopes) produced
+    NO audit_logs row at all. `job_id`/`intake_id`/`snapshot_id` are already
+    optional here (see the early-return below when any is missing) — a
+    GLOBAL report and a DELIVERY-scoped report with no persisted snapshot
+    both already fall into that path safely; nothing about this function's
+    existing failure policy needed to change to serve both.
+
+    NOT IDEMPOTENT, BY DESIGN, MATCHING EVERY OTHER CALLER: each call is a
+    real, distinct report generation and gets its own report_id and its own
+    audit row — the same "insert, never update" contract the module
+    docstring states for every write here. A client-side retry of one
+    logical request is a caller concern (an idempotency key on the request,
+    if ever needed); this function does not silently coalesce two calls
+    into one row, because it cannot tell a legitimate second generation
+    from a retry, and guessing wrongly in either direction is worse than a
+    caller owning that decision.
     """
     from app.core import request_context
     from app.models.database import AuditLog
@@ -113,8 +144,14 @@ async def record_report_generation(
     snapshot_id = dataset.get("snapshot_id")
     build_sha = request_context.build_sha()
     correlation_id = request_context.correlation_id()[:64]
+    # Scope/actor/delivery/review-cycle facts only - never the dataset, HTML
+    # or CSV content, and never PHI beyond the identifiers already named
+    # elsewhere in the audit trail (job_id/intake_id are opaque UUIDs, not
+    # patient or provider data).
     details = {
         "job_id": job_id, "intake_id": intake_id, "snapshot_id": snapshot_id,
+        "review_cycle_id": review_cycle_id,
+        "scope_type": scope_type or ("DELIVERY" if (job_id or intake_id) else "GLOBAL"),
         "template_version": template_version, "build_sha": build_sha,
         "report_type": report_type, "actor": generated_by,
         "artifacts": [{"id": a.get("id"), "content_type": a.get("content_type"),

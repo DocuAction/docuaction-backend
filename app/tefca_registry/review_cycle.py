@@ -151,6 +151,31 @@ async def create_review_cycle(
         # roll the official sample back and let the next attempt redraw it.
         await db.commit()
 
+        # THE MISSING LINK (2026-09-17): `tefca_registry.models.ReviewCycle`
+        # existed as a table but nothing ever wrote a row to it, so no code
+        # path could name a delivery's review cycle by id at all — a report
+        # asked to scope to "this delivery's cycle" had no id to be given,
+        # and the only working default was the unscoped, registry-wide one.
+        # One row per drawn sample, deterministically (sample_id is already
+        # idempotent per `finalize_plan`'s plan_key, so re-entering this
+        # function for the same delivery/parameters never creates a second
+        # cycle for the same sample).
+        cycle = (await db.execute(select(reg.ReviewCycle)
+                                  .where(reg.ReviewCycle.sample_id == sample_id))).scalar_one_or_none()
+        if cycle is None:
+            cycle = reg.ReviewCycle(
+                id=uuid.uuid4(), cycle_type=review_type, sample_id=sample_id,
+                cycle_start=None, cycle_end=None, status="open")
+            db.add(cycle)
+            await db.commit()
+            reg_audit.record(
+                db, "review_cycle_row_created", None, actor_id=actor_id,
+                actor_email=actor_email, ip_address=ip_address,
+                metadata={"source_intake_id": str(intake_id), "sample_id": str(sample_id),
+                          "review_cycle_id": str(cycle.id)})
+            await db.commit()
+        review_cycle_id = cycle.id
+
         unlinked = (await db.execute(
             select(reg.SampleEntity)
             .where(reg.SampleEntity.sample_id == sample_id,
@@ -234,6 +259,7 @@ async def create_review_cycle(
     remaining = max(total_unlinked - linked, 0)
     return {
         "intake_id": str(intake_id),
+        "review_cycle_id": str(review_cycle_id),
         "plan": plan,
         "reconciliation_passed": True,
         "members": plan.get("membership_count"),
@@ -267,6 +293,12 @@ async def read_review_cycle(db, intake_id) -> Dict[str, Any]:
             .where(reg.SampleEntity.sample_id == sample.id,
                    reg.SampleEntity.review_id.is_(None)))).all()
         plan["unlinked_members"] = len(unlinked)
+        cycle = (await db.execute(select(reg.ReviewCycle.id)
+                                  .where(reg.ReviewCycle.sample_id == sample.id))).scalar_one_or_none()
+        # None here means a sample was drawn by some OTHER, older path than
+        # `create_review_cycle` (or before this fix existed) and never got its
+        # row — a real, visible gap, not hidden behind a fabricated id.
+        plan["review_cycle_id"] = str(cycle) if cycle is not None else None
         plan["completion"] = await plan_completion(db, sample.id)
         plans.append(plan)
 

@@ -1060,6 +1060,12 @@ async def _analyst_sample_summary(db, intake_id) -> Dict[str, Any]:
         "eligible_population": eligible,
         "calculated_sample_size": calculated,
         "review_cycle_exists": latest is not None,
+        # The id a delivery-scoped report request must name in
+        # parameters.review_cycle_id (see generator.py's job_id/intake_id
+        # cross-check). None until a Program Manager creates the cycle, and
+        # None (not a fabricated id) if a legacy sample predates this fix and
+        # was never linked to a ReviewCycle row - see read_review_cycle.
+        "review_cycle_id": latest.get("review_cycle_id") if latest else None,
         "actual_sample_size": actual_sample_size,
         "actual_sample_verified": linked,
         "reconciliation_passed": bool(recon.get("passed")) if recon else None,
