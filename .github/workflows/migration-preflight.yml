@@ -116,25 +116,87 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Report runner IPv4 and wait for the operator's temporary /32 (bounded)
+      # AUTOMATED TEMPORARY AUTHORIZATION (2026-09-18) - replaces the manual
+      # runner-IP handshake. The previous design posted the runner's IPv4 to
+      # a GitHub issue and waited up to 20 minutes for a HUMAN to add a
+      # temporary /32 firewall rule by hand - every dispatch needed a person
+      # watching for that comment, and a run with nobody watching failed
+      # closed after 20 minutes with nothing migrated (exactly what happened
+      # on run 35362478212). This step now creates and later deletes that
+      # same kind of rule itself, scoped to the exact runner IP for the exact
+      # life of this job, using the OIDC-authenticated Azure session above -
+      # no wider than the /32 a human would have added, no standing rule
+      # left behind, no dependency on a handshake_issue for the
+      # authorization itself (handshake_issue, when supplied, is still
+      # accepted and still commented on for the audit trail - see below -
+      # but nothing waits on a reply to it any more).
+      - name: Detect and validate this runner's public IPv4
         if: inputs.apply == true
-        env:
-          GH_TOKEN: ${{ github.token }}
+        id: runner_ip
+        run: |
+          IP=$(curl -s --max-time 10 https://api.ipify.org)
+          echo "runner reports: '$IP'"
+          # Validation logic lives in migration_firewall_authorization.py
+          # (unit-tested in tests/test_migration_firewall_authorization.py)
+          # rather than inline here, so the exact rule this job enforces is
+          # independently testable without running the workflow itself.
+          VALIDATED=$(python .github/scripts/migration_firewall_authorization.py validate-ip "$IP")
+          echo "ip=$VALIDATED" >> "$GITHUB_OUTPUT"
+          echo "validated runner IPv4: $VALIDATED"
+
+      - name: Generate a unique firewall-rule name for this run
+        if: inputs.apply == true
+        id: rule_name
+        run: |
+          NAME=$(python .github/scripts/migration_firewall_authorization.py rule-name \
+            "${{ github.run_id }}" "${{ github.run_attempt }}" "development")
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "firewall rule name: $NAME"
+
+      - name: Create the temporary firewall rule (exact runner /32, never a range)
+        if: inputs.apply == true
+        id: create_rule
         run: |
           test -n "${{ inputs.handshake_issue }}" || { echo "::error::apply=true requires handshake_issue"; exit 1; }
           test -n "${{ inputs.expected_current }}" || { echo "::error::apply=true requires expected_current"; exit 1; }
           test -n "${{ inputs.target_revision }}" || { echo "::error::apply=true requires target_revision"; exit 1; }
-          IP=$(curl -s https://api.ipify.org)
-          echo "runner public IPv4: $IP"
+          IP="${{ steps.runner_ip.outputs.ip }}"
+          NAME="${{ steps.rule_name.outputs.name }}"
+          # Start IP and end IP are IDENTICAL - a single address, never a
+          # range, and never the "Allow all Azure services" pseudo-rule
+          # (0.0.0.0-0.0.0.0), which this step's own IP validation above has
+          # already refused to accept as the detected IP in the first place.
+          if ! az postgres flexible-server firewall-rule create \
+              --resource-group rg-docuaction-DEV \
+              --name docuaction-db-dev \
+              --rule-name "$NAME" \
+              --start-ip-address "$IP" \
+              --end-ip-address "$IP" 2>&1 | tee /tmp/create_rule.log; then
+            echo "::error::AUTHORIZATION/PERMISSION FAILURE creating firewall rule $NAME for $IP - the OIDC identity likely lacks Microsoft.DBforPostgreSQL/flexibleServers/firewallRules/write on docuaction-db-dev. See the Azure error above. Nothing was migrated; no rule was left behind (none was ever created)."
+            exit 1
+          fi
+          echo "created rule $NAME: $IP - $IP"
+          echo "created=true" >> "$GITHUB_OUTPUT"
+
+      - name: Post audit-trail comment to the handshake issue (informational only - nothing waits on a reply)
+        if: inputs.apply == true && steps.create_rule.outputs.created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
           gh issue comment "${{ inputs.handshake_issue }}" --repo "${{ github.repository }}" \
-            --body "dev-release run ${{ github.run_id }}: runner public IPv4 **$IP** - waiting up to 20 min for a temporary /32 (start = end = this address). Remove it when this run finishes."
-          for i in $(seq 1 80); do
+            --body "dev-release run ${{ github.run_id }} (attempt ${{ github.run_attempt }}): automatically authorized runner IPv4 **${{ steps.runner_ip.outputs.ip }}** as firewall rule \`${{ steps.rule_name.outputs.name }}\`. No manual action needed; the rule is removed automatically when this job ends." \
+            || echo "::warning::could not comment on handshake issue ${{ inputs.handshake_issue }} - continuing, this is audit-trail only and does not gate the migration"
+
+      - name: Poll for connectivity (bounded, up to 5 minutes)
+        if: inputs.apply == true && steps.create_rule.outputs.created == 'true'
+        run: |
+          for i in $(seq 1 30); do
             if python -c "import socket;s=socket.socket();s.settimeout(5);s.connect(('$PGHOST',5432))" 2>/dev/null; then
-              echo "DEV Postgres reachable after $i attempt(s)"; exit 0
+              echo "DEV Postgres reachable after $i attempt(s) (rule propagation)"; exit 0
             fi
-            sleep 15
+            sleep 10
           done
-          echo "::error::DEV Postgres not reachable within 20 minutes - no /32 was authorised. Failing closed; nothing was migrated."
+          echo "::error::FIREWALL/NETWORK FAILURE - DEV Postgres not reachable within 5 minutes even though firewall rule ${{ steps.rule_name.outputs.name }} for ${{ steps.runner_ip.outputs.ip }} was created successfully. This is a network-path failure, distinct from an authorization failure (the rule creation above already succeeded) - possibly Azure firewall-rule propagation delay, or the server is down. Nothing was migrated."
           exit 1
 
       - name: Token, connection and role assumption
@@ -165,10 +227,32 @@ jobs:
                   user=os.environ["PG_PRINCIPAL"], password=os.environ["PGTOKEN"],
                   sslmode="require", connect_timeout=20)   # TLS required, not optional
           except psycopg2.OperationalError as exc:
-              print(f"DEV Postgres is not reachable from this runner: {exc}",
-                    file=sys.stderr)
-              print("EXPECTED on push-triggered runs: reporting readable=false; "
-                    "dev-release.yml's migration gate decides what to do.", file=sys.stderr)
+              # psycopg2 raises the SAME exception class for a network-level
+              # failure (connection refused/timed out - the firewall
+              # blocked it) and an authentication-level failure (Entra token
+              # accepted by Azure but Postgres itself rejects it - wrong
+              # role, expired token, misconfigured AAD mapping). Treating
+              # both as "expected, not reachable" would silently swallow a
+              # real auth problem as if it were routine. Distinguish by the
+              # server's own message: Postgres phrases an auth rejection
+              # with "password authentication failed" or "no pg_hba.conf
+              # entry"; anything else at this stage is the network path.
+              msg = str(exc)
+              if "password authentication failed" in msg or "pg_hba.conf" in msg or "no encryption" in msg:
+                  print(f"::error::AUTHENTICATION FAILURE connecting to DEV Postgres as "
+                        f"{os.environ['PG_PRINCIPAL']!r}: {exc}", file=sys.stderr)
+                  print("This is NOT the expected firewall-blocked case - the network path "
+                        "was reachable and Postgres itself rejected the credential. Stopping; "
+                        "nothing was migrated.", file=sys.stderr)
+                  sys.exit(1)
+              print(f"FIREWALL/NETWORK FAILURE - DEV Postgres is not reachable from this "
+                    f"runner: {exc}", file=sys.stderr)
+              print("EXPECTED on push-triggered runs (no apply requested, no firewall rule "
+                    "authorized this runner): reporting readable=false; dev-release.yml's "
+                    "migration gate decides what to do. On an apply=true run reaching this "
+                    "branch, the firewall rule created earlier in this job did not actually "
+                    "authorize connectivity - see the polling step above, which should have "
+                    "already caught this case.", file=sys.stderr)
               print("readable=false")
               print("dev_revision=UNREACHABLE_FROM_CI")
               sys.exit(0)
@@ -179,7 +263,7 @@ jobs:
           c.execute("set role docuaction_owner")
           c.execute("select current_user"); assumed = c.fetchone()[0]
           print("after SET ROLE   :", assumed, file=sys.stderr)
-          assert assumed == "docuaction_owner", "SET ROLE docuaction_owner did not take effect"
+          assert assumed == "docuaction_owner", "DATABASE-ROLE FAILURE: SET ROLE docuaction_owner did not take effect"
           # Schema metadata only. No Government business row is read. Read it
           # WHILE the owner role is assumed: the dedicated identity holds no
           # privilege of its own on alembic_version - only through
@@ -196,8 +280,9 @@ jobs:
           # start from. Zero or several is a human decision, not something the
           # pipeline should guess its way through.
           assert len(rows) == 1, (
-              f"DEV alembic_version has {len(rows)} rows, expected exactly 1 "
-              f"({rows!r}) - stop and resolve this by hand before automating "
+              f"ALEMBIC REVISION MISMATCH: DEV alembic_version has {len(rows)} rows, "
+              f"expected exactly 1 ({rows!r}) - multiple/zero heads is a human decision, "
+              f"stop and resolve this by hand before automating "
               f"a migration decision on top of it")
           print("readable=true")
           print(f"dev_revision={rows[0]}")
@@ -252,7 +337,7 @@ jobs:
           ALLOWED_HOSTS: '*'
         run: |
           CUR="${{ steps.read.outputs.dev_revision }}"; TARGET="${{ inputs.target_revision }}"
-          test "$CUR" = "${{ inputs.expected_current }}" || { echo "::error::DEV is at $CUR, operator expected ${{ inputs.expected_current }} - nothing executed"; exit 1; }
+          test "$CUR" = "${{ inputs.expected_current }}" || { echo "::error::ALEMBIC REVISION MISMATCH - DEV is at $CUR, operator expected ${{ inputs.expected_current }} (divergent or ahead of what was confirmed) - nothing executed"; exit 1; }
           python -m pip install --quiet -r requirements.txt
           # target_revision must be the DIRECT CHILD of CUR - one controlled
           # migration per apply, never zero (target == CUR, its own node has no
@@ -273,7 +358,7 @@ jobs:
           print(down or '')
           ")
           echo "target_revision $TARGET has parent: $PARENT"
-          test "$PARENT" = "$CUR" || { echo "::error::target_revision $TARGET is not the direct child of $CUR (its parent is '$PARENT') - nothing executed"; exit 1; }
+          test "$PARENT" = "$CUR" || { echo "::error::ALEMBIC REVISION MISMATCH - target_revision $TARGET is not the direct child of $CUR (its parent is '$PARENT'; DEV is unknown, divergent, or not a valid ancestor of the requested target) - nothing executed"; exit 1; }
           PGTOKEN=$(az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv)
           export DATABASE_URL="postgresql://${PG_PRINCIPAL}:${PGTOKEN}@${PGHOST}/${PGDATABASE}?ssl=require"
           echo "--- identity check via the approved DB_MIGRATION_ROLE mechanism (startup-packet role) ---"
@@ -293,7 +378,7 @@ jobs:
           alembic upgrade "$TARGET"
           AFTER=$(alembic current 2>/dev/null | awk '{print $1}'); echo "after: $AFTER"
           test "$AFTER" = "$TARGET" || { echo "::error::after upgrade DEV is at $AFTER, expected $TARGET"; exit 1; }
-          test "$(alembic heads | grep -c '(head)')" -eq 1 || { echo "::error::multiple heads after upgrade"; exit 1; }
+          test "$(alembic heads | grep -c '(head)')" -eq 1 || { echo "::error::ALEMBIC REVISION MISMATCH - multiple heads after upgrade"; exit 1; }
           echo "--- second run must be a true no-op ---"
           alembic upgrade "$TARGET" 2>&1 | tee /tmp/second.log
           if grep -q "Running upgrade" /tmp/second.log; then echo "::error::second alembic upgrade $TARGET was not a no-op"; exit 1; fi
@@ -338,3 +423,44 @@ jobs:
             echo "dev_revision=${{ steps.read.outputs.dev_revision }}" >> "$GITHUB_OUTPUT"
           fi
           echo "baseline_readable=${{ steps.baseline.outputs.readable }}"
+
+      # CLEANUP - if: always() so this runs after success, a migration
+      # failure, an authentication/authorization failure, the 5-minute
+      # connectivity timeout, a later step's failure, OR cancellation
+      # (GitHub still runs already-started `if: always()` steps on a
+      # graceful cancellation; a hard/forced cancellation past GitHub's
+      # grace period can still skip it - noted, not something a workflow
+      # step can control). A later job's failure (e.g. the deploy job, which
+      # runs after this one completes) has nothing to clean up here: this
+      # rule's entire lifecycle is contained within THIS job, deleted before
+      # the job ends either way.
+      - name: Delete the temporary firewall rule
+        if: always() && inputs.apply == true && steps.create_rule.outputs.created == 'true'
+        id: delete_rule
+        run: |
+          NAME="${{ steps.rule_name.outputs.name }}"
+          if az postgres flexible-server firewall-rule delete \
+              --resource-group rg-docuaction-DEV \
+              --name docuaction-db-dev \
+              --rule-name "$NAME" \
+              --yes 2>&1 | tee /tmp/delete_rule.log; then
+            echo "deleted=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deleted=false" >> "$GITHUB_OUTPUT"
+            echo "::error::failed to delete firewall rule $NAME - see the cleanup-verification step for the residual-rule report"
+          fi
+
+      - name: Verify the temporary rule no longer exists (queries Azure, does not trust the delete call's own exit code alone)
+        if: always() && inputs.apply == true && steps.create_rule.outputs.created == 'true'
+        run: |
+          NAME="${{ steps.rule_name.outputs.name }}"
+          REMAINING=$(az postgres flexible-server firewall-rule show \
+              --resource-group rg-docuaction-DEV \
+              --name docuaction-db-dev \
+              --rule-name "$NAME" \
+              --query name -o tsv 2>/dev/null || echo "")
+          if [ -n "$REMAINING" ]; then
+            echo "::error::CLEANUP FAILED - firewall rule '$NAME' (runner IP ${{ steps.runner_ip.outputs.ip }}) still exists on docuaction-db-dev after the delete step. This release is NO-GO until an operator removes it by hand: az postgres flexible-server firewall-rule delete --resource-group rg-docuaction-DEV --name docuaction-db-dev --rule-name $NAME --yes"
+            exit 1
+          fi
+          echo "confirmed: rule $NAME no longer exists on docuaction-db-dev"
