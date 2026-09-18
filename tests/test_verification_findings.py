@@ -55,8 +55,14 @@ def test_connector_shape_normalises_status():
 
 
 def test_outcome_from_evidence_bundle():
+    # `"evidence"` is the canonical per-source list key - the one
+    # `DimensionResult.to_dict()` (app/Tefca/evidence_dimensions.py) actually
+    # serialises, and the one every real producer/consumer in the codebase
+    # uses. Before 2026-09-18 this fixture used `"items"`, silently mirroring
+    # a bug in `npi_outcome_from_evidence` itself rather than testing the
+    # real production evidence shape.
     def bundle(item):
-        return {"dimensions": [{"dimension": "D1_IDENTITY", "items": [item]}]}
+        return {"dimensions": [{"dimension": "D1_IDENTITY", "evidence": [item]}]}
 
     assert vf.npi_outcome_from_evidence(bundle(
         {"source": "NPPES", "disposition": "UNAVAILABLE", "note": "down"}))["outcome"] == vf.NPI_VERIFICATION_UNAVAILABLE
@@ -68,6 +74,20 @@ def test_outcome_from_evidence_bundle():
     assert vf.npi_outcome_from_evidence(bundle(
         {"source": "NPPES", "disposition": "PASS", "original_values": {"status": "ACTIVE"}}))["outcome"] == vf.VERIFIED
     assert vf.npi_outcome_from_evidence({"dimensions": []}) is None
+
+
+def test_outcome_from_evidence_handles_a_malformed_or_missing_evidence_key_safely():
+    """A dimension with no `evidence` key, a non-list `evidence`, or a
+    non-dict item must never raise and must never be read as VERIFIED -
+    silence about the evidence is not a pass."""
+    assert vf.npi_outcome_from_evidence(
+        {"dimensions": [{"dimension": "D1_IDENTITY"}]}) is None
+    assert vf.npi_outcome_from_evidence(
+        {"dimensions": [{"dimension": "D1_IDENTITY", "evidence": "not-a-list"}]}) is None
+    assert vf.npi_outcome_from_evidence(
+        {"dimensions": [{"dimension": "D1_IDENTITY", "evidence": [None, "also-not-a-dict"]}]}) is None
+    assert vf.npi_outcome_from_evidence({}) is None
+    assert vf.npi_outcome_from_evidence(None or {}) is None
 
 
 def test_evidence_assembly_marks_a_deactivated_npi_for_review():

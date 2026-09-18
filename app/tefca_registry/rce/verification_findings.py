@@ -107,12 +107,39 @@ def npi_outcome_from_evidence(evidence: Dict[str, Any]) -> Optional[Dict[str, An
     Reads the D1_IDENTITY dimension's NPPES item as `_dimension_identity`
     writes it: disposition PASS / NOT_FOUND / UNAVAILABLE / REVIEW, with
     `original_values.status` carrying the NPPES status.
+
+    THE CANONICAL EVIDENCE CONTRACT is `DimensionResult.to_dict()`
+    (app/Tefca/evidence_dimensions.py) — the one place a dimension dict is
+    ever serialised. Its per-source list is keyed `"evidence"`
+    (`[i.to_dict() for i in self.items]`); `items` is only the Python
+    attribute name on the dataclass, never a key in the dict this function
+    actually receives. This function read `dimension["items"]` until
+    2026-09-18 — confirmed nowhere else in the codebase (no migration,
+    fixture, or preserved log ever produced that shape) — so it silently
+    returned None for every real evidence bundle: NPPES NOT_FOUND/
+    DEACTIVATED/UNAVAILABLE outcomes reached `_classify_entity_outcome`
+    correctly (that function reads the dimension's own top-level
+    disposition/applicability, unaffected by this bug) but never wrote an
+    issue-ledger finding or an analyst work item, in either
+    `arc_pipeline.verify_and_classify` or `automated_verification.py`. A
+    malformed or missing `evidence` list is handled the same way an absent
+    D1_IDENTITY dimension always was: this function returns None, which its
+    caller (`record_from_evidence`) already treats as "nothing to record" -
+    never as VERIFIED.
     """
     for dimension in evidence.get("dimensions") or []:
         if dimension.get("dimension") != "D1_IDENTITY":
             continue
-        for item in dimension.get("items") or []:
-            if item.get("source") != "NPPES":
+        dim_evidence = dimension.get("evidence")
+        if not isinstance(dim_evidence, list):
+            if dim_evidence is not None:
+                logger.warning(
+                    "D1_IDENTITY evidence is %s, not a list - treating as no "
+                    "NPPES evidence for this generation rather than guessing",
+                    type(dim_evidence).__name__)
+            continue
+        for item in dim_evidence:
+            if not isinstance(item, dict) or item.get("source") != "NPPES":
                 continue
             disposition = item.get("disposition")
             values = item.get("original_values") or {}
