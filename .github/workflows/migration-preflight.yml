@@ -137,6 +137,23 @@ jobs:
           echo "::error::DEV Postgres not reachable within 20 minutes - no /32 was authorised. Failing closed; nothing was migrated."
           exit 1
 
+      # The first login's federated client assertion is valid for ~5 minutes.
+      # The wait above is bounded at ~20 minutes, so by the time the operator's
+      # /32 lands and Postgres becomes reachable, that assertion has usually
+      # already expired (AADSTS700024, run 35391488253 - the wait itself and
+      # the connection succeeded, only the stale token acquisition failed).
+      # Re-authenticating here, only when the wait actually ran, mints a fresh
+      # ~5-minute-valid assertion immediately before it is needed. No new
+      # credential, scope or long-lived secret is introduced - same OIDC
+      # federated identity, same login action, called again.
+      - name: Refresh Azure OIDC login after the bounded firewall wait
+        if: inputs.apply == true
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
       - name: Token, connection and role assumption
         id: read
         run: |
