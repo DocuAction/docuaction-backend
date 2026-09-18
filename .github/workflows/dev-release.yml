@@ -253,6 +253,20 @@ jobs:
           echo "::error::DEV Postgres not reachable within 20 minutes - post-deploy Government-integrity verification could not run. Release FAILS; nothing is assumed."
           exit 1
 
+      # Same defect and same fix as migration-preflight.yml (PR #79, run
+      # 35391488253 / 35395945838): the first azure/login@v2's federated
+      # client assertion is valid ~5 minutes, but the bounded wait above can
+      # run up to ~20 minutes. Re-authenticate with the identical OIDC
+      # identity immediately after the wait succeeds and immediately before
+      # the Postgres access token is minted - no new credential, scope, or
+      # firewall authority.
+      - name: Refresh Azure OIDC login after the bounded firewall wait
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
       - name: Compare against the pre-deploy baseline
         env:
           BASELINE_JSON: ${{ needs.migration-check.outputs.baseline_json }}
