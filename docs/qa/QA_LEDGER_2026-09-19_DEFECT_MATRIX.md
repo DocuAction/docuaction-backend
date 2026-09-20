@@ -123,3 +123,11 @@ Totals: FIXED 39 · FIXED-PARTIAL 7 · CONFIG/DESIGN 3 · DECISION 2 · BLOCKED 
    `POST /api/tefca/rce/deliveries/{intake}/verification-coverage/run` as a program manager (QA-017/V01).
 2. Set `ENABLE_QA_MONITOR=true` on exactly one DEV instance (QA-059).
 3. Deploy frontend main to DEV (frontend PRs #47/#48 are merged but DEV still serves `80de8b6`).
+
+## Final evidence SHAs (added 2026-09-20, checkpoint review)
+
+- Frontend PR #50 head `a3db3bc8fe9cd59f1d42df9a857869000e48da52` on base `395522381967f12446573d30c7253388e6341b8f`; CI audit + e2e pass (analyze / dependency-review skipped by the entitlement gate, as on main).
+- Backend PR #81: code through `e49f7e28ea88850f45ca2a1032cdd42241b5254e` on base `37db323423409de95f407ee3d1ea97242de7b985`; CI CodeQL, analyze, dependency-review, fixture, pytest, render, sast pass. The commit adding this section also adds the `isolation-postgres` CI job so the P0 database-backed suites run against PostgreSQL in CI instead of being skipped; the PR head after that commit is the final backend SHA.
+- Migrations introduced by either PR: **none** (`git diff --name-only 37db323..HEAD -- alembic/` is empty; head remains `20260918_pp_verification`).
+- Worker / scheduler impact: none of `delivery_scheduler.py`, `delivery_runner.py`, `automated_verification.py`, `stage_events.py`, `main.py` changed; the backend image serves API and scheduler together, so one backend deployment covers both.
+- Local full backend suite (isolated PostgreSQL 18, UTC): 3,731 passed, 11 failed, 71 skipped; 10 failures reproduce identically on unmodified `37db323` (9 × `test_automated_verification*.py`, 1 × `test_promotion_one_pass.py`), 1 fixed on this branch. Acceptance harness: scenario A 11/11 checks (3 received, 3 held, distinct codes, equation holds, no invalid identifier promoted); scenario C 12/12 checks (184 rows, 184 unique lines, 183 CREATED + 1 HELD, API/CSV agree, report linked).
