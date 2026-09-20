@@ -303,7 +303,40 @@ async def verification_workspace(
         result = await workspace(db, review_id, include_raw=include_raw)
     except WorkspaceRefused as exc:
         raise HTTPException(404, str(exc))
+    result["qa_eligibility"] = qa_eligibility(result, user)
     return _mask_workspace(result, user)
+
+
+def qa_eligibility(result, user) -> dict:
+    """Whether THIS user may act as independent QA on the case (QA-058).
+
+    Stated by the server so the client renders the QA form only for an
+    eligible checker; the server-side refusal in `qa_gate.submit_qa_review`
+    stays as defense in depth. The maker is the actor of the determination in
+    force; a QA lead who made it is `is_maker` and not `can_qa`.
+    """
+    from app.core.security import role_at_least
+
+    determination = ((result.get("recommendation") or {}).get("determination")) or {}
+    user_id = str(getattr(user, "id", "") or "")
+    user_email = (getattr(user, "email", "") or "").lower()
+    maker_id = str(determination.get("actor_user_id") or "")
+    maker_email = (determination.get("actor_email") or "").lower()
+    is_maker = bool(determination) and (
+        (bool(maker_id) and maker_id == user_id) or (bool(maker_email) and maker_email == user_email))
+    has_role = bool(role_at_least(user, "qalead"))
+    reason = None
+    if not determination:
+        reason = "No analyst determination has been recorded yet."
+    elif is_maker:
+        reason = "You recorded this determination; segregation of duties requires a different QA lead."
+    elif not has_role:
+        reason = "Independent QA requires the QA lead role."
+    return {"can_qa": bool(determination) and has_role and not is_maker,
+            "is_maker": is_maker, "has_qa_role": has_role,
+            "maker_email": determination.get("actor_email"),
+            "maker_user_id": determination.get("actor_user_id") or None,
+            "reason": reason}
 
 
 # ── my reviews ───────────────────────────────────────────────────────────────

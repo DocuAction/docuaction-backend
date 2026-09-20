@@ -271,13 +271,18 @@ class PlatformReadinessCheck:
 
     async def check_api_endpoints(self) -> Dict[str, Any]:
         base = os.getenv("QA_BASE_URL") or os.getenv("API_PUBLIC_URL") or "https://api-prod.docuaction.io"
+        # Public endpoints only (QA-059). /api/tefca/dashboard/summary is
+        # viewer-gated, so an unauthenticated probe answered 401 forever and
+        # the check could never pass. /api/tefca/status is the public
+        # connector-health surface and is the right liveness probe here.
         try:
             import httpx
             async with httpx.AsyncClient(timeout=8.0) as c:
                 h = await c.get(base + "/health")
-                s = await c.get(base + "/api/tefca/dashboard/summary")
+                s = await c.get(base + "/api/tefca/status")
             ok = h.status_code == 200 and s.status_code == 200
-            return {"name": "api_endpoints", "passed": ok, "detail": f"/health={h.status_code} /dashboard/summary={s.status_code}"}
+            return {"name": "api_endpoints", "passed": ok,
+                    "detail": f"/health={h.status_code} /api/tefca/status={s.status_code}"}
         except Exception as e:
             return {"name": "api_endpoints", "passed": False, "detail": str(e)[:120]}
 

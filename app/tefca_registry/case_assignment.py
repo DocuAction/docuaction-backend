@@ -371,18 +371,51 @@ async def cases_in_state(db, state: str, *, queue_source=None, intake_id=None,
 
 async def _dto(db, record) -> Dict[str, Any]:
     payload = record.verification_results or {}
+    # Final classification and traceability (QA-042, QA-043): a review-cycle
+    # case carries no `case_classification`/`severity` in its payload (those
+    # are DQ-bridge keys), so the record's own bucket, any reclassification,
+    # the determination status and the delivery it was created against are
+    # surfaced explicitly instead of reading as blank.
+    final_bucket = record.reclassified_to or record.classification_bucket
+    entity_name = None
+    if record.entity_id:
+        entity = await db.get(reg.TefcaRegEntity, record.entity_id)
+        entity_name = getattr(entity, "name", None)
+    delivery_label = None
+    source_intake_id = payload.get("source_intake_id")
+    if source_intake_id:
+        try:
+            from app.tefca_registry.rce import models as m
+
+            intake = await db.get(m.RceSourceIntake, uuid.UUID(str(source_intake_id)))
+            delivery_label = getattr(intake, "delivery_label", None)
+        except (ValueError, TypeError):
+            delivery_label = None
     return {
         "review_id": record.review_id,
         # NULL for a pre-promotion case. Never str(None).
         "entity_id": str(record.entity_id) if record.entity_id else None,
+        "entity_name": entity_name,
         "source_record_id": (str(record.source_record_id)
                              if record.source_record_id else None),
+        "source_intake_id": source_intake_id,
+        "delivery_label": delivery_label,
+        "queue_source": payload.get("queue_source"),
+        "sample_id": payload.get("sample_id"),
         "assigned_to_user_id": (str(record.assigned_to_user_id)
                                 if record.assigned_to_user_id else None),
         "assigned_at": record.assigned_at,
         "state": await case_state(db, record.review_id),
-        "case_classification": payload.get("case_classification"),
+        "case_classification": payload.get("case_classification") or final_bucket,
         "severity": payload.get("severity"),
+        "classification_bucket": record.classification_bucket,
+        "reclassified_to": record.reclassified_to,
+        "final_classification": final_bucket,
+        "classification_rule": record.classification_rule,
+        "classification_rule_version": record.classification_rule_version,
+        "reviewer_resolution": record.reviewer_resolution,
+        "reviewed_at": record.reviewed_at,
+        "reportable_at": record.reportable_at,
         "priority": payload.get("priority", 50),
         "issue_codes": payload.get("issue_codes", []),
         "created_at": record.created_at,
