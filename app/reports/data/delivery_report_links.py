@@ -78,6 +78,62 @@ async def _artifact_row_id(db, report_id: str, artifact: Optional[Dict[str, Any]
         return None
 
 
+IDENTITY_MISMATCH = "REPORT_IDENTITY_MISMATCH"
+DELIVERY_MISMATCH = "REPORT_DELIVERY_MISMATCH"
+
+
+def stored_delivery(row) -> Dict[str, Optional[str]]:
+    """The delivery a STORED report describes, from its own frozen dataset.
+
+    `review_reports.report_data.dataset.delivery` is written at generation and
+    never updated, so it is the authoritative answer to "whose report is this",
+    independent of any link row that may point at the id.
+    """
+    data = getattr(row, "report_data", None) or {}
+    delivery = (data.get("dataset") or {}).get("delivery") or {}
+    return {"job_id": (str(delivery.get("job_id")) if delivery.get("job_id") else None),
+            "intake_id": (str(delivery.get("intake_id")) if delivery.get("intake_id") else None)}
+
+
+async def verify_report_delivery(db, report_id: str, *, job_id=None, intake_id=None,
+                                 stored_id=None) -> Dict[str, Any]:
+    """Fail-closed check that `report_id` resolves to the report the caller
+    means: the stored row (by id, when the caller has just written it) and the
+    delivery that row describes (when the caller acts in a delivery context).
+
+    Returns `{ok, code, stored_job_id, stored_intake_id, stored_row_id}`.
+    `ok` is False when no row exists, when the row is not the one just stored
+    (a colliding id resolving to an OLDER report — QA-034), or when the row
+    describes a different delivery than the one named. A GLOBAL report never
+    belongs to a delivery, so naming a job for one is a mismatch, not a match.
+    """
+    from app.tefca_registry import models as reg
+
+    out: Dict[str, Any] = {"ok": False, "code": None, "stored_row_id": None,
+                           "stored_job_id": None, "stored_intake_id": None}
+    row = (await db.execute(
+        select(reg.ReviewReport).where(reg.ReviewReport.report_id == report_id)
+    )).scalar_one_or_none()
+    if row is None:
+        out["code"] = "REPORT_NOT_STORED"
+        return out
+    out["stored_row_id"] = str(row.id)
+    described = stored_delivery(row)
+    out["stored_job_id"] = described["job_id"]
+    out["stored_intake_id"] = described["intake_id"]
+    if stored_id is not None and str(row.id) != str(stored_id):
+        out["code"] = IDENTITY_MISMATCH
+        return out
+    if job_id is not None and described["job_id"] != str(job_id):
+        out["code"] = DELIVERY_MISMATCH
+        return out
+    if intake_id is not None and described["intake_id"] != str(intake_id):
+        out["code"] = DELIVERY_MISMATCH
+        return out
+    out["ok"] = True
+    return out
+
+
 async def record_report_generation(
     db, *, report_id: str, report_type: str, dataset: Dict[str, Any],
     template_version: str, generated_by: str, generated_by_id=None,
@@ -86,6 +142,7 @@ async def record_report_generation(
     storage: Optional[Dict[str, Any]] = None,
     review_cycle_id: Optional[str] = None,
     scope_type: Optional[str] = None,
+    stored_id=None,
 ) -> Dict[str, Any]:
     """Audit row, then one link per artifact, then stage event. Never raises.
 
@@ -160,6 +217,9 @@ async def record_report_generation(
         "storage_backend": storage.get("storage_backend"),
         "durable": storage.get("durable"),
         "pdf_unavailable_reason": storage.get("pdf_unavailable_reason"),
+        # The client's idempotency token, when it sent one (QA-031): the
+        # /generate route replays this report for a repeat of the same token.
+        "idempotency_key": request_context.get("idempotency_key"),
     }
     out: Dict[str, Any] = {"written": False, "audit_id": None, "link_id": None,
                            "link_ids": [], "stage_event_id": None, "job_id": job_id,
@@ -202,6 +262,30 @@ async def record_report_generation(
             await _rollback(db)
             out["reason"] = f"audit commit failed: {type(exc).__name__}"
         return out
+    # 2a. The id must resolve to THIS generation's stored row and that row must
+    # describe THIS delivery. Otherwise the link is refused and the refusal is
+    # the audit record — never a link that hands one delivery another's file.
+    identity = await verify_report_delivery(db, report_id, job_id=job_id,
+                                            intake_id=intake_id, stored_id=stored_id)
+    if not identity["ok"]:
+        logger.error("report %s: link REFUSED (%s): stored row %s describes job %s, "
+                     "delivery named job %s", report_id, identity["code"],
+                     identity["stored_row_id"], identity["stored_job_id"], job_id)
+        try:
+            audit.outcome = "refused"
+            audit.details = {**details, "refusal": identity["code"],
+                             "stored_row_id": identity["stored_row_id"],
+                             "stored_job_id": identity["stored_job_id"]}
+            await db.commit()
+            out["written"] = True
+        except Exception as exc:  # noqa: BLE001
+            await _rollback(db)
+            out["reason"] = f"audit commit failed: {type(exc).__name__}"
+            return out
+        out["reason"] = f"link refused: {identity['code']}"
+        out["refusal"] = identity["code"]
+        return out
+
     try:
         row_ids = []
         for a in registered:
@@ -364,11 +448,48 @@ async def links_for_report(db, report_id: str) -> List[Dict[str, Any]]:
 
 
 async def links_for_job(db, job_id) -> List[Dict[str, Any]]:
+    """Link rows for the job, each VERIFIED against the stored report it
+    names. A link whose stored report describes a different delivery (or none)
+    is excluded and logged — the listing is a promise that every item is this
+    delivery's document, and a stale or colliding link must not break it."""
     L, stmt = _joined_stmt()
     rows = (await db.execute(
         stmt.where(L.job_id == job_id)
         .order_by(L.generated_at.desc(), L.report_id.desc(), _format_order(), L.id))).all()
-    return [_link_with_artifact(link, artifact) for link, artifact in rows]
+    out = []
+    verdicts: Dict[str, Dict[str, Any]] = {}
+    for link, artifact in rows:
+        verdict = verdicts.get(link.report_id)
+        if verdict is None:
+            verdict = await verify_report_delivery(db, link.report_id, job_id=job_id)
+            verdicts[link.report_id] = verdict
+        if not verdict["ok"]:
+            logger.error("job %s: link %s to report %s EXCLUDED (%s): stored report "
+                         "describes job %s", job_id, link.id, link.report_id,
+                         verdict["code"], verdict["stored_job_id"])
+            continue
+        out.append(_link_with_artifact(link, artifact))
+    return out
+
+
+async def quarantined_links_for_job(db, job_id) -> List[Dict[str, Any]]:
+    """The links `links_for_job` excluded, with the reason — for the audit
+    surface, never for download."""
+    from app.tefca_registry.rce import traceability_models as tm
+
+    L = tm.RceDeliveryReportLink
+    rows = (await db.execute(select(L).where(L.job_id == job_id))).scalars().all()
+    out, seen = [], set()
+    for link in rows:
+        if link.report_id in seen:
+            continue
+        seen.add(link.report_id)
+        verdict = await verify_report_delivery(db, link.report_id, job_id=job_id)
+        if not verdict["ok"]:
+            out.append({"report_id": link.report_id, "link_id": str(link.id),
+                        "code": verdict["code"],
+                        "stored_job_id": verdict["stored_job_id"]})
+    return out
 
 
 def group_links_by_report(links: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

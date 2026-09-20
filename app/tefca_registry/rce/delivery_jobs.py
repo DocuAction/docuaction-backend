@@ -472,19 +472,20 @@ async def _review_counts(db, intake_id) -> Dict[str, int]:
         return {"open": 0, "claimed": 0, "determined": 0, "qa_pending": 0,
                 "qa_in_progress": 0, "qa_approved": 0, "total": 0}
 
-    promoted_ids = select(m.RceCuratedRecord.canonical_entity_id).where(
-        m.RceCuratedRecord.source_intake_id == intake_id,
-        m.RceCuratedRecord.canonical_entity_id.isnot(None))
-    scope = (reg.ReviewRecord.entity_id.in_(promoted_ids)
-             | (reg.ReviewRecord.verification_results["source_intake_id"].astext
-                == str(intake_id)))
+    # Cases created AGAINST this delivery only (QA-039): an entity the
+    # delivery contains may carry cases from other deliveries or queues, and
+    # those are not this delivery's review work.
+    scope = (reg.ReviewRecord.verification_results["source_intake_id"].astext
+             == str(intake_id))
     rows = (await db.execute(
         select(reg.ReviewRecord.review_id, reg.ReviewRecord.assigned_to_user_id,
-               reg.ReviewRecord.reviewer_resolution, reg.ReviewRecord.reportable_at)
+               reg.ReviewRecord.reviewer_resolution, reg.ReviewRecord.reportable_at,
+               reg.ReviewRecord.verification_results["queue_source"].astext)
         .where(scope))).all()
 
     counts = {"open": 0, "claimed": 0, "determined": 0, "qa_pending": 0,
-              "qa_in_progress": 0, "qa_approved": 0, "total": len(rows)}
+              "qa_in_progress": 0, "qa_approved": 0, "total": len(rows),
+              "open_breakdown": {}}
     determined_ids = [r.review_id for r in rows
                       if r.reviewer_resolution is not None and r.reportable_at is None]
     latest_qa: Dict[str, Optional[str]] = {}
@@ -509,6 +510,8 @@ async def _review_counts(db, intake_id) -> Dict[str, int]:
             counts["claimed"] += 1
         else:
             counts["open"] += 1
+            source = r[4] or "unknown"
+            counts["open_breakdown"][source] = counts["open_breakdown"].get(source, 0) + 1
     return counts
 
 
@@ -617,6 +620,7 @@ async def status_for_job(db, job) -> Dict[str, Any]:
         outcome_code=outcome["code"],
         snapshot_passed=bool(snapshot_dict and snapshot_dict.get("passed")),
         open_work_items=review_counts["open"],
+        open_breakdown=review_counts.get("open_breakdown"),
         claimed_work_items=review_counts["claimed"],
         determined_items=0,
         qa_pending=review_counts["qa_pending"],

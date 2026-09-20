@@ -187,14 +187,18 @@ async def qhin_rollup(db, intake_id, *, sample_id=None,
     if intake is None:
         raise WorkloadRefused(f"No delivery {intake_id}")
 
-    eligible, unresolved = await resolve_qhin_strata(
+    placed, unplaced, eligibility = await placement_units(
         db, intake_id, include_held=include_held)
+    unresolved = unplaced
 
     qhin_of: Dict[Any, str] = {}
     population: Dict[str, int] = {}
-    for unit in eligible:
+    draw: Dict[str, Dict[str, int]] = {}
+    for unit in placed:
         qhin_of[unit["entity_id"]] = unit["qhin"]
         population[unit["qhin"]] = population.get(unit["qhin"], 0) + 1
+        bucket = draw.setdefault(unit["qhin"], {"eligible": 0, "review_required": 0, "held": 0})
+        bucket[unit["draw_eligibility"]] += 1
 
     names = await qhin_names(db, list(population.keys()))
     levels = await _entity_levels(db, intake_id)
@@ -208,6 +212,13 @@ async def qhin_rollup(db, intake_id, *, sample_id=None,
             "qhin_entity_id": key,
             "qhin_name": names.get(key, "(unnamed QHIN)"),
             "population": count,
+            # Sampling eligibility for a NEW draw, reported beside placement
+            # and never subtracted from it (QA-049): a sampled entity under
+            # review is still placed under its QHIN.
+            "eligible_for_draw": draw.get(key, {}).get("eligible", 0),
+            "excluded_from_draw": {
+                "review_required": draw.get(key, {}).get("review_required", 0),
+                "held": draw.get(key, {}).get("held", 0)},
             "in_review": 0,
             "assigned": 0,
             "completed": 0,
@@ -263,13 +274,23 @@ async def qhin_rollup(db, intake_id, *, sample_id=None,
         "qhins": [per_qhin[k] for k in sorted(
             per_qhin, key=lambda k: (per_qhin[k]["qhin_name"] or "").lower())],
         "totals": totals,
+        "draw_eligibility": eligibility,
         "unresolved": {
             "count": len(unresolved),
             "reasons": _reason_counts(unresolved),
+            # Drillable (QA-047): the exact records, capped, with the reason
+            # each one is not placed. Never a QHIN guess.
+            "items": [{"entity_id": (str(u["entity_id"]) if u.get("entity_id") else None),
+                       "rce_org_oid": u.get("rce_org_oid"),
+                       "record_status": u.get("record_status"),
+                       "reason": u.get("reason")} for u in unresolved[:UNRESOLVED_ITEM_CAP]],
+            "items_capped": len(unresolved) > UNRESOLVED_ITEM_CAP,
             "note": ("These records carry no single canonical managed_by_qhin "
                      "edge, or were never promoted. They are reported here "
                      "rather than assigned to a QHIN — an invented "
-                     "relationship is worse than a visible gap."),
+                     "relationship is worse than a visible gap. Records under "
+                     "review or held ARE placed under their QHIN; their "
+                     "exclusion from a new draw is reported as draw eligibility."),
         },
         "relationship_basis": (
             "QHIN is the canonical managed_by_qhin edge written at promotion. "
@@ -283,8 +304,51 @@ async def qhin_rollup(db, intake_id, *, sample_id=None,
     }
 
 
+UNRESOLVED_ITEM_CAP = 500
+
+
+async def placement_units(db, intake_id, *, include_held: bool = False):
+    """(placed units, unplaced units, eligibility summary) for one delivery.
+
+    PLACEMENT is the canonical `managed_by_qhin` edge and nothing else. DRAW
+    ELIGIBILITY is `resolve_qhin_strata`'s frame for a NEW sample, which
+    excludes held records and entities with an unresolved blocking finding
+    (`verification_status = in_review`). Before 2026-09-20 the rollup used the
+    frame as the population, so the moment a review cycle put 37 entities
+    under review the QHIN population fell from 40 to 3 and the 37 live cases
+    vanished from every count (QA-049/QA-051). A unit with a real QHIN is
+    placed whatever its eligibility; only units with no single edge (or never
+    promoted) are unplaced.
+    """
+    from app.tefca_registry.qhin_sampling import (EXCLUSION_REVIEW_REQUIRED,
+                                                  UNRESOLVED_QHIN,
+                                                  resolve_qhin_strata)
+
+    eligible, unresolved = await resolve_qhin_strata(
+        db, intake_id, include_held=include_held)
+    placed: List[Dict[str, Any]] = [{**u, "draw_eligibility": "eligible"} for u in eligible]
+    unplaced: List[Dict[str, Any]] = []
+    for unit in unresolved:
+        if unit.get("qhin") in (None, UNRESOLVED_QHIN):
+            unplaced.append(unit)
+            continue
+        kind = ("review_required" if unit.get("exclusion") == EXCLUSION_REVIEW_REQUIRED
+                else "held")
+        placed.append({**unit, "draw_eligibility": kind})
+    summary = {"placed": len(placed), "unplaced": len(unplaced),
+               "eligible": sum(1 for u in placed if u["draw_eligibility"] == "eligible"),
+               "review_required": sum(1 for u in placed
+                                      if u["draw_eligibility"] == "review_required"),
+               "held": sum(1 for u in placed if u["draw_eligibility"] == "held"),
+               "basis": ("Placement = canonical managed_by_qhin edge. Draw eligibility = "
+                         "the sampling frame for a NEW draw; entities already under "
+                         "review or held stay placed and are excluded from a new draw "
+                         "only.")}
+    return placed, unplaced, summary
+
+
 def _totals(per_qhin: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
-    keys = ("population", "in_review", "assigned", "completed", "qa",
+    keys = ("population", "eligible_for_draw", "in_review", "assigned", "completed", "qa",
             "participants", "subparticipants")
     out = {key: sum(b[key] for b in per_qhin.values()) for key in keys}
     by_state: Dict[str, int] = {state: 0 for state in STATE_ORDER}
@@ -317,12 +381,11 @@ async def qhin_detail(db, intake_id, qhin_entity_id, *, sample_id=None,
     decision needs — the entity, its level, its parent, who holds the case and
     what state it is in — and nothing else.
     """
-    from app.tefca_registry.qhin_sampling import resolve_qhin_strata
-
-    eligible, _ = await resolve_qhin_strata(db, intake_id,
-                                            include_held=include_held)
+    placed, _, _ = await placement_units(db, intake_id, include_held=include_held)
     target = str(qhin_entity_id)
-    entity_ids = [u["entity_id"] for u in eligible if u["qhin"] == target]
+    eligibility_of = {u["entity_id"]: u["draw_eligibility"] for u in placed
+                      if u["qhin"] == target}
+    entity_ids = [u["entity_id"] for u in placed if u["qhin"] == target]
     if not entity_ids:
         return {"intake_id": str(intake_id), "qhin_entity_id": target,
                 "population": 0, "items": [], "count": 0, "offset": offset}
@@ -359,6 +422,7 @@ async def qhin_detail(db, intake_id, qhin_entity_id, *, sample_id=None,
                                     else None),
             "classification_bucket": getattr(record, "classification_bucket",
                                              None),
+            "draw_eligibility": eligibility_of.get(entity_id),
         })
 
     return {

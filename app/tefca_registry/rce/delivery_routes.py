@@ -457,8 +457,15 @@ async def _review_counts(db, intake_id) -> Dict[str, int]:
     record alone and is reported as zero here; lane P's `status_for_job` reads
     the QA gate events for it.
     """
-    row = (await db.execute(text("""
+    # THIS delivery's cases only: the ones created against it (the DQ bridge
+    # and the review cycle both stamp `source_intake_id`). Before 2026-09-20
+    # a second disjunct also counted every case for any ENTITY the delivery
+    # contains — cases from other deliveries, fixtures and the priority queue
+    # — which is how a 50-record delivery reported 55 open items (QA-039,
+    # QA-V03). The breakdown by queue source is what the overview labels.
+    rows = (await db.execute(text("""
         SELECT
+          coalesce(r.verification_results->>'queue_source', 'unknown') AS queue_source,
           count(*) FILTER (WHERE assigned_to_user_id IS NULL AND reviewer_resolution IS NULL
                              AND reportable_at IS NULL) AS open_items,
           count(*) FILTER (WHERE assigned_to_user_id IS NOT NULL AND reviewer_resolution IS NULL
@@ -468,14 +475,18 @@ async def _review_counts(db, intake_id) -> Dict[str, int]:
           count(*) FILTER (WHERE reportable_at IS NOT NULL) AS qa_approved
         FROM review_records r
         WHERE r.verification_results->>'source_intake_id' = :i
-           OR r.entity_id IN (SELECT canonical_entity_id FROM rce_curated_records
-                              WHERE source_intake_id = CAST(:i AS uuid)
-                                AND canonical_entity_id IS NOT NULL)"""),
-        {"i": str(intake_id)})).one()
-    return {"open_work_items": int(row.open_items or 0),
-            "claimed_work_items": int(row.claimed_items or 0),
-            "qa_pending": int(row.qa_pending or 0),
-            "qa_approved": int(row.qa_approved or 0)}
+        GROUP BY 1"""),
+        {"i": str(intake_id)})).all()
+    out = {"open_work_items": 0, "claimed_work_items": 0, "qa_pending": 0,
+           "qa_approved": 0, "open_breakdown": {}}
+    for row in rows:
+        out["open_work_items"] += int(row.open_items or 0)
+        out["claimed_work_items"] += int(row.claimed_items or 0)
+        out["qa_pending"] += int(row.qa_pending or 0)
+        out["qa_approved"] += int(row.qa_approved or 0)
+        if int(row.open_items or 0):
+            out["open_breakdown"][row.queue_source] = int(row.open_items or 0)
+    return out
 
 
 # ═══ job list and single job ═════════════════════════════════════════════════
@@ -730,20 +741,43 @@ async def _build_block(db) -> Dict[str, Any]:
 
 
 async def _reports(db, job_id) -> List[Dict[str, Any]]:
-    rows = (await db.execute(
-        select(tm.RceDeliveryReportLink)
-        .where(tm.RceDeliveryReportLink.job_id == job_id)
-        .order_by(tm.RceDeliveryReportLink.generated_at.desc()))).scalars().all()
+    """Reports for the job, one entry per report id, each VERIFIED against the
+    stored report it names (`links_for_job` drops any link whose stored report
+    describes another delivery — QA-034) and carrying every registered
+    rendering with format, filename, size and checksum (QA-033)."""
+    from app.reports.data.delivery_report_links import links_for_job
+
+    links = await links_for_job(db, job_id)
     grouped: Dict[str, Dict[str, Any]] = {}
-    for row in rows:
-        entry = grouped.setdefault(row.report_id, {
-            "report_id": row.report_id, "report_type": row.report_type,
-            "snapshot_id": str(row.snapshot_id), "generated_at": _iso(row.generated_at),
-            "generated_by": row.generated_by, "template_version": row.template_version,
-            "build_sha": row.build_sha, "artifacts": []})
-        if row.artifact_id:
-            entry["artifacts"].append(str(row.artifact_id))
+    for link in links:
+        entry = grouped.setdefault(link["report_id"], {
+            "report_id": link["report_id"], "report_type": link.get("report_type"),
+            "snapshot_id": link.get("snapshot_id"), "generated_at": link.get("generated_at"),
+            "generated_by": link.get("generated_by"),
+            "template_version": link.get("template_version"),
+            "build_sha": link.get("build_sha"), "correlation_id": link.get("correlation_id"),
+            "delivery_verified": True, "artifacts": []})
+        if link.get("artifact_id"):
+            entry["artifacts"].append({
+                "id": str(link["artifact_id"]),
+                "format": _format_word(link.get("content_type")),
+                "content_type": link.get("content_type"),
+                "filename": f"delivery-report-{link['report_id']}."
+                            f"{_format_word(link.get('content_type'))}",
+                "size_bytes": link.get("size_bytes"),
+                "sha256": link.get("file_sha256"),
+                "artifact_version": link.get("artifact_version"),
+                "storage_backend": link.get("storage_backend"),
+                "durable": link.get("durable"),
+                "status": "registered" if link.get("file_sha256") else "unregistered",
+            })
     return list(grouped.values())
+
+
+def _format_word(content_type: Optional[str]) -> str:
+    return {"text/html": "html", "text/csv": "csv", "application/pdf": "pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+            }.get(content_type or "", "file")
 
 
 async def _verification_block(db, intake, job) -> Dict[str, Any]:

@@ -84,7 +84,12 @@ def report_to_csv(dataset: Dict[str, Any], report_id: str,
     writer.writerow([f"# DocuAction TEFCA ARC report {report_id}"])
     writer.writerow([f"# Generated (UTC): {generated_at}"])
     writer.writerow([f"# Report Data Service version: {dataset.get('service_version')}"])
-    writer.writerow([f"# Review cycle: {dataset.get('review_cycle_id') or 'All records'}"])
+    # Full provenance (QA-036): delivery job, intake, reconciliation snapshot,
+    # review cycle, source-file hash and build SHA — or an explicit GLOBAL line.
+    from app.reports.data.report_reconciliation import provenance_lines
+
+    for line in provenance_lines(dataset):
+        writer.writerow([line])
     writer.writerow(["# Every value below is read from frozen verification "
                      "results. No live lookup runs during report generation."])
     writer.writerow([])

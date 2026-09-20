@@ -34,7 +34,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import Integer, func, select, text
 
 logger = logging.getLogger(__name__)
 
@@ -115,29 +115,58 @@ class ReportSnapshot:
         return asdict(self)
 
 
+class ReportIdAllocationError(RuntimeError):
+    """The next report id could not be allocated. Generation must stop.
+
+    Before 2026-09-20 `next_report_id` swallowed every exception and answered
+    `DA-ARC-YYYY-001`. On DEV that fallback re-issued the id of the FIRST report
+    ever generated (August 2026, registry-wide) for a September delivery; the
+    later `store_report` insert then hit the UNIQUE constraint, was itself
+    swallowed, and the delivery's link rows were written against the OLD
+    report — the QA-034 cross-delivery leak. An id we cannot allocate is an
+    id we do not issue.
+    """
+
+
+class ReportStorageError(RuntimeError):
+    """A report could not be persisted and the caller asked for fail-closed."""
+
+
+_ID_SEQUENCE_LOCK_KEY = "docuaction:report_id_sequence"
+
+
 async def next_report_id(db, report_type: str = "verification",
                          now: Optional[datetime] = None) -> str:
     """The next DA-ARC-YYYY-NNN, sequential within the calendar year.
 
-    Derived from the count of reports already stored for the year. Two reports
-    generated in the same instant could collide; that is acceptable for a
-    human-facing label because `report_id` is not the primary key —
-    `review_reports.report_id` is UNIQUE, so a genuine collision fails the insert
-    loudly rather than silently overwriting an issued report.
+    Derived from the HIGHEST sequence number already issued for the year (not a
+    row count — a count drifts below the maximum as soon as any row is deleted
+    or an insert fails after allocation), under a transaction-scoped advisory
+    lock so two concurrent generations cannot draw the same number. Any failure
+    raises `ReportIdAllocationError`; there is no silent restart at 001.
     """
     from app.tefca_registry import models as reg
 
     stamp = now or datetime.now(timezone.utc)
     year = stamp.year
+    prefix = f"{REPORT_ID_PREFIX}-{year}-"
     try:
-        existing = int((await db.execute(
-            select(func.count()).select_from(reg.ReviewReport)
-            .where(reg.ReviewReport.report_id.like(f"{REPORT_ID_PREFIX}-{year}-%"))
-        )).scalar() or 0)
+        # Serialise allocation per transaction. Released at commit/rollback.
+        await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+                         {"k": _ID_SEQUENCE_LOCK_KEY})
+        suffix = func.nullif(
+            func.regexp_replace(reg.ReviewReport.report_id, r"^.*-(\d+)$", r"\1"), "")
+        highest = (await db.execute(
+            select(func.max(func.cast(suffix, Integer)))
+            .where(reg.ReviewReport.report_id.like(f"{prefix}%"))
+            .where(reg.ReviewReport.report_id.op("~")(r"-\d+$"))
+        )).scalar()
     except Exception as exc:  # noqa: BLE001
-        logger.warning("report id sequence unavailable, starting at 1: %s", exc)
-        existing = 0
-    return f"{REPORT_ID_PREFIX}-{year}-{existing + 1:03d}"
+        logger.error("report id allocation FAILED: %s: %s", type(exc).__name__, exc)
+        raise ReportIdAllocationError(
+            f"report id sequence unavailable ({type(exc).__name__}); no id issued"
+        ) from exc
+    return f"{prefix}{int(highest or 0) + 1:03d}"
 
 
 async def latest_evidence_generation(db, review_cycle_id: Optional[str]) -> Optional[str]:
@@ -251,13 +280,19 @@ async def build_snapshot(
 
 
 async def store_report(db, snapshot: ReportSnapshot, dataset: Dict[str, Any],
-                       html: str, generated_by_id=None) -> Optional[str]:
+                       html: str, generated_by_id=None, *,
+                       strict: bool = False) -> Optional[str]:
     """Persist the report and its provenance. Returns the row id, or None.
 
-    A storage failure does NOT fail generation. The analyst waiting on the
-    document still gets it, and the caller is told persistence did not complete —
-    the same trade `import_bridge` makes, and for the same reason: losing work
-    that already succeeded because a secondary write failed is the worse outcome.
+    Default (global reports): a storage failure does NOT fail generation. The
+    analyst waiting on the document still gets it, and the caller is told
+    persistence did not complete — the same trade `import_bridge` makes.
+
+    `strict=True` (every delivery-scoped report): a storage failure raises
+    `ReportStorageError` after rollback. A delivery report that was not stored
+    must never be linked, registered or audited under its id — the row is what
+    the id resolves to on download, and linking an unstored id is exactly how a
+    delivery's Reports tab came to serve another delivery's document (QA-034).
     """
     from app.tefca_registry import models as reg
 
@@ -301,6 +336,12 @@ async def store_report(db, snapshot: ReportSnapshot, dataset: Dict[str, Any],
         return str(row_id)
     except Exception as exc:  # noqa: BLE001
         await db.rollback()
+        if strict:
+            logger.error("report %s NOT persisted (fail-closed): %s: %s",
+                         snapshot.report_id, type(exc).__name__, exc)
+            raise ReportStorageError(
+                f"report {snapshot.report_id} could not be stored "
+                f"({type(exc).__name__}); nothing was issued") from exc
         logger.warning("report %s generated but not persisted: %s: %s",
                        snapshot.report_id, type(exc).__name__, exc)
         return None

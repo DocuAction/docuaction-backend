@@ -123,6 +123,13 @@ class GenerateReportRequest(BaseModel):
         default=None, description="One suggested methodology/control change per line")
     implemented_changes: Optional[str] = Field(
         default=None, description="One implemented methodology/control change per line")
+    #: Client-chosen token for ONE logical generation (QA-031). A repeat of the
+    #: same token by the same principal returns the report the first call
+    #: produced (`replayed: true`) instead of generating a second document —
+    #: so a client that timed out can retry safely. Optional; absent means
+    #: every call is a distinct generation, as before.
+    idempotency_key: Optional[str] = Field(default=None, max_length=64, min_length=8,
+                                           pattern=r"^[A-Za-z0-9._:-]+$")
 
 
 def parameter_error_http(exc) -> HTTPException:
@@ -192,6 +199,8 @@ async def generate(
     from app.reports.generator import (ReportGenerationError, ReportParameterError,
                                        generate_report)
 
+    from app.core import request_context
+
     parameters = dict(request.parameters or {})
     for key in ("period_start", "period_end", "suggested_changes", "implemented_changes"):
         value = getattr(request, key)
@@ -200,15 +209,21 @@ async def generate(
     if request.review_cycle_id and "review_cycle_id" not in parameters:
         parameters["review_cycle_id"] = request.review_cycle_id
 
+    if request.idempotency_key:
+        replay = await _replay_for_key(db, request.idempotency_key, getattr(user, "id", None))
+        if replay is not None:
+            return replay
+
     try:
-        result = await generate_report(
-            db,
-            report_type=request.report_type,
-            review_cycle_id=request.review_cycle_id,
-            generated_by=getattr(user, "email", None) or "SYSTEM",
-            generated_by_id=getattr(user, "id", None),
-            query_parameters=parameters,
-        )
+        with request_context.bind(idempotency_key=request.idempotency_key):
+            result = await generate_report(
+                db,
+                report_type=request.report_type,
+                review_cycle_id=request.review_cycle_id,
+                generated_by=getattr(user, "email", None) or "SYSTEM",
+                generated_by_id=getattr(user, "id", None),
+                query_parameters=parameters,
+            )
     except ReportParameterError as exc:
         # The request named no delivery, a delivery that does not exist, or a
         # snapshot that is not the delivery's. 422/404/409 with a machine code.
@@ -229,6 +244,56 @@ async def generate(
                         headers=download_headers(
                             safe_filename(result["report_id"], "html")))
     return _summary(result)
+
+
+async def _replay_for_key(db, key: str, user_id) -> Optional[Dict[str, Any]]:
+    """The report a previous call with this idempotency key produced, or None.
+
+    Looked up on the `report_generated` audit row (the event of record, which
+    carries the key in its details) for the SAME principal; a key is never
+    honoured across users. The answer is the stored report's metadata and
+    links — never a regeneration."""
+    from app.models.database import AuditLog
+    from app.reports.data.delivery_report_links import ACTION_GENERATED, links_for_report
+    from app.tefca_registry import models as reg
+
+    stmt = (select(AuditLog)
+            .where(AuditLog.action == ACTION_GENERATED,
+                   AuditLog.details["idempotency_key"].as_string() == key)
+            .order_by(AuditLog.created_at.desc()).limit(1))
+    if user_id is not None:
+        stmt = stmt.where(AuditLog.user_id == user_id)
+    audit = (await db.execute(stmt)).scalar_one_or_none()
+    if audit is None:
+        return None
+    report_id = audit.resource_id
+    row = (await db.execute(
+        select(reg.ReviewReport).where(reg.ReviewReport.report_id == report_id)
+    )).scalar_one_or_none()
+    if row is None:
+        return None
+    data = row.report_data or {}
+    links = await links_for_report(db, report_id)
+    return {
+        "report_id": report_id,
+        "report_type": row.report_type,
+        "stored_id": str(row.id),
+        "replayed": True,
+        "idempotency_key": key,
+        "snapshot_id": (audit.details or {}).get("snapshot_id"),
+        "delivery_link": {"written": True, "audit_id": str(audit.id),
+                          "link_ids": [link["id"] for link in links],
+                          "job_id": (audit.details or {}).get("job_id"),
+                          "intake_id": (audit.details or {}).get("intake_id")},
+        "artifacts": {"items": [link["artifact"] for link in links if link.get("artifact")]},
+        "snapshot": data.get("snapshot") or {},
+        "accessibility": (data.get("snapshot") or {}).get("accessibility"),
+        "formats": {
+            "html": f"/api/reports/{report_id}/html",
+            "pdf": f"/api/reports/{report_id}/pdf",
+            "csv": f"/api/reports/{report_id}/csv",
+        },
+    }
 
 
 def _pdf_response(html: str, report_id: str) -> Response:
@@ -253,7 +318,18 @@ def _pdf_response(html: str, report_id: str) -> Response:
         headers=download_headers(safe_filename(report_id, "pdf")))
 
 
-async def _stored(db, report_id: str):
+async def _stored(db, report_id: str, job_id: Optional[str] = None):
+    """The stored report, and — when the caller acts in a delivery context —
+    proof that it is THAT delivery's report.
+
+    `job_id` is the delivery the client is showing. A report whose frozen
+    dataset describes a different delivery (or no delivery: a GLOBAL report) is
+    refused with 409 `REPORT_DELIVERY_MISMATCH` and the refusal is audited.
+    Authorising by report id alone is how one delivery's Reports tab served
+    another delivery's CSV (QA-034).
+    """
+    from app.reports.data.delivery_report_links import (DELIVERY_MISMATCH,
+                                                        stored_delivery)
     from app.tefca_registry import models as reg
 
     row = (await db.execute(
@@ -261,7 +337,30 @@ async def _stored(db, report_id: str):
     )).scalar_one_or_none()
     if row is None:
         raise HTTPException(404, f"No report exists with id {report_id}")
+    if job_id:
+        described = stored_delivery(row)
+        if described["job_id"] != str(job_id):
+            from app.reports.data.delivery_report_links import record_report_download_failure
+
+            await record_report_download_failure(
+                db, report_id=report_id, report_type=row.report_type, fmt="any",
+                actor="unknown", code=DELIVERY_MISMATCH,
+                reason="stored report describes a different delivery than the one named",
+                extra={"requested_job_id": str(job_id),
+                       "stored_job_id": described["job_id"]})
+            raise HTTPException(409, {
+                "error": (f"Report {report_id} does not belong to delivery job "
+                          f"{job_id}; it describes "
+                          f"{described['job_id'] or 'no delivery (global scope)'}. "
+                          f"Nothing was served."),
+                "code": DELIVERY_MISMATCH})
     return row
+
+
+JOB_SCOPE_QUERY = Query(
+    None, description=("The delivery job the client is acting for. When given, the "
+                       "report must describe exactly that delivery or the request "
+                       "is refused (409 REPORT_DELIVERY_MISMATCH)."))
 
 
 @router.get("", summary="List generated reports")
@@ -368,7 +467,8 @@ async def reports_by_delivery(
 
     from app.reports.data.artifact_registry import storage_durability
     from app.reports.data.delivery_report_links import (group_links_by_report,
-                                                        links_for_job)
+                                                        links_for_job,
+                                                        quarantined_links_for_job)
 
     try:
         key = _uuid.UUID(job_id)
@@ -376,6 +476,7 @@ async def reports_by_delivery(
         raise HTTPException(422, {"error": f"{job_id!r} is not a valid job id",
                                   "code": "DELIVERY_IDENTIFIER_INVALID"})
     links = await links_for_job(db, key)
+    quarantined = await quarantined_links_for_job(db, key)
     artifacts = [link["artifact"] for link in links if link.get("artifact")]
     backends = sorted({a["storage_backend"] for a in artifacts})
     storage = (storage_durability(backends[0]) if len(backends) == 1
@@ -386,8 +487,14 @@ async def reports_by_delivery(
     return {"job_id": str(key), "count": len(links), "items": links,
             "reports": group_links_by_report(links),
             "artifacts": artifacts, "storage": storage,
+            # Links whose stored report describes another delivery are listed
+            # here by id and reason only — never as downloadable items.
+            "quarantined": quarantined,
             "scope": {"model": "global_roles", "minimum_role": "reviewer",
-                      "per_delivery_scoping": False}}
+                      "per_delivery_scoping": True,
+                      "note": ("Every item is verified against the stored report's "
+                               "own delivery; downloads with ?job_id= are refused "
+                               "on mismatch (409 REPORT_DELIVERY_MISMATCH).")}}
 
 
 @router.get("/{report_id}", summary="Report metadata and snapshot provenance")
@@ -538,6 +645,7 @@ async def post_release(
 @router.get("/{report_id}/package", summary="Download the email-ready deliverable package")
 async def get_package(
     report_id: str,
+    job_id: Optional[str] = JOB_SCOPE_QUERY,
     db: AsyncSession = Depends(get_db),
     # `reviewer` (Decision 1, 2026-09-16): the package is the report's raw
     # evidence in every format at once.
@@ -549,7 +657,7 @@ async def get_package(
     from app.reports.data.release import build_package, current_release
     from app.reports.engine.pdf_engine import pdf_available, render_pdf, unavailable_reason
 
-    row = await _stored(db, report_id)
+    row = await _stored(db, report_id, job_id)
     data = row.report_data or {}
     snapshot = data.get("snapshot") or {}
     dataset = dict(data.get("dataset") or {})
@@ -593,6 +701,7 @@ async def get_package(
 @router.get("/{report_id}/html", summary="Download a report as HTML")
 async def get_report_html(
     report_id: str,
+    job_id: Optional[str] = JOB_SCOPE_QUERY,
     db: AsyncSession = Depends(get_db),
     # `reviewer` (Decision 1, 2026-09-16): identical bytes to the artifact
     # download route, which is already reviewer-gated; a legacy alias must not
@@ -605,10 +714,10 @@ async def get_report_html(
     on read would quietly rewrite history the moment the underlying entities
     changed.
     """
-    row = await _stored(db, report_id)
+    row = await _stored(db, report_id, job_id)
     if not row.report_html:
         raise HTTPException(404, f"Report {report_id} has no stored HTML.")
-    await _audit_download(db, row, "html", user)
+    await _audit_download(db, row, "html", user, job_id=job_id)
     # Served as an attachment, not rendered. A stored report is a document the
     # recipient received; rendering it on this origin would execute whatever
     # markup it contains with the application's own privileges.
@@ -619,16 +728,17 @@ async def get_report_html(
 @router.get("/{report_id}/pdf", summary="Download a report as PDF")
 async def get_report_pdf(
     report_id: str,
+    job_id: Optional[str] = JOB_SCOPE_QUERY,
     db: AsyncSession = Depends(get_db),
     # `reviewer` (Decision 1, 2026-09-16): same document as /html, rendered.
     user=Depends(require_role_audited("reviewer", resource_type="report")),
 ):
     """PDF rendered from the STORED HTML — same document, different container."""
-    row = await _stored(db, report_id)
+    row = await _stored(db, report_id, job_id)
     if not row.report_html:
         raise HTTPException(404, f"Report {report_id} has no stored HTML to render.")
     response = _pdf_response(row.report_html, _stem_for(row))
-    await _audit_download(db, row, "pdf", user)
+    await _audit_download(db, row, "pdf", user, job_id=job_id)
     return response
 
 
@@ -655,6 +765,7 @@ def docx_for_stored_report(row) -> Optional[bytes]:
 @router.get("/{report_id}/docx", summary="Download the editable (DOCX) deliverable")
 async def get_report_docx(
     report_id: str,
+    job_id: Optional[str] = JOB_SCOPE_QUERY,
     db: AsyncSession = Depends(get_db),
     # `reviewer` (Decision 1, 2026-09-16): built from the same stored dataset.
     user=Depends(require_role_audited("reviewer", resource_type="report")),
@@ -664,7 +775,7 @@ async def get_report_docx(
     page numbers, and document properties. Built from the stored dataset."""
     from app.reports.engine.docx_engine import DOCX_CONTENT_TYPE, docx_available
 
-    row = await _stored(db, report_id)
+    row = await _stored(db, report_id, job_id)
     if not docx_available():
         raise HTTPException(503, "DOCX generation is unavailable: python-docx is not installed.")
     if not (row.report_data or {}).get("dataset"):
@@ -672,7 +783,7 @@ async def get_report_docx(
     docx_bytes = await run_in_threadpool(docx_for_stored_report, row)
     if docx_bytes is None:
         raise HTTPException(404, f"Report type '{row.report_type}' has no DOCX form.")
-    await _audit_download(db, row, "docx", user)
+    await _audit_download(db, row, "docx", user, job_id=job_id)
     return Response(
         content=docx_bytes, media_type=DOCX_CONTENT_TYPE,
         headers=download_headers(
@@ -722,6 +833,7 @@ def csv_for_stored_report(row) -> str:
 @router.get("/{report_id}/csv", summary="Download a report's data as CSV")
 async def get_report_csv(
     report_id: str,
+    job_id: Optional[str] = JOB_SCOPE_QUERY,
     db: AsyncSession = Depends(get_db),
     # `reviewer` (Decision 1, 2026-09-16): regenerated from the same stored
     # dataset as HTML/PDF/DOCX.
@@ -735,10 +847,10 @@ async def get_report_csv(
     """
     from app.reports.engine.csv_engine import to_bytes
 
-    row = await _stored(db, report_id)
+    row = await _stored(db, report_id, job_id)
     if not (row.report_data or {}).get("dataset"):
         raise HTTPException(404, f"Report {report_id} has no stored dataset.")
-    await _audit_download(db, row, "csv", user)
+    await _audit_download(db, row, "csv", user, job_id=job_id)
     return Response(
         content=to_bytes(csv_for_stored_report(row)), media_type="text/csv",
         headers=download_headers(safe_filename(_stem_for(row), "csv")))
