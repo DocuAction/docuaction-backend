@@ -236,3 +236,39 @@ async def test_api_endpoint_check_probes_only_public_endpoints(monkeypatch):
     assert out["passed"] is True, out
     assert all("dashboard/summary" not in u for u in seen)
     assert any(u.endswith("/api/tefca/status") for u in seen)
+
+
+# ── analyst directory (QA-050, QA-053) ────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_analyst_directory_lists_verified_assignable_accounts_with_workload(rolled_back_db):
+    from app.models.database import User
+    from app.tefca_registry import models as reg
+    from app.tefca_registry.workflow_routes import analyst_directory
+    from sqlalchemy import select
+
+    db = rolled_back_db
+    tag = uuid.uuid4().hex[:6]
+    analyst = User(id=uuid.uuid4(), email=f"dir-{tag}@synthetic.test", password_hash="x",
+                   full_name="Directory Analyst", role="reviewer")
+    viewer = User(id=uuid.uuid4(), email=f"viewer-{tag}@synthetic.test", password_hash="x",
+                  full_name="", role="viewer")
+    inactive = User(id=uuid.uuid4(), email=f"gone-{tag}@synthetic.test", password_hash="x",
+                    full_name="Gone", role="reviewer", is_active=False)
+    db.add_all([analyst, viewer, inactive])
+    await db.flush()
+    intake_id = await _intake(db)
+    org = await _org(db, intake_id, "A1")
+    review_id = await _dq_case(db, org)
+    record = (await db.execute(select(reg.ReviewRecord)
+                               .where(reg.ReviewRecord.review_id == review_id))).scalar_one()
+    record.assigned_to_user_id = analyst.id
+    await db.flush()
+
+    out = await analyst_directory(db=db, user=SUPERVISOR)
+    by_email = {i["email"]: i for i in out["items"]}
+    assert by_email[analyst.email]["open_cases"] == 1
+    assert by_email[analyst.email]["display_name"] == "Directory Analyst"
+    assert by_email[analyst.email]["role"] == "reviewer"
+    assert viewer.email not in by_email and inactive.email not in by_email
+    assert "eligible_roles" in out
