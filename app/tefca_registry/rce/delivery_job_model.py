@@ -47,6 +47,7 @@ from sqlalchemy import (Boolean, Column, DateTime, Index, Integer, String, Text,
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from app.core.database import Base
+from app.core.time_utils import utc_isoformat
 
 
 class RceDeliveryJob(Base):
@@ -180,14 +181,17 @@ class RceDeliveryJob(Base):
             "source_name": self.source_name,
             "government_reference": self.government_reference,
             "notes": self.notes,
-            "received_date": (self.received_date.isoformat()
-                              if self.received_date else None),
+            "received_date": utc_isoformat(self.received_date),
             "registered_by": self.registered_by,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "started_at": self.started_at.isoformat() if self.started_at else None,
-            "completed_at": (self.completed_at.isoformat()
-                             if self.completed_at else None),
-            "failed_at": self.failed_at.isoformat() if self.failed_at else None,
+            # QA-010: naive columns (UTC by construction, written via
+            # datetime.utcnow()) are given an explicit +00:00 offset here so
+            # this Overview/Identity block agrees with the Audit History and
+            # Processing Timeline for the exact same event, instead of being
+            # reinterpreted as local time by the browser.
+            "created_at": utc_isoformat(self.created_at),
+            "started_at": utc_isoformat(self.started_at),
+            "completed_at": utc_isoformat(self.completed_at),
+            "failed_at": utc_isoformat(self.failed_at),
             "attempt_count": self.attempt_count,
             "error_reason": self.error_reason,
             "intake_id": (str(self.source_intake_id)
