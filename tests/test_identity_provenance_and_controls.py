@@ -272,3 +272,6 @@ async def test_analyst_directory_lists_verified_assignable_accounts_with_workloa
     assert by_email[analyst.email]["role"] == "reviewer"
     assert viewer.email not in by_email and inactive.email not in by_email
     assert "eligible_roles" in out
+    # Below the supervisor floor: no accounts, a stated reason (LOGIN-013).
+    below = await analyst_directory(db=db, user=SimpleNamespace(id=viewer.id, email=viewer.email, role="viewer"))
+    assert below["items"] == [] and below["availability"] == "requires_role:senior_analyst"

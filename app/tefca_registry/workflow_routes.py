@@ -271,19 +271,32 @@ ANALYST_ROLES = ("reviewer", "senior_analyst", "qalead", "program_manager", "adm
 @router.get("/analysts", summary="Analysts a supervisor may assign work to")
 async def analyst_directory(
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role(ROLE_SUPERVISOR)),
+    user=Depends(require_role("viewer")),
 ):
     """The governed analyst directory for assignment (QA-050, QA-053).
 
     Active accounts whose role can hold a case, each with the immutable id,
     email, display name, role and current open workload — so an assignment
     control offers verified identities instead of a free-text id field.
-    Supervisor floor: the same floor as the assignment routes it feeds.
+
+    VIEWER FLOOR, SUPERVISOR CONTENT. Every TEFCA read admits a viewer (the
+    policy tests `test_every_workflow_read_admits_a_viewer` and
+    `test_no_tefca_read_endpoint_sits_above_the_viewer_floor` enforce it), but
+    a staff directory is PII a viewer must never see (LOGIN-013). Below the
+    supervisor floor the response carries NO accounts and states the
+    availability reason — the same shape `/api/reports/{id}` uses below
+    reviewer — so the client can say why the picker is empty.
     """
     from sqlalchemy import func, select
 
+    from app.core.security import role_at_least
     from app.models.database import User
     from app.tefca_registry import models as reg
+
+    if not role_at_least(user, ROLE_SUPERVISOR):
+        return {"items": [], "count": 0, "eligible_roles": list(ANALYST_ROLES),
+                "availability": f"requires_role:{ROLE_SUPERVISOR}",
+                "note": "The analyst directory is available to supervisors and above."}
 
     rows = (await db.execute(
         select(User.id, User.email, User.full_name, User.role)
