@@ -393,6 +393,13 @@ def test_no_tefca_read_endpoint_sits_above_the_viewer_floor():
         # results a viewer legitimately needs remain open: /api/tefca/qa/score,
         # /qa/health, /qa/audit and /qa/evidence-summary are all still viewer.
         "/api/tefca/qa/sweep",
+        # Analyst directory — senior_analyst (5), added 2026-09-20 (QA-050,
+        # QA-053). It is the supervisor's assignment picker: a list of staff
+        # accounts (email, name, role, open workload), not entity data. Staff
+        # email addresses are the PII category the /api/tefca/audit-trail and
+        # QA work-queue exceptions turn on (LOGIN-013), and its only consumers
+        # are the assignment routes, which sit at the same floor.
+        "/api/tefca/workflow/analysts",
         # QA work queue — qalead (6). Directly analogous to the tier-3 queue
         # above: it is a QA lead's worklist, not entity data, and it names the
         # ANALYST who made each determination. Staff email addresses are the
