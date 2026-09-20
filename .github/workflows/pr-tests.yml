@@ -51,3 +51,69 @@ jobs:
           name: pr-test-results-${{ github.sha }}
           path: test-results.xml
           retention-days: 30
+
+  # 2026-09-20 (QA-034/035/036 review gate): the P0 report-isolation, rollup
+  # and identity/provenance suites are DATABASE-BACKED and were only ever
+  # skipped by the job above. This job runs exactly those suites against a
+  # disposable PostgreSQL service (never DEV, never PROD) with the schema
+  # migrated to head through Alembic under the same owner/app role split the
+  # real environments use. Deliberately NOT the whole suite: main carries
+  # pre-existing DB-only failures (test_automated_verification*,
+  # test_promotion_one_pass) that this gate does not own.
+  isolation-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: isolationtest
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      SECRET_KEY: isolationtestisolationtestisolationtestisolationtestisolationtest
+      ALLOWED_HOSTS: '*'
+      DATABASE_URL: postgresql+asyncpg://postgres:isolationtest@127.0.0.1:5432/test
+      DB_MIGRATION_ROLE: docuaction_owner
+      DB_APP_ROLE: docuaction_app
+      PGPASSWORD: isolationtest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx
+      - name: Create the isolated database and roles (owner / app split, UTC)
+        run: |
+          psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE ROLE docuaction_owner LOGIN PASSWORD 'x';" -c "CREATE ROLE docuaction_app LOGIN PASSWORD 'x';" -c "CREATE DATABASE test OWNER docuaction_owner;" -c "ALTER DATABASE test SET timezone = 'UTC';"
+          psql -h 127.0.0.1 -U postgres -d test -v ON_ERROR_STOP=1 -c "ALTER SCHEMA public OWNER TO docuaction_owner;" -c "GRANT ALL ON SCHEMA public TO docuaction_owner;" -c "GRANT USAGE, CREATE ON SCHEMA public TO docuaction_app;"
+      - name: Migrate to head (Alembic, owner role)
+        run: python -m alembic upgrade head
+      - name: Run the database-backed isolation suites
+        run: |
+          python -m pytest \
+            tests/test_report_delivery_isolation_p0.py \
+            tests/test_delivery_rollups_isolation.py \
+            tests/test_identity_provenance_and_controls.py \
+            tests/test_review_cycle_report_scope_isolation.py \
+            tests/test_report_scope_summary_isolation.py \
+            tests/test_report_links.py \
+            tests/test_report_storage_durable.py \
+            tests/test_report_authorization.py \
+            -v --tb=short -rs --junitxml=isolation-results.xml
+      - name: Fail if any isolation test was skipped for want of a database
+        run: |
+          if grep -q 'No database reachable' isolation-results.xml; then echo "::error::database-backed isolation tests were skipped"; exit 1; fi
+      - name: Upload isolation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: isolation-postgres-results-${{ github.sha }}
+          path: isolation-results.xml
+          retention-days: 30

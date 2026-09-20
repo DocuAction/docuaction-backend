@@ -113,7 +113,16 @@ def stage_expr():
 
 
 def _iso(value):
-    if isinstance(value, (datetime, date)):
+    # Naive datetimes are UTC by construction (rce_issues.created_at is written
+    # with datetime.utcnow()); state the offset so a browser never parses the
+    # value as local time (QA-010).
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            from datetime import timezone
+
+            value = value.replace(tzinfo=timezone.utc)
+        return value.isoformat()
+    if isinstance(value, date):
         return value.isoformat()
     return value
 

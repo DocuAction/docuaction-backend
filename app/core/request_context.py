@@ -51,7 +51,8 @@ _TRACEPARENT = re.compile(
     r"^([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$")
 
 _FIELDS = ("request_id", "trace_id", "span_id", "job_id", "intake_id", "stage",
-           "attempt", "report_id", "actor", "route")
+           "attempt", "report_id", "actor", "route",
+           "idempotency_key")
 
 _vars: Dict[str, contextvars.ContextVar] = {
     name: contextvars.ContextVar(f"docuaction_{name}", default=None)

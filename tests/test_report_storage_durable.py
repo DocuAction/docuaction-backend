@@ -402,7 +402,8 @@ def test_reports_survive_a_restart_from_registry_and_store(committed, client):
     assert payload["storage"] == {"storage_backend": "local", "durable": False,
                                   "storage_note": payload["storage"]["storage_note"]}
     assert "tests" in payload["storage"]["storage_note"]
-    assert payload["scope"]["per_delivery_scoping"] is False
+    assert payload["scope"]["per_delivery_scoping"] is True  # QA-034: verified per delivery since 2026-09-20
+    assert payload["quarantined"] == []
     assert payload["scope"]["minimum_role"] == "reviewer"
     assert len(payload["reports"]) == 1 and payload["reports"][0]["report_id"] == report_id
     assert len(payload["reports"][0]["artifacts"]) == len(_expected_types())

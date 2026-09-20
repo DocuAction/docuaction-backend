@@ -238,6 +238,17 @@ class ReportDataService:
             logger.warning("report: review records unavailable: %s", exc)
             return []
 
+    async def _scope_entity_ids(self, review_cycle_id: Optional[str]) -> Optional[List[Any]]:
+        """Entity ids in the cycle's frozen sample, or None for the registry-wide
+        report. Sections that group registry tables (entity status, source
+        coverage) restrict to these so a scoped report never counts entities
+        outside its own population (QA-035)."""
+        if not review_cycle_id:
+            return None
+        records = await self._review_records(review_cycle_id)
+        return sorted({r.entity_id for r in records if getattr(r, "entity_id", None)},
+                      key=str)
+
     async def _cycle(self, review_cycle_id: Optional[str]):
         from app.tefca_registry import models as reg
 
@@ -436,11 +447,13 @@ class ReportDataService:
                                           ) -> Dict[str, Any]:
         from app.tefca_registry import models as reg
 
+        scope_ids = await self._scope_entity_ids(review_cycle_id)
         try:
-            rows = (await self.db.execute(
-                select(reg.TefcaRegEntity.verification_status, func.count())
-                .group_by(reg.TefcaRegEntity.verification_status)
-            )).all()
+            stmt = (select(reg.TefcaRegEntity.verification_status, func.count())
+                    .group_by(reg.TefcaRegEntity.verification_status))
+            if scope_ids is not None:
+                stmt = stmt.where(reg.TefcaRegEntity.id.in_(scope_ids)) if scope_ids                     else stmt.where(False)  # noqa: E712 - empty scope counts nothing
+            rows = (await self.db.execute(stmt)).all()
         except Exception as exc:  # noqa: BLE001
             logger.warning("report: entity status unavailable: %s", exc)
             rows = []
@@ -463,14 +476,16 @@ class ReportDataService:
         """
         from app.tefca_registry import models as reg
 
+        scope_ids = await self._scope_entity_ids(review_cycle_id)
         try:
-            rows = (await self.db.execute(
-                select(reg.TefcaVerification.source,
-                       reg.TefcaVerification.verification_status,
-                       func.count())
-                .group_by(reg.TefcaVerification.source,
-                          reg.TefcaVerification.verification_status)
-            )).all()
+            stmt = (select(reg.TefcaVerification.source,
+                           reg.TefcaVerification.verification_status,
+                           func.count())
+                    .group_by(reg.TefcaVerification.source,
+                              reg.TefcaVerification.verification_status))
+            if scope_ids is not None:
+                stmt = stmt.where(reg.TefcaVerification.entity_id.in_(scope_ids))                     if scope_ids else stmt.where(False)  # noqa: E712
+            rows = (await self.db.execute(stmt)).all()
         except Exception as exc:  # noqa: BLE001
             logger.warning("report: verification coverage unavailable: %s", exc)
             rows = []
@@ -506,14 +521,30 @@ class ReportDataService:
                                   ) -> Dict[str, Any]:
         from app.Tefca.models import TEFCAReview
 
-        try:
-            rows = (await self.db.execute(
-                select(TEFCAReview.qhin, TEFCAReview.status, func.count())
-                .group_by(TEFCAReview.qhin, TEFCAReview.status)
-            )).all()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("report: qhin comparison unavailable: %s", exc)
+        if review_cycle_id:
+            # Scoped: QHIN attribution from the cycle's own frozen review
+            # records, never the registry-wide legacy summary table (which has
+            # no entity or cycle key and cannot be restricted).
+            records = await self._review_records(review_cycle_id)
             rows = []
+            tally: Dict[tuple, int] = {}
+            for r in records:
+                vr = getattr(r, "verification_results", None) or {}
+                qhin = (vr.get("qhin") or vr.get("qhin_name") or vr.get("managed_by_qhin")
+                        or "Unattributed")
+                status = (getattr(r, "reviewer_resolution", None)
+                          or getattr(r, "classification_bucket", None) or "pending")
+                tally[(str(qhin), str(status))] = tally.get((str(qhin), str(status)), 0) + 1
+            rows = [(q, st, n) for (q, st), n in tally.items()]
+        else:
+            try:
+                rows = (await self.db.execute(
+                    select(TEFCAReview.qhin, TEFCAReview.status, func.count())
+                    .group_by(TEFCAReview.qhin, TEFCAReview.status)
+                )).all()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("report: qhin comparison unavailable: %s", exc)
+                rows = []
 
         per_qhin: Dict[str, Dict[str, int]] = {}
         for qhin, status, count in rows:

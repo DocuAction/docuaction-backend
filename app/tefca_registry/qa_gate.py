@@ -119,6 +119,8 @@ def effective_determination(events: List[E]) -> Optional[Dict[str, Any]]:
         "event_type": determination.event_type,
         "determination": determination.determination,
         "determined_bucket": determination.determined_bucket,
+        "actor_user_id": (str(determination.actor_user_id)
+                          if determination.actor_user_id else None),
         "actor_email": determination.actor_email,
         "actor_role": determination.actor_role,
         "occurred_at": determination.occurred_at,
@@ -203,7 +205,7 @@ async def record_analyst_determination(
     the check now lives, mirroring `priority_review.py`'s own pattern
     exactly.
     """
-    await _review_or_refuse(db, review_id)
+    record = await _review_or_refuse(db, review_id)
     actor_id, actor_email, actor_role = _actor(user)
     rationale = _require_rationale(rationale, "rationale")
 
@@ -211,6 +213,14 @@ async def record_analyst_determination(
         raise QaGateRefused("determination must be CONFIRM or RECLASSIFY")
     if determination == "RECLASSIFY" and determined_bucket not in ("B1", "B2", "B3", "B4"):
         raise QaGateRefused("RECLASSIFY requires determined_bucket in B1..B4")
+    if determination == "RECLASSIFY" and record.classification_bucket \
+            and determined_bucket == record.classification_bucket:
+        # QA-057: a "reclassification" to the bucket already in force is not a
+        # decision; the analyst either confirms or names a different bucket.
+        raise QaGateRefused(
+            f"RECLASSIFY to {determined_bucket} is a no-op: {review_id} is already "
+            f"classified {record.classification_bucket}. Use CONFIRM, or name a "
+            f"different bucket.")
 
     events = await _events(db, review_id)
     if is_reportable(events):

@@ -183,11 +183,29 @@ def _result(value: str, basis, detail: str, **extra) -> Dict[str, Any]:
 
 # ── review state ─────────────────────────────────────────────────────────────
 
+QUEUE_SOURCE_LABELS = {
+    "data_quality": "exception work item(s) from delivery findings",
+    "dq_bridge": "exception work item(s) from delivery findings",
+    "post_promotion_verification": "post-promotion verification work item(s)",
+    "review_cycle": "sampled review case(s)",
+    "priority": "priority review case(s)",
+    "unknown": "item(s) of unstated origin",
+}
+
+
+def _breakdown_sentence(open_breakdown) -> str:
+    if not open_breakdown:
+        return ""
+    parts = [f"{int(n)} {QUEUE_SOURCE_LABELS.get(str(k), str(k) + ' item(s)')}"
+             for k, n in sorted(open_breakdown.items(), key=lambda kv: str(kv[0]))]
+    return " (" + "; ".join(parts) + ")"
+
+
 def review_state(*, outcome_code: str, snapshot_passed: bool,
                  open_work_items: int = 0, claimed_work_items: int = 0,
                  determined_items: int = 0, qa_pending: int = 0,
                  qa_in_progress: int = 0, qa_approved: int = 0,
-                 closed: bool = False) -> Dict[str, Any]:
+                 closed: bool = False, open_breakdown=None) -> Dict[str, Any]:
     """Where the humans are. Never a statement about data quality.
 
     Counts come from review records tied to the delivery (DQ bridge cases and
@@ -214,13 +232,15 @@ def review_state(*, outcome_code: str, snapshot_passed: bool,
             and _n(qa_in_progress) == 0 and _n(qa_approved) == total:
         return _review(REVIEW_QA_APPROVED, "Every item has been QA approved.")
     return _review(REVIEW_READY_ANALYST,
-                   f"{_n(open_work_items)} open item(s); a review cycle may be created. "
+                   f"{_n(open_work_items)} open item(s){_breakdown_sentence(open_breakdown)}; "
+                   "a review cycle may be created. "
                    "Readiness for review is a workflow state, not a statement that "
-                   "the data is clean.")
+                   "the data is clean.",
+                   open_breakdown=dict(open_breakdown or {}))
 
 
-def _review(value: str, detail: str) -> Dict[str, Any]:
-    return {"value": value, "code": REVIEW_CODES[value], "detail": detail}
+def _review(value: str, detail: str, **extra: Any) -> Dict[str, Any]:
+    return {"value": value, "code": REVIEW_CODES[value], "detail": detail, **extra}
 
 
 # ── verification coverage ────────────────────────────────────────────────────

@@ -160,7 +160,11 @@ async def generate_report(
     """
     from app.core import request_context, telemetry
     from app.reports.data.report_data_service import ReportDataService
-    from app.reports.data.report_snapshot import build_snapshot, next_report_id, store_report
+    from app.reports.data.report_reconciliation import (
+        RECONCILIATION_CODE, delivery_provenance, is_scoped, reconcile_dataset)
+    from app.reports.data.report_snapshot import (
+        ReportIdAllocationError, ReportStorageError, build_snapshot, next_report_id,
+        store_report)
     from app.reports.engine import chart_engine
     from app.reports.engine.accessibility import validate_html
     from app.reports.engine.csv_engine import report_to_csv
@@ -299,6 +303,23 @@ async def generate_report(
         dataset["delivery"] = ({"job_id": delivery_job_id, "intake_id": resolved_intake_id}
                                if resolved_intake_id else None)
 
+    # 1b. Provenance and reconciliation - BEFORE anything is rendered or issued.
+    #
+    # A scoped report (a delivery or a review cycle named) must describe one
+    # population; a section counting more entities than the scope received is a
+    # leak of registry-wide data into a delivery's document (QA-035) and the
+    # report is refused rather than issued. Global reports are unchanged.
+    scoped = is_scoped(dataset)
+    dataset["provenance"] = (await delivery_provenance(db, dataset)
+                             if dataset.get("delivery") else None)
+    if scoped:
+        problems = reconcile_dataset(dataset)
+        if problems:
+            logger.error("report refused (%s): %s", RECONCILIATION_CODE, "; ".join(problems))
+            raise ReportGenerationError(
+                f"Report sections do not reconcile to the scoped population "
+                f"({RECONCILIATION_CODE}): {'; '.join(problems)}. Nothing was issued.")
+
     # 2. Charts from that same data.
     chart_images = chart_engine.render_all(dataset["chart_list"])
 
@@ -317,7 +338,10 @@ async def generate_report(
         context["document_status"] = "Draft — awaiting PM review"
         context["reviewed_by"] = None
 
-    report_id = await next_report_id(db, report_type)
+    try:
+        report_id = await next_report_id(db, report_type)
+    except ReportIdAllocationError as exc:
+        raise ReportGenerationError(str(exc)) from exc
     template = TEMPLATES[report_type]
 
     # One span for the whole generation — render, validate, snapshot, persist,
@@ -379,8 +403,14 @@ async def generate_report(
         artifacts = None
         delivery_link = None
         if persist:
-            stored_id = await store_report(db, snapshot, dataset, html,
-                                           generated_by_id=generated_by_id)
+            # Fail closed for a scoped report: an unstored id must never be
+            # linked or registered (QA-034). ReportStorageError propagates.
+            try:
+                stored_id = await store_report(db, snapshot, dataset, html,
+                                               generated_by_id=generated_by_id,
+                                               strict=scoped)
+            except ReportStorageError as exc:
+                raise ReportGenerationError(str(exc)) from exc
 
             # 8. Register the DELIVERED bytes in the durable artifact registry.
             #
@@ -485,6 +515,7 @@ async def generate_report(
             with request_context.bind(report_id=report_id):
                 delivery_link = await record_report_generation(
                     db, report_id=report_id, report_type=report_type, dataset=dataset,
+                    stored_id=stored_id,
                     template_version=TEMPLATE_VERSION, generated_by=generated_by,
                     generated_by_id=generated_by_id, artifact=artifact,
                     artifacts=(artifacts or {}).get("artifacts"),

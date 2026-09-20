@@ -177,7 +177,15 @@ def _as_uuid(value) -> Optional[uuid.UUID]:
 
 
 def _iso(value) -> Optional[str]:
-    return value.isoformat() if isinstance(value, datetime) else value
+    """ISO-8601 with an explicit offset. Naive datetimes in this codebase are
+    UTC by construction (`datetime.utcnow()` writers, e.g. rce_issues.created_at)
+    and are labelled so; a browser given an offset-less value parses it as
+    local time, which showed a 4-hour skew on the exception ledger (QA-010)."""
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.isoformat()
+    return value
 
 
 def _utc_naive(value) -> datetime:
@@ -457,8 +465,15 @@ async def _review_counts(db, intake_id) -> Dict[str, int]:
     record alone and is reported as zero here; lane P's `status_for_job` reads
     the QA gate events for it.
     """
-    row = (await db.execute(text("""
+    # THIS delivery's cases only: the ones created against it (the DQ bridge
+    # and the review cycle both stamp `source_intake_id`). Before 2026-09-20
+    # a second disjunct also counted every case for any ENTITY the delivery
+    # contains — cases from other deliveries, fixtures and the priority queue
+    # — which is how a 50-record delivery reported 55 open items (QA-039,
+    # QA-V03). The breakdown by queue source is what the overview labels.
+    rows = (await db.execute(text("""
         SELECT
+          coalesce(r.verification_results->>'queue_source', 'unknown') AS queue_source,
           count(*) FILTER (WHERE assigned_to_user_id IS NULL AND reviewer_resolution IS NULL
                              AND reportable_at IS NULL) AS open_items,
           count(*) FILTER (WHERE assigned_to_user_id IS NOT NULL AND reviewer_resolution IS NULL
@@ -468,14 +483,18 @@ async def _review_counts(db, intake_id) -> Dict[str, int]:
           count(*) FILTER (WHERE reportable_at IS NOT NULL) AS qa_approved
         FROM review_records r
         WHERE r.verification_results->>'source_intake_id' = :i
-           OR r.entity_id IN (SELECT canonical_entity_id FROM rce_curated_records
-                              WHERE source_intake_id = CAST(:i AS uuid)
-                                AND canonical_entity_id IS NOT NULL)"""),
-        {"i": str(intake_id)})).one()
-    return {"open_work_items": int(row.open_items or 0),
-            "claimed_work_items": int(row.claimed_items or 0),
-            "qa_pending": int(row.qa_pending or 0),
-            "qa_approved": int(row.qa_approved or 0)}
+        GROUP BY 1"""),
+        {"i": str(intake_id)})).all()
+    out = {"open_work_items": 0, "claimed_work_items": 0, "qa_pending": 0,
+           "qa_approved": 0, "open_breakdown": {}}
+    for row in rows:
+        out["open_work_items"] += int(row.open_items or 0)
+        out["claimed_work_items"] += int(row.claimed_items or 0)
+        out["qa_pending"] += int(row.qa_pending or 0)
+        out["qa_approved"] += int(row.qa_approved or 0)
+        if int(row.open_items or 0):
+            out["open_breakdown"][row.queue_source] = int(row.open_items or 0)
+    return out
 
 
 # ═══ job list and single job ═════════════════════════════════════════════════
@@ -730,20 +749,43 @@ async def _build_block(db) -> Dict[str, Any]:
 
 
 async def _reports(db, job_id) -> List[Dict[str, Any]]:
-    rows = (await db.execute(
-        select(tm.RceDeliveryReportLink)
-        .where(tm.RceDeliveryReportLink.job_id == job_id)
-        .order_by(tm.RceDeliveryReportLink.generated_at.desc()))).scalars().all()
+    """Reports for the job, one entry per report id, each VERIFIED against the
+    stored report it names (`links_for_job` drops any link whose stored report
+    describes another delivery — QA-034) and carrying every registered
+    rendering with format, filename, size and checksum (QA-033)."""
+    from app.reports.data.delivery_report_links import links_for_job
+
+    links = await links_for_job(db, job_id)
     grouped: Dict[str, Dict[str, Any]] = {}
-    for row in rows:
-        entry = grouped.setdefault(row.report_id, {
-            "report_id": row.report_id, "report_type": row.report_type,
-            "snapshot_id": str(row.snapshot_id), "generated_at": _iso(row.generated_at),
-            "generated_by": row.generated_by, "template_version": row.template_version,
-            "build_sha": row.build_sha, "artifacts": []})
-        if row.artifact_id:
-            entry["artifacts"].append(str(row.artifact_id))
+    for link in links:
+        entry = grouped.setdefault(link["report_id"], {
+            "report_id": link["report_id"], "report_type": link.get("report_type"),
+            "snapshot_id": link.get("snapshot_id"), "generated_at": link.get("generated_at"),
+            "generated_by": link.get("generated_by"),
+            "template_version": link.get("template_version"),
+            "build_sha": link.get("build_sha"), "correlation_id": link.get("correlation_id"),
+            "delivery_verified": True, "artifacts": []})
+        if link.get("artifact_id"):
+            entry["artifacts"].append({
+                "id": str(link["artifact_id"]),
+                "format": _format_word(link.get("content_type")),
+                "content_type": link.get("content_type"),
+                "filename": f"delivery-report-{link['report_id']}."
+                            f"{_format_word(link.get('content_type'))}",
+                "size_bytes": link.get("size_bytes"),
+                "sha256": link.get("file_sha256"),
+                "artifact_version": link.get("artifact_version"),
+                "storage_backend": link.get("storage_backend"),
+                "durable": link.get("durable"),
+                "status": "registered" if link.get("file_sha256") else "unregistered",
+            })
     return list(grouped.values())
+
+
+def _format_word(content_type: Optional[str]) -> str:
+    return {"text/html": "html", "text/csv": "csv", "application/pdf": "pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+            }.get(content_type or "", "file")
 
 
 async def _verification_block(db, intake, job) -> Dict[str, Any]:
@@ -1107,6 +1149,9 @@ async def delivery_audit_route(
     intake_id: str,
     limit: int = Query(200, ge=1, le=1000),
     offset: int = Query(0, ge=0),
+    job_id: Optional[str] = Query(None, description=(
+        "The delivery job the client is showing. Echoed as requested_job_id "
+        "beside the intake's latest job so the header never silently swaps jobs.")),
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role(EVIDENCE_ROLE)),
 ):
@@ -1121,16 +1166,34 @@ async def delivery_audit_route(
     from app.tefca_registry.rce import delivery_jobs as jobs
     from app.tefca_registry.rce import stage_events
 
+    from app.tefca_registry.identity import actor_facts, resolve_principals
+
     intake = await _intake_or_404(db, intake_id)
     job = await jobs.job_for_intake(db, intake.id)
     ids = [str(intake.id)] + ([str(job.id)] if job else [])
+    if job_id and job_id not in ids:
+        ids.append(job_id)
     entries: List[Dict[str, Any]] = []
     truncated: Dict[str, bool] = {}
 
-    def add(source, at, action, actor, ref, detail):
+    # Every entry carries the governed facts as FIRST-CLASS fields (QA-023..
+    # QA-028): a UTC timestamp with offset, event type, resource type/id, the
+    # correlation id, the actor CLASS (human / service / system) beside the
+    # actor, and a display label. `detail` keeps the raw payload.
+    def add(source, at, action, actor, ref, detail, *, event_type=None,
+            resource_type=None, resource_id=None, correlation_id=None,
+            actor_class=None, executing_service=None, human_initiator=None):
+        facts = (actor_facts(service=executing_service, actor_email=human_initiator)
+                 if executing_service else actor_facts(actor_email=actor))
+        if actor_class:
+            facts["actor_class"] = actor_class
         entries.append({"at": _iso(at), "_key": _utc_naive(at), "source": source,
-                        "action": action, "actor": actor, "ref": ref,
-                        "detail": detail})
+                        "action": action, "label": _audit_label(action),
+                        "event_type": event_type or _event_type_of(source, action),
+                        "resource_type": resource_type or _resource_type_of(source),
+                        "resource_id": resource_id or ref,
+                        "correlation_id": correlation_id,
+                        "actor": actor, "ref": ref, "detail": detail, **facts})
 
     registry_rows = (await db.execute(
         select(reg.TefcaRegAuditLog).where(or_(*[
@@ -1139,26 +1202,42 @@ async def delivery_audit_route(
     )).scalars().all()
     truncated["tefca_reg_audit_log"] = len(registry_rows) >= AUDIT_SOURCE_CAP
     for row in registry_rows:
+        meta = row.metadata_ or {}
         add("tefca_reg_audit_log", row.created_at, row.action, row.actor_email,
             str(row.id), {"entity_id": str(row.entity_id) if row.entity_id else None,
-                          "metadata": row.metadata_ or {}})
+                          "metadata": meta},
+            resource_type="entity" if row.entity_id else "registry",
+            resource_id=str(row.entity_id) if row.entity_id else str(row.id),
+            correlation_id=meta.get("correlation_id") or meta.get("request_id"),
+            actor_class="human" if row.actor_email and "@" in str(row.actor_email) else "system")
 
     platform_rows = (await db.execute(
         select(AuditLog).where(or_(AuditLog.resource_id.in_(ids),
                                    AuditLog.correlation_id.in_(ids)))
         .order_by(AuditLog.created_at.desc()).limit(AUDIT_SOURCE_CAP))).scalars().all()
     truncated["audit_logs"] = len(platform_rows) >= AUDIT_SOURCE_CAP
+    principals = await resolve_principals(db, [r.user_id for r in platform_rows if r.user_id])
     for row in platform_rows:
+        who = principals.get(str(row.user_id)) if row.user_id else None
         add("audit_logs", row.created_at, row.action,
-            str(row.user_id) if row.user_id else None, str(row.id),
+            (who or {}).get("label") or (str(row.user_id) if row.user_id else None), str(row.id),
             {"event_type": row.event_type, "outcome": row.outcome,
              "resource_type": row.resource_type, "resource_id": row.resource_id,
-             "correlation_id": row.correlation_id, "details": row.details})
+             "correlation_id": row.correlation_id, "details": row.details,
+             "actor_user_id": str(row.user_id) if row.user_id else None},
+            event_type=row.event_type, resource_type=row.resource_type,
+            resource_id=row.resource_id, correlation_id=row.correlation_id,
+            actor_class="human" if row.user_id else "system")
 
     if job is not None:
         for ev in await stage_events.timeline(db, job.id):
             add("rce_delivery_stage_events", ev["completed_at"] or ev["started_at"],
-                f"{ev['stage']}:{ev['status']}", ev["worker_id"], ev["id"], ev)
+                f"{ev['stage']}:{ev['status']}", ev["worker_id"], ev["id"], ev,
+                event_type="delivery_stage", resource_type="delivery_job",
+                resource_id=str(job.id),
+                correlation_id=ev.get("correlation_id") or str(job.id),
+                executing_service=ev["worker_id"],
+                human_initiator=(ev.get("detail") or {}).get("actor") if isinstance(ev.get("detail"), dict) else None)
 
     disp_rows = (await db.execute(
         select(tm.RceDispositionEvent).where(tm.RceDispositionEvent.intake_id == intake.id)
@@ -1166,8 +1245,13 @@ async def delivery_audit_route(
     )).scalars().all()
     truncated["rce_disposition_events"] = len(disp_rows) >= AUDIT_SOURCE_CAP
     for row in disp_rows:
+        payload = row.to_dict()
         add("rce_disposition_events", row.decided_at,
-            f"disposition:{row.disposition}", row.actor, str(row.id), row.to_dict())
+            f"disposition:{row.disposition}", row.actor, str(row.id), payload,
+            event_type="disposition", resource_type="curated_record",
+            resource_id=payload.get("curated_record_id") or payload.get("source_record_id"),
+            correlation_id=payload.get("correlation_id") or payload.get("request_id"),
+            actor_class="human" if row.actor and "@" in str(row.actor) else "service")
 
     ident_rows = (await db.execute(
         select(tm.TefcaIdentifierDecisionEvent)
@@ -1176,14 +1260,22 @@ async def delivery_audit_route(
     )).scalars().all()
     truncated["tefca_identifier_decision_events"] = len(ident_rows) >= AUDIT_SOURCE_CAP
     for row in ident_rows:
+        payload = row.to_dict()
         add("tefca_identifier_decision_events", row.decided_at,
-            f"identifier:{row.decision}", row.actor, str(row.id), row.to_dict())
+            f"identifier:{row.decision}", row.actor, str(row.id), payload,
+            event_type="identifier_decision", resource_type="entity",
+            resource_id=payload.get("entity_id"),
+            correlation_id=payload.get("correlation_id") or payload.get("request_id"),
+            actor_class="human" if row.actor and "@" in str(row.actor) else "service")
 
     for row in (await db.execute(
             select(tm.RceDeliveryReportLink)
             .where(tm.RceDeliveryReportLink.intake_id == intake.id))).scalars().all():
         add("rce_delivery_report_links", row.generated_at,
-            f"report:{row.report_type}", row.generated_by, str(row.id), row.to_dict())
+            f"report:{row.report_type}", row.generated_by, str(row.id), row.to_dict(),
+            event_type="reporting", resource_type="report", resource_id=row.report_id,
+            correlation_id=row.correlation_id,
+            actor_class="human" if row.generated_by and "@" in str(row.generated_by) else "system")
 
     entries.sort(key=lambda e: e["_key"], reverse=True)
     total = len(entries)
@@ -1191,10 +1283,49 @@ async def delivery_audit_route(
     for e in page:
         e.pop("_key", None)
     return {"intake_id": str(intake.id), "job_id": str(job.id) if job else None,
+            # Labelled identifiers (QA-029): the job the client asked about and
+            # the intake's latest job are two facts, not one.
+            "identifiers": {"intake_id": str(intake.id),
+                            "latest_job_id": str(job.id) if job else None,
+                            "requested_job_id": job_id,
+                            "request_id": request_context.get("request_id")},
             "items": page, "count": len(page), "total": total, "offset": offset,
             "limit": limit, "source_caps": {"per_source": AUDIT_SOURCE_CAP,
                                             "truncated": truncated},
             "correlation": {"request_id": request_context.get("request_id")}}
+
+
+_EVENT_TYPE_BY_SOURCE = {
+    "tefca_reg_audit_log": "registry", "audit_logs": "platform",
+    "rce_delivery_stage_events": "delivery_stage", "rce_disposition_events": "disposition",
+    "tefca_identifier_decision_events": "identifier_decision",
+    "rce_delivery_report_links": "reporting",
+}
+_RESOURCE_TYPE_BY_SOURCE = {
+    "tefca_reg_audit_log": "registry", "audit_logs": "platform",
+    "rce_delivery_stage_events": "delivery_job", "rce_disposition_events": "curated_record",
+    "tefca_identifier_decision_events": "entity", "rce_delivery_report_links": "report",
+}
+
+
+def _event_type_of(source: str, action: str) -> str:
+    return _EVENT_TYPE_BY_SOURCE.get(source, source)
+
+
+def _resource_type_of(source: str) -> str:
+    return _RESOURCE_TYPE_BY_SOURCE.get(source, source)
+
+
+def _audit_label(action: Optional[str]) -> str:
+    """One display label for the two naming styles (QA-028): `STAGE:STATUS`
+    from the delivery pipeline and `snake_case` from the registry."""
+    if not action:
+        return "Event"
+    text_ = str(action)
+    if ":" in text_:
+        left, right = text_.split(":", 1)
+        return f"{left.replace('_', ' ').title()} {right.replace('_', ' ').lower()}"
+    return text_.replace("_", " ").capitalize()
 
 
 # ═══ analyst dispositions on issues ══════════════════════════════════════════

@@ -368,6 +368,14 @@ async def _work_items(db, records: List[reg.ReviewRecord], *, now: datetime,
     unavailable = await _unavailable_sources(db, entity_ids)
     names = await _entity_names(db, entity_ids)
     qhins = await _qhins_for(db, entity_ids)
+    # Provenance and identity (QA-052, QA-040): the delivery each case was
+    # created against and the resolved holder, in two batched lookups.
+    from app.tefca_registry.identity import principal, resolve_principals
+
+    principals = await resolve_principals(
+        db, [r.assigned_to_user_id for r in records if r.assigned_to_user_id])
+    deliveries = await _deliveries_for(
+        db, [p.get("source_intake_id") for p in payloads.values() if p.get("source_intake_id")])
 
     items = []
     for record in records:
@@ -399,6 +407,14 @@ async def _work_items(db, records: List[reg.ReviewRecord], *, now: datetime,
             "source_record_id": (str(record.source_record_id)
                                  if record.source_record_id else None),
             "queue_source": payload.get("queue_source"),
+            # Immutable provenance from delivery to case (QA-052).
+            "delivery": deliveries.get(str(payload.get("source_intake_id") or ""))
+                        or ({"intake_id": str(payload["source_intake_id"]),
+                             "delivery_label": None, "job_id": None}
+                            if payload.get("source_intake_id") else None),
+            "sample_id": payload.get("sample_id"),
+            "selection_reason": payload.get("selection_reason"),
+            "assigned_to": principal(principals, record.assigned_to_user_id),
             "work_reasons": _provenance(payload, state, sample_ids),
             "sample_ids": sample_ids,
             "priority_case_id": payload.get("priority_case_id"),
@@ -604,6 +620,36 @@ def _page(items, total, offset, limit, sort, now, due_soon, stale) -> Dict[str, 
 
 # ── dashboard ────────────────────────────────────────────────────────────────
 
+async def _deliveries_for(db, intake_ids: Sequence[Any]) -> Dict[str, Dict[str, Any]]:
+    """`{intake_id: {intake_id, delivery_label, job_id}}` for the cases' source
+    deliveries — the label a supervisor recognises and the job the detail
+    page is keyed by (QA-037, QA-052)."""
+    from app.tefca_registry.rce import models as m
+    from app.tefca_registry.rce.delivery_job_model import RceDeliveryJob
+
+    keys = []
+    for i in {str(i) for i in intake_ids if i}:
+        try:
+            keys.append(uuid.UUID(i))
+        except ValueError:
+            continue
+    if not keys:
+        return {}
+    intakes = (await db.execute(
+        select(m.RceSourceIntake.id, m.RceSourceIntake.delivery_label)
+        .where(m.RceSourceIntake.id.in_(keys)))).all()
+    jobs = (await db.execute(
+        select(RceDeliveryJob.source_intake_id, RceDeliveryJob.id,
+               RceDeliveryJob.created_at)
+        .where(RceDeliveryJob.source_intake_id.in_(keys))
+        .order_by(RceDeliveryJob.created_at.desc()))).all()
+    job_of: Dict[str, str] = {}
+    for intake_id, job_id, _ in jobs:
+        job_of.setdefault(str(intake_id), str(job_id))
+    return {str(i): {"intake_id": str(i), "delivery_label": label,
+                     "job_id": job_of.get(str(i))} for i, label in intakes}
+
+
 def _scoped(stmt, queue_source: Optional[str]):
     """Narrow a case query to one work source, or leave it estate-wide.
 
@@ -709,6 +755,8 @@ async def analyst_workload(db, *, queue_source: Optional[str] = None,
     for item in items:
         holder = item["assigned_to_user_id"]
         bucket = per.setdefault(holder, {"assigned_to_user_id": holder,
+                                         # Resolved identity beside the id (QA-040).
+                                         "principal": item.get("assigned_to"),
                                          "open_cases": 0, "by_state": {},
                                          "oldest_held_days": None,
                                          "attention_cases": 0})
@@ -906,42 +954,106 @@ async def audit_timeline(db, review_id: str) -> List[Dict[str, Any]]:
     if record is None:
         raise SupervisorRefused(f"no review exists with id {review_id}")
 
+    # Every entry carries a stable event id, its source, its KIND (a workflow
+    # transition recorded in the registry audit log versus the decision record
+    # itself), a precise UTC timestamp, actor role and the request/correlation
+    # id when the source recorded one (QA-061). "analyst determination
+    # recorded" (registry audit, kind=transition) and "analyst_determination"
+    # (decision event, kind=decision_record) are two governed records of one
+    # act and are labelled as such rather than deduplicated.
     entries: List[Dict[str, Any]] = []
+
+    def _entry(*, event_id, source, kind, event, label, at, actor, actor_role=None,
+               correlation_id=None, detail=None):
+        return {"event_id": event_id, "source": source, "kind": kind, "event": event,
+                "label": label, "at": _utc_iso(at), "actor": actor,
+                "actor_role": actor_role, "correlation_id": correlation_id,
+                "detail": detail or {}, "_sort": at}
+
     if record.created_at:
         payload = record.verification_results or {}
-        entries.append({"at": record.created_at, "event": "case_created",
-                        "actor": None,
-                        "detail": {"queue_source": payload.get("queue_source"),
-                                   "selection_reason": payload.get("selection_reason"),
-                                   "cor_reference": payload.get("cor_reference")}})
+        entries.append(_entry(
+            event_id=f"case:{record.review_id}:created", source="review_records",
+            kind="transition", event="case_created", label="Case created",
+            at=record.created_at, actor=None,
+            correlation_id=payload.get("correlation_id"),
+            detail={"queue_source": payload.get("queue_source"),
+                    "selection_reason": payload.get("selection_reason"),
+                    "cor_reference": payload.get("cor_reference"),
+                    "source_intake_id": payload.get("source_intake_id"),
+                    "sample_id": payload.get("sample_id")}))
 
-    audits = (await db.execute(select(reg.TefcaRegAuditLog))).scalars().all()
+    audits = (await db.execute(
+        select(reg.TefcaRegAuditLog)
+        .where(reg.TefcaRegAuditLog.metadata_.op("->>")("review_id") == review_id)
+        .order_by(reg.TefcaRegAuditLog.created_at))).scalars().all()
     for row in audits:
         meta = row.metadata_ or {}
-        if meta.get("review_id") != review_id:
-            continue
-        entries.append({"at": row.created_at, "event": row.action,
-                        "actor": row.actor_email,
-                        "detail": {k: v for k, v in meta.items()
-                                   if k not in ("review_id",)}})
+        entries.append(_entry(
+            event_id=f"registry_audit:{row.id}", source="tefca_reg_audit_log",
+            kind="transition", event=row.action,
+            label=str(row.action).replace("_", " ").capitalize() + " (workflow transition)",
+            at=row.created_at, actor=row.actor_email,
+            actor_role=meta.get("actor_role") or meta.get("role"),
+            correlation_id=meta.get("correlation_id") or meta.get("request_id"),
+            detail={k: v for k, v in meta.items() if k not in ("review_id",)}))
 
     for event in history(await _events(db, review_id)):
-        entries.append({
-            "at": event["occurred_at"],
-            "event": (f"qa_{event['qa_action'].lower()}" if event["qa_action"]
-                      else event["event_type"].lower()),
-            "actor": event["actor_email"],
-            "detail": {"determination": event["determination"],
-                       "determined_bucket": event["determined_bucket"],
-                       "rationale": event["rationale"],
-                       "is_superseded": event["is_superseded"]}})
+        name = (f"qa_{event['qa_action'].lower()}" if event["qa_action"]
+                else event["event_type"].lower())
+        entries.append(_entry(
+            event_id=f"decision_event:{event.get('id') or event['sequence_number']}",
+            source="review_decision_events", kind="decision_record", event=name,
+            label=name.replace("_", " ").capitalize() + " (decision record)",
+            at=event["occurred_at"], actor=event["actor_email"],
+            actor_role=event.get("actor_role"),
+            correlation_id=event.get("correlation_id"),
+            detail={"sequence_number": event["sequence_number"],
+                    "determination": event["determination"],
+                    "determined_bucket": event["determined_bucket"],
+                    "rationale": event["rationale"],
+                    "qa_reason": event.get("qa_reason"),
+                    "is_superseded": event["is_superseded"]}))
 
     if record.reportable_at:
-        entries.append({"at": record.reportable_at, "event": "became_reportable",
-                        "actor": None, "detail": {}})
+        entries.append(_entry(
+            event_id=f"case:{record.review_id}:reportable", source="review_records",
+            kind="transition", event="became_reportable", label="Became reportable",
+            at=record.reportable_at, actor=None))
 
-    entries.sort(key=lambda e: (e["at"] is None, e["at"] or datetime.min))
+    entries.sort(key=lambda e: (e["_sort"] is None, _sortable(e["_sort"])))
+    for e in entries:
+        e.pop("_sort", None)
     return entries
+
+
+def _utc_iso(value) -> Optional[str]:
+    """ISO-8601 with an explicit offset. Naive values are UTC by construction
+    in this codebase (`datetime.utcnow()` writers) and are labelled so."""
+    from datetime import timezone
+
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
+
+
+def _sortable(value) -> datetime:
+    from datetime import timezone
+
+    if value is None:
+        return datetime.min
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return datetime.min
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
 
 
 # ── read-only Government forecast ────────────────────────────────────────────
