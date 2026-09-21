@@ -272,6 +272,11 @@ async def _run_after_area1(db, job, detail: Dict[str, Any], intake_id,
             if stage_name == RceDeliveryJob.STAGE_CURATION:
                 observed["review_bridge"] = await _bridge(db, intake_id, actor)
             elif stage_name == RceDeliveryJob.STAGE_PROMOTION and observed.get("completed"):
+                # 1.3.0 — what this delivery did to history: persisted delta,
+                # presence/absence, stale marks on affected ARC results. A
+                # failure here is recorded on the MATCHING event and does NOT
+                # undo the promotion; the effects are idempotent.
+                observed["snapshot_effects"] = await _snapshot_effects(db, intake_id, actor)
                 await stage_events.record_instant(
                     db, job_id, "MATCHING", intake_id=intake_id,
                     input_count=observed.get("curated_records"),
@@ -280,7 +285,8 @@ async def _run_after_area1(db, job, detail: Dict[str, Any], intake_id,
                             "entities_unchanged": observed.get("entities_unchanged"),
                             "records_in_identifier_conflict":
                                 observed.get("records_in_identifier_conflict"),
-                            "conflicts_raised": observed.get("conflicts_raised")})
+                            "conflicts_raised": observed.get("conflicts_raised"),
+                            "snapshot": _snapshot_summary(observed["snapshot_effects"])})
                 await stage_events.record_instant(
                     db, job_id, "RELATIONSHIPS", intake_id=intake_id,
                     output_count=(observed.get("relationships_managed_by_qhin") or 0)
@@ -289,6 +295,8 @@ async def _run_after_area1(db, job, detail: Dict[str, Any], intake_id,
                             "sub_participant_of":
                                 observed.get("relationships_sub_participant_of"),
                             "unresolved_parents": observed.get("unresolved_parents"),
+                            "superseded": observed.get("relationships_superseded"),
+                            "refused": observed.get("relationships_refused"),
                             "qhin_entities": observed.get("qhin_entities")})
                 observed["review_bridge"] = await _bridge(db, intake_id, actor)
 
@@ -445,6 +453,33 @@ async def _stage_curation(db, intake_id, actor):
             "auto_safe_corrections_applied"),
         "transformation_version": result.get("transformation_version"),
     }
+
+
+async def _snapshot_effects(db, intake_id, actor) -> Dict[str, Any]:
+    """Apply `snapshot_effects` after a completed promotion. Never raises
+    into the stage loop; the outcome rides on the MATCHING event's detail."""
+    from app.tefca_registry.rce import snapshot_effects, stage_events
+
+    try:
+        return await snapshot_effects.apply_snapshot_effects(db, intake_id, actor=actor)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("snapshot effects for %s did not complete: %s",
+                     intake_id, type(exc).__name__, exc_info=True)
+        await _settle(db)
+        return {"completed": False,
+                "error": stage_events.safe_failure_text(exc, 1000)}
+
+
+def _snapshot_summary(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Counts only — no delivered values — for the stage event detail."""
+    delta = result.get("delta") or {}
+    return {"completed": bool(result.get("completed", False)),
+            "delta_state": delta.get("state"),
+            "delta_counts": delta.get("counts"),
+            "material_changes": delta.get("material_changes"),
+            "presence": result.get("presence"),
+            "stale_marked": (result.get("stale") or {}).get("marked"),
+            "error": result.get("error")}
 
 
 async def _stage_promotion(db, intake_id, actor):

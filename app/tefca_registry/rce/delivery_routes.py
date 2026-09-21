@@ -1613,3 +1613,119 @@ async def _audit(db, action: str, user, request, metadata: Dict[str, Any]
         await db.commit()
     except Exception as exc:  # noqa: BLE001 — an audit write must not fail the act
         logger.warning("could not audit %s: %s", action, type(exc).__name__)
+
+
+# ═══ September 2026 — delta, presence, staleness, relationship history ═══════
+
+@router.get("/deliveries/{intake_id}/delta",
+            summary="Persisted per-id delta against the previous delivery")
+async def delivery_delta_route(
+    intake_id: str,
+    classification: Optional[str] = Query(None, description="ADDED|MODIFIED|UNCHANGED|NOT_PRESENT"),
+    material_only: bool = Query(False),
+    limit: int = Query(200, ge=1, le=2000),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("viewer")),
+):
+    """Counts at viewer floor; records (which carry delivered values in
+    `field_changes`) only at the evidence floor."""
+    from sqlalchemy import func, select
+    from app.tefca_registry.rce import snapshot_models as sm
+
+    intake = await _intake_or_404(db, intake_id)
+    base = select(sm.RceDeliveryDelta).where(sm.RceDeliveryDelta.current_intake_id == intake.id)
+    counts = dict((c, int(n)) for c, n in (await db.execute(
+        select(sm.RceDeliveryDelta.classification, func.count())
+        .where(sm.RceDeliveryDelta.current_intake_id == intake.id)
+        .group_by(sm.RceDeliveryDelta.classification))).all())
+    material = int((await db.execute(
+        select(func.count()).select_from(sm.RceDeliveryDelta)
+        .where(sm.RceDeliveryDelta.current_intake_id == intake.id,
+               sm.RceDeliveryDelta.material.is_(True)))).scalar() or 0)
+    previous_id = (await db.execute(
+        select(sm.RceDeliveryDelta.previous_intake_id)
+        .where(sm.RceDeliveryDelta.current_intake_id == intake.id).limit(1))).scalar_one_or_none()
+    out: Dict[str, Any] = {
+        "intake_id": str(intake.id),
+        "previous_intake_id": str(previous_id) if previous_id else None,
+        "state": "COMPARED" if previous_id else "BASELINE_OR_NOT_COMPUTED",
+        "counts": counts, "material_changes": material,
+        "records": None,
+        "availability": {"records": AVAILABLE if role_at_least(user, EVIDENCE_ROLE)
+                         else REQUIRES_REVIEWER},
+    }
+    if not role_at_least(user, EVIDENCE_ROLE):
+        return out
+    if classification:
+        base = base.where(sm.RceDeliveryDelta.classification == classification.upper())
+    if material_only:
+        base = base.where(sm.RceDeliveryDelta.material.is_(True))
+    rows = (await db.execute(base.order_by(sm.RceDeliveryDelta.rce_org_oid)
+                             .limit(limit).offset(offset))).scalars().all()
+    out["records"] = [{
+        "rce_org_oid": r.rce_org_oid, "classification": r.classification,
+        "material": bool(r.material), "changed_fields": r.changed_fields,
+        "field_changes": r.field_changes, "previous_sha256": r.previous_sha256,
+        "current_sha256": r.current_sha256,
+        "current_source_record_id": str(r.current_source_record_id) if r.current_source_record_id else None,
+    } for r in rows]
+    out["limit"], out["offset"] = limit, offset
+    return out
+
+
+@router.get("/deliveries/{intake_id}/stale-marks",
+            summary="ARC results marked stale by this delivery (unresolved first)")
+async def delivery_stale_marks_route(
+    intake_id: str,
+    include_resolved: bool = Query(False),
+    limit: int = Query(200, ge=1, le=2000),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("viewer")),
+):
+    from sqlalchemy import func, select
+    from app.tefca_registry.rce import snapshot_models as sm
+
+    intake = await _intake_or_404(db, intake_id)
+    resolved_ids = select(sm.ArcStaleMark.resolves_mark_id).where(
+        sm.ArcStaleMark.kind == "RESOLVED", sm.ArcStaleMark.resolves_mark_id.isnot(None))
+    q = select(sm.ArcStaleMark).where(sm.ArcStaleMark.intake_id == intake.id,
+                                      sm.ArcStaleMark.kind == "STALE")
+    if not include_resolved:
+        q = q.where(sm.ArcStaleMark.id.notin_(resolved_ids))
+    total = int((await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0)
+    by_reason = dict((r, int(n)) for r, n in (await db.execute(
+        select(sm.ArcStaleMark.reason, func.count())
+        .where(sm.ArcStaleMark.intake_id == intake.id, sm.ArcStaleMark.kind == "STALE",
+               sm.ArcStaleMark.id.notin_(resolved_ids))
+        .group_by(sm.ArcStaleMark.reason))).all())
+    rows = (await db.execute(q.order_by(sm.ArcStaleMark.marked_at.desc())
+                             .limit(limit).offset(offset))).scalars().all()
+    return {
+        "intake_id": str(intake.id), "total": total, "unresolved_by_reason": by_reason,
+        "marks": [{
+            "mark_id": str(r.id), "entity_id": str(r.entity_id), "review_id": r.review_id,
+            "reason": r.reason, "changed_fields": r.changed_fields,
+            "marked_at": r.marked_at.isoformat() if r.marked_at else None, "actor": r.actor,
+        } for r in rows],
+        "limit": limit, "offset": offset,
+    }
+
+
+@router.get("/entities/{entity_id}/relationship-history",
+            summary="Current and historical parent edges of one entity, with observations")
+async def entity_relationship_history_route(
+    entity_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("viewer")),
+):
+    from app.tefca_registry.rce import relationship_history as rh
+    from app.tefca_registry.rce import snapshot_effects
+
+    eid = _as_uuid(entity_id)
+    if eid is None:
+        raise HTTPException(404, f"No entity {entity_id}")
+    out = await rh.history_for_entity(db, eid)
+    out["stale"] = (await snapshot_effects.stale_for_entities(db, [eid])).get(str(eid), [])
+    return out
