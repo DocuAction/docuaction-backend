@@ -107,12 +107,14 @@ async def _build_dataset_context(db, intake_id) -> Dict[str, Any]:
         .where(m.RceSourceRecord.source_intake_id == intake_id))).all()
 
     known_ids = set()
+    source_id_counts: collections.Counter = collections.Counter()
     tefcaid_counts: collections.Counter = collections.Counter()
     hcid_counts: collections.Counter = collections.Counter()
     npi_counts: collections.Counter = collections.Counter()
     for source_id, tefcaid, hcid, npi in rows:
         if source_id:
             known_ids.add(source_id)
+            source_id_counts[source_id] += 1
         if tefcaid:
             tefcaid_counts[tefcaid] += 1
         if hcid:
@@ -120,10 +122,36 @@ async def _build_dataset_context(db, intake_id) -> Dict[str, Any]:
         if npi:
             npi_counts[npi] += 1
 
+    # 1.3.0 — the delivery is not the whole namespace. A parent or a
+    # delegated authority may be an entity an EARLIER delivery promoted, and
+    # "new entrant" is only meaningful against the previous delivery.
+    from app.tefca_registry import models as reg
+    from app.tefca_registry.rce.delivery_delta import previous_delivery
+
+    registry_oids = {v for (v,) in (await db.execute(
+        select(reg.TefcaEntityIdentifier.identifier_value)
+        .where(reg.TefcaEntityIdentifier.identifier_type == "rce_org_oid"))).all()}
+    previous_ids: set = set()
+    previous = None
+    intake = await db.get(m.RceSourceIntake, intake_id)
+    if intake is not None:
+        previous = await previous_delivery(db, intake)
+    if previous is not None:
+        previous_ids = {v for (v,) in (await db.execute(
+            select(m.RceSourceRecord.source_rce_id)
+            .where(m.RceSourceRecord.source_intake_id == previous.id,
+                   m.RceSourceRecord.source_rce_id.isnot(None)))).all()}
+    new_entrant_ids = (known_ids - previous_ids - registry_oids) if previous is not None else set()
+
     return {
         "expected_field_count": len(RCE_FIELDS),
         "known_source_ids": known_ids,
         "qhin_oids": set(OBSERVED_QHIN_OIDS),
+        "registry_oids": registry_oids,
+        "previous_intake_id": str(previous.id) if previous is not None else None,
+        "previous_source_ids": previous_ids,
+        "new_entrant_ids": new_entrant_ids,
+        "source_id_duplicates": {v: n for v, n in source_id_counts.items() if n > 1},
         "tefcaid_duplicates": {v: n for v, n in tefcaid_counts.items() if n > 1},
         "hcid_duplicates": {v: n for v, n in hcid_counts.items() if n > 1},
         "npi_duplicates": {v: n for v, n in npi_counts.items() if n > 1},

@@ -44,10 +44,22 @@ from app.tefca_registry.rce.field_map import (
     NON_PROVIDER_HL7_ROLES,
     OBSERVED_ACTIVE_VALUES,
     OBSERVED_SEQUOIA_ORG_TYPES,
+    ORG_NODE_TYPE_VOCABULARY,
+    PURPOSE_VOCABULARY,
     SUSPECTED_PURPOSE_VARIANTS,
+    classify_purpose_tokens,
+    is_oid_syntax,
+    normalize_active,
+    normalize_naic,
+    split_doa_references,
 )
 
-RULE_SET_VERSION = "1.2.0"
+#: 1.3.0 — September 2026 snapshot: quote-aware reading, `active` normalisation
+#: (CON-003), organizationNodeType vocabulary (CON-004), NAIC for payers
+#: (SO-002), purpose-of-use vocabulary (PUR-001/002), delegated-authority OID
+#: syntax and resolution (DOA-001/002), partOf resolution against the registry
+#: (INT-002), inactive new entrants (ACT-001), duplicate `id` guard (SCH-003).
+RULE_SET_VERSION = "1.3.0"
 
 # ── categories ───────────────────────────────────────────────────────────────
 
@@ -592,21 +604,42 @@ def _con_002(ctx: RecordContext) -> List[Finding]:
 
 
 def _con_003(ctx: RecordContext) -> List[Finding]:
+    """`active` — delivered "0"/"1", accepted also as the spreadsheet
+    round-trip "0.0"/"1.0" (normalised, raw kept). Empty or anything else
+    HOLDS the record: an activity flag is never guessed."""
     value = ctx.get("active")
-    if value not in OBSERVED_ACTIVE_VALUES:
+    norm = normalize_active(value)
+    if norm == "":
         return [Finding(
-            "CON-003", "UNKNOWN_ACTIVE_VALUE", MEDIUM,
-            f"active={value!r} is outside the observed values "
-            f"{list(OBSERVED_ACTIVE_VALUES)}.",
+            "CON-003", "MISSING_ACTIVE_VALUE", HIGH,
+            "active is empty. Every delivered record so far carried 0 or 1; an "
+            "empty flag is neither, and the record is held rather than assumed "
+            "active.",
             HUMAN_REQUIRED, field_name="active", original_value=value)]
-    if value == "0":
+    if norm.startswith("UNSUPPORTED:"):
         return [Finding(
+            "CON-003", "UNSUPPORTED_ACTIVE_VALUE", HIGH,
+            f"active={value!r} is outside the supported forms "
+            f"{list(OBSERVED_ACTIVE_VALUES)} (and their 0.0/1.0 round-trip "
+            f"forms). Held for a human; not normalised.",
+            HUMAN_REQUIRED, field_name="active", original_value=value)]
+    findings: List[Finding] = []
+    if value not in OBSERVED_ACTIVE_VALUES:
+        findings.append(Finding(
+            "CON-003", "ACTIVE_FORMAT_NORMALIZED", INFO,
+            f"active={value!r} is a numeric round-trip of {norm!r}; curated as "
+            f"{norm!r} with the delivered value preserved in Area 1.",
+            NO_CORRECTION, field_name="active", original_value=value,
+            suggested_value=norm, suggested_source="FORMAT_NORMALIZATION",
+            suggested_confidence="HIGH"))
+    if norm == "0":
+        findings.append(Finding(
             "CON-003", "INACTIVE_RECORD", INFO,
             "The record is marked inactive (active=0). A legitimate, reportable "
             "state — the entity is promoted with operational_status='inactive' "
             "and is never dropped.",
-            NO_CORRECTION, field_name="active", original_value=value)]
-    return []
+            NO_CORRECTION, field_name="active", original_value=value))
+    return findings
 
 
 def _con_004(ctx: RecordContext) -> List[Finding]:
@@ -616,10 +649,20 @@ def _con_004(ctx: RecordContext) -> List[Finding]:
     record. The rule exists because the failure it guards against is silent: a
     system that read `initiating-node` as a TEFCA class would reorganise the
     hierarchy without any error appearing anywhere.
+
+    1.3.0: the September snapshot widened the vocabulary to initiating-node /
+    no-node / passthrough-node. A value outside it holds the record.
     """
     node = ctx.get("organizationNodeType")
     if not node:
         return []
+    if node not in ORG_NODE_TYPE_VOCABULARY:
+        return [Finding(
+            "CON-004", "UNKNOWN_ORG_NODE_TYPE", HIGH,
+            f"organizationNodeType={node!r} is outside the supported vocabulary "
+            f"{list(ORG_NODE_TYPE_VOCABULARY)}. Held for a human; the value is "
+            f"kept verbatim and never mapped.",
+            HUMAN_REQUIRED, field_name="organizationNodeType", original_value=node)]
     return [Finding(
         "CON-004", "NODE_TYPE_IS_NOT_HIERARCHY", INFO,
         f"organizationNodeType={node!r} describes TECHNICAL EXCHANGE BEHAVIOUR. "
@@ -663,15 +706,185 @@ def _int_002(ctx: RecordContext) -> List[Finding]:
             NO_CORRECTION, field_name="partOf")]
     known_ids = ctx.dataset.get("known_source_ids") or set()
     qhin_oids = ctx.dataset.get("qhin_oids") or set()
+    registry_oids = ctx.dataset.get("registry_oids") or set()
     if value in known_ids or value in qhin_oids:
         return []
+    if value in registry_oids:
+        # 1.3.0: the parent is a registry entity from an EARLIER delivery.
+        # Legitimate — a monthly file need not repeat every parent — but the
+        # edge will be made against a record this file did not deliver.
+        return [Finding(
+            "INT-002", "PART_OF_RESOLVED_IN_REGISTRY", INFO,
+            f"partOf {value!r} is not a record in this delivery; it resolves to "
+            f"an entity already in the registry from an earlier delivery.",
+            NO_CORRECTION, field_name="partOf", original_value=value)]
     return [Finding(
         "INT-002", "PART_OF_UNRESOLVED", MEDIUM,
-        f"partOf {value!r} does not resolve to any record in this delivery, nor "
-        f"to a QHIN named in orgManagingOrg. The parent may legitimately sit "
-        f"outside the delivered scope; recorded for analyst determination "
-        f"rather than treated as a broken hierarchy.",
+        f"partOf {value!r} does not resolve to any record in this delivery, to "
+        f"the registry, nor to a QHIN named in orgManagingOrg. The parent may "
+        f"legitimately sit outside the delivered scope; recorded for analyst "
+        f"determination rather than treated as a broken hierarchy.",
         HUMAN_REQUIRED, field_name="partOf", original_value=value)]
+
+
+# ── 1.3.0 — September 2026 snapshot rules ────────────────────────────────────
+
+CAT_PURPOSE = "PUR"
+CAT_DOA = "DOA"
+CAT_ACTIVITY = "ACT"
+
+
+def _sch_003(ctx: RecordContext) -> List[Finding]:
+    """The source `id` is the ONLY join key between deliveries. Two lines with
+    the same id make every delta and every match a guess; CRITICAL, held."""
+    value = ctx.get("id")
+    dupes = ctx.dataset.get("source_id_duplicates") or {}
+    if value and value in dupes:
+        return [Finding(
+            "SCH-003", "DUPLICATE_SOURCE_ID", CRITICAL,
+            f"id {value!r} appears on {dupes[value]} lines of this delivery. The "
+            f"id is the 1:1 matching key across monthly files; neither line can "
+            f"be matched, compared or promoted until a human says which is the "
+            f"entity.",
+            HUMAN_REQUIRED, field_name="id", original_value=value)]
+    return []
+
+
+def _so_002(ctx: RecordContext) -> List[Finding]:
+    """SO-2: a payer organisation carries its NAIC company code.
+
+    Applies ONLY where hl7orgrole says payer. NAIC is a TEXT code: a delivered
+    leading zero is preserved, a float artefact ("4918.0") is normalised with
+    the raw value kept. Never sourced from anywhere but the delivery.
+    """
+    role = (ctx.get("hl7orgrole") or "").strip().lower()
+    info = normalize_naic(ctx.get("NAIC"))
+    if role != "payer":
+        if info["raw"]:
+            return [Finding(
+                "SO-002", "NAIC_ON_NON_PAYER", INFO,
+                f"NAIC {info['raw']!r} delivered on hl7orgrole={role!r}. Kept in "
+                f"rce_attributes; SO-2 makes no requirement of it.",
+                NO_CORRECTION, field_name="NAIC", original_value=info["raw"])]
+        return []
+    if not info["raw"]:
+        return [Finding(
+            "SO-002", "MISSING_NAIC_FOR_PAYER", HIGH,
+            "hl7orgrole=payer with no NAIC company code (SO-2). Held: the code "
+            "is not looked up or inferred.",
+            HUMAN_REQUIRED, field_name="NAIC")]
+    findings: List[Finding] = []
+    if info["format"] == "float_artifact":
+        findings.append(Finding(
+            "SO-002", "NAIC_FLOAT_ARTIFACT", INFO,
+            f"NAIC delivered as {info['raw']!r}; curated as the text code "
+            f"{info['normalized']!r} with the raw value preserved.",
+            NO_CORRECTION, field_name="NAIC", original_value=info["raw"],
+            suggested_value=info["normalized"], suggested_source="FORMAT_NORMALIZATION",
+            suggested_confidence="HIGH"))
+    if not info["valid"]:
+        findings.append(Finding(
+            "SO-002", "NAIC_FORMAT_INVALID", MEDIUM,
+            f"NAIC {info['raw']!r} is not a 4–5 digit company code.",
+            HUMAN_REQUIRED, field_name="NAIC", original_value=info["raw"]))
+    return findings
+
+
+def _pur_001(ctx: RecordContext) -> List[Finding]:
+    """Every Exchange Purpose token is in the supported vocabulary."""
+    value = ctx.get("purposesofuse")
+    if not value:
+        return []
+    info = classify_purpose_tokens(value)
+    if not info["unknown"]:
+        return []
+    return [Finding(
+        "PUR-001", "UNKNOWN_PURPOSE_TOKEN", HIGH,
+        f"Exchange Purpose token(s) {info['unknown']} are outside the supported "
+        f"vocabulary of {len(PURPOSE_VOCABULARY)} codes. Held; a token is never "
+        f"dropped, mapped or guessed.",
+        HUMAN_REQUIRED, field_name="purposesofuse",
+        original_value=",".join(info["unknown"]))]
+
+
+def _pur_002(ctx: RecordContext) -> List[Finding]:
+    """The list itself is well-formed (no empty tokens, no dangling separator).
+    Reports normalisation when the delivered separator form differs from the
+    canonical comma list."""
+    value = ctx.get("purposesofuse")
+    if not value:
+        return []
+    info = classify_purpose_tokens(value)
+    findings: List[Finding] = []
+    if info["malformed"]:
+        findings.append(Finding(
+            "PUR-002", "MALFORMED_PURPOSE_LIST", MEDIUM,
+            f"purposesofuse {value!r} has an empty token or a dangling separator.",
+            HUMAN_REQUIRED, field_name="purposesofuse", original_value=value))
+    canonical = ",".join(info["tokens"])
+    if not info["malformed"] and canonical != value.strip():
+        findings.append(Finding(
+            "PUR-002", "PURPOSE_LIST_NORMALIZED", INFO,
+            f"purposesofuse curated as {canonical!r} (separator/whitespace/"
+            f"duplicate normalisation); delivered form preserved in Area 1.",
+            NO_CORRECTION, field_name="purposesofuse", original_value=value,
+            suggested_value=canonical, suggested_source="FORMAT_NORMALIZATION",
+            suggested_confidence="HIGH"))
+    return findings
+
+
+def _doa_001(ctx: RecordContext) -> List[Finding]:
+    """Each delegated-authority reference is an OID by syntax."""
+    value = ctx.get("doa")
+    if not value:
+        return []
+    bad = [t for t in split_doa_references(value) if not is_oid_syntax(t)]
+    if not bad:
+        return []
+    return [Finding(
+        "DOA-001", "DOA_NOT_AN_OID", MEDIUM,
+        f"doa reference(s) {bad} are not dotted-decimal OIDs.",
+        HUMAN_REQUIRED, field_name="doa", original_value=value)]
+
+
+def _doa_002(ctx: RecordContext) -> List[Finding]:
+    """Each syntactically valid DOA reference resolves inside the TEFCA
+    namespace: a record of this delivery, a registry entity, or a QHIN.
+    Otherwise it is an EXTERNAL reference the pipeline cannot verify."""
+    value = ctx.get("doa")
+    if not value:
+        return []
+    known = ctx.dataset.get("known_source_ids") or set()
+    registry = ctx.dataset.get("registry_oids") or set()
+    qhins = ctx.dataset.get("qhin_oids") or set()
+    external = [t for t in split_doa_references(value)
+                if is_oid_syntax(t) and t not in known and t not in registry
+                and t not in qhins]
+    if not external:
+        return []
+    return [Finding(
+        "DOA-002", "EXTERNAL_REFERENCE_UNVERIFIED", MEDIUM,
+        f"doa reference(s) {external} do not resolve to any TEFCA record, "
+        f"registry entity or QHIN. Recorded as an external reference for "
+        f"analyst determination; never treated as a relationship.",
+        HUMAN_REQUIRED, field_name="doa", original_value=value)]
+
+
+def _act_001(ctx: RecordContext) -> List[Finding]:
+    """A record first seen in this delivery that is already inactive. A
+    legitimate state (23 of 1,035 September new entrants), but one an analyst
+    should confirm before it enters the ARC population as history-less."""
+    if normalize_active(ctx.get("active")) != "0":
+        return []
+    new_ids = ctx.dataset.get("new_entrant_ids")
+    if not new_ids or ctx.get("id") not in new_ids:
+        return []
+    return [Finding(
+        "ACT-001", "INACTIVE_NEW_ENTRANT", HIGH,
+        "First delivery of this id and already active=0. Held for analyst "
+        "confirmation: the record has no prior presence to have been "
+        "deactivated from.",
+        HUMAN_REQUIRED, field_name="active", original_value=ctx.get("active"))]
 
 
 def _int_003(ctx: RecordContext) -> List[Finding]:
@@ -787,14 +1000,16 @@ RULES: Tuple[Rule, ...] = (
     Rule("CON-001", CAT_CONTENT, "1.0.0", "domains value", _con_001, INFO),
     Rule("CON-002", CAT_CONTENT, "1.0.0",
          "Exchange Purpose present and canonical", _con_002, INFO),
-    Rule("CON-003", CAT_CONTENT, "1.0.0", "active flag", _con_003, INFO),
-    Rule("CON-004", CAT_CONTENT, "1.0.0",
-         "organizationNodeType is not hierarchy", _con_004, INFO),
+    Rule("CON-003", CAT_CONTENT, "1.3.0", "active flag (0/1, 0.0/1.0 normalised)",
+         _con_003, INFO),
+    Rule("CON-004", CAT_CONTENT, "1.3.0",
+         "organizationNodeType vocabulary; never hierarchy", _con_004, INFO),
     Rule("CON-005", CAT_CONTENT, "1.0.0",
          "address_text is a label, not an address", _con_005, INFO),
     Rule("INT-001", CAT_INTEGRITY, "1.0.0",
          "orgManagingOrg present", _int_001, HIGH),
-    Rule("INT-002", CAT_INTEGRITY, "1.0.0", "partOf resolves", _int_002, MEDIUM),
+    Rule("INT-002", CAT_INTEGRITY, "1.3.0",
+         "partOf resolves (delivery, registry or QHIN)", _int_002, MEDIUM),
     Rule("INT-003", CAT_INTEGRITY, "1.0.0",
          "Subparticipant parented to a Participant", _int_003, MEDIUM),
     Rule("BUS-001", CAT_BUSINESS, "1.0.0",
@@ -803,6 +1018,21 @@ RULES: Tuple[Rule, ...] = (
          "Test-artefact detection", _bus_002, MEDIUM),
     Rule("BUS-003", CAT_BUSINESS, "1.0.0",
          "Participant parent is its QHIN", _bus_003, INFO),
+    # ── 1.3.0 September 2026 snapshot ──
+    Rule("SCH-003", CAT_SCHEMA, "1.3.0",
+         "Source `id` unique within the delivery (1:1 join key)", _sch_003, CRITICAL),
+    Rule("SO-002", CAT_BUSINESS, "1.3.0",
+         "SO-2: payer carries a NAIC company code (text, format checked)", _so_002, HIGH),
+    Rule("PUR-001", CAT_PURPOSE, "1.3.0",
+         "Exchange Purpose tokens in supported vocabulary", _pur_001, HIGH),
+    Rule("PUR-002", CAT_PURPOSE, "1.3.0",
+         "Exchange Purpose list well-formed / normalised", _pur_002, MEDIUM),
+    Rule("DOA-001", CAT_DOA, "1.3.0",
+         "Delegated-authority reference is an OID", _doa_001, MEDIUM),
+    Rule("DOA-002", CAT_DOA, "1.3.0",
+         "Delegated-authority reference resolves in the TEFCA namespace", _doa_002, MEDIUM),
+    Rule("ACT-001", CAT_ACTIVITY, "1.3.0",
+         "Inactive new entrant confirmed by an analyst", _act_001, HIGH),
 )
 
 #: Rules that are NOT executed by the quality engine. Their findings are

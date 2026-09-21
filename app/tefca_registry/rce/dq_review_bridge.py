@@ -108,6 +108,12 @@ RULE_CLASSIFICATION: Dict[str, str] = {
     "CON-001": "METHODOLOGY", "CON-002": "METHODOLOGY",
     "CON-003": "METHODOLOGY", "CON-004": "METHODOLOGY",
     "CON-005": "METHODOLOGY",
+    # ── rule set 1.3.0 (September 2026 snapshot) ──
+    "SCH-003": "IDENTITY",        # duplicate source `id`: which line is the entity?
+    "SO-002": "DQ",               # NAIC for a payer: a delivered-field completeness fact
+    "PUR-001": "METHODOLOGY", "PUR-002": "METHODOLOGY",   # purpose vocabulary, like CON-002
+    "DOA-001": "RELATIONSHIP", "DOA-002": "RELATIONSHIP", # delegated-authority references
+    "ACT-001": "METHODOLOGY",     # inactive new entrant: an activity-state judgement
 }
 
 #: Higher sorts first in the analyst queue. A statement about how soon a human
