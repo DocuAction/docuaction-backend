@@ -977,16 +977,34 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
                 .values(promotion_status=status_value))
     await db.commit()
 
-    # ── pass 2 — relationships ──
+    # ── pass 2 — relationships (1.3.0: reconciled, not add-only) ──
+    #
+    # Each promoted child's CURRENT edges are compared with what this delivery
+    # asserts. A different parent supersedes the old edge at the delivery
+    # boundary (the file's received date), with provenance in
+    # tefca_relationship_observations; an unresolved, cross-QHIN or
+    # out-of-order assertion is REFUSED and recorded. Add-only behaviour
+    # (September 2026: 228 Subparticipants moved .300 → .700 and would have
+    # carried two active parents) is gone.
+    from app.tefca_registry.rce import relationship_history as rh
+
     edges_qhin = 0
     edges_parent = 0
     unresolved_parents = 0
-    today = date.today()
+    intake_row = await db.get(m.RceSourceIntake, intake_id)
+    boundary = (intake_row.received_at.date() if intake_row and intake_row.received_at
+                else date.today())
+    edge_state = await rh.EdgeState.load(db)
+    rel_actor = actor or "SYSTEM"
 
-    existing_edges = set((str(p), str(c), t) for p, c, t in (await db.execute(
-        select(reg.TefcaEntityRelationship.parent_entity_id,
-               reg.TefcaEntityRelationship.child_entity_id,
-               reg.TefcaEntityRelationship.relationship_type))).all())
+    # Parents of a Subparticipant may be entities an EARLIER delivery
+    # promoted; `oid_to_entity` only knows this delivery's rows plus the
+    # safety-net lookups, so fall back to the full identifier map.
+    def _resolve_parent(oid: str):
+        found = oid_to_entity.get(oid)
+        if found is None:
+            found = existing_by_oid.get(oid)
+        return found
 
     for offset in range(0, total, BATCH_SIZE):
         rows = (await db.execute(
@@ -1003,15 +1021,14 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
 
             qhin_id = qhin_map.get(row.org_managing_org or "")
             if qhin_id and str(qhin_id) != str(child_id):
-                key = (str(qhin_id), str(child_id), REL_MANAGED_BY_QHIN)
-                if key not in existing_edges:
-                    db.add(reg.TefcaEntityRelationship(
-                        id=uuid.uuid4(), parent_entity_id=qhin_id,
-                        child_entity_id=child_id,
-                        relationship_type=REL_MANAGED_BY_QHIN,
-                        effective_date=today, status="active", source="import",
-                        notes="orgManagingOrg — entity to its managing QHIN."))
-                    existing_edges.add(key)
+                outcome = await rh.sync_edge(
+                    db, edge_state, intake_id=intake_id, boundary=boundary,
+                    child_id=child_id, parent_id=qhin_id, rel_type=REL_MANAGED_BY_QHIN,
+                    delivered_parent_oid=row.org_managing_org,
+                    child_qhin_oid=row.org_managing_org, actor=rel_actor,
+                    notes="orgManagingOrg — entity to its managing QHIN.",
+                    enforce_same_qhin=False)
+                if outcome == "ASSERTED":
                     edges_qhin += 1
 
             # A Participant's partOf repeats its QHIN. No second edge: the
@@ -1021,23 +1038,22 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
             if not row.part_of or row.part_of == row.org_managing_org:
                 continue
 
-            parent_entity = oid_to_entity.get(row.part_of)
-            if parent_entity is None:
-                unresolved_parents += 1
+            parent_entity = _resolve_parent(row.part_of)
+            if parent_entity is not None and str(parent_entity) == str(child_id):
                 continue
-            if str(parent_entity) == str(child_id):
-                continue
-            key = (str(parent_entity), str(child_id), REL_SUB_PARTICIPANT_OF)
-            if key not in existing_edges:
-                db.add(reg.TefcaEntityRelationship(
-                    id=uuid.uuid4(), parent_entity_id=parent_entity,
-                    child_entity_id=child_id,
-                    relationship_type=REL_SUB_PARTICIPANT_OF,
-                    effective_date=today, status="active", source="import",
-                    notes="partOf — Subparticipant to its Participant."))
-                existing_edges.add(key)
+            outcome = await rh.sync_edge(
+                db, edge_state, intake_id=intake_id, boundary=boundary,
+                child_id=child_id, parent_id=parent_entity,
+                rel_type=REL_SUB_PARTICIPANT_OF, delivered_parent_oid=row.part_of,
+                child_qhin_oid=row.org_managing_org, actor=rel_actor,
+                notes="partOf — Subparticipant to its Participant.",
+                enforce_same_qhin=True)
+            if outcome == "ASSERTED":
                 edges_parent += 1
+            elif outcome == "UNRESOLVED_PARENT":
+                unresolved_parents += 1
         await db.commit()
+    relationship_counters = dict(edge_state.counters)
 
     intake_status_counts = dict((status, int(count)) for status, count in (
         await db.execute(
@@ -1063,6 +1079,11 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
         "relationships_managed_by_qhin": edges_qhin,
         "relationships_sub_participant_of": edges_parent,
         "unresolved_parents": unresolved_parents,
+        "relationships_superseded": relationship_counters.get("superseded", 0),
+        "relationships_refused": (relationship_counters.get("cross_qhin_refused", 0)
+                                  + relationship_counters.get("snapshot_mismatch", 0)),
+        "relationship_observations": relationship_counters,
+        "relationship_boundary": boundary.isoformat(),
         "not_promoted_by_status": skipped_status,
         "curated_status_counts": intake_status_counts,
         "dispositions": disposition_counts,
