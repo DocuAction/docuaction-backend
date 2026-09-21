@@ -46,14 +46,18 @@ ABSENT = {"rce_source_intakes", "rce_source_records", "rce_ingestion_runs", "rce
           "tefca_dimension_evidence", "source_version_snapshots", "evidence_relationship_path",
           # 20260917_delivery_traceability: five append-only evidence tables the chain creates
           "rce_delivery_stage_events", "rce_disposition_events", "rce_reconciliation_snapshots",
-          "tefca_identifier_decision_events", "rce_delivery_report_links"}
+          "tefca_identifier_decision_events", "rce_delivery_report_links",
+          # 20260921_september_snapshot: seven append-only tables the chain creates
+          "rce_delivery_delta", "rce_entity_presence", "tefca_relationship_observations", "arc_stale_marks", "source_snapshot", "entity_source_match", "arc_assessment_run"}
 ADDITIVE = {"audit_logs": ["event_type", "outcome", "correlation_id"], "tefca_import_history": ["file_hash"]}
 AREA1 = {"rce_source_records", "rce_source_intakes", "rce_ingestion_runs",
          "rce_rule_execution_history", "rce_delivery_jobs",
          # the traceability evidence tables stay owner-owned: the app holds only
          # append-only grants from the chain (20260917_delivery_traceability)
          "rce_delivery_stage_events", "rce_disposition_events", "rce_reconciliation_snapshots",
-         "tefca_identifier_decision_events", "rce_delivery_report_links"}
+         "tefca_identifier_decision_events", "rce_delivery_report_links",
+         # 20260921_september_snapshot: same model (owner-owned, app SELECT+INSERT)
+         "rce_delivery_delta", "rce_entity_presence", "tefca_relationship_observations", "arc_stale_marks", "source_snapshot", "entity_source_match", "arc_assessment_run"}
 
 LEGACY_OWNER = "legacy_owner"
 MIGRATION_ID = "migration_identity"
