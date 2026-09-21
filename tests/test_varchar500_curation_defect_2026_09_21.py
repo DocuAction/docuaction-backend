@@ -128,7 +128,7 @@ def test_reason_string_built_by_the_delivery_runner_carries_no_sql():
 # ── 2. A genuine, live database round-trip (not a hand-built exception) ─────
 
 @pytest.fixture
-async def rolled_back_db():
+async def rolled_back_db(db_required):
     engine = create_async_engine(
         _normalize_url(os.environ["DATABASE_URL"]), poolclass=NullPool)
     connection = await engine.connect()
