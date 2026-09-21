@@ -35,7 +35,7 @@ import logging
 import uuid
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 
 logger = logging.getLogger(__name__)
 
@@ -273,14 +273,26 @@ class DeliveryProcessingDataService:
 
     async def _build(self) -> Dict[str, Any]:
         from app.core import request_context
+        from app.tefca_registry.rce.reconciliation import _migration_revision_isolated
 
         build = dict(request_context.build_identity())
-        try:
-            rev = (await self.db.execute(text("select version_num from alembic_version"))).scalars().all()
-            build["migration_revision"] = rev[0] if len(rev) == 1 else (",".join(rev) or "unknown")
-        except Exception as exc:  # noqa: BLE001
-            logger.info("alembic_version unreadable: %s", exc)
-            build["migration_revision"] = "unknown"
+        # APP-DEFECT-001 (2026-09-21): this used to read alembic_version on
+        # self.db, the same session the rest of report generation — including
+        # next_report_id() — runs on. A DEV role lacking SELECT on
+        # alembic_version raised InsufficientPrivilegeError here; the read was
+        # caught and logged as merely informational, but nothing rolled the
+        # session back, so it stayed in Postgres's aborted-transaction state
+        # for every later query on self.db in the same request. The very next
+        # one, next_report_id()'s advisory-lock acquisition, then failed with
+        # InFailedSQLTransactionError — an unrelated, purely diagnostic read
+        # masquerading as a report-id allocation failure (request id
+        # 133964d0-c24e-4e95-a5f1-fcd7aad2b339, and others the same day).
+        # This value is a single string for provenance display, worth nothing
+        # against risking the caller's transaction; it now runs on its own
+        # throwaway session, the same pattern reconciliation.py already
+        # established for the identical failure mode on the delivery
+        # pipeline's own long-lived session (2026-09-17, job fb32f946).
+        build["migration_revision"] = await _migration_revision_isolated()
         return build
 
     # -- evidence blocks -----------------------------------------------------

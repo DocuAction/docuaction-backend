@@ -106,6 +106,7 @@ jobs:
             tests/test_report_links.py \
             tests/test_report_storage_durable.py \
             tests/test_report_authorization.py \
+            tests/test_report_id_transaction_isolation_2026_09_21.py \
             -v --tb=short -rs --junitxml=isolation-results.xml
       - name: Fail if any isolation test was skipped for want of a database
         run: |

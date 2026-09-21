@@ -135,6 +135,25 @@ class ReportStorageError(RuntimeError):
 _ID_SEQUENCE_LOCK_KEY = "docuaction:report_id_sequence"
 
 
+#: asyncpg's signal that a session came in with an already-aborted
+#: transaction — from ANY earlier, unrelated statement on the same session,
+#: not something this allocation did. Recovered once by rolling back and
+#: retrying; a session still broken after that rollback is a genuine failure,
+#: not this class of problem, and is reported as such.
+_ABORTED_TRANSACTION_ERROR = "InFailedSQLTransactionError"
+
+
+def _is_aborted_transaction(exc: BaseException) -> bool:
+    seen = set()
+    cursor: Optional[BaseException] = exc
+    while cursor is not None and id(cursor) not in seen:
+        seen.add(id(cursor))
+        if type(cursor).__name__ == _ABORTED_TRANSACTION_ERROR:
+            return True
+        cursor = getattr(cursor, "orig", None) or cursor.__cause__
+    return False
+
+
 async def next_report_id(db, report_type: str = "verification",
                          now: Optional[datetime] = None) -> str:
     """The next DA-ARC-YYYY-NNN, sequential within the calendar year.
@@ -144,28 +163,53 @@ async def next_report_id(db, report_type: str = "verification",
     or an insert fails after allocation), under a transaction-scoped advisory
     lock so two concurrent generations cannot draw the same number. Any failure
     raises `ReportIdAllocationError`; there is no silent restart at 001.
+
+    APP-DEFECT-002 (2026-09-21): an unrelated, earlier statement on the same
+    session — the migration-revision diagnostic read was one instance, fixed
+    separately in delivery_processing_data.py, but this allocation must not
+    depend on every possible caller having done so — can leave the session in
+    Postgres's aborted-transaction state before this function ever runs. The
+    advisory-lock acquisition below then fails with InFailedSQLTransactionError,
+    which used to be indistinguishable from a genuine allocation failure. That
+    one specific, recoverable condition is now rolled back and retried exactly
+    once; any other exception, or a second failure after the retry, still
+    raises ReportIdAllocationError exactly as before — no ID is issued, and
+    the message carries only the exception's class name (see
+    safe_exception_text / redact_text), never SQL text or bound parameters.
     """
     from app.tefca_registry import models as reg
 
     stamp = now or datetime.now(timezone.utc)
     year = stamp.year
     prefix = f"{REPORT_ID_PREFIX}-{year}-"
-    try:
-        # Serialise allocation per transaction. Released at commit/rollback.
-        await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
-                         {"k": _ID_SEQUENCE_LOCK_KEY})
-        suffix = func.nullif(
-            func.regexp_replace(reg.ReviewReport.report_id, r"^.*-(\d+)$", r"\1"), "")
-        highest = (await db.execute(
-            select(func.max(func.cast(suffix, Integer)))
-            .where(reg.ReviewReport.report_id.like(f"{prefix}%"))
-            .where(reg.ReviewReport.report_id.op("~")(r"-\d+$"))
-        )).scalar()
-    except Exception as exc:  # noqa: BLE001
-        logger.error("report id allocation FAILED: %s: %s", type(exc).__name__, exc)
-        raise ReportIdAllocationError(
-            f"report id sequence unavailable ({type(exc).__name__}); no id issued"
-        ) from exc
+    for attempt in (1, 2):
+        try:
+            # Serialise allocation per transaction. Released at commit/rollback.
+            await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+                             {"k": _ID_SEQUENCE_LOCK_KEY})
+            suffix = func.nullif(
+                func.regexp_replace(reg.ReviewReport.report_id, r"^.*-(\d+)$", r"\1"), "")
+            highest = (await db.execute(
+                select(func.max(func.cast(suffix, Integer)))
+                .where(reg.ReviewReport.report_id.like(f"{prefix}%"))
+                .where(reg.ReviewReport.report_id.op("~")(r"-\d+$"))
+            )).scalar()
+            break
+        except Exception as exc:  # noqa: BLE001
+            if attempt == 1 and _is_aborted_transaction(exc):
+                logger.warning(
+                    "report id allocation found the session already in an "
+                    "aborted transaction from unrelated earlier work; rolling "
+                    "back and retrying this allocation once")
+                try:
+                    await db.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+                continue
+            logger.error("report id allocation FAILED: %s: %s", type(exc).__name__, exc)
+            raise ReportIdAllocationError(
+                f"report id sequence unavailable ({type(exc).__name__}); no id issued"
+            ) from exc
     return f"{prefix}{int(highest or 0) + 1:03d}"
 
 
