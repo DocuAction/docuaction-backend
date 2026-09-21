@@ -51,6 +51,7 @@ have produced a wrong result if carried forward unexamined:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -738,3 +739,94 @@ def schema_fingerprint(headers: List[str]) -> str:
 #: differs is flagged as schema drift and held for review rather than parsed
 #: against a map that may no longer describe it.
 EXPECTED_SCHEMA_FINGERPRINT = schema_fingerprint(list(RCE_FIELDS))
+
+
+# ── September 2026 vocabularies and normalisers ──────────────────────────────
+#
+# The September 2, 2026 snapshot (24,589 records) widened three vocabularies
+# that the July profile had observed as a single value, and delivered `active`
+# and NAIC in formats a spreadsheet round-trip can distort. The rules that use
+# these never REWRITE the delivered value: `parsed`/`raw_line` stay verbatim,
+# and the normalised form is a curated projection with the raw kept beside it.
+#
+# Every vocabulary here is "supported", not "complete": an unlisted value holds
+# the record for a human (HUMAN_REQUIRED), it is never silently accepted.
+
+ORG_NODE_TYPE_VOCABULARY = ("initiating-node", "no-node", "passthrough-node")
+
+#: The eleven purpose-of-use tokens delivered so far. `purposesofuse` is a
+#: comma-separated list inside one quoted CSV cell (September) or a bare cell
+#: with no comma (July, pipe-delimited). Tokens are matched exactly.
+PURPOSE_VOCABULARY = OBSERVED_PURPOSE_TOKENS
+
+#: `active` as delivered ("0"/"1") plus the float round-trip forms a
+#: spreadsheet export produces ("0.0"/"1.0"). Anything else is UNSUPPORTED.
+ACTIVE_NORMALIZATION = {
+    "0": "0", "1": "1", "0.0": "0", "1.0": "1",
+    "false": "0", "true": "1", "FALSE": "0", "TRUE": "1", "False": "0", "True": "1",
+}
+
+_OID_RE = re.compile(r"^[0-2](\.(0|[1-9][0-9]*))+$")
+_NAIC_FLOAT_RE = re.compile(r"^(\d+)\.0+$")
+_NAIC_INT_RE = re.compile(r"^\d{4,5}$")
+
+
+def normalize_active(value: Optional[str]) -> str:
+    """'0' | '1' | '' (empty) | 'UNSUPPORTED:<value>'. Never guesses."""
+    v = (value or "").strip()
+    if v == "":
+        return ""
+    return ACTIVE_NORMALIZATION.get(v, f"UNSUPPORTED:{v[:40]}")
+
+
+def normalize_naic(value: Optional[str]) -> Dict[str, Any]:
+    """NAIC company code as a 4–5 digit TEXT code. The delivered form is kept
+    (`raw`); `normalized` strips only a float artefact ("4918.0" -> "4918").
+    A delivered leading zero ("04918") is PRESERVED — the code is text, and
+    the pipeline does not decide that the RCE meant 4918."""
+    raw = (value or "").strip()
+    if raw == "":
+        return {"raw": raw, "normalized": "", "format": "empty", "valid": False}
+    m = _NAIC_FLOAT_RE.match(raw)
+    if m:
+        return {"raw": raw, "normalized": m.group(1), "format": "float_artifact",
+                "valid": bool(_NAIC_INT_RE.match(m.group(1)))}
+    if _NAIC_INT_RE.match(raw):
+        return {"raw": raw, "normalized": raw, "format": "int", "valid": True}
+    return {"raw": raw, "normalized": raw, "format": "other", "valid": False}
+
+
+def split_purpose_tokens(value: Optional[str]) -> List[str]:
+    """Order-preserving, de-duplicated token list. Separators: comma,
+    semicolon, pipe, whitespace. The RAW cell is never altered by this."""
+    seen: List[str] = []
+    for tok in re.split(r"[;,|\s]+", value or ""):
+        tok = tok.strip()
+        if tok and tok not in seen:
+            seen.append(tok)
+    return seen
+
+
+def classify_purpose_tokens(value: Optional[str]) -> Dict[str, Any]:
+    tokens = split_purpose_tokens(value)
+    unknown = [t for t in tokens if t not in PURPOSE_VOCABULARY]
+    variants = {t: SUSPECTED_PURPOSE_VARIANTS[t] for t in tokens
+                if t in SUSPECTED_PURPOSE_VARIANTS}
+    raw = (value or "").strip()
+    malformed = bool(raw) and (
+        raw.startswith((",", ";", "|")) or raw.endswith((",", ";", "|"))
+        or ",," in raw or ";;" in raw)
+    return {"tokens": tokens, "unknown": unknown, "suspected_variants": variants,
+            "malformed": malformed, "count": len(tokens)}
+
+
+def is_oid_syntax(value: Optional[str]) -> bool:
+    """ISO OID dotted-decimal syntax: first arc 0-2, ≥2 arcs, no leading
+    zeros, no trailing dot. `doa` and `partOf` are OIDs by contract."""
+    v = (value or "").strip()
+    return bool(v) and bool(_OID_RE.match(v)) and len(v) <= 200
+
+
+def split_doa_references(value: Optional[str]) -> List[str]:
+    """`doa` may carry more than one delegated-authority OID."""
+    return split_purpose_tokens(value)
