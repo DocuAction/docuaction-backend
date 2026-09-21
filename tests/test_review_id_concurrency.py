@@ -90,7 +90,7 @@ def _synthetic_delivery_bytes(run_tag: str, n: int = 8) -> bytes:
             "address_country": "US",
             "phone": "512-555-0100",
             "email": f"concy{i}@synthetic-test.docuaction.invalid",
-            "purposesofuse": "TREATMENT",
+            "purposesofuse": "T-TRTMNT",   # a vocabulary token (PUR-001 holds unknown ones since 1.3.0)
             "stateofoperation": "TX",
             "doa": "2026-01-01",
             "transaction": "A",

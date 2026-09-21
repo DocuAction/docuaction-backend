@@ -151,5 +151,6 @@ def test_every_rule_still_has_a_unique_id():
     from app.tefca_registry.rce.quality_rules import _assert_rule_ids_unique
 
     _assert_rule_ids_unique()      # raises on a duplicate
-    # 33 since rule set 1.2.0 added NPI-004 (numeric format).
-    assert len({r.rule_id for r in RULES}) == len(RULES) == 33
+    # 33 since rule set 1.2.0 added NPI-004 (numeric format); 40 since 1.3.0
+    # (September 2026: SCH-003, SO-002, PUR-001/002, DOA-001/002, ACT-001).
+    assert len({r.rule_id for r in RULES}) == len(RULES) == 40
