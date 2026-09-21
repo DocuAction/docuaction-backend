@@ -163,9 +163,13 @@ def test_grants_come_from_the_reviewed_chain_not_reimplemented():
     assert "for t in MANAGED_CHAIN_ALTERS:" in prep
     assert "for t in MANAGED_CHAIN_REFERENCES:" in prep
     _refs = re.search(r"MANAGED_CHAIN_REFERENCES = \(([^)]*)\)", code)
-    assert _refs and {"rce_issues", "tefca_entity_versions", "audit_logs"} == set(
+    # 20260917: rce_issues, tefca_entity_versions, audit_logs.
+    # 20260921_september_snapshot: tefca_entity_relationships (observation and
+    # stale-mark rows reference relationship edges by id).
+    assert _refs and {"rce_issues", "tefca_entity_versions", "audit_logs",
+                      "tefca_entity_relationships"} == set(
         re.findall(r"['\"]([^'\"]+)['\"]", _refs.group(1))), \
-        "20260917 declares FKs to exactly these app-owned, never-ALTERed tables"
+        "the chain declares FKs to exactly these app-owned, never-ALTERed tables"
     assert "assert not set(MANAGED_CHAIN_ALTERS) & AREA1_OWNER_TABLES" in code
     assert not re.search(r"\bREVOKE\b", code, re.I), "no invented REVOKE"
 
