@@ -327,6 +327,21 @@ async def reconcile_delivery(db, intake_id) -> Dict[str, Any]:
           f"{unresolved_conflicts} unresolved conflict(s); {conflicts_not_held} "
           f"on record(s) that are not held")
 
+    # ── 1.3.1: snapshot effects (delta / presence / stale marks / PENDING snapshot) ──
+    # A delivery whose effects did not complete has a FAILED snapshot tip and
+    # cannot pass: it never becomes READY_FOR_REVIEW, no review cycle or report
+    # is created from it, and it cannot be approved. Deliveries processed
+    # before the snapshot model (no MATCHING event carrying `snapshot`) are
+    # legacy and pass this check unchanged.
+    from app.tefca_registry.rce import snapshot_effects as se
+
+    snap = await se.snapshot_state(db, intake_id)
+    check("Snapshot effects completed (PENDING or APPROVED snapshot)",
+          bool(snap.get("legacy")) or (snap.get("status") in (
+              "PENDING", "APPROVED", "SUPERSEDED", "ROLLED_BACK")),
+          ("legacy delivery: processed before the snapshot model" if snap.get("legacy")
+           else f"snapshot tip status {snap.get('status')!r}"))
+
     # ── Area 1 integrity ──
     from app.tefca_registry.rce import repository as repo
 

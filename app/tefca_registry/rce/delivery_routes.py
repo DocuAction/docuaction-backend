@@ -1646,10 +1646,16 @@ async def delivery_delta_route(
     previous_id = (await db.execute(
         select(sm.RceDeliveryDelta.previous_intake_id)
         .where(sm.RceDeliveryDelta.current_intake_id == intake.id).limit(1))).scalar_one_or_none()
+    from app.tefca_registry.rce import snapshot_effects as se
+    snap = await se.snapshot_state(db, intake.id)
     out: Dict[str, Any] = {
         "intake_id": str(intake.id),
         "previous_intake_id": str(previous_id) if previous_id else None,
         "state": "COMPARED" if previous_id else "BASELINE_OR_NOT_COMPUTED",
+        # PENDING / FAILED / ROLLED_BACK deltas are evidence about the delivery,
+        # not the current state; the status says which.
+        "snapshot_status": snap.get("status"),
+        "snapshot_effective": bool(snap.get("effective")),
         "counts": counts, "material_changes": material,
         "records": None,
         "availability": {"records": AVAILABLE if role_at_least(user, EVIDENCE_ROLE)
@@ -1687,11 +1693,25 @@ async def delivery_stale_marks_route(
     from sqlalchemy import func, select
     from app.tefca_registry.rce import snapshot_models as sm
 
+    from app.tefca_registry.rce import snapshot_effects as se
+
     intake = await _intake_or_404(db, intake_id)
+    snap = await se.snapshot_state(db, intake.id)
     resolved_ids = select(sm.ArcStaleMark.resolves_mark_id).where(
         sm.ArcStaleMark.kind == "RESOLVED", sm.ArcStaleMark.resolves_mark_id.isnot(None))
     q = select(sm.ArcStaleMark).where(sm.ArcStaleMark.intake_id == intake.id,
                                       sm.ArcStaleMark.kind == "STALE")
+    if not snap.get("effective"):
+        # Not a current view: a pending/failed/rolled-back snapshot's marks are
+        # listed as evidence only, flagged, and never counted as current.
+        rows = (await db.execute(q.order_by(sm.ArcStaleMark.marked_at.desc())
+                                 .limit(limit).offset(offset))).scalars().all()
+        return {"intake_id": str(intake.id), "snapshot_status": snap.get("status"),
+                "snapshot_effective": False, "total": 0, "unresolved_by_reason": {},
+                "evidence_only": [{"mark_id": str(r.id), "entity_id": str(r.entity_id),
+                                   "review_id": r.review_id, "reason": r.reason}
+                                  for r in rows],
+                "limit": limit, "offset": offset}
     if not include_resolved:
         q = q.where(sm.ArcStaleMark.id.notin_(resolved_ids))
     total = int((await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0)
@@ -1703,7 +1723,8 @@ async def delivery_stale_marks_route(
     rows = (await db.execute(q.order_by(sm.ArcStaleMark.marked_at.desc())
                              .limit(limit).offset(offset))).scalars().all()
     return {
-        "intake_id": str(intake.id), "total": total, "unresolved_by_reason": by_reason,
+        "intake_id": str(intake.id), "snapshot_status": snap.get("status"),
+        "snapshot_effective": True, "total": total, "unresolved_by_reason": by_reason,
         "marks": [{
             "mark_id": str(r.id), "entity_id": str(r.entity_id), "review_id": r.review_id,
             "reason": r.reason, "changed_fields": r.changed_fields,
@@ -1729,3 +1750,107 @@ async def entity_relationship_history_route(
     out = await rh.history_for_entity(db, eid)
     out["stale"] = (await snapshot_effects.stale_for_entities(db, [eid])).get(str(eid), [])
     return out
+
+
+# ═══ snapshot governance (P1-1): state, approval, retry ══════════════════════
+
+@router.get("/deliveries/{intake_id}/snapshot",
+            summary="The delivery's snapshot chain state and approval gates")
+async def delivery_snapshot_state_route(
+    intake_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("viewer")),
+):
+    from app.tefca_registry.rce import snapshot_effects as se
+
+    intake = await _intake_or_404(db, intake_id)
+    state = await se.snapshot_state(db, intake.id)
+    gates = await se.approval_gates(db, intake.id)
+    chain = await se.snapshot_chain(db, intake.id)
+    current = await se.current_snapshot(db)
+    return {
+        "intake_id": str(intake.id), **state,
+        "gates": gates["gates"], "approvable": bool(state.get("approvable") and gates["all"]),
+        "reconciliation_snapshot_id": gates.get("reconciliation_snapshot_id"),
+        "reconciliation_hash": gates.get("reconciliation_hash"),
+        "is_current": bool(current.get("current")
+                           and current["current"]["intake_id"] == str(intake.id)),
+        "chain": [{"snapshot_id": str(r.id), "status": r.status,
+                   "created_by": r.created_by, "created_at": r.created_at.isoformat(),
+                   "approved_by": r.approved_by, "approved_role": r.approved_role,
+                   "approved_at": r.approved_at.isoformat() if r.approved_at else None,
+                   "approval_ref": r.approval_ref,
+                   "reconciliation_snapshot_id": (str(r.reconciliation_snapshot_id)
+                                                  if r.reconciliation_snapshot_id else None),
+                   "reconciliation_hash": r.reconciliation_hash, "build_sha": r.build_sha,
+                   "request_id": r.request_id, "correlation_id": r.correlation_id,
+                   "supersedes_snapshot_id": (str(r.supersedes_snapshot_id)
+                                              if r.supersedes_snapshot_id else None)}
+                  for r in chain],
+        "approval_role": se.SNAPSHOT_APPROVAL_ROLE,
+    }
+
+
+@router.post("/deliveries/{intake_id}/snapshot/approve",
+             summary="Approve the delivery's snapshot (QA lead or above; after reconciliation)")
+async def delivery_snapshot_approve_route(
+    intake_id: str,
+    approval_ref: str = Form(..., min_length=3, max_length=120),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("qalead")),
+):
+    """Append-only: writes the APPROVED successor row, never edits. Refused
+    (409) unless every gate holds: effects completed (PENDING tip), the
+    persisted reconciliation snapshot PASSED with a hash after the effects,
+    the live reconciliation passes now, and the approver is neither the
+    system nor the delivery's registrant."""
+    from app.tefca_registry import audit as reg_audit
+    from app.tefca_registry.rce import snapshot_effects as se
+
+    intake = await _intake_or_404(db, intake_id)
+    try:
+        result = await se.approve_delivery_snapshot(db, intake.id, user=user,
+                                                    approval_ref=approval_ref, commit=False)
+    except se.ApprovalRefused as exc:
+        raise HTTPException(409, str(exc))
+    actor_id, actor_email = reg_audit.actor_of(user)
+    reg_audit.record(db, "source_snapshot_approved", None, actor_id=actor_id,
+                     actor_email=actor_email,
+                     metadata={"source_intake_id": str(intake.id),
+                               "actor_role": getattr(user, "role", None),
+                               "snapshot_id": result["snapshot_id"],
+                               "reconciliation_snapshot_id": result["reconciliation_snapshot_id"],
+                               "reconciliation_hash": result["reconciliation_hash"],
+                               "approval_ref": approval_ref,
+                               "build_sha": request_context.build_sha(),
+                               "request_id": request_context.get("request_id")})
+    await db.commit()
+    return result
+
+
+@router.post("/deliveries/{intake_id}/snapshot-effects/retry",
+             summary="Idempotently re-apply the snapshot effects after a failure")
+async def delivery_snapshot_effects_retry_route(
+    intake_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role(DATA_OPERATIONS_ROLE)),
+):
+    """Re-runs delta / presence / stale marks / PENDING registration. Every
+    step is idempotent, so a partial earlier run is completed, not doubled.
+    A FAILED tip is superseded by PENDING on success; on failure another
+    FAILED row is NOT appended (idempotent) and 409 is returned."""
+    from app.tefca_registry.rce import snapshot_effects as se
+    from app.tefca_registry.rce.stage_events import safe_failure_text
+
+    intake = await _intake_or_404(db, intake_id)
+    actor = getattr(user, "email", None) or "SYSTEM"
+    try:
+        result = await se.apply_snapshot_effects(db, intake.id, actor=actor)
+    except Exception as exc:  # noqa: BLE001
+        await db.rollback()
+        failure = await se.record_effects_failure(
+            db, intake.id, actor=actor, error=safe_failure_text(exc, 1000))
+        raise HTTPException(409, {"error": "snapshot_effects_failed",
+                                  "detail": safe_failure_text(exc, 1000),
+                                  "failure_record": failure})
+    return result

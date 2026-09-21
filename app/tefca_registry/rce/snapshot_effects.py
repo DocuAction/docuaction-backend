@@ -314,8 +314,21 @@ async def resolve_stale(db, mark_id, *, actor: str, reason: str,
     return {"resolved_mark_id": str(mark.id), "resolution_id": str(row.id)}
 
 
+def effective_intakes_subquery():
+    """Intake ids whose snapshot chain tip is APPROVED (or later SUPERSEDED by a
+    newer approved one). PENDING, FAILED, REJECTED and ROLLED_BACK snapshots
+    never reach a current view."""
+    successor = select(sm.SourceSnapshot.supersedes_snapshot_id).where(
+        sm.SourceSnapshot.supersedes_snapshot_id.isnot(None))
+    return select(sm.SourceSnapshot.intake_id).where(
+        sm.SourceSnapshot.intake_id.isnot(None),
+        sm.SourceSnapshot.status.in_(sm.SNAPSHOT_EFFECTIVE),
+        sm.SourceSnapshot.id.notin_(successor))
+
+
 async def stale_for_entities(db, entity_ids: List[Any]) -> Dict[str, List[Dict[str, Any]]]:
-    """Unresolved marks per entity id (string keys) — for current views."""
+    """Unresolved marks per entity id (string keys) — for current views, so
+    only marks written by an APPROVED snapshot are returned."""
     if not entity_ids:
         return {}
     resolved = select(sm.ArcStaleMark.resolves_mark_id).where(
@@ -323,7 +336,8 @@ async def stale_for_entities(db, entity_ids: List[Any]) -> Dict[str, List[Dict[s
     rows = (await db.execute(
         select(sm.ArcStaleMark)
         .where(sm.ArcStaleMark.kind == "STALE", sm.ArcStaleMark.entity_id.in_(entity_ids),
-               sm.ArcStaleMark.id.notin_(resolved))
+               sm.ArcStaleMark.id.notin_(resolved),
+               sm.ArcStaleMark.intake_id.in_(effective_intakes_subquery()))
         .order_by(sm.ArcStaleMark.marked_at.desc()))).scalars().all()
     out: Dict[str, List[Dict[str, Any]]] = {}
     for r in rows:
@@ -334,56 +348,254 @@ async def stale_for_entities(db, entity_ids: List[Any]) -> Dict[str, List[Dict[s
     return out
 
 
-async def register_source_snapshot(db, intake_id, *, actor: str = "SYSTEM",
-                                   commit: bool = True) -> Dict[str, Any]:
-    """One `source_snapshot` row (ONC_RCE) per intake — the generic source
-    ledger IQVIA snapshots will share. An ONC delivery is approved by the act
-    of registering it (Data Operations role), so it lands APPROVED with the
-    intake as its approval reference. Idempotent per intake."""
-    intake = await db.get(m.RceSourceIntake, intake_id)
-    if intake is None:
-        raise SnapshotRefused(f"No delivery {intake_id}")
-    existing = (await db.execute(
-        select(sm.SourceSnapshot).where(sm.SourceSnapshot.intake_id == intake_id)
-        .limit(1))).scalars().first()
-    if existing is not None:
-        return {"snapshot_id": str(existing.id), "already": True, "status": existing.status}
+# ── 4. the snapshot chain ────────────────────────────────────────────────────
+#
+# One append-only chain per intake in `source_snapshot`, linked by
+# supersedes_snapshot_id. The TIP is the snapshot's state:
+#
+#   FAILED       effects did not complete (retry allowed; a new PENDING row
+#                supersedes it when the retry succeeds)
+#   PENDING      effects completed; awaiting reconciliation + human approval
+#   APPROVED     an authorised human approved after reconciliation PASSED
+#   ROLLED_BACK  the compensating relationship rollback was applied
+#
+# Nothing is ever updated in place; the app role holds INSERT only.
+
+async def snapshot_chain(db, intake_id) -> List[sm.SourceSnapshot]:
+    """Every row of the intake's chain, oldest first — ordered by following
+    `supersedes_snapshot_id` from the root, never by timestamp (Postgres
+    `now()` is per transaction, so rows written in one transaction tie)."""
+    rows = list((await db.execute(
+        select(sm.SourceSnapshot).where(sm.SourceSnapshot.intake_id == intake_id))).scalars().all())
+    successors: Dict[Any, List[sm.SourceSnapshot]] = {}
+    for r in rows:
+        successors.setdefault(r.supersedes_snapshot_id, []).append(r)
+    ordered: List[sm.SourceSnapshot] = []
+    frontier = sorted(successors.get(None, []), key=lambda r: (r.created_at, str(r.id)))
+    seen = set()
+    while frontier:
+        r = frontier[0]
+        if r.id in seen:
+            break
+        seen.add(r.id)
+        ordered.append(r)
+        frontier = sorted(successors.get(r.id, []), key=lambda x: (x.created_at, str(x.id)))
+    # anything unreachable from the root (should not exist) is appended last
+    ordered.extend(sorted((r for r in rows if r.id not in seen), key=lambda r: (r.created_at, str(r.id))))
+    return ordered
+
+
+async def snapshot_tip(db, intake_id):
+    """The chain row no later row supersedes (None when nothing is registered)."""
+    chain = await snapshot_chain(db, intake_id)
+    return chain[-1] if chain else None
+
+
+async def snapshot_state(db, intake_id) -> Dict[str, Any]:
+    """Tip status plus whether this delivery predates the snapshot model
+    (`legacy`: processed before 1.3.0, so no effects were ever attempted)."""
+    from app.tefca_registry.rce import traceability_models as tm
+
+    tip = await snapshot_tip(db, intake_id)
+    if tip is not None:
+        return {"status": tip.status, "snapshot_id": str(tip.id), "legacy": False,
+                "effective": tip.status in sm.SNAPSHOT_EFFECTIVE,
+                "approvable": tip.status == sm.SNAPSHOT_PENDING}
+    attempted = (await db.execute(
+        select(func.count()).select_from(tm.RceDeliveryStageEvent)
+        .where(tm.RceDeliveryStageEvent.intake_id == intake_id,
+               tm.RceDeliveryStageEvent.stage == "MATCHING",
+               tm.RceDeliveryStageEvent.detail.has_key("snapshot")))).scalar()
+    return {"status": None, "snapshot_id": None, "legacy": int(attempted or 0) == 0,
+            "effective": False, "approvable": False}
+
+
+def _received_tz(intake):
     received = intake.received_at
     if received.tzinfo is None:
         from datetime import timezone
         received = received.replace(tzinfo=timezone.utc)
-    previous = await dd.previous_delivery(db, intake)
-    prev_snapshot = None
-    if previous is not None:
-        prev_snapshot = (await db.execute(
-            select(sm.SourceSnapshot.id).where(sm.SourceSnapshot.intake_id == previous.id)
-            .limit(1))).scalar_one_or_none()
+    return received
+
+
+def _snapshot_row(intake, *, status, supersedes, actor, metadata=None, **extra) -> sm.SourceSnapshot:
     import uuid as _uuid
-    row = sm.SourceSnapshot(
+    return sm.SourceSnapshot(
         id=_uuid.uuid4(), source_system=sm.SOURCE_ONC_RCE,
         snapshot_label=(intake.delivery_label or intake.original_filename or "")[:200],
         sha256=intake.sha256, record_count=int(intake.record_count or 0),
-        received_at=received, intake_id=intake_id, status=sm.SNAPSHOT_APPROVED,
-        approved_by=actor[:320], approved_at=received,
-        approval_ref=f"rce_source_intake:{intake_id}",
-        supersedes_snapshot_id=prev_snapshot,
+        received_at=_received_tz(intake), intake_id=intake.id, status=status,
+        supersedes_snapshot_id=supersedes,
         metadata_={"schema_fingerprint": intake.schema_fingerprint,
-                   "delimiter": intake.delimiter, "encoding": intake.encoding},
-        created_by=actor[:320], correlation_id=_cid())
+                   "delimiter": intake.delimiter, "encoding": intake.encoding,
+                   **(metadata or {})},
+        created_by=actor[:320], correlation_id=_cid(), build_sha=_sha(),
+        request_id=(request_context.get("request_id") or None), **extra)
+
+
+async def register_source_snapshot(db, intake_id, *, actor: str = "SYSTEM",
+                                   commit: bool = True) -> Dict[str, Any]:
+    """The ONC_RCE snapshot row for an intake, written ONLY after the effects
+    completed, as PENDING. Registration is the system's act and never an
+    approval. Idempotent: a PENDING/APPROVED/ROLLED_BACK tip is returned
+    as-is; a FAILED tip is superseded by a new PENDING row (the retry
+    succeeded)."""
+    intake = await db.get(m.RceSourceIntake, intake_id)
+    if intake is None:
+        raise SnapshotRefused(f"No delivery {intake_id}")
+    tip = await snapshot_tip(db, intake_id)
+    if tip is not None and tip.status != sm.SNAPSHOT_FAILED:
+        return {"snapshot_id": str(tip.id), "already": True, "status": tip.status}
+    row = _snapshot_row(intake, status=sm.SNAPSHOT_PENDING,
+                        supersedes=(tip.id if tip is not None else None), actor=actor,
+                        metadata={"registered": "effects completed; awaiting reconciliation "
+                                                "and an authorised approval"})
     db.add(row)
     if commit:
         await db.commit()
     return {"snapshot_id": str(row.id), "already": False, "status": row.status,
-            "supersedes_snapshot_id": str(prev_snapshot) if prev_snapshot else None}
+            "supersedes_snapshot_id": str(tip.id) if tip is not None else None}
+
+
+async def record_effects_failure(db, intake_id, *, actor: str, error: str,
+                                 commit: bool = True) -> Dict[str, Any]:
+    """Append a FAILED row (redacted reason) so the failure is durable and the
+    delivery can neither be approved nor become current. Idempotent while the
+    tip is already FAILED; never regresses an APPROVED/ROLLED_BACK tip."""
+    intake = await db.get(m.RceSourceIntake, intake_id)
+    if intake is None:
+        return {"recorded": False, "reason": "no intake"}
+    tip = await snapshot_tip(db, intake_id)
+    if tip is not None and tip.status == sm.SNAPSHOT_FAILED:
+        return {"recorded": False, "already": True, "snapshot_id": str(tip.id)}
+    if tip is not None and tip.status in (sm.SNAPSHOT_APPROVED, sm.SNAPSHOT_ROLLED_BACK):
+        return {"recorded": False, "already": True, "snapshot_id": str(tip.id),
+                "note": f"tip is {tip.status}; not regressed by a late re-run failure"}
+    row = _snapshot_row(intake, status=sm.SNAPSHOT_FAILED,
+                        supersedes=(tip.id if tip is not None else None), actor=actor,
+                        metadata={"failure": error[:1000]})
+    db.add(row)
+    if commit:
+        await db.commit()
+    return {"recorded": True, "snapshot_id": str(row.id), "status": row.status}
+
+
+class ApprovalRefused(RuntimeError):
+    pass
+
+
+#: Who may approve a delivery snapshot: QA lead and above (Data Operations is
+#: program_manager, above it). Registration by the system never counts.
+SNAPSHOT_APPROVAL_ROLE = "qalead"
+
+
+async def approval_gates(db, intake_id) -> Dict[str, Any]:
+    """Every gate an approval needs, evaluated without side effects."""
+    from app.tefca_registry.rce import delivery_jobs as jobs
+    from app.tefca_registry.rce import reconciliation
+
+    tip = await snapshot_tip(db, intake_id)
+    job = await jobs.job_for_intake(db, intake_id)
+    recon = await reconciliation.latest_snapshot(db, job.id if job else None)
+    gates = {
+        "effects_completed": tip is not None and tip.status != sm.SNAPSHOT_FAILED,
+        "tip_pending": tip is not None and tip.status == sm.SNAPSHOT_PENDING,
+        "reconciliation_persisted_passed": bool(recon is not None and recon.passed and recon.hash),
+        "reconciliation_after_effects": bool(
+            recon is not None and tip is not None and recon.created_at is not None
+            and tip.created_at is not None and recon.created_at >= tip.created_at),
+    }
+    return {"gates": gates, "all": all(gates.values()),
+            "tip_status": tip.status if tip else None, "tip_id": str(tip.id) if tip else None,
+            "job_id": str(job.id) if job else None, "registered_by": getattr(job, "registered_by", None),
+            "reconciliation_snapshot_id": str(recon.id) if recon else None,
+            "reconciliation_hash": recon.hash if recon else None}
+
+
+async def approve_delivery_snapshot(db, intake_id, *, user, approval_ref: str,
+                                    commit: bool = True) -> Dict[str, Any]:
+    """Append the APPROVED successor row — only when every gate holds: an
+    authorised human (QA lead or above, not the delivery's registrant, not
+    the system), tip PENDING, the latest persisted reconciliation snapshot for
+    the delivery's job PASSED with a hash and postdates the effects, and the
+    live reconciliation still passes. The row carries the reconciliation
+    artefact, actor + role, build and request ids."""
+    from app.core.security import role_at_least
+    from app.tefca_registry.rce import reconciliation
+
+    role = getattr(user, "role", None)
+    actor = (getattr(user, "email", None) or "").strip()
+    if not actor or actor.upper() == "SYSTEM" or not role_at_least(user, SNAPSHOT_APPROVAL_ROLE):
+        raise ApprovalRefused(f"snapshot approval requires a human {SNAPSHOT_APPROVAL_ROLE} or above")
+    intake = await db.get(m.RceSourceIntake, intake_id)
+    if intake is None:
+        raise ApprovalRefused(f"no delivery {intake_id}")
+    g = await approval_gates(db, intake_id)
+    gates = g["gates"]
+    if not gates["effects_completed"]:
+        raise ApprovalRefused("snapshot effects have not completed (no PENDING snapshot); retry them first")
+    if not gates["tip_pending"]:
+        raise ApprovalRefused(f"snapshot is {g['tip_status']}, not PENDING; decisions are append-only")
+    registrant = (g.get("registered_by") or "").strip().lower()
+    if registrant and registrant == actor.lower():
+        raise ApprovalRefused("maker/checker: the delivery's registrant cannot approve its snapshot")
+    if not gates["reconciliation_persisted_passed"]:
+        raise ApprovalRefused("reconciliation has not PASSED with a persisted snapshot hash")
+    if not gates["reconciliation_after_effects"]:
+        raise ApprovalRefused("the passing reconciliation snapshot predates the effects; re-run reconciliation")
+    live = await reconciliation.reconcile_delivery(db, intake_id)
+    if not live.get("passed"):
+        failed = [c["check"] for c in live.get("checks", []) if not c["passed"]]
+        raise ApprovalRefused(f"reconciliation does not pass now: {failed[:5]}")
+    from datetime import datetime, timezone
+    tip = await snapshot_tip(db, intake_id)
+    import uuid as _uuid
+    row = _snapshot_row(intake, status=sm.SNAPSHOT_APPROVED, supersedes=tip.id, actor=actor,
+                        metadata={"approval": "human approval after reconciliation passed"},
+                        approved_by=actor[:320], approved_role=str(role)[:64],
+                        approved_at=datetime.now(timezone.utc), approval_ref=approval_ref[:120],
+                        reconciliation_snapshot_id=_uuid.UUID(g["reconciliation_snapshot_id"]),
+                        reconciliation_hash=g["reconciliation_hash"])
+    db.add(row)
+    if commit:
+        await db.commit()
+    return {"snapshot_id": str(row.id), "status": row.status, "supersedes_snapshot_id": str(tip.id),
+            "reconciliation_snapshot_id": g["reconciliation_snapshot_id"],
+            "reconciliation_hash": g["reconciliation_hash"],
+            "approved_by": actor, "approved_role": role}
+
+
+async def current_snapshot(db) -> Dict[str, Any]:
+    """The current ONC snapshot: the latest-received intake whose chain tip is
+    APPROVED. A newer approved snapshot supersedes the previous current view."""
+    superseded = select(sm.SourceSnapshot.supersedes_snapshot_id).where(
+        sm.SourceSnapshot.supersedes_snapshot_id.isnot(None))
+    row = (await db.execute(
+        select(sm.SourceSnapshot)
+        .where(sm.SourceSnapshot.source_system == sm.SOURCE_ONC_RCE,
+               sm.SourceSnapshot.status == sm.SNAPSHOT_APPROVED,
+               sm.SourceSnapshot.id.notin_(superseded))
+        .order_by(sm.SourceSnapshot.received_at.desc(), sm.SourceSnapshot.created_at.desc())
+        .limit(1))).scalars().first()
+    if row is None:
+        return {"current": None}
+    return {"current": {"snapshot_id": str(row.id), "intake_id": str(row.intake_id),
+                        "received_at": row.received_at.isoformat(), "approved_by": row.approved_by,
+                        "approved_role": row.approved_role,
+                        "approved_at": row.approved_at.isoformat() if row.approved_at else None,
+                        "reconciliation_snapshot_id": (str(row.reconciliation_snapshot_id)
+                                                       if row.reconciliation_snapshot_id else None),
+                        "reconciliation_hash": row.reconciliation_hash}}
 
 
 async def apply_snapshot_effects(db, current_intake_id, *, actor: str = "SYSTEM") -> Dict[str, Any]:
-    """Runner entry point after PROMOTION: guard, snapshot row, delta,
-    presence, staleness. Every step is idempotent per intake."""
+    """Runner entry point after PROMOTION: guard, delta, presence, staleness,
+    and ONLY THEN the PENDING snapshot row. Every step is idempotent per
+    intake; a failure leaves no PENDING row (the caller records FAILED)."""
     guard = await assert_ids_unique(db, current_intake_id)
-    snapshot = await register_source_snapshot(db, current_intake_id, actor=actor)
     delta = await persist_delta(db, current_intake_id)
     presence = await record_presence(db, current_intake_id)
     stale = await mark_stale(db, current_intake_id, actor=actor)
+    snapshot = await register_source_snapshot(db, current_intake_id, actor=actor)
     return {"completed": True, "id_guard": guard, "source_snapshot": snapshot,
             "delta": delta, "presence": presence, "stale": stale}

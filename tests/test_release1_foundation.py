@@ -49,8 +49,8 @@ def test_auto_match_only_for_unique_valid_type2_npi():
     e = uuid.uuid4()
     d = sx.evaluate_npi_match(source_npi=NPI_REGISTERED, nppes_evidence=NPPES_T2,
                               registry_entities_with_npi=[e], source_record_key="HCO-1")
-    assert d["status"] == "AUTO_APPROVED" and d["method"] == "NPI_EXACT_TYPE2"
-    assert d["entity_id"] == str(e) and d["confidence"] == 1.0
+    assert (d["status"] == "AUTO_APPROVED") and (d["method"] == "NPI_EXACT_TYPE2")
+    assert (d["entity_id"] == str(e)) and (d["confidence"] == 1.0)
 
 
 def test_type1_npi_is_an_exception_not_a_match():
@@ -63,7 +63,7 @@ def test_ambiguous_npi_is_an_exception():
     d = sx.evaluate_npi_match(source_npi=NPI_REGISTERED, nppes_evidence=NPPES_T2,
                               registry_entities_with_npi=[uuid.uuid4(), uuid.uuid4()],
                               source_record_key="HCO-1")
-    assert d["status"] == "EXCEPTION" and "2 registry entities" in d["reason"]
+    assert (d["status"] == "EXCEPTION") and ("2 registry entities" in d["reason"])
 
 
 def test_invalid_npi_is_an_exception_and_unknown_type_is_candidate():
@@ -81,7 +81,7 @@ def test_invalid_npi_is_an_exception_and_unknown_type_is_candidate():
 def test_ccn_and_descriptive_methods_are_candidate_only():
     d = sx.evaluate_ccn_candidate(source_ccn="123456", source_record_key="k",
                                   registry_entities_with_ccn=[uuid.uuid4()])
-    assert d["status"] == "CANDIDATE" and d["method"] == "CCN_CANDIDATE"
+    assert (d["status"] == "CANDIDATE") and (d["method"] == "CCN_CANDIDATE")
     for method in ("EXACT_NAME_ADDRESS_PHONE", "FUZZY_DISCOVERY"):
         d = sx.evaluate_descriptive_candidate(method=method, source_record_key="k",
                                               candidates=[uuid.uuid4()], score=0.99)
@@ -108,10 +108,10 @@ def test_licensed_access_requires_flag_and_reviewer_floor(monkeypatch):
 def test_log_redaction_covers_licensed_keys():
     out = redact({"iqvia_hco_id": "X1", "OneKey": "Y", "hcp_name": "Dr Z", "hcp": "p",
                   "licensed_payload": {"a": 1}, "name": "kept", "hcpcs_code": "kept"})
-    assert out["iqvia_hco_id"] == "[REDACTED]" and out["OneKey"] == "[REDACTED]"
-    assert out["hcp_name"] == "[REDACTED]" and out["hcp"] == "[REDACTED]"
+    assert (out["iqvia_hco_id"] == "[REDACTED]") and (out["OneKey"] == "[REDACTED]")
+    assert (out["hcp_name"] == "[REDACTED]") and (out["hcp"] == "[REDACTED]")
     assert out["licensed_payload"] == "[REDACTED]"
-    assert out["name"] == "kept" and out["hcpcs_code"] == "kept"
+    assert (out["name"] == "kept") and (out["hcpcs_code"] == "kept")
 
 
 # ── persistence: approval gate, maker/checker, CHECKs ────────────────────────
@@ -123,7 +123,7 @@ async def test_snapshot_approval_is_append_only_and_gated(rolled_back_db):
     received = await sx.register_snapshot(
         db, source_system="IQVIA_HCO", label=f"{SYN}-HCO-2026-09", sha256="a" * 64,
         record_count=0, received_at=now, created_by="dataops@x")
-    assert received.status == "RECEIVED"
+    assert received.status == "PENDING"
     assert await sx.current_approved_snapshot(db, "IQVIA_HCO") is None
 
     with pytest.raises(PermissionError):
@@ -134,11 +134,12 @@ async def test_snapshot_approval_is_append_only_and_gated(rolled_back_db):
                                   approval_ref="DUA-1")
     approved = await sx.approve_snapshot(db, received.id, user=_User("qalead", "qa@x"),
                                          approval_ref="DUA-1")
-    assert approved.status == "APPROVED" and approved.supersedes_snapshot_id == received.id
+    assert (approved.status == "APPROVED") and (approved.supersedes_snapshot_id == received.id)
     await db.refresh(received)
-    assert received.status == "RECEIVED"          # never edited
+    assert received.status == "PENDING"           # never edited
+    assert (approved.approved_role == "qalead") and (approved.build_sha is not None)
     current = await sx.current_approved_snapshot(db, "IQVIA_HCO")
-    assert current is not None and current.id == approved.id
+    assert (current is not None) and (current.id == approved.id)
     with pytest.raises(ValueError):                # cannot approve twice
         await sx.approve_snapshot(db, received.id, user=_User("qalead", "qa@x"),
                                   approval_ref="DUA-1")
@@ -201,7 +202,7 @@ async def test_match_rows_honour_auto_only_npi_and_maker_checker(rolled_back_db)
                                decision=sx.MatchDecision(ccn, status="QA_APPROVED"),
                                proposed_by="SYSTEM", reviewed_by="analyst@x", qa_by="qa@x",
                                supersedes_match_id=cand.id)
-    assert qa.match_status == "QA_APPROVED" and qa.supersedes_match_id == cand.id
+    assert (qa.match_status == "QA_APPROVED") and (qa.supersedes_match_id == cand.id)
     rows = (await db.execute(select(sm.EntitySourceMatch)
                              .where(sm.EntitySourceMatch.entity_id == entity))).scalars().all()
     assert len(rows) == 3                          # append-only chain, nothing rewritten

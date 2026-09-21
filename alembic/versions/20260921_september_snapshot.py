@@ -269,7 +269,8 @@ def upgrade() -> None:
             sa.Column("build_sha", sa.String(40), nullable=False, server_default=sa.text("'unknown'")),
             sa.CheckConstraint(
                 "observation IN ('ASSERTED','SUPERSEDED','UNRESOLVED_PARENT',"
-                "'CROSS_QHIN_REFUSED','SNAPSHOT_MISMATCH','ABSENT')",
+                "'CROSS_QHIN_REFUSED','SNAPSHOT_MISMATCH','ABSENT',"
+                "'ROLLED_BACK','RESTORED')",
                 name="ck_tefca_relobs_observation"),
         )
         op.create_index("idx_tefca_relobs_child", "tefca_relationship_observations",
@@ -317,10 +318,21 @@ def upgrade() -> None:
             sa.Column("received_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("intake_id", _uuid(),
                       sa.ForeignKey("rce_source_intakes.id", ondelete="RESTRICT")),
-            sa.Column("status", sa.String(16), nullable=False, server_default=sa.text("'RECEIVED'")),
+            # PENDING on registration (the system never approves); APPROVED only
+            # by an authorised human as an append-only successor row; FAILED
+            # when the snapshot effects did not complete; ROLLED_BACK after the
+            # compensating relationship rollback.
+            sa.Column("status", sa.String(16), nullable=False, server_default=sa.text("'PENDING'")),
             sa.Column("approved_by", sa.String(320)),
+            sa.Column("approved_role", sa.String(64)),
             sa.Column("approved_at", sa.DateTime(timezone=True)),
             sa.Column("approval_ref", sa.String(120)),
+            # The reconciliation artefact the approval rests on, and where it
+            # was decided (build, request) - approval evidence, not metadata.
+            sa.Column("reconciliation_snapshot_id", _uuid()),
+            sa.Column("reconciliation_hash", sa.String(64)),
+            sa.Column("build_sha", sa.String(40), nullable=False, server_default=sa.text("'unknown'")),
+            sa.Column("request_id", sa.String(64)),
             sa.Column("supersedes_snapshot_id", _uuid(),
                       sa.ForeignKey("source_snapshot.id", ondelete="RESTRICT")),
             sa.Column("metadata", postgresql.JSONB(), nullable=False,
@@ -331,10 +343,11 @@ def upgrade() -> None:
             sa.Column("correlation_id", sa.String(64), nullable=False),
             sa.CheckConstraint("source_system IN ('ONC_RCE','IQVIA_HCO','IQVIA_HCP',"
                                "'IQVIA_AFFILIATION')", name="ck_source_snapshot_system"),
-            sa.CheckConstraint("status IN ('RECEIVED','APPROVED','REJECTED','SUPERSEDED')",
-                               name="ck_source_snapshot_status"),
+            sa.CheckConstraint("status IN ('PENDING','APPROVED','REJECTED','SUPERSEDED',"
+                               "'FAILED','ROLLED_BACK')", name="ck_source_snapshot_status"),
             sa.CheckConstraint("(status <> 'APPROVED') OR (approved_by IS NOT NULL AND "
-                               "approved_at IS NOT NULL)", name="ck_source_snapshot_approval"),
+                               "approved_at IS NOT NULL AND approved_role IS NOT NULL)",
+                               name="ck_source_snapshot_approval"),
         )
         # The same file is registered ONCE. Approval/rejection rows are
         # append-only successors (supersedes_snapshot_id set) of the
@@ -437,6 +450,15 @@ def upgrade() -> None:
           AND NOT EXISTS (
               SELECT 1 FROM arc_stale_marks r
               WHERE r.kind = 'RESOLVED' AND r.resolves_mark_id = s.id)
+          -- current views show only marks of an APPROVED snapshot: a pending,
+          -- failed or rolled-back delivery never reaches the current state.
+          AND EXISTS (
+              SELECT 1 FROM source_snapshot ss
+              WHERE ss.intake_id = s.intake_id
+                AND ss.status IN ('APPROVED', 'SUPERSEDED')
+                AND NOT EXISTS (
+                    SELECT 1 FROM source_snapshot n
+                    WHERE n.supersedes_snapshot_id = ss.id))
     """)
 
     # ── grants: append-only ──────────────────────────────────────────────────

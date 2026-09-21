@@ -39,10 +39,21 @@ reportable.
    exactly one registry entity carries it (`ck_esm_auto_only_npi`). A Type-1
    NPI or an ambiguous NPI is an `EXCEPTION`; CCN, exact name+address+phone
    and fuzzy discovery are `CANDIDATE` only.
-4. **Snapshot approval gate.** A licensed snapshot is registered `RECEIVED`
-   and is unusable until a QA lead or above (not the registrant) records an
-   `APPROVED` successor row with an approval reference. The original row is
-   never edited (partial unique index on original registrations only).
+4. **Snapshot approval gate.** Every snapshot — ONC delivery or licensed —
+   is registered `PENDING` by the system, which never approves. An ONC
+   delivery's PENDING row is written only after its snapshot effects
+   completed (a `FAILED` row otherwise, retry allowed); reconciliation
+   includes "snapshot effects completed", so a failed delivery never
+   becomes READY_FOR_REVIEW and no review cycle or report is created from
+   it. A QA lead or above (not the registrant, not the system) records an
+   `APPROVED` successor row carrying the reconciliation snapshot id and
+   hash, role, build SHA and request id — only after the persisted
+   reconciliation snapshot PASSED. Current views (stale marks,
+   `arc_current_stale`, relationship `current`) select APPROVED snapshots
+   only. The original row is never edited (partial unique index on original
+   registrations only). Compensating rollback of one snapshot's relationship
+   changes is a separate, fail-closed, idempotent procedure
+   (`docs/rce/RELATIONSHIP_ROLLBACK_RUNBOOK.md`).
 5. **Access.** Licensed content is served above the reviewer floor and only
    when `ENABLE_IQVIA_SOURCES` is on. Keys naming IQVIA/OneKey/HCP content
    are redacted from every log line (`logging_config._SENSITIVE_KEY`).

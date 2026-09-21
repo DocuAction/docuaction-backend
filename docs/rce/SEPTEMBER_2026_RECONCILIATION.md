@@ -82,9 +82,21 @@ NPI-004 rules; the `id` column is 1:1 in every file (SCH-003 now guards it).
   run after promotion inside the existing MATCHING event (no new stage name;
   the stage-event CHECK is untouched). A failure there is recorded and does
   not undo the promotion; the effects are idempotent.
-* Rollback target for the code: the merge base of the branch. Rollback of
-  the migration: `alembic downgrade 20260918_pp_verification` (drops only the
-  new tables; ended relationship rows keep their `end_date`).
+* Rollback is THREE distinct things (see
+  `docs/rce/RELATIONSHIP_ROLLBACK_RUNBOOK.md`): image rollback to the merge
+  base `804b8fe9` (stops the code, restores no data); `alembic downgrade
+  20260918_pp_verification` (drops the new tables, REFUSES while they hold
+  rows, never touches `tefca_entity_relationships`); and the data
+  compensation `scripts/rce_snapshot_rollback.py` (per intake, from the
+  snapshot's own observation evidence, fail-closed, idempotent, append-only
+  evidence). `alembic downgrade` alone is not a rollback.
+* Snapshot governance (P1-1): the effects register the snapshot as PENDING
+  only after they complete (a FAILED row otherwise); reconciliation includes
+  "snapshot effects completed", so a failed delivery never becomes
+  READY_FOR_REVIEW and no review cycle or report is created from it; an
+  authorised human (QA lead or above, not the registrant) approves as an
+  append-only row carrying the reconciliation snapshot id/hash, role, build
+  SHA and request id; current views select approved snapshots only.
 
 ## 6. Test evidence
 

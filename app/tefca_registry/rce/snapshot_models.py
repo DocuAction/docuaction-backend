@@ -36,6 +36,8 @@ OBS_UNRESOLVED_PARENT = "UNRESOLVED_PARENT"
 OBS_CROSS_QHIN_REFUSED = "CROSS_QHIN_REFUSED"
 OBS_SNAPSHOT_MISMATCH = "SNAPSHOT_MISMATCH"
 OBS_ABSENT = "ABSENT"
+OBS_ROLLED_BACK = "ROLLED_BACK"     # a replacement edge retired by compensation
+OBS_RESTORED = "RESTORED"           # a superseded edge made current again
 
 # stale-mark reasons: the MATERIAL changes that require ARC re-evaluation.
 STALE_PART_OF_CHANGED = "PART_OF_CHANGED"
@@ -49,10 +51,15 @@ STALE_MATCH_CHANGED = "MATCH_CHANGED"
 STALE_ABSENT_FROM_DELIVERY = "ABSENT_FROM_DELIVERY"
 
 # source snapshot
-SNAPSHOT_RECEIVED = "RECEIVED"
-SNAPSHOT_APPROVED = "APPROVED"
+SNAPSHOT_PENDING = "PENDING"        # registered; the system never approves
+SNAPSHOT_APPROVED = "APPROVED"      # an authorised human approved, after reconciliation
 SNAPSHOT_REJECTED = "REJECTED"
 SNAPSHOT_SUPERSEDED = "SUPERSEDED"
+SNAPSHOT_FAILED = "FAILED"          # snapshot effects did not complete; retry allowed
+SNAPSHOT_ROLLED_BACK = "ROLLED_BACK"  # relationship compensation applied
+#: A snapshot whose chain tip is one of these took effect at some point and
+#: its evidence belongs in CURRENT views. PENDING/FAILED/REJECTED/ROLLED_BACK do not.
+SNAPSHOT_EFFECTIVE = (SNAPSHOT_APPROVED, SNAPSHOT_SUPERSEDED)
 SOURCE_ONC_RCE = "ONC_RCE"
 SOURCE_IQVIA_HCO = "IQVIA_HCO"
 SOURCE_IQVIA_HCP = "IQVIA_HCP"
@@ -186,10 +193,15 @@ class SourceSnapshot(Base):
     received_at = Column(DateTime(timezone=True), nullable=False)
     intake_id = Column(UUID(as_uuid=True),
                        ForeignKey("rce_source_intakes.id", ondelete="RESTRICT"))
-    status = Column(String(16), nullable=False, server_default=text("'RECEIVED'"))
+    status = Column(String(16), nullable=False, server_default=text("'PENDING'"))
     approved_by = Column(String(320))
+    approved_role = Column(String(64))
     approved_at = Column(DateTime(timezone=True))
     approval_ref = Column(String(120))
+    reconciliation_snapshot_id = Column(UUID(as_uuid=True))
+    reconciliation_hash = Column(String(64))
+    build_sha = Column(String(40), nullable=False, server_default=text("'unknown'"))
+    request_id = Column(String(64))
     supersedes_snapshot_id = Column(UUID(as_uuid=True),
                                     ForeignKey("source_snapshot.id", ondelete="RESTRICT"))
     metadata_ = Column("metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb"))

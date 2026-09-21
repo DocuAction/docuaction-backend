@@ -48,14 +48,14 @@ def test_reader_honours_rfc4180_quoting_for_comma_files():
 
 def test_reader_pipe_file_without_quotes_is_split_exactly_as_before():
     values, note = reader.split_fields('a|b|c 12" wide|d', "|", 4)
-    assert values == ["a", "b", 'c 12" wide', "d"] and note is None
+    assert (values == ["a", "b", 'c 12" wide', "d"]) and (note is None)
 
 
 def test_reader_stray_quote_falls_back_to_plain_split_with_note():
     # A quote that opens mid-cell would swallow the rest of the line under csv
     # rules; the plain split matches the header count, so it wins, noted.
     values, note = reader.split_fields('"open,b,c,d', ",", 4)
-    assert len(values) == 4 and note and "plain split" in note
+    assert (len(values) == 4) and (note is not None) and ("plain split" in note)
 
 
 # ── normalisers ──────────────────────────────────────────────────────────────
@@ -276,7 +276,8 @@ async def test_july_then_september_supersedes_marks_and_persists(rolled_back_db)
     assert jp["relationships_superseded"] == 0
     july_effects = await se.apply_snapshot_effects(db, july_id, actor=SYN)
     assert july_effects["delta"]["state"] in ("BASELINE_DELIVERY", "COMPARED")
-    assert july_effects["source_snapshot"]["status"] == sm.SNAPSHOT_APPROVED
+    # registration is the system's act: PENDING, never APPROVED
+    assert july_effects["source_snapshot"]["status"] == sm.SNAPSHOT_PENDING
 
     sub1 = await _entity_by_oid(db, f"{ARC}.1")
     sub3 = await _entity_by_oid(db, f"{ARC}.3")
@@ -334,19 +335,25 @@ async def test_july_then_september_supersedes_marks_and_persists(rolled_back_db)
     assert old_edge.end_date == boundary and old_edge.status == "historical"
     assert str(old_edge.parent_entity_id) == str(p300)
     current = await _active_parent(db, sub1, REL_SUB_PARTICIPANT_OF)
-    assert len(current) == 1 and str(current[0].parent_entity_id) == str(p700)
+    assert (len(current) == 1) and (str(current[0].parent_entity_id) == str(p700))
     assert current[0].effective_date == boundary
+    # CURRENT VIEW (P1-1): the snapshot is PENDING, so the new edge is STAGED
+    # and the ended edge is still the current relationship.
+    view = await history_for_entity(db, sub1)
+    assert [e["id"] for e in view["staged"] if e["relationship_type"] == REL_SUB_PARTICIPANT_OF] == [str(current[0].id)]
+    assert [e["id"] for e in view["current"] if e["relationship_type"] == REL_SUB_PARTICIPANT_OF] == [str(old_edge.id)]
+    assert view["current"][[e["id"] for e in view["current"]].index(str(old_edge.id))]["pending_supersession_by"] == str(current[0].id)
 
     # cross-QHIN refused: .3 still under .300, nothing ended
     kept = await _active_parent(db, sub3, REL_SUB_PARTICIPANT_OF)
-    assert len(kept) == 1 and str(kept[0].parent_entity_id) == str(p300)
+    assert (len(kept) == 1) and (str(kept[0].parent_entity_id) == str(p300))
     hist3 = await history_for_entity(db, sub3)
     assert {o["observation"] for o in hist3["observations"]} >= {"ASSERTED", "CROSS_QHIN_REFUSED"}
     hist1 = await history_for_entity(db, sub1)
     kinds = [o["observation"] for o in hist1["observations"]
              if o["relationship_type"] == REL_SUB_PARTICIPANT_OF]
     # July assertion, September supersession of it, September assertion.
-    assert "SUPERSEDED" in kinds and kinds.count("ASSERTED") == 2
+    assert ("SUPERSEDED" in kinds) and (kinds.count("ASSERTED") == 2)
     asserted_new = [o for o in hist1["observations"] if o["observation"] == "ASSERTED"
                     and o["supersedes_relationship_id"]]
     assert asserted_new and asserted_new[0]["supersedes_relationship_id"] == str(old_edge.id)
@@ -355,14 +362,15 @@ async def test_july_then_september_supersedes_marks_and_persists(rolled_back_db)
     eff = await se.apply_snapshot_effects(db, sept_id, actor=SYN)
     assert eff["id_guard"]["unique"] is True
     d = eff["delta"]
-    assert d["state"] == "COMPARED" and d["previous_intake_id"] == str(july_id) or d["previous_intake_id"] == july_id
+    assert d["state"] == "COMPARED"
+    assert str(d["previous_intake_id"]) == str(july_id)
     assert d["counts"][sm.DELTA_NEW] == 1
     assert d["counts"][sm.DELTA_NOT_PRESENT] == 1
     assert d["counts"][sm.DELTA_CHANGED] == 5   # .1 .2 .3 .5 .6
     assert d["counts"][sm.DELTA_UNCHANGED] == 3 # .300 .700 .9
     assert d["material_changes"] == 4           # .6 is postal code only
-    assert eff["presence"]["absent"] == 1 and eff["presence"]["present"] == 8
-    assert eff["source_snapshot"]["status"] == sm.SNAPSHOT_APPROVED
+    assert (eff["presence"]["absent"] == 1) and (eff["presence"]["present"] == 8)
+    assert eff["source_snapshot"]["status"] == sm.SNAPSHOT_PENDING
 
     marks = (await db.execute(select(sm.ArcStaleMark)
                               .where(sm.ArcStaleMark.intake_id == sept_id))).scalars().all()
@@ -385,10 +393,13 @@ async def test_july_then_september_supersedes_marks_and_persists(rolled_back_db)
 
     # idempotent re-application: nothing duplicated
     eff2 = await se.apply_snapshot_effects(db, sept_id, actor=SYN)
-    assert eff2["delta"]["persisted"] == 0 and eff2["delta"]["already"] == 10
-    assert eff2["presence"]["present"] == 0 and eff2["presence"]["absent"] == 0
+    assert (eff2["delta"]["persisted"] == 0) and (eff2["delta"]["already"] == 10)
+    assert (eff2["presence"]["present"] == 0) and (eff2["presence"]["absent"] == 0)
     assert eff2["stale"]["marked"] == 0
     assert eff2["source_snapshot"]["already"] is True
+
+    # CURRENT VIEW: a PENDING snapshot's marks are not current (P1-1)
+    assert await se.stale_for_entities(db, [sub1]) == {}
 
     # resolve one mark: append-only, the STALE row remains
     mark = by_entity[str(sub1)][0]
@@ -434,7 +445,7 @@ async def test_older_snapshot_cannot_end_a_newer_edge(rolled_back_db):
     assert lp["relationship_observations"]["snapshot_mismatch"] >= 1
     assert lp["relationships_superseded"] == 0
     edges = await _active_parent(db, sub1, REL_SUB_PARTICIPANT_OF)
-    assert len(edges) == 1 and str(edges[0].parent_entity_id) == str(p300)
+    assert (len(edges) == 1) and (str(edges[0].parent_entity_id) == str(p300))
     assert edges[0].end_date is None
 
 
@@ -453,5 +464,5 @@ async def test_duplicate_id_refuses_snapshot_effects(rolled_back_db):
         select(m.RceIssue).join(m.RceSourceRecord, m.RceSourceRecord.id == m.RceIssue.source_record_id)
         .where(m.RceSourceRecord.source_intake_id == intake_id,
                m.RceIssue.rule_id == "SCH-003"))).scalars().all()
-    assert len(dup) == 2 and all(i.severity == "CRITICAL" for i in dup)
+    assert (len(dup) == 2) and all(i.severity == "CRITICAL" for i in dup)
     assert curated["status_counts"]["HELD"] >= 2

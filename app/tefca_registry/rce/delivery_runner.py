@@ -466,8 +466,20 @@ async def _snapshot_effects(db, intake_id, actor) -> Dict[str, Any]:
         logger.error("snapshot effects for %s did not complete: %s",
                      intake_id, type(exc).__name__, exc_info=True)
         await _settle(db)
-        return {"completed": False,
-                "error": stage_events.safe_failure_text(exc, 1000)}
+        error = stage_events.safe_failure_text(exc, 1000)
+        # FAIL CLOSED: the failure is recorded as a FAILED snapshot row, so the
+        # delivery cannot pass reconciliation, be approved, or become current
+        # until an idempotent retry completes the effects.
+        failure: Dict[str, Any]
+        try:
+            failure = await snapshot_effects.record_effects_failure(
+                db, intake_id, actor=actor, error=error)
+        except Exception as exc2:  # noqa: BLE001
+            logger.error("snapshot failure row for %s not written: %s",
+                         intake_id, type(exc2).__name__, exc_info=True)
+            await _settle(db)
+            failure = {"recorded": False, "error": stage_events.safe_failure_text(exc2, 300)}
+        return {"completed": False, "error": error, "failure_record": failure}
 
 
 def _snapshot_summary(result: Dict[str, Any]) -> Dict[str, Any]:

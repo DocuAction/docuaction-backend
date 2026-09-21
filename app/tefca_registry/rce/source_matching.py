@@ -26,7 +26,7 @@ What this module fixes in code, so the licensed integration cannot drift:
 
   SNAPSHOT APPROVAL  A licensed snapshot is usable only after a QA-lead-or-
                      above approval, recorded as a NEW `source_snapshot` row
-                     (append-only) that supersedes the RECEIVED one.
+                     (append-only) that supersedes the PENDING one.
 
   ACCESS             Licensed content is served only above the reviewer
                      floor and only when the programme flag is on.
@@ -208,13 +208,13 @@ async def register_snapshot(db, *, source_system: str, label: str, sha256: str,
                             record_count: int, received_at: datetime, created_by: str,
                             metadata: Optional[Dict[str, Any]] = None,
                             commit: bool = True) -> sm.SourceSnapshot:
-    """A licensed snapshot arrives RECEIVED. Nothing reads it until approved."""
+    """A licensed snapshot arrives PENDING. Nothing reads it until approved."""
     if source_system not in OBSERVATION_SOURCES and source_system != sm.SOURCE_ONC_RCE:
         raise ValueError(f"unknown source system {source_system!r}")
     row = sm.SourceSnapshot(
         id=uuid.uuid4(), source_system=source_system, snapshot_label=label[:200],
         sha256=sha256, record_count=int(record_count), received_at=received_at,
-        status=sm.SNAPSHOT_RECEIVED, metadata_=dict(metadata or {}),
+        status=sm.SNAPSHOT_PENDING, metadata_=dict(metadata or {}),
         created_by=created_by[:320], correlation_id=_cid())
     db.add(row)
     if commit:
@@ -225,14 +225,16 @@ async def register_snapshot(db, *, source_system: str, label: str, sha256: str,
 async def approve_snapshot(db, snapshot_id, *, user, approval_ref: str,
                            commit: bool = True) -> sm.SourceSnapshot:
     """QA-lead-or-above approval, APPEND-ONLY: a new APPROVED row that
-    supersedes the RECEIVED one. The RECEIVED row is never edited."""
+    supersedes the PENDING one. The PENDING row is never edited. (ONC
+    deliveries use `snapshot_effects.approve_delivery_snapshot`, which adds
+    the reconciliation gates.)"""
     if not role_at_least(user, SNAPSHOT_APPROVAL_ROLE):
         raise PermissionError(f"snapshot approval requires {SNAPSHOT_APPROVAL_ROLE} or above")
     received = await db.get(sm.SourceSnapshot, snapshot_id)
     if received is None:
         raise ValueError(f"no snapshot {snapshot_id}")
-    if received.status != sm.SNAPSHOT_RECEIVED:
-        raise ValueError(f"snapshot {snapshot_id} is {received.status}, not RECEIVED")
+    if received.status != sm.SNAPSHOT_PENDING:
+        raise ValueError(f"snapshot {snapshot_id} is {received.status}, not PENDING")
     successor = (await db.execute(
         select(sm.SourceSnapshot.id, sm.SourceSnapshot.status)
         .where(sm.SourceSnapshot.supersedes_snapshot_id == received.id).limit(1))).first()
@@ -248,9 +250,12 @@ async def approve_snapshot(db, snapshot_id, *, user, approval_ref: str,
         snapshot_label=received.snapshot_label, sha256=received.sha256,
         record_count=received.record_count, received_at=received.received_at,
         intake_id=received.intake_id, status=sm.SNAPSHOT_APPROVED,
-        approved_by=actor[:320], approved_at=now, approval_ref=approval_ref[:120],
+        approved_by=actor[:320], approved_role=str(getattr(user, "role", ""))[:64],
+        approved_at=now, approval_ref=approval_ref[:120],
         supersedes_snapshot_id=received.id, metadata_=dict(received.metadata_ or {}),
-        created_by=actor[:320], correlation_id=_cid())
+        created_by=actor[:320], correlation_id=_cid(),
+        build_sha=request_context.build_sha(),
+        request_id=(request_context.get("request_id") or None))
     db.add(row)
     if commit:
         await db.commit()
