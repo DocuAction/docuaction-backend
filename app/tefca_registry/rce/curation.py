@@ -138,7 +138,10 @@ def _canonical_entity_level(sequoia: str) -> str:
 
 
 def _split_purposes(value: str) -> List[str]:
-    return [p.strip() for p in (value or "").split(",") if p.strip()]
+    # 1.3.0: order-preserving, de-duplicated, tolerant of ; | and whitespace
+    # separators. Identical to the comma split for every July/September token.
+    from app.tefca_registry.rce.field_map import split_purpose_tokens
+    return split_purpose_tokens(value)
 
 
 def _contact_block(values: Dict[str, str]) -> Dict[str, str]:
@@ -150,7 +153,20 @@ def _rce_attributes(values: Dict[str, str]) -> Dict[str, str]:
     keep = ("domains", "initiatoronly", "stateofoperation", "doa",
             "delegationRole", "phone", "email", "alias", "address_text",
             "address_country", "transaction", "NAIC", "CCN")
-    return {k: values.get(k, "") for k in keep if (values.get(k) or "").strip()}
+    out = {k: values.get(k, "") for k in keep if (values.get(k) or "").strip()}
+    # 1.3.0: normalised projections beside the raw values they came from.
+    # The raw cell is never replaced; `active_raw`/`purposesofuse_raw` keep the
+    # delivered text on the curated row so a reviewer sees both without Area 1.
+    from app.tefca_registry.rce.field_map import normalize_active, normalize_naic
+    if (values.get("NAIC") or "").strip():
+        out["NAIC_normalized"] = normalize_naic(values.get("NAIC"))["normalized"]
+    active_raw = (values.get("active") or "").strip()
+    if active_raw:
+        out["active_raw"] = active_raw
+        out["active_normalized"] = normalize_active(active_raw)
+    if (values.get("purposesofuse") or "").strip():
+        out["purposesofuse_raw"] = values.get("purposesofuse", "").strip()
+    return out
 
 
 def build_curated_row(record, values: Dict[str, str], *,
@@ -158,9 +174,13 @@ def build_curated_row(record, values: Dict[str, str], *,
     """Project one source record into its curated shape, pre-correction."""
     from app.tefca_registry.rce.quality_rules import _TEST_NAME_PATTERN
 
+    from app.tefca_registry.rce.field_map import normalize_active
+
     sequoia = (values.get("sequoiaorgtype") or "").strip()
     active_raw = (values.get("active") or "").strip()
-    is_active = active_raw != "0"
+    # 1.3.0: "0.0"/"1.0" (spreadsheet round-trip) curate as "0"/"1". An empty
+    # or unsupported value is HELD by CON-003, so its projection never promotes.
+    is_active = normalize_active(active_raw) != "0"
     name = (values.get("name") or "").strip()
 
     return {
@@ -242,6 +262,11 @@ async def curate_delivery(db, intake_id, *, run_id=None,
     total = int((await db.execute(
         select(func.count()).select_from(m.RceSourceRecord)
         .where(m.RceSourceRecord.source_intake_id == intake_id))).scalar() or 0)
+
+    # RE-RUN GUARD: `uq_rce_curated_source_record` (one curated row per source
+    # row) makes a second curation of the same delivery fail at the database,
+    # never absorb silently — tests/test_curation_rerun_invariant.py holds
+    # that contract. No code-level short-circuit is layered on top of it.
 
     created = 0
     corrections_applied = 0

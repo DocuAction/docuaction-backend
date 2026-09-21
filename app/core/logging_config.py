@@ -30,7 +30,11 @@ from app.core import request_context
 
 _SENSITIVE_KEY = re.compile(
     r"(token|secret|password|passwd|authorization|api[_-]?key|connection[_-]?string|"
-    r"cookie|set-cookie|client[_-]?secret|(?:^|[_.-])sas(?:[_.-]|$)|signature)",
+    r"cookie|set-cookie|client[_-]?secret|(?:^|[_.-])sas(?:[_.-]|$)|signature|"
+    # Licensed-source content (IQVIA OneKey HCO/HCP identifiers and payloads)
+    # is never written to a log line, whatever key it arrives under.
+    r"iqvia|onekey|one[_-]?key|(?:^|[_.-])hcp(?:[_.-]|$)|hcp[_-]?(?:id|name|record)|"
+    r"licensed[_-]?(?:payload|record|content))",
     re.IGNORECASE)
 _BEARER = re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{8,}")
 #: `instrumentationkey` / `sharedaccesskey` / `accountkey`: the credential

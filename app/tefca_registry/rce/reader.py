@@ -29,6 +29,7 @@ survive into the issue ledger.
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import logging
 import re
@@ -240,6 +241,40 @@ def count_mojibake(text: str) -> int:
     return sum(text.count(marker) for marker in MOJIBAKE_MARKERS)
 
 
+QUOTE_CHAR = '"'
+
+
+def split_fields(raw_line: str, delimiter: str,
+                 expected: int) -> Tuple[List[str], Optional[str]]:
+    """Split ONE delivered line into fields, honouring RFC-4180 quoting.
+
+    The July 2026 file was pipe-delimited with no quoting, so a plain split
+    was exact. The September 2026 file is comma-delimited and quotes every
+    cell that contains a comma — `purposesofuse` ("T-TRTMNT,T-PYMNT"), the
+    delegated-authority list, and names such as "Clinic, Inc." A plain split
+    turned each of those into a field-count mismatch and shifted nothing
+    only because the mismatch branch refuses positional mapping.
+
+    Policy: `raw_line` is never altered. A line with no quote character is
+    split exactly as before. A line with a quote is parsed by the csv module;
+    if that parse does NOT yield the expected field count but the plain split
+    does, the plain split wins and the line carries a note, so a stray inch
+    mark inside an unquoted cell cannot swallow the rest of the line.
+    """
+    plain = raw_line.split(delimiter)
+    if QUOTE_CHAR not in raw_line:
+        return plain, None
+    try:
+        quoted = next(csv.reader([raw_line], delimiter=delimiter,
+                                 quotechar=QUOTE_CHAR, strict=False))
+    except (csv.Error, StopIteration):
+        return plain, "quote-aware split failed; plain split used"
+    if len(quoted) == expected or len(plain) != expected:
+        return quoted, None
+    return plain, ("line contains a quote character but the quote-aware split "
+                   f"gave {len(quoted)} fields; plain split ({len(plain)}) used")
+
+
 def read_delivery(raw: bytes, *, declared_delimiter: Optional[str] = None,
                   expected_fields: Optional[Tuple[str, ...]] = None) -> DeliveryRead:
     """Read a delivery into ParsedLines. Never drops a line, never raises on
@@ -266,11 +301,13 @@ def read_delivery(raw: bytes, *, declared_delimiter: Optional[str] = None,
     tab_cells = 0
 
     for offset, raw_line in enumerate(physical[1:], start=2):
-        values = raw_line.split(delimiter)
+        values, split_note = split_fields(raw_line, delimiter, len(headers))
         parsed_line = ParsedLine(
             line_number=offset, raw_line=raw_line,
             values=values, field_count=len(values),
         )
+        if split_note:
+            parsed_line.parse_note = split_note
         if len(values) == len(headers):
             parsed_line.parsed = dict(zip(headers, values))
             parsed_line.parse_status = PARSE_OK

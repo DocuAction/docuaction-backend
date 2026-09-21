@@ -34,6 +34,7 @@ from app.core.database import Base
 # The job table is declared in its own module and is not imported by
 # rce/models.py; the foreign keys below need it on the same metadata.
 import app.tefca_registry.rce.delivery_job_model  # noqa: F401
+import app.tefca_registry.rce.snapshot_models  # noqa: F401  (September 2026 snapshot tables)
 
 STAGE_EVENT_STAGES = (
     "REGISTERED", "RECEIPT_PRESERVED", "SHA256", "SCHEMA_VALIDATION", "PARSING",

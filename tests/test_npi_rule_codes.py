@@ -51,8 +51,10 @@ def test_the_contract_values_behave_as_stated():
     assert validate_npi("1982916079")[0] is False
 
 
-def test_rule_set_is_1_2_0():
-    assert qr.RULE_SET_VERSION == "1.2.0"
+def test_rule_set_is_at_least_1_2_0():
+    # 1.2.0 introduced the NPI codes below; 1.3.0 (September 2026) added rules
+    # without changing any of them.
+    assert tuple(int(x) for x in qr.RULE_SET_VERSION.split(".")) >= (1, 2, 0)
 
 
 # ── QUALITY-time codes ───────────────────────────────────────────────────────

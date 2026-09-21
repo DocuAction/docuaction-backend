@@ -69,7 +69,9 @@ AREA1_PRESENT = ["rce_source_records", "rce_source_intakes", "rce_ingestion_runs
 #: Owner-owned after the chain: Area-1 plus the five traceability evidence tables
 #: (20260917), which the app may only SELECT/INSERT (UPDATE on stage events).
 TRACEABILITY = ["rce_delivery_stage_events", "rce_disposition_events", "rce_reconciliation_snapshots",
-                "tefca_identifier_decision_events", "rce_delivery_report_links"]
+                "tefca_identifier_decision_events", "rce_delivery_report_links",
+                # 20260921_september_snapshot: seven more owner-owned, app SELECT+INSERT tables
+                "rce_delivery_delta", "rce_entity_presence", "tefca_relationship_observations", "arc_stale_marks", "source_snapshot", "entity_source_match", "arc_assessment_run"]
 AREA1_FINAL = AREA1_PRESENT + ["rce_delivery_jobs"] + TRACEABILITY
 ENTRA_ADMIN = "entra_admin"
 CK = "ck_review_record_has_subject"

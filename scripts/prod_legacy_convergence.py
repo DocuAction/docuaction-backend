@@ -95,6 +95,12 @@ AREA1_OWNER_TABLES = {
     "rce_reconciliation_snapshots",
     "tefca_identifier_decision_events",
     "rce_delivery_report_links",
+    # 20260921_september_snapshot: seven append-only tables (delta, presence,
+    # relationship observations, stale marks, source ledger, source matches,
+    # assessment runs). Same model: created by the chain AS the owner role, the
+    # app holds SELECT+INSERT only.
+    "rce_delivery_delta", "rce_entity_presence", "tefca_relationship_observations",
+    "arc_stale_marks", "source_snapshot", "entity_source_match", "arc_assessment_run",
 }
 
 
@@ -501,6 +507,9 @@ MANAGED_CHAIN_CREATES = {
     # 20260917_delivery_traceability
     "rce_delivery_stage_events", "rce_disposition_events", "rce_reconciliation_snapshots",
     "tefca_identifier_decision_events", "rce_delivery_report_links",
+    # 20260921_september_snapshot
+    "rce_delivery_delta", "rce_entity_presence", "tefca_relationship_observations",
+    "arc_stale_marks", "source_snapshot", "entity_source_match", "arc_assessment_run",
 }
 # Tables the 20260917 revision declares FOREIGN KEYS to that docuaction_app owns
 # in PROD and that no pending revision ALTERs (so they are not re-owned). CREATE
@@ -508,7 +517,10 @@ MANAGED_CHAIN_CREATES = {
 # PREPARE grants exactly that, to the owner role, and nothing else. REFERENCES
 # lets a role declare a foreign key pointing at the table - it confers no read,
 # write or ownership - so it is left in place after the chain.
-MANAGED_CHAIN_REFERENCES = ("rce_issues", "tefca_entity_versions", "audit_logs")
+MANAGED_CHAIN_REFERENCES = ("rce_issues", "tefca_entity_versions", "audit_logs",
+                            # 20260921_september_snapshot: observation and stale-mark
+                            # rows reference relationship edges by id.
+                            "tefca_entity_relationships")
 assert not set(MANAGED_CHAIN_REFERENCES) & AREA1_OWNER_TABLES
 assert not set(MANAGED_CHAIN_REFERENCES) & set(MANAGED_CHAIN_ALTERS)
 MANAGED_LEGACY_ONLY = [
