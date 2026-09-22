@@ -1,7 +1,7 @@
-"""APP-DEFECT-001 / APP-DEFECT-002, 2026-09-21: the migration-revision
-diagnostic must never poison the caller's session, and report-id allocation
-must never silently execute — or silently fail — on a session someone else
-already broke.
+"""APP-DEFECT-001, 2026-09-21: the migration-revision diagnostic must never
+poison the caller's session. Report-id allocation must never silently
+execute on a session someone else already broke -- and must not try to fix
+that session itself, since it does not own it.
 
 CONTEXT
 -------
@@ -16,20 +16,25 @@ and four others the same day) showed this exact sequence on one request:
         aborted" (next_report_id's own advisory-lock query, on the SAME
         now-poisoned session)
 
-The migration revision is purely informational provenance — nothing decides
-anything from it — so the fix is not a privilege grant (least privilege is
-kept; DEV's database was not touched by this change). The two fixes:
+The migration revision is purely informational provenance -- nothing decides
+anything from it -- so the fix is not a privilege grant (least privilege is
+kept; DEV's database was not touched by this change).
 
+THE FIX
+-------
   1. delivery_processing_data.py._build() now reads the migration revision on
      its own throwaway session (the same isolated-session pattern
      reconciliation.py already established for the identical failure mode on
      the delivery pipeline's own long-lived session, 2026-09-17, job
-     fb32f946) — self.db is never touched by this read at all now.
-  2. report_snapshot.py.next_report_id() detects the specific
-     InFailedSQLTransactionError signature, rolls back, and retries its own
-     work exactly once — recovering from a session some OTHER, unrelated
-     statement broke, without ever silently allocating an id on a broken
-     session and without masking a genuine allocation failure.
+     fb32f946) -- self.db is never touched by this read at all now. This is
+     the fix: the caller's session is simply never put at risk in the first
+     place.
+  2. next_report_id() itself is deliberately left alone beyond that: it does
+     not own the session it is handed, so it does not roll it back or retry
+     on its behalf. Any failure -- an already-aborted session included --
+     still raises the existing sanitized, fail-closed ReportIdAllocationError,
+     exactly as before this defect was ever introduced. No new recovery
+     behaviour was added here, on purpose.
 
 ISOLATION
 ---------
@@ -50,15 +55,9 @@ from sqlalchemy.pool import NullPool
 
 from app.core.database import _normalize_url
 from app.core.logging_config import safe_exception_text
-from app.reports.data.report_snapshot import (
-    ReportIdAllocationError,
-    _is_aborted_transaction,
-    next_report_id,
-)
+from app.reports.data.report_snapshot import ReportIdAllocationError, next_report_id
 from app.tefca_registry.rce.stage_events import safe_failure_text
 
-
-# ── 1. _is_aborted_transaction: the exact reported exception shape ─────────
 
 def _dbapi_error(orig_cls_name: str, message: str) -> DBAPIError:
     """A DBAPIError wrapping a fake exception with the given class name --
@@ -70,20 +69,7 @@ def _dbapi_error(orig_cls_name: str, message: str) -> DBAPIError:
         {"k": "docuaction:report_id_sequence"}, orig, DBAPIError)
 
 
-def test_is_aborted_transaction_recognises_the_exact_reported_signature():
-    exc = _dbapi_error("InFailedSQLTransactionError",
-                       "current transaction is aborted, commands ignored "
-                       "until end of transaction block")
-    assert _is_aborted_transaction(exc) is True
-
-
-def test_is_aborted_transaction_is_false_for_other_failures():
-    exc = _dbapi_error("OperationalError", "connection refused")
-    assert _is_aborted_transaction(exc) is False
-    assert _is_aborted_transaction(ValueError("unrelated")) is False
-
-
-# ── 2. genuine live-database round trip ──────────────────────────────────
+# ── genuine live-database round trip ────────────────────────────────────
 
 @pytest.fixture
 async def rolled_back_db(db_required):
@@ -125,19 +111,20 @@ async def test_migration_revision_isolated_never_touches_the_callers_session(
     assert build["migration_revision"]  # a real value, or "unknown" -- never raises
 
     # The session must still be fully usable for real, unrelated work.
-    year = (await db.execute(text("SELECT 1"))).scalar()
-    assert year == 1
+    assert (await db.execute(text("SELECT 1"))).scalar() == 1
 
 
 @pytest.mark.asyncio
-async def test_next_report_id_recovers_from_a_genuinely_aborted_session(
+async def test_next_report_id_fails_closed_on_an_already_aborted_session(
         rolled_back_db):
-    """A REAL aborted-transaction state (not a mock), caused by an unrelated
-    bad statement on the SAME session -- exactly the shape of the DEV
-    incident, minus needing an actual privilege revoke to produce it."""
+    """next_report_id() does not own its session and must not try to repair
+    one someone else broke -- a REAL aborted-transaction state (not a mock),
+    caused by an unrelated bad statement on the SAME session, exactly the
+    shape of the DEV incident. It must raise ReportIdAllocationError, issue
+    no id, and leave the session exactly as broken as it found it (proving
+    it never called rollback on a transaction it does not own)."""
     db = rolled_back_db
-    year = 2026
-    prefix = f"DA-ARC-{year}-"
+    prefix = "DA-ARC-2026-"
     before = await _existing_report_ids(db, prefix)
 
     # Poison the session with an unrelated, deliberately invalid statement --
@@ -145,32 +132,34 @@ async def test_next_report_id_recovers_from_a_genuinely_aborted_session(
     with pytest.raises(Exception):
         await db.execute(text("SELECT 1/0"))
 
-    # A query issued directly on this still-aborted session must fail --
-    # confirms the poisoning actually happened, not a no-op.
+    with pytest.raises(ReportIdAllocationError) as exc_info:
+        await next_report_id(db, "verification")
+    text_out = safe_exception_text(exc_info.value)
+    assert "sequence unavailable" in str(exc_info.value)
+    assert "SELECT" not in text_out
+    assert "pg_advisory" not in text_out
+
+    # The session must remain exactly as aborted as before the call -- proof
+    # next_report_id() did not roll back a transaction it does not own. Any
+    # query, including a verification one, still fails on this same session.
     with pytest.raises(Exception):
         await db.execute(text("SELECT 1"))
-    await db.rollback()  # test-harness cleanup only; next_report_id does not need this
 
-    # Poison it again, THIS time hand it straight to next_report_id().
-    with pytest.raises(Exception):
-        await db.execute(text("SELECT 1/0"))
-    report_id = await next_report_id(db, "verification", now=None)
-
-    assert report_id.startswith(prefix)
+    # No partial/orphan/duplicate report was created by the failed attempt.
+    # Verifying this requires ending the transaction first (the harness's own
+    # cleanup, not next_report_id's) -- the assertion above already proved
+    # next_report_id itself never did this.
+    await db.rollback()
     after = await _existing_report_ids(db, prefix)
-    assert after == before, "allocation must not itself create a report row"
-
-    # The session must remain usable afterward -- prove with a real query.
-    assert (await db.execute(text("SELECT 1"))).scalar() == 1
+    assert after == before
 
 
 @pytest.mark.asyncio
-async def test_next_report_id_still_fails_closed_on_a_genuine_failure(
+async def test_next_report_id_still_fails_closed_on_any_other_genuine_failure(
         rolled_back_db):
-    """Not every failure is a recoverable aborted transaction. An exception
-    that is NOT the InFailedSQLTransactionError signature -- a real,
-    unrelated database failure -- must raise ReportIdAllocationError on the
-    first attempt, with no retry and no id issued."""
+    """A failure unrelated to an aborted transaction -- any other real
+    database error -- must raise ReportIdAllocationError just the same, with
+    no id issued and no SQL detail leaked."""
     db = rolled_back_db
 
     async def _boom(*args, **kwargs):
@@ -187,33 +176,17 @@ async def test_next_report_id_still_fails_closed_on_a_genuine_failure(
 
 
 @pytest.mark.asyncio
-async def test_two_recoveries_in_a_row_do_not_allocate_the_same_id(
+async def test_next_report_id_still_succeeds_on_a_healthy_session(
         rolled_back_db):
-    """Sequential recoveries (two separate poisoned-then-recovered calls, as
-    two different requests would look) must not collide. next_report_id()
-    only computes the next id -- it does not reserve it -- so the id only
-    advances once a report row is actually persisted with it, exactly as the
-    real report-generation flow does between allocating and inserting."""
-    from app.tefca_registry import models as reg
-
+    """Sanity check that the fail-closed path above is specific to a broken
+    session, not a regression in the ordinary case: a healthy session still
+    allocates a well-formed, correctly-prefixed id."""
     db = rolled_back_db
-    with pytest.raises(Exception):
-        await db.execute(text("SELECT 1/0"))
-    first = await next_report_id(db, "verification")
-    db.add(reg.ReviewReport(report_id=first, report_type="verification"))
-    # commit (not just flush): next_report_id's own rollback-and-retry, on the
-    # SECOND poison below, must not also discard this row -- exactly as a real
-    # request commits the allocated report before any later request runs.
-    await db.commit()
-
-    with pytest.raises(Exception):
-        await db.execute(text("SELECT 1/0"))
-    second = await next_report_id(db, "verification")
-
-    assert first != second
+    report_id = await next_report_id(db, "verification")
+    assert report_id.startswith("DA-ARC-2026-")
 
 
-# ── 3. sanitization is preserved end to end ─────────────────────────────
+# ── sanitization is preserved end to end ────────────────────────────────
 
 def test_report_id_allocation_error_message_never_carries_sql():
     exc = ReportIdAllocationError(
