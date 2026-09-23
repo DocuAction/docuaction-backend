@@ -457,19 +457,21 @@ async def test_close_stage_survives_an_event_expired_by_intervening_commits(
     pipeline to reproduce the right number of intervening commits.
     """
     db = rolled_back_db
-    job_id = uuid.uuid4()
+    rows = make_rows(1, arc="9.99.777.90")
+    intake_id, job = await seed_intake(db, rows)
+    job_id = job.id
     ev = await stage_events.open_stage(db, job_id, "QUALITY")
 
     # Simulate the PROMOTION follow-on work's commits/rollbacks on a
     # completely unrelated row -- this is what expires `ev`'s attributes.
     other = tm.RceDeliveryStageEvent(
-        job_id=uuid.uuid4(), stage="MATCHING", status="COMPLETED",
+        job_id=job_id, stage="MATCHING", status="COMPLETED",
         started_at=datetime.utcnow(), completed_at=datetime.utcnow())
     db.add(other)
     await db.commit()
     await db.rollback()  # exactly what `_settle()` does on a caught failure
     db.add(tm.RceDeliveryStageEvent(
-        job_id=uuid.uuid4(), stage="RELATIONSHIPS", status="COMPLETED",
+        job_id=job_id, stage="RELATIONSHIPS", status="COMPLETED",
         started_at=datetime.utcnow(), completed_at=datetime.utcnow()))
     await db.commit()
 
@@ -485,5 +487,5 @@ async def test_close_stage_survives_an_event_expired_by_intervening_commits(
     # PendingRollbackError for the next statement, the way the real
     # incident poisoned everything downstream of the failed close.
     again = await db.execute(select(tm.RceDeliveryStageEvent)
-                             .where(tm.RceDeliveryStageEvent.job_id == job_id))
+                             .where(tm.RceDeliveryStageEvent.id == ev.id))
     assert again.scalar_one().status == "COMPLETED"
