@@ -86,6 +86,29 @@ async def close_stage(db, event: tm.RceDeliveryStageEvent, status: str, *,
         raise ValueError(f"cannot close a stage with status {status!r}")
     # The event may belong to a session that has since been rolled back; re-attach.
     event = await db.merge(event)
+    # APP-DEFECT-001 (2026-09-23): `merge()` on an instance that is already
+    # THIS session's own tracked copy of the row (the common case here - `ev`
+    # was opened, committed once, then the PROMOTION follow-on work
+    # (snapshot_effects/record_instant x2/review bridge) ran zero or more of
+    # its OWN commits and rollbacks on this SAME shared session before this
+    # close call) takes a fast path that returns the object as-is without
+    # reloading it, even though every intervening commit/rollback on the
+    # session already expired its attributes. The very next line used to read
+    # `event.started_at` as a bare (non-awaited) attribute access; on an
+    # expired attribute that raises `sqlalchemy.exc.MissingGreenlet`
+    # ("greenlet_spawn has not been called") because the lazy load it
+    # triggers happens outside the async greenlet SQLAlchemy's asyncio
+    # extension sets up around awaited calls - which then leaves the session
+    # in PendingRollbackError for every later statement. Reproduced end to
+    # end via a duplicate-source-id delivery (SnapshotRefused during
+    # PROMOTION's follow-on work): the job never reached a terminal state,
+    # matching the fx1/fx3/fx1-retry 2026-09-21 incidents exactly. Loading
+    # this column (and every other one this function and `to_dict()` below
+    # read - `stage`, `attempt`, `job_id`, `intake_id`, `id`, ... - all the
+    # same risk) through one explicit, awaited full refresh removes the bare
+    # synchronous read entirely; it does not touch commit/rollback behaviour
+    # or ownership of the caller's transaction anywhere else.
+    await db.refresh(event)
     event.status = status
     event.completed_at = _now()
     if event.completed_at < event.started_at:

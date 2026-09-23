@@ -444,3 +444,46 @@ async def test_duplicate_source_id_reaches_a_terminal_state_promptly(rolled_back
         or events["READY_FOR_REVIEW"]["detail"].get("snapshot_id") != str(tip.id), (
         "READY_FOR_REVIEW must never point at a FAILED snapshot"
     )
+
+
+async def test_close_stage_survives_an_event_expired_by_intervening_commits(
+        rolled_back_db):
+    """Direct unit-level pin on the exact APP-DEFECT-001 mechanism, without
+    depending on the duplicate-source-id/SnapshotRefused path at all: any
+    number of commits or rollbacks on the SAME session between `open_stage`
+    and `close_stage`, on ANY OTHER row, must not make `close_stage` raise
+    `MissingGreenlet`/`PendingRollbackError`. Forces the exact expiry this
+    incident depended on directly, rather than relying on the delivery
+    pipeline to reproduce the right number of intervening commits.
+    """
+    db = rolled_back_db
+    job_id = uuid.uuid4()
+    ev = await stage_events.open_stage(db, job_id, "QUALITY")
+
+    # Simulate the PROMOTION follow-on work's commits/rollbacks on a
+    # completely unrelated row -- this is what expires `ev`'s attributes.
+    other = tm.RceDeliveryStageEvent(
+        job_id=uuid.uuid4(), stage="MATCHING", status="COMPLETED",
+        started_at=datetime.utcnow(), completed_at=datetime.utcnow())
+    db.add(other)
+    await db.commit()
+    await db.rollback()  # exactly what `_settle()` does on a caught failure
+    db.add(tm.RceDeliveryStageEvent(
+        job_id=uuid.uuid4(), stage="RELATIONSHIPS", status="COMPLETED",
+        started_at=datetime.utcnow(), completed_at=datetime.utcnow()))
+    await db.commit()
+
+    # `ev` is now expired by three intervening commits/rollbacks it had no
+    # part in. Before the fix, this raised MissingGreenlet here.
+    closed = await stage_events.close_stage(db, ev, "COMPLETED", output_count=3)
+    assert closed.status == "COMPLETED"
+    assert closed.started_at is not None
+    assert closed.completed_at is not None
+    assert closed.completed_at >= closed.started_at
+
+    # And the session must still be usable afterward -- not left in
+    # PendingRollbackError for the next statement, the way the real
+    # incident poisoned everything downstream of the failed close.
+    again = await db.execute(select(tm.RceDeliveryStageEvent)
+                             .where(tm.RceDeliveryStageEvent.job_id == job_id))
+    assert again.scalar_one().status == "COMPLETED"
