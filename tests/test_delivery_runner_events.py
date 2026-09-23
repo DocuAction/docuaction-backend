@@ -373,3 +373,74 @@ async def test_migration_revision_probe_failure_does_not_hang_the_job(
     events = {e["stage"]: e for e in await stage_events.timeline(db, job.id)}
     assert events["RECONCILIATION"]["status"] == "COMPLETED"
     assert "READY_FOR_REVIEW" in events
+
+
+async def test_duplicate_source_id_reaches_a_terminal_state_promptly(rolled_back_db):
+    """DIAGNOSTIC REPRODUCTION (2026-09-23): the fx1/fx3/fx1-retry incidents
+    (2026-09-21) all stalled near PROMOTION with the generic
+    `worker_stopped_without_reporting`, reaped only after the ~1800s
+    stale-heartbeat threshold, on fixtures with a deliberate duplicate
+    source `id`. `assert_ids_unique` correctly raises `SnapshotRefused`
+    inside `apply_snapshot_effects`; `_snapshot_effects()` in
+    delivery_runner.py catches it and returns `{"completed": False, ...}`
+    without raising. This test proves, on a REAL Postgres connection (not a
+    mock), whether the job then reaches a terminal state within a bounded
+    window or hangs — and if it hangs, WHERE, by bounding the whole run in
+    `asyncio.wait_for` so a stall fails this test loudly in seconds rather
+    than the suite silently for 1800s+.
+    """
+    import asyncio
+
+    from app.tefca_registry.rce import snapshot_effects
+
+    rows = make_rows(3, arc="9.99.777.7X")
+    rows[1]["id"] = rows[0]["id"]  # duplicate source id -> not 1:1 on the intake
+    db = rolled_back_db
+    intake_id, job = await seed_intake(db, rows)
+
+    try:
+        state, detail = await asyncio.wait_for(
+            _run_recoverable(db, job, intake_id, 3), timeout=30)
+    except asyncio.TimeoutError:
+        raise AssertionError(
+            "REPRODUCED: run_delivery_job did not reach a terminal state "
+            "within 30s of the duplicate-source-id SnapshotRefused failure "
+            "at the snapshot-effects step. This is the worker_stopped_"
+            "without_reporting stall (APP-DEFECT-001), not a database lock "
+            "wait proven elsewhere in this run."
+        )
+
+    # Whatever the terminal state, it must actually BE terminal -- not left
+    # RUNNING for the reaper to guess about later.
+    await db.refresh(job)
+    assert job.state in (RceDeliveryJob.STATE_SUCCEEDED, RceDeliveryJob.STATE_FAILED), (
+        f"job left in non-terminal state {job.state!r} after the run returned "
+        f"{state!r} -- this is the false-terminal-state failure mode"
+    )
+    assert job.state == state
+
+    events = {e["stage"]: e for e in await stage_events.timeline(db, job.id)}
+    assert "MATCHING" in events, "MATCHING event was never written -- the " \
+        "follow-on work after PROMOTION did not run to completion"
+    matching_detail = events["MATCHING"]["detail"] or {}
+    snap_summary = matching_detail.get("snapshot")
+    assert snap_summary is not None and snap_summary.get("completed") is False
+    assert snap_summary.get("error") and "not 1:1" in snap_summary["error"], (
+        f"the true SnapshotRefused reason was not preserved on MATCHING: "
+        f"{snap_summary!r}"
+    )
+
+    # A FAILED source_snapshot row must exist so the delivery cannot be
+    # approved or become current -- the fail-closed guarantee the effects
+    # guard exists to provide.
+    tip = await snapshot_effects.snapshot_tip(db, intake_id)
+    assert tip is not None and tip.status == "FAILED", (
+        f"expected a FAILED source_snapshot tip, got {tip!r}"
+    )
+
+    # No review-readiness event may be emitted for a delivery whose snapshot
+    # effects never completed.
+    assert "READY_FOR_REVIEW" not in events or job.state != RceDeliveryJob.STATE_SUCCEEDED \
+        or events["READY_FOR_REVIEW"]["detail"].get("snapshot_id") != str(tip.id), (
+        "READY_FOR_REVIEW must never point at a FAILED snapshot"
+    )
