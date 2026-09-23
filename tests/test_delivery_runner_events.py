@@ -466,13 +466,15 @@ async def test_close_stage_survives_an_event_expired_by_intervening_commits(
     # completely unrelated row -- this is what expires `ev`'s attributes.
     other = tm.RceDeliveryStageEvent(
         job_id=job_id, stage="MATCHING", status="COMPLETED",
-        started_at=datetime.utcnow(), completed_at=datetime.utcnow())
+        started_at=datetime.utcnow(), completed_at=datetime.utcnow(),
+        correlation_id=str(job_id))
     db.add(other)
     await db.commit()
     await db.rollback()  # exactly what `_settle()` does on a caught failure
     db.add(tm.RceDeliveryStageEvent(
         job_id=job_id, stage="RELATIONSHIPS", status="COMPLETED",
-        started_at=datetime.utcnow(), completed_at=datetime.utcnow()))
+        started_at=datetime.utcnow(), completed_at=datetime.utcnow(),
+        correlation_id=str(job_id)))
     await db.commit()
 
     # `ev` is now expired by three intervening commits/rollbacks it had no
