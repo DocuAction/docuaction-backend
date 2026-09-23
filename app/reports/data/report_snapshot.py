@@ -144,6 +144,16 @@ async def next_report_id(db, report_type: str = "verification",
     or an insert fails after allocation), under a transaction-scoped advisory
     lock so two concurrent generations cannot draw the same number. Any failure
     raises `ReportIdAllocationError`; there is no silent restart at 001.
+
+    This function does not own the session it is given, and does not roll it
+    back: a caller who handed it a session already left in Postgres's
+    aborted-transaction state by some earlier, unrelated statement (the
+    alembic_version diagnostic read used to do this — fixed at the source in
+    delivery_processing_data.py, which now runs that read on its own isolated
+    session instead of self.db) gets the same fail-closed
+    ReportIdAllocationError as any other failure here. No ID is issued, and
+    the message carries only the exception's class name (see
+    safe_exception_text / redact_text), never SQL text or bound parameters.
     """
     from app.tefca_registry import models as reg
 
