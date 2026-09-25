@@ -319,54 +319,183 @@ async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_S
 
 
 # ── scheduler integration ────────────────────────────────────────────────────
+#
+# LOAD PROTECTION (2026-09-25). On DEV the candidate query below ran for 34
+# minutes — a DISTINCT over every curated record of every SUCCEEDED delivery,
+# with a correlated NOT EXISTS against the evidence table — and copies of it
+# overlapped across container recycles (APScheduler's `max_instances=1` is
+# per process), pinning the database at 100% CPU. Three controls:
+#
+#   1. cross-process single flight: a PostgreSQL session-level advisory lock
+#      on a fixed key, tried (never waited for) on the tick's own connection.
+#      A second process, or the previous container still draining, finds the
+#      lock held and returns without touching anything;
+#   2. a bounded candidate query: the newest `CANDIDATE_JOB_LIMIT` succeeded
+#      deliveries, each probed with an EXISTS ... LIMIT 1 for one promoted
+#      record without evidence, instead of a DISTINCT over the population;
+#   3. a statement timeout on that lookup (`SET LOCAL`, transaction-scoped),
+#      so a lookup that is still slow is cancelled, logged and retried on a
+#      later tick rather than left running.
+
+#: The advisory-lock key. A fixed 64-bit constant, chosen once, never reused
+#: for another lock in this codebase (grep before adding one).
+COVERAGE_TICK_LOCK_KEY = 20260925000000001
+
+#: How many of the newest succeeded deliveries one tick considers.
+CANDIDATE_JOB_LIMIT = 25
+
+#: `SET LOCAL statement_timeout` for the candidate lookup, in milliseconds.
+ENV_CANDIDATE_TIMEOUT_MS = "COVERAGE_CANDIDATE_TIMEOUT_MS"
+DEFAULT_CANDIDATE_TIMEOUT_MS = 15_000
+MIN_CANDIDATE_TIMEOUT_MS = 1_000
+MAX_CANDIDATE_TIMEOUT_MS = 600_000
+
+#: PostgreSQL's SQLSTATE for a statement cancelled by statement_timeout.
+_QUERY_CANCELED_SQLSTATE = "57014"
+
+
+def candidate_timeout_ms() -> int:
+    """The configured lookup timeout, clamped to a sane range. A value that is
+    not an integer falls back to the default rather than disabling the bound."""
+    raw = os.environ.get(ENV_CANDIDATE_TIMEOUT_MS, "").strip()
+    try:
+        value = int(raw) if raw else DEFAULT_CANDIDATE_TIMEOUT_MS
+    except ValueError:
+        logger.warning("%s=%r is not an integer; using %d ms",
+                       ENV_CANDIDATE_TIMEOUT_MS, raw, DEFAULT_CANDIDATE_TIMEOUT_MS)
+        value = DEFAULT_CANDIDATE_TIMEOUT_MS
+    return max(MIN_CANDIDATE_TIMEOUT_MS, min(value, MAX_CANDIDATE_TIMEOUT_MS))
+
+
+async def _try_acquire_tick_lock(conn) -> bool:
+    """Session-level advisory lock, tried on THIS connection. Never blocks."""
+    acquired = (await conn.execute(
+        text("SELECT pg_try_advisory_lock(CAST(:k AS bigint))"),
+        {"k": COVERAGE_TICK_LOCK_KEY})).scalar()
+    return bool(acquired)
+
+
+async def _release_tick_lock(conn) -> None:
+    """Release on the SAME connection that acquired it; a session-level
+    advisory lock released elsewhere is not released at all."""
+    try:
+        released = (await conn.execute(
+            text("SELECT pg_advisory_unlock(CAST(:k AS bigint))"),
+            {"k": COVERAGE_TICK_LOCK_KEY})).scalar()
+        if not released:
+            logger.warning("automated coverage: advisory lock %s was not held at release",
+                           COVERAGE_TICK_LOCK_KEY)
+    except Exception as exc:  # noqa: BLE001 - the connection is closed right after anyway
+        logger.warning("automated coverage: advisory unlock failed: %s", type(exc).__name__)
+
 
 async def _coverage_tick():
     """One scheduler tick: find ONE delivery with eligible-but-not-covered
     entities and process one bounded batch for it.
 
-    Mirrors `delivery_scheduler._poll_tick`'s shape exactly (own session, own
-    try/except so a tick that raises cannot stop the scheduler) rather than
-    inventing a second convention for background work in this codebase.
-    Gated behind `automated_coverage_enabled()` so importing/registering this
-    module is inert until a deployment explicitly turns it on.
+    Mirrors `delivery_scheduler._poll_tick`'s shape (own session, own
+    try/except so a tick that raises cannot stop the scheduler). Gated behind
+    `automated_coverage_enabled()` so importing/registering this module is
+    inert until a deployment explicitly turns it on.
+
+    The session is bound to ONE connection held for the whole tick, because a
+    session-level advisory lock belongs to a connection: a pooled session
+    hands its connection back on every commit (and `run_coverage_batch`
+    commits), so lock and unlock would otherwise land on different
+    connections and the lock would leak into the pool, held forever.
     """
     if not automated_coverage_enabled():
         return
-    from app.core.database import async_session_maker
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.core.database import _get_engine
 
     try:
-        async with async_session_maker() as db:
-            intake_id = await _next_delivery_needing_coverage(db)
-            if intake_id is None:
+        async with _get_engine().connect() as conn:
+            if not await _try_acquire_tick_lock(conn):
+                logger.debug("automated coverage tick skipped: another process holds "
+                             "advisory lock %s", COVERAGE_TICK_LOCK_KEY)
                 return
-            result = await run_coverage_batch(db, intake_id)
-            logger.info("automated coverage tick for %s: %s/%s covered, %s remaining",
-                       intake_id, result["covered"], result["eligible"], result["remaining"])
+            await conn.commit()  # end the autobegun transaction; the lock outlives it
+            try:
+                async with AsyncSession(bind=conn, expire_on_commit=False) as db:
+                    intake_id = await _next_delivery_needing_coverage(db)
+                    if intake_id is None:
+                        return
+                    result = await run_coverage_batch(db, intake_id)
+                    logger.info("automated coverage tick for %s: %s/%s covered, %s remaining",
+                                intake_id, result["covered"], result["eligible"],
+                                result["remaining"])
+            finally:
+                await _release_tick_lock(conn)
     except Exception as exc:  # noqa: BLE001 - a tick that raises must not stop the scheduler
         logger.error("automated coverage tick error: %s", exc, exc_info=True)
 
 
+#: One intake among the newest `:job_limit` succeeded deliveries that still
+#: has a promoted record (canonical_entity_id IS NOT NULL) with no
+#: tefca_dimension_evidence row for CAST(canonical_entity_id AS TEXT). The
+#: candidate set is bounded first; each candidate is then probed with an
+#: EXISTS ... LIMIT 1 that stops at the first qualifying record.
 _ONE_DELIVERY_NEEDING_COVERAGE_SQL = """
-    SELECT DISTINCT r.source_intake_id
-    FROM rce_curated_records r
-    JOIN rce_delivery_jobs j ON j.source_intake_id = r.source_intake_id
-    WHERE r.canonical_entity_id IS NOT NULL
-      AND j.state = 'SUCCEEDED'
-      AND EXISTS (
-          SELECT 1 FROM rce_curated_records r2
-          WHERE r2.source_intake_id = r.source_intake_id
-            AND r2.canonical_entity_id IS NOT NULL
-            AND NOT EXISTS (
-                SELECT 1 FROM tefca_dimension_evidence d
-                WHERE d.entity_id = CAST(r2.canonical_entity_id AS TEXT))
-      )
-    ORDER BY r.source_intake_id
+    SELECT c.source_intake_id
+    FROM (
+        SELECT j.source_intake_id,
+               max(coalesce(j.completed_at, j.created_at)) AS finished_at
+        FROM rce_delivery_jobs j
+        WHERE j.state = 'SUCCEEDED'
+          AND j.source_intake_id IS NOT NULL
+        GROUP BY j.source_intake_id
+        ORDER BY finished_at DESC
+        LIMIT :job_limit
+    ) c
+    WHERE EXISTS (
+        SELECT 1 FROM rce_curated_records r
+        WHERE r.source_intake_id = c.source_intake_id
+          AND r.canonical_entity_id IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM tefca_dimension_evidence d
+              WHERE d.entity_id = CAST(r.canonical_entity_id AS TEXT))
+        LIMIT 1
+    )
+    ORDER BY c.finished_at DESC
     LIMIT 1
 """
 
 
-async def _next_delivery_needing_coverage(db):
-    row = (await db.execute(text(_ONE_DELIVERY_NEEDING_COVERAGE_SQL))).first()
+def _is_statement_timeout(exc: BaseException) -> bool:
+    for candidate in (exc, getattr(exc, "orig", None)):
+        if candidate is None:
+            continue
+        if getattr(candidate, "sqlstate", None) == _QUERY_CANCELED_SQLSTATE:
+            return True
+        if type(candidate).__name__ == "QueryCanceledError":
+            return True
+    return False
+
+
+async def _next_delivery_needing_coverage(db, *, job_limit: int = CANDIDATE_JOB_LIMIT,
+                                          timeout_ms: Optional[int] = None):
+    """The next intake to cover, or None — also None (logged, nothing marked)
+    when the lookup exceeds its statement timeout.
+
+    `SET LOCAL` is transaction-scoped, and the transaction is ended after the
+    lookup, so the timeout never applies to the batch that follows.
+    """
+    timeout = int(timeout_ms if timeout_ms is not None else candidate_timeout_ms())
+    try:
+        # SET LOCAL takes no bind parameter; the value is an int by construction.
+        await db.execute(text(f"SET LOCAL statement_timeout = {timeout}"))
+        row = (await db.execute(text(_ONE_DELIVERY_NEEDING_COVERAGE_SQL),
+                                {"job_limit": int(job_limit)})).first()
+    except Exception as exc:  # noqa: BLE001 - a cancelled lookup is a skipped tick, not a crash
+        if not _is_statement_timeout(exc):
+            raise
+        logger.warning("automated coverage: candidate lookup exceeded %d ms and was "
+                       "cancelled; nothing marked, will retry on a later tick", timeout)
+        await db.rollback()
+        return None
+    await db.rollback()  # read-only; ends the transaction and the SET LOCAL with it
     return row[0] if row else None
 
 

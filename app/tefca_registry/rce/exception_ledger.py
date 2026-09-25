@@ -42,6 +42,7 @@ from app.tefca_registry import models as reg
 from app.tefca_registry.rce import models as m
 from app.tefca_registry.rce import run_selection
 from app.tefca_registry.rce import traceability_models as tm
+from app.tefca_registry.rce.curation import is_terminal_resolution
 
 logger = logging.getLogger(__name__)
 
@@ -371,6 +372,7 @@ def _row(row, *, job_id, intake_id, histories, ident_events, assignees, legacy):
     is_conflict = str(issue.issue_type or "").endswith("_CONFLICT")
     existing_value = (latest_event["existing_value"] if latest_event
                       else (issue.suggested_value if is_conflict else None))
+    terminal = is_terminal_resolution(issue.resolution)
     out = {
         "issue_id": str(issue.id),
         "issue_code": issue.issue_code,
@@ -399,6 +401,10 @@ def _row(row, *, job_id, intake_id, histories, ident_events, assignees, legacy):
         "reason_code": (latest_disposition or {}).get("reason_code"),
         "created_at": _iso(issue.created_at),
         "status": issue.resolution,
+        # A settled finding accepts no decision (`curation.apply_disposition`
+        # refuses it with 409); the UI disables its controls on these.
+        "terminal": terminal,
+        "can_dispose": not terminal,
         "assignee": assignees.get(issue.source_record_id),
         "disposition": (latest_disposition or {}).get("disposition"),
         "disposition_history": history,

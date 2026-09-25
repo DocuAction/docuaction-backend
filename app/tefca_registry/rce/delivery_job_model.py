@@ -47,6 +47,8 @@ from sqlalchemy import (Boolean, Column, DateTime, Index, Integer, String, Text,
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from app.core.database import Base
+from app.core.logging_config import (sanitize_stored_error,
+                                     sanitize_stored_error_tree)
 from app.core.time_utils import utc_isoformat
 
 
@@ -168,7 +170,10 @@ class RceDeliveryJob(Base):
 
         Carries no Government data value: a filename, a hash, counts and stage
         names. `error_reason` is a controlled string written by this
-        application, not an exception's text.
+        application, not an exception's text — for rows written since PR #85.
+        Older rows may still hold a driver's rendering of the failed statement
+        and its parameters; those are masked on the way out
+        (`sanitize_stored_error`), never rewritten in the row.
         """
         return {
             "job_id": str(self.id),
@@ -193,11 +198,11 @@ class RceDeliveryJob(Base):
             "completed_at": utc_isoformat(self.completed_at),
             "failed_at": utc_isoformat(self.failed_at),
             "attempt_count": self.attempt_count,
-            "error_reason": self.error_reason,
+            "error_reason": sanitize_stored_error(self.error_reason),
             "intake_id": (str(self.source_intake_id)
                           if self.source_intake_id else None),
             "records_received": self.records_received,
             "records_processed": self.records_processed,
             "reconciliation_passed": self.reconciliation_passed,
-            "stage_detail": self.stage_detail or {},
+            "stage_detail": sanitize_stored_error_tree(self.stage_detail or {}),
         }
