@@ -43,6 +43,16 @@
         color: #b50909;
       }
     }
+    /* The named landscape page (wide evidence tables) carries the same notice. */
+    @page dp-landscape {
+      @top-center {
+        content: "{% if snapshot.data_classification == 'NO_DATASET_LOADED' %}NO DATASET LOADED{% else %}DEVELOPMENT / TEST DATA{% endif %} — NOT FOR GOVERNMENT DELIVERY";
+        font-family: var(--report-font);
+        font-size: 7.5pt;
+        font-weight: 700;
+        color: #b50909;
+      }
+    }
   </style>
   {% endif %}
 </head>

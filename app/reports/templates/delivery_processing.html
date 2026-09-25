@@ -180,6 +180,13 @@
 <p class="insufficient-data">No reconciliation snapshot is persisted for this delivery. No reconciliation of record exists, and this report does not compute one.</p>
 {% endif %}
 
+{#
+  Sections 4–9 hold the record-level evidence tables (7–12 columns each). The
+  `dp-wide` wrapper places them on the named landscape page defined in
+  uswds_report.css (`@page dp-landscape`); narrative sections 1–3 and 10–11
+  stay portrait. Layout only: the wrapper adds no content and removes none.
+#}
+<div class="dp-wide">
 <h2>4. Dispositions</h2>
 <p>
   The current disposition of every received record, read from the append-only disposition ledger
@@ -241,6 +248,8 @@
 <p class="insufficient-data">No disposition events are persisted for this delivery; per-record outcomes cannot be stated from evidence.</p>
 {% endif %}
 
+</div>
+<div class="dp-wide">
 <h2>5. Findings</h2>
 {% if findings.available %}
 <p>{{ findings.total|number }} finding(s) in the current quality run {{ findings.run_id }} (rule set {{ findings.rule_set_version or 'not recorded' }});
@@ -288,6 +297,8 @@
 <p class="insufficient-data">No completed quality run exists for this delivery; findings cannot be stated.</p>
 {% endif %}
 
+</div>
+<div class="dp-wide">
 <h2>6. Identifier conflicts and decisions</h2>
 {% if identifiers.available and identifiers.conflicts %}
 <p>{{ identifiers.conflicts|length }} identifier conflict(s) raised for this delivery; {{ identifiers.unresolved|number }} unresolved; {{ identifiers.events_total|number }} event(s) in total.</p>
@@ -322,6 +333,8 @@
 <p class="insufficient-data">Identifier decisions are unavailable: the delivery has no intake.</p>
 {% endif %}
 
+</div>
+<div class="dp-wide">
 <h2>7. Verification coverage</h2>
 <p>State: {{ verification.state }} (source: {{ verification.source }}){% if verification.reason %} &mdash; {{ verification.reason }}{% endif %}.
   Coverage is counted from evidence rows for this delivery's entities; connector readiness is not coverage.</p>
@@ -351,6 +364,8 @@
   </tbody>
 </table>
 
+</div>
+<div class="dp-wide">
 <h2>8. Analyst actions</h2>
 <p>{{ analyst.counts.disposition_events|number }} analyst disposition(s), {{ analyst.counts.issue_resolutions|number }} finding resolution(s),
   {{ analyst.counts.review_records|number }} review record(s) ({{ analyst.counts.open|number }} open, {{ analyst.counts.claimed|number }} claimed,
@@ -421,6 +436,8 @@
 <p>No analyst action has been recorded for this delivery.</p>
 {% endif %}
 
+</div>
+<div class="dp-wide">
 <h2>9. Lineage</h2>
 {% if lineage.available %}
 <p>{{ lineage.corrections_total|number }} correction(s) applied to delivered values, each preserving the original;
@@ -469,6 +486,7 @@
 <p class="insufficient-data">Lineage is unavailable: the delivery has no intake.</p>
 {% endif %}
 
+</div>
 <h2>10. Evidence limitations</h2>
 <p>What this report could not state from persisted evidence, and why. This list is never omitted.</p>
 <ul>

@@ -19,6 +19,7 @@ delivered values is reachable below `reviewer`.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Any, Dict, Optional
@@ -238,7 +239,7 @@ async def generate(
             content=to_bytes(result["csv"]), media_type="text/csv",
             headers=download_headers(safe_filename(result["report_id"], "csv")))
     if request.format == "pdf":
-        return _pdf_response(result["html"], result["report_id"])
+        return await _pdf_response(result["html"], result["report_id"])
     if request.format == "html":
         return Response(content=result["html"], media_type="text/html",
                         headers=download_headers(
@@ -296,13 +297,22 @@ async def _replay_for_key(db, key: str, user_id) -> Optional[Dict[str, Any]]:
     }
 
 
-def _pdf_response(html: str, report_id: str) -> Response:
+async def _pdf_response(html: str, report_id: str) -> Response:
     """Render to PDF, or answer 503 with the reason.
 
     503 rather than 500: the engine's native libraries being absent is a
     service-configuration fact, not a bug in the request, and the message names
     exactly what is missing so an operator can act on it instead of filing a
     stack trace.
+
+    The render runs in a worker thread (`asyncio.to_thread`), never on the
+    event loop. WeasyPrint is CPU-bound and synchronous; called inline it
+    stalls every other coroutine for the whole render. On DEV (2026-09-24,
+    DA-ARC-2026-028: a 29 MB delivery_processing document) that stall held
+    `/health` unanswered for about eight minutes and the container was
+    recycled mid-render. The worker thread keeps the loop answering; it does
+    not make the render faster, and a very large document can still exceed the
+    platform's request timeout.
     """
     from app.reports.engine.pdf_engine import (
         PDFEngineUnavailable, pdf_available, render_pdf, unavailable_reason)
@@ -310,7 +320,7 @@ def _pdf_response(html: str, report_id: str) -> Response:
     if not pdf_available():
         raise HTTPException(503, f"PDF generation is unavailable: {unavailable_reason()}")
     try:
-        pdf = render_pdf(html, title=report_id)
+        pdf = await asyncio.to_thread(render_pdf, html, title=report_id)
     except PDFEngineUnavailable as exc:
         raise HTTPException(503, str(exc))
     return Response(
@@ -737,7 +747,7 @@ async def get_report_pdf(
     row = await _stored(db, report_id, job_id)
     if not row.report_html:
         raise HTTPException(404, f"Report {report_id} has no stored HTML to render.")
-    response = _pdf_response(row.report_html, _stem_for(row))
+    response = await _pdf_response(row.report_html, _stem_for(row))
     await _audit_download(db, row, "pdf", user, job_id=job_id)
     return response
 

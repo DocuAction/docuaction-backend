@@ -280,7 +280,18 @@ td {
 tbody tr:nth-child(even) { background: var(--report-bg-alt); }
 
 thead { display: table-header-group; }   /* repeat headers across page breaks */
-tr    { break-inside: avoid; }
+tfoot { display: table-footer-group; }   /* and footers, where a table has one */
+tr    { break-inside: avoid; page-break-inside: avoid; }
+
+/* A cell must never push a table past the page edge. Long identifiers (OIDs,
+   UUIDs, hashes, delivered names) have no natural break points; without these
+   rules a single value widens its column until the table is clipped. */
+th, td {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  hyphens: auto;
+  vertical-align: top;
+}
 
 .rag-green  { font-weight: 700; }
 .rag-amber  { font-weight: 700; }
@@ -340,6 +351,59 @@ figcaption {
 }
 
 .page-break { break-before: page; page-break-before: always; }
+
+/* ── Wide evidence tables: landscape pages ────────────────────────────────── */
+/*
+   The delivery_processing report carries record-level tables of 7–12 columns
+   (dispositions, findings, identifier conflicts, verification coverage,
+   analyst actions, lineage). On a portrait letter page those columns are
+   crushed or clipped, and at 24,589 records (DA-ARC-2026-028) the tables run
+   for hundreds of pages. The sections that hold them are wrapped in
+   `.dp-wide`, which moves them to a named landscape page with the same
+   running header and footer as the portrait page; narrative and summary
+   sections stay portrait. Nothing is dropped: fixed layout plus the wrapping
+   rules above keep every column on the page.
+*/
+@page dp-landscape {
+  size: letter landscape;
+  margin: 18mm 16mm 18mm 16mm;
+  @top-left {
+    content: string(doc-title);
+    font-family: var(--report-font);
+    font-size: 8pt;
+    color: var(--report-muted);
+  }
+  @top-right {
+    content: string(doc-contract);
+    font-family: var(--report-font);
+    font-size: 8pt;
+    color: var(--report-muted);
+  }
+  @bottom-center {
+    content: "Page " counter(page) " of " counter(pages);
+    font-family: var(--report-font);
+    font-size: 8pt;
+    color: var(--report-muted);
+  }
+}
+
+.dp-wide {
+  page: dp-landscape;
+  /* Each wide section is a major numbered section; it starts its own page. */
+  break-before: page;
+  page-break-before: always;
+}
+.dp-wide table {
+  table-layout: fixed;   /* equal columns, no clipping; far cheaper to lay out than auto */
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 8pt;
+  line-height: 1.3;
+}
+.dp-wide th, .dp-wide td { padding: 3pt 4pt; }
+.dp-wide thead { display: table-header-group; }
+.dp-wide tr    { break-inside: avoid; page-break-inside: avoid; }
+.dp-wide h2, .dp-wide h3 { break-after: avoid; page-break-after: avoid; }
 
 /* Screen-reader-only: available to assistive technology, invisible on the page.
    Used for table summaries and chart long-descriptions that would be redundant
