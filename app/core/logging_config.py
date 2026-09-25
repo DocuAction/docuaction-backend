@@ -122,6 +122,65 @@ def safe_error(exc: BaseException) -> Dict[str, str]:
             "error_message": redact_text(str(exc))[:800]}
 
 
+# ── stored error text, sanitised on READ ────────────────────────────────────
+#
+# `safe_exception_text` keeps driver payloads out of the evidence tables on
+# WRITE (PR #85). Rows written before that fix still carry the raw SQLAlchemy
+# rendering — the statement, the bound parameters (delivered values) and the
+# driver's message — in `rce_delivery_jobs.error_reason` and `stage_detail`.
+# Those rows are evidence and are not rewritten; what a viewer receives is
+# masked here instead. The stage prefix and the exception class names stay,
+# because they are what an operator needs; everything after the innermost
+# driver class, and every `[SQL: ...]` / `[parameters: ...]` fragment, goes.
+
+_ERROR_WITHHELD = " (message withheld from evidence; see the server log)"
+#: The SQLAlchemy statement/parameter/background fragments. Nothing useful
+#: to a viewer follows the first one, so the cut runs to the end.
+_SQL_FRAGMENT = re.compile(r"\s*\[(?:SQL|parameters):.*$", re.DOTALL)
+_BACKGROUND = re.compile(r"\s*\(Background on this error at:.*$", re.DOTALL)
+#: A driver exception class as SQLAlchemy renders it: "<class 'asyncpg....X'>".
+_DRIVER_CLASS = re.compile(r"(<class '[\w.]+'>)")
+#: A dialect wrapper as SQLAlchemy renders it: "(sqlalchemy.dialects....Error)".
+_DIALECT_CLASS = re.compile(r"(\((?:sqlalchemy|asyncpg|psycopg2?|psycopg)[\w.]*\))")
+
+
+def sanitize_stored_error(value: Any) -> Any:
+    """Mask driver payloads in an error string persisted before PR #85.
+
+    Pure, idempotent, and a no-op on the controlled strings this application
+    writes ("worker_stopped_without_reporting", "CURATION: ValueError: ...").
+    Non-strings are returned unchanged.
+    """
+    if not isinstance(value, str) or not value:
+        return value
+    text = _SQL_FRAGMENT.sub("", value)
+    text = _BACKGROUND.sub("", text)
+    withheld = False
+    match = None
+    for m in _DRIVER_CLASS.finditer(text):
+        match = m  # the innermost (last) driver class
+    if match is None:
+        for m in _DIALECT_CLASS.finditer(text):
+            match = m
+    if match is not None:
+        rest = text[match.end():]
+        text = text[:match.end()]
+        withheld = bool(rest.strip(" :\n\t"))
+    if withheld:
+        text = text.rstrip() + _ERROR_WITHHELD
+    return text if text != value else value
+
+
+def sanitize_stored_error_tree(value: Any) -> Any:
+    """`sanitize_stored_error` applied to every string in a nested structure
+    (a job's `stage_detail`). Dicts and lists are copied; nothing is mutated."""
+    if isinstance(value, dict):
+        return {k: sanitize_stored_error_tree(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [sanitize_stored_error_tree(v) for v in value]
+    return sanitize_stored_error(value)
+
+
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:  # noqa: A003
         payload: Dict[str, Any] = {
