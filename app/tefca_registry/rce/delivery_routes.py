@@ -1383,6 +1383,15 @@ async def post_issue_disposition(
 
     actor = getattr(user, "email", None) or "SYSTEM"
     actor_id = getattr(user, "id", None)
+    # Captured now: a refusal rolls the session back, which expires the row,
+    # and an audit written after that must not lazy-load it.
+    issue_facts = {
+        "issue_id": str(issue.id), "issue_code": issue.issue_code,
+        "intake_id": str(issue.source_intake_id),
+        "source_record_id": (str(issue.source_record_id)
+                             if issue.source_record_id else None),
+        "resolution": issue.resolution,
+    }
     apply = getattr(curation, "apply_disposition", None)
     try:
         if apply is not None:
@@ -1399,6 +1408,17 @@ async def post_issue_disposition(
             path = "delivery_routes._fallback_apply_disposition"
     except curation.CorrectionRefused as exc:
         await db.rollback()
+        if str(exc) == curation.TERMINAL_FINDING_MESSAGE:
+            # The attempt is itself evidence; the finding is not touched. The
+            # rollback expired every row in the session, the caller's own
+            # user row included, so the actor is the pair captured above.
+            from types import SimpleNamespace
+            actor_facts = SimpleNamespace(id=actor_id, email=actor)
+            await _audit(db, "analyst_disposition_refused", actor_facts, request, {
+                **issue_facts, "decision": decision,
+                "refusal": "terminal_finding",
+                "correlation_id": request_context.correlation_id(),
+            })
         raise HTTPException(409, str(exc))
     except ValueError as exc:
         # Includes identifier_decisions.IdentifierAlreadyRegistered (409) and
@@ -1441,6 +1461,8 @@ async def _fallback_apply_disposition(db, issue, *, decision: str, reason: str,
     from app.tefca_registry.rce import curation
     from app.tefca_registry.rce import models as m
 
+    if curation.is_terminal_resolution(issue.resolution):
+        raise curation.CorrectionRefused(curation.TERMINAL_FINDING_MESSAGE)
     to_status = _FALLBACK_TRANSITION.get(decision.upper())
     if to_status is None:
         raise ValueError(f"decision must be one of {list(ISSUE_DECISIONS)}")

@@ -418,6 +418,25 @@ _ALLOWED_TRANSITIONS = {
     "RESOLVED": set(),
 }
 
+#: Resolution states with no outgoing transition. A finding in one of these is
+#: settled: no analyst decision may touch it (`apply_disposition` refuses it
+#: before any side effect) and the exception ledger marks it `terminal` so the
+#: UI can disable its controls instead of guessing. Reopening is a separate,
+#: approved workflow, never a disposition. Derived from the table above so the
+#: two cannot disagree.
+TERMINAL_RESOLUTIONS = frozenset(
+    state for state, targets in _ALLOWED_TRANSITIONS.items() if not targets)
+
+#: The one message a refused decision on a terminal finding carries. The
+#: frontend matches on it; change it in both places or not at all.
+TERMINAL_FINDING_MESSAGE = ("This finding is resolved and cannot be changed. Use the "
+                            "approved reopen workflow if further action is required.")
+
+
+def is_terminal_resolution(resolution: Optional[str]) -> bool:
+    """Whether an issue in this resolution state accepts no further decision."""
+    return (resolution or "OPEN") in TERMINAL_RESOLUTIONS
+
 
 async def transition_issue(db, issue_id, *, to_status: str, actor: str,
                            notes: Optional[str] = None,
@@ -823,6 +842,10 @@ async def apply_disposition(db, issue_id, *, decision: str, reason: str,
     issue = await db.get(m.RceIssue, issue_id)
     if issue is None:
         raise CorrectionRefused(f"No issue {issue_id}")
+    # Before ANY side effect — no identifier decision, no correction, no state
+    # walk — a settled finding refuses every decision with one fixed message.
+    if is_terminal_resolution(issue.resolution):
+        raise CorrectionRefused(TERMINAL_FINDING_MESSAGE)
     if issue.source_record_id is None:
         raise CorrectionRefused(
             f"Issue {issue.issue_code} names no source record; it is a "
