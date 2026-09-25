@@ -416,13 +416,18 @@ async def get_job(db, job_id):
         return None
 
 
-async def list_jobs(db, *, limit: int = 50, state: Optional[str] = None):
-    """Recent registrations, newest first."""
+async def list_jobs(db, *, limit: int = 50, state: Optional[str] = None,
+                    offset: int = 0):
+    """Recent registrations, newest first. `offset` pages through them; the
+    order is total (created_at, then id) so pages never overlap or skip."""
     from app.tefca_registry.rce.delivery_job_model import RceDeliveryJob
 
-    stmt = select(RceDeliveryJob).order_by(RceDeliveryJob.created_at.desc())
+    stmt = (select(RceDeliveryJob)
+            .order_by(RceDeliveryJob.created_at.desc(), RceDeliveryJob.id.desc()))
     if state:
         stmt = stmt.where(RceDeliveryJob.state == state)
+    if offset:
+        stmt = stmt.offset(offset)
     return (await db.execute(stmt.limit(limit))).scalars().all()
 
 
@@ -584,6 +589,20 @@ async def status_for_job(db, job) -> Dict[str, Any]:
     the unresolved identifier conflicts, invalid identifiers that reached the
     registry, failed required verifications and the review records tied to the
     delivery. Nothing is recomputed from the job's own counters.
+
+    Since 2026-09-25 this is the one-job case of `status_for_jobs`, which reads
+    the same evidence with a bounded number of grouped queries. The per-row
+    derivation is kept as `_status_for_job_reference` and the equivalence of
+    the two is pinned by tests/test_delivery_jobs_list_perf.py.
+    """
+    return (await status_for_jobs(db, [job]))[0]
+
+
+async def _status_for_job_reference(db, job) -> Dict[str, Any]:
+    """The original per-row derivation (about eight queries per job).
+
+    NOT used by any route. Retained as the oracle the bulk path is tested
+    against, so a change to either that alters an outcome is caught.
     """
     from app.tefca_registry.rce import dispositions as disp
     from app.tefca_registry.rce import identifier_decisions, stage_events
@@ -645,3 +664,314 @@ async def status_for_job(db, job) -> Dict[str, Any]:
             "review_counts": review_counts,
         },
     }
+
+
+# ── the same derivation for a page of jobs, in a bounded number of queries ──
+#
+# The list endpoint used to call `status_for_job` once per row: eight queries
+# per job, several of them scanning the delivery's curated records, so a page
+# of 50 jobs cost 400+ statements and, on the DEV database, 134-271 s. Each
+# input below is one grouped query over the page's job ids / intake ids, so
+# the statement count is a constant (nine at most) whatever the page size.
+# Every filter is the SAME as the per-row helper it replaces; the only change
+# is GROUP BY instead of one WHERE per job.
+
+def _intake_ids_of(jobs) -> List[Any]:
+    seen: Dict[Any, None] = {}
+    for job in jobs:
+        if job.source_intake_id is not None:
+            seen.setdefault(job.source_intake_id, None)
+    return list(seen)
+
+
+async def _latest_snapshots_by_job(db, job_ids) -> Dict[Any, Any]:
+    """job id -> its highest-sequence snapshot (the same row
+    `reconciliation.latest_snapshot` returns)."""
+    from app.tefca_registry.rce import traceability_models as tm
+
+    if not job_ids:
+        return {}
+    rows = (await db.execute(
+        select(tm.RceReconciliationSnapshot)
+        .where(tm.RceReconciliationSnapshot.job_id.in_(job_ids))
+        .distinct(tm.RceReconciliationSnapshot.job_id)
+        .order_by(tm.RceReconciliationSnapshot.job_id,
+                  tm.RceReconciliationSnapshot.sequence.desc()))).scalars().all()
+    return {row.job_id: row for row in rows}
+
+
+async def _timelines_by_job(db, job_ids) -> Dict[Any, List[Dict[str, Any]]]:
+    """job id -> its stage events oldest first (as `stage_events.timeline`)."""
+    from app.tefca_registry.rce import traceability_models as tm
+
+    out: Dict[Any, List[Dict[str, Any]]] = {}
+    if not job_ids:
+        return out
+    rows = (await db.execute(
+        select(tm.RceDeliveryStageEvent)
+        .where(tm.RceDeliveryStageEvent.job_id.in_(job_ids))
+        .order_by(tm.RceDeliveryStageEvent.job_id,
+                  tm.RceDeliveryStageEvent.started_at,
+                  tm.RceDeliveryStageEvent.attempt))).scalars().all()
+    for row in rows:
+        out.setdefault(row.job_id, []).append(row.to_dict())
+    return out
+
+
+async def _open_findings_by_intake(db, intake_ids) -> Dict[Any, int]:
+    """`_open_findings` for several intakes: open HIGH/CRITICAL issues of each
+    intake's CURRENT run (`run_selection`'s definition, applied per intake)."""
+    if not intake_ids:
+        return {}
+    rows = (await db.execute(text("""
+        WITH current_run AS (
+            SELECT DISTINCT ON (source_intake_id) source_intake_id, id AS run_id
+            FROM rce_ingestion_runs
+            WHERE source_intake_id = ANY(CAST(:ids AS uuid[]))
+              AND run_status = 'COMPLETE' AND completed_at IS NOT NULL
+            ORDER BY source_intake_id, completed_at DESC, started_at DESC, id DESC)
+        SELECT i.source_intake_id, count(*) AS n
+        FROM rce_issues i
+        JOIN current_run c ON c.source_intake_id = i.source_intake_id
+                          AND c.run_id = i.run_id
+        WHERE i.severity IN ('CRITICAL', 'HIGH')
+          AND i.resolution IN ('OPEN', 'PROPOSED', 'UNDER_REVIEW')
+        GROUP BY i.source_intake_id"""),
+        {"ids": [str(i) for i in intake_ids]})).all()
+    return {row[0]: int(row[1] or 0) for row in rows}
+
+
+async def _unresolved_conflicts_by_intake(db, intake_ids) -> Dict[Any, int]:
+    """`identifier_decisions.unresolved_for_intake`, grouped by intake."""
+    if not intake_ids:
+        return {}
+    rows = (await db.execute(text("""
+        SELECT x.intake_id, count(*) AS n FROM (
+          SELECT DISTINCT ON (intake_id, entity_id, identifier_type) intake_id, decision
+          FROM tefca_identifier_decision_events
+          WHERE intake_id = ANY(CAST(:ids AS uuid[]))
+          ORDER BY intake_id, entity_id, identifier_type, sequence DESC) x
+        WHERE x.decision = 'CONFLICT_RAISED'
+        GROUP BY x.intake_id"""),
+        {"ids": [str(i) for i in intake_ids]})).all()
+    return {row[0]: int(row[1] or 0) for row in rows}
+
+
+async def _invalid_identifiers_promoted_by_intake(db, intake_ids) -> Dict[Any, int]:
+    """`_invalid_identifiers_promoted`, grouped by intake. The DISTINCT on
+    (intake, entity) keeps the per-row `IN (subquery)` semantics: an entity
+    promoted from two lines of one delivery is one entity, and its identifier
+    rows are counted once."""
+    from app.services.npi_validator import validate_npi
+    from app.tefca_registry import models as reg
+    from app.tefca_registry.rce import models as m
+
+    if not intake_ids:
+        return {}
+    promoted = (select(m.RceCuratedRecord.source_intake_id.label("intake_id"),
+                       m.RceCuratedRecord.canonical_entity_id.label("entity_id"))
+                .where(m.RceCuratedRecord.source_intake_id.in_(intake_ids),
+                       m.RceCuratedRecord.canonical_entity_id.isnot(None))
+                .distinct().subquery())
+    rows = (await db.execute(
+        select(promoted.c.intake_id, reg.TefcaEntityIdentifier.identifier_value)
+        .join(reg.TefcaEntityIdentifier,
+              reg.TefcaEntityIdentifier.entity_id == promoted.c.entity_id)
+        .where(reg.TefcaEntityIdentifier.identifier_type == "npi",
+               reg.TefcaEntityIdentifier.identifier_status == "active"))).all()
+    out: Dict[Any, int] = {}
+    for intake_id, value in rows:
+        if not validate_npi(value)[0]:
+            out[intake_id] = out.get(intake_id, 0) + 1
+    return out
+
+
+async def _failed_required_verification_by_intake(db, intake_ids) -> Dict[Any, int]:
+    """`_failed_required_verification`, grouped by intake: FAIL evidence rows
+    whose entity_id (a string column) is the text form of a canonical entity
+    of the intake. An absent table is zero evidence for every intake."""
+    if not intake_ids:
+        return {}
+    try:
+        rows = (await db.execute(text("""
+            SELECT c.intake_id, count(*) AS n
+            FROM tefca_dimension_evidence e
+            JOIN (SELECT DISTINCT source_intake_id AS intake_id,
+                                  CAST(canonical_entity_id AS text) AS entity_id
+                  FROM rce_curated_records
+                  WHERE source_intake_id = ANY(CAST(:ids AS uuid[]))
+                    AND canonical_entity_id IS NOT NULL) c
+              ON c.entity_id = e.entity_id
+            WHERE e.disposition = 'FAIL'
+            GROUP BY c.intake_id"""),
+            {"ids": [str(i) for i in intake_ids]})).all()
+    except Exception as exc:  # noqa: BLE001 — an absent table is zero evidence, not an error
+        logger.warning("failed-verification count unavailable: %s",
+                       type(exc).__name__, exc_info=True)
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return {}
+    return {row[0]: int(row[1] or 0) for row in rows}
+
+
+async def _records_without_disposition_by_intake(db, intake_ids) -> Dict[Any, int]:
+    """`dispositions.records_without_disposition`, grouped by intake."""
+    from app.tefca_registry.rce import traceability_models as tm
+
+    if not intake_ids:
+        return {}
+    rows = (await db.execute(text(f"""
+        SELECT s.source_intake_id, count(*) AS n
+        FROM rce_source_records s
+        LEFT JOIN {tm.CURRENT_DISPOSITIONS_VIEW} d ON d.source_record_id = s.id
+        WHERE s.source_intake_id = ANY(CAST(:ids AS uuid[])) AND d.id IS NULL
+        GROUP BY s.source_intake_id"""),
+        {"ids": [str(i) for i in intake_ids]})).all()
+    return {row[0]: int(row[1] or 0) for row in rows}
+
+
+def _empty_review_counts() -> Dict[str, Any]:
+    return {"open": 0, "claimed": 0, "determined": 0, "qa_pending": 0,
+            "qa_in_progress": 0, "qa_approved": 0, "total": 0,
+            "open_breakdown": {}}
+
+
+async def _review_counts_by_intake(db, intake_ids) -> Dict[Any, Dict[str, Any]]:
+    """`_review_counts` for several intakes: the delivery's own cases (stamped
+    `source_intake_id`) in one read, the latest QA action of every determined
+    case in a second, then the same bucketing per intake."""
+    from app.tefca_registry import models as reg
+
+    out: Dict[Any, Dict[str, Any]] = {}
+    if not intake_ids:
+        return out
+    by_text = {str(i): i for i in intake_ids}
+    stamp = reg.ReviewRecord.verification_results["source_intake_id"].astext
+    rows = (await db.execute(
+        select(stamp, reg.ReviewRecord.review_id, reg.ReviewRecord.assigned_to_user_id,
+               reg.ReviewRecord.reviewer_resolution, reg.ReviewRecord.reportable_at,
+               reg.ReviewRecord.verification_results["queue_source"].astext)
+        .where(stamp.in_(list(by_text))))).all()
+    for intake_id in intake_ids:
+        out[intake_id] = _empty_review_counts()
+    determined_ids = [r[1] for r in rows
+                      if r[3] is not None and r[4] is None]
+    latest_qa: Dict[str, Optional[str]] = {}
+    if determined_ids:
+        qa_rows = (await db.execute(text("""
+            SELECT DISTINCT ON (review_id) review_id, qa_action
+            FROM review_decision_events
+            WHERE review_id = ANY(:ids) AND event_type = 'QA_REVIEW'
+            ORDER BY review_id, sequence_number DESC"""),
+            {"ids": determined_ids})).all()
+        latest_qa = {rid: action for rid, action in qa_rows}
+    for stamped, review_id, assigned_to, resolution, reportable_at, source in rows:
+        counts = out[by_text[stamped]]
+        counts["total"] += 1
+        if reportable_at is not None:
+            counts["qa_approved"] += 1
+        elif resolution is not None:
+            action = latest_qa.get(review_id)
+            if action in ("RETURN", "ESCALATE"):
+                counts["qa_in_progress"] += 1
+            else:
+                counts["qa_pending"] += 1
+        elif assigned_to is not None:
+            counts["claimed"] += 1
+        else:
+            counts["open"] += 1
+            source = source or "unknown"
+            counts["open_breakdown"][source] = counts["open_breakdown"].get(source, 0) + 1
+    return out
+
+
+async def status_for_jobs(db, jobs) -> List[Dict[str, Any]]:
+    """`status_for_job` for a page of jobs, one result per job in order.
+
+    Reads the same persisted evidence through nine grouped queries at most
+    (snapshots, stage events, open findings, identifier conflicts, invalid
+    promoted identifiers, failed verifications, records without disposition,
+    review records, QA events) instead of eight per job, and feeds
+    `status_model` exactly the inputs the per-row derivation would.
+    """
+    from app.tefca_registry.rce import stage_events, status_model
+
+    jobs = list(jobs)
+    if not jobs:
+        return []
+    job_ids = [job.id for job in jobs]
+    intake_ids = _intake_ids_of(jobs)
+
+    snapshots = await _latest_snapshots_by_job(db, job_ids)
+    timelines = await _timelines_by_job(db, job_ids)
+    findings = await _open_findings_by_intake(db, intake_ids)
+    conflicts = await _unresolved_conflicts_by_intake(db, intake_ids)
+    invalid = await _invalid_identifiers_promoted_by_intake(db, intake_ids)
+    failed = await _failed_required_verification_by_intake(db, intake_ids)
+    unexplained = await _records_without_disposition_by_intake(db, intake_ids)
+    reviews = await _review_counts_by_intake(db, intake_ids)
+
+    results: List[Dict[str, Any]] = []
+    for job in jobs:
+        intake_id = job.source_intake_id
+        snapshot = snapshots.get(job.id)
+        snapshot_dict = snapshot.to_dict() if snapshot is not None else None
+        summary = stage_events.summarise(timelines.get(job.id, []))
+
+        unresolved_findings = findings.get(intake_id, 0) if intake_id is not None else 0
+        unresolved_conflicts = conflicts.get(intake_id, 0) if intake_id is not None else 0
+        invalid_promoted = invalid.get(intake_id, 0) if intake_id is not None else 0
+        failed_verification = failed.get(intake_id, 0) if intake_id is not None else 0
+        records_unexplained = unexplained.get(intake_id, 0) if intake_id is not None else 0
+
+        outcome = status_model.processing_outcome(
+            job_state=job.state, job_stage=job.stage,
+            failed_stage=summary.get("failed_stage"),
+            error_reason=job.error_reason,
+            snapshot=snapshot_dict,
+            stages_completed=summary.get("completed_stages") or [],
+            unresolved_findings=unresolved_findings,
+            unresolved_conflicts=unresolved_conflicts,
+            invalid_identifiers_promoted=invalid_promoted,
+            failed_required_verification=failed_verification,
+            unexplained_records=records_unexplained,
+        )
+        if intake_id is None:
+            # The per-row helper's no-intake shape (no breakdown key).
+            review_counts: Dict[str, Any] = {
+                "open": 0, "claimed": 0, "determined": 0, "qa_pending": 0,
+                "qa_in_progress": 0, "qa_approved": 0, "total": 0}
+        else:
+            review_counts = reviews.get(intake_id) or _empty_review_counts()
+        review = status_model.review_state(
+            outcome_code=outcome["code"],
+            snapshot_passed=bool(snapshot_dict and snapshot_dict.get("passed")),
+            open_work_items=review_counts["open"],
+            open_breakdown=review_counts.get("open_breakdown"),
+            claimed_work_items=review_counts["claimed"],
+            determined_items=0,
+            qa_pending=review_counts["qa_pending"],
+            qa_in_progress=review_counts["qa_in_progress"],
+            qa_approved=review_counts["qa_approved"],
+            closed=False,
+        )
+        results.append({
+            "processing_outcome": outcome,
+            "review_state": review,
+            "inputs": {
+                "snapshot_id": snapshot_dict.get("id") if snapshot_dict else None,
+                "snapshot_passed": snapshot_dict.get("passed") if snapshot_dict else None,
+                "stage_attempts": summary.get("attempts", 0),
+                "completed_stages": summary.get("completed_stages") or [],
+                "failed_stage": summary.get("failed_stage"),
+                "unresolved_findings": unresolved_findings,
+                "unresolved_conflicts": unresolved_conflicts,
+                "invalid_identifiers_promoted": invalid_promoted,
+                "failed_required_verification": failed_verification,
+                "records_without_disposition": records_unexplained,
+                "review_counts": review_counts,
+            },
+        })
+    return results

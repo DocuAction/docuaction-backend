@@ -501,35 +501,43 @@ async def _review_counts(db, intake_id) -> Dict[str, int]:
 
 @router.get("/delivery-jobs", summary="Recent official delivery registrations")
 async def list_delivery_jobs(
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(20, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     state: Optional[str] = Query(None, description="QUEUED|RUNNING|SUCCEEDED|FAILED"),
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role("viewer")),
 ):
-    """Each item carries the two-axis status. Computed for the returned page
-    only, so the cost is bounded by `limit`, never by the table."""
+    """Each item carries the two-axis status, derived for the whole page in a
+    bounded number of grouped queries (`delivery_jobs.status_for_jobs`), so
+    the cost is a constant per page, never a multiple of `limit` and never a
+    function of the table. `total` is the count of jobs matching `state`."""
     from app.tefca_registry.rce import delivery_jobs as jobs
     from app.tefca_registry.rce.delivery_job_model import RceDeliveryJob
 
-    rows = await jobs.list_jobs(db, limit=limit, state=state)
+    rows = await jobs.list_jobs(db, limit=limit, state=state, offset=offset)
     count_stmt = select(func.count()).select_from(RceDeliveryJob)
     if state:
         count_stmt = count_stmt.where(RceDeliveryJob.state == state)
     total = int((await db.execute(count_stmt)).scalar() or 0)
-    items = []
-    for row in rows:
-        item = row.to_dict()
-        if not (item.get("processing_outcome") and item.get("review_state")):
+    derived: List[Optional[Dict[str, Any]]] = [None] * len(rows)
+    if rows:
+        try:
+            derived = list(await jobs.status_for_jobs(db, rows))
+        except Exception as exc:  # noqa: BLE001 - a status failure must not empty the list
+            logger.info("status for the delivery job page unavailable: %s",
+                        type(exc).__name__, exc_info=True)
             try:
-                derived = await status_for_job(db, row)
-                item["processing_outcome"] = derived.get("processing_outcome")
-                item["review_state"] = derived.get("review_state")
-            except Exception as exc:  # noqa: BLE001 - one bad row must not empty the list
-                logger.info("status for job %s unavailable: %s", row.id, type(exc).__name__)
-                item.setdefault("processing_outcome", None)
-                item.setdefault("review_state", None)
+                await db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+    items = []
+    for row, status in zip(rows, derived):
+        item = row.to_dict()
+        item["processing_outcome"] = status.get("processing_outcome") if status else None
+        item["review_state"] = status.get("review_state") if status else None
         items.append(item)
-    return {"items": items, "count": len(items), "total": total, "limit": limit}
+    return {"items": items, "count": len(items), "total": total,
+            "limit": limit, "offset": offset}
 
 
 @router.get("/delivery-jobs/{job_id}", summary="One registration, and its progress")
