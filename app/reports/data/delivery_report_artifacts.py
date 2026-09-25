@@ -44,6 +44,7 @@ generation — the analyst already has the document.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -152,7 +153,11 @@ async def finalize_report_renderings(
             out["pdf_unavailable_reason"] = unavailable_reason()
         else:
             try:
-                pdf_bytes = render_pdf(html, title=report_id)
+                # Off the event loop: this runs inside `POST /generate`, and a
+                # synchronous WeasyPrint render of a large delivery report
+                # would otherwise stall every other request (see
+                # routes._pdf_response for the DEV incident).
+                pdf_bytes = await asyncio.to_thread(render_pdf, html, title=report_id)
             except PDFEngineUnavailable as exc:
                 out["pdf_unavailable_reason"] = str(exc)
             except Exception as exc:  # noqa: BLE001
