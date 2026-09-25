@@ -61,11 +61,15 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+import time
 import uuid
+from dataclasses import dataclass, replace as _dc_replace
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -335,7 +339,22 @@ async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_S
 #      record without evidence, instead of a DISTINCT over the population;
 #   3. a statement timeout on that lookup (`SET LOCAL`, transaction-scoped),
 #      so a lookup that is still slow is cancelled, logged and retried on a
-#      later tick rather than left running.
+#      later tick rather than left running;
+#   4. ADAPTIVE BACKOFF (2026-09-25, follow-up). Controls 1-3 were not enough
+#      on a 1-vCPU burstable server: every 15-second tick's lookup ran into
+#      the 15 s timeout and was cancelled, so a bounded query at a fixed
+#      cadence still kept the database at ~100% CPU with no burst credits
+#      left. A cancelled (or raising) lookup now arms a cooldown — ticks are
+#      skipped until `next_allowed_at` — that doubles per consecutive
+#      failure from `COVERAGE_BACKOFF_BASE_SECONDS` (default 300) up to
+#      `COVERAGE_BACKOFF_MAX_SECONDS` (default 3600) and resets on the first
+#      lookup that completes. A duty-cycle guard adds a rest after any tick
+#      whose wall time exceeded half the interval, so successive ticks cannot
+#      occupy the database back-to-back. The state lives in this process
+#      (`_state`, guarded by `_state_lock`); a multi-process deployment
+#      would need shared state for the backoff to be global — the same
+#      accepted limitation control 1 addresses for overlap, and in that
+#      deployment the advisory lock still keeps ticks single-flight.
 
 #: The advisory-lock key. A fixed 64-bit constant, chosen once, never reused
 #: for another lock in this codebase (grep before adding one).
@@ -352,6 +371,171 @@ MAX_CANDIDATE_TIMEOUT_MS = 600_000
 
 #: PostgreSQL's SQLSTATE for a statement cancelled by statement_timeout.
 _QUERY_CANCELED_SQLSTATE = "57014"
+
+#: The scheduler interval (`register_with_scheduler`) and the backoff bounds.
+TICK_INTERVAL_SECONDS = 15
+ENV_BACKOFF_BASE_SECONDS = "COVERAGE_BACKOFF_BASE_SECONDS"
+DEFAULT_BACKOFF_BASE_SECONDS = 300
+ENV_BACKOFF_MAX_SECONDS = "COVERAGE_BACKOFF_MAX_SECONDS"
+DEFAULT_BACKOFF_MAX_SECONDS = 3600
+MIN_BACKOFF_SECONDS = 1
+MAX_BACKOFF_SECONDS = 86_400
+
+#: Duty-cycle guard: a tick whose wall time exceeds this fraction of the
+#: interval is followed by a rest of `DUTY_CYCLE_REST_FACTOR` x its wall
+#: time (never less than one interval), so the database is idle at least
+#: twice as long as the tick kept it busy.
+DUTY_CYCLE_FRACTION = 0.5
+DUTY_CYCLE_REST_FACTOR = 2
+
+#: `last_outcome` vocabulary reported by `coverage_scheduler_status()`.
+TICK_IDLE = "idle"                  # no tick has run yet
+TICK_BATCH = "batch"                # a candidate was found and a batch ran
+TICK_NO_CANDIDATE = "no_candidate"  # lookup completed, nothing to cover
+TICK_TIMEOUT = "timeout"            # lookup cancelled by statement_timeout
+TICK_SKIPPED_LOCK = "skipped_lock"  # another connection holds the advisory lock
+TICK_BACKOFF = "backoff"            # skipped: cooldown still in force
+TICK_ERROR = "error"                # lookup or batch raised (logged)
+
+
+class CandidateLookupTimeout(Exception):
+    """The candidate lookup was cancelled by its statement timeout. Raised
+    only when `_next_delivery_needing_coverage(..., raise_on_timeout=True)`
+    is asked for it; the default contract (return None) is unchanged."""
+
+
+@dataclass
+class _CoverageSchedulerState:
+    """Per-process tick state. Timestamps are epoch seconds (float) from the
+    tick's clock so a test can inject a fake `now`; `coverage_scheduler_status`
+    renders them as ISO-8601 UTC. Holds no identifiers, SQL or secrets."""
+    last_tick_at: Optional[float] = None
+    last_outcome: str = TICK_IDLE
+    consecutive_timeouts: int = 0
+    next_allowed_at: Optional[float] = None
+    last_lookup_ms: Optional[int] = None
+    last_batch_ms: Optional[int] = None
+    ticks_skipped_backoff: int = 0
+
+
+_state = _CoverageSchedulerState()
+_state_lock = threading.Lock()
+
+
+def reset_coverage_scheduler_state() -> None:
+    """Forget all tick state (tests; a process restart does the same)."""
+    global _state
+    with _state_lock:
+        _state = _CoverageSchedulerState()
+
+
+def _env_seconds(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    try:
+        value = int(raw) if raw else default
+    except ValueError:
+        logger.warning("%s=%r is not an integer; using %d s", name, raw, default)
+        value = default
+    return max(MIN_BACKOFF_SECONDS, min(value, MAX_BACKOFF_SECONDS))
+
+
+def backoff_base_seconds() -> int:
+    return _env_seconds(ENV_BACKOFF_BASE_SECONDS, DEFAULT_BACKOFF_BASE_SECONDS)
+
+
+def backoff_max_seconds() -> int:
+    """The cap; never below the base, so a misconfigured pair still backs off."""
+    return max(backoff_base_seconds(), _env_seconds(ENV_BACKOFF_MAX_SECONDS,
+                                                    DEFAULT_BACKOFF_MAX_SECONDS))
+
+
+def backoff_seconds(consecutive_timeouts: int) -> int:
+    """Cooldown after the n-th consecutive failed lookup: base * 2**(n-1),
+    capped. `consecutive_timeouts` <= 0 means no cooldown."""
+    if consecutive_timeouts <= 0:
+        return 0
+    base, cap = backoff_base_seconds(), backoff_max_seconds()
+    exponent = min(consecutive_timeouts - 1, 30)  # 2**30 * base is already past any cap
+    return min(base * (2 ** exponent), cap)
+
+
+def _iso(epoch: Optional[float]) -> Optional[str]:
+    if epoch is None:
+        return None
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat(timespec="seconds")
+
+
+def coverage_scheduler_status() -> Dict[str, Any]:
+    """Safe operational metrics for `/api/admin/health`: flags, timestamps,
+    counters and durations only — no identifiers, SQL or secrets."""
+    with _state_lock:
+        s = _dc_replace(_state)
+    return {
+        "enabled": automated_coverage_enabled(),
+        "last_tick_at": _iso(s.last_tick_at),
+        "last_outcome": s.last_outcome,
+        "consecutive_timeouts": s.consecutive_timeouts,
+        "next_allowed_at": _iso(s.next_allowed_at),
+        "last_lookup_ms": s.last_lookup_ms,
+        "last_batch_ms": s.last_batch_ms,
+        "ticks_skipped_backoff": s.ticks_skipped_backoff,
+        "backoff_base_seconds": backoff_base_seconds(),
+        "backoff_max_seconds": backoff_max_seconds(),
+        "tick_interval_seconds": TICK_INTERVAL_SECONDS,
+    }
+
+
+def _skip_for_backoff(now: float) -> bool:
+    """True (and counted) when the cooldown is still in force at `now`."""
+    with _state_lock:
+        if _state.next_allowed_at is not None and now < _state.next_allowed_at:
+            _state.ticks_skipped_backoff += 1
+            _state.last_tick_at = now
+            _state.last_outcome = TICK_BACKOFF
+            return True
+    return False
+
+
+def _finish_tick(started: float, ended: float, outcome: str, *,
+                 lookup_result: Optional[str], lookup_ms: Optional[int],
+                 batch_ms: Optional[int]) -> None:
+    """Record a tick that ran and arm or clear the cooldown.
+
+    `lookup_result` is "ok" (a candidate was found or none exists), "timeout",
+    "error", or None when the lookup was not attempted (lock not acquired),
+    which leaves the backoff state untouched.
+    """
+    with _state_lock:
+        s = _state
+        s.last_tick_at = started
+        s.last_outcome = outcome
+        s.last_lookup_ms = lookup_ms
+        s.last_batch_ms = batch_ms
+
+        if lookup_result in (TICK_TIMEOUT, TICK_ERROR):
+            s.consecutive_timeouts += 1
+            cooldown = backoff_seconds(s.consecutive_timeouts)
+            s.next_allowed_at = ended + cooldown
+            logger.info("automated coverage: entering backoff after %d consecutive "
+                        "failed lookup(s) (%s); next tick allowed in %d s",
+                        s.consecutive_timeouts, lookup_result, cooldown)
+        elif lookup_result == "ok":
+            if s.consecutive_timeouts:
+                logger.info("automated coverage: leaving backoff after %d consecutive "
+                            "failed lookup(s); lookup completed in %s ms",
+                            s.consecutive_timeouts, lookup_ms)
+            s.consecutive_timeouts = 0
+            s.next_allowed_at = None
+
+        wall = max(0.0, ended - started)
+        if wall > DUTY_CYCLE_FRACTION * TICK_INTERVAL_SECONDS:
+            rest = max(float(TICK_INTERVAL_SECONDS), DUTY_CYCLE_REST_FACTOR * wall)
+            candidate = ended + rest
+            if s.next_allowed_at is None or candidate > s.next_allowed_at:
+                s.next_allowed_at = candidate
+                logger.debug("automated coverage: tick took %.1f s (> %d%% of the %d s "
+                             "interval); resting %.0f s", wall,
+                             int(DUTY_CYCLE_FRACTION * 100), TICK_INTERVAL_SECONDS, rest)
 
 
 def candidate_timeout_ms() -> int:
@@ -389,47 +573,81 @@ async def _release_tick_lock(conn) -> None:
         logger.warning("automated coverage: advisory unlock failed: %s", type(exc).__name__)
 
 
-async def _coverage_tick():
+async def _coverage_tick(*, now: Optional[Callable[[], float]] = None):
     """One scheduler tick: find ONE delivery with eligible-but-not-covered
     entities and process one bounded batch for it.
 
     Mirrors `delivery_scheduler._poll_tick`'s shape (own session, own
     try/except so a tick that raises cannot stop the scheduler). Gated behind
     `automated_coverage_enabled()` so importing/registering this module is
-    inert until a deployment explicitly turns it on.
+    inert until a deployment explicitly turns it on, and behind the backoff
+    cooldown (`_skip_for_backoff`) so a database that cannot answer the
+    lookup in time is left alone for a growing interval instead of being
+    asked again 15 seconds later.
 
     The session is bound to ONE connection held for the whole tick, because a
     session-level advisory lock belongs to a connection: a pooled session
     hands its connection back on every commit (and `run_coverage_batch`
     commits), so lock and unlock would otherwise land on different
     connections and the lock would leak into the pool, held forever.
+
+    `now` is the clock (epoch seconds); injectable so tests drive the backoff
+    with a fake clock instead of sleeping.
     """
     if not automated_coverage_enabled():
         return
-    from sqlalchemy.ext.asyncio import AsyncSession
+    clock = now or time.time
+    started = clock()
+    if _skip_for_backoff(started):
+        return
 
     from app.core.database import _get_engine
 
+    outcome = TICK_IDLE
+    lookup_result: Optional[str] = None
+    lookup_ms: Optional[int] = None
+    batch_ms: Optional[int] = None
     try:
         async with _get_engine().connect() as conn:
             if not await _try_acquire_tick_lock(conn):
                 logger.debug("automated coverage tick skipped: another process holds "
                              "advisory lock %s", COVERAGE_TICK_LOCK_KEY)
+                outcome = TICK_SKIPPED_LOCK
                 return
             await conn.commit()  # end the autobegun transaction; the lock outlives it
             try:
                 async with AsyncSession(bind=conn, expire_on_commit=False) as db:
-                    intake_id = await _next_delivery_needing_coverage(db)
-                    if intake_id is None:
+                    lookup_started = clock()
+                    try:
+                        intake_id = await _next_delivery_needing_coverage(
+                            db, raise_on_timeout=True)
+                    except CandidateLookupTimeout:
+                        lookup_result = outcome = TICK_TIMEOUT
                         return
+                    except Exception:
+                        lookup_result = outcome = TICK_ERROR
+                        raise
+                    finally:
+                        lookup_ms = int((clock() - lookup_started) * 1000)
+                    lookup_result = "ok"
+                    if intake_id is None:
+                        outcome = TICK_NO_CANDIDATE
+                        return
+                    batch_started = clock()
                     result = await run_coverage_batch(db, intake_id)
+                    batch_ms = int((clock() - batch_started) * 1000)
+                    outcome = TICK_BATCH
                     logger.info("automated coverage tick for %s: %s/%s covered, %s remaining",
                                 intake_id, result["covered"], result["eligible"],
                                 result["remaining"])
             finally:
                 await _release_tick_lock(conn)
     except Exception as exc:  # noqa: BLE001 - a tick that raises must not stop the scheduler
+        outcome = TICK_ERROR
         logger.error("automated coverage tick error: %s", exc, exc_info=True)
+    finally:
+        _finish_tick(started, clock(), outcome, lookup_result=lookup_result,
+                     lookup_ms=lookup_ms, batch_ms=batch_ms)
 
 
 #: One intake among the newest `:job_limit` succeeded deliveries that still
@@ -475,9 +693,12 @@ def _is_statement_timeout(exc: BaseException) -> bool:
 
 
 async def _next_delivery_needing_coverage(db, *, job_limit: int = CANDIDATE_JOB_LIMIT,
-                                          timeout_ms: Optional[int] = None):
+                                          timeout_ms: Optional[int] = None,
+                                          raise_on_timeout: bool = False):
     """The next intake to cover, or None — also None (logged, nothing marked)
-    when the lookup exceeds its statement timeout.
+    when the lookup exceeds its statement timeout, unless `raise_on_timeout`
+    asks for `CandidateLookupTimeout` instead so the caller (the scheduler
+    tick) can tell "nothing to do" from "could not find out" and back off.
 
     `SET LOCAL` is transaction-scoped, and the transaction is ended after the
     lookup, so the timeout never applies to the batch that follows.
@@ -494,6 +715,8 @@ async def _next_delivery_needing_coverage(db, *, job_limit: int = CANDIDATE_JOB_
         logger.warning("automated coverage: candidate lookup exceeded %d ms and was "
                        "cancelled; nothing marked, will retry on a later tick", timeout)
         await db.rollback()
+        if raise_on_timeout:
+            raise CandidateLookupTimeout(timeout) from exc
         return None
     await db.rollback()  # read-only; ends the transaction and the SET LOCAL with it
     return row[0] if row else None
@@ -508,7 +731,7 @@ def register_with_scheduler(scheduler) -> None:
     from apscheduler.triggers.interval import IntervalTrigger
 
     scheduler.add_job(
-        _coverage_tick, IntervalTrigger(seconds=15),
+        _coverage_tick, IntervalTrigger(seconds=TICK_INTERVAL_SECONDS),
         id="rce_automated_verification_coverage",
         name="Automated verification coverage (external sources, all eligible entities)",
         coalesce=True, misfire_grace_time=120, replace_existing=True, max_instances=1)
