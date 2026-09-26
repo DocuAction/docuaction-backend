@@ -19,6 +19,7 @@ THE ALGORITHM (45 CFR 162.406, CMS NPI Check Digit Calculation)
 from __future__ import annotations
 
 import re
+from typing import Optional
 
 # ISO 7812 issuer identifier for CMS. Not arbitrary and not configurable.
 CMS_PREFIX = "80840"
@@ -69,6 +70,28 @@ def validate_npi(npi: str) -> tuple[bool, str]:
 def is_valid_npi(npi: str) -> bool:
     """Boolean-only convenience wrapper."""
     return validate_npi(npi)[0]
+
+
+def npi_rejection_reason(npi: Optional[str]) -> Optional[str]:
+    """None when `npi` is safe to send to an upstream NPI-keyed connector
+    (NPPES, the legacy PECOS/NPPES proxy, CMS PPEF Enrollment, CMS Revocation);
+    otherwise a reason string the caller wraps in a fail-closed result.
+
+    Centralised so every connector applies the identical gate before dispatch,
+    per 45 CFR 162.406 (Luhn + 10-digit) — an upstream source seeing a
+    malformed identifier is a request-validation problem, not a lookup, and
+    must never be sent. Missing and malformed are kept as distinguishable
+    reasons (both still refuse the call) because they are different facts:
+    "no identifier to look up" is a normal, common state for many entities;
+    "identifier present but invalid" is a data-quality problem worth a
+    different downstream note.
+    """
+    if not npi:
+        return "no_npi_submitted: entity has no NPI identifier to look up"
+    ok, message = validate_npi(npi)
+    if not ok:
+        return f"npi_failed_validation: {message}"
+    return None
 
 
 def compute_check_digit(base9: str) -> str:

@@ -115,10 +115,46 @@ def test_pecos_health_note_states_not_connected():
 
 def test_snapshot_vocabulary_matches_frontend_resolver():
     # src/platform/components/ConnectorStatus.js: HEALTHY / DEGRADED / UNAVAILABLE sets.
+    # Fix 3 added free-text presentation fields (pecos_label/pecos_subtitle) and
+    # the CMS PECOS-derived keys (cms_ppef_enrollment/cms_revocation), which speak
+    # their own AVAILABLE/DEGRADED/UNAVAILABLE vocabulary — neither is part of the
+    # legacy four-key available/partial/unavailable status vocabulary this test
+    # protects, so both are excluded here rather than folded into `allowed`.
     allowed = {"available", "partial", "unavailable"}
+    excluded_suffixes = ("_backing", "_label", "_subtitle")
     for live in (True, False):
         snap = _connector_health_snapshot(_health(pecos_live=live))
         for k, v in snap.items():
-            if k.endswith("_backing"):
+            if k.endswith(excluded_suffixes) or k.startswith("cms_"):
                 continue
             assert v in allowed, (k, v)
+
+
+def test_pecos_label_never_claims_direct_connection_or_medicare_enrollment():
+    """Fix 3: the legacy pecos key must always carry its proxy caption, and
+    that caption must never claim a direct PECOS connection or Medicare
+    enrolment verification."""
+    snap = _connector_health_snapshot(_health(pecos_live=True))
+    assert snap["pecos_label"] == "NPPES Registry — Legacy PECOS Proxy"
+    subtitle = snap["pecos_subtitle"].lower()
+    assert "not a direct pecos query" in subtitle
+    assert "does not establish medicare enrollment" in subtitle
+    assert "direct pecos connected" not in subtitle
+    assert "verifies medicare enrollment" not in subtitle
+
+
+def test_cms_ppef_and_revocation_reported_separately_from_legacy_pecos():
+    """Fix 3: genuine CMS PECOS-derived sources must be labelled and reported
+    under their own keys, never folded into the legacy `pecos` key."""
+    health = _health(pecos_live=True)
+    cms_systems = [
+        {"system": "CMS_PPEF", "status": "AVAILABLE"},
+        {"system": "CMS_REVOCATION", "status": "DEGRADED"},
+    ]
+    snap = _connector_health_snapshot(health, cms_systems=cms_systems)
+    assert snap["cms_ppef_enrollment"] == "available"
+    assert snap["cms_ppef_enrollment_label"] == "CMS Public Provider Enrollment — PECOS-derived"
+    assert snap["cms_revocation"] == "degraded"
+    assert snap["cms_revocation_label"] == "CMS Revocation — PECOS-derived"
+    # Never conflated with the legacy proxy key.
+    assert snap["pecos"] != snap["cms_ppef_enrollment"] or snap["pecos_backing"] == "nppes_proxy"

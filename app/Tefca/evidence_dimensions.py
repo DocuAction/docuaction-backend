@@ -195,6 +195,17 @@ class EvidenceItem:
             "record_count": int(p.get("row_count") or 0),
             "records_truncated": bool(p.get("records_truncated", False)),
         }
+        # Fix 4: the one allow-listed, safe upstream request-tracing identifier
+        # (see connectors.safe_upstream_request_id), if the provenance carries
+        # one. Stored inside the existing `normalized_values` JSONB column —
+        # no schema migration needed — merged rather than overwritten so a
+        # caller's own `normalized_values` kwarg (e.g. D1's type_alignment) is
+        # preserved alongside it.
+        upstream_request_id = p.get("upstream_request_id")
+        if upstream_request_id:
+            merged = {"upstream_request_id": upstream_request_id}
+            merged.update(kwargs.pop("normalized_values", None) or {})
+            fields["normalized_values"] = merged
         fields.update(kwargs)
         return cls(dimension=dimension, source=source, disposition=disposition, **fields)
 

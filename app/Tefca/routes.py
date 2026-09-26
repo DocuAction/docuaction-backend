@@ -1303,27 +1303,55 @@ def _review_status(status: str) -> str:
     return _REVIEW_STATUS_MAP.get((status or "").strip().lower(), "unknown")
 
 
-def _connector_health_snapshot(health: dict) -> dict:
+def _connector_health_snapshot(health: dict, cms_systems: Optional[list] = None) -> dict:
     """Public connector states. Vocabulary is the frontend's resolveStatus():
     available -> Live, partial -> Partial, unavailable -> Unavailable.
 
     PECOS is never reported "available": the probe behind that key reaches the
     NPPES proxy, not a PECOS feed, so a reachable proxy is "partial" (NPPES-proxy
     verification only) and the backing is named explicitly. A source that is
-    not connected must not read as connected."""
-    from app.Tefca.connectors import PECOS_BACKING
+    not connected must not read as connected.
+
+    Fix 3 (truthful labels): `pecos_label`/`pecos_subtitle` are the single
+    presentation text every surface should read, rather than each surface
+    writing its own PECOS wording — never "Direct PECOS Connected", never a
+    claim that NPPES verifies Medicare enrolment. The genuine CMS
+    PECOS-derived sources (CMS_PPEF_ENROLLMENT / CMS_REVOCATION) are reported
+    separately, from `cms_ppef.cms_capability_health()`'s `systems` list, when
+    the caller supplies it — never folded into the `pecos` key above.
+    """
+    from app.Tefca.connectors import (
+        PECOS_BACKING, PECOS_UI_LABEL, PECOS_UI_SUBTITLE,
+        CMS_PPEF_ENROLLMENT_UI_LABEL, CMS_PPEF_ENROLLMENT_UI_SUBTITLE,
+        CMS_REVOCATION_UI_LABEL, CMS_REVOCATION_UI_SUBTITLE,
+    )
 
     def s(k):
         return "available" if health.get(k, {}).get("live") else "unavailable"
 
     pecos_live = bool(health.get("PECOS", {}).get("live"))
-    return {
+    snapshot = {
         "sam_gov": s("SAM_GOV"),
         "pecos": "partial" if pecos_live else "unavailable",
         "pecos_backing": PECOS_BACKING,
+        "pecos_label": PECOS_UI_LABEL,
+        "pecos_subtitle": PECOS_UI_SUBTITLE,
         "leie": s("OIG_LEIE"),
         "nppes": s("NPPES"),
     }
+    if cms_systems:
+        by_system = {sys.get("system"): sys for sys in cms_systems}
+        ppef = by_system.get("CMS_PPEF")
+        revocation = by_system.get("CMS_REVOCATION")
+        if ppef:
+            snapshot["cms_ppef_enrollment"] = ppef.get("status", "UNAVAILABLE").lower()
+            snapshot["cms_ppef_enrollment_label"] = CMS_PPEF_ENROLLMENT_UI_LABEL
+            snapshot["cms_ppef_enrollment_subtitle"] = CMS_PPEF_ENROLLMENT_UI_SUBTITLE
+        if revocation:
+            snapshot["cms_revocation"] = revocation.get("status", "UNAVAILABLE").lower()
+            snapshot["cms_revocation_label"] = CMS_REVOCATION_UI_LABEL
+            snapshot["cms_revocation_subtitle"] = CMS_REVOCATION_UI_SUBTITLE
+    return snapshot
 
 
 @tefca_dashboard_router.get("/dashboard/summary", summary="Executive dashboard summary (aggregate, viewer role required)", dependencies=[Depends(require_role("viewer"))])
@@ -1376,6 +1404,12 @@ async def dashboard_summary(db: AsyncSession = Depends(get_db)):
         return round(n / total, 4) if total else 0.0
 
     health = await get_connector_manager().health_check()
+    try:
+        from app.Tefca.cms_ppef import cms_capability_health
+        cms_health = await cms_capability_health()
+        cms_systems = cms_health.get("systems")
+    except Exception:  # noqa: BLE001 — dashboard must not 500 on a CMS probe hiccup
+        cms_systems = None
     top = sorted(fail_reasons.items(), key=lambda x: -x[1])[:10]
     return {
         "total_reviews": total,
@@ -1387,7 +1421,7 @@ async def dashboard_summary(db: AsyncSession = Depends(get_db)):
         "reviews_by_status": by_status,
         "reviews_by_month": [{"month": k, "count": v["count"], "pass": v["pass"], "fail": v["fail"]}
                              for k, v in sorted(by_month.items())],
-        "connector_health": _connector_health_snapshot(health),
+        "connector_health": _connector_health_snapshot(health, cms_systems=cms_systems),
         "risk_distribution": by_risk,
         "top_failure_reasons": [{"reason": _FINDING_REASON_LABELS.get(c, c), "count": n} for c, n in top],
         **data_source_labels(),
@@ -1644,8 +1678,9 @@ async def dashboard_notifications(db: AsyncSession = Depends(get_db)):
         health = await get_connector_manager().health_check()
     except Exception:
         health = {}
+    from app.Tefca.connectors import PECOS_UI_LABEL
     for key, label in (("SAM_GOV", "SAM.gov"), ("NPPES", "NPPES"),
-                       ("OIG_LEIE", "OIG LEIE"), ("PECOS", "PECOS")):
+                       ("OIG_LEIE", "OIG LEIE"), ("PECOS", PECOS_UI_LABEL)):
         info = health.get(key) or {}
         if not info.get("live"):
             out.append({
@@ -1953,11 +1988,16 @@ async def tefca_status():
     """Lightweight public status: whether TEFCA is serving MOCK or PRODUCTION data,
     plus live connector health. The honest 'are we on mock data?' endpoint."""
     health = await get_connector_manager().health_check()
+    try:
+        from app.Tefca.cms_ppef import cms_capability_health
+        cms_systems = (await cms_capability_health()).get("systems")
+    except Exception:  # noqa: BLE001 — public status must not 500 on a CMS probe hiccup
+        cms_systems = None
     return {
         "module": "tefca_arc",
         "status": "active",
         "rce_directory_live": not is_running_mock(),
-        "connector_health": _connector_health_snapshot(health),
+        "connector_health": _connector_health_snapshot(health, cms_systems=cms_systems),
         **data_source_labels(),
     }
 

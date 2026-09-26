@@ -90,7 +90,9 @@ from app.Tefca.connectors import (
     SourceResult,
     _get_with_retry,
     HEALTH_TIMEOUT_SECONDS,
+    safe_upstream_request_id,
 )
+from app.services.npi_validator import npi_rejection_reason
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +183,10 @@ class CMSQuery:
     http_last_modified: Optional[str] = None
     row_count: int = 0
     truncated: bool = False
+    #: Fix 4 — {"header": <name>, "value": <value>} from
+    #: connectors.safe_upstream_request_id(), or None. Never anything beyond
+    #: that one allow-listed header; never Authorization/Cookie/query secrets.
+    upstream_request_id: Optional[Dict[str, str]] = None
 
     def as_provenance(self) -> Dict[str, Any]:
         return {
@@ -198,6 +204,7 @@ class CMSQuery:
             "realtime": False,
             "row_count": self.row_count,
             "records_truncated": self.truncated,
+            "upstream_request_id": self.upstream_request_id,
         }
 
 
@@ -239,6 +246,9 @@ class CMSDataAPIClient:
             if resp.status_code != 200:
                 raise CMSUnavailable(f"HTTP {resp.status_code}")
             query.http_last_modified = query.http_last_modified or resp.headers.get("Last-Modified")
+            # Fix 4: the allow-listed request-id only, from the first page —
+            # good enough to spot-check one lookup with CMS support later.
+            query.upstream_request_id = query.upstream_request_id or safe_upstream_request_id(resp)
             try:
                 page = resp.json()
             except Exception as exc:  # malformed body is an availability problem
@@ -336,19 +346,15 @@ class PPEFEnrollmentConnector:
 
     async def lookup_by_npi(self, npi: str) -> SourceResult:
         qp = {"npi": npi, "dataset": self.DATASET_ID}
-        if not npi:
-            # Not an error and not a failure: there is nothing to look up.
-            return SourceResult.ok(
-                self.SOURCE_NAME,
-                {
-                    "found": False,
-                    "reason": "no_npi_submitted",
-                    "records": [],
-                    "provenance": CMSQuery(self.DATASET_ID, PPEFComponent.ENROLLMENT.value, {}).as_provenance(),
-                },
-                qp,
-                self.DATASET_ID,
-            )
+        # Centralised gate (Fix 1): a missing or invalid-format NPI is never
+        # sent to the CMS data-api. Fail-closed, not a clean "found: False" —
+        # an earlier version of this branch returned SourceResult.ok(found:
+        # False), which downstream dimension assembly (_dimension_medicare)
+        # read as an affirmative PECOS non-match and reported PASS/NOT_FOUND
+        # for an entity whose enrolment was never actually queried.
+        rejection = npi_rejection_reason(npi)
+        if rejection:
+            return SourceResult.unavailable(self.SOURCE_NAME, rejection, qp, self.DATASET_ID)
         try:
             rows, query = await self.client.fetch_all(
                 self.DATASET_ID, PPEFComponent.ENROLLMENT.value, {F_NPI: npi}
@@ -428,12 +434,16 @@ class CMSRevocationConnector:
 
     async def lookup_by_npi(self, npi: str) -> SourceResult:
         qp = {"npi": npi, "dataset": self.DATASET_ID}
-        if not npi:
-            return SourceResult.ok(
-                self.SOURCE_NAME,
-                {"checked": False, "reason": "no_npi_submitted", "matches": []},
-                qp, self.DATASET_ID,
-            )
+        # Centralised gate (Fix 1). This branch previously returned
+        # SourceResult.ok({"checked": False, "matches": []}) — success=True —
+        # which evidence_assembly._dimension_exclusion read as `_ok(revocation)`
+        # True, `matches=[]`, and rolled up to Disposition.PASS
+        # ("NO_ACTIVE_REVOCATION_RECORD_FOUND"). That is a false clean finding
+        # for an entity that was never actually queried; unavailable makes
+        # `_ok()` False and the dimension correctly falls to UNAVAILABLE.
+        rejection = npi_rejection_reason(npi)
+        if rejection:
+            return SourceResult.unavailable(self.SOURCE_NAME, rejection, qp, self.DATASET_ID)
         try:
             rows, query = await self.client.fetch_all(
                 self.DATASET_ID, "REVOCATION", {F_NPI: npi}

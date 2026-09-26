@@ -218,10 +218,19 @@ class TestPECOSEnrollment:
         assert result.get("record_count") == 3
         assert set(result.get("enrollment_ids")) == {"I1", "I2", "O3"}
 
-    async def test_no_npi_is_not_an_outage(self):
-        result = await enrollment_source(FakeCMSClient(), npi="")
-        assert result.success is True
-        assert result.get("reason") == "no_npi_submitted"
+    async def test_no_npi_is_not_sent_upstream_and_is_distinguishable_from_an_outage(self):
+        """Fix 1 (centralised NPI gate): a missing NPI is refused BEFORE
+        dispatch, same as any other invalid input — fail-closed, never a clean
+        SourceResult.ok(found=False). It is still distinguishable from a
+        genuine CMS outage by its reason string, which is what "not an
+        outage" actually protects: this must never score as CMS being down,
+        and it does not, because the reason names the real cause."""
+        client = FakeCMSClient()
+        result = await enrollment_source(client, npi="")
+        assert result.success is False
+        assert result.data is None  # fail-closed: no caller can read a clean value
+        assert "no_npi_submitted" in (result.error or "")
+        assert client.calls == []  # never sent upstream
 
 
 class TestCMSFailureModes:
