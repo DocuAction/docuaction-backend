@@ -92,7 +92,7 @@ from app.Tefca.connectors import (
     HEALTH_TIMEOUT_SECONDS,
     safe_upstream_request_id,
 )
-from app.services.npi_validator import npi_rejection_reason
+from app.services.npi_validator import mask_npi, npi_rejection_reason
 
 logger = logging.getLogger(__name__)
 
@@ -362,7 +362,7 @@ class PPEFEnrollmentConnector:
         except CMSUnavailable as exc:
             return SourceResult.unavailable(self.SOURCE_NAME, str(exc), qp, self.DATASET_ID)
         except Exception as exc:
-            logger.warning("PPEF enrollment unavailable for NPI %s: %s", npi, exc)
+            logger.warning("PPEF enrollment unavailable for NPI %s: %s", mask_npi(npi), exc)
             return SourceResult.unavailable(self.SOURCE_NAME, str(exc), qp, self.DATASET_ID)
 
         records = [_shape_enrollment(r) for r in rows]
@@ -451,7 +451,7 @@ class CMSRevocationConnector:
         except CMSUnavailable as exc:
             return SourceResult.unavailable(self.SOURCE_NAME, str(exc), qp, self.DATASET_ID)
         except Exception as exc:
-            logger.warning("CMS revocation unavailable for NPI %s: %s", npi, exc)
+            logger.warning("CMS revocation unavailable for NPI %s: %s", mask_npi(npi), exc)
             return SourceResult.unavailable(self.SOURCE_NAME, str(exc), qp, self.DATASET_ID)
 
         matches = [

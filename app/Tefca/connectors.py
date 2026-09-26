@@ -42,7 +42,7 @@ from tenacity import (
     retry_if_exception_type,
 )
 
-from app.services.npi_validator import npi_rejection_reason
+from app.services.npi_validator import mask_npi, npi_rejection_reason
 
 logger = logging.getLogger("docuaction.tefca.connectors")
 
@@ -410,7 +410,7 @@ class NPPESConnector:
                 data["upstream_request_id"] = trace_id
             return SourceResult.ok("NPPES", data, qp, self.API_VERSION, raw_for_hash=payload)
         except Exception as e:
-            logger.warning(f"NPPES unavailable for NPI {npi}: {e}")
+            logger.warning(f"NPPES unavailable for NPI {mask_npi(npi)}: {e}")
             return SourceResult.unavailable("NPPES", str(e), qp, self.API_VERSION)
 
     async def lookup_by_name(self, organization_name: str) -> SourceResult:
@@ -974,7 +974,7 @@ class PECOSConnector:
             }
             return SourceResult.ok("PECOS", data, qp, self.API_VERSION, raw_for_hash=payload)
         except Exception as e:
-            logger.warning(f"PECOS/NPPES unavailable for NPI {npi}: {e}")
+            logger.warning(f"PECOS/NPPES unavailable for NPI {mask_npi(npi)}: {e}")
             return SourceResult.unavailable("PECOS", str(e), qp, self.API_VERSION)
 
     async def probe(self) -> bool:

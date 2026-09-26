@@ -200,14 +200,19 @@ class TestSanitizedOutput:
         for forbidden_key in ("entity_id", "name", "organization_name", "address", "legal_name", "npi"):
             assert forbidden_key not in cand
 
-    async def test_candidate_ref_is_opaque_deterministic_and_non_reversible(self):
+    async def test_candidate_ref_is_opaque_and_deterministic_not_an_encoding(self):
+        """Opaque and pseudonymous, NOT a claim of non-reversibility: an
+        unsalted hash of a low-entropy id space is reversible by anyone who
+        can enumerate that id space and hash each candidate — see the
+        function docstring. This test only proves the ref is not a plain
+        encoding of the id (e.g. base64) and is stable across calls."""
         ref = _opaque_ref("entity-missing")
         assert ref.startswith("cand-")
         assert "entity-missing" not in ref
         # Deterministic: same input, same output — required for idempotency.
         assert ref == _opaque_ref("entity-missing")
-        # Non-reversible by construction: it is a truncated SHA-256 digest,
-        # not an encoding of the id (spot-check against a hand-computed hash).
+        # Spot-check against a hand-computed hash, to pin the exact construction
+        # (truncated SHA-256) rather than assert an unearned security property.
         expected = "cand-" + hashlib.sha256(b"entity-missing").hexdigest()[:12]
         assert ref == expected
 

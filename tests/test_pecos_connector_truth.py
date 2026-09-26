@@ -225,6 +225,81 @@ class TestTransportFailuresFailClosed:
         assert result.success is False
 
 
+# ── Follow-up: no full NPI in any warning/error log or SourceResult.error ────
+
+class TestNoFullNpiInLogsOrErrors:
+    """Every logger.warning/error call these connectors can reach, plus
+    validate_npi's own message (surfaced through SourceResult.error via
+    npi_rejection_reason), must carry only a masked NPI — last 4 digits — and
+    never the full 10-digit value. Proven with caplog against a real test NPI,
+    not just by reading the source."""
+
+    async def test_nppes_transport_failure_log_never_contains_the_full_npi(self, monkeypatch, caplog):
+        async def raiser(*a, **k):
+            raise ConnectionError("simulated transport failure")
+
+        monkeypatch.setattr(c, "_get_with_retry", raiser)
+        with caplog.at_level("WARNING"):
+            result = await NPPESConnector().lookup_by_npi(VALID_NPI)
+        assert result.success is False
+        assert VALID_NPI not in caplog.text
+        assert VALID_NPI not in (result.error or "")
+        assert "...9883" in caplog.text  # last 4 digits of VALID_NPI, masked
+
+    async def test_legacy_pecos_transport_failure_log_never_contains_the_full_npi(self, monkeypatch, caplog):
+        async def raiser(*a, **k):
+            raise ConnectionError("simulated transport failure")
+
+        monkeypatch.setattr(c, "_get_with_retry", raiser)
+        with caplog.at_level("WARNING"):
+            result = await PECOSConnector().lookup_by_npi(VALID_NPI)
+        assert result.success is False
+        assert VALID_NPI not in caplog.text
+        assert VALID_NPI not in (result.error or "")
+
+    async def test_cms_ppef_transport_failure_log_never_contains_the_full_npi(self, monkeypatch, caplog):
+        from app.Tefca import cms_ppef as ppef_module
+
+        async def raiser(*a, **k):
+            raise ConnectionError("simulated transport failure")
+
+        monkeypatch.setattr(ppef_module, "_get_with_retry", raiser)
+        with caplog.at_level("WARNING"):
+            result = await PPEFEnrollmentConnector(CMSDataAPIClient()).lookup_by_npi(VALID_NPI)
+        assert result.success is False
+        assert VALID_NPI not in caplog.text
+        assert VALID_NPI not in (result.error or "")
+
+    async def test_cms_revocation_transport_failure_log_never_contains_the_full_npi(self, monkeypatch, caplog):
+        from app.Tefca import cms_ppef as ppef_module
+
+        async def raiser(*a, **k):
+            raise ConnectionError("simulated transport failure")
+
+        monkeypatch.setattr(ppef_module, "_get_with_retry", raiser)
+        with caplog.at_level("WARNING"):
+            result = await CMSRevocationConnector(CMSDataAPIClient()).lookup_by_npi(VALID_NPI)
+        assert result.success is False
+        assert VALID_NPI not in caplog.text
+        assert VALID_NPI not in (result.error or "")
+
+    async def test_checksum_invalid_npi_error_message_is_masked_not_full(self):
+        """validate_npi's Luhn-failure message flows straight into
+        SourceResult.error via npi_rejection_reason — it must not carry the
+        full (invalid) NPI either."""
+        result = await NPPESConnector().lookup_by_npi(INVALID_CHECKSUM_NPI)
+        assert result.success is False
+        assert INVALID_CHECKSUM_NPI not in result.error
+        assert "..." in result.error  # masked form present
+
+    def test_mask_npi_helper_is_last_four_digits_only(self):
+        from app.services.npi_validator import mask_npi
+        assert mask_npi(VALID_NPI) == "...9883"
+        assert mask_npi(None) == "(none)"
+        assert mask_npi("") == "(none)"
+        assert VALID_NPI not in mask_npi(VALID_NPI)
+
+
 # ── 8. CMS PPEF and CMS Revocation share the same input validation ─────────
 
 class TestCmsSourcesShareValidation:

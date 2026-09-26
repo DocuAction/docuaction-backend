@@ -93,7 +93,8 @@ def _mask_npi(npi: Optional[str]) -> Optional[str]:
 
 
 def _opaque_ref(entity_id: str) -> str:
-    """A stable, deterministic, opaque stand-in for the real entity id.
+    """A stable, deterministic, PSEUDONYMOUS stand-in for the real entity id —
+    NOT a claim of non-reversibility or non-linkability.
 
     This report is a dry-run PLAN, read by whoever decides whether to
     authorize a retry — it is not itself the authorization channel, and has
@@ -102,10 +103,22 @@ def _opaque_ref(entity_id: str) -> str:
     purpose is "look, don't touch", so it is hashed rather than passed
     through. The hash is deterministic (SHA-256, truncated) so two dry runs
     against the same data produce the IDENTICAL reference — required for the
-    idempotency guarantee — and an operator with system access can still
-    resolve a given `candidate_ref` back to its entity by recomputing the same
-    hash over a candidate entity_id, without this report ever having printed
-    one.
+    idempotency guarantee.
+
+    THIS IS OPACITY, NOT CRYPTOGRAPHIC NON-LINKABILITY. An unsalted,
+    unkeyed hash of a low-entropy, enumerable id space (internal entity ids
+    are sequential/structured, not high-entropy secrets) can be reversed by
+    anyone who can enumerate candidate ids and hash each one — this is
+    exactly what "an operator with system access can recompute the same hash"
+    means, and it is true of ANY attacker who can also enumerate that id
+    space, not only an authorized operator. If a security requirement calls
+    for true non-linkability (an adversary who cannot enumerate ids should
+    still be unable to correlate two candidate_ref values, or across reports),
+    this construction does not provide it and would need an HMAC keyed with a
+    server-side secret instead of a bare hash. No such requirement was found
+    in this repository's security documentation at the time this was written
+    (see SECURITY.md, docs/security/) — if one exists elsewhere, treat this
+    function as not meeting it and route through an HMAC design instead.
     """
     return "cand-" + hashlib.sha256(str(entity_id).encode("utf-8")).hexdigest()[:12]
 
@@ -224,9 +237,11 @@ async def plan_pecos_retry(db, limit: int = MAX_CANDIDATES) -> Dict[str, Any]:
             "See module docstring."
         ),
         "identifier_note": (
-            "candidate_ref is a deterministic, opaque, non-reversible reference "
-            "(not the internal entity id); npi_masked shows only the last 4 digits. "
-            "No name, address, full NPI or raw entity id is included."
+            "candidate_ref is a deterministic, opaque, PSEUDONYMOUS reference (not the "
+            "internal entity id) — an unsalted hash of a low-entropy id space, which is "
+            "opacity, not a guarantee of non-reversibility or non-linkability. "
+            "npi_masked shows only the last 4 digits. No name, address, full NPI or raw "
+            "entity id is included."
         ),
         "candidates": [c.to_dict() for c in candidates],
         "candidate_count": len(candidates),
