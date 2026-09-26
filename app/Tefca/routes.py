@@ -2903,17 +2903,26 @@ async def pecos_retry_plan(
 ):
     """Expose `pecos_retry_planner.plan_pecos_retry` — and nothing else.
 
-    Every guarantee is the planner's own, unchanged: two bounded SELECTs, zero
-    writes, zero upstream calls, ≤25 sanitized candidates (opaque
-    `candidate_ref`, masked NPI, no names/addresses/raw ids), targets only
+    Every selection guarantee is the planner's own, unchanged: two bounded
+    SELECTs, zero writes, zero upstream calls, ≤25 candidates, targets only
     CMS_PPEF_ENROLLMENT and CMS_REVOCATION, never the legacy `pecos` key.
-    This handler only adds: admin gating, delivery-job resolution, a hard
-    reject (not a clamp) on limit > 25, no-store caching, and a correlation id
-    that is logged with COUNTS ONLY. Deliberately NO database audit row: the
-    endpoint's contract is zero inserts/updates/deletes, and that guarantee
-    outranks an audit insert — the sanitized server log line is the record
-    (existing registry audit could take a row without a migration, but not
-    without a write; decision documented here on purpose).
+    This handler adds: admin gating, delivery-job resolution, a hard reject
+    (not a clamp) on limit > 25, no-store caching, a correlation id logged
+    with COUNTS ONLY, and a response-level identifier policy STRICTER than
+    the planner's: candidates carry ONLY {candidate_ref, missing_sources,
+    reason} — the planner's masked-NPI field is stripped, so no full or
+    partial NPI digits appear anywhere in the response or logs.
+
+    Error semantics: a syntactically invalid or unknown job id is a sanitized
+    404 (the established convention for delivery-job lookups); database or
+    infrastructure failures are NOT converted to 404 — `db.get` is deliberately
+    uncaught here, so they reach the global sanitized error handler as a 500
+    with a request id.
+
+    Deliberately NO database audit row: the endpoint's contract is zero
+    inserts/updates/deletes, and that guarantee outranks an audit insert — the
+    sanitized server log line is the record (existing registry audit could
+    take a row without a migration, but not without a write).
     """
     import uuid as _uuid
 
@@ -2931,45 +2940,65 @@ async def pecos_retry_plan(
             detail=f"limit must be between 1 and {MAX_CANDIDATES}",
         )
 
-    from app.tefca_registry.rce import delivery_jobs as _jobs
-
+    # Malformed identifier: 404 per the established delivery-job convention
+    # (get_job itself maps malformed ids to None/404 for every other route).
+    # Validated BEFORE touching the database so that the only exceptions that
+    # can escape the lookup below are real database/infrastructure failures,
+    # which must surface through the global sanitized handler — never as a
+    # false "no such job".
     try:
-        job = await _jobs.get_job(db, delivery_job_id)
-    except Exception:  # noqa: BLE001 — a malformed id is a 404-shaped fact, not a 500
-        job = None
+        job_uuid = _uuid.UUID(delivery_job_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"No delivery job {delivery_job_id}")
+
+    from app.tefca_registry.rce.delivery_job_model import RceDeliveryJob
+
+    job = await db.get(RceDeliveryJob, job_uuid)  # uncaught on purpose — see docstring
     if job is None or not getattr(job, "source_intake_id", None):
         # Sanitized: echoes only the identifier the caller already supplied.
         raise HTTPException(status_code=404, detail=f"No delivery job {delivery_job_id}")
 
     plan = await plan_pecos_retry(db, limit, intake_id=str(job.source_intake_id))
 
+    scanned = plan["entities_scanned"]
+    invalid = plan["excluded_invalid_npi"]
+    existing = plan["excluded_already_has_evidence"]
+    # Eligible = survived EVERY exclusion (invalid NPI and already-evidenced).
+    eligible = scanned - invalid - existing
+
     logger.info(
         "pecos_retry_plan viewed correlation_id=%s job=%s scanned=%s eligible=%s "
         "selected=%s excluded_invalid_npi=%s excluded_existing=%s",
-        correlation_id, delivery_job_id, plan["entities_scanned"],
-        plan["entities_scanned"] - plan["excluded_invalid_npi"],
-        plan["candidate_count"], plan["excluded_invalid_npi"],
-        plan["excluded_already_has_evidence"],
+        correlation_id, delivery_job_id, scanned, eligible,
+        plan["candidate_count"], invalid, existing,
     )
 
     return {
         "correlation_id": correlation_id,
         "delivery_job_id": delivery_job_id,
         "requested_limit": limit,
-        "scanned_count": plan["entities_scanned"],
-        "eligible_count": plan["entities_scanned"] - plan["excluded_invalid_npi"],
+        "scanned_count": scanned,
+        "eligible_count": eligible,
         "selected_count": plan["candidate_count"],
-        "excluded_invalid_npi_count": plan["excluded_invalid_npi"],
-        "excluded_existing_evidence_count": plan["excluded_already_has_evidence"],
+        "excluded_invalid_npi_count": invalid,
+        "excluded_existing_evidence_count": existing,
         "target_connectors": plan["target_sources"],
-        "candidates": plan["candidates"],
+        # Stricter than the planner: no npi_masked — reference, gaps, reason only.
+        "candidates": [
+            {"candidate_ref": c["candidate_ref"],
+             "missing_sources": c["missing_sources"],
+             "reason": c["reason"]}
+            for c in plan["candidates"]
+        ],
         "planner_version": plan["planner_version"],
         "build_sha": os.environ.get("GIT_SHA", "unknown"),
         "dry_run": True,
         "executed_retry": False,
         "database_writes_made": plan["database_writes_made"],
         "upstream_calls_made": plan["upstream_calls_made"],
-        "identifier_note": plan["identifier_note"],
+        "identifier_note": ("candidate_ref is a deterministic, opaque, pseudonymous reference; "
+                            "no full or partial NPI digits, names, addresses or raw entity ids "
+                            "appear in this response."),
     }
 
 
