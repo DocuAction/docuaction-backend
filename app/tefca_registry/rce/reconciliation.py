@@ -237,6 +237,22 @@ async def reconcile_delivery(db, intake_id) -> Dict[str, Any]:
     _not_work_item = (
         "  AND COALESCE(r.verification_results->>'queue_source', '') NOT IN "
         "      ('RCE_DQ_HUMAN_REQUIRED', 'RCE_POST_PROMOTION_VERIFICATION') ")
+    # A SECOND, OLDER evidence shape exists alongside the sampled reviews'
+    # `dimensions` array: the single-entity Priority Review / ad-hoc Verify
+    # action (`review_service.run_review`, still reachable from
+    # POST /priority-review and the entity detail page) writes
+    # verification_results as {fields, sources, address_match,
+    # confidence_score, entity_resolution} - a real, per-source evidence
+    # model that has never carried a `dimensions` key, because it predates
+    # that array and was never migrated onto it. Both shapes write one
+    # `tefca_verifications` row per source probed (unconditionally, in the
+    # same transaction as the ReviewRecord), so that table is the one
+    # evidence signal common to every review-creation path, regardless of
+    # which one wrote the row. Treating "no tefca_verifications row at all"
+    # as the true absence of evidence - rather than "no `dimensions` array" -
+    # recognises evidence that genuinely exists instead of requiring one
+    # specific JSON shape for it (found investigating six September-2026
+    # reviews this check flagged; root-caused 2026-09-26).
     reviews_without_evidence = await _scalar(db, text(
         "SELECT count(*) FROM review_records r "
         "WHERE r.entity_id IN (SELECT canonical_entity_id FROM rce_curated_records "
@@ -246,6 +262,8 @@ async def reconcile_delivery(db, intake_id) -> Dict[str, Any]:
         "  AND (r.verification_results IS NULL "
         "       OR r.verification_results->'dimensions' IS NULL "
         "       OR jsonb_array_length(r.verification_results->'dimensions') = 0)"
+        "  AND NOT EXISTS (SELECT 1 FROM tefca_verifications v "
+        "                  WHERE v.review_id = r.review_id)"
     ).bindparams(i=intake_id))
     reviews_without_rule = await _scalar(db, text(
         "SELECT count(*) FROM review_records r "
