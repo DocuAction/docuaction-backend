@@ -112,6 +112,17 @@ def _program_profile() -> Dict[str, Any]:
     return profile_summary()
 
 
+def _automated_coverage() -> Dict[str, Any]:
+    """The coverage scheduler's per-process tick/backoff metrics: flags,
+    timestamps, counters and durations only (never an intake id, SQL or a
+    connection detail). Read from module state, never probed."""
+    try:
+        from app.tefca_registry.rce.automated_verification import coverage_scheduler_status
+        return coverage_scheduler_status()
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not raise
+        return {"enabled": None, "error_class": type(exc).__name__}
+
+
 @router.get("/health", summary="Operational health (admin)")
 async def admin_health(
     db: AsyncSession = Depends(get_db),
@@ -127,6 +138,11 @@ async def admin_health(
         "connectors": await _connectors(),
         "usps": _usps(),
         "program_profile": _program_profile(),
+        # {enabled, last_tick_at, last_outcome, consecutive_timeouts,
+        # next_allowed_at, last_lookup_ms, last_batch_ms, ticks_skipped_backoff,
+        # ...}: the automated-coverage tick's adaptive backoff, so an operator
+        # can see why a database is (or is no longer) being asked for work.
+        "automated_coverage": _automated_coverage(),
         "log_format": os.environ.get("DOCUACTION_LOG_FORMAT", "json"),
         # {enabled, reason, sampler, exporter}: whether traces are exported and
         # why not; never the connection string (presence is implied by `enabled`).
