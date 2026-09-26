@@ -229,7 +229,7 @@ class ConnectorHealthCheck:
                 "schema_valid": schema_ok, "components": comp, "health_score": score}
 
     async def check_all_connectors(self, db=None) -> Dict[str, Any]:
-        from .connectors import check_nppes, check_pecos, check_sam, check_leie
+        from .connectors import check_nppes, check_pecos, check_sam, check_leie, PECOS_UI_LABEL, PECOS_UI_SUBTITLE
         results = await asyncio.gather(
             self._one("NPPES", check_nppes(self.TEST_NPI)),
             self._one("PECOS", check_pecos(self.TEST_NPI)),
@@ -237,6 +237,15 @@ class ConnectorHealthCheck:
             self._one("OIG_LEIE", check_leie("", self.TEST_NPI)),
         )
         by_name = {r["name"]: r for r in results}
+        # Fix 3: this Gate-2 probe deliberately queries the legacy PECOS/NPPES
+        # proxy independently of NPPES (see the note on
+        # SourceConnectorManager.query_all_sources — that per-entity path was
+        # deduplicated; this infrastructure health probe was not, on purpose).
+        # A "PECOS" row with no caption would still read as a live PECOS
+        # connection, so the label/subtitle travel with the score.
+        if "PECOS" in by_name:
+            by_name["PECOS"]["label"] = PECOS_UI_LABEL
+            by_name["PECOS"]["subtitle"] = PECOS_UI_SUBTITLE
         overall = round(sum(r["health_score"] for r in results) / len(results), 1) if results else 0.0
         # Log to the connector log + QA audit (best-effort).
         if db is not None:

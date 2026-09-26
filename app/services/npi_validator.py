@@ -19,6 +19,7 @@ THE ALGORITHM (45 CFR 162.406, CMS NPI Check Digit Calculation)
 from __future__ import annotations
 
 import re
+from typing import Optional
 
 # ISO 7812 issuer identifier for CMS. Not arbitrary and not configurable.
 CMS_PREFIX = "80840"
@@ -26,6 +27,16 @@ CMS_PREFIX = "80840"
 #: ASCII digits only: `\d` and `str.isdigit()` accept other scripts' digits,
 #: which the quality engine rejects (review finding L-5, 2026-09-16).
 _DIGITS_ONLY = re.compile(r"^[0-9]{10}$")
+
+
+def mask_npi(npi: Optional[str]) -> str:
+    """Last 4 digits only, for anything that might reach a log line, an error
+    message, or a report — a full NPI has no business in any of those. Safe
+    on any input, including one that already failed format validation."""
+    if not npi:
+        return "(none)"
+    digits = str(npi).strip()
+    return f"...{digits[-4:]}" if len(digits) >= 4 else "...."
 
 
 def _luhn_total(number: str) -> int:
@@ -61,7 +72,10 @@ def validate_npi(npi: str) -> tuple[bool, str]:
         return False, f"NPI must be exactly 10 digits (got {len(value)})"
 
     if _luhn_total(CMS_PREFIX + value) % 10 != 0:
-        return False, f"NPI {value} fails Luhn check digit validation"
+        # Masked, not the full value — this message reaches logs and
+        # SourceResult.error via npi_rejection_reason() below, and a full NPI
+        # has no business appearing in either just to say "this failed Luhn".
+        return False, f"NPI {mask_npi(value)} fails Luhn check digit validation"
 
     return True, ""
 
@@ -69,6 +83,28 @@ def validate_npi(npi: str) -> tuple[bool, str]:
 def is_valid_npi(npi: str) -> bool:
     """Boolean-only convenience wrapper."""
     return validate_npi(npi)[0]
+
+
+def npi_rejection_reason(npi: Optional[str]) -> Optional[str]:
+    """None when `npi` is safe to send to an upstream NPI-keyed connector
+    (NPPES, the legacy PECOS/NPPES proxy, CMS PPEF Enrollment, CMS Revocation);
+    otherwise a reason string the caller wraps in a fail-closed result.
+
+    Centralised so every connector applies the identical gate before dispatch,
+    per 45 CFR 162.406 (Luhn + 10-digit) — an upstream source seeing a
+    malformed identifier is a request-validation problem, not a lookup, and
+    must never be sent. Missing and malformed are kept as distinguishable
+    reasons (both still refuse the call) because they are different facts:
+    "no identifier to look up" is a normal, common state for many entities;
+    "identifier present but invalid" is a data-quality problem worth a
+    different downstream note.
+    """
+    if not npi:
+        return "no_npi_submitted: entity has no NPI identifier to look up"
+    ok, message = validate_npi(npi)
+    if not ok:
+        return f"npi_failed_validation: {message}"
+    return None
 
 
 def compute_check_digit(base9: str) -> str:

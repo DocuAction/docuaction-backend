@@ -21,6 +21,8 @@ from app.tefca_registry import models as reg
 from app.tefca_registry.bucket_classifier import (
     BucketClassifier, FAILED, NOT_CHECKED, NOT_FOUND, UNAVAILABLE, VERIFIED,
     ensure_seed_rules, ensure_rules_v2)
+from app.services.npi_validator import npi_rejection_reason
+from app.Tefca.connectors import PECOS_UI_LABEL, PECOS_UI_SUBTITLE
 
 logger = logging.getLogger(__name__)
 
@@ -54,13 +56,21 @@ NO_CONNECTOR = {
            "not hold.",
 }
 
+#: Fix 3: "pecos" is the legacy NPPES-proxy connector (PECOS_BACKING =
+#: "nppes_proxy" in app.Tefca.connectors) — it does not check Medicare
+#: enrolment, and the label must say so. Reads PECOS_UI_LABEL/PECOS_UI_SUBTITLE
+#: directly (imported above) rather than duplicating the text, so the two can
+#: never drift apart.
 SOURCE_LABELS = {
     "nppes": "NPI Registry — CMS/HHS",
-    "pecos": "Provider Enrollment — CMS",
+    "pecos": PECOS_UI_LABEL,
     "oig_leie": "Exclusion List — OIG/HHS",
     "sam_gov": "Federal Registration — GSA",
     "state_registry": "State licensure registry",
     "irs": "IRS Exempt Organizations",
+}
+SOURCE_SUBTITLES = {
+    "pecos": PECOS_UI_SUBTITLE,
 }
 
 
@@ -79,7 +89,8 @@ async def probe_sources(db, entity_id) -> Dict[str, dict]:
     ).scalar_one_or_none()
 
     out: Dict[str, dict] = {
-        k: {"status": NOT_CHECKED, "reason": why, "label": SOURCE_LABELS.get(k)}
+        k: {"status": NOT_CHECKED, "reason": why, "label": SOURCE_LABELS.get(k),
+            "subtitle": SOURCE_SUBTITLES.get(k)}
         for k, why in NO_CONNECTOR.items()
     }
 
@@ -87,7 +98,21 @@ async def probe_sources(db, entity_id) -> Dict[str, dict]:
         for key in ("nppes", "pecos", "oig_leie"):
             out[key] = {"status": NOT_CHECKED,
                         "reason": "entity has no NPI identifier to look up",
-                        "label": SOURCE_LABELS.get(key)}
+                        "label": SOURCE_LABELS.get(key), "subtitle": SOURCE_SUBTITLES.get(key)}
+        return out
+
+    # Centralised gate (Fix 1), ahead of the connector loop: a present but
+    # malformed/checksum-invalid NPI is reported NOT_CHECKED — never sent
+    # upstream, never NOT_FOUND, never an adverse finding — and NOT_CHECKED is
+    # exactly the status this module's own docs already define as "needs a
+    # decision", i.e. analyst review, never a silent pass. The connectors
+    # below (NPPESConnector/PECOSConnector) apply the identical validator as a
+    # second, independent gate — this early check only avoids the wasted call.
+    npi_rejection = npi_rejection_reason(npi)
+    if npi_rejection:
+        for key in ("nppes", "pecos", "oig_leie"):
+            out[key] = {"status": NOT_CHECKED, "reason": npi_rejection,
+                        "label": SOURCE_LABELS.get(key), "subtitle": SOURCE_SUBTITLES.get(key)}
         return out
 
     try:
@@ -97,7 +122,7 @@ async def probe_sources(db, entity_id) -> Dict[str, dict]:
         logger.warning("TEFCA connectors unavailable: %s", exc)
         for key in ("nppes", "pecos", "oig_leie"):
             out[key] = {"status": UNAVAILABLE, "reason": f"connector import failed: {exc}",
-                        "label": SOURCE_LABELS.get(key)}
+                        "label": SOURCE_LABELS.get(key), "subtitle": SOURCE_SUBTITLES.get(key)}
         return out
 
     for key, attr in (("nppes", "nppes"), ("pecos", "pecos"), ("oig_leie", "leie")):
@@ -105,7 +130,7 @@ async def probe_sources(db, entity_id) -> Dict[str, dict]:
         fn = getattr(conn, "lookup_by_npi", None) if conn else None
         if fn is None:
             out[key] = {"status": NOT_CHECKED, "reason": "connector not available",
-                        "label": SOURCE_LABELS.get(key)}
+                        "label": SOURCE_LABELS.get(key), "subtitle": SOURCE_SUBTITLES.get(key)}
             continue
         try:
             r = await fn(npi)
@@ -124,7 +149,7 @@ async def probe_sources(db, entity_id) -> Dict[str, dict]:
                 # outage against the entity would be an accusation, not a result.
                 out[key] = {"status": UNAVAILABLE,
                             "reason": str(err or "source did not complete")[:200],
-                            "label": SOURCE_LABELS.get(key)}
+                            "label": SOURCE_LABELS.get(key), "subtitle": SOURCE_SUBTITLES.get(key)}
                 if key == "nppes":
                     out[key]["npi_outcome"] = "NPI_VERIFICATION_UNAVAILABLE"
                     out[key]["npi_outcome_detail"] = out[key]["reason"]
@@ -133,13 +158,13 @@ async def probe_sources(db, entity_id) -> Dict[str, dict]:
                 # `excluded` counts only ACTIVE exclusions — a reinstated
                 # provider is not currently excluded.
                 out[key] = {"status": "excluded" if data.get("excluded") else "clear",
-                            "label": SOURCE_LABELS.get(key),
+                            "label": SOURCE_LABELS.get(key), "subtitle": SOURCE_SUBTITLES.get(key),
                             "exclusion_count": data.get("exclusion_count", 0)}
             else:
                 # NPPES/PECOS return ok() for BOTH found and not-found; `found`
                 # is what distinguishes them.
                 out[key] = {"status": VERIFIED if data.get("found", False) else NOT_FOUND,
-                            "label": SOURCE_LABELS.get(key)}
+                            "label": SOURCE_LABELS.get(key), "subtitle": SOURCE_SUBTITLES.get(key)}
                 if key == "nppes":
                     # Found + active, found + DEACTIVATED, not found, unavailable
                     # are four different statements. `status` keeps the
@@ -178,7 +203,7 @@ async def probe_sources(db, entity_id) -> Dict[str, dict]:
                     }
         except Exception as exc:  # noqa: BLE001 — one source must not sink the run
             out[key] = {"status": FAILED, "reason": f"{type(exc).__name__}: {exc}"[:200],
-                        "label": SOURCE_LABELS.get(key)}
+                        "label": SOURCE_LABELS.get(key), "subtitle": SOURCE_SUBTITLES.get(key)}
             if key == "nppes":
                 out[key]["npi_outcome"] = "NPI_VERIFICATION_UNAVAILABLE"
                 out[key]["npi_outcome_detail"] = out[key]["reason"]

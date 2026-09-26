@@ -25,9 +25,18 @@ FONT = "Arial"
 _thin = Side(style="thin", color=GRID)
 BORDER = Border(left=_thin, right=_thin, top=_thin, bottom=_thin)
 
-ENTITY_HEADERS = ["Review ID", "Entity", "NPI", "Type", "NPPES", "PECOS",
+#: Fix 3: a bare "PECOS" column header would read as a direct PECOS check.
+#: This column is the legacy connector keyed "pecos" in verification_results —
+#: PECOS_BACKING = "nppes_proxy" in app.Tefca.connectors — so the header and
+#: the permanent Limitations-sheet note (below) both say so.
+ENTITY_HEADERS = ["Review ID", "Entity", "NPI", "Type", "NPPES", "PECOS (NPPES proxy)",
                   "OIG LEIE", "Bucket", "Rule", "Rationale"]
-ENTITY_WIDTHS = [18, 38, 14, 16, 13, 13, 13, 9, 12, 70]
+ENTITY_WIDTHS = [18, 38, 14, 16, 13, 20, 13, 9, 12, 70]
+PECOS_PROXY_LIMITATION = (
+    "The \"PECOS (NPPES proxy)\" column reflects the CMS NPPES NPI Registry, not a direct "
+    "PECOS query. It confirms NPI registry information only and does not establish "
+    "Medicare enrollment."
+)
 
 
 def _clean(v: Any) -> str:
@@ -163,7 +172,7 @@ def build_weekly_excel(report_data: Dict[str, Any], report_id: str,
     s3["A2"].font = Font(name=FONT, size=10, italic=True)
     s3.column_dimensions["A"].width = 120
     _header(s3, ["Limitation"], [120], row=4)
-    lims = d.get("limitations") or ["None identified."]
+    lims = [PECOS_PROXY_LIMITATION, *(d.get("limitations") or [])] or ["None identified."]
     _write_rows(s3, [[x] for x in lims], start=5, wrap_cols=(1,))
 
     buf = io.BytesIO()

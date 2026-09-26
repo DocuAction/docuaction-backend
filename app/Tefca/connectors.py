@@ -42,6 +42,8 @@ from tenacity import (
     retry_if_exception_type,
 )
 
+from app.services.npi_validator import mask_npi, npi_rejection_reason
+
 logger = logging.getLogger("docuaction.tefca.connectors")
 
 # Per-source ceilings. The 30s total is enforced both by httpx (connect/read)
@@ -115,6 +117,38 @@ HTTP_HEADERS = {
         "(Alliance Global Tech; ONC Contract 7571MN26F80064)"
     )
 }
+
+# ─── Safe upstream request-tracing metadata (Fix 4) ──────────────────────────
+# An allow-list, not a guess. Verified live against the real hosts (2026-09-26):
+# data.cms.gov answers with `X-Request-ID` (e.g. "v-bfdf5ed2-..."); NPPES sits
+# behind CloudFront and answers with `X-Amz-Cf-Id` instead — there is no single
+# correlation-id header name across both upstreams. Only the header NAME and
+# VALUE named here are ever kept; every other response header (and the full
+# body) is discarded. Authorization, Set-Cookie and any query-string secret are
+# never read by this helper regardless of what a future host adds to the map.
+SAFE_UPSTREAM_REQUEST_ID_HEADERS: Dict[str, str] = {
+    "npiregistry.cms.hhs.gov": "x-amz-cf-id",
+    "data.cms.gov": "x-request-id",
+}
+
+
+def safe_upstream_request_id(resp: "httpx.Response") -> Optional[Dict[str, str]]:
+    """The one allow-listed, safe-to-store request-tracing identifier for this
+    response, or None. Returns {"header": <name-as-sent>, "value": <value>} —
+    never a dict of arbitrary headers, and never anything from Authorization/
+    Cookie/Set-Cookie/query secrets, which this function does not read."""
+    try:
+        host = (resp.request.url.host or "").lower()
+    except Exception:
+        return None
+    header_name = SAFE_UPSTREAM_REQUEST_ID_HEADERS.get(host)
+    if not header_name:
+        return None
+    value = resp.headers.get(header_name)
+    if not value:
+        return None
+    return {"header": header_name, "value": value}
+
 
 # Exceptions worth retrying. A non-200 is surfaced as RetryableHTTPError only
 # for 429/5xx; 4xx is raised as a terminal error and not retried.
@@ -268,6 +302,28 @@ async def _get_with_retry(
 
 # ─── NPPES NPI Registry (CMS/HHS) ────────────────────────────────────────────
 
+def _nppes_structural_check(payload: Any) -> Optional[str]:
+    """None when `payload` is a structurally valid NPPES response we can read
+    a `results` list from; otherwise a safe reason string (no upstream body
+    echoed — NPPES error text is not attacker-controlled but is kept out of
+    the reason on principle, since it is never needed for triage).
+
+    NPPES answers a request-validation error (e.g. a malformed `number`) with
+    HTTP 200 and an `Errors` array instead of `results` — indistinguishable
+    from a clean empty match by status code alone. The two must not be
+    conflated: an `Errors` body means NPPES never attempted the lookup, so it
+    can never be read as "verified: no record found". Only a `results` list
+    (empty or not) is an affirmative answer.
+    """
+    if not isinstance(payload, dict):
+        return "malformed_response: NPPES response was not a JSON object"
+    if "Errors" in payload:
+        return "npi_registry_request_error: NPPES rejected the request; not a lookup result"
+    if not isinstance(payload.get("results"), list):
+        return "malformed_response: NPPES response missing a 'results' list"
+    return None
+
+
 class NPPESConnector:
     BASE_URL = "https://npiregistry.cms.hhs.gov/api"
     API_VERSION = "2.1"
@@ -317,12 +373,15 @@ class NPPESConnector:
 
     async def lookup_by_npi(self, npi: str) -> SourceResult:
         qp = {"npi": npi}
-        if not npi:
-            # A missing NPI is a real, verified condition — not an outage.
-            return SourceResult.ok(
-                "NPPES", {"found": False, "npi": None, "reason": "no_npi_submitted"},
-                qp, self.API_VERSION,
-            )
+        # Centralised gate (Luhn + 10-digit, 45 CFR 162.406): an NPI that is
+        # missing or fails validation is never sent to NPPES. Fail-closed —
+        # success=False, data=None — so no downstream reader can turn this
+        # into NOT_FOUND, VERIFIED or an adverse finding; it flows through the
+        # same "unavailable" contract that already routes a required source to
+        # Tier-2 analyst review instead of an automatic classification.
+        rejection = npi_rejection_reason(npi)
+        if rejection:
+            return SourceResult.unavailable("NPPES", rejection, qp, self.API_VERSION)
         try:
             resp = await _get_with_retry(
                 f"{self.BASE_URL}/",
@@ -332,15 +391,26 @@ class NPPESConnector:
             if resp.status_code != 200:
                 return SourceResult.unavailable("NPPES", f"HTTP {resp.status_code}", qp, self.API_VERSION)
             payload = resp.json()
-            results = payload.get("results", [])
+            bad = _nppes_structural_check(payload)
+            if bad:
+                # HTTP 200 does not mean "affirmative answer" — see
+                # _nppes_structural_check. This is never NOT_FOUND.
+                return SourceResult.unavailable("NPPES", bad, qp, self.API_VERSION)
+            results = payload["results"]
+            trace_id = safe_upstream_request_id(resp)
             if not results:
-                # Verified: NPI does not exist in NPPES.
-                return SourceResult.ok(
-                    "NPPES", {"found": False, "npi": npi}, qp, self.API_VERSION, raw_for_hash=payload,
-                )
-            return SourceResult.ok("NPPES", self._shape(results[0], npi), qp, self.API_VERSION, raw_for_hash=payload)
+                # Verified: the request was valid and NPPES affirmatively
+                # returned zero matches. Only this branch may be NOT_FOUND.
+                data = {"found": False, "npi": npi}
+                if trace_id:
+                    data["upstream_request_id"] = trace_id
+                return SourceResult.ok("NPPES", data, qp, self.API_VERSION, raw_for_hash=payload)
+            data = self._shape(results[0], npi)
+            if trace_id:
+                data["upstream_request_id"] = trace_id
+            return SourceResult.ok("NPPES", data, qp, self.API_VERSION, raw_for_hash=payload)
         except Exception as e:
-            logger.warning(f"NPPES unavailable for NPI {npi}: {e}")
+            logger.warning(f"NPPES unavailable for NPI {mask_npi(npi)}: {e}")
             return SourceResult.unavailable("NPPES", str(e), qp, self.API_VERSION)
 
     async def lookup_by_name(self, organization_name: str) -> SourceResult:
@@ -348,8 +418,9 @@ class NPPESConnector:
         entity). Same fail-closed contract as lookup_by_npi."""
         qp = {"organization_name": organization_name}
         if not organization_name:
-            return SourceResult.ok(
-                "NPPES", {"found": False, "reason": "no_name_submitted"}, qp, self.API_VERSION,
+            return SourceResult.unavailable(
+                "NPPES", "no_name_submitted: entity has no organization name to look up",
+                qp, self.API_VERSION,
             )
         try:
             resp = await _get_with_retry(
@@ -360,7 +431,10 @@ class NPPESConnector:
             if resp.status_code != 200:
                 return SourceResult.unavailable("NPPES", f"HTTP {resp.status_code}", qp, self.API_VERSION)
             payload = resp.json()
-            results = payload.get("results", [])
+            bad = _nppes_structural_check(payload)
+            if bad:
+                return SourceResult.unavailable("NPPES", bad, qp, self.API_VERSION)
+            results = payload["results"]
             if not results:
                 return SourceResult.ok(
                     "NPPES", {"found": False, "organization_name": organization_name},
@@ -465,13 +539,20 @@ class OIGLEIEConnector:
 
     async def lookup_by_npi(self, npi: str) -> SourceResult:
         qp = {"npi": npi}
-        if not npi:
-            # No NPI to match on — fall back to "no NPI-based exclusion found",
-            # which is a verified negative for the NPI dimension (name screening
-            # is a separate call). Not an outage.
-            if not await _ensure_leie_loaded():
-                return SourceResult.unavailable("OIG_LEIE", "exclusions CSV unavailable", qp, self.API_VERSION)
-            return self._build([], qp)
+        # Centralised gate (same defect class as NPPES/PECOS/CMS PPEF/CMS
+        # Revocation, found on inspection per the follow-up request): a
+        # malformed (non-empty) NPI used to fall straight through to the cache
+        # lookup below. `_LEIE_CACHE["by_npi"].get(garbage, [])` always misses
+        # on a garbage key, same as it would on a real absence, so a malformed
+        # NPI silently produced `SourceResult.ok(excluded=False)` — a verified
+        # "not excluded" for an identifier that was never actually screened.
+        # A missing NPI ("no NPI to match on") is a real, different condition
+        # (name screening is a separate call) but is folded into the same gate
+        # for a uniform contract: both now fail closed instead of returning a
+        # clean value, and both are distinguishable from an outage by reason.
+        rejection = npi_rejection_reason(npi)
+        if rejection:
+            return SourceResult.unavailable("OIG_LEIE", rejection, qp, self.API_VERSION)
         if not await _ensure_leie_loaded():
             return SourceResult.unavailable("OIG_LEIE", "exclusions CSV unavailable", qp, self.API_VERSION)
         matches = _LEIE_CACHE["by_npi"].get(npi.strip(), [])
@@ -843,12 +924,11 @@ class PECOSConnector:
 
     async def lookup_by_npi(self, npi: str) -> SourceResult:
         qp = {"npi": npi}
-        if not npi:
-            return SourceResult.ok(
-                "PECOS",
-                {"found": False, "payment_suspension": None, "reason": "no_npi_submitted"},
-                qp, self.API_VERSION,
-            )
+        # Same centralised gate as NPPESConnector — this connector queries the
+        # identical upstream, so a malformed NPI must be refused identically.
+        rejection = npi_rejection_reason(npi)
+        if rejection:
+            return SourceResult.unavailable("PECOS", rejection, qp, self.API_VERSION)
         try:
             resp = await _get_with_retry(
                 self.BASE_URL,
@@ -858,14 +938,17 @@ class PECOSConnector:
             if resp.status_code != 200:
                 return SourceResult.unavailable("PECOS", f"HTTP {resp.status_code}", qp, self.API_VERSION)
             payload = resp.json()
-            results = payload.get("results", [])
+            bad = _nppes_structural_check(payload)
+            if bad:
+                return SourceResult.unavailable("PECOS", bad, qp, self.API_VERSION)
+            results = payload["results"]
+            trace_id = safe_upstream_request_id(resp)
             if not results:
-                return SourceResult.ok(
-                    "PECOS",
-                    {"found": False, "npi": npi, "payment_suspension": None,
-                     "note": "NPI not enrolled / not found in NPPES (PECOS source)."},
-                    qp, self.API_VERSION, raw_for_hash=payload,
-                )
+                data = {"found": False, "npi": npi, "payment_suspension": None,
+                        "note": "NPI not enrolled / not found in NPPES (PECOS source)."}
+                if trace_id:
+                    data["upstream_request_id"] = trace_id
+                return SourceResult.ok("PECOS", data, qp, self.API_VERSION, raw_for_hash=payload)
             r = results[0]
             basic = r.get("basic", {})
             taxonomies = r.get("taxonomies", []) or []
@@ -891,7 +974,7 @@ class PECOSConnector:
             }
             return SourceResult.ok("PECOS", data, qp, self.API_VERSION, raw_for_hash=payload)
         except Exception as e:
-            logger.warning(f"PECOS/NPPES unavailable for NPI {npi}: {e}")
+            logger.warning(f"PECOS/NPPES unavailable for NPI {mask_npi(npi)}: {e}")
             return SourceResult.unavailable("PECOS", str(e), qp, self.API_VERSION)
 
     async def probe(self) -> bool:
@@ -903,6 +986,82 @@ class PECOSConnector:
             return resp.status_code == 200
         except Exception:
             return False
+
+    @classmethod
+    def from_nppes(cls, nppes_result: "SourceResult") -> "SourceResult":
+        """Derive a PECOS-proxy result from an NPPES SourceResult already
+        fetched in the same query cycle, instead of a second HTTP call to the
+        identical npiregistry.cms.hhs.gov endpoint for the identical NPI.
+
+        This is the fix for the duplicate-call defect: `SourceConnectorManager
+        .query_all_sources` and `check_all_connectors` used to issue two
+        concurrent requests to the same upstream for the same NPI, one
+        labelled "nppes" and one labelled "pecos". Every field this connector
+        would normally report is filled from that one NPPES observation, and
+        the result is stamped `derived_from`/`audit_reason` so an auditor can
+        see the deprecated proxy call was skipped, never that a genuine PECOS
+        source was reached twice or that CMS PPEF evidence was copied in here
+        — this stays an NPPES-derived proxy result, nothing more.
+        """
+        qp = dict(nppes_result.query_params or {})
+        audit_reason = ("deprecated_proxy_call_skipped: the legacy PECOS/NPPES-proxy check "
+                         "was not queried separately; satisfied by the NPPES observation "
+                         "already gathered this cycle for the same NPI")
+        if not nppes_result.success:
+            return SourceResult.unavailable(
+                "PECOS",
+                f"{audit_reason} (that observation was itself unavailable: {nppes_result.error})",
+                qp, cls.API_VERSION,
+            )
+        d = nppes_result.data or {}
+        if not d.get("found"):
+            data = {
+                "found": False, "npi": d.get("npi"), "payment_suspension": None,
+                "note": "NPI not enrolled / not found in NPPES (PECOS source).",
+                "derived_from": "nppes_concurrent_observation", "audit_reason": audit_reason,
+            }
+            return SourceResult.ok("PECOS", data, qp, cls.API_VERSION, raw_for_hash=d)
+        loc = next((a for a in d.get("addresses", []) or [] if a.get("address_purpose") == "LOCATION"), {})
+        data = {
+            "found": True,
+            "npi": d.get("npi"),
+            "enumeration_type": d.get("enumeration_type"),
+            "provider_name": d.get("legal_name"),
+            "status": d.get("status_raw") or d.get("status"),
+            "enumeration_date": d.get("enumeration_date"),
+            "taxonomy": d.get("taxonomy"),
+            "taxonomy_code": d.get("taxonomy_code"),
+            "provider_type": d.get("taxonomy"),
+            "city": loc.get("city"),
+            "state": loc.get("state"),
+            "payment_suspension": None,
+            "note": "Enrollment verified via NPPES. Payment-suspension flag requires COR-provisioned feed.",
+            "derived_from": "nppes_concurrent_observation", "audit_reason": audit_reason,
+        }
+        return SourceResult.ok("PECOS", data, qp, cls.API_VERSION, raw_for_hash=d)
+
+
+#: Truthful, user-facing presentation for the legacy `pecos` key (Fix 3). The
+#: internal key, `PECOS_BACKING` value and `PECOS_BACKING_NOTE` technical note
+#: above are all preserved unmodified — this is presentation only, read by the
+#: connector-health endpoints and the frontend so no surface shows the legacy
+#: key as "Direct PECOS Connected" or as Medicare enrolment verification.
+PECOS_UI_LABEL = "NPPES Registry — Legacy PECOS Proxy"
+PECOS_UI_SUBTITLE = (
+    "Checks NPI Registry information through NPPES. This is not a direct PECOS "
+    "query and does not establish Medicare enrollment."
+)
+#: Labels for the genuine CMS PECOS-derived sources, shown separately from the
+#: legacy proxy above so the two are never conflated.
+CMS_PPEF_ENROLLMENT_UI_LABEL = "CMS Public Provider Enrollment — PECOS-derived"
+CMS_PPEF_ENROLLMENT_UI_SUBTITLE = (
+    "Genuine CMS Medicare enrolment evidence (PPEF), published quarterly. Not real-time."
+)
+CMS_REVOCATION_UI_LABEL = "CMS Revocation — PECOS-derived"
+CMS_REVOCATION_UI_SUBTITLE = (
+    "Genuine CMS revoked-provider evidence, published quarterly. A negative result means "
+    "only that no active revocation record was found."
+)
 
 
 # ─── TEFCA entity data (provided by ONC) — FHIR R4 ───────────────────────────────
@@ -1128,16 +1287,23 @@ class SourceConnectorManager:
           nppes, leie_npi, sam_entity, sam_exclusion, pecos
         SAM is queried once; its single probe backs both the registration check
         (sam_entity) and the debarment check (sam_exclusion).
+
+        `pecos` is DERIVED from the `nppes` observation (PECOSConnector.
+        from_nppes), not fetched separately — both used to hit the identical
+        npiregistry.cms.hhs.gov endpoint for the identical NPI, once labelled
+        "nppes" and once "pecos". That duplicate call is now skipped; see
+        `PECOSConnector.from_nppes` for the audit-safe reason recorded on the
+        result.
         """
         npi = _extract_npi(entity)
         uei = _extract_uei(entity)
-        nppes_r, leie_r, sam_r, pecos_r = await asyncio.gather(
+        nppes_r, leie_r, sam_r = await asyncio.gather(
             self.nppes.lookup_by_npi(npi),
             self.leie.lookup_by_npi(npi),
             self.sam.lookup_by_uei(uei),   # SAM.gov is keyed on UEI, not NPI
-            self.pecos.lookup_by_npi(npi),
             return_exceptions=False,
         )
+        pecos_r = PECOSConnector.from_nppes(nppes_r)
         return {
             "nppes": nppes_r,
             "leie_npi": leie_r,
@@ -1243,7 +1409,22 @@ def _check_manager() -> "SourceConnectorManager":
 
 
 async def _log_connector_check(connector_name: str, status: str, response_ms: int) -> None:
-    """Best-effort insert into tefca_connector_logs (own session, never raises)."""
+    """Best-effort insert into tefca_connector_logs (own session, never raises).
+
+    FIX 4 SCHEMA LIMITATION — REPORTED, NOT MIGRATED (by task instruction).
+    `tefca_connector_logs` (app.Tefca.models.TEFCAConnectorLog) has exactly
+    five fixed columns — id, connector_name, status, response_time_ms,
+    checked_at — and no free-form/JSONB column, unlike `tefca_dimension_
+    evidence` (which already has `original_values`/`normalized_values` JSONB
+    and now carries `upstream_request_id` there, see EvidenceItem.
+    from_provenance). There is nowhere in THIS table to add the allow-listed
+    upstream request id from `safe_upstream_request_id()` without a migration,
+    so none is added here. Smallest future change: one additive, nullable
+    `upstream_request_id VARCHAR(128)` column (NULL for every historical row,
+    the same pattern `vocabulary_version` already uses on
+    TEFCADimensionEvidence) plus a corresponding `upstream_request_id=:rid`
+    insert parameter — a single, reversible, backward-compatible migration.
+    """
     try:
         from app.core.database import async_session_maker
         from sqlalchemy import text as _sql_text
@@ -1448,12 +1629,21 @@ async def check_all_connectors(entity: dict, db=None) -> dict:
 
     Submitted name + address are threaded into the NPPES and SAM checks so their
     results carry the name/address cross-reference used by the verification
-    summary."""
+    summary.
+
+    `pecos` is DERIVED from the `nppes` result (PECOSConnector.from_nppes)
+    rather than fetched with its own `check_pecos()` call — the two used to
+    query the identical NPPES endpoint for the identical NPI concurrently.
+    `check_pecos()` itself is left intact and is still used standalone by the
+    QA connector-health probe, which deliberately verifies both labels
+    independently as an infrastructure check, not an entity evidence lookup.
+    """
     npi = _extract_npi(entity)
     uei = _extract_uei(entity)
     name = entity.get("name", "")
     address = _extract_address(entity)
-    nppes_r, pecos_r, sam_r, leie_r = await asyncio.gather(
-        check_nppes(name, npi, address), check_pecos(npi), check_sam(uei, address), check_leie(name, npi),
+    nppes_r, sam_r, leie_r = await asyncio.gather(
+        check_nppes(name, npi, address), check_sam(uei, address), check_leie(name, npi),
     )
+    pecos_r = PECOSConnector.from_nppes(nppes_r)
     return {"nppes": nppes_r, "pecos": pecos_r, "sam": sam_r, "leie": leie_r}
