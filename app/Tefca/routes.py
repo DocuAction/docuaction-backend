@@ -2890,6 +2890,118 @@ async def qa_connector_health(db: AsyncSession = Depends(get_db), user=Depends(r
     return await qa_engine.ConnectorHealthCheck().check_all_connectors(db=db)
 
 
+@tefca_dashboard_router.get(
+    "/admin/pecos-retry-plan",
+    summary="Read-only dry-run plan for a bounded CMS PPEF/Revocation retry (admin)",
+)
+async def pecos_retry_plan(
+    response: Response,
+    delivery_job_id: str = Query(..., description="Delivery job id whose entities scope the plan"),
+    limit: int = Query(25, description="Maximum candidates; values above 25 are rejected"),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("admin")),
+):
+    """Expose `pecos_retry_planner.plan_pecos_retry` — and nothing else.
+
+    Every selection guarantee is the planner's own, unchanged: two bounded
+    SELECTs, zero writes, zero upstream calls, ≤25 candidates, targets only
+    CMS_PPEF_ENROLLMENT and CMS_REVOCATION, never the legacy `pecos` key.
+    This handler adds: admin gating, delivery-job resolution, a hard reject
+    (not a clamp) on limit > 25, no-store caching, a correlation id logged
+    with COUNTS ONLY, and a response-level identifier policy STRICTER than
+    the planner's: candidates carry ONLY {candidate_ref, missing_sources,
+    reason} — the planner's masked-NPI field is stripped, so no full or
+    partial NPI digits appear anywhere in the response or logs.
+
+    Error semantics: a syntactically invalid or unknown job id is a sanitized
+    404 (the established convention for delivery-job lookups); database or
+    infrastructure failures are NOT converted to 404 — `db.get` is deliberately
+    uncaught here, so they reach the global sanitized error handler as a 500
+    with a request id.
+
+    Deliberately NO database audit row: the endpoint's contract is zero
+    inserts/updates/deletes, and that guarantee outranks an audit insert — the
+    sanitized server log line is the record (existing registry audit could
+    take a row without a migration, but not without a write).
+    """
+    import uuid as _uuid
+
+    from app.Tefca.pecos_retry_planner import MAX_CANDIDATES, plan_pecos_retry
+
+    correlation_id = str(_uuid.uuid4())
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Correlation-Id"] = correlation_id
+
+    if limit > MAX_CANDIDATES or limit < 1:
+        # Reject, never silently clamp: a caller who asked for more than the
+        # ceiling should learn the ceiling, not receive a quietly smaller plan.
+        raise HTTPException(
+            status_code=422,
+            detail=f"limit must be between 1 and {MAX_CANDIDATES}",
+        )
+
+    # Malformed identifier: 404 per the established delivery-job convention
+    # (get_job itself maps malformed ids to None/404 for every other route).
+    # Validated BEFORE touching the database so that the only exceptions that
+    # can escape the lookup below are real database/infrastructure failures,
+    # which must surface through the global sanitized handler — never as a
+    # false "no such job".
+    try:
+        job_uuid = _uuid.UUID(delivery_job_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"No delivery job {delivery_job_id}")
+
+    from app.tefca_registry.rce.delivery_job_model import RceDeliveryJob
+
+    job = await db.get(RceDeliveryJob, job_uuid)  # uncaught on purpose — see docstring
+    if job is None or not getattr(job, "source_intake_id", None):
+        # Sanitized: echoes only the identifier the caller already supplied.
+        raise HTTPException(status_code=404, detail=f"No delivery job {delivery_job_id}")
+
+    plan = await plan_pecos_retry(db, limit, intake_id=str(job.source_intake_id))
+
+    scanned = plan["entities_scanned"]
+    invalid = plan["excluded_invalid_npi"]
+    existing = plan["excluded_already_has_evidence"]
+    # Eligible = survived EVERY exclusion (invalid NPI and already-evidenced).
+    eligible = scanned - invalid - existing
+
+    logger.info(
+        "pecos_retry_plan viewed correlation_id=%s job=%s scanned=%s eligible=%s "
+        "selected=%s excluded_invalid_npi=%s excluded_existing=%s",
+        correlation_id, delivery_job_id, scanned, eligible,
+        plan["candidate_count"], invalid, existing,
+    )
+
+    return {
+        "correlation_id": correlation_id,
+        "delivery_job_id": delivery_job_id,
+        "requested_limit": limit,
+        "scanned_count": scanned,
+        "eligible_count": eligible,
+        "selected_count": plan["candidate_count"],
+        "excluded_invalid_npi_count": invalid,
+        "excluded_existing_evidence_count": existing,
+        "target_connectors": plan["target_sources"],
+        # Stricter than the planner: no npi_masked — reference, gaps, reason only.
+        "candidates": [
+            {"candidate_ref": c["candidate_ref"],
+             "missing_sources": c["missing_sources"],
+             "reason": c["reason"]}
+            for c in plan["candidates"]
+        ],
+        "planner_version": plan["planner_version"],
+        "build_sha": os.environ.get("GIT_SHA", "unknown"),
+        "dry_run": True,
+        "executed_retry": False,
+        "database_writes_made": plan["database_writes_made"],
+        "upstream_calls_made": plan["upstream_calls_made"],
+        "identifier_note": ("candidate_ref is a deterministic, opaque, pseudonymous reference; "
+                            "no full or partial NPI digits, names, addresses or raw entity ids "
+                            "appear in this response."),
+    }
+
+
 @tefca_dashboard_router.get("/qa/audit", summary="QA audit trail (filters: review_id, gate_name, gate_type, passed)")
 async def qa_audit_trail(
     review_id: Optional[str] = Query(None), gate_name: Optional[str] = Query(None),

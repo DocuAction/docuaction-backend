@@ -79,6 +79,11 @@ TARGET_SOURCES = ("CMS_PPEF_ENROLLMENT", "CMS_REVOCATION")
 #: module docstring's "constant query count" section.
 SCAN_WINDOW = 500
 
+#: Planner contract version, reported in every plan so a stored plan can be
+#: tied to the exact selection semantics that produced it. 1.1.0 adds the
+#: optional per-delivery entity scope (`intake_id`); 1.0.0 was table-wide.
+PLANNER_VERSION = "1.1.0"
+
 assert LEGACY_PECOS_KEY not in TARGET_SOURCES  # excluded by construction, not by luck
 
 
@@ -139,7 +144,8 @@ class RetryCandidate:
         }
 
 
-async def plan_pecos_retry(db, limit: int = MAX_CANDIDATES) -> Dict[str, Any]:
+async def plan_pecos_retry(db, limit: int = MAX_CANDIDATES, *,
+                           intake_id: Optional[str] = None) -> Dict[str, Any]:
     """Dry run only. Reads `tefca_dimension_evidence` with exactly two
     queries (see module docstring); writes nothing; calls no upstream
     connector. Deterministic for a fixed database state: the NPPES scan is
@@ -148,6 +154,12 @@ async def plan_pecos_retry(db, limit: int = MAX_CANDIDATES) -> Dict[str, Any]:
     data return the same candidates in the same order with the same
     `candidate_ref` values.
 
+    `intake_id` (1.1.0) scopes the scan to entities promoted from ONE
+    delivery, via an `IN (subquery)` on `rce_curated_records.canonical_entity_
+    id` embedded in the same two statements — the query count stays constant
+    and no other delivery's entities can enter the plan (cross-delivery
+    isolation). Without it, behaviour is the original table-wide window.
+
     Returns a sanitized report — see module docstring for what is and is not
     included. No name, address, full NPI or raw entity id is ever present in
     the output.
@@ -155,17 +167,31 @@ async def plan_pecos_retry(db, limit: int = MAX_CANDIDATES) -> Dict[str, Any]:
     limit = min(max(int(limit), 0), MAX_CANDIDATES)
     from app.Tefca.models import TEFCADimensionEvidence
 
+    scope = None
+    if intake_id:
+        from sqlalchemy import cast, String as SAString
+        from app.tefca_registry.rce.models import RceCuratedRecord
+        scope = (
+            select(cast(RceCuratedRecord.canonical_entity_id, SAString))
+            .where(RceCuratedRecord.source_intake_id == intake_id,
+                   RceCuratedRecord.canonical_entity_id.isnot(None))
+        )
+
     # ── Query 1 of 2: most recent NPPES identity row per entity, within the
     # scan window. NPPES is the primary NPI identity authority (D1), so its
     # `original_values.npi` is the right place to read a candidate's NPI from
     # — never a stored CMS_PPEF/CMS_REVOCATION row's own NPI field, which
     # would presuppose the very evidence this planner is checking for
     # absence.
-    rows = (await db.execute(
+    scan = (
         select(TEFCADimensionEvidence.entity_id, TEFCADimensionEvidence.original_values)
         .where(TEFCADimensionEvidence.source == "NPPES")
-        .order_by(TEFCADimensionEvidence.entity_id,
-                  TEFCADimensionEvidence.generation_timestamp.desc())
+    )
+    if scope is not None:
+        scan = scan.where(TEFCADimensionEvidence.entity_id.in_(scope))
+    rows = (await db.execute(
+        scan.order_by(TEFCADimensionEvidence.entity_id,
+                      TEFCADimensionEvidence.generation_timestamp.desc())
         .limit(SCAN_WINDOW)
     )).all()
 
@@ -224,6 +250,8 @@ async def plan_pecos_retry(db, limit: int = MAX_CANDIDATES) -> Dict[str, Any]:
 
     return {
         "dry_run": True,
+        "planner_version": PLANNER_VERSION,
+        "intake_scope": str(intake_id) if intake_id else None,
         "executed_retry": False,
         "upstream_calls_made": 0,
         "database_writes_made": 0,
