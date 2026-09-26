@@ -248,11 +248,29 @@ async def reconcile_delivery(db, intake_id) -> Dict[str, Any]:
     # `tefca_verifications` row per source probed (unconditionally, in the
     # same transaction as the ReviewRecord), so that table is the one
     # evidence signal common to every review-creation path, regardless of
-    # which one wrote the row. Treating "no tefca_verifications row at all"
-    # as the true absence of evidence - rather than "no `dimensions` array" -
-    # recognises evidence that genuinely exists instead of requiring one
-    # specific JSON shape for it (found investigating six September-2026
-    # reviews this check flagged; root-caused 2026-09-26).
+    # which one wrote the row.
+    #
+    # NOT EVERY ROW IN THAT TABLE IS EVIDENCE, THOUGH. `TefcaVerification`'s
+    # own docstring names the authoritative five-state taxonomy -
+    # VERIFIED, NOT_FOUND, NOT_CHECKED, UNAVAILABLE, FAILED
+    # (`bucket_classifier.VERIFICATION_STATES`) - and is explicit that
+    # `unavailable` (a third party's outage) "must never count against an
+    # entity", exactly like `not_checked` (a disclosed non-attempt: no
+    # connector, no NPI, not applicable - `review_service.NO_CONNECTOR`) and
+    # `failed` (an uncaught exception probing the source: a bug in this
+    # code, not a fact about the entity). Only a row stating an actual
+    # answer from a reached source is substantive: VERIFIED, NOT_FOUND
+    # ("reached, no record" - the docstring says this "must" count), and the
+    # OIG LEIE-specific `excluded` literal (an active exclusion hit; the
+    # single most significant negative finding the model has, driving B4 -
+    # see `bucket_classifier.py`'s own rule conditions). `clear` (LEIE's
+    # positive counterpart) is never itself persisted here: `run_review`
+    # rewrites it to `verified` before the row is written, so it needs no
+    # entry of its own. Accepting only these three keeps `not_checked` /
+    # `unavailable` / `failed` - and anything not on this named list -
+    # correctly non-qualifying by default, rather than accepting a row
+    # merely for existing.
+    _QUALIFYING_VERIFICATION_STATUSES = "('verified', 'not_found', 'excluded')"
     reviews_without_evidence = await _scalar(db, text(
         "SELECT count(*) FROM review_records r "
         "WHERE r.entity_id IN (SELECT canonical_entity_id FROM rce_curated_records "
@@ -263,7 +281,8 @@ async def reconcile_delivery(db, intake_id) -> Dict[str, Any]:
         "       OR r.verification_results->'dimensions' IS NULL "
         "       OR jsonb_array_length(r.verification_results->'dimensions') = 0)"
         "  AND NOT EXISTS (SELECT 1 FROM tefca_verifications v "
-        "                  WHERE v.review_id = r.review_id)"
+        "                  WHERE v.review_id = r.review_id "
+        f"                   AND v.verification_status IN {_QUALIFYING_VERIFICATION_STATUSES})"
     ).bindparams(i=intake_id))
     reviews_without_rule = await _scalar(db, text(
         "SELECT count(*) FROM review_records r "

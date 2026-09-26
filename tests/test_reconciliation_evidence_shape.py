@@ -1,5 +1,6 @@
 """P12 reconciliation — the evidence-completeness check recognises BOTH
-evidence shapes a review_record can legitimately carry.
+evidence shapes a review_record can legitimately carry, and only counts a
+`tefca_verifications` row as evidence when its status is substantive.
 
 BACKGROUND (root-caused 2026-09-26 against the live September 2026 delivery,
 job 0930826c-970e-419d-ab8d-f05bb4f99116)
@@ -13,17 +14,45 @@ verify action), NOT by the bulk delivery-verification sampler
 (`arc_pipeline.verify_and_classify`). That path's `verification_results`
 shape is {fields, sources, address_match, confidence_score,
 entity_resolution} and has never carried a `dimensions` array; it predates
-that key and was never migrated onto it. Every one of the six DOES have at
-least one `tefca_verifications` audit row (the platform's own definition of
-"what an auditor needs to retrace a decision") — three real sources verified
-(nppes/pecos/oig_leie), the other three (sam_gov/state_registry/irs)
-correctly marked not_checked/not-implemented, exactly the same "unavailable
-must never count against an entity" rule the rest of the platform already
-follows. This is real, non-fabricated evidence in a shape the check did not
-recognise — not missing evidence.
+that key and was never migrated onto it.
 
-This module proves the fix: a review is only "without evidence" now if it
-has BOTH no `dimensions` array AND no `tefca_verifications` row at all.
+THE AUTHORITATIVE STATUS TAXONOMY (not invented for this fix — read from the
+platform's own declarations):
+  - `TefcaVerification`'s class docstring names five states verbatim:
+    "verified | not_found | not_checked | unavailable | failed", and states
+    the load-bearing rule: `unavailable` (a third party's outage) "must
+    never count against an entity", while `not_found` (source reached, no
+    record) "must" — collapsing them "converts an outage into a finding".
+  - `bucket_classifier.VERIFICATION_STATES = (VERIFIED, NOT_FOUND,
+    NOT_CHECKED, UNAVAILABLE, FAILED)` is the same five, as importable
+    constants (`= "verified"/"not_found"/"not_checked"/"unavailable"/
+    "failed"`).
+  - `review_service.probe_sources` produces exactly these five plus one
+    connector-specific literal, `excluded` (an active OIG LEIE exclusion
+    hit; `clear` is LEIE's positive counterpart but is rewritten to
+    `verified` by `run_review` before the row is persisted, so `clear`
+    never itself reaches `tefca_verifications.verification_status`).
+    `bucket_classifier.py`'s own rule conditions treat `not_found` and
+    `excluded` as real classification inputs (`not_found` drives specific
+    B1/B2 rules; `excluded` alone drives B4 disqualification) — i.e. the
+    platform's own business rules already rely on both as substantive
+    determinations, not as absence-of-evidence.
+  - `not_checked` (`review_service.NO_CONNECTOR`: no connector built, no
+    NPI to look up, or not applicable) and `failed` (an uncaught exception
+    calling the connector — a bug in this code, not a fact about the
+    entity) are both, by the platform's own words, non-evidence: a
+    disclosed non-attempt and a technical failure respectively, never a
+    statement about the entity.
+
+QUALIFYING PREDICATE SELECTED: `verification_status IN ('verified',
+'not_found', 'excluded')`. Anything else — `not_checked`, `unavailable`,
+`failed`, or any future/unknown value — is non-qualifying BY DEFAULT (an
+inclusion list, not an exclusion list), so a new non-evidence status can
+never silently start counting as evidence.
+
+This module proves: a review is "without evidence" only if it has BOTH no
+populated `dimensions` array AND no `tefca_verifications` row whose status
+is in that qualifying set.
 """
 from __future__ import annotations
 
@@ -31,30 +60,20 @@ import uuid
 from datetime import datetime
 
 import pytest
+from sqlalchemy import text
 
 from app.tefca_registry import models as reg
 from app.tefca_registry.rce import reconciliation
 
 from test_human_review_workflow import _seed, rolled_back_db  # noqa: F401
 
-SYN = "SYNTHETIC-EVSHAPE"
 
-
-def _legacy_shaped_verification_results() -> dict:
+def _legacy_shaped_verification_results(**sources) -> dict:
     """The exact shape `review_service.run_review` writes — no `dimensions`
     key, ever, by design; a genuinely different evidence model."""
     return {
         "fields": {"npi": "1234567890"},
-        "sources": {
-            "nppes": {"status": "verified"},
-            "pecos": {"status": "verified"},
-            "oig_leie": {"status": "verified"},
-            "sam_gov": {"status": "not_checked"},
-            "state_registry": {"status": "not_checked",
-                               "reason": "Connector not implemented"},
-            "irs": {"status": "not_checked",
-                   "reason": "Not applicable"},
-        },
+        "sources": sources or {"nppes": {"status": "verified"}},
         "address_match": {"method": "skipped", "reason": "not evaluated"},
         "confidence_score": None,
         "entity_resolution": {"status": "resolved"},
@@ -77,6 +96,7 @@ async def _add_review(db, entity_id, *, verification_results,
 
 
 async def _add_verification_rows(db, entity_id, review_id, sources):
+    """`sources`: iterable of (source_name, verification_status)."""
     for source, status in sources:
         db.add(reg.TefcaVerification(
             id=uuid.uuid4(), entity_id=entity_id, review_id=review_id,
@@ -96,16 +116,83 @@ async def _entities_for(db, intake_id):
     return list(rows)
 
 
-class TestLegacyShapedReviewIsRecognisedAsEvidenced:
-    """The exact six-review failure pattern: legacy shape + real audit rows."""
+async def _evidence_check(db, intake_id) -> dict:
+    result = await reconciliation.reconcile_delivery(db, intake_id)
+    return next(c for c in result["checks"]
+               if c["check"] == "Every determination traces to evidence")
 
-    async def test_a_legacy_shaped_review_with_an_audit_row_passes(self, rolled_back_db):
+
+class TestQualifyingStatusesPass:
+    """Each named substantive status, alone, is enough - both positive
+    (`verified`) and negative (`not_found`, `excluded`) evidence."""
+
+    async def test_a_verified_observation_alone_qualifies(self, rolled_back_db):
         db = rolled_back_db
-        intake_id = await _seed(db, "LEGACYPASS", n=2)
+        intake_id = await _seed(db, "QUALVERIFIED", n=2)
         entity_id = (await _entities_for(db, intake_id))[0]
 
         review_id = await _add_review(
-            db, entity_id, verification_results=_legacy_shaped_verification_results())
+            db, entity_id,
+            verification_results=_legacy_shaped_verification_results(
+                nppes={"status": "verified"}))
+        await _add_verification_rows(db, entity_id, review_id,
+                                     [("nppes", "verified")])
+        await db.commit()
+
+        check = await _evidence_check(db, intake_id)
+        assert check["passed"] is True, check["detail"]
+        assert "0 review(s)" in check["detail"]
+
+    async def test_a_not_found_observation_alone_qualifies(self, rolled_back_db):
+        """`not_found` is documented as evidence the model says "must" count
+        against an entity - a real negative answer, not an absence."""
+        db = rolled_back_db
+        intake_id = await _seed(db, "QUALNOTFOUND", n=2)
+        entity_id = (await _entities_for(db, intake_id))[0]
+
+        review_id = await _add_review(
+            db, entity_id,
+            verification_results=_legacy_shaped_verification_results(
+                nppes={"status": "not_found"}))
+        await _add_verification_rows(db, entity_id, review_id,
+                                     [("nppes", "not_found")])
+        await db.commit()
+
+        check = await _evidence_check(db, intake_id)
+        assert check["passed"] is True, check["detail"]
+
+    async def test_an_excluded_observation_alone_qualifies(self, rolled_back_db):
+        """`excluded` (an active OIG LEIE hit) is the single most significant
+        negative finding the model has - it alone drives B4 disqualification
+        in bucket_classifier.py's own rules, so it must count as evidence."""
+        db = rolled_back_db
+        intake_id = await _seed(db, "QUALEXCLUDED", n=2)
+        entity_id = (await _entities_for(db, intake_id))[0]
+
+        review_id = await _add_review(
+            db, entity_id,
+            verification_results=_legacy_shaped_verification_results(
+                oig_leie={"status": "excluded"}))
+        await _add_verification_rows(db, entity_id, review_id,
+                                     [("oig_leie", "excluded")])
+        await db.commit()
+
+        check = await _evidence_check(db, intake_id)
+        assert check["passed"] is True, check["detail"]
+
+    async def test_the_six_real_reviews_pattern_still_passes(self, rolled_back_db):
+        """The reproduction of the actual reported symptom: three real
+        sources verified, three correctly not_checked - mixed, exactly as
+        observed on the live delivery."""
+        db = rolled_back_db
+        intake_id = await _seed(db, "SIXPATTERN", n=2)
+        entity_id = (await _entities_for(db, intake_id))[0]
+
+        review_id = await _add_review(
+            db, entity_id, verification_results=_legacy_shaped_verification_results(
+                nppes={"status": "verified"}, pecos={"status": "verified"},
+                oig_leie={"status": "verified"}, sam_gov={"status": "not_checked"},
+                state_registry={"status": "not_checked"}, irs={"status": "not_checked"}))
         await _add_verification_rows(
             db, entity_id, review_id,
             [("nppes", "verified"), ("pecos", "verified"), ("oig_leie", "verified"),
@@ -113,60 +200,68 @@ class TestLegacyShapedReviewIsRecognisedAsEvidenced:
              ("irs", "not_checked")])
         await db.commit()
 
-        result = await reconciliation.reconcile_delivery(db, intake_id)
-        evidence_check = next(c for c in result["checks"]
-                              if c["check"] == "Every determination traces to evidence")
-        assert evidence_check["passed"] is True, evidence_check["detail"]
-        assert "0 review(s)" in evidence_check["detail"]
+        check = await _evidence_check(db, intake_id)
+        assert check["passed"] is True, check["detail"]
+        assert "0 review(s)" in check["detail"]
 
-    async def test_the_exact_dimensions_predicate_alone_would_still_flag_it(self, rolled_back_db):
-        """Documents WHY the six reviews were flagged: read literally, the
-        `dimensions`-only predicate (the pre-fix check) is still true for a
-        legacy-shaped review. This is not a claim the code regressed to that
-        state - it is the reproduction of the reported symptom, asserted
-        directly against the same review row the test above proves is
-        correctly recognised as evidenced end-to-end."""
-        from sqlalchemy import text
 
+class TestNonQualifyingStatusesStillFail:
+    """A review whose ONLY audit rows are non-substantive must still read as
+    unevidenced - the fix widens what counts as evidence, it does not accept
+    a row merely for existing."""
+
+    async def test_only_not_checked_rows_still_fails(self, rolled_back_db):
         db = rolled_back_db
-        intake_id = await _seed(db, "LEGACYSHAPE", n=2)
+        intake_id = await _seed(db, "ONLYNOTCHECKED", n=2)
         entity_id = (await _entities_for(db, intake_id))[0]
+
         review_id = await _add_review(
-            db, entity_id, verification_results=_legacy_shaped_verification_results())
-        await _add_verification_rows(db, entity_id, review_id, [("nppes", "verified")])
+            db, entity_id,
+            verification_results=_legacy_shaped_verification_results(
+                sam_gov={"status": "not_checked"}, irs={"status": "not_checked"}))
+        await _add_verification_rows(
+            db, entity_id, review_id,
+            [("sam_gov", "not_checked"), ("irs", "not_checked")])
         await db.commit()
 
-        dimensions_only = await db.scalar(text(
-            "SELECT count(*) FROM review_records r WHERE r.review_id = :rid "
-            "AND (r.verification_results IS NULL "
-            "     OR r.verification_results->'dimensions' IS NULL "
-            "     OR jsonb_array_length(r.verification_results->'dimensions') = 0)"
-        ).bindparams(rid=review_id))
-        assert dimensions_only == 1, (
-            "a legacy-shaped review has no `dimensions` key by design - "
-            "this is exactly the symptom the fix reclassifies using "
-            "tefca_verifications, not a claim that dimensions exist")
+        check = await _evidence_check(db, intake_id)
+        assert check["passed"] is False
+        assert "1 review(s)" in check["detail"]
 
-
-class TestAGenuinelyUnevidencedReviewStillFails:
-    """The fix widens what counts as evidence; it must not blanket-suppress a
-    review that truly has neither shape - the negative/isolation case."""
-
-    async def test_no_dimensions_and_no_audit_row_still_fails(self, rolled_back_db):
+    async def test_only_unavailable_or_failed_rows_still_fails(self, rolled_back_db):
+        """`unavailable` (a reached-and-errored outage) and `failed` (an
+        uncaught exception in this code) are both, by the model's own
+        words, never a fact about the entity."""
         db = rolled_back_db
-        intake_id = await _seed(db, "NOEVIDENCE", n=2)
+        intake_id = await _seed(db, "ONLYUNAVAIL", n=2)
+        entity_id = (await _entities_for(db, intake_id))[0]
+
+        review_id = await _add_review(
+            db, entity_id,
+            verification_results=_legacy_shaped_verification_results(
+                nppes={"status": "unavailable"}, pecos={"status": "failed"}))
+        await _add_verification_rows(
+            db, entity_id, review_id,
+            [("nppes", "unavailable"), ("pecos", "failed")])
+        await db.commit()
+
+        check = await _evidence_check(db, intake_id)
+        assert check["passed"] is False
+        assert "1 review(s)" in check["detail"]
+
+    async def test_no_verification_rows_at_all_still_fails(self, rolled_back_db):
+        db = rolled_back_db
+        intake_id = await _seed(db, "NOROWS", n=2)
         entity_id = (await _entities_for(db, intake_id))[0]
 
         await _add_review(db, entity_id, verification_results={"queue_source": None})
         await db.commit()
 
-        result = await reconciliation.reconcile_delivery(db, intake_id)
-        evidence_check = next(c for c in result["checks"]
-                              if c["check"] == "Every determination traces to evidence")
-        assert evidence_check["passed"] is False
-        assert "1 review(s)" in evidence_check["detail"]
+        check = await _evidence_check(db, intake_id)
+        assert check["passed"] is False
+        assert "1 review(s)" in check["detail"]
 
-    async def test_null_verification_results_and_no_audit_row_still_fails(self, rolled_back_db):
+    async def test_null_verification_results_and_no_rows_still_fails(self, rolled_back_db):
         db = rolled_back_db
         intake_id = await _seed(db, "NULLRESULTS", n=2)
         entity_id = (await _entities_for(db, intake_id))[0]
@@ -174,15 +269,60 @@ class TestAGenuinelyUnevidencedReviewStillFails:
         await _add_review(db, entity_id, verification_results=None)
         await db.commit()
 
-        result = await reconciliation.reconcile_delivery(db, intake_id)
-        evidence_check = next(c for c in result["checks"]
-                              if c["check"] == "Every determination traces to evidence")
-        assert evidence_check["passed"] is False
+        check = await _evidence_check(db, intake_id)
+        assert check["passed"] is False
 
+
+class TestPopulatedDimensionsPathIsUnaffected:
+    """The original, modern evidence signal - a non-empty `dimensions` array
+    from `verify_and_classify` - must keep passing on its own, even with no
+    qualifying (or no) `tefca_verifications` rows at all."""
+
+    async def test_populated_dimensions_passes_with_no_verification_rows(self, rolled_back_db):
+        db = rolled_back_db
+        intake_id = await _seed(db, "DIMSONLY", n=2)
+        entity_id = (await _entities_for(db, intake_id))[0]
+
+        await _add_review(
+            db, entity_id,
+            verification_results={
+                "dimensions": [{"dimension": "IDENTITY", "disposition": "PASS"}],
+                "applicability": {}, "sufficiency": {}, "data_quality_flags": [],
+            })
+        await db.commit()
+
+        check = await _evidence_check(db, intake_id)
+        assert check["passed"] is True, check["detail"]
+
+    async def test_populated_dimensions_passes_even_with_only_non_qualifying_rows(
+            self, rolled_back_db):
+        """A modern arc_pipeline review always writes one `tefca_verifications`
+        row stamped `verified` unconditionally, but the check must not
+        *depend* on that: dimensions alone is sufficient, and a (synthetic,
+        contrived) non-qualifying row alongside it must not flip a
+        dimensions-evidenced review to unevidenced."""
+        db = rolled_back_db
+        intake_id = await _seed(db, "DIMSPLUSBAD", n=2)
+        entity_id = (await _entities_for(db, intake_id))[0]
+
+        review_id = await _add_review(
+            db, entity_id,
+            verification_results={
+                "dimensions": [{"dimension": "IDENTITY", "disposition": "PASS"}],
+            })
+        await _add_verification_rows(db, entity_id, review_id,
+                                     [("rce_arc_pipeline", "unavailable")])
+        await db.commit()
+
+        check = await _evidence_check(db, intake_id)
+        assert check["passed"] is True, check["detail"]
+
+
+class TestWorkItemExclusionIsUnaffected:
     async def test_a_dq_bridge_work_item_is_still_excluded_not_reclassified(self, rolled_back_db):
         """The pre-existing 2026-09-16 exclusion for open work items must be
-        untouched: they still pass by being excluded, not by suddenly
-        acquiring a tefca_verifications row they never had."""
+        untouched: they still pass by being excluded, not by acquiring a
+        qualifying tefca_verifications row they never had."""
         db = rolled_back_db
         intake_id = await _seed(db, "WORKITEM", n=2)
         entity_id = (await _entities_for(db, intake_id))[0]
@@ -193,10 +333,8 @@ class TestAGenuinelyUnevidencedReviewStillFails:
             classification_bucket=None, classification_rule=None)
         await db.commit()
 
-        result = await reconciliation.reconcile_delivery(db, intake_id)
-        evidence_check = next(c for c in result["checks"]
-                              if c["check"] == "Every determination traces to evidence")
-        assert evidence_check["passed"] is True
+        check = await _evidence_check(db, intake_id)
+        assert check["passed"] is True
 
 
 class TestIsolationAcrossDeliveries:
@@ -211,16 +349,14 @@ class TestIsolationAcrossDeliveries:
         clean_intake = await _seed(db, "ISOCLEAN", n=2)
 
         broken_entity = (await _entities_for(db, broken_intake))[0]
-        await _add_review(db, broken_entity, verification_results={})
+        review_id = await _add_review(db, broken_entity, verification_results={})
+        await _add_verification_rows(db, broken_entity, review_id,
+                                     [("nppes", "unavailable")])
         await db.commit()
 
-        broken_result = await reconciliation.reconcile_delivery(db, broken_intake)
-        clean_result = await reconciliation.reconcile_delivery(db, clean_intake)
+        broken_check = await _evidence_check(db, broken_intake)
+        clean_check = await _evidence_check(db, clean_intake)
 
-        broken_check = next(c for c in broken_result["checks"]
-                            if c["check"] == "Every determination traces to evidence")
-        clean_check = next(c for c in clean_result["checks"]
-                           if c["check"] == "Every determination traces to evidence")
         assert broken_check["passed"] is False
         assert clean_check["passed"] is True
         assert "0 review(s)" in clean_check["detail"]
