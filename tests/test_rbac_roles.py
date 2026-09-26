@@ -370,6 +370,14 @@ def test_no_tefca_read_endpoint_sits_above_the_viewer_floor():
     # Deliberate exceptions, each justified rather than blanket-ignored.
     ALLOWED_ABOVE_VIEWER = {
         "/api/v1/tefca/queue/tier3",  # Bucket-3 escalation queue — senior_analyst by contract
+        # Admin-only dry-run planner for the bounded CMS PPEF/Revocation retry.
+        # Deliberately above viewer: it is an OPERATIONAL planning surface (which
+        # entities a future governed connector test would touch), not entity data
+        # a reviewer needs — and the release-governance instruction that created
+        # it requires Test-Administrator/admin entitlement explicitly. Output is
+        # already sanitized (pseudonymous refs, masked NPIs), so the gate is
+        # about who may PLAN retries, not about hiding data.
+        "/api/tefca/admin/pecos-retry-plan",
         # Platform audit trail — qalead (6). This is the ONE TEFCA read that is
         # not entity data: it is every user's authentication history, with their
         # email addresses and source IPs. Level 6 is "QA Lead — audit access, no
