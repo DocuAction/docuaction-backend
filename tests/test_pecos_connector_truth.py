@@ -10,11 +10,14 @@ otherwise reach the real npiregistry.cms.hhs.gov / data.cms.gov hosts.
 """
 from __future__ import annotations
 
+from io import BytesIO
+
 import pytest
 
 from app.Tefca import connectors as c
 from app.Tefca.connectors import (
     NPPESConnector,
+    OIGLEIEConnector,
     PECOSConnector,
     PECOS_UI_LABEL,
     PECOS_UI_SUBTITLE,
@@ -263,6 +266,69 @@ class TestInvalidInputNeverAdverse:
         assert result.data is None
 
 
+# ── Follow-up: OIG LEIE has the same false-negative shape, fixed the same way ─
+#
+# Found on inspection per the explicit follow-up request. `_LEIE_CACHE["by_npi"]
+# .get(npi, [])` misses identically whether `npi` is a real absent NPI or pure
+# garbage, so a malformed NPI used to reach the cache lookup and come back as a
+# clean SourceResult.ok(excluded=False) — never screened, reported as screened
+# clean. Covered by the same centralised validator as the other four
+# connectors; no new mechanism was needed.
+
+class TestLeieSharesTheCentralizedGate:
+    async def test_malformed_npi_is_rejected_before_any_cache_lookup(self, monkeypatch):
+        from app.Tefca import connectors as conn_mod
+
+        async def fail_if_called():
+            raise AssertionError("must not reach the exclusions cache for an invalid NPI")
+
+        monkeypatch.setattr(conn_mod, "_ensure_leie_loaded", fail_if_called)
+        result = await OIGLEIEConnector().lookup_by_npi("not-an-npi")
+        assert result.success is False
+        assert result.data is None
+        assert "npi_failed_validation" in result.error
+
+    async def test_checksum_invalid_npi_is_rejected_before_any_cache_lookup(self, monkeypatch):
+        from app.Tefca import connectors as conn_mod
+
+        async def fail_if_called():
+            raise AssertionError("must not reach the exclusions cache for an invalid NPI")
+
+        monkeypatch.setattr(conn_mod, "_ensure_leie_loaded", fail_if_called)
+        result = await OIGLEIEConnector().lookup_by_npi(INVALID_CHECKSUM_NPI)
+        assert result.success is False
+
+    async def test_no_npi_is_unavailable_not_a_clean_not_excluded(self, monkeypatch):
+        """Regression pin: this branch used to call _build([], qp) — a clean,
+        verified 'not excluded' — for an NPI that was never screened at all."""
+        from app.Tefca import connectors as conn_mod
+
+        async def fail_if_called():
+            raise AssertionError("must not reach the exclusions cache with no NPI")
+
+        monkeypatch.setattr(conn_mod, "_ensure_leie_loaded", fail_if_called)
+        result = await OIGLEIEConnector().lookup_by_npi("")
+        assert result.success is False
+        assert result.data is None  # never {"excluded": False} for a screen never run
+
+    async def test_valid_npi_still_reaches_the_cache_lookup(self, monkeypatch):
+        """The gate must not block legitimate traffic."""
+        from app.Tefca import connectors as conn_mod
+
+        calls = []
+
+        async def fake_ensure_loaded():
+            calls.append(True)
+            return True
+
+        monkeypatch.setattr(conn_mod, "_ensure_leie_loaded", fake_ensure_loaded)
+        monkeypatch.setattr(conn_mod, "_LEIE_CACHE", {"by_npi": {}, "by_name": {}, "row_count": 1})
+        result = await OIGLEIEConnector().lookup_by_npi(VALID_NPI)
+        assert calls == [True]
+        assert result.success is True
+        assert result.data["excluded"] is False
+
+
 # ── 10. Duplicate NPPES invocation is prevented ─────────────────────────────
 
 class TestDuplicateNppesCallPrevented:
@@ -323,10 +389,57 @@ class TestTruthfulLabels:
 
     def test_report_excel_header_and_limitation_are_truthful(self):
         from app.tefca_registry.report_excel import ENTITY_HEADERS, PECOS_PROXY_LIMITATION
+
+        # 1. The truthful proxy label is present.
         assert "PECOS (NPPES proxy)" in ENTITY_HEADERS
-        assert "PECOS" == next((h for h in ENTITY_HEADERS if h == "PECOS"), None) or True
+        # 2. The bare, uncaveated "PECOS" header — the one that could be read
+        #    as a direct PECOS verification — must be GONE, not just
+        #    supplemented. This is the assertion the earlier `or True` no-op
+        #    silently skipped.
+        assert "PECOS" not in ENTITY_HEADERS
+        assert not any(h.strip() == "PECOS" for h in ENTITY_HEADERS)
+        # 3. This sheet reports the legacy six-source model only. Genuine CMS
+        #    PECOS-derived sources (CMS_PPEF_ENROLLMENT / CMS_REVOCATION) are a
+        #    separate report and must never be introduced into this header
+        #    under a name that could be confused with the proxy column.
+        assert not any(("CMS PPEF" in h or "CMS Revocation" in h or "PECOS-derived" in h)
+                       for h in ENTITY_HEADERS)
         assert "not a direct" in PECOS_PROXY_LIMITATION.lower()
         assert "medicare enrollment" in PECOS_PROXY_LIMITATION.lower()
+
+    def test_report_excel_actually_renders_the_truthful_header_and_limitation(self):
+        """Wiring-level check: read back the real generated workbook rather
+        than only asserting on the source constants."""
+        from openpyxl import load_workbook
+
+        from app.tefca_registry.report_excel import ENTITY_HEADERS, build_weekly_excel
+
+        pecos_col = ENTITY_HEADERS.index("PECOS (NPPES proxy)") + 1  # openpyxl is 1-indexed
+        xlsx_bytes = build_weekly_excel(
+            {"report_type": "weekly", "contract": "TEST", "limitations": ["Existing caveat."]},
+            "TEST-REPORT-001",
+            entity_rows=[{
+                "review_id": "R1", "entity_name": "Test Entity", "npi": VALID_NPI,
+                "entity_type": "ORGANIZATION", "bucket": "B1", "rule_code": "R-1",
+                "rationale": "test",
+                "verification": {"nppes": {"status": "verified"},
+                                  "pecos": {"status": "verified"},
+                                  "oig_leie": {"status": "clear"}},
+            }],
+        )
+        wb = load_workbook(BytesIO(xlsx_bytes))
+        ws = wb["Entity Results"]
+        header_cell = ws.cell(row=1, column=pecos_col).value
+        assert header_cell == "PECOS (NPPES proxy)"
+        assert header_cell != "PECOS"
+
+        limitations_sheet = wb["Limitations"]
+        limitation_values = [
+            limitations_sheet.cell(row=r, column=1).value
+            for r in range(5, limitations_sheet.max_row + 1)
+        ]
+        assert any("PECOS (NPPES proxy)" in (v or "") and "not a direct" in (v or "").lower()
+                   for v in limitation_values), limitation_values
 
     def test_safe_upstream_request_id_is_host_scoped_and_allow_listed(self):
         cms_resp = FakeResponse(200, {}, headers={"X-Request-ID": "v-abc123"}, host="data.cms.gov")

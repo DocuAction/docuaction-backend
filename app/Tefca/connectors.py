@@ -539,13 +539,20 @@ class OIGLEIEConnector:
 
     async def lookup_by_npi(self, npi: str) -> SourceResult:
         qp = {"npi": npi}
-        if not npi:
-            # No NPI to match on — fall back to "no NPI-based exclusion found",
-            # which is a verified negative for the NPI dimension (name screening
-            # is a separate call). Not an outage.
-            if not await _ensure_leie_loaded():
-                return SourceResult.unavailable("OIG_LEIE", "exclusions CSV unavailable", qp, self.API_VERSION)
-            return self._build([], qp)
+        # Centralised gate (same defect class as NPPES/PECOS/CMS PPEF/CMS
+        # Revocation, found on inspection per the follow-up request): a
+        # malformed (non-empty) NPI used to fall straight through to the cache
+        # lookup below. `_LEIE_CACHE["by_npi"].get(garbage, [])` always misses
+        # on a garbage key, same as it would on a real absence, so a malformed
+        # NPI silently produced `SourceResult.ok(excluded=False)` — a verified
+        # "not excluded" for an identifier that was never actually screened.
+        # A missing NPI ("no NPI to match on") is a real, different condition
+        # (name screening is a separate call) but is folded into the same gate
+        # for a uniform contract: both now fail closed instead of returning a
+        # clean value, and both are distinguishable from an outage by reason.
+        rejection = npi_rejection_reason(npi)
+        if rejection:
+            return SourceResult.unavailable("OIG_LEIE", rejection, qp, self.API_VERSION)
         if not await _ensure_leie_loaded():
             return SourceResult.unavailable("OIG_LEIE", "exclusions CSV unavailable", qp, self.API_VERSION)
         matches = _LEIE_CACHE["by_npi"].get(npi.strip(), [])

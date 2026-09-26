@@ -32,9 +32,28 @@ candidates, so the NPPES-evidence lookup is windowed (`SCAN_WINDOW`, most
 recent generation first) rather than scanning every row. This is a documented
 heuristic, not a claim of exhaustive coverage — `entities_scanned` in the
 output says exactly how many rows were examined.
+
+CONSTANT QUERY COUNT — NOT N+1
+An earlier version of this planner issued one NPPES scan query plus one
+additional "existing target-source evidence" query PER CANDIDATE ENTITY,
+which is an N+1 pattern: with `SCAN_WINDOW` rows in flight, that is up to
+`SCAN_WINDOW` extra round trips to return at most 25 candidates. This version
+issues exactly TWO queries, regardless of how many rows are scanned or how
+many candidates qualify:
+
+  1. The bounded NPPES scan (`SCAN_WINDOW` rows, as before).
+  2. ONE bulk query for `TARGET_SOURCES` evidence, filtered to
+     `entity_id IN (<every NPI-valid entity from query 1>)` — never to the
+     full 24,589-record population, only to the (at most `SCAN_WINDOW`)
+     entities the first query already bounded.
+
+Everything else — deduplication, NPI validation, exclusion of entities that
+already carry full target coverage, the 25-candidate ceiling — is then pure
+Python over those two result sets; no further database round trips.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -56,7 +75,8 @@ MAX_CANDIDATES = 25
 TARGET_SOURCES = ("CMS_PPEF_ENROLLMENT", "CMS_REVOCATION")
 
 #: How many recent NPPES evidence rows to examine while looking for
-#: `limit` qualifying candidates. Bounds the read; see module docstring.
+#: qualifying candidates. Bounds BOTH queries this planner issues — see the
+#: module docstring's "constant query count" section.
 SCAN_WINDOW = 500
 
 assert LEGACY_PECOS_KEY not in TARGET_SOURCES  # excluded by construction, not by luck
@@ -72,16 +92,34 @@ def _mask_npi(npi: Optional[str]) -> Optional[str]:
     return f"...{digits[-4:]}" if len(digits) >= 4 else "...."
 
 
+def _opaque_ref(entity_id: str) -> str:
+    """A stable, deterministic, opaque stand-in for the real entity id.
+
+    This report is a dry-run PLAN, read by whoever decides whether to
+    authorize a retry — it is not itself the authorization channel, and has
+    no established contract requiring the raw internal id. A raw entity_id is
+    an unnecessarily exposed internal identifier for a document whose whole
+    purpose is "look, don't touch", so it is hashed rather than passed
+    through. The hash is deterministic (SHA-256, truncated) so two dry runs
+    against the same data produce the IDENTICAL reference — required for the
+    idempotency guarantee — and an operator with system access can still
+    resolve a given `candidate_ref` back to its entity by recomputing the same
+    hash over a candidate entity_id, without this report ever having printed
+    one.
+    """
+    return "cand-" + hashlib.sha256(str(entity_id).encode("utf-8")).hexdigest()[:12]
+
+
 @dataclass(frozen=True)
 class RetryCandidate:
-    entity_id: str
+    candidate_ref: str
     npi_masked: Optional[str]
     missing_sources: tuple
     reason: str
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "entity_id": self.entity_id,
+            "candidate_ref": self.candidate_ref,
             "npi_masked": self.npi_masked,
             "missing_sources": list(self.missing_sources),
             "reason": self.reason,
@@ -89,22 +127,27 @@ class RetryCandidate:
 
 
 async def plan_pecos_retry(db, limit: int = MAX_CANDIDATES) -> Dict[str, Any]:
-    """Dry run only. Reads `tefca_dimension_evidence`; writes nothing; calls no
-    upstream connector. Deterministic for a fixed database state: the NPPES
-    scan is ordered by (entity_id, generation_timestamp DESC), so two runs
-    against the same data return the same candidates in the same order.
+    """Dry run only. Reads `tefca_dimension_evidence` with exactly two
+    queries (see module docstring); writes nothing; calls no upstream
+    connector. Deterministic for a fixed database state: the NPPES scan is
+    ordered by (entity_id, generation_timestamp DESC) and the bulk
+    existing-evidence query is a pure set lookup, so two runs against the same
+    data return the same candidates in the same order with the same
+    `candidate_ref` values.
 
     Returns a sanitized report — see module docstring for what is and is not
-    included.
+    included. No name, address, full NPI or raw entity id is ever present in
+    the output.
     """
     limit = min(max(int(limit), 0), MAX_CANDIDATES)
     from app.Tefca.models import TEFCADimensionEvidence
 
-    # Most recent NPPES identity row per entity, within the scan window. NPPES
-    # is the primary NPI identity authority (D1), so its `original_values.npi`
-    # is the right place to read a candidate's NPI from — never a stored
-    # CMS_PPEF/CMS_REVOCATION row's own NPI field, which would presuppose the
-    # very evidence this planner is checking for absence.
+    # ── Query 1 of 2: most recent NPPES identity row per entity, within the
+    # scan window. NPPES is the primary NPI identity authority (D1), so its
+    # `original_values.npi` is the right place to read a candidate's NPI from
+    # — never a stored CMS_PPEF/CMS_REVOCATION row's own NPI field, which
+    # would presuppose the very evidence this planner is checking for
+    # absence.
     rows = (await db.execute(
         select(TEFCADimensionEvidence.entity_id, TEFCADimensionEvidence.original_values)
         .where(TEFCADimensionEvidence.source == "NPPES")
@@ -113,39 +156,55 @@ async def plan_pecos_retry(db, limit: int = MAX_CANDIDATES) -> Dict[str, Any]:
         .limit(SCAN_WINDOW)
     )).all()
 
+    # Dedup to the newest generation per entity (first occurrence wins, since
+    # rows are grouped by entity_id with newest generation first within each
+    # group), and split invalid NPIs out — all in Python, no further queries.
     seen_entities: set = set()
-    scanned = 0
-    excluded_invalid_npi = 0
-    excluded_has_evidence = 0
-    candidates: List[RetryCandidate] = []
-
+    npi_by_entity: Dict[str, Optional[str]] = {}
+    order: List[str] = []
     for entity_id, original_values in rows:
         entity_id = str(entity_id)
         if entity_id in seen_entities:
-            continue  # keep only the newest NPPES generation per entity
-        seen_entities.add(entity_id)
-        scanned += 1
-        if len(candidates) >= limit:
-            continue  # keep scanning only to report accurate exclusion counts
-
-        npi = (original_values or {}).get("npi")
-        if npi_rejection_reason(npi):
-            excluded_invalid_npi += 1
             continue
+        seen_entities.add(entity_id)
+        order.append(entity_id)
+        npi_by_entity[entity_id] = (original_values or {}).get("npi")
+    scanned = len(order)
 
-        existing = (await db.execute(
-            select(TEFCADimensionEvidence.source)
-            .where(TEFCADimensionEvidence.entity_id == entity_id,
+    excluded_invalid_npi = 0
+    valid_entity_ids: List[str] = []
+    for entity_id in order:
+        if npi_rejection_reason(npi_by_entity[entity_id]):
+            excluded_invalid_npi += 1
+        else:
+            valid_entity_ids.append(entity_id)
+
+    # ── Query 2 of 2: ONE bulk query for existing TARGET_SOURCES evidence,
+    # scoped to only the NPI-valid entities from query 1 (never to the full
+    # entity population). Replaces the old per-candidate query entirely.
+    existing_by_entity: Dict[str, set] = {}
+    if valid_entity_ids:
+        existing_rows = (await db.execute(
+            select(TEFCADimensionEvidence.entity_id, TEFCADimensionEvidence.source)
+            .where(TEFCADimensionEvidence.entity_id.in_(valid_entity_ids),
                    TEFCADimensionEvidence.source.in_(TARGET_SOURCES))
-        )).scalars().all()
-        missing = tuple(s for s in TARGET_SOURCES if s not in set(existing))
+        )).all()
+        for entity_id, source in existing_rows:
+            existing_by_entity.setdefault(str(entity_id), set()).add(source)
+
+    excluded_has_evidence = 0
+    candidates: List[RetryCandidate] = []
+    for entity_id in valid_entity_ids:
+        existing = existing_by_entity.get(entity_id, set())
+        missing = tuple(s for s in TARGET_SOURCES if s not in existing)
         if not missing:
             excluded_has_evidence += 1
             continue
-
+        if len(candidates) >= limit:
+            continue  # keep iterating (no further queries) only to report accurate exclusion counts
         candidates.append(RetryCandidate(
-            entity_id=entity_id,
-            npi_masked=_mask_npi(npi),
+            candidate_ref=_opaque_ref(entity_id),
+            npi_masked=_mask_npi(npi_by_entity[entity_id]),
             missing_sources=missing,
             reason=f"no current-generation evidence on file for {', '.join(missing)}",
         ))
@@ -155,6 +214,7 @@ async def plan_pecos_retry(db, limit: int = MAX_CANDIDATES) -> Dict[str, Any]:
         "executed_retry": False,
         "upstream_calls_made": 0,
         "database_writes_made": 0,
+        "database_queries_made": 2 if valid_entity_ids else 1,
         "target_sources": list(TARGET_SOURCES),
         "excludes_legacy_pecos_proxy": True,
         "population_scope": (
@@ -162,6 +222,11 @@ async def plan_pecos_retry(db, limit: int = MAX_CANDIDATES) -> Dict[str, Any]:
             "evidence row on file (within the most recent "
             f"{SCAN_WINDOW}-row window), not from a full entity-population scan. "
             "See module docstring."
+        ),
+        "identifier_note": (
+            "candidate_ref is a deterministic, opaque, non-reversible reference "
+            "(not the internal entity id); npi_masked shows only the last 4 digits. "
+            "No name, address, full NPI or raw entity id is included."
         ),
         "candidates": [c.to_dict() for c in candidates],
         "candidate_count": len(candidates),
