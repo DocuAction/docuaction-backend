@@ -98,6 +98,7 @@ jobs:
       - name: Run the database-backed isolation suites
         run: |
           python -m pytest \
+            tests/test_reconciliation_evidence_shape.py \
             tests/test_report_delivery_isolation_p0.py \
             tests/test_delivery_rollups_isolation.py \
             tests/test_identity_provenance_and_controls.py \
@@ -108,7 +109,6 @@ jobs:
             tests/test_report_authorization.py \
             tests/test_report_id_transaction_isolation_2026_09_21.py \
             tests/test_delivery_runner_events.py \
-            tests/test_reconciliation_evidence_shape.py \
             -v --tb=short -rs --junitxml=isolation-results.xml
       - name: Fail if any isolation test was skipped for want of a database
         run: |
