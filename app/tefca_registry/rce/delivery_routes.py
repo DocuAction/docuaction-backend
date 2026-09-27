@@ -71,6 +71,7 @@ here directly against the traceability tables and never depend on lane P.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 
 from sqlalchemy.exc import IntegrityError
@@ -108,6 +109,12 @@ EVIDENCE_ROLE = "reviewer"
 REVIEWER_BLOCKS = ("records", "exceptions", "lineage", "audit")
 #: Every block `availability` speaks about.
 ALL_BLOCKS = ("records", "exceptions", "lineage", "audit", "verification", "reports")
+
+#: Bounds the detail endpoint's per-request fan-out sessions GLOBALLY, so a
+#: handful of concurrent detail views cannot exhaust the engine pool
+#: (pool_size=5, max_overflow=10): at most 8 fan-out connections in flight
+#: across all requests, on top of the request sessions themselves.
+_DETAIL_FANOUT = asyncio.Semaphore(8)
 
 AVAILABLE = "available"
 NOT_YET = "not_yet"
@@ -597,7 +604,7 @@ async def delivery_job_detail(
     include: Optional[str] = Query(
         None,
         description="Comma-separated heavy blocks to compute inline: 'audit', "
-                    "'lineage'. Omitted by default (QA108-20260927-002): the "
+                    "'lineage', 'records'. Omitted by default (QA108-20260927-002): the "
                     "audit count ILIKE-scans the full registry audit table and "
                     "lineage counts entity versions across every promoted "
                     "entity, which together pushed this endpoint to 11-16 s on "
@@ -612,7 +619,7 @@ async def delivery_job_detail(
     from app.tefca_registry.rce import models as m
 
     included = {p.strip().lower() for p in (include or "").split(",") if p.strip()}
-    unknown = included - {"audit", "lineage"}
+    unknown = included - {"audit", "lineage", "records"}
     if unknown:
         raise HTTPException(422, f"unknown include block(s): {', '.join(sorted(unknown))}")
 
@@ -640,31 +647,83 @@ async def delivery_job_detail(
     job_state = job.state
     intake_id = intake.id if intake is not None else None
 
-    events = await stage_events.timeline(db, job.id)
+    # Pre-read every job/intake attribute the fan-out tasks need, so no task
+    # can trigger a lazy load on the REQUEST session from inside the gather.
+    received = job.records_received
+    if received is None and intake is not None:
+        received = intake.record_count
+    records_declared = intake.record_count if intake is not None else None
+    records_processed = job.records_processed
+
+    # ── Fan-out (QA108-20260927-002, second pass). The blocks below are
+    # independent reads over 24,589-record evidence tables; run sequentially
+    # on the one request session they cost 12-15 s wall-clock (measured on
+    # DEV after the audit/lineage deferral). Each task now runs on ITS OWN
+    # short-lived session, bounded by a module semaphore so two concurrent
+    # detail views stay inside the engine pool (5 + 10 overflow). The
+    # request session is NOT used inside the gather. Content is unchanged —
+    # the same helpers, the same rows, the same answers, concurrently.
+    from app.core.database import async_session_maker
+
+    async def _own_session(fn, *args):
+        async with _DETAIL_FANOUT:
+            async with async_session_maker() as s:
+                return await fn(s, *args)
+
+    async def _status_task(s):
+        return await status_for_job(s, job)
+
+    async def _snapshot_pair(s):
+        snap = await latest_snapshot(s, job_id)
+        return snap, await snapshot_history_count(s, job_id)
+
+    fanout = [
+        _own_session(stage_events.timeline, job_id),
+        _own_session(_status_task),
+        _own_session(_snapshot_pair),
+        _own_session(_reports, job_id),
+        _own_session(_verification_block, intake, job),
+    ]
+    exceptions_idx = None
+    if reviewer_ok and intake is not None:
+        exceptions_idx = len(fanout)
+        fanout.append(_own_session(_exceptions_block, intake_id))
+    results = await asyncio.gather(*fanout)
+    events, status, (snapshot, history_count), reports, verification = results[:5]
+    exceptions_block_value = results[exceptions_idx] if exceptions_idx is not None else None
+
     summary = stage_events.summarise(events)
     failed_stage = summary["failed_stage"] or (job.stage if job.state == "FAILED" else None)
-
-    status = await status_for_job(db, job)
-    snapshot = await latest_snapshot(db, job.id)
     snapshot_dict = snapshot.to_dict() if snapshot is not None else None
-    history_count = await snapshot_history_count(db, job.id)
 
     job_dict = job.to_dict()
     job_dict["failed_stage"] = failed_stage
     job_dict["remediation_guidance"] = (
         _guidance(failed_stage) if job.state == "FAILED" else None)
 
-    received = job.records_received
-    if received is None and intake is not None:
-        received = intake.record_count
-
     disposition_block = None
-    if intake is not None:
-        counts = await dispositions.counts_for_intake(db, intake.id)
+    if snapshot is not None:
+        # The pipeline persists a NEW snapshot on every disposition (trigger
+        # DISPOSITION — verified live 2026-09-27: an authorized disposition at
+        # 13:09Z produced snapshot sequence 2 within seconds), so the latest
+        # snapshot's evidence IS the current disposition state. Serving it
+        # replaces two aggregate scans over the full event view per page view.
+        ev = snapshot.source_evidence or {}
+        counts = {k: int(v) for k, v in (ev.get("dispositions") or {}).items()
+                  if k != "total" and isinstance(v, (int, float))}
+        disposition_block = {
+            **{k.lower(): v for k, v in counts.items()},
+            "total": sum(counts.values()),
+            "equation": dispositions.equation(counts, int(received or 0)),
+            "unexplained": ev.get("records_without_disposition"),
+            "source": "persisted_snapshot",
+        }
+    elif intake is not None:
+        counts = await dispositions.counts_for_intake(db, intake_id)
         disposition_block = {
             **{k.lower(): v for k, v in counts.items()},
             "equation": dispositions.equation(counts, int(received or 0)),
-            "unexplained": await dispositions.records_without_disposition(db, intake.id),
+            "unexplained": await dispositions.records_without_disposition(db, intake_id),
         }
 
     accounted = None
@@ -676,24 +735,27 @@ async def delivery_job_detail(
     counts_block = {
         "records_received": received,
         "records_accounted": accounted,
-        "records_processed": job.records_processed,
-        "records_declared": intake.record_count if intake is not None else None,
+        "records_processed": records_processed,
+        "records_declared": records_declared,
     }
     if disposition_block:
         for key in ("created", "updated", "matched_unchanged", "held", "rejected",
                     "missing_key", "excluded"):
             counts_block[key] = disposition_block.get(key)
 
-    reports = await _reports(db, job.id)
-    verification = await _verification_block(db, intake, job)
-
     blocks: Dict[str, Any] = {"records": None, "exceptions": None, "lineage": None,
                               "audit": None, "verification": verification,
                               "reports": reports}
     deferred_blocks: list = []
     if reviewer_ok and intake is not None:
-        blocks["records"] = await _records_block(db, intake_id)
-        blocks["exceptions"] = await _exceptions_block(db, intake_id)
+        # records joins audit + lineage as deferred-by-default: its three
+        # GROUP BY scans over 24,589 source/curated rows serve a summary the
+        # Records tab does not read (the tab pages its own endpoint).
+        if "records" in included:
+            blocks["records"] = await _records_block(db, intake_id)
+        else:
+            deferred_blocks.append("records")
+        blocks["exceptions"] = exceptions_block_value
         # audit + lineage stay None unless explicitly included: their inline
         # summaries duplicate what the Audit History and Changes & Lineage
         # tabs fetch from their own endpoints, at full-table-scan cost.
