@@ -594,11 +594,27 @@ async def resolve_job(db, ident: str):
             summary="Everything about one delivery, keyed by job (or intake) id")
 async def delivery_job_detail(
     job_id: str,
+    include: Optional[str] = Query(
+        None,
+        description="Comma-separated heavy blocks to compute inline: 'audit', "
+                    "'lineage'. Omitted by default (QA108-20260927-002): the "
+                    "audit count ILIKE-scans the full registry audit table and "
+                    "lineage counts entity versions across every promoted "
+                    "entity, which together pushed this endpoint to 11-16 s on "
+                    "the 24,589-record delivery - and BOTH tabs fetch their "
+                    "own dedicated endpoints anyway. Availability still "
+                    "reports these blocks honestly; only the inline payload "
+                    "is deferred."),
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role("viewer")),
 ):
     from app.tefca_registry.rce import dispositions, identifier_decisions, stage_events
     from app.tefca_registry.rce import models as m
+
+    included = {p.strip().lower() for p in (include or "").split(",") if p.strip()}
+    unknown = included - {"audit", "lineage"}
+    if unknown:
+        raise HTTPException(422, f"unknown include block(s): {', '.join(sorted(unknown))}")
 
     resolved = await resolve_job(db, job_id)
     if resolved[1] is None:
@@ -674,20 +690,39 @@ async def delivery_job_detail(
     blocks: Dict[str, Any] = {"records": None, "exceptions": None, "lineage": None,
                               "audit": None, "verification": verification,
                               "reports": reports}
+    deferred_blocks: list = []
     if reviewer_ok and intake is not None:
         blocks["records"] = await _records_block(db, intake_id)
         blocks["exceptions"] = await _exceptions_block(db, intake_id)
-        blocks["lineage"] = await _lineage_block(db, intake_id, identifier_decisions)
-        blocks["audit"] = await _audit_block(db, job_id, intake_id)
+        # audit + lineage stay None unless explicitly included: their inline
+        # summaries duplicate what the Audit History and Changes & Lineage
+        # tabs fetch from their own endpoints, at full-table-scan cost.
+        if "lineage" in included:
+            blocks["lineage"] = await _lineage_block(db, intake_id, identifier_decisions)
+        else:
+            deferred_blocks.append("lineage")
+        if "audit" in included:
+            blocks["audit"] = await _audit_block(db, job_id, intake_id)
+        else:
+            deferred_blocks.append("audit")
 
     availability = {
         block: _availability(block, job_state=job_state, intake_id=intake_id,
-                             reviewer_ok=reviewer_ok, value=blocks[block],
+                             reviewer_ok=reviewer_ok,
+                             # A deferred block is not an UNAVAILABLE block: the
+                             # data exists and its tab endpoint serves it - the
+                             # sentinel keeps the availability answer identical
+                             # to what computing the block would have said.
+                             value=({} if block in deferred_blocks else blocks[block]),
                              snapshot=snapshot_dict)
         for block in ALL_BLOCKS}
 
     return {
         "resolved_from": resolved_from,
+        # Honest deferral marker: these blocks were not computed inline (their
+        # tabs fetch dedicated endpoints); pass ?include=audit,lineage to get
+        # them in this payload.
+        "blocks_deferred": deferred_blocks,
         "job": job_dict,
         "status": {"processing_outcome": status.get("processing_outcome"),
                    "review_state": status.get("review_state"),

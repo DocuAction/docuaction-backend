@@ -297,6 +297,12 @@ async def _replay_for_key(db, key: str, user_id) -> Optional[Dict[str, Any]]:
     }
 
 
+#: Hard wall-clock budget for one on-request PDF render. Generous for every
+#: report CI renders in ~1 minute total, far short of the platform's ~230 s
+#: connection drop that used to be the only "answer" a slow render gave.
+PDF_RENDER_BUDGET_SECONDS = 120.0
+
+
 async def _pdf_response(html: str, report_id: str) -> Response:
     """Render to PDF, or answer 503 with the reason.
 
@@ -320,7 +326,20 @@ async def _pdf_response(html: str, report_id: str) -> Response:
     if not pdf_available():
         raise HTTPException(503, f"PDF generation is unavailable: {unavailable_reason()}")
     try:
-        pdf = await asyncio.to_thread(render_pdf, html, title=report_id)
+        # HARD render budget (QA108-20260927-004): on DEV a per-request render
+        # was observed answering NOTHING for 200+ seconds until the platform
+        # dropped the connection - a hung download with no explanation. The
+        # budget converts that into an honest 503 the caller can act on.
+        # (asyncio.wait_for cannot stop the worker thread itself; the response
+        # stops waiting, which is the part the caller experiences.)
+        pdf = await asyncio.wait_for(
+            asyncio.to_thread(render_pdf, html, title=report_id),
+            timeout=PDF_RENDER_BUDGET_SECONDS)
+    except asyncio.TimeoutError:
+        raise HTTPException(503, (
+            f"PDF rendering exceeded the {PDF_RENDER_BUDGET_SECONDS:.0f}s budget "
+            "for this document. The stored HTML and CSV downloads carry the same "
+            "content; retry the PDF when the service is less loaded."))
     except PDFEngineUnavailable as exc:
         raise HTTPException(503, str(exc))
     return Response(
@@ -328,7 +347,8 @@ async def _pdf_response(html: str, report_id: str) -> Response:
         headers=download_headers(safe_filename(report_id, "pdf")))
 
 
-async def _stored(db, report_id: str, job_id: Optional[str] = None):
+async def _stored(db, report_id: str, job_id: Optional[str] = None, *,
+                  defer_html: bool = False):
     """The stored report, and — when the caller acts in a delivery context —
     proof that it is THAT delivery's report.
 
@@ -337,14 +357,21 @@ async def _stored(db, report_id: str, job_id: Optional[str] = None):
     refused with 409 `REPORT_DELIVERY_MISMATCH` and the refusal is audited.
     Authorising by report id alone is how one delivery's Reports tab served
     another delivery's CSV (QA-034).
+
+    `defer_html=True` (QA108-20260927-005) skips loading `report_html` — 29 MB
+    for the 24,589-record delivery report — for callers that only read the
+    frozen dataset (CSV, DOCX). The deferred column must then never be touched.
     """
     from app.reports.data.delivery_report_links import (DELIVERY_MISMATCH,
                                                         stored_delivery)
     from app.tefca_registry import models as reg
 
-    row = (await db.execute(
-        select(reg.ReviewReport).where(reg.ReviewReport.report_id == report_id)
-    )).scalar_one_or_none()
+    stmt = select(reg.ReviewReport).where(reg.ReviewReport.report_id == report_id)
+    if defer_html:
+        from sqlalchemy.orm import defer
+
+        stmt = stmt.options(defer(reg.ReviewReport.report_html))
+    row = (await db.execute(stmt)).scalar_one_or_none()
     if row is None:
         raise HTTPException(404, f"No report exists with id {report_id}")
     if job_id:
@@ -365,6 +392,54 @@ async def _stored(db, report_id: str, job_id: Optional[str] = None):
                           f"Nothing was served."),
                 "code": DELIVERY_MISMATCH})
     return row
+
+
+async def _stored_html_light(db, report_id: str, job_id: Optional[str] = None):
+    """(row, file_stem) for the HTML/PDF download routes, with `report_data`
+    NEVER loaded (QA108-20260927-005).
+
+    The full `_stored()` loads the whole entity: for the 24,589-record
+    delivery report that is a 29 MB `report_html` PLUS a multi-megabyte
+    frozen dataset the download route never reads — measured >44 s to first
+    byte on DEV. The scope check and file stem need exactly three small
+    values from `report_data`, so they come from a JSONB path projection and
+    the entity is loaded with the column deferred. Same 404/409 semantics,
+    same audit on refusal, same bytes served."""
+    from sqlalchemy.orm import defer
+
+    from app.reports.data.delivery_report_links import DELIVERY_MISMATCH
+    from app.tefca_registry import models as reg
+
+    R = reg.ReviewReport
+    meta = (await db.execute(select(
+        R.report_data["dataset"]["delivery"]["job_id"].label("described_job"),
+        R.report_data["dataset"]["branding"]["contract_number"].label("contract_branded"),
+        R.report_data["dataset"]["contract_number"].label("contract_plain"),
+    ).where(R.report_id == report_id))).first()
+    row = (await db.execute(
+        select(R).options(defer(R.report_data)).where(R.report_id == report_id)
+    )).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(404, f"No report exists with id {report_id}")
+    if job_id:
+        described_job = str(meta.described_job) if meta and meta.described_job else None
+        if described_job != str(job_id):
+            from app.reports.data.delivery_report_links import record_report_download_failure
+
+            await record_report_download_failure(
+                db, report_id=report_id, report_type=row.report_type, fmt="any",
+                actor="unknown", code=DELIVERY_MISMATCH,
+                reason="stored report describes a different delivery than the one named",
+                extra={"requested_job_id": str(job_id),
+                       "stored_job_id": described_job})
+            raise HTTPException(409, {
+                "error": (f"Report {report_id} does not belong to delivery job "
+                          f"{job_id}; it describes "
+                          f"{described_job or 'no delivery (global scope)'}. "
+                          f"Nothing was served."),
+                "code": DELIVERY_MISMATCH})
+    contract = (meta.contract_branded or meta.contract_plain) if meta else None
+    return row, _stem_for(row, contract=contract)
 
 
 JOB_SCOPE_QUERY = Query(
@@ -454,17 +529,26 @@ def _deliverable_meta(report_type: str) -> Dict[str, Any]:
             "kind": meta.get("kind")}
 
 
-def _stem_for(row) -> str:
+_UNSET = object()
+
+
+def _stem_for(row, contract=_UNSET) -> str:
     """Traceable file stem for one stored report (contract, task, deliverable,
     cadence, period, report id). Falls back to the bare report id for report
-    families that are not contract deliverables."""
+    families that are not contract deliverables.
+
+    `contract` may be supplied by a caller that loaded the report row with
+    `report_data` DEFERRED (QA108-20260927-005): touching the attribute on such
+    a row would ask the ORM for a lazy async load it cannot perform. The
+    override carries the same value, extracted by a cheap JSONB path query."""
     from app.reports.branding import deliverable_filename_stem
 
-    data = row.report_data or {}
-    dataset = data.get("dataset") or {}
+    if contract is _UNSET:
+        data = row.report_data or {}
+        dataset = data.get("dataset") or {}
+        branding = dataset.get("branding") or {}
+        contract = branding.get("contract_number") or dataset.get("contract_number")
     meta = _deliverable_meta(row.report_type)
-    branding = dataset.get("branding") or {}
-    contract = branding.get("contract_number") or dataset.get("contract_number")
     if not (meta.get("deliverable") and contract):
         return row.report_id
     return deliverable_filename_stem(
@@ -765,7 +849,7 @@ async def get_report_html(
     on read would quietly rewrite history the moment the underlying entities
     changed.
     """
-    row = await _stored(db, report_id, job_id)
+    row, stem = await _stored_html_light(db, report_id, job_id)
     if not row.report_html:
         raise HTTPException(404, f"Report {report_id} has no stored HTML.")
     await _audit_download(db, row, "html", user, job_id=job_id)
@@ -773,7 +857,7 @@ async def get_report_html(
     # recipient received; rendering it on this origin would execute whatever
     # markup it contains with the application's own privileges.
     return Response(content=row.report_html, media_type="text/html",
-                    headers=download_headers(safe_filename(_stem_for(row), "html")))
+                    headers=download_headers(safe_filename(stem, "html")))
 
 
 @router.get("/{report_id}/pdf", summary="Download a report as PDF")
@@ -785,10 +869,10 @@ async def get_report_pdf(
     user=Depends(require_role_audited("reviewer", resource_type="report")),
 ):
     """PDF rendered from the STORED HTML — same document, different container."""
-    row = await _stored(db, report_id, job_id)
+    row, stem = await _stored_html_light(db, report_id, job_id)
     if not row.report_html:
         raise HTTPException(404, f"Report {report_id} has no stored HTML to render.")
-    response = await _pdf_response(row.report_html, _stem_for(row))
+    response = await _pdf_response(row.report_html, stem)
     await _audit_download(db, row, "pdf", user, job_id=job_id)
     return response
 
@@ -826,7 +910,7 @@ async def get_report_docx(
     page numbers, and document properties. Built from the stored dataset."""
     from app.reports.engine.docx_engine import DOCX_CONTENT_TYPE, docx_available
 
-    row = await _stored(db, report_id, job_id)
+    row = await _stored(db, report_id, job_id, defer_html=True)
     if not docx_available():
         raise HTTPException(503, "DOCX generation is unavailable: python-docx is not installed.")
     if not (row.report_data or {}).get("dataset"):
@@ -898,7 +982,7 @@ async def get_report_csv(
     """
     from app.reports.engine.csv_engine import to_bytes
 
-    row = await _stored(db, report_id, job_id)
+    row = await _stored(db, report_id, job_id, defer_html=True)
     if not (row.report_data or {}).get("dataset"):
         raise HTTPException(404, f"Report {report_id} has no stored dataset.")
     await _audit_download(db, row, "csv", user, job_id=job_id)

@@ -317,7 +317,12 @@ async def verify_stored_file(db, intake_id) -> Dict[str, Any]:
         return {"checked": False, "reason": "intake not found"}
     path = intake.storage_path
     if not path or not os.path.exists(path):
-        return {"checked": False, "reason": f"stored file not found at {path}",
+        # Name the FILE, never the container path (QA108-20260927-010): the
+        # reason travels into API bodies, and an internal filesystem layout is
+        # not something a response should teach.
+        return {"checked": False,
+                "reason": ("stored file not found: "
+                           f"{os.path.basename(path) if path else '(no path recorded)'}"),
                 "intact": None}
     with open(path, "rb") as handle:
         recomputed = hashlib.sha256(handle.read()).hexdigest()
