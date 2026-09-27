@@ -74,7 +74,8 @@ def as_role(client):
 
         app.dependency_overrides[get_db] = _override
         token = create_access_token({"sub": user.id, "role": role}, is_admin=(role == "admin"))
-        return lambda path: client.get(path, headers={"Authorization": f"Bearer {token}"})
+        return lambda path, extra=None: client.get(
+            path, headers={"Authorization": f"Bearer {token}", **(extra or {})})
 
     yield make
     from app.main import app as _app
@@ -83,11 +84,21 @@ def as_role(client):
 
 
 FAKE_PLAN = {
-    "dry_run": True, "planner_version": "1.1.0", "intake_scope": "fake-intake",
+    "dry_run": True, "planner_version": "1.2.0", "intake_scope": "fake-intake",
     "executed_retry": False, "upstream_calls_made": 0, "database_writes_made": 0,
     "database_queries_made": 2,
     "target_sources": ["CMS_PPEF_ENROLLMENT", "CMS_REVOCATION"],
     "excludes_legacy_pecos_proxy": True,
+    # 1.2.0 diagnostics — the closed funnel: 3 scanned = 0 missing + 1 invalid
+    # + 1 already-evidenced + 1 eligible.
+    "scan_window": 500, "scan_rows_examined": 3, "scan_truncated": False,
+    "eligible_count": 1, "returned_count": 1, "truncated_by_limit": False,
+    "exclusion_counts": {"missing_npi": 0, "invalid_npi": 1,
+                          "already_has_both_target_sources": 1},
+    "missing_source_counts": {"CMS_PPEF_ENROLLMENT_only": 0,
+                               "CMS_REVOCATION_only": 0, "both": 1},
+    "sources_considered": ["NPPES", "CMS_PPEF_ENROLLMENT", "CMS_REVOCATION"],
+    "would_call_upstream": False, "would_write": False,
     "population_scope": "test", "identifier_note": "candidate_ref is pseudonymous; no name/address/full NPI/raw id",
     # The fake DELIBERATELY carries npi_masked, exactly as the real planner
     # does internally: the tests below prove the ENDPOINT strips it, so no
@@ -221,6 +232,104 @@ def test_missing_job_parameter_is_a_validation_error(as_role, fake_planner):
     assert r.status_code == 422
 
 
+def test_funnel_fields_pass_through_and_reconcile(as_role, fake_planner):
+    """The 1.2.0 diagnostic funnel is closed: scanned = every exclusion +
+    eligible, and the endpoint surfaces it without inventing numbers."""
+    body = as_role("admin")(f"{URL}?delivery_job_id={KNOWN_JOB}").json()
+    ec = body["exclusion_counts"]
+    assert set(ec) == {"missing_npi", "invalid_npi", "already_has_both_target_sources"}
+    assert body["scanned_count"] == (ec["missing_npi"] + ec["invalid_npi"]
+                                     + ec["already_has_both_target_sources"]
+                                     + body["eligible_count"])
+    assert body["excluded_invalid_npi_count"] == ec["missing_npi"] + ec["invalid_npi"]
+    assert body["excluded_existing_evidence_count"] == ec["already_has_both_target_sources"]
+    assert set(body["missing_source_counts"]) == {"CMS_PPEF_ENROLLMENT_only",
+                                                   "CMS_REVOCATION_only", "both"}
+    assert body["truncated"] is False and body["scan_window"] == 500
+    assert body["returned_count"] == body["selected_count"]
+    assert body["would_call_upstream"] is False and body["would_write"] is False
+    assert body["sources_considered"] == ["NPPES", "CMS_PPEF_ENROLLMENT", "CMS_REVOCATION"]
+
+
+def test_correlation_header_is_cors_exposed_and_matches_body(as_role, fake_planner):
+    """A cross-origin browser could not read X-Correlation-Id (only CORS-
+    safelisted headers like Cache-Control are visible without
+    Access-Control-Expose-Headers). The header must be exposed BY NAME and
+    equal the body's correlation_id — origins/methods/credentials unchanged."""
+    r = as_role("admin")(f"{URL}?delivery_job_id={KNOWN_JOB}",
+                         extra={"Origin": "http://localhost:3000"})
+    assert r.status_code == 200, r.text
+    assert r.headers.get("access-control-allow-origin") == "http://localhost:3000"
+    expose = r.headers.get("access-control-expose-headers", "")
+    assert "x-correlation-id" in expose.lower(), expose
+    assert r.headers["X-Correlation-Id"] == r.json()["correlation_id"]
+
+
+# ── planner unit tests (pure-Python fake session — run everywhere) ───────────
+
+class _PlanRows:
+    def __init__(self, rows): self._rows = rows
+    def all(self): return self._rows
+
+
+class _PlanDB:
+    """Feeds the planner's two SELECTs from canned batches; any write is a
+    failure by construction."""
+    def __init__(self, batches): self._batches = list(batches)
+    async def execute(self, stmt, *a, **k): return _PlanRows(self._batches.pop(0))
+    def add(self, *a, **k): raise AssertionError("planner must never write")
+    async def commit(self): raise AssertionError("planner must never commit")
+    async def flush(self): raise AssertionError("planner must never flush")
+
+
+async def test_scan_truncation_is_reported_and_limit_is_only_a_cap():
+    """SCAN_WINDOW bounds ROWS; on a population larger than the window the
+    plan must say truncated=True (the observed DEV case: 246 entities scanned
+    of a 24,502-entity delivery). `limit` caps the RETURNED list only — it
+    never shrinks the scan or the funnel counts."""
+    from app.Tefca.pecos_retry_planner import SCAN_WINDOW, plan_pecos_retry
+
+    rows = [(f"entity-{i:05d}", {"npi": VALID_NPI}) for i in range(SCAN_WINDOW + 1)]
+    plan = await plan_pecos_retry(_PlanDB([rows, []]), 25)
+
+    assert plan["scan_truncated"] is True
+    assert plan["scan_rows_examined"] == SCAN_WINDOW
+    assert plan["entities_scanned"] == SCAN_WINDOW          # the 501st row is NOT processed
+    assert plan["eligible_count"] == SCAN_WINDOW            # none have target evidence
+    assert plan["returned_count"] == plan["candidate_count"] == 25
+    assert plan["truncated_by_limit"] is True
+    assert plan["max_candidates"] == 25
+    # Funnel closure holds even when truncated.
+    ec = plan["exclusion_counts"]
+    assert plan["entities_scanned"] == (ec["missing_npi"] + ec["invalid_npi"]
+                                        + ec["already_has_both_target_sources"]
+                                        + plan["eligible_count"])
+    assert plan["missing_source_counts"]["both"] == SCAN_WINDOW
+    assert plan["would_call_upstream"] is False and plan["would_write"] is False
+
+
+async def test_small_population_is_not_truncated_and_funnel_splits_npi_reasons():
+    """Three entities: valid-no-evidence (eligible), missing NPI, invalid NPI.
+    The funnel distinguishes 'missing' from 'invalid' while the legacy
+    combined counter keeps its 1.1.0 meaning."""
+    from app.Tefca.pecos_retry_planner import plan_pecos_retry
+
+    rows = [("entity-a", {"npi": VALID_NPI}),
+            ("entity-b", {}),                       # no NPI on the identity row
+            ("entity-c", {"npi": "1234567890"})]    # Luhn-invalid
+    plan = await plan_pecos_retry(_PlanDB([rows, []]), 25)
+
+    assert plan["scan_truncated"] is False
+    assert plan["entities_scanned"] == 3
+    assert plan["exclusion_counts"] == {"missing_npi": 1, "invalid_npi": 1,
+                                         "already_has_both_target_sources": 0}
+    assert plan["excluded_invalid_npi"] == 2                # combined, unchanged meaning
+    assert plan["eligible_count"] == plan["returned_count"] == 1
+    assert plan["truncated_by_limit"] is False
+    blob = str(plan["candidates"])
+    assert VALID_NPI not in blob and "entity-a" not in blob  # still sanitized
+
+
 # ── planner integration (real PostgreSQL — isolation-postgres CI job) ────────
 
 pytestmark_db = pytest.mark.skipif(not _database_available(),
@@ -314,7 +423,85 @@ def test_seeded_delivery_plan_is_bounded_isolated_and_write_free():
     assert plan["candidate_count"] <= 25
     assert queries == 2                                   # constant, not N+1, with scope applied
     assert plan["candidates"] == plan_again["candidates"]  # idempotent on unchanged data
+    # 1.2.0 funnel against real data: closed, and untruncated at this size.
+    ec = plan["exclusion_counts"]
+    assert plan["entities_scanned"] == (ec["missing_npi"] + ec["invalid_npi"]
+                                        + ec["already_has_both_target_sources"]
+                                        + plan["eligible_count"])
+    assert plan["scan_truncated"] is False
+    assert plan["eligible_count"] >= plan["returned_count"] == plan["candidate_count"]
     # Sanitization against real data.
     blob = str(plan["candidates"])
     for forbidden in (VALID_NPI, e_sel, e_evd, e_bad):
         assert forbidden not in blob
+
+
+@pytestmark_db
+def test_zero_eligible_delivery_reconciles_and_unavailable_counts_as_coverage():
+    """The observed DEV outcome in miniature: every valid-NPI entity already
+    carries rows for both target sources, so eligible_count is 0 and the
+    funnel still closes exactly.
+
+    Includes the CHARACTERIZATION of current policy: an entity whose only
+    target-source rows are disposition=UNAVAILABLE (an outage record, rule
+    CMS_OUTAGE_IS_NOT_A_VERIFICATION_FAILURE) is ALSO excluded as
+    already-evidenced, because the planner's coverage check is row-presence,
+    not disposition. Whether an outage row should count as coverage for RETRY
+    planning is a recorded open policy question (DEV holds exactly one such
+    entity in the September delivery) — this test pins today's behaviour so
+    any future policy change is deliberate, visible, and reviewed."""
+    from sqlalchemy import text as sql
+    from app.core.database import async_session_maker
+    from app.Tefca.pecos_retry_planner import plan_pecos_retry
+
+    a = seed_delivery(issues=3)
+    intake_a = a["intake_id"]
+    e_pass, e_unav, e_pass2 = (str(uuid.uuid4()) for _ in range(3))
+
+    async def _seed_and_plan():
+        async with async_session_maker() as s:
+            for ent in (e_pass, e_unav, e_pass2):
+                linked = await s.execute(sql(
+                    "UPDATE rce_curated_records SET canonical_entity_id = CAST(:ent AS uuid) "
+                    "WHERE id = (SELECT id FROM rce_curated_records "
+                    "            WHERE source_intake_id = CAST(:intake AS uuid) "
+                    "              AND canonical_entity_id IS NULL "
+                    "            LIMIT 1)"), {"ent": ent, "intake": str(intake_a)})
+                assert linked.rowcount == 1, f"no free curated row in intake {intake_a}"
+            for ent in (e_pass, e_unav, e_pass2):
+                await s.execute(sql(
+                    "INSERT INTO tefca_dimension_evidence "
+                    "(id, entity_id, evidence_dimension, source, disposition, original_values, generation_timestamp) "
+                    "VALUES (gen_random_uuid(), CAST(:ent AS varchar), 'IDENTITY', 'NPPES', 'PASS', "
+                    "        jsonb_build_object('npi', CAST(:npi AS text)), '2026-09-27T00:00:00')"),
+                    {"ent": ent, "npi": VALID_NPI})
+            # e_pass / e_pass2: completed determinations for both sources.
+            # e_unav: OUTAGE rows only for both sources.
+            for ent, disp in ((e_pass, "PASS"), (e_pass2, "CORROBORATED"),
+                              (e_unav, "UNAVAILABLE")):
+                for src in ("CMS_PPEF_ENROLLMENT", "CMS_REVOCATION"):
+                    await s.execute(sql(
+                        "INSERT INTO tefca_dimension_evidence "
+                        "(id, entity_id, evidence_dimension, source, disposition, original_values, generation_timestamp) "
+                        "VALUES (gen_random_uuid(), CAST(:ent AS varchar), 'MEDICARE_ENROLLMENT', "
+                        "        CAST(:src AS varchar), CAST(:disp AS varchar), '{}'::jsonb, "
+                        "        '2026-09-27T00:00:00')"), {"ent": ent, "src": src, "disp": disp})
+            await s.commit()
+        async with async_session_maker() as s:
+            first = await plan_pecos_retry(s, 25, intake_id=str(intake_a))
+            second = await plan_pecos_retry(s, 25, intake_id=str(intake_a))
+        return first, second
+
+    plan, plan_again = run(_seed_and_plan())
+
+    assert plan["entities_scanned"] == 3
+    assert plan["eligible_count"] == 0 and plan["candidates"] == []
+    assert plan["returned_count"] == 0 and plan["truncated_by_limit"] is False
+    # Current policy: the outage-only entity counts as covered too.
+    assert plan["exclusion_counts"] == {"missing_npi": 0, "invalid_npi": 0,
+                                         "already_has_both_target_sources": 3}
+    assert plan["missing_source_counts"] == {"CMS_PPEF_ENROLLMENT_only": 0,
+                                              "CMS_REVOCATION_only": 0, "both": 0}
+    # Closed funnel and determinism on the zero-candidate path.
+    assert plan["entities_scanned"] == sum(plan["exclusion_counts"].values()) + plan["eligible_count"]
+    assert plan == plan_again

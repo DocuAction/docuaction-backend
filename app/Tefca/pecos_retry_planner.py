@@ -82,7 +82,10 @@ SCAN_WINDOW = 500
 #: Planner contract version, reported in every plan so a stored plan can be
 #: tied to the exact selection semantics that produced it. 1.1.0 adds the
 #: optional per-delivery entity scope (`intake_id`); 1.0.0 was table-wide.
-PLANNER_VERSION = "1.1.0"
+#: 1.2.0 adds DIAGNOSTIC fields only (`scan_truncated`, `exclusion_counts`,
+#: `missing_source_counts`, ...) — the selection semantics are UNCHANGED from
+#: 1.1.0: same window, same predicates, same ordering, same candidates.
+PLANNER_VERSION = "1.2.0"
 
 assert LEGACY_PECOS_KEY not in TARGET_SOURCES  # excluded by construction, not by luck
 
@@ -189,11 +192,19 @@ async def plan_pecos_retry(db, limit: int = MAX_CANDIDATES, *,
     )
     if scope is not None:
         scan = scan.where(TEFCADimensionEvidence.entity_id.in_(scope))
+    # Fetch ONE row beyond the window so truncation is a FACT, not a guess:
+    # the September delivery holds ~49k NPPES rows across ~24.5k entities, so
+    # a 500-row window yields entities_scanned=246 — a number an administrator
+    # cannot interpret without being told the window cut the population off.
+    # Only the first SCAN_WINDOW rows are ever processed; selection semantics
+    # are identical to 1.1.0.
     rows = (await db.execute(
         scan.order_by(TEFCADimensionEvidence.entity_id,
                       TEFCADimensionEvidence.generation_timestamp.desc())
-        .limit(SCAN_WINDOW)
+        .limit(SCAN_WINDOW + 1)
     )).all()
+    scan_truncated = len(rows) > SCAN_WINDOW
+    rows = rows[:SCAN_WINDOW]
 
     # Dedup to the newest generation per entity (first occurrence wins, since
     # rows are grouped by entity_id with newest generation first within each
@@ -210,13 +221,23 @@ async def plan_pecos_retry(db, limit: int = MAX_CANDIDATES, *,
         npi_by_entity[entity_id] = (original_values or {}).get("npi")
     scanned = len(order)
 
-    excluded_invalid_npi = 0
+    # Same fail-closed gate as 1.1.0 (`npi_rejection_reason` rejects missing
+    # AND invalid values); the split below is DIAGNOSTIC only, so an
+    # administrator can tell "no NPI on the identity evidence" apart from
+    # "an NPI that fails validation".
+    excluded_missing_npi = 0
+    excluded_bad_npi = 0
     valid_entity_ids: List[str] = []
     for entity_id in order:
-        if npi_rejection_reason(npi_by_entity[entity_id]):
-            excluded_invalid_npi += 1
+        npi = npi_by_entity[entity_id]
+        if npi_rejection_reason(npi):
+            if npi:
+                excluded_bad_npi += 1
+            else:
+                excluded_missing_npi += 1
         else:
             valid_entity_ids.append(entity_id)
+    excluded_invalid_npi = excluded_missing_npi + excluded_bad_npi
 
     # ── Query 2 of 2: ONE bulk query for existing TARGET_SOURCES evidence,
     # scoped to only the NPI-valid entities from query 1 (never to the full
@@ -232,6 +253,13 @@ async def plan_pecos_retry(db, limit: int = MAX_CANDIDATES, *,
             existing_by_entity.setdefault(str(entity_id), set()).add(source)
 
     excluded_has_evidence = 0
+    # Which target source(s) the ELIGIBLE entities are missing — counted over
+    # every eligible entity, not only the ≤`limit` returned, so the funnel
+    # stays exact when the candidate list is capped.
+    missing_source_counts = {"CMS_PPEF_ENROLLMENT_only": 0,
+                             "CMS_REVOCATION_only": 0,
+                             "both": 0}
+    eligible_total = 0
     candidates: List[RetryCandidate] = []
     for entity_id in valid_entity_ids:
         existing = existing_by_entity.get(entity_id, set())
@@ -239,6 +267,13 @@ async def plan_pecos_retry(db, limit: int = MAX_CANDIDATES, *,
         if not missing:
             excluded_has_evidence += 1
             continue
+        eligible_total += 1
+        if len(missing) == 2:
+            missing_source_counts["both"] += 1
+        elif missing[0] == "CMS_PPEF_ENROLLMENT":
+            missing_source_counts["CMS_PPEF_ENROLLMENT_only"] += 1
+        else:
+            missing_source_counts["CMS_REVOCATION_only"] += 1
         if len(candidates) >= limit:
             continue  # keep iterating (no further queries) only to report accurate exclusion counts
         candidates.append(RetryCandidate(
@@ -277,4 +312,23 @@ async def plan_pecos_retry(db, limit: int = MAX_CANDIDATES, *,
         "entities_scanned": scanned,
         "excluded_invalid_npi": excluded_invalid_npi,
         "excluded_already_has_evidence": excluded_has_evidence,
+        # ── Diagnostics (1.2.0) — counts only, no record-level value. ──
+        # The funnel is exact and closed:
+        #   entities_scanned = missing_npi + invalid_npi
+        #                    + already_has_both_target_sources + eligible_count
+        "scan_window": SCAN_WINDOW,
+        "scan_rows_examined": len(rows),
+        "scan_truncated": scan_truncated,
+        "eligible_count": eligible_total,
+        "returned_count": len(candidates),
+        "truncated_by_limit": eligible_total > len(candidates),
+        "exclusion_counts": {
+            "missing_npi": excluded_missing_npi,
+            "invalid_npi": excluded_bad_npi,
+            "already_has_both_target_sources": excluded_has_evidence,
+        },
+        "missing_source_counts": missing_source_counts,
+        "sources_considered": ["NPPES"] + list(TARGET_SOURCES),
+        "would_call_upstream": False,
+        "would_write": False,
     }
