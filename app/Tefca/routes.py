@@ -15,10 +15,12 @@ import csv
 import io as _io
 import json
 import os
+import time
+import asyncio
 import uuid
 import logging
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Query, Depends, HTTPException, Request, UploadFile, File
 from fastapi.responses import Response
@@ -1983,23 +1985,58 @@ async def _registry_audit_rows(db, *, event_type, action, correlation_id, search
     return out, total
 
 
+#: /status probe cache (QA108-20260927). The SPA shell fetched this endpoint
+#: three to four times PER PAGE VIEW, and every call actively probed every
+#: upstream connector (connectors.py health_check + cms_capability_health):
+#: one person clicking through five pages fired ~60 outbound probes. Under
+#: that self-inflicted load the endpoint was measured at 13–15 s and answered
+#: 503 on an S1 worker. Concurrent callers now share ONE probe and a
+#: fresh-enough snapshot is reused for a short TTL. This is still a REAL
+#: probe result — `checked_at` inside each connector entry keeps saying when
+#: the probe actually ran — only the multiplication is gone. The explicit
+#: operator probe (`GET /connectors/status`, "Test All Connectors") is NOT
+#: cached: an operator asking for a fresh probe gets a fresh probe.
+_STATUS_CACHE_TTL_SECONDS = 20.0
+_status_cache: Dict[str, Any] = {"at": 0.0, "value": None}
+_status_probe_lock = asyncio.Lock()
+
+
+async def _status_snapshot() -> Dict[str, Any]:
+    now = time.monotonic()
+    if _status_cache["value"] is not None and now - _status_cache["at"] < _STATUS_CACHE_TTL_SECONDS:
+        return _status_cache["value"]
+    async with _status_probe_lock:
+        # Re-check under the lock: a caller that queued behind the probing one
+        # uses the answer that probe just produced instead of probing again.
+        now = time.monotonic()
+        if _status_cache["value"] is not None and now - _status_cache["at"] < _STATUS_CACHE_TTL_SECONDS:
+            return _status_cache["value"]
+        health = await get_connector_manager().health_check()
+        try:
+            from app.Tefca.cms_ppef import cms_capability_health
+            cms_systems = (await cms_capability_health()).get("systems")
+        except Exception:  # noqa: BLE001 — public status must not 500 on a CMS probe hiccup
+            cms_systems = None
+        value = {
+            "module": "tefca_arc",
+            "status": "active",
+            "rce_directory_live": not is_running_mock(),
+            "connector_health": _connector_health_snapshot(health, cms_systems=cms_systems),
+            **data_source_labels(),
+        }
+        _status_cache["at"] = time.monotonic()
+        _status_cache["value"] = value
+        return value
+
+
 @tefca_dashboard_router.get("/status", summary="Module status + data provenance (public)")
 async def tefca_status():
     """Lightweight public status: whether TEFCA is serving MOCK or PRODUCTION data,
-    plus live connector health. The honest 'are we on mock data?' endpoint."""
-    health = await get_connector_manager().health_check()
-    try:
-        from app.Tefca.cms_ppef import cms_capability_health
-        cms_systems = (await cms_capability_health()).get("systems")
-    except Exception:  # noqa: BLE001 — public status must not 500 on a CMS probe hiccup
-        cms_systems = None
-    return {
-        "module": "tefca_arc",
-        "status": "active",
-        "rce_directory_live": not is_running_mock(),
-        "connector_health": _connector_health_snapshot(health, cms_systems=cms_systems),
-        **data_source_labels(),
-    }
+    plus live connector health. The honest 'are we on mock data?' endpoint.
+    Probe results are shared across concurrent callers and reused for a short
+    TTL — see _status_snapshot; the explicit operator probe endpoint stays
+    uncached."""
+    return await _status_snapshot()
 
 
 @tefca_dashboard_router.get("/search", summary="Global entity search (NPI, name, QHIN) with live NPPES lookup")

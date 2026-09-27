@@ -608,12 +608,93 @@ async def verify(
             summary="Hard reconciliation gate: A–F populations must close exactly")
 async def reconciliation(
     intake_id: str,
+    recompute: bool = Query(
+        False,
+        description="Run the full live reconciliation instead of serving the "
+                    "persisted snapshot. qalead or above: recomputation walks "
+                    "every population (158 s measured on the 24,589-record "
+                    "delivery) and is an explicit operation, not a page view."),
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role("viewer")),
 ):
+    """QA108-20260927-009: an ordinary GET used to recompute the entire
+    reconciliation on every call — correct, but 158 s on the September
+    delivery, which makes a read into a denial-of-service on the worker. The
+    default now serves the PERSISTED snapshot (the same numbers the snapshot
+    check-constraint enforces, written by the governed persist path), shaped
+    like the live result and labeled `source: persisted_snapshot`. Live
+    recomputation remains available, explicitly, to qalead and above via
+    `?recompute=true`. An intake with no snapshot yet falls back to the live
+    computation unchanged — there is nothing persisted to serve."""
+    from sqlalchemy import desc, select
+
+    from app.core.security import role_at_least
+    from app.tefca_registry.rce import traceability_models as _tm
     from app.tefca_registry.rce.reconciliation import reconcile_delivery
 
-    return await reconcile_delivery(db, intake_id)
+    if recompute:
+        if not role_at_least(user, "qalead"):
+            raise HTTPException(
+                403, "Live reconciliation recomputation requires the qalead role; "
+                     "the persisted snapshot is served without this flag.")
+        result = await reconcile_delivery(db, intake_id)
+        result["source"] = "live_recompute"
+        return result
+
+    snap = (await db.execute(
+        select(_tm.RceReconciliationSnapshot)
+        .where(_tm.RceReconciliationSnapshot.intake_id == intake_id)
+        .order_by(desc(_tm.RceReconciliationSnapshot.created_at),
+                  desc(_tm.RceReconciliationSnapshot.sequence))
+        .limit(1))).scalars().first()
+    if snap is None:
+        result = await reconcile_delivery(db, intake_id)
+        result["source"] = "live_compute_no_snapshot"
+        return result
+
+    ev = snap.source_evidence or {}
+    checks = list(snap.checks or [])
+    accounted = (snap.created + snap.updated + snap.matched_unchanged
+                 + snap.held + snap.rejected + snap.missing_key + snap.excluded)
+    return {
+        "intake_id": str(intake_id),
+        "passed": bool(snap.passed),
+        "populations": ev.get("populations") or {},
+        "curated_status_counts": ev.get("curated_status_counts") or {},
+        "dispositions": ev.get("dispositions") or {},
+        "equation": {
+            "received": snap.received, "accounted": accounted,
+            "created": snap.created, "updated": snap.updated,
+            "matched_unchanged": snap.matched_unchanged, "held": snap.held,
+            "rejected": snap.rejected, "missing_key": snap.missing_key,
+            "excluded": snap.excluded,
+        },
+        "records_without_disposition": ev.get("records_without_disposition"),
+        "identifier_conflicts": ev.get("identifier_conflicts") or {},
+        "corrections": ev.get("corrections") or {},
+        "report_links": ev.get("report_links") or {},
+        "rule_execution": ev.get("rule_execution") or {},
+        "dimensions": dict(snap.dimensions or {}),
+        "checks": checks,
+        "failed_checks": [c for c in checks if not c.get("passed")],
+        "area1_integrity": {
+            "record_hashes": ev.get("area1_record_hashes"),
+            "note": ("As recorded when this snapshot was persisted. Live "
+                     "immutability and stored-file state are re-evaluated only "
+                     "on an explicit recomputation."),
+        },
+        "source": "persisted_snapshot",
+        "snapshot": {
+            "id": str(snap.id), "sequence": snap.sequence,
+            "trigger": snap.trigger, "created_at": snap.created_at,
+            "hash": snap.hash, "build_sha": snap.build_sha,
+            "reconstructed": bool(snap.reconstructed),
+        },
+        "note": ("Served from the persisted reconciliation snapshot — the same "
+                 "equation the snapshot's database CHECK constraint enforces. "
+                 "Pass ?recompute=true (qalead or above) to re-derive every "
+                 "population live."),
+    }
 
 
 # ── P0/P1 — profile and field map ────────────────────────────────────────────
