@@ -146,13 +146,15 @@ class TestRoutesThatRender:
                               period_end=None)
         audited = []
 
-        async def fake_stored(db, report_id, job_id=None):
-            return row
+        # QA108: the PDF route loads via _stored_html_light — (row, stem) with
+        # report_data deferred — instead of the full-entity _stored.
+        async def fake_stored_light(db, report_id, job_id=None):
+            return row, row.report_id
 
         async def fake_audit(db, row_, fmt, user, **extra):
             audited.append(fmt)
 
-        monkeypatch.setattr(routes, "_stored", fake_stored)
+        monkeypatch.setattr(routes, "_stored_html_light", fake_stored_light)
         monkeypatch.setattr(routes, "_audit_download", fake_audit)
 
         response = await routes.get_report_pdf(
