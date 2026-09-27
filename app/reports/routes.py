@@ -380,23 +380,64 @@ async def list_reports(
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role("viewer")),
 ):
+    """QA108-20260927: this listing used to SELECT full ReviewReport entities,
+    which drags every row's `report_data` (the frozen dataset — megabytes for
+    a 24,589-record delivery report) and `report_html` out of Postgres to
+    serve a page of metadata; 50 rows took 8–13 s on DEV. The query now
+    projects exactly the columns the listing returns plus the three SMALL
+    JSONB subtrees it reads (`snapshot`, `release`, the contract number) —
+    the response shape is unchanged, byte for byte."""
+    from app.reports.data.release import current_release
     from app.tefca_registry import models as reg
 
-    stmt = select(reg.ReviewReport).order_by(reg.ReviewReport.generated_at.desc())
+    R = reg.ReviewReport
+    stmt = select(
+        R.report_id, R.report_type, R.generated_at, R.generated_by,
+        R.period_start, R.period_end,
+        R.report_data["snapshot"].label("snapshot"),
+        R.report_data["release"].label("release"),
+        R.report_data["dataset"]["branding"]["contract_number"].label("contract_branded"),
+        R.report_data["dataset"]["contract_number"].label("contract_plain"),
+    ).order_by(R.generated_at.desc())
     if report_type:
-        stmt = stmt.where(reg.ReviewReport.report_type == report_type)
-    rows = (await db.execute(stmt.limit(limit))).scalars().all()
-    return {"items": [{
-        "report_id": r.report_id,
-        "report_type": r.report_type,
-        "generated_at": r.generated_at,
-        # The STORED principal, not the copy inside the snapshot. An auditor
-        # asking the API who generated a report must get the column the
-        # application wrote, or a populated row reads back as anonymous.
-        "generated_by": str(r.generated_by) if r.generated_by else None,
-        "snapshot": (r.report_data or {}).get("snapshot", {}),
-        **_listing_extras(r),
-    } for r in rows]}
+        stmt = stmt.where(R.report_type == report_type)
+    rows = (await db.execute(stmt.limit(limit))).all()
+
+    from app.reports.branding import deliverable_filename_stem
+
+    items = []
+    for r in rows:
+        snapshot = r.snapshot or {}
+        meta = _deliverable_meta(r.report_type)
+        contract = r.contract_branded or r.contract_plain
+        if meta.get("deliverable") and contract:
+            file_stem = deliverable_filename_stem(
+                contract_number=contract, task=meta.get("task"),
+                deliverable=meta.get("deliverable"), kind=meta.get("kind"),
+                period_start=str(r.period_start) if r.period_start else None,
+                period_end=str(r.period_end) if r.period_end else None,
+                report_id=r.report_id)
+        else:
+            file_stem = r.report_id
+        items.append({
+            "report_id": r.report_id,
+            "report_type": r.report_type,
+            "generated_at": r.generated_at,
+            # The STORED principal, not the copy inside the snapshot. An auditor
+            # asking the API who generated a report must get the column the
+            # application wrote, or a populated row reads back as anonymous.
+            "generated_by": str(r.generated_by) if r.generated_by else None,
+            "snapshot": snapshot,
+            "generated_by_email": snapshot.get("generated_by"),
+            "period_start": r.period_start,
+            "period_end": r.period_end,
+            # current_release reads only the `release` key — hand it exactly
+            # that, wrapped the way it expects.
+            "release": current_release({"release": r.release} if r.release else {}),
+            "file_stem": file_stem,
+            **meta,
+        })
+    return {"items": items}
 
 
 def _deliverable_meta(report_type: str) -> Dict[str, Any]:
