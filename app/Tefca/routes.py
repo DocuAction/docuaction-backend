@@ -2968,9 +2968,9 @@ async def pecos_retry_plan(
 
     logger.info(
         "pecos_retry_plan viewed correlation_id=%s job=%s scanned=%s eligible=%s "
-        "selected=%s excluded_invalid_npi=%s excluded_existing=%s",
+        "selected=%s excluded_invalid_npi=%s excluded_existing=%s scan_truncated=%s",
         correlation_id, delivery_job_id, scanned, eligible,
-        plan["candidate_count"], invalid, existing,
+        plan["candidate_count"], invalid, existing, plan["scan_truncated"],
     )
 
     return {
@@ -2980,8 +2980,22 @@ async def pecos_retry_plan(
         "scanned_count": scanned,
         "eligible_count": eligible,
         "selected_count": plan["candidate_count"],
+        "returned_count": plan["returned_count"],
         "excluded_invalid_npi_count": invalid,
         "excluded_existing_evidence_count": existing,
+        # ── Exclusion funnel (planner 1.2.0 diagnostics; counts only). It is
+        # closed: scanned_count = exclusion_counts.* summed + eligible_count.
+        "exclusion_counts": plan["exclusion_counts"],
+        "missing_source_counts": plan["missing_source_counts"],
+        # The scan window bounds ROWS, so on a large delivery `scanned_count`
+        # is a bounded sample, not the delivery population — `truncated: true`
+        # says so instead of leaving an administrator to reconcile 246 against
+        # a 24,589-record delivery on their own.
+        "truncated": plan["scan_truncated"],
+        "scan_window": plan["scan_window"],
+        "scan_rows_examined": plan["scan_rows_examined"],
+        "truncated_by_limit": plan["truncated_by_limit"],
+        "sources_considered": plan["sources_considered"],
         "target_connectors": plan["target_sources"],
         # Stricter than the planner: no npi_masked — reference, gaps, reason only.
         "candidates": [
@@ -2994,6 +3008,8 @@ async def pecos_retry_plan(
         "build_sha": os.environ.get("GIT_SHA", "unknown"),
         "dry_run": True,
         "executed_retry": False,
+        "would_call_upstream": False,
+        "would_write": False,
         "database_writes_made": plan["database_writes_made"],
         "upstream_calls_made": plan["upstream_calls_made"],
         "identifier_note": ("candidate_ref is a deterministic, opaque, pseudonymous reference; "

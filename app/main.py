@@ -72,6 +72,14 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Response headers a cross-origin caller may READ. Without this, only the
+    # CORS-safelisted response headers (Cache-Control, Content-Type, ...) are
+    # visible to browser JavaScript: the admin dry-run planner sets
+    # X-Correlation-Id on its 200s and the header was on the wire, but
+    # `response.headers.get("x-correlation-id")` returned null in the browser.
+    # Exposing ONE named, non-sensitive correlation header — origins, methods,
+    # credentials and request headers are unchanged.
+    expose_headers=["X-Correlation-Id"],
 )
 
 # ── Trusted Host (FIX 8 — NIST SC-7) — reject Host-header spoofing. ──

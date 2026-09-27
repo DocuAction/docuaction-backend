@@ -144,8 +144,11 @@ class TestConstantQueryCount:
         db = CapturingDB(_rows(), _existing_rows_bulk())
         await plan_pecos_retry(db, limit=25)
         first_query_sql = captured_limits[0]
-        assert f"LIMIT {SCAN_WINDOW}" in first_query_sql
-        assert SCAN_WINDOW < 24589
+        # 1.2.0 fetches SCAN_WINDOW + 1: the sentinel row makes `scan_truncated`
+        # a fact instead of a guess. Still a constant, still nowhere near a
+        # full-population scan, and only SCAN_WINDOW rows are ever processed.
+        assert f"LIMIT {SCAN_WINDOW + 1}" in first_query_sql
+        assert SCAN_WINDOW + 1 < 24589
 
 
 class TestBoundedAndScoped:
