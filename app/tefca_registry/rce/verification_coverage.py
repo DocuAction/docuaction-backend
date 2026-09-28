@@ -128,6 +128,79 @@ async def _dimension_rows(db, intake_id) -> Iterable:
         {"i": str(intake_id)})).all()
 
 
+#: The source-spelling → key mapping (SOURCES) and the status/disposition →
+#: outcome maps, expressed as SQL so the tally is COUNTED in Postgres instead of
+#: pulling every evidence row to Python. AP-002: the detail endpoint pulled the
+#: whole population's dimension-evidence (122,945 rows at September scale) plus
+#: verification rows across the wire and built Python sets. The SQL is optimal
+#: (a full-population hash join), so no index helps; the cost was the row
+#: transfer + set-building. This aggregation returns at most one row per source.
+_SOURCE_CASE = """
+        CASE lower(btrim({col}))
+          WHEN 'nppes' THEN 'nppes' WHEN 'npi_registry' THEN 'nppes' WHEN 'cms_nppes' THEN 'nppes'
+          WHEN 'pecos' THEN 'pecos'
+          WHEN 'leie' THEN 'leie' WHEN 'oig_leie' THEN 'leie' WHEN 'oig' THEN 'leie' WHEN 'oig-leie' THEN 'leie'
+          WHEN 'sam' THEN 'sam' WHEN 'sam_gov' THEN 'sam' WHEN 'sam.gov' THEN 'sam' WHEN 'samgov' THEN 'sam'
+        END"""
+
+_COVERAGE_COUNTS_SQL = f"""
+    WITH pop_uuid AS (
+        SELECT DISTINCT canonical_entity_id AS eid
+        FROM rce_curated_records
+        WHERE source_intake_id = CAST(:i AS uuid) AND canonical_entity_id IS NOT NULL),
+    pop_text AS (SELECT CAST(eid AS text) AS eid FROM pop_uuid),
+    rows AS (
+        SELECT {_SOURCE_CASE.format(col='v.source')} AS key,
+               v.entity_id::text AS eid,
+               CASE WHEN lower(coalesce(v.detail, '')) LIKE '%deactivat%' THEN 'deactivated'
+                    ELSE (CASE lower(btrim(coalesce(v.verification_status, '')))
+                       WHEN 'verified' THEN 'verified' WHEN 'match' THEN 'verified' WHEN 'matched' THEN 'verified'
+                       WHEN 'not_found' THEN 'not_found' WHEN 'no_match' THEN 'not_found'
+                       WHEN 'unavailable' THEN 'unavailable' WHEN 'source_unavailable' THEN 'unavailable'
+                       WHEN 'failed' THEN 'failed' WHEN 'error' THEN 'failed'
+                       WHEN 'deactivated' THEN 'deactivated' ELSE NULL END) END AS outcome
+        FROM tefca_verifications v
+        WHERE v.entity_id IN (SELECT eid FROM pop_uuid)
+        UNION ALL
+        SELECT {_SOURCE_CASE.format(col='d.source')} AS key,
+               d.entity_id AS eid,
+               CASE upper(btrim(coalesce(d.disposition, '')))
+                    WHEN 'PASS' THEN 'verified' WHEN 'CORROBORATED' THEN 'verified'
+                    WHEN 'NOT_FOUND' THEN 'not_found'
+                    WHEN 'UNAVAILABLE' THEN 'unavailable'
+                    WHEN 'FAIL' THEN 'failed' WHEN 'CONFLICT' THEN 'failed' ELSE NULL END AS outcome
+        FROM tefca_dimension_evidence d
+        WHERE d.entity_id IN (SELECT eid FROM pop_text))
+    SELECT key,
+           count(DISTINCT eid) AS attempted,
+           count(DISTINCT eid) FILTER (WHERE outcome = 'verified') AS verified,
+           count(DISTINCT eid) FILTER (WHERE outcome = 'not_found') AS not_found,
+           count(DISTINCT eid) FILTER (WHERE outcome = 'deactivated') AS deactivated,
+           count(DISTINCT eid) FILTER (WHERE outcome = 'failed') AS failed,
+           count(DISTINCT eid) FILTER (WHERE outcome = 'unavailable') AS unavailable
+    FROM rows WHERE key IS NOT NULL GROUP BY key
+"""
+
+
+async def coverage_counts(db, intake_id) -> Dict[str, Dict[str, int]]:
+    """Per-source distinct-entity outcome COUNTS, computed in Postgres.
+
+    Oracle-equal to `_tally` reduced to `len()` of each set, but it never pulls
+    the evidence rows to Python. Sources with no evidence get all-zero counts,
+    so callers can index every key unconditionally.
+    """
+    base = {o: 0 for o in ("attempted", *OUTCOMES)}
+    out: Dict[str, Dict[str, int]] = {key: dict(base) for key in SOURCES}
+    rows = (await db.execute(text(_COVERAGE_COUNTS_SQL), {"i": str(intake_id)})).all()
+    for key, attempted, verified, not_found, deactivated, failed, unavailable in rows:
+        if key not in out:
+            continue
+        out[key] = {"attempted": int(attempted or 0), "verified": int(verified or 0),
+                    "not_found": int(not_found or 0), "deactivated": int(deactivated or 0),
+                    "failed": int(failed or 0), "unavailable": int(unavailable or 0)}
+    return out
+
+
 def _tally(verification_rows, dimension_rows) -> Dict[str, Dict[str, set]]:
     """Per source: outcome -> set of entity ids, plus 'attempted'."""
     tally: Dict[str, Dict[str, set]] = {
@@ -176,8 +249,10 @@ def overall_state(sources: Dict[str, Dict[str, Any]]) -> str:
 async def coverage_for_intake(db, intake_id, *, job=None) -> Dict[str, Any]:
     """Coverage of one delivery, per source and overall. Reads only."""
     eligible = await _eligible_count(db, intake_id)
-    tally = _tally(await _verification_rows(db, intake_id),
-                   await _dimension_rows(db, intake_id))
+    # AP-002: count in Postgres instead of pulling the whole population's
+    # evidence rows to Python. Oracle-equal to the old _tally (see
+    # test_coverage_sql_matches_python_oracle).
+    tally = await coverage_counts(db, intake_id)
     configured = configured_sources()
     in_progress = bool(job is not None and getattr(job, "state", None) == "RUNNING"
                        and getattr(job, "stage", None) == "VERIFICATION")
@@ -186,10 +261,10 @@ async def coverage_for_intake(db, intake_id, *, job=None) -> Dict[str, Any]:
         counts = tally[key]
         sources[key] = status_model.coverage_state(
             configured=configured[key], eligible=eligible,
-            attempted=len(counts["attempted"]),
-            verified=len(counts["verified"]), not_found=len(counts["not_found"]),
-            deactivated=len(counts["deactivated"]), failed=len(counts["failed"]),
-            unavailable=len(counts["unavailable"]), in_progress=in_progress)
+            attempted=counts["attempted"],
+            verified=counts["verified"], not_found=counts["not_found"],
+            deactivated=counts["deactivated"], failed=counts["failed"],
+            unavailable=counts["unavailable"], in_progress=in_progress)
     provenance = None
     try:
         from app.Tefca.connectors import data_source_labels
