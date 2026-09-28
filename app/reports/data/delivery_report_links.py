@@ -111,14 +111,25 @@ async def verify_report_delivery(db, report_id: str, *, job_id=None, intake_id=N
 
     out: Dict[str, Any] = {"ok": False, "code": None, "stored_row_id": None,
                            "stored_job_id": None, "stored_intake_id": None}
+    # Only the row id and the frozen delivery stamp are read here. The FULL row
+    # used to be selected, which dragged `report_html` (29 MB on the capacity
+    # report) and the whole `report_data` dataset across the wire for EVERY
+    # linked report on EVERY delivery-detail view — the dominant cost behind
+    # QA108-20260927-002's 10-14 s detail loads.
     row = (await db.execute(
-        select(reg.ReviewReport).where(reg.ReviewReport.report_id == report_id)
-    )).scalar_one_or_none()
+        select(reg.ReviewReport.id,
+               reg.ReviewReport.report_data["dataset"]["delivery"].label("delivery"))
+        .where(reg.ReviewReport.report_id == report_id)
+    )).first()
     if row is None:
         out["code"] = "REPORT_NOT_STORED"
         return out
     out["stored_row_id"] = str(row.id)
-    described = stored_delivery(row)
+    delivery = row.delivery or {}
+    described = {
+        "job_id": (str(delivery.get("job_id")) if delivery.get("job_id") else None),
+        "intake_id": (str(delivery.get("intake_id")) if delivery.get("intake_id") else None),
+    }
     out["stored_job_id"] = described["job_id"]
     out["stored_intake_id"] = described["intake_id"]
     if stored_id is not None and str(row.id) != str(stored_id):

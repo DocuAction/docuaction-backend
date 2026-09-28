@@ -202,3 +202,52 @@ def test_by_delivery_route_requires_authentication():
     client = TestClient(app)
     response = client.get(f"/api/reports/by-delivery/{uuid.uuid4()}")
     assert response.status_code in (401, 403)
+
+
+@pytest.mark.asyncio
+async def test_link_verification_never_reads_the_report_body(rolled_back_db, artifact_root):
+    """QA108-20260927-002 (root cause): `verify_report_delivery` selected the
+    FULL review_reports row, so every delivery-detail view dragged
+    `report_html` — 29 MB on the September capacity report — and the whole
+    `report_data` dataset across the wire once per linked report. The check
+    reads two values (row id, the frozen delivery stamp); it must fetch no
+    more. Pinned by capturing the SQL the verification actually emits.
+    """
+    from app.reports.data.delivery_report_links import links_for_job, verify_report_delivery
+
+    db = rolled_back_db
+    ids = await seed_delivery(db)
+    result = await _generate(db, job_id=str(ids["job_id"]))
+
+    statements: list[str] = []
+    conn = await db.connection()
+
+    from sqlalchemy import event
+
+    def _capture(conn_, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    sync_engine = conn.sync_connection.engine
+    event.listen(sync_engine, "before_cursor_execute", _capture)
+    try:
+        verdict = await verify_report_delivery(db, result["report_id"],
+                                               job_id=ids["job_id"])
+        links = await links_for_job(db, ids["job_id"])
+    finally:
+        event.remove(sync_engine, "before_cursor_execute", _capture)
+
+    assert verdict["ok"] is True
+    assert links, "the generated report must be linked to its job"
+    offending = [s for s in statements
+                 if "review_reports" in s and "report_html" in s]
+    assert not offending, (
+        "link verification selected report_html — the multi-megabyte body — "
+        f"on a metadata path:\n{offending[0][:400]}")
+    # report_data may be TOUCHED only through a JSONB path extraction of the
+    # delivery stamp, never selected whole.
+    whole_data = [s for s in statements
+                  if "review_reports" in s
+                  and "review_reports.report_data" in s.replace("\n", " ")
+                  and "delivery" not in s]
+    assert not whole_data, (
+        f"link verification selected the whole report_data dataset:\n{whole_data[0][:400]}")

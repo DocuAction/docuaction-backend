@@ -394,7 +394,8 @@ async def _stored(db, report_id: str, job_id: Optional[str] = None, *,
     return row
 
 
-async def _stored_html_light(db, report_id: str, job_id: Optional[str] = None):
+async def _stored_html_light(db, report_id: str, job_id: Optional[str] = None,
+                             *, defer_html: bool = False):
     """(row, file_stem) for the HTML/PDF download routes, with `report_data`
     NEVER loaded (QA108-20260927-005).
 
@@ -416,8 +417,13 @@ async def _stored_html_light(db, report_id: str, job_id: Optional[str] = None):
         R.report_data["dataset"]["branding"]["contract_number"].label("contract_branded"),
         R.report_data["dataset"]["contract_number"].label("contract_plain"),
     ).where(R.report_id == report_id))).first()
+    opts = [defer(R.report_data)]
+    if defer_html:
+        # The caller will serve REGISTERED artifact bytes (QA108-20260927-013's
+        # canonical surface), so the stored column must not be dragged along.
+        opts.append(defer(R.report_html))
     row = (await db.execute(
-        select(R).options(defer(R.report_data)).where(R.report_id == report_id)
+        select(R).options(*opts).where(R.report_id == report_id)
     )).scalar_one_or_none()
     if row is None:
         raise HTTPException(404, f"No report exists with id {report_id}")
@@ -833,6 +839,51 @@ async def get_package(
                    "X-Release-Status": package["manifest"]["release"].get("status", "DRAFT")}))
 
 
+async def _registered_bytes(db, report_id: str, content_type: str):
+    """The verified REGISTERED artifact for (report, content_type), or None.
+
+    CANONICAL SURFACE RULE (QA108-20260927-013): for a report with a registered
+    artifact, the REGISTERED bytes are the deliverable — they were hashed at
+    finalisation and are re-hashed here. The stored column is the source the
+    artifact was made from, and later governed writes (e.g. a PM release stamp
+    on `report_data`) mean the two can legitimately drift; the registered file
+    is what the recipient received.
+
+    Returns the verified dict, or None when this report has no registered
+    artifact of that type (legacy reports — the caller serves the stored
+    column) or the registered bytes are GONE from the store (the caller falls
+    back to the stored column and the fallback is audited: availability, with
+    the divergence on the record instead of silent). An INTEGRITY failure —
+    bytes present but hashing differently — refuses, exactly like the artifact
+    download route: a silently altered deliverable is worse than no download.
+    """
+    from app.core.storage.artifact_store import ArtifactNotFound
+    from app.reports.data.artifact_registry import retrieve_artifact
+    from app.reports.data.delivery_report_links import record_report_download_failure
+
+    try:
+        return await retrieve_artifact(db, report_id, content_type=content_type)
+    except LookupError:
+        return None  # never registered — the stored column is all there is
+    except ArtifactNotFound as exc:
+        await record_report_download_failure(
+            db, report_id=report_id, report_type=None,
+            fmt=f"artifact-fallback:{content_type}", actor="SYSTEM",
+            code="ARTIFACT_MISSING_FALLBACK",
+            reason=("registered bytes are gone from the store; serving the "
+                    "stored column instead"),
+            extra={"content_type": content_type, "store_error": str(exc)[:200]})
+        return None
+    except RuntimeError as exc:
+        # Integrity failure: registered bytes no longer hash to the record.
+        await record_report_download_failure(
+            db, report_id=report_id, report_type=None,
+            fmt=f"artifact:{content_type}", actor="SYSTEM",
+            code="ARTIFACT_INTEGRITY", reason=str(exc)[:300],
+            extra={"content_type": content_type})
+        raise HTTPException(500, "Artifact integrity check failed; nothing was served.")
+
+
 @router.get("/{report_id}/html", summary="Download a report as HTML")
 async def get_report_html(
     report_id: str,
@@ -843,21 +894,38 @@ async def get_report_html(
     # reopen the same door at a lower floor.
     user=Depends(require_role_audited("reviewer", resource_type="report")),
 ):
-    """The STORED HTML, byte for byte.
+    """The report's HTML, byte for byte — REGISTERED artifact first.
 
     Never re-rendered. A report is what the recipient received; regenerating it
     on read would quietly rewrite history the moment the underlying entities
-    changed.
+    changed. When a registered HTML artifact exists its verified bytes are
+    served (the canonical deliverable, and no multi-megabyte column read —
+    QA108-20260927-005/013); a report from before artifact registration falls
+    back to the stored column, exactly as before.
     """
-    row, stem = await _stored_html_light(db, report_id, job_id)
+    registered = await _registered_bytes(db, report_id, "text/html")
+    row, stem = await _stored_html_light(db, report_id, job_id,
+                                         defer_html=registered is not None)
+    if registered is not None:
+        await _audit_download(db, row, "html", user, job_id=job_id,
+                              source="artifact-registry",
+                              artifact_version=(registered.get("artifact") or {}).get("artifact_version"),
+                              sha256=(registered.get("artifact") or {}).get("rendered_sha256"))
+        headers = download_headers(safe_filename(stem, "html"))
+        headers["X-Report-Source"] = "artifact-registry"
+        return Response(content=registered["content"], media_type="text/html",
+                        headers=headers)
     if not row.report_html:
         raise HTTPException(404, f"Report {report_id} has no stored HTML.")
-    await _audit_download(db, row, "html", user, job_id=job_id)
+    await _audit_download(db, row, "html", user, job_id=job_id,
+                          source="stored-column")
     # Served as an attachment, not rendered. A stored report is a document the
     # recipient received; rendering it on this origin would execute whatever
     # markup it contains with the application's own privileges.
+    headers = download_headers(safe_filename(stem, "html"))
+    headers["X-Report-Source"] = "stored-column"
     return Response(content=row.report_html, media_type="text/html",
-                    headers=download_headers(safe_filename(stem, "html")))
+                    headers=headers)
 
 
 @router.get("/{report_id}/pdf", summary="Download a report as PDF")
@@ -868,12 +936,31 @@ async def get_report_pdf(
     # `reviewer` (Decision 1, 2026-09-16): same document as /html, rendered.
     user=Depends(require_role_audited("reviewer", resource_type="report")),
 ):
-    """PDF rendered from the STORED HTML — same document, different container."""
-    row, stem = await _stored_html_light(db, report_id, job_id)
+    """The report's PDF — REGISTERED artifact first, render as fallback.
+
+    Generation registers the PDF rendering at finalisation whenever the engine
+    is available, so the normal download is a verified byte serve, not a
+    20-second render on the request path (QA108-20260927-004). A report whose
+    PDF was never registered (legacy, or generated while the engine was
+    absent) still renders from the stored HTML inside the existing budget.
+    """
+    registered = await _registered_bytes(db, report_id, "application/pdf")
+    row, stem = await _stored_html_light(db, report_id, job_id,
+                                         defer_html=registered is not None)
+    if registered is not None:
+        await _audit_download(db, row, "pdf", user, job_id=job_id,
+                              source="artifact-registry",
+                              artifact_version=(registered.get("artifact") or {}).get("artifact_version"),
+                              sha256=(registered.get("artifact") or {}).get("rendered_sha256"))
+        headers = download_headers(safe_filename(stem, "pdf"))
+        headers["X-Report-Source"] = "artifact-registry"
+        return Response(content=registered["content"], media_type="application/pdf",
+                        headers=headers)
     if not row.report_html:
         raise HTTPException(404, f"Report {report_id} has no stored HTML to render.")
     response = await _pdf_response(row.report_html, stem)
-    await _audit_download(db, row, "pdf", user, job_id=job_id)
+    await _audit_download(db, row, "pdf", user, job_id=job_id,
+                          source="rendered-on-request")
     return response
 
 

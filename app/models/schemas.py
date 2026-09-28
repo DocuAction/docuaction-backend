@@ -40,6 +40,11 @@ class UserResponse(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    # The refresh token was minted on every login (create_token_pair) and then
+    # discarded here, so no client could ever reach /api/auth/refresh and every
+    # non-admin session hard-died at the 15-minute access expiry (MQA-2026-007).
+    refresh_token: Optional[str] = None
+    expires_in: Optional[int] = None
     user: UserResponse
 
 

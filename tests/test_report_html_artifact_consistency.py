@@ -137,3 +137,88 @@ class TestLayoutRulesWithoutADatabase:
         assert source.index('<div class="dp-wide">') < source.index("<h2>4. Dispositions</h2>")
         assert source.rindex("</div>") < source.index("<h2>10. Evidence limitations</h2>")
         assert source.index("<h2>3. Reconciliation</h2>") < source.index('<div class="dp-wide">')
+
+
+@pytest.mark.asyncio
+async def test_html_route_serves_the_registered_bytes_even_when_the_column_drifts(
+        rolled_back_db, artifact_root):
+    """QA108-20260927-013 — the canonical-surface rule, pinned.
+
+    The REGISTERED artifact is the deliverable: it was hashed at finalisation
+    and is re-verified on read. If `review_reports.report_html` later drifts
+    (whatever wrote it), the route must keep serving the bytes the recipient
+    can verify against the registry — never the drifted column."""
+    from sqlalchemy import select
+
+    from app.reports import routes
+    from app.tefca_registry import models as reg
+
+    db = rolled_back_db
+    result = await _persisted_delivery_report(db)
+    artifact = result["artifact"]
+
+    row = (await db.execute(select(reg.ReviewReport).where(
+        reg.ReviewReport.report_id == result["report_id"]))).scalar_one()
+    row.report_html = row.report_html + "<!-- synthetic drift -->"
+    await db.flush()
+
+    response = await routes.get_report_html(result["report_id"], job_id=None,
+                                            db=db, user=USER)
+    assert hashlib.sha256(response.body).hexdigest() == artifact["rendered_sha256"], (
+        "/html served the drifted column instead of the registered artifact")
+    assert response.headers.get("X-Report-Source") == "artifact-registry"
+
+
+@pytest.mark.asyncio
+async def test_html_route_still_serves_a_legacy_report_with_no_artifact(
+        rolled_back_db, artifact_root):
+    """A report from before artifact registration has only the column; the
+    route serves it exactly as before, and says so."""
+    import uuid as _uuid
+
+    from app.reports import routes
+    from app.tefca_registry import models as reg
+
+    db = rolled_back_db
+    legacy = reg.ReviewReport(
+        id=_uuid.uuid4(), report_id="DA-SYN-LEGACY-001", report_type="weekly",
+        report_data={"dataset": {}}, report_html="<html><body>legacy</body></html>")
+    db.add(legacy)
+    await db.flush()
+
+    response = await routes.get_report_html("DA-SYN-LEGACY-001", job_id=None,
+                                            db=db, user=USER)
+    assert response.body == b"<html><body>legacy</body></html>"
+    assert response.headers.get("X-Report-Source") == "stored-column"
+
+
+@pytest.mark.asyncio
+async def test_pdf_route_serves_the_registered_pdf_without_rendering(
+        rolled_back_db, artifact_root, monkeypatch):
+    """QA108-20260927-004 — a registered PDF is SERVED, never re-rendered.
+
+    The render engine is nailed shut for the duration: if the route still
+    tried to render, it would blow up instead of answering."""
+    from app.reports import routes
+    from app.reports.data.artifact_registry import finalize_artifact
+
+    db = rolled_back_db
+    result = await _persisted_delivery_report(db)
+
+    pdf_bytes = b"%PDF-1.4 synthetic registered rendering"
+    registered = await finalize_artifact(
+        db, report_id=result["report_id"], report_type="delivery_processing",
+        content=pdf_bytes, content_type="application/pdf",
+        review_cycle_id="SYNTHETIC-CYCLE", generated_by=USER.email)
+    assert registered["rendered_sha256"] == hashlib.sha256(pdf_bytes).hexdigest()
+
+    async def _explode(*a, **k):  # pragma: no cover - reached only on regression
+        raise AssertionError("the PDF route rendered despite a registered artifact")
+
+    monkeypatch.setattr(routes, "_pdf_response", _explode)
+
+    response = await routes.get_report_pdf(result["report_id"], job_id=None,
+                                           db=db, user=USER)
+    assert response.body == pdf_bytes
+    assert response.media_type == "application/pdf"
+    assert response.headers.get("X-Report-Source") == "artifact-registry"
