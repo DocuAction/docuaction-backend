@@ -195,6 +195,11 @@ async def distribute(
 
     result = await apply_distribution(db, plan, user=user,
                                       ip_address=_client_ip(request))
+    # The route owns the transaction (audit.py). get_db() closes WITHOUT
+    # committing, so without this commit every applied assignment — and its
+    # audit row — silently rolled back at request teardown while the response
+    # still reported success (MQA-2026-006).
+    await db.commit()
     result["preview"] = False
     result["skipped_already_held"] = len(body.review_ids) - len(plan)
     return result

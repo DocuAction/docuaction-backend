@@ -578,6 +578,12 @@ safe_load("app.api.routes", "core")
 # ═══ MICROSOFT ENTRA ID SSO (additional login option; email/password unaffected) ═══
 safe_load("app.api.azure_auth_routes", "azure-auth")
 
+# ═══ TOKEN REFRESH (rotation) ═══
+# /api/auth/refresh existed but was never mounted, and login discarded the
+# refresh token — so 15-minute non-admin sessions were unrenewable
+# (MQA-2026-007). Both halves are fixed together.
+safe_load("app.api.auth_endpoints", "auth-refresh")
+
 # ═══ AUDIO (Whisper transcription) ═══
 safe_load("app.api.audio_routes", "audio")
 

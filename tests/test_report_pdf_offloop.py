@@ -148,14 +148,21 @@ class TestRoutesThatRender:
 
         # QA108: the PDF route loads via _stored_html_light — (row, stem) with
         # report_data deferred — instead of the full-entity _stored.
-        async def fake_stored_light(db, report_id, job_id=None):
+        async def fake_stored_light(db, report_id, job_id=None, defer_html=False):
             return row, row.report_id
 
         async def fake_audit(db, row_, fmt, user, **extra):
             audited.append(fmt)
 
+        # No registered PDF artifact: this test exercises the RENDER fallback
+        # (a registered artifact is served without rendering — covered in
+        # test_report_html_artifact_consistency.py).
+        async def fake_registered(db, report_id, content_type):
+            return None
+
         monkeypatch.setattr(routes, "_stored_html_light", fake_stored_light)
         monkeypatch.setattr(routes, "_audit_download", fake_audit)
+        monkeypatch.setattr(routes, "_registered_bytes", fake_registered)
 
         response = await routes.get_report_pdf(
             "DA-ARC-2026-998", job_id=None, db=None,

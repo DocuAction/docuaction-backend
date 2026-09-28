@@ -416,7 +416,13 @@ async def login(data: LoginRequest, request: Request, db: AsyncSession = Depends
 
     await _audit_auth(db, user.id, "login_success", {"email": user.email, "reason": "credentials_valid"}, request, cid)
     tokens = create_token_pair(str(user.id), user.role, user.email)
-    return TokenResponse(access_token=tokens["access_token"], user=UserResponse.model_validate(user))
+    # Return the WHOLE pair. The refresh token (rotated + revocation-checked by
+    # /api/auth/refresh) was being minted and dropped, which made 15-minute
+    # non-admin sessions unrenewable (MQA-2026-007).
+    return TokenResponse(access_token=tokens["access_token"],
+                         refresh_token=tokens["refresh_token"],
+                         expires_in=tokens["expires_in"],
+                         user=UserResponse.model_validate(user))
 
 
 @router.post("/api/auth/logout", tags=["Auth"])

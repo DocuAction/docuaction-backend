@@ -469,6 +469,70 @@ async def test_two_analysts_claiming_at_once_produce_exactly_one_owner(
         assert claims == 1
 
 
+async def test_distribute_apply_survives_request_teardown(sandbox_engine):
+    """MQA-2026-006: bulk Apply must COMMIT, or teardown rolls it all back.
+
+    `get_db()` closes the request session without committing. Every other write
+    route commits explicitly; the distribute route did not, so Apply reported
+    success while every assignment — and its audit row — vanished at request
+    teardown. This test drives the ROUTE with get_db's exact semantics (close,
+    never commit) and then looks with a FRESH session, the same way the
+    analyst's next page load does.
+    """
+    from app.tefca_registry.workflow_routes import (DistributionRequest,
+                                                    distribute)
+
+    review_ids = []
+    async with AsyncSession(sandbox_engine, expire_on_commit=False) as db:
+        for i in range(3):
+            rid = f"REV-9000-DIST{i:02d}"
+            db.add(reg.ReviewRecord(
+                id=uuid.uuid4(), review_id=rid,
+                entity_id=None, source_record_id=uuid.uuid4(),
+                verification_results={"queue_source": "TEST", "priority": 50}))
+            review_ids.append(rid)
+        await db.commit()
+
+    analyst_ids = [ANALYST_A.id, ANALYST_B.id]
+    stub_request = SimpleNamespace(headers={},
+                                   client=SimpleNamespace(host="127.0.0.1"))
+
+    # The request: session is CLOSED afterwards, never committed by the caller —
+    # exactly what app.core.database.get_db does after the response is built.
+    session = AsyncSession(sandbox_engine, expire_on_commit=False)
+    try:
+        result = await distribute(
+            DistributionRequest(review_ids=review_ids,
+                                analyst_user_ids=analyst_ids,
+                                preview=False),
+            stub_request, db=session, user=SUPERVISOR)
+    finally:
+        await session.close()
+
+    assert result["preview"] is False
+    assert result["assigned"] == 3
+    assert result["refused"] == 0
+
+    # A fresh session sees what the analyst's next page load sees.
+    async with AsyncSession(sandbox_engine) as db:
+        rows = (await db.execute(
+            select(reg.ReviewRecord.review_id,
+                   reg.ReviewRecord.assigned_to_user_id)
+            .where(reg.ReviewRecord.review_id.in_(review_ids)))).all()
+        owners = {rid: holder for rid, holder in rows}
+        assert len(owners) == 3
+        for rid in review_ids:
+            assert owners[rid] is not None, (
+                f"{rid} lost its assignment at request teardown — the Apply "
+                f"response claimed success for work that was rolled back")
+        assert set(owners.values()) <= set(analyst_ids)
+        audit_rows = (await db.execute(
+            select(func.count()).select_from(reg.TefcaRegAuditLog)
+            .where(reg.TefcaRegAuditLog.action == "review_case_assigned"))
+        ).scalar()
+        assert audit_rows == 3, "audit rows must land in the same commit"
+
+
 def test_synthetic_identities_only():
     for actor in (ANALYST_A, ANALYST_B, SUPERVISOR, QA, OUTSIDER):
         assert actor.email.endswith("@synthetic.test")
