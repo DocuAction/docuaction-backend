@@ -41,22 +41,24 @@ def test_detail_defers_audit_and_lineage_by_default_and_computes_on_include(clie
     r = client.get(f"/api/tefca/rce/delivery-jobs/{job_id}/detail", headers=h)
     assert r.status_code == 200, r.text
     body = r.json()
-    assert sorted(body["blocks_deferred"]) == ["audit", "lineage"]
+    assert sorted(body["blocks_deferred"]) == ["audit", "lineage", "records"]
     assert body["audit"] is None and body["lineage"] is None
     # Deferred is NOT unavailable: the tabs' own endpoints serve the data.
     assert body["availability"]["audit"] not in ("unavailable", "requires_role:reviewer")
     assert body["availability"]["lineage"] not in ("unavailable", "requires_role:reviewer")
-    # The cheap blocks are still inline.
-    assert body["records"] is not None and body["exceptions"] is not None
+    assert body["availability"]["records"] not in ("unavailable", "requires_role:reviewer")
+    # exceptions stays inline (its tab header reads it).
+    assert body["exceptions"] is not None
     assert "timeline" in body, "timeline must stay inline (empty for this seed: no stage events)"
 
-    r2 = client.get(f"/api/tefca/rce/delivery-jobs/{job_id}/detail?include=audit,lineage",
+    r2 = client.get(f"/api/tefca/rce/delivery-jobs/{job_id}/detail?include=audit,lineage,records",
                     headers=h)
     assert r2.status_code == 200, r2.text
     body2 = r2.json()
     assert body2["blocks_deferred"] == []
     assert body2["audit"] is not None and "disposition_events" in body2["audit"]
     assert body2["lineage"] is not None and "entity_versions" in body2["lineage"]
+    assert body2["records"] is not None and "by_parse_status" in body2["records"]
 
     r3 = client.get(f"/api/tefca/rce/delivery-jobs/{job_id}/detail?include=everything",
                     headers=h)
@@ -177,3 +179,39 @@ async def test_pdf_render_budget_answers_503_not_a_hang(monkeypatch):
     assert "budget" in detail
     for leak in ("Traceback", "asyncio", "thread"):
         assert leak not in detail
+
+
+@pytestmark_db
+def test_detail_dispositions_come_from_the_persisted_snapshot_when_one_exists(client):
+    """QA108-002 second pass: with a persisted snapshot the detail's
+    disposition block is DERIVED from it (the pipeline persists a new snapshot
+    on every disposition, so the latest snapshot IS current) and must equal
+    what the live aggregation says."""
+    from app.core.database import async_session_maker
+    from app.tefca_registry.rce import dispositions as disp
+    from app.tefca_registry.rce.reconciliation import persist_snapshot, reconcile_delivery
+
+    seeded = seed_delivery()
+    intake_id = seeded["intake_id"]
+    job_id = seeded["job_ids"][0]
+
+    async def _persist_and_live():
+        async with async_session_maker() as db:
+            live = await reconcile_delivery(db, intake_id)
+            await persist_snapshot(db, intake_id, live, job_id=job_id,
+                                   actor="qa108-test", trigger="MANUAL")
+            counts = await disp.counts_for_intake(db, intake_id)
+            return counts
+
+    live_counts = run(_persist_and_live())
+
+    r = client.get(f"/api/tefca/rce/delivery-jobs/{job_id}/detail",
+                   headers=headers_for("reviewer"))
+    assert r.status_code == 200, r.text
+    block = r.json()["dispositions"]
+    assert block["source"] == "persisted_snapshot"
+    for key in ("created", "updated", "matched_unchanged", "held", "rejected",
+                "missing_key", "excluded"):
+        assert block[key] == live_counts[key.upper()], key
+    assert block["total"] == live_counts["total"]
+    assert block["equation"]["accounted"] == live_counts["total"]
