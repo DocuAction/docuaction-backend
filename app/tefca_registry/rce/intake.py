@@ -23,6 +23,7 @@ success is worse than one that failed.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -123,6 +124,105 @@ def storage_root() -> str:
     return os.path.join(base, STORAGE_SUBDIR)
 
 
+# ── durable preservation (DEF-004) ───────────────────────────────────────────
+#
+# `preserve_original` below writes to the LOCAL filesystem, which on App
+# Service is the container's own writable layer: a redeploy or recycle
+# discards it, and the "Original delivery file unmodified" reconciliation
+# check then honestly skips (DEF-004). When a durable artifact backend is
+# configured (REPORT_ARTIFACT_BACKEND=azure_blob), the original bytes are ALSO
+# written, fail-closed, to the write-once artifact store under a
+# content-addressed key, and the durable locator travels on the intake's
+# source_metadata so integrity checks can read through the store after the
+# local copy is gone. The local write stays: processing reads it cheaply, and
+# the two copies are the same bytes by construction (the key IS the hash).
+
+#: Key prefix in the artifact store. The full key is the prefix plus the
+#: delivery's SHA-256, so identical bytes land once and different bytes can
+#: never collide under one key.
+DURABLE_ORIGINAL_KEY_PREFIX = "delivery-original-"
+
+
+def durable_original_key(sha256: str) -> str:
+    return f"{DURABLE_ORIGINAL_KEY_PREFIX}{sha256}"
+
+
+def durable_artifact_store():
+    """The configured artifact store when it is durable, else None.
+
+    The local backend is not durable on App Service, so `local` means "no
+    durable preservation configured" — the pre-DEF-004 behaviour, unchanged.
+    Selecting azure without its configuration already RAISES inside
+    `build_artifact_store`, so this can never silently fall back.
+    """
+    from app.core.storage.artifact_store import get_artifact_store
+
+    store = get_artifact_store()
+    return store if store.backend != "local" else None
+
+
+async def preserve_original_durably(raw: bytes, sha256: str,
+                                    filename: str) -> Optional[Dict[str, Any]]:
+    """Write the original bytes to the durable store, or None when none is
+    configured. FAIL-CLOSED: with a durable backend configured, a delivery
+    whose original cannot be durably preserved is refused — an operator who
+    believes the original is in durable storage while it only exists on a
+    container's disk is exactly the state DEF-004 exists to prevent.
+
+    Idempotent: the key is the content hash, and the store deduplicates a
+    re-put of identical bytes, so registration, the job runner's re-ingest and
+    an operator restore may each call this without creating versions.
+    """
+    store = durable_artifact_store()
+    if store is None:
+        return None
+    try:
+        record = await asyncio.to_thread(
+            store.put, durable_original_key(sha256), raw,
+            content_type="text/csv",
+            metadata={"kind": "delivery_original", "original_filename": filename,
+                      "source_sha256": sha256})
+    except Exception as exc:  # noqa: BLE001 - every failure means "not preserved"
+        raise IntakeError(
+            f"The delivery was NOT accepted: durable original storage is "
+            f"configured ({store.backend}) but the write failed "
+            f"({type(exc).__name__}). Accepting a delivery whose original is "
+            f"only on the container filesystem would silently reintroduce "
+            f"DEF-004.") from exc
+    if record.content_sha256 != sha256:
+        raise IntakeError(
+            "The delivery was NOT accepted: the durable store returned a "
+            "different content hash than the delivery's own SHA-256, so the "
+            "preserved bytes cannot be the delivered bytes.")
+    return {
+        "locator": record.locator,
+        "backend": store.backend,
+        "sha256": record.content_sha256,
+        "size_bytes": record.size_bytes,
+        "stored_at": record.stored_at,
+        "artifact_key": record.key,
+        "artifact_version": record.version,
+    }
+
+
+async def read_durable_original(sha256: str) -> Optional[bytes]:
+    """The preserved original's bytes from the durable store, hash-verified,
+    or None when no durable backend is configured or no copy exists there.
+    Never returns bytes whose hash differs from `sha256`."""
+    store = durable_artifact_store()
+    if store is None:
+        return None
+    versions = await asyncio.to_thread(store.versions, durable_original_key(sha256))
+    for record in versions:
+        if record.content_sha256 == sha256:
+            raw = await asyncio.to_thread(store.get, record.locator)
+            if hashlib.sha256(raw).hexdigest() == sha256:
+                return raw
+            logger.error("durable original %s failed re-hash on read; refusing it",
+                         record.locator)
+    return None
+
+
 def preserve_original(raw: bytes, sha256: str, filename: str) -> str:
     """Write the original bytes to immutable storage and return the path.
 
@@ -167,8 +267,11 @@ async def ingest_delivery(
 
     sha256 = hashlib.sha256(raw).hexdigest()
 
-    # 2 — preserve the original before anything else can go wrong.
+    # 2 — preserve the original before anything else can go wrong: locally for
+    # processing, and durably (fail-closed) when a durable backend is
+    # configured (DEF-004).
     storage_path = preserve_original(raw, sha256, filename)
+    durable_original = await preserve_original_durably(raw, sha256, filename)
 
     # 3 — read.
     try:
@@ -183,7 +286,9 @@ async def ingest_delivery(
             headers=[], schema_fingerprint="", record_count=0,
             delivery_label=delivery_label, received_by=received_by,
             status="FAILED", error=str(exc),
-            source_metadata=source_metadata or {},
+            source_metadata={**(source_metadata or {}),
+                             **({"durable_original": durable_original}
+                                if durable_original else {})},
         )
         await db.commit()
         raise IntakeError(
@@ -203,6 +308,8 @@ async def ingest_delivery(
         "parse_ok": read.ok_count,
         "parse_malformed": read.malformed_count,
     })
+    if durable_original:
+        metadata["durable_original"] = durable_original
     if drift:
         metadata["schema_drift_note"] = (
             "The delivered header does not match the locked 41-field map. The "
