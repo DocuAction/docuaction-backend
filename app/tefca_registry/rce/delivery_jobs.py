@@ -757,32 +757,100 @@ async def _unresolved_conflicts_by_intake(db, intake_ids) -> Dict[Any, int]:
     return {row[0]: int(row[1] or 0) for row in rows}
 
 
+def _luhn_sum_sql(col: str) -> str:
+    """The Luhn sum of a 10-digit string column, as one SQL expression.
+
+    Same arithmetic as `npi_validator._luhn_total("80840" + value)`: the
+    constant CMS prefix contributes 24, and the doubled digits of the 10-digit
+    part are the odd 1-based positions from the left (reversed indexes
+    1,3,5,7,9). "Double and subtract 9 above 9" is `2*d - 9` exactly when
+    `d > 4`. The digits are taken by integer division/modulo on the value cast
+    to bigint — cheaper per row than ten substr()::int casts, which showed up
+    at September scale (24,589 rows per view). Callers must have established
+    the value is exactly 10 ASCII digits, or the cast raises. Pinned
+    digit-by-digit against `validate_npi` in
+    tests/test_status_npi_sql_aggregation.py.
+    """
+    n = f"({col}::bigint)"
+
+    def digit(pos: int) -> str:
+        return (f"mod({n} / {10 ** (10 - pos)}, 10)" if pos < 10
+                else f"mod({n}, 10)")
+
+    # "Double and subtract 9 above 9" over the doubled digits, algebraically:
+    #   sum(2d - 9*[d>4]) = 2*sum(d) - 9*sum(d/5)   (integer division; for a
+    # digit, d/5 is 1 exactly when d > 4). No per-digit CASE.
+    doubled = [digit(pos) for pos in (1, 3, 5, 7, 9)]
+    plain = [digit(pos) for pos in (2, 4, 6, 8, 10)]
+    return (f"24 + 2*({' + '.join(doubled)}) + ({' + '.join(plain)})"
+            f" - 9*({' + '.join(f'({d})/5' for d in doubled)})")
+
+
+#: AP-002 residual: this helper used to SELECT every active NPI identifier row
+#: of the page's promoted entities (24,589 at September scale) and run
+#: `validate_npi` per value in Python — the same rows-over-the-wire shape the
+#: verification-coverage fix removed. The check-digit rule (45 CFR 162.406) is
+#: pure digit arithmetic, so well-formed values are judged IN Postgres and only
+#: the count crosses the wire. A value that is not exactly 10 ASCII digits
+#: after a space-trim cannot be judged by the SQL fast path (Python's strip()
+#: also removes tabs and unicode whitespace), so those RARE rows come back and
+#: go through the real `validate_npi` — the partition is safe because any value
+#: the SQL judges is byte-identical to what Python would validate.
+_NPI_INVALID_COUNTS_SQL = f"""
+    WITH promoted AS (
+        SELECT DISTINCT c.source_intake_id AS intake_id,
+                        c.canonical_entity_id AS entity_id
+        FROM rce_curated_records c
+        WHERE c.source_intake_id = ANY(CAST(:ids AS uuid[]))
+          AND c.canonical_entity_id IS NOT NULL),
+    vals AS (
+        SELECT p.intake_id,
+               ti.identifier_value AS raw,
+               btrim(ti.identifier_value) AS v
+        FROM promoted p
+        JOIN tefca_entity_identifiers ti ON ti.entity_id = p.entity_id
+        WHERE ti.identifier_type = 'npi' AND ti.identifier_status = 'active'),
+    classified AS (
+        -- exactly 10 ASCII digits, tested with length+translate rather than a
+        -- regex: same predicate, a fraction of the per-row cost at 24,589 rows
+        SELECT intake_id, raw,
+               CASE WHEN length(v) = 10 AND translate(v, '0123456789', '') = ''
+                    THEN CASE WHEN mod({_luhn_sum_sql('v')}, 10) = 0
+                              THEN 'valid' ELSE 'invalid' END
+                    ELSE 'defer' END AS verdict
+        FROM vals)
+    SELECT intake_id,
+           count(*) FILTER (WHERE verdict = 'invalid') AS invalid_wellformed,
+           array_agg(raw) FILTER (WHERE verdict = 'defer') AS deferred
+    FROM classified GROUP BY intake_id
+"""
+
+
 async def _invalid_identifiers_promoted_by_intake(db, intake_ids) -> Dict[Any, int]:
     """`_invalid_identifiers_promoted`, grouped by intake. The DISTINCT on
     (intake, entity) keeps the per-row `IN (subquery)` semantics: an entity
     promoted from two lines of one delivery is one entity, and its identifier
-    rows are counted once."""
+    rows are counted once.
+
+    Counted in SQL (see `_NPI_INVALID_COUNTS_SQL`): the query returns one row
+    per intake — an invalid-count for well-formed values plus the rare values
+    the fast path cannot judge, which are validated here with the real
+    `validate_npi`, keeping this oracle-equal to the per-row helper
+    (tests/test_status_npi_sql_aggregation.py, test_delivery_jobs_list_perf.py).
+    """
     from app.services.npi_validator import validate_npi
-    from app.tefca_registry import models as reg
-    from app.tefca_registry.rce import models as m
 
     if not intake_ids:
         return {}
-    promoted = (select(m.RceCuratedRecord.source_intake_id.label("intake_id"),
-                       m.RceCuratedRecord.canonical_entity_id.label("entity_id"))
-                .where(m.RceCuratedRecord.source_intake_id.in_(intake_ids),
-                       m.RceCuratedRecord.canonical_entity_id.isnot(None))
-                .distinct().subquery())
     rows = (await db.execute(
-        select(promoted.c.intake_id, reg.TefcaEntityIdentifier.identifier_value)
-        .join(reg.TefcaEntityIdentifier,
-              reg.TefcaEntityIdentifier.entity_id == promoted.c.entity_id)
-        .where(reg.TefcaEntityIdentifier.identifier_type == "npi",
-               reg.TefcaEntityIdentifier.identifier_status == "active"))).all()
+        text(_NPI_INVALID_COUNTS_SQL),
+        {"ids": [str(i) for i in intake_ids]})).all()
     out: Dict[Any, int] = {}
-    for intake_id, value in rows:
-        if not validate_npi(value)[0]:
-            out[intake_id] = out.get(intake_id, 0) + 1
+    for intake_id, invalid_wellformed, deferred in rows:
+        n = int(invalid_wellformed or 0)
+        n += sum(1 for value in (deferred or []) if not validate_npi(value)[0])
+        if n:
+            out[intake_id] = n
     return out
 
 
