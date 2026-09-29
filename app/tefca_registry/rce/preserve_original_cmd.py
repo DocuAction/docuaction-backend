@@ -61,9 +61,10 @@ async def restore_preserved_original(
 
     Kept as its own function — with its own name in every operator runbook —
     but it is now the file-based special case of `restore_preserved_original_bytes`,
-    which also backs the admin-endpoint restore (DEF-005 follow-up: a pre-staged
-    blob, not a local path). Steps 1-7 of RESTORE-PROCEDURE.md; raises
-    RestoreRefused on ANY deviation, leaving the intake exactly as it was.
+    which also backs the admin-endpoint restore (DEF-004 governed original-
+    artifact restoration: a pre-staged blob, not a local path). Steps 1-7 of
+    RESTORE-PROCEDURE.md; raises RestoreRefused on ANY deviation, leaving the
+    intake exactly as it was.
     """
     with open(file_path, "rb") as handle:
         raw = handle.read()

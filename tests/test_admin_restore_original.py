@@ -1,5 +1,6 @@
-"""DEF-005 follow-up — the DEV-only, admin-only, feature-flagged governed
-restore of a delivery's preserved original from a pre-staged private blob.
+"""DEF-004 governed original-artifact restoration — the DEV-only, admin-only,
+feature-flagged governed restore of a delivery's preserved original from a
+pre-staged private blob.
 
 WHY THIS EXISTS
 ────────────────

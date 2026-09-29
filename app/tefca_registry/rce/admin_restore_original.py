@@ -1,6 +1,6 @@
-"""DEF-005 follow-up — governed DEV-only restore of a delivery's preserved
-original via a pre-staged private blob, driven through the RUNNING
-application's own DATABASE_URL and managed identity.
+"""DEF-004 governed original-artifact restoration — DEV-only restore of a
+delivery's preserved original via a pre-staged private blob, driven through
+the RUNNING application's own DATABASE_URL and managed identity.
 
 WHY THIS EXISTS
 ────────────────

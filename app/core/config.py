@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     # pipeline exists to prevent. Excluded rows stay in Area 1 and Area 2.
     RCE_EXCLUDE_TEST_RECORDS: bool = False
 
-    # ── DEV-only governed original-artifact restore (DEF-005 follow-up) ──────
+    # ── DEV-only governed original-artifact restore (DEF-004 governed restoration) ──
     # A SECOND gate beyond ENVIRONMENT=development: the admin restore endpoint
     # is only REGISTERED (it does not exist in the route table at all, in any
     # environment) when this is true AND is_development is true. Defaults

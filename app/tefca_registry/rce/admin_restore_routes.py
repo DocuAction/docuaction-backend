@@ -1,7 +1,7 @@
-"""DEF-005 follow-up — the HTTP surface for the DEV-only governed original
-restore (`admin_restore_original.py` holds the actual business logic; this
-module is FastAPI plumbing only: route registration, auth, error mapping,
-sanitized response shape).
+"""DEF-004 governed original-artifact restoration — the HTTP surface for the
+DEV-only restore (`admin_restore_original.py` holds the actual business
+logic; this module is FastAPI plumbing only: route registration, auth,
+error mapping, sanitized response shape).
 
 WHY THIS ROUTER MAY HAVE ZERO ROUTES ON IT
 ────────────────────────────────────────────
