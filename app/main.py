@@ -663,6 +663,16 @@ safe_load("app.tefca_registry.rce.routes", "tefca-rce-pipeline")
 # reading it. Neither module mutates Area 1.
 safe_load("app.tefca_registry.rce.delivery_routes", "tefca-rce-deliveries")
 
+# DEF-004 governed original-artifact restoration: DEV-only, admin-only,
+# feature-flagged restore of a delivery's preserved original from a
+# pre-staged private blob — runs inside THIS process so it can use the
+# resolved DATABASE_URL and the container's own managed identity, neither of
+# which an operator's own machine can reach. The module attaches its one
+# route ONLY when ENVIRONMENT=development AND ENABLE_DEV_RESTORE_ORIGINAL=true;
+# otherwise `router` carries no routes and this include is a no-op. See
+# app/tefca_registry/rce/admin_restore_routes.py.
+safe_load("app.tefca_registry.rce.admin_restore_routes", "tefca-rce-admin-restore")
+
 # Program Manager + Analyst workflow surface at /api/tefca/workflow/*:
 # QHIN work organisation, workload distribution, and the analyst verification
 # workspace. Read surface plus one audited bulk-assignment write; it creates no
