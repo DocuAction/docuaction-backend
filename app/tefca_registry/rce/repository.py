@@ -308,28 +308,88 @@ async def verify_record_hashes(db, intake_id, *, sample: Optional[int] = None
     }
 
 
-async def verify_stored_file(db, intake_id) -> Dict[str, Any]:
-    """Re-hash the preserved original file and compare against the intake record."""
+async def verify_stored_file(db, intake_id, *, deep: bool = False) -> Dict[str, Any]:
+    """Re-hash the preserved original file and compare against the intake record.
+
+    Order of evidence (DEF-004): the LOCAL file, fully re-hashed, when it
+    exists; otherwise the DURABLE copy recorded on the intake's
+    source_metadata. The durable path compares the write-once store's recorded
+    content hash by default (bounded cost — this runs on every dashboard
+    view), and with `deep=True` downloads the bytes and re-hashes them (the
+    restore command and one-off audits use this). `verified_by` says which
+    evidence produced the verdict, so a PASS from a durable record is
+    distinguishable from a PASS from a local re-hash.
+    """
+    import asyncio
     import os
 
     intake = await get_intake(db, intake_id)
     if intake is None:
         return {"checked": False, "reason": "intake not found"}
     path = intake.storage_path
-    if not path or not os.path.exists(path):
-        # Name the FILE, never the container path (QA108-20260927-010): the
-        # reason travels into API bodies, and an internal filesystem layout is
-        # not something a response should teach.
-        return {"checked": False,
-                "reason": ("stored file not found: "
-                           f"{os.path.basename(path) if path else '(no path recorded)'}"),
-                "intact": None}
-    with open(path, "rb") as handle:
-        recomputed = hashlib.sha256(handle.read()).hexdigest()
-    return {
-        "checked": True,
-        "storage_path": path,
-        "recorded_sha256": intake.sha256,
-        "recomputed_sha256": recomputed,
-        "intact": recomputed == intake.sha256,
-    }
+    if path and os.path.exists(path):
+        with open(path, "rb") as handle:
+            recomputed = hashlib.sha256(handle.read()).hexdigest()
+        return {
+            "checked": True,
+            "storage_path": path,
+            "recorded_sha256": intake.sha256,
+            "recomputed_sha256": recomputed,
+            "intact": recomputed == intake.sha256,
+            "storage_backend": "local",
+            "verified_by": "local_file_rehash",
+        }
+
+    durable = (getattr(intake, "source_metadata", None) or {}).get(
+        "durable_original") or {}
+    locator = durable.get("locator")
+    from app.tefca_registry.rce.intake import durable_artifact_store, durable_original_key
+
+    store = durable_artifact_store()
+    if store is not None:
+        # The intake's metadata locator when it has one (deliveries ingested
+        # after DEF-004); otherwise the CONTENT-ADDRESSED key derived from the
+        # intake's own sha256 — which is how an operator-restored original
+        # (RESTORE-PROCEDURE) is found without ever UPDATE-ing the immutable
+        # intake row.
+        try:
+            record = None
+            if locator:
+                record = await asyncio.to_thread(store.head, locator)
+            else:
+                for candidate in await asyncio.to_thread(
+                        store.versions, durable_original_key(intake.sha256)):
+                    if candidate.content_sha256 == intake.sha256:
+                        record = candidate
+                        break
+            if record is not None:
+                if deep:
+                    raw = await asyncio.to_thread(store.get, record.locator)
+                    recomputed = hashlib.sha256(raw).hexdigest()
+                    verified_by = "durable_artifact_rehash"
+                else:
+                    recomputed = record.content_sha256
+                    verified_by = "durable_artifact_record"
+                return {
+                    "checked": True,
+                    "storage_path": record.locator,
+                    "recorded_sha256": intake.sha256,
+                    "recomputed_sha256": recomputed,
+                    "intact": recomputed == intake.sha256,
+                    "storage_backend": store.backend,
+                    "verified_by": verified_by,
+                }
+        except Exception as exc:  # noqa: BLE001 - unreachable durable copy is honest news
+            return {"checked": False,
+                    "reason": (f"a durable original is recorded but could not be "
+                               f"read ({type(exc).__name__})"),
+                    "storage_backend": store.backend,
+                    "intact": None}
+
+    # Name the FILE, never the container path (QA108-20260927-010): the
+    # reason travels into API bodies, and an internal filesystem layout is
+    # not something a response should teach.
+    return {"checked": False,
+            "reason": ("stored file not found: "
+                       f"{os.path.basename(path) if path else '(no path recorded)'}"),
+            "intact": None}

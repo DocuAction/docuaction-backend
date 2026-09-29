@@ -388,11 +388,25 @@ async def _stage_area1(db, job):
     will call `preserve_original` again with the same content hash; that is
     idempotent by construction — it returns the existing path and does not
     rewrite preserved evidence.
-    """
-    from app.tefca_registry.rce.intake import ingest_delivery
 
-    with open(job.storage_path, "rb") as handle:
-        raw = handle.read()
+    If the container recycled between registration and this stage, the local
+    file is gone; with a durable backend configured (DEF-004) the bytes are
+    re-read, hash-verified, from the durable store instead of failing the job.
+    """
+    import os
+
+    from app.tefca_registry.rce.intake import ingest_delivery, read_durable_original
+
+    if os.path.exists(job.storage_path):
+        with open(job.storage_path, "rb") as handle:
+            raw = handle.read()
+    else:
+        raw = await read_durable_original(job.sha256)
+        if raw is None:
+            raise FileNotFoundError(
+                f"The preserved original for job {job.id} is not on this "
+                f"container's filesystem and no durable copy exists. Register "
+                f"the delivery again as a NEW delivery.")
 
     result = await ingest_delivery(
         db, raw,
