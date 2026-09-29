@@ -211,6 +211,24 @@ class ReportArtifactStore(ABC):
         record = self.head(locator)
         return content_sha256(self.get(locator)) == record.content_sha256
 
+    def read_staged_blob(self, blob_name: str) -> bytes:
+        """Read an object by its EXACT name from this backend's configured
+        account/container — for a governed staging read ONLY (e.g. an
+        operator-restore endpoint picking up a pre-staged file the caller
+        never gets to name a storage account, container or URL for).
+
+        Deliberately NOT part of the versioned artifact contract: no key/
+        version parsing, no `StoredArtifact` record, no `put`/`head` path.
+        The caller is responsible for restricting `blob_name` to an approved
+        prefix before calling this — this method's only job is refusing a
+        name that tries to escape the account/container it already has
+        (`..`, an absolute path). The base implementation refuses outright;
+        a backend that has no staging area of its own should not silently
+        no-op.
+        """
+        raise ArtifactStoreUnconfigured(
+            f"the {self.backend} backend does not support staged-blob reads")
+
 
 # ── local filesystem backend ─────────────────────────────────────────────────
 
@@ -337,6 +355,21 @@ class LocalFilesystemArtifactStore(ReportArtifactStore):
         if not os.path.exists(self._record_path(version_dir)):
             raise ArtifactNotFound(locator)
         return self._read_record(version_dir)
+
+    def read_staged_blob(self, blob_name: str) -> bytes:
+        """`<root>/<blob_name>`, refusing any attempt to leave `root`. Exists
+        so tests can exercise the staged-restore path against a real
+        filesystem instead of mocking Azure; production traffic goes through
+        `AzureBlobArtifactStore.read_staged_blob` below."""
+        if not blob_name or ".." in blob_name or blob_name.startswith("/"):
+            raise ArtifactNotFound(f"{blob_name!r} is not a safe blob name")
+        path = os.path.abspath(os.path.join(self.root, blob_name))
+        if not path.startswith(self.root + os.sep):
+            raise ArtifactNotFound(f"{blob_name!r} resolves outside the store")
+        if not os.path.exists(path):
+            raise ArtifactNotFound(blob_name)
+        with open(path, "rb") as fh:
+            return fh.read()
 
 
 # ── Azure Blob backend ───────────────────────────────────────────────────────
@@ -526,6 +559,21 @@ class AzureBlobArtifactStore(ReportArtifactStore):
         except ResourceNotFoundError:
             raise ArtifactNotFound(locator) from None
         return self._record_from_json(raw)
+
+    def read_staged_blob(self, blob_name: str) -> bytes:
+        """Download `blob_name` from THIS store's already-configured
+        account/container, exactly as named — for a governed staging read
+        only (see the base class docstring). Refuses any name that tries to
+        leave the container; the caller is responsible for restricting it to
+        an approved prefix before this is ever reached."""
+        from azure.core.exceptions import ResourceNotFoundError
+
+        if not blob_name or ".." in blob_name or blob_name.startswith("/"):
+            raise ArtifactNotFound(f"{blob_name!r} is not a safe blob name")
+        try:
+            return self._client().download_blob(blob_name).readall()
+        except ResourceNotFoundError:
+            raise ArtifactNotFound(blob_name) from None
 
 
 # ── selection ────────────────────────────────────────────────────────────────

@@ -247,10 +247,18 @@ async def test_restore_puts_verifies_audits_and_is_idempotent(
     assert len(rows) == 1
     assert rows[0][0] == "operator@example.test"
 
-    # idempotent: a second run deduplicates rather than versions
+    # idempotent: a second run deduplicates rather than versions, and writes
+    # NO second audit row — "already restored" is reported instead of a
+    # duplicate record of an action that already happened.
     again = await restore_preserved_original(
         db, intake_id=intake_id, file_path=str(copy), expect_sha=SHA,
         actor="operator@example.test")
     assert again["restored"] is True
+    assert again["already_restored"] is True
     assert again["deduplicated"] is True
     assert len(durable_store.versions(intake_mod.durable_original_key(SHA))) == 1
+    rows_after = (await db.execute(text(
+        "SELECT count(*) FROM tefca_reg_audit_log "
+        "WHERE action = 'original_preserved' AND metadata->>'sha256' = :s"),
+        {"s": SHA})).scalar()
+    assert rows_after == 1, "a deduplicated repeat must not write a second audit event"

@@ -57,8 +57,37 @@ async def restore_preserved_original(
     db, *, intake_id, file_path: str, expect_sha: str, actor: str,
     store=None,
 ) -> Dict[str, Any]:
-    """Steps 1-7 of the governed restore. Raises RestoreRefused on ANY
-    deviation, leaving the intake exactly as it was."""
+    """The CLI's entry point: read a LOCAL file, then run the shared core.
+
+    Kept as its own function — with its own name in every operator runbook —
+    but it is now the file-based special case of `restore_preserved_original_bytes`,
+    which also backs the admin-endpoint restore (DEF-005 follow-up: a pre-staged
+    blob, not a local path). Steps 1-7 of RESTORE-PROCEDURE.md; raises
+    RestoreRefused on ANY deviation, leaving the intake exactly as it was.
+    """
+    with open(file_path, "rb") as handle:
+        raw = handle.read()
+    return await restore_preserved_original_bytes(
+        db, intake_id=intake_id, raw=raw, expect_sha=expect_sha, actor=actor,
+        provenance="operator restore from verified local copy", store=store)
+
+
+async def restore_preserved_original_bytes(
+    db, *, intake_id, raw: bytes, expect_sha: str, actor: str,
+    provenance: str, store=None,
+) -> Dict[str, Any]:
+    """The shared restore core: bytes in hand, everything after that is
+    identical regardless of where the bytes came from (a local file for the
+    CLI, a pre-staged private blob for the admin endpoint). Raises
+    RestoreRefused on any deviation, leaving the intake exactly as it was.
+
+    IDEMPOTENCY (stricter than the original CLI-only version): the underlying
+    store's `put` already deduplicates identical bytes under a key — this
+    function additionally skips the audit write whenever that happens, so a
+    repeat call writes NOTHING (no second blob write, no second audit row)
+    and reports `already_restored: True` instead of quietly appending a
+    duplicate record of an action that already happened.
+    """
     from app.tefca_registry import models as reg
     from app.tefca_registry.rce import repository as repo
     from app.tefca_registry.rce.intake import (durable_artifact_store,
@@ -76,24 +105,22 @@ async def restore_preserved_original(
     if intake is None:
         raise RestoreRefused(f"intake {intake_id} does not exist")
 
-    # 1-2. read unchanged, hash, compare against BOTH the operator's expected
+    # 1-2. hash the bytes in hand, compare against BOTH the caller's expected
     # hash and the intake's recorded one.
-    with open(file_path, "rb") as handle:
-        raw = handle.read()
     local_sha = hashlib.sha256(raw).hexdigest()
     expect = (expect_sha or "").strip().lower()
     if local_sha != expect:
         raise RestoreRefused(
-            f"the file's SHA-256 ({local_sha[:16]}…) does not equal "
-            f"--expect-sha ({expect[:16]}…); nothing was written")
+            f"the bytes' SHA-256 ({local_sha[:16]}…) does not equal the "
+            f"expected SHA-256 ({expect[:16]}…); nothing was written")
     if local_sha != (intake.sha256 or "").lower():
         raise RestoreRefused(
-            f"the file's SHA-256 ({local_sha[:16]}…) does not equal the "
+            f"the bytes' SHA-256 ({local_sha[:16]}…) does not equal the "
             f"intake's recorded sha256 ({(intake.sha256 or '')[:16]}…); "
             f"nothing was written")
     if intake.file_size_bytes is not None and len(raw) != intake.file_size_bytes:
         raise RestoreRefused(
-            f"the file is {len(raw)} bytes but the intake recorded "
+            f"the bytes are {len(raw)} long but the intake recorded "
             f"{intake.file_size_bytes}; nothing was written")
 
     # 3. write-once put under the content-addressed key. Identical bytes
@@ -104,7 +131,7 @@ async def restore_preserved_original(
         metadata={"kind": "delivery_original",
                   "original_filename": intake.original_filename,
                   "source_sha256": local_sha,
-                  "provenance": "operator restore from verified local copy",
+                  "provenance": provenance,
                   "restored_by": actor,
                   "intake_id": str(intake.id)})
 
@@ -117,24 +144,25 @@ async def restore_preserved_original(
             f"{stored_sha[:16]}…, not {local_sha[:16]}…. The intake remains "
             f"marked unavailable; do not trust the stored copy.")
 
-    # 5-6. one append-only audit event. No intake UPDATE — the durable copy is
-    # found through the content-addressed key.
-    db.add(reg.TefcaRegAuditLog(
-        entity_id=None,
-        action="original_preserved",
-        actor_email=actor,
-        metadata_={
-            "intake_id": str(intake.id),
-            "original_filename": intake.original_filename,
-            "size_bytes": len(raw),
-            "sha256": local_sha,
-            "storage_backend": store.backend,
-            "storage_key": record.key,
-            "storage_locator": record.locator,
-            "deduplicated": bool(record.deduplicated),
-            "provenance": "operator restore from verified local copy",
-        }))
-    await db.commit()
+    # 5-6. one append-only audit event, ONLY on a genuinely new write — never
+    # on a deduplicated repeat. No intake UPDATE — the durable copy is found
+    # through the content-addressed key.
+    if not record.deduplicated:
+        db.add(reg.TefcaRegAuditLog(
+            entity_id=None,
+            action="original_preserved",
+            actor_email=actor,
+            metadata_={
+                "intake_id": str(intake.id),
+                "original_filename": intake.original_filename,
+                "size_bytes": len(raw),
+                "sha256": local_sha,
+                "storage_backend": store.backend,
+                "storage_key": record.key,
+                "storage_locator": record.locator,
+                "provenance": provenance,
+            }))
+        await db.commit()
 
     # 7. rerun ONLY the preservation control, deep, and require PASS.
     verification = await repo.verify_stored_file(db, intake.id, deep=True)
@@ -145,6 +173,7 @@ async def restore_preserved_original(
 
     return {
         "restored": True,
+        "already_restored": bool(record.deduplicated),
         "intake_id": str(intake.id),
         "sha256": local_sha,
         "size_bytes": len(raw),

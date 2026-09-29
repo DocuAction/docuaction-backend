@@ -117,6 +117,7 @@ jobs:
             tests/test_delivery_jobs_list_perf.py \
             tests/test_def004_durable_originals.py \
             tests/test_def005_disposition_inflight_guard.py \
+            tests/test_admin_restore_original.py \
             -v --tb=short -rs --junitxml=isolation-results.xml
       - name: Fail if any isolation test was skipped for want of a database
         run: |
