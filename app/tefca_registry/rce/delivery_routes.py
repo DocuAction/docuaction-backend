@@ -73,6 +73,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from contextlib import asynccontextmanager
 
 from sqlalchemy.exc import IntegrityError
 
@@ -1456,6 +1457,56 @@ class IssueDispositionBody(BaseModel):
     corrected_value: Optional[str] = Field(None, max_length=2000)
 
 
+#: DEF-005 §7 — the operator-facing refusal when a disposition for the SAME
+#: finding is already running. Fixed wording: it reaches the screen as-is.
+DISPOSITION_IN_FLIGHT_MESSAGE = (
+    "A disposition for this finding is already being processed. Wait for it "
+    "to complete, then refresh the decision history before deciding again.")
+
+
+@asynccontextmanager
+async def _issue_disposition_guard(issue_id):
+    """One disposition chain per finding at a time (DEF-005 §7).
+
+    A hold-releasing disposition re-promotes and reconciles the WHOLE delivery
+    — 75.8 s observed on the 24,589-record September delivery (request id
+    ffb44190-dae2-453c-a7b9-9b4b34dd5561) — and the chain commits in stages,
+    so a duplicate submitted while the first is in flight could start a SECOND
+    promotion/reconciliation over the same records. The terminal-finding 409
+    only protects once the first chain's resolution has committed; this closes
+    the window before that.
+
+    The lock is a SESSION-level Postgres advisory lock held on a DEDICATED
+    connection for the request's whole duration — transaction-scoped would
+    release at the chain's first internal commit, and a lock on the request
+    session's own connection would not survive the session's commit/refresh
+    cycle predictably. If the process dies, the connection dies and Postgres
+    releases the lock; if the unlock itself fails, the connection is
+    INVALIDATED rather than returned to the pool still holding the lock.
+    """
+    from app.core.database import engine
+
+    key = f"issue-disposition:{issue_id}"
+    conn = await engine.connect()
+    acquired = False
+    try:
+        acquired = bool((await conn.execute(
+            text("SELECT pg_try_advisory_lock(hashtextextended(:k, 0))"),
+            {"k": key})).scalar())
+        if not acquired:
+            raise HTTPException(409, DISPOSITION_IN_FLIGHT_MESSAGE)
+        yield
+    finally:
+        if acquired:
+            try:
+                await conn.execute(
+                    text("SELECT pg_advisory_unlock(hashtextextended(:k, 0))"),
+                    {"k": key})
+            except Exception:  # noqa: BLE001 - never return a still-locked conn
+                await conn.invalidate()
+        await conn.close()
+
+
 @router.post("/issues/{issue_id}/dispositions",
              summary="Record an analyst disposition on a finding")
 async def post_issue_disposition(
@@ -1490,55 +1541,61 @@ async def post_issue_disposition(
         "resolution": issue.resolution,
     }
     apply = getattr(curation, "apply_disposition", None)
-    try:
-        if apply is not None:
-            # curation.DISPOSITION_DECISIONS are the same words in lower case
-            # (accept, reject, correct, confirm_existing, ...).
-            result = await apply(db, issue.id, decision=decision.lower(),
-                                 reason=body.reason.strip(), actor=actor,
-                                 corrected_value=body.corrected_value, actor_id=actor_id)
-            path = "curation.apply_disposition"
-        else:
-            result = await _fallback_apply_disposition(
-                db, issue, decision=decision, reason=body.reason.strip(),
-                actor=actor, corrected_value=body.corrected_value)
-            path = "delivery_routes._fallback_apply_disposition"
-    except curation.CorrectionRefused as exc:
-        await db.rollback()
-        if str(exc) == curation.TERMINAL_FINDING_MESSAGE:
-            # The attempt is itself evidence; the finding is not touched. The
-            # rollback expired every row in the session, the caller's own
-            # user row included, so the actor is the pair captured above.
-            from types import SimpleNamespace
-            actor_facts = SimpleNamespace(id=actor_id, email=actor)
-            await _audit(db, "analyst_disposition_refused", actor_facts, request, {
-                **issue_facts, "decision": decision,
-                "refusal": "terminal_finding",
-                "correlation_id": request_context.correlation_id(),
-            })
-        raise HTTPException(409, str(exc))
-    except ValueError as exc:
-        # Includes identifier_decisions.IdentifierAlreadyRegistered (409) and
-        # the value/conflict refusals (422) from the decision gate.
-        await db.rollback()
-        from app.tefca_registry.rce import identifier_decisions as _idd
-        if isinstance(exc, _idd.IdentifierAlreadyRegistered):
+    # DEF-005 §7 — the guard spans the WHOLE chain including the audit write,
+    # so a duplicate for the same finding is refused (409, fixed message)
+    # rather than starting a second promotion/reconciliation. The terminal
+    # refusal inside apply_disposition stays the FIRST check once the guard is
+    # held (§8): a settled finding is refused before any side effect.
+    async with _issue_disposition_guard(issue.id):
+        try:
+            if apply is not None:
+                # curation.DISPOSITION_DECISIONS are the same words in lower case
+                # (accept, reject, correct, confirm_existing, ...).
+                result = await apply(db, issue.id, decision=decision.lower(),
+                                     reason=body.reason.strip(), actor=actor,
+                                     corrected_value=body.corrected_value, actor_id=actor_id)
+                path = "curation.apply_disposition"
+            else:
+                result = await _fallback_apply_disposition(
+                    db, issue, decision=decision, reason=body.reason.strip(),
+                    actor=actor, corrected_value=body.corrected_value)
+                path = "delivery_routes._fallback_apply_disposition"
+        except curation.CorrectionRefused as exc:
+            await db.rollback()
+            if str(exc) == curation.TERMINAL_FINDING_MESSAGE:
+                # The attempt is itself evidence; the finding is not touched. The
+                # rollback expired every row in the session, the caller's own
+                # user row included, so the actor is the pair captured above.
+                from types import SimpleNamespace
+                actor_facts = SimpleNamespace(id=actor_id, email=actor)
+                await _audit(db, "analyst_disposition_refused", actor_facts, request, {
+                    **issue_facts, "decision": decision,
+                    "refusal": "terminal_finding",
+                    "correlation_id": request_context.correlation_id(),
+                })
             raise HTTPException(409, str(exc))
-        raise HTTPException(422, str(exc))
-    except IntegrityError:
-        await db.rollback()
-        raise HTTPException(409, "A concurrent change was recorded for this record; "
-                                 "refresh and review the current state.")
+        except ValueError as exc:
+            # Includes identifier_decisions.IdentifierAlreadyRegistered (409) and
+            # the value/conflict refusals (422) from the decision gate.
+            await db.rollback()
+            from app.tefca_registry.rce import identifier_decisions as _idd
+            if isinstance(exc, _idd.IdentifierAlreadyRegistered):
+                raise HTTPException(409, str(exc))
+            raise HTTPException(422, str(exc))
+        except IntegrityError:
+            await db.rollback()
+            raise HTTPException(409, "A concurrent change was recorded for this record; "
+                                     "refresh and review the current state.")
 
-    await _audit(db, "analyst_disposition", user, request, {
-        "issue_id": str(issue.id), "issue_code": issue.issue_code,
-        "intake_id": str(issue.source_intake_id),
-        "source_record_id": (str(issue.source_record_id)
-                             if issue.source_record_id else None),
-        "decision": decision, "reason": body.reason.strip(),
-        "corrected_value_supplied": body.corrected_value is not None,
-        "applied_by": path, "correlation_id": request_context.correlation_id(),
-    })
+        await _audit(db, "analyst_disposition", user, request, {
+            "issue_id": str(issue.id), "issue_code": issue.issue_code,
+            "intake_id": str(issue.source_intake_id),
+            "source_record_id": (str(issue.source_record_id)
+                                 if issue.source_record_id else None),
+            "decision": decision, "reason": body.reason.strip(),
+            "corrected_value_supplied": body.corrected_value is not None,
+            "applied_by": path, "correlation_id": request_context.correlation_id(),
+        })
     return {"issue_id": str(issue.id), "decision": decision,
             "applied_by": path, "result": result,
             "correlation": {"request_id": request_context.get("request_id")}}
