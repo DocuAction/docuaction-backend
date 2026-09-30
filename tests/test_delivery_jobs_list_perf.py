@@ -221,9 +221,11 @@ async def test_list_page_reuses_the_heavy_intake_counts_within_the_ttl(rolled_ba
     from app.tefca_registry.rce import delivery_jobs as jobs
 
     db = rolled_back_db
-    population = await jobs.list_jobs(db, limit=6)
-    if not population:
-        pytest.skip("no delivery jobs seeded in this database (not a database-reachability skip)")
+    # Seed the page ourselves (the CI database holds only jobs without an
+    # intake, which never reach the heavy per-intake counts): two clean
+    # deliveries, one held delivery and one FAILED job without an intake.
+    population = await _population(db, 2)
+    assert any(getattr(j, "source_intake_id", None) is not None for j in population)
     jobs.reset_list_status_cache()
     calls = {"invalid": 0, "unexplained": 0}
     real_invalid = jobs._invalid_identifiers_promoted_by_intake
