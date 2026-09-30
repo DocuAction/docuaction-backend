@@ -122,6 +122,7 @@ jobs:
             tests/test_exception_issue_decisions.py \
             tests/test_report_generate_idempotency.py \
             tests/test_release1_foundation.py \
+            tests/test_contract_progress_reports.py \
             -v --tb=short -rs --junitxml=isolation-results.xml
       - name: Fail if any isolation test was skipped for want of a database
         run: |

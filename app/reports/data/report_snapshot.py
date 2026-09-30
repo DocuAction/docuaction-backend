@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 REPORT_TYPES = ("verification", "verification_brief", "data_quality", "executive",
                 "intake", "delivery_processing", "retrospective_weekly",
-                "retrospective_final", "ongoing_biweekly", "ongoing_quarterly",
+                "retro_monthly", "retrospective_final", "ongoing_biweekly", "ongoing_quarterly",
                 "priority_status", "priority_quarterly")
 
 #: DA-ARC-YYYY-NNN

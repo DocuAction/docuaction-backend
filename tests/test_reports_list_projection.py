@@ -103,8 +103,12 @@ def test_listing_answers_without_touching_dataset_or_html(client, committed_repo
     # never touch the rendered-HTML column or load the dataset wholesale.
     code = src.split('"""')[-1]
     assert "report_html" not in code
-    # The only dataset touches are the two contract-number path extracts.
-    assert code.count('["dataset"]') == 2
+    # The only dataset touches are path extracts of small subtrees: the two
+    # contract-number paths and, since the ONC demo implementation
+    # (2026-09-30), the `delivery` and `scope` identifier blocks that name a
+    # scoped report's population. Never the dataset itself.
+    assert code.count('["dataset"]') == 4
+    assert 'R.report_data["dataset"].label' not in code
     r = client.get("/api/reports?limit=5", headers=headers_for("viewer"))
     assert r.status_code == 200
 

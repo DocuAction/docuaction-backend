@@ -1,0 +1,210 @@
+{#
+  Contract progress deliverables — D3.1 Weekly, D3.1 Monthly, D3.2 120-Day Final.
+
+  Front section: the approved Alliance Global Tech executive layout (2026-09-30
+  branded comparison package — navy/blue/gold, metric cards, B1–B4 colour map,
+  compact header, contract footer), rendered from the `progress` dataset that
+  app/reports/data/sow_progress_data.py derives from the selected delivery /
+  review cycle. Every number on this page is read from that dataset; nothing is
+  typed into the template.
+
+  Then the contract-required body (stratified list of Participants and
+  Subparticipants under the four Government categories, sampling context,
+  methodology changes, dependencies, provenance) — unchanged from sow_report.html
+  via inheritance.
+
+  Marking: `document_marking` (generator) — "DRAFT — FOR CLIENT REVIEW"; a FINAL
+  mark is never rendered here (release governance happens after the bytes are
+  frozen). A draft computed outside Government-classified data carries the
+  discreet `synthetic_note` under the marking line instead of the engine's
+  red development banner; the page margin repeats the client marking.
+#}
+{% extends "sow_report.html" %}
+
+{% block page_marking %}
+<style>
+  @page { @top-center { content: "{{ document_marking }}"; font-family: Arial, Helvetica, sans-serif; font-size: 7.5pt; font-weight: 700; color: #002D5E; } }
+</style>
+{% endblock %}
+{% block classification_banner %}{% endblock %}
+
+{% block cover %}
+<style>
+  :root {
+    --agt-navy: #0A1628; --agt-dblue: #002D5E; --agt-blue: #0066B3; --agt-lblue: #E8F4FD;
+    --agt-gold: #C8A951; --agt-lgold: #FBF5E6; --agt-panel: #F8F9FA; --agt-line: #DEE2E6;
+    --agt-muted: #6C757D; --agt-ink: #212529; --agt-green: #107C10; --agt-orange: #E87722; --agt-red: #D13438;
+  }
+  .agt-page { font-family: Arial, Helvetica, "Public Sans", sans-serif; color: var(--agt-ink); page-break-after: always; }
+  /* Layout grids are <div>s styled as CSS tables (WeasyPrint-safe); <table> is
+     reserved for data, so every data table carries real header cells. */
+  .agt-head { display: table; width: 100%; border-collapse: collapse; border-bottom: 3px solid var(--agt-navy); }
+  .agt-head .cell { display: table-cell; vertical-align: middle; padding: 0 0 6px 0; }
+  .agt-head img { height: 0.48in; width: auto; }
+  .agt-head .org { font-size: 12.5pt; font-weight: 700; color: var(--agt-navy); margin: 0; }
+  .agt-head .prog { font-size: 9pt; color: var(--agt-blue); font-weight: 700; letter-spacing: .4pt; text-transform: uppercase; margin: 2px 0 0 0; }
+  .agt-head .title { font-size: 14pt; font-weight: 700; color: var(--agt-dblue); margin: 0; text-align: right; }
+  .agt-head .deliv { font-size: 9pt; color: var(--agt-ink); margin: 2px 0 0 0; text-align: right; }
+  .agt-goldrule { height: 3px; background: var(--agt-gold); margin: 0 0 6px 0; }
+  .agt-marking { background: var(--agt-lgold); border: 1px solid var(--agt-gold); color: #6b4f0a; font-size: 8.5pt; padding: 3px 8px; margin: 0 0 8px 0; }
+  .agt-marking b { letter-spacing: .8pt; }
+  .agt-synth { font-size: 7.5pt; color: var(--agt-muted); margin: -5px 0 8px 0; padding: 0 8px; }
+  .agt-kpis { display: table; width: 100%; border-collapse: separate; border-spacing: 6px 0; margin: 0 -6px 8px -6px; }
+  .agt-kpi { display: table-cell; background: var(--agt-lblue); border-top: 3px solid var(--agt-blue); padding: 6px 8px; vertical-align: top; width: 20%; }
+  .agt-kpi .l { font-size: 7.5pt; text-transform: uppercase; letter-spacing: .4pt; color: var(--agt-muted); font-weight: 700; margin: 0; }
+  .agt-kpi .v { font-size: 16pt; font-weight: 700; color: var(--agt-navy); margin: 2px 0 0 0; line-height: 1.15; }
+  .agt-kpi .n { font-size: 7.5pt; color: var(--agt-muted); margin: 2px 0 0 0; line-height: 1.3; }
+  .agt-h2 { font-size: 10pt; margin: 8px 0 4px 0; color: var(--agt-dblue); text-transform: uppercase; letter-spacing: .5pt; border-left: 4px solid var(--agt-gold); padding-left: 6px; }
+  table.agt { width: 100%; border-collapse: collapse; font-size: 8.5pt; margin: 0; }
+  table.agt th { background: var(--agt-navy); color: #fff; text-align: left; padding: 4px 5px; font-weight: 700; font-size: 8pt; }
+  table.agt th.num, table.agt td.num { text-align: right; }
+  table.agt td { padding: 3.5px 5px; border-bottom: 1px solid var(--agt-line); }
+  table.agt tr.total td { background: var(--agt-lblue); font-weight: 700; border-top: 2px solid var(--agt-navy); }
+  .agt-chip { display: inline-block; min-width: 22px; text-align: center; padding: 1px 4px; border-radius: 2px; color: #fff; font-weight: 700; font-size: 8pt; }
+  .agt-chip.b1 { background: var(--agt-green); } .agt-chip.b2 { background: var(--agt-blue); } .agt-chip.b3 { background: var(--agt-orange); } .agt-chip.b4 { background: var(--agt-red); }
+  .agt-cols { display: table; width: 100%; border-collapse: separate; border-spacing: 10px 0; margin: 0 -10px; }
+  .agt-cols > .cell { display: table-cell; vertical-align: top; padding: 0; }
+  .agt-box { border: 1px solid var(--agt-line); border-top: 3px solid var(--agt-blue); padding: 5px 8px; font-size: 8.5pt; line-height: 1.32; margin: 0 0 7px 0; }
+  .agt-box .agt-h2 { margin: 0 0 4px 0; border-left: 0; padding-left: 0; }
+  .agt-box ul, .agt-box ol { margin: 0; padding-left: 16px; } .agt-box li { margin-bottom: 2px; }
+  .agt-st { display: table; width: 100%; border-collapse: separate; border-spacing: 4px; margin: 0 -4px; }
+  .agt-st .row { display: table-row; }
+  .agt-st .cell { display: table-cell; background: var(--agt-panel); padding: 4px 6px; font-size: 8pt; vertical-align: top; width: 50%; }
+  .agt-st b { display: block; color: var(--agt-navy); }
+  .agt-note { font-size: 7.5pt; color: var(--agt-muted); margin: 4px 0 0 0; line-height: 1.3; }
+  .agt-cor { font-size: 7.5pt; color: #6b4f0a; background: var(--agt-lgold); border-left: 3px solid var(--agt-gold); padding: 2px 7px; margin: 4px 0 0 0; }
+  .agt-foot { border-top: 2px solid var(--agt-navy); padding-top: 5px; margin-top: 8px; font-size: 7.5pt; color: var(--agt-muted); }
+  .agt-foot .mock { color: #6b4f0a; font-weight: 700; }
+  .agt-pkg { background: var(--agt-panel); border-left: 4px solid var(--agt-navy); padding: 5px 8px; font-size: 8pt; margin-top: 6px; }
+</style>
+
+<section class="agt-page" aria-labelledby="agt-title">
+  <div class="agt-head">
+    <div class="cell" style="width:1.6in">
+      {% if branding.agt_logo %}<img src="{{ branding.agt_logo }}" alt="{{ branding.prepared_by }} logo">{% else %}<p class="org">{{ branding.prepared_by }}</p>{% endif %}
+    </div>
+    <div class="cell">
+      <p class="org">Alliance Global Tech</p>
+      <p class="prog">TEFCA Audit, Review &amp; Compliance</p>
+    </div>
+    <div class="cell">
+      <h1 class="title" id="agt-title">{{ progress.title if progress else deliverable_title }}</h1>
+      <p class="deliv"><b>Deliverable {{ deliverable }}</b> &middot; {{ progress.period_label if progress else (reporting_period_start or 'period not specified') }}</p>
+    </div>
+  </div>
+  <div class="agt-goldrule"></div>
+  <p class="agt-marking"><b>{{ document_marking }}</b> &middot; Contract {{ contract_number }} &middot; Prepared for the COR &middot; Report {{ snapshot.report_id }}</p>
+  {% if synthetic_note %}<p class="agt-synth" role="note">{{ synthetic_note }}</p>{% endif %}
+  {% if not progress %}
+  <div class="agt-box" role="note" style="border-left:4px solid var(--agt-red)">
+    <h2 class="agt-h2">Progress metrics unavailable</h2>
+    <p style="margin:0;font-size:8.5pt">No delivery or review cycle was selected for this draft, so no
+      Participant / Subparticipant counts, QHIN coverage, B1&ndash;B4 totals or workflow figures are stated
+      here. Sampling population pending COR/RCE confirmation. Generate this deliverable for a named delivery
+      or review cycle to populate the executive summary.</p>
+  </div>
+  {% else %}
+
+  <div class="agt-kpis">
+    {% for k in progress.kpis %}
+    <div class="agt-kpi"><p class="l">{{ k.label }}</p><p class="v">{{ k.value }}</p><p class="n">{{ k.note }}</p></div>
+    {% endfor %}
+  </div>
+  {% if progress.sampling_note %}<p class="agt-cor">{{ progress.sampling_note }}</p>{% endif %}
+
+  <h2 class="agt-h2">B1&ndash;B4 classification, assignment and workflow ({{ progress.scope_label }})</h2>
+  <table class="agt">
+    <thead><tr>
+      <th style="width:7%">Bucket</th><th>Classification</th><th class="num">Total</th><th class="num">% of reviewed</th>
+      <th class="num">Assigned</th><th class="num">Unassigned</th><th class="num">Completed</th><th class="num">In review</th><th class="num">Awaiting QA</th>
+    </tr></thead>
+    <tbody>
+      {% for b in progress.buckets %}
+      <tr>
+        <td><span class="agt-chip {{ b.bucket|lower }}">{{ b.bucket }}</span></td><td>{{ b.label }}</td>
+        <td class="num">{{ b.total|number }}</td><td class="num">{{ b.pct }}</td>
+        <td class="num">{{ b.assigned|number }}</td><td class="num">{{ b.unassigned|number }}</td>
+        <td class="num">{{ b.completed|number }}</td><td class="num">{{ b.in_review|number }}</td><td class="num">{{ b.awaiting_qa|number }}</td>
+      </tr>
+      {% endfor %}
+      <tr class="total">
+        <td></td><td>{{ progress.buckets_total.label }}</td>
+        <td class="num">{{ progress.buckets_total.total|number }}</td><td class="num">{{ progress.buckets_total.pct }}</td>
+        <td class="num">{{ progress.buckets_total.assigned|number }}</td><td class="num">{{ progress.buckets_total.unassigned|number }}</td>
+        <td class="num">{{ progress.buckets_total.completed|number }}</td><td class="num">{{ progress.buckets_total.in_review|number }}</td><td class="num">{{ progress.buckets_total.awaiting_qa|number }}</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="agt-note">{{ progress.arithmetic.note }} Unassigned = not yet claimed by an analyst; Awaiting QA = analyst determination recorded, independent QA approval pending (maker/checker). Unclassified open cases: {{ progress.unclassified|number }}.</p>
+
+  <div class="agt-cols">
+    <div class="cell" style="width:58%">
+      {% if progress.periods %}
+      <h2 class="agt-h2">{{ progress.periods_heading }}</h2>
+      <table class="agt">
+        <thead><tr><th>{{ progress.periods_column }}</th><th class="num">Reviewed</th><th class="num">B1</th><th class="num">B2</th><th class="num">B3</th><th class="num">B4</th><th class="num">Cumulative</th></tr></thead>
+        <tbody>
+          {% for p in progress.periods %}
+          <tr><td>{{ p.label }}</td><td class="num">{{ p.reviewed|number }}</td><td class="num">{{ p.B1|number }}</td><td class="num">{{ p.B2|number }}</td><td class="num">{{ p.B3|number }}</td><td class="num">{{ p.B4|number }}</td><td class="num">{{ p.cumulative|number }}</td></tr>
+          {% endfor %}
+          <tr class="total"><td>{{ progress.periods_total.label }}</td><td class="num">{{ progress.periods_total.reviewed|number }}</td><td class="num">{{ progress.periods_total.B1|number }}</td><td class="num">{{ progress.periods_total.B2|number }}</td><td class="num">{{ progress.periods_total.B3|number }}</td><td class="num">{{ progress.periods_total.B4|number }}</td><td class="num">{{ progress.periods_total.cumulative|number }}</td></tr>
+        </tbody>
+      </table>
+      {% endif %}
+
+      <h2 class="agt-h2">QHIN coverage ({{ progress.scope_label }})</h2>
+      <table class="agt">
+        <thead><tr><th>QHIN</th><th class="num">Entities</th><th class="num">Sample</th><th class="num">Reviewed</th><th class="num">% of sample</th><th class="num">B1</th><th class="num">B2</th><th class="num">B3</th><th class="num">B4</th></tr></thead>
+        <tbody>
+          {% for q in progress.qhins %}
+          <tr><td>{{ q.qhin }}</td><td class="num">{{ q.population|number }}</td><td class="num">{{ q.sample }}</td><td class="num">{{ q.reviewed|number }}</td><td class="num">{{ q.pct }}</td><td class="num">{{ q.B1|number }}</td><td class="num">{{ q.B2|number }}</td><td class="num">{{ q.B3|number }}</td><td class="num">{{ q.B4|number }}</td></tr>
+          {% endfor %}
+          <tr class="total"><td>All QHINs</td><td class="num">{{ progress.qhins_total.population|number }}</td><td class="num">{{ progress.qhins_total.sample }}</td><td class="num">{{ progress.qhins_total.reviewed|number }}</td><td class="num">{{ progress.qhins_total.pct }}</td><td class="num">{{ progress.qhins_total.B1|number }}</td><td class="num">{{ progress.qhins_total.B2|number }}</td><td class="num">{{ progress.qhins_total.B3|number }}</td><td class="num">{{ progress.qhins_total.B4|number }}</td></tr>
+        </tbody>
+      </table>
+      <p class="agt-note">{{ progress.qhin_note }}</p>
+
+      <h2 class="agt-h2">Important findings</h2>
+      <ol style="margin:0;padding-left:16px;font-size:8.5pt;line-height:1.32">
+        {% for f in progress.findings %}<li>{{ f }}</li>{% endfor %}
+      </ol>
+    </div>
+    <div class="cell">
+      <div class="agt-box"><h2 class="agt-h2">Source categories used</h2>
+        <ul>{% for s in progress.sources %}<li>{{ s.category }} &mdash; <b>{{ s.count|number }}</b> {{ s.unit }}</li>{% endfor %}</ul>
+        <p class="agt-note">{{ progress.sources_note }}</p>
+      </div>
+      <div class="agt-box"><h2 class="agt-h2">Reconciliation &amp; source integrity</h2>
+        <div class="agt-st">
+          <div class="row">{% for c in progress.controls[:2] %}<div class="cell"><b>{{ c.title }}</b>{{ c.text }}</div>{% endfor %}</div>
+          <div class="row">{% for c in progress.controls[2:4] %}<div class="cell"><b>{{ c.title }}</b>{{ c.text }}</div>{% endfor %}</div>
+        </div>
+      </div>
+      <div class="agt-box"><h2 class="agt-h2">Suggested methodology / control-framework {{ 'changes' if progress.kind == 'final' else 'improvements' }}</h2>
+        {% if methodology_changes.suggested %}<ol>{% for item in methodology_changes.suggested %}<li>{{ item }}</li>{% endfor %}</ol>
+        {% else %}<p style="margin:0">No suggested change was recorded for this reporting period.</p>{% endif %}
+      </div>
+      {% if progress.kind != 'weekly' %}
+      <div class="agt-box"><h2 class="agt-h2">{{ 'Changes actually implemented' if progress.kind == 'final' else 'Implemented this period' }}</h2>
+        {% if methodology_changes.implemented %}<ol>{% for item in methodology_changes.implemented %}<li>{{ item }}</li>{% endfor %}</ol>
+        {% else %}<p style="margin:0">No implemented change was recorded for this reporting period.</p>{% endif %}
+      </div>
+      {% endif %}
+      {% if progress.kind == 'final' %}
+      <div class="agt-box"><h2 class="agt-h2">Major discrepancy themes (B3 / B4)</h2>
+        {% if progress.themes %}<ol>{% for t in progress.themes %}<li>{{ t.label }} &mdash; <b>{{ t.count|number }}</b></li>{% endfor %}</ol>
+        {% else %}<p style="margin:0">No B3 / B4 theme is recorded for this period.</p>{% endif %}
+      </div>
+      {% endif %}
+      <div class="agt-box"><h2 class="agt-h2">{{ 'Remaining limitations & external dependencies' if progress.kind == 'final' else 'Limitations & dependencies' }}</h2>
+        <ul>{% for l in progress.limitations %}<li>{{ l }}</li>{% endfor %}</ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="agt-pkg"><b>Package:</b> {{ progress.package_note }}</div>
+  {% endif %}
+  <p class="agt-foot">Alliance Global Tech &middot; Contract {{ contract_number }} &middot; Deliverable {{ deliverable }} &middot; {{ progress.period_label if progress else (reporting_period_start or 'period not specified') ~ ' – ' ~ (reporting_period_end or '') }} &middot; <span class="mock">{{ document_marking }}</span> &middot; Generated {{ generated_at_display }} by {{ snapshot.generated_by }}</p>
+</section>
+{{ super() }}
+{% endblock %}

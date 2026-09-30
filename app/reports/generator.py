@@ -43,8 +43,12 @@ TEMPLATES = {
     # The contract's report families (Section C, Tasks 3-5). One template; the
     # body is the stratified Participant/Subparticipant list under the four
     # Government categories, which is what every one of them must contain.
-    "retrospective_weekly": "sow_report.html",
-    "retrospective_final": "sow_report.html",
+    # The three Task 3 progress deliverables carry the approved executive
+    # front section (AGT branding, KPI cards, B1–B4 / QHIN / period tables)
+    # ahead of that same body.
+    "retrospective_weekly": "sow_progress_report.html",
+    "retro_monthly": "sow_progress_report.html",
+    "retrospective_final": "sow_progress_report.html",
     "ongoing_biweekly": "sow_report.html",
     "ongoing_quarterly": "sow_report.html",
     "priority_status": "sow_report.html",
@@ -52,8 +56,40 @@ TEMPLATES = {
 }
 
 #: Report types produced by the SOW data service (stratified entity lists).
-SOW_TYPES = ("retrospective_weekly", "retrospective_final", "ongoing_biweekly",
-             "ongoing_quarterly", "priority_status", "priority_quarterly")
+SOW_TYPES = ("retrospective_weekly", "retro_monthly", "retrospective_final",
+             "ongoing_biweekly", "ongoing_quarterly", "priority_status",
+             "priority_quarterly")
+
+#: Client-facing document marking of every generated progress deliverable.
+#: Generation only ever produces a DRAFT; a FINAL marking is never rendered
+#: here (release governance is a separate workflow applied to frozen bytes).
+DRAFT_MARKING = "DRAFT — FOR CLIENT REVIEW"
+
+#: Printed, discreetly, on a draft computed outside Government-classified data.
+SYNTHETIC_DATA_NOTE = ("Synthetic sample data: the figures in this draft are computed from a "
+                       "synthetic review population prepared for client review. No Government "
+                       "data is included.")
+
+
+def document_marking_for(data_classification: Optional[str]) -> str:  # noqa: ARG001
+    return DRAFT_MARKING
+
+
+def synthetic_note_for(data_classification: Optional[str]) -> Optional[str]:
+    return None if data_classification == "GOVERNMENT" else SYNTHETIC_DATA_NOTE
+
+
+def _marking_context(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    """The marking, the synthetic-data note and the human-readable generation
+    time, from the snapshot that is inside the same document (never a second
+    clock)."""
+    stamp = str(snapshot.get("generation_timestamp") or "")
+    classification = snapshot.get("data_classification")
+    return {
+        "document_marking": document_marking_for(classification),
+        "synthetic_note": synthetic_note_for(classification),
+        "generated_at_display": (stamp[:16].replace("T", " ") + " UTC") if stamp else "—",
+    }
 
 AVAILABLE_TYPES = tuple(TEMPLATES)
 
@@ -337,6 +373,9 @@ async def generate_report(
                                    f"{dataset.get('deliverable')}; TEFCA ARC")
         context["document_status"] = "Draft — awaiting PM review"
         context["reviewed_by"] = None
+        # Progress deliverables: the marking printed on the executive front
+        # page is set per render from the snapshot (see `_marking_context`).
+        context.setdefault("progress", None)
 
     try:
         report_id = await next_report_id(db, report_type)
@@ -353,7 +392,8 @@ async def generate_report(
         # 3-4. Render, then validate what was actually produced.
         provisional_snapshot = _empty_snapshot(report_id, report_type, dataset,
                                                generated_by, TEMPLATE_VERSION)
-        first_pass = render_html(template, {**context, "snapshot": provisional_snapshot})
+        first_pass = render_html(template, {**context, "snapshot": provisional_snapshot,
+                                            **_marking_context(provisional_snapshot)})
         accessibility = validate_html(first_pass, chart_engine.TOKENS).to_dict()
 
         # 5. Provenance, carrying the accessibility result.
@@ -365,7 +405,8 @@ async def generate_report(
         )
 
         # 6. Final render, with the snapshot inside the document.
-        html = render_html(template, {**context, "snapshot": snapshot.to_dict()})
+        html = render_html(template, {**context, "snapshot": snapshot.to_dict(),
+                                      **_marking_context(snapshot.to_dict())})
 
         # Re-validate the document that is ACTUALLY delivered.
         #
@@ -387,7 +428,15 @@ async def generate_report(
                 final_accessibility["errors"])
         accessibility = final_accessibility
 
-        if report_type in SOW_TYPES:
+        if report_type in SOW_TYPES and dataset.get("progress"):
+            # The contract's controlled stratified-list annex (14 columns, case
+            # references only — no names, NPIs or addresses).
+            from app.reports.data.sow_progress_data import annex_csv
+
+            csv_text = annex_csv(dataset["progress"], report_id=report_id,
+                                 marking=document_marking_for(snapshot.data_classification),
+                                 note=synthetic_note_for(snapshot.data_classification))
+        elif report_type in SOW_TYPES:
             from app.reports.engine.csv_engine import sow_report_to_csv
 
             csv_text = sow_report_to_csv(dataset, report_id, snapshot.generation_timestamp)
@@ -500,7 +549,10 @@ async def generate_report(
                 db, report_id=report_id, report_type=report_type, html=html,
                 csv_text=csv_text, snapshot=snapshot, dataset=dataset,
                 generated_by=generated_by, html_artifact=artifact,
-                include_csv=bool(report_type in RCE_TYPES and dataset.get("delivery")))
+                # The delivery-scoped RCE types, and the progress deliverables
+                # (their controlled annex is issued with the report).
+                include_csv=bool(report_type in RCE_TYPES and dataset.get("delivery"))
+                or bool(dataset.get("progress")))
             if artifact is None or artifact.get("registered") is False:
                 artifact = artifacts.get("html") or artifact
 

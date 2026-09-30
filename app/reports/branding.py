@@ -70,6 +70,13 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return value.strip().lower() in ("1", "true", "yes", "on")
 
 
+#: The official Alliance Global Tech logo shipped with the application (the
+#: same file the proposal/PDF generator uses), used when REPORT_AGT_LOGO_PATH
+#: is not set.
+DEFAULT_AGT_LOGO_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "services", "agt_logo.png")
+
+
 def _embedded_image(path: Optional[str]) -> Optional[str]:
     """A data URI for a small logo file, or None when absent/unreadable."""
     if not path or not os.path.isfile(path):
@@ -126,7 +133,8 @@ def current_branding() -> ReportBranding:
                        if authorized else None)
     return ReportBranding(
         government_branding_authorized=authorized and government_logo is not None,
-        agt_logo=_embedded_image(os.environ.get("REPORT_AGT_LOGO_PATH")),
+        agt_logo=_embedded_image(os.environ.get("REPORT_AGT_LOGO_PATH")
+                                 or DEFAULT_AGT_LOGO_PATH),
         government_logo=government_logo,
     )
 
