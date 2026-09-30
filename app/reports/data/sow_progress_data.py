@@ -613,7 +613,8 @@ class SowProgressDataService:
         return {"ok": True, "checks": checks, "note": "; ".join(checks) + "."}
 
 
-def annex_csv(progress: Dict[str, Any], *, report_id: str, marking: str) -> str:
+def annex_csv(progress: Dict[str, Any], *, report_id: str, marking: str,
+              note: Optional[str] = None) -> str:
     """The contract-required stratified-list annex as CSV (no names, NPIs or addresses)."""
     import csv
     import io
@@ -622,6 +623,8 @@ def annex_csv(progress: Dict[str, Any], *, report_id: str, marking: str) -> str:
     w = csv.writer(buf, lineterminator="\n")
     w.writerow([f"# {marking}"])
     w.writerow([f"# Report {report_id} — Deliverable {progress['deliverable']} — {progress['title']} — period {progress['period_label']}"])
+    if note:
+        w.writerow([f"# {note}"])
     w.writerow(["# Identifiers are review-case references; no names, NPIs, addresses or credentials are included."])
     cols = progress.get("annex_columns") or []
     w.writerow(cols)

@@ -25,7 +25,8 @@ from test_delivery_processing_report import (  # noqa: F401  (fixtures registere
     SYN, VALID_NPI, artifact_root, rolled_back_db, seed_delivery)
 
 PROGRESS_TYPES = ("retrospective_weekly", "retro_monthly", "retrospective_final")
-DEV_MARKING = "DRAFT — DEV DEMONSTRATION — NOT FOR OFFICIAL SUBMISSION"
+DEV_MARKING = "DRAFT — FOR CLIENT REVIEW"
+SYNTHETIC_NOTE = "Synthetic sample data: the figures in this draft are computed from a synthetic review population"
 ANNEX_COLUMNS = [
     "Participant/Subparticipant reference", "Participant type", "QHIN", "Source category",
     "Sample-selection reason", "B1–B4 classification", "Discrepancy summary",
@@ -379,9 +380,16 @@ async def test_the_branded_front_page_carries_the_approved_fields_and_the_dev_ma
     assert title in body
     assert "Prepared for the COR" in body
     assert 'alt="Alliance Global Tech Inc. logo"' in html, "the official AGT logo is embedded"
-    # marking: DEV draft, never MOCK-UP, never FINAL
+    # marking: client-review DRAFT (front page, footer, page margin), never
+    # MOCK-UP, never FINAL, none of the development wording, no red banner;
+    # a discreet synthetic-data note instead.
     assert body.count(DEV_MARKING) >= 2                     # front-page marking line + footer
+    assert html.count(DEV_MARKING) >= 3                     # + the @page running header
     assert "MOCK-UP" not in body and "MOCKUP" not in body
+    for banned in ("DEV DEMONSTRATION", "NOT FOR OFFICIAL SUBMISSION", "DEVELOPMENT / TEST DATA",
+                   "NOT FOR GOVERNMENT DELIVERY", 'class="dev-banner"'):
+        assert banned not in html, banned
+    assert SYNTHETIC_NOTE in body
     assert not re.search(r"\bFINAL\b(?! Report)", body)
     # the approved palette and B1–B4 colours are in the stylesheet
     for colour in ("#0A1628", "#002D5E", "#0066B3", "#C8A951", "#107C10", "#E87722", "#D13438"):
@@ -427,6 +435,7 @@ async def test_no_pii_npi_names_or_secrets_in_report_annex_or_logs(rolled_back_d
     assert all(r[0].startswith("REV-") for r in data)
     assert sum(r[5].startswith("Unclassified") for r in data) == p["unclassified"]
     assert rows[0][0].startswith(f"# {DEV_MARKING}")
+    assert any(r and r[0].startswith(f"# {SYNTHETIC_NOTE}") for r in rows[:4])
     assert any(r[7] == "Unassigned" for r in data) and any(r[9] == "QA approved" for r in data)
     assert p["annex_columns"] == ANNEX_COLUMNS
 

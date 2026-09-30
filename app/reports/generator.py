@@ -60,24 +60,34 @@ SOW_TYPES = ("retrospective_weekly", "retro_monthly", "retrospective_final",
              "ongoing_biweekly", "ongoing_quarterly", "priority_status",
              "priority_quarterly")
 
-#: Document marking for a report generated outside Government-classified data.
-#: A FINAL marking is never produced by generation; release governance is a
-#: separate workflow applied to the frozen bytes.
-DEV_DRAFT_MARKING = "DRAFT — DEV DEMONSTRATION — NOT FOR OFFICIAL SUBMISSION"
-GOVERNMENT_DRAFT_MARKING = "DRAFT — NOT FOR OFFICIAL SUBMISSION UNTIL RELEASED"
+#: Client-facing document marking of every generated progress deliverable.
+#: Generation only ever produces a DRAFT; a FINAL marking is never rendered
+#: here (release governance is a separate workflow applied to frozen bytes).
+DRAFT_MARKING = "DRAFT — FOR CLIENT REVIEW"
+
+#: Printed, discreetly, on a draft computed outside Government-classified data.
+SYNTHETIC_DATA_NOTE = ("Synthetic sample data: the figures in this draft are computed from a "
+                       "synthetic review population prepared for client review. No Government "
+                       "data is included.")
 
 
-def document_marking_for(data_classification: Optional[str]) -> str:
-    return (GOVERNMENT_DRAFT_MARKING if data_classification == "GOVERNMENT"
-            else DEV_DRAFT_MARKING)
+def document_marking_for(data_classification: Optional[str]) -> str:  # noqa: ARG001
+    return DRAFT_MARKING
+
+
+def synthetic_note_for(data_classification: Optional[str]) -> Optional[str]:
+    return None if data_classification == "GOVERNMENT" else SYNTHETIC_DATA_NOTE
 
 
 def _marking_context(snapshot: Dict[str, Any]) -> Dict[str, Any]:
-    """The marking and the human-readable generation time, from the snapshot
-    that is inside the same document (never a second clock)."""
+    """The marking, the synthetic-data note and the human-readable generation
+    time, from the snapshot that is inside the same document (never a second
+    clock)."""
     stamp = str(snapshot.get("generation_timestamp") or "")
+    classification = snapshot.get("data_classification")
     return {
-        "document_marking": document_marking_for(snapshot.get("data_classification")),
+        "document_marking": document_marking_for(classification),
+        "synthetic_note": synthetic_note_for(classification),
         "generated_at_display": (stamp[:16].replace("T", " ") + " UTC") if stamp else "—",
     }
 
@@ -424,7 +434,8 @@ async def generate_report(
             from app.reports.data.sow_progress_data import annex_csv
 
             csv_text = annex_csv(dataset["progress"], report_id=report_id,
-                                 marking=document_marking_for(snapshot.data_classification))
+                                 marking=document_marking_for(snapshot.data_classification),
+                                 note=synthetic_note_for(snapshot.data_classification))
         elif report_type in SOW_TYPES:
             from app.reports.engine.csv_engine import sow_report_to_csv
 

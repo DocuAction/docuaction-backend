@@ -13,11 +13,20 @@
   methodology changes, dependencies, provenance) — unchanged from sow_report.html
   via inheritance.
 
-  Marking: `document_marking` (generator) — "DRAFT — DEV DEMONSTRATION — NOT FOR
-  OFFICIAL SUBMISSION" for a development draft; a FINAL mark is never rendered
-  here (release governance happens after the bytes are frozen).
+  Marking: `document_marking` (generator) — "DRAFT — FOR CLIENT REVIEW"; a FINAL
+  mark is never rendered here (release governance happens after the bytes are
+  frozen). A draft computed outside Government-classified data carries the
+  discreet `synthetic_note` under the marking line instead of the engine's
+  red development banner; the page margin repeats the client marking.
 #}
 {% extends "sow_report.html" %}
+
+{% block page_marking %}
+<style>
+  @page { @top-center { content: "{{ document_marking }}"; font-family: Arial, Helvetica, sans-serif; font-size: 7.5pt; font-weight: 700; color: #002D5E; } }
+</style>
+{% endblock %}
+{% block classification_banner %}{% endblock %}
 
 {% block cover %}
 <style>
@@ -39,6 +48,7 @@
   .agt-goldrule { height: 3px; background: var(--agt-gold); margin: 0 0 6px 0; }
   .agt-marking { background: var(--agt-lgold); border: 1px solid var(--agt-gold); color: #6b4f0a; font-size: 8.5pt; padding: 3px 8px; margin: 0 0 8px 0; }
   .agt-marking b { letter-spacing: .8pt; }
+  .agt-synth { font-size: 7.5pt; color: var(--agt-muted); margin: -5px 0 8px 0; padding: 0 8px; }
   .agt-kpis { display: table; width: 100%; border-collapse: separate; border-spacing: 6px 0; margin: 0 -6px 8px -6px; }
   .agt-kpi { display: table-cell; background: var(--agt-lblue); border-top: 3px solid var(--agt-blue); padding: 6px 8px; vertical-align: top; width: 20%; }
   .agt-kpi .l { font-size: 7.5pt; text-transform: uppercase; letter-spacing: .4pt; color: var(--agt-muted); font-weight: 700; margin: 0; }
@@ -84,6 +94,7 @@
   </div>
   <div class="agt-goldrule"></div>
   <p class="agt-marking"><b>{{ document_marking }}</b> &middot; Contract {{ contract_number }} &middot; Prepared for the COR &middot; Report {{ snapshot.report_id }}</p>
+  {% if synthetic_note %}<p class="agt-synth" role="note">{{ synthetic_note }}</p>{% endif %}
   {% if not progress %}
   <div class="agt-box" role="note" style="border-left:4px solid var(--agt-red)">
     <h2 class="agt-h2">Progress metrics unavailable</h2>

@@ -32,6 +32,7 @@
     is also written into the page margin. Conditional, hence here in the
     template rather than in the stylesheet: CSS cannot branch on the snapshot.
   #}
+  {% block page_marking %}
   {% if snapshot.data_classification != 'GOVERNMENT' %}
   <style>
     @page {
@@ -55,6 +56,7 @@
     }
   </style>
   {% endif %}
+  {% endblock %}
 </head>
 <body>
 
@@ -71,6 +73,7 @@
   rest of the application uses (`is_running_mock`). The report cannot disagree
   with the dashboard about whether real data is loaded.
 #}
+{% block classification_banner %}
 {% if snapshot.data_classification == 'NO_DATASET_LOADED' %}
 <div class="dev-banner" role="note" aria-label="No dataset loaded notice">
   <p class="dev-banner-line1">NO DATASET LOADED &mdash; NOT FOR GOVERNMENT DELIVERY</p>
@@ -86,6 +89,7 @@
      document is a validation result computed over development data.</p>
 </div>
 {% endif %}
+{% endblock %}
 
 {% macro status_indicator(bucket, indicators) %}
   {#
