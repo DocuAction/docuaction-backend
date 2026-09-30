@@ -137,6 +137,8 @@ class SowReportDataService:
 
         self.db = db
         self.canonical = canonical or ReportDataService(db)
+        #: Set by `resolve_scope` for the delivery-scoped progress deliverables.
+        self.scope: Optional[Dict[str, Any]] = None
 
     # ── shared building blocks ───────────────────────────────────────────────
 
@@ -144,13 +146,88 @@ class SowReportDataService:
         from app.tefca_registry import models as reg
 
         stmt = select(reg.ReviewRecord)
-        if review_cycle_id:
+        intake_id = (self.scope or {}).get("intake_id")
+        if intake_id:
+            # Delivery-scoped: every review case the delivery created, whatever
+            # queue it came through. The drawn sample (if any) sizes the
+            # coverage table; it does not narrow the case set.
+            stmt = stmt.where(
+                reg.ReviewRecord.verification_results["source_intake_id"].astext == str(intake_id))
+        elif review_cycle_id:
             stmt = stmt.where(reg.ReviewRecord.sample_id == review_cycle_id)
         try:
             return list((await self.db.execute(stmt)).scalars().all())
         except Exception as exc:  # noqa: BLE001
             logger.warning("sow report: review records unavailable: %s", exc)
             return []
+
+    async def resolve_scope(self, *, review_cycle_id: Optional[str],
+                            job_id: Optional[str] = None,
+                            intake_id: Optional[str] = None) -> Dict[str, Any]:
+        """Name the population ONE progress deliverable describes.
+
+        A delivery (`job_id` / `intake_id`) is resolved through the same
+        `resolve_delivery` the RCE reports use; its review cycle is the one
+        `read_review_cycle` lists for that intake. A `review_cycle_id` may be a
+        `review_cycles.id` (the ARC flow) or a `review_samples.id` (the legacy
+        sampling flow); both are accepted and the sample id is what filters
+        cases. A cycle that belongs to a different delivery is refused.
+        """
+        import uuid as _uuid
+
+        from app.reports.generator import ReportParameterError
+        from app.tefca_registry import models as reg
+
+        scope: Dict[str, Any] = {"job": None, "intake": None, "intake_id": None,
+                                 "job_id": None, "review_cycle_id": review_cycle_id,
+                                 "sample_id": None}
+        if job_id or intake_id:
+            from app.reports.data.delivery_processing_data import resolve_delivery
+            from app.tefca_registry.review_cycle import read_review_cycle
+
+            resolved = await resolve_delivery(self.db, job_id=job_id, intake_id=intake_id)
+            intake = resolved["intake"]
+            if intake is None:
+                raise ReportParameterError(
+                    f"Delivery {job_id or intake_id!r} produced no intake; a progress "
+                    f"report has nothing to describe.",
+                    code="DELIVERY_HAS_NO_INTAKE", status=422)
+            scope.update(job=resolved["job"], intake=intake, intake_id=str(intake.id),
+                         job_id=str(resolved["job"].id) if resolved["job"] else None)
+            plans = (await read_review_cycle(self.db, intake.id)).get("plans") or []
+            own_cycles = {str(p.get("review_cycle_id")) for p in plans if p.get("review_cycle_id")}
+            own_samples = {str(p.get("sample_id")) for p in plans if p.get("sample_id")}
+            if review_cycle_id and str(review_cycle_id) not in own_cycles | own_samples:
+                raise ReportParameterError(
+                    f"review_cycle_id {review_cycle_id!r} does not belong to delivery "
+                    f"{intake.id} (its review cycles are {sorted(own_cycles) or 'none'}). "
+                    f"A report cannot mix one delivery's identity with another's cycle.",
+                    code="REVIEW_CYCLE_DELIVERY_MISMATCH", status=409)
+            if not review_cycle_id and plans:
+                review_cycle_id = next((p.get("review_cycle_id") for p in plans
+                                        if p.get("review_cycle_id")), None) \
+                    or next((p.get("sample_id") for p in plans if p.get("sample_id")), None)
+                scope["review_cycle_id"] = review_cycle_id
+        if review_cycle_id:
+            try:
+                key = _uuid.UUID(str(review_cycle_id))
+            except (ValueError, TypeError):
+                key = None
+            if key is not None:
+                cycle = await self.db.get(reg.ReviewCycle, key)
+                if cycle is not None:
+                    scope["sample_id"] = str(cycle.sample_id) if cycle.sample_id else None
+                else:
+                    sample = await self.db.get(reg.ReviewSample, key)
+                    if sample is not None:
+                        scope["sample_id"] = str(sample.id)
+                    elif not scope["intake_id"]:
+                        raise ReportParameterError(
+                            f"review_cycle_id {review_cycle_id!r} does not name a review "
+                            f"cycle or a drawn sample that exists. Nothing was generated.",
+                            code="REVIEW_CYCLE_NOT_FOUND", status=404)
+        self.scope = scope
+        return scope
 
     async def evidence_scope(self, review_cycle_id: Optional[str] = None
                              ) -> Dict[str, Any]:
@@ -326,7 +403,11 @@ class SowReportDataService:
             .outerjoin(Qhin, Qhin.id == reg.TefcaEntityRelationship.parent_entity_id)
             .order_by(reg.ReviewRecord.review_id)
         )
-        if review_cycle_id:
+        intake_id = (self.scope or {}).get("intake_id")
+        if intake_id:
+            stmt = stmt.where(
+                reg.ReviewRecord.verification_results["source_intake_id"].astext == str(intake_id))
+        elif review_cycle_id:
             try:
                 stmt = stmt.where(
                     reg.ReviewRecord.sample_id == _uuid.UUID(str(review_cycle_id)))
@@ -484,6 +565,18 @@ class SowReportDataService:
         params = dict(query_parameters or {})
         period_start = params.get("period_start") or None
         period_end = params.get("period_end") or None
+        scope = None
+        if report_type in PROGRESS_KINDS:
+            # The progress deliverables describe ONE delivery / review cycle.
+            # The identifiers are read the one way every report reads them
+            # (top-level keyword or nested in the parameters; a conflict is
+            # refused).
+            from app.reports.generator import _normalize_report_scope
+
+            job_id, intake_id, review_cycle_id = _normalize_report_scope(params, review_cycle_id)
+            scope = await self.resolve_scope(
+                review_cycle_id=review_cycle_id, job_id=job_id, intake_id=intake_id)
+            review_cycle_id = scope["sample_id"] or scope["review_cycle_id"] or review_cycle_id
         method = getattr(self, meta["method"])
         if meta["deliverable"] == "D5.1":
             data = await method(case_id=params.get("case_id"),
@@ -524,6 +617,33 @@ class SowReportDataService:
             "service_version": self.version,
             "chart_list": [],
         })
+        if scope is not None:
+            from app.reports.data.sow_progress_data import SowProgressDataService
+
+            job, intake = scope["job"], scope["intake"]
+            data["delivery"] = ({
+                "resolved_from": "job_id" if params.get("job_id") else "intake_id",
+                "job_id": scope["job_id"], "intake_id": scope["intake_id"],
+                "sha256": getattr(job, "sha256", None) or getattr(intake, "sha256", None),
+                "filename": getattr(job, "original_filename", None)
+                or getattr(intake, "original_filename", None),
+                "delivery_label": getattr(job, "delivery_label", None)
+                or getattr(intake, "delivery_label", None),
+            } if scope["intake_id"] else None)
+            data["scope"]["review_cycle_id"] = scope["review_cycle_id"]
+            data["scope"]["sample_id"] = scope["sample_id"]
+            data["scope"]["intake_id"] = scope["intake_id"]
+            data["scope"]["job_id"] = scope["job_id"]
+            if scope["intake_id"] or scope["sample_id"]:
+                data["progress"] = await SowProgressDataService(self.db).build(
+                    kind=PROGRESS_KINDS[report_type], deliverable=meta["deliverable"],
+                    title=meta["title"], intake_id=scope["intake_id"],
+                    sample_id=scope["sample_id"], job=job, intake=intake,
+                    period_start=period_start, period_end=period_end)
+            else:
+                # Period-only scope: the legacy system-wide list is produced,
+                # but no progress metrics are claimed for an unnamed population.
+                data["progress"] = None
         return data
 
     # ── the contract's families ──────────────────────────────────────────────
@@ -536,6 +656,19 @@ class SowReportDataService:
         data["required_content"] = [
             "Stratified list across the four Government categories",
             "Suggested changes to the Task 2 methodology or control framework, as needed",
+        ]
+        return data
+
+    async def retrospective_monthly(self, review_cycle_id=None,
+                                    period_start=None, period_end=None):
+        """D3.1 — Task 3 monthly progress report: the month's weekly reports
+        rolled up (¶136, ¶138), with suggested AND implemented changes."""
+        data = await self._envelope("D3.1_RETROSPECTIVE_MONTHLY", review_cycle_id,
+                                    period_start, period_end)
+        data["required_content"] = [
+            "Roll-up of the period's weekly reports, reconciled week by week",
+            "Stratified list across the four Government categories",
+            "Suggested and implemented changes to the Task 2 methodology or control framework",
         ]
         return data
 
@@ -713,6 +846,9 @@ class SowReportDataService:
 #: Every SOW family, by deliverable id, for callers that iterate.
 SOW_FAMILIES = {
     "D3.1": "retrospective_weekly",
+    # The monthly progress report is the D3.1 cadence rolled up; it is listed
+    # under its own key because one deliverable key maps to one method.
+    "D3.1M": "retrospective_monthly",
     "D3.2": "retrospective_final",
     "D4.1": "ongoing_biweekly",
     "D4.2": "ongoing_quarterly",
@@ -755,12 +891,25 @@ def _unpack_row(row):
 #: Generated-document report types for the SOW families. Keys are the
 #: `report_type` accepted by the generator (each at most 20 characters, the
 #: width of `review_reports.report_type`).
+#: The contract progress deliverables rendered with the approved executive
+#: layout (sow_progress_report.html) and a `progress` dataset block.
+PROGRESS_KINDS: Dict[str, str] = {
+    "retrospective_weekly": "weekly",
+    "retro_monthly": "monthly",
+    "retrospective_final": "final",
+}
+
 SOW_REPORT_TYPES: Dict[str, Dict[str, Any]] = {
-    "retrospective_weekly": {"kind": "Weekly", 
+    "retrospective_weekly": {"kind": "Weekly",
         "deliverable": "D3.1", "task": "Task 3", "method": "retrospective_weekly",
         "title": "Task 3 Weekly Progress Report", "implemented_changes": False,
         "cadence": "Weekly during the first 120 days"},
-    "retrospective_final": {"kind": "Final", 
+    # 20 characters at most (review_reports.report_type), hence the short key.
+    "retro_monthly": {"kind": "Monthly",
+        "deliverable": "D3.1", "task": "Task 3", "method": "retrospective_monthly",
+        "title": "Task 3 Monthly Progress Report", "implemented_changes": True,
+        "cadence": "Monthly during the first 120 days (roll-up of the weekly reports)"},
+    "retrospective_final": {"kind": "Final",
         "deliverable": "D3.2", "task": "Task 3", "method": "retrospective_final",
         "title": "Task 3 Final Report", "implemented_changes": True,
         "cadence": "Within thirty days following completion of the retrospective review"},

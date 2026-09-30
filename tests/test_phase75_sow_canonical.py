@@ -81,7 +81,9 @@ class TestGovernmentTerminology:
 class TestEveryFamilyExists:
 
     def test_all_eight_deliverables_are_covered(self):
-        assert set(SOW_FAMILIES) == {"D3.1", "D3.2", "D4.1", "D4.2",
+        # D3.1M: the monthly roll-up of the D3.1 weekly cadence (ONC demo
+        # implementation, 2026-09-30) — same deliverable, its own method.
+        assert set(SOW_FAMILIES) == {"D3.1", "D3.1M", "D3.2", "D4.1", "D4.2",
                                      "D5.1", "D5.2", "D6.1", "D6.2"}
 
     def test_each_maps_to_a_real_method(self):

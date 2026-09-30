@@ -512,12 +512,18 @@ async def list_reports(
         R.report_data["release"].label("release"),
         R.report_data["dataset"]["branding"]["contract_number"].label("contract_branded"),
         R.report_data["dataset"]["contract_number"].label("contract_plain"),
+        # The named population (delivery / review cycle) of a scoped report —
+        # small identifier subtrees, so the register can say what a report
+        # describes without loading its dataset.
+        R.report_data["dataset"]["delivery"].label("delivery"),
+        R.report_data["dataset"]["scope"].label("scope"),
     ).order_by(R.generated_at.desc())
     if report_type:
         stmt = stmt.where(R.report_type == report_type)
     rows = (await db.execute(stmt.limit(limit))).all()
 
     from app.reports.branding import deliverable_filename_stem
+    from app.reports.generator import document_marking_for
 
     items = []
     for r in rows:
@@ -549,9 +555,26 @@ async def list_reports(
             # that, wrapped the way it expects.
             "release": current_release({"release": r.release} if r.release else {}),
             "file_stem": file_stem,
+            "source": _source_summary(r.delivery, r.scope),
+            "document_marking": document_marking_for(snapshot.get("data_classification")),
             **meta,
         })
     return {"items": items}
+
+
+def _source_summary(delivery, scope) -> Optional[Dict[str, Any]]:
+    """Which delivery / review cycle a stored report describes (identifiers
+    and the delivery label only), or None for a global report."""
+    delivery = delivery or {}
+    scope = scope or {}
+    job_id = delivery.get("job_id") or scope.get("job_id")
+    intake_id = delivery.get("intake_id") or scope.get("intake_id")
+    cycle = scope.get("review_cycle_id")
+    if not (job_id or intake_id or cycle):
+        return None
+    return {"job_id": job_id, "intake_id": intake_id,
+            "delivery_label": delivery.get("delivery_label"),
+            "review_cycle_id": cycle, "sample_id": scope.get("sample_id")}
 
 
 def _deliverable_meta(report_type: str) -> Dict[str, Any]:
@@ -602,14 +625,19 @@ def _listing_extras(r) -> Dict[str, Any]:
     """Deliverable, period and PM release state for one stored report."""
     from app.reports.data.release import current_release
 
+    from app.reports.generator import document_marking_for
+
     data = r.report_data or {}
     snapshot = data.get("snapshot", {})
+    dataset = data.get("dataset") or {}
     return {
         "generated_by_email": snapshot.get("generated_by"),
         "period_start": r.period_start,
         "period_end": r.period_end,
         "release": current_release(data),
         "file_stem": _stem_for(r),
+        "source": _source_summary(dataset.get("delivery"), dataset.get("scope")),
+        "document_marking": document_marking_for(snapshot.get("data_classification")),
         **_deliverable_meta(r.report_type),
     }
 
@@ -1167,6 +1195,13 @@ def csv_for_stored_report(row) -> str:
     dataset = dict(data.get("dataset") or {})
     snapshot = data.get("snapshot") or {}
     generated_at = snapshot.get("generation_timestamp", "")
+    if row.report_type in SOW_TYPES and dataset.get("progress"):
+        # The controlled annex the progress deliverables were issued with.
+        from app.reports.data.sow_progress_data import annex_csv
+        from app.reports.generator import document_marking_for
+
+        return annex_csv(dataset["progress"], report_id=row.report_id,
+                         marking=document_marking_for(snapshot.get("data_classification")))
     if row.report_type in SOW_TYPES:
         return sow_report_to_csv(dataset, row.report_id, generated_at)
     if row.report_type == "delivery_processing":
@@ -1236,6 +1271,7 @@ async def engine_health(user=Depends(require_role("viewer"))):
 
 SOW_DELIVERABLES = {
     "D3.1": ("retrospective_weekly", "Task 3 weekly progress report"),
+    "D3.1M": ("retro_monthly", "Task 3 monthly progress report"),
     "D3.2": ("retrospective_final", "Task 3 final retrospective report"),
     "D4.1": ("ongoing_biweekly", "Task 4 bi-weekly progress report"),
     "D4.2": ("ongoing_quarterly", "Task 4 quarterly report"),
