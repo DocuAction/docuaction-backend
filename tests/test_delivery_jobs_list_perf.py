@@ -210,3 +210,68 @@ def test_list_endpoint_pages_and_reports_the_filtered_total(client, three_failed
                       headers=headers_for("viewer")).status_code == 422
     assert client.get(f"{BASE}/delivery-jobs?limit=0",
                       headers=headers_for("viewer")).status_code == 422
+
+
+# ═══ MQA-2026-010 / AP-001: the two heavy per-intake aggregates are cached for
+# a LIST page (short TTL, keyed by the job's completion marker); the single-job
+# detail derivation stays live. ═════════════════════════════════════════════
+
+@pytest.mark.asyncio
+async def test_list_page_reuses_the_heavy_intake_counts_within_the_ttl(rolled_back_db, monkeypatch):
+    from app.tefca_registry.rce import delivery_jobs as jobs
+
+    db = rolled_back_db
+    # Seed the page ourselves (the CI database holds only jobs without an
+    # intake, which never reach the heavy per-intake counts): two clean
+    # deliveries, one held delivery and one FAILED job without an intake.
+    population = await _population(db, 2)
+    assert any(getattr(j, "source_intake_id", None) is not None for j in population)
+    jobs.reset_list_status_cache()
+    calls = {"invalid": 0, "unexplained": 0}
+    real_invalid = jobs._invalid_identifiers_promoted_by_intake
+    real_unexplained = jobs._records_without_disposition_by_intake
+
+    async def counting_invalid(db_, ids):
+        calls["invalid"] += 1
+        return await real_invalid(db_, ids)
+
+    async def counting_unexplained(db_, ids):
+        calls["unexplained"] += 1
+        return await real_unexplained(db_, ids)
+
+    monkeypatch.setattr(jobs, "_invalid_identifiers_promoted_by_intake", counting_invalid)
+    monkeypatch.setattr(jobs, "_records_without_disposition_by_intake", counting_unexplained)
+
+    first = await jobs.status_for_jobs(db, population)
+    assert calls == {"invalid": 1, "unexplained": 1}
+    second = await jobs.status_for_jobs(db, population)
+    assert calls == {"invalid": 1, "unexplained": 1}, "a second page load inside the TTL must not rescan"
+    assert [s["processing_outcome"] for s in second] == [s["processing_outcome"] for s in first]
+
+    # The single-job derivation (delivery detail) is NOT served from the page
+    # cache: its source never touches the cache or the page helper.
+    import inspect
+    single_src = inspect.getsource(jobs.status_for_job)
+    assert "_list_status_cache" not in single_src and "_heavy_intake_counts_for_page" not in single_src
+    single = await jobs.status_for_job(db, population[0])
+    assert single["processing_outcome"] == first[0]["processing_outcome"]
+
+    # An expired entry is recomputed.
+    for key in list(jobs._list_status_cache):
+        expires, a, b = jobs._list_status_cache[key]
+        jobs._list_status_cache[key] = (0.0, a, b)
+    before = dict(calls)
+    await jobs.status_for_jobs(db, population)
+    assert calls["invalid"] == before["invalid"] + 1 and calls["unexplained"] == before["unexplained"] + 1
+    jobs.reset_list_status_cache()
+
+
+def test_list_status_cache_key_changes_when_the_job_is_reprocessed():
+    from types import SimpleNamespace
+
+    from app.tefca_registry.rce import delivery_jobs as jobs
+
+    a = SimpleNamespace(source_intake_id="intake-1", completed_at="2026-09-30T01:00:00", updated_at=None, state="SUCCEEDED")
+    b = SimpleNamespace(source_intake_id="intake-1", completed_at="2026-09-30T02:00:00", updated_at=None, state="SUCCEEDED")
+    assert jobs._list_status_cache_key(a) != jobs._list_status_cache_key(b)
+    assert jobs._LIST_STATUS_CACHE_TTL_SECONDS <= 30, "a list may lag a disposition by at most one short TTL"

@@ -64,3 +64,6 @@ var/authoritative/
 docs/evidence/**/C_*
 docs/evidence/**/restricted/
 docs/evidence/**/isolated_acceptance_evidence.json
+
+# Generated synthetic QA fixture pack (scripts/qa_fixture_pack.py); regenerate, never commit.
+qa-fixtures/out/

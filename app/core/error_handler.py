@@ -121,7 +121,22 @@ def register_exception_handlers(app):
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request: Request, exc: StarletteHTTPException):
         request_id = _resolve_request_id(None)
-        code = ERROR_CODES.get(exc.status_code, "ERROR")
+        # A raiser may name its own machine code, either as an attribute (e.g.
+        # DISPOSITION_IN_FLIGHT on a 409, the way `require_role` attaches
+        # `required_role`) or as a {"error", "code"} detail dict (the reports
+        # routes' REPORT_DELIVERY_MISMATCH / DELIVERY_IDENTIFIER_REQUIRED). Either
+        # way the client matches the code, not the English; a dict detail is
+        # unwrapped so the body never carries a stringified dict. Anything else
+        # keeps the status map.
+        # 5xx keeps the generic code and message: the audit row carries the
+        # specific token, the client is told only that the server failed.
+        named = getattr(exc, "code", None) if exc.status_code < 500 else None
+        detail = exc.detail
+        if (exc.status_code < 500 and isinstance(detail, dict)
+                and isinstance(detail.get("code"), str) and detail.get("code")):
+            named = named or detail["code"]
+            detail = detail.get("error") or detail.get("message") or str(detail)
+        code = named if isinstance(named, str) and named else ERROR_CODES.get(exc.status_code, "ERROR")
         # 5xx details can carry internal specifics (raw exception text, DB errors,
         # filesystem paths). Log the real detail internally but NEVER return it to the
         # client — replace 5xx bodies with a generic message. 4xx details are
@@ -133,7 +148,7 @@ def register_exception_handlers(app):
             )
             safe_detail = "An internal error occurred. Please try again or contact support."
         else:
-            safe_detail = str(exc.detail)
+            safe_detail = str(detail)
         # NIST AU-2 — capture Failed Authorization (403) events in the audit
         # trail. Centralized here so every 403 (require_role denials, disabled
         # accounts, area-access blocks) is recorded in one place without touching

@@ -38,8 +38,9 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
@@ -955,6 +956,71 @@ async def _review_counts_by_intake(db, intake_ids) -> Dict[Any, Dict[str, Any]]:
     return out
 
 
+#: MQA-2026-010 / AP-001 — the two per-intake aggregates that dominate a LIST
+#: page: the SQL Luhn pass over every promoted identifier and the
+#: records-without-disposition count. Profiled on a 25,000-row synthetic
+#: delivery (2026-09-30): ~120-150 ms and ~40-60 ms of a ~200 ms status
+#: derivation, EXPLAIN shows a seq scan the planner rightly prefers when one
+#: intake is most of the table (an index on source_intake_id already exists
+#: and is not chosen), so no index would help. What made the DEV list miss its
+#: gate on cold runs was paying that full scan on EVERY page load of a screen
+#: the shell re-polls. The page's copy of these two counts is kept for a short
+#: TTL, keyed by (intake, the job's completion marker) so a reprocessed
+#: delivery is never answered from the old entry. LIST path only: the single
+#: job detail (`status_for_job`) still derives live, so a disposition shows on
+#: the detail page immediately and on the list within one TTL — the same
+#: contract the shell's /status snapshot already has.
+_LIST_STATUS_CACHE_TTL_SECONDS = 20.0
+_list_status_cache: Dict[Tuple[Any, Any], Tuple[float, int, int]] = {}
+
+
+def _list_status_cache_key(job) -> Tuple[Any, Any]:
+    marker = getattr(job, "completed_at", None) or getattr(job, "updated_at", None) \
+        or getattr(job, "state", None)
+    return (job.source_intake_id, str(marker))
+
+
+async def _heavy_intake_counts_for_page(db, jobs) -> Tuple[Dict[Any, int], Dict[Any, int]]:
+    """(invalid promoted identifiers, records without disposition) per intake for
+    a page, from the TTL cache where a fresh entry exists and from the
+    database for the rest — one grouped query each for the misses."""
+    now = time.monotonic()
+    invalid: Dict[Any, int] = {}
+    unexplained: Dict[Any, int] = {}
+    misses = []
+    for job in jobs:
+        if job.source_intake_id is None:
+            continue
+        key = _list_status_cache_key(job)
+        hit = _list_status_cache.get(key)
+        if hit is not None and hit[0] > now:
+            invalid[job.source_intake_id] = hit[1]
+            unexplained[job.source_intake_id] = hit[2]
+        else:
+            misses.append(job)
+    if misses:
+        miss_ids = _intake_ids_of(misses)
+        fresh_invalid = await _invalid_identifiers_promoted_by_intake(db, miss_ids)
+        fresh_unexplained = await _records_without_disposition_by_intake(db, miss_ids)
+        expires = time.monotonic() + _LIST_STATUS_CACHE_TTL_SECONDS
+        for job in misses:
+            iid = job.source_intake_id
+            i_count = int(fresh_invalid.get(iid, 0))
+            u_count = int(fresh_unexplained.get(iid, 0))
+            invalid[iid] = i_count
+            unexplained[iid] = u_count
+            _list_status_cache[_list_status_cache_key(job)] = (expires, i_count, u_count)
+        # Bounded: entries for jobs no longer on any page age out; keep the map small.
+        if len(_list_status_cache) > 512:
+            for key in [k for k, v in _list_status_cache.items() if v[0] <= now]:
+                _list_status_cache.pop(key, None)
+    return invalid, unexplained
+
+
+def reset_list_status_cache() -> None:
+    _list_status_cache.clear()
+
+
 async def status_for_jobs(db, jobs) -> List[Dict[str, Any]]:
     """`status_for_job` for a page of jobs, one result per job in order.
 
@@ -976,9 +1042,8 @@ async def status_for_jobs(db, jobs) -> List[Dict[str, Any]]:
     timelines = await _timelines_by_job(db, job_ids)
     findings = await _open_findings_by_intake(db, intake_ids)
     conflicts = await _unresolved_conflicts_by_intake(db, intake_ids)
-    invalid = await _invalid_identifiers_promoted_by_intake(db, intake_ids)
+    invalid, unexplained = await _heavy_intake_counts_for_page(db, jobs)
     failed = await _failed_required_verification_by_intake(db, intake_ids)
-    unexplained = await _records_without_disposition_by_intake(db, intake_ids)
     reviews = await _review_counts_by_intake(db, intake_ids)
 
     results: List[Dict[str, Any]] = []

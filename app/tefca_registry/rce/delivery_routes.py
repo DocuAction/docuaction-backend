@@ -1462,6 +1462,10 @@ class IssueDispositionBody(BaseModel):
 DISPOSITION_IN_FLIGHT_MESSAGE = (
     "A disposition for this finding is already being processed. Wait for it "
     "to complete, then refresh the decision history before deciding again.")
+#: The machine code a client matches on; the envelope's generic 409 code
+#: (CONFLICT) also covers the terminal-finding and identifier refusals, which
+#: is why this one is named (MQA-2026-011).
+DISPOSITION_IN_FLIGHT_CODE = "DISPOSITION_IN_FLIGHT"
 
 
 @asynccontextmanager
@@ -1494,7 +1498,9 @@ async def _issue_disposition_guard(issue_id):
             text("SELECT pg_try_advisory_lock(hashtextextended(:k, 0))"),
             {"k": key})).scalar())
         if not acquired:
-            raise HTTPException(409, DISPOSITION_IN_FLIGHT_MESSAGE)
+            refusal = HTTPException(409, DISPOSITION_IN_FLIGHT_MESSAGE)
+            refusal.code = DISPOSITION_IN_FLIGHT_CODE
+            raise refusal
         yield
     finally:
         if acquired:

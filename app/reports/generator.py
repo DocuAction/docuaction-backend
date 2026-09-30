@@ -478,23 +478,31 @@ async def generate_report(
                     report_id, type(exc).__name__, exc)
                 artifact = {"registered": False, "error": f"{type(exc).__name__}: {exc}"}
 
-            # 8b. Every rendering a delivery report is issued in — not only the HTML.
+            # 8b. Every rendering a report is issued in — not only the HTML.
             #
-            # For the delivery-scoped types the CSV (and the PDF, when the engine's
-            # native libraries are present) are registered through the same store
-            # with their own hashes, so "which file was the reviewer handed" has a
-            # row for every format. Without a PDF engine the reason is recorded and
-            # /pdf keeps rendering on demand. Never fails the generation.
-            if report_type in RCE_TYPES and dataset.get("delivery"):
-                from app.reports.data.delivery_report_artifacts import (
-                    finalize_report_renderings)
+            # The CSV (delivery-scoped types) and the PDF (every type, when the
+            # engine's native libraries are present) are registered through the
+            # same store with their own hashes, so "which file was the reviewer
+            # handed" has a row for every format. Without a PDF engine the reason
+            # is recorded and /pdf keeps rendering on demand. Never fails the
+            # generation.
+            #
+            # QA108-20260927-004: this used to run for the delivery-scoped RCE
+            # types only, so every SOW / global report (the DA-ARC-* deliverables
+            # QA actually downloads) had no registered PDF and /pdf rendered the
+            # whole document on every request — 24–42 s first byte on DEV.
+            # Rendering once here, off the event loop, is what makes /pdf a
+            # verified byte serve for those reports too.
+            from app.reports.data.delivery_report_artifacts import (
+                finalize_report_renderings)
 
-                artifacts = await finalize_report_renderings(
-                    db, report_id=report_id, report_type=report_type, html=html,
-                    csv_text=csv_text, snapshot=snapshot, dataset=dataset,
-                    generated_by=generated_by, html_artifact=artifact)
-                if artifact is None or artifact.get("registered") is False:
-                    artifact = artifacts.get("html") or artifact
+            artifacts = await finalize_report_renderings(
+                db, report_id=report_id, report_type=report_type, html=html,
+                csv_text=csv_text, snapshot=snapshot, dataset=dataset,
+                generated_by=generated_by, html_artifact=artifact,
+                include_csv=bool(report_type in RCE_TYPES and dataset.get("delivery")))
+            if artifact is None or artifact.get("registered") is False:
+                artifact = artifacts.get("html") or artifact
 
             # 9. The audit event of record — for EVERY report, delivery-scoped
             # or global.

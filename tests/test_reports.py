@@ -826,6 +826,8 @@ class TestReportAPI:
             # Phase 7.5A — durable artifact storage
             "/api/reports/artifacts/{report_id}",
             "/api/reports/artifacts/{report_id}/download",
+            # QA108-20260927-004: one-time PDF registration for pre-fix reports
+            "/api/reports/{report_id}/artifacts/backfill",
             # Step #17 — the controlled Excel export
             "/api/reports/exports/onc-review-workbook",
             # Step #17C — its background job
