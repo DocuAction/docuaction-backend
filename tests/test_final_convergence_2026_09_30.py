@@ -166,7 +166,10 @@ def _app_role_url():
     # The CI job creates both roles with password 'x' (pr-tests.yml); the
     # superuser's own password on DATABASE_URL is not the app role's. A local
     # trust-auth instance ignores the value. DB_APP_ROLE_PASSWORD overrides.
-    return url.set(username=role, password=os.environ.get("DB_APP_ROLE_PASSWORD", "x"))
+    app_url = url.set(username=role, password=os.environ.get("DB_APP_ROLE_PASSWORD", "x"))
+    # str(URL) masks the password as '***' — a trust-auth instance never
+    # notices, a password-auth one (CI) refuses the login.
+    return app_url.render_as_string(hide_password=False)
 
 
 @pytest.mark.asyncio
