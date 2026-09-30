@@ -291,6 +291,58 @@ async def _disposition_histories(db, record_ids: Sequence[uuid.UUID]
     return out
 
 
+def latest_decision_from_notes(notes: Optional[str], *, actor: Optional[str],
+                               decided_at: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The analyst decision an issue's OWN columns carry, or None.
+
+    `curation.transition_issue` writes `resolution_notes` as "[DECISION] reason"
+    for every analyst decision — including the non-resolving ones (REJECT,
+    REQUEST_EVIDENCE, DEFER, ESCALATE) that write no record-level disposition
+    event. Until 2026-09-30 that reason reached the API only inside this
+    string, so the exception drawer could show "Decided … by …" and no
+    decision, comment or history (release-gate defect D, synthetic delivery
+    SEQ-012 A, request d288b6bc…). This parse is the fallback when the audit
+    trail has no row for the issue (older data); the audit trail is the
+    primary source (`_issue_decisions`).
+    """
+    import re
+
+    if not notes:
+        return None
+    m = re.match(r"^\[(?P<decision>[A-Z_]+)\]\s*(?P<reason>.*)$", str(notes).strip(), re.S)
+    if not m:
+        return None
+    return {"id": None, "decision": m.group("decision"), "reason": m.group("reason").strip(),
+            "actor": actor, "decided_at": decided_at, "correlation_id": None,
+            "source": "issue"}
+
+
+async def _issue_decisions(db, issue_ids: Sequence[uuid.UUID]
+                           ) -> Dict[str, List[Dict[str, Any]]]:
+    """Every analyst decision recorded for these issues, oldest first, from the
+    registry audit trail (`analyst_disposition` rows carry issue_id, decision,
+    reason, correlation_id; the row carries the actor and the time). Issue-level,
+    unlike `disposition_history`, which is the RECORD's disposition events."""
+    if not issue_ids:
+        return {}
+    from app.tefca_registry import models as reg
+
+    wanted = [str(i) for i in issue_ids]
+    rows = (await db.execute(
+        select(reg.TefcaRegAuditLog)
+        .where(reg.TefcaRegAuditLog.action == "analyst_disposition",
+               reg.TefcaRegAuditLog.metadata_["issue_id"].astext.in_(wanted))
+        .order_by(reg.TefcaRegAuditLog.created_at, reg.TefcaRegAuditLog.id))).scalars().all()
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for row in rows:
+        md = row.metadata_ or {}
+        out.setdefault(str(md.get("issue_id")), []).append({
+            "id": str(row.id), "decision": md.get("decision"), "reason": md.get("reason"),
+            "actor": row.actor_email, "decided_at": _iso(row.created_at),
+            "correlation_id": md.get("correlation_id"), "source": "audit"})
+    return out
+
+
 async def _identifier_events(db, issue_ids: Sequence[uuid.UUID]
                              ) -> Dict[uuid.UUID, List[Dict[str, Any]]]:
     if not issue_ids:
@@ -360,12 +412,21 @@ def _normalized_value(row, field_name: Optional[str]):
     return getattr(row, attr, None) if attr else None
 
 
-def _row(row, *, job_id, intake_id, histories, ident_events, assignees, legacy):
+def _row(row, *, job_id, intake_id, histories, ident_events, assignees, legacy,
+         issue_decisions: Optional[Dict[str, List[Dict[str, Any]]]] = None):
     issue = row.RceIssue
     events = ident_events.get(issue.id, [])
     latest_event = events[-1] if events else None
     history = histories.get(issue.source_record_id, [])
     latest_disposition = history[-1] if history else None
+    # Issue-level analyst decisions (audit trail), else the one the issue's own
+    # columns carry; never confused with the record-level `disposition_history`.
+    decisions = list((issue_decisions or {}).get(str(issue.id)) or [])
+    if not decisions:
+        parsed = latest_decision_from_notes(
+            issue.resolution_notes, actor=issue.resolved_by, decided_at=_iso(issue.resolved_at))
+        if parsed:
+            decisions = [parsed]
     legacy_types = legacy.get(issue.issue_type)
     entity_id = row.curated_entity_id or row.source_entity_id or (
         latest_event.get("entity_id") if latest_event else None)
@@ -408,6 +469,8 @@ def _row(row, *, job_id, intake_id, histories, ident_events, assignees, legacy):
         "assignee": assignees.get(issue.source_record_id),
         "disposition": (latest_disposition or {}).get("disposition"),
         "disposition_history": history,
+        "issue_decisions": decisions,
+        "latest_decision": decisions[-1] if decisions else None,
         "identifier_decisions": events,
         "actor": (issue.resolved_by
                   or (latest_event["actor"] if latest_event else None)),
@@ -462,12 +525,14 @@ async def list_exceptions(db, intake_id, *, source_row: Optional[int] = None,
     issue_ids = [r.RceIssue.id for r in page]
     histories = await _disposition_histories(db, record_ids)
     ident_events = await _identifier_events(db, issue_ids)
+    issue_decisions = await _issue_decisions(db, issue_ids)
     assignees = await _assignees(db, record_ids)
     job_id = await _job_for_intake(db, intake_uuid)
     legacy = legacy_issue_types()
 
     items = [_row(r, job_id=job_id, intake_id=intake_uuid, histories=histories,
-                  ident_events=ident_events, assignees=assignees, legacy=legacy)
+                  ident_events=ident_events, assignees=assignees, legacy=legacy,
+                  issue_decisions=issue_decisions)
              for r in page]
     return {
         "intake_id": str(intake_uuid),
