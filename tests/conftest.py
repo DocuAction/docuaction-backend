@@ -323,3 +323,16 @@ def _remove_seeded_delivery_rows():
             helper.cleanup()
         except Exception as exc:  # noqa: BLE001 - never fail a module on cleanup
             print(f"support_delivery_api.cleanup failed: {type(exc).__name__}: {exc}")
+
+
+@pytest.fixture(autouse=True)
+def _reset_list_status_cache():
+    """The delivery-list page caches two heavy per-intake counts for a short TTL
+    (MQA-2026-010). A test that mutates evidence and then reads the list must
+    never be answered from a previous test's entry."""
+    try:
+        from app.tefca_registry.rce import delivery_jobs as _jobs
+        _jobs.reset_list_status_cache()
+    except Exception:  # noqa: BLE001 - the module may be absent in a partial checkout
+        pass
+    yield
