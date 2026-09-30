@@ -163,7 +163,10 @@ def _app_role_url():
     url = make_url(os.environ["DATABASE_URL"])
     role = os.environ.get("DB_APP_ROLE", "").strip()
     assert role, "DB_APP_ROLE must name the runtime role for this test to mean anything"
-    return url.set(username=role, password=url.password or "x")
+    # The CI job creates both roles with password 'x' (pr-tests.yml); the
+    # superuser's own password on DATABASE_URL is not the app role's. A local
+    # trust-auth instance ignores the value. DB_APP_ROLE_PASSWORD overrides.
+    return url.set(username=role, password=os.environ.get("DB_APP_ROLE_PASSWORD", "x"))
 
 
 @pytest.mark.asyncio

@@ -186,7 +186,10 @@ class TestRoutesThatRender:
         monkeypatch.setattr(generator, "generate_report", fake_generate_report)
 
         response = await routes.generate(
-            routes.GenerateReportRequest(report_type="verification", format="pdf"),
+            # An explicit period: the route refuses an unscoped draft
+            # (REPORT_SCOPE_REQUIRED, MQA-2026-103); this test is about the render.
+            routes.GenerateReportRequest(report_type="verification", format="pdf",
+                                         period_start="2026-09-01", period_end="2026-09-30"),
             db=None, user=SimpleNamespace(email="qa@synthetic.invalid", id=None))
 
         _assert_off_loop(stub_engine.probe.only)

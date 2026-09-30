@@ -1028,6 +1028,18 @@ async def backfill_pdf_artifact(
     from app.reports.engine.pdf_engine import pdf_available, unavailable_reason
     from app.tefca_registry import models as reg
 
+    # The id names a storage key (artifact_key -> filesystem path on the local
+    # backend), so the URL value is never used past this point: it must match
+    # the report-id shape, and every later call uses the STORED row's own id.
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,40}", report_id or ""):
+        raise HTTPException(404, "No report exists with that id")
+    row = (await db.execute(
+        select(reg.ReviewReport).where(reg.ReviewReport.report_id == report_id)
+    )).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(404, f"No report exists with id {report_id}")
+    report_id = str(row.report_id)
+
     existing = await _registered_bytes(db, report_id, PDF)
     if existing is not None:
         return {"report_id": report_id, "backfilled": False,
@@ -1036,12 +1048,6 @@ async def backfill_pdf_artifact(
 
     if not pdf_available():
         raise HTTPException(503, f"PDF generation is unavailable: {unavailable_reason()}")
-
-    row = (await db.execute(
-        select(reg.ReviewReport).where(reg.ReviewReport.report_id == report_id)
-    )).scalar_one_or_none()
-    if row is None:
-        raise HTTPException(404, f"No report exists with id {report_id}")
     if not row.report_html:
         raise HTTPException(404, f"Report {report_id} has no stored HTML to render.")
 
