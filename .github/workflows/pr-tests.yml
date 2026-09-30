@@ -120,6 +120,7 @@ jobs:
             tests/test_admin_restore_original.py \
             tests/test_final_convergence_2026_09_30.py \
             tests/test_exception_issue_decisions.py \
+            tests/test_report_generate_idempotency.py \
             tests/test_release1_foundation.py \
             -v --tb=short -rs --junitxml=isolation-results.xml
       - name: Fail if any isolation test was skipped for want of a database
