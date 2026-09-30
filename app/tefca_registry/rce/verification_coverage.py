@@ -265,6 +265,7 @@ async def coverage_for_intake(db, intake_id, *, job=None) -> Dict[str, Any]:
             verified=counts["verified"], not_found=counts["not_found"],
             deactivated=counts["deactivated"], failed=counts["failed"],
             unavailable=counts["unavailable"], in_progress=in_progress)
+    stamp_pecos_backing(sources)
     provenance = None
     try:
         from app.Tefca.connectors import data_source_labels
@@ -285,11 +286,31 @@ async def coverage_for_intake(db, intake_id, *, job=None) -> Dict[str, Any]:
     }
 
 
+def stamp_pecos_backing(sources: Dict[str, Any]) -> Dict[str, Any]:
+    """Name what stands behind the `pecos` coverage, from the ONE constant the
+    status endpoint already reports (MQA-2026-013).
+
+    No PECOS feed is connected: every PECOS evidence row is an NPPES-derived
+    proxy. The Verification tab reads `pecos_backing` and, absent it, can only
+    say "backing not stated by the server" — which is true and useless. The
+    label/subtitle ride along so no surface invents its own PECOS wording.
+    """
+    pecos = sources.get("pecos")
+    if not isinstance(pecos, dict):
+        return sources
+    from app.Tefca.connectors import PECOS_BACKING, PECOS_UI_LABEL, PECOS_UI_SUBTITLE
+    pecos.setdefault("pecos_backing", PECOS_BACKING)
+    pecos.setdefault("pecos_label", PECOS_UI_LABEL)
+    pecos.setdefault("pecos_subtitle", PECOS_UI_SUBTITLE)
+    return sources
+
+
 def empty_coverage(*, reason: str) -> Dict[str, Any]:
     """The shape when there is no intake yet (a job that failed before Area 1)."""
     configured = configured_sources()
     sources = {key: status_model.coverage_state(configured=configured[key], eligible=0,
                                                 attempted=0) for key in SOURCES}
+    stamp_pecos_backing(sources)
     return {"intake_id": None, "job_id": None, "state": overall_state(sources),
             "eligible": 0, "sources": sources, "provenance": None,
             "evidence_tables": ["tefca_verifications", "tefca_dimension_evidence"],

@@ -133,6 +133,37 @@ class GenerateReportRequest(BaseModel):
                                            pattern=r"^[A-Za-z0-9._:-]+$")
 
 
+#: MQA-2026-103 / RX-006 — the product rule for generating a draft deliverable.
+#:
+#: A report draft must name what it describes. Generating with NO scope used to
+#: fall through to the deliberate "every ReviewRecord in the system" path, so a
+#: single click under the DEVELOPMENT / TEST banner minted a system-wide draft
+#: with nothing chosen. The route now refuses that shape with a machine code;
+#: `generate_report()` itself is unchanged, so the system-wide figure remains
+#: available to a caller that asks for it explicitly with a period.
+#:
+#: Accepted scopes: a review cycle; a delivery (`job_id` / `intake_id`); or,
+#: for the SOW and global technical families, an explicit reporting period
+#: (`period_start` AND `period_end`). The role floor is unchanged (reviewer,
+#: Decision 1, 2026-09-16).
+REPORT_SCOPE_REQUIRED = "REPORT_SCOPE_REQUIRED"
+
+
+def require_explicit_scope(report_type: str, parameters: Dict[str, Any]) -> None:
+    """Raise 422 REPORT_SCOPE_REQUIRED when a generate request names no scope."""
+    p = parameters or {}
+    if p.get("review_cycle_id") or p.get("job_id") or p.get("intake_id"):
+        return
+    if p.get("period_start") and p.get("period_end"):
+        return
+    raise HTTPException(422, detail={
+        "error": (f"A {report_type} draft must name its scope: a review_cycle_id, a "
+                  f"delivery (parameters.job_id or parameters.intake_id), or an "
+                  f"explicit reporting period (period_start and period_end). "
+                  f"Nothing was generated."),
+        "code": REPORT_SCOPE_REQUIRED})
+
+
 def parameter_error_http(exc) -> HTTPException:
     """A ReportParameterError as the HTTP answer: its own status (422 by
     default) and a body naming the machine code beside the message, so a
@@ -209,6 +240,8 @@ async def generate(
             parameters[key] = value
     if request.review_cycle_id and "review_cycle_id" not in parameters:
         parameters["review_cycle_id"] = request.review_cycle_id
+
+    require_explicit_scope(request.report_type, parameters)
 
     if request.idempotency_key:
         replay = await _replay_for_key(db, request.idempotency_key, getattr(user, "id", None))
@@ -962,6 +995,103 @@ async def get_report_pdf(
     await _audit_download(db, row, "pdf", user, job_id=job_id,
                           source="rendered-on-request")
     return response
+
+
+@router.post("/{report_id}/artifacts/backfill",
+             summary="Register the PDF rendering of an already-stored report, once")
+async def backfill_pdf_artifact(
+    report_id: str,
+    db: AsyncSession = Depends(get_db),
+    # `qalead`: this is an operator action that spends a full render, not a
+    # read; reviewers keep downloading exactly as before.
+    user=Depends(require_role_audited("qalead", resource_type="report")),
+):
+    """Give a report generated BEFORE PDF registration its durable PDF
+    (QA108-20260927-004).
+
+    Idempotent: a report that already has a registered PDF is answered from
+    the registry without rendering (`backfilled: False`). Otherwise the stored
+    HTML — the same bytes /html serves — is rendered ONCE, off the event loop
+    and inside the same budget the on-request path uses, then registered with
+    the provenance the stored snapshot already carries. Nothing is
+    regenerated, no dataset is re-queried, no report row is modified; the only
+    write is the new artifact registration, and it is audited.
+    """
+    from dataclasses import fields as dc_fields
+
+    from app.reports.data.artifact_registry import public_artifact
+    from app.reports.data.delivery_report_artifacts import (
+        PDF, finalize_report_renderings)
+    from app.reports.data.delivery_report_links import (
+        record_report_download, record_report_download_failure)
+    from app.reports.data.report_snapshot import ReportSnapshot
+    from app.reports.engine.pdf_engine import pdf_available, unavailable_reason
+    from app.tefca_registry import models as reg
+
+    existing = await _registered_bytes(db, report_id, PDF)
+    if existing is not None:
+        return {"report_id": report_id, "backfilled": False,
+                "artifact": public_artifact(existing.get("artifact") or {}),
+                "note": "A registered PDF already exists; nothing was rendered."}
+
+    if not pdf_available():
+        raise HTTPException(503, f"PDF generation is unavailable: {unavailable_reason()}")
+
+    row = (await db.execute(
+        select(reg.ReviewReport).where(reg.ReviewReport.report_id == report_id)
+    )).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(404, f"No report exists with id {report_id}")
+    if not row.report_html:
+        raise HTTPException(404, f"Report {report_id} has no stored HTML to render.")
+
+    data = row.report_data or {}
+    snap_dict = dict(data.get("snapshot") or {})
+    allowed = {f.name for f in dc_fields(ReportSnapshot)}
+    snapshot = ReportSnapshot(**{k: v for k, v in snap_dict.items() if k in allowed},
+                              **({"report_id": report_id} if "report_id" not in snap_dict else {}),
+                              **({"report_type": row.report_type} if "report_type" not in snap_dict else {}),
+                              **({"generation_timestamp": ""} if "generation_timestamp" not in snap_dict else {}))
+    html_artifact = await _registered_bytes(db, report_id, "text/html")
+
+    actor = getattr(user, "email", None) or "SYSTEM"
+    try:
+        out = await asyncio.wait_for(
+            finalize_report_renderings(
+                db, report_id=report_id, report_type=row.report_type,
+                html=row.report_html, csv_text=None, snapshot=snapshot,
+                dataset=data.get("dataset") or {}, generated_by=actor,
+                include_csv=False, include_pdf=True,
+                html_artifact=(html_artifact or {}).get("artifact")),
+            timeout=PDF_RENDER_BUDGET_SECONDS)
+    except asyncio.TimeoutError:
+        await record_report_download_failure(
+            db, report_id=report_id, report_type=row.report_type,
+            fmt="artifact-backfill:pdf", actor=actor, actor_id=getattr(user, "id", None),
+            code="PDF_RENDER_BUDGET_EXCEEDED",
+            reason=f"backfill render exceeded the {PDF_RENDER_BUDGET_SECONDS:.0f}s budget")
+        raise HTTPException(503, (
+            f"PDF rendering exceeded the {PDF_RENDER_BUDGET_SECONDS:.0f}s budget "
+            "for this document; nothing was registered."))
+
+    pdf_row = out.get("pdf")
+    if pdf_row is None:
+        reason = out.get("pdf_unavailable_reason") or "; ".join(out.get("errors") or []) or "unknown"
+        await record_report_download_failure(
+            db, report_id=report_id, report_type=row.report_type,
+            fmt="artifact-backfill:pdf", actor=actor, actor_id=getattr(user, "id", None),
+            code="PDF_BACKFILL_FAILED", reason=str(reason)[:300])
+        raise HTTPException(503, f"The PDF could not be registered: {str(reason)[:300]}")
+
+    await record_report_download(
+        db, report_id=report_id, report_type=row.report_type,
+        fmt="artifact-backfill:pdf", actor=actor, actor_id=getattr(user, "id", None),
+        extra={"artifact_version": pdf_row.get("artifact_version"),
+               "sha256": pdf_row.get("rendered_sha256"),
+               "storage_backend": out.get("storage_backend")})
+    return {"report_id": report_id, "backfilled": True,
+            "artifact": public_artifact(pdf_row),
+            "storage_backend": out.get("storage_backend"), "durable": out.get("durable")}
 
 
 def docx_for_stored_report(row) -> Optional[bytes]:

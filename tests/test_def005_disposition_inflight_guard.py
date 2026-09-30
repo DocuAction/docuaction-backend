@@ -141,12 +141,18 @@ async def test_route_refuses_409_while_a_disposition_is_in_flight(seeded_issue, 
 
     assert blocked.status_code == 409, blocked.text
     assert message_of(blocked) == dr.DISPOSITION_IN_FLIGHT_MESSAGE
+    # MQA-2026-011: the machine code names THIS refusal, not the generic 409
+    # word — a client distinguishes "wait" from "settled" without parsing prose.
+    assert blocked.json()["code"] == dr.DISPOSITION_IN_FLIGHT_CODE == "DISPOSITION_IN_FLIGHT"
+    assert blocked.json()["request_id"]
 
     # Released: the same POST now gets PAST the guard, to apply_disposition's
-    # own refusal for this record-less finding — a different message.
+    # own refusal for this record-less finding — a different message AND a
+    # different (generic) code.
     after = await asyncio.to_thread(post)
     assert after.status_code == 409, after.text
     assert message_of(after) != dr.DISPOSITION_IN_FLIGHT_MESSAGE
+    assert after.json()["code"] != dr.DISPOSITION_IN_FLIGHT_CODE
     assert "names no source record" in message_of(after)
 
 
