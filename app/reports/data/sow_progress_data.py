@@ -35,7 +35,7 @@ import logging
 import statistics
 import uuid
 from collections import Counter, defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import select
