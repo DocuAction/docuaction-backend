@@ -321,6 +321,7 @@ class SowProgressDataService:
                 "case_classification": vr.get("case_classification"),
                 "issue_codes": vr.get("issue_codes") or [],
                 "bucket": bucket if bucket in BUCKET_CODES else None,
+                "system_bucket": (c.classification_bucket if c.classification_bucket in BUCKET_CODES else None),
                 "determined_at": determined_at, "determined_by": actor,
                 "state": state,
                 "assigned": "Assigned" if state not in STATE_UNASSIGNED else "Unassigned",
@@ -399,6 +400,9 @@ class SowProgressDataService:
                        "sample": (sum(q["sample"] for q in qhins if isinstance(q["sample"], int)) if any(isinstance(q["sample"], int) for q in qhins) else "—"),
                        "reviewed": len(scope_rows), **{b: sum(q[b] for q in qhins) for b in BUCKET_CODES}}
         qhins_total["pct"] = _pct(len(scope_rows), qhins_total["sample"]) if isinstance(qhins_total["sample"], int) and qhins_total["sample"] else "—"
+        for q in qhins:
+            q["allocation"] = (_pct(q["sample"], qhins_total["sample"]) if isinstance(q["sample"], int) and isinstance(qhins_total["sample"], int) and qhins_total["sample"] else "—")
+        qhins_total["allocation"] = "100.0%" if isinstance(qhins_total["sample"], int) and qhins_total["sample"] else "—"
 
         # periods (monthly: ISO weeks in the period; final: 30-day blocks)
         periods: List[Dict[str, Any]] = []
@@ -447,44 +451,76 @@ class SowProgressDataService:
         sample_total = qhins_total["sample"] if isinstance(qhins_total["sample"], int) else None
         sampling_note = None if (sample is not None and sample_total) else SAMPLING_PENDING
 
-        # KPIs (kind-specific wording, all derived)
+        # KPIs — one five-card grammar for every deliverable (population /
+        # review scope, sample reviewed, QHIN coverage, B3 + B4 rate, workflow
+        # interval); the wording of each note is kind-specific, the figures are
+        # not.
         completeness = _pct(records_processed or 0, records_received or 0) if records_received else "—"
         this_period = len(in_period_rows) if (p_start or p_end) else len(classified)
         remaining = (sample_total - len(to_date)) if sample_total else None
         interval_v = f"{median:.1f} d" if median is not None else "—"
         interval_n = f"median assignment → QA approval · P90 {p90:.1f} d · n={len(intervals)}" if intervals else "no completed case in scope yet"
+        qhins_hit = len({r["qhin"] for r in scope_rows if r["qhin"] not in ("Unresolved", "Not linked")})
+        qhins_all = len(populations) if populations else None
+        b34 = sum(t["total"] for t in buckets if t["bucket"] in ("B3", "B4"))
+        scope_card = (
+            {"label": "Population / review scope", "value": f"{distinct_entities:,}" if distinct_entities is not None else "Pending",
+             "note": (f"distinct promoted entities in the delivery · {len(rows):,} review cases · {(records_received or 0):,} source records"
+                      if distinct_entities is not None else SAMPLING_PENDING)})
         if kind == "weekly":
-            kpis = [
-                {"label": "Participants / Subparticipants reviewed", "value": f"{len(to_date):,}",
-                 "note": f"to date · {this_period:,} this period · {len(unclassified):,} open, unclassified"},
-                {"label": "QHINs represented", "value": f"{len({r['qhin'] for r in scope_rows if r['qhin'] not in ('Unresolved', 'Not linked')})} of {len(populations) if populations else '—'}",
-                 "note": "QHINs with at least one reviewed case / QHINs in the delivery"},
-                {"label": "Sample size · confidence", "value": f"{sample_total:,}" if sample_total else "Pending",
-                 "note": (f"{sample.confidence_level} confidence, ±{sample.margin_of_error} margin, per QHIN" if sample is not None and sample_total else SAMPLING_PENDING)},
-                {"label": "Processing completeness", "value": completeness,
-                 "note": f"{(records_processed or 0):,} of {(records_received or 0):,} loaded source records processed" if records_received else "no delivery counts on record"},
-                {"label": "Workflow interval", "value": interval_v, "note": interval_n},
-            ]
+            sample_card = {"label": "Sample reviewed", "value": f"{len(to_date):,}",
+                           "note": (f"of {sample_total:,} sampled to date ({_pct(len(to_date), sample_total)}) · {this_period:,} this week" if sample_total
+                                    else f"classified cases to date · {this_period:,} this week")}
+            rate_card = {"label": "B3 + B4 rate", "value": _pct(b34, len(scope_rows)), "note": f"{b34:,} of {len(scope_rows):,} reviewed to date inexplicable or non-compliant"}
         elif kind == "monthly":
-            b34 = sum(t["total"] for t in buckets if t["bucket"] in ("B3", "B4"))
-            kpis = [
-                {"label": "Reviewed this period", "value": f"{len(in_period_rows):,}", "note": f"cumulative to date {len(to_date):,}" + (f" of {sample_total:,}" if sample_total else "")},
-                {"label": "QHINs represented", "value": f"{len({r['qhin'] for r in scope_rows if r['qhin'] not in ('Unresolved', 'Not linked')})} of {len(populations) if populations else '—'}", "note": "QHINs with a reviewed case this period"},
-                {"label": "Sample size · confidence", "value": f"{sample_total:,}" if sample_total else "Pending",
-                 "note": (f"{sample.confidence_level} confidence, ±{sample.margin_of_error} margin, per QHIN" if sample is not None and sample_total else SAMPLING_PENDING)},
-                {"label": "B3 + B4 this period", "value": f"{b34:,}", "note": f"{_pct(b34, len(in_period_rows))} inexplicable or non-compliant"},
-                {"label": "Workflow interval", "value": interval_v, "note": interval_n},
-            ]
+            sample_card = {"label": "Sample reviewed", "value": f"{len(in_period_rows):,}",
+                           "note": (f"this period · cumulative {len(to_date):,} of {sample_total:,} sampled" if sample_total else f"this period · cumulative {len(to_date):,} to date")}
+            rate_card = {"label": "B3 + B4 rate", "value": _pct(b34, len(scope_rows)), "note": f"{b34:,} of {len(scope_rows):,} reviewed this period inexplicable or non-compliant"}
         else:
-            b34 = sum(t["total"] for t in buckets if t["bucket"] in ("B3", "B4"))
-            kpis = [
-                {"label": "Distinct entities in delivery", "value": f"{distinct_entities:,}" if distinct_entities is not None else "Pending",
-                 "note": "promoted entities of the selected delivery (not location rows)" if distinct_entities is not None else SAMPLING_PENDING},
-                {"label": "Sample reviewed", "value": f"{len(to_date):,}", "note": (f"of {sample_total:,} sampled ({_pct(len(to_date), sample_total)})" if sample_total else "classified review cases to date")},
-                {"label": "QHIN coverage", "value": f"{len({r['qhin'] for r in scope_rows if r['qhin'] not in ('Unresolved', 'Not linked')})} / {len(populations) if populations else '—'}", "note": "QHINs with at least one reviewed case"},
-                {"label": "B3 + B4 rate", "value": _pct(b34, len(scope_rows)), "note": f"{b34:,} entities inexplicable or non-compliant"},
-                {"label": "Workflow interval", "value": interval_v, "note": interval_n},
-            ]
+            sample_card = {"label": "Sample reviewed", "value": f"{len(to_date):,}",
+                           "note": (f"of {sample_total:,} sampled ({_pct(len(to_date), sample_total)})" if sample_total else "classified review cases to date")}
+            rate_card = {"label": "B3 + B4 rate", "value": _pct(b34, len(scope_rows)), "note": f"{b34:,} of {len(scope_rows):,} entities inexplicable or non-compliant"}
+        kpis = [
+            scope_card, sample_card,
+            {"label": "QHIN coverage", "value": f"{qhins_hit} of {qhins_all}" if qhins_all else f"{qhins_hit}",
+             "note": "QHINs with at least one reviewed case / QHINs in the delivery"},
+            rate_card,
+            {"label": "Workflow interval", "value": interval_v, "note": interval_n},
+        ]
+
+        # period-scoped activity (what happened in the window) and what is next
+        def in_window(dt):
+            d = _iso_date(dt)
+            return d is not None and (p_start is None or d >= p_start) and (p_end is None or d <= p_end)
+        claimed_in = sum(1 for r in rows if in_window(r["assigned_at"]))
+        determined_in = sum(1 for r in rows if r["event_count"] and in_window(r["determined_at"]))
+        reclassified_in = sum(1 for r in rows if r["event_count"] and in_window(r["determined_at"])
+                              and r["bucket"] and r["bucket"] != r.get("system_bucket"))
+        approved_in = sum(1 for r in rows if in_window(r["qa_at"]))
+        evidence_checks = sum(s["count"] for s in sources)
+        actions_completed = [
+            f"{claimed_in:,} case(s) claimed by analysts in the period",
+            f"{determined_in:,} analyst determination(s) recorded ({reclassified_in:,} reclassified from the system category)",
+            f"{approved_in:,} independent QA approval(s) recorded",
+            (f"Verification evidence recorded for {evidence_checks:,} entity checks" if evidence_checks
+             else "No verification evidence recorded for the scope"),
+        ]
+        plural = "y" if remaining == 1 else "ies"
+        next_actions = [
+            f"{buckets_total['unassigned']:,} case(s) await assignment to an analyst",
+            f"{buckets_total['awaiting_qa']:,} determination(s) await independent QA approval",
+            (f"{remaining:,} sampled entit{plural} not yet classified" if remaining is not None and remaining > 0
+             else "Every sampled entity carries a classification" if remaining == 0 else SAMPLING_PENDING),
+            f"{len(unclassified):,} open case(s) without any classification",
+        ]
+        if sample is not None and sample_total:
+            census = all(q.get("sample") == q.get("population") for q in qhins if isinstance(q.get("sample"), int))
+            sampling_text = (f"Stratified by QHIN: an independent draw inside each stratum at {float(sample.confidence_level):.0%} confidence "
+                             f"and ±{float(sample.margin_of_error):.0%} margin (p = {sample.proportion}, finite-population correction "
+                             f"{'applied' if sample.use_fpc else 'not applied'}); {sample_total:,} of {sample.population_size:,} eligible entities drawn"
+                             + (" — every stratum is a census because its population is below the computed size." if census else "."))
+        else:
+            sampling_text = SAMPLING_PENDING
 
         # controls
         approved = [r for r in scope_rows if r["state"] in STATE_COMPLETED]
@@ -573,6 +609,9 @@ class SowProgressDataService:
                        "records_received": records_received, "records_processed": records_processed,
                        "distinct_entities": distinct_entities, "sample_size": sample_total},
             "sampling_note": sampling_note,
+            "sampling_text": sampling_text,
+            "actions_completed": actions_completed,
+            "next_actions": next_actions,
             "kpis": kpis,
             "buckets": buckets, "buckets_total": buckets_total, "unclassified": len(unclassified),
             "qhins": qhins, "qhins_total": qhins_total,

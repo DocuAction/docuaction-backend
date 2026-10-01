@@ -392,13 +392,33 @@ async def test_the_branded_front_page_carries_the_approved_fields_and_the_dev_ma
     assert SYNTHETIC_NOTE in body
     assert not re.search(r"\bFINAL\b(?! Report)", body)
     # the approved palette and B1–B4 colours are in the stylesheet
-    for colour in ("#0A1628", "#002D5E", "#0066B3", "#C8A951", "#107C10", "#E87722", "#D13438"):
+    # navy / dark blue / blue / gold rules; B1 green, B2 amber, B3 blue, B4 red
+    for colour in ("#0A1628", "#002D5E", "#0066B3", "#C8A951", "#107C10", "#B5891F", "#D13438"):
         assert colour in html
+    assert "#E87722" not in html
     # section grammar
-    for heading in ("classification, assignment and workflow", "QHIN coverage", "Important findings",
-                    "Source categories used", "Reconciliation &amp; source integrity",
-                    "Suggested methodology / control-framework", "Package:"):
+    common = ("Assignment and workflow status", "Reconciliation &amp; source integrity",
+              "Appendix A &mdash; Document control", "Appendix B &mdash; Contract sections")
+    per_kind = {
+        "retrospective_weekly": ("Current-period B1–B4 results", "QHIN coverage", "Important findings",
+                                 "Actions completed during the week", "Source categories used",
+                                 "Suggested control improvements", "Next-week actions, dependencies and limitations"),
+        "retro_monthly": ("Monthly B1–B4 aggregate", "Weekly trend within the month", "QHIN comparison",
+                          "Source / methodology summary", "Significant findings", "Implemented improvements",
+                          "Outstanding dependencies and limitations"),
+        "retrospective_final": ("120-day aggregate B1–B4 results", "Trend by reporting period",
+                                "QHIN coverage and proportional allocation", "Sampling methodology &amp; confidence",
+                                "Major discrepancy themes", "Suggested controls", "Changes implemented",
+                                "Remaining limitations and external dependencies", "Controlled annex references"),
+    }
+    for heading in common + per_kind[report_type]:
         assert heading in body, heading
+    # the five-card executive grammar, in order
+    labels = re.findall(r'<p class="l">([^<]*)</p>', body)
+    assert labels == ["Population / review scope", "Sample reviewed", "QHIN coverage", "B3 + B4 rate", "Workflow interval"], labels
+    # no word is ever hyphenated or broken inside the executive page: the base
+    # stylesheet's per-cell hyphenation is overridden
+    assert "hyphens: manual" in html
     if report_type == "retrospective_weekly":
         assert "Exclusion-list pre-screen" not in body     # weekly: suggested only
     else:
