@@ -39,9 +39,10 @@
   }
   /* The base stylesheet (uswds_report.css) hyphenates and breaks words inside
      every table cell; the executive page never does. */
-  .agt-page, .agt-page * { hyphens: manual; -webkit-hyphens: manual; overflow-wrap: normal; word-break: normal; }
-  .agt-page { font-family: "Public Sans", Arial, Helvetica, sans-serif; font-size: 7.9pt; line-height: 1.25; color: var(--agt-ink); page-break-after: always; }
-  .agt-page p { margin: 0; }
+  section.cover { min-height: auto; padding-top: 0; border-top: 0; margin: 0; }
+  .cover, .cover * { hyphens: manual; -webkit-hyphens: manual; overflow-wrap: normal; word-break: normal; }
+  .cover { font-family: "Public Sans", Arial, Helvetica, sans-serif; font-size: 7.9pt; line-height: 1.25; color: var(--agt-ink); page-break-after: always; }
+  .cover p { margin: 0; }
   .report-header { display: none; }
 
   /* header */
@@ -141,9 +142,12 @@
   section[aria-labelledby="s6-heading"] th, section[aria-labelledby="s6-heading"] td,
   section[aria-labelledby="s9-heading"] th, section[aria-labelledby="s9-heading"] td { padding: 2.5pt 4pt; }
   .contents { font-size: 9pt; }
+  section.appendix table, section.accessibility-statement { font-size: 8pt; }
+  section.appendix th, section.appendix td { padding: 2pt 5pt; }
+  section.appendix h2, section.accessibility-statement h2 { font-size: 11pt; margin: 8pt 0 3pt 0; }
 </style>
 
-<section class="agt-page" aria-labelledby="agt-title">
+<section class="cover" aria-labelledby="agt-title">
   {# ── header: title block left, badge + identity right ─────────────── #}
   <div class="agt-head">
     <div class="cell logo" style="width: 0.95in">
@@ -323,7 +327,7 @@
   <p>Deliverable {{ deliverable }} &middot; Report {{ snapshot.report_id }} &middot; Contract {{ contract_number }} &middot; {{ document_marking }}. The executive summary is page 1; these appendices carry the document control record, the contract sections and the provenance record.</p>
 </div>
 <section class="doc-control" aria-labelledby="control-heading">
-  <h2 id="control-heading">Appendix A &mdash; Document control</h2>
+  <h2 id="control-heading">Appendix A &mdash; Document Control</h2>
   <table>
     <caption>Document control record for {{ snapshot.report_id }}</caption>
     <thead><tr><th scope="col">Item</th><th scope="col">Value</th></tr></thead>
@@ -341,7 +345,7 @@
       <tr><th scope="row">Source delivery</th><td>{{ snapshot.source_provenance.get('original_filename') or 'Not recorded' }}{% if progress and progress.source and progress.source.delivery_label %} &mdash; {{ progress.source.delivery_label }}{% endif %}</td></tr>
       <tr><th scope="row">Review cycle / sample</th><td>{{ (progress.source.sample_id if progress and progress.source else none) or snapshot.review_cycle_id or 'Not recorded' }}</td></tr>
       <tr><th scope="row">Methodology / rule set version</th><td>{{ evidence_rule_version or 'Not recorded' }} &middot; {{ snapshot.b1_b4_rule_version or 'Not recorded' }}</td></tr>
-      <tr><th scope="row">Data classification</th><td>{% if snapshot.data_classification == 'GOVERNMENT' %}Government data{% else %}Synthetic / development data &mdash; not for Government delivery{% endif %}</td></tr>
+      <tr><th scope="row">Data classification</th><td>{% if snapshot.data_classification == 'GOVERNMENT' %}Government data{% else %}DEVELOPMENT / TEST (synthetic sample) &mdash; not for Government delivery{% endif %}</td></tr>
     </tbody>
   </table>
   <h2 id="contents-heading">Contents</h2>

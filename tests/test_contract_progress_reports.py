@@ -398,7 +398,7 @@ async def test_the_branded_front_page_carries_the_approved_fields_and_the_dev_ma
     assert "#E87722" not in html
     # section grammar
     common = ("Assignment and workflow status", "Reconciliation &amp; source integrity",
-              "Appendix A &mdash; Document control", "Appendix B &mdash; Contract sections")
+              "Appendix A &mdash; Document Control", "Appendix B &mdash; Contract sections")
     per_kind = {
         "retrospective_weekly": ("Current-period B1–B4 results", "QHIN coverage", "Important findings",
                                  "Actions completed during the week", "Source categories used",
