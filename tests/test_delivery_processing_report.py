@@ -424,6 +424,12 @@ async def test_report_is_built_from_the_persisted_evidence_of_the_named_delivery
     assert conflict["identifier_type"] == "npi" and conflict["current_decision"] == "CONFIRM_EXISTING"
     assert conflict["selected_value"] == "1497758544" and ds["identifiers"]["unresolved"] == 0
     assert {s["name"] for s in ds["verification"]["sources"]} >= {"nppes", "pecos", "leie", "sam"}
+    # Failed is counted per source, never summed into one delivery-wide
+    # figure -- the report itself says so beside the table (reconciliation
+    # pending), rather than letting a reader add the column up unqualified.
+    assert "Failed/error indicator" in result["html"]
+    assert "reconciliation pending" in result["html"]
+    assert "must not be summed across sources" in result["html"]
     assert ds["analyst"]["counts"]["disposition_events"] == 1
     assert ds["analyst"]["counts"]["issue_resolutions"] == 1
     assert ds["analyst"]["counts"]["review_records"] == 1 and ds["analyst"]["counts"]["open"] == 1

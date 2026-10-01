@@ -363,6 +363,12 @@
     {% endfor %}
   </tbody>
 </table>
+<p><strong>Failed/error indicator &mdash; reconciliation pending.</strong>
+  Each source's Failed column is that source's own count and is not a
+  reconciled, mutually exclusive delivery-wide status: an entity failed at one
+  source can be verified or not found at another, so the Failed columns above
+  must not be summed across sources into a single figure until a governed
+  read-only reconciliation confirms what such a total would mean.</p>
 
 </div>
 <div class="dp-wide">
