@@ -56,6 +56,31 @@ _FILENAME_SAFE = re.compile(r"[^A-Za-z0-9._-]")
 MAX_FILENAME = 120
 
 
+#: AP-001: `GET /{report_id}` is a metadata/provenance endpoint (<2s gate,
+#: workbook case AP-001 — 0.96s/0.88s normally, 3.95s on the 24,589-row job).
+#: `report_data["dataset"]` carries whatever record-level arrays the generator
+#: built to render annexes (e.g. `dataset["progress"]["annex_rows"]`) — full
+#: rows are already reachable through the dedicated annex/CSV download route,
+#: so this endpoint has no reason to also serialise and transfer them. Any
+#: list this long gets summarised instead of transferred.
+_DATASET_LIST_PREVIEW_LIMIT = 25
+
+
+def _lightweight_dataset(value: Any) -> Any:
+    """`value` with any list longer than `_DATASET_LIST_PREVIEW_LIMIT` replaced
+    by a count summary. Recurses into dicts and lists; scalars pass through.
+    """
+    if isinstance(value, list):
+        if len(value) > _DATASET_LIST_PREVIEW_LIMIT:
+            return {"_truncated": True, "count": len(value),
+                    "note": "Full rows are available from this report's annex/CSV download, "
+                            "not this metadata endpoint."}
+        return [_lightweight_dataset(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _lightweight_dataset(item) for key, item in value.items()}
+    return value
+
+
 def safe_filename(stem: str, extension: str) -> str:
     """A filename that cannot escape the header it sits in.
 
@@ -751,7 +776,7 @@ async def get_report(
     artifacts = [link_artifact_summary(a) for a in await artifacts_for_report(db, report_id)]
     return {
         **base,
-        "dataset": data.get("dataset", {}),
+        "dataset": _lightweight_dataset(data.get("dataset", {})),
         # Present only when the report was generated for a named delivery and
         # a reconciliation snapshot existed to link it to. One link per stored
         # rendering; `delivery_link` is the first (the HTML) for callers that
