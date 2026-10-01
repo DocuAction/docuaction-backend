@@ -133,10 +133,10 @@
   thead { display: table-header-group; }
   /* a column heading is never split; a cell token longer than its column may wrap */
   th { white-space: nowrap; overflow-wrap: normal; }
-  /* the tabular contract sections (sampling plans, stratification, record-level
-     lists, observations, pending QA) run on landscape pages so no table clips */
-  section[aria-labelledby="s4-heading"], section[aria-labelledby="s5-heading"], section[aria-labelledby="s6-heading"],
-  section[aria-labelledby="s7-heading"], section[aria-labelledby="s8-heading"], section[aria-labelledby="s9-heading"] { page: dp-landscape; }
+  /* every page after the executive summary is landscape: the record-level
+     lists need the width, and one orientation keeps the appendices flowing
+     without the blank half-pages an orientation switch leaves behind */
+  .agt-appendix-intro, .doc-control, .agt-appendix-b, section.panel, section.accessibility-statement, section.appendix { page: dp-landscape; }
   section[aria-labelledby="s6-heading"] table, section[aria-labelledby="s9-heading"] table { font-size: 7.6pt; }
   section[aria-labelledby="s6-heading"] th, section[aria-labelledby="s6-heading"] td,
   section[aria-labelledby="s9-heading"] th, section[aria-labelledby="s9-heading"] td { padding: 2.5pt 4pt; }
@@ -354,6 +354,6 @@
 {% endblock %}
 
 {% block content %}
-<h2 style="font-size: 11pt; margin: 8pt 0 4pt 0; color: var(--agt-dblue)">Appendix B &mdash; Contract sections 1&ndash;10</h2>
+<h2 class="agt-appendix-b" style="font-size: 11pt; margin: 8pt 0 4pt 0; color: var(--agt-dblue)">Appendix B &mdash; Contract sections 1&ndash;10</h2>
 {{ super() }}
 {% endblock %}
