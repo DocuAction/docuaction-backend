@@ -25,7 +25,7 @@ from datetime import datetime
 
 from sqlalchemy import (Boolean, Column, DateTime, Index, Integer, String, Text,
                         text)
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from app.core.database import Base
 
@@ -52,9 +52,21 @@ class ReportExportJob(Base):
     identity = Column(String(64), nullable=False, index=True)
     export_type = Column(String(64), nullable=False)
 
-    source_intake_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    #: Nullable since 20261001_report_generation_jobs: a period/review-cycle
+    #: report (e.g. retrospective_weekly) is not scoped to one delivery. Every
+    #: ONC workbook export (the only prior user of this table) still has one.
+    source_intake_id = Column(UUID(as_uuid=True), nullable=True, index=True)
     classification = Column(String(32), nullable=False)
     generator_version = Column(String(128), nullable=False)
+
+    #: Added 20261001_report_generation_jobs, for a report-generation job only
+    #: (`export_type` starting `REPORT_GENERATION_EXPORT_TYPE_PREFIX`). NULL for
+    #: the ONC workbook, whose product is always the same thing.
+    report_type = Column(String(64), index=True)
+    #: The exact `query_parameters` dict (plus `format` and `review_cycle_id`)
+    #: `generate_report()` needs to replay this request. NULL for the ONC
+    #: workbook, which needs only the columns above.
+    request_parameters = Column(JSONB)
 
     state = Column(String(20), nullable=False, default=STATE_QUEUED, index=True)
     #: Where the run actually is, in words. Written only from real transitions;
@@ -105,6 +117,7 @@ class ReportExportJob(Base):
             "state": self.state,
             "phase": self.phase,
             "export_type": self.export_type,
+            "report_type": self.report_type,
             "classification": self.classification,
             "generator_version": self.generator_version,
             "requested_by": self.requested_by,
