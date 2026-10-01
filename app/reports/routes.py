@@ -1197,12 +1197,13 @@ def csv_for_stored_report(row) -> str:
     generated_at = snapshot.get("generation_timestamp", "")
     if row.report_type in SOW_TYPES and dataset.get("progress"):
         # The controlled annex the progress deliverables were issued with.
-        from app.reports.data.sow_progress_data import annex_csv
+        from app.reports.data.sow_progress_data import annex_csv, annex_provenance
         from app.reports.generator import document_marking_for, synthetic_note_for
 
         return annex_csv(dataset["progress"], report_id=row.report_id,
                          marking=document_marking_for(snapshot.get("data_classification")),
-                         note=synthetic_note_for(snapshot.get("data_classification")))
+                         note=synthetic_note_for(snapshot.get("data_classification")),
+                         provenance=annex_provenance(dataset, snapshot))
     if row.report_type in SOW_TYPES:
         return sow_report_to_csv(dataset, row.report_id, generated_at)
     if row.report_type == "delivery_processing":

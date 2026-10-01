@@ -46,29 +46,47 @@ async def main(out: str) -> int:
     db = AsyncSession(bind=conn, join_transaction_mode="create_savepoint", expire_on_commit=False)
     failures = 0
     try:
-        scope = await seed_scope(db, label="SYNTHETIC-PREVIEW", period_anchor=ANCHOR)
-        for rt, period in SPECS:
+        # Set A: the test population (12 cases, two QHINs). Set B mirrors the
+        # DEV client-review delivery: 45 cases across three QHINs whose names
+        # are OIDs, 8 analyst determinations, the rest system-classified and
+        # unassigned — the shape that must still fit the executive page.
+        qhins_b = ("QHIN 2.16.840.1.113883.3.9999.0.1", "QHIN 2.16.840.1.113883.3.9999.0.2",
+                   "QHIN 2.16.840.1.113883.3.9999.0.3")
+        pop_b = []
+        for qi, q in enumerate(qhins_b):
+            for k in range(15):
+                n = qi * 15 + k
+                bucket = "B1" if n in (0, 1, 3, 15) else "B2" if n in (2, 17) else "B4" if n == 31 else "B3"
+                state = "SUBMITTED_FOR_QA" if n in (0, 1, 2, 15, 16, 17, 30, 31) else "AVAILABLE"
+                pop_b.append((bucket, state, q))
+        sets = [("A", dict(label="SYNTHETIC-PREVIEW", period_anchor=ANCHOR)),
+                ("B", dict(label="SYNTHETIC-DEVLIKE", period_anchor=ANCHOR, population=pop_b,
+                           qhin_names=qhins_b, census_sizing=True))]
+        for set_name, kwargs in sets:
+          scope = await seed_scope(db, **kwargs)
+          for rt, period in SPECS:
             r = await generate_report(
                 db, report_type=rt, persist=False, generated_by="preview@synthetic.invalid",
                 query_parameters={"job_id": str(scope["job_id"]), "period_start": period[0],
                                   "period_end": period[1],
                                   "suggested_changes": "USPS standardisation before comparison\nExclusion-list pre-screen at intake",
                                   "implemented_changes": "Second-source rule for B3 determinations"})
-            html_path = os.path.join(out, f"{rt}.html")
+            rt_out = f"{set_name}_{rt}"
+            html_path = os.path.join(out, f"{rt_out}.html")
             with open(html_path, "w", encoding="utf-8") as fh:
                 fh.write(r["html"])
             pdf = render_pdf(r["html"], title=rt)
-            pdf_path = os.path.join(out, f"{rt}.pdf")
+            pdf_path = os.path.join(out, f"{rt_out}.pdf")
             with open(pdf_path, "wb") as fh:
                 fh.write(pdf)
-            with open(os.path.join(out, f"{rt}.csv"), "w", encoding="utf-8", newline="\n") as fh:
+            with open(os.path.join(out, f"{rt_out}.csv"), "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(r["csv"])
             # pages → PNG (poppler), 60 dpi is enough to judge layout
-            subprocess.run(["pdftoppm", "-r", "60", "-png", pdf_path, os.path.join(out, f"{rt}_p")], check=False)
+            subprocess.run(["pdftoppm", "-r", "60", "-png", pdf_path, os.path.join(out, f"{rt_out}_p")], check=False)
             pages = subprocess.run(["pdfinfo", pdf_path], capture_output=True, text=True).stdout
             n = next((line.split()[-1] for line in pages.splitlines() if line.startswith("Pages:")), "?")
             ok = r["accessibility"]["automated_checks_passed"]
-            print(f"{rt}: {len(pdf):,} bytes, {n} pages, a11y={ok}, report_id={r['report_id']}")
+            print(f"{rt_out}: {len(pdf):,} bytes, {n} pages, a11y={ok}, report_id={r['report_id']}")
             failures += 0 if ok else 1
     finally:
         await db.close()

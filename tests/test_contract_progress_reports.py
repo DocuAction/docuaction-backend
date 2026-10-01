@@ -57,7 +57,7 @@ ANALYST = SimpleNamespace(id=uuid.uuid4(), email="analyst@synthetic.invalid", ro
 QA = SimpleNamespace(id=uuid.uuid4(), email="qa@synthetic.invalid", role="qalead")
 
 
-async def seed_scope(db, *, label: str, period_anchor: date):
+async def seed_scope(db, *, label: str, period_anchor: date, population=None, qhin_names=None, census_sizing=False):
     """A delivery (from the shared fixture) plus QHINs, entities, a drawn
     sample, a review cycle and the controlled case population."""
     from app.tefca_registry import models as reg
@@ -67,8 +67,10 @@ async def seed_scope(db, *, label: str, period_anchor: date):
     intake_id = d["intake_id"]
     t0 = datetime.combine(period_anchor, datetime.min.time()) - timedelta(days=20)
 
+    population = list(population or POPULATION)
+    qhin_names = tuple(qhin_names or ("QHIN-ALPHA", "QHIN-BRAVO"))
     qhins = {}
-    for name in ("QHIN-ALPHA", "QHIN-BRAVO"):
+    for name in qhin_names:
         q = reg.TefcaRegEntity(id=uuid.uuid4(), name=f"{label} {name}", entity_level="qhin",
                                entity_type="qhin", created_at=t0)
         db.add(q)
@@ -77,12 +79,15 @@ async def seed_scope(db, *, label: str, period_anchor: date):
 
     sample = reg.ReviewSample(
         id=uuid.uuid4(), sample_name=f"{label} sample", review_type="weekly",
-        population_size=len(POPULATION), sample_size=len(POPULATION) - 1,
+        population_size=len(population), sample_size=len(population) - 1,
         confidence_level=0.95, margin_of_error=0.05, proportion=0.5, use_fpc=True,
         strata_config={"stratify_by": "qhin", "source_intake_id": str(intake_id)},
-        strata_distribution={"selected": {}, "sizing": {
+        strata_distribution={"selected": {}, "sizing": (
+            {str(qhins[n].id): {"population_size": sum(1 for _, _, q in population if q == n),
+                               "sample_size": sum(1 for _, _, q in population if q == n), "census": True}
+             for n in qhin_names} if census_sizing else {
             str(qhins["QHIN-ALPHA"].id): {"population_size": 7, "sample_size": 6, "census": False},
-            str(qhins["QHIN-BRAVO"].id): {"population_size": 5, "sample_size": 5, "census": True}}},
+            str(qhins["QHIN-BRAVO"].id): {"population_size": 5, "sample_size": 5, "census": True}})},
         status="drawn", drawn_at=t0)
     db.add(sample)
     await db.flush()
@@ -93,7 +98,7 @@ async def seed_scope(db, *, label: str, period_anchor: date):
 
     stem = uuid.uuid4().hex[:6].upper()
     cases = []
-    for i, (bucket, state, qhin) in enumerate(POPULATION, start=1):
+    for i, (bucket, state, qhin) in enumerate(population, start=1):
         entity = reg.TefcaRegEntity(
             id=uuid.uuid4(), name=f"{label} ENTITY {i:02d}", entity_level="participant",
             entity_type="provider", created_at=t0)
@@ -300,9 +305,10 @@ async def test_no_figure_is_hard_coded_a_second_population_reports_its_own_numbe
     assert pa["buckets_total"]["total"] != pb["buckets_total"]["total"]
     for p in (pa, pb):
         assert p["arithmetic"]["ok"]
+    html = _body((await _generate(db, "retrospective_weekly", a, persist=False))["html"])
     for banned in ("24,589", "94,231", "383"):
-        html = (await _generate(db, "retrospective_weekly", a, persist=False))["html"]
-        assert banned not in _body(html)
+        # as a figure (not inside a hash or an identifier)
+        assert not re.search(r"(?<![0-9a-fA-F.,-])" + re.escape(banned) + r"(?![0-9a-fA-F.,-])", html), banned
 
 
 @pytest.mark.asyncio
@@ -398,15 +404,17 @@ async def test_the_branded_front_page_carries_the_approved_fields_and_the_dev_ma
     assert "#E87722" not in html
     # section grammar
     common = ("Assignment and workflow status", "Reconciliation &amp; source integrity",
-              "Appendix A &mdash; Document Control", "Appendix B &mdash; Contract sections")
+              "Appendix A &mdash; Document Control", "Appendix B &mdash; Contract sections",
+              "Appendix C &mdash; Provenance and controlled annex", "classified cases are independently QA-approved",
+              "Source delivery (this report)", "Controlled annex (CSV)")
     per_kind = {
-        "retrospective_weekly": ("Current-period B1–B4 results", "QHIN coverage", "Important findings",
+        "retrospective_weekly": ("Provisional B1&ndash;B4 classifications &mdash; pending independent QA", "QHIN coverage", "Important findings",
                                  "Actions completed during the week", "Source categories used",
                                  "Suggested control improvements", "Next-week actions, dependencies and limitations"),
-        "retro_monthly": ("Monthly B1–B4 aggregate", "Weekly trend within the month", "QHIN comparison",
+        "retro_monthly": ("Provisional B1&ndash;B4 classifications &mdash; pending independent QA", "Weekly trend within the month", "QHIN comparison",
                           "Source / methodology summary", "Significant findings", "Implemented improvements",
                           "Outstanding dependencies and limitations"),
-        "retrospective_final": ("120-day aggregate B1–B4 results", "Trend by reporting period",
+        "retrospective_final": ("Provisional B1&ndash;B4 classifications &mdash; pending independent QA", "Trend by reporting period",
                                 "QHIN coverage and proportional allocation", "Sampling methodology &amp; confidence",
                                 "Major discrepancy themes", "Suggested controls", "Changes implemented",
                                 "Remaining limitations and external dependencies", "Controlled annex references"),

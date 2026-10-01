@@ -246,6 +246,32 @@ async def authoritative_source_provenance(db) -> SourceProvenance:
         data_classification=classification)
 
 
+async def source_provenance_for_intake(db, intake_id) -> Optional["SourceProvenance"]:
+    """The provenance of ONE named delivery (the one a delivery-scoped report
+    describes), with the same checksum discipline as the authoritative read.
+    None when the intake does not exist."""
+    import uuid as _uuid
+
+    from app.tefca_registry.rce.models import RceSourceIntake
+
+    classification = await resolve_classification(db)
+    try:
+        row = await db.get(RceSourceIntake, _uuid.UUID(str(intake_id)))
+    except Exception as exc:  # noqa: BLE001
+        logger.info("named intake %s unavailable: %s", intake_id, exc)
+        return None
+    if row is None:
+        return None
+    digest = (row.sha256 or "").strip().lower()
+    common = dict(original_filename=row.original_filename, record_count=row.record_count,
+                  schema_fingerprint=row.schema_fingerprint, intake_id=str(row.id),
+                  received_at=row.received_at.isoformat() if row.received_at else None,
+                  status=row.status, data_classification=classification)
+    if not is_real_sha256(digest):
+        return SourceProvenance(unavailable_reason=REASON_UNUSABLE, **common)
+    return SourceProvenance(sha256=digest, **common)
+
+
 # ── Report cycle ────────────────────────────────────────────────────────────
 #
 # A report cycle answers "which run of the review does this report belong to".

@@ -244,7 +244,18 @@ async def build_snapshot(
         authoritative_source_provenance, resolve_cycle_id)
 
     scope = dataset.get("scope") or {}
-    source = await authoritative_source_provenance(db)
+    # A delivery-scoped report describes ONE delivery: its provenance is that
+    # delivery's intake, never the system-wide newest one (which is a different
+    # fact — the authoritative current delivery — and was being labelled as
+    # this report's source until 2026-10-01).
+    named_intake = (dataset.get("delivery") or {}).get("intake_id")
+    source = None
+    if named_intake:
+        from app.reports.data.source_provenance import source_provenance_for_intake
+
+        source = await source_provenance_for_intake(db, named_intake)
+    if source is None:
+        source = await authoritative_source_provenance(db)
     evidence_generation = await latest_evidence_generation(
         db, dataset.get("review_cycle_id"))
     # Never null. A stored report with no cycle cannot be scoped afterwards,

@@ -57,8 +57,11 @@ async def test_every_format_states_the_same_identity_and_rows(populated_sow, mon
 
     # HTML
     assert report_id in html and CONTRACT in html and "DEVELOPMENT / TEST" in html
-    for e in ENTITIES:
+    # QA-approved entities are listed in the document; the pending one is
+    # counted in section 9 and listed in the controlled annex (CSV / DOCX).
+    for e in ENTITIES[:2]:
         assert e in html
+    assert "Reviews pending independent QA &mdash; 1 record(s)" in html
     assert PERIOD[0] in html and PERIOD[1] in html
 
     # CSV — the stratified list, same rows, same id and contract

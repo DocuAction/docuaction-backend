@@ -120,9 +120,12 @@ class TestTaskThreeWeekly:
         assert html.index("6.1 No discrepancies identified") < alpha < html.index("6.2 Minor")
         assert html.index("6.3 Inexplicable discrepancies") < bravo < html.index("6.4 Non-compliant")
         # The pending record is listed as pending, not under a category.
-        charlie = html.index("SYNTHETIC CLINIC CHARLIE")
-        assert charlie > html.index("Reviews pending independent QA")
-        assert "No standing QA approval" in html
+        # The pending record is counted in section 9 and listed in the controlled
+        # annex (CSV), not by name in the document (client-readiness correction,
+        # 2026-10-01): the record-level case list lives in the annex.
+        assert "SYNTHETIC CLINIC CHARLIE" not in html
+        assert "Reviews pending independent QA &mdash; 1 record(s); provisional, not findings" in html
+        assert "controlled annex" in html
 
     @pytest.mark.asyncio
     async def test_weekly_cites_the_contract_and_the_deliverable(self, populated_sow):
