@@ -43,6 +43,9 @@
   section.cover { min-height: auto; padding-top: 0; border-top: 0; margin: 0; }
   .cover, .cover * { hyphens: manual; -webkit-hyphens: manual; overflow-wrap: normal; word-break: normal; }
   .cover { font-family: "Public Sans", Arial, Helvetica, sans-serif; font-size: 7.6pt; line-height: 1.22; color: var(--agt-ink); page-break-after: always; }
+  .cover[data-kind="final"] { font-size: 7.2pt; line-height: 1.17; }
+  .cover[data-kind="final"] .agt-sec { margin-bottom: 3pt; }
+  .cover[data-kind="final"] .agt-box { margin-bottom: 2.5pt; padding-top: 2pt; padding-bottom: 2.5pt; }
   .cover p { margin: 0; }
   .report-header { display: none; }
 
@@ -126,6 +129,9 @@
   .agt-appendix-intro h1 { font-size: 15pt; margin: 0 0 2pt 0; color: var(--agt-dblue); string-set: doc-title content(); }
   .agt-appendix-intro p { font-size: 8.5pt; color: var(--agt-muted); margin: 0; }
   .doc-control { page-break-before: auto; }
+  .doc-control table { font-size: 7.8pt; margin: 3pt 0 6pt 0; }
+  .doc-control th, .doc-control td { padding: 1.8pt 5pt; }
+  .doc-control h2 { margin-top: 4pt; }
   .doc-control h2, .panel h2 { font-size: 11pt; margin: 10pt 0 4pt 0; }
   .panel { font-size: 9pt; padding: 6pt 8pt; margin-bottom: 7pt; break-inside: avoid; page-break-inside: avoid; }
   section[aria-labelledby="s6-heading"], section[aria-labelledby="s9-heading"] { break-inside: auto; page-break-inside: auto; }
@@ -169,7 +175,7 @@
   section.appendix h2, section.accessibility-statement h2 { font-size: 11pt; margin: 8pt 0 3pt 0; }
 </style>
 
-<section class="cover" aria-labelledby="agt-title">
+<section class="cover" aria-labelledby="agt-title"{% if progress %} data-kind="{{ progress.kind }}"{% endif %}>
   {# ── header: title block left, badge + identity right ─────────────── #}
   <div class="agt-head">
     <div class="cell logo" style="width: 0.95in">
@@ -567,10 +573,9 @@
       <tr><th scope="row">Template / Report Data Service version</th><td>{{ snapshot.template_version }} &middot; {{ snapshot.report_data_service_version }}</td></tr>
       <tr><th scope="row">PDF engine</th><td>{{ snapshot.pdf_engine.get('engine') }} {{ snapshot.pdf_engine.get('version') or '' }}</td></tr>
       {% if annex %}<tr><th scope="row">Controlled annex (CSV)</th><td>{{ annex.filename }} &middot; {{ annex.rows|number }} case rows &middot; {{ annex.bytes|number }} bytes &middot; SHA-256 {{ annex.sha256 }}</td></tr>{% endif %}
+      <tr><th scope="row" id="a11y-heading">Accessibility checks performed</th><td>{{ snapshot.accessibility.get('conformance_claim', 'Automated accessibility checks were not recorded for this report.') }}{% if snapshot.accessibility.get('manual_review_required') %} Manual review still required before any conformance claim is made: {{ snapshot.accessibility.get('manual_review_required')|join('; ') }}.{% endif %}</td></tr>
     </tbody>
   </table>
   <p class="figure-notes">Every value in this report is read from the stored review-case ledger of the named delivery. Generation is read-only: no connector lookup runs and no classification is evaluated while a report is produced; regenerating from the same ledger produces the same figures.</p>
-  <h3 id="a11y-heading">Accessibility checks performed</h3>
-  <p class="figure-notes">{{ snapshot.accessibility.get('conformance_claim', 'Automated accessibility checks were not recorded for this report.') }}{% if snapshot.accessibility.get('manual_review_required') %} Manual review still required before any conformance claim is made: {{ snapshot.accessibility.get('manual_review_required')|join('; ') }}.{% endif %}</p>
 </section>
 {% endblock %}
