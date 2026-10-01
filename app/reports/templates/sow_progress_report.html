@@ -83,7 +83,7 @@
   table.agt { width: 100%; border-collapse: collapse; font-size: 7.5pt; margin: 0; table-layout: fixed; }
   table.agt caption { display: none; }
   table.agt th { background: var(--agt-navy); color: #fff; text-align: left; padding: 2.4pt 4pt; font-weight: 700; font-size: 7pt; border: 0; white-space: normal; vertical-align: bottom; line-height: 1.15; }
-  table.agt td.q { white-space: nowrap; font-size: 7pt; }
+  table.agt td.q { white-space: normal; overflow-wrap: normal; word-break: normal; font-size: 7pt; }
   table.agt th.gap, table.agt td.gap { padding-left: 12pt; }
   table.agt th.num, table.agt td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
   table.agt td { padding: 1.7pt 4pt; border: 0; border-bottom: 0.6pt solid var(--agt-line); vertical-align: middle; }
@@ -127,7 +127,16 @@
   .agt-appendix-intro p { font-size: 8.5pt; color: var(--agt-muted); margin: 0; }
   .doc-control { page-break-before: auto; }
   .doc-control h2, .panel h2 { font-size: 11pt; margin: 10pt 0 4pt 0; }
-  .panel { font-size: 9pt; padding: 6pt 8pt; margin-bottom: 7pt; break-inside: auto; page-break-inside: auto; }
+  .panel { font-size: 9pt; padding: 6pt 8pt; margin-bottom: 7pt; break-inside: avoid; page-break-inside: avoid; }
+  section[aria-labelledby="s6-heading"], section[aria-labelledby="s9-heading"] { break-inside: auto; page-break-inside: auto; }
+  section[aria-labelledby="s6-heading"] h3 { page-break-after: avoid; }
+  /* the sampling-plan table never runs past the panel: fixed layout, every
+     column heading may wrap, the timestamp wraps at its "T" */
+  section[aria-labelledby="s4-heading"] table { table-layout: fixed; width: 100%; }
+  section[aria-labelledby="s4-heading"] th { white-space: normal; }
+  /* the contents list in two columns */
+  .contents { column-count: 2; column-gap: 24pt; margin: 2pt 0 6pt 0; }
+  .contents li { break-inside: avoid; }
   .panel.page-break { page-break-before: auto; break-before: auto; }
   .panel p { margin: 0 0 4pt 0; }
   table { font-size: 8.2pt; margin: 4pt 0 8pt 0; }
@@ -428,10 +437,11 @@
   {% if sampling.plans %}
     <table>
       <caption>{{ sampling.plans_caption }}</caption>
+      <colgroup><col style="width: 24%"><col style="width: 9%"><col style="width: 10%"><col style="width: 9%"><col style="width: 10%"><col style="width: 8%"><col style="width: 6%"><col style="width: 11%"><col style="width: 13%"></colgroup>
       <thead><tr><th scope="col">Plan</th><th scope="col">Type</th><th scope="col">Population</th><th scope="col">Sample</th><th scope="col">Confidence</th><th scope="col">Margin</th><th scope="col">FPC</th><th scope="col">Stratified by</th><th scope="col">Drawn (UTC)</th></tr></thead>
       <tbody>
         {% for plan in sampling.plans %}
-          <tr><th scope="row">{{ plan.name or plan.sample_id }}</th><td>{{ plan.review_type or '—' }}</td><td>{{ plan.population_size|number }}</td><td>{{ plan.sample_size|number }}</td><td>{{ plan.confidence_level }}</td><td>{{ plan.margin_of_error }}</td><td>{{ 'Yes' if plan.use_fpc else 'No' }}</td><td>{{ plan.stratify_by or '—' }}</td><td>{{ plan.drawn_at or '—' }}</td></tr>
+          <tr><th scope="row">{{ plan.name or plan.sample_id }}</th><td>{{ plan.review_type or '—' }}</td><td>{{ plan.population_size|number }}</td><td>{{ plan.sample_size|number }}</td><td>{{ plan.confidence_level }}</td><td>{{ plan.margin_of_error }}</td><td>{{ 'Yes' if plan.use_fpc else 'No' }}</td><td>{{ plan.stratify_by or '—' }}</td><td>{{ (plan.drawn_at or '—')|replace('T', ' ') }}</td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -457,6 +467,14 @@
 <section class="panel" aria-labelledby="s6-heading">
   <h2 id="s6-heading">6. Review Results</h2>
   <p>Each category lists the Participants and Subparticipants with a standing independent QA approval, with the QHIN named by the delivered relationship. A list, not a count.</p>
+  {% set ns = namespace(any=false) %}{% for category in categories %}{% if entity_lists[category] %}{% set ns.any = true %}{% endif %}{% endfor %}
+  {% if not ns.any %}
+  <table>
+    <caption>Participants / Subparticipants listed under each category &mdash; none this period (no independent QA approval stands)</caption>
+    <thead><tr><th scope="col">No.</th><th scope="col">Category</th><th scope="col">Listed (QA approved)</th><th scope="col">Status</th></tr></thead>
+    <tbody>{% for category in categories %}<tr><th scope="row">6.{{ loop.index }}</th><td>{{ government_labels[category] }}</td><td>0</td><td>No Participant or Subparticipant is listed under this category for the reporting period.</td></tr>{% endfor %}</tbody>
+  </table>
+  {% else %}
   {% for category in categories %}
     <h3 id="s6-{{ loop.index }}-heading">6.{{ loop.index }} {{ government_labels[category] }}</h3>
     {% set rows = entity_lists[category] %}
@@ -472,6 +490,7 @@
       <p class="insufficient-data">No Participant or Subparticipant is listed under this category for the reporting period (no independent QA approval stands).</p>
     {% endif %}
   {% endfor %}
+  {% endif %}
 </section>
 
 <section class="panel" aria-labelledby="s7-heading">
@@ -519,6 +538,8 @@
 </section>
 {% endblock %}
 
+{% block accessibility %}{% endblock %}
+{% block provenance %}{% endblock %}
 {% block appendix %}
 <section class="appendix" aria-labelledby="prov-heading">
   <h2 id="prov-heading">Appendix C &mdash; Provenance and controlled annex</h2>
@@ -549,5 +570,7 @@
     </tbody>
   </table>
   <p class="figure-notes">Every value in this report is read from the stored review-case ledger of the named delivery. Generation is read-only: no connector lookup runs and no classification is evaluated while a report is produced; regenerating from the same ledger produces the same figures.</p>
+  <h3 id="a11y-heading">Accessibility checks performed</h3>
+  <p class="figure-notes">{{ snapshot.accessibility.get('conformance_claim', 'Automated accessibility checks were not recorded for this report.') }}{% if snapshot.accessibility.get('manual_review_required') %} Manual review still required before any conformance claim is made: {{ snapshot.accessibility.get('manual_review_required')|join('; ') }}.{% endif %}</p>
 </section>
 {% endblock %}
