@@ -1,0 +1,68 @@
+# Renders the three Task 3 progress deliverables (D3.1 Weekly, D3.1 Monthly,
+# D3.2 Final) from the controlled test population with the REAL PDF engine
+# (WeasyPrint on Linux) and publishes page-by-page PNG previews as an
+# artifact, so a template change can be inspected visually before it ships.
+# Nothing is persisted: the generation runs inside a rolled-back transaction
+# against the job's own throw-away PostgreSQL service.
+name: Progress report previews
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'app/reports/templates/sow_progress_report.html'
+      - 'app/reports/data/sow_progress_data.py'
+      - 'app/reports/styles/**'
+      - 'scripts/render_progress_previews.py'
+
+jobs:
+  previews:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: previewtest
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      SECRET_KEY: previewtestpreviewtestpreviewtestpreviewtestpreviewtestpreviewtest
+      ALLOWED_HOSTS: '*'
+      DATABASE_URL: postgresql+asyncpg://postgres:previewtest@127.0.0.1:5432/test
+      DB_MIGRATION_ROLE: docuaction_owner
+      DB_APP_ROLE: docuaction_app
+      PGPASSWORD: previewtest
+      REPORT_ARTIFACT_ROOT: /tmp/artifacts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install WeasyPrint native stack and poppler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 libffi8 shared-mime-info fonts-dejavu-core poppler-utils
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx
+      - name: Create the isolated database and roles
+        run: |
+          psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE ROLE docuaction_owner LOGIN PASSWORD 'x';" -c "CREATE ROLE docuaction_app LOGIN PASSWORD 'x';" -c "CREATE DATABASE test OWNER docuaction_owner;" -c "ALTER DATABASE test SET timezone = 'UTC';"
+          psql -h 127.0.0.1 -U postgres -d test -v ON_ERROR_STOP=1 -c "ALTER SCHEMA public OWNER TO docuaction_owner;" -c "GRANT ALL ON SCHEMA public TO docuaction_owner;" -c "GRANT USAGE, CREATE ON SCHEMA public TO docuaction_app;"
+      - name: Migrate to head
+        run: python -m alembic upgrade head
+      - name: Render the three deliverables
+        run: python scripts/render_progress_previews.py progress-previews
+      - name: Upload previews
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: progress-previews-${{ github.sha }}
+          path: progress-previews/
+          retention-days: 14

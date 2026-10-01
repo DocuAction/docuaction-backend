@@ -1,29 +1,30 @@
 {#
   Contract progress deliverables — D3.1 Weekly, D3.1 Monthly, D3.2 120-Day Final.
 
-  Front section: the approved Alliance Global Tech executive layout (2026-09-30
-  branded comparison package — navy/blue/gold, metric cards, B1–B4 colour map,
-  compact header, contract footer), rendered from the `progress` dataset that
-  app/reports/data/sow_progress_data.py derives from the selected delivery /
-  review cycle. Every number on this page is read from that dataset; nothing is
-  typed into the template.
+  Page 1 is the executive summary in the approved Alliance Global Tech design
+  system (navy/gold rules, five KPI cards, two-column analytical layout, navy
+  table headings, B1 green / B2 amber / B3 blue / B4 red). Every figure comes
+  from the `progress` block that app/reports/data/sow_progress_data.py derives
+  from the SELECTED delivery / review cycle — nothing is typed into the
+  template. The pages after it are the appendices: document control, contents
+  and the contract body (sections 1–10) inherited from sow_report.html.
 
-  Then the contract-required body (stratified list of Participants and
-  Subparticipants under the four Government categories, sampling context,
-  methodology changes, dependencies, provenance) — unchanged from sow_report.html
-  via inheritance.
+  Marking: `document_marking` ("DRAFT — FOR CLIENT REVIEW") as a compact badge
+  at the upper right, in the footer line and in the running header of the
+  appendix pages. A draft computed outside Government-classified data carries
+  the discreet `synthetic_note`. A FINAL mark is never rendered here.
 
-  Marking: `document_marking` (generator) — "DRAFT — FOR CLIENT REVIEW"; a FINAL
-  mark is never rendered here (release governance happens after the bytes are
-  frozen). A draft computed outside Government-classified data carries the
-  discreet `synthetic_note` under the marking line instead of the engine's
-  red development banner; the page margin repeats the client marking.
+  Rendering notes (WeasyPrint): layout grids are CSS tables; `hyphens: manual`
+  and `word-break: normal` override the base stylesheet's per-cell hyphenation
+  so no ordinary word is split; numeric cells never wrap; table rows and
+  panels never split across pages; table headers repeat.
 #}
 {% extends "sow_report.html" %}
 
 {% block page_marking %}
 <style>
-  @page { @top-center { content: "{{ document_marking }}"; font-family: Arial, Helvetica, sans-serif; font-size: 7.5pt; font-weight: 700; color: #002D5E; } }
+  @page { @top-center { content: "{{ document_marking }}"; font-family: "Public Sans", Arial, Helvetica, sans-serif; font-size: 7.5pt; font-weight: 700; color: #002D5E; } }
+  @page :first { margin: 0.38in 0.46in 0.32in 0.46in; @top-center { content: none; } @bottom-center { content: none; } }
 </style>
 {% endblock %}
 {% block classification_banner %}{% endblock %}
@@ -33,78 +34,150 @@
   :root {
     --agt-navy: #0A1628; --agt-dblue: #002D5E; --agt-blue: #0066B3; --agt-lblue: #E8F4FD;
     --agt-gold: #C8A951; --agt-lgold: #FBF5E6; --agt-panel: #F8F9FA; --agt-line: #DEE2E6;
-    --agt-muted: #6C757D; --agt-ink: #212529; --agt-green: #107C10; --agt-orange: #E87722; --agt-red: #D13438;
+    --agt-muted: #6C757D; --agt-ink: #212529;
+    --agt-b1: #107C10; --agt-b2: #B5891F; --agt-b3: #0066B3; --agt-b4: #D13438;
   }
-  .agt-page { font-family: Arial, Helvetica, "Public Sans", sans-serif; color: var(--agt-ink); page-break-after: always; }
-  /* Layout grids are <div>s styled as CSS tables (WeasyPrint-safe); <table> is
-     reserved for data, so every data table carries real header cells. */
-  .agt-head { display: table; width: 100%; border-collapse: collapse; border-bottom: 3px solid var(--agt-navy); }
-  .agt-head .cell { display: table-cell; vertical-align: middle; padding: 0 0 6px 0; }
-  .agt-head img { height: 0.48in; width: auto; }
-  .agt-head .org { font-size: 12.5pt; font-weight: 700; color: var(--agt-navy); margin: 0; }
-  .agt-head .prog { font-size: 9pt; color: var(--agt-blue); font-weight: 700; letter-spacing: .4pt; text-transform: uppercase; margin: 2px 0 0 0; }
-  .agt-head .title { font-size: 14pt; font-weight: 700; color: var(--agt-dblue); margin: 0; text-align: right; }
-  .agt-head .deliv { font-size: 9pt; color: var(--agt-ink); margin: 2px 0 0 0; text-align: right; }
-  .agt-goldrule { height: 3px; background: var(--agt-gold); margin: 0 0 6px 0; }
-  .agt-marking { background: var(--agt-lgold); border: 1px solid var(--agt-gold); color: #6b4f0a; font-size: 8.5pt; padding: 3px 8px; margin: 0 0 8px 0; }
-  .agt-marking b { letter-spacing: .8pt; }
-  .agt-synth { font-size: 7.5pt; color: var(--agt-muted); margin: -5px 0 8px 0; padding: 0 8px; }
-  .agt-kpis { display: table; width: 100%; border-collapse: separate; border-spacing: 6px 0; margin: 0 -6px 8px -6px; }
-  .agt-kpi { display: table-cell; background: var(--agt-lblue); border-top: 3px solid var(--agt-blue); padding: 6px 8px; vertical-align: top; width: 20%; }
-  .agt-kpi .l { font-size: 7.5pt; text-transform: uppercase; letter-spacing: .4pt; color: var(--agt-muted); font-weight: 700; margin: 0; }
-  .agt-kpi .v { font-size: 16pt; font-weight: 700; color: var(--agt-navy); margin: 2px 0 0 0; line-height: 1.15; }
-  .agt-kpi .n { font-size: 7.5pt; color: var(--agt-muted); margin: 2px 0 0 0; line-height: 1.3; }
-  .agt-h2 { font-size: 10pt; margin: 8px 0 4px 0; color: var(--agt-dblue); text-transform: uppercase; letter-spacing: .5pt; border-left: 4px solid var(--agt-gold); padding-left: 6px; }
-  table.agt { width: 100%; border-collapse: collapse; font-size: 8.5pt; margin: 0; }
-  table.agt th { background: var(--agt-navy); color: #fff; text-align: left; padding: 4px 5px; font-weight: 700; font-size: 8pt; }
-  table.agt th.num, table.agt td.num { text-align: right; }
-  table.agt td { padding: 3.5px 5px; border-bottom: 1px solid var(--agt-line); }
-  table.agt tr.total td { background: var(--agt-lblue); font-weight: 700; border-top: 2px solid var(--agt-navy); }
-  .agt-chip { display: inline-block; min-width: 22px; text-align: center; padding: 1px 4px; border-radius: 2px; color: #fff; font-weight: 700; font-size: 8pt; }
-  .agt-chip.b1 { background: var(--agt-green); } .agt-chip.b2 { background: var(--agt-blue); } .agt-chip.b3 { background: var(--agt-orange); } .agt-chip.b4 { background: var(--agt-red); }
-  .agt-cols { display: table; width: 100%; border-collapse: separate; border-spacing: 10px 0; margin: 0 -10px; }
+  /* The base stylesheet (uswds_report.css) hyphenates and breaks words inside
+     every table cell; the executive page never does. */
+  section.cover { min-height: auto; padding-top: 0; border-top: 0; margin: 0; }
+  .cover, .cover * { hyphens: manual; -webkit-hyphens: manual; overflow-wrap: normal; word-break: normal; }
+  .cover { font-family: "Public Sans", Arial, Helvetica, sans-serif; font-size: 7.9pt; line-height: 1.25; color: var(--agt-ink); page-break-after: always; }
+  .cover p { margin: 0; }
+  .report-header { display: none; }
+
+  /* header */
+  .agt-head { display: table; width: 100%; border-collapse: collapse; }
+  .agt-head .cell { display: table-cell; vertical-align: top; padding: 0; }
+  .agt-head .logo img { height: 0.38in; width: auto; display: block; }
+  .agt-head .title { font-size: 14pt; font-weight: 700; color: var(--agt-dblue); margin: 0; line-height: 1.15; }
+  .agt-head .deliv { font-size: 9pt; color: var(--agt-ink); margin: 2pt 0 0 0; }
+  .agt-head .deliv b { color: var(--agt-navy); }
+  .agt-head .meta { font-size: 7.2pt; color: var(--agt-muted); margin: 2pt 0 0 0; }
+  .agt-head .meta .pg::after { content: "Page " counter(page) " of " counter(pages); }
+  .agt-badge { display: inline-block; border: 1.2pt solid var(--agt-gold); background: var(--agt-lgold); color: #6b4f0a; font-size: 7.6pt; font-weight: 700; letter-spacing: .6pt; padding: 2.5pt 7pt; white-space: nowrap; }
+  .agt-head .org { font-size: 8pt; font-weight: 700; color: var(--agt-navy); margin: 4pt 0 0 0; text-align: right; }
+  .agt-head .prog { font-size: 7pt; color: var(--agt-blue); font-weight: 700; letter-spacing: .4pt; text-transform: uppercase; margin: 1pt 0 0 0; text-align: right; }
+  .agt-rule { height: 2pt; background: var(--agt-navy); margin: 5pt 0 0 0; }
+  .agt-goldrule { height: 1.5pt; background: var(--agt-gold); margin: 1.5pt 0 4pt 0; }
+  .agt-synth { font-size: 7pt; color: var(--agt-muted); margin: 0 0 4pt 0; }
+
+  /* KPI cards */
+  .agt-kpis { display: table; width: 100%; border-collapse: separate; border-spacing: 5pt 0; margin: 0 -5pt 5pt -5pt; }
+  .agt-kpi { display: table-cell; width: 20%; background: var(--agt-lblue); border-top: 2.5pt solid var(--agt-blue); padding: 4pt 6pt; vertical-align: top; }
+  .agt-kpi .l { font-size: 6.8pt; text-transform: uppercase; letter-spacing: .4pt; color: var(--agt-muted); font-weight: 700; margin: 0; white-space: nowrap; }
+  .agt-kpi .v { font-size: 13.5pt; font-weight: 700; color: var(--agt-navy); margin: 2pt 0 0 0; line-height: 1.1; white-space: nowrap; }
+  .agt-kpi .n { font-size: 6.6pt; color: var(--agt-muted); margin: 1.5pt 0 0 0; line-height: 1.25; }
+  .agt-cor { font-size: 7.2pt; color: #6b4f0a; background: var(--agt-lgold); border-left: 2.5pt solid var(--agt-gold); padding: 2pt 6pt; margin: 0 0 6pt 0; }
+
+  /* two-column analytical layout */
+  .agt-cols { display: table; width: 100%; border-collapse: separate; border-spacing: 9pt 0; margin: 0 -9pt; table-layout: fixed; }
   .agt-cols > .cell { display: table-cell; vertical-align: top; padding: 0; }
-  .agt-box { border: 1px solid var(--agt-line); border-top: 3px solid var(--agt-blue); padding: 5px 8px; font-size: 8.5pt; line-height: 1.32; margin: 0 0 7px 0; }
-  .agt-box .agt-h2 { margin: 0 0 4px 0; border-left: 0; padding-left: 0; }
-  .agt-box ul, .agt-box ol { margin: 0; padding-left: 16px; } .agt-box li { margin-bottom: 2px; }
-  .agt-st { display: table; width: 100%; border-collapse: separate; border-spacing: 4px; margin: 0 -4px; }
+  .agt-cols > .left { width: 61%; }
+  .agt-cols > .right { width: 39%; }
+
+  /* sections and data tables */
+  .agt-h2 { font-size: 8.2pt; margin: 0 0 2.5pt 0; color: var(--agt-dblue); text-transform: uppercase; letter-spacing: .5pt; border-left: 3pt solid var(--agt-gold); padding-left: 5pt; border-bottom: 0; page-break-after: avoid; }
+  .agt-sec { margin: 0 0 4.5pt 0; page-break-inside: avoid; }
+  table.agt { width: 100%; border-collapse: collapse; font-size: 7.5pt; margin: 0; table-layout: fixed; }
+  table.agt caption { display: none; }
+  table.agt th { background: var(--agt-navy); color: #fff; text-align: left; padding: 2.4pt 4pt; font-weight: 700; font-size: 7pt; border: 0; white-space: nowrap; vertical-align: bottom; }
+  table.agt th.num, table.agt td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  table.agt td { padding: 2pt 4pt; border: 0; border-bottom: 0.6pt solid var(--agt-line); vertical-align: middle; }
+  table.agt tbody tr:nth-child(even) td { background: #F6F8FA; }
+  table.agt tr { page-break-inside: avoid; }
+  table.agt thead { display: table-header-group; }
+  table.agt tr.total td { background: var(--agt-lblue); font-weight: 700; border-top: 1.4pt solid var(--agt-navy); border-bottom: 0; }
+  .agt-chip { display: inline-block; min-width: 18pt; text-align: center; padding: 0.5pt 3pt; border-radius: 2pt; color: #fff; font-weight: 700; font-size: 7pt; }
+  .agt-chip.b1 { background: var(--agt-b1); } .agt-chip.b2 { background: var(--agt-b2); } .agt-chip.b3 { background: var(--agt-b3); } .agt-chip.b4 { background: var(--agt-b4); }
+  .agt-bar { display: table; width: 100%; height: 6pt; border-collapse: collapse; margin: 2pt 0 2pt 0; }
+  .agt-bar .seg { display: table-cell; height: 7pt; padding: 0; }
+  .agt-bar .b1 { background: var(--agt-b1); } .agt-bar .b2 { background: var(--agt-b2); } .agt-bar .b3 { background: var(--agt-b3); } .agt-bar .b4 { background: var(--agt-b4); } .agt-bar .none { background: var(--agt-line); }
+  .agt-note { font-size: 6.5pt; color: var(--agt-muted); margin: 2pt 0 0 0; line-height: 1.25; }
+
+  /* right-column panels */
+  .agt-box { border: 0.7pt solid var(--agt-line); border-top: 2.5pt solid var(--agt-blue); padding: 3pt 6pt 4pt 6pt; font-size: 7.3pt; line-height: 1.25; margin: 0 0 4pt 0; page-break-inside: avoid; }
+  .agt-box .agt-h2 { margin: 0 0 2pt 0; border-left: 0; padding-left: 0; font-size: 7.6pt; }
+  .agt-box ul, .agt-box ol { margin: 0; padding-left: 12pt; }
+  .agt-box li { margin: 0 0 1pt 0; }
+  .agt-src { display: table; width: 100%; border-collapse: collapse; }
+  .agt-src .r { display: table-row; }
+  .agt-src .k, .agt-src .n { display: table-cell; padding: 1.2pt 0; border-bottom: 0.5pt solid var(--agt-line); vertical-align: top; }
+  .agt-src .n { text-align: right; white-space: nowrap; font-weight: 700; color: var(--agt-navy); padding-left: 6pt; width: 22%; }
+  .agt-st { display: table; width: 100%; border-collapse: separate; border-spacing: 3pt; margin: 0 -3pt; }
   .agt-st .row { display: table-row; }
-  .agt-st .cell { display: table-cell; background: var(--agt-panel); padding: 4px 6px; font-size: 8pt; vertical-align: top; width: 50%; }
-  .agt-st b { display: block; color: var(--agt-navy); }
-  .agt-note { font-size: 7.5pt; color: var(--agt-muted); margin: 4px 0 0 0; line-height: 1.3; }
-  .agt-cor { font-size: 7.5pt; color: #6b4f0a; background: var(--agt-lgold); border-left: 3px solid var(--agt-gold); padding: 2px 7px; margin: 4px 0 0 0; }
-  .agt-foot { border-top: 2px solid var(--agt-navy); padding-top: 5px; margin-top: 8px; font-size: 7.5pt; color: var(--agt-muted); }
-  .agt-foot .mock { color: #6b4f0a; font-weight: 700; }
-  .agt-pkg { background: var(--agt-panel); border-left: 4px solid var(--agt-navy); padding: 5px 8px; font-size: 8pt; margin-top: 6px; }
+  .agt-st .cell { display: table-cell; width: 50%; background: var(--agt-panel); padding: 2.5pt 4pt; font-size: 6.8pt; vertical-align: top; line-height: 1.24; }
+  .agt-st b { display: block; color: var(--agt-navy); margin-bottom: 1pt; }
+  .agt-dot::before { content: "\25CF  "; color: var(--agt-b1); }
+  .agt-dot.warn::before { color: var(--agt-b2); }
+  .agt-findings { margin: 0; padding-left: 11pt; font-size: 7.4pt; line-height: 1.28; }
+  .agt-findings li { margin: 0 0 1pt 0; }
+
+  /* footer line and package strip */
+  .agt-pkg { background: var(--agt-panel); border-left: 3pt solid var(--agt-navy); padding: 2.5pt 6pt; font-size: 6.9pt; margin: 1pt 0 0 0; page-break-inside: avoid; }
+  .agt-foot { border-top: 1.4pt solid var(--agt-navy); padding-top: 2.5pt; margin-top: 4pt; font-size: 6.6pt; color: var(--agt-muted); page-break-inside: avoid; }
+  .agt-foot .mark { color: #6b4f0a; font-weight: 700; }
+
+  /* appendices: the contract body, compacted and never word-broken */
+  .agt-appendix-intro { margin: 0 0 8pt 0; }
+  .agt-appendix-intro h1 { font-size: 15pt; margin: 0 0 2pt 0; color: var(--agt-dblue); string-set: doc-title content(); }
+  .agt-appendix-intro p { font-size: 8.5pt; color: var(--agt-muted); margin: 0; }
+  .doc-control { page-break-before: auto; }
+  .doc-control h2, .panel h2 { font-size: 11pt; margin: 10pt 0 4pt 0; }
+  .panel { font-size: 9pt; padding: 6pt 8pt; margin-bottom: 7pt; break-inside: auto; page-break-inside: auto; }
+  .panel.page-break { page-break-before: auto; break-before: auto; }
+  .panel p { margin: 0 0 4pt 0; }
+  table { font-size: 8.2pt; margin: 4pt 0 8pt 0; }
+  /* no hyphenation anywhere; a token longer than its column (an id, a hash)
+     may still wrap, an ordinary word never does */
+  th, td { padding: 3pt 5pt; hyphens: manual; -webkit-hyphens: manual; overflow-wrap: anywhere; word-break: normal; }
+  tbody tr { page-break-inside: avoid; }
+  thead { display: table-header-group; }
+  /* a column heading is never split; a cell token longer than its column may wrap */
+  th { white-space: nowrap; overflow-wrap: normal; }
+  /* every page after the executive summary is landscape: the record-level
+     lists need the width, and one orientation keeps the appendices flowing
+     without the blank half-pages an orientation switch leaves behind */
+  .agt-appendix-intro, .doc-control, .agt-appendix-b, section.panel, section.accessibility-statement, section.appendix { page: dp-landscape; }
+  section[aria-labelledby="s6-heading"] table, section[aria-labelledby="s9-heading"] table { font-size: 7.6pt; }
+  section[aria-labelledby="s6-heading"] th, section[aria-labelledby="s6-heading"] td,
+  section[aria-labelledby="s9-heading"] th, section[aria-labelledby="s9-heading"] td { padding: 2.5pt 4pt; }
+  .contents { font-size: 9pt; }
+  section.appendix table, section.accessibility-statement { font-size: 8pt; }
+  section.appendix th, section.appendix td { padding: 2pt 5pt; }
+  section.appendix h2, section.accessibility-statement h2 { font-size: 11pt; margin: 8pt 0 3pt 0; }
 </style>
 
-<section class="agt-page" aria-labelledby="agt-title">
+<section class="cover" aria-labelledby="agt-title">
+  {# ── header: title block left, badge + identity right ─────────────── #}
   <div class="agt-head">
-    <div class="cell" style="width:1.6in">
-      {% if branding.agt_logo %}<img src="{{ branding.agt_logo }}" alt="{{ branding.prepared_by }} logo">{% else %}<p class="org">{{ branding.prepared_by }}</p>{% endif %}
-    </div>
-    <div class="cell">
-      <p class="org">Alliance Global Tech</p>
-      <p class="prog">TEFCA Audit, Review &amp; Compliance</p>
+    <div class="cell logo" style="width: 0.95in">
+      {% if branding.agt_logo %}<img src="{{ branding.agt_logo }}" alt="{{ branding.prepared_by }} logo">{% endif %}
     </div>
     <div class="cell">
       <h1 class="title" id="agt-title">{{ progress.title if progress else deliverable_title }}</h1>
-      <p class="deliv"><b>Deliverable {{ deliverable }}</b> &middot; {{ progress.period_label if progress else (reporting_period_start or 'period not specified') }}</p>
+      <p class="deliv"><b>Deliverable {{ deliverable }}</b> &middot; {{ 'Weekly progress report' if progress and progress.kind == 'weekly' else 'Monthly progress report' if progress and progress.kind == 'monthly' else '120-day retrospective review, final report' if progress and progress.kind == 'final' else task }}</p>
+      <p class="meta">Reporting period {{ progress.period_label if progress else (reporting_period_start or 'not specified') }} &middot; Contract {{ contract_number }} &middot; Prepared for the COR (HHS / ASTP-ONC) &middot; Report {{ snapshot.report_id }} &middot; <span class="pg"></span></p>
+    </div>
+    <div class="cell" style="width: 1.75in; text-align: right">
+      <span class="agt-badge">{{ document_marking }}</span>
+      <p class="org">{{ branding.prepared_by }}</p>
+      <p class="prog">TEFCA Audit, Review &amp; Compliance</p>
     </div>
   </div>
+  <div class="agt-rule"></div>
   <div class="agt-goldrule"></div>
-  <p class="agt-marking"><b>{{ document_marking }}</b> &middot; Contract {{ contract_number }} &middot; Prepared for the COR &middot; Report {{ snapshot.report_id }}</p>
-  {% if synthetic_note %}<p class="agt-synth" role="note">{{ synthetic_note }}</p>{% endif %}
+  {% if synthetic_note %}<p class="agt-synth">{{ synthetic_note }}</p>{% endif %}
+
   {% if not progress %}
-  <div class="agt-box" role="note" style="border-left:4px solid var(--agt-red)">
+  <div class="agt-box" role="note" style="border-top-color: var(--agt-b4)">
     <h2 class="agt-h2">Progress metrics unavailable</h2>
-    <p style="margin:0;font-size:8.5pt">No delivery or review cycle was selected for this draft, so no
-      Participant / Subparticipant counts, QHIN coverage, B1&ndash;B4 totals or workflow figures are stated
-      here. Sampling population pending COR/RCE confirmation. Generate this deliverable for a named delivery
-      or review cycle to populate the executive summary.</p>
+    <p>No delivery or review cycle was selected for this draft, so no Participant / Subparticipant counts, QHIN coverage,
+      B1&ndash;B4 totals or workflow figures are stated here. Sampling population pending COR/RCE confirmation. Generate this
+      deliverable for a named delivery or review cycle to populate the executive summary.</p>
   </div>
   {% else %}
 
+  {# ── five KPI cards ───────────────────────────────────────────────── #}
   <div class="agt-kpis">
     {% for k in progress.kpis %}
     <div class="agt-kpi"><p class="l">{{ k.label }}</p><p class="v">{{ k.value }}</p><p class="n">{{ k.note }}</p></div>
@@ -112,99 +185,179 @@
   </div>
   {% if progress.sampling_note %}<p class="agt-cor">{{ progress.sampling_note }}</p>{% endif %}
 
-  <h2 class="agt-h2">B1&ndash;B4 classification, assignment and workflow ({{ progress.scope_label }})</h2>
-  <table class="agt">
-    <thead><tr>
-      <th style="width:7%">Bucket</th><th>Classification</th><th class="num">Total</th><th class="num">% of reviewed</th>
-      <th class="num">Assigned</th><th class="num">Unassigned</th><th class="num">Completed</th><th class="num">In review</th><th class="num">Awaiting QA</th>
-    </tr></thead>
-    <tbody>
-      {% for b in progress.buckets %}
-      <tr>
-        <td><span class="agt-chip {{ b.bucket|lower }}">{{ b.bucket }}</span></td><td>{{ b.label }}</td>
-        <td class="num">{{ b.total|number }}</td><td class="num">{{ b.pct }}</td>
-        <td class="num">{{ b.assigned|number }}</td><td class="num">{{ b.unassigned|number }}</td>
-        <td class="num">{{ b.completed|number }}</td><td class="num">{{ b.in_review|number }}</td><td class="num">{{ b.awaiting_qa|number }}</td>
-      </tr>
-      {% endfor %}
-      <tr class="total">
-        <td></td><td>{{ progress.buckets_total.label }}</td>
-        <td class="num">{{ progress.buckets_total.total|number }}</td><td class="num">{{ progress.buckets_total.pct }}</td>
-        <td class="num">{{ progress.buckets_total.assigned|number }}</td><td class="num">{{ progress.buckets_total.unassigned|number }}</td>
-        <td class="num">{{ progress.buckets_total.completed|number }}</td><td class="num">{{ progress.buckets_total.in_review|number }}</td><td class="num">{{ progress.buckets_total.awaiting_qa|number }}</td>
-      </tr>
-    </tbody>
-  </table>
-  <p class="agt-note">{{ progress.arithmetic.note }} Unassigned = not yet claimed by an analyst; Awaiting QA = analyst determination recorded, independent QA approval pending (maker/checker). Unclassified open cases: {{ progress.unclassified|number }}.</p>
-
   <div class="agt-cols">
-    <div class="cell" style="width:58%">
+    <div class="cell left">
+
+      {# ── B1–B4 results ─────────────────────────────────────────────── #}
+      <div class="agt-sec">
+        <h2 class="agt-h2">{{ 'Current-period B1–B4 results' if progress.kind == 'weekly' else 'Monthly B1–B4 aggregate' if progress.kind == 'monthly' else '120-day aggregate B1–B4 results' }}</h2>
+        {% set tot = progress.buckets_total.total %}
+        <div class="agt-bar">
+          {% for b in progress.buckets %}{% if b.total %}<div class="seg {{ b.bucket|lower }}" style="width: {{ (100.0 * b.total / tot)|round(1) }}%"></div>{% endif %}{% endfor %}
+          {% if not tot %}<div class="seg none" style="width: 100%"></div>{% endif %}
+        </div>
+        <table class="agt">
+          <caption>B1–B4 results</caption>
+          <colgroup><col style="width: 11%"><col><col style="width: 13%"><col style="width: 17%"></colgroup>
+          <thead><tr><th>Bucket</th><th>Classification</th><th class="num">Total</th><th class="num">% of reviewed</th></tr></thead>
+          <tbody>
+            {% for b in progress.buckets %}
+            <tr><td><span class="agt-chip {{ b.bucket|lower }}">{{ b.bucket }}</span></td><td>{{ b.label }}</td><td class="num">{{ b.total|number }}</td><td class="num">{{ b.pct }}</td></tr>
+            {% endfor %}
+            <tr class="total"><td></td><td>{{ progress.buckets_total.label }}</td><td class="num">{{ tot|number }}</td><td class="num">{{ progress.buckets_total.pct }}</td></tr>
+          </tbody>
+        </table>
+        <p class="agt-note">B1 + B2 + B3 + B4 = {{ tot|number }} = {{ progress.scope_label }}. Open cases without any classification: {{ progress.unclassified|number }} (reported separately, never inside a category).</p>
+      </div>
+
+      {# ── assignment / workflow status ───────────────────────────────── #}
+      <div class="agt-sec">
+        <h2 class="agt-h2">Assignment and workflow status</h2>
+        <table class="agt">
+          <caption>Assignment and workflow status by category</caption>
+          <colgroup><col style="width: 11%"><col style="width: 15%"><col style="width: 16%"><col style="width: 15%"><col style="width: 14%"><col style="width: 15%"><col style="width: 14%"></colgroup>
+          <thead><tr><th>Bucket</th><th class="num">Assigned</th><th class="num">Unassigned</th><th class="num">Completed</th><th class="num">In review</th><th class="num">Awaiting QA</th><th class="num">Total</th></tr></thead>
+          <tbody>
+            {% for b in progress.buckets %}
+            <tr><td><span class="agt-chip {{ b.bucket|lower }}">{{ b.bucket }}</span></td><td class="num">{{ b.assigned|number }}</td><td class="num">{{ b.unassigned|number }}</td><td class="num">{{ b.completed|number }}</td><td class="num">{{ b.in_review|number }}</td><td class="num">{{ b.awaiting_qa|number }}</td><td class="num">{{ b.total|number }}</td></tr>
+            {% endfor %}
+            <tr class="total"><td>All</td><td class="num">{{ progress.buckets_total.assigned|number }}</td><td class="num">{{ progress.buckets_total.unassigned|number }}</td><td class="num">{{ progress.buckets_total.completed|number }}</td><td class="num">{{ progress.buckets_total.in_review|number }}</td><td class="num">{{ progress.buckets_total.awaiting_qa|number }}</td><td class="num">{{ tot|number }}</td></tr>
+          </tbody>
+        </table>
+        <p class="agt-note">Assigned + Unassigned = Total and Completed + In review + Awaiting QA = Assigned on every row. Unassigned = not yet claimed by an analyst; Awaiting QA = analyst determination recorded, independent QA approval pending (maker/checker).</p>
+      </div>
+
+      {# ── trend (monthly: weeks in the month; final: reporting periods) ── #}
       {% if progress.periods %}
-      <h2 class="agt-h2">{{ progress.periods_heading }}</h2>
-      <table class="agt">
-        <thead><tr><th>{{ progress.periods_column }}</th><th class="num">Reviewed</th><th class="num">B1</th><th class="num">B2</th><th class="num">B3</th><th class="num">B4</th><th class="num">Cumulative</th></tr></thead>
-        <tbody>
-          {% for p in progress.periods %}
-          <tr><td>{{ p.label }}</td><td class="num">{{ p.reviewed|number }}</td><td class="num">{{ p.B1|number }}</td><td class="num">{{ p.B2|number }}</td><td class="num">{{ p.B3|number }}</td><td class="num">{{ p.B4|number }}</td><td class="num">{{ p.cumulative|number }}</td></tr>
-          {% endfor %}
-          <tr class="total"><td>{{ progress.periods_total.label }}</td><td class="num">{{ progress.periods_total.reviewed|number }}</td><td class="num">{{ progress.periods_total.B1|number }}</td><td class="num">{{ progress.periods_total.B2|number }}</td><td class="num">{{ progress.periods_total.B3|number }}</td><td class="num">{{ progress.periods_total.B4|number }}</td><td class="num">{{ progress.periods_total.cumulative|number }}</td></tr>
-        </tbody>
-      </table>
+      <div class="agt-sec">
+        <h2 class="agt-h2">{{ 'Weekly trend within the month' if progress.kind == 'monthly' else 'Trend by reporting period' }}</h2>
+        <table class="agt">
+          <caption>{{ progress.periods_heading }}</caption>
+          <colgroup><col><col style="width: 12%"><col style="width: 9%"><col style="width: 9%"><col style="width: 9%"><col style="width: 9%"><col style="width: 14%"></colgroup>
+          <thead><tr><th>{{ progress.periods_column }}</th><th class="num">Reviewed</th><th class="num">B1</th><th class="num">B2</th><th class="num">B3</th><th class="num">B4</th><th class="num">Cumulative</th></tr></thead>
+          <tbody>
+            {% for p in progress.periods %}
+            <tr><td>{{ p.label }}</td><td class="num">{{ p.reviewed|number }}</td><td class="num">{{ p.B1|number }}</td><td class="num">{{ p.B2|number }}</td><td class="num">{{ p.B3|number }}</td><td class="num">{{ p.B4|number }}</td><td class="num">{{ p.cumulative|number }}</td></tr>
+            {% endfor %}
+            <tr class="total"><td>{{ progress.periods_total.label }}</td><td class="num">{{ progress.periods_total.reviewed|number }}</td><td class="num">{{ progress.periods_total.B1|number }}</td><td class="num">{{ progress.periods_total.B2|number }}</td><td class="num">{{ progress.periods_total.B3|number }}</td><td class="num">{{ progress.periods_total.B4|number }}</td><td class="num">{{ progress.periods_total.cumulative|number }}</td></tr>
+          </tbody>
+        </table>
+        <p class="agt-note">Period rows reconcile to the {{ progress.scope_label }} total{% if progress.kind == 'monthly' %}; the month sums into the 120-day Final Report (D3.2){% endif %}.</p>
+      </div>
       {% endif %}
 
-      <h2 class="agt-h2">QHIN coverage ({{ progress.scope_label }})</h2>
-      <table class="agt">
-        <thead><tr><th>QHIN</th><th class="num">Entities</th><th class="num">Sample</th><th class="num">Reviewed</th><th class="num">% of sample</th><th class="num">B1</th><th class="num">B2</th><th class="num">B3</th><th class="num">B4</th></tr></thead>
-        <tbody>
-          {% for q in progress.qhins %}
-          <tr><td>{{ q.qhin }}</td><td class="num">{{ q.population|number }}</td><td class="num">{{ q.sample }}</td><td class="num">{{ q.reviewed|number }}</td><td class="num">{{ q.pct }}</td><td class="num">{{ q.B1|number }}</td><td class="num">{{ q.B2|number }}</td><td class="num">{{ q.B3|number }}</td><td class="num">{{ q.B4|number }}</td></tr>
-          {% endfor %}
-          <tr class="total"><td>All QHINs</td><td class="num">{{ progress.qhins_total.population|number }}</td><td class="num">{{ progress.qhins_total.sample }}</td><td class="num">{{ progress.qhins_total.reviewed|number }}</td><td class="num">{{ progress.qhins_total.pct }}</td><td class="num">{{ progress.qhins_total.B1|number }}</td><td class="num">{{ progress.qhins_total.B2|number }}</td><td class="num">{{ progress.qhins_total.B3|number }}</td><td class="num">{{ progress.qhins_total.B4|number }}</td></tr>
-        </tbody>
-      </table>
-      <p class="agt-note">{{ progress.qhin_note }}</p>
-
-      <h2 class="agt-h2">Important findings</h2>
-      <ol style="margin:0;padding-left:16px;font-size:8.5pt;line-height:1.32">
-        {% for f in progress.findings %}<li>{{ f }}</li>{% endfor %}
-      </ol>
-    </div>
-    <div class="cell">
-      <div class="agt-box"><h2 class="agt-h2">Source categories used</h2>
-        <ul>{% for s in progress.sources %}<li>{{ s.category }} &mdash; <b>{{ s.count|number }}</b> {{ s.unit }}</li>{% endfor %}</ul>
-        <p class="agt-note">{{ progress.sources_note }}</p>
+      {# ── QHIN coverage ──────────────────────────────────────────────── #}
+      <div class="agt-sec">
+        <h2 class="agt-h2">{{ 'QHIN coverage' if progress.kind == 'weekly' else 'QHIN comparison' if progress.kind == 'monthly' else 'QHIN coverage and proportional allocation' }}</h2>
+        <table class="agt">
+          <caption>QHIN coverage</caption>
+          <colgroup><col style="width: 30%"><col style="width: 11%"><col style="width: 11%"><col style="width: 11%"><col style="width: 13%"><col style="width: 6%"><col style="width: 6%"><col style="width: 6%"><col style="width: 6%"></colgroup>
+          <thead><tr><th>QHIN</th><th class="num">Entities</th><th class="num">Sample</th><th class="num">Reviewed</th><th class="num">{{ 'Allocation' if progress.kind == 'final' else '% of sample' }}</th><th class="num">B1</th><th class="num">B2</th><th class="num">B3</th><th class="num">B4</th></tr></thead>
+          <tbody>
+            {% for q in progress.qhins %}
+            <tr><td>{{ q.qhin }}</td><td class="num">{{ q.population|number }}</td><td class="num">{{ q.sample }}</td><td class="num">{{ q.reviewed|number }}</td><td class="num">{{ q.allocation if progress.kind == 'final' else q.pct }}</td><td class="num">{{ q.B1|number }}</td><td class="num">{{ q.B2|number }}</td><td class="num">{{ q.B3|number }}</td><td class="num">{{ q.B4|number }}</td></tr>
+            {% endfor %}
+            <tr class="total"><td>All QHINs</td><td class="num">{{ progress.qhins_total.population|number }}</td><td class="num">{{ progress.qhins_total.sample }}</td><td class="num">{{ progress.qhins_total.reviewed|number }}</td><td class="num">{{ progress.qhins_total.allocation if progress.kind == 'final' else progress.qhins_total.pct }}</td><td class="num">{{ progress.qhins_total.B1|number }}</td><td class="num">{{ progress.qhins_total.B2|number }}</td><td class="num">{{ progress.qhins_total.B3|number }}</td><td class="num">{{ progress.qhins_total.B4|number }}</td></tr>
+          </tbody>
+        </table>
+        <p class="agt-note">{{ progress.qhin_note }}{% if progress.kind == 'final' %} Allocation = each QHIN's share of the drawn sample.{% endif %}</p>
       </div>
+
+      {# ── findings ───────────────────────────────────────────────────── #}
+      <div class="agt-sec">
+        <h2 class="agt-h2">{{ 'Significant findings' if progress.kind == 'monthly' else 'Important findings' }}</h2>
+        <ol class="agt-findings">{% for f in progress.findings %}<li>{{ f }}</li>{% endfor %}</ol>
+      </div>
+    </div>
+
+    <div class="cell right">
+      {% if progress.kind == 'final' %}
+      <div class="agt-box"><h2 class="agt-h2">Sampling methodology &amp; confidence</h2><p>{{ progress.sampling_text }}</p></div>
+      {% endif %}
+      {% if progress.kind == 'weekly' %}
+      <div class="agt-box"><h2 class="agt-h2">Actions completed during the week</h2><ul>{% for a in progress.actions_completed %}<li>{{ a }}</li>{% endfor %}</ul></div>
+      {% endif %}
+
+      <div class="agt-box"><h2 class="agt-h2">{{ 'Source / methodology summary' if progress.kind == 'monthly' else 'Source categories used' }}</h2>
+        <div class="agt-src">{% for s in progress.sources %}<div class="r"><div class="k">{{ s.category }}</div><div class="n">{{ s.count|number }}</div></div>{% endfor %}</div>
+        <p class="agt-note">{{ progress.sources_note }}{% if progress.kind == 'monthly' %} {{ progress.sampling_text }}{% endif %}</p>
+      </div>
+
       <div class="agt-box"><h2 class="agt-h2">Reconciliation &amp; source integrity</h2>
         <div class="agt-st">
-          <div class="row">{% for c in progress.controls[:2] %}<div class="cell"><b>{{ c.title }}</b>{{ c.text }}</div>{% endfor %}</div>
-          <div class="row">{% for c in progress.controls[2:4] %}<div class="cell"><b>{{ c.title }}</b>{{ c.text }}</div>{% endfor %}</div>
+          <div class="row">{% for c in progress.controls[:2] %}<div class="cell"><b class="agt-dot{% if 'not' in c.title %} warn{% endif %}">{{ c.title }}</b>{{ c.text }}</div>{% endfor %}</div>
+          <div class="row">{% for c in progress.controls[2:4] %}<div class="cell"><b class="agt-dot{% if 'partial' in c.title or 'No completed' in c.text %} warn{% endif %}">{{ c.title }}</b>{{ c.text }}</div>{% endfor %}</div>
         </div>
       </div>
-      <div class="agt-box"><h2 class="agt-h2">Suggested methodology / control-framework {{ 'changes' if progress.kind == 'final' else 'improvements' }}</h2>
+
+      {% if progress.kind == 'final' and progress.themes %}
+      <div class="agt-box"><h2 class="agt-h2">Major discrepancy themes (B3 / B4)</h2><ol>{% for t in progress.themes %}<li>{{ t.label }} &mdash; <b>{{ t.count|number }}</b></li>{% endfor %}</ol></div>
+      {% elif progress.kind == 'final' %}
+      <div class="agt-box"><h2 class="agt-h2">Major discrepancy themes (B3 / B4)</h2><p>No B3 / B4 theme is recorded for this period.</p></div>
+      {% endif %}
+
+      <div class="agt-box"><h2 class="agt-h2">{{ 'Suggested controls' if progress.kind == 'final' else 'Suggested control improvements' }}</h2>
         {% if methodology_changes.suggested %}<ol>{% for item in methodology_changes.suggested %}<li>{{ item }}</li>{% endfor %}</ol>
-        {% else %}<p style="margin:0">No suggested change was recorded for this reporting period.</p>{% endif %}
+        {% else %}<p>No suggested change was recorded for this reporting period.</p>{% endif %}
       </div>
+
       {% if progress.kind != 'weekly' %}
-      <div class="agt-box"><h2 class="agt-h2">{{ 'Changes actually implemented' if progress.kind == 'final' else 'Implemented this period' }}</h2>
+      <div class="agt-box"><h2 class="agt-h2">{{ 'Changes implemented' if progress.kind == 'final' else 'Implemented improvements' }}</h2>
         {% if methodology_changes.implemented %}<ol>{% for item in methodology_changes.implemented %}<li>{{ item }}</li>{% endfor %}</ol>
-        {% else %}<p style="margin:0">No implemented change was recorded for this reporting period.</p>{% endif %}
+        {% else %}<p>No implemented change was recorded for this reporting period.</p>{% endif %}
+        <p class="agt-note">{{ methodology_changes.basis }}</p>
       </div>
       {% endif %}
-      {% if progress.kind == 'final' %}
-      <div class="agt-box"><h2 class="agt-h2">Major discrepancy themes (B3 / B4)</h2>
-        {% if progress.themes %}<ol>{% for t in progress.themes %}<li>{{ t.label }} &mdash; <b>{{ t.count|number }}</b></li>{% endfor %}</ol>
-        {% else %}<p style="margin:0">No B3 / B4 theme is recorded for this period.</p>{% endif %}
-      </div>
-      {% endif %}
-      <div class="agt-box"><h2 class="agt-h2">{{ 'Remaining limitations & external dependencies' if progress.kind == 'final' else 'Limitations & dependencies' }}</h2>
+
+      <div class="agt-box"><h2 class="agt-h2">{{ 'Next-week actions, dependencies and limitations' if progress.kind == 'weekly' else 'Outstanding dependencies and limitations' if progress.kind == 'monthly' else 'Remaining limitations and external dependencies' }}</h2>
+        {% if progress.kind != 'final' %}<ul>{% for a in progress.next_actions %}<li>{{ a }}</li>{% endfor %}</ul>{% endif %}
         <ul>{% for l in progress.limitations %}<li>{{ l }}</li>{% endfor %}</ul>
       </div>
     </div>
   </div>
 
-  <div class="agt-pkg"><b>Package:</b> {{ progress.package_note }}</div>
+  <div class="agt-pkg"><b>{{ 'Controlled annex references' if progress.kind == 'final' else 'Package' }}:</b> this report &middot; controlled stratified-list annex (CSV, {{ progress.annex_rows|length|number }} rows, report {{ snapshot.report_id }}) &middot; appendices: document control, contract sections 1&ndash;10 and provenance{% if progress.kind != 'final' %} &middot; rolls up into the 120-day Final Report (D3.2){% endif %}.</div>
   {% endif %}
-  <p class="agt-foot">Alliance Global Tech &middot; Contract {{ contract_number }} &middot; Deliverable {{ deliverable }} &middot; {{ progress.period_label if progress else (reporting_period_start or 'period not specified') ~ ' – ' ~ (reporting_period_end or '') }} &middot; <span class="mock">{{ document_marking }}</span> &middot; Generated {{ generated_at_display }} by {{ snapshot.generated_by }}</p>
+  <p class="agt-foot">{{ branding.prepared_by }} &middot; Contract {{ contract_number }} &middot; Deliverable {{ deliverable }} &middot; {{ progress.period_label if progress else (reporting_period_start or 'period not specified') }} &middot; <span class="mark">{{ document_marking }}</span> &middot; Generated {{ generated_at_display }} by {{ snapshot.generated_by }}</p>
 </section>
+
+{# ── appendix A: document control and contents (compact) ───────────── #}
+<div class="agt-appendix-intro">
+  <h1>{{ deliverable_title }} &mdash; Appendices</h1>
+  <p>Deliverable {{ deliverable }} &middot; Report {{ snapshot.report_id }} &middot; Contract {{ contract_number }} &middot; {{ document_marking }}. The executive summary is page 1; these appendices carry the document control record, the contract sections and the provenance record.</p>
+</div>
+<section class="doc-control" aria-labelledby="control-heading">
+  <h2 id="control-heading">Appendix A &mdash; Document Control</h2>
+  <table>
+    <caption>Document control record for {{ snapshot.report_id }}</caption>
+    <thead><tr><th scope="col">Item</th><th scope="col">Value</th></tr></thead>
+    <tbody>
+      <tr><th scope="row">Contract number</th><td>{{ contract_number }}</td></tr>
+      <tr><th scope="row">Program</th><td>{{ branding.program_name }}</td></tr>
+      <tr><th scope="row">Task / deliverable</th><td>{{ task }} &mdash; {{ deliverable }} {{ deliverable_title }}</td></tr>
+      <tr><th scope="row">Reporting period</th><td>{% if reporting_period_start or reporting_period_end %}{{ reporting_period_start|date }} &ndash; {{ reporting_period_end|date }}{% else %}Not specified{% endif %}</td></tr>
+      <tr><th scope="row">Report ID / version</th><td>{{ snapshot.report_id }} &middot; {{ snapshot.template_version or '1.0' }}</td></tr>
+      <tr><th scope="row">Prepared by</th><td>{{ snapshot.generated_by }} ({{ branding.prepared_by }})</td></tr>
+      <tr><th scope="row">Prepared for</th><td>{% for line in branding.prepared_for %}{{ line }}{% if not loop.last %}; {% endif %}{% endfor %}</td></tr>
+      <tr><th scope="row">Reviewed by</th><td>{{ reviewed_by or 'Awaiting programme manager review' }}</td></tr>
+      <tr><th scope="row">Document marking / PM release status</th><td>{{ document_marking }} &middot; {{ document_status }}</td></tr>
+      <tr><th scope="row">Generated (UTC)</th><td>{{ snapshot.generation_timestamp }}</td></tr>
+      <tr><th scope="row">Source delivery</th><td>{{ snapshot.source_provenance.get('original_filename') or 'Not recorded' }}{% if progress and progress.source and progress.source.delivery_label %} &mdash; {{ progress.source.delivery_label }}{% endif %}</td></tr>
+      <tr><th scope="row">Review cycle / sample</th><td>{{ (progress.source.sample_id if progress and progress.source else none) or snapshot.review_cycle_id or 'Not recorded' }}</td></tr>
+      <tr><th scope="row">Methodology / rule set version</th><td>{{ evidence_rule_version or 'Not recorded' }} &middot; {{ snapshot.b1_b4_rule_version or 'Not recorded' }}</td></tr>
+      <tr><th scope="row">Data classification</th><td>{% if snapshot.data_classification == 'GOVERNMENT' %}Government data{% else %}DEVELOPMENT / TEST (synthetic sample) &mdash; not for Government delivery{% endif %}</td></tr>
+    </tbody>
+  </table>
+  <h2 id="contents-heading">Contents</h2>
+  <ol class="contents">
+    <li>Executive Summary</li><li>Reporting Period and Scope</li><li>Review Activity</li><li>Population and Sampling Context</li>
+    <li>QHIN Stratification Summary</li><li>Review Results</li><li>Significant Observations</li>
+    <li>Suggested Methodology / Control Framework Changes</li><li>Issues, Dependencies and COR Decisions</li><li>Supporting Traceability</li>
+  </ol>
+</section>
+{% endblock %}
+
+{% block content %}
+<h2 class="agt-appendix-b" style="font-size: 11pt; margin: 8pt 0 4pt 0; color: var(--agt-dblue)">Appendix B &mdash; Contract sections 1&ndash;10</h2>
 {{ super() }}
 {% endblock %}
