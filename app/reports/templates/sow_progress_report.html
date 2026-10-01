@@ -584,9 +584,12 @@
       <tr><th scope="row">Template / Report Data Service version</th><td>{{ snapshot.template_version }} &middot; {{ snapshot.report_data_service_version }}</td></tr>
       <tr><th scope="row">PDF engine</th><td>{{ snapshot.pdf_engine.get('engine') }} {{ snapshot.pdf_engine.get('version') or '' }}</td></tr>
       {% if annex %}<tr><th scope="row">Controlled annex (CSV)</th><td>{{ annex.filename }} &middot; {{ annex.rows|number }} case rows &middot; {{ annex.bytes|number }} bytes &middot; SHA-256 {{ annex.sha256 }}</td></tr>{% endif %}
-      <tr><th scope="row" id="a11y-heading">Accessibility checks performed</th><td>{{ snapshot.accessibility.get('conformance_claim', 'Automated accessibility checks were not recorded for this report.') }}{% if snapshot.accessibility.get('manual_review_required') %} Manual review still required before any conformance claim is made: {{ snapshot.accessibility.get('manual_review_required')|join('; ') }}.{% endif %}</td></tr>
+      <tr><th scope="row" id="a11y-heading">Accessibility checks performed</th><td>{{ snapshot.accessibility.get('conformance_claim', 'Automated accessibility checks were not recorded for this report.') }}{% if snapshot.accessibility.get('manual_review_required') %} Manual review still required (see note below).{% endif %}</td></tr>
     </tbody>
   </table>
+  {% if snapshot.accessibility.get('manual_review_required') %}
+  <p class="figure-notes"><b>Manual review still required before any conformance claim is made:</b> {{ snapshot.accessibility.get('manual_review_required')|join('; ') }}.</p>
+  {% endif %}
   <p class="figure-notes">Every value in this report is read from the stored review-case ledger of the named delivery. Generation is read-only: no connector lookup runs and no classification is evaluated while a report is produced; regenerating from the same ledger produces the same figures.</p>
 </section>
 {% endblock %}
