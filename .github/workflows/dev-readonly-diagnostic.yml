@@ -1,0 +1,141 @@
+name: DEV Read-Only Diagnostic (governed, aggregate-only)
+
+# Narrowly-scoped governed read-only diagnostic for Azure DEV Postgres,
+# proposed to replace ad-hoc manual SSH sessions for one-off reconciliation
+# questions (first use case: the "1,298 Failed indicator" checkpoint,
+# qa-evidence/2026-10-01-reporting-architecture/CHECKPOINT-1298-FAILED-INDICATOR-STATIC-ANALYSIS.md).
+#
+# PREPARED, NOT RUN. This workflow has never been dispatched. It is committed
+# for review; triggering it is a separate, later human decision.
+#
+# Self-review checklist (every bullet the task required, with where it is met):
+#   - workflow_dispatch only, no other trigger .......... `on:` block below (only key)
+#   - existing OIDC identity + temporary /32 handshake,
+#     no new auth mechanism ............................. steps "Login to Azure (OIDC...)",
+#                                                           "Report runner IPv4 and wait...",
+#                                                           "Refresh Azure OIDC login..." --
+#                                                           copied verbatim in shape from
+#                                                           migration-preflight.yml:112-156
+#   - workflow identity is NOT granted firewall-management
+#     authority (operator adds/removes the /32 out of band,
+#     same as every other DB-touching workflow here) ..... no firewall-rule create/delete
+#     call anywhere in this file; comment under `permissions:` below
+#   - explicit READ ONLY transaction .................... ap007_1298_reconciliation.py:
+#     `cur.execute("BEGIN TRANSACTION READ ONLY")`
+#   - 20-second statement_timeout ........................ ap007_1298_reconciliation.py:
+#     `STATEMENT_TIMEOUT_MS = 20000`, `SET LOCAL statement_timeout`
+#   - aggregate counts only, wired to the existing script  step "Run the read-only
+#     aggregate diagnostic" below invokes
+#     scripts/dev_readonly_diagnostics/ap007_1298_reconciliation.py unchanged
+#   - no migration, no deployment, no DDL ................ no `alembic`, no `deploy`, no
+#     CREATE/ALTER/DROP anywhere in this file or the script it calls
+#   - never prints NPIs, names, payloads or credentials .. the script selects and prints
+#     COUNTs only (see its own docstring); PGTOKEN is read into a step-local env var and
+#     never echoed, written to $GITHUB_OUTPUT, or logged (same pattern as
+#     migration-preflight.yml:160-168 and gov_integrity_snapshot.py's own docstring)
+#   - removes the temporary firewall rule in a cleanup
+#     step that always runs ............................. N/A BY DESIGN: this identity never
+#     creates the rule, so it cannot and does not remove it either -- removal is the
+#     operator's own out-of-band action on the SAME handshake issue, exactly as
+#     migration-preflight.yml and prod-migration.yml already document in their header
+#     comments ("The workflow identity is NOT granted firewall-management authority").
+#     A cleanup step that attempted removal would imply (falsely) that this identity can
+#     create or own the rule.
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Why this diagnostic is being run (free text, required; posted on the handshake issue for the record)'
+        required: true
+        type: string
+      handshake_issue:
+        description: 'Issue number where this job posts its runner IPv4 for the operator temporary /32'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  # id-token + issues granted on the job below only, same minimal shape as
+  # migration-preflight.yml and prod-migration.yml. This workflow is never
+  # granted any permission that could create, modify or delete an Azure
+  # firewall rule -- the operator's out-of-band /32 add/remove is the only
+  # mechanism that ever touches DEV Postgres's firewall.
+
+env:
+  PGHOST: docuaction-db-dev.postgres.database.azure.com
+  PGDATABASE: postgres
+  PG_PRINCIPAL: github-actions-docuaction-backend-dev
+  # Read-only role for this diagnostic -- the only role this dedicated
+  # identity can assume without a new grant (same reasoning as
+  # DB_INTEGRITY_ROLE in migration-preflight.yml / gov_integrity_snapshot.py).
+  # This job issues SELECT only; it never SETs this or any other role for
+  # a write.
+  DB_INTEGRITY_ROLE: docuaction_owner
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    environment: development   # required-reviewer gate, same as migration-preflight.yml
+    permissions:
+      id-token: write
+      contents: read
+      issues: write   # to post the runner IPv4 handshake comment, nothing else
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install the one read-only driver this script needs
+        run: python -m pip install --quiet psycopg2-binary
+
+      - name: Login to Azure (OIDC - no stored client secret)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Report runner IPv4 and wait for the operator's temporary /32 (bounded)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          IP=$(curl -s https://api.ipify.org)
+          echo "runner public IPv4: $IP"
+          gh issue comment "${{ inputs.handshake_issue }}" --repo "${{ github.repository }}" \
+            --body "dev-readonly-diagnostic run ${{ github.run_id }} (\"${{ inputs.reason }}\"): runner public IPv4 **$IP** - waiting up to 20 min for a temporary /32 (start = end = this address). Remove it when this run finishes. This identity cannot add or remove it itself."
+          for i in $(seq 1 80); do
+            if python -c "import socket;s=socket.socket();s.settimeout(5);s.connect(('$PGHOST',5432))" 2>/dev/null; then
+              echo "DEV Postgres reachable after $i attempt(s)"; exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::DEV Postgres not reachable within 20 minutes - no /32 was authorised. Failing closed; nothing was read."
+          exit 1
+
+      # Same reasoning as migration-preflight.yml:140-156: the first login's
+      # federated client assertion is ~5 minutes old by the time the bounded
+      # wait above finishes. Re-authenticating mints a fresh one immediately
+      # before it is needed -- same OIDC identity, same login action, no new
+      # credential or scope.
+      - name: Refresh Azure OIDC login after the bounded firewall wait
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run the read-only aggregate diagnostic
+        run: |
+          # The token is minted here, stays a shell variable for the life of
+          # this step, and is never echoed, exported to GITHUB_ENV, written to
+          # an artifact, or stored as a secret. It expires on its own in
+          # minutes. Same pattern as migration-preflight.yml:164-168.
+          PGTOKEN=$(az account get-access-token \
+            --resource https://ossrdbms-aad.database.windows.net \
+            --query accessToken -o tsv)
+          test -n "$PGTOKEN" || { echo "FAIL: no PostgreSQL access token"; exit 1; }
+          echo "token acquired (${#PGTOKEN} chars, not printed)"
+          PGTOKEN="$PGTOKEN" python scripts/dev_readonly_diagnostics/ap007_1298_reconciliation.py
