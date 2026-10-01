@@ -24,7 +24,8 @@
 {% block page_marking %}
 <style>
   @page { @top-center { content: "{{ document_marking }}"; font-family: "Public Sans", Arial, Helvetica, sans-serif; font-size: 7.5pt; font-weight: 700; color: #002D5E; } }
-  @page :first { margin: 0.38in 0.46in 0.32in 0.46in; @top-center { content: none; } @bottom-center { content: none; } }
+  @page :first { margin: 0.38in 0.46in 0.5in 0.46in; @top-center { content: none; }
+    @bottom-center { content: element(agtfoot); width: 100%; vertical-align: top; } }
 </style>
 {% endblock %}
 {% block classification_banner %}{% endblock %}
@@ -41,7 +42,7 @@
      every table cell; the executive page never does. */
   section.cover { min-height: auto; padding-top: 0; border-top: 0; margin: 0; }
   .cover, .cover * { hyphens: manual; -webkit-hyphens: manual; overflow-wrap: normal; word-break: normal; }
-  .cover { font-family: "Public Sans", Arial, Helvetica, sans-serif; font-size: 7.9pt; line-height: 1.25; color: var(--agt-ink); page-break-after: always; }
+  .cover { font-family: "Public Sans", Arial, Helvetica, sans-serif; font-size: 7.6pt; line-height: 1.22; color: var(--agt-ink); page-break-after: always; }
   .cover p { margin: 0; }
   .report-header { display: none; }
 
@@ -66,7 +67,7 @@
   .agt-kpi { display: table-cell; width: 20%; background: var(--agt-lblue); border-top: 2.5pt solid var(--agt-blue); padding: 4pt 6pt; vertical-align: top; }
   .agt-kpi .l { font-size: 6.8pt; text-transform: uppercase; letter-spacing: .4pt; color: var(--agt-muted); font-weight: 700; margin: 0; white-space: nowrap; }
   .agt-kpi .v { font-size: 13.5pt; font-weight: 700; color: var(--agt-navy); margin: 2pt 0 0 0; line-height: 1.1; white-space: nowrap; }
-  .agt-kpi .n { font-size: 6.6pt; color: var(--agt-muted); margin: 1.5pt 0 0 0; line-height: 1.25; }
+  .agt-kpi .n { font-size: 6.4pt; color: var(--agt-muted); margin: 1.5pt 0 0 0; line-height: 1.22; }
   .agt-cor { font-size: 7.2pt; color: #6b4f0a; background: var(--agt-lgold); border-left: 2.5pt solid var(--agt-gold); padding: 2pt 6pt; margin: 0 0 6pt 0; }
 
   /* two-column analytical layout */
@@ -80,9 +81,10 @@
   .agt-sec { margin: 0 0 4.5pt 0; page-break-inside: avoid; }
   table.agt { width: 100%; border-collapse: collapse; font-size: 7.5pt; margin: 0; table-layout: fixed; }
   table.agt caption { display: none; }
-  table.agt th { background: var(--agt-navy); color: #fff; text-align: left; padding: 2.4pt 4pt; font-weight: 700; font-size: 7pt; border: 0; white-space: nowrap; vertical-align: bottom; }
+  table.agt th { background: var(--agt-navy); color: #fff; text-align: left; padding: 2.4pt 4pt; font-weight: 700; font-size: 7pt; border: 0; white-space: normal; vertical-align: bottom; line-height: 1.15; }
+  table.agt td.q { white-space: nowrap; font-size: 7pt; }
   table.agt th.num, table.agt td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
-  table.agt td { padding: 2pt 4pt; border: 0; border-bottom: 0.6pt solid var(--agt-line); vertical-align: middle; }
+  table.agt td { padding: 1.7pt 4pt; border: 0; border-bottom: 0.6pt solid var(--agt-line); vertical-align: middle; }
   table.agt tbody tr:nth-child(even) td { background: #F6F8FA; }
   table.agt tr { page-break-inside: avoid; }
   table.agt thead { display: table-header-group; }
@@ -95,7 +97,7 @@
   .agt-note { font-size: 6.5pt; color: var(--agt-muted); margin: 2pt 0 0 0; line-height: 1.25; }
 
   /* right-column panels */
-  .agt-box { border: 0.7pt solid var(--agt-line); border-top: 2.5pt solid var(--agt-blue); padding: 3pt 6pt 4pt 6pt; font-size: 7.3pt; line-height: 1.25; margin: 0 0 4pt 0; page-break-inside: avoid; }
+  .agt-box { border: 0.7pt solid var(--agt-line); border-top: 2.5pt solid var(--agt-blue); padding: 2.5pt 6pt 3.5pt 6pt; font-size: 7.1pt; line-height: 1.22; margin: 0 0 3.5pt 0; page-break-inside: avoid; }
   .agt-box .agt-h2 { margin: 0 0 2pt 0; border-left: 0; padding-left: 0; font-size: 7.6pt; }
   .agt-box ul, .agt-box ol { margin: 0; padding-left: 12pt; }
   .agt-box li { margin: 0 0 1pt 0; }
@@ -114,7 +116,7 @@
 
   /* footer line and package strip */
   .agt-pkg { background: var(--agt-panel); border-left: 3pt solid var(--agt-navy); padding: 2.5pt 6pt; font-size: 6.9pt; margin: 1pt 0 0 0; page-break-inside: avoid; }
-  .agt-foot { border-top: 1.4pt solid var(--agt-navy); padding-top: 2.5pt; margin-top: 4pt; font-size: 6.6pt; color: var(--agt-muted); page-break-inside: avoid; }
+  .agt-foot { position: running(agtfoot); border-top: 1.4pt solid var(--agt-navy); padding-top: 2.5pt; margin: 0; font-size: 6.6pt; color: var(--agt-muted); font-family: "Public Sans", Arial, Helvetica, sans-serif; line-height: 1.25; }
   .agt-foot .mark { color: #6b4f0a; font-weight: 700; }
 
   /* appendices: the contract body, compacted and never word-broken */
@@ -141,7 +143,16 @@
   section[aria-labelledby="s6-heading"] table, section[aria-labelledby="s9-heading"] table { font-size: 7.6pt; }
   section[aria-labelledby="s6-heading"] th, section[aria-labelledby="s6-heading"] td,
   section[aria-labelledby="s9-heading"] th, section[aria-labelledby="s9-heading"] td { padding: 2.5pt 4pt; }
-  .contents { font-size: 9pt; }
+  .contents { font-size: 9pt; page-break-inside: avoid; break-inside: avoid; }
+  table { page-break-inside: auto; break-inside: auto; }
+  th { white-space: normal; }
+  /* the sampling-plan table: fixed columns so no value is squeezed into a word break */
+  section[aria-labelledby="s4-heading"] table { table-layout: fixed; }
+  section[aria-labelledby="s4-heading"] th:nth-child(1) { width: 26%; } section[aria-labelledby="s4-heading"] th:nth-child(2) { width: 9%; }
+  section[aria-labelledby="s4-heading"] th:nth-child(3) { width: 10%; } section[aria-labelledby="s4-heading"] th:nth-child(4) { width: 8%; }
+  section[aria-labelledby="s4-heading"] th:nth-child(5) { width: 10%; } section[aria-labelledby="s4-heading"] th:nth-child(6) { width: 8%; }
+  section[aria-labelledby="s4-heading"] th:nth-child(7) { width: 6%; } section[aria-labelledby="s4-heading"] th:nth-child(8) { width: 11%; }
+  section[aria-labelledby="s4-heading"] th:nth-child(9) { width: 12%; }
   section.appendix table, section.accessibility-statement { font-size: 8pt; }
   section.appendix th, section.appendix td { padding: 2pt 5pt; }
   section.appendix h2, section.accessibility-statement h2 { font-size: 11pt; margin: 8pt 0 3pt 0; }
@@ -251,11 +262,11 @@
         <h2 class="agt-h2">{{ 'QHIN coverage' if progress.kind == 'weekly' else 'QHIN comparison' if progress.kind == 'monthly' else 'QHIN coverage and proportional allocation' }}</h2>
         <table class="agt">
           <caption>QHIN coverage</caption>
-          <colgroup><col style="width: 30%"><col style="width: 11%"><col style="width: 11%"><col style="width: 11%"><col style="width: 13%"><col style="width: 6%"><col style="width: 6%"><col style="width: 6%"><col style="width: 6%"></colgroup>
-          <thead><tr><th>QHIN</th><th class="num">Entities</th><th class="num">Sample</th><th class="num">Reviewed</th><th class="num">{{ 'Allocation' if progress.kind == 'final' else '% of sample' }}</th><th class="num">B1</th><th class="num">B2</th><th class="num">B3</th><th class="num">B4</th></tr></thead>
+          <colgroup><col style="width: 33%"><col style="width: 10%"><col style="width: 10%"><col style="width: 11%"><col style="width: 12%"><col style="width: 6%"><col style="width: 6%"><col style="width: 6%"><col style="width: 6%"></colgroup>
+          <thead><tr><th>QHIN</th><th class="num">Entities</th><th class="num">Sample</th><th class="num">Reviewed</th><th class="num">{{ 'Allocation' if progress.kind == 'final' else '% sample' }}</th><th class="num">B1</th><th class="num">B2</th><th class="num">B3</th><th class="num">B4</th></tr></thead>
           <tbody>
             {% for q in progress.qhins %}
-            <tr><td>{{ q.qhin }}</td><td class="num">{{ q.population|number }}</td><td class="num">{{ q.sample }}</td><td class="num">{{ q.reviewed|number }}</td><td class="num">{{ q.allocation if progress.kind == 'final' else q.pct }}</td><td class="num">{{ q.B1|number }}</td><td class="num">{{ q.B2|number }}</td><td class="num">{{ q.B3|number }}</td><td class="num">{{ q.B4|number }}</td></tr>
+            <tr><td class="q">{{ q.qhin }}</td><td class="num">{{ q.population|number }}</td><td class="num">{{ q.sample }}</td><td class="num">{{ q.reviewed|number }}</td><td class="num">{{ q.allocation if progress.kind == 'final' else q.pct }}</td><td class="num">{{ q.B1|number }}</td><td class="num">{{ q.B2|number }}</td><td class="num">{{ q.B3|number }}</td><td class="num">{{ q.B4|number }}</td></tr>
             {% endfor %}
             <tr class="total"><td>All QHINs</td><td class="num">{{ progress.qhins_total.population|number }}</td><td class="num">{{ progress.qhins_total.sample }}</td><td class="num">{{ progress.qhins_total.reviewed|number }}</td><td class="num">{{ progress.qhins_total.allocation if progress.kind == 'final' else progress.qhins_total.pct }}</td><td class="num">{{ progress.qhins_total.B1|number }}</td><td class="num">{{ progress.qhins_total.B2|number }}</td><td class="num">{{ progress.qhins_total.B3|number }}</td><td class="num">{{ progress.qhins_total.B4|number }}</td></tr>
           </tbody>
@@ -266,7 +277,7 @@
       {# ── findings ───────────────────────────────────────────────────── #}
       <div class="agt-sec">
         <h2 class="agt-h2">{{ 'Significant findings' if progress.kind == 'monthly' else 'Important findings' }}</h2>
-        <ol class="agt-findings">{% for f in progress.findings %}<li>{{ f }}</li>{% endfor %}</ol>
+        <ol class="agt-findings">{% for f in progress.findings[:4] %}<li>{{ f }}</li>{% endfor %}</ol>
       </div>
     </div>
 
@@ -299,10 +310,16 @@
       <div class="agt-box"><h2 class="agt-h2">{{ 'Suggested controls' if progress.kind == 'final' else 'Suggested control improvements' }}</h2>
         {% if methodology_changes.suggested %}<ol>{% for item in methodology_changes.suggested %}<li>{{ item }}</li>{% endfor %}</ol>
         {% else %}<p>No suggested change was recorded for this reporting period.</p>{% endif %}
+        {% if progress.kind == 'final' %}
+        <h2 class="agt-h2" style="margin-top: 3pt">Changes implemented</h2>
+        {% if methodology_changes.implemented %}<ol>{% for item in methodology_changes.implemented %}<li>{{ item }}</li>{% endfor %}</ol>
+        {% else %}<p>No implemented change was recorded for this reporting period.</p>{% endif %}
+        <p class="agt-note">{{ methodology_changes.basis }}</p>
+        {% endif %}
       </div>
 
-      {% if progress.kind != 'weekly' %}
-      <div class="agt-box"><h2 class="agt-h2">{{ 'Changes implemented' if progress.kind == 'final' else 'Implemented improvements' }}</h2>
+      {% if progress.kind == 'monthly' %}
+      <div class="agt-box"><h2 class="agt-h2">Implemented improvements</h2>
         {% if methodology_changes.implemented %}<ol>{% for item in methodology_changes.implemented %}<li>{{ item }}</li>{% endfor %}</ol>
         {% else %}<p>No implemented change was recorded for this reporting period.</p>{% endif %}
         <p class="agt-note">{{ methodology_changes.basis }}</p>
