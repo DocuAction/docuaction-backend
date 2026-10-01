@@ -68,6 +68,7 @@
   .agt-kpi .l { font-size: 6.8pt; text-transform: uppercase; letter-spacing: .4pt; color: var(--agt-muted); font-weight: 700; margin: 0; white-space: nowrap; }
   .agt-kpi .v { font-size: 13.5pt; font-weight: 700; color: var(--agt-navy); margin: 2pt 0 0 0; line-height: 1.1; white-space: nowrap; }
   .agt-kpi .n { font-size: 6.4pt; color: var(--agt-muted); margin: 1.5pt 0 0 0; line-height: 1.22; }
+  .agt-qa { font-size: 7.4pt; color: #6b4f0a; background: var(--agt-lgold); border-left: 2.5pt solid var(--agt-gold); padding: 2pt 6pt; margin: 0 0 3pt 0; }
   .agt-cor { font-size: 7.2pt; color: #6b4f0a; background: var(--agt-lgold); border-left: 2.5pt solid var(--agt-gold); padding: 2pt 6pt; margin: 0 0 6pt 0; }
 
   /* two-column analytical layout */
@@ -83,6 +84,7 @@
   table.agt caption { display: none; }
   table.agt th { background: var(--agt-navy); color: #fff; text-align: left; padding: 2.4pt 4pt; font-weight: 700; font-size: 7pt; border: 0; white-space: normal; vertical-align: bottom; line-height: 1.15; }
   table.agt td.q { white-space: nowrap; font-size: 7pt; }
+  table.agt th.gap, table.agt td.gap { padding-left: 12pt; }
   table.agt th.num, table.agt td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
   table.agt td { padding: 1.7pt 4pt; border: 0; border-bottom: 0.6pt solid var(--agt-line); vertical-align: middle; }
   table.agt tbody tr:nth-child(even) td { background: #F6F8FA; }
@@ -201,8 +203,9 @@
 
       {# ── B1–B4 results ─────────────────────────────────────────────── #}
       <div class="agt-sec">
-        <h2 class="agt-h2">{{ 'Current-period B1–B4 results' if progress.kind == 'weekly' else 'Monthly B1–B4 aggregate' if progress.kind == 'monthly' else '120-day aggregate B1–B4 results' }}</h2>
+        <h2 class="agt-h2">Provisional B1&ndash;B4 classifications &mdash; pending independent QA ({{ progress.scope_label }})</h2>
         {% set tot = progress.buckets_total.total %}
+        <p class="agt-qa"><b>{{ progress.qa_statement }}</b></p>
         <div class="agt-bar">
           {% for b in progress.buckets %}{% if b.total %}<div class="seg {{ b.bucket|lower }}" style="width: {{ (100.0 * b.total / tot)|round(1) }}%"></div>{% endif %}{% endfor %}
           {% if not tot %}<div class="seg none" style="width: 100%"></div>{% endif %}
@@ -262,13 +265,13 @@
         <h2 class="agt-h2">{{ 'QHIN coverage' if progress.kind == 'weekly' else 'QHIN comparison' if progress.kind == 'monthly' else 'QHIN coverage and proportional allocation' }}</h2>
         <table class="agt">
           <caption>QHIN coverage</caption>
-          <colgroup><col style="width: 33%"><col style="width: 10%"><col style="width: 10%"><col style="width: 11%"><col style="width: 12%"><col style="width: 6%"><col style="width: 6%"><col style="width: 6%"><col style="width: 6%"></colgroup>
-          <thead><tr><th>QHIN</th><th class="num">Entities</th><th class="num">Sample</th><th class="num">Reviewed</th><th class="num">{{ 'Allocation' if progress.kind == 'final' else '% sample' }}</th><th class="num">B1</th><th class="num">B2</th><th class="num">B3</th><th class="num">B4</th></tr></thead>
+          <colgroup><col style="width: 31%"><col style="width: 10%"><col style="width: 9%"><col style="width: 11%"><col style="width: 12%"><col style="width: 8%"><col style="width: 6.5%"><col style="width: 6.5%"><col style="width: 6%"></colgroup>
+          <thead><tr><th>QHIN</th><th class="num">Entities</th><th class="num">Sample</th><th class="num">Reviewed</th><th class="num">{{ 'Allocation' if progress.kind == 'final' else '% sample' }}</th><th class="num gap">B1</th><th class="num">B2</th><th class="num">B3</th><th class="num">B4</th></tr></thead>
           <tbody>
             {% for q in progress.qhins %}
-            <tr><td class="q">{{ q.qhin }}</td><td class="num">{{ q.population|number }}</td><td class="num">{{ q.sample }}</td><td class="num">{{ q.reviewed|number }}</td><td class="num">{{ q.allocation if progress.kind == 'final' else q.pct }}</td><td class="num">{{ q.B1|number }}</td><td class="num">{{ q.B2|number }}</td><td class="num">{{ q.B3|number }}</td><td class="num">{{ q.B4|number }}</td></tr>
+            <tr><td class="q">{{ q.qhin }}</td><td class="num">{{ q.population|number }}</td><td class="num">{{ q.sample }}</td><td class="num">{{ q.reviewed|number }}</td><td class="num">{{ q.allocation if progress.kind == 'final' else q.pct }}</td><td class="num gap">{{ q.B1|number }}</td><td class="num">{{ q.B2|number }}</td><td class="num">{{ q.B3|number }}</td><td class="num">{{ q.B4|number }}</td></tr>
             {% endfor %}
-            <tr class="total"><td>All QHINs</td><td class="num">{{ progress.qhins_total.population|number }}</td><td class="num">{{ progress.qhins_total.sample }}</td><td class="num">{{ progress.qhins_total.reviewed|number }}</td><td class="num">{{ progress.qhins_total.allocation if progress.kind == 'final' else progress.qhins_total.pct }}</td><td class="num">{{ progress.qhins_total.B1|number }}</td><td class="num">{{ progress.qhins_total.B2|number }}</td><td class="num">{{ progress.qhins_total.B3|number }}</td><td class="num">{{ progress.qhins_total.B4|number }}</td></tr>
+            <tr class="total"><td>All QHINs</td><td class="num">{{ progress.qhins_total.population|number }}</td><td class="num">{{ progress.qhins_total.sample }}</td><td class="num">{{ progress.qhins_total.reviewed|number }}</td><td class="num">{{ progress.qhins_total.allocation if progress.kind == 'final' else progress.qhins_total.pct }}</td><td class="num gap">{{ progress.qhins_total.B1|number }}</td><td class="num">{{ progress.qhins_total.B2|number }}</td><td class="num">{{ progress.qhins_total.B3|number }}</td><td class="num">{{ progress.qhins_total.B4|number }}</td></tr>
           </tbody>
         </table>
         <p class="agt-note">{{ progress.qhin_note }}{% if progress.kind == 'final' %} Allocation = each QHIN's share of the drawn sample.{% endif %}</p>
@@ -359,7 +362,9 @@
       <tr><th scope="row">Reviewed by</th><td>{{ reviewed_by or 'Awaiting programme manager review' }}</td></tr>
       <tr><th scope="row">Document marking / PM release status</th><td>{{ document_marking }} &middot; {{ document_status }}</td></tr>
       <tr><th scope="row">Generated (UTC)</th><td>{{ snapshot.generation_timestamp }}</td></tr>
-      <tr><th scope="row">Source delivery</th><td>{{ snapshot.source_provenance.get('original_filename') or 'Not recorded' }}{% if progress and progress.source and progress.source.delivery_label %} &mdash; {{ progress.source.delivery_label }}{% endif %}</td></tr>
+      <tr><th scope="row">Source delivery (this report)</th><td>{{ snapshot.source_provenance.get('original_filename') or 'Not recorded' }}{% if progress and progress.source and progress.source.delivery_label %} &mdash; {{ progress.source.delivery_label }}{% endif %}{% if snapshot.source_provenance.get('record_count') is not none %} &middot; {{ snapshot.source_provenance.get('record_count')|number }} delivered source lines{% endif %}</td></tr>
+      {% if progress %}<tr><th scope="row">Counts in this report</th><td>{{ progress.source.records_received|number if progress.source.records_received is not none else '—' }} delivered source lines &middot; {{ progress.source.distinct_entities|number if progress.source.distinct_entities is not none else '—' }} distinct promoted entities &middot; {{ progress.counts.cases|number }} review cases in scope{% if progress.source.sample_size %} &middot; {{ progress.source.sample_size|number }} sampled{% endif %}</td></tr>{% endif %}
+      {% if annex %}<tr><th scope="row">Controlled annex (CSV)</th><td>{{ annex.filename }} &middot; {{ annex.rows|number }} case rows &middot; {{ annex.bytes|number }} bytes &middot; SHA-256 {{ annex.sha256 }}</td></tr>{% endif %}
       <tr><th scope="row">Review cycle / sample</th><td>{{ (progress.source.sample_id if progress and progress.source else none) or snapshot.review_cycle_id or 'Not recorded' }}</td></tr>
       <tr><th scope="row">Methodology / rule set version</th><td>{{ evidence_rule_version or 'Not recorded' }} &middot; {{ snapshot.b1_b4_rule_version or 'Not recorded' }}</td></tr>
       <tr><th scope="row">Data classification</th><td>{% if snapshot.data_classification == 'GOVERNMENT' %}Government data{% else %}DEVELOPMENT / TEST (synthetic sample) &mdash; not for Government delivery{% endif %}</td></tr>
@@ -376,5 +381,173 @@
 
 {% block content %}
 <h2 class="agt-appendix-b" style="font-size: 11pt; margin: 8pt 0 4pt 0; color: var(--agt-dblue)">Appendix B &mdash; Contract sections 1&ndash;10</h2>
-{{ super() }}
+
+<section class="panel" aria-labelledby="s1-heading">
+  <h2 id="s1-heading">1. Executive Summary</h2>
+  <p>This {{ deliverable_title|lower }} covers {{ reporting_period_start|date }} to {{ reporting_period_end|date }} under contract {{ contract_number }}.
+    {{ list_counts.listed_total|number }} Participant/Subparticipant review(s) with a standing independent QA approval are listed under the four
+    contractual discrepancy categories. {{ list_counts.pending_qa|number }} review record(s) remain pending independent QA and are reported
+    separately as work in progress, not as findings.{% if progress %} {{ progress.qa_statement }}{% endif %}</p>
+  <p class="figure-notes">{{ contract_citation }}</p>
+  <h3>Required content for this deliverable</h3>
+  <ul>{% for item in required_content %}<li>{{ item }}</li>{% endfor %}</ul>
+</section>
+
+<section class="panel" aria-labelledby="s2-heading">
+  <h2 id="s2-heading">2. Reporting Period and Scope</h2>
+  <div class="scope-grid">
+    <div class="scope-item"><span class="label">Reporting period</span><span class="value">{{ reporting_period_start|date }} &ndash; {{ reporting_period_end|date }}</span></div>
+    <div class="scope-item"><span class="label">Review cycle</span><span class="value">{{ scope.review_cycle_id or snapshot.review_cycle_id }}</span></div>
+    <div class="scope-item"><span class="label">Review cases in scope</span><span class="value">{{ stratification.records_considered|number }}</span></div>
+    <div class="scope-item"><span class="label">Listed (QA approved)</span><span class="value">{{ list_counts.listed_total|number }}</span></div>
+    <div class="scope-item"><span class="label">Pending QA</span><span class="value">{{ list_counts.pending_qa|number }}</span></div>
+    <div class="scope-item"><span class="label">Evidence rule version</span><span class="value">{{ evidence_rule_version or 'Not recorded' }}</span></div>
+  </div>
+  <p class="figure-notes">{{ stratification.gate }}</p>
+</section>
+
+<section class="panel" aria-labelledby="s3-heading">
+  <h2 id="s3-heading">3. Review Activity</h2>
+  <table>
+    <caption>Review activity in the reporting period</caption>
+    <thead><tr><th scope="col">Measure</th><th scope="col">Value</th></tr></thead>
+    <tbody>
+      <tr><th scope="row">Reviews listed (independent QA approved)</th><td>{{ list_counts.listed_total|number }}</td></tr>
+      <tr><th scope="row">Reviews pending independent QA</th><td>{{ list_counts.pending_qa|number }}</td></tr>
+      <tr><th scope="row">Review cases in scope</th><td>{{ stratification.records_considered|number }}</td></tr>
+      {% if progress %}<tr><th scope="row">Analyst determinations recorded (awaiting QA)</th><td>{{ progress.buckets_total.awaiting_qa|number }}</td></tr>
+      <tr><th scope="row">Cases not yet assigned</th><td>{{ progress.buckets_total.unassigned|number }}</td></tr>{% endif %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel" aria-labelledby="s4-heading">
+  <h2 id="s4-heading">4. Population and Sampling Context</h2>
+  <p>Confidence: {{ sampling.confidence_floor }}. Stratification: {{ sampling.stratification_requirement }}.</p>
+  <p class="figure-notes">{{ sampling.parameters_status }}</p>
+  {% if sampling.plans %}
+    <table>
+      <caption>{{ sampling.plans_caption }}</caption>
+      <thead><tr><th scope="col">Plan</th><th scope="col">Type</th><th scope="col">Population</th><th scope="col">Sample</th><th scope="col">Confidence</th><th scope="col">Margin</th><th scope="col">FPC</th><th scope="col">Stratified by</th><th scope="col">Drawn (UTC)</th></tr></thead>
+      <tbody>
+        {% for plan in sampling.plans %}
+          <tr><th scope="row">{{ plan.name or plan.sample_id }}</th><td>{{ plan.review_type or '—' }}</td><td>{{ plan.population_size|number }}</td><td>{{ plan.sample_size|number }}</td><td>{{ plan.confidence_level }}</td><td>{{ plan.margin_of_error }}</td><td>{{ 'Yes' if plan.use_fpc else 'No' }}</td><td>{{ plan.stratify_by or '—' }}</td><td>{{ plan.drawn_at or '—' }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="figure-notes">{{ sampling.plans_on_record|number }} plan(s) are recorded for this delivery; all are shown. {% if progress %}{{ progress.sampling_text }}{% endif %}</p>
+  {% else %}
+    <p class="insufficient-data">No official sampling plan has been drawn for this delivery.</p>
+  {% endif %}
+</section>
+
+<section class="panel" aria-labelledby="s5-heading">
+  <h2 id="s5-heading">5. QHIN Stratification Summary</h2>
+  <table>
+    <caption>Participants and Subparticipants by Government discrepancy category</caption>
+    <thead><tr><th scope="col">No.</th><th scope="col">Category</th><th scope="col">Listed in this report (QA approved)</th><th scope="col">Pending QA (provisional, not findings)</th></tr></thead>
+    <tbody>
+      {% for category in categories %}
+        <tr><th scope="row">{{ category_numbers[category] }}</th><td>{{ government_labels[category] }}</td><td>{{ list_counts[category]|number }}</td><td>{{ stratification.pending_qa[category]|number }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel" aria-labelledby="s6-heading">
+  <h2 id="s6-heading">6. Review Results</h2>
+  <p>Each category lists the Participants and Subparticipants with a standing independent QA approval, with the QHIN named by the delivered relationship. A list, not a count.</p>
+  {% for category in categories %}
+    <h3 id="s6-{{ loop.index }}-heading">6.{{ loop.index }} {{ government_labels[category] }}</h3>
+    {% set rows = entity_lists[category] %}
+    {% if rows %}
+      <table>
+        <caption>{{ government_labels[category] }} &mdash; {{ rows|length }} Participant(s) / Subparticipant(s)</caption>
+        <thead><tr>{% for column in entity_columns %}<th scope="col">{{ column.label }}</th>{% endfor %}</tr></thead>
+        <tbody>
+          {% for row in rows %}<tr>{% for column in entity_columns %}{% if loop.first %}<th scope="row">{{ row[column.key] or '—' }}</th>{% else %}<td>{{ row[column.key] or '—' }}</td>{% endif %}{% endfor %}</tr>{% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="insufficient-data">No Participant or Subparticipant is listed under this category for the reporting period (no independent QA approval stands).</p>
+    {% endif %}
+  {% endfor %}
+</section>
+
+<section class="panel" aria-labelledby="s7-heading">
+  <h2 id="s7-heading">7. Significant Observations</h2>
+  <table>
+    <caption>Sources that could not answer during evidence collection</caption>
+    <thead><tr><th scope="col">Source</th><th scope="col">Observations affected</th></tr></thead>
+    <tbody>
+      {% if source_limitations.sources_unavailable %}{% for source, count in source_limitations.sources_unavailable.items() %}<tr><th scope="row">{{ source }}</th><td>{{ count|number }}</td></tr>{% endfor %}
+      {% else %}<tr><th scope="row">None recorded</th><td>0</td></tr>{% endif %}
+    </tbody>
+  </table>
+  <p class="figure-notes">{{ source_limitations.note }}</p>
+</section>
+
+<section class="panel" aria-labelledby="s8-heading">
+  <h2 id="s8-heading">8. Suggested Methodology / Control Framework Changes</h2>
+  {% if methodology_changes.suggested %}<ul>{% for item in methodology_changes.suggested %}<li>{{ item }}</li>{% endfor %}</ul>{% else %}<p>No suggested change was recorded for this reporting period.</p>{% endif %}
+  {% if methodology_changes.includes_implemented %}
+    <h3>Implemented changes</h3>
+    {% if methodology_changes.implemented %}<ul>{% for item in methodology_changes.implemented %}<li>{{ item }}</li>{% endfor %}</ul>{% else %}<p>No implemented change was recorded for this reporting period.</p>{% endif %}
+  {% endif %}
+  <p class="figure-notes">{{ methodology_changes.basis }}</p>
+</section>
+
+<section class="panel" aria-labelledby="s9-heading">
+  <h2 id="s9-heading">9. Issues, Dependencies and COR Decisions</h2>
+  <p class="figure-notes">{{ methodology_pending.note }}</p>
+  {% if not pending_qa %}<p class="insufficient-data">No review record is pending QA.</p>{% endif %}
+  <table>
+    <caption>Reviews pending independent QA &mdash; {{ pending_qa|length|number }} record(s); provisional, not findings</caption>
+    <thead><tr><th scope="col">No.</th><th scope="col">System category (provisional)</th><th scope="col">Pending QA</th></tr></thead>
+    <tbody>
+      {% for category in categories %}<tr><th scope="row">{{ category_numbers[category] }}</th><td>{{ government_labels[category] }}</td><td>{{ stratification.pending_qa[category]|number }}</td></tr>{% endfor %}
+      <tr><th scope="row">&mdash;</th><td>No classification yet</td><td>{{ stratification.unclassified_pending|number }}</td></tr>
+    </tbody>
+  </table>
+  <p>The record-level case traceability list ({{ pending_qa|length|number }} pending row(s) plus every listed case) is delivered as the controlled annex{% if annex %} <b>{{ annex.filename }}</b> ({{ annex.rows|number }} rows, SHA-256 {{ annex.sha256 }}){% endif %}, not in this document. Each row carries the case reference, QHIN, provisional category, assignment / reviewer / QA status, recommended action and evidence reference.</p>
+  <p class="figure-notes">{{ list_note }}</p>
+</section>
+
+<section class="panel" aria-labelledby="s10-heading">
+  <h2 id="s10-heading">10. Supporting Traceability</h2>
+  <p>Every listed and pending review traces to its case identifier; each case's determination and independent QA are recorded as append-only decision events in DocuAction. The controlled annex carries the full provenance record and the case list; its SHA-256 is cited in the document control record and in Appendix C, so the annex and this document can be verified against each other.</p>
+</section>
+{% endblock %}
+
+{% block appendix %}
+<section class="appendix" aria-labelledby="prov-heading">
+  <h2 id="prov-heading">Appendix C &mdash; Provenance and controlled annex</h2>
+  <table>
+    <caption>Provenance record for {{ snapshot.report_id }} (the full record is repeated in the controlled annex)</caption>
+    <thead><tr><th scope="col">Attribute</th><th scope="col">Value</th></tr></thead>
+    <tbody>
+      <tr><th scope="row">Report ID / type</th><td>{{ snapshot.report_id }} &middot; {{ snapshot.report_type }}</td></tr>
+      <tr><th scope="row">Generated (UTC) / by</th><td>{{ snapshot.generation_timestamp }} &middot; {{ snapshot.generated_by }}</td></tr>
+      {% if provenance %}
+      <tr><th scope="row">Scope</th><td>{{ provenance.scope_type }} &middot; delivery job {{ provenance.delivery_job_id or 'Not recorded' }} &middot; intake {{ provenance.intake_id or 'Not recorded' }}</td></tr>
+      <tr><th scope="row">Review cycle / drawn sample</th><td>{{ provenance.review_cycle_id or snapshot.review_cycle_id }}{% if progress and progress.source.sample_id %} &middot; {{ progress.source.sample_id }}{% endif %}</td></tr>
+      <tr><th scope="row">Source delivery (this report)</th><td>{{ snapshot.source_provenance.get('original_filename') or 'Not recorded' }}{% if snapshot.source_provenance.get('record_count') is not none %} &middot; {{ snapshot.source_provenance.get('record_count')|number }} delivered source lines{% endif %}</td></tr>
+      <tr><th scope="row">Source file SHA-256</th><td>{% if snapshot.rce_source_file_sha256 %}{{ snapshot.rce_source_file_sha256 }}{% else %}Not available &mdash; {{ snapshot.source_provenance.get('unavailable_reason') or 'reason not recorded' }}{% endif %}</td></tr>
+      <tr><th scope="row">Source schema fingerprint</th><td>{{ snapshot.source_provenance.get('schema_fingerprint') or 'Not recorded' }}</td></tr>
+      <tr><th scope="row">Reconciliation snapshot</th><td>{% if provenance.reconciliation_snapshot_id %}{{ provenance.reconciliation_snapshot_id }}{% if progress and progress.reconciliation.available %} &middot; sequence {{ progress.reconciliation.sequence }} &middot; received {{ progress.reconciliation.received|number }} &middot; passed = {{ progress.reconciliation.passed }}{% endif %}{% else %}None persisted for this delivery{% endif %}</td></tr>
+      <tr><th scope="row">Build SHA</th><td>{{ provenance.build_sha or 'Not recorded' }}</td></tr>
+      {% else %}
+      <tr><th scope="row">Scope</th><td>GLOBAL &mdash; every review cycle; no delivery named</td></tr>
+      {% endif %}
+      <tr><th scope="row">B1&ndash;B4 rule version</th><td>{{ snapshot.b1_b4_rule_version or 'Not recorded' }} &middot; evidence rule version {{ evidence_rule_version or 'Not recorded' }}</td></tr>
+      <tr><th scope="row">Dataset snapshot version / evidence generation</th><td>{% if snapshot.evidence_generation %}{{ snapshot.evidence_generation }}{% else %}Not applicable &mdash; this deliverable reads the review-case ledger (review records and decision events) directly; no dimension-evidence generation of the verification report family is part of its scope{% endif %}</td></tr>
+      <tr><th scope="row">Data classification</th><td>{% if snapshot.data_classification == 'GOVERNMENT' %}Government data{% else %}DEVELOPMENT / TEST (synthetic sample) &mdash; not for Government delivery{% endif %}</td></tr>
+      <tr><th scope="row">Data payload hash</th><td>{{ snapshot.data_payload_hash }}</td></tr>
+      <tr><th scope="row">Template / Report Data Service version</th><td>{{ snapshot.template_version }} &middot; {{ snapshot.report_data_service_version }}</td></tr>
+      <tr><th scope="row">PDF engine</th><td>{{ snapshot.pdf_engine.get('engine') }} {{ snapshot.pdf_engine.get('version') or '' }}</td></tr>
+      {% if annex %}<tr><th scope="row">Controlled annex (CSV)</th><td>{{ annex.filename }} &middot; {{ annex.rows|number }} case rows &middot; {{ annex.bytes|number }} bytes &middot; SHA-256 {{ annex.sha256 }}</td></tr>{% endif %}
+    </tbody>
+  </table>
+  <p class="figure-notes">Every value in this report is read from the stored review-case ledger of the named delivery. Generation is read-only: no connector lookup runs and no classification is evaluated while a report is produced; regenerating from the same ledger produces the same figures.</p>
+</section>
 {% endblock %}

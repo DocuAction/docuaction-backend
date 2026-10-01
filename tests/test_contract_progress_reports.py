@@ -305,9 +305,10 @@ async def test_no_figure_is_hard_coded_a_second_population_reports_its_own_numbe
     assert pa["buckets_total"]["total"] != pb["buckets_total"]["total"]
     for p in (pa, pb):
         assert p["arithmetic"]["ok"]
+    html = _body((await _generate(db, "retrospective_weekly", a, persist=False))["html"])
     for banned in ("24,589", "94,231", "383"):
-        html = (await _generate(db, "retrospective_weekly", a, persist=False))["html"]
-        assert banned not in _body(html)
+        # as a figure (not inside a hash or an identifier)
+        assert not re.search(r"(?<![0-9a-fA-F.,-])" + re.escape(banned) + r"(?![0-9a-fA-F.,-])", html), banned
 
 
 @pytest.mark.asyncio
@@ -403,15 +404,17 @@ async def test_the_branded_front_page_carries_the_approved_fields_and_the_dev_ma
     assert "#E87722" not in html
     # section grammar
     common = ("Assignment and workflow status", "Reconciliation &amp; source integrity",
-              "Appendix A &mdash; Document Control", "Appendix B &mdash; Contract sections")
+              "Appendix A &mdash; Document Control", "Appendix B &mdash; Contract sections",
+              "Appendix C &mdash; Provenance and controlled annex", "classified cases are independently QA-approved",
+              "Source delivery (this report)", "Controlled annex (CSV)")
     per_kind = {
-        "retrospective_weekly": ("Current-period B1–B4 results", "QHIN coverage", "Important findings",
+        "retrospective_weekly": ("Provisional B1&ndash;B4 classifications &mdash; pending independent QA", "QHIN coverage", "Important findings",
                                  "Actions completed during the week", "Source categories used",
                                  "Suggested control improvements", "Next-week actions, dependencies and limitations"),
-        "retro_monthly": ("Monthly B1–B4 aggregate", "Weekly trend within the month", "QHIN comparison",
+        "retro_monthly": ("Provisional B1&ndash;B4 classifications &mdash; pending independent QA", "Weekly trend within the month", "QHIN comparison",
                           "Source / methodology summary", "Significant findings", "Implemented improvements",
                           "Outstanding dependencies and limitations"),
-        "retrospective_final": ("120-day aggregate B1–B4 results", "Trend by reporting period",
+        "retrospective_final": ("Provisional B1&ndash;B4 classifications &mdash; pending independent QA", "Trend by reporting period",
                                 "QHIN coverage and proportional allocation", "Sampling methodology &amp; confidence",
                                 "Major discrepancy themes", "Suggested controls", "Changes implemented",
                                 "Remaining limitations and external dependencies", "Controlled annex references"),

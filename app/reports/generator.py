@@ -25,6 +25,7 @@ identical across both renders.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from typing import Any, Dict, Optional
 
@@ -376,6 +377,7 @@ async def generate_report(
         # Progress deliverables: the marking printed on the executive front
         # page is set per render from the snapshot (see `_marking_context`).
         context.setdefault("progress", None)
+        context.setdefault("annex", None)   # identity of the controlled annex: known only at the final render
 
     try:
         report_id = await next_report_id(db, report_type)
@@ -404,9 +406,36 @@ async def generate_report(
             accessibility=accessibility,
         )
 
-        # 6. Final render, with the snapshot inside the document.
+        # 6. Final render, with the snapshot inside the document. A progress
+        # deliverable also carries the identity of its controlled annex
+        # (file name, size, SHA-256): the annex bytes are built from the
+        # dataset and this same snapshot first, so the document can cite the
+        # exact file that is registered beside it.
+        annex_meta = None
+        if dataset.get("progress"):
+            from app.reports.branding import deliverable_filename_stem
+            from app.reports.data.sow_progress_data import annex_csv, annex_provenance
+            from app.reports.engine.csv_engine import to_bytes
+
+            snap_dict = snapshot.to_dict()
+            annex_text = annex_csv(dataset["progress"], report_id=report_id,
+                                   marking=document_marking_for(snapshot.data_classification),
+                                   note=synthetic_note_for(snapshot.data_classification),
+                                   provenance=annex_provenance(dataset, snap_dict))
+            annex_bytes = to_bytes(annex_text)
+            stem = deliverable_filename_stem(
+                contract_number=dataset.get("contract_number"), task=dataset.get("task"),
+                deliverable=dataset.get("deliverable"),
+                kind=__import__("app.reports.data.sow_report_data", fromlist=["SOW_REPORT_TYPES"]).SOW_REPORT_TYPES.get(report_type, {}).get("kind"),
+                period_start=snapshot.reporting_period_start, period_end=snapshot.reporting_period_end,
+                report_id=report_id)
+            annex_meta = {"filename": f"{stem}.csv", "sha256": hashlib.sha256(annex_bytes).hexdigest(),
+                          "bytes": len(annex_bytes), "rows": len(dataset["progress"].get("annex_rows") or []),
+                          "text": annex_text}
         html = render_html(template, {**context, "snapshot": snapshot.to_dict(),
-                                      **_marking_context(snapshot.to_dict())})
+                                      **_marking_context(snapshot.to_dict()),
+                                      "annex": ({k: v for k, v in annex_meta.items() if k != "text"}
+                                                if annex_meta else None)})
 
         # Re-validate the document that is ACTUALLY delivered.
         #
@@ -429,13 +458,9 @@ async def generate_report(
         accessibility = final_accessibility
 
         if report_type in SOW_TYPES and dataset.get("progress"):
-            # The contract's controlled stratified-list annex (14 columns, case
-            # references only — no names, NPIs or addresses).
-            from app.reports.data.sow_progress_data import annex_csv
-
-            csv_text = annex_csv(dataset["progress"], report_id=report_id,
-                                 marking=document_marking_for(snapshot.data_classification),
-                                 note=synthetic_note_for(snapshot.data_classification))
+            # The controlled annex (provenance + 14-column case list) — the
+            # very bytes whose hash the document cites.
+            csv_text = annex_meta["text"]
         elif report_type in SOW_TYPES:
             from app.reports.engine.csv_engine import sow_report_to_csv
 

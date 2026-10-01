@@ -494,14 +494,18 @@ class SowReportDataService:
         from app.tefca_registry import models as reg
 
         plans: List[Dict[str, Any]] = []
+        intake_id = (self.scope or {}).get("intake_id")
         try:
-            rows = list((await self.db.execute(
-                select(reg.ReviewSample).order_by(reg.ReviewSample.drawn_at.desc())
-            )).scalars().all())
+            stmt = select(reg.ReviewSample).order_by(reg.ReviewSample.drawn_at.desc())
+            if intake_id:
+                # Delivery-scoped: ONLY the plans drawn for this delivery.
+                stmt = stmt.where(reg.ReviewSample.strata_config["source_intake_id"].astext == str(intake_id))
+            rows = list((await self.db.execute(stmt)).scalars().all())
         except Exception as exc:  # noqa: BLE001
             logger.warning("sow report: sampling plans unavailable: %s", exc)
             rows = []
-        for plan in rows[:10]:
+        shown = rows if intake_id else rows[:10]
+        for plan in shown:
             strata = getattr(plan, "strata_config", None) or {}
             plans.append({
                 "sample_id": str(getattr(plan, "id", "")),
@@ -524,6 +528,9 @@ class SowReportDataService:
                                   "submitted under D2, awaiting COR confirmation, and "
                                   "are reported as recorded on each plan."),
             "plans_on_record": len(rows),
+            "plans_shown": len(plans),
+            "plans_caption": (f"Sampling plan(s) drawn for this delivery ({len(plans)})" if intake_id
+                              else f"Official sampling plans on record ({len(rows)}; newest {len(plans)} shown)"),
             "plans": plans,
         }
 
@@ -608,7 +615,7 @@ class SowReportDataService:
             "categories": list(GOVERNMENT_CATEGORIES),
             "methodology_changes": self.methodology_changes(
                 params, include_implemented=meta["implemented_changes"]),
-            "sampling": data.get("sampling") or await self.sampling_summary(review_cycle_id),
+            "sampling": (await self.sampling_summary(review_cycle_id)) if scope is not None else (data.get("sampling") or await self.sampling_summary(review_cycle_id)),
             "scope": {
                 "reporting_period_start": period_start,
                 "reporting_period_end": period_end,
@@ -634,6 +641,11 @@ class SowReportDataService:
             data["scope"]["sample_id"] = scope["sample_id"]
             data["scope"]["intake_id"] = scope["intake_id"]
             data["scope"]["job_id"] = scope["job_id"]
+            if scope["job"] is not None:
+                from app.tefca_registry.rce import reconciliation as _recon
+
+                snap = await _recon.latest_snapshot(self.db, scope["job"].id)
+                data["reconciliation_snapshot_id"] = str(snap.id) if snap is not None else None
             if scope["intake_id"] or scope["sample_id"]:
                 data["progress"] = await SowProgressDataService(self.db).build(
                     kind=PROGRESS_KINDS[report_type], deliverable=meta["deliverable"],

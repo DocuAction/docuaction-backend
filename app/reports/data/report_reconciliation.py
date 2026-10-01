@@ -116,7 +116,7 @@ async def delivery_provenance(db, dataset: Dict[str, Any]) -> Dict[str, Any]:
         "delivery_job_id": job_id,
         "intake_id": intake_id,
         "delivery_label": delivery_label,
-        "reconciliation_snapshot_id": dataset.get("snapshot_id"),
+        "reconciliation_snapshot_id": dataset.get("snapshot_id") or dataset.get("reconciliation_snapshot_id"),
         "review_cycle_id": dataset.get("review_cycle_id"),
         "source_filename": filename,
         "source_file_sha256": sha256,
