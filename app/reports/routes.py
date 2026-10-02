@@ -529,6 +529,40 @@ async def _pdf_response(html: str, report_id: str) -> Response:
     from app.reports.engine.pdf_engine import (
         PDFEngineUnavailable, pdf_available, render_pdf, unavailable_reason)
 
+    # DEV-ONLY OPT-IN, 2026-10-02: this module's own docstring is "ONE ENGINE,
+    # DELIBERATELY" — WeasyPrint only, no silent fallback, because a different
+    # engine produces a structurally different, differently-accessible
+    # document. That policy is preserved: WeasyPrint stays the unconditional
+    # default below. The ONLY way to reach the Chromium/Playwright renderer is
+    # an operator or test explicitly setting `PDF_ENGINE_DEV_OVERRIDE` to the
+    # exact, loudly-named value below — never implied by WeasyPrint being
+    # unavailable, never a silent substitution. Its own response header marks
+    # it as untagged/non-production so a caller can never mistake it for the
+    # real engine's output.
+    import os
+
+    from app.reports.engine.pdf_engine import (
+        PDF_ENGINE_DEV_OVERRIDE_ENV, PDF_ENGINE_DEV_OVERRIDE_VALUE,
+        PlaywrightEngineUnavailable, render_pdf_dev_chromium_UNTAGGED)
+
+    if os.environ.get(PDF_ENGINE_DEV_OVERRIDE_ENV) == PDF_ENGINE_DEV_OVERRIDE_VALUE:
+        try:
+            pdf = await asyncio.wait_for(
+                asyncio.to_thread(render_pdf_dev_chromium_UNTAGGED, html, title=report_id),
+                timeout=PDF_RENDER_BUDGET_SECONDS)
+        except asyncio.TimeoutError:
+            raise HTTPException(503, (
+                f"PDF rendering exceeded the {PDF_RENDER_BUDGET_SECONDS:.0f}s "
+                "budget (dev Chromium engine)."))
+        except PlaywrightEngineUnavailable as exc:
+            raise HTTPException(503, str(exc))
+        return Response(
+            content=pdf, media_type="application/pdf",
+            headers=download_headers(
+                safe_filename(report_id, "pdf"),
+                extra={"X-PDF-Engine": "playwright-chromium-dev-only-UNTAGGED",
+                      "X-PDF-Accessibility": "NOT-EVALUATED-NOT-ACCESSIBLE"}))
+
     if not pdf_available():
         raise HTTPException(503, f"PDF generation is unavailable: {unavailable_reason()}")
     try:

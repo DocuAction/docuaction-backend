@@ -112,6 +112,159 @@ def render_pdf(html: str, *, title: Optional[str] = None,
         return document.write_pdf()
 
 
+#: Opt-in ONLY. Set by an operator/test, never implied by absence of
+#: WeasyPrint — see this module's own "ONE ENGINE, DELIBERATELY" docstring
+#: above, which this constant and `render_pdf_dev_chromium_UNTAGGED` are
+#: designed to respect, not quietly override. Checking this is the CALLER's
+#: responsibility (`app/reports/routes.py::_pdf_response`); this module does
+#: not auto-select an engine based on availability.
+PDF_ENGINE_DEV_OVERRIDE_ENV = "PDF_ENGINE_DEV_OVERRIDE"
+PDF_ENGINE_DEV_OVERRIDE_VALUE = "playwright_chromium_untagged_dev_only"
+
+
+class PlaywrightEngineUnavailable(RuntimeError):
+    """Playwright/Chromium is not installed (`pip install playwright` and
+    `python -m playwright install chromium`)."""
+
+
+@functools.lru_cache(maxsize=1)
+def _probe_playwright() -> tuple:
+    try:
+        import playwright.sync_api  # noqa: F401
+    except ImportError as exc:
+        return False, f"playwright is not installed ({exc})."
+    try:
+        with playwright.sync_api.sync_playwright() as p:
+            browser = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
+            browser.close()
+    except Exception as exc:  # noqa: BLE001 — e.g. chromium binary not installed
+        return False, (f"Playwright is installed but Chromium could not launch "
+                       f"({type(exc).__name__}: {exc}). Run "
+                       f"`python -m playwright install chromium`.")
+    return True, "Playwright/Chromium is available."
+
+
+def playwright_available() -> bool:
+    return _probe_playwright()[0]
+
+
+def render_pdf_dev_chromium_UNTAGGED(html: str, *, title: Optional[str] = None) -> bytes:
+    """DEV/VERIFICATION ENGINE — NOT THE PRODUCTION PATH, NOT ACCESSIBLE.
+
+    Deliberately named loudly (UNTAGGED in the function name, not just a
+    docstring) so a caller cannot use it without seeing what it is. Renders
+    via headless Chromium (Playwright), split into contiguous portrait/
+    landscape runs and merged with pypdf, because Chromium's print engine
+    does not implement CSS Paged Media Level 3 named pages / page-margin-box
+    `string()` content — the mechanism `app/reports/styles/uswds_report.css`
+    uses (`@page dp-landscape` + `.dp-wide { page: dp-landscape; }`) to put
+    this report's wide evidence tables in landscape within one otherwise-
+    portrait document under WeasyPrint. Without the split, Chromium silently
+    ignores that CSS and crushes every wide table into a portrait page.
+
+    THIS PDF HAS NO TAGGED STRUCTURE TREE. Confirmed, not assumed — see
+    `inspect_pdf_tagging()`. It has NEVER been evaluated for Section 508 or
+    PDF/UA conformance and must never be presented as accessible. It exists
+    so real PDF output can be inspected (page order, text-layer, pagination)
+    on hosts where WeasyPrint's native dependencies cannot be installed —
+    this host included.
+    """
+    available, reason = _probe_playwright()
+    if not available:
+        raise PlaywrightEngineUnavailable(reason)
+
+    import copy
+    import io
+
+    from bs4 import BeautifulSoup
+    from playwright.sync_api import sync_playwright
+    from pypdf import PdfReader, PdfWriter
+
+    soup = BeautifulSoup(html, "html.parser")
+    main = soup.body.find("main")
+    if main is None:
+        # No <main> to split (not this report's template shape) — render as
+        # one portrait document rather than fail outright.
+        runs = [(False, [])]
+        single_doc = True
+    else:
+        children = main.find_all(recursive=False)
+        runs = []
+        for child in children:
+            is_wide = "dp-wide" in (child.get("class") or [])
+            if runs and runs[-1][0] == is_wide:
+                runs[-1][1].append(child)
+            else:
+                runs.append((is_wide, [child]))
+        single_doc = False
+
+    def _build_doc(elements) -> str:
+        if single_doc:
+            return html
+        doc = copy.copy(soup)
+        new_main = doc.new_tag("main")
+        for el in elements:
+            new_main.append(copy.copy(el))
+        old_main = doc.body.find("main")
+        old_main.replace_with(new_main)
+        return str(doc)
+
+    writer = PdfWriter()
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
+        try:
+            for is_wide, elements in runs:
+                page = browser.new_page()
+                try:
+                    page.set_content(_build_doc(elements), wait_until="load")
+                    part_bytes = page.pdf(print_background=True, format="Letter",
+                                          landscape=is_wide)
+                finally:
+                    page.close()
+                reader = PdfReader(io.BytesIO(part_bytes))
+                for pg in reader.pages:
+                    writer.add_page(pg)
+        finally:
+            browser.close()
+
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
+def inspect_pdf_tagging(pdf_bytes: bytes) -> Dict[str, Any]:
+    """Ground truth, not an assumption: does this PDF have a structure tree?
+
+    Checks the document catalog for `/MarkInfo` and `/StructTreeRoot` — the
+    two things a real screen reader / PDF-UA validator looks for. Returns
+    both flags plus an explicit, unambiguous statement of what this does and
+    does not prove.
+    """
+    import io
+
+    from pypdf import PdfReader
+
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    catalog = reader.trailer["/Root"]
+    has_mark_info = "/MarkInfo" in catalog
+    marked = bool(catalog.get("/MarkInfo", {}).get("/Marked", False)) if has_mark_info else False
+    has_struct_tree = "/StructTreeRoot" in catalog
+    return {
+        "has_mark_info": has_mark_info,
+        "marked_true": marked,
+        "has_struct_tree_root": has_struct_tree,
+        "is_tagged_pdf": has_mark_info and marked and has_struct_tree,
+        "statement": (
+            "This checks ONLY for the presence of a structure tree (PDF/UA's "
+            "precondition). It does NOT check tag correctness, reading-order "
+            "fidelity, alt-text on images, color contrast, or any other "
+            "Section 508/PDF-UA requirement. A PDF with is_tagged_pdf=True is "
+            "NOT thereby proven 508-conformant; a PDF with is_tagged_pdf=False "
+            "is CERTAINLY not."
+        ),
+    }
+
+
 def engine_info() -> Dict[str, Any]:
     """Engine status, for the report snapshot and the health endpoint."""
     available, reason = _probe()

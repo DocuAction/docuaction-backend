@@ -242,7 +242,8 @@ class CMSDataAPIClient:
             params: Dict[str, Any] = {"size": PAGE_SIZE, "offset": offset}
             for k, v in filters.items():
                 params[f"filter[{k}]"] = v
-            resp = await _get_with_retry(url, params=params, headers=HTTP_HEADERS, timeout=self.timeout)
+            resp = await _get_with_retry(url, params=params, headers=HTTP_HEADERS, timeout=self.timeout,
+                                        source="CMS_PPEF")
             if resp.status_code != 200:
                 raise CMSUnavailable(f"HTTP {resp.status_code}")
             query.http_last_modified = query.http_last_modified or resp.headers.get("Last-Modified")
@@ -272,6 +273,7 @@ class CMSDataAPIClient:
                 params={"size": 1},
                 headers=HTTP_HEADERS,
                 timeout=HEALTH_TIMEOUT_SECONDS,
+                source="CMS_PPEF",
             )
             return resp.status_code == 200
         except Exception:

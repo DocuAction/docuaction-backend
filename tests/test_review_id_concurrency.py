@@ -241,14 +241,46 @@ def test_lock_is_the_same_primitive_finalize_plan_already_uses():
 def test_verify_and_classify_acquires_the_lock_before_allocating_any_id():
     """The lock must cover the whole batch, not be re-acquired per entity —
     per-entity acquisition inside the loop would still race between entities
-    of two DIFFERENT concurrent batches."""
+    of two DIFFERENT concurrent batches.
+
+    UPDATED 2026-10-02 (concurrency): evidence gathering (resolve +
+    build_evidence, the real per-entity wall-clock cost — see arc_pipeline's
+    profiling comment above `_EVIDENCE_GATHER_CONCURRENCY`) now runs
+    bounded-concurrently in a `_gather_all_evidence()` phase BEFORE the serial
+    persistence/classification loop. That phase never allocates a review id
+    (`_allocate_review_id` is only called in the serial loop below it), so the
+    lock-before-any-allocation invariant this test exists to prove is
+    unchanged.
+
+    UPDATED AGAIN 2026-10-02 (chunking, 1.23GB peak-RSS fix): gather+persist
+    now runs per CHUNK (`_GATHER_CHUNK_SIZE` entities at a time) rather than
+    once over the whole delivery, to stop holding every entity's evidence in
+    memory simultaneously. The lock is still acquired exactly ONCE, before
+    the outer chunk loop — not re-acquired per chunk — so review-id ordering
+    across chunks of the SAME call, and across two different concurrent
+    `verify_and_classify` calls, is unaffected. This test now asserts the
+    lock precedes the CHUNK loop itself (the thing that now contains both the
+    gather call and the id-allocating loop), rather than matching either
+    inner loop's literal header text directly."""
     import inspect
 
     from app.tefca_registry.rce import arc_pipeline
 
     source = inspect.getsource(arc_pipeline.verify_and_classify)
     assert source.count("await _lock_review_id_allocation(db)") == 1, (
-        "the lock must be acquired exactly once, before the per-entity loop")
+        "the lock must be acquired exactly once, before any id allocation")
     lock_pos = source.index("await _lock_review_id_allocation(db)")
-    loop_pos = source.index("for ref in entity_refs:")
-    assert lock_pos < loop_pos, "the lock must be acquired BEFORE the loop starts"
+    chunk_loop_pos = source.index("for _chunk_start in range(")
+    gather_pos = source.index("await _gather_all_evidence(chunk_refs")
+    loop_pos = source.index("for g in gathered:")
+    assert lock_pos < chunk_loop_pos, (
+        "the lock must be acquired before the chunk loop starts — it must "
+        "cover every chunk of this call, not be re-acquired per chunk")
+    assert lock_pos < gather_pos, (
+        "the lock must be acquired before evidence gathering starts")
+    assert lock_pos < loop_pos, (
+        "the lock must be acquired before the id-allocating loop starts")
+    allocate_pos = source.index("await _allocate_review_id(db)")
+    assert loop_pos < allocate_pos, (
+        "review-id allocation must happen inside the serial loop, never "
+        "during concurrent evidence gathering")

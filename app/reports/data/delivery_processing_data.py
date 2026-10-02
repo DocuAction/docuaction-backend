@@ -35,7 +35,7 @@ import logging
 import uuid
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, or_, select
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +56,22 @@ _PAGE = 5000
 
 #: Lineage rows printed in the report (the totals are always complete).
 _LINEAGE_ROW_CAP = 200
+
+#: PROFILED 2026-10-02: for a delivery at the real ~24,563-record September
+#: scale, `_dispositions`/`_findings`/`_identifiers` each materialised and
+#: inline-rendered one table row PER RECORD ("every received record", per the
+#: dispositions template caption) — unbounded report size, unbounded peak
+#: memory, and a PDF nobody could usefully read. The summary tables above each
+#: (counts, totals, by-severity) always come from separate aggregate COUNT
+#: queries and stay complete regardless of this cap; only the per-record
+#: detail TABLE is capped. Full per-record detail is the already-existing CSV
+#: annex (`dispositions.csv`, and the two new `findings.csv`/
+#: `identifiers.csv` routes added alongside this cap), referenced by the
+#: template next to each capped table — detail is redirected, never dropped.
+_DISPOSITIONS_ROW_CAP = 100
+_FINDINGS_ROW_CAP = 100
+_IDENTIFIER_ROW_CAP = 100
+_REVIEW_RECORD_ROW_CAP = 100
 
 
 def _iso(value: Any) -> Optional[str]:
@@ -361,17 +377,32 @@ class DeliveryProcessingDataService:
             return {"available": False, "counts": empty_counts,
                     "equation": disp.equation(empty_counts, 0), "records_received": 0,
                     "records_without_disposition": 0, "agrees_with_snapshot": None,
-                    "rows": [], "human_count": 0, "reconstructed_count": 0}
+                    "rows": [], "rows_shown": 0, "rows_total": 0,
+                    "human_count": 0, "reconstructed_count": 0}
 
         counts = await disp.counts_for_intake(self.db, intake.id)
         without = await disp.records_without_disposition(self.db, intake.id)
         per_record = await self._issue_counts_by_record(intake)
 
         rows: List[Dict[str, Any]] = []
+        human_count = 0
+        reconstructed_count = 0
+        rows_total = 0
         offset = 0
         while True:
             page = await disp.current_for_intake(self.db, intake.id, limit=_PAGE, offset=offset)
             for r in page:
+                rows_total += 1
+                # These two counters are summed across the WHOLE delivery, not
+                # just the capped detail table below — paging continues to the
+                # end regardless of the cap so these stay delivery-wide totals,
+                # matching what the summary paragraph above the table states.
+                if r.get("actor_type") == "HUMAN":
+                    human_count += 1
+                if r.get("reconstructed"):
+                    reconstructed_count += 1
+                if len(rows) >= _DISPOSITIONS_ROW_CAP:
+                    continue
                 f, w = per_record.get(str(r.get("source_record_id")), (0, 0))
                 rows.append({
                     "line_number": r.get("line_number"),
@@ -427,8 +458,10 @@ class DeliveryProcessingDataService:
             "records_without_disposition": without,
             "agrees_with_snapshot": agrees,
             "rows": rows,
-            "human_count": sum(1 for r in rows if r["actor_type"] == "HUMAN"),
-            "reconstructed_count": sum(1 for r in rows if r["reconstructed"]),
+            "rows_shown": len(rows),
+            "rows_total": rows_total,
+            "human_count": human_count,
+            "reconstructed_count": reconstructed_count,
         }
 
     async def _findings(self, intake) -> Dict[str, Any]:
@@ -436,7 +469,8 @@ class DeliveryProcessingDataService:
         from app.tefca_registry.rce import run_selection
 
         base = {"available": False, "total": 0, "by_severity": {s: 0 for s in SEVERITY_ORDER},
-                "by_code": [], "by_resolution": {}, "rows": [], "run_id": None,
+                "by_code": [], "by_resolution": {}, "rows": [], "rows_shown": 0,
+                "rows_total": 0, "run_id": None,
                 "rule_set_version": None, "open_high": 0}
         if intake is None:
             return base
@@ -452,22 +486,41 @@ class DeliveryProcessingDataService:
         by_res = dict((k or "(none)", int(v)) for k, v in (await self.db.execute(
             select(m.RceIssue.resolution, func.count()).where(scope)
             .group_by(m.RceIssue.resolution))).all())
+        # Delivery-wide, independent of the capped `rows` below (which only
+        # feeds the printed detail table) — see `_DISPOSITIONS_ROW_CAP`'s
+        # comment for why this delivery can have one issue row per record.
+        open_high_total = int((await self.db.execute(
+            select(func.count()).select_from(m.RceIssue)
+            .where(scope, m.RceIssue.resolution == "OPEN",
+                  m.RceIssue.severity.in_(("HIGH", "CRITICAL"))))).scalar() or 0)
+        rows_total = int((await self.db.execute(
+            select(func.count()).select_from(m.RceIssue).where(scope))).scalar() or 0)
+        # OPEN HIGH/CRITICAL first (the actionable ones), then by line number —
+        # a capped sample should show the findings that matter, not an
+        # arbitrary prefix of the delivery.
+        severity_rank = case(
+            (m.RceIssue.resolution == "OPEN",
+             case((m.RceIssue.severity == "CRITICAL", 0),
+                  (m.RceIssue.severity == "HIGH", 1), else_=2)),
+            else_=3)
         rows = (await self.db.execute(
             select(m.RceIssue, m.RceSourceRecord.line_number)
             .join(m.RceSourceRecord, m.RceSourceRecord.id == m.RceIssue.source_record_id,
                   isouter=True)
             .where(scope)
-            .order_by(m.RceSourceRecord.line_number, m.RceIssue.rule_id))).all()
+            .order_by(severity_rank, m.RceSourceRecord.line_number, m.RceIssue.rule_id)
+            .limit(_FINDINGS_ROW_CAP))).all()
         by_severity = {s: 0 for s in SEVERITY_ORDER}
         for _rule, _type, severity, n in by_code:
             by_severity[severity] = by_severity.get(severity, 0) + int(n)
-        open_high = sum(1 for issue, _ in rows
-                        if issue.resolution == "OPEN" and issue.severity in ("HIGH", "CRITICAL"))
+        open_high = open_high_total
         if run is None:
             self.limit("No completed quality run exists for this delivery; findings "
                        "cannot be stated (quality never ran, or never completed).")
         return {
             "available": run is not None,
+            "rows_shown": len(rows),
+            "rows_total": rows_total,
             "total": sum(by_severity.values()),
             "by_severity": by_severity,
             "by_code": [{"rule_id": r, "issue_type": t, "severity": s, "count": int(n)}
@@ -492,7 +545,8 @@ class DeliveryProcessingDataService:
         from app.tefca_registry.rce import traceability_models as tm
 
         if intake is None:
-            return {"available": False, "conflicts": [], "unresolved": 0, "events_total": 0}
+            return {"available": False, "conflicts": [], "rows_shown": 0, "rows_total": 0,
+                    "unresolved": 0, "events_total": 0}
         E = tm.TefcaIdentifierDecisionEvent
         events = (await self.db.execute(
             select(E).where(E.intake_id == intake.id)
@@ -518,7 +572,16 @@ class DeliveryProcessingDataService:
         unresolved = sum(1 for c in items if c["current_decision"] in ("CONFLICT_RAISED",
                                                                        "REQUEST_EVIDENCE",
                                                                        "DEFERRED", "ESCALATED"))
-        return {"available": True, "conflicts": items, "unresolved": unresolved,
+        # Unresolved conflicts first (the actionable ones) — see
+        # `_DISPOSITIONS_ROW_CAP`'s comment; the printed table is capped, the
+        # counts above it (unresolved, events_total) stay delivery-wide.
+        UNRESOLVED = ("CONFLICT_RAISED", "REQUEST_EVIDENCE", "DEFERRED", "ESCALATED")
+        items.sort(key=lambda c: (c["current_decision"] not in UNRESOLVED,
+                                  c["entity_id"], c["identifier_type"]))
+        conflicts_total = len(items)
+        shown = items[:_IDENTIFIER_ROW_CAP]
+        return {"available": True, "conflicts": shown, "rows_shown": len(shown),
+                "rows_total": conflicts_total, "unresolved": unresolved,
                 "events_total": len(events)}
 
     async def _verification(self, intake) -> Dict[str, Any]:
@@ -560,11 +623,13 @@ class DeliveryProcessingDataService:
         from app.tefca_registry.rce import traceability_models as tm
 
         empty = {"available": False, "disposition_events": [], "issue_resolutions": [],
-                 "review_records": [], "counts": {"disposition_events": 0,
-                                                  "issue_resolutions": 0,
-                                                  "review_records": 0, "open": 0,
-                                                  "claimed": 0, "qa_pending": 0,
-                                                  "qa_approved": 0}}
+                 "review_records": [], "rule_versions_in_effect": [],
+                 "review_records_shown": 0, "review_records_total": 0,
+                 "counts": {"disposition_events": 0,
+                           "issue_resolutions": 0,
+                           "review_records": 0, "open": 0,
+                           "claimed": 0, "qa_pending": 0,
+                           "qa_approved": 0}}
         if intake is None:
             return empty
         D = tm.RceDispositionEvent
@@ -580,10 +645,27 @@ class DeliveryProcessingDataService:
             .order_by(m.RceIssue.resolved_at))).scalars().all()
         record_ids = select(m.RceSourceRecord.id).where(
             m.RceSourceRecord.source_intake_id == intake.id)
+        # ReviewRecord is reachable two ways depending on which path created
+        # it: the manual single-entity review path (`review_service.
+        # run_review`) sets `source_record_id`; the bulk delivery-processing
+        # path (`arc_pipeline.verify_and_classify` — the one this report is
+        # FOR) sets `entity_id` instead and leaves `source_record_id` null.
+        # Filtering on `source_record_id` alone, as this query did before,
+        # silently excluded every arc_pipeline-created record from a delivery
+        # processed that way — this delivery's own classification history.
+        # `RceCuratedRecord.canonical_entity_id` is this intake's promoted
+        # entities; OR-ing both reaches both creation paths.
+        entity_ids = select(m.RceCuratedRecord.canonical_entity_id).where(
+            m.RceCuratedRecord.source_intake_id == intake.id,
+            m.RceCuratedRecord.canonical_entity_id.isnot(None))
         reviews = (await self.db.execute(
             select(reg.ReviewRecord)
-            .where(reg.ReviewRecord.source_record_id.in_(record_ids))
+            .where(or_(reg.ReviewRecord.source_record_id.in_(record_ids),
+                      reg.ReviewRecord.entity_id.in_(entity_ids)))
             .order_by(reg.ReviewRecord.created_at))).scalars().all()
+        rule_versions_in_effect = sorted({
+            r.classification_rule_version for r in reviews
+            if r.classification_rule_version is not None})
         open_items = sum(1 for r in reviews
                          if r.assigned_to_user_id is None and r.reviewer_resolution is None)
         claimed = sum(1 for r in reviews
@@ -601,18 +683,31 @@ class DeliveryProcessingDataService:
                 "resolution_notes": i.resolution_notes,
                 "qa_approved_by": i.qa_approved_by, "qa_approved_at": _iso(i.qa_approved_at),
             } for i in resolved],
+            # Open/unresolved first (the actionable ones) — see
+            # `_DISPOSITIONS_ROW_CAP`'s comment; one ReviewRecord per entity
+            # means this is delivery-scale too since the entity_id-linkage fix
+            # above now actually returns arc_pipeline's rows.
             "review_records": [{
                 "review_id": r.review_id, "source_record_id": _s(r.source_record_id),
                 "entity_id": _s(r.entity_id), "bucket": r.classification_bucket,
+                "classification_rule": r.classification_rule,
+                "classification_rule_version": r.classification_rule_version,
                 "resolution": r.reviewer_resolution, "reclassified_to": r.reclassified_to,
                 "assigned": r.assigned_to_user_id is not None,
                 "reviewed_at": _iso(r.reviewed_at), "reportable_at": _iso(r.reportable_at),
                 "created_at": _iso(r.created_at),
-            } for r in reviews],
+            } for r in sorted(
+                reviews,
+                key=lambda r: (r.reportable_at is not None, r.reviewed_at is not None,
+                              r.created_at),
+            )[:_REVIEW_RECORD_ROW_CAP]],
+            "rule_versions_in_effect": rule_versions_in_effect,
             "counts": {"disposition_events": len(human), "issue_resolutions": len(resolved),
                        "review_records": len(reviews), "open": open_items,
                        "claimed": claimed, "qa_pending": qa_pending,
                        "qa_approved": qa_approved},
+            "review_records_shown": min(len(reviews), _REVIEW_RECORD_ROW_CAP),
+            "review_records_total": len(reviews),
         }
 
     async def _lineage(self, intake, job) -> Dict[str, Any]:

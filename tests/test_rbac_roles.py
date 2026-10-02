@@ -442,6 +442,13 @@ def test_no_tefca_read_endpoint_sits_above_the_viewer_floor():
         "/api/tefca/rce/deliveries/{intake_id}/issues",
         "/api/tefca/rce/deliveries/{intake_id}/dispositions",
         "/api/tefca/rce/deliveries/{intake_id}/dispositions.csv",
+        # ── Reporting-architecture task (2026-10-02): concise-report CSV
+        # annexes ── Same floor, same justification, as dispositions.csv
+        # immediately above: each is the full-detail CSV behind a table the
+        # report now caps at 100 inline rows, not a new category of content.
+        "/api/tefca/rce/deliveries/{intake_id}/findings.csv",
+        "/api/tefca/rce/deliveries/{intake_id}/identifier-conflicts.csv",
+        "/api/tefca/rce/deliveries/{intake_id}/review-records.csv",
         "/api/tefca/rce/deliveries/{intake_id}/exceptions",
         "/api/tefca/rce/deliveries/{intake_id}/audit",
         # ── Reporting-architecture task (2026-10-01): verification drill-down ──

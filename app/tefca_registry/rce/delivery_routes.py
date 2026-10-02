@@ -1105,6 +1105,178 @@ async def dispositions_csv_route(
                                         "X-Returned-Rows": str(len(rows))}))
 
 
+@router.get("/deliveries/{intake_id}/findings.csv",
+            summary="Every finding of the current quality run, as a streamed CSV")
+async def findings_csv_route(
+    intake_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role(EVIDENCE_ROLE)),
+):
+    """The client-report's Findings section (section 5) caps its inline table
+    at `_FINDINGS_ROW_CAP` (first 100, open HIGH/CRITICAL first) — this route
+    is the full, per-finding detail the report points readers to, streamed
+    row-by-row so a delivery with many findings never holds them all in
+    memory at once (same pattern as verification-coverage's CSV export)."""
+    from app.tefca_registry.rce import models as m
+    from app.tefca_registry.rce import run_selection
+
+    intake = await _intake_or_404(db, intake_id)
+    scope = run_selection.current_issues_filter(intake.id)
+    row_count = int((await db.execute(
+        select(func.count()).select_from(m.RceIssue).where(scope))).scalar() or 0)
+
+    import csv
+    import io
+
+    from fastapi.responses import StreamingResponse
+
+    async def _rows():
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["issue_code", "line_number", "source_record_id", "rule_id",
+                         "rule_version", "issue_type", "severity", "field_name",
+                         "resolution", "correction_authority", "description",
+                         "resolved_by", "resolved_at"])
+        yield buf.getvalue()
+        stmt = (select(m.RceIssue, m.RceSourceRecord.line_number)
+               .join(m.RceSourceRecord, m.RceSourceRecord.id == m.RceIssue.source_record_id,
+                     isouter=True)
+               .where(scope)
+               .order_by(m.RceSourceRecord.line_number, m.RceIssue.rule_id))
+        result = await db.stream(stmt)
+        async for issue, line in result:
+            buf.seek(0)
+            buf.truncate(0)
+            writer.writerow([issue.issue_code, line, str(issue.source_record_id),
+                             issue.rule_id, issue.rule_version, issue.issue_type,
+                             issue.severity, issue.field_name, issue.resolution,
+                             issue.correction_authority, issue.description,
+                             issue.resolved_by,
+                             issue.resolved_at.isoformat() if issue.resolved_at else ""])
+            yield buf.getvalue()
+
+    from app.reports.routes import download_headers
+    return StreamingResponse(
+        _rows(), media_type="text/csv; charset=utf-8",
+        headers=download_headers(f"findings-{intake.id}.csv",
+                                 extra={"X-Returned-Rows": str(row_count)}))
+
+
+@router.get("/deliveries/{intake_id}/identifier-conflicts.csv",
+            summary="Every identifier conflict and its current decision, as CSV")
+async def identifier_conflicts_csv_route(
+    intake_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role(EVIDENCE_ROLE)),
+):
+    """The client-report's Identifier conflicts section (section 6) caps its
+    inline table at `_IDENTIFIER_ROW_CAP` (first 100, unresolved first) —
+    this route is the full export. Conflicts are grouped in Python from the
+    underlying decision-event ledger (the same logic the report's own data
+    layer uses, `_identifiers`), so unlike `findings.csv` this is not a true
+    streaming export — acceptable at this scale for the same reason
+    `dispositions.csv` already materialises its full result before writing."""
+    from app.tefca_registry.rce import traceability_models as tm
+
+    intake = await _intake_or_404(db, intake_id)
+    E = tm.TefcaIdentifierDecisionEvent
+    events = (await db.execute(
+        select(E).where(E.intake_id == intake.id)
+        .order_by(E.entity_id, E.identifier_type, E.sequence))).scalars().all()
+    conflicts: Dict[tuple, Dict[str, Any]] = {}
+    for ev in events:
+        key = (str(ev.entity_id), ev.identifier_type)
+        item = conflicts.setdefault(key, {
+            "entity_id": str(ev.entity_id), "identifier_type": ev.identifier_type,
+            "submitted_value": ev.submitted_value, "existing_value": ev.existing_value,
+            "verified_value": None, "selected_value": None,
+            "current_decision": None, "decided_at": None, "actor": None, "reason": None})
+        item["current_decision"] = ev.decision
+        item["decided_at"] = ev.decided_at.isoformat() if ev.decided_at else ""
+        item["actor"] = ev.actor
+        item["reason"] = ev.reason
+        item["verified_value"] = ev.verified_value or item["verified_value"]
+        item["selected_value"] = ev.selected_value
+
+    import csv
+    import io
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["entity_id", "identifier_type", "submitted_value", "existing_value",
+                     "verified_value", "selected_value", "current_decision", "decided_at",
+                     "actor", "reason"])
+    for c in conflicts.values():
+        writer.writerow([c["entity_id"], c["identifier_type"], c["submitted_value"],
+                         c["existing_value"], c["verified_value"], c["selected_value"],
+                         c["current_decision"], c["decided_at"], c["actor"], c["reason"]])
+
+    from app.reports.routes import download_headers
+    return Response(
+        content=buf.getvalue(), media_type="text/csv; charset=utf-8",
+        headers=download_headers(f"identifier-conflicts-{intake.id}.csv",
+                                 extra={"X-Returned-Rows": str(len(conflicts))}))
+
+
+@router.get("/deliveries/{intake_id}/review-records.csv",
+            summary="Every review record tied to this delivery, with its classification rule and version, as CSV")
+async def review_records_csv_route(
+    intake_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role(EVIDENCE_ROLE)),
+):
+    """The client-report's Analyst actions section (section 8) caps its
+    review-records table at `_REVIEW_RECORD_ROW_CAP` (first 100, unresolved/
+    not-yet-QA-approved first) — this route is the full export, including
+    every record's classification rule and rule-set version (the permanent
+    provenance a determination was made under, never altered by a later
+    rule-set upgrade). Reaches review records via EITHER `source_record_id`
+    (the manual single-entity review path) OR the delivery's own promoted
+    `entity_id`s (the bulk `arc_pipeline.verify_and_classify` path this report
+    exists for) — same linkage as `_analyst()` in the report's data layer."""
+    from app.tefca_registry import models as reg
+    from app.tefca_registry.rce import models as m
+
+    intake = await _intake_or_404(db, intake_id)
+    record_ids = select(m.RceSourceRecord.id).where(
+        m.RceSourceRecord.source_intake_id == intake.id)
+    entity_ids = select(m.RceCuratedRecord.canonical_entity_id).where(
+        m.RceCuratedRecord.source_intake_id == intake.id,
+        m.RceCuratedRecord.canonical_entity_id.isnot(None))
+    reviews = (await db.execute(
+        select(reg.ReviewRecord)
+        .where(or_(reg.ReviewRecord.source_record_id.in_(record_ids),
+                  reg.ReviewRecord.entity_id.in_(entity_ids)))
+        .order_by(reg.ReviewRecord.created_at))).scalars().all()
+
+    import csv
+    import io
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["review_id", "entity_id", "source_record_id", "classification_bucket",
+                     "classification_rule", "classification_rule_version",
+                     "reviewer_resolution", "reclassified_to", "assigned",
+                     "reviewed_at", "reportable_at", "created_at"])
+    for r in reviews:
+        writer.writerow([
+            r.review_id, str(r.entity_id) if r.entity_id else "",
+            str(r.source_record_id) if r.source_record_id else "",
+            r.classification_bucket, r.classification_rule, r.classification_rule_version,
+            r.reviewer_resolution, r.reclassified_to,
+            "yes" if r.assigned_to_user_id else "no",
+            r.reviewed_at.isoformat() if r.reviewed_at else "",
+            r.reportable_at.isoformat() if r.reportable_at else "",
+            r.created_at.isoformat() if r.created_at else "",
+        ])
+
+    from app.reports.routes import download_headers
+    return Response(
+        content=buf.getvalue(), media_type="text/csv; charset=utf-8",
+        headers=download_headers(f"review-records-{intake.id}.csv",
+                                 extra={"X-Returned-Rows": str(len(reviews))}))
+
+
 # ═══ exceptions ══════════════════════════════════════════════════════════════
 
 @router.get("/deliveries/{intake_id}/exceptions",
@@ -1246,30 +1418,46 @@ async def verification_coverage_entities_csv_route(
 ):
     from app.reports.data.verification_drilldown import (UnknownSourceOrOutcome,
                                                           UnprovenOutcomeRefused,
-                                                          outcome_entities_csv_rows)
+                                                          count_outcome_entities,
+                                                          iter_outcome_entities_csv_rows,
+                                                          validate_source_outcome)
 
     intake = await _intake_or_404(db, intake_id)
+    # Validate, and get the row count, BEFORE opening the streaming
+    # response: a 409/422 must reach the caller as a normal error response,
+    # and the X-Returned-Rows header must be set before the body starts --
+    # neither is possible once StreamingResponse begins sending. The count
+    # query is a plain COUNT(*), not a materialization of any row.
     try:
-        rows = await outcome_entities_csv_rows(
-            db, intake.id, source=source, outcome=outcome, sort=sort)
+        validate_source_outcome(source, outcome)
+        row_count = await count_outcome_entities(db, intake.id, source=source, outcome=outcome)
     except (UnprovenOutcomeRefused, UnknownSourceOrOutcome) as exc:
         raise _verification_drilldown_http(exc)
 
     import csv
     import io
 
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(["entity_id", "source_record_id", "line_number", "entity_name", "npi"])
-    for r in rows:
-        writer.writerow([r.entity_id, r.source_record_id, r.line_number, r.entity_name, r.npi])
-    body = buf.getvalue()
+    from fastapi.responses import StreamingResponse
+
+    async def _rows():
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["entity_id", "source_record_id", "line_number", "entity_name",
+                         "npi", "source_record_count"])
+        yield buf.getvalue()
+        async for r in iter_outcome_entities_csv_rows(
+                db, intake.id, source=source, outcome=outcome, sort=sort):
+            buf.seek(0)
+            buf.truncate(0)
+            writer.writerow([r.entity_id, r.source_record_id, r.line_number,
+                             r.entity_name, r.npi, r.source_record_count])
+            yield buf.getvalue()
 
     from app.reports.routes import download_headers
-    return Response(
-        content=body, media_type="text/csv; charset=utf-8",
+    return StreamingResponse(
+        _rows(), media_type="text/csv; charset=utf-8",
         headers=download_headers(f"verification-{source}-{outcome}-{intake.id}.csv",
-                                 extra={"X-Returned-Rows": str(len(rows))}))
+                                 extra={"X-Returned-Rows": str(row_count)}))
 
 
 async def _analyst_sample_summary(db, intake_id) -> Dict[str, Any]:
