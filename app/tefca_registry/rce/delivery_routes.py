@@ -90,6 +90,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import request_context
 from app.core.database import get_db
+from app.reports.engine.csv_engine import neutralise_row
 from app.core.error_handler import create_error_response
 from app.core.security import require_role, role_at_least
 from app.tefca_registry.rce import status_model
@@ -1147,12 +1148,13 @@ async def findings_csv_route(
         async for issue, line in result:
             buf.seek(0)
             buf.truncate(0)
-            writer.writerow([issue.issue_code, line, str(issue.source_record_id),
-                             issue.rule_id, issue.rule_version, issue.issue_type,
-                             issue.severity, issue.field_name, issue.resolution,
-                             issue.correction_authority, issue.description,
-                             issue.resolved_by,
-                             issue.resolved_at.isoformat() if issue.resolved_at else ""])
+            writer.writerow(neutralise_row([
+                issue.issue_code, line, str(issue.source_record_id),
+                issue.rule_id, issue.rule_version, issue.issue_type,
+                issue.severity, issue.field_name, issue.resolution,
+                issue.correction_authority, issue.description,
+                issue.resolved_by,
+                issue.resolved_at.isoformat() if issue.resolved_at else ""]))
             yield buf.getvalue()
 
     from app.reports.routes import download_headers
@@ -1207,9 +1209,10 @@ async def identifier_conflicts_csv_route(
                      "verified_value", "selected_value", "current_decision", "decided_at",
                      "actor", "reason"])
     for c in conflicts.values():
-        writer.writerow([c["entity_id"], c["identifier_type"], c["submitted_value"],
-                         c["existing_value"], c["verified_value"], c["selected_value"],
-                         c["current_decision"], c["decided_at"], c["actor"], c["reason"]])
+        writer.writerow(neutralise_row([
+            c["entity_id"], c["identifier_type"], c["submitted_value"],
+            c["existing_value"], c["verified_value"], c["selected_value"],
+            c["current_decision"], c["decided_at"], c["actor"], c["reason"]]))
 
     from app.reports.routes import download_headers
     return Response(
@@ -1259,7 +1262,7 @@ async def review_records_csv_route(
                      "reviewer_resolution", "reclassified_to", "assigned",
                      "reviewed_at", "reportable_at", "created_at"])
     for r in reviews:
-        writer.writerow([
+        writer.writerow(neutralise_row([
             r.review_id, str(r.entity_id) if r.entity_id else "",
             str(r.source_record_id) if r.source_record_id else "",
             r.classification_bucket, r.classification_rule, r.classification_rule_version,
@@ -1268,7 +1271,7 @@ async def review_records_csv_route(
             r.reviewed_at.isoformat() if r.reviewed_at else "",
             r.reportable_at.isoformat() if r.reportable_at else "",
             r.created_at.isoformat() if r.created_at else "",
-        ])
+        ]))
 
     from app.reports.routes import download_headers
     return Response(
@@ -1423,41 +1426,97 @@ async def verification_coverage_entities_csv_route(
                                                           validate_source_outcome)
 
     intake = await _intake_or_404(db, intake_id)
-    # Validate, and get the row count, BEFORE opening the streaming
-    # response: a 409/422 must reach the caller as a normal error response,
-    # and the X-Returned-Rows header must be set before the body starts --
-    # neither is possible once StreamingResponse begins sending. The count
-    # query is a plain COUNT(*), not a materialization of any row.
     try:
         validate_source_outcome(source, outcome)
-        row_count = await count_outcome_entities(db, intake.id, source=source, outcome=outcome)
     except (UnprovenOutcomeRefused, UnknownSourceOrOutcome) as exc:
         raise _verification_drilldown_http(exc)
 
+    # Consistent snapshot between the COUNT and the stream (2026-10-03):
+    # a DEDICATED connection, separate from the shared per-request `db`
+    # session. Postgres requires `SET TRANSACTION ISOLATION LEVEL` to be a
+    # transaction's first statement -- the shared session's first statement
+    # is already spent by the time this route body runs (the `require_role`
+    # auth dependency queries the user row first, and FastAPI resolves
+    # dependencies before the route function). A fresh connection sidesteps
+    # that entirely: its first statement genuinely is this one, so the row
+    # count registered up front and the rows later streamed are guaranteed
+    # to be read against the IDENTICAL database snapshot, not merely
+    # "probably fine because the tables are append-only".
+    from app.core.database import engine
+
+    conn = await engine.connect()
+    await conn.execution_options(isolation_level="REPEATABLE READ")
+    await conn.execute(text("SET TRANSACTION READ ONLY"))
+    try:
+        row_count = await count_outcome_entities(conn, intake.id, source=source, outcome=outcome)
+    except (UnprovenOutcomeRefused, UnknownSourceOrOutcome) as exc:
+        await conn.close()
+        raise _verification_drilldown_http(exc)
+
     import csv
+    import hashlib
     import io
 
     from fastapi.responses import StreamingResponse
 
+    export_id = str(uuid.uuid4())
+
     async def _rows():
         buf = io.StringIO()
         writer = csv.writer(buf)
-        writer.writerow(["entity_id", "source_record_id", "line_number", "entity_name",
-                         "npi", "source_record_count"])
-        yield buf.getvalue()
-        async for r in iter_outcome_entities_csv_rows(
-                db, intake.id, source=source, outcome=outcome, sort=sort):
-            buf.seek(0)
-            buf.truncate(0)
-            writer.writerow([r.entity_id, r.source_record_id, r.line_number,
-                             r.entity_name, r.npi, r.source_record_count])
-            yield buf.getvalue()
+        digest = hashlib.sha256()
+        byte_count = 0
+        streamed_rows = 0
+
+        def _emit(text_chunk: str) -> str:
+            nonlocal byte_count
+            encoded = text_chunk.encode("utf-8")
+            digest.update(encoded)
+            byte_count += len(encoded)
+            return text_chunk
+
+        try:
+            writer.writerow(["entity_id", "source_record_id", "line_number", "entity_name",
+                             "npi", "source_record_count"])
+            yield _emit(buf.getvalue())
+            async for r in iter_outcome_entities_csv_rows(
+                    conn, intake.id, source=source, outcome=outcome, sort=sort):
+                buf.seek(0)
+                buf.truncate(0)
+                writer.writerow(neutralise_row([r.entity_id, r.source_record_id, r.line_number,
+                                 r.entity_name, r.npi, r.source_record_count]))
+                streamed_rows += 1
+                yield _emit(buf.getvalue())
+        finally:
+            # The dedicated connection's read-only transaction is only ever
+            # committed/rolled back here, after the SAME snapshot has served
+            # both the count above and every row below -- never reused for
+            # anything else, never left open past this one export.
+            await conn.rollback()
+            await conn.close()
+
+        # Registered manifest (2026-10-03): the logical row count this SAME
+        # consistent-snapshot transaction counted up front, the exact byte
+        # count and SHA-256 of what was actually streamed (computed
+        # incrementally, never buffering the whole export in memory to get
+        # them), and the row-count-mismatch check that would catch a
+        # snapshot inconsistency directly rather than assuming one can't
+        # happen. Checkable by `export_id` in the structured log, same
+        # pattern this app already uses for request-level audit facts.
+        logger.info(
+            "csv_export_manifest",
+            extra={"export_id": export_id, "intake_id": str(intake.id),
+                  "source": source, "outcome": outcome, "sort": sort,
+                  "registered_row_count": row_count, "streamed_row_count": streamed_rows,
+                  "row_count_reconciles": row_count == streamed_rows,
+                  "byte_count": byte_count, "sha256": digest.hexdigest()})
 
     from app.reports.routes import download_headers
     return StreamingResponse(
         _rows(), media_type="text/csv; charset=utf-8",
         headers=download_headers(f"verification-{source}-{outcome}-{intake.id}.csv",
-                                 extra={"X-Returned-Rows": str(row_count)}))
+                                 extra={"X-Returned-Rows": str(row_count),
+                                       "X-Export-Id": export_id}))
 
 
 async def _analyst_sample_summary(db, intake_id) -> Dict[str, Any]:

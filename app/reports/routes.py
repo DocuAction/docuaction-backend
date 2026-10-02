@@ -543,7 +543,35 @@ async def _pdf_response(html: str, report_id: str) -> Response:
 
     from app.reports.engine.pdf_engine import (
         PDF_ENGINE_DEV_OVERRIDE_ENV, PDF_ENGINE_DEV_OVERRIDE_VALUE,
-        PlaywrightEngineUnavailable, render_pdf_dev_chromium_UNTAGGED)
+        PlaywrightEngineUnavailable, render_pdf_dev_chromium_UNTAGGED,
+        render_pdf_dev_chromium_tagged)
+
+    #: A second, separate opt-in value, same ENV var. Produces a single-
+    #: document, tagged render (real /StructTreeRoot, confirmed non-trivial —
+    #: see pdf_engine.inspect_pdf_tagging) instead of the split+merge
+    #: UNTAGGED path above, which was confirmed to drop its structure tree
+    #: entirely on merge. Still explicitly opt-in, still not the production
+    #: default, still NOT claimed Section 508/PDF-UA conformant — a
+    #: structure tree is a precondition, not a certificate.
+    PDF_ENGINE_DEV_OVERRIDE_TAGGED_VALUE = "playwright_chromium_tagged_dev_only"
+
+    if os.environ.get(PDF_ENGINE_DEV_OVERRIDE_ENV) == PDF_ENGINE_DEV_OVERRIDE_TAGGED_VALUE:
+        try:
+            pdf = await asyncio.wait_for(
+                asyncio.to_thread(render_pdf_dev_chromium_tagged, html, title=report_id),
+                timeout=PDF_RENDER_BUDGET_SECONDS)
+        except asyncio.TimeoutError:
+            raise HTTPException(503, (
+                f"PDF rendering exceeded the {PDF_RENDER_BUDGET_SECONDS:.0f}s "
+                "budget (dev Chromium tagged engine)."))
+        except PlaywrightEngineUnavailable as exc:
+            raise HTTPException(503, str(exc))
+        return Response(
+            content=pdf, media_type="application/pdf",
+            headers=download_headers(
+                safe_filename(report_id, "pdf"),
+                extra={"X-PDF-Engine": "playwright-chromium-dev-only-TAGGED",
+                      "X-PDF-Accessibility": "STRUCTURE-TREE-PRESENT-NOT-508-EVALUATED"}))
 
     if os.environ.get(PDF_ENGINE_DEV_OVERRIDE_ENV) == PDF_ENGINE_DEV_OVERRIDE_VALUE:
         try:
