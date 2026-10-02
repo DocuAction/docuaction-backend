@@ -132,14 +132,26 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      # `reason` and `handshake_issue` are workflow_dispatch inputs -- arbitrary
+      # operator-supplied text. Interpolating `${{ inputs.* }}` directly into a
+      # `run:` script (the previous shape) is a script-injection surface: the
+      # expression is substituted into the shell source BEFORE the shell ever
+      # runs, so a value containing shell metacharacters (backticks, `$(...)`,
+      # quotes) would be executed, not treated as data. Both now flow through
+      # `env:` and every expansion below is double-quoted, so the shell only
+      # ever sees them as the CONTENTS of a variable, never as script text.
       - name: Report runner IPv4 and wait for the operator's temporary /32 (bounded)
         env:
           GH_TOKEN: ${{ github.token }}
+          HANDSHAKE_ISSUE: ${{ inputs.handshake_issue }}
+          RUN_REASON: ${{ inputs.reason }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           IP=$(curl -s https://api.ipify.org)
           echo "runner public IPv4: $IP"
-          gh issue comment "${{ inputs.handshake_issue }}" --repo "${{ github.repository }}" \
-            --body "dev-readonly-diagnostic run ${{ github.run_id }} (\"${{ inputs.reason }}\"): runner public IPv4 **$IP** - waiting up to 20 min for a temporary /32 (start = end = this address). Remove it when this run finishes. This identity cannot add or remove it itself."
+          gh issue comment "$HANDSHAKE_ISSUE" --repo "$REPO" \
+            --body "dev-readonly-diagnostic run $RUN_ID (\"$RUN_REASON\"): runner public IPv4 **$IP** - waiting up to 20 min for a temporary /32 (start = end = this address). Remove it when this run finishes. This identity cannot add or remove it itself."
           for i in $(seq 1 80); do
             if python -c "import socket;s=socket.socket();s.settimeout(5);s.connect(('$PGHOST',5432))" 2>/dev/null; then
               echo "DEV Postgres reachable after $i attempt(s)"; exit 0
