@@ -69,12 +69,22 @@ name: DEV Read-Only Diagnostic (governed, aggregate-only)
 #     A cleanup step that attempted removal would imply (falsely) that this identity can
 #     create or own the rule.
 #
-# Hardening (2026-10-02, audit-and-fix session): external actions pinned to
-# verified full commit SHAs, each with a readable version comment, resolved
-# via the GitHub API (not guessed) -- actions/checkout@11d5960... (v4.4.0),
-# actions/setup-python@a26af69... (v5.6.0), azure/login@7184910... (v2.3.1,
-# the v2 annotated tag dereferenced to its target commit). Same releases as
-# before (@v4/@v5/@v2); nothing upgraded or downgraded.
+# Hardening pass (2026-10-02, audit-and-fix session) -- three narrow commits,
+# each locally tested with harmless synthetic values before commit, nothing
+# dispatched:
+#   1. external actions pinned to verified full commit SHAs, each with a
+#      readable version comment, resolved via the GitHub API (not guessed):
+#      actions/checkout@11d5960... (v4.4.0), actions/setup-python@a26af69...
+#      (v5.6.0), azure/login@7184910... (v2.3.1, the v2 annotated tag
+#      dereferenced to its target commit). Same releases as before
+#      (@v4/@v5/@v2); nothing upgraded or downgraded.
+#   2. `${{ inputs.reason }}` / `${{ inputs.handshake_issue }}` no longer
+#      interpolated directly into a `run:` script (a script-injection
+#      surface -- the expression substitutes into the shell source before
+#      the shell runs it). Both now flow through `env:` and are read as
+#      quoted shell variables, so the shell only ever sees them as data.
+#   3. `handshake_issue` is validated as a positive integer in its own step,
+#      before the Azure login or the `gh issue comment` call that uses it.
 
 on:
   workflow_dispatch:
