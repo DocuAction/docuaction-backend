@@ -143,12 +143,16 @@ _SOURCE_CASE = """
           WHEN 'sam' THEN 'sam' WHEN 'sam_gov' THEN 'sam' WHEN 'sam.gov' THEN 'sam' WHEN 'samgov' THEN 'sam'
         END"""
 
-_COVERAGE_COUNTS_SQL = f"""
-    WITH pop_uuid AS (
-        SELECT DISTINCT canonical_entity_id AS eid
-        FROM rce_curated_records
-        WHERE source_intake_id = CAST(:i AS uuid) AND canonical_entity_id IS NOT NULL),
-    pop_text AS (SELECT CAST(eid AS text) AS eid FROM pop_uuid),
+#: The per-evidence-row (source, outcome) computation, shared verbatim with
+#: `app.reports.data.verification_drilldown` (the paginated per-entity list
+#: behind each coverage card's clickable totals): the drill-down's row count
+#: for (source, outcome) must equal this module's own aggregate count for the
+#: same (source, outcome) EXACTLY, and the only way to guarantee that is one
+#: SQL fragment neither module re-derives independently. Requires `pop_uuid`
+#: (distinct `canonical_entity_id` of the population) and `pop_text` (the same,
+#: cast to text, for `tefca_dimension_evidence.entity_id`) as CTEs already
+#: defined by the caller.
+EVIDENCE_ROWS_CTE_SQL = f"""
     rows AS (
         SELECT {_SOURCE_CASE.format(col='v.source')} AS key,
                v.entity_id::text AS eid,
@@ -171,6 +175,15 @@ _COVERAGE_COUNTS_SQL = f"""
                     WHEN 'FAIL' THEN 'failed' WHEN 'CONFLICT' THEN 'failed' ELSE NULL END AS outcome
         FROM tefca_dimension_evidence d
         WHERE d.entity_id IN (SELECT eid FROM pop_text))
+"""
+
+_COVERAGE_COUNTS_SQL = f"""
+    WITH pop_uuid AS (
+        SELECT DISTINCT canonical_entity_id AS eid
+        FROM rce_curated_records
+        WHERE source_intake_id = CAST(:i AS uuid) AND canonical_entity_id IS NOT NULL),
+    pop_text AS (SELECT CAST(eid AS text) AS eid FROM pop_uuid),
+    {EVIDENCE_ROWS_CTE_SQL}
     SELECT key,
            count(DISTINCT eid) AS attempted,
            count(DISTINCT eid) FILTER (WHERE outcome = 'verified') AS verified,

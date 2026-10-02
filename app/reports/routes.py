@@ -56,6 +56,31 @@ _FILENAME_SAFE = re.compile(r"[^A-Za-z0-9._-]")
 MAX_FILENAME = 120
 
 
+#: AP-001: `GET /{report_id}` is a metadata/provenance endpoint (<2s gate,
+#: workbook case AP-001 — 0.96s/0.88s normally, 3.95s on the 24,589-row job).
+#: `report_data["dataset"]` carries whatever record-level arrays the generator
+#: built to render annexes (e.g. `dataset["progress"]["annex_rows"]`) — full
+#: rows are already reachable through the dedicated annex/CSV download route,
+#: so this endpoint has no reason to also serialise and transfer them. Any
+#: list this long gets summarised instead of transferred.
+_DATASET_LIST_PREVIEW_LIMIT = 25
+
+
+def _lightweight_dataset(value: Any) -> Any:
+    """`value` with any list longer than `_DATASET_LIST_PREVIEW_LIMIT` replaced
+    by a count summary. Recurses into dicts and lists; scalars pass through.
+    """
+    if isinstance(value, list):
+        if len(value) > _DATASET_LIST_PREVIEW_LIMIT:
+            return {"_truncated": True, "count": len(value),
+                    "note": "Full rows are available from this report's annex/CSV download, "
+                            "not this metadata endpoint."}
+        return [_lightweight_dataset(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _lightweight_dataset(item) for key, item in value.items()}
+    return value
+
+
 def safe_filename(stem: str, extension: str) -> str:
     """A filename that cannot escape the header it sits in.
 
@@ -278,6 +303,154 @@ async def generate(
                         headers=download_headers(
                             safe_filename(result["report_id"], "html")))
     return _summary(result)
+
+
+@router.post("/generate/jobs", status_code=202,
+             summary="Queue report generation as a durable background job")
+async def generate_async(
+    request: GenerateReportRequest,
+    db: AsyncSession = Depends(get_db),
+    # Same floor as the synchronous route (Decision 1): the completed job
+    # answers with the report's full content, so queuing one needs the same
+    # role as reading one.
+    user=Depends(require_role_audited("reviewer", resource_type="report")),
+):
+    """Queue a report generation instead of rendering it inline.
+
+    `POST /generate` still exists unchanged for every existing caller. This is
+    the same request body, answered in under two seconds with a receipt
+    instead of the document: `POST /reports/{id}/html` etc. still serve the
+    finished report once `GET /generate/jobs/{job_id}` reports SUCCEEDED, the
+    same download routes the synchronous path already uses.
+
+    Reuses `report_export_jobs` (added for the ONC review workbook export,
+    Step #17) rather than a second job table or queue: the durable state,
+    heartbeat, reaper and partial-unique-index concurrency guard it already
+    has are exactly what a queued report generation needs too.
+    """
+    from app.reports.data.delivery_processing_data import resolve_delivery
+    from app.reports.data.export_jobs import (ExportJobConflict, active_job,
+                                              REPORT_GENERATION_EXPORT_TYPE_PREFIX,
+                                              report_generation_identity, request_job)
+    from app.reports.data.source_provenance import resolve_classification
+    from app.reports.engine.template_engine import TEMPLATE_VERSION
+    from app.reports.generator import ReportParameterError
+
+    parameters = dict(request.parameters or {})
+    for key in ("period_start", "period_end", "suggested_changes", "implemented_changes"):
+        value = getattr(request, key)
+        if value:
+            parameters[key] = value
+    if request.review_cycle_id and "review_cycle_id" not in parameters:
+        parameters["review_cycle_id"] = request.review_cycle_id
+
+    require_explicit_scope(request.report_type, parameters)
+
+    # Async generation is delivery-scoped ONLY (migration review,
+    # qa-evidence/2026-10-01-reporting-architecture/MIGRATION-REVIEW-20261001-report-generation-jobs.md):
+    # `report_export_jobs.source_intake_id` stays NOT NULL on purpose, so a
+    # review-cycle-only or period-only request -- valid for the synchronous
+    # route, but naming no one delivery -- is refused here rather than
+    # queued with no intake. A caller that needs one of those report types
+    # still has the unchanged synchronous `POST /generate`.
+    if not (parameters.get("job_id") or parameters.get("intake_id")):
+        raise HTTPException(422, detail={
+            "error": ("Asynchronous generation requires a delivery: "
+                      "parameters.job_id or parameters.intake_id. A "
+                      "review-cycle-only or period-only report is not yet "
+                      "supported on this path -- use POST /generate."),
+            "code": "ASYNC_GENERATION_REQUIRES_DELIVERY"})
+    try:
+        resolved = await resolve_delivery(
+            db, job_id=parameters.get("job_id"), intake_id=parameters.get("intake_id"))
+    except ReportParameterError as exc:
+        raise parameter_error_http(exc)
+    intake = resolved.get("intake")
+    if intake is None:
+        raise HTTPException(404, detail={
+            "error": "The named delivery has no intake to scope this report to.",
+            "code": "DELIVERY_NOT_FOUND"})
+    intake_id = intake.id
+
+    classification = await resolve_classification(db)
+    requested_by = getattr(user, "email", None) or "SYSTEM"
+
+    # Carries everything `generate_report()` needs to replay this exact
+    # request from the worker (`run_report_generation_job`): the normal
+    # `parameters` dict, plus `format` and `review_cycle_id`, which the
+    # synchronous route keeps as separate call arguments rather than folding
+    # into `parameters`.
+    stored_parameters = {**parameters, "format": request.format,
+                         "review_cycle_id": request.review_cycle_id}
+
+    identity = report_generation_identity(
+        report_type=request.report_type, format=request.format,
+        parameters=parameters, review_cycle_id=request.review_cycle_id,
+        template_version=TEMPLATE_VERSION, principal=requested_by,
+        idempotency_key=request.idempotency_key)
+
+    before = await active_job(db, identity)
+    try:
+        job = await request_job(
+            db, identity=identity,
+            export_type=f"{REPORT_GENERATION_EXPORT_TYPE_PREFIX}{request.report_type}",
+            intake_id=intake_id, classification=classification,
+            generator_version=TEMPLATE_VERSION, requested_by=requested_by,
+            report_type=request.report_type, request_parameters=stored_parameters)
+    except ExportJobConflict as exc:
+        raise HTTPException(409, str(exc))
+
+    reused = before is not None and str(before.id) == str(job.id)
+    return {
+        **job.to_dict(),
+        "reused_existing_job": reused,
+        "status_url": f"/api/reports/generate/jobs/{job.id}",
+        # Short and fixed: the job table has no progress percentage to base a
+        # longer estimate on, and a client should poll promptly after a 202.
+        "retry_after": 2,
+    }
+
+
+@router.get("/generate/jobs/{job_id}",
+            summary="Status of one queued report generation")
+async def generate_job_status(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("viewer")),
+):
+    """Where one queued generation got to. READS ONLY -- polling must never
+    start work (same rule the ONC export's status route follows).
+
+    Readable by whoever requested it, and by a program manager or
+    administrator who supervise the queue. Everyone else gets 404, not 403,
+    for the same enumeration-oracle reason the ONC export status route gives.
+    """
+    from app.core.security import ROLE_HIERARCHY
+    from app.reports.data.export_jobs import get_job
+
+    job = await get_job(db, job_id)
+    if job is None:
+        raise HTTPException(404, "No such report generation job.")
+
+    email = (getattr(user, "email", None) or "").lower()
+    role = (getattr(user, "role", "") or "").lower()
+    supervises = ROLE_HIERARCHY.get(role, 0) >= ROLE_HIERARCHY["program_manager"]
+    if not supervises and (job.requested_by or "").lower() != email:
+        raise HTTPException(404, "No such report generation job.")
+
+    payload = job.to_dict()
+    if job.state == job.STATE_SUCCEEDED and job.report_id:
+        report_format = (job.request_parameters or {}).get("format", "html")
+        payload["report"] = {
+            "report_id": job.report_id,
+            "formats": {
+                "html": f"/api/reports/{job.report_id}/html",
+                "pdf": f"/api/reports/{job.report_id}/pdf",
+                "csv": f"/api/reports/{job.report_id}/csv",
+            },
+            "requested_format": report_format,
+        }
+    return payload
 
 
 async def _replay_for_key(db, key: str, user_id) -> Optional[Dict[str, Any]]:
@@ -751,7 +924,7 @@ async def get_report(
     artifacts = [link_artifact_summary(a) for a in await artifacts_for_report(db, report_id)]
     return {
         **base,
-        "dataset": data.get("dataset", {}),
+        "dataset": _lightweight_dataset(data.get("dataset", {})),
         # Present only when the report was generated for a named delivery and
         # a reconciliation snapshot existed to link it to. One link per stored
         # rendering; `delivery_link` is the first (the HTML) for callers that

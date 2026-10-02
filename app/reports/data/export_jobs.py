@@ -35,6 +35,7 @@ certified in Step #17.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -82,9 +83,44 @@ def job_identity(*, intake_id, workbook_version: str, engine_version: str,
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
+#: Prefix on `export_type` for a report-generation job, so one table tells the
+#: two job kinds apart (the ONC workbook export is the bare product name,
+#: e.g. "onc_review_workbook") without a second "kind" column.
+REPORT_GENERATION_EXPORT_TYPE_PREFIX = "report:"
+
+
+def report_generation_identity(*, report_type: str, format: str,
+                               parameters: Dict[str, Any],
+                               review_cycle_id: Optional[str],
+                               template_version: str,
+                               principal: str,
+                               idempotency_key: Optional[str] = None) -> str:
+    """What makes two `/generate` (async) requests the SAME request.
+
+    An explicit `idempotency_key` is scoped to the requesting principal and
+    wins outright: the same person resubmitting the same key gets the same
+    job back even if a parameter were somehow different, and a NEW key is a
+    new request even with identical parameters (QA-031's rule for the
+    synchronous path, carried over here). With no key, two requests for the
+    same report_type/format/scope/parameters are the same request — the
+    content-hash fallback `job_identity` already uses for the ONC workbook.
+    """
+    if idempotency_key:
+        material = "|".join(["generate-idem", principal, idempotency_key])
+    else:
+        material = "|".join([
+            "generate", report_type, format, template_version,
+            str(review_cycle_id),
+            json.dumps(parameters, sort_keys=True, default=str),
+        ])
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
 async def request_job(db, *, identity: str, export_type: str, intake_id,
                       classification: str, generator_version: str,
-                      requested_by: str) -> Any:
+                      requested_by: str,
+                      report_type: Optional[str] = None,
+                      request_parameters: Optional[Dict[str, Any]] = None) -> Any:
     """Return the job for this identity, creating one only if none is active.
 
     THE THREE OUTCOMES, AND WHY EACH IS RIGHT
@@ -120,6 +156,8 @@ async def request_job(db, *, identity: str, export_type: str, intake_id,
         created_at=datetime.utcnow(),
         heartbeat_at=datetime.utcnow(),
         attempt_count=0,
+        report_type=report_type,
+        request_parameters=request_parameters,
     )
     db.add(job)
     try:
