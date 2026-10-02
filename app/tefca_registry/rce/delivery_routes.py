@@ -1178,6 +1178,100 @@ async def verification_coverage_route(
     return result
 
 
+#: `verification-coverage` above is viewer-floor COUNTS only (Decision 1 of
+#: the pre-merge review: content that returns delivered values needs
+#: `reviewer`). These two routes return the entities themselves (name, NPI)
+#: behind one coverage card's count, so they share the evidence floor the
+#: disposition/exception routes above use, not the coverage route's.
+
+
+def _verification_drilldown_http(exc) -> HTTPException:
+    from app.reports.data.verification_drilldown import (UnknownSourceOrOutcome,
+                                                          UnprovenOutcomeRefused)
+
+    if isinstance(exc, UnprovenOutcomeRefused):
+        return HTTPException(409, detail={"error": str(exc), "code": "OUTCOME_RECONCILIATION_PENDING"})
+    if isinstance(exc, UnknownSourceOrOutcome):
+        return HTTPException(422, str(exc))
+    raise exc  # noqa: TRY004 -- programmer error, not a request error
+
+
+@router.get("/deliveries/{intake_id}/verification-coverage/{source}/{outcome}",
+            summary="Entities behind one coverage card's total (never 'failed')")
+async def verification_coverage_entities_route(
+    intake_id: str,
+    source: str,
+    outcome: str,
+    sort: str = Query("line_number", description="line_number|entity_name|npi"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role(EVIDENCE_ROLE)),
+):
+    """The paginated entity list behind one (source, outcome) total on the
+    Verification tab — e.g. this delivery's NPPES "Not found" count. `source`
+    is one of verification_coverage.SOURCES; `outcome` is one of
+    verification_coverage.OUTCOMES, except `failed`, which this route refuses
+    with 409 OUTCOME_RECONCILIATION_PENDING -- see
+    verification_drilldown.UnprovenOutcomeRefused's own docstring.
+
+    Never routes to the global synthetic Findings page or any cross-delivery
+    listing — every row here is scoped to THIS intake_id, same as every other
+    `/deliveries/{intake_id}/...` route in this file.
+    """
+    from app.reports.data.verification_drilldown import (UnknownSourceOrOutcome,
+                                                          UnprovenOutcomeRefused,
+                                                          list_outcome_entities)
+
+    intake = await _intake_or_404(db, intake_id)
+    try:
+        result = await list_outcome_entities(
+            db, intake.id, source=source, outcome=outcome,
+            limit=limit, offset=offset, sort=sort)
+    except (UnprovenOutcomeRefused, UnknownSourceOrOutcome) as exc:
+        raise _verification_drilldown_http(exc)
+    result["correlation"] = {"request_id": request_context.get("request_id")}
+    return result
+
+
+@router.get("/deliveries/{intake_id}/verification-coverage/{source}/{outcome}/csv",
+            summary="The same entity list as a controlled CSV export")
+async def verification_coverage_entities_csv_route(
+    intake_id: str,
+    source: str,
+    outcome: str,
+    sort: str = Query("line_number"),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role(EVIDENCE_ROLE)),
+):
+    from app.reports.data.verification_drilldown import (UnknownSourceOrOutcome,
+                                                          UnprovenOutcomeRefused,
+                                                          outcome_entities_csv_rows)
+
+    intake = await _intake_or_404(db, intake_id)
+    try:
+        rows = await outcome_entities_csv_rows(
+            db, intake.id, source=source, outcome=outcome, sort=sort)
+    except (UnprovenOutcomeRefused, UnknownSourceOrOutcome) as exc:
+        raise _verification_drilldown_http(exc)
+
+    import csv
+    import io
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["entity_id", "source_record_id", "line_number", "entity_name", "npi"])
+    for r in rows:
+        writer.writerow([r.entity_id, r.source_record_id, r.line_number, r.entity_name, r.npi])
+    body = buf.getvalue()
+
+    from app.reports.routes import download_headers
+    return Response(
+        content=body, media_type="text/csv; charset=utf-8",
+        headers=download_headers(f"verification-{source}-{outcome}-{intake.id}.csv",
+                                 extra={"X-Returned-Rows": str(len(rows))}))
+
+
 async def _analyst_sample_summary(db, intake_id) -> Dict[str, Any]:
     """Calculated vs. actual analyst-review sample size for one delivery,
     read-only (never draws or persists a plan). Distinct from
