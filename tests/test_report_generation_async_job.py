@@ -42,6 +42,18 @@ def delivery():
     cleanup()
 
 
+def test_a_review_cycle_only_scope_is_refused_not_queued_with_no_intake(client, delivery):
+    """`report_export_jobs.source_intake_id` is NOT NULL on purpose (migration
+    review). A review-cycle-only scope is valid for the synchronous route but
+    names no delivery, so the async route must refuse it before it ever
+    reaches `request_job` -- never attempt an insert with no intake."""
+    resp = client.post(f"{BASE}/generate/jobs", headers=headers_for("reviewer"),
+                       json={"report_type": "delivery_processing", "format": "html",
+                             "review_cycle_id": "some-cycle", "parameters": {}})
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["code"] == "ASYNC_GENERATION_REQUIRES_DELIVERY"
+
+
 def test_queueing_returns_202_with_a_receipt_immediately(client, delivery):
     resp = client.post(f"{BASE}/generate/jobs", headers=headers_for("reviewer"),
                        json={"report_type": "delivery_processing", "format": "html",

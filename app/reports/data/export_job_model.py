@@ -52,10 +52,13 @@ class ReportExportJob(Base):
     identity = Column(String(64), nullable=False, index=True)
     export_type = Column(String(64), nullable=False)
 
-    #: Nullable since 20261001_report_generation_jobs: a period/review-cycle
-    #: report (e.g. retrospective_weekly) is not scoped to one delivery. Every
-    #: ONC workbook export (the only prior user of this table) still has one.
-    source_intake_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    #: Deliberately NOT NULL still (migration review,
+    #: qa-evidence/2026-10-01-reporting-architecture/MIGRATION-REVIEW-20261001-report-generation-jobs.md):
+    #: every current job kind -- the ONC workbook export and async
+    #: `delivery_processing` generation -- is delivery-scoped. A relaxation
+    #: was drafted for a hypothetical period-scoped report type and reverted;
+    #: nothing creates a row with no intake.
+    source_intake_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     classification = Column(String(32), nullable=False)
     generator_version = Column(String(128), nullable=False)
 

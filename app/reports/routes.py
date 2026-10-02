@@ -346,14 +346,31 @@ async def generate_async(
 
     require_explicit_scope(request.report_type, parameters)
 
-    intake_id = None
-    if parameters.get("job_id") or parameters.get("intake_id"):
-        try:
-            resolved = await resolve_delivery(
-                db, job_id=parameters.get("job_id"), intake_id=parameters.get("intake_id"))
-        except ReportParameterError as exc:
-            raise parameter_error_http(exc)
-        intake_id = resolved["intake"].id if resolved.get("intake") else None
+    # Async generation is delivery-scoped ONLY (migration review,
+    # qa-evidence/2026-10-01-reporting-architecture/MIGRATION-REVIEW-20261001-report-generation-jobs.md):
+    # `report_export_jobs.source_intake_id` stays NOT NULL on purpose, so a
+    # review-cycle-only or period-only request -- valid for the synchronous
+    # route, but naming no one delivery -- is refused here rather than
+    # queued with no intake. A caller that needs one of those report types
+    # still has the unchanged synchronous `POST /generate`.
+    if not (parameters.get("job_id") or parameters.get("intake_id")):
+        raise HTTPException(422, detail={
+            "error": ("Asynchronous generation requires a delivery: "
+                      "parameters.job_id or parameters.intake_id. A "
+                      "review-cycle-only or period-only report is not yet "
+                      "supported on this path -- use POST /generate."),
+            "code": "ASYNC_GENERATION_REQUIRES_DELIVERY"})
+    try:
+        resolved = await resolve_delivery(
+            db, job_id=parameters.get("job_id"), intake_id=parameters.get("intake_id"))
+    except ReportParameterError as exc:
+        raise parameter_error_http(exc)
+    intake = resolved.get("intake")
+    if intake is None:
+        raise HTTPException(404, detail={
+            "error": "The named delivery has no intake to scope this report to.",
+            "code": "DELIVERY_NOT_FOUND"})
+    intake_id = intake.id
 
     classification = await resolve_classification(db)
     requested_by = getattr(user, "email", None) or "SYSTEM"
