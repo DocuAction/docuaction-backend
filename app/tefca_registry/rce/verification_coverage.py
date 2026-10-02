@@ -24,9 +24,28 @@ WHERE THE EVIDENCE IS READ FROM (the mapping this module commits to)
             deactivated (or detail ~ 'deactivat') -> deactivated
         tefca_dimension_evidence.disposition
             PASS | CORROBORATED                   -> verified
-            NOT_FOUND                             -> not_found
+            NOT_FOUND | REVIEW                    -> not_found
             UNAVAILABLE                           -> unavailable
             FAIL | CONFLICT                       -> failed
+
+    REVIEW (2026-10-02, SAM verification-contract review): a potential
+    exclusion/debarment match pending analyst confirmation -- e.g. an
+    ambiguous SAM/LEIE name match, or (since that same pass's connector fix)
+    a CONFIRMED exclusion correctly surfaced at the evidence layer, which is
+    assembled as REVIEW rather than FAIL because an automated system is
+    never the one to pronounce a debarment final (see
+    `evidence_assembly._dimension_exclusion`'s own docstring). Before this
+    mapping existed, REVIEW was simply absent from every bucket here --
+    `eligible`/`attempted` counted the entity, but no outcome did, so a
+    pending exclusion silently vanished from the coverage dashboard instead
+    of being miscounted. Mapped to `not_found` deliberately, not `failed`:
+    it is the SAME choice `arc_pipeline._DISPOSITION_TO_STATE` already makes
+    for the bucket classifier (consistent across both consumers of the same
+    underlying disposition), and it does NOT touch the `failed` bucket at
+    all -- confirmed independent of the still-open "1,298 Failed indicator"
+    reconciliation question (qa-evidence/2026-10-01-reporting-architecture/
+    CHECKPOINT-1298-FAILED-INDICATOR-STATIC-ANALYSIS.md), which is about
+    cross-source `failed` semantics specifically.
 
     `review_records.verification_results` is NOT read: it is a snapshot for
     the review, not a lookup log, and counting it would count the same lookup
@@ -70,7 +89,7 @@ _VERIFICATION_STATUS = {
 }
 _DIMENSION_DISPOSITION = {
     "PASS": "verified", "CORROBORATED": "verified",
-    "NOT_FOUND": "not_found",
+    "NOT_FOUND": "not_found", "REVIEW": "not_found",
     "UNAVAILABLE": "unavailable",
     "FAIL": "failed", "CONFLICT": "failed",
 }
@@ -166,7 +185,7 @@ _COVERAGE_COUNTS_SQL = f"""
                d.entity_id AS eid,
                CASE upper(btrim(coalesce(d.disposition, '')))
                     WHEN 'PASS' THEN 'verified' WHEN 'CORROBORATED' THEN 'verified'
-                    WHEN 'NOT_FOUND' THEN 'not_found'
+                    WHEN 'NOT_FOUND' THEN 'not_found' WHEN 'REVIEW' THEN 'not_found'
                     WHEN 'UNAVAILABLE' THEN 'unavailable'
                     WHEN 'FAIL' THEN 'failed' WHEN 'CONFLICT' THEN 'failed' ELSE NULL END AS outcome
         FROM tefca_dimension_evidence d

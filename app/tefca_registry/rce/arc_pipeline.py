@@ -92,6 +92,46 @@ _EVIDENCE_SOURCE_TO_RULE_SOURCE = {
 #: excludes not_checked from its discrepancy counts, which is exactly right:
 #: a dimension that does not apply must neither help nor hurt the entity.
 #: Mapping it to `verified` would let inapplicability manufacture a clean result.
+#:
+#: INVESTIGATED 2026-10-02, RESOLVED (not deferred): two findings from the
+#: SAM verification-contract review, both traced to this mapping.
+#:
+#:   1. REVIEW -> "not_found" collapses "searched, found a potential match,
+#:      analyst must confirm" into the same classifier state as "searched,
+#:      found nothing," for OIG_LEIE/SAM_GOV exclusion dimensions. Left
+#:      UNCHANGED, deliberately: `verification_coverage.py` (the dashboard's
+#:      per-source count) reads `tefca_dimension_evidence.disposition`
+#:      directly, through its OWN `_DIMENSION_DISPOSITION` mapping, never
+#:      through this translator or this classifier — confirmed by reading
+#:      both consumers; they do not share state, so changing this mapping
+#:      would not touch the "1,298 Failed indicator" dashboard count either
+#:      way. It was left alone because RULE-002's own pre-existing condition
+#:      already depends on "not_found" meaning exactly this (see point 2),
+#:      and changing the literal here without updating that rule would
+#:      break a currently-correct guard, not fix anything.
+#:      SEPARATELY, `verification_coverage.py`'s OWN `_DIMENSION_DISPOSITION`
+#:      dict WAS updated (same session) to map REVIEW -> "not_found" too --
+#:      it had no entry for REVIEW at all before, so a pending/confirmed
+#:      exclusion was invisible to the coverage dashboard, not merely
+#:      mislabeled. That is a different dict from this one; see its own
+#:      comment for why mapping it the same way is safe and independent of
+#:      the 1,298 question.
+#:   2. `bucket_classifier.SEED_RULES_V2`'s RULE-001/003/005 SAM/LEIE
+#:      disqualifiers were written against literal source-status strings
+#:      "excluded"/"debarred" — never producible by this translator's
+#:      five-state vocabulary, so dead on THIS (RCE/delivery) path, while
+#:      still correctly reachable on the separate manual single-entity
+#:      review path (`review_service.probe_sources` DOES emit "excluded"
+#:      literally for OIG_LEIE). FIXED in `bucket_classifier.SEED_RULES_V3`
+#:      (`_v3_rules()`): additively adds `{"source": ..., "status":
+#:      "not_found"}` conditions — the literal this translator actually
+#:      produces for REVIEW, already proven reachable by RULE-002's own
+#:      existing condition — to RULE-001/003/005, without touching the
+#:      v1/v2 "excluded"/"debarred" conditions those rules still need for
+#:      the other path. Confirmed independent of the 1,298 question: this
+#:      is about whether the BUCKET CLASSIFIER can disqualify an entity for
+#:      a pending exclusion review, not about the dashboard's "failed"
+#:      count semantics across sources.
 _DISPOSITION_TO_STATE = {
     "PASS": "verified",
     "CORROBORATED": "verified",
@@ -306,7 +346,8 @@ async def _allocate_review_id(db, year: Optional[int] = None) -> str:
 
 async def _rule_set(db) -> List[Dict[str, Any]]:
     """Active B1-B4 rules, seeded if the table is empty."""
-    from app.tefca_registry.bucket_classifier import ensure_rules_v2, ensure_seed_rules
+    from app.tefca_registry.bucket_classifier import (ensure_rules_v2, ensure_rules_v3,
+                                                       ensure_seed_rules)
 
     count = int((await db.execute(
         select(func.count()).select_from(reg.ReviewRule))).scalar() or 0)
@@ -324,6 +365,7 @@ async def _rule_set(db) -> List[Dict[str, Any]]:
         if count == 0:
             await ensure_seed_rules(db)
             await ensure_rules_v2(db)
+            await ensure_rules_v3(db)
         await db.commit()
     rows = (await db.execute(
         select(reg.ReviewRule).where(reg.ReviewRule.is_active.is_(True)))).scalars().all()

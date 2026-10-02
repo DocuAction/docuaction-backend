@@ -382,3 +382,86 @@ def test_v2_sam_excluded_blocks_b2_and_b3_too():
     r = results(nppes="verified", pecos="verified", oig_leie="clear",
                 sam_gov="excluded", fields={"name_mismatch": {"severity": "minor"}})
     assert clf().classify(r, rules=SEED_RULES_V2).bucket == "B4"
+
+
+# ── v3 — v2's SAM/LEIE disqualifier made reachable on the RCE path ───────────
+#
+# v2's RULE-001/003/005 conditions checked literal "excluded"/"debarred" --
+# never producible by arc_pipeline.dimensions_to_verification_results() for
+# RCE/delivery entities (confirmed: that translator's five-state vocabulary
+# maps a REVIEW disposition to "not_found", the literal RULE-002 already used
+# correctly). These tests exercise the classifier the same way the OLD v2
+# tests above do (hand-built "excluded"/"debarred" results, simulating the
+# OTHER real caller -- review_service.probe_sources, which does emit those
+# literals) PLUS the NEW "not_found" literal (the one arc_pipeline actually
+# produces), proving v3 catches it on both.
+
+from app.tefca_registry.bucket_classifier import SEED_RULES_V3  # noqa: E402
+
+
+@pytest.mark.parametrize("sources", [
+    dict(nppes="verified", pecos="verified", oig_leie="clear", sam_gov="not_checked"),
+    dict(nppes="verified", pecos="verified", oig_leie="clear", sam_gov="unavailable"),
+    dict(nppes="not_found", pecos="verified", oig_leie="clear", sam_gov="not_checked"),
+    dict(nppes="verified", pecos="unavailable", oig_leie="clear", sam_gov="unavailable"),
+    dict(nppes="verified", pecos="verified", oig_leie="excluded", sam_gov="not_checked"),
+])
+def test_v3_is_identical_to_v2_when_sam_is_silent(sources):
+    """Same guarantee as the v2 silent-SAM test, one version later: v3 must
+    not reclassify anything when SAM answers nothing."""
+    r = results(**sources)
+    assert clf().classify(r, rules=SEED_RULES_V2).bucket == \
+           clf().classify(r, rules=SEED_RULES_V3).bucket
+
+
+def test_v3_still_catches_literal_excluded_and_debarred():
+    """v2's conditions are untouched, not replaced -- the manual single-entity
+    review path (review_service.probe_sources) emits these literals for real
+    and must keep working exactly as it did under v2."""
+    for literal in ("excluded", "debarred"):
+        r = results(nppes="verified", pecos="verified", oig_leie="clear",
+                    sam_gov=literal)
+        out = clf().classify(r, rules=SEED_RULES_V3)
+        assert out.bucket == "B4", f"sam_gov={literal!r} did not disqualify under v3: {out}"
+
+
+def test_v3_catches_sam_not_found_that_v2_missed():
+    """THE BUG: a pending/confirmed SAM exclusion that reaches the classifier
+    as 'not_found' (what the RCE path's translator actually produces) fell
+    through v2's RULE-001 entirely -- RULE-001 had no sam_gov condition at
+    all, v1 or v2 -- and was reported B1, 'No Discrepancy'. The most
+    consequential error this engine can make, now for a second, independent
+    reason from the one v2 already fixed."""
+    r = results(nppes="verified", pecos="verified", oig_leie="clear",
+                sam_gov="not_found")
+    v2 = clf().classify(r, rules=SEED_RULES_V2)
+    assert v2.bucket == "B1", f"expected v2 to still have the gap (the bug): {v2}"
+    v3 = clf().classify(r, rules=SEED_RULES_V3)
+    assert v3.bucket == "B4", f"v3 must disqualify sam_gov=not_found: {v3}"
+    assert v3.rule_code == "RULE-005"
+
+
+def test_v3_catches_leie_not_found_via_rule_003_too():
+    """RULE-003 (B2) had a `none_of oig_leie excluded` guard since v1 -- also
+    dead on the RCE path for the identical reachability reason, independent
+    of SAM. A minor address/name variance with a pending LEIE review must not
+    quietly resolve as B2."""
+    r = results(nppes="verified", pecos="verified", oig_leie="not_found",
+                sam_gov="not_checked",
+                fields={"name_mismatch": {"severity": "minor"}})
+    v3 = clf().classify(r, rules=SEED_RULES_V3)
+    assert v3.bucket == "B4", f"a pending LEIE review must disqualify, not read as B2: {v3}"
+
+
+def test_v3_sam_not_found_blocks_b2_too():
+    r = results(nppes="verified", pecos="verified", oig_leie="clear",
+                sam_gov="not_found", fields={"name_mismatch": {"severity": "minor"}})
+    assert clf().classify(r, rules=SEED_RULES_V3).bucket == "B4"
+
+
+def test_v3_genuinely_clean_sam_still_reaches_b1():
+    """Regression guard: v3 must not fail-closed on a clean SAM answer."""
+    r = results(nppes="verified", pecos="verified", oig_leie="clear", sam_gov="clear")
+    out = clf().classify(r, rules=SEED_RULES_V3)
+    assert out.bucket == "B1"
+    assert out.rule_code == "RULE-001"

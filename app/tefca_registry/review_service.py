@@ -20,7 +20,7 @@ from app.tefca_registry import audit as reg_audit
 from app.tefca_registry import models as reg
 from app.tefca_registry.bucket_classifier import (
     BucketClassifier, FAILED, NOT_CHECKED, NOT_FOUND, UNAVAILABLE, VERIFIED,
-    ensure_seed_rules, ensure_rules_v2)
+    ensure_seed_rules, ensure_rules_v2, ensure_rules_v3)
 from app.services.npi_validator import npi_rejection_reason
 from app.Tefca.connectors import PECOS_UI_LABEL, PECOS_UI_SUBTITLE
 
@@ -481,6 +481,10 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
     # on a positive finding, so with no SAM key this is a no-op on bucketing
     # (test_v2_is_identical_to_v1_when_sam_is_silent). Idempotent.
     await ensure_rules_v2(db)
+    # v3 makes v2's SAM/LEIE disqualifier reachable on the RCE path too
+    # (2026-10-02; see bucket_classifier._v3_rules's docstring). Purely
+    # additive over v2, same no-op-when-silent guarantee. Idempotent.
+    await ensure_rules_v3(db)
     actor_id, actor_email = reg_audit.actor_of(user)
 
     reg_audit.record(db, reg_audit.VERIFICATION_STARTED, entity.id,

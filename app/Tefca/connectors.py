@@ -703,7 +703,8 @@ class SAMGovConnector:
             entities = payload.get("entityData", [])
             if not entities:
                 return SourceResult.ok(
-                    "SAM_GOV", {"found": False, "uei": uei, "registration_current": None, "excluded": False},
+                    "SAM_GOV", {"found": False, "uei": uei, "matched_by": "uei",
+                                "registration_current": None, "excluded": False},
                     qp, self.API_VERSION, raw_for_hash=payload,
                 )
             reg = entities[0].get("entityRegistration", {})
@@ -719,6 +720,7 @@ class SAMGovConnector:
             }
             data = {
                 "found": True,
+                "matched_by": "uei",
                 "uei": reg.get("ueiSAM"),
                 "legal_name": reg.get("legalBusinessName"),
                 "registration_status": reg.get("registrationStatus"),
@@ -827,11 +829,21 @@ class SAMGovConnector:
             total = payload.get("totalRecords")
             if total is None:
                 total = len(records)
+            # A UEI-keyed exclusions search is exact — SAM.gov's own identifier
+            # is unique. A name-keyed search with more than one hit is
+            # ambiguous in the same way a name-keyed registration search is:
+            # several distinct entities matched, and treating `excluded=True`
+            # as a confirmed finding would attach a debarment to whichever one
+            # happened to be in the response, on the strength of a name
+            # collision. Ambiguous here means "identity unconfirmed", not
+            # "clear" — the caller must route it to analyst review.
+            ambiguous = (not uei) and total > 1
             return SourceResult.ok(
                 "SAM_GOV_EXCLUSIONS",
                 {"excluded": bool(total),
                  "match_count": total,
                  "matched_by": "uei" if uei else "name",
+                 "ambiguous": ambiguous,
                  "exclusions": [
                      {"name": (r.get("exclusionIdentification") or {})
                       .get("exclusionName"),
@@ -864,20 +876,29 @@ class SAMGovConnector:
                 qp, self.API_VERSION)
 
         data = dict(reg.data or {})
+        data.setdefault("matched_by", "uei" if uei else "name")
         data["registration_available"] = reg.success
         data["exclusions_available"] = exc.success
+        # Ambiguity is a property of IDENTITY, not of either leg alone: a name
+        # match that returned more than one candidate on EITHER the
+        # registration search or the independent exclusions search means the
+        # entity behind this result is not confirmed, and nothing downstream
+        # may treat either leg's answer (clear or excluded, current or lapsed)
+        # as a confirmed determination until an analyst resolves which
+        # candidate is correct.
+        data["identity_ambiguous"] = bool(reg.data and reg.data.get("ambiguous")) or (
+            exc.success and bool(exc.data.get("ambiguous")))
         if exc.success:
             # v4 is authoritative for exclusion; it overrides the v3 summary flag.
             data["excluded"] = bool(exc.get("excluded"))
             data["exclusion_match_count"] = exc.get("match_count")
             data["exclusions"] = exc.get("exclusions")
+            data["excluded_known"] = True
         else:
             data["exclusion_check_error"] = exc.error
             data.setdefault("excluded", False)
             # Do not let a missing exclusions check read as a clean bill.
             data["excluded_known"] = False
-        if exc.success:
-            data["excluded_known"] = True
         return SourceResult.ok("SAM_GOV", data, qp, self.API_VERSION)
 
     async def lookup_by_npi(self, npi: str) -> SourceResult:
@@ -1285,8 +1306,12 @@ class SourceConnectorManager:
         Query every authoritative source for one entity, concurrently.
         Returns a dict keyed exactly as the validation engine expects:
           nppes, leie_npi, sam_entity, sam_exclusion, pecos
-        SAM is queried once; its single probe backs both the registration check
-        (sam_entity) and the debarment check (sam_exclusion).
+        SAM's registration (v3) and exclusion (v4) checks are two independent
+        HTTP calls — `SAMGovConnector.verify()` makes both and merges them,
+        never inferring one from the other. The single merged result backs
+        both the registration check (sam_entity) and the debarment check
+        (sam_exclusion): they are reported as one distinct source ("SAM_GOV")
+        downstream, but both legs were genuinely, independently queried.
 
         `pecos` is DERIVED from the `nppes` observation (PECOSConnector.
         from_nppes), not fetched separately — both used to hit the identical
@@ -1297,10 +1322,16 @@ class SourceConnectorManager:
         """
         npi = _extract_npi(entity)
         uei = _extract_uei(entity)
+        legal_name = entity.get("name") or ""
         nppes_r, leie_r, sam_r = await asyncio.gather(
             self.nppes.lookup_by_npi(npi),
             self.leie.lookup_by_npi(npi),
-            self.sam.lookup_by_uei(uei),   # SAM.gov is keyed on UEI, not NPI
+            # UEI present -> exact registration+exclusion match. No UEI ->
+            # name-based fallback for both legs (SAMGovConnector.verify's own
+            # documented search strategy); a resulting ambiguous match is
+            # carried as `identity_ambiguous` for the evidence/validation
+            # layers to route to analyst review, never resolved by guessing.
+            self.sam.verify(uei=uei, legal_name=legal_name),
             return_exceptions=False,
         )
         pecos_r = PECOSConnector.from_nppes(nppes_r)
