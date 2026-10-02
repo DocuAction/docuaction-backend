@@ -24,11 +24,15 @@ from datetime import datetime, timezone
 import pytest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-#: The chain's actual head. 20260918 (Decision 2, added 2026-09-18) only adds
-#: nullable columns to `rce_issues` and widens the snapshot trigger CHECK; it
-#: does not touch the five evidence tables' grants this module tests, so
-#: "upgrade to head" testing those grants stays valid with the head moved.
-HEAD = "20260918_pp_verification"
+#: The chain's actual head. Stale before this update -- it had pointed at
+#: 20260918_pp_verification since Decision 2 (2026-09-18), already two
+#: migrations behind (20260921_september_snapshot, 20260930_alembic_version_read)
+#: before 20261001_report_generation_jobs (this reporting-architecture task)
+#: made it three. None of the intervening migrations touch the five evidence
+#: tables' grants this module tests (20261001's own two columns are on
+#: report_export_jobs, not those five tables), so "upgrade to head" testing
+#: those grants stays valid with the head moved again.
+HEAD = "20261001_report_generation_jobs"
 PREVIOUS = "20260915_curated_text_columns"
 MIG_DB = "mig_test"
 OWNER, APP = "docuaction_owner", "docuaction_app"
