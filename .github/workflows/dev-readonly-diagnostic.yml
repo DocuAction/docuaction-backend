@@ -84,7 +84,7 @@ on:
         required: true
         type: string
       handshake_issue:
-        description: 'Issue number where this job posts its runner IPv4 for the operator temporary /32'
+        description: 'Issue NUMBER (positive integer only) where this job posts its runner IPv4 for the operator temporary /32'
         required: true
         type: string
 
@@ -124,6 +124,25 @@ jobs:
 
       - name: Install the one read-only driver this script needs
         run: python -m pip install --quiet psycopg2-binary
+
+      # Validate BEFORE anything downstream uses this input: handshake_issue
+      # names a GitHub issue number, nothing else. A non-numeric, zero or
+      # negative value is refused here rather than reaching the Azure login
+      # or the `gh issue comment` call further down as an unvalidated string.
+      - name: Validate handshake_issue is a positive integer
+        env:
+          HANDSHAKE_ISSUE: ${{ inputs.handshake_issue }}
+        run: |
+          case "$HANDSHAKE_ISSUE" in
+            ''|*[!0-9]*)
+              echo "::error::handshake_issue must be a positive integer issue number; got '$HANDSHAKE_ISSUE'"
+              exit 1
+              ;;
+          esac
+          if [ "$HANDSHAKE_ISSUE" -le 0 ]; then
+            echo "::error::handshake_issue must be a positive integer issue number; got '$HANDSHAKE_ISSUE'"
+            exit 1
+          fi
 
       - name: Login to Azure (OIDC - no stored client secret)
         uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
