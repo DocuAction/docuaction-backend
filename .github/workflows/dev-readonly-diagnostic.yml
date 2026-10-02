@@ -6,16 +6,43 @@ name: DEV Read-Only Diagnostic (governed, aggregate-only)
 # qa-evidence/2026-10-01-reporting-architecture/CHECKPOINT-1298-FAILED-INDICATOR-STATIC-ANALYSIS.md).
 #
 # PREPARED, NOT RUN. This workflow has never been dispatched. It is committed
-# for review; triggering it is a separate, later human decision.
+# for review, on its own branch/PR, separate from any product change, so it
+# can be reviewed and approved purely on its own governance merits -- never
+# bundled into a product PR's approval.
 #
 # Self-review checklist (every bullet the task required, with where it is met):
 #   - workflow_dispatch only, no other trigger .......... `on:` block below (only key)
+#   - protected development environment approval ........ `environment: development` on the
+#     job (same required-reviewer gate migration-preflight.yml uses); a run cannot start
+#     without that approval, and the OIDC token itself is void without it (see the
+#     "OIDC SUBJECT SCOPING" note below)
+#   - least-privilege permissions ........................ workflow-level `permissions:` is
+#     `contents: read` only; `id-token: write` + `issues: write` are granted on the
+#     `diagnostic` job ONLY, nowhere at workflow scope -- no job in this file can write
+#     code, open a PR, or touch anything but this one handshake issue comment
 #   - existing OIDC identity + temporary /32 handshake,
 #     no new auth mechanism ............................. steps "Login to Azure (OIDC...)",
 #                                                           "Report runner IPv4 and wait...",
 #                                                           "Refresh Azure OIDC login..." --
 #                                                           copied verbatim in shape from
 #                                                           migration-preflight.yml:112-156
+#   - OIDC subject constrained to repository + environment: ALREADY TRUE, inherited for free --
+#     `vars.AZURE_CLIENT_ID`'s federated credential subject is `repo:<org>/<repo>:environment:
+#     development` (migration-preflight.yml:86-88's own comment: "A job that does not declare
+#     it gets a token Azure refuses"), and this workflow declares the identical
+#     `environment: development`, so Azure validates the same repo+environment subject before
+#     issuing a token here.
+#     CONSTRAINED TO THIS WORKFLOW SPECIFICALLY: NOT YET TRUE, and not achievable by editing
+#     this YAML file alone. GitHub's OIDC token subject (`sub` claim) is one pattern per
+#     federated credential; this App Registration's credential is subject-matched on
+#     `environment:development`, which every workflow in this repo that declares that
+#     environment can satisfy (migration-preflight.yml included) -- there is no second,
+#     narrower federated credential scoped to `job_workflow_ref` for this workflow alone.
+#     Adding one is an Azure AD App Registration change (a new federated credential with
+#     subject `repo:<org>/<repo>:job_workflow_ref:<org>/<repo>/.github/workflows/
+#     dev-readonly-diagnostic.yml@refs/heads/main`), which is infrastructure the operator
+#     controls, not something this PR can do by itself -- flagged here as a recommended
+#     follow-up, not silently claimed as already done.
 #   - workflow identity is NOT granted firewall-management
 #     authority (operator adds/removes the /32 out of band,
 #     same as every other DB-touching workflow here) ..... no firewall-rule create/delete
@@ -27,11 +54,11 @@ name: DEV Read-Only Diagnostic (governed, aggregate-only)
 #   - aggregate counts only, wired to the existing script  step "Run the read-only
 #     aggregate diagnostic" below invokes
 #     scripts/dev_readonly_diagnostics/ap007_1298_reconciliation.py unchanged
-#   - no migration, no deployment, no DDL ................ no `alembic`, no `deploy`, no
-#     CREATE/ALTER/DROP anywhere in this file or the script it calls
-#   - never prints NPIs, names, payloads or credentials .. the script selects and prints
-#     COUNTs only (see its own docstring); PGTOKEN is read into a step-local env var and
-#     never echoed, written to $GITHUB_OUTPUT, or logged (same pattern as
+#   - no migration, no deployment, no DDL, no PII ........ no `alembic`, no `deploy`, no
+#     CREATE/ALTER/DROP anywhere in this file or the script it calls; the script selects
+#     and prints COUNTs only (see its own docstring) -- no NPI, name or payload
+#   - never prints credentials ........................... PGTOKEN is read into a step-local
+#     env var and never echoed, written to $GITHUB_OUTPUT, or logged (same pattern as
 #     migration-preflight.yml:160-168 and gov_integrity_snapshot.py's own docstring)
 #   - removes the temporary firewall rule in a cleanup
 #     step that always runs ............................. N/A BY DESIGN: this identity never
