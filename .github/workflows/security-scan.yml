@@ -22,12 +22,40 @@ jobs:
         run: pip install -r requirements.txt
       - name: Install security tools
         run: pip install bandit pip-audit cyclonedx-bom
+      # `|| true` on each scan below is deliberate and stays: bandit and
+      # pip-audit both exit non-zero when they FIND something (their
+      # documented behavior for "there are findings"), and this is a
+      # report-only job -- a finding must not fail the step. What `|| true`
+      # also swallows, with no distinction, is the tool never running at all
+      # (binary missing, bad arguments, a crash) -- that produces no report
+      # file, which looks identical to "ran, wrote a report" in the Actions
+      # UI (the step is still green). Each scan is followed by a check that
+      # its own output file actually exists and is non-empty, and a
+      # non-blocking ::warning:: names which this run was if it does not --
+      # never failing the job, since that would add a new gate.
       - name: Bandit SAST scan
         run: bandit -r app/ -f json -o bandit-report.json -ll || true
+      - name: Confirm bandit produced a report (non-blocking)
+        run: |
+          if [ ! -s bandit-report.json ]; then
+            echo "::warning::bandit-report.json is missing or empty -- bandit likely did not run to completion (not the same as 'ran and found nothing')."
+          fi
       - name: pip-audit dependency scan
         run: pip-audit -r requirements.txt -f json -o pip-audit-report.json || true
+      - name: Confirm pip-audit produced a report (non-blocking)
+        run: |
+          if [ ! -s pip-audit-report.json ]; then
+            echo "::warning::pip-audit-report.json is missing or empty -- pip-audit likely did not run to completion (not the same as 'ran and found nothing')."
+          fi
       - name: Generate SBOM (CycloneDX)
         run: cyclonedx-py requirements -i requirements.txt -o sbom-backend.json --format json || true
+      - name: Confirm the SBOM was generated and is valid JSON (non-blocking)
+        run: |
+          if [ ! -s sbom-backend.json ]; then
+            echo "::warning::sbom-backend.json is missing or empty -- cyclonedx-py likely did not run to completion."
+          elif ! python -c "import json; json.load(open('sbom-backend.json'))" 2>/dev/null; then
+            echo "::warning::sbom-backend.json exists but is not valid JSON."
+          fi
       - name: Upload security reports
         uses: actions/upload-artifact@v4
         with:
