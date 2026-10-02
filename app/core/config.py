@@ -33,6 +33,18 @@ class Settings(BaseSettings):
     # Alias flag (Task 2.6) — either flag being true exposes the OpenAPI surfaces.
     ENABLE_OPENAPI: bool = False
 
+    # ── Entity Identity & Location Intelligence (isolated foundation) ─────────
+    # ALL OFF by default. The master flag gates every service, connector and
+    # job entry point in app/core/entity_intelligence; the subordinate flags
+    # gate individual evidence sources and are meaningless while the master is
+    # off. No route, job, table or report reads these while they are False.
+    # See docs/entity-intelligence/ENTITY_IDENTITY_INTELLIGENCE_ARCHITECTURE.md.
+    ENTITY_INTELLIGENCE_ENABLED: bool = False
+    NPPES_IDENTITY_CORROBORATION_ENABLED: bool = False
+    IQVIA_EVIDENCE_ENABLED: bool = False
+    GOOGLE_ADDRESS_INTELLIGENCE_ENABLED: bool = False
+    STATE_REGISTRY_INTELLIGENCE_ENABLED: bool = False
+
     # ── AI ───────────────────────────────────────────────────────────────────
     AI_PROVIDER: str = "anthropic"
     ANTHROPIC_API_KEY: str = ""
