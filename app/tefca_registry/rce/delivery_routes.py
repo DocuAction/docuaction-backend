@@ -2075,6 +2075,41 @@ async def delivery_snapshot_state_route(
     }
 
 
+@router.get("/deliveries/{intake_id}/rollback-plan",
+            summary="Read-only rehearsal of what a relationship rollback would do")
+async def delivery_rollback_plan_route(
+    intake_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role(DATA_OPERATIONS_ROLE)),
+):
+    """ROL workbook cases (Fail-NoRollbackUI): there is no UI button that
+    mutates a relationship rollback, by design -- `scripts/rce_snapshot_rollback.py`
+    is the operator-run tool, gated to Data Operations (program_manager)+,
+    and `--apply` needs a `DATABASE_URL` that only resolves inside the
+    container. This endpoint reuses that SAME read-only planning logic
+    (`relationship_history.compensate_snapshot(..., apply=False)` -- it
+    never writes, same fail-closed role/reason checks as the real tool) so a
+    reviewer can see what a rollback of THIS delivery would restore/retire
+    before an operator ever runs `--apply`. It is a rehearsal, not an
+    action: there is no corresponding POST/apply route here."""
+    from app.tefca_registry.rce import relationship_history as rh
+
+    intake = await _intake_or_404(db, intake_id)
+    try:
+        plan = await rh.compensate_snapshot(
+            db, intake.id, actor=getattr(user, "email", None) or "SYSTEM",
+            role=getattr(user, "role", ""), reason="read-only rehearsal view",
+            apply=False)
+    except rh.RollbackRefused as exc:
+        raise HTTPException(409, str(exc))
+    return {"intake_id": str(intake.id), "rehearsal": True,
+            "note": ("This is a read-only rehearsal of what a relationship rollback "
+                     "would do. It changes nothing. Applying a rollback is an "
+                     "operator-run action (scripts/rce_snapshot_rollback.py --apply), "
+                     "never a button in this UI."),
+            **plan}
+
+
 @router.post("/deliveries/{intake_id}/snapshot/approve",
              summary="Approve the delivery's snapshot (QA lead or above; after reconciliation)")
 async def delivery_snapshot_approve_route(
