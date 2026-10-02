@@ -6,6 +6,7 @@ distinct from the official job.
 from __future__ import annotations
 
 import time
+import uuid
 
 import pytest
 
@@ -24,7 +25,17 @@ def test_large_synthetic_report_metadata_get_is_fast_and_summarised(client):
         from app.core.database import async_session_maker
 
         async with async_session_maker() as db:
-            rows = make_rows(60, arc=ARC)
+            # make_rows() is fully deterministic for a fixed (n, arc), so the
+            # delivery job's content-hash `identity` -- and the partial
+            # unique index on (identity, active_marker) -- would collide
+            # with a PRIOR run's row on a shared, long-lived test database
+            # (this test does not go through the job queue's own
+            # finish_succeeded/finish_failed, so nothing here ever clears
+            # that earlier row's active_marker). A per-run nonce keeps the
+            # ARC label's fixed prefix (still clearly 9.99.777.92, still
+            # clearly synthetic/non-official) while making the content --
+            # and therefore the identity hash -- unique every run.
+            rows = make_rows(60, arc=f"{ARC}.{uuid.uuid4().hex[:8]}")
             intake_id, job = await seed_intake(db, rows)
             await db.commit()
             await run_quality_and_curation(db, intake_id)
