@@ -43,6 +43,12 @@ results.xml
 # JUnit output from the QA regression runs (--junit-xml). Regenerated on every
 # run and machine-specific; the pass/fail record belongs in CI, not in git.
 results_*.xml
+# Same category, different naming convention (pytest --junitxml=test-results.xml):
+# test-results.xml was already committed (hostname/timestamp baked in, same
+# machine-specific regenerated-report shape as results_*.xml above) because this
+# pattern didn't cover it. Not removed from history here -- only the pattern is
+# added, so a freshly regenerated copy stops slipping back in.
+test-results.xml
 
 # One-off deploy artifacts built during the August 2026 RBAC fix (~58 MB each).
 deploy-rbac-fix.zip
