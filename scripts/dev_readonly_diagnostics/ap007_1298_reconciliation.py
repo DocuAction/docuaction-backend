@@ -18,6 +18,14 @@ a new grant -- same reasoning as that script), then every statement below
 runs inside one explicit `READ ONLY` transaction with a 20s statement
 timeout. Selects and prints AGGREGATE COUNTS ONLY -- no NPI, entity name,
 source payload, or credential is ever selected, referenced, or printed.
+
+`docuaction_owner` is a full table-owning role, not a least-privilege
+read-only role -- Postgres is not withholding INSERT/UPDATE/DELETE from it.
+The read-only guarantee here is entirely this script's own behavior (the
+statements it chooses to issue, wrapped in `BEGIN TRANSACTION READ ONLY`),
+not a privilege the database has revoked. A dedicated role with write
+privileges actually revoked would be a stronger guarantee; that is
+follow-up infrastructure work, not something claimed as already true here.
 """
 import json
 import os

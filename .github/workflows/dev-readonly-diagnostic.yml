@@ -69,6 +69,24 @@ name: DEV Read-Only Diagnostic (governed, aggregate-only)
 #     A cleanup step that attempted removal would imply (falsely) that this identity can
 #     create or own the rule.
 #
+# WHAT THIS FILE CANNOT PROVE (operator verification required, not satisfied by review
+# of this YAML alone):
+#   - That `vars.AZURE_CLIENT_ID`'s live Azure AD App Registration actually has only the
+#     IAM role assignments this diagnostic needs on docuaction-db-dev, and nothing broader
+#     left over from another workflow's use of the same identity.
+#   - That the federated credential's subject match is enforced the way the comment above
+#     describes -- this file can declare `environment: development` and reason about what
+#     *should* follow, but cannot read back Azure AD's actual federated-credential config.
+#   - That the GitHub Environment named `development` actually has a required-reviewer
+#     rule configured in this repository's live settings. A missing or misconfigured
+#     environment protection rule would let this workflow run unapproved despite
+#     `environment: development` being present in the YAML -- the YAML cannot detect that.
+#   - That `docuaction_owner`'s actual GRANTed privileges on Azure DEV Postgres match what
+#     is assumed above (see DB_INTEGRITY_ROLE comment below) -- this file states what the
+#     role is used for, not what Postgres enforces.
+# All four require checking the live Azure/GitHub configuration directly before relying on
+# this workflow's safety; none of them can be settled by reading or testing this file.
+#
 # Hardening pass (2026-10-02, audit-and-fix session) -- three narrow commits,
 # each locally tested with harmless synthetic values before commit, nothing
 # dispatched:
@@ -110,12 +128,18 @@ env:
   PGHOST: docuaction-db-dev.postgres.database.azure.com
   PGDATABASE: postgres
   PG_PRINCIPAL: github-actions-docuaction-backend-dev
-  # Read-only role for this diagnostic -- the only role this dedicated
-  # identity can assume without a new grant (same reasoning as
-  # DB_INTEGRITY_ROLE in migration-preflight.yml / gov_integrity_snapshot.py).
-  # This job issues SELECT only; it never SETs this or any other role for
-  # a write.
-  DB_INTEGRITY_ROLE: docuaction_owner
+  # NOT a least-privilege read-only role. `docuaction_owner` is the full
+  # table-owning role this dedicated identity can assume without a new
+  # grant (same reasoning as DB_INTEGRITY_ROLE in migration-preflight.yml /
+  # gov_integrity_snapshot.py) -- it is a convenience choice, not a security
+  # minimization. Read-only behavior here comes entirely from what THIS
+  # SCRIPT chooses to execute (SELECT only, inside `BEGIN TRANSACTION READ
+  # ONLY`) -- not from any privilege the database has withheld from the
+  # role. A future bug in the script, or a different script run with this
+  # same role, could write. A dedicated role with write privileges actually
+  # revoked (e.g. `GRANT SELECT` only, no `INSERT`/`UPDATE`/`DELETE`) is
+  # recommended follow-up infrastructure work, tracked separately -- not
+  # something this workflow file can create or claim for itself.
 
 jobs:
   diagnostic:
