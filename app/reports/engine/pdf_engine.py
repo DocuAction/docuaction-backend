@@ -389,11 +389,20 @@ def _mark_page_chrome_as_artifacts(ops: list, page_box: tuple, chrome_band_pt: f
       from the tag tree but still paints it; the template declared it
       decorative, so Artifact is the faithful translation. Text the document
       did not declare decorative never qualifies, whatever it looks like.
-    * A depth-0 fill is wrapped as a Layout artifact only when it is ONE
-      rectangle covering ≥ 90 % of the page (the page background Chromium
-      paints for `print_background=True`). Any other depth-0 painting —
-      a smaller fill, a stroke, an image XObject, an inline image — is left
-      unwrapped and counted in `unclassified_depth0_items`.
+    * Depth-0 path painting (fills and strokes built from `m l c v y h re`)
+      is wrapped as a Layout artifact: the page background Chromium paints
+      for `print_background=True` (one rectangle covering ≥ 90 % of the
+      page, counted separately as `background_fills_wrapped`) and the CSS
+      backgrounds, borders and rules of the design system (table shading,
+      KPI tiles, the navy/gold rules — `decoration_paint_runs_wrapped`).
+      This is decoration by construction of Chromium's tagged export: every
+      meaningful graphic — an `<img>`, `<svg>`, `<canvas>` — is emitted as a
+      tagged Figure / image XObject at depth ≥ 1, never as bare path
+      operators at depth 0. A path run never contains text or an XObject
+      (those start their own runs), so nothing readable can be inside it.
+    * Image XObjects, shadings and inline images at depth 0 (`Do`, `sh`,
+      `BI…EI`) are left unwrapped and counted in `unclassified_depth0_items`:
+      an untagged image could be content, and a validator must see it.
     """
     from pikepdf import Dictionary, Name, Operator
 
@@ -411,7 +420,7 @@ def _mark_page_chrome_as_artifacts(ops: list, page_box: tuple, chrome_band_pt: f
             for px, py in points)
 
     stats = {"text_blocks_wrapped": 0, "background_fills_wrapped": 0,
-             "decorative_glyph_blocks_wrapped": 0,
+             "decoration_paint_runs_wrapped": 0, "decorative_glyph_blocks_wrapped": 0,
              "unclassified_depth0_items": 0, "depth0_text_blocks_left_unwrapped": 0}
 
     out: list = []
@@ -572,10 +581,9 @@ def _mark_page_chrome_as_artifacts(ops: list, page_box: tuple, chrome_band_pt: f
                              and page_area > 0 and rect_area >= 0.9 * page_area)
             if is_background:
                 stats["background_fills_wrapped"] += 1
-                flush("layout")
             else:
-                stats["unclassified_depth0_items"] += 1
-                flush(None)
+                stats["decoration_paint_runs_wrapped"] += 1
+            flush("layout")
             continue
         if op in _OTHER_CONTENT_OPS:
             flush(None)
@@ -662,7 +670,7 @@ def _pdf_ua_postprocess(pdf_bytes: bytes, html: str, *,
     stats: Dict[str, Any] = {
         "title": info["title"], "lang": info["lang"],
         "text_blocks_wrapped": 0, "background_fills_wrapped": 0,
-        "decorative_glyph_blocks_wrapped": 0,
+        "decoration_paint_runs_wrapped": 0, "decorative_glyph_blocks_wrapped": 0,
         "unclassified_depth0_items": 0, "depth0_text_blocks_left_unwrapped": 0,
         "role_map_added": [], "non_standard_tags_unmapped": [],
     }
@@ -696,10 +704,11 @@ def _pdf_ua_postprocess(pdf_bytes: bytes, html: str, *,
             parse_content_stream(page), box, chrome_band_pt,
             decorative_positions=glyph_positions.get(index))
         for key in ("text_blocks_wrapped", "background_fills_wrapped",
-                    "decorative_glyph_blocks_wrapped",
+                    "decoration_paint_runs_wrapped", "decorative_glyph_blocks_wrapped",
                     "unclassified_depth0_items", "depth0_text_blocks_left_unwrapped"):
             stats[key] += pstats[key]
         if (pstats["text_blocks_wrapped"] or pstats["background_fills_wrapped"]
+                or pstats["decoration_paint_runs_wrapped"]
                 or pstats["decorative_glyph_blocks_wrapped"]):
             page.Contents = pdf.make_stream(unparse_content_stream(new_ops))
 

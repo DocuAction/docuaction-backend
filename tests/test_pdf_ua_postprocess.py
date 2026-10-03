@@ -179,11 +179,16 @@ def test_the_band_is_the_requested_margin_plus_tolerance():
     assert _pdf_ua_postprocess(outside, HTML)[1]["depth0_text_blocks_left_unwrapped"] == 1
 
 
-def test_only_a_full_page_single_rectangle_fill_is_a_layout_artifact():
+def test_page_background_and_css_decoration_fills_are_layout_artifacts():
+    """The full-page background and a CSS-decoration fill (table shading, a
+    rule) are both Layout artifacts, counted separately. Pure path painting
+    at depth 0 can only be decoration in Chromium's tagged export: images,
+    SVG and canvas arrive as tagged Figures, never as bare path operators."""
     out, stats = _pdf_ua_postprocess(_tagged_pdf(_page_ops(extra_fill=True)), HTML)
     assert stats["background_fills_wrapped"] == 1
-    assert stats["unclassified_depth0_items"] == 1, "the 50x50 fill must be left visible"
-    assert _depth0_artifacts(out).count("/Layout") == 1
+    assert stats["decoration_paint_runs_wrapped"] == 1
+    assert stats["unclassified_depth0_items"] == 0
+    assert _depth0_artifacts(out).count("/Layout") == 2
 
 
 def test_an_image_xobject_at_depth0_is_reported_not_hidden():
@@ -240,6 +245,6 @@ def test_marker_pass_leaves_clip_paths_alone():
         [([0, 0, W, H], Operator("re")), ([], Operator("W")), ([], Operator("n"))])))
     new_ops, stats = _mark_page_chrome_as_artifacts(ops, PAGE_BOX, _CHROME_BAND_PT)
     assert stats == {"text_blocks_wrapped": 0, "background_fills_wrapped": 0,
-                     "decorative_glyph_blocks_wrapped": 0,
+                     "decoration_paint_runs_wrapped": 0, "decorative_glyph_blocks_wrapped": 0,
                      "unclassified_depth0_items": 0, "depth0_text_blocks_left_unwrapped": 0}
     assert [str(i.operator) for i in new_ops] == ["re", "W", "n"]
