@@ -66,6 +66,7 @@ async def test_eligible_non_b1_completes_qa_via_real_routes_genuine_finding_stil
     intake_a = await sam._seed_promoted_delivery(n=1)
     mp = pytest.MonkeyPatch()
     try:
+        mp.setenv("ENTITY_RESOLVER_SOURCE", "db")  # explicit: the default resolver is a bundled mock dataset that cannot resolve freshly-seeded synthetic entities
         sam._clean_nppes_leie(mp)
 
         def clean_sam(*, uei, legal_name):

@@ -78,6 +78,7 @@ async def test_real_v4_candidate_shadow_comparison_full_lifecycle():
 
     mp = pytest.MonkeyPatch()
     try:
+        mp.setenv("ENTITY_RESOLVER_SOURCE", "db")  # explicit: the default resolver is a bundled mock dataset that cannot resolve freshly-seeded synthetic entities
         sam._clean_nppes_leie(mp)
         async with async_session_maker() as db:
             refs = await sam._promoted_refs(db, intake_id, 3)
