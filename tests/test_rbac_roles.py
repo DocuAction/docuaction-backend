@@ -459,6 +459,28 @@ def test_no_tefca_read_endpoint_sits_above_the_viewer_floor():
         # /dispositions and /exceptions right above it.
         "/api/tefca/rce/deliveries/{intake_id}/verification-coverage/{source}/{outcome}",
         "/api/tefca/rce/deliveries/{intake_id}/verification-coverage/{source}/{outcome}/csv",
+        # ── IQVIA Release 1 application journey (2026-10-02) ──
+        # Snapshot status/progress/reconciliation for a staged licensed
+        # extract -- reviewer (4), the SAME floor `source_matching.
+        # LICENSED_ACCESS_ROLE` already requires for any licensed-source
+        # content (ADR-006). Gated above viewer by that pre-existing,
+        # unchanged rule, not a new decision made here: licensed content is
+        # served only above the reviewer floor AND only when
+        # ENABLE_IQVIA_SOURCES is on (`_require_licensed_access`, checked
+        # first by every route in `iqvia_routes.py`). The route returns a
+        # snapshot's progress/rejected-row counts, never a raw delivered
+        # row value -- same shape of exception as the delivery-workflow
+        # reads immediately above, applied to a different source family.
+        "/api/tefca/rce/iqvia/snapshots/{snapshot_id}",
+        # Same rule, same source family, applied to the chunked-upload
+        # resume contract added 2026-10-03: `_require_licensed_access` is
+        # the first thing this route does too (identical to every other
+        # iqvia_routes.py route), so this is the SAME pre-existing
+        # ADR-006/reviewer-floor-plus-ENABLE_IQVIA_SOURCES rule as the
+        # snapshot-status entry immediately above, not a new access
+        # decision. The route returns only chunk-receipt bookkeeping
+        # (received/missing counts) -- never a byte of delivered content.
+        "/api/tefca/rce/iqvia/uploads/{upload_id}",
         # Read-only rollback REHEARSAL -- program_manager (7), the same floor
         # `scripts/rce_snapshot_rollback.py --apply` already requires. Same
         # reasoning as /api/tefca/admin/pecos-retry-plan above: this is an
