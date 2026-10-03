@@ -434,6 +434,13 @@ def _row(row, *, job_id, intake_id, histories, ident_events, assignees, legacy,
     existing_value = (latest_event["existing_value"] if latest_event
                       else (issue.suggested_value if is_conflict else None))
     terminal = is_terminal_resolution(issue.resolution)
+    # WF-S22: a delivery-level finding (no `source_record_id`) has nothing for
+    # a disposition to attach to -- `curation.apply_disposition` refuses it
+    # with 409 ("names no source record... has no record disposition"), same
+    # as a terminal finding. `can_dispose` must say so BEFORE the form is
+    # offered, not after the server rejects the Save (SCH-002 is the case
+    # that surfaced this: a dataset-level rule with no source record).
+    dispositionable = not terminal and issue.source_record_id is not None
     out = {
         "issue_id": str(issue.id),
         "issue_code": issue.issue_code,
@@ -465,7 +472,11 @@ def _row(row, *, job_id, intake_id, histories, ident_events, assignees, legacy,
         # A settled finding accepts no decision (`curation.apply_disposition`
         # refuses it with 409); the UI disables its controls on these.
         "terminal": terminal,
-        "can_dispose": not terminal,
+        "can_dispose": dispositionable,
+        "disposition_blocked_reason": (
+            None if dispositionable
+            else ("delivery_level_finding" if issue.source_record_id is None
+                  else "terminal")),
         "assignee": assignees.get(issue.source_record_id),
         "disposition": (latest_disposition or {}).get("disposition"),
         "disposition_history": history,

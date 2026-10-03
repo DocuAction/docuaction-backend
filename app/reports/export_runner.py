@@ -154,3 +154,76 @@ async def run_export_job(db, job) -> str:
         rendered_sha256=artifact["rendered_sha256"],
         size_bytes=int(artifact["size_bytes"] or 0))
     return ReportExportJob.STATE_SUCCEEDED
+
+
+async def run_report_generation_job(db, job) -> str:
+    """Take a RUNNING report-generation job to SUCCEEDED or FAILED.
+
+    Sibling to `run_export_job`, not a branch inside it: that function's own
+    docstring says changing it risks the certified workbook's bytes, so a
+    second job kind gets a second function instead. Calls `generate_report`
+    exactly as `POST /reports/generate` does — same function, same dataset
+    build, same snapshot, same artifact registration — the only difference is
+    WHEN it runs and that the result is read back from a job row instead of
+    an HTTP response body.
+    """
+    from app.reports.data import export_jobs
+    from app.reports.data.export_job_model import ReportExportJob
+    from app.reports.generator import (ReportGenerationError, ReportParameterError,
+                                       generate_report)
+
+    job_id = job.id
+    params = dict(job.request_parameters or {})
+    report_format = params.pop("format", "html")
+    review_cycle_id = params.pop("review_cycle_id", None)
+
+    try:
+        await export_jobs.heartbeat(db, job_id, phase=PHASE_PREPARING)
+        # `generate_report` builds HTML (Jinja2 templating, not the CPU-bound
+        # WeasyPrint PDF render -- `generate_report`'s own docstring: "PDF is
+        # NOT generated here"), so unlike the ONC workbook's `render_workbook`
+        # it does not need a worker thread of its own; it is awaited directly.
+        async with _Heartbeat(job_id, export_jobs.HEARTBEAT_INTERVAL_SECONDS):
+            result = await generate_report(
+                db, report_type=job.report_type,
+                review_cycle_id=review_cycle_id,
+                generated_by=job.requested_by, generated_by_id=None,
+                query_parameters=params)
+        await export_jobs.heartbeat(db, job_id, phase=PHASE_REGISTERING)
+    except (ReportParameterError, ReportGenerationError) as exc:
+        # The request named no scope, a delivery that does not exist, or a
+        # snapshot that is not the delivery's -- a controlled refusal, same
+        # text the synchronous route would have answered with.
+        await export_jobs.finish_failed(db, job_id, str(exc))
+        return ReportExportJob.STATE_FAILED
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("report generation job %s failed", job_id)
+        await export_jobs.finish_failed(
+            db, job_id,
+            f"The report could not be generated ({type(exc).__name__}). "
+            f"Nothing was registered. Administrator diagnostics are in the "
+            f"application log against job {job_id}.")
+        return ReportExportJob.STATE_FAILED
+
+    artifacts = result.get("artifacts") or {}
+    chosen = artifacts.get(report_format) or artifacts.get("html") or result.get("artifact")
+    if not chosen or not chosen.get("id"):
+        # Generation itself succeeded (the report is stored and readable
+        # through /reports/{id}) but no registry row exists for the job to
+        # point at -- report it, never claim success without an artifact
+        # (same rule `run_export_job` follows).
+        await export_jobs.finish_failed(
+            db, job_id,
+            f"Report {result.get('report_id')} was generated but no durable "
+            f"artifact was registered for format '{report_format}'. The "
+            f"report may still be readable at /api/reports/{result.get('report_id')}.")
+        return ReportExportJob.STATE_FAILED
+
+    await export_jobs.finish_succeeded(
+        db, job_id,
+        report_id=result["report_id"],
+        artifact_id=str(chosen["id"]),
+        artifact_version=int(chosen.get("artifact_version") or 1),
+        rendered_sha256=chosen.get("rendered_sha256") or "",
+        size_bytes=int(chosen.get("size_bytes") or 0))
+    return ReportExportJob.STATE_SUCCEEDED

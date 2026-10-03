@@ -442,8 +442,33 @@ def test_no_tefca_read_endpoint_sits_above_the_viewer_floor():
         "/api/tefca/rce/deliveries/{intake_id}/issues",
         "/api/tefca/rce/deliveries/{intake_id}/dispositions",
         "/api/tefca/rce/deliveries/{intake_id}/dispositions.csv",
+        # ── Reporting-architecture task (2026-10-02): concise-report CSV
+        # annexes ── Same floor, same justification, as dispositions.csv
+        # immediately above: each is the full-detail CSV behind a table the
+        # report now caps at 100 inline rows, not a new category of content.
+        "/api/tefca/rce/deliveries/{intake_id}/findings.csv",
+        "/api/tefca/rce/deliveries/{intake_id}/identifier-conflicts.csv",
+        "/api/tefca/rce/deliveries/{intake_id}/review-records.csv",
         "/api/tefca/rce/deliveries/{intake_id}/exceptions",
         "/api/tefca/rce/deliveries/{intake_id}/audit",
+        # ── Reporting-architecture task (2026-10-01): verification drill-down ──
+        # Same principle as the delivery-workflow exceptions immediately above:
+        # /verification-coverage (plural sources, counts only) stays viewer, but
+        # the entity-level list behind ONE (source, outcome) count -- entity
+        # name and NPI, a delivered value -- sits at reviewer, same floor as
+        # /dispositions and /exceptions right above it.
+        "/api/tefca/rce/deliveries/{intake_id}/verification-coverage/{source}/{outcome}",
+        "/api/tefca/rce/deliveries/{intake_id}/verification-coverage/{source}/{outcome}/csv",
+        # Read-only rollback REHEARSAL -- program_manager (7), the same floor
+        # `scripts/rce_snapshot_rollback.py --apply` already requires. Same
+        # reasoning as /api/tefca/admin/pecos-retry-plan above: this is an
+        # OPERATIONAL planning surface (what an apply WOULD restore/retire),
+        # not entity data a reviewer needs day to day, and it exists
+        # specifically so a program manager can rehearse the real operator
+        # tool's plan before anyone runs --apply. No apply/mutating route
+        # exists at any floor -- see ROL-001..015's root-cause note in
+        # app/tefca_registry/rce/delivery_routes.py.
+        "/api/tefca/rce/deliveries/{intake_id}/rollback-plan",
         # ── Pre-merge review Decision 1 (2026-09-16) ──
         # Deprecated legacy aliases for the current /api/reports/* content
         # routes, which the same review raised from viewer to reviewer

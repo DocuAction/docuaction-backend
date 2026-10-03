@@ -90,6 +90,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import request_context
 from app.core.database import get_db
+from app.reports.engine.csv_engine import neutralise_row
 from app.core.error_handler import create_error_response
 from app.core.security import require_role, role_at_least
 from app.tefca_registry.rce import status_model
@@ -1074,6 +1075,90 @@ async def list_dispositions_route(
             "total": total, "offset": offset, "limit": limit}
 
 
+async def _open_consistent_snapshot():
+    """A DEDICATED connection in a `REPEATABLE READ, READ ONLY` transaction,
+    plus an `AsyncSession` bound to it, for one CSV export (2026-10-03).
+
+    Why not the request's shared `db` session: Postgres requires `SET
+    TRANSACTION ISOLATION LEVEL` to be a transaction's first statement, and
+    by the time a route body runs, `require_role` has already queried the
+    user row on that session. A fresh connection's first statement genuinely
+    is this one, so the row count registered up front and the rows read
+    afterwards are guaranteed to come from the IDENTICAL snapshot — not
+    "probably consistent because the tables are append-only". The caller
+    closes both in a `finally` (`_close_consistent_snapshot`); the
+    connection is never reused for anything else.
+    """
+    from app.core.database import engine
+
+    conn = await engine.connect()
+    await conn.execution_options(isolation_level="REPEATABLE READ")
+    await conn.execute(text("SET TRANSACTION READ ONLY"))
+    session = AsyncSession(bind=conn, expire_on_commit=False)
+    return conn, session
+
+
+async def _close_consistent_snapshot(conn, session) -> None:
+    try:
+        await session.close()
+    finally:
+        try:
+            await conn.rollback()
+        finally:
+            await conn.close()
+
+
+class _CsvExportManifest:
+    """The registered facts of one CSV export (2026-10-03): the logical row
+    count the consistent-snapshot transaction counted up front, and the byte
+    count and SHA-256 of exactly what was sent — computed incrementally as
+    chunks are emitted, never by buffering the export to hash it. Logged once
+    under `csv_export_manifest`, keyed by the `X-Export-Id` response header,
+    with `row_count_reconciles` so a snapshot inconsistency (or a caller's
+    `limit` truncating a bounded export) is recorded rather than assumed away.
+    Row grains per route: `CSV_ROW_GRAINS.md`."""
+
+    def __init__(self, *, route: str, intake_id, registered_row_count: int, **facts: Any):
+        import hashlib
+
+        self.export_id = str(uuid.uuid4())
+        self.route = route
+        self.intake_id = str(intake_id)
+        self.registered_row_count = int(registered_row_count)
+        self.facts = facts
+        self._digest = hashlib.sha256()
+        self.byte_count = 0
+        self.streamed_rows = 0
+
+    def emit(self, chunk: str) -> str:
+        encoded = chunk.encode("utf-8")
+        self._digest.update(encoded)
+        self.byte_count += len(encoded)
+        return chunk
+
+    def row(self, chunk: str) -> str:
+        self.streamed_rows += 1
+        return self.emit(chunk)
+
+    def log(self) -> None:
+        logger.info(
+            "csv_export_manifest",
+            extra={"export_id": self.export_id, "route": self.route,
+                   "intake_id": self.intake_id,
+                   "registered_row_count": self.registered_row_count,
+                   "streamed_row_count": self.streamed_rows,
+                   "row_count_reconciles": self.registered_row_count == self.streamed_rows,
+                   "byte_count": self.byte_count, "sha256": self._digest.hexdigest(),
+                   **self.facts})
+
+    def headers(self, filename: str, **extra: str) -> Dict[str, str]:
+        from app.reports.routes import download_headers
+
+        return download_headers(filename, extra={
+            "X-Returned-Rows": str(self.registered_row_count),
+            "X-Export-Id": self.export_id, **extra})
+
+
 @router.get("/deliveries/{intake_id}/dispositions.csv",
             summary="Record-level dispositions as CSV")
 async def dispositions_csv_route(
@@ -1086,23 +1171,248 @@ async def dispositions_csv_route(
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role(EVIDENCE_ROLE)),
 ):
+    """One row per received source line with its current disposition (see
+    `CSV_ROW_GRAINS.md`). Count and rows are read in one consistent
+    snapshot; `X-Total-Rows` is the count over the identical predicate,
+    `X-Returned-Rows` the rows written — they differ only when `limit`
+    truncates, and the manifest then records `row_count_reconciles=false`."""
     from app.tefca_registry.rce.exception_ledger import (dispositions_csv,
                                                           list_dispositions)
 
     intake = await _intake_or_404(db, intake_id)
+    conn, snap = await _open_consistent_snapshot()
     try:
         rows, total = await list_dispositions(
-            db, intake.id, disposition=disposition, source_row=source_row,
+            snap, intake.id, disposition=disposition, source_row=source_row,
             entity_name=entity_name, npi=npi, limit=limit, offset=0)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
+    finally:
+        await _close_consistent_snapshot(conn, snap)
     body = dispositions_csv(rows)
-    from app.reports.routes import download_headers
+    manifest = _CsvExportManifest(route="dispositions.csv", intake_id=intake.id,
+                                  registered_row_count=total, limit=limit,
+                                  filtered=bool(disposition or source_row or entity_name or npi))
+    manifest.emit(body)
+    manifest.streamed_rows = len(rows)
+    manifest.log()
     return Response(
         content=body, media_type="text/csv; charset=utf-8",
-        headers=download_headers(f"dispositions-{intake.id}.csv",
-                                 extra={"X-Total-Rows": str(total),
-                                        "X-Returned-Rows": str(len(rows))}))
+        headers={**manifest.headers(f"dispositions-{intake.id}.csv",
+                                    **{"X-Total-Rows": str(total)}),
+                 "X-Returned-Rows": str(len(rows))})
+
+
+@router.get("/deliveries/{intake_id}/findings.csv",
+            summary="Every finding of the current quality run, as a streamed CSV")
+async def findings_csv_route(
+    intake_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role(EVIDENCE_ROLE)),
+):
+    """The client-report's Findings section (section 5) caps its inline table
+    at `_FINDINGS_ROW_CAP` (first 100, open HIGH/CRITICAL first) — this route
+    is the full, per-finding detail the report points readers to, streamed
+    row-by-row so a delivery with many findings never holds them all in
+    memory at once (same pattern as verification-coverage's CSV export)."""
+    from app.tefca_registry.rce import models as m
+    from app.tefca_registry.rce import run_selection
+
+    intake = await _intake_or_404(db, intake_id)
+    scope = run_selection.current_issues_filter(intake.id)
+
+    # Consistent snapshot between the COUNT and the stream (2026-10-03): the
+    # dedicated connection stays open across the streamed rows and is closed
+    # in the generator's `finally`, after the SAME snapshot served both.
+    conn, snap = await _open_consistent_snapshot()
+    try:
+        row_count = int((await snap.execute(
+            select(func.count()).select_from(m.RceIssue).where(scope))).scalar() or 0)
+    except Exception:
+        await _close_consistent_snapshot(conn, snap)
+        raise
+    manifest = _CsvExportManifest(route="findings.csv", intake_id=intake.id,
+                                  registered_row_count=row_count)
+
+    import csv
+    import io
+
+    from fastapi.responses import StreamingResponse
+
+    async def _rows():
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        try:
+            writer.writerow(["issue_code", "line_number", "source_record_id", "rule_id",
+                             "rule_version", "issue_type", "severity", "field_name",
+                             "resolution", "correction_authority", "description",
+                             "resolved_by", "resolved_at"])
+            yield manifest.emit(buf.getvalue())
+            stmt = (select(m.RceIssue, m.RceSourceRecord.line_number)
+                   .join(m.RceSourceRecord, m.RceSourceRecord.id == m.RceIssue.source_record_id,
+                         isouter=True)
+                   .where(scope)
+                   .order_by(m.RceSourceRecord.line_number, m.RceIssue.rule_id))
+            result = await snap.stream(stmt)
+            async for issue, line in result:
+                buf.seek(0)
+                buf.truncate(0)
+                writer.writerow(neutralise_row([
+                    issue.issue_code, line, str(issue.source_record_id),
+                    issue.rule_id, issue.rule_version, issue.issue_type,
+                    issue.severity, issue.field_name, issue.resolution,
+                    issue.correction_authority, issue.description,
+                    issue.resolved_by,
+                    issue.resolved_at.isoformat() if issue.resolved_at else ""]))
+                yield manifest.row(buf.getvalue())
+        finally:
+            await _close_consistent_snapshot(conn, snap)
+        manifest.log()
+
+    return StreamingResponse(
+        _rows(), media_type="text/csv; charset=utf-8",
+        headers=manifest.headers(f"findings-{intake.id}.csv"))
+
+
+@router.get("/deliveries/{intake_id}/identifier-conflicts.csv",
+            summary="Every identifier conflict and its current decision, as CSV")
+async def identifier_conflicts_csv_route(
+    intake_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role(EVIDENCE_ROLE)),
+):
+    """The client-report's Identifier conflicts section (section 6) caps its
+    inline table at `_IDENTIFIER_ROW_CAP` (first 100, unresolved first) —
+    this route is the full export. Conflicts are grouped in Python from the
+    underlying decision-event ledger (the same logic the report's own data
+    layer uses, `_identifiers`), so unlike `findings.csv` this is not a true
+    streaming export — acceptable at this scale for the same reason
+    `dispositions.csv` already materialises its full result before writing."""
+    from app.tefca_registry.rce import traceability_models as tm
+
+    intake = await _intake_or_404(db, intake_id)
+    E = tm.TefcaIdentifierDecisionEvent
+    # Count and events in ONE consistent snapshot (2026-10-03): the registered
+    # count is `COUNT(DISTINCT (entity_id, identifier_type))` — exactly the
+    # pairs the grouping below produces, not the number of events.
+    conn, snap = await _open_consistent_snapshot()
+    try:
+        pairs = select(E.entity_id, E.identifier_type).where(E.intake_id == intake.id).distinct().subquery()
+        row_count = int((await snap.execute(select(func.count()).select_from(pairs))).scalar() or 0)
+        events = (await snap.execute(
+            select(E).where(E.intake_id == intake.id)
+            .order_by(E.entity_id, E.identifier_type, E.sequence))).scalars().all()
+    finally:
+        await _close_consistent_snapshot(conn, snap)
+    conflicts: Dict[tuple, Dict[str, Any]] = {}
+    for ev in events:
+        key = (str(ev.entity_id), ev.identifier_type)
+        item = conflicts.setdefault(key, {
+            "entity_id": str(ev.entity_id), "identifier_type": ev.identifier_type,
+            "submitted_value": ev.submitted_value, "existing_value": ev.existing_value,
+            "verified_value": None, "selected_value": None,
+            "current_decision": None, "decided_at": None, "actor": None, "reason": None})
+        item["current_decision"] = ev.decision
+        item["decided_at"] = ev.decided_at.isoformat() if ev.decided_at else ""
+        item["actor"] = ev.actor
+        item["reason"] = ev.reason
+        item["verified_value"] = ev.verified_value or item["verified_value"]
+        item["selected_value"] = ev.selected_value
+
+    import csv
+    import io
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["entity_id", "identifier_type", "submitted_value", "existing_value",
+                     "verified_value", "selected_value", "current_decision", "decided_at",
+                     "actor", "reason"])
+    for c in conflicts.values():
+        writer.writerow(neutralise_row([
+            c["entity_id"], c["identifier_type"], c["submitted_value"],
+            c["existing_value"], c["verified_value"], c["selected_value"],
+            c["current_decision"], c["decided_at"], c["actor"], c["reason"]]))
+
+    body = buf.getvalue()
+    manifest = _CsvExportManifest(route="identifier-conflicts.csv", intake_id=intake.id,
+                                  registered_row_count=row_count, events=len(events))
+    manifest.emit(body)
+    manifest.streamed_rows = len(conflicts)
+    manifest.log()
+    return Response(
+        content=body, media_type="text/csv; charset=utf-8",
+        headers=manifest.headers(f"identifier-conflicts-{intake.id}.csv"))
+
+
+@router.get("/deliveries/{intake_id}/review-records.csv",
+            summary="Every review record tied to this delivery, with its classification rule and version, as CSV")
+async def review_records_csv_route(
+    intake_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role(EVIDENCE_ROLE)),
+):
+    """The client-report's Analyst actions section (section 8) caps its
+    review-records table at `_REVIEW_RECORD_ROW_CAP` (first 100, unresolved/
+    not-yet-QA-approved first) — this route is the full export, including
+    every record's classification rule and rule-set version (the permanent
+    provenance a determination was made under, never altered by a later
+    rule-set upgrade). Reaches review records via EITHER `source_record_id`
+    (the manual single-entity review path) OR the delivery's own promoted
+    `entity_id`s (the bulk `arc_pipeline.verify_and_classify` path this report
+    exists for) — same linkage as `_analyst()` in the report's data layer."""
+    from app.tefca_registry import models as reg
+    from app.tefca_registry.rce import models as m
+
+    intake = await _intake_or_404(db, intake_id)
+    record_ids = select(m.RceSourceRecord.id).where(
+        m.RceSourceRecord.source_intake_id == intake.id)
+    entity_ids = select(m.RceCuratedRecord.canonical_entity_id).where(
+        m.RceCuratedRecord.source_intake_id == intake.id,
+        m.RceCuratedRecord.canonical_entity_id.isnot(None))
+    predicate = or_(reg.ReviewRecord.source_record_id.in_(record_ids),
+                    reg.ReviewRecord.entity_id.in_(entity_ids))
+    # Count and rows in ONE consistent snapshot, over the identical predicate
+    # (2026-10-03).
+    conn, snap = await _open_consistent_snapshot()
+    try:
+        row_count = int((await snap.execute(
+            select(func.count()).select_from(reg.ReviewRecord).where(predicate))).scalar() or 0)
+        reviews = (await snap.execute(
+            select(reg.ReviewRecord).where(predicate)
+            .order_by(reg.ReviewRecord.created_at))).scalars().all()
+    finally:
+        await _close_consistent_snapshot(conn, snap)
+
+    import csv
+    import io
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["review_id", "entity_id", "source_record_id", "classification_bucket",
+                     "classification_rule", "classification_rule_version",
+                     "reviewer_resolution", "reclassified_to", "assigned",
+                     "reviewed_at", "reportable_at", "created_at"])
+    for r in reviews:
+        writer.writerow(neutralise_row([
+            r.review_id, str(r.entity_id) if r.entity_id else "",
+            str(r.source_record_id) if r.source_record_id else "",
+            r.classification_bucket, r.classification_rule, r.classification_rule_version,
+            r.reviewer_resolution, r.reclassified_to,
+            "yes" if r.assigned_to_user_id else "no",
+            r.reviewed_at.isoformat() if r.reviewed_at else "",
+            r.reportable_at.isoformat() if r.reportable_at else "",
+            r.created_at.isoformat() if r.created_at else "",
+        ]))
+
+    body = buf.getvalue()
+    manifest = _CsvExportManifest(route="review-records.csv", intake_id=intake.id,
+                                  registered_row_count=row_count)
+    manifest.emit(body)
+    manifest.streamed_rows = len(reviews)
+    manifest.log()
+    return Response(
+        content=body, media_type="text/csv; charset=utf-8",
+        headers=manifest.headers(f"review-records-{intake.id}.csv"))
 
 
 # ═══ exceptions ══════════════════════════════════════════════════════════════
@@ -1176,6 +1486,172 @@ async def verification_coverage_route(
     result["automated_coverage"]["automatic_scheduling_enabled"] = av.automated_coverage_enabled()
     result["analyst_sample"] = await _analyst_sample_summary(db, intake.id)
     return result
+
+
+#: `verification-coverage` above is viewer-floor COUNTS only (Decision 1 of
+#: the pre-merge review: content that returns delivered values needs
+#: `reviewer`). These two routes return the entities themselves (name, NPI)
+#: behind one coverage card's count, so they share the evidence floor the
+#: disposition/exception routes above use, not the coverage route's.
+
+
+def _verification_drilldown_http(exc) -> HTTPException:
+    from app.reports.data.verification_drilldown import (UnknownSourceOrOutcome,
+                                                          UnprovenOutcomeRefused)
+
+    if isinstance(exc, UnprovenOutcomeRefused):
+        return HTTPException(409, detail={"error": str(exc), "code": "OUTCOME_RECONCILIATION_PENDING"})
+    if isinstance(exc, UnknownSourceOrOutcome):
+        return HTTPException(422, str(exc))
+    raise exc  # noqa: TRY004 -- programmer error, not a request error
+
+
+@router.get("/deliveries/{intake_id}/verification-coverage/{source}/{outcome}",
+            summary="Entities behind one coverage card's total (never 'failed')")
+async def verification_coverage_entities_route(
+    intake_id: str,
+    source: str,
+    outcome: str,
+    sort: str = Query("line_number", description="line_number|entity_name|npi"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role(EVIDENCE_ROLE)),
+):
+    """The paginated entity list behind one (source, outcome) total on the
+    Verification tab — e.g. this delivery's NPPES "Not found" count. `source`
+    is one of verification_coverage.SOURCES; `outcome` is one of
+    verification_coverage.OUTCOMES, except `failed`, which this route refuses
+    with 409 OUTCOME_RECONCILIATION_PENDING -- see
+    verification_drilldown.UnprovenOutcomeRefused's own docstring.
+
+    Never routes to the global synthetic Findings page or any cross-delivery
+    listing — every row here is scoped to THIS intake_id, same as every other
+    `/deliveries/{intake_id}/...` route in this file.
+    """
+    from app.reports.data.verification_drilldown import (UnknownSourceOrOutcome,
+                                                          UnprovenOutcomeRefused,
+                                                          list_outcome_entities)
+
+    intake = await _intake_or_404(db, intake_id)
+    try:
+        result = await list_outcome_entities(
+            db, intake.id, source=source, outcome=outcome,
+            limit=limit, offset=offset, sort=sort)
+    except (UnprovenOutcomeRefused, UnknownSourceOrOutcome) as exc:
+        raise _verification_drilldown_http(exc)
+    result["correlation"] = {"request_id": request_context.get("request_id")}
+    return result
+
+
+@router.get("/deliveries/{intake_id}/verification-coverage/{source}/{outcome}/csv",
+            summary="The same entity list as a controlled CSV export")
+async def verification_coverage_entities_csv_route(
+    intake_id: str,
+    source: str,
+    outcome: str,
+    sort: str = Query("line_number"),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role(EVIDENCE_ROLE)),
+):
+    from app.reports.data.verification_drilldown import (UnknownSourceOrOutcome,
+                                                          UnprovenOutcomeRefused,
+                                                          count_outcome_entities,
+                                                          iter_outcome_entities_csv_rows,
+                                                          validate_source_outcome)
+
+    intake = await _intake_or_404(db, intake_id)
+    try:
+        validate_source_outcome(source, outcome)
+    except (UnprovenOutcomeRefused, UnknownSourceOrOutcome) as exc:
+        raise _verification_drilldown_http(exc)
+
+    # Consistent snapshot between the COUNT and the stream (2026-10-03):
+    # a DEDICATED connection, separate from the shared per-request `db`
+    # session. Postgres requires `SET TRANSACTION ISOLATION LEVEL` to be a
+    # transaction's first statement -- the shared session's first statement
+    # is already spent by the time this route body runs (the `require_role`
+    # auth dependency queries the user row first, and FastAPI resolves
+    # dependencies before the route function). A fresh connection sidesteps
+    # that entirely: its first statement genuinely is this one, so the row
+    # count registered up front and the rows later streamed are guaranteed
+    # to be read against the IDENTICAL database snapshot, not merely
+    # "probably fine because the tables are append-only".
+    from app.core.database import engine
+
+    conn = await engine.connect()
+    await conn.execution_options(isolation_level="REPEATABLE READ")
+    await conn.execute(text("SET TRANSACTION READ ONLY"))
+    try:
+        row_count = await count_outcome_entities(conn, intake.id, source=source, outcome=outcome)
+    except (UnprovenOutcomeRefused, UnknownSourceOrOutcome) as exc:
+        await conn.close()
+        raise _verification_drilldown_http(exc)
+
+    import csv
+    import hashlib
+    import io
+
+    from fastapi.responses import StreamingResponse
+
+    export_id = str(uuid.uuid4())
+
+    async def _rows():
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        digest = hashlib.sha256()
+        byte_count = 0
+        streamed_rows = 0
+
+        def _emit(text_chunk: str) -> str:
+            nonlocal byte_count
+            encoded = text_chunk.encode("utf-8")
+            digest.update(encoded)
+            byte_count += len(encoded)
+            return text_chunk
+
+        try:
+            writer.writerow(["entity_id", "source_record_id", "line_number", "entity_name",
+                             "npi", "source_record_count"])
+            yield _emit(buf.getvalue())
+            async for r in iter_outcome_entities_csv_rows(
+                    conn, intake.id, source=source, outcome=outcome, sort=sort):
+                buf.seek(0)
+                buf.truncate(0)
+                writer.writerow(neutralise_row([r.entity_id, r.source_record_id, r.line_number,
+                                 r.entity_name, r.npi, r.source_record_count]))
+                streamed_rows += 1
+                yield _emit(buf.getvalue())
+        finally:
+            # The dedicated connection's read-only transaction is only ever
+            # committed/rolled back here, after the SAME snapshot has served
+            # both the count above and every row below -- never reused for
+            # anything else, never left open past this one export.
+            await conn.rollback()
+            await conn.close()
+
+        # Registered manifest (2026-10-03): the logical row count this SAME
+        # consistent-snapshot transaction counted up front, the exact byte
+        # count and SHA-256 of what was actually streamed (computed
+        # incrementally, never buffering the whole export in memory to get
+        # them), and the row-count-mismatch check that would catch a
+        # snapshot inconsistency directly rather than assuming one can't
+        # happen. Checkable by `export_id` in the structured log, same
+        # pattern this app already uses for request-level audit facts.
+        logger.info(
+            "csv_export_manifest",
+            extra={"export_id": export_id, "intake_id": str(intake.id),
+                  "source": source, "outcome": outcome, "sort": sort,
+                  "registered_row_count": row_count, "streamed_row_count": streamed_rows,
+                  "row_count_reconciles": row_count == streamed_rows,
+                  "byte_count": byte_count, "sha256": digest.hexdigest()})
+
+    from app.reports.routes import download_headers
+    return StreamingResponse(
+        _rows(), media_type="text/csv; charset=utf-8",
+        headers=download_headers(f"verification-{source}-{outcome}-{intake.id}.csv",
+                                 extra={"X-Returned-Rows": str(row_count),
+                                       "X-Export-Id": export_id}))
 
 
 async def _analyst_sample_summary(db, intake_id) -> Dict[str, Any]:
@@ -1979,6 +2455,41 @@ async def delivery_snapshot_state_route(
                   for r in chain],
         "approval_role": se.SNAPSHOT_APPROVAL_ROLE,
     }
+
+
+@router.get("/deliveries/{intake_id}/rollback-plan",
+            summary="Read-only rehearsal of what a relationship rollback would do")
+async def delivery_rollback_plan_route(
+    intake_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role(DATA_OPERATIONS_ROLE)),
+):
+    """ROL workbook cases (Fail-NoRollbackUI): there is no UI button that
+    mutates a relationship rollback, by design -- `scripts/rce_snapshot_rollback.py`
+    is the operator-run tool, gated to Data Operations (program_manager)+,
+    and `--apply` needs a `DATABASE_URL` that only resolves inside the
+    container. This endpoint reuses that SAME read-only planning logic
+    (`relationship_history.compensate_snapshot(..., apply=False)` -- it
+    never writes, same fail-closed role/reason checks as the real tool) so a
+    reviewer can see what a rollback of THIS delivery would restore/retire
+    before an operator ever runs `--apply`. It is a rehearsal, not an
+    action: there is no corresponding POST/apply route here."""
+    from app.tefca_registry.rce import relationship_history as rh
+
+    intake = await _intake_or_404(db, intake_id)
+    try:
+        plan = await rh.compensate_snapshot(
+            db, intake.id, actor=getattr(user, "email", None) or "SYSTEM",
+            role=getattr(user, "role", ""), reason="read-only rehearsal view",
+            apply=False)
+    except rh.RollbackRefused as exc:
+        raise HTTPException(409, str(exc))
+    return {"intake_id": str(intake.id), "rehearsal": True,
+            "note": ("This is a read-only rehearsal of what a relationship rollback "
+                     "would do. It changes nothing. Applying a rollback is an "
+                     "operator-run action (scripts/rce_snapshot_rollback.py --apply), "
+                     "never a button in this UI."),
+            **plan}
 
 
 @router.post("/deliveries/{intake_id}/snapshot/approve",

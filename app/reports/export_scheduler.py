@@ -57,7 +57,8 @@ async def _poll_tick():
     """
     from app.core.database import async_session_maker
     from app.reports.data import export_jobs
-    from app.reports.export_runner import run_export_job
+    from app.reports.data.export_jobs import REPORT_GENERATION_EXPORT_TYPE_PREFIX
+    from app.reports.export_runner import run_export_job, run_report_generation_job
 
     try:
         async with async_session_maker() as db:
@@ -66,7 +67,14 @@ async def _poll_tick():
                 return
             logger.info("export poller claimed job %s (%s)", job.id,
                         job.export_type)
-            state = await run_export_job(db, job)
+            # Two job kinds share this one table (report generation added
+            # 2026-10-01); dispatched on `export_type`'s prefix rather than a
+            # separate "kind" column, same distinction `report_type` already
+            # makes on the row.
+            runner = (run_report_generation_job
+                     if (job.export_type or "").startswith(REPORT_GENERATION_EXPORT_TYPE_PREFIX)
+                     else run_export_job)
+            state = await runner(db, job)
             logger.info("export job %s finished: %s", job.id, state)
     except Exception as exc:  # noqa: BLE001
         # A tick that raises must not stop the scheduler. The job it was working
