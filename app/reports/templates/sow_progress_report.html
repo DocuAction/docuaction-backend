@@ -32,12 +32,11 @@
 
 {% block cover %}
 <style>
-  :root {
-    --agt-navy: #0A1628; --agt-dblue: #002D5E; --agt-blue: #0066B3; --agt-lblue: #E8F4FD;
-    --agt-gold: #C8A951; --agt-lgold: #FBF5E6; --agt-panel: #F8F9FA; --agt-line: #DEE2E6;
-    --agt-muted: #6C757D; --agt-ink: #212529;
-    --agt-b1: #107C10; --agt-b2: #B5891F; --agt-b3: #0066B3; --agt-b4: #D13438;
-  }
+  {# The design system itself (tokens, header band, KPI cards, two-column
+     layout, agt tables, chips, panels, footer) lives in
+     app/reports/styles/agt_design_system.css, shared with the delivery
+     client report — see template_engine.agt_design_css(). #}
+  {{ agt_css|safe }}
   /* The base stylesheet (uswds_report.css) hyphenates and breaks words inside
      every table cell; the executive page never does. */
   section.cover { min-height: auto; padding-top: 0; border-top: 0; margin: 0; }
@@ -48,81 +47,6 @@
   .cover[data-kind="final"] .agt-box { margin-bottom: 2.5pt; padding-top: 2pt; padding-bottom: 2.5pt; }
   .cover p { margin: 0; }
   .report-header { display: none; }
-
-  /* header */
-  .agt-head { display: table; width: 100%; border-collapse: collapse; }
-  .agt-head .cell { display: table-cell; vertical-align: top; padding: 0; }
-  .agt-head .logo img { height: 0.38in; width: auto; display: block; }
-  .agt-head .title { font-size: 14pt; font-weight: 700; color: var(--agt-dblue); margin: 0; line-height: 1.15; }
-  .agt-head .deliv { font-size: 9pt; color: var(--agt-ink); margin: 2pt 0 0 0; }
-  .agt-head .deliv b { color: var(--agt-navy); }
-  .agt-head .meta { font-size: 7.2pt; color: var(--agt-muted); margin: 2pt 0 0 0; }
-  .agt-head .meta .pg::after { content: "Page " counter(page) " of " counter(pages); }
-  .agt-badge { display: inline-block; border: 1.2pt solid var(--agt-gold); background: var(--agt-lgold); color: #6b4f0a; font-size: 7.6pt; font-weight: 700; letter-spacing: .6pt; padding: 2.5pt 7pt; white-space: nowrap; }
-  .agt-head .org { font-size: 8pt; font-weight: 700; color: var(--agt-navy); margin: 4pt 0 0 0; text-align: right; }
-  .agt-head .prog { font-size: 7pt; color: var(--agt-blue); font-weight: 700; letter-spacing: .4pt; text-transform: uppercase; margin: 1pt 0 0 0; text-align: right; }
-  .agt-rule { height: 2pt; background: var(--agt-navy); margin: 5pt 0 0 0; }
-  .agt-goldrule { height: 1.5pt; background: var(--agt-gold); margin: 1.5pt 0 4pt 0; }
-  .agt-synth { font-size: 7pt; color: var(--agt-muted); margin: 0 0 4pt 0; }
-
-  /* KPI cards */
-  .agt-kpis { display: table; width: 100%; border-collapse: separate; border-spacing: 5pt 0; margin: 0 -5pt 5pt -5pt; }
-  .agt-kpi { display: table-cell; width: 20%; background: var(--agt-lblue); border-top: 2.5pt solid var(--agt-blue); padding: 4pt 6pt; vertical-align: top; }
-  .agt-kpi .l { font-size: 6.8pt; text-transform: uppercase; letter-spacing: .4pt; color: var(--agt-muted); font-weight: 700; margin: 0; white-space: nowrap; }
-  .agt-kpi .v { font-size: 13.5pt; font-weight: 700; color: var(--agt-navy); margin: 2pt 0 0 0; line-height: 1.1; white-space: nowrap; }
-  .agt-kpi .n { font-size: 6.4pt; color: var(--agt-muted); margin: 1.5pt 0 0 0; line-height: 1.22; }
-  .agt-qa { font-size: 7.4pt; color: #6b4f0a; background: var(--agt-lgold); border-left: 2.5pt solid var(--agt-gold); padding: 2pt 6pt; margin: 0 0 3pt 0; }
-  .agt-cor { font-size: 7.2pt; color: #6b4f0a; background: var(--agt-lgold); border-left: 2.5pt solid var(--agt-gold); padding: 2pt 6pt; margin: 0 0 6pt 0; }
-
-  /* two-column analytical layout */
-  .agt-cols { display: table; width: 100%; border-collapse: separate; border-spacing: 9pt 0; margin: 0 -9pt; table-layout: fixed; }
-  .agt-cols > .cell { display: table-cell; vertical-align: top; padding: 0; }
-  .agt-cols > .left { width: 61%; }
-  .agt-cols > .right { width: 39%; }
-
-  /* sections and data tables */
-  .agt-h2 { font-size: 8.2pt; margin: 0 0 2.5pt 0; color: var(--agt-dblue); text-transform: uppercase; letter-spacing: .5pt; border-left: 3pt solid var(--agt-gold); padding-left: 5pt; border-bottom: 0; page-break-after: avoid; }
-  .agt-sec { margin: 0 0 4.5pt 0; page-break-inside: avoid; }
-  table.agt { width: 100%; border-collapse: collapse; font-size: 7.5pt; margin: 0; table-layout: fixed; }
-  table.agt caption { display: none; }
-  table.agt th { background: var(--agt-navy); color: #fff; text-align: left; padding: 2.4pt 4pt; font-weight: 700; font-size: 7pt; border: 0; white-space: normal; vertical-align: bottom; line-height: 1.15; }
-  table.agt td.q { white-space: normal; overflow-wrap: normal; word-break: normal; font-size: 7pt; }
-  table.agt th.gap, table.agt td.gap { padding-left: 12pt; }
-  table.agt th.num, table.agt td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
-  table.agt td { padding: 1.7pt 4pt; border: 0; border-bottom: 0.6pt solid var(--agt-line); vertical-align: middle; }
-  table.agt tbody tr:nth-child(even) td { background: #F6F8FA; }
-  table.agt tr { page-break-inside: avoid; }
-  table.agt thead { display: table-header-group; }
-  table.agt tr.total td { background: var(--agt-lblue); font-weight: 700; border-top: 1.4pt solid var(--agt-navy); border-bottom: 0; }
-  .agt-chip { display: inline-block; min-width: 18pt; text-align: center; padding: 0.5pt 3pt; border-radius: 2pt; color: #fff; font-weight: 700; font-size: 7pt; }
-  .agt-chip.b1 { background: var(--agt-b1); } .agt-chip.b2 { background: var(--agt-b2); } .agt-chip.b3 { background: var(--agt-b3); } .agt-chip.b4 { background: var(--agt-b4); }
-  .agt-bar { display: table; width: 100%; height: 6pt; border-collapse: collapse; margin: 2pt 0 2pt 0; }
-  .agt-bar .seg { display: table-cell; height: 7pt; padding: 0; }
-  .agt-bar .b1 { background: var(--agt-b1); } .agt-bar .b2 { background: var(--agt-b2); } .agt-bar .b3 { background: var(--agt-b3); } .agt-bar .b4 { background: var(--agt-b4); } .agt-bar .none { background: var(--agt-line); }
-  .agt-note { font-size: 6.5pt; color: var(--agt-muted); margin: 2pt 0 0 0; line-height: 1.25; }
-
-  /* right-column panels */
-  .agt-box { border: 0.7pt solid var(--agt-line); border-top: 2.5pt solid var(--agt-blue); padding: 2.5pt 6pt 3.5pt 6pt; font-size: 7.1pt; line-height: 1.22; margin: 0 0 3.5pt 0; page-break-inside: avoid; }
-  .agt-box .agt-h2 { margin: 0 0 2pt 0; border-left: 0; padding-left: 0; font-size: 7.6pt; }
-  .agt-box ul, .agt-box ol { margin: 0; padding-left: 12pt; }
-  .agt-box li { margin: 0 0 1pt 0; }
-  .agt-src { display: table; width: 100%; border-collapse: collapse; }
-  .agt-src .r { display: table-row; }
-  .agt-src .k, .agt-src .n { display: table-cell; padding: 1.2pt 0; border-bottom: 0.5pt solid var(--agt-line); vertical-align: top; }
-  .agt-src .n { text-align: right; white-space: nowrap; font-weight: 700; color: var(--agt-navy); padding-left: 6pt; width: 22%; }
-  .agt-st { display: table; width: 100%; border-collapse: separate; border-spacing: 3pt; margin: 0 -3pt; }
-  .agt-st .row { display: table-row; }
-  .agt-st .cell { display: table-cell; width: 50%; background: var(--agt-panel); padding: 2.5pt 4pt; font-size: 6.8pt; vertical-align: top; line-height: 1.24; }
-  .agt-st b { display: block; color: var(--agt-navy); margin-bottom: 1pt; }
-  .agt-dot::before { content: "\25CF  "; color: var(--agt-b1); }
-  .agt-dot.warn::before { color: var(--agt-b2); }
-  .agt-findings { margin: 0; padding-left: 11pt; font-size: 7.4pt; line-height: 1.28; }
-  .agt-findings li { margin: 0 0 1pt 0; }
-
-  /* footer line and package strip */
-  .agt-pkg { background: var(--agt-panel); border-left: 3pt solid var(--agt-navy); padding: 2.5pt 6pt; font-size: 6.9pt; margin: 1pt 0 0 0; page-break-inside: avoid; }
-  .agt-foot { position: running(agtfoot); border-top: 1.4pt solid var(--agt-navy); padding-top: 2.5pt; margin: 0; font-size: 6.6pt; color: var(--agt-muted); font-family: "Public Sans", Arial, Helvetica, sans-serif; line-height: 1.25; }
-  .agt-foot .mark { color: #6b4f0a; font-weight: 700; }
 
   /* appendices: the contract body, compacted and never word-broken */
   .agt-appendix-intro { margin: 0 0 8pt 0; }

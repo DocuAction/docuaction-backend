@@ -23,6 +23,63 @@
   {%- endif -%}
 {% endmacro %}
 
+{#
+  Presentation (2026-10-03): the approved Alliance Global Tech design system —
+  the same header band, KPI cards, navy table headings and B1–B4 chips the
+  D3.1 / D3.2 progress family ships with (agt_design_system.css, shared, not
+  copied). Content sections 1–11 and their CSV-annex captions are unchanged:
+  this block adds a header band and a summary row above them, and styles the
+  headings and tables they already have. Every KPI value is a template
+  variable the data service already provides; nothing is typed in.
+#}
+{% block cover %}
+<style>
+  {{ agt_css|safe }}
+  .report-header { display: none; }
+  .dp-band { font-family: "Public Sans", Arial, Helvetica, sans-serif; color: var(--agt-ink); margin: 0 0 8pt 0; }
+  .dp-band, .dp-band * { hyphens: manual; -webkit-hyphens: manual; overflow-wrap: normal; word-break: normal; }
+  .dp-band p { margin: 0; }
+  .dp-band .agt-head .title { string-set: doc-title content(); }
+  .dp-band .agt-kpi .v { font-size: 12.5pt; }
+  .dp-band .agt-kpi .v.sm { font-size: 9.5pt; line-height: 1.3; white-space: normal; }
+  /* the body: section headings and tables follow the same system */
+  main h2 { font-size: 11pt; color: var(--agt-dblue); text-transform: none; letter-spacing: 0; border-left: 3pt solid var(--agt-gold); border-bottom: 0; padding-left: 6pt; margin: 12pt 0 5pt 0; page-break-after: avoid; }
+  main table thead th { background: var(--agt-navy); color: #fff; border: 0; }
+  main table tbody th[scope="row"] { background: var(--agt-lblue); color: var(--agt-ink); font-weight: 700; }
+  main table tbody tr:nth-child(even) td { background: #F6F8FA; }
+  main table td, main table th { border-bottom: 0.6pt solid var(--agt-line); }
+  main .scope-box { border-top: 2.5pt solid var(--agt-blue); }
+</style>
+<div class="dp-band">
+  <div class="agt-head">
+    <div class="cell logo" style="width: 0.95in">
+      {% if branding.agt_logo %}<img src="{{ branding.agt_logo }}" alt="{{ branding.prepared_by }} logo">{% endif %}
+    </div>
+    <div class="cell">
+      <h1 class="title" id="dp-title">RCE Delivery Processing Report</h1>
+      <p class="deliv"><b>Delivery processing</b> &middot; {{ delivery.delivery_label or 'Unlabelled delivery' }}{% if delivery.filename %} &middot; {{ delivery.filename }}{% endif %}</p>
+      <p class="meta">Report {{ snapshot.report_id }} &middot; Generated {{ generated_at_display }} &middot; Report Data Service v{{ snapshot.report_data_service_version }} &middot; Template v{{ snapshot.template_version }}{% if snapshot_id %} &middot; Reconciliation snapshot {{ snapshot_sequence }} of {{ reconciliation.history_count }}{% endif %}</p>
+    </div>
+    <div class="cell" style="width: 1.75in; text-align: right">
+      <span class="agt-badge">{{ document_status|upper }}</span>
+      <p class="org">{{ branding.prepared_by }}</p>
+      <p class="prog">TEFCA Audit, Review &amp; Compliance</p>
+    </div>
+  </div>
+  <div class="agt-rule"></div>
+  <div class="agt-goldrule"></div>
+
+  {# ── five KPI cards: every figure is restated, with its basis, in sections 1–8 ── #}
+  <div class="agt-kpis">
+    <div class="agt-kpi"><p class="l">Records delivered</p><p class="v">{{ delivery.record_count|number }}</p><p class="n">Area 1 source lines registered for this delivery</p></div>
+    <div class="agt-kpi"><p class="l">Processing outcome</p><p class="v sm">{{ outcome.value }}</p><p class="n">{{ outcome.code }} &middot; review state {{ review.code }}</p></div>
+    <div class="agt-kpi"><p class="l">Reconciliation</p><p class="v">{% if reconciliation.available %}{{ 'PASSED' if reconciliation.passed else 'FAILED' }}{% else %}None{% endif %}</p><p class="n">{% if reconciliation.available %}pinned snapshot sequence {{ reconciliation.sequence }}{% else %}no reconciliation snapshot is persisted{% endif %}</p></div>
+    <div class="agt-kpi"><p class="l">Findings</p><p class="v">{% if findings.available %}{{ findings.total|number }}{% else %}&mdash;{% endif %}</p><p class="n">{% if findings.available %}{{ findings.open_high|number }} open at HIGH / CRITICAL{% else %}no completed quality run{% endif %}</p></div>
+    <div class="agt-kpi"><p class="l">Review records</p><p class="v">{{ analyst.counts.review_records|number }}</p><p class="n">{{ analyst.counts.qa_approved|number }} independently QA approved &middot; {{ analyst.counts.qa_pending|number }} awaiting QA</p></div>
+  </div>
+</div>
+{% endblock %}
+
 {% block content %}
 
 <section class="scope-box" aria-labelledby="dp-identity">
@@ -471,7 +528,7 @@
     {% for r in analyst.review_records %}
     <tr>
       <th scope="row">{{ r.review_id }}</th>
-      <td>{{ r.bucket or '—' }}</td>
+      <td>{% if r.bucket in ('B1', 'B2', 'B3', 'B4') %}<span class="agt-chip {{ r.bucket|lower }}">{{ r.bucket }}</span>{% else %}{{ r.bucket or '—' }}{% endif %}</td>
       <td>{{ r.classification_rule or '—' }}{% if r.classification_rule_version is not none %} (v{{ r.classification_rule_version }}){% endif %}</td>
       <td>{{ r.resolution or 'Pending' }}{% if r.reclassified_to %} → {{ r.reclassified_to }}{% endif %}</td>
       <td>{{ 'Yes' if r.assigned else 'No' }}</td>
