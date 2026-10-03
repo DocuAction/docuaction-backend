@@ -57,7 +57,10 @@ def _synthetic_delivery_bytes(run_tag: str, n: int) -> bytes:
             "id": f"sam.e2e.{run_tag}.{i:04d}",
             "orgManagingOrg": qhin, "sequoiaorgtype": "Participant",
             "organizationNodeType": "initiating-node",
-            "NPI": _valid_npi(i + hash(run_tag) % 100_000),
+            # uuid-derived (2026-10-03): the shared test_sam database keeps
+            # every seeded delivery, and a 100k NPI space collided with
+            # earlier entities' persisted evidence, making runs flaky.
+            "NPI": _valid_npi(i + uuid.uuid4().int % 800_000_000),
             "TEFCAID": f"TEFCA-SAME2E-{run_tag}-{i:04d}",
             "HCID": f"HCID-SAME2E-{run_tag}-{i:04d}", "active": "true",
             "hl7orgrole": "provider",
@@ -377,3 +380,61 @@ async def test_clean_confirmed_entity_is_not_disqualified_by_sam(db_required, mo
         "classification_rule_version was not populated on the persisted ReviewRecord")
     print(f"[rule-version] clean_no_match -> "
           f"rule={record.classification_rule} version={record.classification_rule_version}")
+
+
+async def test_clean_name_screen_end_to_end_is_not_disqualified(db_required, monkeypatch):
+    """2026-10-03 (peer Lane S finding): the REAL bulk path, SAM screened by
+    ORGANISATION NAME (no UEI -- the delivered 41 fields never carry one),
+    nothing listed. The evidence layer records NOT_FOUND ("a name search does
+    not carry the weight of a UEI match"); before the translator fix that
+    became `not_found` and v3 RULE-005 disqualified every clean,
+    name-screened entity as B4. Now it is "clear": eligible for B1, never
+    RULE-005. The identity-ambiguity guard is a different disposition
+    (REVIEW) and is covered by test_ambiguous_sam_match_end_to_end."""
+    from app.Tefca.connectors import SourceResult
+    from app.core.database import async_session_maker
+    from app.tefca_registry.rce.arc_pipeline import verify_and_classify
+
+    monkeypatch.setenv("ENTITY_RESOLVER_SOURCE", "db")
+    _clean_nppes_leie(monkeypatch)
+
+    def clean_name_screen(*, uei, legal_name):
+        return SourceResult.ok("SAM_GOV", {
+            "found": False, "matched_by": "name", "excluded": False,
+            "excluded_known": True, "identity_ambiguous": False,
+            "registration_current": None,
+        }, {"legal_name": legal_name})
+    _patch_sam_verify(monkeypatch, clean_name_screen)
+
+    intake_id = await _seed_promoted_delivery(n=1)
+    async with async_session_maker() as db:
+        refs = await _promoted_refs(db, intake_id, 1)
+    async with async_session_maker() as db:
+        result = await verify_and_classify(db, refs, intake_id=intake_id,
+                                           actor="pytest-sam-e2e")
+    outcome = result["outcomes"][0]
+
+    async with async_session_maker() as db:
+        from sqlalchemy import select
+        from app.Tefca.models import TEFCADimensionEvidence
+        from app.tefca_registry import models as reg
+        rows = (await db.execute(select(TEFCADimensionEvidence).where(
+            TEFCADimensionEvidence.entity_id == str(outcome["entity_id"]),
+            TEFCADimensionEvidence.evidence_dimension == "EXCLUSION_REVOCATION"))).scalars().all()
+        record = (await db.execute(select(reg.ReviewRecord).where(
+            reg.ReviewRecord.entity_id == outcome["entity_id"]))).scalars().one()
+    sam_rows = [r for r in rows if r.source == "SAM_GOV"]
+    assert sam_rows, "no SAM_GOV evidence row was persisted"
+    # Evidence keeps the weaker-than-UEI truth ...
+    assert sam_rows[-1].disposition in ("NOT_FOUND", "PASS"), sam_rows[-1].disposition
+    assert sam_rows[-1].original_values.get("excluded") is False
+    # ... and the classifier input reads it as a clean screen, not a hit.
+    classifier_input = record.verification_results["classifier_input"]
+    assert classifier_input["sources"]["sam_gov"]["status"] in ("clear", "verified"), \
+        classifier_input["sources"]["sam_gov"]
+    assert outcome["bucket"] != "B4", f"a clean SAM name screen was disqualified: {outcome}"
+    assert outcome["rule_code"] != "RULE-005", outcome
+    assert outcome["bucket"] in ("B1", "B2"), outcome   # B2 only via the fixture's address variance
+    print(f"[rule-version] clean_name_screen -> bucket={outcome['bucket']} "
+          f"rule={record.classification_rule} version={record.classification_rule_version} "
+          f"sam_disposition={sam_rows[-1].disposition}")

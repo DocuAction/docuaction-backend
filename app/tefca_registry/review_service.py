@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from app.tefca_registry import audit as reg_audit
 from app.tefca_registry import models as reg
@@ -210,6 +210,134 @@ async def probe_sources(db, entity_id) -> Dict[str, dict]:
         out[key]["verified_at"] = datetime.utcnow().isoformat() + "Z"
         out[key]["lookup_identifier"] = npi
     return out
+
+
+#: Persisted exclusion/revocation evidence the manual path CONSUMES (2026-10-03).
+#:
+#: `probe_sources` only ever queries the live NPPES/PECOS/LEIE connectors and
+#: stubs `sam_gov` as a permanent NOT_CHECKED. The bulk path
+#: (`arc_pipeline.verify_and_classify`) does query SAM.gov and persists the
+#: answer as `tefca_dimension_evidence` rows. Until this helper existed the
+#: manual path ignored those rows entirely — a confirmed SAM exclusion
+#: persisted at B4 by the bulk path was followed by a NEWER manual
+#: ReviewRecord at B1 (proven in tests/test_sam_manual_review_asymmetry.py).
+#:
+#: Rules, fail-closed:
+#:   * If persisted evidence exists for a source, the classifier sees its real
+#:     state, translated through the SAME `_DISPOSITION_TO_STATE` the bulk
+#:     path uses (REVIEW -> not_found, PASS -> verified, ...). A persisted
+#:     exclusion can never be classified B1 here.
+#:   * A live answer is kept when it is at least as bad as the persisted one
+#:     (a live "excluded" beats a persisted "not_found"); persisted evidence
+#:     overrides a live "clear"/verified only when it is worse. The worse
+#:     state always wins, mirroring `arc_pipeline._STATE_PRECEDENCE`.
+#:   * With NO persisted evidence the existing NOT_CHECKED stub stands, with
+#:     its reason; nothing is invented.
+#:   * No network call; `IMPLEMENTED_SOURCES` (the live-probe set) is unchanged.
+#:   * The evidence generation timestamp is carried into the review's
+#:     rationale so a reviewer can see how old the SAM/LEIE evidence is. No
+#:     freshness cutoff is applied — that is a policy decision (proposed, not
+#:     applied, in SAM_MANUAL_REVIEW_ASYMMETRY.md).
+PERSISTED_EXCLUSION_DIMENSION = "EXCLUSION_REVOCATION"
+PERSISTED_EVIDENCE_SOURCES = {"SAM_GOV": "sam_gov", "OIG_LEIE": "oig_leie",
+                              "CMS_REVOCATION": "cms_revocation"}
+#: Worst first. "excluded"/"clear" are the manual path's own literals for the
+#: exclusion list; the five canonical states sit between them.
+_PERSISTED_PRECEDENCE = {"excluded": 0, FAILED: 1, NOT_FOUND: 2, UNAVAILABLE: 3,
+                         NOT_CHECKED: 4, VERIFIED: 5, "clear": 5}
+
+
+def _precedence(status: Optional[str]) -> int:
+    # An unknown literal never outranks evidence.
+    return _PERSISTED_PRECEDENCE.get(status, len(_PERSISTED_PRECEDENCE))
+
+
+async def latest_persisted_exclusion_evidence(db, entity_id) -> Dict[str, Any]:
+    """Most recent `tefca_dimension_evidence` row per source for the
+    EXCLUSION_REVOCATION dimension. Rows are append-only, so the newest
+    `created_at` is the newest generation."""
+    from sqlalchemy import select
+    from app.Tefca.models import TEFCADimensionEvidence as DE
+
+    rows = (await db.execute(
+        select(DE).where(DE.entity_id == str(entity_id),
+                         DE.evidence_dimension == PERSISTED_EXCLUSION_DIMENSION,
+                         DE.source.in_(list(PERSISTED_EVIDENCE_SOURCES)))
+        .order_by(DE.created_at.desc(), DE.generation_timestamp.desc()))).scalars().all()
+    latest: Dict[str, Any] = {}
+    for row in rows:
+        latest.setdefault(row.source, row)
+    return latest
+
+
+def _evidence_age_days(generation_timestamp: Optional[str]) -> Optional[float]:
+    if not generation_timestamp:
+        return None
+    try:
+        stamp = datetime.fromisoformat(str(generation_timestamp).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if stamp.tzinfo is not None:
+        stamp = stamp.replace(tzinfo=None)
+    return round((datetime.utcnow() - stamp).total_seconds() / 86400, 2)
+
+
+def apply_persisted_exclusion_evidence(sources: Dict[str, dict],
+                                       latest_rows: Dict[str, Any]) -> List[dict]:
+    """Fold persisted exclusion/revocation evidence into `sources`, in place.
+    Returns one provenance record per source whose state came from persisted
+    evidence — carried into the rationale and the review snapshot."""
+    # The SAME translation the bulk path's classifier input uses — including
+    # the 2026-10-03 correction that a clean exclusion-list name screen
+    # (NOT_FOUND on this dimension) is "clear", not a disqualifying not_found.
+    from app.tefca_registry.rce.arc_pipeline import evidence_item_state
+
+    used: List[dict] = []
+    for source_name, row in latest_rows.items():
+        key = PERSISTED_EVIDENCE_SOURCES[source_name]
+        state = evidence_item_state(PERSISTED_EXCLUSION_DIMENSION, row.disposition)
+        live = sources.get(key) or {}
+        live_status = live.get("status")
+        live_answered = live_status in ("excluded", "clear", VERIFIED, NOT_FOUND)
+        if live_answered and _precedence(live_status) <= _precedence(state):
+            # The live probe already said something at least as bad. Keep it;
+            # note that the persisted row was seen and not needed.
+            live["persisted_evidence_seen"] = {
+                "source": source_name, "disposition": row.disposition,
+                "generation_timestamp": row.generation_timestamp}
+            continue
+        provenance = {
+            "source": source_name, "disposition": row.disposition,
+            "state": state, "generation_timestamp": row.generation_timestamp,
+            "age_days": _evidence_age_days(row.generation_timestamp),
+            "evidence_id": str(row.id), "review_id": row.review_id,
+            "rule_applied": row.rule_applied,
+            "superseded_live_status": live_status,
+        }
+        sources[key] = {
+            "status": state,
+            "label": SOURCE_LABELS.get(key, source_name),
+            "subtitle": SOURCE_SUBTITLES.get(key),
+            "reason": (f"persisted {source_name} evidence ({PERSISTED_EXCLUSION_DIMENSION}) "
+                       f"disposition {row.disposition}, generated "
+                       f"{row.generation_timestamp or 'unknown'}"
+                       + (f"; replaces live {live_status}" if live_status else "")),
+            "verified_at": row.generation_timestamp,
+            "lookup_identifier": row.query_identifier,
+            "persisted_evidence": provenance,
+        }
+        used.append(provenance)
+    return used
+
+
+def persisted_evidence_rationale(used: List[dict]) -> str:
+    if not used:
+        return ""
+    parts = [f"{u['source']} {u['disposition']} -> {u['state']} (generated "
+             f"{u['generation_timestamp'] or 'unknown'}"
+             + (f", {u['age_days']} days old" if u.get("age_days") is not None else "")
+             + ")" for u in used]
+    return " Persisted exclusion/revocation evidence consumed: " + "; ".join(parts) + "."
 
 
 #: Connectors that EXIST and are queried on every verification. Coverage is
@@ -499,6 +627,18 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
 
     sources = await probe_sources(db, entity.id)
 
+    # Persisted exclusion/revocation evidence from the bulk path (2026-10-03).
+    # Read-only, no network; see PERSISTED_EVIDENCE_SOURCES. A query failure
+    # here must not fail the review, but it must not pass silently either:
+    # the stub stays NOT_CHECKED and the failure is logged, never "clear".
+    persisted_used: List[dict] = []
+    try:
+        persisted_rows = await latest_persisted_exclusion_evidence(db, entity.id)
+        persisted_used = apply_persisted_exclusion_evidence(sources, persisted_rows)
+    except Exception as exc:  # noqa: BLE001 — evidence read must not sink the review
+        logger.error("Persisted exclusion evidence not consumed for %s: %s",
+                     entity.id, type(exc).__name__, exc_info=True)
+
     # The NPPES outcome goes to the delivery's issue ledger too (NPI-005/006/
     # 009), so the exception view shows every NPI question in one place. A
     # repeat verification with the same outcome writes nothing new.
@@ -517,7 +657,10 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
     npi_flagged = bool(npi) and not validate_npi(npi)[0]
 
     results = {"sources": sources, "fields": _derived_fields(sources, npi_flagged),
-               "confidence_score": None}
+               "confidence_score": None,
+               # Provenance of every source state taken from persisted evidence
+               # rather than a live probe — part of the review snapshot.
+               "persisted_evidence": persisted_used}
 
     # ── Steps 2-4: entity resolution (USPS -> Jaro-Winkler -> AI) ────────────
     # Runs BEFORE classification and contributes nothing to the bucket: the B1-B4
@@ -547,14 +690,21 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
         results["address_match"] = {"method": "skipped", "reason": str(e)[:200]}
 
     classification = await _classifier.classify_with_db(db, results)
+    # The rule set and version path are unchanged; only the rationale text
+    # gains the evidence provenance, so a reviewer can see how old the
+    # SAM/LEIE evidence behind this determination is.
+    rationale = classification.rationale + persisted_evidence_rationale(persisted_used)
     review_id = await generate_review_id(db)
 
     # One audit row per source — the minimal record an auditor needs to retrace
     # the decision, without storing full provenance.
     for src, info in sources.items():
+        lookup = info.get("lookup_identifier")
         db.add(reg.TefcaVerification(
             entity_id=entity.id, review_id=review_id, source=src,
-            lookup_identifier=info.get("lookup_identifier"),
+            # String(50); a persisted-evidence query identifier can be longer
+            # than a bare NPI (the bulk path truncates the same way).
+            lookup_identifier=(str(lookup)[:50] if lookup else None),
             verification_status=("verified" if info.get("status") == "clear"
                                  else info.get("status")),
             detail=info.get("reason"), data_source_label=info.get("label")))
@@ -565,7 +715,7 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
         classification_bucket=classification.bucket,
         classification_rule=classification.rule_code,
         classification_rule_version=classification.rule_version,
-        classification_rationale=classification.rationale,
+        classification_rationale=rationale,
         reviewed_at=datetime.utcnow()))
 
     if sample_id:
@@ -600,8 +750,10 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
         "verification": sources,
         "classification": {
             **classification.as_dict(),
+            "rationale": rationale,
             "classified_at": datetime.utcnow().isoformat() + "Z",
         },
+        "persisted_evidence": persisted_used,
         "confidence": coverage_note(sources),
         # Steps 6-7 of the documented pipeline. Both were already computed and
         # persisted into verification_results, but neither was returned — so a

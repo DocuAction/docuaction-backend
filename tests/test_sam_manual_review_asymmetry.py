@@ -1,36 +1,37 @@
 """The SAM.gov asymmetry between the two real callers of
-`BucketClassifier.classify()` -- stated precisely, after the 2026-10-03
-challenge "zero connector calls alone does not establish a defect if
-appropriate persisted evidence is consumed":
+`BucketClassifier.classify()` -- proven, then FIXED (2026-10-03).
 
-  * `arc_pipeline.verify_and_classify` (bulk/RCE path) queries SAM.gov
-    (`connectors.query_all_sources` -> `SAMGovConnector.verify()`), persists
-    the answer as `tefca_dimension_evidence` (EXCLUSION_REVOCATION / SAM_GOV),
-    and a confirmed-or-pending exclusion disqualifies the entity (v3 rules).
-  * `review_service.run_review` / `probe_sources` (manual single-entity path)
-    neither queries SAM.gov NOR reads that persisted evidence. It builds its
-    classifier input from live connector calls only (nppes/pecos/oig_leie),
-    seeds `sources["sam_gov"]` from the static `NO_CONNECTOR` stub, and never
-    imports or selects `TEFCADimensionEvidence` at all (asserted below from
-    the module source). So the challenge's "unless persisted evidence is
-    consumed" branch does not apply: nothing is consumed.
+  * `arc_pipeline.verify_and_classify` (bulk/RCE path) queries SAM.gov,
+    persists the answer as `tefca_dimension_evidence` (EXCLUSION_REVOCATION /
+    SAM_GOV), and a confirmed-or-pending exclusion disqualifies the entity.
+  * `review_service.run_review` (manual single-entity path) never queries
+    SAM.gov live (`probe_sources` stubs `sam_gov` as NOT_CHECKED). Until the
+    fix it also never READ the persisted evidence, so a confirmed exclusion
+    persisted at B4 was followed by a newer manual ReviewRecord at B1.
+    `run_review` now consumes the entity's most recent persisted
+    exclusion/revocation evidence through the bulk path's own
+    `_DISPOSITION_TO_STATE` (`review_service.apply_persisted_exclusion_evidence`).
 
 Three cases, each with its own test:
-  (a) persisted bulk-path SAM exclusion exists -> the manual path still
-      writes a NEW ReviewRecord that does not reflect it (REAL DEFECT: two
-      contradictory determinations for one entity, the newer one clean);
-  (b) no persisted evidence at all -> no SAM signal either way (the only
-      case that is merely "unprotected", not contradictory);
-  (c) staleness -> moot: there is no read to be stale, and no re-query.
+  (a) persisted bulk SAM exclusion exists -> manual path now B4/RULE-005; the
+      contradiction is gone; the historical bulk record is untouched;
+  (b) no persisted evidence at all -> the NOT_CHECKED stub stands and the
+      v3 rule set classifies clean live sources as B1/RULE-001 -- the SAME
+      outcome the bulk path produces when SAM is unavailable, by the v2
+      design decision "SAM is a disqualifier, never a requirement"
+      (bucket_classifier._v2_rules docstring). Asserted explicitly; changing
+      it is a rule-set (policy) decision, not this fix's;
+  (c) staleness -> the evidence generation timestamp and age are carried in
+      the rationale; no cutoff is applied (policy, proposed in the doc).
 
-Not fixed here. Wiring SAM (live or persisted) into the manual path is a
-behavior change needing its own authorization; the smallest fix is named in
-SAM_MANUAL_REVIEW_ASYMMETRY.md.
+The live probe set (`IMPLEMENTED_SOURCES`) is unchanged and no connector
+call is added -- the first two tests still prove that.
 """
 from __future__ import annotations
 
 import inspect
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
@@ -44,9 +45,6 @@ class _FakeResult:
 
 
 def _valid_npi() -> str:
-    """A structurally valid (Luhn-passing) NPI, so probe_sources' own
-    pre-connector validity gate does not short-circuit every source to
-    not_checked before the SAM question is even reached."""
     from app.services.npi_validator import CMS_PREFIX, _luhn_total
 
     base = "120588014"
@@ -75,8 +73,7 @@ class _FakeDB:
 
 def _clean_nppes_pecos_leie_mgr():
     """A connector manager whose nppes/pecos/leie all report a clean,
-    positive result -- isolates the test to the SAM effect, exactly like the
-    existing e2e test's `_clean_nppes_leie` helper."""
+    positive result -- isolates the test to the SAM effect."""
 
     class _Conn:
         async def lookup_by_npi(self, npi):
@@ -87,20 +84,15 @@ def _clean_nppes_pecos_leie_mgr():
 
     class _Mgr:
         nppes = pecos = leie = _Conn()
-        # A real SAM-aware manager WOULD also expose `.sam_gov` here -- but
-        # review_service.probe_sources's connector loop
-        # (`for key, attr in (("nppes","nppes"),("pecos","pecos"),
-        # ("oig_leie","leie"))`) never looks it up, so even attaching one
-        # here (see below) proves it is never consulted.
         sam_gov = _Conn()
 
     return _Mgr()
 
 
-async def test_manual_review_never_queries_sam_even_when_a_connector_exists(monkeypatch):
-    """The core proof. Attach a SAM connector to the manager that WOULD report
-    a debarment if it were ever called -- probe_sources must still return the
-    static not_checked stub, never touching it."""
+async def test_manual_review_never_queries_sam_live_even_when_a_connector_exists(monkeypatch):
+    """Still true after the fix: no LIVE SAM call is ever made by the manual
+    path. Attach a SAM connector that WOULD report a debarment -- it is never
+    invoked."""
     from app.tefca_registry import review_service as svc
     import app.Tefca.connectors as conns
 
@@ -108,10 +100,6 @@ async def test_manual_review_never_queries_sam_even_when_a_connector_exists(monk
 
     class _SamThatWouldFlag:
         async def verify(self, uei="", legal_name=""):
-            # If this is ever called, the test below would fail on the call
-            # count assertion -- this method intentionally reports the worst
-            # possible real-world finding, to prove the asymmetry is not an
-            # artifact of a lenient mock.
             calls["sam_gov"] += 1
             return _FakeResult(success=True, data={
                 "excluded": True, "debarred": True, "matched_by": "uei",
@@ -125,23 +113,17 @@ async def test_manual_review_never_queries_sam_even_when_a_connector_exists(monk
     db = _FakeDB(npi=_valid_npi())
     sources = await svc.probe_sources(db, "entity-would-be-excluded")
 
-    assert calls["sam_gov"] == 0, (
-        "probe_sources invoked the SAM connector -- the asymmetry this test "
-        "guards against has been fixed; update this test's purpose, do not "
-        "just relax this assertion")
+    assert calls["sam_gov"] == 0
     assert sources["sam_gov"]["status"] == svc.NOT_CHECKED
-    assert "sam_gov" not in ("nppes", "pecos", "oig_leie")  # sanity: distinct key
-    # The real NPPES/PECOS/LEIE results DID come through -- proves the gap is
-    # specific to sam_gov, not a general connector failure.
     assert sources["nppes"]["status"] in (svc.VERIFIED, "clear")
     assert sources["oig_leie"]["status"] == "clear"
+    assert svc.IMPLEMENTED_SOURCES == ("nppes", "pecos", "oig_leie")
 
 
-async def test_classification_on_the_manual_path_is_unaffected_by_what_sam_would_say(monkeypatch):
-    """Feeds probe_sources' output into the REAL v3 classifier (the same one
-    the RCE/bulk path uses) and shows the result is identical whether SAM
-    would have said "debarred" or said nothing at all -- because the manual
-    path never lets the classifier see a SAM answer either way."""
+async def test_probe_output_alone_is_unaffected_by_what_sam_would_say(monkeypatch):
+    """`probe_sources` output (no persisted evidence folded in) classifies
+    identically whatever a live SAM mock would have said -- the fix lives in
+    `run_review`, not in the probe."""
     from app.tefca_registry import review_service as svc
     from app.tefca_registry.bucket_classifier import BucketClassifier, SEED_RULES_V3
     import app.Tefca.connectors as conns
@@ -153,33 +135,85 @@ async def test_classification_on_the_manual_path_is_unaffected_by_what_sam_would
 
         class _Sam:
             async def verify(self, uei="", legal_name=""):
-                if sam_would_flag:
-                    return _FakeResult(success=True, data={"excluded": True, "debarred": True})
-                return _FakeResult(success=True, data={"excluded": False, "debarred": False})
+                return _FakeResult(success=True, data={"excluded": sam_would_flag,
+                                                       "debarred": sam_would_flag})
         mgr.sam_gov = _Sam()
         monkeypatch.setattr(conns, "SourceConnectorManager", lambda: mgr)
 
-        db = _FakeDB(npi=_valid_npi())
-        sources = await svc.probe_sources(db, "entity")
-        results = {"sources": sources, "fields": {}, "confidence_score": None}
-        return classifier.classify(results)
+        sources = await svc.probe_sources(_FakeDB(npi=_valid_npi()), "entity")
+        return classifier.classify({"sources": sources, "fields": {}, "confidence_score": None})
 
-    result_if_sam_would_flag = await _classify_with_sam_mock(sam_would_flag=True)
-    result_if_sam_silent = await _classify_with_sam_mock(sam_would_flag=False)
-
-    assert result_if_sam_would_flag.bucket == result_if_sam_silent.bucket, (
-        "Expected IDENTICAL classification regardless of the SAM mock's "
-        "answer -- this is the asymmetry: the manual path's bucket cannot "
-        "depend on SAM at all today, because SAM is never actually queried.")
-    assert result_if_sam_would_flag.rule_code != "RULE-005", (
-        "A confirmed debarment did NOT disqualify this entity on the manual "
-        "path -- exactly the gap this test documents, not fixed here.")
+    assert ((await _classify_with_sam_mock(True)).bucket
+            == (await _classify_with_sam_mock(False)).bucket)
 
 
-# ── Persisted-evidence cases (2026-10-03) ────────────────────────────────────
-# Seeding helpers kept local so this file stays self-contained; they mirror
-# test_sam_e2e_delivery_path.py (same synthetic shape, same connector-method
-# patching, no network).
+# ── The fix, unit level: precedence between live and persisted ───────────────
+
+def _row(source, disposition, stamp="2026-10-02T12:00:00+00:00"):
+    return SimpleNamespace(id=uuid.uuid4(), source=source, disposition=disposition,
+                           generation_timestamp=stamp, review_id="REV-2026-000001",
+                           rule_applied="D3", query_identifier="UEI-X")
+
+
+def test_persisted_exclusion_overrides_the_static_stub():
+    from app.tefca_registry import review_service as svc
+
+    sources = {"sam_gov": {"status": svc.NOT_CHECKED, "reason": "stub"}}
+    used = svc.apply_persisted_exclusion_evidence(sources, {"SAM_GOV": _row("SAM_GOV", "REVIEW")})
+    assert sources["sam_gov"]["status"] == svc.NOT_FOUND
+    assert sources["sam_gov"]["persisted_evidence"]["disposition"] == "REVIEW"
+    assert used and used[0]["source"] == "SAM_GOV" and used[0]["age_days"] is not None
+    assert "generated 2026-10-02T12:00:00+00:00" in svc.persisted_evidence_rationale(used)
+
+
+def test_persisted_clean_pass_becomes_verified_and_unavailable_stays_unavailable():
+    from app.tefca_registry import review_service as svc
+
+    sources = {"sam_gov": {"status": svc.NOT_CHECKED}}
+    svc.apply_persisted_exclusion_evidence(sources, {"SAM_GOV": _row("SAM_GOV", "PASS")})
+    assert sources["sam_gov"]["status"] == svc.VERIFIED
+
+    sources = {"sam_gov": {"status": svc.NOT_CHECKED}}
+    svc.apply_persisted_exclusion_evidence(sources, {"SAM_GOV": _row("SAM_GOV", "UNAVAILABLE")})
+    assert sources["sam_gov"]["status"] == svc.UNAVAILABLE
+
+
+def test_a_worse_live_answer_is_kept_and_a_worse_persisted_one_wins():
+    from app.tefca_registry import review_service as svc
+
+    # live LEIE says excluded; persisted says REVIEW (-> not_found): keep live.
+    sources = {"oig_leie": {"status": "excluded"}}
+    used = svc.apply_persisted_exclusion_evidence(sources, {"OIG_LEIE": _row("OIG_LEIE", "REVIEW")})
+    assert sources["oig_leie"]["status"] == "excluded" and used == []
+    assert sources["oig_leie"]["persisted_evidence_seen"]["disposition"] == "REVIEW"
+
+    # live LEIE says clear; persisted says REVIEW: the persisted (worse) wins.
+    sources = {"oig_leie": {"status": "clear"}}
+    used = svc.apply_persisted_exclusion_evidence(sources, {"OIG_LEIE": _row("OIG_LEIE", "REVIEW")})
+    assert sources["oig_leie"]["status"] == svc.NOT_FOUND
+    assert used[0]["superseded_live_status"] == "clear"
+
+    # live LEIE clear; persisted PASS: nothing to override, nothing invented.
+    sources = {"oig_leie": {"status": "clear"}}
+    assert svc.apply_persisted_exclusion_evidence(
+        sources, {"OIG_LEIE": _row("OIG_LEIE", "PASS")}) == []
+    assert sources["oig_leie"]["status"] == "clear"
+
+
+async def test_review_service_reads_persisted_evidence_only_through_the_helper():
+    """The one sanctioned read. Anything else touching the evidence table
+    from this module should be reviewed, not assumed."""
+    from app.tefca_registry import review_service as svc
+
+    src = inspect.getsource(svc)
+    assert src.count("TEFCADimensionEvidence") == 1
+    assert "sources = await probe_sources(db, entity.id)" in src
+    assert "latest_persisted_exclusion_evidence(db, entity.id)" in src
+
+
+# ── Persisted-evidence cases, end to end on real Postgres ────────────────────
+# Seeding helpers mirror test_sam_e2e_delivery_path.py (same synthetic shape,
+# same connector-method patching, no network).
 
 def _e2e_valid_npi(seed: int) -> str:
     from app.services.npi_validator import CMS_PREFIX, _luhn_total
@@ -203,7 +237,10 @@ def _synthetic_delivery_bytes(run_tag: str, n: int) -> bytes:
             "id": f"sam.asym.{run_tag}.{i:04d}",
             "orgManagingOrg": qhin, "sequoiaorgtype": "Participant",
             "organizationNodeType": "initiating-node",
-            "NPI": _e2e_valid_npi(i + hash(run_tag) % 100_000),
+            # uuid-derived, not hash(run_tag) % 100_000: the shared test_sam
+            # database accumulates deliveries across sessions, and a 100k
+            # NPI space collides with earlier entities' persisted evidence.
+            "NPI": _e2e_valid_npi(i + uuid.uuid4().int % 800_000_000),
             "TEFCAID": f"TEFCA-ASYM-{run_tag}-{i:04d}",
             "HCID": f"HCID-ASYM-{run_tag}-{i:04d}", "active": "true",
             "hl7orgrole": "provider",
@@ -251,21 +288,24 @@ async def _seed_promoted_delivery(n: int):
     return intake_id
 
 
-async def _promoted_refs(db, intake_id, limit):
+async def _promoted(db, intake_id):
+    """(rce_org_oid, canonical_entity_id) of the one promoted synthetic record."""
     from sqlalchemy import select
 
     from app.tefca_registry.rce import models as m
 
-    return list((await db.execute(
-        select(m.RceCuratedRecord.rce_org_oid)
+    row = (await db.execute(
+        select(m.RceCuratedRecord.rce_org_oid, m.RceCuratedRecord.canonical_entity_id)
         .where(m.RceCuratedRecord.source_intake_id == intake_id,
-               m.RceCuratedRecord.canonical_entity_id.isnot(None))
-        .order_by(m.RceCuratedRecord.rce_org_oid).limit(limit))).scalars().all())
+               m.RceCuratedRecord.canonical_entity_id.isnot(None)))).first()
+    assert row is not None, "no promoted synthetic entity"
+    return row[0], row[1]
 
 
-def _patch_bulk_connectors_sam_excluded(monkeypatch):
-    """Bulk path: NPPES/LEIE clean, SAM a CONFIRMED exclusion. Patched class
-    methods on the real connectors -- never the HTTP path."""
+def _patch_bulk_connectors(monkeypatch, *, sam_excluded: bool):
+    """Bulk path: NPPES/LEIE clean, SAM either a CONFIRMED exclusion or a
+    clean UEI match. Patched class methods on the real connectors -- never
+    the HTTP path."""
     from app.Tefca.connectors import (NPPESConnector, OIGLEIEConnector,
                                       SAMGovConnector, SourceResult)
 
@@ -280,7 +320,7 @@ def _patch_bulk_connectors_sam_excluded(monkeypatch):
 
     async def fake_sam_verify(self, uei="", legal_name=""):
         return SourceResult.ok("SAM_GOV", {
-            "found": True, "matched_by": "uei", "excluded": True,
+            "found": True, "matched_by": "uei", "excluded": sam_excluded,
             "excluded_known": True, "identity_ambiguous": False,
             "registration_current": True,
         }, {"uei": uei})
@@ -290,32 +330,35 @@ def _patch_bulk_connectors_sam_excluded(monkeypatch):
     monkeypatch.setattr(SAMGovConnector, "verify", fake_sam_verify)
 
 
-async def test_review_service_never_reads_persisted_dimension_evidence():
-    """Cases (b)/(c), executable: the manual path has NO code path that
-    consults persisted evidence, so there is nothing to be stale and
-    nothing to be consumed. If someone wires one in, this fails and the
-    asymmetry claim must be re-examined -- which is the point."""
-    from app.tefca_registry import review_service as svc
+def _manual_path_clean_live(monkeypatch):
+    """Manual path: clean live NPPES/PECOS/LEIE, no SAM connector at all."""
+    import app.Tefca.connectors as conns
 
-    src = inspect.getsource(svc)
-    assert "TEFCADimensionEvidence" not in src
-    assert "tefca_dimension_evidence" not in src
-    assert "sources = await probe_sources(db, entity.id)" in src
+    mgr = _clean_nppes_pecos_leie_mgr()
+    mgr.sam_gov = None
+    monkeypatch.setattr(conns, "SourceConnectorManager", lambda: mgr)
 
 
-async def test_persisted_bulk_sam_exclusion_is_not_consumed_by_the_manual_path(
+async def _review_records(entity_id):
+    from sqlalchemy import select
+
+    from app.core.database import async_session_maker
+    from app.tefca_registry import models as reg
+
+    async with async_session_maker() as db:
+        return (await db.execute(
+            select(reg.ReviewRecord).where(reg.ReviewRecord.entity_id == entity_id)
+            .order_by(reg.ReviewRecord.created_at))).scalars().all()
+
+
+async def test_case_a_persisted_bulk_exclusion_now_disqualifies_on_the_manual_path(
         db_required, monkeypatch):
-    """Case (a), the real defect. The REAL bulk pipeline runs with a
-    confirmed SAM exclusion, so `tefca_dimension_evidence` holds a truthful
-    REVIEW row and a non-B1 ReviewRecord for the entity. The REAL manual
-    path (`run_review`) then runs on the SAME entity with clean
-    NPPES/PECOS/LEIE answers and no SAM connector at all.
-
-    If the "persisted evidence is consumed" branch applied, the manual review
-    would reflect the exclusion (B4 / RULE-005). It does not: it writes a
-    SECOND, newer ReviewRecord with `sam_gov` still the static NOT_CHECKED
-    stub. Two contradictory determinations now exist for one entity, and the
-    newer one is the clean one."""
+    """Case (a), fixed. The REAL bulk pipeline persists a confirmed SAM
+    exclusion (REVIEW, excluded=True) and a B4 ReviewRecord. The REAL manual
+    path on the SAME entity, with clean live answers and no SAM connector,
+    must now consume that evidence: sam_gov -> not_found, B4 / RULE-005, the
+    evidence timestamp in the rationale, the bulk record byte-for-byte
+    untouched."""
     from sqlalchemy import select
 
     from app.Tefca.models import TEFCADimensionEvidence
@@ -323,21 +366,18 @@ async def test_persisted_bulk_sam_exclusion_is_not_consumed_by_the_manual_path(
     from app.tefca_registry import models as reg
     from app.tefca_registry import review_service as svc
     from app.tefca_registry.rce.arc_pipeline import verify_and_classify
-    import app.Tefca.connectors as conns
 
     monkeypatch.setenv("ENTITY_RESOLVER_SOURCE", "db")
-    _patch_bulk_connectors_sam_excluded(monkeypatch)
+    _patch_bulk_connectors(monkeypatch, sam_excluded=True)
 
     intake_id = await _seed_promoted_delivery(n=1)
     async with async_session_maker() as db:
-        refs = await _promoted_refs(db, intake_id, 1)
-    assert len(refs) == 1
+        ref, entity_id = await _promoted(db, intake_id)
     async with async_session_maker() as db:
-        bulk = await verify_and_classify(db, refs, intake_id=intake_id,
+        bulk = await verify_and_classify(db, [ref], intake_id=intake_id,
                                          actor="pytest-sam-asym")
     outcome = bulk["outcomes"][0]
-    entity_id = uuid.UUID(outcome["entity_id"])
-    assert outcome["bucket"] != "B1", f"bulk precondition failed: {outcome}"
+    assert outcome["bucket"] == "B4" and outcome["rule_code"] == "RULE-005", outcome
 
     async with async_session_maker() as db:
         sam_rows = [r for r in (await db.execute(select(TEFCADimensionEvidence).where(
@@ -345,33 +385,103 @@ async def test_persisted_bulk_sam_exclusion_is_not_consumed_by_the_manual_path(
             TEFCADimensionEvidence.evidence_dimension == "EXCLUSION_REVOCATION"))
         ).scalars().all() if r.source == "SAM_GOV"]
     assert sam_rows and sam_rows[-1].disposition == "REVIEW"
-    assert sam_rows[-1].original_values.get("excluded") is True
+    stamp = sam_rows[-1].generation_timestamp
+    before = [(r.review_id, r.classification_bucket, r.classification_rule,
+               r.classification_rule_version, r.classification_rationale)
+              for r in await _review_records(entity_id)]
+    assert len(before) == 1
 
-    mgr = _clean_nppes_pecos_leie_mgr()
-    mgr.sam_gov = None   # no SAM connector of any kind on the manual path
-    monkeypatch.setattr(conns, "SourceConnectorManager", lambda: mgr)
-
+    _manual_path_clean_live(monkeypatch)
     async with async_session_maker() as db:
         entity = await db.get(reg.TefcaRegEntity, entity_id)
-        assert entity is not None
         manual = await svc.run_review(db, entity, trigger="manual")
 
-    assert manual["verification"]["sam_gov"]["status"] == svc.NOT_CHECKED, (
-        "the manual path produced a SAM status other than the static stub -- "
-        "persisted evidence or a connector is now consumed; re-examine the "
-        "asymmetry claim rather than relaxing this test")
-    assert manual["classification"]["bucket"] != "B4"
-    assert manual["classification"]["rule_code"] != "RULE-005", (
-        "a persisted, confirmed SAM exclusion WAS reflected by the manual "
-        "path -- the asymmetry has been closed; update this file's purpose")
+    assert manual["verification"]["sam_gov"]["status"] == svc.NOT_FOUND
+    assert manual["verification"]["sam_gov"]["persisted_evidence"]["disposition"] == "REVIEW"
+    assert manual["classification"]["bucket"] == "B4"
+    assert manual["classification"]["rule_code"] == "RULE-005"
+    assert "SAM_GOV" in {u["source"] for u in manual["persisted_evidence"]}
+    assert "Persisted exclusion/revocation evidence consumed" in manual["classification"]["rationale"]
+    assert str(stamp) in manual["classification"]["rationale"]
 
+    after = await _review_records(entity_id)
+    assert len(after) == 2
+    # Historical record untouched.
+    assert (after[0].review_id, after[0].classification_bucket, after[0].classification_rule,
+            after[0].classification_rule_version, after[0].classification_rationale) == before[0]
+    # New manual record agrees with the evidence; no contradiction persisted.
+    assert after[1].review_id == manual["review_id"]
+    assert after[1].classification_bucket == "B4"
+    assert after[1].classification_rule == "RULE-005"
+    assert str(stamp) in after[1].classification_rationale
+    persisted = {u["source"]: u for u in after[1].verification_results["persisted_evidence"]}
+    assert persisted["SAM_GOV"]["disposition"] == "REVIEW"
+    assert persisted["SAM_GOV"]["state"] == "not_found"
+    print(f"[asymmetry] bulk={after[0].classification_bucket}/{after[0].classification_rule} "
+          f"manual={after[1].classification_bucket}/{after[1].classification_rule}")
+
+
+async def test_case_b_no_persisted_evidence_keeps_the_disclosed_stub_and_classifies_b1(
+        db_required, monkeypatch):
+    """Case (b), made explicit. An entity never bulk-processed has no
+    persisted evidence; clean live NPPES/PECOS/LEIE and the NOT_CHECKED SAM
+    stub classify as B1 / RULE-001 under v3. This is the bulk path's own
+    outcome when SAM is unavailable (RULE-001 has no positive SAM
+    requirement by the v2 design decision). The stub's reason is disclosed
+    on the review; nothing is invented. Changing this bucket is a rule-set
+    policy decision -- see SAM_MANUAL_REVIEW_ASYMMETRY.md §4."""
+    from app.core.database import async_session_maker
+    from app.tefca_registry import models as reg
+    from app.tefca_registry import review_service as svc
+
+    monkeypatch.setenv("ENTITY_RESOLVER_SOURCE", "db")
+    intake_id = await _seed_promoted_delivery(n=1)
     async with async_session_maker() as db:
-        records = (await db.execute(
-            select(reg.ReviewRecord).where(reg.ReviewRecord.entity_id == entity_id)
-            .order_by(reg.ReviewRecord.created_at))).scalars().all()
-    assert len(records) == 2, [r.review_id for r in records]
-    assert records[0].classification_bucket == outcome["bucket"]
-    assert records[1].review_id == manual["review_id"]
-    assert records[1].classification_bucket != "B4"
-    print(f"[asymmetry] bulk={records[0].classification_bucket}/{records[0].classification_rule} "
-          f"manual={records[1].classification_bucket}/{records[1].classification_rule}")
+        _ref, entity_id = await _promoted(db, intake_id)
+    assert await _review_records(entity_id) == []
+
+    _manual_path_clean_live(monkeypatch)
+    async with async_session_maker() as db:
+        entity = await db.get(reg.TefcaRegEntity, entity_id)
+        manual = await svc.run_review(db, entity, trigger="manual")
+
+    assert manual["persisted_evidence"] == []
+    assert manual["verification"]["sam_gov"]["status"] == svc.NOT_CHECKED
+    assert manual["verification"]["sam_gov"]["reason"] == svc.NO_CONNECTOR["sam_gov"]
+    assert manual["classification"]["bucket"] == "B1"
+    assert manual["classification"]["rule_code"] == "RULE-001"
+    assert "Persisted exclusion/revocation evidence consumed" not in manual["classification"]["rationale"]
+
+
+async def test_regression_clean_fully_evidenced_entity_still_classifies_b1_on_the_manual_path(
+        db_required, monkeypatch):
+    """A genuinely clean entity -- bulk path persisted SAM PASS -- must still
+    be B1 on the manual path, now with sam_gov=verified from persisted
+    evidence rather than the stub."""
+    from app.core.database import async_session_maker
+    from app.tefca_registry import models as reg
+    from app.tefca_registry import review_service as svc
+    from app.tefca_registry.rce.arc_pipeline import verify_and_classify
+
+    monkeypatch.setenv("ENTITY_RESOLVER_SOURCE", "db")
+    _patch_bulk_connectors(monkeypatch, sam_excluded=False)
+
+    intake_id = await _seed_promoted_delivery(n=1)
+    async with async_session_maker() as db:
+        ref, entity_id = await _promoted(db, intake_id)
+    async with async_session_maker() as db:
+        bulk = await verify_and_classify(db, [ref], intake_id=intake_id,
+                                         actor="pytest-sam-asym")
+    assert bulk["outcomes"][0]["dimensions"]["EXCLUSION_REVOCATION"] == "PASS", \
+        bulk["outcomes"][0]["dimensions"]
+
+    _manual_path_clean_live(monkeypatch)
+    async with async_session_maker() as db:
+        entity = await db.get(reg.TefcaRegEntity, entity_id)
+        manual = await svc.run_review(db, entity, trigger="manual")
+
+    assert manual["verification"]["sam_gov"]["status"] == svc.VERIFIED
+    assert manual["verification"]["sam_gov"]["persisted_evidence"]["disposition"] == "PASS"
+    assert manual["classification"]["bucket"] == "B1"
+    assert manual["classification"]["rule_code"] == "RULE-001"
+    assert "SAM_GOV PASS -> verified" in manual["classification"]["rationale"]

@@ -144,10 +144,50 @@ _DISPOSITION_TO_STATE = {
     "NOT_APPLICABLE": "not_checked",
 }
 
+#: CORRECTION 2026-10-03 (peer Lane S finding, PEER-LANE-S.md): on the
+#: EXCLUSION_REVOCATION dimension the evidence layer emits NOT_FOUND for a
+#: CLEAN name screen — "searched SAM.gov / OIG LEIE by organisation name,
+#: nothing listed" (`evidence_assembly._sam_disposition` by_name branch;
+#: `_dimension_exclusion`'s no-NPI LEIE branch). The table above maps that to
+#: `not_found`, the same state as a REVIEW (potential hit), and SEED_RULES_V3
+#: lists `sam_gov/oig_leie == not_found` as a B4 disqualifier. On the bulk
+#: path SAM is ALWAYS name-screened (no RCE field carries a UEI) and LEIE is
+#: name-screened for every NPI-less record, so with a SAM key configured a
+#: clean, not-listed entity would have classified B4. Reproduced without a DB
+#: in lanes/S/repro_v3_name_screen_not_found_disqualifies.py.
+#:
+#: Fixed in the TRANSLATOR, scoped to exclusion dimensions, with no rule
+#: change: a NOT_FOUND exclusion-list item becomes the classifier's own
+#: exclusion-list literal "clear" ("reached it and the entity is not
+#: listed" — `BucketClassifier._match_source` already accepts it for
+#: `oig_leie == clear`, and the manual path emits the same literal for a
+#: clean LEIE lookup). REVIEW (potential or confirmed hit, or an ambiguous
+#: multi-match) stays `not_found` and still disqualifies; UNAVAILABLE and
+#: INSUFFICIENT_EVIDENCE are untouched. "clear" is deliberately NOT
+#: `verified`: a name-only screen is weaker than a UEI/NPI match and the
+#: evidence row's note says so; the classifier treats the two alike for
+#: exclusion purposes, which is the truthful reading of an enumerative list.
+#: `_DISPOSITION_TO_STATE` itself is unchanged (other dimensions' NOT_FOUND —
+#: e.g. PECOS enrolment not found — is a finding and must stay `not_found`).
+EXCLUSION_DIMENSION = "EXCLUSION_REVOCATION"
+EXCLUSION_CLEAN_SCREEN_STATE = "clear"
+
+
+def evidence_item_state(dimension: Optional[str], disposition: Optional[str]) -> str:
+    """Classifier state for one persisted/assembled evidence item. The single
+    translation both real classifier callers use (this translator for the bulk
+    path; `review_service.apply_persisted_exclusion_evidence` for persisted
+    evidence on the manual path)."""
+    if dimension == EXCLUSION_DIMENSION and disposition == "NOT_FOUND":
+        return EXCLUSION_CLEAN_SCREEN_STATE
+    return _DISPOSITION_TO_STATE.get(disposition, "not_checked")
+
+
 #: The worst disposition wins when a source appears in several of the dimensions
 #: below, so a source that failed somewhere is not reported verified because it
-#: also passed elsewhere.
-_STATE_PRECEDENCE = ("failed", "not_found", "unavailable", "not_checked", "verified")
+#: also passed elsewhere. "clear" ranks with "verified" (least bad).
+_STATE_PRECEDENCE = ("failed", "not_found", "unavailable", "not_checked", "verified",
+                     EXCLUSION_CLEAN_SCREEN_STATE)
 
 #: Dimensions whose evidence items set a SOURCE state.
 #:
@@ -217,7 +257,7 @@ def dimensions_to_verification_results(evidence: Dict[str, Any]) -> Dict[str, An
             key = _EVIDENCE_SOURCE_TO_RULE_SOURCE.get(item.get("source"))
             if not key:
                 continue
-            state = _DISPOSITION_TO_STATE.get(item.get("disposition"), "not_checked")
+            state = evidence_item_state(name, item.get("disposition"))
             current = sources.get(key, {}).get("status")
             if current is None or (
                 _STATE_PRECEDENCE.index(state) < _STATE_PRECEDENCE.index(current)
