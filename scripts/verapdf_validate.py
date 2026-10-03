@@ -22,6 +22,7 @@ embedded CLI pack is used -- the GUI/doc/plugin packs are never touched).
 from __future__ import annotations
 
 import argparse
+import os
 import pathlib
 import subprocess
 import sys
@@ -66,10 +67,28 @@ def ensure_cli_pack() -> pathlib.Path:
     return CLI_PACK_ZIP
 
 
+def java_executable() -> str:
+    """`$JAVA_HOME/bin/java` when JAVA_HOME is set, else the user-scoped JRE
+    this project installs under `~/.jre/` (not on PATH -- the normal case on
+    the project's Windows hosts), else the bare `java` on PATH: exactly what
+    the module docstring promises. (2026-10-03: the first cut called bare
+    `java` and failed with WinError 2 in a fresh shell; patch adopted from
+    the stopped Lane R, extended with the ~/.jre fallback.)"""
+    exe = "java.exe" if os.name == "nt" else "java"
+    home = os.environ.get("JAVA_HOME")
+    if home:
+        candidate = pathlib.Path(home) / "bin" / exe
+        if candidate.exists():
+            return str(candidate)
+    for candidate in sorted(pathlib.Path.home().glob(f".jre/*/bin/{exe}")):
+        return str(candidate)
+    return "java"
+
+
 def validate(pdf_path: str, flavour: str = "ua1", fmt: str = "xml") -> subprocess.CompletedProcess:
     cli_pack = ensure_cli_pack()
     return subprocess.run(
-        ["java", "-cp", str(cli_pack), MAIN_CLASS,
+        [java_executable(), "-cp", str(cli_pack), MAIN_CLASS,
          "-f", flavour, "--format", fmt, pdf_path],
         capture_output=True, text=True)
 
