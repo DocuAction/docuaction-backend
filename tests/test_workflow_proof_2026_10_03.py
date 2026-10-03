@@ -195,14 +195,14 @@ async def test_combined_workflow_proof(monkeypatch):
 
     review_id = outcomes[0]["review_id"]
     _log(f"[3c] review_id for analyst/QA = {review_id}, bucket={outcomes[0]['bucket']}. "
-         f"FINDING, confirmed by reading the code (not inferred): "
-         f"arc_pipeline.py sets TefcaRegEntity.verification_status='in_review' for ANY "
-         f"non-B1 bucket (not only via post_promotion_verification.record_finding, which "
-         f"is the ONLY code path that ever clears it back to 'verified'). No code path in "
-         f"this codebase clears a bucket-driven in_review flag -- qa_gate.submit_qa_review's "
-         f"QA_APPROVE is therefore structurally unreachable today for any B2/B3/B4 entity, "
-         f"not only ones with a genuine unresolved post-promotion finding. Proven below by "
-         f"attempting it for real, not asserted from code-reading alone.")
+         f"FIXED 2026-10-03 (fix/qa-approval-non-b1-eligibility-2026-10-03, merged into "
+         f"this combined worktree): QA_APPROVE used to refuse unconditionally for any "
+         f"non-B1 bucket, because arc_pipeline.py's bucket-driven "
+         f"TefcaRegEntity.verification_status='in_review' write was indistinguishable "
+         f"from a genuine post_promotion_verification.record_finding. qa_gate.py now "
+         f"queries for an actual unresolved blocking rce_issues row directly -- step 4 "
+         f"below proves the eligible non-B1 completion for real, through the same "
+         f"application code a real route calls.")
 
     # ---- Step 4: analyst determination, then QA -- maker/checker proven
     # with a real refusal AND a real approval, not just reasoning ----
@@ -250,16 +250,21 @@ async def test_combined_workflow_proof(monkeypatch):
     async with async_session_maker() as db:
         events = await qa_gate._events(db, review_id)
         reportable = qa_gate.is_reportable(events)
-    _log(f"[4d] review {review_id} reportable={reportable}")
+        entity_after = await db.get(m.TefcaRegEntity, outcomes[0]["entity_id"])
+    _log(f"[4d] review {review_id} reportable={reportable}, "
+         f"entity.verification_status={entity_after.verification_status if entity_after else None}")
     if qa_approval_blocked_by_bucket:
         assert not reportable, (
             "a refused QA approval still left the review reportable -- inconsistent state")
-        _log("[4d-note] NOT reportable, as expected given [4c]'s refusal. The maker/checker "
-             "mechanism itself (same-person refused, different-person reaches the next real "
-             "gate) is PROVEN; final QA_APPROVE/reportability for this bucket is a separate, "
-             "pre-existing limitation, documented, not forced around.")
+        _log("[4d-note] NOT reportable -- a genuine unresolved finding must have existed for "
+             "this entity (the fix only unblocks bucket-driven in_review, never a real one). "
+             "The maker/checker mechanism itself (same-person refused, different-person "
+             "reaches the next real gate) is still PROVEN.")
     else:
         assert reportable, "QA-approved review did not become reportable"
+        assert entity_after is not None and entity_after.verification_status == "verified", (
+            "QA_APPROVE succeeded but did not resolve the entity's verification_status "
+            "back to verified -- the resolve path qhin_sampling.py expects is incomplete")
 
     # ---- Step 5: report generation (HTML + CSV; PDF is memory-gated
     # separately, see RESOURCE-ASSESSMENT) ----
@@ -270,6 +275,21 @@ async def test_combined_workflow_proof(monkeypatch):
          f"html_bytes={len(report.get('html',''))}, csv_bytes={len(report.get('csv',''))}")
     assert report.get("html"), "report generation returned no HTML"
     assert report.get("csv"), "report generation returned no CSV"
+    # report_type="verification" is a GLOBAL aggregate (every review cycle,
+    # no delivery named -- confirmed by reading its own CSV header, "Scope:
+    # GLOBAL"), not a per-entity detail listing, so a bare review_id string
+    # is never expected to appear in it regardless of approval state. The
+    # meaningful check at this scope: the B2 bucket this entity was
+    # determined into is itself represented in Figure 1's real counts, not
+    # silently zero.
+    import re as _re
+    b2_line = _re.search(r"B2 Minor or Administrative,(\d+)", report["csv"])
+    b2_count = int(b2_line.group(1)) if b2_line else None
+    _log(f"[5b] Figure 1 'B2 Minor or Administrative' count in the generated CSV: {b2_count}")
+    if not qa_approval_blocked_by_bucket:
+        assert b2_count is not None and b2_count > 0, (
+            "the report's own B1-B4 classification figure shows zero B2 entities -- "
+            "does not reflect the approved B2 outcome")
 
     # ---- Step 6: IQVIA unsupported-affiliation-matching explicit refusal ----
     hcp_cap = _matching_capability("IQVIA_HCP")
