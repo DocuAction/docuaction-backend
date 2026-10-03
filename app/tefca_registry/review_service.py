@@ -402,9 +402,15 @@ def _practice_address(data: dict) -> str:
     addresses = data.get("addresses") or []
     chosen = next((a for a in addresses
                    if str(a.get("address_purpose", "")).upper() == "LOCATION"), None)
-    if chosen is None and addresses:
-        chosen = addresses[0]
-    if not chosen:
+    # No LOCATION row means NO practice address is known, not "use whatever
+    # row NPPES listed first". That first row is a MAILING address whenever
+    # LOCATION is absent, and comparing the submitted practice address against
+    # a lockbox manufactured a mismatch no one could act on. Fail closed: an
+    # empty string makes `_compare_addresses` record `not_compared`, which is
+    # neither a match nor a finding. (2026-10-03, safeguard 5.)
+    if chosen is None:
+        if addresses:
+            return ""
         return data.get("practice_address") or data.get("address") or ""
     parts = [chosen.get("address_1"), chosen.get("address_2"),
              chosen.get("city"), chosen.get("state"),

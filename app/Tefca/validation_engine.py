@@ -244,23 +244,43 @@ class ValidationEngine:
                 # Address comparison
                 nppes_addrs = nppes_data.get("addresses", [])
                 if nppes_addrs:
+                    # Practice LOCATION only. Falling back to `nppes_addrs[0]`
+                    # compared the submitted practice address against a
+                    # MAILING row (a lockbox or corporate office) whenever
+                    # NPPES listed no LOCATION, which manufactured
+                    # ADDRESS_STATE_CONFLICT / FORMAT findings out of two
+                    # addresses with different meanings. No LOCATION row is
+                    # "not compared" — neither a match nor a finding.
+                    # (2026-10-03, safeguard 5.)
                     primary = next(
                         (a for a in nppes_addrs if a.get("address_purpose") == "LOCATION"),
-                        nppes_addrs[0]
+                        None
                     )
-                    addr_finding, addr_deduction = self._classify_address(
-                        submitted_address, primary
-                    )
-                    if addr_finding:
-                        findings.append(addr_finding)
-                        deductions += addr_deduction
-                    field_comparisons.append({
-                        "field": "address",
-                        "submitted": submitted_address,
-                        "nppes": primary,
-                        "result": "MATCH" if not addr_finding else "MISMATCH",
-                        "finding": addr_finding
-                    })
+                    if primary is None:
+                        field_comparisons.append({
+                            "field": "address",
+                            "submitted": submitted_address,
+                            "nppes": None,
+                            "result": "NOT_COMPARED",
+                            "finding": None,
+                            "note": ("NPPES returned no LOCATION (practice) address; "
+                                     "a MAILING address is not compared against "
+                                     "the submitted practice address."),
+                        })
+                    else:
+                        addr_finding, addr_deduction = self._classify_address(
+                            submitted_address, primary
+                        )
+                        if addr_finding:
+                            findings.append(addr_finding)
+                            deductions += addr_deduction
+                        field_comparisons.append({
+                            "field": "address",
+                            "submitted": submitted_address,
+                            "nppes": primary,
+                            "result": "MATCH" if not addr_finding else "MISMATCH",
+                            "finding": addr_finding
+                        })
 
                 # Entity type check
                 nppes_enum = nppes_data.get("enumeration_type", "")
