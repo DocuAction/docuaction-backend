@@ -81,8 +81,11 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import request_context
 from app.core.database import get_db
 from app.core.security import require_role
 from app.tefca_registry.rce import iqvia_import as ii
@@ -128,6 +131,46 @@ def _require_known_source(source: str) -> str:
     return source
 
 
+async def _audit(db: AsyncSession, user, *, action: str, outcome: str,
+                 resource_type: str, resource_id, details: Optional[Dict[str, Any]] = None,
+                 commit: bool = True) -> None:
+    """One row in the platform's canonical audit trail (`audit_logs`) per
+    journey act -- the SAME mechanism `reports/routes.py` uses for report
+    release decisions, not a new table. `event_type="data_import"` is the
+    Audit Trail UI's existing filter bucket for ingestion. `outcome` records
+    refusals as first-class facts (`rejected`/`blocked`), because a maker/
+    checker refusal or an affiliation-unavailable refusal is an auditable
+    event in its own right, not an absence of one. Never raises: an audit
+    write failing must not turn a successful act into a 500, so it logs and
+    moves on (the same best-effort posture the bulletin audit uses)."""
+    from app.models.database import AuditLog
+
+    try:
+        db.add(AuditLog(
+            user_id=getattr(user, "id", None),
+            action=action,
+            event_type="data_import",
+            outcome=outcome,
+            resource_type=resource_type,
+            resource_id=str(resource_id) if resource_id is not None else None,
+            details={
+                "actor": getattr(user, "email", None) or "UNKNOWN",
+                "actor_role": str(getattr(user, "role", "") or ""),
+                "request_id": request_context.get("request_id"),
+                **(details or {}),
+            },
+            correlation_id=request_context.correlation_id(),
+        ))
+        if commit:
+            await db.commit()
+    except Exception:  # noqa: BLE001 -- audit must never mask the act's own outcome
+        logger.exception("IQVIA audit write failed for %s (%s)", action, outcome)
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 class StageRequest(BaseModel):
     file_path: str = Field(..., description=(
         "Server-local path to the delivered CSV (operator-placed; see module "
@@ -154,12 +197,45 @@ async def _register_and_enqueue(
         raise HTTPException(422, f"no file at {file_path!r}")
 
     file_sha = ii.file_sha256(path)
-    snapshot = await sx.register_snapshot(
-        db, source_system=_SOURCE_SYSTEM[source], label=label, sha256=file_sha,
-        record_count=0, received_at=__import__("datetime").datetime.now(
-            __import__("datetime").timezone.utc),
-        created_by=created_by,
-        metadata={"original_path": str(path), "import_status": "staging"})
+    # Duplicate submission: the SAME bytes under the SAME label for the SAME
+    # source is already registered once (`uq_source_snapshot_identity`, a
+    # partial unique index on original registrations). Before this check a
+    # second submission reached the index and surfaced as an unhandled 500;
+    # worse, with a different label it would have silently created a second
+    # usable snapshot of identical content. Refuse explicitly and point at
+    # the existing registration -- never a 500, never a silent duplicate.
+    existing = (await db.execute(
+        select(sm.SourceSnapshot)
+        .where(sm.SourceSnapshot.source_system == _SOURCE_SYSTEM[source],
+               sm.SourceSnapshot.sha256 == file_sha,
+               sm.SourceSnapshot.supersedes_snapshot_id.is_(None))
+        .order_by(sm.SourceSnapshot.created_at.asc()).limit(1))).scalars().first()
+    if existing is not None:
+        raise HTTPException(409, detail={
+            "error": (f"this exact file (sha256 {file_sha[:12]}...) is already registered "
+                      f"for {source} as snapshot {existing.id} (label {existing.snapshot_label!r}, "
+                      f"status {existing.status}); a second registration of identical "
+                      "content is refused -- resume or review the existing snapshot instead"),
+            "code": "DUPLICATE_SNAPSHOT",
+            "existing_snapshot_id": str(existing.id),
+            "existing_label": existing.snapshot_label,
+            "existing_status": existing.status,
+            "existing_import_status": (existing.metadata_ or {}).get("import_status")})
+
+    try:
+        snapshot = await sx.register_snapshot(
+            db, source_system=_SOURCE_SYSTEM[source], label=label, sha256=file_sha,
+            record_count=0, received_at=__import__("datetime").datetime.now(
+                __import__("datetime").timezone.utc),
+            created_by=created_by,
+            metadata={"original_path": str(path), "import_status": "staging"})
+    except IntegrityError:
+        # Lost a race with a concurrent identical submission between the
+        # pre-check above and the insert: same answer, same code.
+        await db.rollback()
+        raise HTTPException(409, detail={
+            "error": "this exact file was registered concurrently by another request",
+            "code": "DUPLICATE_SNAPSHOT"})
 
     job = await jobs.enqueue_import_job(
         db, snapshot_id=snapshot.id, source=source, file_path=str(path),
@@ -192,6 +268,10 @@ async def start_upload(body: StartUploadRequest, db: AsyncSession = Depends(get_
         db, source=body.source, label=body.label, total_size=body.total_size,
         chunk_size=body.chunk_size, total_chunks=total_chunks, temp_path=str(temp_path),
         created_by=getattr(user, "email", None) or "UNKNOWN")
+    await _audit(db, user, action="IQVIA_UPLOAD_STARTED", outcome="success",
+                 resource_type="iqvia_upload", resource_id=session.id,
+                 details={"source": body.source, "label": body.label,
+                          "total_size": body.total_size, "total_chunks": total_chunks})
     return {"upload_id": str(session.id), "total_chunks": total_chunks,
            "chunk_size": body.chunk_size}
 
@@ -262,6 +342,10 @@ async def complete_upload(upload_id: uuid.UUID, db: AsyncSession = Depends(get_d
         # repeated. Return the already-registered result instead of
         # attempting to register a second snapshot for the same upload.
         job = await jobs.latest_job_for_snapshot(db, session.snapshot_id)
+        await _audit(db, user, action="IQVIA_UPLOAD_COMPLETE_REPEATED", outcome="success",
+                     resource_type="iqvia_upload", resource_id=upload_id,
+                     details={"snapshot_id": str(session.snapshot_id),
+                              "note": "idempotent repeat of an already-completed upload"})
         return {"snapshot_id": str(session.snapshot_id), "source": session.source,
                 "status": "PENDING", "import_status": "staging",
                 "job_id": str(job.id) if job else None,
@@ -283,6 +367,10 @@ async def complete_upload(upload_id: uuid.UUID, db: AsyncSession = Depends(get_d
         db, source=session.source, file_path=session.temp_path, label=session.label,
         created_by=session.created_by, upload_id=upload_id)
     await jobs.mark_upload_complete(db, upload_id, snapshot_id=uuid.UUID(result["snapshot_id"]))
+    await _audit(db, user, action="IQVIA_UPLOAD_COMPLETED", outcome="success",
+                 resource_type="iqvia_snapshot", resource_id=result["snapshot_id"],
+                 details={"upload_id": str(upload_id), "source": session.source,
+                          "label": session.label, "job_id": result["job_id"]})
     return result
 
 
@@ -298,9 +386,14 @@ async def stage_source(
     `/approve` call."""
     _require_licensed_access(user)
     source = _require_known_source(source)
-    return await _register_and_enqueue(
+    result = await _register_and_enqueue(
         db, source=source, file_path=body.file_path, label=body.label,
         created_by=getattr(user, "email", None) or "UNKNOWN")
+    await _audit(db, user, action="IQVIA_SNAPSHOT_STAGED", outcome="success",
+                 resource_type="iqvia_snapshot", resource_id=result["snapshot_id"],
+                 details={"source": source, "label": body.label, "job_id": result["job_id"],
+                          "origin": "server_local_path"})
+    return result
 
 
 @router.get("/snapshots/{snapshot_id}",
@@ -327,7 +420,52 @@ async def snapshot_status(
         out["job"] = job.to_dict()
     if (snapshot.metadata_ or {}).get("import_status") == "completed":
         out["reconciliation"] = await ii.verify_snapshot_staged_completely(db, snapshot_id)
+    # Who registered it (the maker) -- the UI states the maker/checker rule
+    # against a name, and a QA lead who IS the registrant learns before
+    # clicking that their approval will be refused, not after.
+    out["created_by"] = snapshot.created_by
+    # The append-only decision, if one exists: approval creates a NEW row
+    # that supersedes this one, so a reload of the ORIGINAL id must still be
+    # able to say "approved, by whom, as which successor" rather than
+    # showing a stale PENDING with no way to find the APPROVED row.
+    successor = (await db.execute(
+        select(sm.SourceSnapshot)
+        .where(sm.SourceSnapshot.supersedes_snapshot_id == snapshot.id)
+        .limit(1))).scalars().first()
+    out["decision"] = None if successor is None else {
+        "successor_snapshot_id": str(successor.id), "status": successor.status,
+        "approved_by": successor.approved_by, "approved_role": successor.approved_role,
+        "approved_at": successor.approved_at.isoformat() if successor.approved_at else None,
+        "approval_ref": successor.approval_ref,
+    }
+    # The journey's matching capability for THIS source, stated up front so
+    # the UI distinguishes "supported" from "unavailable because the
+    # relationship data is absent" before anyone clicks Match.
+    out["matching"] = _matching_capability(snapshot.source_system)
     return out
+
+
+def _matching_capability(source_system: str) -> Dict[str, Any]:
+    if source_system == sm.SOURCE_IQVIA_HCO:
+        return {"supported": True, "reason": None, "code": None}
+    if source_system == sm.SOURCE_IQVIA_HCP:
+        return {"supported": False, "code": "AFFILIATION_DATA_UNAVAILABLE",
+                "reason": _HCP_UNAVAILABLE_REASON}
+    if source_system == sm.SOURCE_IQVIA_AFFILIATION:
+        return {"supported": False, "code": "AFFILIATION_DATA_UNAVAILABLE",
+                "reason": _AFFIL_UNAVAILABLE_REASON}
+    return {"supported": False, "code": "NOT_MATCHABLE",
+            "reason": f"{source_system} is not matchable by this route"}
+
+
+_HCP_UNAVAILABLE_REASON = (
+    "HCP-to-organisation matching is not available: the delivered data carries no "
+    "usable HCP<->HCO affiliation link (dedicated AFFIL extract absent; HCP_ADDR's own "
+    "HOSP_AFFIL_* fields are unpopulated). This is a data-completeness fact, not a bug -- "
+    "matching will not silently return zero results.")
+_AFFIL_UNAVAILABLE_REASON = (
+    "No affiliation snapshot has ever been approved with real data as of this pass; "
+    "matching against it is not yet meaningful.")
 
 
 @router.post("/snapshots/{snapshot_id}/approve",
@@ -350,11 +488,17 @@ async def approve(
         raise HTTPException(404, f"no snapshot {snapshot_id}")
     import_status = (snapshot.metadata_ or {}).get("import_status")
     if import_status != "completed":
+        await _audit(db, user, action="IQVIA_SNAPSHOT_APPROVAL", outcome="rejected",
+                     resource_type="iqvia_snapshot", resource_id=snapshot_id,
+                     details={"code": "IMPORT_NOT_COMPLETE", "import_status": import_status})
         raise HTTPException(409, detail={
             "error": f"snapshot import_status is {import_status!r}, not 'completed'",
             "code": "IMPORT_NOT_COMPLETE"})
     reconciliation = await ii.verify_snapshot_staged_completely(db, snapshot_id)
     if not reconciliation["reconciles"]:
+        await _audit(db, user, action="IQVIA_SNAPSHOT_APPROVAL", outcome="rejected",
+                     resource_type="iqvia_snapshot", resource_id=snapshot_id,
+                     details={"code": "RECONCILIATION_FAILED", "reconciliation": reconciliation})
         raise HTTPException(409, detail={
             "error": "staged row count does not reconcile with rows read minus "
                      "rows rejected -- refusing to approve a partial import",
@@ -362,10 +506,37 @@ async def approve(
     try:
         approved = await sx.approve_snapshot(db, snapshot_id, user=user,
                                              approval_ref=body.approval_ref)
-    except (ValueError, PermissionError) as exc:
-        raise HTTPException(409, str(exc))
+    except PermissionError as exc:
+        # `approve_snapshot` already enforces maker/checker (the registrant
+        # cannot approve their own snapshot, ADR-006 decision 4) and the role
+        # floor. Surface it as the SAME structured segregation-of-duties
+        # refusal the review-service QA gate uses -- a machine code the UI
+        # branches on, never a stringified exception.
+        is_maker = "maker/checker" in str(exc)
+        code = "MAKER_CHECKER_VIOLATION" if is_maker else "APPROVAL_ROLE_REQUIRED"
+        await _audit(db, user, action="IQVIA_SNAPSHOT_APPROVAL", outcome="rejected",
+                     resource_type="iqvia_snapshot", resource_id=snapshot_id,
+                     details={"code": code, "registrant": snapshot.created_by})
+        raise HTTPException(409, detail={
+            "error": (f"segregation of duties: {getattr(user, 'email', None) or 'UNKNOWN'} "
+                      f"registered snapshot {snapshot_id} and may not approve it; a "
+                      "different QA lead must record the approval")
+                     if is_maker else str(exc),
+            "code": code, "registrant": snapshot.created_by})
+    except ValueError as exc:
+        await _audit(db, user, action="IQVIA_SNAPSHOT_APPROVAL", outcome="rejected",
+                     resource_type="iqvia_snapshot", resource_id=snapshot_id,
+                     details={"code": "APPROVAL_REFUSED", "reason": str(exc)})
+        raise HTTPException(409, detail={"error": str(exc), "code": "APPROVAL_REFUSED"})
+    await _audit(db, user, action="IQVIA_SNAPSHOT_APPROVED", outcome="success",
+                 resource_type="iqvia_snapshot", resource_id=snapshot_id,
+                 details={"successor_snapshot_id": str(approved.id),
+                          "approval_ref": body.approval_ref,
+                          "registrant": snapshot.created_by,
+                          "reconciliation": reconciliation})
     return {"snapshot_id": str(approved.id), "status": approved.status,
-           "approved_by": approved.approved_by, "approved_at": approved.approved_at.isoformat()}
+           "approved_by": approved.approved_by, "approved_at": approved.approved_at.isoformat(),
+           "supersedes_snapshot_id": str(snapshot_id)}
 
 
 @router.post("/snapshots/{snapshot_id}/match",
@@ -382,27 +553,32 @@ async def match_snapshot(
     snapshot = await db.get(sm.SourceSnapshot, snapshot_id)
     if snapshot is None:
         raise HTTPException(404, f"no snapshot {snapshot_id}")
-    if snapshot.source_system == sm.SOURCE_IQVIA_HCP:
-        raise HTTPException(409, detail={
-            "error": "HCP-to-organisation matching is not available: the delivered "
-                     "data carries no usable HCP<->HCO affiliation link (dedicated "
-                     "AFFIL extract absent; HCP_ADDR's own HOSP_AFFIL_* fields are "
-                     "unpopulated). This is a data-completeness fact, not a bug -- "
-                     "matching will not silently return zero results.",
-            "code": "AFFILIATION_DATA_UNAVAILABLE"})
-    if snapshot.source_system == sm.SOURCE_IQVIA_AFFILIATION:
-        raise HTTPException(409, detail={
-            "error": "No affiliation snapshot has ever been approved with real "
-                     "data as of this pass; matching against it is not yet "
-                     "meaningful.", "code": "AFFILIATION_DATA_UNAVAILABLE"})
-    if snapshot.source_system != sm.SOURCE_IQVIA_HCO:
-        raise HTTPException(422, f"{snapshot.source_system} is not matchable by this route")
+    capability = _matching_capability(snapshot.source_system)
+    if not capability["supported"]:
+        # A refusal for absent relationship data is an auditable, blocked
+        # act -- recorded as such, distinct from an error and from a run that
+        # found nothing.
+        await _audit(db, user, action="IQVIA_SNAPSHOT_MATCH", outcome="blocked",
+                     resource_type="iqvia_snapshot", resource_id=snapshot_id,
+                     details={"code": capability["code"],
+                              "source_system": snapshot.source_system})
+        if capability["code"] == "NOT_MATCHABLE":
+            raise HTTPException(422, capability["reason"])
+        raise HTTPException(409, detail={"error": capability["reason"],
+                                         "code": capability["code"]})
     try:
         summary = await im.match_hco_snapshot(db, snapshot_id=snapshot_id,
                                               actor=getattr(user, "email", None) or "UNKNOWN")
     except ValueError as exc:
-        raise HTTPException(409, str(exc))
-    return summary.as_dict()
+        await _audit(db, user, action="IQVIA_SNAPSHOT_MATCH", outcome="rejected",
+                     resource_type="iqvia_snapshot", resource_id=snapshot_id,
+                     details={"code": "MATCH_REFUSED", "reason": str(exc)})
+        raise HTTPException(409, detail={"error": str(exc), "code": "MATCH_REFUSED"})
+    result = summary.as_dict()
+    await _audit(db, user, action="IQVIA_SNAPSHOT_MATCHED", outcome="success",
+                 resource_type="iqvia_snapshot", resource_id=snapshot_id,
+                 details={k: v for k, v in result.items() if k != "details"})
+    return result
 
 
 async def run_import_job(job_id: str) -> None:

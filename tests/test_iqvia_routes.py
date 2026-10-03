@@ -54,6 +54,9 @@ async def db(db_required):
     async with async_session_maker() as session:
         yield session
     async with async_session_maker() as cleanup:
+        from app.models.database import AuditLog
+        audited = [str(i) for i in (_created_snapshot_ids + _created_upload_ids)] or ["none"]
+        await cleanup.execute(delete(AuditLog).where(AuditLog.resource_id.in_(audited)))
         await cleanup.execute(delete(um.IqviaImportJob).where(
             um.IqviaImportJob.snapshot_id.in_(_created_snapshot_ids or [uuid.uuid4()])))
         await cleanup.execute(delete(um.IqviaUploadSession).where(
@@ -321,3 +324,190 @@ class TestChunkedUpload:
         with pytest.raises(HTTPException) as exc:
             await routes.upload_chunk(bogus, 0, _FakeRequest(b"x"), db, user=_User("reviewer"))
         assert exc.value.status_code == 404
+
+
+async def _audit_rows(db, resource_id):
+    from app.models.database import AuditLog
+    rows = (await db.execute(
+        select(AuditLog).where(AuditLog.resource_id == str(resource_id))
+        .order_by(AuditLog.created_at.asc()))).scalars().all()
+    return [(r.action, r.outcome, r.details or {}) for r in rows]
+
+
+class TestMakerCheckerAndDuplicates:
+    """ADR-006 decision 4: the APPROVED successor is recorded by a QA lead or
+    above who is NOT the registrant. And a second submission of identical
+    bytes is a refused duplicate, never a 500 and never a second usable
+    snapshot."""
+
+    async def test_registrant_cannot_approve_own_snapshot(self, db, tmp_path, monkeypatch):
+        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        f = write_csv(tmp_path / "hco.csv", HCO_HEADER, [
+            [f"{SYN}-MC-{i}", "", "", f"{SYN} MC Org {i}", "02101"] for i in range(2)])
+        # The maker holds qalead -- role alone must not be enough.
+        maker = _User("qalead", email=f"{SYN}-maker-qalead@synthetic-test.docuaction.invalid")
+        result = await routes.stage_source(
+            "hco", routes.StageRequest(file_path=str(f), label=f"{SYN}-mc"), db, user=maker)
+        snapshot_id = uuid.UUID(result["snapshot_id"])
+        _created_snapshot_ids.append(snapshot_id)
+        assert await _run_one_queued_job(db) == um.IqviaImportJob.STATE_SUCCEEDED
+
+        with pytest.raises(HTTPException) as exc:
+            await routes.approve(snapshot_id, routes.ApproveRequest(approval_ref=f"{SYN}-r"),
+                                 db, user=maker)
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == "MAKER_CHECKER_VIOLATION"
+        assert "segregation of duties" in exc.value.detail["error"]
+        assert exc.value.detail["registrant"] == maker.email
+
+        # Still PENDING, no successor -- the refusal changed nothing.
+        status = await routes.snapshot_status(snapshot_id, db, user=maker)
+        assert status["status"] == sm.SNAPSHOT_PENDING
+        assert status["decision"] is None
+        assert status["created_by"] == maker.email
+
+        # A DIFFERENT qalead succeeds, and the original id now reports the decision.
+        checker = _User("qalead", email=f"{SYN}-checker-qalead@synthetic-test.docuaction.invalid")
+        approved = await routes.approve(
+            snapshot_id, routes.ApproveRequest(approval_ref=f"{SYN}-r"), db, user=checker)
+        assert approved["status"] == sm.SNAPSHOT_APPROVED
+        assert approved["supersedes_snapshot_id"] == str(snapshot_id)
+        status = await routes.snapshot_status(snapshot_id, db, user=maker)
+        assert status["decision"]["status"] == sm.SNAPSHOT_APPROVED
+        assert status["decision"]["approved_by"] == checker.email
+        assert status["decision"]["successor_snapshot_id"] == approved["snapshot_id"]
+
+        # Both the refusal and the approval are in the audit trail, as such.
+        rows = await _audit_rows(db, snapshot_id)
+        assert ("IQVIA_SNAPSHOT_APPROVAL", "rejected") in [(a, o) for a, o, _ in rows]
+        assert ("IQVIA_SNAPSHOT_APPROVED", "success") in [(a, o) for a, o, _ in rows]
+        rejected = next(d for a, o, d in rows if a == "IQVIA_SNAPSHOT_APPROVAL" and o == "rejected")
+        assert rejected["code"] == "MAKER_CHECKER_VIOLATION"
+        assert rejected["actor"] == maker.email
+
+    async def test_identical_bytes_are_refused_as_duplicate_not_500(
+            self, db, tmp_path, monkeypatch):
+        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        f = write_csv(tmp_path / "dup.csv", HCO_HEADER, [
+            [f"{SYN}-DUP-{i}", "", "", f"{SYN} Dup Org {i}", "02101"] for i in range(2)])
+        reviewer = _User("reviewer")
+        first = await routes.stage_source(
+            "hco", routes.StageRequest(file_path=str(f), label=f"{SYN}-dup"), db, user=reviewer)
+        _created_snapshot_ids.append(uuid.UUID(first["snapshot_id"]))
+
+        # Same bytes, same label.
+        with pytest.raises(HTTPException) as exc:
+            await routes.stage_source(
+                "hco", routes.StageRequest(file_path=str(f), label=f"{SYN}-dup"), db, user=reviewer)
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == "DUPLICATE_SNAPSHOT"
+        assert exc.value.detail["existing_snapshot_id"] == first["snapshot_id"]
+
+        # Same bytes, DIFFERENT label: previously would have silently created a
+        # second usable snapshot of identical content.
+        with pytest.raises(HTTPException) as exc:
+            await routes.stage_source(
+                "hco", routes.StageRequest(file_path=str(f), label=f"{SYN}-dup-relabelled"),
+                db, user=reviewer)
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == "DUPLICATE_SNAPSHOT"
+
+        # Exactly one original registration exists for these bytes.
+        registered = await db.get(sm.SourceSnapshot, uuid.UUID(first["snapshot_id"]))
+        originals = (await db.execute(select(sm.SourceSnapshot).where(
+            sm.SourceSnapshot.sha256 == registered.sha256,
+            sm.SourceSnapshot.source_system == sm.SOURCE_IQVIA_HCO,
+            sm.SourceSnapshot.supersedes_snapshot_id.is_(None)))).scalars().all()
+        assert len(originals) == 1
+
+    async def test_duplicate_complete_via_chunked_upload_is_refused(
+            self, db, tmp_path, monkeypatch):
+        """Two separate upload sessions carrying identical bytes: the second
+        `/complete` is a DUPLICATE_SNAPSHOT 409, not a second snapshot."""
+        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        content = write_csv(tmp_path / "c.csv", HCO_HEADER, [
+            [f"{SYN}-CDUP-{i}", "", "", f"{SYN} CDup {i}", "02101"] for i in range(2)]).read_bytes()
+        reviewer = _User("reviewer")
+        ids = []
+        for _ in range(2):
+            start = await routes.start_upload(routes.StartUploadRequest(
+                source="hco", label=f"{SYN}-cdup", total_size=len(content), chunk_size=1024),
+                db, user=reviewer)
+            uid = uuid.UUID(start["upload_id"])
+            _created_upload_ids.append(uid)
+            await routes.upload_chunk(uid, 0, _FakeRequest(content), db, user=reviewer)
+            ids.append(uid)
+        first = await routes.complete_upload(ids[0], db, user=reviewer)
+        _created_snapshot_ids.append(uuid.UUID(first["snapshot_id"]))
+        with pytest.raises(HTTPException) as exc:
+            await routes.complete_upload(ids[1], db, user=reviewer)
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == "DUPLICATE_SNAPSHOT"
+        # The idempotent repeat of the FIRST upload still works.
+        again = await routes.complete_upload(ids[0], db, user=reviewer)
+        assert again["already_completed"] is True
+        assert again["snapshot_id"] == first["snapshot_id"]
+
+
+class TestAuditTrailAndCapability:
+    async def test_journey_acts_are_audited_with_actor_role_and_request_id(
+            self, db, tmp_path, monkeypatch):
+        from app.core import request_context
+        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        content = write_csv(tmp_path / "a.csv", HCO_HEADER, [
+            [f"{SYN}-AUD-{i}", "", "", f"{SYN} Aud {i}", "02101"] for i in range(2)]).read_bytes()
+        reviewer = _User("reviewer")
+        with request_context.bind(request_id=f"{SYN}-req-audit"):
+            start = await routes.start_upload(routes.StartUploadRequest(
+                source="hco", label=f"{SYN}-aud", total_size=len(content), chunk_size=4096),
+                db, user=reviewer)
+            uid = uuid.UUID(start["upload_id"])
+            _created_upload_ids.append(uid)
+            await routes.upload_chunk(uid, 0, _FakeRequest(content), db, user=reviewer)
+            done = await routes.complete_upload(uid, db, user=reviewer)
+            snapshot_id = uuid.UUID(done["snapshot_id"])
+            _created_snapshot_ids.append(snapshot_id)
+            assert await _run_one_queued_job(db) == um.IqviaImportJob.STATE_SUCCEEDED
+            approved = await routes.approve(
+                snapshot_id, routes.ApproveRequest(approval_ref=f"{SYN}-r"), db, user=_User("qalead"))
+            approved_id = uuid.UUID(approved["snapshot_id"])
+            _created_snapshot_ids.append(approved_id)
+            await routes.match_snapshot(approved_id, db, user=reviewer)
+
+        upload_rows = await _audit_rows(db, uid)
+        assert [(a, o) for a, o, _ in upload_rows] == [("IQVIA_UPLOAD_STARTED", "success")]
+        snap_rows = await _audit_rows(db, snapshot_id)
+        actions = [(a, o) for a, o, _ in snap_rows]
+        assert ("IQVIA_UPLOAD_COMPLETED", "success") in actions
+        assert ("IQVIA_SNAPSHOT_APPROVED", "success") in actions
+        match_rows = await _audit_rows(db, approved_id)
+        assert ("IQVIA_SNAPSHOT_MATCHED", "success") in [(a, o) for a, o, _ in match_rows]
+        for _, _, d in upload_rows + snap_rows + match_rows:
+            assert d["request_id"] == f"{SYN}-req-audit"
+            assert d["actor"].endswith("@synthetic-test.docuaction.invalid")
+            assert d["actor_role"] in ("reviewer", "qalead")
+
+    async def test_hcp_match_refusal_is_audited_as_blocked_and_status_says_unsupported(
+            self, db, monkeypatch):
+        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        from app.tefca_registry.rce import source_matching as sx
+        snapshot = await sx.register_snapshot(
+            db=db, source_system=sm.SOURCE_IQVIA_HCP, label=f"{SYN}-hcp-cap",
+            sha256="3" * 64, record_count=0,
+            received_at=__import__("datetime").datetime.now(
+                __import__("datetime").timezone.utc), created_by=SYN)
+        _created_snapshot_ids.append(snapshot.id)
+        status = await routes.snapshot_status(snapshot.id, db, user=_User("reviewer"))
+        assert status["matching"]["supported"] is False
+        assert status["matching"]["code"] == "AFFILIATION_DATA_UNAVAILABLE"
+        with pytest.raises(HTTPException) as exc:
+            await routes.match_snapshot(snapshot.id, db, user=_User("reviewer"))
+        assert exc.value.detail["code"] == "AFFILIATION_DATA_UNAVAILABLE"
+        rows = await _audit_rows(db, snapshot.id)
+        assert [(a, o) for a, o, _ in rows] == [("IQVIA_SNAPSHOT_MATCH", "blocked")]
+        assert rows[0][2]["code"] == "AFFILIATION_DATA_UNAVAILABLE"
+
+    async def test_hco_status_says_matching_supported(self, db, tmp_path, monkeypatch):
+        snapshot_id = await _stage_and_complete(db, tmp_path, monkeypatch, n=1)
+        status = await routes.snapshot_status(uuid.UUID(snapshot_id), db, user=_User("reviewer"))
+        assert status["matching"] == {"supported": True, "reason": None, "code": None}
