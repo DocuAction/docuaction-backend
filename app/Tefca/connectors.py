@@ -612,17 +612,46 @@ class NPPESConnector:
 _LEIE_CSV_URL = "https://oig.hhs.gov/exclusions/downloadables/UPDATED.csv"
 _LEIE_TTL_SECONDS = 86400
 _LEIE_CACHE: Dict[str, Any] = {"loaded_at": 0.0, "by_npi": {}, "by_name": {}, "row_count": 0}
+# Single-flight guard for the load below (2026-10-03). MEASURED, not guessed:
+# `arc_pipeline` gathers evidence for up to 16 entities at once, and every
+# one of the first wave found an empty cache and started its OWN download +
+# parse of the 84,001-row LEIE CSV. On this host one cold load costs ~3.5s
+# and ~120MB; sixteen simultaneous cold loads cost 44.2s wall-clock and a
+# 452MB process peak (scripts/perf/leie_load_timing.py). That was the
+# "first-wave warm-up" earlier profiling attributed to TLS handshakes, and
+# a large share of the pipeline's peak memory. One loader at a time; the
+# others wait for it and then read the freshly-filled cache. Same data,
+# same TTL, same fail-closed contract -- only the duplicate work is gone.
+_LEIE_LOAD_LOCK: Optional[asyncio.Lock] = None
+
+
+def _leie_cache_fresh(now: float) -> bool:
+    return (_LEIE_CACHE["row_count"] > 0
+            and (now - _LEIE_CACHE["loaded_at"]) < _LEIE_TTL_SECONDS)
 
 
 async def _ensure_leie_loaded() -> bool:
     """Download + index the LEIE CSV if the cache is empty or stale. Returns
-    False (fail-closed) if the CSV cannot be retrieved."""
+    False (fail-closed) if the CSV cannot be retrieved. Concurrent callers
+    on a cold cache share ONE load (see `_LEIE_LOAD_LOCK`)."""
+    global _LEIE_LOAD_LOCK
+    import time as _time
+    if _leie_cache_fresh(_time.time()):
+        return True
+    if _LEIE_LOAD_LOCK is None:
+        _LEIE_LOAD_LOCK = asyncio.Lock()
+    async with _LEIE_LOAD_LOCK:
+        # Re-check: whoever held the lock before us may have filled the cache.
+        if _leie_cache_fresh(_time.time()):
+            return True
+        return await _load_leie_csv()
+
+
+async def _load_leie_csv() -> bool:
     import time as _time
     import csv as _csv
     import io as _io
     now = _time.time()
-    if _LEIE_CACHE["row_count"] > 0 and (now - _LEIE_CACHE["loaded_at"]) < _LEIE_TTL_SECONDS:
-        return True
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
             resp = await client.get(_LEIE_CSV_URL, headers=HTTP_HEADERS)

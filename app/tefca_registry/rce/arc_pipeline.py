@@ -461,9 +461,16 @@ async def _gather_all_evidence(entity_refs: List[str],
     preserving `entity_refs` order in the result (asyncio.gather guarantees
     result order matches input order regardless of completion order))."""
     semaphore = asyncio.Semaphore(_EVIDENCE_GATHER_CONCURRENCY)
+    import time as _t
+    from app.tefca_registry.rce import pipeline_metrics as _pm
 
     async def _bounded(ref: str) -> Dict[str, Any]:
+        # Measurement hook: one `is not None` check when no collector is
+        # active (the production case); see pipeline_metrics.py.
+        _t_wait = _t.perf_counter() if _pm.active() is not None else None
         async with semaphore:
+            if _t_wait is not None:
+                _pm.note_semaphore_wait(_t.perf_counter() - _t_wait)
             return await _resolve_and_gather_evidence(ref, timing_log=timing_log)
 
     return await asyncio.gather(*(_bounded(ref) for ref in entity_refs))
@@ -546,12 +553,13 @@ async def verify_and_classify(
 
         _dbg_t0 = _dbgtime.perf_counter()
         gathered = await _gather_all_evidence(chunk_refs, timing_log=_dbg_path)
+        _dbg_gather_s = _dbgtime.perf_counter() - _dbg_t0
         if _dbg_path:
             with open(_dbg_path, "a", encoding="utf-8") as _f:
                 _rec = {"phase": "gather_chunk", "chunk_start": _chunk_start,
-                       "n": len(chunk_refs),
-                       "seconds": _dbgtime.perf_counter() - _dbg_t0}
+                       "n": len(chunk_refs), "seconds": _dbg_gather_s}
                 _f.write(_dbgjson.dumps(_rec) + "\n")
+        _dbg_serial_t0 = _dbgtime.perf_counter()
 
         for g in gathered:
             ref = g["ref"]
@@ -666,6 +674,11 @@ async def verify_and_classify(
                                for d in evidence.get("dimensions", [])},
                 "applicability": evidence.get("applicability", {}).get("dimensions", {}),
             })
+
+        # Measurement hook (no-op unless a collector is active).
+        from app.tefca_registry.rce import pipeline_metrics as _pm
+        _pm.note_chunk(_chunk_start, len(chunk_refs), _dbg_gather_s,
+                       _dbgtime.perf_counter() - _dbg_serial_t0)
 
     await db.commit()
 
