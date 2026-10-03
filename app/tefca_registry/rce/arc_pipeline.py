@@ -513,6 +513,31 @@ async def verify_and_classify(
     # and the final `db.commit()` are all still exactly-once for this whole
     # call — see `_GATHER_CHUNK_SIZE`'s comment above for why that is a
     # deliberate choice, not an oversight.
+    #
+    # PIPELINING ATTEMPTED AND REVERTED, 2026-10-03: a one-chunk-ahead
+    # prefetch (chunk N+1's gather kicked off via `asyncio.create_task`
+    # before chunk N's persist/classify loop ran, overlapping the two) was
+    # built and measured, expecting to recover the duration this simple
+    # chunk-at-a-time loop gives up. It did the opposite: measured at TWO
+    # scales (n=2,500: ~559s vs this simple loop's n=2,500 territory;
+    # n=24,563: 5,286.46s, 2.67x WORSE than the 1,978.99s unbatched
+    # baseline) — confirmed at small scale too, ruling out "only compounds
+    # over many chunks". Best-available hypothesis, not fully proven in the
+    # time available: each concurrent gather task opens its own scratch DB
+    # session (`async_session_maker()`), and under this test environment's
+    # connection pooling (confirmed `NullPool` — every scratch session is a
+    # brand-new physical connection, not a reused one), overlapping up to
+    # 16 of those simultaneously with the long-held, uncommitted main
+    # persist transaction plausibly caused real contention this simple
+    # serial loop never did (gather and persist never previously overlapped
+    # in time at all). Reverted rather than shipped on a hypothesis that
+    # could not be fully confirmed within this pass's time budget — a
+    # regression proven worse is worse than no fix, however reasoned the
+    # intent. The duration-vs-memory tradeoff from chunking itself (without
+    # prefetching) remains this function's honest, current state: memory is
+    # bounded, full-scale duration is not yet proven to beat the unbatched
+    # baseline, and that gap is intentionally left open rather than closed
+    # with an unproven fix.
     import time as _dbgtime, os as _dbgos, json as _dbgjson
     _dbg_path = _dbgos.environ.get("ARC_PIPELINE_TIMING_LOG")
 

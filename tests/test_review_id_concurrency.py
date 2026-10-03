@@ -261,7 +261,20 @@ def test_verify_and_classify_acquires_the_lock_before_allocating_any_id():
     `verify_and_classify` calls, is unaffected. This test now asserts the
     lock precedes the CHUNK loop itself (the thing that now contains both the
     gather call and the id-allocating loop), rather than matching either
-    inner loop's literal header text directly."""
+    inner loop's literal header text directly.
+
+    ATTEMPTED AND REVERTED 2026-10-03: a one-chunk-ahead prefetch
+    (`asyncio.create_task`, overlapping chunk N+1's gather with chunk N's
+    persist/classify) was built, measured at two scales, and found to make
+    duration substantially WORSE, not better (confirmed, not assumed — see
+    `arc_pipeline.verify_and_classify`'s own comment above `_GATHER_CHUNK_SIZE`
+    usage for the measured numbers and the leading hypothesis). Reverted back
+    to this simple, sequential per-chunk loop. This test's assertions are
+    correspondingly reverted to match — they assert the same semantic
+    invariants (lock before the chunk loop, before any gather, before the
+    id-allocating loop; review-id allocation only inside the serial loop)
+    against the SIMPLE loop's literal source shape, not the (removed)
+    prefetch pattern's."""
     import inspect
 
     from app.tefca_registry.rce import arc_pipeline
