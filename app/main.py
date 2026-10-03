@@ -673,6 +673,14 @@ safe_load("app.tefca_registry.rce.delivery_routes", "tefca-rce-deliveries")
 # app/tefca_registry/rce/admin_restore_routes.py.
 safe_load("app.tefca_registry.rce.admin_restore_routes", "tefca-rce-admin-restore")
 
+# Preflight (pre-classification schema/identifier/context checks), shadow
+# reassessment (classifier-only re-run over persisted evidence, pinned and
+# approval-bound) and the consolidated analyst workspace (2026-10-03). Writes
+# only its own append-only tables; successor publication is refused outside
+# SHADOW_PUBLICATION_MODE=local_test. See
+# app/tefca_registry/rce/preflight_shadow_routes.py.
+safe_load("app.tefca_registry.rce.preflight_shadow_routes", "tefca-rce-preflight-shadow")
+
 # Program Manager + Analyst workflow surface at /api/tefca/workflow/*:
 # QHIN work organisation, workload distribution, and the analyst verification
 # workspace. Read surface plus one audited bulk-assignment write; it creates no

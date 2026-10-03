@@ -444,6 +444,18 @@ def test_no_tefca_read_endpoint_sits_above_the_viewer_floor():
         "/api/tefca/rce/deliveries/{intake_id}/dispositions.csv",
         "/api/tefca/rce/deliveries/{intake_id}/exceptions",
         "/api/tefca/rce/deliveries/{intake_id}/audit",
+        # ── Preflight + analyst workspace (2026-10-03, items 9-10) ──
+        # Preflight findings carry the ORIGINAL delivered value of every
+        # identifier or field they are about, and the normalization list is
+        # original-beside-derived by definition; the workspace consolidates
+        # delivered values, Issue Ledger rows and dimension evidence per
+        # entity. Same principle as the delivery-workflow exceptions above:
+        # reads that return delivered values sit at reviewer (4). The shadow
+        # comparison reads stay viewer: buckets, rules and hashes only.
+        "/api/tefca/rce/deliveries/{intake_id}/preflight",
+        "/api/tefca/rce/preflight-runs/{run_id}/findings",
+        "/api/tefca/rce/preflight-runs/{run_id}/normalizations",
+        "/api/tefca/rce/deliveries/{intake_id}/workspace",
         # ── Pre-merge review Decision 1 (2026-09-16) ──
         # Deprecated legacy aliases for the current /api/reports/* content
         # routes, which the same review raised from viewer to reviewer
