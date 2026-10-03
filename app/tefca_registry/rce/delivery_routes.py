@@ -1075,6 +1075,90 @@ async def list_dispositions_route(
             "total": total, "offset": offset, "limit": limit}
 
 
+async def _open_consistent_snapshot():
+    """A DEDICATED connection in a `REPEATABLE READ, READ ONLY` transaction,
+    plus an `AsyncSession` bound to it, for one CSV export (2026-10-03).
+
+    Why not the request's shared `db` session: Postgres requires `SET
+    TRANSACTION ISOLATION LEVEL` to be a transaction's first statement, and
+    by the time a route body runs, `require_role` has already queried the
+    user row on that session. A fresh connection's first statement genuinely
+    is this one, so the row count registered up front and the rows read
+    afterwards are guaranteed to come from the IDENTICAL snapshot — not
+    "probably consistent because the tables are append-only". The caller
+    closes both in a `finally` (`_close_consistent_snapshot`); the
+    connection is never reused for anything else.
+    """
+    from app.core.database import engine
+
+    conn = await engine.connect()
+    await conn.execution_options(isolation_level="REPEATABLE READ")
+    await conn.execute(text("SET TRANSACTION READ ONLY"))
+    session = AsyncSession(bind=conn, expire_on_commit=False)
+    return conn, session
+
+
+async def _close_consistent_snapshot(conn, session) -> None:
+    try:
+        await session.close()
+    finally:
+        try:
+            await conn.rollback()
+        finally:
+            await conn.close()
+
+
+class _CsvExportManifest:
+    """The registered facts of one CSV export (2026-10-03): the logical row
+    count the consistent-snapshot transaction counted up front, and the byte
+    count and SHA-256 of exactly what was sent — computed incrementally as
+    chunks are emitted, never by buffering the export to hash it. Logged once
+    under `csv_export_manifest`, keyed by the `X-Export-Id` response header,
+    with `row_count_reconciles` so a snapshot inconsistency (or a caller's
+    `limit` truncating a bounded export) is recorded rather than assumed away.
+    Row grains per route: `CSV_ROW_GRAINS.md`."""
+
+    def __init__(self, *, route: str, intake_id, registered_row_count: int, **facts: Any):
+        import hashlib
+
+        self.export_id = str(uuid.uuid4())
+        self.route = route
+        self.intake_id = str(intake_id)
+        self.registered_row_count = int(registered_row_count)
+        self.facts = facts
+        self._digest = hashlib.sha256()
+        self.byte_count = 0
+        self.streamed_rows = 0
+
+    def emit(self, chunk: str) -> str:
+        encoded = chunk.encode("utf-8")
+        self._digest.update(encoded)
+        self.byte_count += len(encoded)
+        return chunk
+
+    def row(self, chunk: str) -> str:
+        self.streamed_rows += 1
+        return self.emit(chunk)
+
+    def log(self) -> None:
+        logger.info(
+            "csv_export_manifest",
+            extra={"export_id": self.export_id, "route": self.route,
+                   "intake_id": self.intake_id,
+                   "registered_row_count": self.registered_row_count,
+                   "streamed_row_count": self.streamed_rows,
+                   "row_count_reconciles": self.registered_row_count == self.streamed_rows,
+                   "byte_count": self.byte_count, "sha256": self._digest.hexdigest(),
+                   **self.facts})
+
+    def headers(self, filename: str, **extra: str) -> Dict[str, str]:
+        from app.reports.routes import download_headers
+
+        return download_headers(filename, extra={
+            "X-Returned-Rows": str(self.registered_row_count),
+            "X-Export-Id": self.export_id, **extra})
+
+
 @router.get("/deliveries/{intake_id}/dispositions.csv",
             summary="Record-level dispositions as CSV")
 async def dispositions_csv_route(
@@ -1087,23 +1171,36 @@ async def dispositions_csv_route(
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role(EVIDENCE_ROLE)),
 ):
+    """One row per received source line with its current disposition (see
+    `CSV_ROW_GRAINS.md`). Count and rows are read in one consistent
+    snapshot; `X-Total-Rows` is the count over the identical predicate,
+    `X-Returned-Rows` the rows written — they differ only when `limit`
+    truncates, and the manifest then records `row_count_reconciles=false`."""
     from app.tefca_registry.rce.exception_ledger import (dispositions_csv,
                                                           list_dispositions)
 
     intake = await _intake_or_404(db, intake_id)
+    conn, snap = await _open_consistent_snapshot()
     try:
         rows, total = await list_dispositions(
-            db, intake.id, disposition=disposition, source_row=source_row,
+            snap, intake.id, disposition=disposition, source_row=source_row,
             entity_name=entity_name, npi=npi, limit=limit, offset=0)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
+    finally:
+        await _close_consistent_snapshot(conn, snap)
     body = dispositions_csv(rows)
-    from app.reports.routes import download_headers
+    manifest = _CsvExportManifest(route="dispositions.csv", intake_id=intake.id,
+                                  registered_row_count=total, limit=limit,
+                                  filtered=bool(disposition or source_row or entity_name or npi))
+    manifest.emit(body)
+    manifest.streamed_rows = len(rows)
+    manifest.log()
     return Response(
         content=body, media_type="text/csv; charset=utf-8",
-        headers=download_headers(f"dispositions-{intake.id}.csv",
-                                 extra={"X-Total-Rows": str(total),
-                                        "X-Returned-Rows": str(len(rows))}))
+        headers={**manifest.headers(f"dispositions-{intake.id}.csv",
+                                    **{"X-Total-Rows": str(total)}),
+                 "X-Returned-Rows": str(len(rows))})
 
 
 @router.get("/deliveries/{intake_id}/findings.csv",
@@ -1123,8 +1220,19 @@ async def findings_csv_route(
 
     intake = await _intake_or_404(db, intake_id)
     scope = run_selection.current_issues_filter(intake.id)
-    row_count = int((await db.execute(
-        select(func.count()).select_from(m.RceIssue).where(scope))).scalar() or 0)
+
+    # Consistent snapshot between the COUNT and the stream (2026-10-03): the
+    # dedicated connection stays open across the streamed rows and is closed
+    # in the generator's `finally`, after the SAME snapshot served both.
+    conn, snap = await _open_consistent_snapshot()
+    try:
+        row_count = int((await snap.execute(
+            select(func.count()).select_from(m.RceIssue).where(scope))).scalar() or 0)
+    except Exception:
+        await _close_consistent_snapshot(conn, snap)
+        raise
+    manifest = _CsvExportManifest(route="findings.csv", intake_id=intake.id,
+                                  registered_row_count=row_count)
 
     import csv
     import io
@@ -1134,34 +1242,36 @@ async def findings_csv_route(
     async def _rows():
         buf = io.StringIO()
         writer = csv.writer(buf)
-        writer.writerow(["issue_code", "line_number", "source_record_id", "rule_id",
-                         "rule_version", "issue_type", "severity", "field_name",
-                         "resolution", "correction_authority", "description",
-                         "resolved_by", "resolved_at"])
-        yield buf.getvalue()
-        stmt = (select(m.RceIssue, m.RceSourceRecord.line_number)
-               .join(m.RceSourceRecord, m.RceSourceRecord.id == m.RceIssue.source_record_id,
-                     isouter=True)
-               .where(scope)
-               .order_by(m.RceSourceRecord.line_number, m.RceIssue.rule_id))
-        result = await db.stream(stmt)
-        async for issue, line in result:
-            buf.seek(0)
-            buf.truncate(0)
-            writer.writerow(neutralise_row([
-                issue.issue_code, line, str(issue.source_record_id),
-                issue.rule_id, issue.rule_version, issue.issue_type,
-                issue.severity, issue.field_name, issue.resolution,
-                issue.correction_authority, issue.description,
-                issue.resolved_by,
-                issue.resolved_at.isoformat() if issue.resolved_at else ""]))
-            yield buf.getvalue()
+        try:
+            writer.writerow(["issue_code", "line_number", "source_record_id", "rule_id",
+                             "rule_version", "issue_type", "severity", "field_name",
+                             "resolution", "correction_authority", "description",
+                             "resolved_by", "resolved_at"])
+            yield manifest.emit(buf.getvalue())
+            stmt = (select(m.RceIssue, m.RceSourceRecord.line_number)
+                   .join(m.RceSourceRecord, m.RceSourceRecord.id == m.RceIssue.source_record_id,
+                         isouter=True)
+                   .where(scope)
+                   .order_by(m.RceSourceRecord.line_number, m.RceIssue.rule_id))
+            result = await snap.stream(stmt)
+            async for issue, line in result:
+                buf.seek(0)
+                buf.truncate(0)
+                writer.writerow(neutralise_row([
+                    issue.issue_code, line, str(issue.source_record_id),
+                    issue.rule_id, issue.rule_version, issue.issue_type,
+                    issue.severity, issue.field_name, issue.resolution,
+                    issue.correction_authority, issue.description,
+                    issue.resolved_by,
+                    issue.resolved_at.isoformat() if issue.resolved_at else ""]))
+                yield manifest.row(buf.getvalue())
+        finally:
+            await _close_consistent_snapshot(conn, snap)
+        manifest.log()
 
-    from app.reports.routes import download_headers
     return StreamingResponse(
         _rows(), media_type="text/csv; charset=utf-8",
-        headers=download_headers(f"findings-{intake.id}.csv",
-                                 extra={"X-Returned-Rows": str(row_count)}))
+        headers=manifest.headers(f"findings-{intake.id}.csv"))
 
 
 @router.get("/deliveries/{intake_id}/identifier-conflicts.csv",
@@ -1182,9 +1292,18 @@ async def identifier_conflicts_csv_route(
 
     intake = await _intake_or_404(db, intake_id)
     E = tm.TefcaIdentifierDecisionEvent
-    events = (await db.execute(
-        select(E).where(E.intake_id == intake.id)
-        .order_by(E.entity_id, E.identifier_type, E.sequence))).scalars().all()
+    # Count and events in ONE consistent snapshot (2026-10-03): the registered
+    # count is `COUNT(DISTINCT (entity_id, identifier_type))` — exactly the
+    # pairs the grouping below produces, not the number of events.
+    conn, snap = await _open_consistent_snapshot()
+    try:
+        pairs = select(E.entity_id, E.identifier_type).where(E.intake_id == intake.id).distinct().subquery()
+        row_count = int((await snap.execute(select(func.count()).select_from(pairs))).scalar() or 0)
+        events = (await snap.execute(
+            select(E).where(E.intake_id == intake.id)
+            .order_by(E.entity_id, E.identifier_type, E.sequence))).scalars().all()
+    finally:
+        await _close_consistent_snapshot(conn, snap)
     conflicts: Dict[tuple, Dict[str, Any]] = {}
     for ev in events:
         key = (str(ev.entity_id), ev.identifier_type)
@@ -1214,11 +1333,15 @@ async def identifier_conflicts_csv_route(
             c["existing_value"], c["verified_value"], c["selected_value"],
             c["current_decision"], c["decided_at"], c["actor"], c["reason"]]))
 
-    from app.reports.routes import download_headers
+    body = buf.getvalue()
+    manifest = _CsvExportManifest(route="identifier-conflicts.csv", intake_id=intake.id,
+                                  registered_row_count=row_count, events=len(events))
+    manifest.emit(body)
+    manifest.streamed_rows = len(conflicts)
+    manifest.log()
     return Response(
-        content=buf.getvalue(), media_type="text/csv; charset=utf-8",
-        headers=download_headers(f"identifier-conflicts-{intake.id}.csv",
-                                 extra={"X-Returned-Rows": str(len(conflicts))}))
+        content=body, media_type="text/csv; charset=utf-8",
+        headers=manifest.headers(f"identifier-conflicts-{intake.id}.csv"))
 
 
 @router.get("/deliveries/{intake_id}/review-records.csv",
@@ -1246,11 +1369,19 @@ async def review_records_csv_route(
     entity_ids = select(m.RceCuratedRecord.canonical_entity_id).where(
         m.RceCuratedRecord.source_intake_id == intake.id,
         m.RceCuratedRecord.canonical_entity_id.isnot(None))
-    reviews = (await db.execute(
-        select(reg.ReviewRecord)
-        .where(or_(reg.ReviewRecord.source_record_id.in_(record_ids),
-                  reg.ReviewRecord.entity_id.in_(entity_ids)))
-        .order_by(reg.ReviewRecord.created_at))).scalars().all()
+    predicate = or_(reg.ReviewRecord.source_record_id.in_(record_ids),
+                    reg.ReviewRecord.entity_id.in_(entity_ids))
+    # Count and rows in ONE consistent snapshot, over the identical predicate
+    # (2026-10-03).
+    conn, snap = await _open_consistent_snapshot()
+    try:
+        row_count = int((await snap.execute(
+            select(func.count()).select_from(reg.ReviewRecord).where(predicate))).scalar() or 0)
+        reviews = (await snap.execute(
+            select(reg.ReviewRecord).where(predicate)
+            .order_by(reg.ReviewRecord.created_at))).scalars().all()
+    finally:
+        await _close_consistent_snapshot(conn, snap)
 
     import csv
     import io
@@ -1273,11 +1404,15 @@ async def review_records_csv_route(
             r.created_at.isoformat() if r.created_at else "",
         ]))
 
-    from app.reports.routes import download_headers
+    body = buf.getvalue()
+    manifest = _CsvExportManifest(route="review-records.csv", intake_id=intake.id,
+                                  registered_row_count=row_count)
+    manifest.emit(body)
+    manifest.streamed_rows = len(reviews)
+    manifest.log()
     return Response(
-        content=buf.getvalue(), media_type="text/csv; charset=utf-8",
-        headers=download_headers(f"review-records-{intake.id}.csv",
-                                 extra={"X-Returned-Rows": str(len(reviews))}))
+        content=body, media_type="text/csv; charset=utf-8",
+        headers=manifest.headers(f"review-records-{intake.id}.csv"))
 
 
 # ═══ exceptions ══════════════════════════════════════════════════════════════
