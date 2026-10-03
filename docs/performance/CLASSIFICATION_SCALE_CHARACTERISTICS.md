@@ -17,9 +17,9 @@ connection pooling (`NullPool`). Both were hypotheses. Measured directly this ro
 
 | Hypothesis | Measurement | Verdict |
 |---|---|---|
-| Physical DB connects are expensive under `NullPool` | connect+`select 1`: 65 ms sequential, 0.37 s for 16 at once; identical under QueuePool(5+10) and QueuePool(20+0) | **Refuted** as a dominant cost at this concurrency |
+| Physical DB connects are expensive under `NullPool` | Isolated: 65 ms each, 0.37 s for 16 at once. Inside the pipeline under load: ~0.3 s average per scratch session, 2,501 connects, 754 s summed wait; QueuePool(5+10) cuts n=2,500 mock-connector classify from 170.8 s to 79.6 s (§3). | **Confirmed for the pytest harness only** — production already runs QueuePool; no production change needed; every earlier benchmark was inflated by it |
 | The first-wave warm-up is TLS/DNS | One cold OIG LEIE CSV load (download + index 84,001 rows) = 3.5 s / +120 MB; **16 concurrent cold loads = 44.2 s wall and a 452 MB process peak** — exactly what the 16-wide first gather wave did, because `_ensure_leie_loaded()` had no single-flight guard | **Confirmed as the warm-up and a large share of peak memory**; fixed (§2) |
-| The chunked loop regressed duration | The per-source token-bucket rate limiter (added 2026-10-02, after the 33.0-min unbatched baseline was measured, so the baseline never ran under it) bounds throughput: each entity with a valid NPI makes 2 `CMS_PPEF` calls (enrollment + revocation) against one shared 10 req/s bucket ⇒ ≤ 5 entities/s ⇒ **≥ 4,913 s (81.9 min) for 24,563 entities regardless of chunking or pooling**. The 88.1-min "pipelined regression" (5,286 s) and the >558 s n=2,500 diagnostic (bound: 500 s) both sit on that bound. | **The regression was the rate limiter, not chunking or pipelining** — confirmed by the live-connector variant in §3 |
+| The chunked loop regressed duration | (a) vs (d): chunked 170.8 s vs single-chunk 167.9 s at n=2,500 (+1.7 %).  The per-source token-bucket rate limiter (added 2026-10-02, after the 33.0-min unbatched baseline was measured, so the baseline never ran under it) bounds throughput: each entity with a valid NPI makes 2 `CMS_PPEF` calls (enrollment + revocation) against one shared 10 req/s bucket ⇒ ≤ 5 entities/s ⇒ **≥ 4,913 s (81.9 min) for 24,563 entities regardless of chunking or pooling**. The 88.1-min "pipelined regression" (5,286 s) and the >558 s n=2,500 diagnostic (bound: 500 s) both sit on that bound. | **The regression was the rate limiter, not chunking or pipelining** — confirmed by the live-connector variant in §3 |
 
 ## 2. The fix applied (smallest justified)
 
@@ -38,7 +38,40 @@ quota), not a performance fix this lane is authorised to make — see §5.
 
 ## 3. n = 2,500 variants (same seeded delivery, repeat cycles; host shared with a peer session)
 
-MEASURED_TABLE_PLACEHOLDER
+| Variant | Connectors | Pool in effect | Chunk | classify s | ms/entity | gather s | serial s | SQL stmts | physical connects | pool wait s (sum) | rate-limit wait s (sum, CMS_PPEF) | peak RSS MB (ext.) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| (a) current code, harness default | mock, 50 ms | NullPool | 1000 | 170.8 | 68.3 | 117.3 | 53.3 | 25,003* | 2,501 | 754.0 | 0 | 325.6 |
+| (b) production pool shape | mock, 50 ms | QueuePool 5+10 | 1000 | **79.6** | 31.8 | 36.2 | 43.3 | 22,503 | 36 | 121.4 | 0 | 309.5 |
+| (c) larger pool | mock, 50 ms | QueuePool 20+0 | 1000 | 86.2 | 34.5 | 40.9 | 45.2 | 22,503 | 16 | 62.7 | 0 | 309.1 |
+| (d) pre-chunking shape | mock, 50 ms | NullPool | 2500 (1 chunk) | 167.9 | 67.2 | 118.6 | 49.1 | 22,503 | 2,501 | 671.7 | 0 | 347.4 |
+| (e) **live NPPES/CMS, SAM keyless** | live | NullPool | 1000 | **568.1** | 227.2 | 534.0 | 34.0 | 22,503 | 2,501 | 191.2 | **14,246.7** | 304.5 |
+
+\* variant (a) also ran the first cycle on a fresh delivery (2,500 extra statements from the NPI
+ledger writes); (b)–(e) are repeat cycles on the same delivery. All five: 2,500/2,500 verified,
+0 unresolved, bucket counts identical (B3 x 2,500 under the unmatched default, as expected for
+synthetic NPPES-unknown NPIs), rule set size 5. LEIE pre-warm (timed separately, after the
+single-flight fix): 3.8–4.7 s, +88–118 MB. Host shared with a peer session throughout; minimum
+host free memory during a run 203–330 MB. Raw JSON/CSV per variant in `lanes/P/`.
+
+What the table shows:
+
+1. **Chunking is not a regression**: (a) vs (d) = 170.8 vs 167.9 s, +1.7 % at n = 2,500, with
+   the same per-chunk serial cost. Memory at this n is similar either way; the chunked loop's
+   benefit is bounded evidence residency at full scale, not speed.
+2. **With live connectors the rate limiter dominates**: (e) gathers at 4.4 entities/s against a
+   hard bound of 5/s (2 `CMS_PPEF` calls per entity, one 10 req/s bucket). Summed token-bucket
+   wait 14,247 s across the 16 concurrent tasks; NPPES waited 6 s in total. Pool wait fell to
+   191 s because connects were no longer the thing tasks queued on. **At 24,563 entities this
+   bound alone is 4,913 s (81.9 min)**; the 88.1-min "pipelined regression" is this bound, not
+   pipelining.
+3. **NullPool is a pytest-harness artifact that inflated every earlier benchmark**: (a) vs (b)
+   = 170.8 vs 79.6 s with mocked connectors; 2,501 physical connects at ~0.3 s average under
+   load versus 36. Production (`app/core/database.py`) already uses QueuePool(5+10), and a
+   bigger pool (c) is not faster, so **no pool change is made**. The production-shape number
+   for the pipeline's own overhead is (b): ~32 ms/entity, ~18 ms of it the serial
+   persist/classify step.
+4. **The committed fix (single-flight LEIE) removes the first-wave warm-up** (44 s → 3 s on a
+   cold process) and ~230 MB of transient peak; it is independent of the three points above.
 
 ## 4. Equivalence — what is compared and what is excluded, with reasons
 
