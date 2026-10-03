@@ -51,7 +51,7 @@ from alembic import context, op
 from sqlalchemy.dialects import postgresql
 
 revision = "20261003_preflight_shadow"
-down_revision = "20260930_alembic_version_read"
+down_revision = "20261003_iqvia_upload_durability"
 branch_labels = None
 depends_on = None
 

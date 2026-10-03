@@ -68,7 +68,7 @@ from alembic import context, op
 from sqlalchemy.dialects import postgresql
 
 revision = "20261002_iqvia_observations"
-down_revision = "20260930_alembic_version_read"
+down_revision = "20261001_report_generation_jobs"
 branch_labels = None
 depends_on = None
 
