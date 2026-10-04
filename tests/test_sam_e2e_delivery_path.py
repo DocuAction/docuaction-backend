@@ -389,6 +389,23 @@ async def test_clean_confirmed_entity_is_not_disqualified_by_sam(db_required, mo
 
     monkeypatch.setenv("ENTITY_RESOLVER_SOURCE", "db")
     _clean_nppes_leie(monkeypatch)
+    # 2026-10-04: the CMS connectors were unpatched, so this assertion on the
+    # EXCLUSION dimension depended on a live call to the CMS data API (offline
+    # it read UNAVAILABLE and the test failed). Deterministic answers, the same
+    # the live API gives a synthetic NPI: no revocation record.
+    from app.Tefca import cms_ppef
+
+    async def no_revocation(self, npi):
+        return SourceResult.ok(self.SOURCE_NAME, {
+            "checked": True, "matches": [],
+            "result": "NO_ACTIVE_REVOCATION_RECORD_FOUND"}, {"npi": npi})
+
+    async def enrolment_not_exercised(self, npi):
+        return SourceResult.unavailable(
+            self.SOURCE_NAME, "synthetic: CMS enrolment API not exercised by this test",
+            {"npi": npi})
+    monkeypatch.setattr(cms_ppef.CMSRevocationConnector, "lookup_by_npi", no_revocation)
+    monkeypatch.setattr(cms_ppef.PPEFEnrollmentConnector, "lookup_by_npi", enrolment_not_exercised)
 
     def clean_result(*, uei, legal_name):
         return SourceResult.ok("SAM_GOV", {

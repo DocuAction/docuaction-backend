@@ -20,6 +20,20 @@ from rce_traceability_support import (  # noqa: F401
 )
 
 
+@pytest.fixture(autouse=True)
+def _resolve_entities_from_the_registry(monkeypatch):
+    """These tests promote real entities and then run the coverage batch,
+    which resolves each reference through `resolve_entity`. That honours
+    ENTITY_RESOLVER_SOURCE, whose default is "mock" -- so unless the
+    AMBIENT environment happened to say "db", every reference failed to
+    resolve, every entity came back NOT_ELIGIBLE and 8 tests failed
+    (identically at the PR #110 head; they need a database, so no CI job ran
+    them). The dependency is now stated by the test instead of inherited
+    from whoever's shell runs it. Root-caused 2026-10-04; an earlier note
+    blaming a dimension-name literal was wrong."""
+    monkeypatch.setenv("ENTITY_RESOLVER_SOURCE", "db")
+
+
 # ── pure: outcome classification (no DB, no network) ────────────────────────
 
 def _evidence(dispositions, applicabilities=None):
