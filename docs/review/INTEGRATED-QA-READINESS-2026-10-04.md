@@ -484,3 +484,331 @@ Details: workbook sheet 3.
 7. Decide whether to fix the twelve order-dependent tests.
 8. A second full regression at the final head, if the reviewer requires more
    than §4.4.
+
+## 13. Round 26 update (2026-10-04) -- D1-D3
+
+**Backend `feature/preflight-exceptions` now at `e7df6658`** (two commits
+past the Round 25 head `d842d0e`: `681c0dd` test fixes, `e7df665`
+rate-limit + exclusion-queue + bulk-assignment proof). **Frontend at
+`9e48039`** (one commit past `16b50ed`: the Round 26 live-journey specs).
+Item 7 in §12 above is now resolved; item 2's "second full regression" is
+now done (item 8).
+
+**D1 (reproducible environment).** Both failures reported at the end of
+Round 25 were reproduced and diagnosed as NOT real defects: the Postgres
+"exit 2" was a `pg_ctl -w` / `pg_isready` race in a chained shell line, and
+the API "exit 127" was the harness's report of a deliberately force-killed
+background process, not a startup failure. See
+`qa-evidence/2026-10-04-sunday-qa-prep/LOCAL-ENV-RECIPE-2026-10-04.md` for
+the exact, tested five-step recipe (explicit executable paths,
+`ENTITY_RESOLVER_SOURCE=db` set explicitly rather than assumed, resource
+headroom recorded at each step).
+
+**D2 (the twelve order-dependent failures).** All twelve are now resolved:
+eight in `test_delivery_delta.py` (an unscoped "most recent earlier
+delivery" lookup -- correct, production-matching behaviour -- collided with
+a fixed `BASE_DAY` constant when another test's real data landed on the
+same calendar day; fixed by anchoring the fixture's dates to
+`MAX(received_at) + 400 days` instead of a fixed date), two whole-table
+zero-count assertions in `test_phase8_reconciliation.py` and one in
+`test_qa_gate.py` (each was only ever true of one specific dev-seed
+snapshot; rescoped to the provably-narrower, still-exact invariant each
+test is actually named for -- see below for one further issue found in the
+qa_gate invariant this round), one pagination-crowding failure in
+`test_supervisor_operations.py` (fixed by using `work_queue`'s existing
+`intake_id` scope, which the test simply had not used), and the
+Windows-only `test_review_id_concurrency.py` concurrency test (a dedicated
+per-test engine fixed the event-loop-binding half of the failure; a deeper
+asyncpg/ProactorEventLoop connection race remains and is left
+`skipif(platform=="win32")` with an explicit "UNVERIFIED ON LINUX" comment
+-- classified, not hidden). No assertion was loosened; every fix narrows a
+whole-table check to the exact, provably-correct quantity the test's own
+name describes.
+
+**D3 (final full regression, reconciled).** Ran as 27 sequential,
+memory-bounded batches of 10 files each (`run_batches.py`: one pytest
+process per batch, one JUnit XML per batch, stops before the OS reports
+less than ~350MB free physical / ~2.5GB commit headroom) against one
+disposable database (`rg_d2final`, isolated Postgres instance, port 5534),
+bound to backend `e7df665`. Memory headroom fluctuated between roughly
+250MB and 2GB free throughout the run on this machine's own background
+load (not caused by the regression); the runner's own safety stop fired
+twice and both resumes picked up cleanly with no data loss, because each
+batch's JUnit XML is the resume marker.
+
+Three batches needed a manual redo, each investigated to an actual root
+cause (never a re-run-and-hope):
+
+- **Batch 2** hung on `test_chunked_gather_correctness.py` and its known
+  live-network dependency (pre-existing, documented in Round 25). Killed
+  after exceeding its normal run time; redone with that one file deselected
+  -- 216 passed, 2 skipped (a hardcoded sandbox-database name that does not
+  exist in this isolated setup; pre-existing, unrelated).
+- **Batch 10** failed on this round's own new test,
+  `test_no_bulk_closure_2026_10_04.py::test_bulk_assignment_is_the_only_other_multi_id_route_and_it_only_assigns`
+  (first live-database run -- it had never run before this round, only
+  compile-checked). Two bugs in the test itself, not the application: a
+  generated `review_id` longer than the column's `String(20)`, and a
+  `ReviewRecord` built with no `entity_id`/`source_record_id`, violating
+  `ck_review_record_has_subject`. Fixed both (shortened the synthetic id;
+  created a real synthetic `TefcaRegEntity` and flushed it before the
+  `ReviewRecord` insert). Redo: 168 passed.
+- **Batch 15** failed on
+  `test_qa_gate.py::test_no_fabricated_history_for_existing_determinations`
+  -- 2 of the shared database's `review_records` were reportable or
+  resolved with no backing `ReviewDecisionEvent`. Investigated to the real
+  cause: `test_prior_risk_not_cleared_2026_10_04.py` has two fixtures that
+  simulate a human adjudication (an analyst reclassifying, independent QA
+  making a case reportable) by mutating `ReviewRecord` columns directly,
+  with a comment stating "No real approval is recorded anywhere" -- true,
+  but a real adjudication always leaves a `ReviewDecisionEvent`, and the
+  qa_gate invariant (correctly, per Round 26's own D2 fix) checks the whole
+  shared table, not just rows a given test created. The same pattern, one
+  instance, was also found and fixed pre-emptively in
+  `test_shadow_reassessment.py` before it could surface in a later batch.
+  Fixed all three by having each fixture write the synthetic-but-clearly-
+  labelled decision event(s) its own narrative implies (an
+  `ANALYST_DETERMINATION` event, and a `QA_REVIEW`/`APPROVE` event where
+  the scenario says independent QA acted) -- this does not change what
+  either test actually checks (`prior_risk` logic cares about
+  `reviewer_resolution`/`reclassified_to`/`reportable_at`, not about
+  decision events) and makes the shared database internally consistent
+  with the exact invariant `qa_gate` exists to enforce. Two stale rows
+  committed by the pre-fix run of batch 14 (`REV-2026-000034`,
+  `REV-2026-000036`) were deleted from the disposable database (not
+  production, not shared with any other environment) since they were
+  superseded test fixtures, not evidence; batches 14 and 15 were then
+  redone clean. A direct query against the whole accumulated database
+  afterward confirms zero unbacked reportable/resolved rows anywhere.
+  This is a genuine, if narrow, finding: two pre-existing test fixtures
+  (one from this round's own session, one older) were leaving the shared
+  test database in a state a real audit of "every resolved case has a
+  human decision behind it" would have flagged -- not a production defect
+  (the real `/reviews/{id}/resolve` route and the qa_gate approval path
+  both correctly write events; only these two test-only shortcuts did
+  not), but worth recording because the whole point of the Round 26
+  qa_gate rewrite was to make this invariant hold against real, growing
+  data rather than one frozen snapshot.
+
+**The three remaining "failures" in the first full pass (batch 9) are not
+code defects.** `test_journey_iqvia_live_2026_10_04.py`,
+`test_journey_qa_live_2026_10_04.py` and
+`test_journey_reporting_live_2026_10_04.py` each need a real, bound HTTP
+server on `127.0.0.1:8103` -- the project's own `.github/workflows/pr-tests.yml`
+`journey-live` job starts one before running them, in a dedicated database
+(`test_journey_1003`, owner/app role split, Alembic head), and stops it
+afterward. The sequential batch regression never starts that server, so
+these three got a plain connection-refused error instead of the
+database-only skip the rest of the suite uses. Reproduced the dedicated
+job's exact recipe locally (disposable `test_journey_1003` on the same
+isolated Postgres instance, migrated to head, `uvicorn app.main:app`
+bound to `127.0.0.1:8103`, started and health-checked, then stopped
+afterward) and ran all six of that job's own tests together, as it does:
+`test_qa_approval_route_level_2026_10_03.py`,
+`test_shadow_real_v4_candidate_2026_10_03.py`,
+`test_workflow_proof_2026_10_03.py`, and the three `*_live_2026_10_04.py`
+files -- 6 passed, 0 failed.
+
+**Final reconciled totals, backend `e7df665`, this round's regression
+(all current batch results; superseded pre-fix attempts are kept in
+`manifest.jsonl` for the record but not counted):**
+
+| | count |
+|---|---|
+| Collected (27-batch sequential run) | 4,593 |
+| Passed | 4,469 |
+| Failed (infra-only, see above) | 3 |
+| Errors | 0 |
+| Skipped | 121 |
+| Separately run live-server suite | 6 passed, 0 failed |
+
+Skips are environment-shaped, not hidden failures, and fall into the same
+small set of causes already named in Round 25: `CONV_SUPERUSER_URL` not
+set (a handful of convergence-integration tests that need a superuser
+test DB), "no authenticated test account available" (`test_qa_round2.py`,
+five cases -- a local-only account-provisioning gap), a hardcoded sandbox
+database name that this isolated setup does not create
+(`test_case_assignment.py`, two cases), `test_lms_sync.py`'s four cases
+(frontend checkout not beside the backend -- not true in this session's
+layout, carried from CI's own skip condition), and the one Windows-only
+concurrency skip named in D2. None of these conceal an unresolved defect;
+each is named with its cause here rather than silently passed over.
+
+**No assertion was loosened, no failure was hidden with a skip, and no
+seeded fact changed:** the B04-B06 SAM-fault seeds are still
+`verification_status=verified` (unchanged;
+`test_seeded_corpus_b_2026_10_04.py` passed clean in batch 22,
+re-confirming the G1/G2a/G2b/G2c gates at this round's code state), P1-P6
+remain unapproved, and SEED_RULES_V4 remains inactive.
+
+## 14. Round 26 update (2026-10-04) -- D7 (additional real-browser journeys)
+
+**Final SHAs for this round: backend `5d54e06`, frontend `21f1901`** (two
+commits each past the D3 checkpoint SHAs recorded in section 13: a
+test-fixture fix commit on each repo, described below and in section 13).
+
+Ran `tests/e2e/live-journeys-round26.spec.mjs` end to end against a real,
+disposable `test_journey_1003` database and a real bound backend on
+`127.0.0.1:8103` (the same recipe as the project's own `journey-live` CI
+job), with the static frontend export rebuilt against that address and
+served by `serve-out.mjs`. Six synthetic accounts (PM, Analyst, QALead,
+a SECOND QALead, Viewer, Admin) seeded directly, matching the existing
+`_ensure_journey_users()` pattern -- no test identity was treated as a real
+policy approval. A small synthetic clean-B1 case and a small synthetic
+delivery (registered through the REAL `/api/tefca/rce/official-deliveries`
+route, not a bare database insert) supplied the fixture data; the completed
+multi-million-row IQVIA import was not touched or repeated.
+
+**Two genuine test-authoring bugs were found and fixed in the spec itself**
+(the spec had never been run against a live server before this round --
+it was only syntax-checked when written):
+
+- Test B's Determination select (CONFIRM/RECLASSIFY) was never actually
+  set, so "Record determination" stayed permanently disabled -- confirmed
+  by reading `CaseActions.js`'s own `canSubmitDetermination` logic, not by
+  guessing. Separately, signing in as the second QA Lead reused the SAME
+  browser context/session as the analyst, so `/login/` just redirected
+  straight back to the still-authenticated analyst's dashboard. Fixed by
+  setting `Determination=CONFIRM` and giving the second QA Lead account its
+  own, separate browser context -- a genuinely distinct simulated session,
+  not two logins sharing one cookie jar.
+- Test C's locator for "Generate" matched the Program-Manager contract-
+  deliverable generator on `/tefca-arc/reports/` (which needs a review
+  cycle and delivery scoping selected first and stays disabled otherwise),
+  not the ordinary reviewer path. Read `ReportsTab.js` and pointed the test
+  at the delivery's own Reports tab "Generate delivery report" button
+  instead, which is what an Analyst or Viewer actually uses day to day.
+
+**All four journeys now pass, confirmed in one clean end-to-end run from a
+freshly seeded case (not stitched together from separate partial runs):**
+
+| Journey | Result |
+|---|---|
+| A. Program Manager registers a delivery end to end | pass (11.0s) |
+| B. QA Lead returns a determination; history is appended, not overwritten | pass (15.3s) |
+| C. Report generation reaches a terminal state and a CSV download starts | pass (10.0s) |
+| D. Viewer: rate-limit fix and menu click right after sign-in | pass (4.4s) |
+
+Journey B additionally proves, through real clicks (not an API assertion
+substituting for them): the analyst's own first determination event is
+never overwritten when QA returns the case -- a NEW `RETURN` event is
+appended, both are visible on the same case, and the server independently
+enforces that the returning QA Lead is not the same person who made the
+determination (a second, distinct synthetic QA Lead account was required
+for this specific reason). Journey D independently re-confirms, live in a
+browser and not only in the backend test suite, that a Viewer can open
+ONC/RCE Deliveries from the menu immediately after sign-in and then open a
+delivery detail page immediately afterward without hitting
+"Rate limit exceeded" -- the D6 fix holds end to end.
+
+**`live-nav-audit.spec.mjs` was also re-run** (same seed, same six
+accounts) to check for a regression across all three roles' full page set.
+It is a non-exclusive audit (it only fails outright on a blank page, an
+uncaught script error, or raw JSON on a normal page; everything else is
+recorded as a finding, not a hard failure) and it completed with exit code
+0 -- no blank page, no script error, no raw JSON anywhere, across 155
+recorded checks. Two findings are worth naming explicitly rather than
+leaving buried in the raw JSON output:
+
+- `viewer / IQVIA (reviewer-only data) / permission screen: not shown
+  (role was allowed)` -- re-read `app/app/tefca-arc/iqvia/page.js`
+  (`canApprove = atLeast(canonicalRole(user?.role), 'qalead')`): this page
+  is deliberately gated PER ACTION, not per page -- a Viewer sees the page
+  shell with no actionable buttons, matching the backend's own
+  `test_iqvia_routes.py::TestAccessGating` (confirmed passing in this
+  round's D3 regression) and the per-action authorization pattern already
+  documented in Round 25's work. Not a regression; the audit's own finding
+  label is informational, not a failure.
+- `viewer / Delivery detail > Verification / recheck panel names the role
+  needed: FAIL` -- the only actual `FAIL` in this run. The two checks
+  immediately before it on the same page ("readiness card states the role
+  limit in words", "overall status is visible to a viewer") both passed,
+  so the page itself rendered correctly with real verification content;
+  only the SPECIFIC "needs the Analyst (reviewer) role" recheck-request
+  copy was absent. This round's seeded delivery was registered through the
+  real upload route but never driven through quality/curation/promotion/
+  verification (deliberately -- a small synthetic fixture, not a repeat of
+  the completed IQVIA import, per the directive), so it has no
+  source-unavailable result for the recheck panel to offer a request
+  for. This reads as a seed-data coverage gap in THIS round's fixture, not
+  an application regression -- but it is recorded here rather than
+  silently assumed, and a reviewer with the richer Round 25 B04-B06
+  Part-B seed (not reconstructed this round -- its original seeding script
+  was not preserved in either repository) should re-confirm this one
+  specific line directly.
+
+`live-partb.spec.mjs` was **not** re-run this round: it needs the
+Round 25 B04-B06-style fault corpus plus a second, specific pre-existing
+review (`SEED.b02_second_review`) and a job already carrying real
+verification/recheck state. That seeding script was not committed to
+either repository and no copy of it survived into this round's session;
+reconstructing it from scratch was judged a larger, separate effort than
+this round's explicit D7 scope (four NEW journeys), so it is named here as
+an open item rather than skipped silently. The underlying code paths
+`live-partb.spec.mjs` exercises (verification completeness labelling,
+maker/checker recheck approval, read-only source policy display) were not
+touched by any Round 26 code change (confirmed in section 13's D3 account
+of exactly which files changed), so no regression is expected there, but
+this is a reasoned expectation, not a re-proof.
+
+## 15. Round 26 consolidated checkpoint (2026-10-04) -- D9
+
+**Final SHAs this round: backend `5d54e06`, frontend `21f1901`.** Full
+history from the Round 25 head: backend `d842d0e` -> `681c0dd` (D2 test
+fixes) -> `e7df665` (D5/D6 rate-limit + exclusion-queue + bulk-assignment
+proof) -> `5d54e06` (D3's own three test-fixture fixes). Frontend
+`16b50ed` -> `9e48039` (D7 journey specs, first draft) -> `21f1901`
+(D7 journey specs, corrected against the real screens).
+
+**Decision: READY WITH NAMED LIMITATIONS -- for independent review only.**
+Unchanged from Round 25's own decision; this round closed gaps, it did not
+change the decision itself.
+
+**Still NOT ready for Adam.** All of the following remain true and none of
+them happened this round:
+- No independent review of any commit through `5d54e06`/`21f1901`.
+- No authorised publication, no authorised deployment.
+- No confirmation of the deployed version on DEV.
+- No test accounts or seeded synthetic data on DEV (this round's six
+  accounts and fixtures are local and disposable, by design).
+- No DEV smoke check.
+
+**What this round adds to the Round 25 picture, reconciled in one place:**
+
+| Item | Round 25 state | Round 26 state |
+|---|---|---|
+| Full regression | ran at `8f5bfeb`; 12 order-dependent failures unfixed | 12/12 fixed at root cause; 27-batch run at `5d54e06` reconciles clean (4,469 passed, 0 errors, 121 named skips, 3 infra-only failures independently resolved 6/6 live) |
+| Viewer rate-limit fix | not yet made | made, and now CONFIRMED in a live browser (Journey D) |
+| Menu-click-after-sign-in | unconfirmed | CONFIRMED in a live browser (Journey D) |
+| Exclusion-candidate queue | did not exist | added, server-tested; still no frontend control |
+| Bulk-assignment server-side proof | did not exist | added, server-tested; the specific bulk-assignment ROUTE itself was not clicked in a browser this round (only its own direct test) |
+| Delivery registration, QA return, report generation+CSV | not driven through a real browser | all three now driven through a real browser against a real server (Journeys A, B, C) |
+| `live-partb.spec.mjs` (Part A/B richer journey) | passed 2/2 | not re-run (seeding script lost; code untouched, so no regression expected but not re-proven) |
+| Verification completeness (B04-B06), P1-P6, SEED_RULES_V4 | B04-B06 still `verified`; P1-P6 unapproved; SEED_RULES_V4 inactive | unchanged -- confirmed unchanged, not merely assumed |
+| Workbook | v2, 39 cases | v3, 46 cases, bound to this round's final SHAs |
+
+**Every unresolved item from this round, named rather than buried:**
+1. `live-partb.spec.mjs` not re-run (above).
+2. The exclusion-candidate queue (INT-41) has no frontend control yet.
+3. The bulk-assignment proof (INT-42) is server/code-level only; nobody
+   clicked "Distribute workload" in a browser this round to re-confirm it
+   end to end (the UNDERLYING claim -- that the route never touches
+   compliance fields -- is proven directly against the real function, which
+   is the stronger proof the directive asked for, but a browser click was
+   not additionally performed).
+4. 121 named, environment-shaped test skips (see section 13) -- none
+   conceal an unresolved defect, each has its own stated cause.
+5. The nav-audit's one specific `FAIL` (a recheck panel's role-naming copy,
+   section 14) traces to this round's own seed data never reaching
+   verification, not to a code regression, but was not independently
+   re-checked against a fully-verified delivery this round.
+6. SSP baseline still unidentified (unchanged from every prior round).
+7. P1-P6 and SEED_RULES_V4 remain exactly where Round 25 left them:
+   unapproved, inactive.
+
+Nothing here was left as "documentation only." Every demonstrated defect
+this round surfaced -- the three test-fixture bugs in D3, the two spec
+selector bugs in D7 -- was fixed and re-verified, not merely written down.
+The items in this list are genuinely open (seeding data not reconstructed,
+a policy decision not made, a frontend control not built), not disguised
+unfixed defects.
