@@ -67,6 +67,15 @@ from app.tefca_registry.rce.quality_rules import (
 
 logger = logging.getLogger(__name__)
 
+
+class PreflightBlockedError(RuntimeError):
+    """Raised by `delivery_runner._stage_preflight` (only when
+    ENABLE_PREFLIGHT_ENFORCEMENT is on) when a run's `classification_gate`
+    is GATE_BLOCKED. Not raised by `run_preflight` itself -- a dry run via
+    the admin route must be able to return a BLOCKED gate as data, for a
+    human to read, without the HTTP call itself raising."""
+
+
 PREFLIGHT_VERSION = "1.0.0"
 BATCH_SIZE = 2000
 INSERT_BATCH = 2000
@@ -180,6 +189,28 @@ def _schema_findings(acc: _Acc, intake) -> None:
     delivered = [str(h) for h in (intake.headers or [])]
     expected = list(RCE_FIELDS)
     stripped = [h.strip() for h in delivered]
+
+    # Duplicate headers (2026-10-04, Round 22): two delivered columns sharing
+    # one exact name. A dict-based reader keeps only one value per name, so
+    # which column's value survives is undefined -- this is a PARSING
+    # trust problem, not a completeness one, and BLOCKS the whole delivery
+    # the same way a missing column does (PF-SCH-001, below): guessing which
+    # duplicate "wins" would silently fabricate which value a field holds.
+    from collections import Counter
+    dup_counts = Counter(stripped)
+    duplicates = sorted(name for name, n in dup_counts.items() if n > 1 and name)
+    if duplicates:
+        acc.finding(category="SCHEMA", code="PF-SCH-008", field_name="__header__",
+                    applicability=pm.APPLIES, execution=pm.EXEC_DONE,
+                    disposition=pm.DISP_BLOCKED,
+                    evidence={"duplicate_columns": duplicates,
+                              "occurrence_counts": {d: dup_counts[d] for d in duplicates}},
+                    description=f"{len(duplicates)} column name(s) appear more than once in "
+                                f"the delivered header: {', '.join(duplicates)}. Final "
+                                f"classification is BLOCKED: which of the duplicate columns' "
+                                f"values a dict-based reader kept is undefined, and the "
+                                f"ambiguity is never guessed at.")
+
     bom = bool(delivered) and delivered[0].startswith("﻿")
     if bom:
         stripped[0] = stripped[0].lstrip("﻿")

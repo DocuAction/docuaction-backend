@@ -24,15 +24,16 @@ from datetime import datetime, timezone
 import pytest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-#: The chain's actual head. Stale before this update -- it had pointed at
-#: 20260918_pp_verification since Decision 2 (2026-09-18), already two
-#: migrations behind (20260921_september_snapshot, 20260930_alembic_version_read)
-#: before 20261001_report_generation_jobs (this reporting-architecture task)
-#: made it three. None of the intervening migrations touch the five evidence
-#: tables' grants this module tests (20261001's own two columns are on
-#: report_export_jobs, not those five tables), so "upgrade to head" testing
-#: those grants stays valid with the head moved again.
-HEAD = "20261001_report_generation_jobs"
+#: The chain's actual head. Bumped again 2026-10-04 (Round 22) past
+#: 20261003_preflight_shadow to 20261004_stage_event_preflight -- two new
+#: migrations (20261004_preflight_exec_held, 20261004_stage_event_preflight)
+#: widen two CHECK constraints (rce_preflight_finding.execution;
+#: rce_delivery_stage_events.stage, one of this module's own TABLES) to
+#: admit new enum values. Neither touches ownership or GRANTs on any of
+#: the five evidence tables -- a CHECK constraint is independent of both --
+#: so "upgrade to head" testing those grants stays valid with the head
+#: moved again, same as every prior bump recorded in this comment's history.
+HEAD = "20261004_stage_event_preflight"
 PREVIOUS = "20260915_curated_text_columns"
 MIG_DB = "mig_test"
 OWNER, APP = "docuaction_owner", "docuaction_app"

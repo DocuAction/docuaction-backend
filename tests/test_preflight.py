@@ -228,6 +228,37 @@ async def test_preflight_blocks_on_a_missing_column_and_reports_a_rename(db_requ
     assert run2["classification_gate"] != pm.GATE_BLOCKED
 
 
+async def test_preflight_blocks_on_a_duplicate_header(db_required):
+    """Added 2026-10-04 (Round 22, docs/review/DELTA-2026-10-04.md): a
+    delivered header with the SAME column name twice. A dict-based reader
+    keeps only one value per name -- which one is undefined -- so this is a
+    PARSING trust problem, same severity class as a missing column
+    (PF-SCH-001), and BLOCKS the whole delivery (PF-SCH-008)."""
+    from app.core.database import async_session_maker
+    from app.tefca_registry.rce import preflight as pf
+    from app.tefca_registry.rce import preflight_shadow_models as pm
+    from app.tefca_registry.rce.field_map import RCE_FIELDS
+
+    tag = uuid.uuid4().hex[:8]
+    # HCID delivered twice; drop CCN to keep the column count the expected 41
+    # (a duplicate is a distinct defect from a missing column, and this
+    # keeps the two findings from being conflated in one delivery).
+    headers = [h for h in RCE_FIELDS if h != "CCN"] + ["HCID"]
+    rows = _rows(tag)
+    for r in rows:
+        r.setdefault("HCID", r.get("HCID", ""))
+    intake_id = await _ingest(_bytes(rows, headers), tag)
+    async with async_session_maker() as db:
+        run = await pf.run_preflight(db, intake_id, actor="pytest-preflight")
+        findings = await pf.list_findings(db, uuid.UUID(run["run_id"]), category="SCHEMA")
+    assert run["classification_gate"] == pm.GATE_BLOCKED
+    sch = {f["code"]: f for f in findings["items"]}
+    assert sch["PF-SCH-008"]["disposition"] == pm.DISP_BLOCKED
+    assert sch["PF-SCH-008"]["evidence"]["duplicate_columns"] == ["HCID"]
+    assert sch["PF-SCH-008"]["evidence"]["occurrence_counts"]["HCID"] == 2
+    assert sch["PF-SCH-008"]["source_record_id"] is None  # delivery-level
+
+
 def test_preflight_routes_floor_and_shape(db_required):
     from fastapi.testclient import TestClient
 

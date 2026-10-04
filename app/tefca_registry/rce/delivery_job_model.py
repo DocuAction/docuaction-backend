@@ -76,6 +76,11 @@ class RceDeliveryJob(Base):
     #: reported is the stage, plus the row counts the stage itself produced.
     STAGE_ACCEPTED = "ACCEPTED"
     STAGE_PARSING = "PARSING"
+    #: Added 2026-10-04 (Round 22): runs preflight.run_preflight() between
+    #: PARSING and QUALITY, gated by ENABLE_PREFLIGHT_ENFORCEMENT (default
+    #: off -- see delivery_runner._stage_preflight). Additive: a plain
+    #: String(32) column, no CHECK constraint, no migration required.
+    STAGE_PREFLIGHT = "PREFLIGHT"
     STAGE_QUALITY = "QUALITY"
     STAGE_CURATION = "CURATION"
     STAGE_PROMOTION = "PROMOTION"
@@ -83,9 +88,9 @@ class RceDeliveryJob(Base):
     STAGE_RECONCILIATION = "RECONCILIATION"
     STAGE_READY = "READY_FOR_REVIEW"
 
-    STAGE_ORDER = (STAGE_ACCEPTED, STAGE_PARSING, STAGE_QUALITY, STAGE_CURATION,
-                   STAGE_PROMOTION, STAGE_VERIFICATION, STAGE_RECONCILIATION,
-                   STAGE_READY)
+    STAGE_ORDER = (STAGE_ACCEPTED, STAGE_PARSING, STAGE_PREFLIGHT, STAGE_QUALITY,
+                   STAGE_CURATION, STAGE_PROMOTION, STAGE_VERIFICATION,
+                   STAGE_RECONCILIATION, STAGE_READY)
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 

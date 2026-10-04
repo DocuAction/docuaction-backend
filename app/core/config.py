@@ -82,6 +82,14 @@ class Settings(BaseSettings):
     # REPORT_ARTIFACT_BACKEND.
     ENABLE_DEV_RESTORE_ORIGINAL: bool = False
 
+    # Preflight ENFORCEMENT (not the engine itself, which always exists and
+    # is always reachable via the admin dry-run route regardless of this
+    # flag). Default False: zero behavior change for any official delivery
+    # or reference-snapshot write. See
+    # docs/review/DELTA-2026-10-04.md and delivery_runner._stage_preflight.
+    # New enforcement stays in shadow (off) until explicitly approved.
+    ENABLE_PREFLIGHT_ENFORCEMENT: bool = False
+
     class Config:
         env_file = ".env"
         extra = "allow"
