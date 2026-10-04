@@ -121,6 +121,48 @@ async def _promoted_refs(db, intake_id, limit):
         .order_by(m.RceCuratedRecord.rce_org_oid).limit(limit))).scalars().all())
 
 
+#: Fixed identities the LIVE-server journey tests (test_journey_iqvia_live,
+#: test_journey_qa_live, test_journey_reporting_live) log into over real
+#: HTTP -- shared here, not duplicated per file, since all three need the
+#: SAME accounts to exist in whatever database the live server and the
+#: pytest process both point at.
+JOURNEY_ANALYST_EMAIL = "journey-analyst@synthetic-test.docuaction.invalid"
+JOURNEY_ANALYST_PASSWORD = "JourneyAnalyst!2026"
+JOURNEY_QALEAD_EMAIL = "journey-qalead@synthetic-test.docuaction.invalid"
+JOURNEY_QALEAD_PASSWORD = "JourneyQALead!2026"
+JOURNEY_ADMIN_EMAIL = "journey-admin@synthetic-test.docuaction.invalid"
+JOURNEY_ADMIN_PASSWORD = "JourneyAdmin!2026"
+
+
+async def _ensure_journey_users():
+    """Idempotent: create the three fixed journey accounts if they are not
+    already present (direct DB insert -- there is no public self-registration
+    endpoint, same pattern as every other synthetic test account in this
+    suite). Safe to call from more than one test file in the same session."""
+    from sqlalchemy import select
+
+    from app.core.database import async_session_maker
+    from app.core.security import hash_password
+    from app.models.database import User
+
+    async with async_session_maker() as db:
+        for email, password, role in (
+            (JOURNEY_ANALYST_EMAIL, JOURNEY_ANALYST_PASSWORD, "reviewer"),
+            (JOURNEY_QALEAD_EMAIL, JOURNEY_QALEAD_PASSWORD, "qalead"),
+            (JOURNEY_ADMIN_EMAIL, JOURNEY_ADMIN_PASSWORD, "admin"),
+        ):
+            existing = (await db.execute(
+                select(User).where(User.email == email))).scalars().first()
+            if existing is not None:
+                continue
+            db.add(User(
+                id=uuid.uuid4(), tenant_id="synthetic-journey", email=email,
+                password_hash=hash_password(password), full_name=f"SYNTHETIC journey {role}",
+                role=role, is_active=True, is_verified=True, status="active",
+                allowed_modules=[]))
+        await db.commit()
+
+
 def _clean_nppes_leie(monkeypatch, *, uei_by_entity: dict | None = None):
     """Patch NPPES/LEIE to a clean, positive answer for every NPI -- isolates
     the test to the SAM effect, rather than every entity being indeterminate

@@ -94,6 +94,7 @@ async def test_eligible_non_b1_completes_qa_via_real_routes_genuine_finding_stil
     intake_b = await sam._seed_promoted_delivery(n=1)
     mp_b = pytest.MonkeyPatch()
     try:
+        mp_b.setenv("ENTITY_RESOLVER_SOURCE", "db")  # same reason as entity A -- mp.undo() above already reverted this
         sam._clean_nppes_leie(mp_b)
         sam._patch_sam_verify(mp_b, clean_sam)
         async with async_session_maker() as db:

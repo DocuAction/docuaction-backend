@@ -127,7 +127,10 @@ def test_inventory_output_never_carries_delivered_values(tmp_path):
     text = inv.render_markdown("TEST", None, res, {})
     assert "SYNTHETIC-TRACE Org" not in text
     assert "2.16.840.1.113883.3.99999" not in text
-    for line in path.read_text(encoding="utf-8", newline="").splitlines()[1:]:
+    # Path.read_text(newline=...) needs Python 3.13+; CI runs 3.12.
+    with open(path, encoding="utf-8", newline="") as fh:
+        delivered_lines = fh.read().splitlines()
+    for line in delivered_lines[1:]:
         if not line.strip():
             continue
         npi = line.split("|")[10]

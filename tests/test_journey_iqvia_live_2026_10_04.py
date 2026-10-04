@@ -18,6 +18,7 @@ import app.tefca_registry.rce.iqvia_routes as routes
 import app.tefca_registry.rce.iqvia_upload_jobs as jobs
 import app.tefca_registry.rce.iqvia_upload_models as um
 import app.tefca_registry.rce.source_matching as sm
+import test_sam_e2e_delivery_path as sam
 
 pytestmark = pytest.mark.asyncio
 
@@ -48,6 +49,8 @@ async def test_journey_iqvia_live(tmp_path, monkeypatch):
     from app.core.database import async_session_maker
     from app.models.database import User
     from app.core.security import hash_password
+
+    await sam._ensure_journey_users()
     import uuid as _uuid
 
     monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
@@ -55,9 +58,17 @@ async def test_journey_iqvia_live(tmp_path, monkeypatch):
     # ---- stage + run the import job directly (DB-level, same reliable
     # pattern as the proven test_iqvia_routes.py helper). Content must be
     # unique per run -- the snapshot-identity guard correctly refuses a
-    # byte-for-byte repeat of an earlier run's fixture. ----
+    # byte-for-byte repeat of an earlier run's fixture. Written into
+    # IQVIA_IMPORT_DIR, not tmp_path -- stage_source confines a stage
+    # request's file_path to that directory (CodeQL py/path-injection fix,
+    # 2026-10-04); a pytest tmp_path lives outside it. ----
+    from pathlib import Path
+
+    from app.core.config import settings
     run_tag = _uuid.uuid4().hex[:10]
-    f = _write_csv(tmp_path / "hco.csv", HCO_HEADER, [
+    import_dir = Path(settings.IQVIA_IMPORT_DIR)
+    import_dir.mkdir(parents=True, exist_ok=True)
+    f = _write_csv(import_dir / f"journey-hco-{run_tag}.csv", HCO_HEADER, [
         [f"{SYN}-{run_tag}-HCO-{i}", "", "", f"{SYN} Journey Org {run_tag}-{i}", "02101"] for i in range(2)
     ])
     from sqlalchemy import select

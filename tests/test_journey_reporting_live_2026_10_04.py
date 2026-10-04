@@ -1,10 +1,12 @@
 """Reporting journey, route-level against the LIVE running server
-(http://127.0.0.1:8103, DATABASE_URL=test_journey_1003). Uses the clean,
-fully-reconciled intake from the Admin upload journey
-(d5e65cb4-0369-47af-9517-8a25c74e3546, READY_FOR_REVIEW, 0 invalid
-identifiers promoted) to generate a delivery_processing report via the
-async job path, poll status, download CSV, and check formula-injection
-escaping and totals.
+(http://127.0.0.1:8103, DATABASE_URL=test_journey_1003). Seeds its own
+clean, promoted synthetic delivery (same proven ingest -> quality -> curate
+-> promote pipeline as the other journey/isolation tests -- see
+test_sam_e2e_delivery_path._seed_promoted_delivery) rather than depending
+on one specific intake id from someone's already-populated environment, so
+this is portable to a fresh disposable database. Generates a
+delivery_processing report via the async job path, polls status, downloads
+CSV, and checks formula-injection escaping and totals.
 """
 from __future__ import annotations
 
@@ -13,21 +15,27 @@ import time
 import httpx
 import pytest
 
+import test_sam_e2e_delivery_path as sam
+
+pytestmark = pytest.mark.asyncio
+
 LIVE = "http://127.0.0.1:8103"
-CLEAN_INTAKE_ID = "d5e65cb4-0369-47af-9517-8a25c74e3546"
 
 
-def test_journey_reporting_live():
+async def test_journey_reporting_live():
+    await sam._ensure_journey_users()
+    intake_id = await sam._seed_promoted_delivery(n=3)
+
     admin_tok = httpx.post(f"{LIVE}/api/auth/login", json={
-        "email": "journey-admin@synthetic-test.docuaction.invalid",
-        "password": "JourneyAdmin!2026"}).json()["access_token"]
+        "email": sam.JOURNEY_ADMIN_EMAIL,
+        "password": sam.JOURNEY_ADMIN_PASSWORD}).json()["access_token"]
     H = {"Authorization": f"Bearer {admin_tok}"}
 
     with httpx.Client(timeout=30) as client:
         # ---- start generation (async job path) ----
         r = client.post(f"{LIVE}/api/reports/generate/jobs", headers=H, json={
             "report_type": "delivery_processing", "format": "html",
-            "parameters": {"intake_id": CLEAN_INTAKE_ID}})
+            "parameters": {"intake_id": intake_id}})
         print(f"[report] generate job: {r.status_code} {r.text[:500]}")
         assert r.status_code in (200, 202), f"job queue should succeed: {r.text}"
         job = r.json()
@@ -52,12 +60,12 @@ def test_journey_reporting_live():
         print(f"[report] report_id: {report_id}")
 
         # ---- delivery detail/status usable during and after generation ----
-        r = client.get(f"{LIVE}/api/tefca/rce/deliveries/{CLEAN_INTAKE_ID}/dashboard", headers=H)
+        r = client.get(f"{LIVE}/api/tefca/rce/deliveries/{intake_id}/dashboard", headers=H)
         print(f"[report] delivery dashboard still usable: {r.status_code}")
         assert r.status_code == 200
 
         # ---- verification-coverage drill-down (click-through filters) ----
-        r = client.get(f"{LIVE}/api/tefca/rce/deliveries/{CLEAN_INTAKE_ID}/verification-coverage",
+        r = client.get(f"{LIVE}/api/tefca/rce/deliveries/{intake_id}/verification-coverage",
                        headers=H)
         print(f"[report] verification-coverage: {r.status_code} {r.text[:400]}")
 
@@ -66,7 +74,7 @@ def test_journey_reporting_live():
             ("dispositions.csv", "dispositions"),
             ("findings.csv", "findings"),
         ]:
-            r = client.get(f"{LIVE}/api/tefca/rce/deliveries/{CLEAN_INTAKE_ID}/{csv_path}", headers=H)
+            r = client.get(f"{LIVE}/api/tefca/rce/deliveries/{intake_id}/{csv_path}", headers=H)
             print(f"[report] {label}.csv: {r.status_code} ({len(r.text)} bytes)")
             if r.status_code == 200:
                 lines = r.text.splitlines()
