@@ -222,3 +222,74 @@ async def split_verified_counts(db, counts: Dict[str, int],
             by_source[item["source"]] = by_source.get(item["source"], 0) + 1
     return {"counts": out, "verified_total": verified, "split": split,
             "incomplete_by_source": by_source}
+
+
+async def delivery_completeness(db, intake_id) -> Dict[str, Any]:
+    """Entity status for ONE delivery with `verified` split by completeness.
+
+    Scoped by a join on the delivery's curated records (no id list is sent),
+    so it stays one bounded query pair at 25,000 records."""
+    from sqlalchemy import func
+
+    from app.tefca_registry.rce import models as m
+
+    E, R, C = reg.TefcaRegEntity, reg.ReviewRecord, m.RceCuratedRecord
+    in_delivery = (select(C.canonical_entity_id)
+                   .where(C.source_intake_id == intake_id,
+                          C.canonical_entity_id.isnot(None)).distinct().subquery())
+    rows = (await db.execute(
+        select(E.verification_status, func.count())
+        .join(in_delivery, in_delivery.c.canonical_entity_id == E.id)
+        .group_by(E.verification_status))).all()
+    counts = {(status or "unknown"): int(n) for status, n in rows}
+    total = sum(counts.values())
+    verified = int(counts.get("verified", 0))
+
+    latest = (select(R.entity_id,
+                     R.verification_results["classifier_input"]["sources"],
+                     R.verification_results["sources"])
+              .join(in_delivery, in_delivery.c.canonical_entity_id == R.entity_id)
+              .join(E, E.id == R.entity_id)
+              .where(E.verification_status == "verified",
+                     R.classification_bucket.isnot(None))
+              .order_by(R.entity_id, R.created_at.desc(), R.review_id.desc())
+              .distinct(R.entity_id))
+    complete = incomplete = 0
+    by_source: Dict[str, int] = {}
+    by_outcome: Dict[str, Dict[str, int]] = {}
+    for _eid, pipeline_sources, manual_sources in (await db.execute(latest)).all():
+        sources = pipeline_sources if isinstance(pipeline_sources, dict) else manual_sources
+        comp = completeness({"sources": sources} if isinstance(sources, dict) else None)
+        if comp["state"] == COMPLETE:
+            complete += 1
+        elif comp["state"] == INCOMPLETE:
+            incomplete += 1
+        for item in comp.get("incomplete", []):
+            by_source[item["source"]] = by_source.get(item["source"], 0) + 1
+            by_outcome.setdefault(item["source"], {})
+            by_outcome[item["source"]][item["outcome"]] = \
+                by_outcome[item["source"]].get(item["outcome"], 0) + 1
+    incomplete = min(incomplete, verified)
+    complete = min(complete, verified - incomplete)
+    qualified = {k: v for k, v in counts.items() if k != "verified"}
+    split = {VERIFIED_COMPLETE: complete, VERIFIED_CHECKS_INCOMPLETE: incomplete,
+             VERIFIED_CHECKS_NOT_RECORDED: verified - complete - incomplete}
+    for key, value in split.items():
+        if value:
+            qualified[key] = value
+    return {
+        "intake_id": str(intake_id), "entities": total,
+        "stored_status_counts": counts,
+        "overall_counts": qualified,
+        "labels": {**DISPLAY, "in_review": "In review", "not_verified": "Not verified"},
+        "verified_total": verified, "verified_split": split,
+        "incomplete_by_source": [
+            {"source": s, "label": SOURCE_DISPLAY.get(s, s), "entities": n,
+             "outcomes": {OUTCOME_DISPLAY.get(o, o): c for o, c in by_outcome[s].items()}}
+            for s, n in sorted(by_source.items(), key=lambda kv: -kv[1])],
+        "note": ("\"Verified\" here means every applicable check answered. An entity "
+                 "whose source was unavailable is counted under \"Verified - checks "
+                 "incomplete\": no discrepancy was found, but the check did not "
+                 "complete. Classification and reportability are not changed by this "
+                 "view."),
+    }

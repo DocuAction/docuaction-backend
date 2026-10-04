@@ -253,6 +253,23 @@ async def request_recheck_route(intake_id: str, req: RecheckRequest,
         raise HTTPException(409, str(exc))
 
 
+@router.get("/deliveries/{intake_id}/verification-completeness",
+            summary="Entity status for a delivery with `verified` split by whether "
+                    "every applicable check answered. Read-only.")
+async def delivery_completeness_route(intake_id: str, db: AsyncSession = Depends(get_db),
+                                      user=Depends(require_role("viewer"))):
+    from app.tefca_registry.rce import verification_completeness as vcomp
+    return await vcomp.delivery_completeness(db, _uuid_or_422(intake_id, "intake_id"))
+
+
+@router.get("/deliveries/{intake_id}/rechecks",
+            summary="Recheck jobs for a delivery, and whether rechecks are enabled")
+async def list_rechecks_route(intake_id: str, db: AsyncSession = Depends(get_db),
+                              user=Depends(require_role("viewer"))):
+    from app.tefca_registry.rce import rechecks
+    return await rechecks.list_jobs(db, _uuid_or_422(intake_id, "intake_id"))
+
+
 @router.post("/rechecks/{job_id}/approve",
              summary="Independent approval of a recheck (never the requester)")
 async def approve_recheck_route(job_id: str, db: AsyncSession = Depends(get_db),

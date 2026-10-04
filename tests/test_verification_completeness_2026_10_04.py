@@ -213,3 +213,43 @@ async def test_the_report_never_prints_a_bare_verified_count_for_incomplete_chec
     chart = entity_status_chart(data)
     assert "verified checks incomplete" in chart.categories
     assert "not a completed verification" in chart.notes
+
+
+@pytest.mark.asyncio
+async def test_the_case_workspace_states_completeness_and_any_uncleared_concern(db_required):
+    """What the analyst's case screen reads: the qualified status, the sources
+    that did not answer, an uncleared earlier concern, and source-policy
+    status -- as structured fields, so the screen never has to print an object."""
+    from app.core.database import async_session_maker
+    from app.tefca_registry import models as reg
+    from app.tefca_registry.workspace import workspace
+
+    review_id = f"RW{uuid.uuid4().hex[:14]}"
+    vr = dict(_vr(**SAM_DOWN))
+    vr["prior_risk_not_cleared"] = {"prior_review_id": "REV-PRIOR", "signals": ["EXCLUSION:sam_gov"],
+                                    "why_not_cleared": "not_adjudicated",
+                                    "open_blocking_finding": False}
+    vr["verification_claim"] = {
+        "exclusion_screening_incomplete": [{"control": "sam_gov", "gap": "UNAVAILABLE"}],
+        "official": {"entity_marked_verified": True},
+        "proposed_inactive": {"entity_would_be_marked_verified": False}}
+    async with async_session_maker() as db:
+        e = reg.TefcaRegEntity(id=uuid.uuid4(), name="SYNTHETIC-TRACE WORKSPACE STATUS",
+                               entity_level="participant", entity_type="provider",
+                               verification_status="verified")
+        db.add(e)
+        await db.flush()
+        db.add(reg.ReviewRecord(id=uuid.uuid4(), review_id=review_id, entity_id=e.id,
+                                verification_results=vr, classification_bucket="B1",
+                                classification_rule="RULE-001", classification_rule_version=3))
+        await db.commit()
+    async with async_session_maker() as db:
+        out = (await workspace(db, review_id))["verification_status"]
+    assert out["entity_verification_status"] == "verified"          # stored value untouched
+    assert out["classification_bucket"] == "B1"                     # classification untouched
+    assert out["completeness"]["overall_status"] == vc.VERIFIED_CHECKS_INCOMPLETE
+    assert out["completeness"]["overall_label"] == "Verified - checks incomplete"
+    assert out["completeness"]["source_outcomes"]["sam_gov"] == vc.UNAVAILABLE
+    assert out["prior_risk_not_cleared"]["prior_review_id"] == "REV-PRIOR"
+    assert out["verification_claim"]["official"]["entity_marked_verified"] is True
+    assert out["source_policy"]["recorded"] is False and "unknown" in out["source_policy"]["note"]

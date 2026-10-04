@@ -512,6 +512,21 @@ def manual_sources_block(sources: Dict[str, Dict[str, Any]], *,
     return source_policy_block(observations, verified_at=verified_at)
 
 
+#: Names a person reads. The ids above are for code and audit rows.
+SOURCE_LABELS: Dict[str, str] = {
+    "NPPES_REGISTRY_API": "NPPES NPI Registry (live lookup)",
+    "NPPES_DISSEMINATION_FILE": "NPPES monthly data file",
+    "PECOS_PROXY": "Medicare enrollment (inferred from NPPES)",
+    "CMS_PPEF": "Medicare enrollment (CMS provider enrollment file)",
+    "CMS_REVOCATION": "CMS revocation list",
+    "OIG_LEIE": "OIG exclusion list (LEIE)",
+    "SAM_GOV": "SAM.gov exclusions",
+    "USPS": "USPS address check",
+    "IQVIA": "IQVIA reference data",
+    "EVIDENCE_RETENTION": "Evidence retention",
+}
+
+
 def registry_dto() -> Dict[str, Any]:
     """Every source, both views, no evidence -- for the policy API/UI."""
     return {
@@ -520,6 +535,7 @@ def registry_dto() -> Dict[str, Any]:
                                    for p in OFFICIAL_POLICIES.values()),
         "sources": [{
             "source_id": sid,
+            "label": SOURCE_LABELS.get(sid, sid),
             "official": OFFICIAL_POLICIES[sid].as_dict(),
             "proposed_inactive": PROPOSED_POLICIES[sid].as_dict(),
         } for sid in ALL_SOURCE_IDS],

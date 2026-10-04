@@ -51,12 +51,29 @@ class _Sam:
             "registration_current": True}, {"uei": uei})
 
 
+def _cms_not_exercised(monkeypatch):
+    """The two CMS connectors were unpatched here, so every recheck test
+    queried the live CMS data API (2026-10-04: 50 tests took 380 s offline,
+    and their result depended on the Internet). Deterministic and identical to
+    what an unreachable API yields: unavailable, never a finding."""
+    from app.Tefca import cms_ppef
+    from app.Tefca.connectors import SourceResult
+
+    async def unavailable(self, npi):
+        return SourceResult.unavailable(
+            self.SOURCE_NAME, "synthetic: CMS data API not exercised by this test", {"npi": npi})
+
+    monkeypatch.setattr(cms_ppef.PPEFEnrollmentConnector, "lookup_by_npi", unavailable)
+    monkeypatch.setattr(cms_ppef.CMSRevocationConnector, "lookup_by_npi", unavailable)
+
+
 async def _delivery_verified_during_an_outage(monkeypatch, n=3):
     from app.core.database import async_session_maker
     from app.tefca_registry.rce.arc_pipeline import verify_and_classify
 
     monkeypatch.setenv("ENTITY_RESOLVER_SOURCE", "db")
     sam._clean_nppes_leie(monkeypatch)
+    _cms_not_exercised(monkeypatch)
     fake = _Sam()
     sam._patch_sam_verify(monkeypatch, fake)
     intake_id = await sam._seed_promoted_delivery(n=n)
@@ -380,3 +397,26 @@ async def test_routes_refuse_while_the_flag_is_off_and_the_csv_is_neutralised(
     lines = body.strip().split("\r\n")
     assert lines[0].startswith("job_id,entity_id,entity_ref,state,prior_disposition")
     assert len(lines) == 2 and ",PENDING,UNAVAILABLE," in lines[1]
+
+
+async def test_the_delivery_recheck_list_states_whether_the_feature_is_on_and_who_may_act(
+        db_required, monkeypatch):
+    """What the screen reads to decide whether to offer a control at all."""
+    from app.core.config import settings
+    from app.core.database import async_session_maker
+
+    intake_id, _, _fake = await _delivery_verified_during_an_outage(monkeypatch, n=1)
+    async with async_session_maker() as db:
+        empty = await rechecks.list_jobs(db, intake_id)
+    assert empty["items"] == [] and empty["enabled"] is bool(settings.ENABLE_CONTROLLED_RECHECKS)
+    assert {s["source_id"] for s in empty["supported_sources"]} == set(rechecks.SUPPORTED_SOURCES)
+    assert all(s["label"] and s["label"] != s["source_id"] for s in empty["supported_sources"])
+    assert empty["roles"]["request"] == "reviewer"
+    assert empty["roles"]["approve_run_resume"] == "qalead"
+
+    job = await _request(intake_id, _User("reviewer"))
+    async with async_session_maker() as db:
+        listed = await rechecks.list_jobs(db, intake_id)
+    assert [j["job_id"] for j in listed["items"]] == [job["job_id"]]
+    assert listed["items"][0]["state"] == rm.STATE_PENDING_APPROVAL
+    assert listed["items"][0]["is_compliance_approval"] is False

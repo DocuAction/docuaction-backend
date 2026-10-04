@@ -436,6 +436,16 @@ async def test_combined_shadow_proof_over_the_seeded_corpus(db_required, monkeyp
     assert split["split"][vcomp.VERIFIED_CHECKS_INCOMPLETE] >= 3  # B04-B06
     assert split["incomplete_by_source"].get("sam_gov") == 3
     assert split["counts"]["in_review"] == 8
+    # The delivery-scoped view the Verification tab reads: same split, by join.
+    async with async_session_maker() as db:
+        per_delivery = await vcomp.delivery_completeness(db, intake_id)
+    assert per_delivery["entities"] == 12 and per_delivery["verified_total"] == 4
+    assert per_delivery["overall_counts"].get("verified", 0) == 0
+    assert per_delivery["overall_counts"][vcomp.VERIFIED_CHECKS_INCOMPLETE] == 4
+    assert sum(per_delivery["overall_counts"].values()) == 12
+    sam_row = [r for r in per_delivery["incomplete_by_source"] if r["source"] == "sam_gov"]
+    assert sam_row and sam_row[0]["entities"] == 3
+    assert sam_row[0]["outcomes"] == {"Source unavailable": 3}
     official_gate = {
         "G2a_fault_counted_as_successful_source_check": len(sam_counted_successful),
         "G2b_unqualified_overall_verified_on_a_fault_seed": len(unqualified_verified),

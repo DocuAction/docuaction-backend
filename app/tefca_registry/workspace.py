@@ -90,6 +90,10 @@ async def workspace(db, review_id: str, *, include_raw: bool = False
         "evidence": await _section_evidence(db, record),
         # G — the recommendation, and what may be recorded.
         "recommendation": await _section_recommendation(db, record),
+        # What "verified" does and does not mean for THIS case (2026-10-04):
+        # per-source outcome, completeness, any uncleared earlier concern,
+        # and the policy status of each source used. Describes; changes nothing.
+        "verification_status": _section_verification_status(record, entity),
 
         "layer_note": (
             "SOURCE is the ONC/RCE delivery and is never modified. CURATED is "
@@ -101,6 +105,37 @@ async def workspace(db, review_id: str, *, include_raw: bool = False
 
 
 # ── record lookup ────────────────────────────────────────────────────────────
+
+def _section_verification_status(record, entity) -> Dict[str, Any]:
+    from app.Tefca import source_policy as sp
+    from app.tefca_registry.rce import verification_completeness as vcomp
+
+    vr = record.verification_results or {}
+    stored = getattr(entity, "verification_status", None)
+    policy = vr.get("source_policy") or {}
+    sources = []
+    for pid, entry in sorted((policy.get("sources") or {}).items()):
+        sources.append({"policy_id": pid, "label": sp.SOURCE_LABELS.get(pid, pid),
+                        "policy_registered": True, **entry})
+    return {
+        "entity_verification_status": stored,
+        "classification_bucket": record.classification_bucket,
+        "completeness": vcomp.describe(stored, vcomp.completeness(vr)),
+        "prior_risk_not_cleared": vr.get("prior_risk_not_cleared"),
+        "verification_claim": vr.get("verification_claim"),
+        "source_policy": {
+            "recorded": bool(policy),
+            "registry_version": policy.get("registry_version"),
+            "sources": sources,
+            "unregistered_sources": policy.get("unregistered_sources") or [],
+            "note": policy.get("note") or (
+                "No source-policy record is stored on this review (it predates the "
+                "policy registry). Freshness is unknown."),
+        },
+        "rule": {"rule_code": record.classification_rule,
+                 "rule_version": record.classification_rule_version},
+    }
+
 
 async def _curated_for(db, record):
     """The Area 2 record behind this case, by source record or by entity."""

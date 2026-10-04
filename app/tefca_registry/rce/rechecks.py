@@ -502,6 +502,27 @@ def job_dto(job: RceRecheckJob) -> Dict[str, Any]:
     }
 
 
+async def list_jobs(db, intake_id, *, limit: int = 50) -> Dict[str, Any]:
+    """Recheck jobs for one delivery, newest first. Read-only; available
+    whether or not the feature is on, so a screen can say which it is."""
+    from app.core.config import settings
+
+    rows = (await db.execute(
+        select(RceRecheckJob).where(RceRecheckJob.intake_id == intake_id)
+        .order_by(RceRecheckJob.created_at.desc()).limit(limit))).scalars().all()
+    return {
+        "enabled": bool(getattr(settings, "ENABLE_CONTROLLED_RECHECKS", False)),
+        "supported_sources": [
+            {"source_id": s, "label": sp.SOURCE_LABELS.get(s, s)}
+            for s in SUPPORTED_SOURCES],
+        "trigger_kinds": list(rm.TRIGGER_KINDS),
+        "limits": {"max_entities": MAX_ENTITIES_PER_JOB, "max_batch_size": MAX_BATCH_SIZE},
+        "roles": {"request": "reviewer", "approve_run_resume": "qalead",
+                  "rule": "the person who requested a recheck cannot approve it"},
+        "items": [job_dto(j) for j in rows],
+    }
+
+
 async def list_items(db, job_id, *, limit: int = 100, offset: int = 0) -> Dict[str, Any]:
     """Drill-down: every targeted entity, its prior and new disposition."""
     job = await _job_or_refuse(db, job_id)
