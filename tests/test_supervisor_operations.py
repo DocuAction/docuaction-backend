@@ -1441,3 +1441,20 @@ async def test_unresolved_exclusion_candidates_are_individually_listed_never_bul
     # Still the ordinary queue shape: no group/bulk action field anywhere.
     for item in page["items"]:
         assert "bulk" not in str(item).lower()
+
+    # 2026-10-04 (same day, R27-2): the row itself now carries the SAME
+    # prior-risk fact the analyst's own case screen renders as a banner --
+    # additive, read-only, present on every row this filter selects, so the
+    # frontend queue can show WHICH candidate is which without opening each
+    # case first.
+    by_id = {i["review_id"]: i for i in page["items"]}
+    for rid in (flagged, other_flagged):
+        assert by_id[rid]["prior_risk_not_cleared"] == prior_risk, rid
+
+    # The unfiltered queue (no exclusion filter) carries the SAME field --
+    # present where it exists, None where it does not -- never introduces a
+    # different shape depending on which filter was used.
+    unfiltered = await so.work_queue(db, limit=50, intake_id=intake_id)
+    by_id_all = {i["review_id"]: i for i in unfiltered["items"]}
+    assert by_id_all[flagged]["prior_risk_not_cleared"] == prior_risk
+    assert by_id_all[clean]["prior_risk_not_cleared"] is None
