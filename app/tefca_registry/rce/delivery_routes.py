@@ -1198,9 +1198,8 @@ async def dispositions_csv_route(
     manifest.log()
     return Response(
         content=body, media_type="text/csv; charset=utf-8",
-        headers={**manifest.headers(f"dispositions-{intake.id}.csv",
-                                    **{"X-Total-Rows": str(total)}),
-                 "X-Returned-Rows": str(len(rows))})
+        headers=manifest.headers(f"dispositions-{intake.id}.csv",
+                                 **{"X-Total-Rows": str(total), "X-Returned-Rows": str(len(rows))}))
 
 
 @router.get("/deliveries/{intake_id}/findings.csv",
