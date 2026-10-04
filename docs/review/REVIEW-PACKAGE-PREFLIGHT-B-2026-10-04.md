@@ -1,248 +1,309 @@
 # Part B — Public-Data Verification, Grouped Cases, Shadow Proof
-**Prepared**: 2026-10-04 (Round 23, Part B) — local/disposable development
-only; no push, PR, merge, migration dispatch, deployment, or official
-finding/policy change made under this task.
+**Updated**: 2026-10-04 (Round 24, Fable continuation). Supersedes the Round 23
+text of this file, whose audit cited the wrong module (see §2).
+Local/disposable development only. No push, PR change, merge, shared
+migration, deployment, firewall/account action, official finding change or
+policy approval. `SEED_RULES_V4` inactive; the "1,298" interpretation
+unresolved. This is a technical self-check, **not an independent review**.
 
-> **This checkpoint is NOT a complete Part B, and says so explicitly in
-> §9.** It is an honest audit of what already exists for sections 1/3/4
-> (with real citations), one concrete new piece of infrastructure for
-> section 2, and an explicit list of what section 5's corpus extension
-> and section 6 (frontend + LMS) still need — not attempted this round.
-> Preserving unfinished work as labeled WIP, per instruction, rather than
-> presenting a thin pass over six large areas as finished.
+## 1. Bases and local SHAs
 
-## 1. Exact backend/frontend bases and local SHAs
-
-| Repo | Branch | Base (Part A) | This round's local commits |
+| Repo | Branch (local, unpushed) | Base | Head |
 |---|---|---|---|
-| Backend (PR #110, untouched) | `feature/preflight-exceptions` | `ba34436` (Part A checkpoint) | `6b1862c` (source-policy registry) |
-| Frontend (PR #66, untouched) | `feature/preflight-exceptions` | `4803178` (= PR #66 head `48031780`'s branch tip) | none this round |
+| Backend | `feature/preflight-exceptions` | PR #110 head `ea92ea5c33a5075dc40b1473a64152bb52a5c3e5` (app code `264252582a63e19d14d0c715d23089fe6bab4916`) | last tested code commit `46b820e`; this document's own commit follows it (ledger Round 24 records the hash) |
+| Frontend | `feature/preflight-exceptions` | PR #66 head `48031780ad4ce0b84126ae7187f49d1d1a8ee87b` | unchanged (no frontend work; §8) |
 
-Neither PR #110 nor #66 was modified or pushed. `feature/preflight-exceptions`
-remains local-only in both repos, confirmed via `git branch -vv` (no
-upstream tracking).
+PR #110 and #66 are untouched. Part A checkpoint: `ba344360`. Round 23
+checkpoint: `9e922d86`.
 
-## 2. Public-data matching (task §1) — AUDITED, substantially pre-existing
+Commits this round, in order:
 
-EIN/TIN/SSN are correctly never required, inferred, or fabricated anywhere
-found in this audit. Concrete, cited evidence:
+| Commit | What |
+|---|---|
+| `294a8a2` | No bulk supersession of exclusion / identity-conflict records |
+| `101a62f` | A disappeared risk signal no longer verifies the entity |
+| `9f5b17d` | Pipeline process marker is not a verified source (reports) |
+| `7420748` | Exclusion name screening on the manual path; normalized candidates |
+| `8e279df` | No pass from a source or reference-schema fault (LEIE, SAM, IQVIA) |
+| `4b4e9b6` | Source-policy registry completed and integrated (annotation only) |
+| `4878968` | Durable bounded rechecks; "verified with incomplete exclusion screening" recorded |
+| `46b820e` | NPPES outcomes never reached the ledger on real evidence; corpus proof |
 
-- **SAM.gov is matched on UEI/CAGE, never NPI** — `connectors.py`
-  (`SAMGovConnector`, line ~809): "SAM is keyed on UEI/CAGE, never NPI."
-  `lookup_by_npi` for SAM explicitly fails closed with a stated reason
-  rather than guessing (line ~1082-1085).
-- **Ambiguous name matches never confirm or clear** — `connectors.py`
-  (~line 915): "Returns `ambiguous: True` when SAM matches more than one
-  entity." `validation_engine.py` (~line 339-346, ~403-420): an ambiguous
-  match is explicitly treated the same as source-unavailable — "fail
-  closed, route to a human, never auto-classify" — and is excluded from
-  the confidence-score calculation as a confirmed result either way.
-  This is the literal mechanism the task's §1 instruction asks for
-  ("may never alone confirm, clear, auto-close, or produce a
-  verification pass") — already built, not new work this round.
-- **Missing NPI does not remove a record from name screening** —
-  `evidence_service.py` (~line 268-315, docstring "ORGANISATION-LEVEL
-  SCREENING WHEN NO NPI EXISTS"): LEIE and SAM are additionally queried
-  by organisation name under `leie_org`/`sam_name` keys when no NPI
-  exists. The comment documents a REAL prior defect found and fixed
-  (a positional-argument `TypeError` silently swallowed by
-  `_safe_lookup`, which meant "the org-level check silently never ran
-  and D3 fell through to INSUFFICIENT_EVIDENCE for every NPI-less
-  entity — a check that appeared wired up and was not"). `evidence_assembly.py`
-  (~line 440-530) then assembles this into `NOT_FOUND` (not `PASS`) for a
-  name-only clean result — explicitly weaker evidence than an NPI match,
-  documented as such ("NOT_FOUND rather than PASS... must not read as an
-  equivalent clearance").
+## 2. Actual call paths (traced, and a correction)
 
-**No new public-data-matching code was written this round** — the audit
-found the specific defect classes this task's §1 warns against (fabricated
-negatives from an unscreened NPI-less entity, ambiguous matches read as
-clearances) already identified and fixed in prior rounds, with the fix's
-own reasoning preserved in comments rather than silently applied. This
-section's work this round was verification, not construction.
+**Correction.** Round 23 cited `validation_engine.py` as proof of ambiguous-
+identity handling. The delivery path never calls `ValidationEngine`. Its
+callers are the legacy `Tefca/routes.py`, `review_engine.py` and
+`qa_engine.py` golden cases. The same mistake — reading one module and
+assuming the path — is what previously hid the SAM contract bug.
 
-## 3. Honest outcomes and versioned source policy (task §2) — ONE NEW PIECE
+**Delivery path** (`delivery_runner` → review cycle → `arc_pipeline.verify_and_classify`):
+`_resolve_and_gather_evidence` → `EvidenceService.build_evidence` →
+`gather_sources` (`SourceConnectorManager.query_all_sources`: NPPES by NPI,
+LEIE by NPI, `SAMGovConnector.verify` by UEI else legal name; plus `leie_org`
+/ `sam_name` when there is no NPI; plus CMS PPEF and revocation) →
+`evidence_assembly.assemble_dimensions` (D1–D6) → `source_policy.annotate_evidence`
+→ `dimensions_to_verification_results` (`evidence_item_state`, worst state
+wins per source) → `BucketClassifier.classify` (active rules v3) →
+`verification_findings.record_from_evidence` (ledger) → `prior_risk` guards →
+`ReviewRecord` + entity status.
 
-**What already existed**: per-connector `API_VERSION` constants; per-
-rule-set `RULE_SET_VERSION`/`FIELD_MAP_VERSION`; a real
-`source_version_snapshots` DB table (`scripts/phase6_population_enrichment.py`,
-`register_source_versions`) tracking `version_label`/`source_as_of`/
-`source_file_hash` per ingested source. None of this is a POLICY in the
-sense this task means: nothing records who approved relying on a given
-schema/mapping/identity-method/freshness-window for a live classification
-decision.
+**Manual path** (`review_service.run_review`): `probe_sources` (NPPES, PECOS
+proxy, LEIE by NPI; **now** LEIE by organisation name when there is no NPI;
+SAM is a permanent `NOT_CHECKED` stub) → `apply_persisted_exclusion_evidence`
+(folds in the delivery path's persisted SAM/LEIE/revocation evidence, worse
+state wins) → `source_policy.manual_sources_block` → `classify_with_db`.
 
-**What this round built**: `app/Tefca/source_policy.py` — a versioned
-registry with exactly the two views the task specifies:
+**Coverage path** (`automated_verification.run_coverage_batch`): same
+`build_evidence`, evidence rows only, no review record. First attempt only.
 
-- `OFFICIAL_POLICIES`: every entry (`NPPES_BULK`, `PECOS_PROXY`, `USPS`,
-  `IQVIA`) is `POLICY_UNAPPROVED` today, grounded in
-  `qa-evidence/PROJECT_CONTRACT_CONTEXT.md`'s own statement that no COR
-  acceptance has occurred. `official_view()` returns
-  `freshness=FRESHNESS_UNKNOWN` **unconditionally** for an unapproved
-  source — proven NOT to be computable from a recent `as_of` date
-  (`test_a_very_recent_as_of_date_does_not_make_an_unapproved_source_current`),
-  which is the exact trap the task names ("do not treat source cadence
-  alone as an approved freshness deadline").
-- `PROPOSED_POLICIES`: concrete candidate values, each `PROPOSED_INACTIVE`.
-  NPPES bulk mapping pinned to `"V2"` per the task's own instruction
-  (`test_nppes_bulk_proposed_mapping_is_pinned_to_v2`). PECOS formalized
-  as `PROXY_NOT_PECOS`, citing the already-existing
-  `connectors.PECOS_BACKING` constant rather than restating the fact
-  independently. USPS carries an explicit `proves_identity=False`/
-  `proves_occupancy=False` pair plus a permitted-scope statement tied to
-  the existing signed agreement (not a new credential claim). IQVIA
-  names the affiliation-journey gap specifically
-  (`IQVIA_AFFILIATION_JOURNEY_UNSUPPORTED`) while leaving the delivered
-  HCO/HCP facts themselves `mapping_version="delivered-facts-only"` —
-  never calling the whole source unsupported.
-- `both_views()` produces official and proposed against **identical**
-  pinned evidence (`as_of`/`retrieved_at`/`verified_at`, tracked
-  separately, never collapsed) — proven directly
-  (`test_proposed_and_official_use_identical_pinned_evidence`).
+**Recheck path** (new, `rechecks.run_batch`): same `build_evidence`, appends
+a generation, never classifies.
 
-**17 tests, all passing, no DB/network required.** **Not wired into any
-live decision path this round** — `validation_engine.py`/`connectors.py`
-are unchanged; this is additive reporting infrastructure the existing,
-already-fail-closed connectors do not currently need in order to be safe
-(see §2 above). Wiring it into an actual UI/report surface is named in §9
-as remaining work, not attempted this round.
+## 3. What is implemented, exercised, incomplete, unsupported
 
-## 4. Exclusion-specific safeguards (task §3) — AUDITED, substantially pre-existing
+| Requirement | State | Evidence |
+|---|---|---|
+| SAM keyed on UEI/CAGE, name fallback as candidate | Implemented, exercised on the delivery path | `evidence_assembly._sam_disposition`; `test_sam_e2e_delivery_path.py` (pre-existing); corpus B02/B03 |
+| Ambiguous identity never confirms or clears | Implemented, exercised | `identity_ambiguous` → REVIEW → `not_found` → not B1; corpus B03 |
+| OIG screening when NPI is absent — delivery path | Implemented, exercised | `gather_sources` `leie_org`; corpus B09/B10 |
+| OIG screening when NPI is absent — manual path | **Was missing; fixed** (`7420748`) | `_leie_org_name_screen`; `test_exclusion_name_screening` |
+| Name variants generate candidates | **Was missing; fixed** (`7420748`) | exact string lookup missed "X, L.L.C." vs "X LLC"; `normalize_org_name` (deterministic, no threshold) |
+| A name-only clean screen is not a pass | Implemented; manual-path coverage count fixed | NOT_FOUND not PASS; `sources_name_screen_only`; corpus B10 |
+| Worst-state-wins, persisted vs live | Implemented, exercised | `_PERSISTED_PRECEDENCE`; `test_sam_manual_review_asymmetry.py` (pre-existing) |
+| Disappearance does not clear a prior signal | **Was missing; fixed** (`101a62f`) | reproduced B4/in_review → B1/verified; `prior_risk.py`; 5 tests |
+| No bulk closure of exclusion / identity findings | Routes are single-item; **one bulk channel closed** (`294a8a2`) | `publish_successors`; `risk_signals`; 4 tests |
+| Technical grouping separate from compliance adjudication | Implemented (existing coverage (source, outcome) + drill-down); measured on the corpus | 21 technical records → 5 groups; risk signals remain one review record each |
+| HTTP 200 error body is not an answer | NPPES existing; **LEIE and SAM fixed** (`8e279df`) | `test_reference_source_faults` (18) |
+| Reference-snapshot preflight | IQVIA **added** (`8e279df`); CMS PPEF existing (`validate_schema`); OIG list **added** | `reference_preflight.py`; 19 tests |
+| Source policy, official vs proposed | **Completed and integrated** (`4b4e9b6`) | §5 |
+| Durable, idempotent, bounded rechecks | **Added** (`4878968`) | §6 |
+| NPPES findings reach the ledger | **Was silently broken; fixed** (`46b820e`) | wrong dimension literal; corpus B11/B12 |
+| Verified requires completed exclusion screening | **Recorded, NOT enforced** — policy decision | §4, §11-P1 |
+| Manual path live SAM lookup | Unsupported (stub `NOT_CHECKED`); consumes persisted evidence only | named limitation |
+| IQVIA affiliation journey | Unsupported; nothing fabricated | policy entry + existing route capability text |
+| Recheck trigger: approved mapping change | Implemented as a refusal | no policy is approved, so it cannot fire |
+| Recheck trigger: new approved snapshot | CMS PPEF completed ingest only; validation tested, a full run on real PPEF data not exercised | named limitation |
+| Retention rule | `POLICY_UNAPPROVED`; nothing deleted; indefinite retention not approved | §7 |
+| QA gate reads the new annotations | **Incomplete**: `qa_gate` still reads the issue ledger only | §11 |
+| Frontend, QA addendum, LMS | **Not built**; hand-off written | §8 |
 
-- **Independent screening, individually adjudicated**: `SAMGovConnector`'s
-  registration (v3) and exclusion (v4) checks are documented as "two
-  independent legs" (`connectors.py` ~line 1501) — a registration success
-  does not imply the debarment question was ever answered
-  (`validation_engine.py` ~line 347-354, `sam_exclusion_unknown`).
-- **Unresolved identity is reported as a limitation, not a clearance**:
-  `evidence_assembly.py`'s `INSUFFICIENT_EVIDENCE` disposition (~line
-  453, 515-524) is explicit: "the check could not be performed and is
-  NOT reported clean."
-- **No bulk closure / no inherited disposition for exclusion findings**:
-  `review_service.py` (~line 215-247, `PERSISTED_EXCLUSION_DIMENSION`,
-  `_PERSISTED_PRECEDENCE`) documents and fixes the EXACT failure mode
-  this task's §3 warns against: "a confirmed SAM exclusion persisted at
-  B4 by the bulk path was followed by a NEWER manual ReviewRecord at B1"
-  — i.e., a bulk-classified exclusion finding being silently overridden
-  by a later, less-informed path. The fix makes the WORSE state always
-  win (`excluded` ranks 0, the lowest/worst in `_PERSISTED_PRECEDENCE`,
-  so it can never be outranked by a later `clear`) — proven in
-  `tests/test_sam_manual_review_asymmetry.py` (pre-existing, re-read not
-  re-written this round).
-- **Reinstatement requires actual evidence, not silence**:
-  `connectors.py`'s `OIGLEIEConnector._reinstated` (~line 694-696) reads
-  an explicit `reinstatement_date` field from the LEIE record itself —
-  there is no code path anywhere in this audit that clears an exclusion
-  because it simply stopped appearing in a later snapshot.
+EIN, TIN and SSN are not used anywhere above and no finding is raised for
+their absence.
 
-**No specific gap was found and fixed in this section this round** — the
-audit's purpose here was to confirm the task's safeguards against the
-actual code, with citations, rather than assume compliance. One item
-explicitly NOT verified this round: the task's "archive snapshots under
-approved retention rules... document the retention decision needed" —
-no retention-policy code or document was found or written; named as an
-open item in §9, not fabricated as POLICY_UNAPPROVED in `source_policy.py`
-only because retention is a storage/ops decision, not a verification-
-source policy, and belongs in a different module than the one built
-this round.
+## 4. False-pass risks found on the real paths
 
-## 5. Grouped technical causes and controlled rechecks (task §4) — AUDITED
+1. **Disappearing signal** — cycle 1 SAM exclusion → B4 / in_review; cycle 2
+   clean → B1 / **verified**, with no human decision. Fixed.
+2. **Source fault read as a clean list** — an OIG HTTP 200 error page was
+   indexed as an empty exclusion list; every lookup returned "not excluded"
+   for 24 hours. Fixed. SAM: a 200 error body read as "zero exclusions". Fixed.
+3. **Empty reference snapshot reconciles** — an IQVIA extract with a renamed
+   identity column rejected every row and then reconciled (0 == 0) as an
+   approvable empty snapshot. Fixed (cannot reconcile; enforced refusal behind
+   the flag).
+4. **NPPES findings never recorded** — `npi_outcome_from_evidence` matched
+   `"D1_IDENTITY"`; real evidence says `"IDENTITY"`. No deactivated-NPI,
+   not-found or unavailable outcome reached `rce_issues` from any real run,
+   so the QA gate's blocking-finding check never saw one. Fixed.
+5. **Report counted a process marker as a verified source** —
+   `rce_arc_pipeline: 100% verified` for every entity including B4. Fixed.
+6. **Bulk supersession** — a permissive what-if rule set could supersede
+   exclusion records together with technical ones (local-test mode). Fixed.
+7. **OPEN — verified while exclusion screening was incomplete.** Under the
+   ACTIVE v3 rules, B1 (hence `verified`) is reached with SAM unavailable,
+   never checked or insufficient, and with CMS revocation unavailable
+   (RULE-001 / RULE-002; only OIG is required). Reproduced in
+   `test_verification_claim` and on corpus seeds B04–B06. The rules are
+   approved text and were not changed. Every affected record now carries
+   `verification_claim`; `ENFORCE_COMPLETE_EXCLUSION_SCREENING` (default off)
+   withholds `verified`. **Decision required (§11-P1).**
 
-`app/tefca_registry/rce/dq_review_bridge.py` already implements:
-- A root-cause-like **group key** (`case_key`, combining rule ids/issue
-  types/severity per record — ~line 213-267) distinct from a raw
-  per-issue list.
-- **Idempotent grouping**: `_existing_case(db, group["case_key"])` is
-  checked before a new case is created (~line 313-314) — a second run
-  over the same findings does not duplicate a case.
-- Append-only audit (`reg_audit_record`, ~line 444) and a derived
-  priority/severity rollup per group.
+## 5. Source policy — official versus proposed
 
-`exception_ledger.py` / `scripts/exception_inventory.py` already provide
-the drill-down and CSV export the task asks for, with the three
-populations (processing failures / verification outcomes / review cases)
-kept explicitly separate and never summed (`exception_inventory.py`'s own
-module docstring).
+`app/Tefca/source_policy.py`, registry version `2026-10-04.2`. Ten entries:
+NPPES Registry API, NPPES Dissemination File (mapping pinned **V2**, offline
+only — no loader exists or is added), PECOS proxy (distinguished from CMS
+PPEF), CMS PPEF, CMS revocation, OIG LEIE, SAM.gov, USPS (verified permitted
+scope: address validation; proves neither identity nor occupancy; the signed
+agreement and access are retained), IQVIA (only the affiliation journey
+unsupported), Evidence retention.
 
-**Not verified this round, named as a gap**: a "controlled recheck after
-source recovery or approved mapping/rule change" TRIGGER — grouping and
-idempotent case creation clearly exist, but this audit did not find (and
-did not have time to search exhaustively for) a specific, bounded
-recheck-trigger mechanism distinct from simply re-running the whole
-pipeline. This is named honestly rather than asserted either way.
+- **Official view**: every entry `POLICY_UNAPPROVED`, freshness `UNKNOWN` —
+  never computed from a recent date.
+- **Proposed view**: concrete candidate values, every entry
+  `PROPOSED_INACTIVE`. No write route exists.
+- Both views are produced against the same `as_of` / `retrieved_at` /
+  `verified_at`.
+- **Integration (annotation only; asserted not to change any disposition or
+  bucket)**: assembled evidence, the review-record snapshot (beside, never
+  inside, `classifier_input`), the manual review result, each analyst-
+  workspace evidence row, and `GET /api/tefca/rce/source-policies`.
+- The workspace's existing 30-day window is now labelled
+  `OPERATIONAL_DEFAULT_NOT_APPROVED_POLICY`; its `REUSED_FRESH` value is kept.
 
-## 6. Integrated proof (task §5) — PARTIAL
+## 6. Rechecks
 
-- Part A's 8-seed manifest (`tests/fixtures/seeded/`) remains the proven
-  corpus for SCHEMA/IDENTIFIER/MISSING_CONTEXT preflight scenarios —
-  unchanged, not re-litigated.
-- This round's 17 `source_policy` tests are a parallel, real proof set
-  for the Freshness/approval-status dimension specifically (stale vs.
-  unknown freshness; official-never-current-from-cadence-alone).
-- **NOT extended this round**: the task's explicit additional scenario
-  list — HTTP 200-with-error-body/429/timeout/outage (already covered at
-  the unit level by `tests/test_sam_failure_diagnosis.py`, pre-existing,
-  but not re-expressed as seeded-manifest entries); ambiguous identity
-  with conflicting corroboration; seeded exclusions and deactivated
-  NPIs; missing IQVIA affiliation data as a manifest seed; forbidden
-  bulk compliance closure as a manifest seed; recheck retry/idempotency;
-  maker/checker refusal as a manifest seed. None of these were built as
-  new seeded-manifest entries this round — doing so honestly, at the
-  depth the task's "hard gates" demand (zero loss of seeded signals,
-  zero false passes, every changed outcome explained), is a substantial
-  further body of work, not attempted here rather than rushed.
-- Shadow mode remains default; `SEED_RULES_V4` remains inactive; no
-  production delivery or shared database was touched.
+`rechecks.py`, `recheck_models.py`, migration `20261004_recheck_jobs`
+(local/disposable only). Re-evaluation, never approval: no review id, no
+ReviewRecord, no classifier, no entity marked verified; a risk signal moves
+the entity to `in_review`. Idempotent (unique trigger key; unique job/entity
+item), bounded (2,000 entities, 200 per batch, 3 attempts), maker/checker,
+stale-baseline refusal, circuit breaker when the source is still down,
+reaper-based crash recovery, pinned versions. Routes refuse unless
+`ENABLE_CONTROLLED_RECHECKS`; no scheduler runs one. 16 tests.
 
-## 7. Frontend and QA/LMS handoff (task §6) — NOT ATTEMPTED
+## 7. Retention
 
-No frontend code was read or written this round. No QA cases, no LMS
-draft. This is named directly rather than implied by omission: **Part
-B's §6 has not been started.**
+No approved retention rule was found. Recorded as `EVIDENCE_RETENTION`:
+`POLICY_UNAPPROVED`; existing evidence preserved; **no automated deletion
+introduced**; indefinite retention of every payload is **not** thereby
+approved. Authority still required (not read in this session, so not cited):
+the contract's records clause / applicable schedule, confirmed with the COR;
+which payloads are records, the period per class, and who may dispose.
 
-## 8. API/UI completion
+## 8. API versus frontend completion
 
-Backend: `app/Tefca/source_policy.py` is a pure Python module with no
-route exposed yet — `official_view()`/`proposed_view()`/`both_views()`
-exist as callables, not as an API endpoint. No new route was added this
-round. Frontend: none.
+- **Backend/API: complete for the items in §3 marked implemented or fixed.**
+- **Frontend: nothing built.** Frontend branch is at its base.
+- **QA addendum and LMS: not written.** Adam's existing workbook is untouched.
+- Hand-off for a Sonnet continuation, with endpoints, the eleven screen
+  changes, seventeen QA cases and the LMS outline:
+  `docs/review/HANDOFF-SONNET-FRONTEND-QA-LMS-2026-10-04.md`.
 
-## 9. Policy decisions and remaining blockers — explicit
+## 9. Seeded corpus and combined shadow result
 
-1. **Whether `source_policy.py` should be exposed via an API/UI surface**,
-   and to whom (reviewer-only? everyone?) — not decided here.
-2. **The retention-policy gap named in §4** — no retention rule exists;
-   per this task's own instruction this should record `POLICY_UNAPPROVED`
-   and avoid introducing automated deletion, but no code or document for
-   it was written this round.
-3. **Whether a recheck-trigger mechanism exists or needs building**
-   (§5) — not resolved, named as unverified rather than assumed either
-   way.
-4. **The full corpus extension and the entire frontend/LMS deliverable**
-   (§6/§7) are the largest remaining blockers to calling Part B complete.
-5. As with Part A: no decision was made about ever turning any of this
-   round's work from shadow/proposed into an active, official policy —
-   that remains a COR-facing decision outside this session's authority.
+`tests/fixtures/seeded/manifest_b.json`: 12 pipeline seeds (one synthetic
+delivery through the real pipeline, deterministic fakes for every source) and
+16 component seeds, each naming an existing test.
+`tests/test_seeded_corpus_b_2026_10_04.py`, at `46b820e`:
 
-## 10. Contract mapping
+| Gate | Official view | Proposed view (inactive) |
+|---|---|---|
+| G1 lost seeded risk signals (exclusion, ambiguous identity, name candidate, deactivated NPI) | **0** | 0 |
+| G2 false verification passes from seeded source faults | **3** (B04, B05, B06 — SAM error body / 429 / timeout → B1 RULE-002 → verified) | **0** |
+| G3 outcomes that differ between views | 3, each explained by a recorded `sam_gov: UNAVAILABLE` gap | |
+| G4 original delivered data | unchanged | unchanged |
+| G5 phase-1 evidence and review records | unchanged | unchanged |
 
-`qa-evidence/PROJECT_CONTRACT_CONTEXT.md` (same document Part A used) is
-the authority for this round's central claim that no source policy is
-approved today — Task 2/Deliverable 2 (the COR-reviewed Review
-Methodology and Control Framework) has not been accepted, so
-`POLICY_UNAPPROVED` is not a pessimistic default invented for this
-module; it is the honest current state. This round does not resolve any
-of that file's five open questions.
+Marked verified: official {B01, B04, B05, B06}; proposed {B01}. Enforcing
+the proposed view on the same population reproduced the shadow prediction
+exactly and changed no bucket. Technical measure: 21 unavailable/insufficient
+(entity, source) records fall into 5 cause groups. Recovery recheck of the 3
+SAM faults: 2 answered with no signal, 1 risk signal (the exclusion hidden
+behind the 429), 0 entities verified, repeat trigger returned the same job.
 
-## 11. Is this ready for independent review?
+**G2 is not met in the official view.** That is finding §4-7, stated rather
+than masked. These are corpus results, not universal accuracy.
 
-**Partially, and only the parts explicitly marked as such.** The
-`source_policy.py` module and its 17 tests (§3) are a complete, scoped,
-independently-reviewable unit. The §2/§4 audits (§4 above) are
-reviewable as claims-with-citations — a reviewer can check each cited
-file:line against the actual code. **The task as a whole is NOT
-complete and is NOT ready to be presented as a finished Part B**: the
-corpus extension (§5), the frontend, and the LMS handoff (§6/§7) have
-not been started. Recommend treating this checkpoint as a status update
-and one small verified increment, not a Part B sign-off.
+### Part A totals, reconciled
+Part A's document said "501 tests selected … 493 passed, 3 failed, 7
+skipped". The selection was **503**, not 501: 493 passed + 3 failed + 7
+skipped = 503, with 3,948 deselected, 4,451 collected. Command:
+`pytest tests/ -k "delivery or preflight or traceability or quality or
+stage_event or shadow"`, database `test_journey_1003_fresh` as
+`docuaction_owner`, working tree that became `cef5226`. The 7 skips: 1
+`test_delivery_delta` (no sandbox database for its concurrency test), 4
+`test_rbac_delivery_fields` (nothing below viewer), 1
+`test_traceability_migration` and 1 `test_traceability_migration_ownership`
+(connection was not a superuser; both pass under a superuser, re-run this
+round). The 3 failures were `test_automated_verification_cross_delivery_isolation`,
+pre-existing — see §10.
+
+## 10. Regression
+
+**The single combined full-suite regression did NOT complete.** It was
+started at `46b820e` against a brand-new database and was stopped by the
+host tool because the machine ran critically low on memory (not a test
+failure). It was not restarted. What it had done when stopped: batch 1 of 2
+at 17% -- 338 tests run, 300 passed, 29 skipped, **9 failed, not identified
+by name** (the summary and JUnit file are written only at the end). Eight
+known pre-existing failures sort into that range (below); the ninth is
+unidentified. **A complete combined regression is therefore still owed**
+before this branch is treated as regression-clean.
+
+What did run to completion this round (each bound to the commit it ran at;
+database `test_journey_1003_fresh` on the disposable port-5533 instance
+unless stated):
+
+| Commit | Command (pytest ...) | Result |
+|---|---|---|
+| `294a8a2` | `test_no_bulk_closure`, `test_shadow_reassessment`, `test_shadow_real_v4_candidate` | 12 passed |
+| `101a62f` | `test_prior_risk_not_cleared` | 5 passed |
+| `101a62f` | `test_sam_e2e_delivery_path`, `test_sam_manual_review_asymmetry`, `test_sam_verification_contract`, `test_delivery_runner_events` | 42 passed |
+| `9f5b17d` | `test_report_coverage_excludes_pipeline_marker`, `test_reports`, `test_review_reports` | 87 passed, 2 skipped |
+| `7420748` | `-k "leie or exclusion or evidence_assembly or review_service or manual_review or probe or coverage_note or organisation or no_npi"` | 103 passed |
+| `8e279df` | `test_reference_source_faults` | 18 passed |
+| `8e279df` | `test_reference_preflight`, `test_iqvia_import` | 34 passed |
+| `8e279df` | `test_iqvia_import_durability`, `test_iqvia_routes` | 26 passed (11 of these fail at the PR #110 head) |
+| `8e279df` | `-k "sam or leie or connector or nppes or exclusion"` | 360 passed, 6 skipped, 1 failed (`test_no_nppes_bulk_loader_was_introduced`, caused by the Round 23 registry; fixed in `4b4e9b6`) |
+| `4b4e9b6` | `test_source_policy`, `test_ppef_bulk_ingest_gate` | 59 passed |
+| `4b4e9b6` | `-k "evidence or workspace or review_service or manual or shadow or arc or classif or sam_ or prior_risk or bulk_closure or policy"` | 637 passed, 18 skipped, 6 failed -- see note |
+| `4b4e9b6` | `test_chunked_gather_correctness` (after ignoring `verified_at`) | 1 passed |
+| `4878968` | `test_verification_claim`, `test_rechecks`, `test_prior_risk_not_cleared`, `test_traceability_migration` | 29 passed, 1 skipped |
+| `4878968` | `test_prod_convergence_integration`, `test_prod_managed_migration_integration` on a clean throwaway cluster (port 5534) | 9 passed (17 revisions to `20261004_recheck_jobs`, one head) |
+| `4878968` | `test_traceability_migration`, `..._ownership` as superuser | 2 passed |
+| `46b820e` | `test_seeded_corpus_b` | 2 passed |
+| `46b820e` | `-k "corpus_b or verification_finding or automated_verification or post_promotion or npi_outcome or deactivat or qa_gate or qa_approval or issue_ledger or exception_ledger"` | 134 passed, 10 failed -- see note |
+
+**Note on the failures.** The port-5533 database is reused across runs and
+this round's real-pipeline tests commit to it, so data-dependent tests
+(`test_delivery_delta` x3, `test_qa_gate` x1, `test_job_detail_contract` x1)
+fail there. To separate cause from pollution, base `ea92ea5` (a detached
+worktree) and head were each run on a NEW database on the clean cluster for
+`test_automated_verification`, `test_automated_verification_cross_delivery_isolation`
+and `test_qa_gate`: **identical on both -- 31 passed, 1 skipped, 8 failed**
+(5 + 3; `test_qa_gate` passes). Those 8 are pre-existing at the PR #110
+head: their hand-built evidence uses the dimension literal `D1_IDENTITY`,
+so nothing is persisted. They need a database, so CI's no-DB `pytest` job
+skips them and the isolation job does not include them. **Not fixed here.**
+`test_job_detail_contract::test_reviewer_gets_the_evidence_blocks` also
+fails with this round's changes stashed; it was not re-run on a clean
+database before the run was stopped, so it is unclassified.
+
+Not run under any commit: the one later commit (snapshot status now returns
+`reference_preflight`; documents) -- compiled only. No CI. No DEV.
+
+## 11. Policy decisions and acceptance gaps
+
+- **P1 (highest)**: should `verified` require every applicable exclusion
+  control (SAM, CMS revocation) to have answered? Today it does not. Turning
+  `ENFORCE_COMPLETE_EXCLUSION_SCREENING` on with no SAM key configured would
+  withhold `verified` for every entity — so this is a decision about the
+  rules and about SAM access together, not a switch to flip.
+- **P2**: a name-only exclusion candidate classifies B4 (v3 RULE-005 on
+  `not_found`) pending an analyst. Confirm that B4-pending is the intended
+  presentation of an unconfirmed candidate.
+- **P3**: RULE-002 (priority 20) precedes RULE-003 (30), so a minor address
+  variance with PECOS unavailable is B1, not B2. Confirm intended.
+- **P4**: approve, amend or reject each proposed source policy, including
+  freshness windows and the retention authority.
+- **P5**: enable preflight enforcement (deliveries and reference snapshots)
+  and rechecks, and under which approval gate.
+- **P6**: manual reviews now screen NPI-less entities against the OIG list by
+  name — a behaviour change to confirm.
+- **Gaps**: `qa_gate` does not read `prior_risk_not_cleared` /
+  `verification_claim`; the ledger fix (§4-4) will begin writing NPPES
+  findings on real runs for the first time, so volumes should be reviewed
+  before any deployment; the 8 pre-existing coverage-test failures (§10) are
+  unaddressed; **the full combined regression did not complete (§10)**; reader-level truncation of ONC deliveries (Part A) is still
+  not separately seeded; nothing here has run in CI or on DEV.
+
+## 12. Contract mapping
+Source: `qa-evidence/PROJECT_CONTRACT_CONTEXT.md` (located; not restated from
+memory). Task 2 (methodology and control framework; "incomplete, inconsistent
+and variable-quality submissions"; discrepancy taxonomy): preflight, source
+policy, honest outcomes. Tasks 3 and 4 (four discrepancy categories): a
+source or schema fault is none of the four and is kept out of them. Task 5
+(priority reviews: root cause, recurrence): technical groups and rechecks.
+Tasks 1 and 6: unaffected. The file's five open questions are not resolved
+here.
+
+## 13. Ready for independent review?
+**The backend work in this package can be reviewed as a unit**, with §4-7
+and §11 as open decisions rather than defects to sign off, and with one
+condition: the full combined regression was interrupted and is still owed
+(§10).
+Part B as a whole is **not complete**: the frontend, QA addendum and LMS
+proposal are handed off, not built. Nothing should be merged, migrated or
+deployed from this branch before that review and the explicit approvals.
