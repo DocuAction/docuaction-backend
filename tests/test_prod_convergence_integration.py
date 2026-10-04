@@ -48,7 +48,25 @@ ABSENT = {"rce_source_intakes", "rce_source_records", "rce_ingestion_runs", "rce
           "rce_delivery_stage_events", "rce_disposition_events", "rce_reconciliation_snapshots",
           "tefca_identifier_decision_events", "rce_delivery_report_links",
           # 20260921_september_snapshot: seven append-only tables the chain creates
-          "rce_delivery_delta", "rce_entity_presence", "tefca_relationship_observations", "arc_stale_marks", "source_snapshot", "entity_source_match", "arc_assessment_run"}
+          "rce_delivery_delta", "rce_entity_presence", "tefca_relationship_observations", "arc_stale_marks", "source_snapshot", "entity_source_match", "arc_assessment_run",
+          # 20261002_iqvia_observations: FK to source_snapshot (already ABSENT above),
+          # so these observation tables could not exist before the chain either
+          "iqvia_hco_observation", "iqvia_hcp_observation", "iqvia_affiliation_observation",
+          # 20261003_iqvia_upload_durability: iqvia_upload_session FKs to
+          # source_snapshot (already ABSENT); iqvia_upload_chunk/iqvia_import_job FK
+          # to iqvia_upload_session in turn. NOT part of the 82-table candidate set
+          # computed in a clean subprocess (_candidate_names) -- that set only sees
+          # app.tefca_registry.rce.models' direct imports, not iqvia_upload_models --
+          # but conftest's full-app import makes pytest's in-process Base.metadata
+          # (what md.sorted_tables below actually walks) carry them anyway, so they
+          # must be named here too or this exact FK-ordering bug recurs for them.
+          "iqvia_upload_session", "iqvia_upload_chunk", "iqvia_import_job",
+          # 20261003_preflight_shadow_workspace: the whole preflight/shadow-reassessment
+          # chain FKs (directly or transitively) to rce_source_intakes/rce_source_records
+          # or review_records (already ABSENT above) -- none of it could exist pre-chain
+          "rce_preflight_run", "rce_preflight_finding", "rce_preflight_normalization",
+          "rce_shadow_comparison", "rce_shadow_finding_delta", "rce_shadow_approval",
+          "rce_successor_publication_event"}
 ADDITIVE = {"audit_logs": ["event_type", "outcome", "correlation_id"], "tefca_import_history": ["file_hash"]}
 AREA1 = {"rce_source_records", "rce_source_intakes", "rce_ingestion_runs",
          "rce_rule_execution_history", "rce_delivery_jobs",

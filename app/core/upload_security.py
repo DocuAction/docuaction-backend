@@ -62,3 +62,27 @@ def safe_upload_path(base_dir, original_filename: Optional[str],
     if os.path.commonpath([str(base), str(dest)]) != str(base):
         raise HTTPException(400, "Invalid upload path")
     return dest, ext
+
+
+def safe_existing_path(candidate: str, *allowed_dirs) -> Path:
+    """Resolve a CLIENT-SUPPLIED path to an EXISTING file, confined to one of
+    `allowed_dirs` (each created if missing). Guards an operator-local-path
+    workflow (e.g. staging a multi-GB extract already placed on the server)
+    against path traversal / arbitrary-file-read: a request for
+    ``/etc/passwd`` or ``../../anything`` is refused with 400, never opened.
+
+    Raises HTTPException(400) if the resolved path escapes every allowed
+    directory, or HTTPException(422) if it resolves inside one but no file
+    exists there.
+    """
+    resolved = Path(candidate).resolve()
+    bases = []
+    for d in allowed_dirs:
+        base = Path(d).resolve()
+        base.mkdir(parents=True, exist_ok=True)
+        bases.append(base)
+    if not any(os.path.commonpath([str(base), str(resolved)]) == str(base) for base in bases):
+        raise HTTPException(400, "Invalid file path: must be inside an allowed import directory")
+    if not resolved.is_file():
+        raise HTTPException(422, f"no file at {candidate!r}")
+    return resolved

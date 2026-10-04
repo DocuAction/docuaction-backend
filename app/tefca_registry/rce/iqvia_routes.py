@@ -86,8 +86,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import request_context
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import require_role
+from app.core.upload_security import safe_existing_path
 from app.tefca_registry.rce import iqvia_import as ii
 from app.tefca_registry.rce import iqvia_match as im
 from app.tefca_registry.rce import iqvia_upload_jobs as jobs
@@ -191,10 +193,13 @@ async def _register_and_enqueue(
     request-scoped background task. One registration/enqueue path shared by
     both the server-local `/sources/{source}/stage` route and the chunked
     `/uploads/{id}/complete` route, so there is exactly one way an IQVIA
-    import ever gets started."""
-    path = Path(file_path)
-    if not path.is_file():
-        raise HTTPException(422, f"no file at {file_path!r}")
+    import ever gets started.
+
+    `file_path` is CLIENT-SUPPLIED on the stage route (reviewer role, not
+    admin — see `stage_source`): resolved and confined to the configured
+    IQVIA drop directory or the server's own chunked-upload temp directory,
+    never opened outside either (CodeQL py/path-injection)."""
+    path = safe_existing_path(file_path, settings.IQVIA_IMPORT_DIR, _UPLOAD_DIR)
 
     file_sha = ii.file_sha256(path)
     # Duplicate submission: the SAME bytes under the SAME label for the SAME

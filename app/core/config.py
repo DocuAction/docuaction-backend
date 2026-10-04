@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     # ── Storage ───────────────────────────────────────────────────────────────
     STORAGE_PROVIDER: str = "local"
     UPLOAD_DIR: str = "./uploads"
+    # Server-local drop directory for operator-placed IQVIA extracts (the
+    # `/sources/{source}/stage` route) — the only directory a stage request's
+    # client-supplied file_path is allowed to resolve into; see
+    # app.core.upload_security.safe_existing_path.
+    IQVIA_IMPORT_DIR: str = "./uploads/iqvia-source"
     WHISPER_MODEL: str = "whisper-1"
 
     # ── Optional integrations ─────────────────────────────────────────────────
