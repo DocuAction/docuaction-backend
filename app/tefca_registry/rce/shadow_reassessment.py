@@ -189,6 +189,55 @@ def source_states(inp: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     return out
 
 
+#: Sources whose state can carry an EXCLUSION signal, and the states that do.
+#: `not_found` counts unless the persisted disposition proves it was a CLEAN
+#: screen (NOT_FOUND) -- a pending hit (REVIEW), a CONFLICT, or an origin the
+#: record never persisted are all treated as a signal. Conservative by design:
+#: withholding a delta costs one individual review; superseding a real
+#: exclusion finding in bulk is the error this guard exists to prevent.
+_EXCLUSION_SOURCES = ("oig_leie", "sam_gov", "cms_revocation")
+_EXCLUSION_STATES = ("excluded", "debarred", "failed")
+_IDENTITY_CONFLICT_FIELDS = ("nppes_pecos_conflict", "multiple_source_conflict",
+                             "identifier_conflict")
+
+
+def risk_signals(inp: Optional[Dict[str, Any]]) -> List[str]:
+    """Exclusion / identity-conflict signals present in a persisted classifier
+    input (2026-10-04, Part B). A delta on a record carrying ANY of these is
+    never superseded by a comparison-wide publication: each one is
+    adjudicated individually, by a person, through the ordinary review route.
+
+    Returned as stable, sorted codes so the reason a delta was withheld can
+    be shown and tested rather than inferred."""
+    if not isinstance(inp, dict):
+        return []
+    out: List[str] = []
+    for name, st in source_states(inp).items():
+        status = st.get("status")
+        if name in _EXCLUSION_SOURCES:
+            if status in _EXCLUSION_STATES:
+                out.append(f"EXCLUSION:{name}:{status}")
+            elif status == "not_found" and st.get("disposition") != "NOT_FOUND":
+                out.append(f"EXCLUSION:{name}:potential_hit_or_unknown_origin")
+        if name == "nppes":
+            raw = (inp.get("sources") or {}).get(name)
+            if status in ("not_found", "failed"):
+                out.append(f"IDENTITY:nppes:{status}")
+            if isinstance(raw, dict) and raw.get("npi_status") == "DEACTIVATED":
+                out.append("IDENTITY:nppes:npi_deactivated")
+    fields = inp.get("fields") or {}
+    for f in _IDENTITY_CONFLICT_FIELDS:
+        v = fields.get(f)
+        if v is True or (isinstance(v, dict) and v.get("status") in (True, "flagged", "invalid")):
+            out.append(f"IDENTITY:{f}")
+    npi_v = fields.get("npi_validation")
+    npi_status = npi_v.get("status") if isinstance(npi_v, dict) else npi_v
+    if npi_status in ("flagged", "invalid"):
+        out.append(f"IDENTITY:npi_validation:{npi_status}")
+    return sorted(set(out))
+
+
+
 def _direction(baseline_bucket: Optional[str], candidate_bucket: Optional[str]) -> str:
     b = BUCKET_SEVERITY.get(baseline_bucket or "", -1)
     c = BUCKET_SEVERITY.get(candidate_bucket or "", -1)
@@ -351,6 +400,16 @@ async def build_comparison(db, intake_id, *, built_by: str,
                           + ("; ".join(cand.matched_conditions) or cand.rationale))
                 if needs_manual:
                     reason += " [EIN/FEIN/IRS signal involved: manual review required, never auto-superseded]"
+                # No bulk closure of exclusion / identity-conflict findings
+                # (2026-10-04, Part B): a comparison-wide publication must
+                # never supersede a record carrying one of these signals.
+                signals = risk_signals(inp)
+                detail["risk_signals"] = signals
+                if signals and kind != pm.DELTA_UNCHANGED:
+                    needs_manual = True
+                    reason += (" [exclusion/identity-conflict signal on the record ("
+                               + ", ".join(signals) + "): individually adjudicated, "
+                               "never superseded by a comparison-wide publication]")
         counts[kind] += 1
         directions[direction] += 1
         manual += int(needs_manual)
@@ -636,6 +695,18 @@ async def publish_successors(db, comparison_id, *, user,
             continue
         pred = (await db.get(reg.ReviewRecord, d.predecessor_review_record_id)
                 if d.predecessor_review_record_id else None)
+        # Defence in depth: re-derived from the predecessor itself, so a
+        # comparison built before the build-time guard existed (its delta row
+        # has manual_review_required=False) still cannot supersede an
+        # exclusion / identity-conflict record in bulk.
+        signals = risk_signals(classifier_input(pred.verification_results)) if pred else []
+        if signals:
+            withheld.append({"entity_id": str(d.entity_id), "delta_kind": d.delta_kind,
+                             "risk_signals": signals,
+                             "reason": ("exclusion/identity-conflict signal on the "
+                                        "predecessor; individually adjudicated, never "
+                                        "superseded by a comparison-wide publication")})
+            continue
         review_id = await _allocate_review_id(db)
         vr = dict((pred.verification_results or {}) if pred else {})
         vr["shadow_successor"] = {
