@@ -50,6 +50,10 @@ from sqlalchemy import func, select
 
 logger = logging.getLogger(__name__)
 
+#: tefca_verifications rows that record that a PROCESS ran, not that a SOURCE
+#: answered. Never reported as per-source verification coverage.
+NON_SOURCE_VERIFICATION_ROWS = frozenset({"rce_arc_pipeline"})
+
 #: Bumped whenever the query logic behind any number changes. Stored on every
 #: report snapshot so a number can be traced to the code that produced it —
 #: "why did DA-ARC-2026-001 show 47 B2 entities" is answerable only if the
@@ -491,8 +495,18 @@ class ReportDataService:
             rows = []
 
         per_source: Dict[str, Dict[str, int]] = {}
+        pipeline_runs: Dict[str, Dict[str, int]] = {}
         for source, status, count in rows:
-            per_source.setdefault(source or "unknown", {})[
+            # 2026-10-04 (Part B): `arc_pipeline.verify_and_classify` writes one
+            # tefca_verifications row per entity under the pseudo-source
+            # "rce_arc_pipeline" with status "verified" -- meaning "the
+            # pipeline RAN for this entity", for every bucket including B4.
+            # Counted as a source it read "rce_arc_pipeline: 100% verified",
+            # a verification pass no authoritative source ever gave. It is a
+            # process marker (reconciliation still relies on the row itself),
+            # so it is reported separately and never as source coverage.
+            target = pipeline_runs if source in NON_SOURCE_VERIFICATION_ROWS else per_source
+            target.setdefault(source or "unknown", {})[
                 (status or "unknown")] = int(count)
 
         states = ("verified", "not_found", "not_checked", "unavailable", "failed")
@@ -508,6 +522,12 @@ class ReportDataService:
             })
         return {
             "sources": sources,
+            "pipeline_runs": {
+                "rows": {k: sum(v.values()) for k, v in sorted(pipeline_runs.items())},
+                "note": ("Process markers: the pipeline ran for these entities. "
+                         "Not a verification result and not counted as source "
+                         "coverage."),
+            },
             "states": list(states),
             "insufficient_data": not sources,
             "state_note": (
