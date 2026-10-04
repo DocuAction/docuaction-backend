@@ -159,16 +159,28 @@ def _next_review_id():
     return f"REV-8100-{_SEQ['n']:06d}"
 
 
-async def _dq_case(db, org, *, created_at=None, review_id=None):
-    """A DQ exception case, made the way `dq_review_bridge` makes one."""
+async def _dq_case(db, org, *, created_at=None, review_id=None, intake_id=None):
+    """A DQ exception case, made the way `dq_review_bridge` makes one.
+
+    `source_intake_id` is stamped into `verification_results` exactly as
+    `dq_review_bridge.build_cases` does it (2026-10-04, Round 26) -- the real
+    bridge always stamps it (see `work_queue`'s own docstring: "The DQ bridge
+    stamps `source_intake_id` on every case it creates ... so a delivery's
+    exceptions can be worked as one queue"). This helper had omitted it,
+    which meant a caller had no way to scope `work_queue()` to just the
+    cases it created -- see the fix in
+    test_the_queue_shows_every_state_and_agrees_with_the_case_itself below.
+    """
     review_id = review_id or _next_review_id()
+    vr = {"queue_source": so.QUEUE_DQ, "case_classification": "IDENTITY",
+         "severity": "HIGH", "priority": 70}
+    if intake_id is not None:
+        vr["source_intake_id"] = str(intake_id)
     db.add(reg.ReviewRecord(
         id=uuid.uuid4(), review_id=review_id, entity_id=org.entity_id,
         source_record_id=org.source_record_id,
         created_at=created_at or datetime.utcnow(),
-        verification_results={"queue_source": so.QUEUE_DQ,
-                              "case_classification": "IDENTITY",
-                              "severity": "HIGH", "priority": 70}))
+        verification_results=vr))
     await db.flush()
     return review_id
 
@@ -210,19 +222,35 @@ async def _through_qa(db, review_id, *, action="APPROVE", analyst=ANALYST_A):
 
 async def test_the_queue_shows_every_state_and_agrees_with_the_case_itself(
         rolled_back_db):
-    """The supervisor list must never disagree with the case it summarises."""
+    """The supervisor list must never disagree with the case it summarises.
+
+    2026-10-04 (Round 26): `work_queue(limit=50)` was called unscoped. In a
+    shared, continuously-used test database, enough OTHER tests' (real,
+    committed) eligible work rows can outrank this test's own 6 synthetic
+    cases in the default `sort="age"` ordering that they fall off the first
+    50-row page entirely -- reproduced directly: `KeyError:
+    'REV-8100-000001'` on `states[ids["unassigned"]]` when run after enough
+    of the suite had already committed queue-eligible rows. `work_queue`
+    already supports scoping to one delivery's own work via `intake_id`
+    (its own docstring: "a delivery's exceptions can be worked as one
+    queue") -- this test simply was not using it; now it is, and both the
+    case-creation and the queue read are scoped to this test's own
+    synthetic intake, which the savepoint `rolled_back_db` fixture isolates
+    from every other test's writes regardless of how large the shared
+    table grows.
+    """
     db = rolled_back_db
     intake_id = await _intake(db)
     orgs = [await _org(db, intake_id, f"S0{i}", line=2 + i) for i in range(6)]
     await db.commit()
 
     ids = {}
-    ids["unassigned"] = await _dq_case(db, orgs[0])            # S01
-    ids["assigned"] = await _dq_case(db, orgs[1])              # S02
-    ids["claimed"] = await _dq_case(db, orgs[2])               # S03
-    ids["awaiting"] = await _dq_case(db, orgs[3])              # S04
-    ids["returned"] = await _dq_case(db, orgs[4])              # S05
-    ids["approved"] = await _dq_case(db, orgs[5])              # S07
+    ids["unassigned"] = await _dq_case(db, orgs[0], intake_id=intake_id)   # S01
+    ids["assigned"] = await _dq_case(db, orgs[1], intake_id=intake_id)    # S02
+    ids["claimed"] = await _dq_case(db, orgs[2], intake_id=intake_id)     # S03
+    ids["awaiting"] = await _dq_case(db, orgs[3], intake_id=intake_id)    # S04
+    ids["returned"] = await _dq_case(db, orgs[4], intake_id=intake_id)    # S05
+    ids["approved"] = await _dq_case(db, orgs[5], intake_id=intake_id)    # S07
     await db.commit()
 
     await assignment.assign(db, ids["assigned"], user=SUPERVISOR,
@@ -241,7 +269,7 @@ async def test_the_queue_shows_every_state_and_agrees_with_the_case_itself(
     await _through_qa(db, ids["approved"], action="APPROVE")
     await db.commit()
 
-    page = await so.work_queue(db, limit=50)
+    page = await so.work_queue(db, limit=50, intake_id=intake_id)
     states = {i["review_id"]: i["state"] for i in page["items"]}
     assert states[ids["unassigned"]] == "AVAILABLE"
     assert states[ids["assigned"]] == "CLAIMED"
