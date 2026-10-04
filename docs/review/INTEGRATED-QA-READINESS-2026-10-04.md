@@ -812,3 +812,174 @@ selector bugs in D7 -- was fixed and re-verified, not merely written down.
 The items in this list are genuinely open (seeding data not reconstructed,
 a policy decision not made, a frontend control not built), not disguised
 unfixed defects.
+
+## 16. Round 27 (2026-10-04, same day) — exclusion UI, Part A/B reconstruction, full reconciliation
+
+**Final SHAs: backend `5fdd20b`, frontend `de961ed`.** Seven commits
+past the Round 26 checkpoint (`3afc64b`): `e82476c` (R27-2 backend field),
+`91b1f5a` (R27-2 frontend UI + live proof), `e2c2561` (R27-3 seed
+reconstruction), `de961ed` (R27-3 adapted live spec — frontend's final
+commit this round), `a6beb50` (R27-4 regression manifest), `56a42e1`
+(R27-6 operator checklist), `5fdd20b` (R27-7 decision table). This
+section is itself the R27-8 checkpoint; no further code change follows
+it.
+
+**R27-1 (baseline reconciliation).** Backend and frontend HEADs verified
+directly; both working trees clean except pre-existing untracked scratch
+files this session did not create. Commit `3afc64b` (the Round 26
+checkpoint) proven documentation-only by `git show --stat`: one file
+changed, 328 insertions, zero deletions, zero other files — not merely
+asserted.
+
+**R27-2 (the exclusion-candidate queue, made usable).** The backend
+filter from Round 26 (`work_queue(unresolved_exclusion_candidate=True)`)
+had no frontend surface — "a backend queue without a usable UI is not
+complete for Adam," per this round's own directive. Added to the
+EXISTING Supervisor Operations screen only: a clearly-labelled checkbox
+entry point that relabels the panel when checked; a "Prior risk" column
+naming each flagged case's signal in words (reusing `signalWords`, now
+exported); and the case drawer reusing the analyst's own existing
+`PriorRiskBanner` component for the full evidence-and-uncertainty
+account, with its existing link to the earlier review. One backend field
+added, additive and read-only (`prior_risk_not_cleared` on the work-queue
+row). Deliberately NOT added: any new approval/clearing action, any
+per-row selection, any bulk control. Confirmed live
+(`tests/e2e/live-exclusion-ui-round27.spec.mjs`): the toggle works,
+exactly one checkbox exists on the whole page (no bulk/select-all), the
+row shows the signal in words, the banner and its link render, the
+existing single-case workspace link is intact, and the drawer returns to
+the filtered queue on close.
+
+**R27-3 (the Part A/B browser proof, made reproducible).** The original
+seeding script for `live-partb.spec.mjs` was never committed and did not
+survive into this session. Reconstructed (`tests/fixtures/seeded/
+seed_live_partb.py`, backend repo) by importing
+`test_seeded_corpus_b_2026_10_04.py`'s and `test_prior_risk_not_cleared_
+2026_10_04.py`'s own helper functions directly — one place still builds
+this corpus, nothing duplicated. Produces the real 12-seed corpus through
+the real pipeline, a 13th preflight-only row (giving the delivery's own
+file-level check one genuine `CLEAR_WITH_FINDINGS` finding), a matching
+`rce_delivery_jobs` row (a bare intake has none and cannot be opened by
+id — discovered and fixed this round), a SAM.gov recovery recheck
+requested by the Analyst and left `PENDING_APPROVAL`, and a separate
+two-cycle entity for the uncleared-earlier-concern banner. Three real
+configuration gaps found and fixed while rebuilding this (all three now
+recorded in `tests/fixtures/seeded/LIVE-PARTB-RECIPE-2026-10-04.md` so
+they are not rediscovered): `ENTITY_RESOLVER_SOURCE=db` is required on
+BOTH the seeding process and the live server process (a process
+boundary); `ALLOWED_ORIGINS` must include the frontend's own origin or
+every request fails CORS with a generic, misleading "cannot reach
+server" message; `ENABLE_CONTROLLED_RECHECKS=true` is required or the
+recheck panel looks exactly like "recheck support is off" even for a
+real, pending job. One assumption made partway through this work was
+caught and corrected against the real running page rather than left in:
+the true completeness count is 4 of 12 (matching the ORIGINAL spec, not
+the 3 first assumed from the manifest alone) — every NPI-bearing entity
+in this corpus also carries an unavailable CMS PPEF gap, on top of the
+three SAM.gov source faults. The adapted spec
+(`tests/e2e/live-partb-round27.spec.mjs`) passes 2/2, covering preflight,
+source faults, incomplete verification (named, not merged), prior-risk
+preservation, rechecks end to end (request → approve → run → genuinely
+still-unavailable, nobody newly verified), maker/checker (the requester
+sees no approve control), and read-only source policies. Two narrow,
+intentional, documented differences from the original spec (list-click
+navigation replaced with a direct URL, since Journey A of
+`live-journeys-round26.spec.mjs` already proves that path; the corrected
+completeness count) — neither drops an intended assertion.
+
+**R27-4 (regression evidence, reconciled into one manifest).**
+`docs/review/REGRESSION-MANIFEST-2026-10-04.md`: the 27-batch run's 33
+logged executions resolve to 27 unique, counted results (every repeat
+named and explained — batch 2 three times for a known live-network hang,
+batch 10 three times for this round's own two self-contained test bugs,
+batches 14/15 twice each for one test fixture's leaked state and its
+fix); the three server-dependent cases and their six-test live-server
+confirmation (both contexts explained as the same three tests, not six
+new defects); all 121 skips grouped by cause with a release-relevance
+disposition for every group (none conceals an unresolved defect); and
+R27-2's own affected-test re-run (49 + 9 passed, fresh database). The
+full suite was not repeated — stated as a reasoned conclusion (neither
+R27-2's one additive field nor R27-3's test-only additions touch any
+other file in the 27-batch run), not assumed.
+
+**R27-5 (all 46 workbook cases audited against the final UI; v4
+built).** Every distinctive button/panel/tab label quoted across all 46
+v3 cases was checked against the current frontend source directly (not
+assumed carried-forward-correct). Found: INT-41 described the exclusion
+queue as possibly "not yet wired into the menu" — now corrected against
+the real control R27-2 built. Found: SUN-09 used an ASCII `<->`
+approximation where the real label uses `↔` — corrected. Everything else
+checked (a few dozen distinctive phrases, including older SUN cases)
+matched the current screens exactly, including em-dash glyphs an
+earlier terminal-encoding artifact in this session's own working notes
+had wrongly suggested were wrong — re-verified directly against the
+workbook's own Unicode code points before concluding anything. One new
+case added, INT-47 (the exclusion queue walked end to end). v4 (47
+cases) preserves v3 unchanged in the same folder. `START-HERE.md` and
+the LMS proposal (Lesson C) both updated to match.
+
+**R27-6 (operator prerequisites, prepared).**
+`docs/review/OPERATOR-PREREQUISITE-CHECKLIST-2026-10-04.md`: final SHAs,
+the CI requirement, migration order (no new migration this round — R27-2
+is additive to a response dict, not a schema change), the DEV deploy
+procedure and rollback triggers (unchanged, established pattern),
+every feature flag this round's work actually needed and why, the
+supported account-provisioning procedure verified from
+`app/api/admin_users.py` (direct admin-created accounts, no raw SQL, no
+unnecessary admin privilege, two distinct QA Leads for the self-approval
+refusal this specific work needs), the isolated fixture recipe, the
+deployed-version confirmation step, and an ordered ten-step post-
+deployment smoke sequence. Nothing in it was executed.
+
+**R27-7 (P1–P6, decided by no one, tabulated for whoever will).**
+`docs/review/P1-P6-DECISION-TABLE-2026-10-04.md`: question, observed
+behaviour (re-confirmed this round, not copied forward), recommended
+option, alternative, impact, authority needed, and affected QA cases for
+each of the six. The three-facts distinction (check outcome /
+completeness / classification-and-reportability) stated once rather than
+re-argued six times. SSP impact register: one new entry, S-19 (the
+frontend completion of S-18's backend-only queue); the baseline question
+restated as unresolved, with the precise missing evidence named again
+(a transmittal record, not a document choice) — no candidate selected by
+inference, no completion claimed.
+
+## 17. Round 27 decision
+
+**A. LOCAL IMPLEMENTATION COMPLETE — READY FOR PUBLICATION/REVIEW.**
+
+Every item this round's directive asked for was built, reconstructed,
+reconciled, audited, prepared or tabulated — not merely restated as a
+known gap. The SSP baseline remains genuinely unresolved because it
+depends on an external record (a transmittal) this session cannot
+produce or infer; that is an open INPUT, not an unfinished task, and is
+named precisely in section 16 and in the SSP register itself rather than
+treated as blocking this decision.
+
+**This is still NOT READY FOR ADAM.** That requires, and none of it has
+happened: independent review of every commit through `5fdd20b`/
+`de961ed`; authorised publication (pushing the branches) and CI running
+green on them, including the dedicated `journey-live` job; authorised
+deployment to DEV; the five accounts from the operator checklist created
+on DEV through the supported admin procedure; the feature flags in
+section 16/R27-6 confirmed set on DEV; the deployed version confirmed
+against the live page; and the ten-step smoke sequence run there and
+passed. None of these six is a documentation task — all six are operator
+or reviewer actions this session is not authorised to take.
+
+**Every open item, named once more, in one place:**
+1. SSP baseline transmittal record — not found, needs an operator/COR
+   action to locate (section 16/R27-7).
+2. P1–P6 — tabulated, none decided; every default-off flag stays off.
+3. The exclusion-candidate queue (INT-41/47) has no bulk sign-off path
+   because none should exist — this is confirmed-correct, not open.
+4. `live-partb-round27.spec.mjs`'s two documented, deliberate differences
+   from the original spec (section 16/R27-3) — a reasoned equivalent,
+   named as such, not a silent substitution.
+5. The six DEV-readiness gates in the operator checklist (R27-6) —
+   entirely operator/reviewer actions.
+
+Nothing here was left as "documentation only." Every demonstrated defect
+this round surfaced — the two self-contained bugs in this round's own
+new backend test, the three configuration gaps found rebuilding the Part
+A/B proof, the two workbook wording corrections — was fixed and
+re-verified in this session, not merely written down.
