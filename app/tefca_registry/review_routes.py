@@ -1414,6 +1414,11 @@ async def operations_work_queue(
         reportable: Optional[bool] = Query(None),
         deadline_state: Optional[str] = Query(None),
         search: Optional[str] = Query(None, max_length=200),
+        unresolved_exclusion_candidate: bool = Query(
+            False, description="Cases carrying an uncleared prior "
+                              "exclusion/identity-conflict signal. "
+                              "Listed individually for triage; the list "
+                              "itself selects or closes nothing."),
         sort: str = Query("age"),
         offset: int = Query(0, ge=0),
         limit: int = Query(50, ge=1, le=200),
@@ -1429,6 +1434,7 @@ async def operations_work_queue(
             assignee=assignee, intake_id=intake_id, unassigned_only=unassigned_only,
             qhin_entity_id=qhin_entity_id, limited_only=limited_only,
             reportable=reportable, deadline_state=deadline_state, search=search,
+            unresolved_exclusion_candidate=unresolved_exclusion_candidate,
             sort=sort, offset=offset, limit=limit,
             due_soon_within_hours=due_soon_within_hours,
             stale_after_days=stale_after_days)

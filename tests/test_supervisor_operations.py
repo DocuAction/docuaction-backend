@@ -1403,3 +1403,41 @@ def test_fixtures_are_synthetic_only():
         assert actor.email.endswith("@synthetic.test")
     assert COR.endswith("@synthetic.test")
     assert ARC.startswith("9.99.")
+
+
+async def test_unresolved_exclusion_candidates_are_individually_listed_never_bulk_actionable(
+        rolled_back_db):
+    """2026-10-04 (Round 26): `work_queue(unresolved_exclusion_candidate=True)`
+    lists exactly the cases carrying an uncleared prior exclusion/identity-
+    conflict signal -- a read-only triage list. It is still the ordinary
+    paginated queue: each row opens through the same single-item routes as
+    any other case; nothing about the filter closes, decides or groups
+    anything."""
+    db = rolled_back_db
+    intake_id = await _intake(db)
+    orgs = [await _org(db, intake_id, f"X0{i}", line=2 + i) for i in range(3)]
+    await db.commit()
+
+    flagged = await _dq_case(db, orgs[0], intake_id=intake_id)
+    clean = await _dq_case(db, orgs[1], intake_id=intake_id)
+    other_flagged = await _dq_case(db, orgs[2], intake_id=intake_id)
+
+    prior_risk = {"prior_review_id": "REV-PRIOR-0001",
+                 "signals": ["EXCLUSION:oig_leie:excluded"],
+                 "why_not_cleared": "not_adjudicated", "open_blocking_finding": False}
+    for rid in (flagged, other_flagged):
+        rec = (await db.execute(select(reg.ReviewRecord).where(
+            reg.ReviewRecord.review_id == rid))).scalars().one()
+        rec.verification_results = {**(rec.verification_results or {}),
+                                    "prior_risk_not_cleared": prior_risk}
+    await db.commit()
+
+    page = await so.work_queue(db, limit=50, intake_id=intake_id,
+                               unresolved_exclusion_candidate=True)
+    listed = {i["review_id"] for i in page["items"]}
+    assert listed == {flagged, other_flagged}, listed
+    assert clean not in listed
+
+    # Still the ordinary queue shape: no group/bulk action field anywhere.
+    for item in page["items"]:
+        assert "bulk" not in str(item).lower()

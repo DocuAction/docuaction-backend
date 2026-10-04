@@ -205,3 +205,87 @@ async def test_publication_rederives_the_guard_when_a_stored_flag_says_otherwise
     assert withheld[str(identity_e)]["risk_signals"] == ["IDENTITY:nppes:not_found"]
     assert await _successor_count(excluded_e) == 0
     assert await _successor_count(identity_e) == 0
+
+
+# ── the ONLY other multi-id route in the application: bulk ASSIGNMENT ────────
+#
+# 2026-10-04 (Round 26): the tests above prove the one place a SINGLE action
+# can affect MANY findings' standing (shadow-comparison publication)
+# correctly withholds exclusion/identity-conflict records. This test proves
+# the other half of the claim in this module's own docstring -- "every
+# close/disposition route is single-item, and the one multi-id body (bulk
+# ASSIGNMENT) distributes work, it does not decide it" -- directly, rather
+# than leaving it as an assertion in prose. `plan_distribution` is the only
+# function in the whole backend that accepts a LIST of review ids outside
+# `publish_successors`; this calls it, for real, against review records that
+# carry a genuine OIG exclusion signal and a B4 classification, and proves
+# every compliance-bearing field is untouched afterwards -- only
+# `assigned_to_user_id` changes. A frontend that never renders a bulk-close
+# button proves nothing about the server; this does.
+
+async def test_bulk_assignment_is_the_only_other_multi_id_route_and_it_only_assigns(
+        db_required):
+    """`plan_distribution` (workflow_routes' bulk assignment body) must never
+    become a second channel for closing exclusion/identity-conflict findings
+    in bulk -- it may change who looks at a case, never what the case
+    concludes."""
+    import datetime
+
+    from app.core.database import async_session_maker
+    from app.tefca_registry import models as reg
+    from app.tefca_registry.qhin_workload import plan_distribution
+
+    review_ids = []
+    before = {}
+    async with async_session_maker() as db:
+        for tag, bucket, signals in (
+                ("EXCL", "B4", {"classifier_input": {"sources": {
+                    "oig_leie": {"status": "excluded"}}}}),
+                ("IDENT", "B4", {"classifier_input": {"sources": {
+                    "nppes": {"status": "not_found"}}}}),
+                ("CLEAN", "B1", {"classifier_input": {"sources": {
+                    "oig_leie": {"status": "clear"}}}})):
+            rid = f"REV-BULKASSIGN-{tag}-{uuid.uuid4().hex[:8]}"
+            rec = reg.ReviewRecord(
+                id=uuid.uuid4(), review_id=rid, entity_id=None,
+                verification_results=signals, classification_bucket=bucket,
+                classification_rule="RULE-TEST", classification_rule_version=1,
+                reviewer_resolution=None, reportable_at=None)
+            db.add(rec)
+            review_ids.append(rid)
+        await db.commit()
+        rows = (await db.execute(select(reg.ReviewRecord).where(
+            reg.ReviewRecord.review_id.in_(review_ids)))).scalars().all()
+        before = {r.review_id: (r.classification_bucket, r.reviewer_resolution,
+                                r.reportable_at, r.verification_results)
+                 for r in rows}
+
+    analyst_id = uuid.uuid4()
+    async with async_session_maker() as db:
+        plan = await plan_distribution(db, review_ids, [analyst_id])
+        for rid, to_user in plan:
+            await db.execute(update(reg.ReviewRecord)
+                             .where(reg.ReviewRecord.review_id == rid)
+                             .values(assigned_to_user_id=to_user))
+        await db.commit()
+
+    assert len(plan) == 3, "all three unassigned cases should have been planned"
+
+    async with async_session_maker() as db:
+        rows = (await db.execute(select(reg.ReviewRecord).where(
+            reg.ReviewRecord.review_id.in_(review_ids)))).scalars().all()
+    after = {r.review_id: r for r in rows}
+
+    for rid in review_ids:
+        b_bucket, b_resolution, b_reportable, b_vr = before[rid]
+        a = after[rid]
+        assert a.classification_bucket == b_bucket, (
+            f"{rid}: bulk assignment changed classification_bucket")
+        assert a.reviewer_resolution == b_resolution, (
+            f"{rid}: bulk assignment changed reviewer_resolution")
+        assert a.reportable_at == b_reportable, (
+            f"{rid}: bulk assignment changed reportable_at")
+        assert a.verification_results == b_vr, (
+            f"{rid}: bulk assignment changed verification_results/risk signals")
+        assert a.assigned_to_user_id == analyst_id, (
+            f"{rid}: bulk assignment did not actually assign the case")

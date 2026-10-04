@@ -29,6 +29,19 @@ RATE_LIMITS = {
 # Mission Control fan-out alone can exceed a 10-request burst. Unknown roles
 # still fall to "free" (fail closed); this table only makes the known ones
 # explicit. Limits are not raised globally and the limiter is never disabled.
+#
+# 2026-10-04 (Round 26): "viewer" was the one AUTHENTICATED role left out of
+# this fix, sharing the "free" tier with unauthenticated/unknown traffic even
+# though it is a verified, role-checked account making ordinary read requests
+# through the same multi-request pages every other role uses. Reproduced
+# directly in a real browser: opening the delivery list and then a delivery
+# detail page -- two ordinary page loads, no Mission Control fan-out needed --
+# hit "Rate limit exceeded ... 60 requests/minute allowed for free tier."
+# Moved to "pro" (200/min, burst 30), one tier above the shared anonymous
+# floor and the same tier "contributor" already has -- NOT business/
+# enterprise, since a read-only role should not receive the same allowance
+# as a role that claims and decides cases. Rate limiting for viewer is not
+# removed or raised without bound; abuse protection is retained.
 TIER_BY_ROLE = {
     "admin": "enterprise",
     "program_manager": "business",
@@ -37,7 +50,7 @@ TIER_BY_ROLE = {
     "reviewer": "business",
     "manager": "business",
     "contributor": "pro",
-    "viewer": "free",
+    "viewer": "pro",
 }
 
 
@@ -136,9 +149,18 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         if not result["allowed"]:
             from app.core.error_handler import create_error_response
+            # 2026-10-04 (Round 26): the internal billing-style tier name
+            # ("free"/"pro"/"business") used to be interpolated directly into
+            # this user-facing message ("...allowed for free tier.") -- SaaS
+            # pricing-plan language with no meaning in this platform, and
+            # specifically confusing to an authenticated, role-verified Viewer
+            # who saw the word "free" for a plan they never selected. The
+            # actionable number (the limit itself) is kept; the internal tier
+            # name is not shown.
             return create_error_response(
                 status_code=429,
-                error=f"Rate limit exceeded. {result['limit']} requests/minute allowed for {tier} tier.",
+                error=(f"Rate limit exceeded. {result['limit']} requests per minute "
+                       f"are allowed for your account. Please wait and try again."),
                 code="RATE_LIMIT_EXCEEDED",
             )
 
