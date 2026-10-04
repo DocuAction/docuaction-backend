@@ -17,12 +17,6 @@ from fastapi import HTTPException
 # dots, "..", control chars) is discarded, which is what defeats traversal via ext.
 _EXT_RE = re.compile(r"^[a-z0-9]{1,10}$")
 
-# A safe bare filename: letters, digits, dot, underscore, hyphen, 1-200 of them,
-# never starting with a dot (rules out "." / ".." / a hidden-file name) and
-# never containing "/" or "\" (rules out traversal and an absolute path) by
-# construction, not by denylist.
-_SAFE_FILENAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,199}$")
-
 
 def safe_extension(original_filename: Optional[str],
                    allowed: Optional[Iterable[str]] = None,
@@ -76,24 +70,23 @@ def safe_existing_path(candidate: str, *allowed_dirs) -> Path:
     workflow (e.g. staging a multi-GB extract already placed on the server)
     against path traversal / arbitrary-file-read.
 
-    Unlike a validate-then-pass-through check, this never lets the client's
-    own path string reach a filesystem call: its basename (`Path(...).name`,
-    which already drops every directory component) must additionally match
-    `_SAFE_FILENAME_RE` -- an explicit allowlist, the same regex-match-or-
-    refuse shape `safe_extension` above already uses -- and only the
-    REGEX MATCH's own text (not the original candidate string) is rejoined
-    onto a TRUSTED directory from `allowed_dirs`. Raises HTTPException(400)
-    for a name that fails the allowlist, or (422) if no file by that name
-    exists in any allowed directory.
+    The client's own path string never reaches a filesystem call, not even
+    a derived substring of it: each allowed directory is LISTED (a call
+    that takes no tainted input at all), and the path returned is built
+    from one of THOSE entries -- a value that originates from the
+    filesystem, not from the request -- once it is found to equal the
+    requested basename. Raises HTTPException(400) for an empty/bare name,
+    or (422) if no file by that name exists in any allowed directory.
     """
-    match = _SAFE_FILENAME_RE.match(Path(candidate).name)
-    if not match:
+    requested = Path(candidate).name
+    if not requested or requested in (".", ".."):
         raise HTTPException(400, "Invalid file path: a bare filename is required")
-    name = match.group(0)
     for d in allowed_dirs:
         base = Path(d).resolve()
         base.mkdir(parents=True, exist_ok=True)
-        dest = base / name
-        if dest.is_file():
-            return dest
-    raise HTTPException(422, f"no file named {name!r} in an allowed import directory")
+        for entry in os.listdir(base):
+            if entry == requested:
+                dest = base / entry
+                if dest.is_file():
+                    return dest
+    raise HTTPException(422, f"no file named {requested!r} in an allowed import directory")
