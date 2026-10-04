@@ -647,6 +647,29 @@ async def _ensure_leie_loaded() -> bool:
         return await _load_leie_csv()
 
 
+#: The columns this connector READS from the OIG "UPDATED.csv" download. The
+#: published file carries more; only these are required, by exact name --
+#: no positional fallback and no silent renaming.
+LEIE_REQUIRED_COLUMNS = ("LASTNAME", "FIRSTNAME", "BUSNAME", "EXCLTYPE", "EXCLDATE",
+                         "REINDATE", "STATE", "NPI")
+LEIE_SCHEMA_VERSION = "oig-leie-updated-csv/required-columns-v1"
+
+
+def leie_schema_problem(fieldnames) -> Optional[str]:
+    """Why a downloaded body is NOT a usable exclusion list, or None."""
+    names = [str(f).strip() for f in (fieldnames or [])]
+    if not names:
+        return "empty body: no header row"
+    missing = [c for c in LEIE_REQUIRED_COLUMNS if c not in names]
+    if missing:
+        return (f"header does not match the documented exclusion-list schema; missing "
+                f"column(s): {', '.join(missing)} (first header cell: {names[0][:40]!r})")
+    dupes = sorted({n for n in names if names.count(n) > 1 and n})
+    if dupes:
+        return f"duplicate header column(s): {', '.join(dupes)}"
+    return None
+
+
 async def _load_leie_csv() -> bool:
     import time as _time
     import csv as _csv
@@ -657,10 +680,34 @@ async def _load_leie_csv() -> bool:
             resp = await client.get(_LEIE_CSV_URL, headers=HTTP_HEADERS)
         if resp.status_code != 200:
             return False
+        # REFERENCE-SNAPSHOT PREFLIGHT (2026-10-04, Part B). An HTTP 200 is not
+        # proof the body is the exclusion list. Before this check an HTML
+        # error page, a renamed header or a truncated download was indexed as
+        # a list with no usable rows, the cache was marked fresh for 24h, and
+        # EVERY lookup returned a clean "not excluded" -- a verification pass
+        # manufactured from a source fault. A body that fails this check is
+        # refused: the function returns False (callers report UNAVAILABLE) and
+        # any previously loaded good index is left exactly as it was.
+        reader = _csv.DictReader(_io.StringIO(resp.text))
+        problem = leie_schema_problem(reader.fieldnames)
+        if problem:
+            _LEIE_CACHE["last_refusal"] = {"at": now, "reason": problem}
+            logger.warning("LEIE CSV refused: %s", problem)
+            return False
         by_npi: Dict[str, list] = {}
         by_name: Dict[tuple, list] = {}
         count = 0
-        for row in _csv.DictReader(_io.StringIO(resp.text)):
+        for row in reader:
+            # A short final row is a truncated download; an over-long one is a
+            # shifted record. Either makes the WHOLE snapshot untrustworthy --
+            # a partial exclusion list would answer "not listed" for every
+            # entity in the missing part.
+            if None in row or any(v is None for v in row.values()):
+                problem = (f"malformed row at data line {count + 1}: field count does "
+                           f"not match the header (truncated or shifted record)")
+                _LEIE_CACHE["last_refusal"] = {"at": now, "reason": problem}
+                logger.warning("LEIE CSV refused: %s", problem)
+                return False
             count += 1
             rec = {
                 "lastname": row.get("LASTNAME", ""), "firstname": row.get("FIRSTNAME", ""),
@@ -678,7 +725,13 @@ async def _load_leie_csv() -> bool:
             bus = (row.get("BUSNAME") or "").strip().upper()
             if bus:
                 by_name.setdefault((bus, ""), []).append(rec)
-        _LEIE_CACHE.update(loaded_at=now, by_npi=by_npi, by_name=by_name, row_count=count)
+        if count == 0:
+            problem = "the list has a valid header but no rows"
+            _LEIE_CACHE["last_refusal"] = {"at": now, "reason": problem}
+            logger.warning("LEIE CSV refused: %s", problem)
+            return False
+        _LEIE_CACHE.update(loaded_at=now, by_npi=by_npi, by_name=by_name, row_count=count,
+                           schema_version=LEIE_SCHEMA_VERSION, last_refusal=None)
         logger.info(f"LEIE index loaded: {count} exclusion rows")
         return True
     except Exception as e:
@@ -852,6 +905,32 @@ def _sam_failure_reason(resp) -> str:
     return f"HTTP {status}{(' — ' + body[:160]) if body else ''}"
 
 
+def _sam_structural_check(payload: Any, *, list_keys: tuple) -> Optional[str]:
+    """None when `payload` is a SAM.gov response a result can actually be read
+    from; otherwise a safe reason (2026-10-04, Part B).
+
+    HTTP 200 is not an affirmative answer. Before this check a 200 body that
+    carried none of the documented result keys -- an error object, a
+    throttling notice, a changed schema -- was read as "zero records", i.e.
+    "not excluded" / "not registered": a clean screen manufactured from a
+    source fault. Only a body with a `totalRecords` count or one of the
+    documented list keys (an empty list included) is an answer. Mirrors
+    `_nppes_structural_check`.
+    """
+    if not isinstance(payload, dict):
+        return "malformed_response: SAM.gov response was not a JSON object"
+    has_list = any(isinstance(payload.get(k), list) for k in list_keys)
+    has_total = isinstance(payload.get("totalRecords"), int)
+    if has_list or has_total:
+        return None
+    if any(k in payload for k in ("error", "errors", "errorCode", "message", "fault")):
+        return ("source_error_body: SAM.gov answered HTTP 200 with an error body; "
+                "not a search result")
+    return ("malformed_response: SAM.gov response carried none of the documented "
+            "result keys (" + ", ".join(("totalRecords",) + tuple(list_keys)) + ")")
+
+
+
 class SAMGovConnector:
     """SAM.gov federal registration + exclusion (debarment) checks.
 
@@ -937,6 +1016,9 @@ class SAMGovConnector:
                 return SourceResult.unavailable(
                     "SAM_GOV", _sam_failure_reason(resp), qp, self.API_VERSION)
             payload = resp.json()
+            bad = _sam_structural_check(payload, list_keys=("entityData",))
+            if bad:
+                return SourceResult.unavailable("SAM_GOV", bad, qp, self.API_VERSION)
             entities = payload.get("entityData", [])
             if not entities:
                 return SourceResult.ok(
@@ -998,6 +1080,9 @@ class SAMGovConnector:
                 return SourceResult.unavailable(
                     "SAM_GOV", _sam_failure_reason(resp), qp, self.API_VERSION)
             payload = resp.json()
+            bad = _sam_structural_check(payload, list_keys=("entityData",))
+            if bad:
+                return SourceResult.unavailable("SAM_GOV", bad, qp, self.API_VERSION)
             entities = payload.get("entityData", []) or []
             if not entities:
                 return SourceResult.ok(
@@ -1063,6 +1148,10 @@ class SAMGovConnector:
                 return SourceResult.unavailable(
                     "SAM_GOV_EXCLUSIONS", _sam_failure_reason(resp), qp, "v4")
             payload = resp.json()
+            bad = _sam_structural_check(
+                payload, list_keys=("excludedEntity", "excludedEntities"))
+            if bad:
+                return SourceResult.unavailable("SAM_GOV_EXCLUSIONS", bad, qp, "v4")
             records = (payload.get("excludedEntity")
                        or payload.get("excludedEntities") or []) or []
             total = payload.get("totalRecords")

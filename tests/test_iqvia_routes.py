@@ -38,6 +38,20 @@ _created_snapshot_ids: list = []
 _created_upload_ids: list = []
 
 
+@pytest.fixture(autouse=True)
+def _iqvia_drop_dir_is_tmp_path(tmp_path, monkeypatch):
+    """The stage route confines a client-supplied file name to
+    settings.IQVIA_IMPORT_DIR (upload_security.safe_existing_path, added for
+    the CodeQL path-injection fix). These tests stage files they write under
+    pytest's tmp_path, so the drop directory is pointed there for the test --
+    the confinement itself stays fully in force. Added 2026-10-04: without it
+    every stage call here returned 422, and because these tests need a
+    database they never ran in the no-DB `pytest` CI job, so nothing reported
+    it."""
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "IQVIA_IMPORT_DIR", str(tmp_path))
+
+
 @pytest.fixture
 async def db(db_required):
     """A REAL, committed session -- not the savepoint-isolated
