@@ -246,6 +246,13 @@ unless stated):
 | `46b820e` | `test_seeded_corpus_b` | 2 passed |
 | `46b820e` | `-k "corpus_b or verification_finding or automated_verification or post_promotion or npi_outcome or deactivat or qa_gate or qa_approval or issue_ledger or exception_ledger"` | 134 passed, 10 failed -- see note |
 
+**CORRECTION (Round 25, 2026-10-04).** The explanation below for the eight
+coverage-test failures ("their hand-built evidence uses the dimension literal
+`D1_IDENTITY`") was WRONG. The cause is that those tests never set
+`ENTITY_RESOLVER_SOURCE=db`, so no reference resolved. The full regression has
+since completed and every failure is classified in
+`INTEGRATED-QA-READINESS-2026-10-04.md` §4, which supersedes this section.
+
 **Note on the failures.** The port-5533 database is reused across runs and
 this round's real-pipeline tests commit to it, so data-dependent tests
 (`test_delivery_delta` x3, `test_qa_gate` x1, `test_job_detail_contract` x1)
