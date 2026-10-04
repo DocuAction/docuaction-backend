@@ -100,22 +100,31 @@ downgrade is safe."
   one named-refusal) is demonstrated, not inferred from the two
   migrations' upgrade-direction simplicity.
 
-**Reused, pre-existing, valid evidence** (not re-run this round, per
-"reuse existing compatibility tests where valid"):
+**Reused, pre-existing, valid evidence:**
 - `tests/test_traceability_migration.py`'s own end-to-end test, re-run
   this round against the current head (`20261004_recheck_jobs`):
   confirms the FIVE EVIDENCE tables' ownership and grants are
   unaffected by any of these three revisions (a CHECK constraint is
   independent of ownership and grants, and `recheck_jobs` touches
   neither of those five tables) — 1 passed, this round, at head.
-- `tests/test_prod_managed_migration_integration.py`'s own file
-  comments record that its managed prepare/migrate/finalize gate was
-  run end-to-end through 17 revisions ending at this exact head
-  (`20261004_recheck_jobs`) and passed, in an earlier round, on a real
-  superuser-provisioned cluster. This session did not re-run it (it
-  requires `CONV_SUPERUSER_URL`, not set in this session's environment)
-  and is not claiming to have re-confirmed it — it is cited as existing,
-  valid, dated evidence, not as this round's own result.
+
+**Evidenced in CI this round (R29-3), not merely cited from an earlier
+round** — `convergence-fixture.yml`'s `fixture` job, which previously
+could not reach this PR's base/head (it is a `pull_request` workflow
+scoped to `branches: [main]`, and this stack is stacked on a non-`main`
+base; fixed in R29-2), ran for the first time against backend head
+`d8ce859` and passed: 9 passed in 59.13s, including
+`test_prod_managed_migration_integration.py::test_managed_prepare_migrate_finalize_end_to_end`
+(`MANAGED_PREPARE=PASS`, 18 columns applied exactly once,
+`alembic_version` moved to the owner role, no re-own) and
+`test_fresh_alembic_upgrade_head_from_empty` confirming a fresh build
+reaches exactly `head=20261004_recheck_jobs`. This supersedes the
+file's own prior comment citing an earlier round's result on a
+different, manually-provisioned cluster — the managed prepare/migrate/
+finalize gate is now independently reproduced, in CI, at this exact
+candidate head, with `CONV_SUPERUSER_URL` set by the workflow itself
+rather than absent from the environment. Run:
+https://github.com/DocuAction/docuaction-backend/actions/runs/37236949817
 
 **Still NOT evidenced, and not claimed to be:**
 - A downgrade of the two CHECK-widening migrations has NOT been
