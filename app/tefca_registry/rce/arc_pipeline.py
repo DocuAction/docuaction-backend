@@ -684,9 +684,20 @@ async def verify_and_classify(
                 from app.tefca_registry.rce import prior_risk as _prior_risk
                 prior_risk = await _prior_risk.unresolved_prior_risk(db, entity_uuid)
 
+            # Exclusion screening that never completed (see prior_risk.py):
+            # recorded on every B1 it affects; withholds `verified` only when
+            # ENFORCE_COMPLETE_EXCLUSION_SCREENING is on (default off).
+            claim = None
+            if classification.bucket == "B1":
+                from app.tefca_registry.rce import prior_risk as _prior_risk
+                gaps = _prior_risk.exclusion_screening_gaps(verification_results)
+                if gaps:
+                    claim = _prior_risk.verification_claim("B1", gaps, prior_risk)
+            withhold_verified = bool(prior_risk) or bool(claim and claim["enforced"])
+
             review_id = await _allocate_review_id(db)
             tier = BUCKET_TO_TIER.get(classification.bucket, 3)
-            if prior_risk:
+            if withhold_verified:
                 # Not Tier-1 auto-complete: a person must look.
                 tier = max(tier, 2)
 
@@ -723,6 +734,7 @@ async def verify_and_classify(
                     # Present ONLY when a prior risk signal is uncleared, so
                     # the snapshot shape of every other record is unchanged.
                     **({"prior_risk_not_cleared": prior_risk} if prior_risk else {}),
+                    **({"verification_claim": claim} if claim else {}),
                     # A SNAPSHOT, not a pointer. The report issued from this review
                     # must keep saying what it said after the entity is re-verified.
                     "dimensions": evidence.get("dimensions", []),
@@ -760,7 +772,7 @@ async def verify_and_classify(
                 # verification_status of in_review says who must look; it does not
                 # say what was found.
                 entity_row.verification_status = (
-                    "verified" if classification.bucket == "B1" and not prior_risk
+                    "verified" if classification.bucket == "B1" and not withhold_verified
                     else "in_review")
 
             buckets[classification.bucket] = buckets.get(classification.bucket, 0) + 1
@@ -777,6 +789,7 @@ async def verify_and_classify(
                 "tier": tier,
                 "assigned_role": TIER_ROLE[tier],
                 "prior_risk_not_cleared": prior_risk,
+                "verification_claim": claim,
                 "dimensions": {d["dimension"]: d["disposition"]
                                for d in evidence.get("dimensions", [])},
                 "applicability": evidence.get("applicability", {}).get("dimensions", {}),

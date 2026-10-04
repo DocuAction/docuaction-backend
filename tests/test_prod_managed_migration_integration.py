@@ -69,7 +69,9 @@ CHAIN_ALTERS = ["review_records", "rce_curated_records", "tefca_reg_entities", "
 #: actively updates upload progress). Mirrors the tables in
 #: scripts/prod_legacy_convergence.MANAGED_CHAIN_CREATES that are NOT also in
 #: AREA1_OWNER_TABLES.
-CHAIN_CREATES_TO_APP = ["report_export_jobs", "iqvia_upload_session", "iqvia_upload_chunk", "iqvia_import_job"]
+CHAIN_CREATES_TO_APP = ["report_export_jobs", "iqvia_upload_session", "iqvia_upload_chunk", "iqvia_import_job",
+                        # 20261004_recheck_jobs: job bookkeeping the app UPDATEs, app-owned at FINALIZE
+                        "rce_recheck_job", "rce_recheck_item"]
 PENDING = [rev.revision for rev in
           reversed(list(_SCRIPTS.iterate_revisions(HEAD, EXPECTED)))]
 DECISIONS_COLS = ["approval_justification", "rejection_reason", "rejection_category", "supersedes", "sla_hours",

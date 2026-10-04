@@ -90,6 +90,20 @@ class Settings(BaseSettings):
     # New enforcement stays in shadow (off) until explicitly approved.
     ENABLE_PREFLIGHT_ENFORCEMENT: bool = False
 
+    # Controlled rechecks (rce/rechecks.py) re-query real, rate-limited
+    # sources. Default False: the routes refuse. Nothing schedules a recheck
+    # automatically in either state.
+    ENABLE_CONTROLLED_RECHECKS: bool = False
+
+    # PROPOSED, INACTIVE. Under the active rules an entity is classified B1
+    # and marked verified while SAM.gov or CMS-revocation screening was
+    # unavailable / never evaluated (only OIG LEIE is required). The gap is
+    # always RECORDED on the review record (verification_claim). Turning
+    # this on additionally withholds `verified` for such records. It is a
+    # policy decision, not a default: with no SAM key configured it would
+    # withhold `verified` for every entity.
+    ENFORCE_COMPLETE_EXCLUSION_SCREENING: bool = False
+
     class Config:
         env_file = ".env"
         extra = "allow"

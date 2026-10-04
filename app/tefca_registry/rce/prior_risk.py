@@ -115,3 +115,84 @@ def rationale_suffix(prior: Dict[str, Any]) -> str:
         parts.append("an open BLOCKING ledger finding exists")
     return (" [PRIOR-RISK-NOT-CLEARED: " + "; ".join(parts) + ". This cycle's clean "
             "result does not clear it; entity held in review.]")
+
+
+# ── exclusion screening that did not complete ────────────────────────────────
+#
+# 2026-10-04 (Part B). Reproduced against the ACTIVE v3 rule set:
+#
+#     nppes verified, oig_leie clear, pecos verified, sam_gov UNAVAILABLE  -> B1 RULE-001
+#     nppes verified, oig_leie clear, pecos + sam_gov UNAVAILABLE          -> B1 RULE-002
+#     ... sam_gov never checked / insufficient                             -> B1 RULE-001
+#     ... cms_revocation UNAVAILABLE                                       -> B1 RULE-001
+#
+# Only OIG LEIE is required for B1. The rules are approved text ("an outage
+# is not a discrepancy") and are NOT changed here. What is recorded is the
+# consequence the rules do not state: such an entity is marked `verified`
+# although a debarment or revocation screen never completed.
+#
+# `exclusion_screening_gaps` names the gap on the record, always. Whether the
+# gap also withholds `verified` is `ENFORCE_COMPLETE_EXCLUSION_SCREENING`
+# (default False = official behaviour unchanged; the proposed policy is
+# visible but inactive).
+
+EXCLUSION_CONTROLS = ("oig_leie", "sam_gov", "cms_revocation")
+
+GAP_UNAVAILABLE = "UNAVAILABLE"
+GAP_INSUFFICIENT = "INSUFFICIENT_EVIDENCE"
+GAP_NOT_EVALUATED = "NOT_EVALUATED"
+GAP_FAILED = "FAILED"
+
+
+def exclusion_screening_gaps(classifier_input: Optional[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """Exclusion controls that did not produce an answer for this record.
+
+    NOT_APPLICABLE is not a gap: a control that does not attach to the entity
+    is reported as not applicable, with its documentary basis, elsewhere."""
+    sources = (classifier_input or {}).get("sources") or {}
+    gaps: List[Dict[str, str]] = []
+    for control in EXCLUSION_CONTROLS:
+        raw = sources.get(control)
+        if raw is None:
+            gaps.append({"control": control, "gap": GAP_NOT_EVALUATED})
+            continue
+        status = raw.get("status") if isinstance(raw, dict) else raw
+        disposition = (raw.get("disposition") if isinstance(raw, dict) else None) or ""
+        if disposition == "NOT_APPLICABLE":
+            continue
+        if status == "unavailable":
+            gaps.append({"control": control, "gap": GAP_UNAVAILABLE})
+        elif status == "failed":
+            gaps.append({"control": control, "gap": GAP_FAILED})
+        elif disposition == "INSUFFICIENT_EVIDENCE":
+            gaps.append({"control": control, "gap": GAP_INSUFFICIENT})
+        elif status == "not_checked":
+            gaps.append({"control": control, "gap": GAP_NOT_EVALUATED})
+    return gaps
+
+
+def enforce_complete_exclusion_screening() -> bool:
+    from app.core.config import settings
+    return bool(getattr(settings, "ENFORCE_COMPLETE_EXCLUSION_SCREENING", False))
+
+
+def verification_claim(bucket: str, gaps: List[Dict[str, str]],
+                       prior: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Official and inactive-proposed answer to "may this entity be marked
+    verified?", for a record the classifier put in B1."""
+    enforced = enforce_complete_exclusion_screening()
+    official_verified = bucket == "B1" and not prior and not (enforced and gaps)
+    return {
+        "exclusion_screening_incomplete": gaps,
+        "official": {"entity_marked_verified": official_verified,
+                     "basis": "active rule set; an unavailable SAM / CMS-revocation "
+                              "screen does not prevent B1" if not enforced else
+                              "ENFORCE_COMPLETE_EXCLUSION_SCREENING is on"},
+        "proposed_inactive": {
+            "entity_would_be_marked_verified": bucket == "B1" and not prior and not gaps,
+            "basis": "verified requires every applicable exclusion control to have "
+                     "answered; an unavailable, insufficient or unevaluated screen is "
+                     "never a pass",
+            "status": "ENFORCED" if enforced else "INACTIVE_UNAPPROVED"},
+        "enforced": enforced,
+    }

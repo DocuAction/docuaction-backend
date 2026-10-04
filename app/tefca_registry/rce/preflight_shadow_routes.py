@@ -214,6 +214,124 @@ async def source_policies_route(user=Depends(require_role("viewer"))):
     return source_policy.registry_dto()
 
 
+# ── controlled rechecks ──────────────────────────────────────────────────────
+#
+# Request: reviewer. Approve / run / resume: qalead, and never the requester.
+# Every route refuses unless ENABLE_CONTROLLED_RECHECKS is on. No scheduler
+# runs a recheck: a batch runs only when this route is called.
+
+class RecheckRequest(BaseModel):
+    trigger_kind: str
+    source_id: str
+    trigger_ref: str = Field(..., max_length=255)
+    rationale: str
+    max_entities: int = Field(default=2000, ge=1, le=2000)
+    batch_size: int = Field(default=50, ge=1, le=200)
+
+
+def _rechecks_enabled_or_409():
+    from app.core.config import settings
+    if not bool(getattr(settings, "ENABLE_CONTROLLED_RECHECKS", False)):
+        raise HTTPException(409, "controlled rechecks are disabled "
+                                 "(ENABLE_CONTROLLED_RECHECKS is off)")
+
+
+@router.post("/deliveries/{intake_id}/rechecks", status_code=201,
+             summary="Request a bounded recheck (PENDING_APPROVAL; looks nothing up)")
+async def request_recheck_route(intake_id: str, req: RecheckRequest,
+                                db: AsyncSession = Depends(get_db),
+                                user=Depends(require_role(EVIDENCE_ROLE))):
+    from app.tefca_registry.rce import rechecks
+    _rechecks_enabled_or_409()
+    iid = _uuid_or_422(intake_id, "intake_id")
+    try:
+        return await rechecks.request_recheck(
+            db, iid, trigger_kind=req.trigger_kind, source_id=req.source_id,
+            trigger_ref=req.trigger_ref, rationale=req.rationale, user=user,
+            max_entities=req.max_entities, batch_size=req.batch_size)
+    except rechecks.RecheckRefused as exc:
+        raise HTTPException(409, str(exc))
+
+
+@router.post("/rechecks/{job_id}/approve",
+             summary="Independent approval of a recheck (never the requester)")
+async def approve_recheck_route(job_id: str, db: AsyncSession = Depends(get_db),
+                                user=Depends(require_role("qalead"))):
+    from app.tefca_registry.rce import rechecks
+    _rechecks_enabled_or_409()
+    try:
+        return await rechecks.approve_recheck(db, _uuid_or_422(job_id, "job_id"), user=user)
+    except rechecks.RecheckRefused as exc:
+        raise HTTPException(409, str(exc))
+
+
+@router.post("/rechecks/{job_id}/run-batch",
+             summary="Run ONE bounded batch of an approved recheck")
+async def run_recheck_batch_route(job_id: str, db: AsyncSession = Depends(get_db),
+                                  user=Depends(require_role("qalead"))):
+    from app.tefca_registry.rce import recheck_models as rm
+    from app.tefca_registry.rce import rechecks
+    _rechecks_enabled_or_409()
+    jid = _uuid_or_422(job_id, "job_id")
+    try:
+        job = await rechecks._job_or_refuse(db, jid)
+        if job.state == rm.STATE_QUEUED and await rechecks.claim(db, jid) is None:
+            raise rechecks.RecheckRefused("the job could not be claimed (another worker "
+                                          "holds it, or its attempts are exhausted)")
+        return await rechecks.run_batch(db, jid)
+    except rechecks.RecheckRefused as exc:
+        raise HTTPException(409, str(exc))
+
+
+@router.post("/rechecks/{job_id}/resume",
+             summary="Requeue a recheck the circuit breaker stopped (bounded attempts)")
+async def resume_recheck_route(job_id: str, db: AsyncSession = Depends(get_db),
+                               user=Depends(require_role("qalead"))):
+    from app.tefca_registry.rce import rechecks
+    _rechecks_enabled_or_409()
+    try:
+        return await rechecks.resume_stopped(db, _uuid_or_422(job_id, "job_id"), user=user)
+    except rechecks.RecheckRefused as exc:
+        raise HTTPException(409, str(exc))
+
+
+@router.get("/rechecks/{job_id}", summary="Recheck job status and pinned versions")
+async def get_recheck_route(job_id: str, db: AsyncSession = Depends(get_db),
+                            user=Depends(require_role("viewer"))):
+    from app.tefca_registry.rce import rechecks
+    try:
+        return rechecks.job_dto(await rechecks._job_or_refuse(db, _uuid_or_422(job_id, "job_id")))
+    except rechecks.RecheckRefused as exc:
+        raise HTTPException(404, str(exc))
+
+
+@router.get("/rechecks/{job_id}/items", summary="Recheck drill-down, one row per entity")
+async def recheck_items_route(job_id: str, limit: int = Query(100, ge=1, le=500),
+                              offset: int = Query(0, ge=0),
+                              db: AsyncSession = Depends(get_db),
+                              user=Depends(require_role(EVIDENCE_ROLE))):
+    from app.tefca_registry.rce import rechecks
+    try:
+        return await rechecks.list_items(db, _uuid_or_422(job_id, "job_id"),
+                                         limit=limit, offset=offset)
+    except rechecks.RecheckRefused as exc:
+        raise HTTPException(404, str(exc))
+
+
+@router.get("/rechecks/{job_id}/items.csv", summary="Recheck drill-down as CSV")
+async def recheck_items_csv_route(job_id: str, db: AsyncSession = Depends(get_db),
+                                  user=Depends(require_role(EVIDENCE_ROLE))):
+    from fastapi.responses import Response
+    from app.tefca_registry.rce import rechecks
+    try:
+        body = await rechecks.items_csv(db, _uuid_or_422(job_id, "job_id"))
+    except rechecks.RecheckRefused as exc:
+        raise HTTPException(404, str(exc))
+    return Response(content=body, media_type="text/csv",
+                    headers={"Content-Disposition":
+                             f'attachment; filename="recheck-{job_id}.csv"'})
+
+
 # ── analyst workspace ────────────────────────────────────────────────────────
 
 @router.get("/deliveries/{intake_id}/workspace",

@@ -532,6 +532,9 @@ MANAGED_CHAIN_CREATES = {
     # five imported modules, so it is invisible to the clean-subprocess measurement
     # the same way it always has been for this module.
     "iqvia_upload_session", "iqvia_upload_chunk", "iqvia_import_job",
+    # 20261004_recheck_jobs -- SELECT+INSERT+UPDATE job bookkeeping (the app
+    # updates progress), so app-owned at FINALIZE like the IQVIA job tables.
+    "rce_recheck_job", "rce_recheck_item",
 }
 # Tables the 20260917 revision declares FOREIGN KEYS to that docuaction_app owns
 # in PROD and that no pending revision ALTERs (so they are not re-owned). CREATE
