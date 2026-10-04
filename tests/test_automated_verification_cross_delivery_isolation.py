@@ -135,12 +135,21 @@ async def test_evidence_rows_are_scoped_to_the_delivery_whose_entities_they_desc
     b_ids = await _entity_ids_for(db, b)
     assert a_ids and b_ids and a_ids.isdisjoint(b_ids)
 
+    # 2026-10-04: these assertions read the WHOLE table, so any row another
+    # test had committed to the same database made them fail (they passed
+    # alone on a new database and failed in a longer run). The proof is now
+    # the DELTA this test's own coverage run produced -- the same property,
+    # no longer dependent on the table being empty beforehand.
+    rows_before = {row[0] for row in (await db.execute(
+        select(TEFCADimensionEvidence.id))).all()}
+
     with patch("app.Tefca.evidence_service.EvidenceService.build_evidence",
               new=AsyncMock(return_value=_clean_evidence())):
         await av.run_coverage_batch(db, a, batch_size=100)
 
-    evidence_entity_ids = {row[0] for row in (await db.execute(
-        select(TEFCADimensionEvidence.entity_id))).all()}
+    evidence_entity_ids = {str(entity_id) for row_id, entity_id in (await db.execute(
+        select(TEFCADimensionEvidence.id, TEFCADimensionEvidence.entity_id))).all()
+        if row_id not in rows_before}
 
     assert evidence_entity_ids, "covering delivery A wrote no evidence rows at all"
     assert evidence_entity_ids <= a_ids, (
@@ -222,6 +231,15 @@ async def test_review_required_outcome_sets_in_review_only_on_its_own_entity(
             return _review_required_evidence()
         return _clean_evidence()
 
+    # 2026-10-04: these assertions read the WHOLE table, so any row another
+    # test had committed to the same database made them fail (they passed
+    # alone on a new database and failed in a longer run). The proof is now
+    # the DELTA this test's own coverage run produced -- the same property,
+    # no longer dependent on the table being empty beforehand.
+    in_review_before = {str(i) for i in (await db.execute(
+        select(reg.TefcaRegEntity.id)
+        .where(reg.TefcaRegEntity.verification_status == "in_review"))).scalars().all()}
+
     with patch("app.Tefca.evidence_service.EvidenceService.build_evidence", new=_build_b):
         result_b = await av.run_coverage_batch(db, b, batch_size=100)
 
@@ -233,9 +251,10 @@ async def test_review_required_outcome_sets_in_review_only_on_its_own_entity(
     in_review = (await db.execute(
         select(reg.TefcaRegEntity.id)
         .where(reg.TefcaRegEntity.verification_status == "in_review"))).scalars().all()
-    in_review = {str(i) for i in in_review}
+    in_review = {str(i) for i in in_review} - in_review_before
 
     assert in_review, "no entity was marked in_review for the REVIEW_REQUIRED outcome"
+    assert len(in_review) == 1, f"exactly one entity should have been flipped, got {in_review}"
     assert in_review <= b_ids, (
         "an entity outside delivery B was marked in_review by delivery B's run")
     assert in_review.isdisjoint(a_ids), (
@@ -248,10 +267,19 @@ async def test_no_review_record_is_ever_created_for_either_delivery(two_deliveri
     db, deliveries = two_deliveries
     a, b = deliveries["A"]["intake_id"], deliveries["B"]["intake_id"]
 
+    # Delta, not an empty table: see the note in the evidence test above.
+    before = set((await db.execute(select(reg.ReviewRecord.id))).scalars().all())
+
     with patch("app.Tefca.evidence_service.EvidenceService.build_evidence",
               new=AsyncMock(return_value=_clean_evidence())):
         await av.run_coverage_batch(db, a, batch_size=100)
         await av.run_coverage_batch(db, b, batch_size=100)
 
-    review_records = (await db.execute(select(reg.ReviewRecord.id))).scalars().all()
-    assert review_records == []
+    after = set((await db.execute(select(reg.ReviewRecord.id))).scalars().all())
+    assert after == before, f"coverage created review records: {after - before}"
+    # ...and none exists for any entity of either delivery.
+    ids = [__import__("uuid").UUID(i) for i in
+           (await _entity_ids_for(db, a)) | (await _entity_ids_for(db, b))]
+    own = (await db.execute(select(reg.ReviewRecord.id).where(
+        reg.ReviewRecord.entity_id.in_(ids)))).scalars().all()
+    assert own == []

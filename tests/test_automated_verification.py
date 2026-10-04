@@ -131,8 +131,18 @@ async def test_run_coverage_batch_covers_every_eligible_entity_and_creates_no_re
     assert result["by_outcome"] == {av.OUTCOME_VERIFIED: 5}
 
     # THE INVARIANT THIS MODULE EXISTS TO PRESERVE: no ReviewRecord, ever.
+    # Scoped to THIS delivery's entities (2026-10-04): the whole-table form
+    # failed whenever another test had committed a review record to the same
+    # database, which says nothing about this module.
+    from sqlalchemy import text as _text
+    entity_ids = [r[0] for r in (await db.execute(_text(
+        "SELECT DISTINCT canonical_entity_id FROM rce_curated_records "
+        "WHERE source_intake_id = CAST(:iid AS uuid) AND canonical_entity_id IS NOT NULL"),
+        {"iid": str(intake_id)})).all()]
+    assert len(entity_ids) == 5
     review_records = (await db.execute(
-        select(reg.ReviewRecord.id))).scalars().all()
+        select(reg.ReviewRecord.id).where(
+            reg.ReviewRecord.entity_id.in_(entity_ids)))).scalars().all()
     assert review_records == []
 
 
