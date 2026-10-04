@@ -75,8 +75,32 @@ def safe_existing_path(candidate: str, *allowed_dirs) -> Path:
     that takes no tainted input at all), and the path returned is built
     from one of THOSE entries -- a value that originates from the
     filesystem, not from the request -- once it is found to equal the
-    requested basename. Raises HTTPException(400) for an empty/bare name,
-    or (422) if no file by that name exists in any allowed directory.
+    requested basename.
+
+    Independent review (2026-10-04) found that an entry matching the
+    requested name could itself be a SYMLINK placed inside the allowed
+    directory pointing OUTSIDE it: `Path.is_file()` follows symlinks, so
+    the prior version would return (and a caller would then open) a file
+    outside every allowed directory. Fixed with two independent checks,
+    neither alone sufficient: (1) `DirEntry.is_symlink()` refuses any
+    symlink by name, checked with `os.scandir` (not `os.listdir`) so the
+    entry's type is known from the same syscall, no separate stat a
+    symlink could race; (2) the resolved destination must still be inside
+    `base` (`os.path.commonpath`) -- defense in depth for anything
+    `is_symlink()` does not catch (e.g. a hardlink or bind-mounted path
+    that is not itself a symlink but still resolves outside `base`).
+    Neither check reintroduces client input into a filesystem call: both
+    operate on `base`/`entry.name`, which originate from the trusted
+    directory listing, not from `candidate`.
+
+    This still leaves a narrow TOCTOU window between this check and the
+    caller's actual read (the file could be replaced with a symlink in
+    between) -- callers that open the returned path should use
+    `open_no_follow` (below) rather than the `open()` builtin to close it.
+
+    Raises HTTPException(400) for an empty/bare name or a symlink entry,
+    or (422) if no regular file by that name exists in any allowed
+    directory.
     """
     requested = Path(candidate).name
     if not requested or requested in (".", ".."):
@@ -84,9 +108,34 @@ def safe_existing_path(candidate: str, *allowed_dirs) -> Path:
     for d in allowed_dirs:
         base = Path(d).resolve()
         base.mkdir(parents=True, exist_ok=True)
-        for entry in os.listdir(base):
-            if entry == requested:
-                dest = base / entry
-                if dest.is_file():
-                    return dest
+        with os.scandir(base) as it:
+            for entry in it:
+                if entry.name != requested:
+                    continue
+                if entry.is_symlink():
+                    raise HTTPException(400, "Invalid file path: symlinks are not accepted")
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                dest = (base / entry.name).resolve()
+                if os.path.commonpath([str(base), str(dest)]) != str(base):
+                    raise HTTPException(400, "Invalid file path: escapes the allowed directory")
+                return dest
     raise HTTPException(422, f"no file named {requested!r} in an allowed import directory")
+
+
+def open_no_follow(path, mode: str = "rb", **kwargs):
+    """Open an existing file for reading, refusing to follow a symlink at
+    the final path component (`O_NOFOLLOW`) -- closes the TOCTOU window
+    between a `safe_existing_path` containment check and the actual read:
+    even if the file at `path` was replaced with a symlink after
+    validation, this raises instead of silently reading through it.
+
+    `O_NOFOLLOW` is POSIX-only (a no-op flag value of 0 on platforms
+    without it, e.g. local Windows development); CI and every deployed
+    environment run Linux, where this is the real, enforced guard. `mode`
+    must be a read mode ('rb' or a text mode such as 'r'); extra kwargs
+    (encoding, newline, ...) pass straight through to `os.fdopen`.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    return os.fdopen(fd, mode, **kwargs)

@@ -57,6 +57,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core import request_context
+from app.core.upload_security import open_no_follow
 from app.tefca_registry.rce import snapshot_models as sm
 from app.tefca_registry.rce.source_matching import register_snapshot
 
@@ -116,9 +117,11 @@ async def _notify_progress(progress_cb, summary: "ImportSummary") -> None:
 
 
 def file_sha256(path: Path, *, chunk_bytes: int = 1024 * 1024) -> str:
-    """Streamed hash -- a 3.8GB file is never read into memory at once."""
+    """Streamed hash -- a 3.8GB file is never read into memory at once.
+    open_no_follow, not open(): refuses a symlink even if one replaced
+    `path` after safe_existing_path's own check (TOCTOU)."""
     h = hashlib.sha256()
-    with open(path, "rb") as fh:
+    with open_no_follow(path, "rb") as fh:
         while True:
             block = fh.read(chunk_bytes)
             if not block:
@@ -228,7 +231,10 @@ async def _import_csv(
     cid = _cid()
 
     buffer: List[Dict[str, Any]] = []
-    with open(path, "r", encoding="utf-8", newline="") as fh:
+    # open_no_follow, not open(): same TOCTOU reason as file_sha256 above --
+    # this is the actual multi-GB import read, the highest-value target for
+    # a file swapped in between validation and this call.
+    with open_no_follow(path, "r", encoding="utf-8", newline="") as fh:
         reader = csv.DictReader(fh)
         for line_no, row in enumerate(reader, start=2):  # header is line 1
             summary.rows_read += 1
