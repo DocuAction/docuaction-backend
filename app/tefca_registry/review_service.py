@@ -99,6 +99,13 @@ async def probe_sources(db, entity_id) -> Dict[str, dict]:
             out[key] = {"status": NOT_CHECKED,
                         "reason": "entity has no NPI identifier to look up",
                         "label": SOURCE_LABELS.get(key), "subtitle": SOURCE_SUBTITLES.get(key)}
+        # A missing NPI must not remove the entity from exclusion NAME
+        # screening (2026-10-04, Part B). NPPES/PECOS are NPI-keyed and stay
+        # NOT_CHECKED; the OIG LEIE is also searchable by organisation name,
+        # and the delivery path already does that (`evidence_service.
+        # gather_sources`, `leie_org`). Before this, a manual review of an
+        # NPI-less entity never screened the exclusion list at all.
+        out["oig_leie"] = await _leie_org_name_screen(db, entity_id)
         return out
 
     # Centralised gate (Fix 1), ahead of the connector loop: a present but
@@ -210,6 +217,67 @@ async def probe_sources(db, entity_id) -> Dict[str, dict]:
         out[key]["verified_at"] = datetime.utcnow().isoformat() + "Z"
         out[key]["lookup_identifier"] = npi
     return out
+
+
+#: Marker carried by an exclusion result that came from a NAME search rather
+#: than an identifier match. Weaker evidence: never counted as a verified
+#: source, and a hit is a CANDIDATE for an analyst, never a confirmed exclusion.
+MATCHED_BY_ORG_NAME = "organisation_name"
+
+
+async def _leie_org_name_screen(db, entity_id) -> dict:
+    """OIG LEIE screened by organisation name for an entity with no NPI.
+
+    Uses the SAME two classifier states the delivery path produces for the
+    same evidence (`arc_pipeline.evidence_item_state` on the exclusion
+    dimension), so the two paths cannot disagree about what a name screen
+    means:
+        candidate found  REVIEW    -> "not_found"  potential hit; a person
+                                                   decides; never "excluded"
+        nothing listed   NOT_FOUND -> "clear"      screened by name only
+        list unreachable           -> UNAVAILABLE  never a clearance
+        no name either             -> NOT_CHECKED  screening did not happen
+    Never raises.
+    """
+    from sqlalchemy import select
+    from app.tefca_registry.rce.arc_pipeline import EXCLUSION_DIMENSION, evidence_item_state
+
+    base = {"label": SOURCE_LABELS.get("oig_leie"), "subtitle": SOURCE_SUBTITLES.get("oig_leie"),
+            "matched_by": MATCHED_BY_ORG_NAME}
+    name = ((await db.execute(
+        select(reg.TefcaRegEntity.name).where(reg.TefcaRegEntity.id == entity_id))
+    ).scalar_one_or_none() or "").strip()
+    if not name:
+        return {**base, "status": NOT_CHECKED, "matched_by": None,
+                "reason": ("entity has neither an NPI nor an organisation name; no "
+                           "exclusion screening could be performed -- this is NOT a "
+                           "clearance")}
+    try:
+        from app.Tefca.connectors import SourceConnectorManager
+        r = await SourceConnectorManager().leie.lookup_by_name(last="", first="", org=name)
+    except Exception as exc:  # noqa: BLE001 -- one source must not sink the run
+        return {**base, "status": FAILED, "reason": f"{type(exc).__name__}: {exc}"[:200]}
+    if getattr(r, "error", None) or not getattr(r, "success", False):
+        return {**base, "status": UNAVAILABLE,
+                "reason": str(getattr(r, "error", None) or "source did not complete")[:200]}
+    data = getattr(r, "data", None) or {}
+    hit = bool(data.get("excluded") or data.get("exclusion_found"))
+    disposition = "REVIEW" if hit else "NOT_FOUND"
+    return {**base,
+            "status": evidence_item_state(EXCLUSION_DIMENSION, disposition),
+            "disposition": disposition,
+            "potential_hit": hit,
+            "exclusion_count": data.get("exclusion_count", 0),
+            "lookup_identifier": f"org={name}"[:50],
+            "verified_at": datetime.utcnow().isoformat() + "Z",
+            "reason": (
+                "No NPI. OIG LEIE screened by organisation name: a CANDIDATE match "
+                "was found. A name match alone does not confirm an exclusion and "
+                "does not clear one -- analyst determination required."
+                if hit else
+                "No NPI. OIG LEIE screened by organisation name: no candidate found "
+                "in the current list using an exact organisation-name search. Weaker "
+                "than an identifier match; not an equivalent clearance.")}
 
 
 #: Persisted exclusion/revocation evidence the manual path CONSUMES (2026-10-03).
@@ -359,9 +427,18 @@ def coverage_note(sources: Dict[str, dict]) -> dict:
     unavailable = [k for k, v in impl.items() if v.get("status") == UNAVAILABLE]
     not_checked = [k for k, v in impl.items() if v.get("status") == NOT_CHECKED]
     failed = [k for k, v in impl.items() if v.get("status") == FAILED]
-    verified = [k for k, v in impl.items() if v.get("status") in (VERIFIED, "clear")]
+    # A name-only exclusion screen is weaker than an identifier match: it is
+    # CHECKED, but never counted among the VERIFIED sources (2026-10-04).
+    name_only = sorted(k for k, v in impl.items()
+                       if v.get("matched_by") == MATCHED_BY_ORG_NAME
+                       and v.get("status") in ("clear", NOT_FOUND))
+    verified = [k for k, v in impl.items()
+                if v.get("status") in (VERIFIED, "clear") and k not in name_only]
 
     parts = [f"{len(checked)} of {len(impl)} implemented sources checked."]
+    if name_only:
+        parts.append(f"Screened by organisation name only (not counted as verified): "
+                     f"{', '.join(name_only)}.")
     if unavailable:
         parts.append(f"Unavailable: {', '.join(sorted(unavailable))}.")
     if not_checked:
@@ -378,6 +455,7 @@ def coverage_note(sources: Dict[str, dict]) -> dict:
         "sources_checked": len(checked),
         "sources_available": len(impl),          # implemented connectors only
         "sources_verified": len(verified),
+        "sources_name_screen_only": len(name_only),
         "sources_unavailable": len(unavailable),
         "sources_not_checked": len(not_checked),
         "sources_failed": len(failed),

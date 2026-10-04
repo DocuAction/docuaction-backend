@@ -686,6 +686,54 @@ async def _load_leie_csv() -> bool:
         return False
 
 
+#: Corporate designators dropped by `normalize_org_name`. A fixed list, not a
+#: similarity threshold: two names are a normalized match only when they are
+#: IDENTICAL after this deterministic rewrite.
+_ORG_DESIGNATORS = frozenset({
+    "INC", "INCORPORATED", "LLC", "LTD", "LIMITED", "CORP", "CORPORATION", "CO",
+    "COMPANY", "PLLC", "PC", "PA", "LP", "LLP", "PLC",
+})
+
+
+def normalize_org_name(name: Optional[str]) -> str:
+    """Deterministic organisation-name key for exclusion CANDIDATE generation
+    (2026-10-04, Part B). Upper-case, "&" -> "AND", punctuation removed,
+    whitespace collapsed, trailing corporate designators dropped.
+
+    "Acme Health, L.L.C." and "ACME HEALTH LLC" share a key; "Acme Health"
+    and "Acme Home Health" do not. No fuzzy score and no threshold: this only
+    stops punctuation and suffix spelling from hiding a candidate. A match on
+    this key is a CANDIDATE for a person to adjudicate -- it never confirms
+    an exclusion and never clears one."""
+    import re as _re
+    text = (name or "").upper().replace("&", " AND ")
+    text = _re.sub(r"[.]", "", text)            # L.L.C. -> LLC
+    text = _re.sub(r"[^A-Z0-9 ]+", " ", text)
+    words = text.split()
+    while words and words[-1] in _ORG_DESIGNATORS:
+        words.pop()
+    return " ".join(words)
+
+
+_LEIE_NORM_INDEX: Dict[str, Any] = {"source_id": None, "index": {}}
+
+
+def _leie_norm_index() -> Dict[str, list]:
+    """Normalized business-name index, derived from (and cached against) the
+    loaded `by_name` index, so it can never describe a different snapshot."""
+    by_name = _LEIE_CACHE.get("by_name") or {}
+    if _LEIE_NORM_INDEX["source_id"] != id(by_name):
+        index: Dict[str, list] = {}
+        for (name, first), recs in by_name.items():
+            if first:           # individuals are keyed (last, first); skip
+                continue
+            key = normalize_org_name(name)
+            if key:
+                index.setdefault(key, []).extend(recs)
+        _LEIE_NORM_INDEX.update(source_id=id(by_name), index=index)
+    return _LEIE_NORM_INDEX["index"]
+
+
 class OIGLEIEConnector:
     """OIG LEIE exclusion screening via the free public CSV (key-less)."""
     API_VERSION = "CSV-UPDATED"
@@ -737,9 +785,23 @@ class OIGLEIEConnector:
         if not await _ensure_leie_loaded():
             return SourceResult.unavailable("OIG_LEIE", "exclusions CSV unavailable", qp, self.API_VERSION)
         if org:
-            matches = _LEIE_CACHE["by_name"].get((org.strip().upper(), ""), [])
-        else:
-            matches = _LEIE_CACHE["by_name"].get((last.strip().upper(), first.strip().upper()), [])
+            exact = _LEIE_CACHE["by_name"].get((org.strip().upper(), ""), [])
+            # Normalized candidates are ADDED to exact ones, never substituted:
+            # a punctuation/designator variant must not hide a candidate.
+            normalized = _leie_norm_index().get(normalize_org_name(org), [])
+            seen = {id(m) for m in exact}
+            matches = list(exact) + [m for m in normalized if id(m) not in seen]
+            result = self._build(matches, qp)
+            # What was searched, with what, so a clean screen can be reported
+            # as "no candidate found in THIS list using THESE methods" rather
+            # than as a blanket clearance.
+            result.data["match_methods"] = ["exact_business_name", "normalized_business_name"]
+            result.data["candidates_exact"] = len(exact)
+            result.data["candidates_normalized_only"] = len(matches) - len(exact)
+            result.data["list_rows_searched"] = _LEIE_CACHE.get("row_count", 0)
+            result.data["list_loaded_at_epoch"] = _LEIE_CACHE.get("loaded_at")
+            return result
+        matches = _LEIE_CACHE["by_name"].get((last.strip().upper(), first.strip().upper()), [])
         return self._build(matches, qp)
 
     async def probe(self) -> bool:
