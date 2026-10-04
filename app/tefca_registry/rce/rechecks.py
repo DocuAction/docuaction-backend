@@ -435,8 +435,23 @@ async def run_batch(db, job_id, *, batch_size: Optional[int] = None) -> Dict[str
                             f"unavailable from {job.source_id}; stopped with {pending} "
                             f"item(s) untouched")
     elif pending == 0:
-        job.state = rm.STATE_SUCCEEDED
+        # 2026-10-04 (found in the browser journey): a job in which NOT ONE
+        # entity was actually asked -- every reference failed to resolve, or
+        # every lookup raised -- reported SUCCEEDED / "Finished". Nothing was
+        # re-evaluated, so that is a failure with a reason, not a success.
+        not_asked = int(counts.get(rm.OUTCOME_NOT_RESOLVED, 0)) + int(counts.get(rm.ITEM_ERROR, 0))
+        total_items = sum(int(v) for v in counts.values())
         job.completed_at = datetime.utcnow()
+        if total_items and not_asked == total_items:
+            job.state = rm.STATE_FAILED
+            job.error_reason = (
+                f"no entity could be re-evaluated: {int(counts.get(rm.OUTCOME_NOT_RESOLVED, 0))} "
+                f"reference(s) did not resolve in the registry and "
+                f"{int(counts.get(rm.ITEM_ERROR, 0))} lookup(s) raised an error. The source "
+                f"was not asked. Check the entity resolver configuration "
+                f"(ENTITY_RESOLVER_SOURCE) before requesting another recheck.")
+        else:
+            job.state = rm.STATE_SUCCEEDED
     await db.commit()
     return {**job_dto(job), "processed_this_call": len(items),
             "complete": job.state != rm.STATE_RUNNING}

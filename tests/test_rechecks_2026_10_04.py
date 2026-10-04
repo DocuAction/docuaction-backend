@@ -420,3 +420,24 @@ async def test_the_delivery_recheck_list_states_whether_the_feature_is_on_and_wh
     assert [j["job_id"] for j in listed["items"]] == [job["job_id"]]
     assert listed["items"][0]["state"] == rm.STATE_PENDING_APPROVAL
     assert listed["items"][0]["is_compliance_approval"] is False
+
+
+async def test_a_recheck_in_which_no_entity_resolved_is_a_failure_not_a_success(
+        db_required, monkeypatch):
+    """Found in the 2026-10-04 browser journey: with the entity resolver not
+    pointed at the registry, every reference failed to resolve, SAM.gov was
+    never asked, and the job still read SUCCEEDED ("Finished")."""
+    from app.core.database import async_session_maker
+
+    intake_id, entity_ids, fake = await _delivery_verified_during_an_outage(monkeypatch, n=2)
+    job = await _request(intake_id, _User("reviewer"))
+    await _approve(job["job_id"], _User("qalead"))
+    fake.mode = "up"
+    monkeypatch.setenv("ENTITY_RESOLVER_SOURCE", "mock")     # nothing resolves
+    done = await _claim_and_run(job["job_id"])
+    assert fake.calls == 0                                    # the source was not asked
+    assert done["state"] == rm.STATE_FAILED, done["state"]
+    assert "no entity could be re-evaluated" in done["error_reason"]
+    assert done["summary"]["by_outcome"] == {rm.OUTCOME_NOT_RESOLVED: 2}
+    after = await _snapshot(entity_ids)
+    assert set(after["sam_rows"].values()) == {"UNAVAILABLE"}  # nothing appended, nothing cleared
