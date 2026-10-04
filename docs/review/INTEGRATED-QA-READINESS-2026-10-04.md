@@ -407,7 +407,14 @@ failed load and on a stopped recheck).
    data calls are refused by the server). Observation only.
 3. **IQVIA page** opens for a Viewer without a permission screen; actions
    on it are refused by the server. Observation only.
-4. The audit's first attempt produced two false alarms from its own timing
+5. **Per-source counts on the Verification tab.** On the synthetic corpus the
+   NPPES card showed Eligible 12, Verified 8, Not found 9, Unavailable 3 —
+   more outcomes than organisations (the second cycle for one record and
+   more than one evidence row per organisation are the likely reasons).
+   Seen in a screenshot; **not investigated**. The SAM.gov card's "Not
+   found 9" is the existing vocabulary for a clean name screen. Both are
+   pre-existing coverage semantics, left as they are.
+6. The audit's first attempt produced two false alarms from its own timing
    and selectors (reading a loading skeleton; a link-name pattern). Both
    were corrected in the audit, not in the application.
 
