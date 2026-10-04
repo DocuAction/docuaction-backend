@@ -165,7 +165,7 @@ jobs:
           - 5432:5432
         options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 20
     env:
-      SECRET_KEY: journeytestjourneytestjourneytestjourneytestjourneytestjourneyt
+      SECRET_KEY: journeytestjourneytestjourneytestjourneytestjourneytestjourneytest
       ALLOWED_HOSTS: '*'
       ALLOWED_ORIGINS: http://127.0.0.1:8103
       DATABASE_URL: postgresql+asyncpg://postgres:journeytest@127.0.0.1:5432/test_journey_1003

@@ -68,21 +68,24 @@ def safe_existing_path(candidate: str, *allowed_dirs) -> Path:
     """Resolve a CLIENT-SUPPLIED path to an EXISTING file, confined to one of
     `allowed_dirs` (each created if missing). Guards an operator-local-path
     workflow (e.g. staging a multi-GB extract already placed on the server)
-    against path traversal / arbitrary-file-read: a request for
-    ``/etc/passwd`` or ``../../anything`` is refused with 400, never opened.
+    against path traversal / arbitrary-file-read.
 
-    Raises HTTPException(400) if the resolved path escapes every allowed
-    directory, or HTTPException(422) if it resolves inside one but no file
-    exists there.
+    Unlike a validate-then-pass-through check, this never lets the client's
+    own path string reach a filesystem call: only its basename (`Path(...).name`,
+    which drops every directory component -- a traversal payload like
+    ``../../etc/passwd`` or an absolute path reduces to ``passwd``) is
+    rejoined onto a TRUSTED directory from `allowed_dirs`, the same
+    reconstruct-don't-just-validate shape `safe_upload_path` above already
+    uses. Raises HTTPException(400) for an empty/bare name, or (422) if no
+    file by that name exists in any allowed directory.
     """
-    resolved = Path(candidate).resolve()
-    bases = []
+    name = Path(candidate).name
+    if not name or name in (".", ".."):
+        raise HTTPException(400, "Invalid file path: a bare filename is required")
     for d in allowed_dirs:
         base = Path(d).resolve()
         base.mkdir(parents=True, exist_ok=True)
-        bases.append(base)
-    if not any(os.path.commonpath([str(base), str(resolved)]) == str(base) for base in bases):
-        raise HTTPException(400, "Invalid file path: must be inside an allowed import directory")
-    if not resolved.is_file():
-        raise HTTPException(422, f"no file at {candidate!r}")
-    return resolved
+        dest = base / name
+        if dest.is_file():
+            return dest
+    raise HTTPException(422, f"no file named {name!r} in an allowed import directory")
