@@ -435,10 +435,19 @@ async def test_stale_baseline_refuses_approval_and_publication(db_required, monk
                                      package_hash=dto["package_hash"], rationale="ok")
 
     # An official change lands after the analyst approval: a human confirms the record.
+    # A real confirmation leaves a real event -- write it so this fixture does
+    # not manufacture a resolved row with no backing decision
+    # (see tests/test_qa_gate.py::test_no_fabricated_history_for_existing_determinations).
     async with async_session_maker() as db:
         row = (await db.execute(select(reg.ReviewRecord).where(
             reg.ReviewRecord.review_id == planted))).scalars().one()
         row.reviewer_resolution = "confirmed"
+        db.add(reg.ReviewDecisionEvent(
+            id=uuid.uuid4(), review_id=row.review_id, sequence_number=1,
+            event_type="ANALYST_DETERMINATION", actor_user_id=analyst.id,
+            actor_email=analyst.email, actor_role=analyst.role,
+            determination="CONFIRM",
+            rationale="SYNTHETIC: confirmed after analyst approval (test fixture)"))
         await db.commit()
 
     monkeypatch.setenv(shadow.PUBLICATION_MODE_ENV, shadow.LOCAL_TEST_MODE)

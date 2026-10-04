@@ -245,9 +245,15 @@ async def test_bulk_assignment_is_the_only_other_multi_id_route_and_it_only_assi
                     "nppes": {"status": "not_found"}}}}),
                 ("CLEAN", "B1", {"classifier_input": {"sources": {
                     "oig_leie": {"status": "clear"}}}})):
-            rid = f"REV-BULKASSIGN-{tag}-{uuid.uuid4().hex[:8]}"
+            # ck_review_record_has_subject requires entity_id or source_record_id.
+            entity_id = uuid.uuid4()
+            db.add(reg.TefcaRegEntity(
+                id=entity_id, name=f"SYNTHETIC BULKASSIGN {tag}",
+                entity_level="participant", entity_type="provider"))
+            await db.flush()  # entity row must exist before the review_record FK
+            rid = f"REV-{tag}-{uuid.uuid4().hex[:9]}"  # must fit review_id's String(20)
             rec = reg.ReviewRecord(
-                id=uuid.uuid4(), review_id=rid, entity_id=None,
+                id=uuid.uuid4(), review_id=rid, entity_id=entity_id,
                 verification_results=signals, classification_bucket=bucket,
                 classification_rule="RULE-TEST", classification_rule_version=1,
                 reviewer_resolution=None, reportable_at=None)

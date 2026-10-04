@@ -139,7 +139,13 @@ async def test_a_human_cleared_and_qa_reportable_prior_signal_allows_verificatio
 
     # Simulated adjudication with DISTINCT synthetic identities: an analyst
     # reclassifies after reviewing reinstatement evidence, independent QA
-    # makes it reportable. No real approval is recorded anywhere.
+    # makes it reportable. No REAL approval is recorded anywhere (both
+    # actors below are synthetic), but the decision-event rows a real
+    # analyst+QA pair would leave ARE written -- this fixture is simulating
+    # that a human act happened, so it must leave the same trail a real one
+    # would, or it silently manufactures the exact "fabricated history" gap
+    # tests/test_qa_gate.py::test_no_fabricated_history_for_existing_determinations
+    # exists to catch.
     async with async_session_maker() as db:
         r = (await db.execute(select(reg.ReviewRecord).where(
             reg.ReviewRecord.review_id == first["review_id"]))).scalars().one()
@@ -147,6 +153,20 @@ async def test_a_human_cleared_and_qa_reportable_prior_signal_allows_verificatio
         r.reclassified_to = "B1"
         r.resolution_rationale = "SYNTHETIC: reinstatement evidence reviewed (test fixture)"
         r.reportable_at = datetime.utcnow()
+        db.add(reg.ReviewDecisionEvent(
+            id=uuid.uuid4(), review_id=r.review_id, sequence_number=1,
+            event_type="ANALYST_DETERMINATION", actor_user_id=uuid.uuid4(),
+            actor_email="synthetic-analyst@test.docuaction.invalid",
+            actor_role="reviewer", determination="RECLASSIFY",
+            determined_bucket="B1",
+            rationale="SYNTHETIC: reinstatement evidence reviewed (test fixture)"))
+        db.add(reg.ReviewDecisionEvent(
+            id=uuid.uuid4(), review_id=r.review_id, sequence_number=2,
+            event_type="QA_REVIEW", actor_user_id=uuid.uuid4(),
+            actor_email="synthetic-qalead@test.docuaction.invalid",
+            actor_role="qalead", qa_action="APPROVE",
+            qa_reason="SYNTHETIC: independent QA (test fixture)",
+            rationale="SYNTHETIC: independent QA (test fixture)"))
         await db.commit()
 
     second = (await _cycle(monkeypatch, refs, intake_id, excluded=False))["outcomes"][0]
@@ -166,6 +186,15 @@ async def test_reclassified_without_independent_qa_is_not_enough(db_required, mo
             reg.ReviewRecord.review_id == first["review_id"]))).scalars().one()
         r.reviewer_resolution = "reclassified"
         r.reclassified_to = "B1"          # maker only -- no QA, reportable_at stays NULL
+        # The maker act itself is still a real decision and leaves a real
+        # event -- only the QA event is deliberately absent here.
+        db.add(reg.ReviewDecisionEvent(
+            id=uuid.uuid4(), review_id=r.review_id, sequence_number=1,
+            event_type="ANALYST_DETERMINATION", actor_user_id=uuid.uuid4(),
+            actor_email="synthetic-analyst@test.docuaction.invalid",
+            actor_role="reviewer", determination="RECLASSIFY",
+            determined_bucket="B1",
+            rationale="SYNTHETIC: maker-only reclassification, no QA (test fixture)"))
         await db.commit()
 
     second = (await _cycle(monkeypatch, refs, intake_id, excluded=False))["outcomes"][0]
