@@ -983,3 +983,61 @@ this round surfaced — the two self-contained bugs in this round's own
 new backend test, the three configuration gaps found rebuilding the Part
 A/B proof, the two workbook wording corrections — was fixed and
 re-verified in this session, not merely written down.
+
+## 18. Round 28 (2026-10-04, same day) — published for independent review
+
+**Backend draft PR**: https://github.com/DocuAction/docuaction-backend/pull/115,
+head `85540ec649235f5e89602b4709f776deefacf81c`, stacked on PR #110
+(`feat/reporting-architecture-2026-10-01`).
+
+**Frontend draft PR**: https://github.com/DocuAction/docuaction-frontend/pull/69,
+head `de961ed973e27b80f96ebbd08d7ada1317f99096`, stacked on PR #66
+(same branch name).
+
+Both branches were pushed without force; neither existed on either
+remote before this round. Before pushing, every GitHub Actions workflow
+trigger in both repositories was read directly (not inferred): nothing
+in either repo auto-deploys, auto-migrates, or otherwise mutates an
+environment on a feature-branch push or on a `pull_request` event
+against any base — the one workflow in each repo capable of a real
+environment change (`dev-release.yml` backend, `deploy-frontend.yml`
+frontend) triggers only on a push to `main`, a tag push, or
+`workflow_dispatch`, none of which this round performed. The outgoing
+diffs (87 backend files / 31 commits; 32 frontend files / 7 commits,
+both since the respective PR #110/#66 heads) were reviewed directly for
+credentials, private fixture values, unnecessary logs and real
+source-data content — none found.
+
+**CI, checked once against the GitHub API, not polled repeatedly**: only
+`dependency-review` ran on either draft PR (pass, backend; skipped,
+frontend — no GHAS entitlement on that repository). Confirmed directly:
+neither repo's actual test suite (`pr-tests.yml` / `playwright.yml` /
+`codeql.yml` / `security-scan.yml`) ran, because every one of them
+scopes its `pull_request` trigger to `branches: [main]` and these PRs
+are deliberately stacked on a non-`main` base, matching PR #110/#66's
+own pattern. This is reported here as missing automated coverage on
+these two PRs specifically — not claimed as a passing result, and not
+evidence that anything in this stack is untested (the regression
+manifest and every live-browser spec referenced throughout this
+document remain the actual evidence, all local).
+
+Two new documents were published this round, not present at the Round
+27 checkpoint: `docs/review/FINAL-REVIEW-GUIDE-2026-10-04.md` (before/
+after behaviour for every significant change, security/RBAC notes,
+P1 described explicitly — stored status unchanged, how incompleteness
+is represented, and the real residual misinterpretation risk for a
+consumer this work never touched; approves nothing) and
+`docs/review/SSP-IMPACT-REGISTER-2026-10-04.md` (copied in from outside
+this repository, sanitized, so it has a working link; the baseline
+question remains unresolved within it).
+
+Workbook v4's own candidate binding is unaffected by this round's three
+documentation-only commits (none touch `app`/`tests`/`src`/`alembic`):
+still `e2c2561`/`de961ed`, exactly as built and bound in Round 27.
+
+**Decision, restated, now published rather than only local: A. LOCAL
+IMPLEMENTATION COMPLETE — READY FOR PUBLICATION/REVIEW — which this
+round completed.** This does **not** mean READY FOR ADAM. The next and
+only gate is independent review of PR #115 and PR #69 at their exact
+current heads. No merge, migration, deployment, firewall, account, or
+flag change was performed this round, and none is proposed by it.
