@@ -105,6 +105,35 @@ class TestOutsideTargetSymlinks:
         with pytest.raises(HTTPException):
             safe_existing_path("looks-local.csv", str(allowed))
 
+    def test_a_file_swapped_for_a_symlink_after_validation_is_refused_at_open_time(self, tmp_path):
+        """The actual TOCTOU race, not just a pre-existing symlink: a
+        legitimate regular file passes safe_existing_path's check, and only
+        THEN -- simulating the window between that check and a caller's
+        read -- is the same path replaced with a symlink to a file outside
+        every allowed directory. open_no_follow on the now-swapped path must
+        refuse, not silently read through to the outside content; this is
+        the specific guarantee the module's docstrings claim for it."""
+        outside = tmp_path / "outside"
+        allowed = tmp_path / "allowed"
+        outside.mkdir()
+        allowed.mkdir()
+        secret = outside / "secret.txt"
+        secret.write_text("TOP SECRET, OUTSIDE EVERY ALLOWED DIRECTORY")
+        real = allowed / "report.csv"
+        real.write_text("a,b,c\n1,2,3\n")
+
+        validated = safe_existing_path("report.csv", str(allowed))
+        assert validated.read_text() == "a,b,c\n1,2,3\n"  # genuinely a regular file at this point
+
+        # The race: something with write access to `allowed` (see
+        # upload_security.py's deployment-design note on who that can be)
+        # replaces the validated path with a symlink before it is read.
+        validated.unlink()
+        _symlink_or_skip(str(secret), str(validated))
+
+        with pytest.raises(OSError):
+            open_no_follow(validated, "rb")
+
 
 class TestInvalidPaths:
     def test_empty_candidate_is_refused(self, tmp_path):

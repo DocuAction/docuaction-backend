@@ -81,17 +81,32 @@ def safe_existing_path(candidate: str, *allowed_dirs) -> Path:
     requested name could itself be a SYMLINK placed inside the allowed
     directory pointing OUTSIDE it: `Path.is_file()` follows symlinks, so
     the prior version would return (and a caller would then open) a file
-    outside every allowed directory. Fixed with two independent checks,
-    neither alone sufficient: (1) `DirEntry.is_symlink()` refuses any
-    symlink by name, checked with `os.scandir` (not `os.listdir`) so the
-    entry's type is known from the same syscall, no separate stat a
-    symlink could race; (2) the resolved destination must still be inside
-    `base` (`os.path.commonpath`) -- defense in depth for anything
-    `is_symlink()` does not catch (e.g. a hardlink or bind-mounted path
-    that is not itself a symlink but still resolves outside `base`).
-    Neither check reintroduces client input into a filesystem call: both
-    operate on `base`/`entry.name`, which originate from the trusted
-    directory listing, not from `candidate`.
+    outside every allowed directory. Fixed with `DirEntry.is_symlink()`,
+    which refuses any symlink by name, checked with `os.scandir` (not
+    `os.listdir`) so the entry's type is known from the same syscall --
+    no separate stat a symlink swap could race in between the listing
+    and the type check.
+
+    The `os.path.commonpath` check after that is NOT a second independent
+    detector -- it does not establish that `dest` is free of a hardlink or
+    a bind mount. A hardlink's path string is indistinguishable from a
+    regular file's: it has no reparse point for `resolve()` to follow, so
+    a hardlink into `base` pointing at an outside inode resolves to a path
+    string that is still (correctly, as a string) "inside `base`" and
+    this check would not flag it -- the same is true of a bind mount,
+    which is transparent to every syscall used here, including
+    `is_symlink()`. Both of those are out of scope for this function:
+    they require filesystem-level write access to construct (the same
+    access level needed to plant the symlink this function DOES catch),
+    and the deployment's own trust boundary (see `open_no_follow` below)
+    is what actually bounds who has that access, not this check. What the
+    commonpath line actually guards against, for this specific single-
+    level lookup (`entry.name` has no path separators, and `base` is
+    already fully resolved before the loop starts), is a lower bar: a
+    symlink is the only known way `(base / entry.name).resolve()` can
+    land outside `base` here, and `is_symlink()` already catches that --
+    so this line is cheap, correct defense-in-depth, not a second
+    detection mechanism with its own coverage.
 
     This still leaves a narrow TOCTOU window between this check and the
     caller's actual read (the file could be replaced with a symlink in
@@ -102,6 +117,23 @@ def safe_existing_path(candidate: str, *allowed_dirs) -> Path:
     or (422) if no regular file by that name exists in any allowed
     directory.
     """
+    # Deployment-design note (2026-10-04, written against this repo's own
+    # Dockerfile): the app runs as a single non-root `appuser` that owns its
+    # whole tree -- no other service or tenant shares this container's
+    # filesystem namespace, so a symlink cannot be planted here by a
+    # co-tenant process. The actual trust boundary this function defends
+    # is narrower and specific: `settings.IQVIA_IMPORT_DIR` is an
+    # "operator-local-path" drop directory (see this module's top-level
+    # docstring) -- content lands there from OUTSIDE the running app
+    # (a human or a deploy/ops script with direct volume access), which is
+    # not necessarily the same trust level as the `reviewer`-role API
+    # caller who later names a file in it over HTTP. That gap -- a lower-
+    # trust drop-directory writer vs. a higher-trust API caller -- is
+    # exactly what the independent review's symlink finding exploited, and
+    # is what this function's checks are scoped to. It assumes nothing
+    # about a second, concurrent in-process attacker; that would be a
+    # different, already-worse vulnerability (arbitrary filesystem write)
+    # this function was never meant to compensate for.
     requested = Path(candidate).name
     if not requested or requested in (".", ".."):
         raise HTTPException(400, "Invalid file path: a bare filename is required")
@@ -125,10 +157,23 @@ def safe_existing_path(candidate: str, *allowed_dirs) -> Path:
 
 def open_no_follow(path, mode: str = "rb", **kwargs):
     """Open an existing file for reading, refusing to follow a symlink at
-    the final path component (`O_NOFOLLOW`) -- closes the TOCTOU window
-    between a `safe_existing_path` containment check and the actual read:
-    even if the file at `path` was replaced with a symlink after
-    validation, this raises instead of silently reading through it.
+    the FINAL path component only (`O_NOFOLLOW`) -- closes the TOCTOU
+    window between a `safe_existing_path` containment check and the
+    actual read: even if the file at `path` was replaced with a symlink
+    after validation, this raises instead of silently reading through it.
+
+    `O_NOFOLLOW` does not protect any INTERMEDIATE component of `path`
+    (the allowed directory itself, or anything above it) -- a symlink
+    swapped into one of those earlier would still be followed by the
+    kernel to resolve the directory, same as any other open. This
+    function does not claim otherwise. `safe_existing_path` already
+    resolves `base` once (`Path(d).resolve()`) before this is ever
+    called, so the only thing this closes is the narrow window on the
+    LEAF name between that check and this open; it does not substitute
+    for the deployment's own trust boundary on who can write into an
+    allowed directory at all (see `safe_existing_path`'s docstring) --
+    that boundary is what has to hold for the directory chain above
+    `base` to be trustworthy in the first place.
 
     `O_NOFOLLOW` is POSIX-only (a no-op flag value of 0 on platforms
     without it, e.g. local Windows development); CI and every deployed
