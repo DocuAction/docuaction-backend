@@ -216,6 +216,12 @@ FRESHNESS_WINDOW_BASIS = ("OPERATIONAL_DEFAULT_NOT_APPROVED_POLICY: one reuse wi
                           "proposed (inactive) per-source views.")
 
 
+def _completeness_block(entity, review):
+    from app.tefca_registry.rce import verification_completeness as vcomp
+    comp = vcomp.completeness(review.verification_results) if review is not None else None
+    return vcomp.describe(entity.verification_status, comp)
+
+
 def _policy_for_item(e) -> Dict[str, Any]:
     """Official + inactive-proposed policy view for one persisted evidence row."""
     from app.Tefca import source_policy as sp
@@ -410,6 +416,9 @@ async def delivery_workspace(db, intake_id, *, entity_id=None, limit: int = 50,
                        "name": entity.name, "sequoia_org_type": entity.sequoia_org_type,
                        "hl7_org_role": entity.hl7_org_role,
                        "verification_status": entity.verification_status,
+                       # Source outcome, classification and completeness are
+                       # three facts; `verified` alone is never shown.
+                       "verification_completeness": _completeness_block(entity, review),
                        "curated_record_id": str(c.id),
                        "source_record_id": str(c.source_record_id),
                        "record_status": c.record_status},

@@ -325,9 +325,29 @@ def _patch_bulk_connectors(monkeypatch, *, sam_excluded: bool):
             "registration_current": True,
         }, {"uei": uei})
 
+    # 2026-10-04: the two CMS connectors were left unpatched, so these tests
+    # queried the live CMS data API for a synthetic NPI and their result
+    # depended on the Internet (offline: EXCLUSION_REVOCATION = UNAVAILABLE and
+    # the "clean entity" test failed). Deterministic answers, same as the
+    # live API gives a synthetic NPI: no revocation record; enrolment not
+    # exercised.
+    from app.Tefca import cms_ppef
+
+    async def fake_revocation(self, npi):
+        return SourceResult.ok(self.SOURCE_NAME, {
+            "checked": True, "matches": [],
+            "result": "NO_ACTIVE_REVOCATION_RECORD_FOUND"}, {"npi": npi})
+
+    async def fake_ppef(self, npi):
+        return SourceResult.unavailable(
+            self.SOURCE_NAME, "synthetic: CMS enrolment API not exercised by this test",
+            {"npi": npi})
+
     monkeypatch.setattr(NPPESConnector, "lookup_by_npi", fake_nppes)
     monkeypatch.setattr(OIGLEIEConnector, "lookup_by_npi", fake_leie)
     monkeypatch.setattr(SAMGovConnector, "verify", fake_sam_verify)
+    monkeypatch.setattr(cms_ppef.CMSRevocationConnector, "lookup_by_npi", fake_revocation)
+    monkeypatch.setattr(cms_ppef.PPEFEnrollmentConnector, "lookup_by_npi", fake_ppef)
 
 
 def _manual_path_clean_live(monkeypatch):

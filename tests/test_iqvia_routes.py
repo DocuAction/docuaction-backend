@@ -525,3 +525,84 @@ class TestAuditTrailAndCapability:
         snapshot_id = await _stage_and_complete(db, tmp_path, monkeypatch, n=1)
         status = await routes.snapshot_status(uuid.UUID(snapshot_id), db, user=_User("reviewer"))
         assert status["matching"] == {"supported": True, "reason": None, "code": None}
+
+
+class TestSnapshotStatusOverHttp:
+    """The snapshot-status route through the real application (TestClient):
+    authentication, the role floor, the feature gate, and the
+    `reference_preflight` block the screen reads (2026-10-04). The handler
+    tests above call the function directly and so prove none of the first
+    three."""
+
+    def _client(self):
+        from fastapi.testclient import TestClient
+        from app.main import app
+        return TestClient(app, raise_server_exceptions=False)
+
+    async def test_status_route_auth_roles_and_reference_preflight_block(
+            self, db, tmp_path, monkeypatch):
+        import asyncio
+        import support_delivery_api as api
+
+        snapshot_id = await _stage_and_complete(db, tmp_path, monkeypatch, n=3)
+        url = f"/api/tefca/rce/iqvia/snapshots/{snapshot_id}"
+        reviewer = await api._ensure_user("reviewer")
+        viewer = await api._ensure_user("viewer")
+
+        def token(user):
+            return {"Authorization": "Bearer " + api.create_access_token(
+                {"sub": user["id"], "role": user["role"]}, is_admin=False)}
+
+        client = self._client()
+
+        def calls():
+            return (client.get(url), client.get(url, headers=token(viewer)),
+                    client.get(url, headers=token(reviewer)),
+                    client.get(f"/api/tefca/rce/iqvia/snapshots/{uuid.uuid4()}",
+                               headers=token(reviewer)))
+        anonymous, as_viewer, as_reviewer, missing = await asyncio.to_thread(calls)
+
+        assert anonymous.status_code in (401, 403)          # not signed in
+        assert "reference_preflight" not in anonymous.text
+        assert as_viewer.status_code == 403                 # below the reviewer floor
+        assert "reference_preflight" not in as_viewer.text
+        assert missing.status_code == 404
+        assert as_reviewer.status_code == 200, as_reviewer.text
+        body = as_reviewer.json()
+        pre = body["reference_preflight"]
+        assert pre["gate"] in ("CLEAR", "CLEAR_WITH_FINDINGS")
+        assert pre["enforced"] is False                     # default: shadow, recorded only
+        assert isinstance(pre["findings"], list) and isinstance(pre["held_checks"], list)
+        assert pre["bound"] and pre["schema_version"] and pre["preflight_version"]
+        assert body["reconciliation"]["reference_preflight_gate"] == pre["gate"]
+        assert body["reconciliation"]["refusal_reasons"] == []
+        # no row content, path or licensed value leaks through the findings
+        assert str(tmp_path) not in as_reviewer.text
+
+    async def test_status_route_is_refused_when_the_feature_is_off(
+            self, db, tmp_path, monkeypatch):
+        import asyncio
+        import support_delivery_api as api
+
+        snapshot_id = await _stage_and_complete(db, tmp_path, monkeypatch, n=2)
+        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "false")
+        reviewer = await api._ensure_user("reviewer")
+        headers = {"Authorization": "Bearer " + api.create_access_token(
+            {"sub": reviewer["id"], "role": "reviewer"}, is_admin=False)}
+        client = self._client()
+        got = await asyncio.to_thread(
+            client.get, f"/api/tefca/rce/iqvia/snapshots/{snapshot_id}", headers=headers)
+        assert got.status_code == 403
+        assert "reference_preflight" not in got.text
+
+    async def test_a_snapshot_imported_before_preflight_existed_reports_none_not_clear(
+            self, db, tmp_path, monkeypatch):
+        snapshot_id = await _stage_and_complete(db, tmp_path, monkeypatch, n=2)
+        snap = await db.get(sm.SourceSnapshot, uuid.UUID(snapshot_id))
+        meta = dict(snap.metadata_ or {})
+        meta.pop("reference_preflight", None)
+        snap.metadata_ = meta
+        await db.commit()
+        status = await routes.snapshot_status(uuid.UUID(snapshot_id), db, user=_User("reviewer"))
+        assert status["reference_preflight"] is None
+        assert status["reconciliation"]["reference_preflight_gate"] is None

@@ -643,6 +643,7 @@ async def verify_and_classify(
                 _f.write(_dbgjson.dumps(_rec) + "\n")
         _dbg_serial_t0 = _dbgtime.perf_counter()
 
+        from app.tefca_registry.rce import verification_completeness as _vcomp
         for g in gathered:
             ref = g["ref"]
             entity = g["entity"]
@@ -790,6 +791,12 @@ async def verify_and_classify(
                 "assigned_role": TIER_ROLE[tier],
                 "prior_risk_not_cleared": prior_risk,
                 "verification_claim": claim,
+                "entity_marked_verified": bool(
+                    classification.bucket == "B1" and not withhold_verified),
+                "verification_completeness": _vcomp.describe(
+                    "verified" if classification.bucket == "B1" and not withhold_verified
+                    else "in_review",
+                    _vcomp.completeness({"classifier_input": verification_results})),
                 "dimensions": {d["dimension"]: d["disposition"]
                                for d in evidence.get("dimensions", [])},
                 "applicability": evidence.get("applicability", {}).get("dimensions", {}),
@@ -804,7 +811,16 @@ async def verify_and_classify(
 
     return {
         "requested": len(entity_refs),
+        # LEGACY NAME, kept for existing consumers: this is the number of
+        # entities the pipeline PROCESSED (every bucket, B4 included). It was
+        # never a count of verified entities. Use the three counts below.
         "verified": len(outcomes),
+        "processed": len(outcomes),
+        "entities_marked_verified": sum(1 for o in outcomes if o["entity_marked_verified"]),
+        "entities_marked_verified_checks_incomplete": sum(
+            1 for o in outcomes
+            if o["verification_completeness"]["overall_status"]
+            == "verified_checks_incomplete"),
         "unresolved": unresolved,
         "bucket_counts": buckets,
         "tier_counts": {str(k): v for k, v in sorted(tiers.items())},

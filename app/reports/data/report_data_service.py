@@ -463,11 +463,36 @@ class ReportDataService:
             rows = []
         counts = {(status or "unknown"): int(count) for status, count in rows}
         total = sum(counts.values())
+        # 2026-10-04: a bare "verified" count hid entities whose screening
+        # never completed (a source outage does not prevent B1 under the
+        # active rules). The count is split, never reduced: the parts sum to
+        # the original, so reconciliation against records_received holds.
+        screening: Dict[str, Any] = {"verified_total": int(counts.get("verified", 0)),
+                                     "split": {}, "incomplete_by_source": {}}
+        try:
+            from app.tefca_registry.rce import verification_completeness as vcomp
+            split = await vcomp.split_verified_counts(self.db, counts, scope_ids)
+            counts = split["counts"]
+            screening = {k: split[k] for k in
+                         ("verified_total", "split", "incomplete_by_source")}
+        except Exception as exc:  # noqa: BLE001
+            # Fail towards the weaker claim: if completeness cannot be read,
+            # nothing is reported as verified-and-complete.
+            logger.warning("report: verified completeness unavailable: %s", exc)
+            if counts.get("verified"):
+                counts["verified_checks_not_recorded"] = counts.pop("verified")
         return {
             "counts": counts,
             "total": total,
             "percentages": {k: percentage(v, total) for k, v in counts.items()},
             "insufficient_data": total == 0,
+            "verified_completeness": screening,
+            "language_note": (
+                "\"Verified\" counts only entities whose latest review recorded an "
+                "answer from every applicable check. \"Verified - screening "
+                "incomplete\" are classified with no discrepancy found, but at "
+                "least one source (for example SAM.gov) was unavailable or not "
+                "checked; that is not a successful check and not a finding."),
         }
 
     async def get_verification_coverage(self, review_cycle_id: Optional[str] = None

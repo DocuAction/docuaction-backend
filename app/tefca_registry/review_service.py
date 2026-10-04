@@ -417,6 +417,15 @@ def persisted_evidence_rationale(used: List[dict]) -> str:
 IMPLEMENTED_SOURCES = ("nppes", "pecos", "oig_leie")
 
 
+def _completeness_of(sources, bucket):
+    from app.tefca_registry.rce import verification_completeness as vcomp
+    comp = vcomp.completeness({"sources": sources})
+    block = vcomp.describe("verified" if bucket == "B1" else "in_review", comp)
+    block["basis"] = ("classification " + str(bucket) + " by the active rules; "
+                      "completeness is reported separately and does not change it")
+    return block
+
+
 def coverage_note(sources: Dict[str, dict]) -> dict:
     """Plain-language coverage over the connectors that actually exist."""
     impl = {k: v for k, v in sources.items() if k in IMPLEMENTED_SOURCES}
@@ -838,6 +847,11 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
         },
         "persisted_evidence": persisted_used,
         "confidence": coverage_note(sources),
+        # Source outcome, classification and completeness are three facts.
+        # On this path SAM.gov is never evaluated, so a B1 here is never a
+        # completed verification -- stated on the response, not left to be
+        # inferred from the per-source list.
+        "verification_completeness": _completeness_of(sources, classification.bucket),
         # Steps 6-7 of the documented pipeline. Both were already computed and
         # persisted into verification_results, but neither was returned — so a
         # caller who had just run a verification could not see what the name and

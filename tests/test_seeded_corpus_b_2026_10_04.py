@@ -385,6 +385,64 @@ async def test_combined_shadow_proof_over_the_seeded_corpus(db_required, monkeyp
     # Faults on a source the rules DO require never pass, in either view.
     assert official_status["B07"] != "verified" and official_status["B12"] != "verified"
 
+    # G2a -- SOURCE level: a faulted check is never a successful source
+    # verification. G2b -- LABEL level: no fault seed carries an unqualified
+    # overall "verified". Both hold in the OFFICIAL view; the bucket, the
+    # entity status and the reportability gate are untouched (policy P1).
+    from app.tefca_registry.rce import verification_completeness as vcomp
+    sam_counted_successful, unqualified_verified = [], []
+    for sid in sorted(fault_seeds):
+        comp = vcomp.completeness(records[sid].verification_results)
+        block = vcomp.describe(official_status[sid], comp)
+        faulted = {"B07": "oig_leie", "B12": "nppes"}.get(sid, "sam_gov")
+        assert comp["source_outcomes"][faulted] == vcomp.UNAVAILABLE, (sid, comp)
+        if faulted in comp["successful_sources"]:
+            sam_counted_successful.append(sid)
+        assert comp["state"] == vcomp.INCOMPLETE, (sid, comp)
+        if block["overall_status"] == "verified":
+            unqualified_verified.append(sid)
+        # the pipeline's own result carries the same qualification
+        assert official[sid]["verification_completeness"]["overall_status"] == \
+            block["overall_status"], sid
+    assert sam_counted_successful == [], sam_counted_successful
+    assert unqualified_verified == [], unqualified_verified
+    for sid in official_false_passes:
+        block = vcomp.describe(official_status[sid],
+                               vcomp.completeness(records[sid].verification_results))
+        assert block["overall_status"] == vcomp.VERIFIED_CHECKS_INCOMPLETE
+        assert block["overall_label"] == "Verified - checks incomplete"
+        assert [i["source"] for i in block["incomplete"]] == ["pecos", "sam_gov"] or \
+            "sam_gov" in [i["source"] for i in block["incomplete"]]
+        # UNAVAILABLE is not turned into an exclusion or a not-found, and the
+        # classification is exactly what the active rules gave.
+        assert official[sid]["bucket"] == "B1" and records[sid].classification_bucket == "B1"
+        assert not any(x.startswith("EXCLUSION:") for x in
+                       risk_signals(classifier_input(records[sid].verification_results)))
+    # B01 (every source answered) is the only seed that reads plain "Verified".
+    # In this corpus the CMS enrolment API is faked unavailable for every
+    # record, so even B01 is honestly INCOMPLETE on that source.
+    b01 = vcomp.describe(official_status["B01"],
+                         vcomp.completeness(records["B01"].verification_results))
+    assert b01["source_outcomes"]["sam_gov"] in vcomp.SUCCESSFUL
+    assert b01["source_outcomes"]["oig_leie"] in vcomp.SUCCESSFUL
+    # COUNTS: the report/registry split of the bare "verified" count.
+    corpus_entity_ids = [uuid.UUID(o["entity_id"]) for o in official.values()]
+    async with async_session_maker() as db:
+        split = await vcomp.split_verified_counts(
+            db, {"verified": len(official_verified),
+                 "in_review": 12 - len(official_verified)}, corpus_entity_ids)
+    assert split["verified_total"] == len(official_verified) == 4
+    assert sum(split["split"].values()) == 4                       # reconciles
+    assert split["split"][vcomp.VERIFIED_CHECKS_INCOMPLETE] >= 3  # B04-B06
+    assert split["incomplete_by_source"].get("sam_gov") == 3
+    assert split["counts"]["in_review"] == 8
+    official_gate = {
+        "G2a_fault_counted_as_successful_source_check": len(sam_counted_successful),
+        "G2b_unqualified_overall_verified_on_a_fault_seed": len(unqualified_verified),
+        "G2c_entity_status_verified_while_screening_incomplete": len(official_false_passes),
+    }
+    print("OFFICIAL-VIEW GATES", json.dumps(official_gate), "split", json.dumps(split["split"]))
+
     # Source policy is on every record: official unapproved, freshness unknown.
     for sid, rec in records.items():
         block = rec.verification_results["source_policy"]
