@@ -24,21 +24,39 @@ and synthetic browser testing only).
   substitute for CI itself running.
 - No CI run has been triggered this round (nothing was pushed).
 
-## 3. Migration order and compatibility
+## 3. Migration order and compatibility — CORRECTED 2026-10-04 (R29-1)
 
-- Alembic chain, current head: `20261004_recheck_jobs`. No new migration
-  was added this round (R27-2's backend change is a derived, in-memory
-  response field — additive to a dict, not a schema change; R27-3 added
-  no application code at all, only test fixtures).
+**This section previously said "no new migration was added this
+round," comparing against the wrong reference point (Round 25's own
+starting point, not this PR's actual base against which an independent
+reviewer compares). That was wrong and is corrected here.** Full
+account: [`docs/review/MIGRATION-INVENTORY-2026-10-04.md`](./MIGRATION-INVENTORY-2026-10-04.md).
+
+- **Against this PR's real base** (`ea92ea5`, PR #110/#66's head —
+  Alembic head `20261003_preflight_shadow`), this candidate adds
+  **three** new revisions, reaching head `20261004_recheck_jobs`:
+  two CHECK-constraint widenings
+  (`20261004_preflight_exec_held`, `20261004_stage_event_preflight`,
+  neither adding or removing a column or table) and one that creates
+  two new tables (`20261004_recheck_jobs`:
+  `rce_recheck_job`/`rce_recheck_item`, with a `SELECT, INSERT,
+  UPDATE`-only grant, never `DELETE`, to the app role).
 - Standard order, migration role `docuaction_owner`, confirmed command:
   `DB_APP_ROLE=docuaction_app python -m alembic upgrade head` (the
   `DB_APP_ROLE` guard is enforced by migration `20260828_area1_privilege_
-  correction` and refuses to run without it — rediscovered this round,
-  recorded in `tests/fixtures/seeded/LIVE-PARTB-RECIPE-2026-10-04.md`).
-- Compatibility: every migration since `d842d0e` (Round 25's baseline) is
-  additive (new tables/columns, grants) — none alters or drops an existing
-  column this round or last. No downgrade path was exercised or is
-  claimed proven.
+  correction` AND by `20261004_recheck_jobs` itself, which refuses to
+  run without it — rediscovered this round, recorded in
+  `tests/fixtures/seeded/LIVE-PARTB-RECIPE-2026-10-04.md`).
+- **Compatibility and rollback, evidenced this round, not assumed**:
+  all three new revisions upgrade and downgrade cleanly against an
+  empty throwaway database
+  (`tests/test_recheck_and_preflight_migrations_2026_10_04.py`, new
+  this round). Downgrade WAS exercised, with a real, demonstrated
+  asymmetry: `recheck_jobs` explicitly refuses its own downgrade once a
+  row exists (a named precondition error); the two CHECK-widening
+  migrations do not, and fail with a raw Postgres `CheckViolation`
+  instead if dependent data exists. No existing column, table, or
+  grant outside the two new tables is touched by any of the three.
 
 ## 4. DEV deployment procedure and rollback triggers
 

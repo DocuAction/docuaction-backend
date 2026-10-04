@@ -920,8 +920,10 @@ the LMS proposal (Lesson C) both updated to match.
 
 **R27-6 (operator prerequisites, prepared).**
 `docs/review/OPERATOR-PREREQUISITE-CHECKLIST-2026-10-04.md`: final SHAs,
-the CI requirement, migration order (no new migration this round — R27-2
-is additive to a response dict, not a schema change), the DEV deploy
+the CI requirement, migration order ***(this round's own "no new
+migration" claim here was WRONG, compared against the wrong reference
+point — corrected in R29-1 / section 19 below and in that checklist
+document directly)***, the DEV deploy
 procedure and rollback triggers (unchanged, established pattern),
 every feature flag this round's work actually needed and why, the
 supported account-provisioning procedure verified from
@@ -1041,3 +1043,47 @@ round completed.** This does **not** mean READY FOR ADAM. The next and
 only gate is independent review of PR #115 and PR #69 at their exact
 current heads. No merge, migration, deployment, firewall, account, or
 flag change was performed this round, and none is proposed by it.
+
+## 19. Round 29 (2026-10-04, same day) — correcting this stack's own migration claims
+
+**Independent comparison against the real PR base (`ea92ea5`, PR
+#110/#66's head) found three migration files this stack adds that
+earlier checkpoints (sections 16–18 above) wrongly described as "no new
+migration" or "unchanged."** Both earlier claims compared against the
+wrong reference point (Round 25's own starting point, and separately an
+even older commit, `a6bf241`) instead of this PR's actual base. This
+section corrects that error. It does not alter sections 16–18's own
+account of what each round DID — only the migration-status claim within
+them, marked inline where it occurred.
+
+**The three revisions, exact heads, what each changes, and the
+downgrade behaviour of each — demonstrated against a real throwaway
+database this round, not assumed** — are documented in full in
+[`docs/review/MIGRATION-INVENTORY-2026-10-04.md`](./MIGRATION-INVENTORY-2026-10-04.md),
+new this round. Summary: base head `20261003_preflight_shadow` →
+candidate head `20261004_recheck_jobs`, three revisions
+(`20261004_preflight_exec_held`, `20261004_stage_event_preflight`,
+`20261004_recheck_jobs`). New test:
+`tests/test_recheck_and_preflight_migrations_2026_10_04.py`, run against
+a disposable throwaway database. Found and demonstrated, not assumed: a
+real asymmetry between the three — `recheck_jobs`'s downgrade EXPLICITLY
+REFUSES once a row exists (a named precondition error); the two
+CHECK-widening migrations have no such guard and fail with a raw,
+unguarded Postgres `CheckViolation` instead if dependent data exists.
+Neither currently has a code path that writes the new values in any
+shared environment, so today's exposure is theoretical — stated as a
+fact about current callers, not as a property of the migrations
+themselves, which is not the same claim as "safe to roll back."
+
+`docs/review/FINAL-REVIEW-GUIDE-2026-10-04.md` section 8 and
+`docs/review/OPERATOR-PREREQUISITE-CHECKLIST-2026-10-04.md` section 3
+are both corrected directly (not merely annotated) to match the
+migration inventory. PR #115's own description is corrected the same
+way.
+
+**Decision, unchanged in substance, now resting on a corrected factual
+basis**: A. LOCAL IMPLEMENTATION COMPLETE — READY FOR PUBLICATION/
+REVIEW. This correction is itself part of what independent review
+should check — the migration inventory names exactly what to verify
+(the three revisions, their downgrade behaviour, the grant shape) rather
+than asking a reviewer to take "additive, therefore fine" on trust.

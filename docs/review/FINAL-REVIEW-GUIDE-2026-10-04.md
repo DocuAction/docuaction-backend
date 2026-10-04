@@ -121,16 +121,40 @@ Traced end to end, not assumed consistent across layers:
   FACT available at the data layer with no UI surface at all — now
   closed, confirmed live.
 
-## 8. Migration compatibility and rollback effects
+## 8. Migration compatibility and rollback effects — CORRECTED 2026-10-04 (R29-1)
 
-- Alembic head: `20261004_recheck_jobs` — unchanged by any commit in
-  this stack (`git log` of `alembic/` confirms no new revision file).
-  Every schema change since the published base (`a6bf241`) is additive
-  (new tables/columns/grants); none alters or drops an existing column.
-- No downgrade path was exercised or is claimed proven for any migration
-  in this stack or its base.
+**This section previously claimed "Alembic head unchanged by any commit
+in this stack," comparing against the wrong reference point
+(`a6bf241`, an older commit, not this PR's actual base). That claim was
+wrong and is withdrawn here, not merely softened.** Independent review
+caught it by comparing directly against this PR's real base, `ea92ea5`
+(PR #110/#66's own head) — see
+[`docs/review/MIGRATION-INVENTORY-2026-10-04.md`](./MIGRATION-INVENTORY-2026-10-04.md)
+for the full, corrected account; summarized here:
+
+- Base Alembic head (`ea92ea5`): `20261003_preflight_shadow`. Candidate
+  head: `20261004_recheck_jobs`. **Three new revisions**, in order:
+  `20261004_preflight_exec_held` and `20261004_stage_event_preflight`
+  (each widens one existing CHECK constraint — no column or table
+  added/removed), and `20261004_recheck_jobs` (creates two new tables,
+  `rce_recheck_job`/`rce_recheck_item`, with their own FKs, CHECK
+  constraints, and a `SELECT, INSERT, UPDATE`-only grant — never
+  `DELETE` — to the `DB_APP_ROLE` role).
+- **Downgrade WAS exercised this round**, against a real throwaway
+  database, for all three (`tests/test_recheck_and_preflight_
+  migrations_2026_10_04.py`, new this round) — not merely assumed safe
+  because the upgrade direction is additive. Result: all three
+  downgrade cleanly while empty; `recheck_jobs` EXPLICITLY REFUSES its
+  downgrade once a row exists (a named `RecheckJobsPreconditionError`);
+  the two CHECK-widening migrations have NO such guard and fail with a
+  raw, unguarded Postgres `CheckViolation` if dependent data exists —
+  a real, demonstrated, asymmetric gap between the three, documented in
+  full in the migration inventory linked above, not smoothed into one
+  "additive, therefore safe" claim.
 - Nothing in this stack changes `DB_APP_ROLE` enforcement, the owner/app
-  role split, or any existing grant.
+  role split, or any PRE-EXISTING grant — confirmed directly this round
+  (privilege queries against the new tables only; no change to any
+  other table's grant was made or tested, because none was touched).
 
 ## 9. Remaining policies and limitations — P1 described explicitly, as required
 
