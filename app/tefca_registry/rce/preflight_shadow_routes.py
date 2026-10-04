@@ -201,6 +201,19 @@ async def publish_shadow_successors_route(comparison_id: str, request: Request,
         raise HTTPException(409, str(exc))
 
 
+# ── source policy registry (read-only) ───────────────────────────────────────
+
+@router.get("/source-policies",
+            summary="Versioned source/check policies: official (unapproved) and "
+                    "proposed (inactive) views. Read-only.")
+async def source_policies_route(user=Depends(require_role("viewer"))):
+    """No delivered value and no entity data: policy metadata only. There is
+    deliberately no write route -- approving a policy is a recorded human
+    decision outside this code's authorization."""
+    from app.Tefca import source_policy
+    return source_policy.registry_dto()
+
+
 # ── analyst workspace ────────────────────────────────────────────────────────
 
 @router.get("/deliveries/{intake_id}/workspace",

@@ -204,6 +204,34 @@ def freshness_of(stamp, *, now: datetime, window_days: int) -> Dict[str, Any]:
             "age_days": round(age, 2), "window_days": window_days}
 
 
+#: What the workspace's single window IS (2026-10-04): an operational reuse
+#: default, not an approved per-source freshness policy. `REUSED_FRESH`
+#: therefore means "inside the operational reuse window", never "current
+#: under an approved policy" -- the official answer to that is on each item's
+#: `source_policy.official.freshness`, which is UNKNOWN while no policy is
+#: approved.
+FRESHNESS_WINDOW_BASIS = ("OPERATIONAL_DEFAULT_NOT_APPROVED_POLICY: one reuse window for "
+                          "every source (WORKSPACE_EVIDENCE_FRESHNESS_DAYS); see each "
+                          "item's source_policy for the official (unapproved) and "
+                          "proposed (inactive) per-source views.")
+
+
+def _policy_for_item(e) -> Dict[str, Any]:
+    """Official + inactive-proposed policy view for one persisted evidence row."""
+    from app.Tefca import source_policy as sp
+
+    pid = sp.EVIDENCE_SOURCE_TO_POLICY.get(e.source)
+    if pid is None:
+        return {"policy_registered": False, "approval_status": sp.POLICY_UNAPPROVED,
+                "freshness": sp.FRESHNESS_UNKNOWN}
+    retrieved = e.retrieved_at or e.query_timestamp
+    block = sp.source_policy_block(
+        [{"policy_id": pid, "evidence_source": e.source, "as_of": None,
+          "retrieved_at": str(retrieved) if retrieved else None}],
+        verified_at=str(e.generation_timestamp) if e.generation_timestamp else None)
+    return {"policy_registered": True, "policy_id": pid, **block["sources"][pid]}
+
+
 def _governing_for_issue(issue) -> Dict[str, Any]:
     rule = RULE_BY_ID.get(issue.rule_id)
     spec = FIELD_BY_NAME.get(issue.field_name or "")
@@ -341,6 +369,7 @@ async def delivery_workspace(db, intake_id, *, entity_id=None, limit: int = 50,
                 "dataset_version_anchor": e.dataset_version_anchor,
                 "rule_applied": e.rule_applied, "note": e.note,
                 "freshness": fresh,
+                "source_policy": _policy_for_item(e),
             })
         family_size = 0
         if entity.rce_tefcaid:
@@ -413,7 +442,8 @@ async def delivery_workspace(db, intake_id, *, entity_id=None, limit: int = 50,
             "findings": findings,
             "evidence": {"generation_timestamp": latest_gen, "items": evidence_items,
                          "reused_fresh": reused, "stale": stale,
-                         "freshness_window_days": window},
+                         "freshness_window_days": window,
+                         "freshness_window_basis": FRESHNESS_WINDOW_BASIS},
             "unanswered_questions": questions,
             "context_patterns": _context_patterns(entity, family_size),
             "contextual_assessments": contextual_assessments(

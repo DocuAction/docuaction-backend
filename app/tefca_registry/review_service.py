@@ -739,6 +739,11 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
                # Provenance of every source state taken from persisted evidence
                # rather than a live probe — part of the review snapshot.
                "persisted_evidence": persisted_used}
+    # Policy status beside the sources (2026-10-04). Not read by the
+    # classifier (`classify_with_db` reads sources/fields only).
+    from app.Tefca import source_policy as _source_policy
+    results["source_policy"] = _source_policy.manual_sources_block(
+        sources, verified_at=datetime.utcnow().isoformat() + "Z")
 
     # ── Steps 2-4: entity resolution (USPS -> Jaro-Winkler -> AI) ────────────
     # Runs BEFORE classification and contributes nothing to the bucket: the B1-B4

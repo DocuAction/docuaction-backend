@@ -731,6 +731,11 @@ async def verify_and_classify(
                     "data_quality_flags": evidence.get("data_quality_flags", []),
                     "generation_timestamp": evidence.get("generated_at"),
                     "resolution_source": entity.get("_resolution_source"),
+                    # Official (POLICY_UNAPPROVED / freshness UNKNOWN) and
+                    # inactive proposed policy views for the sources used,
+                    # against the same pinned timestamps. Beside the
+                    # classifier input; never part of it.
+                    "source_policy": evidence.get("source_policy"),
                     "classifier_input": verification_results,
                 },
                 classification_bucket=classification.bucket,
