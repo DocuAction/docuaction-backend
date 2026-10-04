@@ -62,7 +62,7 @@ def real_seed_rules_v4() -> list:
     return out
 
 
-async def test_real_v4_candidate_shadow_comparison_full_lifecycle():
+async def test_real_v4_candidate_shadow_comparison_full_lifecycle(db_required):
     from app.core.database import async_session_maker
     from app.tefca_registry.rce.arc_pipeline import verify_and_classify
     from app.tefca_registry.rce import shadow_reassessment as sr

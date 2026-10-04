@@ -45,7 +45,7 @@ async def _run_one_queued_job(db) -> str:
     return job.state
 
 
-async def test_journey_iqvia_live(tmp_path, monkeypatch):
+async def test_journey_iqvia_live(tmp_path, monkeypatch, db_required):
     from app.core.database import async_session_maker
     from app.models.database import User
     from app.core.security import hash_password

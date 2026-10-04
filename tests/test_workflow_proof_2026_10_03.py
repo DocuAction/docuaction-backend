@@ -101,7 +101,7 @@ def _local_v4_candidate() -> list[dict]:
     return out
 
 
-async def test_combined_workflow_proof(monkeypatch):
+async def test_combined_workflow_proof(monkeypatch, db_required):
     LOG.write_text("", encoding="utf-8")
     _log("=== Combined workflow proof, 2026-10-03 ===")
     monkeypatch.setenv("ENTITY_RESOLVER_SOURCE", "db")

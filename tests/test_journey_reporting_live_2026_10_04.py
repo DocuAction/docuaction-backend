@@ -22,7 +22,7 @@ pytestmark = pytest.mark.asyncio
 LIVE = "http://127.0.0.1:8103"
 
 
-async def test_journey_reporting_live():
+async def test_journey_reporting_live(db_required):
     await sam._ensure_journey_users()
     intake_id = await sam._seed_promoted_delivery(n=3)
 

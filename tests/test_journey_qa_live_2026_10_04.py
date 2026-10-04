@@ -45,7 +45,7 @@ async def _seed_entity(monkeypatch, label):
     return o["review_id"], o["entity_id"]
 
 
-async def test_journey_qa_live():
+async def test_journey_qa_live(db_required):
     await sam._ensure_journey_users()
     mp = pytest.MonkeyPatch()
     try:

@@ -54,7 +54,7 @@ async def _login(client, email, password):
     pytest.skip(f"login still rate-limited after retries: {last.text[:150]!r}")
 
 
-async def test_eligible_non_b1_completes_qa_via_real_routes_genuine_finding_still_denied():
+async def test_eligible_non_b1_completes_qa_via_real_routes_genuine_finding_still_denied(db_required):
     from app.core.database import async_session_maker
     from app.main import app
     from app.tefca_registry import case_assignment as ca
