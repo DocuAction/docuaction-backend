@@ -15,7 +15,7 @@ name: Backend Tests
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, 'feat/reporting-architecture-2026-10-01']
   push:
     branches: [main]
 

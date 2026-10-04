@@ -11,7 +11,7 @@ name: Convergence Fixture Test
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, 'feat/reporting-architecture-2026-10-01']
     paths:
       - 'scripts/prod_legacy_convergence.py'
       - 'tests/test_prod_convergence_integration.py'
