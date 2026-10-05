@@ -6,7 +6,17 @@ docuaction-db-geo, 2026-09-08 - metadata only, no Government data):
 
   * alembic_version = 20260829_report_artifacts (repo head 20260917_delivery_traceability,
     exactly seven revisions pending)
-  * 93 public tables: the 72 candidate tables + 20 legacy-only + alembic_version
+  * 93 public tables: the 72 candidate tables + 20 legacy-only + alembic_version.
+    Ten tables added since the 2026-09-08 measurement by merged migrations
+    (iqvia_hco_observation/iqvia_hcp_observation/iqvia_affiliation_observation,
+    20261002_iqvia_observations; rce_preflight_run/rce_preflight_finding/
+    rce_preflight_normalization/rce_shadow_comparison/rce_shadow_finding_delta/
+    rce_shadow_approval/rce_successor_publication_event,
+    20261003_preflight_shadow_workspace) are themselves chain-created -- each
+    FKs, directly or transitively, into a table the chain also creates
+    (rce_source_intakes/rce_source_records/review_records/source_snapshot) --
+    so they belong in MANAGED_CHAIN_CREATES, not the 72-table candidate
+    baseline, which is unchanged by this round's migrations.
   * docuaction_app  LOGIN, least privilege, OWNS 89 tables incl. alembic_version
   * docuaction_owner NOLOGIN, least privilege, OWNS exactly the four Area-1 tables
     (rce_source_records / rce_source_intakes / rce_ingestion_runs /
@@ -52,6 +62,14 @@ HEAD = _SCRIPTS.get_current_head()
 #: temporarily re-owns exactly these (in this order) and FINALIZE returns them.
 #: Mirrors scripts/prod_legacy_convergence.MANAGED_CHAIN_ALTERS.
 CHAIN_ALTERS = ["review_records", "rce_curated_records", "tefca_reg_entities", "tefca_entity_contacts"]
+#: Chain-created tables that FINALIZE moves to docuaction_app (not Area-1
+#: owner-owned): report_export_jobs plus the three IQVIA upload-durability
+#: tables (20261003_iqvia_upload_durability grants SELECT+INSERT+UPDATE, not
+#: the append-only grant the observation/preflight tables get -- the app
+#: actively updates upload progress). Mirrors the tables in
+#: scripts/prod_legacy_convergence.MANAGED_CHAIN_CREATES that are NOT also in
+#: AREA1_OWNER_TABLES.
+CHAIN_CREATES_TO_APP = ["report_export_jobs", "iqvia_upload_session", "iqvia_upload_chunk", "iqvia_import_job"]
 PENDING = [rev.revision for rev in
           reversed(list(_SCRIPTS.iterate_revisions(HEAD, EXPECTED)))]
 DECISIONS_COLS = ["approval_justification", "rejection_reason", "rejection_category", "supersedes", "sla_hours",
@@ -71,7 +89,14 @@ AREA1_PRESENT = ["rce_source_records", "rce_source_intakes", "rce_ingestion_runs
 TRACEABILITY = ["rce_delivery_stage_events", "rce_disposition_events", "rce_reconciliation_snapshots",
                 "tefca_identifier_decision_events", "rce_delivery_report_links",
                 # 20260921_september_snapshot: seven more owner-owned, app SELECT+INSERT tables
-                "rce_delivery_delta", "rce_entity_presence", "tefca_relationship_observations", "arc_stale_marks", "source_snapshot", "entity_source_match", "arc_assessment_run"]
+                "rce_delivery_delta", "rce_entity_presence", "tefca_relationship_observations", "arc_stale_marks", "source_snapshot", "entity_source_match", "arc_assessment_run",
+                # 20261002_iqvia_observations / 20261003_preflight_shadow_workspace:
+                # ten more owner-owned, app SELECT+INSERT-only tables (both migrations'
+                # own docstrings: "APPEND-ONLY BY GRANT, SAME AS THE SEPTEMBER MIGRATION")
+                "iqvia_hco_observation", "iqvia_hcp_observation", "iqvia_affiliation_observation",
+                "rce_preflight_run", "rce_preflight_finding", "rce_preflight_normalization",
+                "rce_shadow_comparison", "rce_shadow_finding_delta", "rce_shadow_approval",
+                "rce_successor_publication_event"]
 AREA1_FINAL = AREA1_PRESENT + ["rce_delivery_jobs"] + TRACEABILITY
 ENTRA_ADMIN = "entra_admin"
 CK = "ck_review_record_has_subject"
@@ -119,6 +144,26 @@ def _chain_creates():
     names = set(r.stdout.split())
     assert {"report_export_jobs", "rce_delivery_jobs"} <= names, names
     return names
+
+
+#: The ten tables added to the candidate set since the 72-table 2026-09-08
+#: measurement, each verified (2026-10-04) to FK, directly or transitively,
+#: into a table already treated as absent from legacy PROD -- so none of
+#: them could have existed before the chain either. See CANDIDATE_ADDITIONS
+#: for the full table-by-table review. Ten tables were added by migrations
+#: merged since the 72-table 2026-09-08 measurement (iqvia_hco_observation/
+#: iqvia_hcp_observation/iqvia_affiliation_observation, 20261002_iqvia_observations;
+#: rce_preflight_run/rce_preflight_finding/rce_preflight_normalization/
+#: rce_shadow_comparison/rce_shadow_finding_delta/rce_shadow_approval/
+#: rce_successor_publication_event, 20261003_preflight_shadow_workspace) --
+#: each one verified (2026-10-04) to FK, directly or transitively, into a
+#: table the pending chain ALSO creates (rce_source_intakes/rce_source_records/
+#: review_records/source_snapshot), so none of them could have existed before
+#: the chain runs either. They are correctly chain-created, not baseline
+#: candidate: scripts/prod_legacy_convergence.MANAGED_CHAIN_CREATES now names
+#: all ten, which is why the 72-table candidate count below is UNCHANGED by
+#: this round's migrations (`_chain_creates()` subtracts them, same as the
+#: fourteen tables already there).
 
 
 def _candidate_names():
@@ -374,8 +419,8 @@ def test_managed_prepare_migrate_finalize_end_to_end(fixture_db):
 
     # ── FINALIZE (entra_admin -> SET ROLE legacy_owner) ──
     rf = _run_conv(admin, "--finalize", "--i-understand-finalize-writes", "--bootstrap-as-role", LEGACY_OWNER)
-    # report_export_jobs (chain-created, non-Area-1) + every temporarily re-owned chain table
-    assert "FINALIZE COMPLETE" in rf.stdout and f"{1 + len(CHAIN_ALTERS)} non-Area-1 tables" in rf.stdout, rf.stdout[-400:]
+    # CHAIN_CREATES_TO_APP (chain-created, non-Area-1) + every temporarily re-owned chain table
+    assert "FINALIZE COMPLETE" in rf.stdout and f"{len(CHAIN_CREATES_TO_APP) + len(CHAIN_ALTERS)} non-Area-1 tables" in rf.stdout, rf.stdout[-400:]
     with su.connect() as c:
         final = _tables(c)
         assert len(final) == 93 + len(_chain_creates())

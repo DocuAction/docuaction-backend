@@ -134,3 +134,100 @@ jobs:
           name: isolation-postgres-results-${{ github.sha }}
           path: isolation-results.xml
           retention-days: 30
+
+  # 2026-10-04: six more DATABASE-BACKED tests were only ever skipped (or,
+  # before that, failing hard with a bare ConnectionRefusedError -- there is
+  # no "no database reachable" skip path for these, since three of them
+  # specifically exercise the real HTTP-bound server, not just a DB
+  # connection). Separate job, separate disposable database
+  # (test_journey_1003, never test -- isolation-postgres's own suite is
+  # untouched by anything here): test_qa_approval_route_level_2026_10_03.py,
+  # test_shadow_real_v4_candidate_2026_10_03.py and
+  # test_workflow_proof_2026_10_03.py need only the database (ASGI
+  # in-process transport); test_journey_iqvia_live_2026_10_04.py,
+  # test_journey_qa_live_2026_10_04.py and
+  # test_journey_reporting_live_2026_10_04.py additionally drive a REAL
+  # running uvicorn server over real HTTP on 127.0.0.1:8103 -- the thing
+  # the in-process ASGI transport cannot prove (an actual bound socket, a
+  # real request/response cycle, no test-only shortcuts). All six run
+  # together here since they share fixtures (test_sam_e2e_delivery_path's
+  # _ensure_journey_users()/_seed_promoted_delivery()).
+  journey-live:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: journeytest
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      SECRET_KEY: journeytestjourneytestjourneytestjourneytestjourneytestjourneytest
+      ALLOWED_HOSTS: '*'
+      ALLOWED_ORIGINS: http://127.0.0.1:8103
+      DATABASE_URL: postgresql+asyncpg://postgres:journeytest@127.0.0.1:5432/test_journey_1003
+      DB_MIGRATION_ROLE: docuaction_owner
+      DB_APP_ROLE: docuaction_app
+      ENABLE_IQVIA_SOURCES: 'true'
+      PGPASSWORD: journeytest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx
+      - name: Create the isolated database and roles (owner / app split, UTC)
+        run: |
+          psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE ROLE docuaction_owner LOGIN PASSWORD 'x';" -c "CREATE ROLE docuaction_app LOGIN PASSWORD 'x';" -c "CREATE DATABASE test_journey_1003 OWNER docuaction_owner;" -c "ALTER DATABASE test_journey_1003 SET timezone = 'UTC';"
+          psql -h 127.0.0.1 -U postgres -d test_journey_1003 -v ON_ERROR_STOP=1 -c "ALTER SCHEMA public OWNER TO docuaction_owner;" -c "GRANT ALL ON SCHEMA public TO docuaction_owner;" -c "GRANT USAGE, CREATE ON SCHEMA public TO docuaction_app;"
+      - name: Migrate to head (Alembic, owner role)
+        run: python -m alembic upgrade head
+        env:
+          DATABASE_URL: postgresql+asyncpg://docuaction_owner:x@127.0.0.1:5432/test_journey_1003
+      # The three *_live tests need an actual bound HTTP server, distinct
+      # from the in-process ASGI transport the rest of this repo's route
+      # tests use. Started as the postgres superuser (same simplification
+      # isolation-postgres's own DATABASE_URL already makes) so the
+      # legacy, non-Alembic-tracked tables app/main.py creates at startup
+      # never hit a privilege error on a brand-new database.
+      - name: Start the live server (127.0.0.1:8103)
+        run: |
+          nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8103 > journey-server.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8103/health > /dev/null; then echo "server is up"; exit 0; fi
+            sleep 1
+          done
+          echo "::error::server did not become healthy within 30s"; cat journey-server.log; exit 1
+      - name: Run the live-journey and route-level suites
+        run: |
+          python -m pytest \
+            tests/test_qa_approval_route_level_2026_10_03.py \
+            tests/test_shadow_real_v4_candidate_2026_10_03.py \
+            tests/test_workflow_proof_2026_10_03.py \
+            tests/test_journey_iqvia_live_2026_10_04.py \
+            tests/test_journey_qa_live_2026_10_04.py \
+            tests/test_journey_reporting_live_2026_10_04.py \
+            -v -s --tb=short -rs --junitxml=journey-results.xml
+      - name: Stop the live server
+        if: always()
+        run: pkill -f "uvicorn app.main:app" || true
+      - name: Fail if any journey test was skipped for want of a database
+        if: always()
+        run: |
+          if grep -q 'No database reachable' journey-results.xml; then echo "::error::database-backed journey tests were skipped"; exit 1; fi
+      - name: Upload journey results and server log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: journey-live-results-${{ github.sha }}
+          path: |
+            journey-results.xml
+            journey-server.log
+          retention-days: 30

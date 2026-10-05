@@ -315,20 +315,46 @@ async def submit_qa_review(
     #
     # Pre-merge review Decision 2 (2026-09-18), "final classification"
     # exclusion: an entity with an UNRESOLVED post-promotion blocking finding
-    # (`TefcaRegEntity.verification_status == "in_review"`, set by
-    # `post_promotion_verification.record_finding`) must not be finalized as
-    # reportable on this pass — the finding may itself change the answer.
-    # Checked here, not earlier, so a REJECT/RETURN/ESCALATE (which never sets
-    # reportable_at) is never blocked by this.
+    # must not be finalized as reportable on this pass — the finding may
+    # itself change the answer. Checked here, not earlier, so a
+    # REJECT/RETURN/ESCALATE (which never sets reportable_at) is never
+    # blocked by this.
+    #
+    # Fixed 2026-10-03 (local, directive-authorized): this used to read
+    # `TefcaRegEntity.verification_status == "in_review"` directly, which
+    # `arc_pipeline.py` ALSO sets for every classification bucket other than
+    # B1 — not only when a genuine blocking finding exists. That made
+    # QA_APPROVE structurally unreachable for every B2/B3/B4 entity, not the
+    # narrower, documented case above; confirmed by this module's own
+    # pre-existing test (`test_final_classification_is_refused_while_
+    # unresolved`, test_post_promotion_verification.py), which sets up the
+    # refusal via a real `post_promotion_verification.record_finding` call,
+    # never via a bucket. Now checks the genuine finding directly. A
+    # DISCREPANCY bucket (B2/B3/B4) is itself the system's answer, not a
+    # pending one — it is exactly what independent QA exists to confirm and
+    # make reportable; a tier-routing flag with no open finding behind it is
+    # not grounds for refusal.
     if qa_action == E.QA_APPROVE and review.entity_id is not None:
+        from app.tefca_registry.rce import post_promotion_verification as ppv
+
         entity = await db.get(reg.TefcaRegEntity, review.entity_id)
-        if entity is not None and entity.verification_status == "in_review":
-            raise QaGateRefused(
-                f"{review_id} names entity {review.entity_id}, which has an "
-                f"unresolved post-promotion verification finding "
-                f"(verification_status=in_review). Resolve that finding "
-                f"first; approving a final classification over it would rest "
-                f"on state that may itself be about to change.")
+        if entity is not None:
+            if await ppv.has_unresolved_blocking_finding(db, review.entity_id):
+                raise QaGateRefused(
+                    f"{review_id} names entity {review.entity_id}, which has an "
+                    f"unresolved post-promotion verification finding. Resolve "
+                    f"that finding first; approving a final classification "
+                    f"over it would rest on state that may itself be about to "
+                    f"change.")
+            # The resolve path `qhin_sampling.py`'s own comment describes
+            # ("the authorised analyst/QA workflow") for an entity that is
+            # `in_review` purely from classification-time tier routing (no
+            # genuine finding) — independent QA approving now IS that
+            # resolution. Never touches an entity with a real open finding:
+            # the raise above already returned for that case.
+            if entity.verification_status == ppv.REVIEW_REQUIRED_STATUS:
+                entity.verification_status = ppv.VERIFIED_STATUS
+                entity.updated_at = datetime.utcnow()
     review.reportable_at = datetime.utcnow() if qa_action == E.QA_APPROVE else None
 
     reg_audit.record(db, f"qa_{qa_action.lower()}", review.entity_id,

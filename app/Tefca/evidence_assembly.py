@@ -533,56 +533,87 @@ def _dimension_exclusion(entity: Dict[str, Any], profile: ApplicabilityProfile,
     #
     # SAM is NOT keyed on NPI at all, so a missing NPI is irrelevant to it. What
     # matters is whether a UEI or a legal name was available.
+    #
+    # The connector's `excluded` key is read here — NOT `debarred`/`exclusions`,
+    # which no SAM connector response has ever set (that was the bug: every
+    # confirmed SAM debarment silently assembled as a clean PASS). Three more
+    # signals, independent of `excluded` itself, decide whether `excluded` may
+    # be trusted at all:
+    #   identity_ambiguous  a name search matched more than one SAM entity —
+    #                       the debarment or clean answer belongs to an
+    #                       unconfirmed identity and must not be reported as
+    #                       either.
+    #   excluded_known      the independent v4 exclusions leg actually
+    #                       completed. A registration (v3) success with a
+    #                       failed exclusions leg must not read as "clear" —
+    #                       unperformed screening is UNAVAILABLE, not PASS.
+    def _sam_disposition(d: Dict[str, Any], *, by_name: bool
+                         ) -> tuple[str, str]:
+        if d.get("identity_ambiguous"):
+            return (Disposition.REVIEW.value,
+                    "SAM.gov matched more than one entity by name; identity "
+                    "is unconfirmed. Analyst determination required before "
+                    "any debarment or clearance finding.")
+        if not d.get("excluded_known", True):
+            return (Disposition.UNAVAILABLE.value,
+                    "SAM.gov registration was reached, but the independent "
+                    "exclusions (debarment) check did not complete: "
+                    + str(d.get("exclusion_check_error") or "no detail") +
+                    ". Debarment status is UNKNOWN, not clear.")
+        excluded = bool(d.get("excluded"))
+        if excluded:
+            return (Disposition.REVIEW.value,
+                    "Potential debarment match — analyst determination required.")
+        if by_name:
+            return (Disposition.NOT_FOUND.value,
+                    "No UEI available, so SAM.gov was screened by legal name. "
+                    "No match found. NOT_FOUND rather than PASS — a name "
+                    "search does not carry the weight of a UEI match.")
+        return (Disposition.PASS.value, "No debarment record found.")
+
     sam = sources.get("sam_exclusion")
     sam_name = sources.get("sam_name")
     if _ok(sam) and uei:
         d = sam.data or {}
-        debarred = bool(d.get("debarred") or d.get("exclusions"))
-        any_hit = any_hit or debarred
+        disposition, note = _sam_disposition(d, by_name=False)
+        any_hit = any_hit or bool(d.get("excluded")) or bool(d.get("identity_ambiguous"))
         items.append(EvidenceItem(
             dimension=dim, source="SAM_GOV",
-            disposition=Disposition.REVIEW.value if debarred else Disposition.PASS.value,
+            disposition=disposition,
             query_timestamp=sam.query_timestamp, dataset_version_anchor=sam.api_version,
             query_identifier=f"uei={uei}",
             fields_evaluated=["uei", "registration_status", "exclusions"],
             original_values=dict(d),
             rule_applied="SAM_DEBARMENT_CHECK_BY_UEI",
-            note="Potential debarment match — analyst determination required."
-                 if debarred else "No debarment record found.",
+            note=note,
         ))
     elif _ok(sam_name):
         d = sam_name.data or {}
-        debarred = bool(d.get("debarred") or d.get("exclusions"))
-        any_hit = any_hit or debarred
+        disposition, note = _sam_disposition(d, by_name=True)
+        any_hit = any_hit or bool(d.get("excluded")) or bool(d.get("identity_ambiguous"))
         items.append(EvidenceItem(
             dimension=dim, source="SAM_GOV",
-            disposition=Disposition.REVIEW.value if debarred else Disposition.NOT_FOUND.value,
+            disposition=disposition,
             query_timestamp=sam_name.query_timestamp,
             dataset_version_anchor=sam_name.api_version,
             query_identifier=f"legal_name={org_name}",
             fields_evaluated=["legal_name", "registration_status", "exclusions"],
             original_values=dict(d),
             rule_applied="SAM_ORG_LEVEL_CHECK_NO_UEI",
-            note=("Potential debarment match on the organisation name — analyst "
-                  "determination required."
-                  if debarred else
-                  "No UEI available, so SAM.gov was screened by legal name. No match "
-                  "found. NOT_FOUND rather than PASS — a name search does not carry "
-                  "the weight of a UEI match."),
+            note=note,
         ))
     elif _ok(sam):
         d = sam.data or {}
-        debarred = bool(d.get("debarred") or d.get("exclusions"))
-        any_hit = any_hit or debarred
+        disposition, note = _sam_disposition(d, by_name=bool(d.get("matched_by") == "name"))
+        any_hit = any_hit or bool(d.get("excluded")) or bool(d.get("identity_ambiguous"))
         items.append(EvidenceItem(
             dimension=dim, source="SAM_GOV",
-            disposition=Disposition.REVIEW.value if debarred else Disposition.PASS.value,
+            disposition=disposition,
             query_timestamp=sam.query_timestamp, dataset_version_anchor=sam.api_version,
             fields_evaluated=["uei", "registration_status", "exclusions"],
             original_values=dict(d),
             rule_applied="SAM_DEBARMENT_CHECK",
-            note="Potential debarment match — analyst determination required."
-                 if debarred else "No debarment record found.",
+            note=note,
         ))
     elif not uei and not org_name:
         any_insufficient = True

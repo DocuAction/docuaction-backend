@@ -133,7 +133,14 @@ class TestLayoutRulesWithoutADatabase:
         with open(path, encoding="utf-8") as handle:
             source = handle.read()
         assert source.count('<div class="dp-wide">') == 6
-        assert source.count("</div>") == 6
+        # Overall div balance (a basic HTML-sanity check, not pinned to any one
+        # section's count) -- the template also carries a cover/KPI band
+        # (dp-band/agt-*) above the wide sections, with its own divs.
+        import re
+        assert len(re.findall(r"<div\b", source)) == source.count("</div>")
+        # Each dp-wide block is self-contained (no nested <div>), so the
+        # non-greedy match below finds exactly the six wide sections' own closes.
+        assert len(re.findall(r'<div class="dp-wide">.*?</div>', source, re.S)) == 6
         assert source.index('<div class="dp-wide">') < source.index("<h2>4. Dispositions</h2>")
         assert source.rindex("</div>") < source.index("<h2>10. Evidence limitations</h2>")
         assert source.index("<h2>3. Reconciliation</h2>") < source.index('<div class="dp-wide">')

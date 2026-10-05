@@ -71,7 +71,7 @@ def patch_nppes(monkeypatch):
         queue = list(responses)
         calls = []
 
-        async def fake_get(url, params, headers, timeout=None):
+        async def fake_get(url, params, headers, timeout=None, source=None):
             calls.append({"url": url, "params": dict(params)})
             return queue.pop(0)
 
@@ -102,7 +102,7 @@ class TestMalformedNpiRejectedBeforeDispatch:
     async def test_cms_ppef_rejects_malformed_npi_without_a_call(self, monkeypatch):
         calls = []
 
-        async def fake_get(url, params, headers, timeout=None):
+        async def fake_get(url, params, headers, timeout=None, source=None):
             calls.append(url)
             raise AssertionError("must not be called for an invalid NPI")
 
@@ -217,7 +217,7 @@ class TestTransportFailuresFailClosed:
         # does not affect it, so it must be patched on the cms_ppef module.
         from app.Tefca import cms_ppef as ppef_module
 
-        async def fake_get(url, params, headers, timeout=None):
+        async def fake_get(url, params, headers, timeout=None, source=None):
             return FakeResponse(503, {}, host="data.cms.gov")
 
         monkeypatch.setattr(ppef_module, "_get_with_retry", fake_get)

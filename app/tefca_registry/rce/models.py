@@ -515,3 +515,8 @@ RCE_TABLE_ORDER = [
 # importing the RCE models - the app, the Alembic environment, create_all -
 # registers them on the same Base.
 import app.tefca_registry.rce.traceability_models  # noqa: E402,F401
+
+# Preflight + shadow-reassessment evidence tables (2026-10-03). Same reason as
+# the traceability import above: registered on the shared Base wherever the
+# RCE models are imported (app, Alembic env, create_all).
+import app.tefca_registry.rce.preflight_shadow_models  # noqa: E402,F401

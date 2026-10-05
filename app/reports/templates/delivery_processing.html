@@ -23,6 +23,63 @@
   {%- endif -%}
 {% endmacro %}
 
+{#
+  Presentation (2026-10-03): the approved Alliance Global Tech design system —
+  the same header band, KPI cards, navy table headings and B1–B4 chips the
+  D3.1 / D3.2 progress family ships with (agt_design_system.css, shared, not
+  copied). Content sections 1–11 and their CSV-annex captions are unchanged:
+  this block adds a header band and a summary row above them, and styles the
+  headings and tables they already have. Every KPI value is a template
+  variable the data service already provides; nothing is typed in.
+#}
+{% block cover %}
+<style>
+  {{ agt_css|safe }}
+  .report-header { display: none; }
+  .dp-band { font-family: "Public Sans", Arial, Helvetica, sans-serif; color: var(--agt-ink); margin: 0 0 8pt 0; }
+  .dp-band, .dp-band * { hyphens: manual; -webkit-hyphens: manual; overflow-wrap: normal; word-break: normal; }
+  .dp-band p { margin: 0; }
+  .dp-band .agt-head .title { string-set: doc-title content(); }
+  .dp-band .agt-kpi .v { font-size: 12.5pt; }
+  .dp-band .agt-kpi .v.sm { font-size: 9.5pt; line-height: 1.3; white-space: normal; }
+  /* the body: section headings and tables follow the same system */
+  main h2 { font-size: 11pt; color: var(--agt-dblue); text-transform: none; letter-spacing: 0; border-left: 3pt solid var(--agt-gold); border-bottom: 0; padding-left: 6pt; margin: 12pt 0 5pt 0; page-break-after: avoid; }
+  main table thead th { background: var(--agt-navy); color: #fff; border: 0; }
+  main table tbody th[scope="row"] { background: var(--agt-lblue); color: var(--agt-ink); font-weight: 700; }
+  main table tbody tr:nth-child(even) td { background: #F6F8FA; }
+  main table td, main table th { border-bottom: 0.6pt solid var(--agt-line); }
+  main .scope-box { border-top: 2.5pt solid var(--agt-blue); }
+</style>
+<div class="dp-band">
+  <div class="agt-head">
+    <div class="cell logo" style="width: 0.95in">
+      {% if branding.agt_logo %}<img src="{{ branding.agt_logo }}" alt="{{ branding.prepared_by }} logo">{% endif %}
+    </div>
+    <div class="cell">
+      <h1 class="title" id="dp-title">RCE Delivery Processing Report</h1>
+      <p class="deliv"><b>Delivery processing</b> &middot; {{ delivery.delivery_label or 'Unlabelled delivery' }}{% if delivery.filename %} &middot; {{ delivery.filename }}{% endif %}</p>
+      <p class="meta">Report {{ snapshot.report_id }} &middot; Generated {{ generated_at_display }} &middot; Report Data Service v{{ snapshot.report_data_service_version }} &middot; Template v{{ snapshot.template_version }}{% if snapshot_id %} &middot; Reconciliation snapshot {{ snapshot_sequence }} of {{ reconciliation.history_count }}{% endif %}</p>
+    </div>
+    <div class="cell" style="width: 1.75in; text-align: right">
+      <span class="agt-badge">{{ document_status|upper }}</span>
+      <p class="org">{{ branding.prepared_by }}</p>
+      <p class="prog">TEFCA Audit, Review &amp; Compliance</p>
+    </div>
+  </div>
+  <div class="agt-rule"></div>
+  <div class="agt-goldrule"></div>
+
+  {# ── five KPI cards: every figure is restated, with its basis, in sections 1–8 ── #}
+  <div class="agt-kpis">
+    <div class="agt-kpi"><p class="l">Records delivered</p><p class="v">{{ delivery.record_count|number }}</p><p class="n">Area 1 source lines registered for this delivery</p></div>
+    <div class="agt-kpi"><p class="l">Processing outcome</p><p class="v sm">{{ outcome.value }}</p><p class="n">{{ outcome.code }} &middot; review state {{ review.code }}</p></div>
+    <div class="agt-kpi"><p class="l">Reconciliation</p><p class="v">{% if reconciliation.available %}{{ 'PASSED' if reconciliation.passed else 'FAILED' }}{% else %}None{% endif %}</p><p class="n">{% if reconciliation.available %}pinned snapshot sequence {{ reconciliation.sequence }}{% else %}no reconciliation snapshot is persisted{% endif %}</p></div>
+    <div class="agt-kpi"><p class="l">Findings</p><p class="v">{% if findings.available %}{{ findings.total|number }}{% else %}&mdash;{% endif %}</p><p class="n">{% if findings.available %}{{ findings.open_high|number }} open at HIGH / CRITICAL{% else %}no completed quality run{% endif %}</p></div>
+    <div class="agt-kpi"><p class="l">Review records</p><p class="v">{{ analyst.counts.review_records|number }}</p><p class="n">{{ analyst.counts.qa_approved|number }} independently QA approved &middot; {{ analyst.counts.qa_pending|number }} awaiting QA</p></div>
+  </div>
+</div>
+{% endblock %}
+
 {% block content %}
 
 <section class="scope-box" aria-labelledby="dp-identity">
@@ -216,7 +273,8 @@
 
 {% if dispositions.rows %}
 <table>
-  <caption>Record-level dispositions, every received record, by delivered line number</caption>
+  <caption>Record-level dispositions &mdash; first {{ dispositions.rows_shown|number }} of
+    {{ dispositions.rows_total|number }} received record(s), by delivered line number</caption>
   <thead>
     <tr>
       <th scope="col">Line</th><th scope="col">Source id (RCE OID)</th><th scope="col">Name</th>
@@ -244,6 +302,11 @@
     {% endfor %}
   </tbody>
 </table>
+{% if dispositions.rows_total > dispositions.rows_shown %}
+<p>The remaining {{ (dispositions.rows_total - dispositions.rows_shown)|number }} record(s) are in
+  the full disposition export:
+  <code>/api/tefca/rce/deliveries/{{ delivery.intake_id }}/dispositions.csv</code>.</p>
+{% endif %}
 {% else %}
 <p class="insufficient-data">No disposition events are persisted for this delivery; per-record outcomes cannot be stated from evidence.</p>
 {% endif %}
@@ -269,7 +332,8 @@
 </table>
 {% if findings.rows %}
 <table>
-  <caption>Every finding of the current run, by delivered line</caption>
+  <caption>Findings &mdash; first {{ findings.rows_shown|number }} of
+    {{ findings.rows_total|number }}, open HIGH/CRITICAL first, then by delivered line</caption>
   <thead>
     <tr>
       <th scope="col">Issue code</th><th scope="col">Line</th><th scope="col">Rule</th><th scope="col">Issue type</th>
@@ -292,6 +356,11 @@
     {% endfor %}
   </tbody>
 </table>
+{% if findings.rows_total > findings.rows_shown %}
+<p>The remaining {{ (findings.rows_total - findings.rows_shown)|number }} finding(s) are in the
+  full findings export:
+  <code>/api/tefca/rce/deliveries/{{ delivery.intake_id }}/findings.csv</code>.</p>
+{% endif %}
 {% endif %}
 {% else %}
 <p class="insufficient-data">No completed quality run exists for this delivery; findings cannot be stated.</p>
@@ -301,9 +370,10 @@
 <div class="dp-wide">
 <h2>6. Identifier conflicts and decisions</h2>
 {% if identifiers.available and identifiers.conflicts %}
-<p>{{ identifiers.conflicts|length }} identifier conflict(s) raised for this delivery; {{ identifiers.unresolved|number }} unresolved; {{ identifiers.events_total|number }} event(s) in total.</p>
+<p>{{ identifiers.rows_total|number }} identifier conflict(s) raised for this delivery; {{ identifiers.unresolved|number }} unresolved; {{ identifiers.events_total|number }} event(s) in total.</p>
 <table>
-  <caption>Each identifier conflict with its current decision</caption>
+  <caption>Identifier conflicts &mdash; first {{ identifiers.rows_shown|number }} of
+    {{ identifiers.rows_total|number }}, unresolved first</caption>
   <thead>
     <tr>
       <th scope="col">Entity id</th><th scope="col">Identifier</th><th scope="col">Submitted</th><th scope="col">Existing</th>
@@ -327,6 +397,11 @@
     {% endfor %}
   </tbody>
 </table>
+{% if identifiers.rows_total > identifiers.rows_shown %}
+<p>The remaining {{ (identifiers.rows_total - identifiers.rows_shown)|number }} conflict(s) are in
+  the full identifier-conflicts export:
+  <code>/api/tefca/rce/deliveries/{{ delivery.intake_id }}/identifier-conflicts.csv</code>.</p>
+{% endif %}
 {% elif identifiers.available %}
 <p>No identifier conflicts were raised for this delivery.</p>
 {% else %}
@@ -363,13 +438,43 @@
     {% endfor %}
   </tbody>
 </table>
+<p><strong>Failed/error indicator &mdash; reconciliation pending.</strong>
+  Each source's Failed column is that source's own count and is not a
+  reconciled, mutually exclusive delivery-wide status: an entity failed at one
+  source can be verified or not found at another, so the Failed columns above
+  must not be summed across sources into a single figure until a governed
+  read-only reconciliation confirms what such a total would mean.</p>
+
+{% if delivery.intake_id %}
+<p><strong>Investigation CSV annexes.</strong> The entities behind any
+  Verified / Not found / Unavailable total above are available as a CSV
+  export, one file per (source, outcome), from this delivery's Verification
+  tab drill-down in the application (reviewer access required; a static
+  server-rendered report cannot itself carry an authenticated download link).
+  The Failed outcome is intentionally not exportable this way, per the
+  reconciliation note above. For programmatic or support use, the download
+  path is
+  <code>/api/tefca/rce/deliveries/{{ delivery.intake_id }}/verification-coverage/&lt;source&gt;/&lt;outcome&gt;/csv</code>.</p>
+{% endif %}
 
 </div>
 <div class="dp-wide">
 <h2>8. Analyst actions</h2>
 <p>{{ analyst.counts.disposition_events|number }} analyst disposition(s), {{ analyst.counts.issue_resolutions|number }} finding resolution(s),
   {{ analyst.counts.review_records|number }} review record(s) ({{ analyst.counts.open|number }} open, {{ analyst.counts.claimed|number }} claimed,
-  {{ analyst.counts.qa_pending|number }} awaiting QA, {{ analyst.counts.qa_approved|number }} QA approved).</p>
+  {{ analyst.counts.qa_pending|number }} awaiting QA, {{ analyst.counts.qa_approved|number }} QA approved).
+  {% if analyst.rule_versions_in_effect %}
+    Classification rule set version{{ 's' if analyst.rule_versions_in_effect|length > 1 else '' }} in effect for this
+    delivery's review records:
+    {% for v in analyst.rule_versions_in_effect %}{{ v }}{% if not loop.last %}, {% endif %}{% endfor %}{% if analyst.rule_versions_in_effect|length > 1 %}
+    &mdash; more than one version classified records in this delivery (a rule-set upgrade occurred mid-stream); each
+    review record's own row states which version produced it, and that is the determination's permanent, unedited
+    record regardless of any later upgrade.{% endif %}
+  {% elif analyst.review_records_total %}
+    Classification rule set version is not recorded on this delivery's review records (processed before version
+    provenance was captured).
+  {% endif %}
+</p>
 {% if analyst.disposition_events %}
 <table>
   <caption>Analyst disposition decisions (HUMAN actor), oldest first</caption>
@@ -414,15 +519,17 @@
 {% endif %}
 {% if analyst.review_records %}
 <table>
-  <caption>Review records tied to this delivery's records</caption>
+  <caption>Review records &mdash; first {{ analyst.review_records_shown|number }} of
+    {{ analyst.review_records_total|number }}, unresolved/not-yet-QA-approved first</caption>
   <thead>
-    <tr><th scope="col">Review id</th><th scope="col">Category</th><th scope="col">Resolution</th><th scope="col">Assigned</th><th scope="col">Reviewed (UTC)</th><th scope="col">QA approved (UTC)</th></tr>
+    <tr><th scope="col">Review id</th><th scope="col">Category</th><th scope="col">Rule (version)</th><th scope="col">Resolution</th><th scope="col">Assigned</th><th scope="col">Reviewed (UTC)</th><th scope="col">QA approved (UTC)</th></tr>
   </thead>
   <tbody>
     {% for r in analyst.review_records %}
     <tr>
       <th scope="row">{{ r.review_id }}</th>
-      <td>{{ r.bucket or '—' }}</td>
+      <td>{% if r.bucket in ('B1', 'B2', 'B3', 'B4') %}<span class="agt-chip {{ r.bucket|lower }}">{{ r.bucket }}</span>{% else %}{{ r.bucket or '—' }}{% endif %}</td>
+      <td>{{ r.classification_rule or '—' }}{% if r.classification_rule_version is not none %} (v{{ r.classification_rule_version }}){% endif %}</td>
       <td>{{ r.resolution or 'Pending' }}{% if r.reclassified_to %} → {{ r.reclassified_to }}{% endif %}</td>
       <td>{{ 'Yes' if r.assigned else 'No' }}</td>
       <td>{{ r.reviewed_at or '—' }}</td>
@@ -431,6 +538,11 @@
     {% endfor %}
   </tbody>
 </table>
+{% if analyst.review_records_total > analyst.review_records_shown %}
+<p>The remaining {{ (analyst.review_records_total - analyst.review_records_shown)|number }} review record(s), each
+  with its own classification rule and version, are in the full review-records export:
+  <code>/api/tefca/rce/deliveries/{{ delivery.intake_id }}/review-records.csv</code>.</p>
+{% endif %}
 {% endif %}
 {% if not analyst.available %}
 <p>No analyst action has been recorded for this delivery.</p>

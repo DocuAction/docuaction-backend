@@ -24,9 +24,28 @@ WHERE THE EVIDENCE IS READ FROM (the mapping this module commits to)
             deactivated (or detail ~ 'deactivat') -> deactivated
         tefca_dimension_evidence.disposition
             PASS | CORROBORATED                   -> verified
-            NOT_FOUND                             -> not_found
+            NOT_FOUND | REVIEW                    -> not_found
             UNAVAILABLE                           -> unavailable
             FAIL | CONFLICT                       -> failed
+
+    REVIEW (2026-10-02, SAM verification-contract review): a potential
+    exclusion/debarment match pending analyst confirmation -- e.g. an
+    ambiguous SAM/LEIE name match, or (since that same pass's connector fix)
+    a CONFIRMED exclusion correctly surfaced at the evidence layer, which is
+    assembled as REVIEW rather than FAIL because an automated system is
+    never the one to pronounce a debarment final (see
+    `evidence_assembly._dimension_exclusion`'s own docstring). Before this
+    mapping existed, REVIEW was simply absent from every bucket here --
+    `eligible`/`attempted` counted the entity, but no outcome did, so a
+    pending exclusion silently vanished from the coverage dashboard instead
+    of being miscounted. Mapped to `not_found` deliberately, not `failed`:
+    it is the SAME choice `arc_pipeline._DISPOSITION_TO_STATE` already makes
+    for the bucket classifier (consistent across both consumers of the same
+    underlying disposition), and it does NOT touch the `failed` bucket at
+    all -- confirmed independent of the still-open "1,298 Failed indicator"
+    reconciliation question (qa-evidence/2026-10-01-reporting-architecture/
+    CHECKPOINT-1298-FAILED-INDICATOR-STATIC-ANALYSIS.md), which is about
+    cross-source `failed` semantics specifically.
 
     `review_records.verification_results` is NOT read: it is a snapshot for
     the review, not a lookup log, and counting it would count the same lookup
@@ -70,7 +89,7 @@ _VERIFICATION_STATUS = {
 }
 _DIMENSION_DISPOSITION = {
     "PASS": "verified", "CORROBORATED": "verified",
-    "NOT_FOUND": "not_found",
+    "NOT_FOUND": "not_found", "REVIEW": "not_found",
     "UNAVAILABLE": "unavailable",
     "FAIL": "failed", "CONFLICT": "failed",
 }
@@ -143,12 +162,16 @@ _SOURCE_CASE = """
           WHEN 'sam' THEN 'sam' WHEN 'sam_gov' THEN 'sam' WHEN 'sam.gov' THEN 'sam' WHEN 'samgov' THEN 'sam'
         END"""
 
-_COVERAGE_COUNTS_SQL = f"""
-    WITH pop_uuid AS (
-        SELECT DISTINCT canonical_entity_id AS eid
-        FROM rce_curated_records
-        WHERE source_intake_id = CAST(:i AS uuid) AND canonical_entity_id IS NOT NULL),
-    pop_text AS (SELECT CAST(eid AS text) AS eid FROM pop_uuid),
+#: The per-evidence-row (source, outcome) computation, shared verbatim with
+#: `app.reports.data.verification_drilldown` (the paginated per-entity list
+#: behind each coverage card's clickable totals): the drill-down's row count
+#: for (source, outcome) must equal this module's own aggregate count for the
+#: same (source, outcome) EXACTLY, and the only way to guarantee that is one
+#: SQL fragment neither module re-derives independently. Requires `pop_uuid`
+#: (distinct `canonical_entity_id` of the population) and `pop_text` (the same,
+#: cast to text, for `tefca_dimension_evidence.entity_id`) as CTEs already
+#: defined by the caller.
+EVIDENCE_ROWS_CTE_SQL = f"""
     rows AS (
         SELECT {_SOURCE_CASE.format(col='v.source')} AS key,
                v.entity_id::text AS eid,
@@ -166,11 +189,20 @@ _COVERAGE_COUNTS_SQL = f"""
                d.entity_id AS eid,
                CASE upper(btrim(coalesce(d.disposition, '')))
                     WHEN 'PASS' THEN 'verified' WHEN 'CORROBORATED' THEN 'verified'
-                    WHEN 'NOT_FOUND' THEN 'not_found'
+                    WHEN 'NOT_FOUND' THEN 'not_found' WHEN 'REVIEW' THEN 'not_found'
                     WHEN 'UNAVAILABLE' THEN 'unavailable'
                     WHEN 'FAIL' THEN 'failed' WHEN 'CONFLICT' THEN 'failed' ELSE NULL END AS outcome
         FROM tefca_dimension_evidence d
         WHERE d.entity_id IN (SELECT eid FROM pop_text))
+"""
+
+_COVERAGE_COUNTS_SQL = f"""
+    WITH pop_uuid AS (
+        SELECT DISTINCT canonical_entity_id AS eid
+        FROM rce_curated_records
+        WHERE source_intake_id = CAST(:i AS uuid) AND canonical_entity_id IS NOT NULL),
+    pop_text AS (SELECT CAST(eid AS text) AS eid FROM pop_uuid),
+    {EVIDENCE_ROWS_CTE_SQL}
     SELECT key,
            count(DISTINCT eid) AS attempted,
            count(DISTINCT eid) FILTER (WHERE outcome = 'verified') AS verified,

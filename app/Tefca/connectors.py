@@ -272,16 +272,157 @@ class SourceResult:
 
 # ─── Shared fetch with retry/backoff ─────────────────────────────────────────
 
+# PROFILED 2026-10-02: a batch of concurrently-processed entities (see
+# arc_pipeline._gather_all_evidence) each independently call into this module,
+# and every call here used to open a BRAND NEW `httpx.AsyncClient()` — a fresh
+# TCP connection plus a fresh TLS handshake per GET, never reused, even
+# between calls to the SAME host. Measured directly against this host's real
+# network path: the first wave of concurrent entities paid 19-28s each (many
+# simultaneous cold TLS handshakes contending), later ones ~4-6s once the OS
+# connection table had settled — none of which is inherent to what NPPES/
+# LEIE/SAM/CMS actually have to answer (a single warm call is ~0.3-0.4s).
+# A shared, process-lifetime `httpx.AsyncClient` (safe for concurrent use
+# across asyncio tasks — that is what it is for) keeps a pooled, reusable set
+# of connections per host instead of paying handshake cost on every request.
+_SHARED_HTTP_CLIENT: Optional[httpx.AsyncClient] = None
+_SHARED_HTTP_CLIENT_LOOP: Optional[asyncio.AbstractEventLoop] = None
+
+
+def _shared_http_client() -> httpx.AsyncClient:
+    """One pooled client per *running event loop*, not one for the whole
+    process. httpx.AsyncClient's connection pool is bound to the loop that
+    created it; a process that outlives a single loop -- a test suite where
+    pytest-asyncio hands each async test its own loop, a worker that
+    restarts its loop -- would reuse a client whose connections belong to an
+    already-closed loop, raising "RuntimeError: Event loop is closed" on the
+    next call. Found this pass, during combined-suite integration testing
+    (sequencing two loop-creating tests against the same process surfaced it;
+    this fork's own isolated regression batches happened not to). Recreating
+    the client whenever the running loop differs keeps the
+    no-handshake-per-call win within a loop's lifetime while staying correct
+    across loop boundaries.
+    """
+    global _SHARED_HTTP_CLIENT, _SHARED_HTTP_CLIENT_LOOP
+    current_loop = asyncio.get_running_loop()
+    if (_SHARED_HTTP_CLIENT is None or _SHARED_HTTP_CLIENT.is_closed
+            or _SHARED_HTTP_CLIENT_LOOP is not current_loop):
+        _SHARED_HTTP_CLIENT = httpx.AsyncClient(
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=40))
+        _SHARED_HTTP_CLIENT_LOOP = current_loop
+    return _SHARED_HTTP_CLIENT
+
+
+# ─── Per-source rate limiting ────────────────────────────────────────────────
+# Raising evidence-gathering concurrency to Semaphore(16) (arc_pipeline.py)
+# raised the PEAK instantaneous request rate to every source by the same
+# factor — the concurrency cap bounds how many calls run at once, not how
+# fast they fire. Nothing previously paced requests to a source's own rate,
+# as opposed to the connector's own total-elapsed-time ceiling per call. This
+# is that pacing: a token bucket per source, acquired BEFORE a request goes
+# out, in addition to (never instead of) the existing concurrency bound and
+# the existing retry/backoff policy above.
+#
+# Defaults are deliberately conservative placeholders, not a confirmed
+# external quota, except where stated otherwise -- a real, independently
+# documented REQUEST-RATE limit (as opposed to SAM.gov's own documented
+# per-key DAILY quota, a different axis this limiter does not address) was
+# not found in this codebase or during this pass for NPPES, PECOS, the RCE
+# directory, or the dormant IQVIA OneKey connector. SAM.gov's default is set
+# lower than the others specifically because of that documented daily-quota
+# sensitivity (see `_sam_failure_reason`'s existing "rate limit reached"
+# comment) -- a tighter default here reduces how fast a quota could be
+# exhausted, though it does not track or enforce the daily total itself
+# (that would need durable, cross-process state this module does not have;
+# named as a real, separate, unaddressed gap, not hidden).
+#
+# Configurable per source via TEFCA_RATE_LIMIT_<SOURCE>_RPS so an operator
+# can tune this without a code change once a source's real limit is known.
+_RATE_LIMIT_DEFAULTS_RPS: Dict[str, float] = {
+    "NPPES": 10.0,
+    "OIG_LEIE": 10.0,  # not currently reachable via this path (own cached CSV fetch), kept for completeness
+    "SAM_GOV": 3.0,
+    "SAM_GOV_EXCLUSIONS": 3.0,
+    "PECOS": 10.0,
+    "RCE_DIRECTORY": 10.0,
+    "IQVIA_ONEKEY": 10.0,
+    # app/Tefca/cms_ppef.py's PPEFEnrollmentConnector AND CMSRevocationConnector
+    # both call CMSDataAPIClient.query(), the one shared call site tagged
+    # "CMS_PPEF" below -- the two real CMS datasets are not split into
+    # separate buckets, a simplification made for time, not a claim that
+    # they are the same dataset.
+    "CMS_PPEF": 10.0,
+}
+
+
+class _TokenBucket:
+    """A minimal async token bucket: `rate` tokens/second, burst capacity
+    equal to `rate` (one second's worth). `acquire()` sleeps only as long as
+    needed for a token to become available -- it never drops or rejects a
+    request, consistent with this module's fail-closed-on-the-SOURCE,
+    never-fail-closed-on-our-own-pacing design.
+    """
+
+    def __init__(self, rate_per_second: float):
+        self.rate = max(rate_per_second, 0.001)
+        self.capacity = max(self.rate, 1.0)
+        self._tokens = self.capacity
+        self._last: Optional[float] = None  # set on first acquire(), inside a running loop
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        async with self._lock:
+            loop = asyncio.get_running_loop()
+            now = loop.time()
+            if self._last is None:
+                self._last = now
+            elapsed = max(now - self._last, 0.0)
+            self._last = now
+            self._tokens = min(self.capacity, self._tokens + elapsed * self.rate)
+            if self._tokens < 1.0:
+                wait_s = (1.0 - self._tokens) / self.rate
+                await asyncio.sleep(wait_s)
+                self._tokens = 0.0
+                self._last = loop.time()
+            else:
+                self._tokens -= 1.0
+
+
+_RATE_LIMITERS: Dict[str, _TokenBucket] = {}
+
+
+def _rate_limiter_for(source: str) -> _TokenBucket:
+    bucket = _RATE_LIMITERS.get(source)
+    if bucket is None:
+        env_key = f"TEFCA_RATE_LIMIT_{source}_RPS"
+        default = _RATE_LIMIT_DEFAULTS_RPS.get(source, 10.0)
+        try:
+            rate = float(os.environ.get(env_key, default))
+        except ValueError:
+            rate = default
+        bucket = _TokenBucket(rate)
+        _RATE_LIMITERS[source] = bucket
+    return bucket
+
+
 async def _get_with_retry(
     url: str,
     params: Dict[str, Any],
     headers: Dict[str, str],
     timeout: float = SOURCE_TIMEOUT_SECONDS,
+    source: str = "UNSPECIFIED",
 ) -> httpx.Response:
     """
     GET with tenacity retry. Retries transient transport/timeout errors and
     HTTP 429/5xx (1s/2s/4s backoff, 30s ceiling). Raises on terminal 4xx.
+
+    `source` identifies which external source this call is for (the same
+    literal each call site already passes to `SourceResult.unavailable(...)`)
+    so a per-source rate limit can be applied -- paced once per ATTEMPT
+    (including retries), not once per logical call, since a retried request
+    is a real second request against the source.
     """
+    client = _shared_http_client()
+    limiter = _rate_limiter_for(source)
     async for attempt in AsyncRetrying(
         stop=(stop_after_attempt(RETRY_ATTEMPTS) | stop_after_delay(SOURCE_TIMEOUT_SECONDS)),
         wait=wait_exponential(multiplier=1, min=1, max=4),
@@ -289,13 +430,14 @@ async def _get_with_retry(
         reraise=True,
     ):
         with attempt:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as client:
-                resp = await client.get(url, params=params, headers=headers)
-                if resp.status_code == 429 or resp.status_code >= 500:
-                    raise RetryableHTTPError(
-                        f"HTTP {resp.status_code} from {url}"
-                    )
-                return resp
+            await limiter.acquire()
+            resp = await client.get(url, params=params, headers=headers,
+                                    timeout=httpx.Timeout(timeout))
+            if resp.status_code == 429 or resp.status_code >= 500:
+                raise RetryableHTTPError(
+                    f"HTTP {resp.status_code} from {url}"
+                )
+            return resp
     # AsyncRetrying with reraise=True never falls through, but satisfy type checkers.
     raise RuntimeError("unreachable")
 
@@ -387,6 +529,7 @@ class NPPESConnector:
                 f"{self.BASE_URL}/",
                 params={"number": npi, "version": self.API_VERSION, "limit": 1},
                 headers=HTTP_HEADERS,
+                source="NPPES",
             )
             if resp.status_code != 200:
                 return SourceResult.unavailable("NPPES", f"HTTP {resp.status_code}", qp, self.API_VERSION)
@@ -427,6 +570,7 @@ class NPPESConnector:
                 f"{self.BASE_URL}/",
                 params={"organization_name": organization_name, "version": self.API_VERSION, "limit": 1},
                 headers=HTTP_HEADERS,
+                source="NPPES",
             )
             if resp.status_code != 200:
                 return SourceResult.unavailable("NPPES", f"HTTP {resp.status_code}", qp, self.API_VERSION)
@@ -452,6 +596,7 @@ class NPPESConnector:
                 params={"number": "1234567893", "version": self.API_VERSION, "limit": 1},
                 headers=HTTP_HEADERS,
                 timeout=HEALTH_TIMEOUT_SECONDS,
+                source="NPPES",
             )
             return resp.status_code == 200
         except Exception:
@@ -467,17 +612,46 @@ class NPPESConnector:
 _LEIE_CSV_URL = "https://oig.hhs.gov/exclusions/downloadables/UPDATED.csv"
 _LEIE_TTL_SECONDS = 86400
 _LEIE_CACHE: Dict[str, Any] = {"loaded_at": 0.0, "by_npi": {}, "by_name": {}, "row_count": 0}
+# Single-flight guard for the load below (2026-10-03). MEASURED, not guessed:
+# `arc_pipeline` gathers evidence for up to 16 entities at once, and every
+# one of the first wave found an empty cache and started its OWN download +
+# parse of the 84,001-row LEIE CSV. On this host one cold load costs ~3.5s
+# and ~120MB; sixteen simultaneous cold loads cost 44.2s wall-clock and a
+# 452MB process peak (scripts/perf/leie_load_timing.py). That was the
+# "first-wave warm-up" earlier profiling attributed to TLS handshakes, and
+# a large share of the pipeline's peak memory. One loader at a time; the
+# others wait for it and then read the freshly-filled cache. Same data,
+# same TTL, same fail-closed contract -- only the duplicate work is gone.
+_LEIE_LOAD_LOCK: Optional[asyncio.Lock] = None
+
+
+def _leie_cache_fresh(now: float) -> bool:
+    return (_LEIE_CACHE["row_count"] > 0
+            and (now - _LEIE_CACHE["loaded_at"]) < _LEIE_TTL_SECONDS)
 
 
 async def _ensure_leie_loaded() -> bool:
     """Download + index the LEIE CSV if the cache is empty or stale. Returns
-    False (fail-closed) if the CSV cannot be retrieved."""
+    False (fail-closed) if the CSV cannot be retrieved. Concurrent callers
+    on a cold cache share ONE load (see `_LEIE_LOAD_LOCK`)."""
+    global _LEIE_LOAD_LOCK
+    import time as _time
+    if _leie_cache_fresh(_time.time()):
+        return True
+    if _LEIE_LOAD_LOCK is None:
+        _LEIE_LOAD_LOCK = asyncio.Lock()
+    async with _LEIE_LOAD_LOCK:
+        # Re-check: whoever held the lock before us may have filled the cache.
+        if _leie_cache_fresh(_time.time()):
+            return True
+        return await _load_leie_csv()
+
+
+async def _load_leie_csv() -> bool:
     import time as _time
     import csv as _csv
     import io as _io
     now = _time.time()
-    if _LEIE_CACHE["row_count"] > 0 and (now - _LEIE_CACHE["loaded_at"]) < _LEIE_TTL_SECONDS:
-        return True
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
             resp = await client.get(_LEIE_CSV_URL, headers=HTTP_HEADERS)
@@ -695,6 +869,7 @@ class SAMGovConnector:
                     "includeSections": "entityRegistration,coreData",
                 },
                 headers=HTTP_HEADERS,
+                source="SAM_GOV",
             )
             if resp.status_code != 200:
                 return SourceResult.unavailable(
@@ -703,7 +878,8 @@ class SAMGovConnector:
             entities = payload.get("entityData", [])
             if not entities:
                 return SourceResult.ok(
-                    "SAM_GOV", {"found": False, "uei": uei, "registration_current": None, "excluded": False},
+                    "SAM_GOV", {"found": False, "uei": uei, "matched_by": "uei",
+                                "registration_current": None, "excluded": False},
                     qp, self.API_VERSION, raw_for_hash=payload,
                 )
             reg = entities[0].get("entityRegistration", {})
@@ -719,6 +895,7 @@ class SAMGovConnector:
             }
             data = {
                 "found": True,
+                "matched_by": "uei",
                 "uei": reg.get("ueiSAM"),
                 "legal_name": reg.get("legalBusinessName"),
                 "registration_status": reg.get("registrationStatus"),
@@ -753,6 +930,7 @@ class SAMGovConnector:
                         "includeSections": "entityRegistration,coreData",
                         "page": 0, "size": 10},
                 headers=HTTP_HEADERS,
+                source="SAM_GOV",
             )
             if resp.status_code != 200:
                 return SourceResult.unavailable(
@@ -817,7 +995,8 @@ class SAMGovConnector:
             params["q"] = legal_name
         try:
             resp = await _get_with_retry(self.EXCLUSIONS_URL, params=params,
-                                         headers=HTTP_HEADERS)
+                                         headers=HTTP_HEADERS,
+                                         source="SAM_GOV_EXCLUSIONS")
             if resp.status_code != 200:
                 return SourceResult.unavailable(
                     "SAM_GOV_EXCLUSIONS", _sam_failure_reason(resp), qp, "v4")
@@ -827,11 +1006,21 @@ class SAMGovConnector:
             total = payload.get("totalRecords")
             if total is None:
                 total = len(records)
+            # A UEI-keyed exclusions search is exact — SAM.gov's own identifier
+            # is unique. A name-keyed search with more than one hit is
+            # ambiguous in the same way a name-keyed registration search is:
+            # several distinct entities matched, and treating `excluded=True`
+            # as a confirmed finding would attach a debarment to whichever one
+            # happened to be in the response, on the strength of a name
+            # collision. Ambiguous here means "identity unconfirmed", not
+            # "clear" — the caller must route it to analyst review.
+            ambiguous = (not uei) and total > 1
             return SourceResult.ok(
                 "SAM_GOV_EXCLUSIONS",
                 {"excluded": bool(total),
                  "match_count": total,
                  "matched_by": "uei" if uei else "name",
+                 "ambiguous": ambiguous,
                  "exclusions": [
                      {"name": (r.get("exclusionIdentification") or {})
                       .get("exclusionName"),
@@ -864,20 +1053,29 @@ class SAMGovConnector:
                 qp, self.API_VERSION)
 
         data = dict(reg.data or {})
+        data.setdefault("matched_by", "uei" if uei else "name")
         data["registration_available"] = reg.success
         data["exclusions_available"] = exc.success
+        # Ambiguity is a property of IDENTITY, not of either leg alone: a name
+        # match that returned more than one candidate on EITHER the
+        # registration search or the independent exclusions search means the
+        # entity behind this result is not confirmed, and nothing downstream
+        # may treat either leg's answer (clear or excluded, current or lapsed)
+        # as a confirmed determination until an analyst resolves which
+        # candidate is correct.
+        data["identity_ambiguous"] = bool(reg.data and reg.data.get("ambiguous")) or (
+            exc.success and bool(exc.data.get("ambiguous")))
         if exc.success:
             # v4 is authoritative for exclusion; it overrides the v3 summary flag.
             data["excluded"] = bool(exc.get("excluded"))
             data["exclusion_match_count"] = exc.get("match_count")
             data["exclusions"] = exc.get("exclusions")
+            data["excluded_known"] = True
         else:
             data["exclusion_check_error"] = exc.error
             data.setdefault("excluded", False)
             # Do not let a missing exclusions check read as a clean bill.
             data["excluded_known"] = False
-        if exc.success:
-            data["excluded_known"] = True
         return SourceResult.ok("SAM_GOV", data, qp, self.API_VERSION)
 
     async def lookup_by_npi(self, npi: str) -> SourceResult:
@@ -896,6 +1094,7 @@ class SAMGovConnector:
                 self.BASE_URL,
                 params={"api_key": self.api_key, "registrationStatus": "A", "page": 0, "size": 1},
                 headers=HTTP_HEADERS, timeout=HEALTH_TIMEOUT_SECONDS,
+                source="SAM_GOV",
             )
             return resp.status_code == 200
         except Exception:
@@ -934,6 +1133,14 @@ class PECOSConnector:
                 self.BASE_URL,
                 params={"version": self.API_VERSION, "number": npi},
                 headers=HTTP_HEADERS,
+                # PECOS_BACKING = "nppes_proxy": this hits the SAME physical
+                # host as NPPESConnector (npiregistry.cms.hhs.gov). Tagged as
+                # its own "PECOS" bucket, consistent with the rest of this
+                # codebase's source-literal taxonomy, but that means the real
+                # host sees NPPES's and PECOS's buckets ADDED together, not
+                # independently -- a known, named characteristic of per-label
+                # (not per-physical-host) limiting, not a bug.
+                source="PECOS",
             )
             if resp.status_code != 200:
                 return SourceResult.unavailable("PECOS", f"HTTP {resp.status_code}", qp, self.API_VERSION)
@@ -982,6 +1189,7 @@ class PECOSConnector:
             resp = await _get_with_retry(
                 self.BASE_URL, params={"version": self.API_VERSION, "number": "1234567893"},
                 headers=HTTP_HEADERS, timeout=HEALTH_TIMEOUT_SECONDS,
+                source="PECOS",
             )
             return resp.status_code == 200
         except Exception:
@@ -1122,6 +1330,7 @@ class RCEDirectoryConnector:
             resp = await _get_with_retry(
                 f"{self.BASE_URL}/Organization",
                 params=params, headers=self._auth_headers(),
+                source="RCE_DIRECTORY",
             )
             if resp.status_code != 200:
                 return SourceResult.unavailable("RCE_DIRECTORY", f"HTTP {resp.status_code}", qp, self.API_VERSION)
@@ -1152,6 +1361,7 @@ class RCEDirectoryConnector:
             resp = await _get_with_retry(
                 f"{self.BASE_URL}/Organization/{rce_id}",
                 params={}, headers=self._auth_headers(),
+                source="RCE_DIRECTORY",
             )
             if resp.status_code != 200:
                 return SourceResult.unavailable("RCE_DIRECTORY", f"HTTP {resp.status_code}", qp, self.API_VERSION)
@@ -1173,6 +1383,7 @@ class RCEDirectoryConnector:
                 f"{self.BASE_URL}/Organization",
                 params={"identifier": f"http://hl7.org/fhir/sid/us-npi|{npi}"},
                 headers=self._auth_headers(),
+                source="RCE_DIRECTORY",
             )
             if resp.status_code != 200:
                 return SourceResult.unavailable("RCE_DIRECTORY", f"HTTP {resp.status_code}", qp, self.API_VERSION)
@@ -1193,6 +1404,7 @@ class RCEDirectoryConnector:
             resp = await _get_with_retry(
                 f"{self.BASE_URL}/metadata", params={},
                 headers=self._auth_headers(), timeout=HEALTH_TIMEOUT_SECONDS,
+                source="RCE_DIRECTORY",
             )
             return resp.status_code == 200
         except Exception:
@@ -1219,6 +1431,7 @@ class IQVIAOneKeyConnector:
             resp = await _get_with_retry(
                 self.BASE_URL, params={"npi": npi},
                 headers={**HTTP_HEADERS, "X-API-Key": self.api_key},
+                source="IQVIA_ONEKEY",
             )
             if resp.status_code != 200:
                 return SourceResult.unavailable("IQVIA_ONEKEY", f"HTTP {resp.status_code}", qp, self.API_VERSION)
@@ -1285,8 +1498,12 @@ class SourceConnectorManager:
         Query every authoritative source for one entity, concurrently.
         Returns a dict keyed exactly as the validation engine expects:
           nppes, leie_npi, sam_entity, sam_exclusion, pecos
-        SAM is queried once; its single probe backs both the registration check
-        (sam_entity) and the debarment check (sam_exclusion).
+        SAM's registration (v3) and exclusion (v4) checks are two independent
+        HTTP calls — `SAMGovConnector.verify()` makes both and merges them,
+        never inferring one from the other. The single merged result backs
+        both the registration check (sam_entity) and the debarment check
+        (sam_exclusion): they are reported as one distinct source ("SAM_GOV")
+        downstream, but both legs were genuinely, independently queried.
 
         `pecos` is DERIVED from the `nppes` observation (PECOSConnector.
         from_nppes), not fetched separately — both used to hit the identical
@@ -1297,10 +1514,16 @@ class SourceConnectorManager:
         """
         npi = _extract_npi(entity)
         uei = _extract_uei(entity)
+        legal_name = entity.get("name") or ""
         nppes_r, leie_r, sam_r = await asyncio.gather(
             self.nppes.lookup_by_npi(npi),
             self.leie.lookup_by_npi(npi),
-            self.sam.lookup_by_uei(uei),   # SAM.gov is keyed on UEI, not NPI
+            # UEI present -> exact registration+exclusion match. No UEI ->
+            # name-based fallback for both legs (SAMGovConnector.verify's own
+            # documented search strategy); a resulting ambiguous match is
+            # carried as `identity_ambiguous` for the evidence/validation
+            # layers to route to analyst review, never resolved by guessing.
+            self.sam.verify(uei=uei, legal_name=legal_name),
             return_exceptions=False,
         )
         pecos_r = PECOSConnector.from_nppes(nppes_r)

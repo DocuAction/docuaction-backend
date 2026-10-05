@@ -405,6 +405,23 @@ async def _startup_after_schema():
     except Exception as e:
         logger.warning(f"Delivery scheduler not started: {e}")
 
+    # IQVIA Release-1 chunked upload + staging, same reasoning: the real
+    # HCP_ADDR extract is ~3.8GB / ~6.8M rows, minutes-to-hours of work, so
+    # the import job lives in the database and a poller runs it -- not a
+    # request-scoped BackgroundTask that dies with this process. Duplicate
+    # execution of the same snapshot's import is refused by the DATABASE
+    # (partial unique index over active import jobs, FOR UPDATE SKIP LOCKED
+    # on the claim); the reaper is what recovers an import orphaned by a
+    # restart mid-run and requeues it (bounded retries) rather than leaving
+    # it RUNNING forever. Without this the queue still accepts staged
+    # uploads; they sit QUEUED, which is visible rather than silently lost.
+    try:
+        from app.tefca_registry.rce.iqvia_import_scheduler import (
+            start_iqvia_import_scheduler)
+        start_iqvia_import_scheduler()
+    except Exception as e:
+        logger.warning(f"IQVIA import scheduler not started: {e}")
+
     # ═══ EVIDENCE VOCABULARY CONTRACT (B5 / E1) ═══
     #
     # STAGE A: report-only at startup, FATAL in CI. `load_rules` already raises
@@ -663,6 +680,12 @@ safe_load("app.tefca_registry.rce.routes", "tefca-rce-pipeline")
 # reading it. Neither module mutates Area 1.
 safe_load("app.tefca_registry.rce.delivery_routes", "tefca-rce-deliveries")
 
+# IQVIA Release 1 application journey (stage -> approve -> match), gated by
+# ENABLE_IQVIA_SOURCES + reviewer floor inside the module itself -- loaded
+# unconditionally like the other RCE route modules; the flag controls access,
+# not whether the routes exist at all.
+safe_load("app.tefca_registry.rce.iqvia_routes", "tefca-rce-iqvia")
+
 # DEF-004 governed original-artifact restoration: DEV-only, admin-only,
 # feature-flagged restore of a delivery's preserved original from a
 # pre-staged private blob — runs inside THIS process so it can use the
@@ -672,6 +695,14 @@ safe_load("app.tefca_registry.rce.delivery_routes", "tefca-rce-deliveries")
 # otherwise `router` carries no routes and this include is a no-op. See
 # app/tefca_registry/rce/admin_restore_routes.py.
 safe_load("app.tefca_registry.rce.admin_restore_routes", "tefca-rce-admin-restore")
+
+# Preflight (pre-classification schema/identifier/context checks), shadow
+# reassessment (classifier-only re-run over persisted evidence, pinned and
+# approval-bound) and the consolidated analyst workspace (2026-10-03). Writes
+# only its own append-only tables; successor publication is refused outside
+# SHADOW_PUBLICATION_MODE=local_test. See
+# app/tefca_registry/rce/preflight_shadow_routes.py.
+safe_load("app.tefca_registry.rce.preflight_shadow_routes", "tefca-rce-preflight-shadow")
 
 # Program Manager + Analyst workflow surface at /api/tefca/workflow/*:
 # QHIN work organisation, workload distribution, and the analyst verification
