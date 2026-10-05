@@ -30,7 +30,7 @@ on:
       - 'requirements.txt'
       - '.github/workflows/pdf-linux.yml'
   pull_request:
-    branches: [main]
+    branches: [main, 'feat/reporting-architecture-2026-10-01']
   workflow_dispatch:
 
 jobs:

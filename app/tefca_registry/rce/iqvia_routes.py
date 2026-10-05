@@ -447,6 +447,11 @@ async def snapshot_status(
     # the UI distinguishes "supported" from "unavailable because the
     # relationship data is absent" before anyone clicks Match.
     out["matching"] = _matching_capability(snapshot.source_system)
+    # Reference-snapshot preflight as recorded at import (2026-10-04): gate,
+    # findings, held checks, the bound of what was checked, and whether it
+    # was enforced or shadow-only. None for a snapshot imported before it
+    # existed -- shown as "not evaluated", never as clear.
+    out["reference_preflight"] = (snapshot.metadata_ or {}).get("reference_preflight")
     return out
 
 

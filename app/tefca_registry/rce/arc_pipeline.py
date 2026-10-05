@@ -643,6 +643,7 @@ async def verify_and_classify(
                 _f.write(_dbgjson.dumps(_rec) + "\n")
         _dbg_serial_t0 = _dbgtime.perf_counter()
 
+        from app.tefca_registry.rce import verification_completeness as _vcomp
         for g in gathered:
             ref = g["ref"]
             entity = g["entity"]
@@ -675,8 +676,31 @@ async def verify_and_classify(
                     logger.error("NPI verification outcome not recorded for %s: %s",
                                  entity_uuid, type(exc).__name__, exc_info=True)
 
+            # A B1 in THIS cycle must not clear a risk signal no person has
+            # cleared (2026-10-04; see prior_risk.py). Checked only on the
+            # one bucket that would otherwise mark the entity verified, and
+            # BEFORE this cycle's own ReviewRecord is added.
+            prior_risk = None
+            if classification.bucket == "B1" and entity_uuid is not None:
+                from app.tefca_registry.rce import prior_risk as _prior_risk
+                prior_risk = await _prior_risk.unresolved_prior_risk(db, entity_uuid)
+
+            # Exclusion screening that never completed (see prior_risk.py):
+            # recorded on every B1 it affects; withholds `verified` only when
+            # ENFORCE_COMPLETE_EXCLUSION_SCREENING is on (default off).
+            claim = None
+            if classification.bucket == "B1":
+                from app.tefca_registry.rce import prior_risk as _prior_risk
+                gaps = _prior_risk.exclusion_screening_gaps(verification_results)
+                if gaps:
+                    claim = _prior_risk.verification_claim("B1", gaps, prior_risk)
+            withhold_verified = bool(prior_risk) or bool(claim and claim["enforced"])
+
             review_id = await _allocate_review_id(db)
             tier = BUCKET_TO_TIER.get(classification.bucket, 3)
+            if withhold_verified:
+                # Not Tier-1 auto-complete: a person must look.
+                tier = max(tier, 2)
 
             # THE UNMATCHED PATH STILL HAS TO CITE ITS PROVENANCE.
             #
@@ -700,11 +724,18 @@ async def verify_and_classify(
                     f"{len(rules)} active rule(s), evaluated in priority order "
                     f"({', '.join(classification.evaluated_rules) or 'none'}).")
 
+            if prior_risk:
+                rationale = (rationale or "") + _prior_risk.rationale_suffix(prior_risk)
+
             db.add(reg.ReviewRecord(
                 id=uuid.uuid4(),
                 review_id=review_id,
                 entity_id=entity_uuid,
                 verification_results={
+                    # Present ONLY when a prior risk signal is uncleared, so
+                    # the snapshot shape of every other record is unchanged.
+                    **({"prior_risk_not_cleared": prior_risk} if prior_risk else {}),
+                    **({"verification_claim": claim} if claim else {}),
                     # A SNAPSHOT, not a pointer. The report issued from this review
                     # must keep saying what it said after the entity is re-verified.
                     "dimensions": evidence.get("dimensions", []),
@@ -713,6 +744,11 @@ async def verify_and_classify(
                     "data_quality_flags": evidence.get("data_quality_flags", []),
                     "generation_timestamp": evidence.get("generated_at"),
                     "resolution_source": entity.get("_resolution_source"),
+                    # Official (POLICY_UNAPPROVED / freshness UNKNOWN) and
+                    # inactive proposed policy views for the sources used,
+                    # against the same pinned timestamps. Beside the
+                    # classifier input; never part of it.
+                    "source_policy": evidence.get("source_policy"),
                     "classifier_input": verification_results,
                 },
                 classification_bucket=classification.bucket,
@@ -737,7 +773,8 @@ async def verify_and_classify(
                 # verification_status of in_review says who must look; it does not
                 # say what was found.
                 entity_row.verification_status = (
-                    "verified" if classification.bucket == "B1" else "in_review")
+                    "verified" if classification.bucket == "B1" and not withhold_verified
+                    else "in_review")
 
             buckets[classification.bucket] = buckets.get(classification.bucket, 0) + 1
             tiers[tier] = tiers.get(tier, 0) + 1
@@ -752,6 +789,14 @@ async def verify_and_classify(
                 "rule_matched": bool(classification.rule_code),
                 "tier": tier,
                 "assigned_role": TIER_ROLE[tier],
+                "prior_risk_not_cleared": prior_risk,
+                "verification_claim": claim,
+                "entity_marked_verified": bool(
+                    classification.bucket == "B1" and not withhold_verified),
+                "verification_completeness": _vcomp.describe(
+                    "verified" if classification.bucket == "B1" and not withhold_verified
+                    else "in_review",
+                    _vcomp.completeness({"classifier_input": verification_results})),
                 "dimensions": {d["dimension"]: d["disposition"]
                                for d in evidence.get("dimensions", [])},
                 "applicability": evidence.get("applicability", {}).get("dimensions", {}),
@@ -766,7 +811,16 @@ async def verify_and_classify(
 
     return {
         "requested": len(entity_refs),
+        # LEGACY NAME, kept for existing consumers: this is the number of
+        # entities the pipeline PROCESSED (every bucket, B4 included). It was
+        # never a count of verified entities. Use the three counts below.
         "verified": len(outcomes),
+        "processed": len(outcomes),
+        "entities_marked_verified": sum(1 for o in outcomes if o["entity_marked_verified"]),
+        "entities_marked_verified_checks_incomplete": sum(
+            1 for o in outcomes
+            if o["verification_completeness"]["overall_status"]
+            == "verified_checks_incomplete"),
         "unresolved": unresolved,
         "bucket_counts": buckets,
         "tier_counts": {str(k): v for k, v in sorted(tiers.items())},

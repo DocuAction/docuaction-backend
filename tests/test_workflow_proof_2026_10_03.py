@@ -174,6 +174,49 @@ async def test_combined_workflow_proof(monkeypatch, db_required):
         }, {"uei": uei})
     sam._patch_sam_verify(monkeypatch, clean_sam)
 
+    # 2026-10-04 (Round 26): the two CMS connectors were left unpatched here,
+    # so this test queried the live CMS data API for synthetic NPIs. Offline
+    # (no network reachable from this test run, by design -- see the
+    # boundary note in CLAUDE.md), every lookup failed with "All connection
+    # attempts failed", the EXCLUSION_REVOCATION dimension read UNAVAILABLE
+    # for every entity, and that pushed the whole-delivery classification
+    # away from the documented outcome this proof depends on. Deterministic,
+    # offline answers restore it; the real workflow assertions are
+    # unchanged.
+    #
+    # PPEFEnrollmentConnector specifically answers "no enrollment record
+    # found" (`found: False`, the real connector's own shape for a
+    # successful lookup with zero matching rows -- app/Tefca/cms_ppef.py),
+    # NOT "unavailable": an UNAVAILABLE pecos source satisfies RULE-002
+    # ("SAM or PECOS unavailable -> B1") for every entity, including the
+    # SAM-CLEAN one in the second delivery (step 7), erasing the exact
+    # SAM-availability differentiation that delivery's shadow comparison
+    # exists to demonstrate (confirmed by direct reproduction: patched as
+    # unavailable, all three entities in delivery 2 baseline to the SAME
+    # B1/RULE-002, and the "SAM-clean -> UNCHANGED" assertion at [7d] broke
+    # -- a second, previously-unreached failure, since the ORIGINAL offline
+    # run never got past [5b] to exercise this code at all). A genuine
+    # not-found PECOS result instead satisfies RULE-003's documented
+    # "name/PECOS-enrollment corroboration gap" without masking SAM
+    # availability, for both deliveries.
+    from app.Tefca import cms_ppef
+
+    async def no_revocation_record(self, npi):
+        return SourceResult.ok(self.SOURCE_NAME, {
+            "checked": True, "matches": [],
+            "result": "NO_ACTIVE_REVOCATION_RECORD_FOUND"}, {"npi": npi})
+
+    async def no_enrollment_record(self, npi):
+        return SourceResult.ok(self.SOURCE_NAME, {
+            "found": False, "npi": npi, "records": [], "record_count": 0,
+            "enrollment_ids": [], "pac_ids": [], "multiple_npi_flag": None,
+        }, {"npi": npi})
+
+    monkeypatch.setattr(cms_ppef.CMSRevocationConnector, "lookup_by_npi",
+                        no_revocation_record)
+    monkeypatch.setattr(cms_ppef.PPEFEnrollmentConnector, "lookup_by_npi",
+                        no_enrollment_record)
+
     async with async_session_maker() as db:
         refs = await sam._promoted_refs(db, intake_id, 3)
     assert len(refs) == 3, f"expected 3 promoted entities, got {len(refs)}"
@@ -279,17 +322,38 @@ async def test_combined_workflow_proof(monkeypatch, db_required):
     # no delivery named -- confirmed by reading its own CSV header, "Scope:
     # GLOBAL"), not a per-entity detail listing, so a bare review_id string
     # is never expected to appear in it regardless of approval state. The
-    # meaningful check at this scope: the B2 bucket this entity was
-    # determined into is itself represented in Figure 1's real counts, not
-    # silently zero.
+    # meaningful check at this scope: the bucket this entity was ACTUALLY
+    # determined into (step [3b] explicitly tolerates B1 or B2 -- "Both
+    # buckets are a legitimate basis for the rest of this proof") is itself
+    # represented in Figure 1's real counts, not silently zero.
+    #
+    # 2026-10-04 (Round 26): this previously hard-coded "B2 Minor or
+    # Administrative" regardless of which bucket step [3b] actually reached,
+    # conflating "QA approval succeeded" (qa_approval_blocked_by_bucket is
+    # False for B1 just as much as for B2 -- that is the entire point of
+    # fix/qa-approval-non-b1-eligibility-2026-10-03 referenced at [3c]) with
+    # "the bucket is specifically B2". With the CMS connectors deterministic
+    # (see the patch above), this synthetic entity reaches a fully clean B1
+    # -- a legitimate outcome this same test already documented it would
+    # accept. Checking the figure for the bucket actually reached preserves
+    # the real assertion ("the report must truthfully reflect what was
+    # classified, never silently zero") without assuming which bucket that
+    # would be.
+    from app.reports.data.report_data_service import BUCKET_LABELS
+
+    actual_bucket = outcomes[0]["bucket"]
+    bucket_label = BUCKET_LABELS.get(actual_bucket)
+    assert bucket_label, f"no report label known for bucket {actual_bucket!r}"
     import re as _re
-    b2_line = _re.search(r"B2 Minor or Administrative,(\d+)", report["csv"])
-    b2_count = int(b2_line.group(1)) if b2_line else None
-    _log(f"[5b] Figure 1 'B2 Minor or Administrative' count in the generated CSV: {b2_count}")
+    figure_line = _re.search(
+        rf"{_re.escape(actual_bucket)} {_re.escape(bucket_label)},(\d+)", report["csv"])
+    figure_count = int(figure_line.group(1)) if figure_line else None
+    _log(f"[5b] Figure 1 '{actual_bucket} {bucket_label}' count in the generated CSV: "
+         f"{figure_count}")
     if not qa_approval_blocked_by_bucket:
-        assert b2_count is not None and b2_count > 0, (
-            "the report's own B1-B4 classification figure shows zero B2 entities -- "
-            "does not reflect the approved B2 outcome")
+        assert figure_count is not None and figure_count > 0, (
+            f"the report's own B1-B4 classification figure shows zero {actual_bucket} "
+            f"entities -- does not reflect the approved {actual_bucket} outcome")
 
     # ---- Step 6: IQVIA unsupported-affiliation-matching explicit refusal ----
     hcp_cap = _matching_capability("IQVIA_HCP")

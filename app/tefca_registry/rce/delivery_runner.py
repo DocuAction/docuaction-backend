@@ -238,7 +238,20 @@ async def _run_after_area1(db, job, detail: Dict[str, Any], intake_id,
     # produce a confidently wrong Area 2 rather than an honest gap.
     stage_error: Optional[str] = None
 
-    for stage_name, next_stage, runner in (
+    from app.core.config import settings as _settings
+
+    _stages: tuple = ()
+    if bool(getattr(_settings, "ENABLE_PREFLIGHT_ENFORCEMENT", False)):
+        # The PREFLIGHT stage-event entry itself only exists in the
+        # timeline when the flag is on -- not merely a no-op inside it --
+        # so a flag-off delivery's stage_events.timeline() is BYTE-FOR-BYTE
+        # identical to before this round's change (proven by
+        # test_a_clean_delivery_writes_every_stage_event_and_is_ready,
+        # unmodified by this round). See docs/review/DELTA-2026-10-04.md.
+        _stages += ((RceDeliveryJob.STAGE_PREFLIGHT, RceDeliveryJob.STAGE_QUALITY,
+                    _stage_preflight),)
+
+    for stage_name, next_stage, runner in _stages + (
         (RceDeliveryJob.STAGE_QUALITY, RceDeliveryJob.STAGE_CURATION,
          _stage_quality),
         (RceDeliveryJob.STAGE_CURATION, RceDeliveryJob.STAGE_PROMOTION,
@@ -435,6 +448,70 @@ def _registration_metadata(job) -> Dict[str, Any]:
         "declared_source": job.source_name,
         "official_onc_rce_delivery": True,
     }
+
+
+async def _stage_preflight(db, intake_id, actor):
+    """Enforce preflight's classification gate, when
+    `ENABLE_PREFLIGHT_ENFORCEMENT` is on. Default off: for every official
+    delivery today, this stage runs and changes nothing else about the
+    pipeline -- the engine's manual dry-run route
+    (`POST /deliveries/{intake_id}/preflight`) remains available either way.
+
+    See docs/review/DELTA-2026-10-04.md for why this stage exists and why
+    its two non-trivial outcomes below reuse two patterns already proven
+    elsewhere in this same stage loop, rather than inventing new ones:
+
+    GATE_BLOCKED  raises `PreflightBlockedError`, which the stage loop's
+                  existing `except Exception` handler (above) treats
+                  exactly like any other stage failure: closed FAILED,
+                  `break`, no later stage runs. This is the "block an
+                  entire delivery only when parsing, completeness, or
+                  identity cannot be trusted" case -- confirmed by reading
+                  preflight.py that only the delivery-level schema check
+                  (missing 41-field columns) can produce this gate today.
+
+    GATE_CLEAR_WITH_FINDINGS  returns `held=True`, the SAME shape
+                  `_stage_promotion` already returns when `promote_delivery`
+                  declines rather than fails (see that function's own
+                  docstring) -- closed SKIPPED, not FAILED, and the loop
+                  continues into STAGE_QUALITY and every later stage. This
+                  is the "otherwise hold affected records... continue
+                  independent supported checks" case: the findings stay
+                  queryable via the existing preflight GET routes, exactly
+                  as they would after a manual dry run.
+
+    GATE_CLEAR  returns `completed=True`; no different from any other
+                  stage completing normally.
+    """
+    from app.core.config import settings
+    from app.tefca_registry.rce import preflight_shadow_models as pm
+    from app.tefca_registry.rce.preflight import PreflightBlockedError, run_preflight
+
+    enforce = bool(getattr(settings, "ENABLE_PREFLIGHT_ENFORCEMENT", False))
+    if not enforce:
+        return {"completed": True, "enforced": False,
+                "note": "ENABLE_PREFLIGHT_ENFORCEMENT is off -- preflight was not "
+                        "run automatically for this delivery. Run it on demand via "
+                        "POST /deliveries/{intake_id}/preflight if needed."}
+
+    result = await run_preflight(db, intake_id, actor=actor)
+    gate = result.get("classification_gate")
+    base = {"enforced": True, "gate": gate, "run_id": result.get("run_id"),
+            "findings_count": result.get("findings_count"),
+            "field_map_version": result.get("field_map_version"),
+            "rule_set_version": result.get("rule_set_version")}
+
+    if gate == pm.GATE_BLOCKED:
+        raise PreflightBlockedError(
+            f"preflight classification_gate=BLOCKED for intake {intake_id} "
+            f"(run {result.get('run_id')}); see preflight-run findings for detail")
+    if gate == pm.GATE_CLEAR_WITH_FINDINGS:
+        return {**base, "completed": False, "held": True,
+                "reason": "preflight recorded open findings; the delivery "
+                          "proceeds but is recorded as held pending their "
+                          "resolution",
+                "note": (result.get("summary") or {}).get("by_disposition")}
+    return {**base, "completed": True}
 
 
 async def _stage_quality(db, intake_id, actor):
@@ -719,6 +796,11 @@ def _event_counts(stage_name: str, observed: Dict[str, Any]) -> Dict[str, Any]:
     """The stage-event count columns for one stage's observation."""
     if not isinstance(observed, dict):
         return {}
+    if stage_name == "PREFLIGHT":
+        return {"warning_count": observed.get("findings_count"),
+                "detail": {"enforced": observed.get("enforced"),
+                           "gate": observed.get("gate"),
+                           "run_id": observed.get("run_id")}}
     if stage_name == "QUALITY":
         return {"output_count": observed.get("records_evaluated"),
                 "warning_count": observed.get("issues_generated"),

@@ -53,9 +53,29 @@ def test_unknown_role_fails_closed_to_free():
     assert tier_for_role("") == "free"
 
 
-def test_viewer_and_admin_unchanged():
-    assert tier_for_role("viewer") == "free"
+def test_admin_unchanged():
     assert tier_for_role("admin") == "enterprise"
+
+
+def test_viewer_is_authenticated_not_anonymous_and_is_not_free_tier():
+    """2026-10-04 (Round 26): viewer was the one authenticated role left on
+    the SAME tier as unauthenticated/unknown traffic, even though it is a
+    verified account making ordinary read requests through the same
+    multi-request pages every other role uses -- reproduced directly in a
+    real browser (delivery list, then a delivery detail page: two ordinary
+    loads, no special fan-out, hit the free-tier burst limit). Moved to the
+    same tier as "contributor", the next role up -- not business/enterprise,
+    since a read-only role should not receive the same allowance as a role
+    that claims and decides cases. Still a REAL limit, not unlimited."""
+    assert tier_for_role("viewer") == "pro"
+    assert tier_for_role("viewer") != tier_for_role(None)
+    assert tier_for_role("viewer") != tier_for_role("something_new")
+    assert (RATE_LIMITS[tier_for_role("viewer")]["requests_per_minute"]
+            > RATE_LIMITS["free"]["requests_per_minute"])
+    assert (RATE_LIMITS[tier_for_role("viewer")]["requests_per_minute"]
+            < RATE_LIMITS[tier_for_role("reviewer")]["requests_per_minute"]), (
+        "viewer must stay below the operational-role tiers -- this is a "
+        "narrowly scoped fix, not a general limit increase")
 
 
 def _app():

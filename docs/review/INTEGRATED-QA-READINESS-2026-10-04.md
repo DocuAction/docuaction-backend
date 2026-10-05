@@ -1,0 +1,1089 @@
+# Integrated QA readiness — Parts A and B, frontend, workbook, LMS, SSP impact
+**Date:** 2026-10-04 (Round 25). **Prepared by the same session that made the
+changes: this is supporting evidence, not independent approval.**
+
+## Decision
+
+**READY WITH NAMED LIMITATIONS — for independent review only.**
+
+It is **not** ready for Adam. That requires, and none of these has happened:
+independent review, authorised publication, authorised deployment,
+confirmation of the deployed version, test accounts, seeded synthetic data
+on the test environment, and the DEV smoke checks.
+
+Named limitations that a reviewer must weigh:
+
+1. With the active rules an organisation is still recorded `verified` while
+   SAM.gov did not answer (3 of 12 corpus seeds). It is now **labelled**
+   everywhere as "Verified — checks incomplete" and counted separately; it
+   is **not prevented**. Preventing it is policy decision P1, unapproved.
+2. The full regression ran at `8f5bfeb`; the five later backend commits were
+   confirmed by an affected-test run (§4.4), not by a second full run.
+3. Twelve failures in the full run are order-dependent (they pass alone on a
+   new database at base and at head) and are **not fixed**.
+4. One test needs live external sources and was not run (forbidden here).
+5. Browser evidence is local runs with synthetic data. The menu click
+   straight after sign-in was not confirmed (§7).
+5a. A Viewer account can hit the request limit by opening the delivery list
+   and then a delivery straight away, and is told "Rate limit exceeded … free
+   tier" (§7). Pre-existing; not changed.
+6. The submitted SSP could not be identified; an impact register was
+   produced instead of a redline (§10).
+7. No source policy is approved; `SEED_RULES_V4` inactive; "1,298" unresolved.
+
+## 1. Exact state
+
+| | Backend | Frontend |
+|---|---|---|
+| Repository | `DocuAction/docuaction-backend` | `DocuAction/docuaction-frontend` |
+| Published candidate (unchanged; verified with `git ls-remote` this round) | PR #110 head `ea92ea5c33a5075dc40b1473a64152bb52a5c3e5` | PR #66 head `48031780ad4ce0b84126ae7187f49d1d1a8ee87b` |
+| Local branch | `feature/preflight-exceptions` (no upstream) | `feature/preflight-exceptions` (no upstream) |
+| Local head (code and tests) | `0f5cab344a8c2cf99fa30cce1a8bc30967b88082` | `16b50ed6fd6aa5e96921897b1495783c8550ca64` |
+| Commits ahead of the published candidate | 19 (this document's own commit follows) | 3 |
+| Worktree | `%TEMP%\combined-be` | `%TEMP%\combined-fe` |
+
+The worktree path was not trusted: branch, head and ancestry
+(`ea92ea5` is an ancestor of the backend head; `48031780` of the frontend
+head) were read from git.
+
+Nothing was pushed. No PR was edited. No merge, shared migration,
+deployment, firewall or account change. No official finding changed. No
+live external source was queried: every test process and the local API ran
+with outbound HTTP pointed at a closed local port.
+
+**Migrations on the branch after the published candidate's chain**
+(disposable databases only): `20261004_preflight_exec_held`,
+`20261004_stage_event_preflight`, `20261004_recheck_jobs` (head). No
+migration was added in Round 25.
+
+**Untracked files left untouched, not committed:** backend
+`WORKFLOW_PROOF_LOG.txt`, `journey_backend.log`, `rollback_candidate.log`;
+frontend `AGENTS.md`, `CLAUDE.md`, `journey_frontend.log`.
+
+**Processes.** At the start: 786 MB physical memory free of 16 GB, commit
+49.7 of 57.1 GB, almost all browsers (not touched). Stopped, because they
+belonged to this task and held about 1.4 GB: two idle Next.js dev servers
+(ports 3104, 3106) and one stale local API (port 8103, restarted later at
+the current commit). The disposable PostgreSQL cluster on port 5534 (data
+directory inside this job's scratch folder) was restarted after crash
+recovery. A second cluster on port 5499 and the machine's own service on
+5432 belong to other work and were not touched.
+
+### Round 25 commits
+
+| Commit | Repo | What |
+|---|---|---|
+| `d6a1d1c` | BE | Source outcome, classification and completeness reported as three facts; reports/registry/workspace/manual review/pipeline carry the qualified status; `reference_preflight` route exercised over HTTP; one live-network test made deterministic |
+| `3083ced` | BE | Delivery completeness endpoint; recheck list endpoint; case workspace `verification_status`; source labels; **new regression fixed** (RBAC floor registration) |
+| `de6ec8c` | BE | A recheck in which no entity was asked ends FAILED, not SUCCEEDED (found in the browser) |
+| `ab485ad` | BE | Tests state their environment dependencies; one stale contract test updated |
+| `f5002e4` | FE | Source readiness, verification completeness, rechecks, source policy on existing screens; no raw JSON on user-facing pages; IQVIA badges use design tokens |
+| `18b0ea0` | FE | Live browser journey spec; recheck result summary by outcome |
+| `0f5cab3` | BE | Cross-delivery isolation tests assert on their own delta, not on an empty table |
+| `16b50ed` | FE | Live navigation audit by role |
+
+## 2. Completed, partial, blocked
+
+**Completed**
+- Regression at `8f5bfeb` in 27 sequential batches; every failure classified (§4).
+- False-pass semantics: implemented, tested, corpus re-run (§5).
+- `reference_preflight` on the snapshot-status route: exercised through the
+  real application for 401/403/404/200 and the feature-off refusal.
+- Frontend items F1–F11 on existing screens (§6), with unit tests.
+- Raw JSON removed from eleven on-screen sites (§7).
+- One integrated workbook, 39 cases (§9). START-HERE updated.
+- LMS draft against the implemented screens, marked proposed (§9).
+- SSP impact register (§10).
+
+**Partial**
+- Browser coverage: 11 of the 24 new workbook cases were exercised in a
+  browser; the rest by automated tests only (§6).
+- Navigation audit: 24 distinct pages and all eight delivery tabs were opened in a
+  browser as Analyst, QA Lead and Viewer (§7). Pages were opened and
+  checked; multi-step actions on them (IQVIA upload, report generation and
+  download, independent QA approve/return, exception disposition) were
+  **not** performed in a browser this round.
+- Confirmation after the last code change: affected tests only (§4.4).
+
+**Blocked**
+- Anything on DEV (not deployed).
+- A redline of the submitted SSP (baseline not identified).
+- `test_chunked_gather_correctness` (needs live sources).
+- A usability read by someone unfamiliar with the product.
+
+## 3. Method
+
+- Database: PostgreSQL 18, disposable cluster on port 5534, a **new
+  database per run** created by `mkdb.py`, migrated with
+  `alembic upgrade head` as `docuaction_owner`, tests run as `postgres`.
+- Network: `HTTP_PROXY`/`HTTPS_PROXY` set to `http://127.0.0.1:9`;
+  `NO_PROXY=127.0.0.1,localhost`.
+- Full run: detached worktree at exactly `8f5bfeb`
+  (`%TEMP%\reg-be-8f5bfeb`), `tests/test_*.py` sorted, 10 files per batch,
+  one `pytest` process per batch, never two at once, JUnit XML per batch,
+  one shared database `rg_head` for the whole run (as a single full run
+  would use).
+  `python -m pytest <10 files> -q --tb=short -p no:cacheprovider --junitxml=bNN.xml`
+- Baseline: detached worktree at exactly `ea92ea5` (`%TEMP%\base-be-ea92ea5`).
+- Memory before each batch was 8.8–10.5 GB of commit headroom; no batch was
+  stopped for memory.
+- Evidence files (job scratch, not committed): `reg/head_8f5bfeb/`
+  (`manifest.jsonl`, `bNN.log`, `bNN.xml`, `SUMMARY.txt`), `reg/classify/`,
+  `reg/final_ab485ad/`.
+
+## 4. Regression
+
+### 4.1 Totals at `8f5bfeb`
+
+| Collected | Deselected | Run | Passed | Failed | Skipped | Errors |
+|---|---|---|---|---|---|---|
+| 4,563 | 1 | 4,562 | 4,413 | 29 | 120 | 0 |
+
+Batch 2 stalled for 11 minutes on
+`test_chunked_gather_correctness::test_chunked_and_unchunked_gather_produce_identical_classifications`,
+which calls the real source connectors; its process was stopped and the
+batch was re-run with that one test deselected (216 passed, 2 skipped).
+
+Per-batch selections and counts are in `reg/head_8f5bfeb/SUMMARY.txt` and
+`manifest.jsonl`.
+
+### 4.2 The interrupted run of the previous round
+
+Its nine unnamed failures are now named: the five in
+`test_automated_verification.py` and four in
+`test_automated_verification_cross_delivery_isolation.py`. The ninth is
+`test_no_review_record_is_ever_created_for_either_delivery`.
+
+**Correction to the Part B package (§10 there).** It said the eight
+coverage failures were caused by hand-built evidence using the literal
+`D1_IDENTITY`. That was wrong. The cause is below.
+
+### 4.3 Every failure, classified
+
+"Alone" = the file run by itself on a new database, at `8f5bfeb` and at
+`ea92ea5`.
+
+| # | Test(s) | Count | Alone at head | Alone at base | Class | Cause | Action |
+|---|---|---|---|---|---|---|---|
+| 1 | `test_automated_verification` (5), `..._cross_delivery_isolation` (3) | 8 | fail | fail | **Reproduced pre-existing** — test depends on ambient environment | The tests never set `ENTITY_RESOLVER_SOURCE=db` (default `mock`), so no reference resolved and every entity was NOT_ELIGIBLE. Proven: with the variable set, 19/19 pass | **Fixed** in `ab485ad` (autouse fixture). No product change |
+| 2 | `..._cross_delivery_isolation::test_no_review_record_is_ever_created_for_either_delivery` (the "ninth") | 1 | pass | pass | **Test isolation / pollution** | Asserts on whole-table state; fails only after earlier tests in the same database | Not fixed |
+| 3 | `test_delivery_delta` | 8 | pass (23) | pass (23) | **Test isolation / pollution** | Same | Not fixed |
+| 4 | `test_phase8_reconciliation::…::test_nothing_became_reportable` | 1 | pass | pass | **Test isolation / pollution** | Same | Not fixed |
+| 5 | `test_qa_gate::test_no_fabricated_history_for_existing_determinations` | 1 | pass | pass | **Test isolation / pollution** | Same | Not fixed |
+| 6 | `test_supervisor_operations::test_the_queue_shows_every_state_and_agrees_with_the_case_itself` | 1 | pass | pass | **Test isolation / pollution** | Same | Not fixed |
+| 7 | `test_job_detail_contract::test_reviewer_gets_the_evidence_blocks` | 1 | fail | fail | **Reproduced pre-existing** — stale test | Predates QA108-20260927-002, which made records/lineage/audit opt-in via `?include=`. **Not an overlap** with any failure above; counted once | **Fixed** in `ab485ad` (asserts the deferred default and the included form) |
+| 8 | `test_rbac_roles::test_no_tefca_read_endpoint_sits_above_the_viewer_floor` | 1 | — | n/a (routes do not exist at base) | **NEW REGRESSION** (introduced by `4878968`) | Two recheck drill-down GETs sat at the reviewer floor without being registered | **Fixed** in `3083ced`: registered as a documented exception, same precedent as the coverage drill-down. **Raised for review as an access decision** |
+| 9 | `test_journey_iqvia_live`, `test_journey_qa_live`, `test_journey_reporting_live` | 3 | — | — | **Environment** | Need a local API on port 8103 bound to the same database | Run at `ab485ad` with that server present: 3 passed |
+| 10 | `test_sam_e2e_delivery_path::test_clean_confirmed_entity_is_not_disqualified_by_sam` | 1 | fail | fail | **Environment** — unpatched live call | The CMS connectors were not faked; offline the exclusion dimension reads UNAVAILABLE | **Fixed** in `ab485ad` (deterministic CMS answers) |
+| 11 | `test_sam_manual_review_asymmetry::test_regression_clean_fully_evidenced_entity_…` | 1 | — | — | **Environment** — same cause | Same | **Fixed** in `d6a1d1c` |
+| 12 | `test_review_id_concurrency::test_four_concurrent_batches_all_unique` | 1 | fail | fail | **Environment** (reproduced pre-existing) | `RuntimeError: … Lock … is bound to a different event loop` on this Windows host | Not fixed; not caused by this branch |
+| 13 | `test_workflow_proof_2026_10_03::test_combined_workflow_proof` | 1 | fail | fail (same assertion) | **Environment** (reproduced identically at base) | The proof drives the real pipeline and report with the CMS connectors unpatched; 12 blocked connection attempts in each run; the report then shows no B2 entity. Whether it passes with network access was **not** re-checked this round | Not fixed |
+| — | `test_chunked_gather_correctness::…` (deselected) | — | not run | not run | **Unresolved** | Requires live external sources; forbidden in this round | Not run |
+
+8 + 1 + 8 + 1 + 1 + 1 + 1 + 1 + 3 + 1 + 1 + 1 + 1 = 29.
+
+**Impact of what is not fixed.** Rows 2–6 are twelve tests that assert on
+the whole estate and fail when other tests have committed rows to the same
+database. They pass on a new database at both revisions, so they are not
+evidence of a product defect on this branch; they are evidence that a single
+shared-database run of the whole suite cannot be green. Fixing them means
+per-module cleanup or per-module databases, which is outside this round.
+
+### 4.4 After the last code change (`ab485ad`)
+
+Five backend commits followed the full run (`d6a1d1c`, `3083ced`,
+`de6ec8c`, `ab485ad`, `0f5cab3`). They change eleven application files
+(reports, registry queries, analyst workspace, pipeline result, manual
+review response, rechecks, source policy, preflight/recheck routes, case
+workspace, the new completeness module). A second full run was not done.
+Instead every test file whose name touches those areas was run on a new
+database (`rg_final`) at `ab485ad`, 12 files per batch, sequentially:
+
+| Files | Run | Passed | Failed | Skipped |
+|---|---|---|---|---|
+| 82 | 1,395 | 1,345 | 15 | 35 |
+
+The 15 failures are all already classified in §4.3 and none is new:
+`test_delivery_delta` ×8, `test_qa_gate` ×1, `test_supervisor_operations`
+×1 (order-dependent, not fixed); `test_workflow_proof` ×1 (environment);
+and four coverage tests that read a whole table (order-dependent). Those
+four **were then fixed** in `0f5cab3` (assert on the delta the test's own
+run produced) and re-run: 19 passed on a new database and 19 passed on the
+heavily used full-run database `rg_head`.
+
+Also run at the current code against the running local API: the three
+`test_journey_*_live` tests, 3 passed.
+
+Not re-run after `0f5cab3`: nothing else — that commit changes two test
+files only.
+
+### 4.5 The 120 skips, explained
+
+| Count | Reason given by the test |
+|---|---|
+| 21 | Azure artifact storage account not configured on this host |
+| 9 | Needs `CONV_SUPERUSER_URL` (these convergence fixtures were run separately in Round 24: 9 passed) |
+| 46 | Frontend sources are not beside this backend checkout (source-reading tests) |
+| 8 | Requires the populated development dataset |
+| 6 | No authenticated test account available |
+| 9 | `BULLETIN_AUTH_ENABLED` is off (by design) |
+| 7 | No sandbox database named `docuaction` for a concurrency test |
+| 4 | Viewer is the lowest role; nothing below it to test |
+| 4 | This Windows account cannot create symlinks |
+| 4 | WeasyPrint / PDF native libraries missing on this Windows host |
+| 2 | One `no briefing matches`, one `live run needs DEMO_EMAIL` |
+
+No skip was added and no test was newly skipped to obtain a result.
+
+### 4.6 Frontend
+
+`npx vitest run`: **41 files, 310 tests passed.** `npm run test:ui`
+(design guardrails): passed after one fix — it failed at the published
+base too (colour literals on the IQVIA page). `npm run build` (static
+export): succeeded.
+
+## 5. False-pass semantics
+
+Trace of the three official-view cases (B04 error body, B05 HTTP 429, B06
+timeout):
+
+| Stage | Before | Now |
+|---|---|---|
+| Connector | `SourceResult.unavailable` | unchanged — already correct |
+| Evidence | SAM.gov item `UNAVAILABLE` | unchanged |
+| Classifier input | `sam_gov: unavailable` | unchanged |
+| Classification | B1 by RULE-002 | **unchanged** (rule text is approved; not edited) |
+| Entity status | `verified` | **unchanged** (policy P1) — and described: `verification_completeness.overall_status = verified_checks_incomplete` |
+| Pipeline result | `"verified": N` meant "processed" | adds `processed`, `entities_marked_verified`, `entities_marked_verified_checks_incomplete`; the legacy key is kept and documented as a misnomer |
+| Coverage per source | SAM.gov counted unavailable | unchanged; the card now also states "Not checked" and that "Verified" counts only answered lookups |
+| Reports | chart bar "verified" | "verified" split into `verified`, `verified checks incomplete`, `verified checks not recorded`; parts sum to the original; note and language note added |
+| Registry list/detail/stats | `verification_status: verified` | stored value untouched; `verification_overall` and its label added; stats gain `by_verification_overall` |
+| Case screen | no statement | "Verified — checks incomplete", sources named, "neither a pass nor a finding" |
+
+Three things are now distinct in code (`verification_completeness.py`):
+a source check that **successfully verified** (`CONFIRMED`, `NOT_LISTED`
+only); the **classification** (untouched); **completeness** (`COMPLETE`,
+`INCOMPLETE`, `NOT_RECORDED`). `UNAVAILABLE` is never mapped to an
+exclusion, a non-compliance or a not-found (tested).
+
+### Corpus gates, re-run (12 pipeline seeds + 16 component seeds, synthetic)
+
+| Gate | Official view | Proposed (inactive) view |
+|---|---|---|
+| G1 lost seeded risk signals | **0** | 0 |
+| G2a a source fault counted as a successful source check | **0** | 0 |
+| G2b an unqualified overall "verified" on a fault seed | **0** | 0 |
+| G2c entity status `verified` while a check did not answer | **3** (B04, B05, B06) | 0 |
+| G3 changed outcomes unexplained | 0 (3 changed, each by `sam_gov: UNAVAILABLE`) | — |
+| G4 original delivered data changed | 0 | 0 |
+| G5 genuine findings / history lost | 0 | 0 |
+
+G2c is not made green by relabelling. It stays 3 in the official view and is
+the policy-dependent residue: **P1 — may an organisation be recorded
+verified (and so be eligible for auto-completion) while an exclusion check
+did not answer?** The proposed-view column is produced with
+`ENFORCE_COMPLETE_EXCLUSION_SCREENING` on, in a disposable database only.
+
+Corpus split of the 4 `verified` entities: 0 complete, 4 checks incomplete
+(B01 too — the corpus fakes the CMS enrolment source as unavailable for
+every record), 0 not recorded.
+
+## 6. Part A/B integration — delivery path and manual path
+
+| Behaviour | Delivery path (real pipeline) | Manual-review path |
+|---|---|---|
+| Preflight enforcement; shadow does not mutate | `test_preflight_enforcement_2026_10_04` (4: off → no stage; clean continues; bad id shape holds; missing column blocks), `test_seeded_fixture_corpus_2026_10_04` (9), `test_preflight::test_preflight_four_dimensions_and_untouched_originals` | Not applicable: preflight is a delivery-file check |
+| Reference-snapshot preflight | `test_reference_preflight_2026_10_04` (19: IQVIA import with flag off and on), `test_iqvia_routes::TestSnapshotStatusOverHttp` (3, over HTTP) | Not applicable. **Only IQVIA is an implemented snapshot import path with preflight**; CMS PPEF ingest has its own schema validation (`test_ppef_bulk_ingest_gate`); NPPES data-file ingestion does not exist |
+| Missing-NPI OIG name screening | corpus B09 (candidate → B4), B10 (clean name screen is not a pass) | `test_exclusion_name_screening_2026_10_04` (3 manual-path tests: candidate found; clean screen not verified; unreachable list unavailable, never clear) |
+| SAM/OIG ambiguous and unavailable | corpus B03 (ambiguous → not B1), B04–B07; `test_reference_source_faults_2026_10_04` (18) | `test_sam_manual_review_asymmetry` (9): persisted exclusion disqualifies; unavailable stays unavailable; SAM never queried live on this path, disclosed as not evaluated; response now carries `verification_completeness` |
+| Prior risk preserved when later evidence disappears | `test_prior_risk_not_cleared_2026_10_04` (5); browser: B02 second cycle | `test_case_a_persisted_bulk_exclusion_now_disqualifies_on_the_manual_path` (persisted exclusion evidence is consumed, worse wins) |
+| NPPES findings reach the ledger | corpus (exactly `NPI_DEACTIVATED` and `NPI_VERIFICATION_UNAVAILABLE`) | `test_verification_findings::test_record_from_sources_reads_the_probed_nppes_dict` |
+| No bulk compliance closure; no inherited clearance | `test_no_bulk_closure_2026_10_04` (4) | Reviews are decided one record at a time by route; no bulk route exists. UI: no multi-select on the review lists (code read; component tests) |
+| Recheck authorisation, idempotency, crash recovery | `test_rechecks_2026_10_04` (18, including the new "nothing resolved is a failure"); browser: requester cannot approve, QA Lead approves and runs, stops when the source is still unavailable | Not applicable: rechecks are delivery-scoped |
+
+Public-data only: no test or fixture carries or requires an EIN, TIN or
+SSN; their absence raises no finding. Unresolvable potential hits stay
+unresolved and actionable.
+
+**Default-off settings** (all three default False):
+`ENABLE_PREFLIGHT_ENFORCEMENT`, `ENABLE_CONTROLLED_RECHECKS`,
+`ENFORCE_COMPLETE_EXCLUSION_SCREENING`. Enabled paths were demonstrated
+only in disposable databases. Workbook cases that need a setting switched:
+INT-17, INT-18 (enforcement on); INT-28–INT-31 (rechecks on); INT-32
+(rechecks off). The third setting is a proposed policy and no case tests it
+switched on.
+
+**Gap found and fixed this round:** a recheck in which nothing resolved
+reported success (`de6ec8c`). **Observation, not resolved:** the entity
+resolver defaults to `mock`; a deployment that does not set
+`ENTITY_RESOLVER_SOURCE` resolves nothing. What DEV sets was not checked
+(operator item).
+
+## 7. Frontend
+
+| Item | Where | State |
+|---|---|---|
+| F1 readiness card | Delivery → Overview → "Source readiness" | Built; unit + browser |
+| F2 timeline | Delivery → Processing Timeline: "Source readiness check"; held wording | Built; unit only |
+| F3 four-column findings | Delivery → Exceptions → "Source readiness findings" | Built; unit + browser |
+| F4 per-source counts, completeness | Delivery → Verification → "Overall verification status"; "Not checked" per source | Built; unit + browser. "Screened by name only" and "Not applicable" as separate per-source columns are **not** built (the coverage API does not return them) |
+| F5/F11 rechecks | Delivery → Verification → "Rechecks" | Built; unit + browser |
+| F6 dates and policy chip | Case workspace → "Evidence dates and source policy" | Built; unit + browser |
+| F7 banner | Case workspace → "Verification status for this case" | Built; unit + browser |
+| F8 individual exclusion candidates | Review lists | No change needed: no multi-select exists. A dedicated "exclusion candidates" list was **not** built |
+| F9 IQVIA reference check | IQVIA page → "Reference file check" | Built; **not** exercised in a browser |
+| F10 source policies | Sources & Connectors → "Source policies" | Built; unit + browser |
+
+### Raw JSON on user-facing pages — reproduced and fixed
+
+Reproduced by reading the code: eleven places printed a server object with
+`JSON.stringify`. Fixed with one renderer (`lib/ReadableDetail.js`):
+Audit & Decision History details; delivery Audit History detail; delivery
+Records lineage; Changes and Lineage fallback; Supervisor Operations event
+payload; Review Cycles, Findings and Platform Health detail rows; evidence
+dimension field lists; the notifications widget; and the generic display
+fallback in `present.js`. API responses, CSV exports and the explicit
+"Copy technical detail" action are unchanged.
+
+### Coverage, kept separate
+
+**Browser-tested** (real Chromium against the static export in `out/` and a
+real local API running the `de6ec8c` application code on a disposable database seeded
+with the synthetic corpus; real sign-in form; real clicks;
+`tests/e2e/live-partb.spec.mjs`, 2 tests passed): sign-in for Analyst and
+QA Lead; deliveries list → "View details"; Overview readiness card;
+"View readiness findings" → four columns; Verification completeness (4 of
+12 "Verified — checks incomplete", 0 "Verified", SAM.gov named); recheck
+requester cannot approve; a different QA Lead approves and runs; the job
+stops "source still unavailable" with "Try again"; workspace banner for an
+uncleared earlier concern; workspace "checks incomplete" and unknown
+freshness; source policies read-only; "All deliveries" and browser Back;
+no raw JSON on any page visited (12 page checks). Screenshots:
+`qa-evidence/2026-10-04-sunday-qa-prep/precheck-evidence/`.
+
+**Not confirmed in the browser:** clicking "ONC/RCE Deliveries" in the menu
+on the first page after sign-in (the entry was not found within 15 seconds
+and the address was used instead; the same menu worked on a later page).
+Cause not established.
+
+**API/component-tested only:** blocked delivery with enforcement on;
+duplicate-header finding; IQVIA reference check and refusal; duplicate
+recheck request; rechecks switched off; name-candidate on manual review;
+report chart split; viewer messages; timeline held wording.
+
+### Navigation audit by role (`tests/e2e/live-nav-audit.spec.mjs`)
+
+Real browser, real sign-in, static export, local API. For every page:
+a heading rendered and no error boundary; no uncaught script error; no raw
+JSON in the visible text; whether a permission screen appeared.
+
+| Role | Pages / controls | Checks | Result |
+|---|---|---|---|
+| Analyst | 18 menu pages; 2 pages not offered below QA Lead (by address); all 8 delivery tabs; SAM.gov "Unavailable" count → organisation list → CSV; recheck entity CSV; a failed delivery; an unknown delivery id; My Reviews → case → workspace → Back | 119 | all pass |
+| QA Lead | Audit & Decision History (opened a row; details readable), Platform Health & Technical QA, Supervisor Operations, My Reviews, Contract Reports | 21 | all pass |
+| Viewer | Deliveries; delivery detail (role message on the readiness card); Verification (overall status visible; recheck panel names the role needed; page not replaced by a permission screen); Exceptions ("Requires the reviewer role"); Sources & Connectors; IQVIA | 22 | all pass, after pacing — see finding 1 |
+
+States seen: loading skeleton; empty (no recheck / no report); permission
+denied as a whole-page screen (Analyst opening Audit & Decision History by
+address — expected); role message inside a panel (Viewer); failed job
+(stage, error reason, remediation guidance); unknown delivery id (stated
+reason, "Back to deliveries"); source unavailable (coverage card and
+recheck "Stopped — source still unavailable"); retry ("Try again" on a
+failed load and on a stopped recheck).
+
+**Findings from the audit**
+
+1. **Viewer request limit (pre-existing, not changed).** The Viewer role is
+   on the lowest request tier (60 a minute, 10 in any 5 seconds). Opening
+   the delivery list and then a delivery straight away exceeded it: the
+   detail page showed "Could not load the delivery — Rate limit exceeded.
+   60 requests/minute allowed for free tier", with "Try again" and "Back to
+   deliveries". The failed-load state itself is correct; the limit and the
+   words "free tier" are a usability problem for a read-only Government
+   viewer. Screenshot `nav-viewer-rate-limited.png`. A decision, not a code
+   fix, in this round.
+2. **Platform Health & Technical QA** is hidden from the menu below QA Lead
+   but opened for an Analyst by address without a permission screen (its
+   data calls are refused by the server). Observation only.
+3. **IQVIA page** opens for a Viewer without a permission screen; actions
+   on it are refused by the server. Observation only.
+5. **Per-source counts on the Verification tab.** On the synthetic corpus the
+   NPPES card showed Eligible 12, Verified 8, Not found 9, Unavailable 3 —
+   more outcomes than organisations (the second cycle for one record and
+   more than one evidence row per organisation are the likely reasons).
+   Seen in a screenshot; **not investigated**. The SAM.gov card's "Not
+   found 9" is the existing vocabulary for a clean name screen. Both are
+   pre-existing coverage semantics, left as they are.
+6. The audit's first attempt produced two false alarms from its own timing
+   and selectors (reading a loading skeleton; a link-name pattern). Both
+   were corrected in the audit, not in the application.
+
+**Not done in a browser this round:** multi-step actions on those pages —
+IQVIA upload and approval, report generation and each download format,
+independent QA approve/return/escalate, exception disposition, delivery
+registration, the validation/held queue's own actions. Their existing unit
+and API tests pass; this round produced no new browser evidence for them.
+"S-file navigation" was taken to mean the delivery (source-file) detail
+tabs, as in the earlier readiness table; all eight were opened.
+
+The known hydration issue of the local dev server was not used as evidence
+either way: the deployable static export was built and served.
+
+## 8. Unapproved policy decisions (unchanged; none approved)
+
+P1 complete exclusion screening before `verified`; P2–P6 as listed in
+`REVIEW-PACKAGE-PREFLIGHT-B-2026-10-04.md` §11. Retention of verification
+evidence: no authority on file → `POLICY_UNAPPROVED`; no automatic deletion.
+
+## 9. Workbook and LMS
+
+- **Integrated workbook:**
+  `qa-evidence/2026-10-04-sunday-qa-prep/DocuAction_Integrated_QA_Workbook_v2_2026-10-04.xlsx`.
+  39 cases: SUN-01..SUN-15 carried forward unchanged, INT-16..INT-39 new,
+  each cross-referenced to its PB id. Sheets: start here, test cases, test
+  data, pre-check (automation), Adam's results (blank), defects, known
+  limitations, settings and build, case-id map. No password. The earlier
+  workbook is unchanged.
+- Representative instructions were checked against the real screens through
+  the browser run. **No independent person unfamiliar with the product has
+  read them; no usability acceptance review occurred.**
+- `START-HERE.md` updated (testing order, prerequisites, limitations).
+- **LMS:** `…/LMS-UPDATE-PROPOSAL-PARTAB-2026-10-04.md` — five lessons,
+  marked proposed; the frozen 1.2.0 baseline is untouched; nothing published.
+
+## 10. SSP
+
+`qa-evidence/2026-10-04-ssp-impact/SSP-IMPACT-REGISTER-2026-10-04.md`.
+Seven candidate SSP files, six distinct, **none identified as the one
+submitted to ONC** (no transmittal record found). Version 1.2 (16 July
+2026) carries an ONC distribution list and is the most likely candidate;
+that is an inference. Result: a 16-item impact register with severity,
+owner and status, and draft amendment text to apply once the baseline is
+confirmed. No SSP file was modified. Three items are High and two of those
+are pre-existing gaps this work surfaced (external-source list; role table).
+No FedRAMP-readiness, full-control-coverage or Section 508 claim is made.
+Live Azure configuration was not verified.
+
+## 11. Accounts and fixtures needed for QA
+
+Program Manager (or Test Admin), Analyst, QA Lead, Viewer — four people.
+Synthetic corpus seeded by an engineer on the test environment. Eight
+readiness fixtures in `tests/fixtures/seeded/`. Two IQVIA files built fresh.
+Details: workbook sheet 3.
+
+## 12. Remaining operator actions and release blockers
+
+1. Independent review of both branches (19 + 3 commits, plus this document), including the
+   access decision in §4.3 row 8 and policy P1.
+2. Decide P1–P6 and the retention authority.
+3. Publication, CI on the published SHAs, deployment — each needs explicit
+   authorisation.
+4. Confirm `ENTITY_RESOLVER_SOURCE` and the three default-off settings on DEV.
+5. Seed the synthetic corpus on DEV; provision the four accounts.
+6. Locate the SSP transmittal; confirm the baseline.
+7. Decide whether to fix the twelve order-dependent tests.
+8. A second full regression at the final head, if the reviewer requires more
+   than §4.4.
+
+## 13. Round 26 update (2026-10-04) -- D1-D3
+
+**Backend `feature/preflight-exceptions` now at `e7df6658`** (two commits
+past the Round 25 head `d842d0e`: `681c0dd` test fixes, `e7df665`
+rate-limit + exclusion-queue + bulk-assignment proof). **Frontend at
+`9e48039`** (one commit past `16b50ed`: the Round 26 live-journey specs).
+Item 7 in §12 above is now resolved; item 2's "second full regression" is
+now done (item 8).
+
+**D1 (reproducible environment).** Both failures reported at the end of
+Round 25 were reproduced and diagnosed as NOT real defects: the Postgres
+"exit 2" was a `pg_ctl -w` / `pg_isready` race in a chained shell line, and
+the API "exit 127" was the harness's report of a deliberately force-killed
+background process, not a startup failure. See
+`qa-evidence/2026-10-04-sunday-qa-prep/LOCAL-ENV-RECIPE-2026-10-04.md` for
+the exact, tested five-step recipe (explicit executable paths,
+`ENTITY_RESOLVER_SOURCE=db` set explicitly rather than assumed, resource
+headroom recorded at each step).
+
+**D2 (the twelve order-dependent failures).** All twelve are now resolved:
+eight in `test_delivery_delta.py` (an unscoped "most recent earlier
+delivery" lookup -- correct, production-matching behaviour -- collided with
+a fixed `BASE_DAY` constant when another test's real data landed on the
+same calendar day; fixed by anchoring the fixture's dates to
+`MAX(received_at) + 400 days` instead of a fixed date), two whole-table
+zero-count assertions in `test_phase8_reconciliation.py` and one in
+`test_qa_gate.py` (each was only ever true of one specific dev-seed
+snapshot; rescoped to the provably-narrower, still-exact invariant each
+test is actually named for -- see below for one further issue found in the
+qa_gate invariant this round), one pagination-crowding failure in
+`test_supervisor_operations.py` (fixed by using `work_queue`'s existing
+`intake_id` scope, which the test simply had not used), and the
+Windows-only `test_review_id_concurrency.py` concurrency test (a dedicated
+per-test engine fixed the event-loop-binding half of the failure; a deeper
+asyncpg/ProactorEventLoop connection race remains and is left
+`skipif(platform=="win32")` with an explicit "UNVERIFIED ON LINUX" comment
+-- classified, not hidden). No assertion was loosened; every fix narrows a
+whole-table check to the exact, provably-correct quantity the test's own
+name describes.
+
+**D3 (final full regression, reconciled).** Ran as 27 sequential,
+memory-bounded batches of 10 files each (`run_batches.py`: one pytest
+process per batch, one JUnit XML per batch, stops before the OS reports
+less than ~350MB free physical / ~2.5GB commit headroom) against one
+disposable database (`rg_d2final`, isolated Postgres instance, port 5534),
+bound to backend `e7df665`. Memory headroom fluctuated between roughly
+250MB and 2GB free throughout the run on this machine's own background
+load (not caused by the regression); the runner's own safety stop fired
+twice and both resumes picked up cleanly with no data loss, because each
+batch's JUnit XML is the resume marker.
+
+Three batches needed a manual redo, each investigated to an actual root
+cause (never a re-run-and-hope):
+
+- **Batch 2** hung on `test_chunked_gather_correctness.py` and its known
+  live-network dependency (pre-existing, documented in Round 25). Killed
+  after exceeding its normal run time; redone with that one file deselected
+  -- 216 passed, 2 skipped (a hardcoded sandbox-database name that does not
+  exist in this isolated setup; pre-existing, unrelated).
+- **Batch 10** failed on this round's own new test,
+  `test_no_bulk_closure_2026_10_04.py::test_bulk_assignment_is_the_only_other_multi_id_route_and_it_only_assigns`
+  (first live-database run -- it had never run before this round, only
+  compile-checked). Two bugs in the test itself, not the application: a
+  generated `review_id` longer than the column's `String(20)`, and a
+  `ReviewRecord` built with no `entity_id`/`source_record_id`, violating
+  `ck_review_record_has_subject`. Fixed both (shortened the synthetic id;
+  created a real synthetic `TefcaRegEntity` and flushed it before the
+  `ReviewRecord` insert). Redo: 168 passed.
+- **Batch 15** failed on
+  `test_qa_gate.py::test_no_fabricated_history_for_existing_determinations`
+  -- 2 of the shared database's `review_records` were reportable or
+  resolved with no backing `ReviewDecisionEvent`. Investigated to the real
+  cause: `test_prior_risk_not_cleared_2026_10_04.py` has two fixtures that
+  simulate a human adjudication (an analyst reclassifying, independent QA
+  making a case reportable) by mutating `ReviewRecord` columns directly,
+  with a comment stating "No real approval is recorded anywhere" -- true,
+  but a real adjudication always leaves a `ReviewDecisionEvent`, and the
+  qa_gate invariant (correctly, per Round 26's own D2 fix) checks the whole
+  shared table, not just rows a given test created. The same pattern, one
+  instance, was also found and fixed pre-emptively in
+  `test_shadow_reassessment.py` before it could surface in a later batch.
+  Fixed all three by having each fixture write the synthetic-but-clearly-
+  labelled decision event(s) its own narrative implies (an
+  `ANALYST_DETERMINATION` event, and a `QA_REVIEW`/`APPROVE` event where
+  the scenario says independent QA acted) -- this does not change what
+  either test actually checks (`prior_risk` logic cares about
+  `reviewer_resolution`/`reclassified_to`/`reportable_at`, not about
+  decision events) and makes the shared database internally consistent
+  with the exact invariant `qa_gate` exists to enforce. Two stale rows
+  committed by the pre-fix run of batch 14 (`REV-2026-000034`,
+  `REV-2026-000036`) were deleted from the disposable database (not
+  production, not shared with any other environment) since they were
+  superseded test fixtures, not evidence; batches 14 and 15 were then
+  redone clean. A direct query against the whole accumulated database
+  afterward confirms zero unbacked reportable/resolved rows anywhere.
+  This is a genuine, if narrow, finding: two pre-existing test fixtures
+  (one from this round's own session, one older) were leaving the shared
+  test database in a state a real audit of "every resolved case has a
+  human decision behind it" would have flagged -- not a production defect
+  (the real `/reviews/{id}/resolve` route and the qa_gate approval path
+  both correctly write events; only these two test-only shortcuts did
+  not), but worth recording because the whole point of the Round 26
+  qa_gate rewrite was to make this invariant hold against real, growing
+  data rather than one frozen snapshot.
+
+**The three remaining "failures" in the first full pass (batch 9) are not
+code defects.** `test_journey_iqvia_live_2026_10_04.py`,
+`test_journey_qa_live_2026_10_04.py` and
+`test_journey_reporting_live_2026_10_04.py` each need a real, bound HTTP
+server on `127.0.0.1:8103` -- the project's own `.github/workflows/pr-tests.yml`
+`journey-live` job starts one before running them, in a dedicated database
+(`test_journey_1003`, owner/app role split, Alembic head), and stops it
+afterward. The sequential batch regression never starts that server, so
+these three got a plain connection-refused error instead of the
+database-only skip the rest of the suite uses. Reproduced the dedicated
+job's exact recipe locally (disposable `test_journey_1003` on the same
+isolated Postgres instance, migrated to head, `uvicorn app.main:app`
+bound to `127.0.0.1:8103`, started and health-checked, then stopped
+afterward) and ran all six of that job's own tests together, as it does:
+`test_qa_approval_route_level_2026_10_03.py`,
+`test_shadow_real_v4_candidate_2026_10_03.py`,
+`test_workflow_proof_2026_10_03.py`, and the three `*_live_2026_10_04.py`
+files -- 6 passed, 0 failed.
+
+**Final reconciled totals, backend `e7df665`, this round's regression
+(all current batch results; superseded pre-fix attempts are kept in
+`manifest.jsonl` for the record but not counted):**
+
+| | count |
+|---|---|
+| Collected (27-batch sequential run) | 4,593 |
+| Passed | 4,469 |
+| Failed (infra-only, see above) | 3 |
+| Errors | 0 |
+| Skipped | 121 |
+| Separately run live-server suite | 6 passed, 0 failed |
+
+Skips are environment-shaped, not hidden failures, and fall into the same
+small set of causes already named in Round 25: `CONV_SUPERUSER_URL` not
+set (a handful of convergence-integration tests that need a superuser
+test DB), "no authenticated test account available" (`test_qa_round2.py`,
+five cases -- a local-only account-provisioning gap), a hardcoded sandbox
+database name that this isolated setup does not create
+(`test_case_assignment.py`, two cases), `test_lms_sync.py`'s four cases
+(frontend checkout not beside the backend -- not true in this session's
+layout, carried from CI's own skip condition), and the one Windows-only
+concurrency skip named in D2. None of these conceal an unresolved defect;
+each is named with its cause here rather than silently passed over.
+
+**No assertion was loosened, no failure was hidden with a skip, and no
+seeded fact changed:** the B04-B06 SAM-fault seeds are still
+`verification_status=verified` (unchanged;
+`test_seeded_corpus_b_2026_10_04.py` passed clean in batch 22,
+re-confirming the G1/G2a/G2b/G2c gates at this round's code state), P1-P6
+remain unapproved, and SEED_RULES_V4 remains inactive.
+
+## 14. Round 26 update (2026-10-04) -- D7 (additional real-browser journeys)
+
+**Final SHAs for this round: backend `5d54e06`, frontend `21f1901`** (two
+commits each past the D3 checkpoint SHAs recorded in section 13: a
+test-fixture fix commit on each repo, described below and in section 13).
+
+Ran `tests/e2e/live-journeys-round26.spec.mjs` end to end against a real,
+disposable `test_journey_1003` database and a real bound backend on
+`127.0.0.1:8103` (the same recipe as the project's own `journey-live` CI
+job), with the static frontend export rebuilt against that address and
+served by `serve-out.mjs`. Six synthetic accounts (PM, Analyst, QALead,
+a SECOND QALead, Viewer, Admin) seeded directly, matching the existing
+`_ensure_journey_users()` pattern -- no test identity was treated as a real
+policy approval. A small synthetic clean-B1 case and a small synthetic
+delivery (registered through the REAL `/api/tefca/rce/official-deliveries`
+route, not a bare database insert) supplied the fixture data; the completed
+multi-million-row IQVIA import was not touched or repeated.
+
+**Two genuine test-authoring bugs were found and fixed in the spec itself**
+(the spec had never been run against a live server before this round --
+it was only syntax-checked when written):
+
+- Test B's Determination select (CONFIRM/RECLASSIFY) was never actually
+  set, so "Record determination" stayed permanently disabled -- confirmed
+  by reading `CaseActions.js`'s own `canSubmitDetermination` logic, not by
+  guessing. Separately, signing in as the second QA Lead reused the SAME
+  browser context/session as the analyst, so `/login/` just redirected
+  straight back to the still-authenticated analyst's dashboard. Fixed by
+  setting `Determination=CONFIRM` and giving the second QA Lead account its
+  own, separate browser context -- a genuinely distinct simulated session,
+  not two logins sharing one cookie jar.
+- Test C's locator for "Generate" matched the Program-Manager contract-
+  deliverable generator on `/tefca-arc/reports/` (which needs a review
+  cycle and delivery scoping selected first and stays disabled otherwise),
+  not the ordinary reviewer path. Read `ReportsTab.js` and pointed the test
+  at the delivery's own Reports tab "Generate delivery report" button
+  instead, which is what an Analyst or Viewer actually uses day to day.
+
+**All four journeys now pass, confirmed in one clean end-to-end run from a
+freshly seeded case (not stitched together from separate partial runs):**
+
+| Journey | Result |
+|---|---|
+| A. Program Manager registers a delivery end to end | pass (11.0s) |
+| B. QA Lead returns a determination; history is appended, not overwritten | pass (15.3s) |
+| C. Report generation reaches a terminal state and a CSV download starts | pass (10.0s) |
+| D. Viewer: rate-limit fix and menu click right after sign-in | pass (4.4s) |
+
+Journey B additionally proves, through real clicks (not an API assertion
+substituting for them): the analyst's own first determination event is
+never overwritten when QA returns the case -- a NEW `RETURN` event is
+appended, both are visible on the same case, and the server independently
+enforces that the returning QA Lead is not the same person who made the
+determination (a second, distinct synthetic QA Lead account was required
+for this specific reason). Journey D independently re-confirms, live in a
+browser and not only in the backend test suite, that a Viewer can open
+ONC/RCE Deliveries from the menu immediately after sign-in and then open a
+delivery detail page immediately afterward without hitting
+"Rate limit exceeded" -- the D6 fix holds end to end.
+
+**`live-nav-audit.spec.mjs` was also re-run** (same seed, same six
+accounts) to check for a regression across all three roles' full page set.
+It is a non-exclusive audit (it only fails outright on a blank page, an
+uncaught script error, or raw JSON on a normal page; everything else is
+recorded as a finding, not a hard failure) and it completed with exit code
+0 -- no blank page, no script error, no raw JSON anywhere, across 155
+recorded checks. Two findings are worth naming explicitly rather than
+leaving buried in the raw JSON output:
+
+- `viewer / IQVIA (reviewer-only data) / permission screen: not shown
+  (role was allowed)` -- re-read `app/app/tefca-arc/iqvia/page.js`
+  (`canApprove = atLeast(canonicalRole(user?.role), 'qalead')`): this page
+  is deliberately gated PER ACTION, not per page -- a Viewer sees the page
+  shell with no actionable buttons, matching the backend's own
+  `test_iqvia_routes.py::TestAccessGating` (confirmed passing in this
+  round's D3 regression) and the per-action authorization pattern already
+  documented in Round 25's work. Not a regression; the audit's own finding
+  label is informational, not a failure.
+- `viewer / Delivery detail > Verification / recheck panel names the role
+  needed: FAIL` -- the only actual `FAIL` in this run. The two checks
+  immediately before it on the same page ("readiness card states the role
+  limit in words", "overall status is visible to a viewer") both passed,
+  so the page itself rendered correctly with real verification content;
+  only the SPECIFIC "needs the Analyst (reviewer) role" recheck-request
+  copy was absent. This round's seeded delivery was registered through the
+  real upload route but never driven through quality/curation/promotion/
+  verification (deliberately -- a small synthetic fixture, not a repeat of
+  the completed IQVIA import, per the directive), so it has no
+  source-unavailable result for the recheck panel to offer a request
+  for. This reads as a seed-data coverage gap in THIS round's fixture, not
+  an application regression -- but it is recorded here rather than
+  silently assumed, and a reviewer with the richer Round 25 B04-B06
+  Part-B seed (not reconstructed this round -- its original seeding script
+  was not preserved in either repository) should re-confirm this one
+  specific line directly.
+
+`live-partb.spec.mjs` was **not** re-run this round: it needs the
+Round 25 B04-B06-style fault corpus plus a second, specific pre-existing
+review (`SEED.b02_second_review`) and a job already carrying real
+verification/recheck state. That seeding script was not committed to
+either repository and no copy of it survived into this round's session;
+reconstructing it from scratch was judged a larger, separate effort than
+this round's explicit D7 scope (four NEW journeys), so it is named here as
+an open item rather than skipped silently. The underlying code paths
+`live-partb.spec.mjs` exercises (verification completeness labelling,
+maker/checker recheck approval, read-only source policy display) were not
+touched by any Round 26 code change (confirmed in section 13's D3 account
+of exactly which files changed), so no regression is expected there, but
+this is a reasoned expectation, not a re-proof.
+
+## 15. Round 26 consolidated checkpoint (2026-10-04) -- D9
+
+**Final SHAs this round: backend `5d54e06`, frontend `21f1901`.** Full
+history from the Round 25 head: backend `d842d0e` -> `681c0dd` (D2 test
+fixes) -> `e7df665` (D5/D6 rate-limit + exclusion-queue + bulk-assignment
+proof) -> `5d54e06` (D3's own three test-fixture fixes). Frontend
+`16b50ed` -> `9e48039` (D7 journey specs, first draft) -> `21f1901`
+(D7 journey specs, corrected against the real screens).
+
+**Decision: READY WITH NAMED LIMITATIONS -- for independent review only.**
+Unchanged from Round 25's own decision; this round closed gaps, it did not
+change the decision itself.
+
+**Still NOT ready for Adam.** All of the following remain true and none of
+them happened this round:
+- No independent review of any commit through `5d54e06`/`21f1901`.
+- No authorised publication, no authorised deployment.
+- No confirmation of the deployed version on DEV.
+- No test accounts or seeded synthetic data on DEV (this round's six
+  accounts and fixtures are local and disposable, by design).
+- No DEV smoke check.
+
+**What this round adds to the Round 25 picture, reconciled in one place:**
+
+| Item | Round 25 state | Round 26 state |
+|---|---|---|
+| Full regression | ran at `8f5bfeb`; 12 order-dependent failures unfixed | 12/12 fixed at root cause; 27-batch run at `5d54e06` reconciles clean (4,469 passed, 0 errors, 121 named skips, 3 infra-only failures independently resolved 6/6 live) |
+| Viewer rate-limit fix | not yet made | made, and now CONFIRMED in a live browser (Journey D) |
+| Menu-click-after-sign-in | unconfirmed | CONFIRMED in a live browser (Journey D) |
+| Exclusion-candidate queue | did not exist | added, server-tested; still no frontend control |
+| Bulk-assignment server-side proof | did not exist | added, server-tested; the specific bulk-assignment ROUTE itself was not clicked in a browser this round (only its own direct test) |
+| Delivery registration, QA return, report generation+CSV | not driven through a real browser | all three now driven through a real browser against a real server (Journeys A, B, C) |
+| `live-partb.spec.mjs` (Part A/B richer journey) | passed 2/2 | not re-run (seeding script lost; code untouched, so no regression expected but not re-proven) |
+| Verification completeness (B04-B06), P1-P6, SEED_RULES_V4 | B04-B06 still `verified`; P1-P6 unapproved; SEED_RULES_V4 inactive | unchanged -- confirmed unchanged, not merely assumed |
+| Workbook | v2, 39 cases | v3, 46 cases, bound to this round's final SHAs |
+
+**Every unresolved item from this round, named rather than buried:**
+1. `live-partb.spec.mjs` not re-run (above).
+2. The exclusion-candidate queue (INT-41) has no frontend control yet.
+3. The bulk-assignment proof (INT-42) is server/code-level only; nobody
+   clicked "Distribute workload" in a browser this round to re-confirm it
+   end to end (the UNDERLYING claim -- that the route never touches
+   compliance fields -- is proven directly against the real function, which
+   is the stronger proof the directive asked for, but a browser click was
+   not additionally performed).
+4. 121 named, environment-shaped test skips (see section 13) -- none
+   conceal an unresolved defect, each has its own stated cause.
+5. The nav-audit's one specific `FAIL` (a recheck panel's role-naming copy,
+   section 14) traces to this round's own seed data never reaching
+   verification, not to a code regression, but was not independently
+   re-checked against a fully-verified delivery this round.
+6. SSP baseline still unidentified (unchanged from every prior round).
+7. P1-P6 and SEED_RULES_V4 remain exactly where Round 25 left them:
+   unapproved, inactive.
+
+Nothing here was left as "documentation only." Every demonstrated defect
+this round surfaced -- the three test-fixture bugs in D3, the two spec
+selector bugs in D7 -- was fixed and re-verified, not merely written down.
+The items in this list are genuinely open (seeding data not reconstructed,
+a policy decision not made, a frontend control not built), not disguised
+unfixed defects.
+
+## 16. Round 27 (2026-10-04, same day) — exclusion UI, Part A/B reconstruction, full reconciliation
+
+**Final SHAs: backend `5fdd20b`, frontend `de961ed`.** Seven commits
+past the Round 26 checkpoint (`3afc64b`): `e82476c` (R27-2 backend field),
+`91b1f5a` (R27-2 frontend UI + live proof), `e2c2561` (R27-3 seed
+reconstruction), `de961ed` (R27-3 adapted live spec — frontend's final
+commit this round), `a6beb50` (R27-4 regression manifest), `56a42e1`
+(R27-6 operator checklist), `5fdd20b` (R27-7 decision table). This
+section is itself the R27-8 checkpoint; no further code change follows
+it.
+
+**R27-1 (baseline reconciliation).** Backend and frontend HEADs verified
+directly; both working trees clean except pre-existing untracked scratch
+files this session did not create. Commit `3afc64b` (the Round 26
+checkpoint) proven documentation-only by `git show --stat`: one file
+changed, 328 insertions, zero deletions, zero other files — not merely
+asserted.
+
+**R27-2 (the exclusion-candidate queue, made usable).** The backend
+filter from Round 26 (`work_queue(unresolved_exclusion_candidate=True)`)
+had no frontend surface — "a backend queue without a usable UI is not
+complete for Adam," per this round's own directive. Added to the
+EXISTING Supervisor Operations screen only: a clearly-labelled checkbox
+entry point that relabels the panel when checked; a "Prior risk" column
+naming each flagged case's signal in words (reusing `signalWords`, now
+exported); and the case drawer reusing the analyst's own existing
+`PriorRiskBanner` component for the full evidence-and-uncertainty
+account, with its existing link to the earlier review. One backend field
+added, additive and read-only (`prior_risk_not_cleared` on the work-queue
+row). Deliberately NOT added: any new approval/clearing action, any
+per-row selection, any bulk control. Confirmed live
+(`tests/e2e/live-exclusion-ui-round27.spec.mjs`): the toggle works,
+exactly one checkbox exists on the whole page (no bulk/select-all), the
+row shows the signal in words, the banner and its link render, the
+existing single-case workspace link is intact, and the drawer returns to
+the filtered queue on close.
+
+**R27-3 (the Part A/B browser proof, made reproducible).** The original
+seeding script for `live-partb.spec.mjs` was never committed and did not
+survive into this session. Reconstructed (`tests/fixtures/seeded/
+seed_live_partb.py`, backend repo) by importing
+`test_seeded_corpus_b_2026_10_04.py`'s and `test_prior_risk_not_cleared_
+2026_10_04.py`'s own helper functions directly — one place still builds
+this corpus, nothing duplicated. Produces the real 12-seed corpus through
+the real pipeline, a 13th preflight-only row (giving the delivery's own
+file-level check one genuine `CLEAR_WITH_FINDINGS` finding), a matching
+`rce_delivery_jobs` row (a bare intake has none and cannot be opened by
+id — discovered and fixed this round), a SAM.gov recovery recheck
+requested by the Analyst and left `PENDING_APPROVAL`, and a separate
+two-cycle entity for the uncleared-earlier-concern banner. Three real
+configuration gaps found and fixed while rebuilding this (all three now
+recorded in `tests/fixtures/seeded/LIVE-PARTB-RECIPE-2026-10-04.md` so
+they are not rediscovered): `ENTITY_RESOLVER_SOURCE=db` is required on
+BOTH the seeding process and the live server process (a process
+boundary); `ALLOWED_ORIGINS` must include the frontend's own origin or
+every request fails CORS with a generic, misleading "cannot reach
+server" message; `ENABLE_CONTROLLED_RECHECKS=true` is required or the
+recheck panel looks exactly like "recheck support is off" even for a
+real, pending job. One assumption made partway through this work was
+caught and corrected against the real running page rather than left in:
+the true completeness count is 4 of 12 (matching the ORIGINAL spec, not
+the 3 first assumed from the manifest alone) — every NPI-bearing entity
+in this corpus also carries an unavailable CMS PPEF gap, on top of the
+three SAM.gov source faults. The adapted spec
+(`tests/e2e/live-partb-round27.spec.mjs`) passes 2/2, covering preflight,
+source faults, incomplete verification (named, not merged), prior-risk
+preservation, rechecks end to end (request → approve → run → genuinely
+still-unavailable, nobody newly verified), maker/checker (the requester
+sees no approve control), and read-only source policies. Two narrow,
+intentional, documented differences from the original spec (list-click
+navigation replaced with a direct URL, since Journey A of
+`live-journeys-round26.spec.mjs` already proves that path; the corrected
+completeness count) — neither drops an intended assertion.
+
+**R27-4 (regression evidence, reconciled into one manifest).**
+`docs/review/REGRESSION-MANIFEST-2026-10-04.md`: the 27-batch run's 33
+logged executions resolve to 27 unique, counted results (every repeat
+named and explained — batch 2 three times for a known live-network hang,
+batch 10 three times for this round's own two self-contained test bugs,
+batches 14/15 twice each for one test fixture's leaked state and its
+fix); the three server-dependent cases and their six-test live-server
+confirmation (both contexts explained as the same three tests, not six
+new defects); all 121 skips grouped by cause with a release-relevance
+disposition for every group (none conceals an unresolved defect); and
+R27-2's own affected-test re-run (49 + 9 passed, fresh database). The
+full suite was not repeated — stated as a reasoned conclusion (neither
+R27-2's one additive field nor R27-3's test-only additions touch any
+other file in the 27-batch run), not assumed.
+
+**R27-5 (all 46 workbook cases audited against the final UI; v4
+built).** Every distinctive button/panel/tab label quoted across all 46
+v3 cases was checked against the current frontend source directly (not
+assumed carried-forward-correct). Found: INT-41 described the exclusion
+queue as possibly "not yet wired into the menu" — now corrected against
+the real control R27-2 built. Found: SUN-09 used an ASCII `<->`
+approximation where the real label uses `↔` — corrected. Everything else
+checked (a few dozen distinctive phrases, including older SUN cases)
+matched the current screens exactly, including em-dash glyphs an
+earlier terminal-encoding artifact in this session's own working notes
+had wrongly suggested were wrong — re-verified directly against the
+workbook's own Unicode code points before concluding anything. One new
+case added, INT-47 (the exclusion queue walked end to end). v4 (47
+cases) preserves v3 unchanged in the same folder. `START-HERE.md` and
+the LMS proposal (Lesson C) both updated to match.
+
+**R27-6 (operator prerequisites, prepared).**
+`docs/review/OPERATOR-PREREQUISITE-CHECKLIST-2026-10-04.md`: final SHAs,
+the CI requirement, migration order ***(this round's own "no new
+migration" claim here was WRONG, compared against the wrong reference
+point — corrected in R29-1 / section 19 below and in that checklist
+document directly)***, the DEV deploy
+procedure and rollback triggers (unchanged, established pattern),
+every feature flag this round's work actually needed and why, the
+supported account-provisioning procedure verified from
+`app/api/admin_users.py` (direct admin-created accounts, no raw SQL, no
+unnecessary admin privilege, two distinct QA Leads for the self-approval
+refusal this specific work needs), the isolated fixture recipe, the
+deployed-version confirmation step, and an ordered ten-step post-
+deployment smoke sequence. Nothing in it was executed.
+
+**R27-7 (P1–P6, decided by no one, tabulated for whoever will).**
+`docs/review/P1-P6-DECISION-TABLE-2026-10-04.md`: question, observed
+behaviour (re-confirmed this round, not copied forward), recommended
+option, alternative, impact, authority needed, and affected QA cases for
+each of the six. The three-facts distinction (check outcome /
+completeness / classification-and-reportability) stated once rather than
+re-argued six times. SSP impact register: one new entry, S-19 (the
+frontend completion of S-18's backend-only queue); the baseline question
+restated as unresolved, with the precise missing evidence named again
+(a transmittal record, not a document choice) — no candidate selected by
+inference, no completion claimed.
+
+## 17. Round 27 decision
+
+**A. LOCAL IMPLEMENTATION COMPLETE — READY FOR PUBLICATION/REVIEW.**
+
+Every item this round's directive asked for was built, reconstructed,
+reconciled, audited, prepared or tabulated — not merely restated as a
+known gap. The SSP baseline remains genuinely unresolved because it
+depends on an external record (a transmittal) this session cannot
+produce or infer; that is an open INPUT, not an unfinished task, and is
+named precisely in section 16 and in the SSP register itself rather than
+treated as blocking this decision.
+
+**This is still NOT READY FOR ADAM.** That requires, and none of it has
+happened: independent review of every commit through `5fdd20b`/
+`de961ed`; authorised publication (pushing the branches) and CI running
+green on them, including the dedicated `journey-live` job; authorised
+deployment to DEV; the five accounts from the operator checklist created
+on DEV through the supported admin procedure; the feature flags in
+section 16/R27-6 confirmed set on DEV; the deployed version confirmed
+against the live page; and the ten-step smoke sequence run there and
+passed. None of these six is a documentation task — all six are operator
+or reviewer actions this session is not authorised to take.
+
+**Every open item, named once more, in one place:**
+1. SSP baseline transmittal record — not found, needs an operator/COR
+   action to locate (section 16/R27-7).
+2. P1–P6 — tabulated, none decided; every default-off flag stays off.
+3. The exclusion-candidate queue (INT-41/47) has no bulk sign-off path
+   because none should exist — this is confirmed-correct, not open.
+4. `live-partb-round27.spec.mjs`'s two documented, deliberate differences
+   from the original spec (section 16/R27-3) — a reasoned equivalent,
+   named as such, not a silent substitution.
+5. The six DEV-readiness gates in the operator checklist (R27-6) —
+   entirely operator/reviewer actions.
+
+Nothing here was left as "documentation only." Every demonstrated defect
+this round surfaced — the two self-contained bugs in this round's own
+new backend test, the three configuration gaps found rebuilding the Part
+A/B proof, the two workbook wording corrections — was fixed and
+re-verified in this session, not merely written down.
+
+## 18. Round 28 (2026-10-04, same day) — published for independent review
+
+**Backend draft PR**: https://github.com/DocuAction/docuaction-backend/pull/115,
+head `85540ec649235f5e89602b4709f776deefacf81c`, stacked on PR #110
+(`feat/reporting-architecture-2026-10-01`).
+
+**Frontend draft PR**: https://github.com/DocuAction/docuaction-frontend/pull/69,
+head `de961ed973e27b80f96ebbd08d7ada1317f99096`, stacked on PR #66
+(same branch name).
+
+Both branches were pushed without force; neither existed on either
+remote before this round. Before pushing, every GitHub Actions workflow
+trigger in both repositories was read directly (not inferred): nothing
+in either repo auto-deploys, auto-migrates, or otherwise mutates an
+environment on a feature-branch push or on a `pull_request` event
+against any base — the one workflow in each repo capable of a real
+environment change (`dev-release.yml` backend, `deploy-frontend.yml`
+frontend) triggers only on a push to `main`, a tag push, or
+`workflow_dispatch`, none of which this round performed. The outgoing
+diffs (87 backend files / 31 commits; 32 frontend files / 7 commits,
+both since the respective PR #110/#66 heads) were reviewed directly for
+credentials, private fixture values, unnecessary logs and real
+source-data content — none found.
+
+**CI, checked once against the GitHub API, not polled repeatedly**: only
+`dependency-review` ran on either draft PR (pass, backend; skipped,
+frontend — no GHAS entitlement on that repository). Confirmed directly:
+neither repo's actual test suite (`pr-tests.yml` / `playwright.yml` /
+`codeql.yml` / `security-scan.yml`) ran, because every one of them
+scopes its `pull_request` trigger to `branches: [main]` and these PRs
+are deliberately stacked on a non-`main` base, matching PR #110/#66's
+own pattern. This is reported here as missing automated coverage on
+these two PRs specifically — not claimed as a passing result, and not
+evidence that anything in this stack is untested (the regression
+manifest and every live-browser spec referenced throughout this
+document remain the actual evidence, all local).
+
+Two new documents were published this round, not present at the Round
+27 checkpoint: `docs/review/FINAL-REVIEW-GUIDE-2026-10-04.md` (before/
+after behaviour for every significant change, security/RBAC notes,
+P1 described explicitly — stored status unchanged, how incompleteness
+is represented, and the real residual misinterpretation risk for a
+consumer this work never touched; approves nothing) and
+`docs/review/SSP-IMPACT-REGISTER-2026-10-04.md` (copied in from outside
+this repository, sanitized, so it has a working link; the baseline
+question remains unresolved within it).
+
+Workbook v4's own candidate binding is unaffected by this round's three
+documentation-only commits (none touch `app`/`tests`/`src`/`alembic`):
+still `e2c2561`/`de961ed`, exactly as built and bound in Round 27.
+
+**Decision, restated, now published rather than only local: A. LOCAL
+IMPLEMENTATION COMPLETE — READY FOR PUBLICATION/REVIEW — which this
+round completed.** This does **not** mean READY FOR ADAM. The next and
+only gate is independent review of PR #115 and PR #69 at their exact
+current heads. No merge, migration, deployment, firewall, account, or
+flag change was performed this round, and none is proposed by it.
+
+## 19. Round 29 (2026-10-04, same day) — correcting this stack's own migration claims
+
+**Independent comparison against the real PR base (`ea92ea5`, PR
+#110/#66's head) found three migration files this stack adds that
+earlier checkpoints (sections 16–18 above) wrongly described as "no new
+migration" or "unchanged."** Both earlier claims compared against the
+wrong reference point (Round 25's own starting point, and separately an
+even older commit, `a6bf241`) instead of this PR's actual base. This
+section corrects that error. It does not alter sections 16–18's own
+account of what each round DID — only the migration-status claim within
+them, marked inline where it occurred.
+
+**The three revisions, exact heads, what each changes, and the
+downgrade behaviour of each — demonstrated against a real throwaway
+database this round, not assumed** — are documented in full in
+[`docs/review/MIGRATION-INVENTORY-2026-10-04.md`](./MIGRATION-INVENTORY-2026-10-04.md),
+new this round. Summary: base head `20261003_preflight_shadow` →
+candidate head `20261004_recheck_jobs`, three revisions
+(`20261004_preflight_exec_held`, `20261004_stage_event_preflight`,
+`20261004_recheck_jobs`). New test:
+`tests/test_recheck_and_preflight_migrations_2026_10_04.py`, run against
+a disposable throwaway database. Found and demonstrated, not assumed: a
+real asymmetry between the three — `recheck_jobs`'s downgrade EXPLICITLY
+REFUSES once a row exists (a named precondition error); the two
+CHECK-widening migrations have no such guard and fail with a raw,
+unguarded Postgres `CheckViolation` instead if dependent data exists.
+Neither currently has a code path that writes the new values in any
+shared environment, so today's exposure is theoretical — stated as a
+fact about current callers, not as a property of the migrations
+themselves, which is not the same claim as "safe to roll back."
+
+`docs/review/FINAL-REVIEW-GUIDE-2026-10-04.md` section 8 and
+`docs/review/OPERATOR-PREREQUISITE-CHECKLIST-2026-10-04.md` section 3
+are both corrected directly (not merely annotated) to match the
+migration inventory. PR #115's own description is corrected the same
+way.
+
+**Decision, unchanged in substance, now resting on a corrected factual
+basis**: A. LOCAL IMPLEMENTATION COMPLETE — READY FOR PUBLICATION/
+REVIEW. This correction is itself part of what independent review
+should check — the migration inventory names exactly what to verify
+(the three revisions, their downgrade behaviour, the grant shape) rather
+than asking a reviewer to take "additive, therefore fine" on trust.

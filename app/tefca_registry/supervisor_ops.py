@@ -433,6 +433,12 @@ async def _work_items(db, records: List[reg.ReviewRecord], *, now: datetime,
             "decision_events": len(case_events),
             "reportable": record.reportable_at is not None,
             "reportable_at": record.reportable_at,
+            # Read-only, additive (2026-10-04): the SAME fact the analyst
+            # surface already renders as the "earlier concern" banner --
+            # exposed here too so the operations queue can show which
+            # candidate is which without opening each case first. Never
+            # written here, never used to select or close anything.
+            "prior_risk_not_cleared": payload.get("prior_risk_not_cleared"),
             "limitations": limits,
             "attention": _attention(limits, block["deadline_status"], idle_days,
                                     stale_after_days),
@@ -477,6 +483,7 @@ async def work_queue(db, *, queue_source: Optional[str] = None,
                      reportable: Optional[bool] = None,
                      deadline_state: Optional[str] = None,
                      search: Optional[str] = None,
+                     unresolved_exclusion_candidate: bool = False,
                      sort: str = "age", offset: int = 0, limit: int = 50,
                      now: Optional[datetime] = None,
                      due_soon_within_hours: Optional[float] = None,
@@ -537,6 +544,18 @@ async def work_queue(db, *, queue_source: Optional[str] = None,
             .where(reg.TefcaEntityRelationship.parent_entity_id == qhin_entity_id,
                    reg.TefcaEntityRelationship.relationship_type == "managed_by_qhin",
                    reg.TefcaEntityRelationship.status == "active")))
+    if unresolved_exclusion_candidate:
+        # Individually listed, 2026-10-04: every case whose most recent cycle
+        # carries an uncleared prior exclusion/identity-conflict signal
+        # (`prior_risk.unresolved_prior_risk`, written beside the review
+        # record as `prior_risk_not_cleared` -- see arc_pipeline.py). This is
+        # a READ-ONLY list for triage; nothing about it is selectable or
+        # closeable as a group -- each case is still opened, worked and
+        # decided one at a time through the ordinary single-item routes.
+        stmt = stmt.where(
+            reg.ReviewRecord.verification_results["prior_risk_not_cleared"]
+            .isnot(None))
+
 
     derived_filter = any(x is not None for x in (state, work_reason, deadline_state)) \
         or limited_only

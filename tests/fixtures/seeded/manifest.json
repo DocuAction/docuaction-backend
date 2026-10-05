@@ -1,0 +1,85 @@
+{
+  "corpus": "preflight-enforcement-synthetic-seeds",
+  "created": "2026-10-04",
+  "note": "Every row is synthetic (9.99.777 arc, SYNTHETIC-TRACE names) -- no delivered Government row is used. No live source or confidential identifier appears anywhere in this corpus.",
+  "seeds": [
+    {
+      "seed_id": "SEED-01",
+      "scenario": "clean_delivery",
+      "file": "seed-01-clean.psv",
+      "expected_gate": "CLEAR_or_CLEAR_WITH_FINDINGS_never_BLOCKED",
+      "expected_findings": [],
+      "notes": "Baseline. May still carry CONDITIONAL_BLANK/MISSING_CONTEXT informational findings (blank NPI) -- never BLOCKED."
+    },
+    {
+      "seed_id": "SEED-02",
+      "scenario": "missing_identity_field",
+      "file": "seed-02-missing-identity-field.psv",
+      "expected_gate": "BLOCKED",
+      "expected_findings": [
+        "PF-SCH-001"
+      ],
+      "notes": "TEFCAID column entirely absent from the delivered header."
+    },
+    {
+      "seed_id": "SEED-03",
+      "scenario": "duplicate_header",
+      "file": "seed-03-duplicate-header.psv",
+      "expected_gate": "BLOCKED",
+      "expected_findings": [
+        "PF-SCH-008"
+      ],
+      "notes": "HCID column name appears twice; CCN dropped to keep this scenario isolated from SEED-02's missing-column defect."
+    },
+    {
+      "seed_id": "SEED-04",
+      "scenario": "renamed_header",
+      "file": "seed-04-renamed-header.psv",
+      "expected_gate": "not_BLOCKED",
+      "expected_findings": [
+        "PF-SCH-004"
+      ],
+      "notes": "NPI delivered lower-case ('npi'); recorded as a rename candidate, never auto-mapped."
+    },
+    {
+      "seed_id": "SEED-05",
+      "scenario": "reordered_header",
+      "file": "seed-05-reordered-header.psv",
+      "expected_gate": "not_BLOCKED",
+      "expected_findings": [
+        "PF-SCH-003"
+      ],
+      "notes": "The first two columns are swapped; values are read by name so nothing is transposed."
+    },
+    {
+      "seed_id": "SEED-06",
+      "scenario": "extra_unrecognized_column",
+      "file": "seed-06-extra-column.psv",
+      "expected_gate": "not_BLOCKED",
+      "expected_findings": [
+        "PF-SCH-002"
+      ],
+      "notes": "One column outside the locked 41-field map; preserved in Area 1, no rule reads it, never dropped."
+    },
+    {
+      "seed_id": "SEED-07",
+      "scenario": "unknown_enum_value",
+      "file": "seed-07-unknown-enum.psv",
+      "expected_gate": "CLEAR_WITH_FINDINGS",
+      "expected_findings": [
+        "UNKNOWN_SEQUOIA_ORG_TYPE"
+      ],
+      "notes": "sequoiaorgtype='Affiliate' is outside SEQUOIA_ORG_TYPES ('Participant'|'Subparticipant'). Observed (2026-10-04, local disposable DB): gate=CLEAR_WITH_FINDINGS, codes={PF-CTX-000, PF-HCID-001, PF-OID-001, UNKNOWN_SEQUOIA_ORG_TYPE} -- the latter two are this fixture's own synthetic id/HCID shape, not the enum defect itself; UNKNOWN_SEQUOIA_ORG_TYPE (MISSING_CONTEXT category) is the one this seed targets."
+    },
+    {
+      "seed_id": "SEED-08",
+      "scenario": "identifier_checksum_failure",
+      "file": "seed-08-checksum-failure.psv",
+      "expected_gate": "CLEAR_WITH_FINDINGS",
+      "expected_findings": [
+        "NPI_CHECKSUM_INVALID"
+      ],
+      "notes": "NPI 1982916079 fails the CMS check digit (correct digit is 8, not 9). Observed (2026-10-04, local disposable DB): gate=CLEAR_WITH_FINDINGS, codes={NPI_CHECKSUM_INVALID, PF-CTX-000, PF-HCID-001, PF-OID-001} -- a bad checksum alone never blocks the delivery, never corrected automatically."
+    }
+  ]
+}

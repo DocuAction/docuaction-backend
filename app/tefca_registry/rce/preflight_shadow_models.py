@@ -53,7 +53,14 @@ APPLICABILITY = (APPLIES, DOES_NOT_APPLY, UNRESOLVED)
 EXEC_DONE = "done"
 EXEC_UNAVAILABLE = "unavailable"      # no check exists / no source wired
 EXEC_INSUFFICIENT = "insufficient"    # inputs this delivery does not carry
-EXECUTION = (EXEC_DONE, EXEC_UNAVAILABLE, EXEC_INSUFFICIENT)
+#: Added 2026-10-04 (Round 22, docs/review/DELTA-2026-10-04.md §5): the
+#: check could not run because the record/delivery is HELD pending
+#: resolution of something else -- distinct from EXEC_UNAVAILABLE (no
+#: check exists at all) and EXEC_INSUFFICIENT (this delivery's inputs
+#: cannot support the check). Additive: existing rows/values unchanged;
+#: no existing finding is retroactively re-labeled by adding this.
+EXEC_HELD = "held"
+EXECUTION = (EXEC_DONE, EXEC_UNAVAILABLE, EXEC_INSUFFICIENT, EXEC_HELD)
 
 #: Disposition -- what happens next. NOT a pass/fail.
 DISP_OPEN = "open"                    # a human must resolve it

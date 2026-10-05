@@ -226,6 +226,36 @@ async def _import_csv(
             record_count=0, received_at=datetime.now(timezone.utc),
             created_by=created_by, metadata={"original_path": str(path)})
 
+    # REFERENCE-SNAPSHOT PREFLIGHT (2026-10-04, Part B; reference_preflight.py).
+    # Always RUN and always RECORDED on the snapshot -- the shadow record.
+    # ENFORCED (the import refused before any row is staged) only when
+    # ENABLE_PREFLIGHT_ENFORCEMENT is on; off by default, so an official
+    # import behaves exactly as before. Independently of the flag, a
+    # snapshot whose recorded gate is BLOCKED can never reconcile -- see
+    # `verify_snapshot_staged_completely`.
+    from app.core.config import settings as _settings
+    from app.tefca_registry.rce import reference_preflight as _rp
+
+    preflight = _rp.preflight_reference_file(path, source_system)
+    enforce = bool(getattr(_settings, "ENABLE_PREFLIGHT_ENFORCEMENT", False))
+    snapshot.metadata_ = {**(snapshot.metadata_ or {}), "reference_preflight": {
+        "gate": preflight["gate"], "schema_version": preflight["schema_version"],
+        "preflight_version": preflight["preflight_version"],
+        "enforced": enforce, "rows_sampled": preflight["rows_sampled"],
+        "bound": preflight["bound"], "held_checks": preflight["held_checks"],
+        "findings": [{k: f[k] for k in ("code", "field_name", "applicability",
+                                        "execution", "disposition", "description",
+                                        "evidence")} for f in preflight["findings"]],
+    }}
+    await db.commit()
+    if enforce and preflight["gate"] == _rp.pm.GATE_BLOCKED:
+        codes = sorted({f["code"] for f in preflight["findings"]
+                        if f["disposition"] == _rp.pm.DISP_BLOCKED})
+        raise _rp.ReferencePreflightBlocked(
+            f"reference preflight BLOCKED {source_system} snapshot {snapshot.id}: "
+            f"{', '.join(codes)}. No row was staged. One technical issue, not one "
+            f"finding per record.")
+
     summary = ImportSummary(snapshot_id=snapshot.id, source_system=source_system,
                             file_sha256=sha)
     cid = _cid()
@@ -399,9 +429,25 @@ async def verify_snapshot_staged_completely(db, snapshot_id) -> Dict[str, Any]:
     # keeps this check meaningful rather than permissive by default.
     rejected = int((snapshot.metadata_ or {}).get("rows_rejected", 0))
     expected = snapshot.record_count - rejected
+    # 2026-10-04 (Part B): equality alone reconciled an EMPTY snapshot. A file
+    # with a missing/renamed identity column has every row rejected, so
+    # expected == staged == 0 and the check read True -- an approvable
+    # reference snapshot containing nothing. Two refusals, both independent
+    # of ENABLE_PREFLIGHT_ENFORCEMENT (they only ever withhold approval):
+    reasons = []
+    if staged != expected:
+        reasons.append("staged row count does not equal read-minus-rejected")
+    if (snapshot.record_count or 0) > 0 and staged == 0:
+        reasons.append("every row read was rejected; an all-rejected extract is a "
+                       "schema/identity fault, not an empty-but-valid snapshot")
+    ref_preflight = (snapshot.metadata_ or {}).get("reference_preflight") or {}
+    if ref_preflight.get("gate") == "BLOCKED":
+        reasons.append("reference preflight gate is BLOCKED for this snapshot")
     return {
         "snapshot_id": str(snapshot_id), "source_system": snapshot.source_system,
         "declared_record_count": snapshot.record_count, "rows_rejected": rejected,
         "expected_staged_count": expected, "staged_row_count": staged,
-        "reconciles": staged == expected,
+        "reference_preflight_gate": ref_preflight.get("gate"),
+        "reconciles": not reasons,
+        "refusal_reasons": reasons,
     }

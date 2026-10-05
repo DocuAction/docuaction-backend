@@ -101,8 +101,11 @@ async def test_chunked_and_unchunked_gather_produce_identical_classifications(
     # `x-request-id`, unique per actual network call by design). With all six
     # stripped, 600/600 entity pairs in a real run were byte-for-byte
     # identical — not assumed, verified directly.
+    # `verified_at` (2026-10-04): the source_policy block's verification time,
+    # a wall-clock stamp like the others.
     _NONDETERMINISTIC_KEYS = {"generation_timestamp", "retrieved_at", "query_timestamp",
-                             "discovered_at", "http_last_modified", "upstream_request_id"}
+                             "discovered_at", "http_last_modified", "upstream_request_id",
+                             "verified_at"}
 
     def _strip_evidence_timestamps(v):
         if isinstance(v, dict):

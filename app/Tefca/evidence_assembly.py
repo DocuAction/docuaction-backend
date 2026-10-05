@@ -503,7 +503,12 @@ def _dimension_exclusion(entity: Dict[str, Any], profile: ApplicabilityProfile,
                   "No NPI available, so LEIE was screened by organisation name. No "
                   "match found. NOT_FOUND rather than PASS: a name search is weaker "
                   "evidence than an NPI match and must not read as an equivalent "
-                  "clearance."),
+                  "clearance."
+                  # What was actually searched (2026-10-04): "no candidate in
+                  # THIS list using THESE methods", never a blanket clearance.
+                  + (f" Searched {d.get('list_rows_searched')} list row(s) using "
+                     f"{' + '.join(d.get('match_methods') or [])}."
+                     if d.get("match_methods") else "")),
         ))
     elif leie_org is not None and not _ok(leie_org):
         any_unavailable = True

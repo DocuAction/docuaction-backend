@@ -503,6 +503,20 @@ def test_no_tefca_read_endpoint_sits_above_the_viewer_floor():
         "/api/tefca/rce/preflight-runs/{run_id}/findings",
         "/api/tefca/rce/preflight-runs/{run_id}/normalizations",
         "/api/tefca/rce/deliveries/{intake_id}/workspace",
+        # ── Controlled rechecks (2026-10-04) ──
+        # The per-entity drill-down of a recheck and its CSV list each
+        # targeted organisation by its delivered identifier (rce_org_oid)
+        # with its prior and new disposition. Same principle as the
+        # preflight findings above and the delivery-workflow drill-downs:
+        # a read that returns delivered values sits at reviewer (4). The
+        # job-level reads (`/rechecks/{job_id}`, `/deliveries/{intake_id}/
+        # rechecks`) carry counts, versions and states only and stay viewer.
+        # Found by this test in the 2026-10-04 full regression: the routes
+        # were added at the reviewer floor without being listed here.
+        # RAISED FOR INDEPENDENT REVIEW as an access decision, not settled
+        # by this entry.
+        "/api/tefca/rce/rechecks/{job_id}/items",
+        "/api/tefca/rce/rechecks/{job_id}/items.csv",
         # ── Pre-merge review Decision 1 (2026-09-16) ──
         # Deprecated legacy aliases for the current /api/reports/* content
         # routes, which the same review raised from viewer to reviewer

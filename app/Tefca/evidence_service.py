@@ -393,8 +393,11 @@ class EvidenceService:
         dimensions = assemble_dimensions(entity, profile, sources, website,
                                          parent_resolver=parent_resolver)
         from app.Tefca import rce_fields
+        from app.Tefca import source_policy
 
-        return {
+        # Policy status recorded BESIDE the evidence (2026-10-04): one new
+        # top-level key, no dimension/item/disposition touched.
+        return source_policy.annotate_evidence({
             "entity_id": entity.get("id"),
             "entity_name": entity.get("name"),
             "generated_at": datetime.utcnow().isoformat(),
@@ -412,7 +415,7 @@ class EvidenceService:
                 "percentage or source count is derived; correlated CMS components are one "
                 "body of evidence."
             ),
-        }
+        })
 
     async def health(self) -> Dict[str, Any]:
         return await cms_capability_health()
