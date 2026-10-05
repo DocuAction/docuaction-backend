@@ -22,7 +22,7 @@ import shutil
 import subprocess
 import sys
 import uuid
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 import pytest
 
@@ -65,89 +65,93 @@ def _psql(url: str, db: str, user: str, *extra):
     return r.returncode, r.stdout + r.stderr
 
 
+def _su(url: str, db: str, sql: str) -> list[str]:
+    """Superuser SQL through psql (no sync driver is installed in CI). One output line per row."""
+    u = urlsplit(_sync(url))
+    env = dict(os.environ, PGPASSWORD=unquote(u.password or ""), PGCONNECT_TIMEOUT="15")
+    r = subprocess.run(
+        [shutil.which("psql"), "-h", u.hostname, "-p", str(u.port or 5432), "-U", unquote(u.username or "postgres"),
+         "-d", db, "-X", "-At", "-F", "|", "-v", "ON_ERROR_STOP=1", "-c", sql],
+        env=env, capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        raise RuntimeError(f"psql failed on {db}: {r.stderr.strip()[-600:]}")
+    return [line for line in r.stdout.splitlines() if line != ""]
+
+
 @pytest.fixture(scope="module")
 def cluster():
     if not os.environ.get("DATABASE_URL"):
         pytest.skip("DATABASE_URL not set")
     if not shutil.which("psql"):
         pytest.skip("psql is not installed; the repair is a psql script")
-    import sqlalchemy as sa
-    from sqlalchemy import text
-
     url = os.environ["DATABASE_URL"]
-    created: list[str] = []
+    home = urlsplit(_sync(url)).path.lstrip("/") or "postgres"
     try:
-        admin = sa.create_engine(_sync(url), isolation_level="AUTOCOMMIT")
-        with admin.connect() as c:
-            if not c.execute(text("select rolsuper from pg_roles where rolname = current_user")).scalar():
-                pytest.skip("DATABASE_URL user is not a superuser; cannot build the throwaway databases")
-            for role in (OWNER, APP):
-                if not c.execute(text("select 1 from pg_roles where rolname=:r"), {"r": role}).first():
-                    pytest.skip(f"role {role} is absent on this cluster")
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip(f"cluster not usable for the ownership-repair test: {exc}")
+        is_super = _su(url, home, "select rolsuper from pg_roles where rolname = current_user")
+        roles = _su(url, home, f"select rolname from pg_roles where rolname in ('{OWNER}', '{APP}')")
+    except Exception as exc:  # noqa: BLE001 - no reachable cluster is a skip, not a failure
+        pytest.skip(f"No database reachable for the ownership-repair test: {exc}")
+    if is_super != ["t"]:
+        pytest.skip("DATABASE_URL user is not a superuser; cannot build the throwaway databases")
+    if sorted(roles) != sorted([OWNER, APP]):
+        pytest.skip(f"roles {OWNER} / {APP} are absent on this cluster")
 
-    def su(db, sql, **params):
-        eng = sa.create_engine(_with_db(url, db), isolation_level="AUTOCOMMIT")
-        try:
-            with eng.connect() as c:
-                res = c.execute(text(sql), params)
-                return res.fetchall() if res.returns_rows else None
-        finally:
-            eng.dispose()
+    created: list[str] = []
+
+    def su(db, sql):
+        return _su(url, db, sql)
 
     def drop_db(name):
-        with admin.connect() as c:
-            c.execute(text("select pg_terminate_backend(pid) from pg_stat_activity "
-                           "where datname=:d and pid<>pg_backend_pid()"), {"d": name})
-            c.execute(text(f'DROP DATABASE IF EXISTS "{name}"'))
+        su(home, f"select pg_terminate_backend(pid) from pg_stat_activity "
+                 f"where datname = '{name}' and pid <> pg_backend_pid()")
+        su(home, f'DROP DATABASE IF EXISTS "{name}"')
 
     def new_db(name):
         drop_db(name)
-        with admin.connect() as c:
-            c.execute(text(f'CREATE DATABASE "{name}" TEMPLATE "{TEMPLATE}" OWNER "{OWNER}"'))
+        su(home, f'CREATE DATABASE "{name}" TEMPLATE "{TEMPLATE}" OWNER "{OWNER}"')
         created.append(name)
         return name
 
     def cleanup_roles():
-        with admin.connect() as c:
-            if c.execute(text("select 1 from pg_roles where rolname=:r"), {"r": EXTRA}).first():
-                c.execute(text(f'REVOKE "{EXTRA}" FROM "{APP}"'))
-            for role in (ADMIN, NOAUTH, EXTRA):
-                c.execute(text(f'DROP ROLE IF EXISTS "{role}"'))
+        if su(home, f"select 1 from pg_roles where rolname = '{EXTRA}'"):
+            su(home, f'REVOKE "{EXTRA}" FROM "{APP}"')
+        for role in (ADMIN, NOAUTH, EXTRA):
+            su(home, f'DROP ROLE IF EXISTS "{role}"')
 
-    for name in (TEMPLATE,):
-        drop_db(name)
+    drop_db(TEMPLATE)
     cleanup_roles()
-    with admin.connect() as c:
-        # The diagnosed DEV shape: an admin that owns the table only through its
-        # membership in the runtime role, and has ADMIN OPTION (nothing else) on the owner role.
-        c.execute(text(f"CREATE ROLE \"{ADMIN}\" LOGIN PASSWORD 'x' NOSUPERUSER"))
-        c.execute(text(f'GRANT "{APP}" TO "{ADMIN}" WITH INHERIT TRUE, SET TRUE'))
-        c.execute(text(f'GRANT "{OWNER}" TO "{ADMIN}" WITH ADMIN TRUE, INHERIT FALSE, SET FALSE'))
-        c.execute(text(f"CREATE ROLE \"{NOAUTH}\" LOGIN PASSWORD 'x' NOSUPERUSER"))
-        c.execute(text(f'CREATE ROLE "{EXTRA}" NOLOGIN'))
-        c.execute(text(f'CREATE DATABASE "{TEMPLATE}" OWNER "{OWNER}"'))
+    # The diagnosed DEV shape: an admin that owns the table only through its membership
+    # in the runtime role, and has ADMIN OPTION (nothing else) on the owner role.
+    su(home, f"CREATE ROLE \"{ADMIN}\" LOGIN PASSWORD 'x' NOSUPERUSER")
+    su(home, f'GRANT "{APP}" TO "{ADMIN}" WITH INHERIT TRUE, SET TRUE')
+    su(home, f'GRANT "{OWNER}" TO "{ADMIN}" WITH ADMIN TRUE, INHERIT FALSE, SET FALSE')
+    su(home, f"CREATE ROLE \"{NOAUTH}\" LOGIN PASSWORD 'x' NOSUPERUSER")
+    su(home, f'CREATE ROLE "{EXTRA}" NOLOGIN')
+    su(home, f'CREATE DATABASE "{TEMPLATE}" OWNER "{OWNER}"')
     created.append(TEMPLATE)
     su(TEMPLATE, f'GRANT USAGE, CREATE ON SCHEMA public TO "{OWNER}", "{APP}"')
     _alembic(url, TEMPLATE, "upgrade", DIAGNOSED_REV)
     su(TEMPLATE, f'ALTER TABLE public.report_export_jobs OWNER TO "{APP}"')   # what DEV actually has
 
     def snap(db):
-        owner = su(db, "select tableowner from pg_tables where tablename='report_export_jobs'")[0][0]
-        eff = sorted(p for p in PRIVS if su(
-            db, "select has_table_privilege(:r, 'public.report_export_jobs', :p)", r=APP, p=p)[0][0])
-        members = sorted(str(tuple(r)) for r in su(
-            db, "select m.roleid::regrole::text, m.member::regrole::text, m.grantor::regrole::text, "
-                "(to_jsonb(m) - 'oid' - 'roleid' - 'member' - 'grantor')::text from pg_auth_members m "
-                "where m.roleid::regrole::text in (:o, :a) or m.member::regrole::text in (:o, :a)", o=OWNER, a=APP))
-        acl = sorted(str(tuple(r)) for r in su(
-            db, "select gor.rolname, coalesce(gee.rolname,'PUBLIC'), a.privilege_type, a.is_grantable "
-                "from pg_class k cross join lateral aclexplode(coalesce(k.relacl, acldefault('r', k.relowner))) a "
-                "join pg_roles gor on gor.oid=a.grantor left join pg_roles gee on gee.oid=a.grantee "
-                "where k.oid='public.report_export_jobs'::regclass"))
-        return {"owner": owner, "app_effective": eff, "members": members, "acl": acl,
-                "alembic": su(db, "select version_num from alembic_version")[0][0]}
+        privs = ", ".join(f"'{p}'" for p in PRIVS)
+        return {
+            "owner": su(db, "select tableowner from pg_tables where tablename = 'report_export_jobs'")[0],
+            "app_effective": sorted(su(
+                db, f"select p from unnest(array[{privs}]) p "
+                    f"where has_table_privilege('{APP}', 'public.report_export_jobs', p)")),
+            "members": sorted(su(
+                db, "select m.roleid::regrole, m.member::regrole, m.grantor::regrole, "
+                    "to_jsonb(m) - 'oid' - 'roleid' - 'member' - 'grantor' from pg_auth_members m "
+                    f"where m.roleid::regrole::text in ('{OWNER}', '{APP}') "
+                    f"or m.member::regrole::text in ('{OWNER}', '{APP}')")),
+            "acl": sorted(su(
+                db, "select gor.rolname, coalesce(gee.rolname, 'PUBLIC'), a.privilege_type, a.is_grantable "
+                    "from pg_class k cross join lateral aclexplode(coalesce(k.relacl, acldefault('r', k.relowner))) a "
+                    "join pg_roles gor on gor.oid = a.grantor left join pg_roles gee on gee.oid = a.grantee "
+                    "where k.oid = 'public.report_export_jobs'::regclass")),
+            "alembic": su(db, "select version_num from alembic_version")[0],
+        }
 
     try:
         yield {"url": url, "su": su, "new_db": new_db, "snap": snap}
@@ -155,7 +159,6 @@ def cluster():
         for name in reversed(created):
             drop_db(name)
         cleanup_roles()
-        admin.dispose()
 
 
 def test_dry_run_changes_nothing(cluster):
@@ -188,7 +191,7 @@ def test_apply_transfers_ownership_and_keeps_runtime_access(cluster):
     # The revision that failed on DEV now applies, and the chain reaches its head.
     _alembic(cluster["url"], db, "upgrade", "head")
     assert cluster["su"](db, "select count(*) from information_schema.columns where table_name="
-                             "'report_export_jobs' and column_name in ('report_type','request_parameters')")[0][0] == 2
+                             "'report_export_jobs' and column_name in ('report_type','request_parameters')") == ["2"]
     assert cluster["snap"](db)["app_effective"] == ["INSERT", "SELECT", "UPDATE"]
 
 
