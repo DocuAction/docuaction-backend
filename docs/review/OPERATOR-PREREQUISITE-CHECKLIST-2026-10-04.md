@@ -172,3 +172,40 @@ accounts exist, and the flags in section 5 are confirmed set:
 
 Each step above is "go/no-go" for the next: do not proceed past a
 failing step without logging it as a defect first.
+
+## 10. Handoff sequence — who does what, in order (ADDED 2026-10-04, R30)
+
+This sequence was previously implicit across sections 1–9 above and was
+stated inconsistently in this session's own chat — one earlier checkpoint
+said "Adam executes all 47 workbook cases," which is wrong and is
+corrected here (that chat message itself is not edited; this document is
+the authoritative sequence going forward). Each step below is a separate
+gate — none may be skipped or reordered to reach "zero blockers" faster:
+
+1. **Independent review** of the exact published, CI-validated
+   revisions (the final review guide, migration inventory, P1–P6 table —
+   none of P1–P6 approved by this).
+2. **Authorized DEV deployment** of those same revisions, and
+   confirmation that the deployed build's own reported SHA matches them
+   (§8 above).
+3. **Approved configuration** on DEV (§5), the five role accounts (§6),
+   and isolated synthetic fixtures (§7) — prerequisites, not yet
+   performed.
+4. **The ten-step smoke sequence** (§9 above), against the deployed
+   build.
+5. **This session (Claude) executes all 47 workbook cases through
+   Chrome**, against the actual deployed DEV pages and buttons — not
+   against a local server, not against raw API responses, not carried
+   forward from an earlier build — recording actual results and
+   evidence in a section kept separate from Adam's own result columns.
+6. **Resolve and retest** every failed or blocked required case found
+   in step 5, against the deployed build, before proceeding.
+7. **Only then** is the workbook handed to Adam for independent human
+   testing. Adam's own result columns stay blank until he fills them
+   himself — step 5's results are recorded separately and are never
+   entered into his columns on his behalf, and do not substitute for
+   his independent pass.
+
+No API-only or local-only evidence may substitute for step 5's
+deployed-build browser execution, and no case may be removed or
+weakened to avoid a blocker surfaced at step 5 or step 7.
