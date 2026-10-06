@@ -30,6 +30,9 @@
 {# "2026-09-30T04:44:48.668+00:00" -> "2026-09-30 04:44:48": readable, one line, still sortable #}
 {% macro ts(v) %}{% if v %}{{ (v|string)[:19]|replace('T', ' ') }}{% else %}&mdash;{% endif %}{% endmacro %}
 
+{# escaped value with a break opportunity after each underscore or slash: codes wrap between words #}
+{% macro brk(v) %}{{ ((v if v is not none else '')|string|e)|replace('_', '_<wbr>')|replace('/', '/<wbr>')|safe }}{% endmacro %}
+
 {% macro src_label(name) %}{{ {'nppes': 'NPPES', 'pecos': 'PECOS', 'leie': 'OIG LEIE', 'sam': 'SAM.gov'}.get(name, name|upper) }}{% endmacro %}
 
 {# status chip: colour AND text, never colour alone. kind is the approved B1/B2/B4 palette. #}
@@ -95,6 +98,8 @@
   main table.dp-fixed .hash { font-family: "DejaVu Sans Mono", Menlo, Consolas, monospace; font-size: 7pt; overflow-wrap: anywhere; word-break: break-all; hyphens: none; -webkit-hyphens: none; }
   main table.dp-fixed .cd { overflow-wrap: anywhere; word-break: normal; hyphens: none; -webkit-hyphens: none; }
   main table.dp-keep { break-inside: avoid; page-break-inside: avoid; }
+  main table.dp-keep caption { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+  h2, h3 { break-after: avoid; page-break-after: avoid; }
   main table.dp-tight th, main table.dp-tight td { padding: 1.8pt 4pt; font-size: 8pt; line-height: 1.25; }
   .dp-wide p { font-size: 9pt; }
   main table.dp-fixed tr { break-inside: avoid; page-break-inside: avoid; }
@@ -368,7 +373,7 @@
   <tbody>
     {% for ev in timeline.events %}
     <tr>
-      <th scope="row" class="cd">{{ ev.stage }}</th>
+      <th scope="row" class="cd">{{ brk(ev.stage) }}</th>
       <td>{{ ev.attempt }}</td>
       <td class="nw">{{ ev.status }}</td>
       <td class="nw">{{ ts(ev.started_at) }}</td>
@@ -458,8 +463,8 @@
 </table>
 
 {% if dispositions.rows %}
-<table class="dp-fixed">
-  {{ cols([4, 14, 14, 8, 8, 9, 13, 12, 5, 5, 3, 5]) }}
+<table class="dp-fixed dp-tight">
+  {{ cols([4, 11, 11, 7, 7, 11, 17, 10, 6, 6, 3, 7]) }}
   <caption>Record-level dispositions &mdash; first {{ dispositions.rows_shown|number }} of
     {{ dispositions.rows_total|number }} received record(s), by delivered line number</caption>
   <thead>
@@ -478,13 +483,13 @@
       <td>{{ r.name or '—' }}</td>
       <td class="nw">{{ r.submitted_npi or '—' }}</td>
       <td class="nw">{{ r.curated_npi or '—' }}</td>
-      <td class="cd">{{ r.disposition }}</td>
-      <td class="cd">{{ r.reason_code }}</td>
+      <td class="cd">{{ brk(r.disposition) }}</td>
+      <td class="cd">{{ brk(r.reason_code) }}</td>
       <td class="hash">{{ r.entity_id or '—' }}</td>
       <td>{{ r.finding_count|number }}</td>
       <td>{{ r.warning_count|number }}</td>
       <td>{{ r.sequence }}</td>
-      <td class="cd">{{ r.actor_type }}{% if r.reconstructed %} (reconstructed){% endif %}</td>
+      <td class="cd">{{ brk(r.actor_type) }}{% if r.reconstructed %} (reconstructed){% endif %}</td>
     </tr>
     {% endfor %}
   </tbody>
@@ -503,8 +508,8 @@
 <p>{{ findings.total|number }} finding(s) in the current quality run {{ findings.run_id }} (rule set {{ findings.rule_set_version or 'not recorded' }});
   {{ findings.open_high|number }} open at HIGH or CRITICAL severity.</p>
 {% if findings.rows %}
-<table class="dp-fixed">
-  {{ cols([13, 5, 8, 13, 8, 10, 10, 9, 24]) }}
+<table class="dp-fixed dp-tight">
+  {{ cols([13, 4, 7, 15, 7, 11, 11, 9, 23]) }}
   <caption>Findings &mdash; first {{ findings.rows_shown|number }} of
     {{ findings.rows_total|number }}, open HIGH/CRITICAL first, then by delivered line</caption>
   <thead>
@@ -519,11 +524,11 @@
       <th scope="row" class="hash">{{ f.issue_code }}</th>
       <td>{{ f.line_number|number }}</td>
       <td class="nw">{{ f.rule_id }}</td>
-      <td class="cd">{{ f.issue_type }}</td>
+      <td class="cd">{{ brk(f.issue_type) }}</td>
       <td class="nw">{{ f.severity }}</td>
-      <td class="cd">{{ f.field_name or '—' }}</td>
-      <td class="cd">{{ f.correction_authority }}</td>
-      <td class="cd">{{ f.resolution }}</td>
+      <td class="cd">{{ brk(f.field_name or '—') }}</td>
+      <td class="cd">{{ brk(f.correction_authority) }}</td>
+      <td class="cd">{{ brk(f.resolution) }}</td>
       <td>{{ f.description }}</td>
     </tr>
     {% endfor %}
@@ -542,8 +547,8 @@
 <h2>Appendix F. Identifier conflicts and decisions</h2>
 {% if identifiers.available and identifiers.conflicts %}
 <p>{{ identifiers.rows_total|number }} identifier conflict(s) raised for this delivery; {{ identifiers.unresolved|number }} unresolved; {{ identifiers.events_total|number }} event(s) in total.</p>
-<table class="dp-fixed">
-  {{ cols([12, 7, 9, 9, 8, 9, 11, 13, 11, 11]) }}
+<table class="dp-fixed dp-tight">
+  {{ cols([12, 7, 9, 9, 8, 9, 12, 13, 11, 10]) }}
   <caption>Identifier conflicts &mdash; first {{ identifiers.rows_shown|number }} of
     {{ identifiers.rows_total|number }}, unresolved first</caption>
   <thead>
@@ -561,9 +566,9 @@
       <td class="nw">{{ c.existing_value or '—' }}</td>
       <td class="nw">{{ c.verified_value or '—' }}</td>
       <td class="nw">{{ c.selected_value or '—' }}</td>
-      <td class="cd">{{ c.current_decision }}</td>
+      <td class="cd">{{ brk(c.current_decision) }}</td>
       <td class="nw">{{ ts(c.decided_at) }}</td>
-      <td class="cd">{{ c.actor }}</td>
+      <td class="cd">{{ brk(c.actor) }}</td>
       <td>{{ c.reason }}</td>
     </tr>
     {% endfor %}
@@ -657,9 +662,9 @@
       <th scope="row">{{ ev.line_number }}</th>
       <td>{{ ev.sequence }}</td>
       <td class="nw">{{ ev.disposition }}</td>
-      <td class="cd">{{ ev.reason_code }}</td>
+      <td class="cd">{{ brk(ev.reason_code) }}</td>
       <td>{{ ev.reason or '' }}</td>
-      <td class="cd">{{ ev.actor }}</td>
+      <td class="cd">{{ brk(ev.actor) }}</td>
       <td class="nw">{{ ts(ev.decided_at) }}</td>
     </tr>
     {% endfor %}
@@ -679,10 +684,10 @@
       <th scope="row" class="hash">{{ i.issue_code }}</th>
       <td class="nw">{{ i.rule_id }}</td>
       <td class="nw">{{ i.severity }}</td>
-      <td class="cd">{{ i.resolution }}</td>
-      <td class="cd">{{ i.resolved_by or '—' }}</td>
+      <td class="cd">{{ brk(i.resolution) }}</td>
+      <td class="cd">{{ brk(i.resolved_by or '—') }}</td>
       <td class="nw">{{ ts(i.resolved_at) }}</td>
-      <td class="cd">{{ i.qa_approved_by or '—' }}</td>
+      <td class="cd">{{ brk(i.qa_approved_by or '—') }}</td>
     </tr>
     {% endfor %}
   </tbody>
