@@ -31,6 +31,19 @@ supersedes_snapshot_id). Approval, rejection, supersession and rollback remain N
 what they supersede, exactly as before: the importer never edits an approved snapshot and refuses
 to resume into anything but PENDING. No table-wide UPDATE, no DELETE, no TRUNCATE.
 
+A column grant cannot tell a PENDING staging row from an APPROVED one, so on its own it would let the
+runtime role rewrite `metadata` / `record_count` of an APPROVED snapshot after the approval. The same
+revision therefore adds a database guard trigger (`trg_source_snapshot_guard`, function
+`source_snapshot_guard()`), which applies to every role including the owner:
+
+    UPDATE  allowed only when OLD.status = NEW.status = 'PENDING' and nothing except record_count and
+            metadata differs; anything else raises `source_snapshot_immutable`
+    DELETE  refused for any row that is not PENDING
+    INSERT  untouched: approval, rejection, supersession and rollback stay NEW rows
+
+Only an explicit `ALTER TABLE source_snapshot DISABLE TRIGGER` bypasses it, which is deliberate DDL by
+the table owner and shows up in the migration/DBA record, not an application code path.
+
 The migration then verifies the result and FAILS (rolling the transaction back) if the runtime
 role holds table-wide UPDATE, or column UPDATE on anything but those two columns, so a later
 over-broad grant cannot hide behind this one.
@@ -49,6 +62,41 @@ depends_on = None
 
 TABLE = "source_snapshot"
 GRANTED_COLUMNS = ("record_count", "metadata")
+GUARD_FUNCTION = "source_snapshot_guard"
+GUARD_TRIGGER = "trg_source_snapshot_guard"
+
+# Plain plpgsql, not SECURITY DEFINER: it runs with the caller's rights and only ever reads OLD/NEW.
+# `to_jsonb(NEW) - 'a' - 'b'` compares every column except the two bookkeeping ones, so a column added
+# later is protected by default instead of silently exempt.
+GUARD_FUNCTION_SQL = f"""
+CREATE OR REPLACE FUNCTION {GUARD_FUNCTION}() RETURNS trigger LANGUAGE plpgsql AS $guard$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        IF OLD.status <> 'PENDING' THEN
+            RAISE EXCEPTION USING ERRCODE = '23000', MESSAGE =
+                'source_snapshot_immutable: snapshot ' || OLD.id || ' is ' || OLD.status || ' and cannot be deleted';
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF OLD.status <> 'PENDING' THEN
+        RAISE EXCEPTION USING ERRCODE = '23000', MESSAGE =
+            'source_snapshot_immutable: snapshot ' || OLD.id || ' is ' || OLD.status
+            || ' and cannot be changed; record a successor row instead';
+    END IF;
+    IF NEW.status <> OLD.status
+       OR (to_jsonb(NEW) - 'record_count' - 'metadata') IS DISTINCT FROM (to_jsonb(OLD) - 'record_count' - 'metadata') THEN
+        RAISE EXCEPTION USING ERRCODE = '23000', MESSAGE =
+            'source_snapshot_immutable: a PENDING snapshot may only change record_count and metadata (snapshot '
+            || OLD.id || ')';
+    END IF;
+    RETURN NEW;
+END
+$guard$
+"""
+
+GUARD_TRIGGER_SQL = (
+    f'CREATE TRIGGER {GUARD_TRIGGER} BEFORE UPDATE OR DELETE ON "{TABLE}" '
+    f"FOR EACH ROW EXECUTE FUNCTION {GUARD_FUNCTION}()")
 
 
 class SnapshotBookkeepingPreconditionError(RuntimeError):
@@ -74,6 +122,9 @@ def upgrade() -> None:
     role = _app_role()
     if _offline():
         op.execute(f'GRANT UPDATE ({", ".join(GRANTED_COLUMNS)}) ON "{TABLE}" TO "{role}"')
+        op.execute(GUARD_FUNCTION_SQL)
+        op.execute(f'DROP TRIGGER IF EXISTS {GUARD_TRIGGER} ON "{TABLE}"')
+        op.execute(GUARD_TRIGGER_SQL)
         return
     bind = op.get_bind()
     if TABLE not in sa.inspect(bind).get_table_names():
@@ -82,6 +133,10 @@ def upgrade() -> None:
         raise SnapshotBookkeepingPreconditionError(f"role {role!r} does not exist.")
 
     op.execute(f'GRANT UPDATE ({", ".join(GRANTED_COLUMNS)}) ON "{TABLE}" TO "{role}"')
+    # The grant is only safe together with the row-state guard, so they are installed in one transaction.
+    op.execute(GUARD_FUNCTION_SQL)
+    op.execute(f'DROP TRIGGER IF EXISTS {GUARD_TRIGGER} ON "{TABLE}"')
+    op.execute(GUARD_TRIGGER_SQL)
 
     # Verify: exactly these columns, nothing wider.
     if bind.execute(sa.text("select has_table_privilege(:r, :t, 'UPDATE')"),
@@ -99,9 +154,19 @@ def upgrade() -> None:
         raise SnapshotBookkeepingPreconditionError(
             f"{role} can UPDATE {sorted(allowed)} on {TABLE}; expected exactly {sorted(GRANTED_COLUMNS)}. "
             "Refusing to continue.")
+    # tgenabled is a "char"; depending on the driver it comes back as str or bytes, so cast it to text.
+    enabled = bind.execute(sa.text(
+        "select tgenabled::text from pg_trigger where tgrelid = cast(:t as regclass) and tgname = :g "
+        "and not tgisinternal"), {"t": TABLE, "g": GUARD_TRIGGER}).scalar()
+    if enabled != "O":  # 'O' = fires in origin and local modes (the normal, enabled state)
+        raise SnapshotBookkeepingPreconditionError(
+            f"trigger {GUARD_TRIGGER} on {TABLE} is missing or not enabled (tgenabled={enabled!r}); "
+            "the column grant must not stand without it. Refusing to continue.")
 
 
 def downgrade() -> None:
-    """Privilege only; no data is touched. The importer would again fail under the runtime role."""
+    """Privilege and guard only; no data is touched. The importer would again fail under the runtime role."""
     role = _app_role()
     op.execute(f'REVOKE UPDATE ({", ".join(GRANTED_COLUMNS)}) ON "{TABLE}" FROM "{role}"')
+    op.execute(f'DROP TRIGGER IF EXISTS {GUARD_TRIGGER} ON "{TABLE}"')
+    op.execute(f"DROP FUNCTION IF EXISTS {GUARD_FUNCTION}()")

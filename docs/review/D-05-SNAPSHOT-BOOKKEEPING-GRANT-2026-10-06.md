@@ -50,3 +50,31 @@ One new revision, applied through the governed dev-release workflow: dispatch wi
 `expected_current=20261004_recheck_jobs`, `target_revision=20261006_snapshot_bookkeeping`,
 `handshake_issue=93`. DEV only. Rollback limitation is unchanged: this is a forward grant; the downgrade
 only removes the grant.
+
+## Addendum 2026-10-06: row-state guard (database enforcement)
+
+A column-level grant cannot distinguish a PENDING staging row from an APPROVED one. Reproduced on a local
+PostgreSQL 18 with the grant alone: as `docuaction_app`, `UPDATE source_snapshot SET metadata = ..., record_count = 1`
+on an APPROVED snapshot succeeded and rewrote the evidence the approval was given on.
+
+Migration `20261006_snapshot_bookkeeping` therefore also installs `trg_source_snapshot_guard`
+(`source_snapshot_guard()`, plain plpgsql, not SECURITY DEFINER), which applies to every role including the owner:
+
+| Operation | Allowed when |
+|---|---|
+| UPDATE | `OLD.status = NEW.status = 'PENDING'` and every column other than `record_count` and `metadata` is unchanged |
+| DELETE | the row is `PENDING` (staging cleanup) |
+| INSERT | always (approval, rejection, supersession, rollback remain new rows) |
+
+Everything else raises `source_snapshot_immutable` (SQLSTATE 23000). The comparison is `to_jsonb(NEW) - 'record_count' - 'metadata'`,
+so a column added later is protected by default. The migration verifies after installing that the trigger exists and is enabled
+(`tgenabled = 'O'`) and refuses to complete otherwise; downgrade drops the trigger and function with the grant.
+
+Bypass: only `ALTER TABLE source_snapshot DISABLE TRIGGER ...` (or `session_replication_role = replica`), both superuser/owner DDL or
+session settings that the application and the runtime role cannot perform. The two IQVIA test fixtures that delete approved
+synthetic snapshots in teardown now use `SET LOCAL session_replication_role = replica` for that cleanup transaction only.
+
+Not covered by the guard: TRUNCATE (the runtime role has no TRUNCATE privilege; owner-only), and a superuser disabling the trigger.
+
+Tests: `tests/test_source_snapshot_immutability_2026_10_06.py` (30 cases, run as the runtime role and as the owner/superuser). With the
+trigger disabled 26 of 30 fail (negative control), which shows the tests exercise the guard.
