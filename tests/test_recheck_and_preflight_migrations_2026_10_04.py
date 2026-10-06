@@ -43,7 +43,7 @@ import uuid
 import pytest
 
 REPO = os.path.dirname(os.path.abspath(__file__)).rsplit(os.sep, 1)[0]
-HEAD = "20261004_recheck_jobs"
+HEAD = "20261006_snapshot_bookkeeping"
 PREVIOUS = "20261003_preflight_shadow"
 REV_EXEC_HELD = "20261004_preflight_exec_held"
 REV_STAGE_PREFLIGHT = "20261004_stage_event_preflight"
