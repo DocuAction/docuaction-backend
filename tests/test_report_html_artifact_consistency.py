@@ -105,7 +105,8 @@ async def test_delivery_processing_html_carries_the_landscape_layout(rolled_back
     assert "@page dp-landscape" in html
     assert "size: letter landscape" in html
     assert html.count('<div class="dp-wide">') == 1
-    assert '<div class="dp-wide">\n<h2>Appendix A. Delivery Identity and provenance</h2>' in html
+    assert '<div class="dp-wide">\n<p class="dp-appendix-intro">' in html
+    assert html.index('<div class="dp-wide">') < html.index('<h2>Appendix A. Delivery Identity and provenance</h2>')
     for heading in APPENDIX_SECTIONS:
         assert f">{heading}</h2>" in html, heading
     for heading in MAIN_SECTIONS:
