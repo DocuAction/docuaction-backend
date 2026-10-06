@@ -363,6 +363,15 @@ async def generate_report(
     context = {key: dataset[key] for key in dataset
                if key not in ("chart_list", "service_version", "review_cycle_id")}
     context["chart_images"] = chart_images
+    if report_type == "delivery_processing":
+        # The approved AGT header and contract strip (logo, contract number, preparer). The delivery
+        # report describes ONE delivery; it takes the identity only, none of the SOW deliverable context.
+        from app.reports.branding import current_branding
+
+        brand = current_branding()
+        context["branding"] = {**brand.to_dict(), "agt_logo": brand.agt_logo,
+                               "government_logo": brand.government_logo}
+        context["pdf_author"] = brand.prepared_by
     if report_type in SOW_TYPES:
         from app.reports.branding import current_branding
 

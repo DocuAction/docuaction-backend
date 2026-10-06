@@ -45,8 +45,16 @@ from test_delivery_processing_report import (  # noqa: F401  (fixtures registere
 
 USER = SimpleNamespace(email="qa@synthetic.invalid", id=None)
 
-WIDE_SECTIONS = ("4. Dispositions", "5. Findings", "6. Identifier conflicts and decisions",
-                 "7. Verification coverage", "8. Analyst actions", "9. Lineage")
+# Page one is the approved executive layout (cards, navy tables, boxed panels), portrait; every
+# detailed table lives in ONE landscape appendix after it.
+MAIN_SECTIONS = ("Status &mdash; four separate questions", "Reconciliation &mdash; every record accounted for",
+                 "Exceptions (findings) by rule", "Screening coverage &mdash; what was actually attempted",
+                 "Delivery at a glance", "Reconciliation &amp; source integrity",
+                 "Source readiness (preflight) &amp; rechecks", "Evidence limitations", "Required next actions")
+APPENDIX_SECTIONS = ("Appendix A. Delivery Identity and provenance", "Appendix B. Processing timeline",
+                     "Appendix C. Reconciliation detail", "Appendix D. Dispositions", "Appendix E. Findings",
+                     "Appendix F. Identifier conflicts and decisions", "Appendix G. Verification coverage detail",
+                     "Appendix H. Analyst actions", "Appendix I. Lineage", "Appendix J. Audit note")
 
 
 async def _persisted_delivery_report(db):
@@ -96,11 +104,24 @@ async def test_delivery_processing_html_carries_the_landscape_layout(rolled_back
 
     assert "@page dp-landscape" in html
     assert "size: letter landscape" in html
-    assert html.count('<div class="dp-wide">') == 6
-    for heading in WIDE_SECTIONS:
-        assert f'<div class="dp-wide">\n<h2>{heading}</h2>' in html, heading
-    # Narrative sections stay portrait: the wrapper closes before section 10.
-    assert "</div>\n<h2>10. Evidence limitations</h2>" in html
+    assert html.count('<div class="dp-wide">') == 1
+    assert '<div class="dp-wide">\n<p class="dp-appendix-intro">' in html
+    assert html.index('<div class="dp-wide">') < html.index('<h2>Appendix A. Delivery Identity and provenance</h2>')
+    for heading in APPENDIX_SECTIONS:
+        assert f">{heading}</h2>" in html, heading
+    for heading in MAIN_SECTIONS:
+        assert f'<h2 class="agt-h2">{heading}</h2>' in html, heading
+    # Page one stays portrait: every executive section comes BEFORE the one landscape appendix.
+    wide_at = html.index('<div class="dp-wide">')
+    for heading in MAIN_SECTIONS:
+        assert html.index(f'<h2 class="agt-h2">{heading}</h2>') < wide_at, heading
+    for heading in APPENDIX_SECTIONS:
+        assert html.index(f">{heading}</h2>") > wide_at, heading
+    # the approved executive grammar is present on page one
+    for needle in ('class="agt-head"', 'class="agt-kpis"', 'class="agt-strip"', 'class="agt-cols"',
+                   'class="agt-pkg"', 'class="agt-foot"', "table class=\"agt\""):
+        assert needle in html, needle
+    assert html.count('class="agt-kpi"') == 5
     # The DEV/TEST running notice is on the landscape page as well as the
     # portrait one (two @top-center boxes in the conditional style block).
     assert html.count('NOT FOR GOVERNMENT DELIVERY";') == 2
@@ -132,18 +153,20 @@ class TestLayoutRulesWithoutADatabase:
         path = os.path.join(TEMPLATES_DIR, "delivery_processing.html")
         with open(path, encoding="utf-8") as handle:
             source = handle.read()
-        assert source.count('<div class="dp-wide">') == 6
+        assert source.count('<div class="dp-wide">') == 1
         # Overall div balance (a basic HTML-sanity check, not pinned to any one
         # section's count) -- the template also carries a cover/KPI band
         # (dp-band/agt-*) above the wide sections, with its own divs.
         import re
         assert len(re.findall(r"<div\b", source)) == source.count("</div>")
-        # Each dp-wide block is self-contained (no nested <div>), so the
-        # non-greedy match below finds exactly the six wide sections' own closes.
-        assert len(re.findall(r'<div class="dp-wide">.*?</div>', source, re.S)) == 6
-        assert source.index('<div class="dp-wide">') < source.index("<h2>4. Dispositions</h2>")
-        assert source.rindex("</div>") < source.index("<h2>10. Evidence limitations</h2>")
-        assert source.index("<h2>3. Reconciliation</h2>") < source.index('<div class="dp-wide">')
+        # The appendix block is self-contained (no nested <div>), so the non-greedy match below
+        # finds exactly its own close.
+        assert len(re.findall(r'<div class="dp-wide">.*?</div>', source, re.S)) == 1
+        wide = source.index('<div class="dp-wide">')
+        assert wide < source.index('>Appendix D. Dispositions</h2>')
+        # every Program Manager section sits before the appendix, so it stays portrait
+        for heading in ("Evidence limitations", "Required next actions", "Screening coverage"):
+            assert source.index(f'<h2 class="agt-h2">{heading}') < wide, heading
 
 
 @pytest.mark.asyncio

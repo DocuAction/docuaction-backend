@@ -3,10 +3,19 @@
 
   Every value is a template variable read from the Delivery Processing data
   service, which reads persisted evidence only. There is no literal count
-  anywhere in this file. Page one carries the identity block: what was
-  delivered, which job and intake, which reconciliation snapshot the numbers
-  rest on, and which build produced the document — so a regenerated report
-  can be told apart from the original by reading it.
+  anywhere in this file.
+
+  Presentation: the approved Alliance Global Tech design (ONC/TEFCA ARC branded
+  mock-ups of 2026-09-30, the same system the D3.1 / D3.2 progress family ships
+  with, shared from agt_design_system.css — not copied). Page one is the
+  executive page in that grammar: header, contract strip, five metric cards,
+  navy tables with status chips on the left, boxed panels on the right, and the
+  package strip and running footer below. Pages after it are ONE landscape
+  appendix (A–J) that holds every detailed table, hash, UUID and timeline, so
+  the front page stays readable and the report stays traceable.
+
+  This report describes ONE delivery. It is not a D3.1 / D3.2 contract report
+  and it never states a development-data result as a Government finding.
 #}
 {% extends "base.html" %}
 
@@ -14,6 +23,22 @@
 {% block description %}Processing outcome, reconciliation, record-level dispositions and evidence for one ONC/RCE delivery{% endblock %}
 {% block kicker %}DocuAction TEFCA ARC &middot; Delivery Processing{% endblock %}
 {% block heading %}RCE Delivery Processing Report{% endblock %}
+
+{# colgroup from a list of percentages: fixed table layout needs widths or columns collapse #}
+{% macro cols(widths) %}<colgroup>{% for w in widths %}<col style="width: {{ w }}%">{% endfor %}</colgroup>{% endmacro %}
+
+{# "2026-09-30T04:44:48.668+00:00" -> "2026-09-30 04:44:48": readable, one line, still sortable #}
+{% macro ts(v) %}{% if v %}{{ (v|string)[:19]|replace('T', ' ') }}{% else %}&mdash;{% endif %}{% endmacro %}
+
+{# A value with a break opportunity after each underscore or slash, so codes wrap BETWEEN words and never inside one.
+   The break opportunity is a zero-width space (U+200B, invisible in the source and in the PDF); plain string
+   replacement keeps normal HTML escaping of the value itself. #}
+{% macro brk(v) %}{{ (v if v is not none else '')|string|replace('_', '_​')|replace('/', '/​') }}{% endmacro %}
+
+{% macro src_label(name) %}{{ {'nppes': 'NPPES', 'pecos': 'PECOS', 'leie': 'OIG LEIE', 'sam': 'SAM.gov'}.get(name, name|upper) }}{% endmacro %}
+
+{# status chip: colour AND text, never colour alone. kind is the approved B1/B2/B4 palette. #}
+{% macro chip(kind, text) %}<span class="agt-chip {{ kind }} wide">{{ text }}</span>{% endmacro %}
 
 {% macro flag(ok, yes_text, no_text) %}
   {%- if ok -%}
@@ -23,34 +48,71 @@
   {%- endif -%}
 {% endmacro %}
 
-{#
-  Presentation (2026-10-03): the approved Alliance Global Tech design system —
-  the same header band, KPI cards, navy table headings and B1–B4 chips the
-  D3.1 / D3.2 progress family ships with (agt_design_system.css, shared, not
-  copied). Content sections 1–11 and their CSV-annex captions are unchanged:
-  this block adds a header band and a summary row above them, and styles the
-  headings and tables they already have. Every KPI value is a template
-  variable the data service already provides; nothing is typed in.
-#}
+{# Page one carries its own contract strip (the development/test notice) and running footer;
+   later pages keep the running DEVELOPMENT / TEST marking from the base template. #}
+{% block page_marking %}
+{{ super() }}
+<style>
+  @page :first { margin: 0.38in 0.46in 0.5in 0.46in; @top-center { content: none; }
+    @bottom-center { content: element(agtfoot); width: 100%; vertical-align: top; } }
+</style>
+{% endblock %}
+{% block classification_banner %}{% endblock %}
+
 {% block cover %}
+{% set ns = namespace(attempted=0, eligible=0) %}
+{% for s in verification.sources %}{% set ns.attempted = ns.attempted + (s.attempted or 0) %}{% if (s.eligible or 0) > ns.eligible %}{% set ns.eligible = s.eligible %}{% endif %}{% endfor %}
+{% set dev = snapshot.data_classification != 'GOVERNMENT' %}
 <style>
   {{ agt_css|safe }}
   .report-header { display: none; }
-  .dp-band { font-family: "Public Sans", Arial, Helvetica, sans-serif; color: var(--agt-ink); margin: 0 0 8pt 0; }
-  .dp-band, .dp-band * { hyphens: manual; -webkit-hyphens: manual; overflow-wrap: normal; word-break: normal; }
-  .dp-band p { margin: 0; }
-  .dp-band .agt-head .title { string-set: doc-title content(); }
-  .dp-band .agt-kpi .v { font-size: 12.5pt; }
-  .dp-band .agt-kpi .v.sm { font-size: 9.5pt; line-height: 1.3; white-space: normal; }
-  /* the body: section headings and tables follow the same system */
-  main h2 { font-size: 11pt; color: var(--agt-dblue); text-transform: none; letter-spacing: 0; border-left: 3pt solid var(--agt-gold); border-bottom: 0; padding-left: 6pt; margin: 12pt 0 5pt 0; page-break-after: avoid; }
+  section.cover { min-height: auto; padding-top: 0; border-top: 0; margin: 0; }
+  .cover, .cover * { hyphens: manual; -webkit-hyphens: manual; overflow-wrap: normal; word-break: normal; }
+  .cover { font-family: "Public Sans", Arial, Helvetica, sans-serif; font-size: 7.2pt; line-height: 1.2; color: var(--agt-ink); page-break-after: always; }
+  .cover .agt-cor { margin: 0 0 6pt 0; }
+  .cover .agt-sec { margin-bottom: 3.5pt; }
+  .cover .agt-box { margin-bottom: 3pt; }
+  .cover p { margin: 0; }
+  .cover .agt-head .title { string-set: doc-title content(); }
+  /* contract strip, as on the approved mock-ups: gold-edged band, notice left, contract right */
+  .agt-strip { display: table; width: 100%; border: 0.8pt solid var(--agt-gold); background: var(--agt-lgold); font-size: 7.4pt; color: #6b4f0a; margin: 0 0 5pt 0; }
+  .agt-strip .l, .agt-strip .r { display: table-cell; padding: 2.6pt 6pt; vertical-align: middle; }
+  .agt-strip .r { text-align: right; white-space: nowrap; width: 34%; }
+  /* wide status chips for text states (the approved chip, widened) */
+  .agt-chip.wide { display: inline-block; max-width: 100%; white-space: normal; text-align: left; padding: 1.2pt 4pt; font-size: 6.5pt; letter-spacing: .1pt; line-height: 1.2; }
+  .agt-chip.ok { background: var(--agt-b1); } .agt-chip.warn { background: var(--agt-b2); } .agt-chip.bad { background: var(--agt-b4); } .agt-chip.info { background: var(--agt-b3); }
+  .cover table.agt td, .cover table.agt th { vertical-align: top; }
+  .cover table.agt td.nw, .cover table.agt th.nw { white-space: nowrap; }
+  .agt-sec table.agt { margin-bottom: 1pt; }
+  .agt-box .agt-note { margin-top: 2pt; }
+  .agt-box ul li, .agt-box ol li { line-height: 1.22; }
+
+  /* appendix: every detailed table, readable. Fixed widths from <colgroup>, words never broken,
+     one-line values stay on one line; only identifiers (.hash) may break anywhere. */
+  main h2 { font-size: 11pt; color: var(--agt-dblue); text-transform: none; letter-spacing: 0; border-left: 3pt solid var(--agt-gold); border-bottom: 0; padding-left: 6pt; margin: 12pt 0 5pt 0; break-after: avoid; page-break-after: avoid; }
   main table thead th { background: var(--agt-navy); color: #fff; border: 0; }
   main table tbody th[scope="row"] { background: var(--agt-lblue); color: var(--agt-ink); font-weight: 700; }
   main table tbody tr:nth-child(even) td { background: #F6F8FA; }
   main table td, main table th { border-bottom: 0.6pt solid var(--agt-line); }
-  main .scope-box { border-top: 2.5pt solid var(--agt-blue); }
+  main table.dp-fixed { table-layout: fixed; width: 100%; border-collapse: collapse; }
+  main table.dp-fixed th, main table.dp-fixed td { hyphens: manual; -webkit-hyphens: manual; overflow-wrap: normal; word-break: normal; vertical-align: top; padding: 3pt 4pt; font-size: 8.5pt; line-height: 1.3; }
+  main table.dp-fixed .nw, main .status { white-space: nowrap; }
+  main table.dp-fixed .hash { font-family: "DejaVu Sans Mono", Menlo, Consolas, monospace; font-size: 7pt; overflow-wrap: anywhere; word-break: break-all; hyphens: none; -webkit-hyphens: none; }
+  main table.dp-fixed .cd { overflow-wrap: anywhere; word-break: normal; hyphens: none; -webkit-hyphens: none; }
+  main table.dp-keep { break-inside: avoid; page-break-inside: avoid; }
+  main table.dp-keep caption { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+  h2, h3 { break-after: avoid; page-break-after: avoid; }
+  main table.dp-tight th, main table.dp-tight td { padding: 1.8pt 4pt; font-size: 8pt; line-height: 1.25; }
+  .dp-wide p { font-size: 9pt; }
+  main h2.dp-newpage { break-before: page; page-break-before: always; margin-top: 0; }
+  main table.dp-fixed tr { break-inside: avoid; page-break-inside: avoid; }
+  main table.dp-fixed thead { display: table-header-group; }
+  .dp-appendix-intro { font-size: 8.5pt; color: var(--agt-muted); margin: 0 0 6pt 0; }
+  .agt-foot .pg::after { content: "Page " counter(page) " of " counter(pages); font-weight: 700; }
 </style>
-<div class="dp-band">
+
+<section class="cover" aria-labelledby="dp-title">
+  {# ── header: logo + title block left, badge + identity right (approved header) ── #}
   <div class="agt-head">
     <div class="cell logo" style="width: 0.95in">
       {% if branding.agt_logo %}<img src="{{ branding.agt_logo }}" alt="{{ branding.prepared_by }} logo">{% endif %}
@@ -58,7 +120,7 @@
     <div class="cell">
       <h1 class="title" id="dp-title">RCE Delivery Processing Report</h1>
       <p class="deliv"><b>Delivery processing</b> &middot; {{ delivery.delivery_label or 'Unlabelled delivery' }}{% if delivery.filename %} &middot; {{ delivery.filename }}{% endif %}</p>
-      <p class="meta">Report {{ snapshot.report_id }} &middot; Generated {{ generated_at_display }} &middot; Report Data Service v{{ snapshot.report_data_service_version }} &middot; Template v{{ snapshot.template_version }}{% if snapshot_id %} &middot; Reconciliation snapshot {{ snapshot_sequence }} of {{ reconciliation.history_count }}{% endif %}</p>
+      <p class="meta">Report {{ snapshot.report_id }} &middot; Generated {{ generated_at_display }} &middot; Contract {{ branding.contract_number }} &middot; Prepared for the COR (HHS / ASTP-ONC) &middot; <span class="pg"></span></p>
     </div>
     <div class="cell" style="width: 1.75in; text-align: right">
       <span class="agt-badge">{{ document_status|upper }}</span>
@@ -69,117 +131,261 @@
   <div class="agt-rule"></div>
   <div class="agt-goldrule"></div>
 
-  {# ── five KPI cards: every figure is restated, with its basis, in sections 1–8 ── #}
+  {# ── contract strip: the development/test notice, on page one ── #}
+  <div class="agt-strip" role="note">
+    <div class="l">{% if snapshot.data_classification == 'NO_DATASET_LOADED' %}<b>NO DATASET LOADED</b> &mdash; NOT FOR GOVERNMENT DELIVERY. Nothing here is an ONC finding.{% elif dev %}<b>DEVELOPMENT / TEST DATA &mdash; NOT FOR GOVERNMENT DELIVERY.</b> NOT ONC FINDINGS: every figure is a validation result computed over development data.{% else %}<b>Delivery processing report</b> &mdash; computed from persisted evidence for one delivery.{% endif %}</div>
+    <div class="r">Contract {{ branding.contract_number }} &middot; Prepared for the COR</div>
+  </div>
+
+  {# ── five metric cards ── #}
   <div class="agt-kpis">
-    <div class="agt-kpi"><p class="l">Records delivered</p><p class="v">{{ delivery.record_count|number }}</p><p class="n">Area 1 source lines registered for this delivery</p></div>
-    <div class="agt-kpi"><p class="l">Processing outcome</p><p class="v sm">{{ outcome.value }}</p><p class="n">{{ outcome.code }} &middot; review state {{ review.code }}</p></div>
-    <div class="agt-kpi"><p class="l">Reconciliation</p><p class="v">{% if reconciliation.available %}{{ 'PASSED' if reconciliation.passed else 'FAILED' }}{% else %}None{% endif %}</p><p class="n">{% if reconciliation.available %}pinned snapshot sequence {{ reconciliation.sequence }}{% else %}no reconciliation snapshot is persisted{% endif %}</p></div>
+    <div class="agt-kpi"><p class="l">Records delivered</p><p class="v">{{ delivery.record_count|number }}</p><p class="n">Source lines registered for this delivery</p></div>
+    <div class="agt-kpi"><p class="l">Processing outcome</p><p class="v sm" style="font-size: 9.5pt; white-space: normal; line-height: 1.25">{{ outcome.value }}</p><p class="n">Review: {{ review.value }}</p></div>
+    <div class="agt-kpi"><p class="l">Reconciliation</p><p class="v">{% if reconciliation.available %}{{ 'PASSED' if reconciliation.passed else 'FAILED' }}{% else %}None{% endif %}</p><p class="n">{% if reconciliation.available %}snapshot {{ reconciliation.sequence }} of {{ reconciliation.history_count }}{% else %}no reconciliation snapshot is persisted{% endif %}</p></div>
     <div class="agt-kpi"><p class="l">Findings</p><p class="v">{% if findings.available %}{{ findings.total|number }}{% else %}&mdash;{% endif %}</p><p class="n">{% if findings.available %}{{ findings.open_high|number }} open at HIGH / CRITICAL{% else %}no completed quality run{% endif %}</p></div>
     <div class="agt-kpi"><p class="l">Review records</p><p class="v">{{ analyst.counts.review_records|number }}</p><p class="n">{{ analyst.counts.qa_approved|number }} independently QA approved &middot; {{ analyst.counts.qa_pending|number }} awaiting QA</p></div>
   </div>
-</div>
+  <p class="agt-cor">Draft report for one delivery: system results and review status only, no approved findings. Detail: Appendix A&ndash;J.</p>
+
+  <div class="agt-cols">
+    <div class="cell left">
+
+      <div class="agt-sec">
+        <h2 class="agt-h2">Status &mdash; four separate questions</h2>
+        <table class="agt">
+          {{ cols([25, 24, 51]) }}
+          <caption>Did processing finish, what was found, what was checked against outside sources, and has anyone approved it</caption>
+          <thead><tr><th scope="col">Question</th><th scope="col">Status</th><th scope="col">What it means</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><b>Did processing finish?</b></td>
+              <td>{% if outcome.code == 'COMPLETED_CLEAN' %}{{ chip('ok', outcome.value) }}{% elif outcome.code == 'COMPLETED_WITH_EXCEPTIONS' %}{{ chip('warn', outcome.value) }}{% else %}{{ chip('bad', outcome.value) }}{% endif %}</td>
+              <td class="q">{% if outcome.code == 'COMPLETED_CLEAN' %}All received records reconciled; no holding finding remains.{% elif outcome.code == 'COMPLETED_WITH_EXCEPTIONS' %}Records reconciled; {{ findings.open_high|number }} holding-severity finding(s) remain undecided.{% else %}{{ outcome.detail }}{% endif %}</td>
+            </tr>
+            <tr>
+              <td><b>What was found?</b></td>
+              <td>{% if findings.available %}{{ chip('warn' if findings.open_high else 'info', findings.total|number ~ ' findings') }}{% else %}{{ chip('warn', 'No quality run') }}{% endif %}</td>
+              <td class="q">{% if findings.available %}{{ findings.open_high|number }} open at HIGH / CRITICAL. System results, not analyst determinations.{% else %}Findings cannot be stated.{% endif %}</td>
+            </tr>
+            <tr>
+              <td><b>What was checked against outside sources?</b></td>
+              <td>{% if ns.attempted == 0 %}{{ chip('warn', 'Not run &middot; 0%'|safe) }}{% else %}{{ chip('ok' if verification.state == 'Complete' else 'info', verification.state) }}{% endif %}</td>
+              <td class="q">{% if ns.attempted == 0 %}No external source (NPPES, PECOS, OIG LEIE, SAM.gov) was checked. <b>Not run is not the same as clear.</b>{% else %}{{ ns.attempted|number }} source check(s) attempted. See coverage below.{% endif %}</td>
+            </tr>
+            <tr>
+              <td><b>Has anyone approved it?</b></td>
+              <td>{{ chip('ok' if (analyst.counts.qa_approved > 0 and analyst.counts.qa_pending == 0 and analyst.counts.open == 0) else 'warn', review.value) }}</td>
+              <td class="q">{{ analyst.counts.review_records|number }} review record(s): {{ analyst.counts.open|number }} open, {{ analyst.counts.claimed|number }} claimed, {{ analyst.counts.qa_pending|number }} awaiting independent QA, {{ analyst.counts.qa_approved|number }} QA approved.</td>
+            </tr>
+            <tr>
+              <td><b>Has it been released?</b></td>
+              <td>{{ chip('warn', document_status) }}</td>
+              <td class="q">The Program Manager release decision is recorded in the Report Register; none is recorded here.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="agt-sec">
+        <h2 class="agt-h2">Reconciliation &mdash; every record accounted for</h2>
+        {% if reconciliation.available %}
+        {% set eq = reconciliation.equation %}
+        <table class="agt">
+          {{ cols([36, 16, 48]) }}
+          <caption>Records received and what became of them</caption>
+          <thead><tr><th scope="col">Measure</th><th scope="col" class="num">Records</th><th scope="col" class="gap">Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Received</td><td class="num">{{ eq.get('received')|number }}</td><td class="gap q">Lines in the delivered file</td></tr>
+            <tr><td>Accounted for</td><td class="num">{{ eq.get('accounted')|number }}</td><td class="gap q">created {{ eq.get('created')|number }} &middot; updated {{ eq.get('updated')|number }} &middot; unchanged {{ eq.get('matched_unchanged')|number }}</td></tr>
+            <tr><td>Held, rejected, missing key, excluded</td><td class="num">{{ ((eq.get('held') or 0) + (eq.get('rejected') or 0) + (eq.get('missing_key') or 0) + (eq.get('excluded') or 0))|number }}</td><td class="gap q">held {{ eq.get('held')|number }} &middot; rejected {{ eq.get('rejected')|number }} &middot; missing key {{ eq.get('missing_key')|number }} &middot; excluded {{ eq.get('excluded')|number }}</td></tr>
+            <tr class="total"><td>Equation holds</td><td class="num">{{ 'Yes' if eq.get('holds') else 'No' }}</td><td class="gap q">{{ 'PASSED' if reconciliation.passed else 'FAILED' }}{% if not reconciliation.passed %} &mdash; {{ reconciliation.failure_reason or 'no reason recorded' }}{% endif %}{% if reconciliation.reconstructed %} &middot; RECONSTRUCTED snapshot{% endif %}</td></tr>
+          </tbody>
+        </table>
+        {% else %}
+        <p class="agt-note">No reconciliation snapshot is persisted for this delivery. No reconciliation of record exists, and this report does not compute one.</p>
+        {% endif %}
+      </div>
+
+      <div class="agt-sec">
+        <h2 class="agt-h2">Exceptions (findings) by rule</h2>
+        {% if findings.available %}
+        <table class="agt">
+          {{ cols([16, 44, 24, 16]) }}
+          <caption>Findings grouped by rule, issue type and severity</caption>
+          <thead><tr><th scope="col">Rule</th><th scope="col">Issue type</th><th scope="col">Severity</th><th scope="col" class="num">Count</th></tr></thead>
+          <tbody>
+            {% for f in findings.by_code %}
+            <tr><td class="nw"><b>{{ f.rule_id }}</b></td><td class="q">{{ f.issue_type }}</td><td class="nw">{{ f.severity }}</td><td class="num">{{ f.count|number }}</td></tr>
+            {% else %}
+            <tr><td>None</td><td>&mdash;</td><td>&mdash;</td><td class="num">0</td></tr>
+            {% endfor %}
+            <tr class="total"><td colspan="3">Total findings</td><td class="num">{{ findings.total|number }}</td></tr>
+          </tbody>
+        </table>
+        <p class="agt-note">Findings are system results. They are not approved until an analyst determines and a different QA reviewer approves. Line-by-line list: Appendix E.</p>
+        {% else %}
+        <p class="agt-note">No completed quality run exists for this delivery; findings cannot be stated.</p>
+        {% endif %}
+      </div>
+
+      <div class="agt-sec">
+        <h2 class="agt-h2">Screening coverage &mdash; what was actually attempted</h2>
+        <table class="agt">
+          {{ cols([22, 19, 15, 16, 14, 14]) }}
+          <caption>Verification coverage per source</caption>
+          <thead>
+            <tr><th scope="col">Source</th><th scope="col">State</th><th scope="col" class="num">Eligible</th><th scope="col" class="num">Attempted</th><th scope="col" class="num">Verified</th><th scope="col" class="num">Coverage</th></tr>
+          </thead>
+          <tbody>
+            {% for s in verification.sources %}
+            <tr><td class="nw"><b>{{ src_label(s.name) }}</b></td><td class="nw">{{ s.state }}</td><td class="num">{{ s.eligible|number }}</td><td class="num">{{ s.attempted|number }}</td><td class="num">{{ s.verified|number }}</td><td class="num">{% if s.coverage_pct is none %}Not run{% else %}{{ s.coverage_pct }}%{% endif %}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        <p class="agt-note">Coverage counts what was attempted for this delivery's entities; connector readiness is not coverage. Not-found, unavailable and failed counts per source: Appendix G.</p>
+      </div>
+    </div>
+
+    <div class="cell right">
+
+      <div class="agt-box"><h2 class="agt-h2">Delivery at a glance</h2>
+        <div class="agt-src">
+          <div class="r"><div class="k">Delivery</div><div class="n" style="white-space: normal; width: 62%">{{ delivery.delivery_label or 'Not labelled' }}</div></div>
+          <div class="r"><div class="k">Records delivered</div><div class="n">{{ delivery.record_count|number }}</div></div>
+          <div class="r"><div class="k">Completed (UTC)</div><div class="n">{{ ts(delivery.completed_at or delivery.failed_at) }}</div></div>
+          <div class="r"><div class="k">Software build</div><div class="n">{{ (build.git_sha or '')[:12] }}</div></div>
+        </div>
+      </div>
+
+      <div class="agt-box"><h2 class="agt-h2">Reconciliation &amp; source integrity</h2>
+        <div class="agt-st">
+          <div class="row">
+            <div class="cell"><b class="agt-dot{% if not (reconciliation.available and reconciliation.passed) %} warn{% endif %}">{% if reconciliation.available and reconciliation.passed %}Reconciliation closed{% else %}Reconciliation not closed{% endif %}</b>{% if reconciliation.available %}Received {{ reconciliation.equation.get('received')|number }} = accounted {{ reconciliation.equation.get('accounted')|number }}; snapshot {{ reconciliation.sequence }} of {{ reconciliation.history_count }}.{% else %}No snapshot is persisted.{% endif %}</div>
+            <div class="cell"><b class="agt-dot{% if not delivery.sha256 %} warn{% endif %}">Source integrity</b>{% if delivery.sha256 %}Delivered file hash is retained with the intake ({{ (delivery.sha256 or '')[:12] }}&hellip;).{% else %}No file hash is recorded.{% endif %}</div>
+          </div>
+          <div class="row">
+            <div class="cell"><b class="agt-dot">Audit recorded</b>Generation and every download are written to the audit log.</div>
+            <div class="cell"><b class="agt-dot{% if analyst.counts.qa_approved == 0 %} warn{% endif %}">QA independence</b>{% if analyst.counts.qa_approved %}{{ analyst.counts.qa_approved|number }} of {{ analyst.counts.review_records|number }} approved by a QA reviewer other than the analyst.{% else %}No determination has been QA approved yet.{% endif %}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="agt-box"><h2 class="agt-h2">Source readiness (preflight) &amp; rechecks</h2>
+        {% if readiness.available %}
+        {% set rr = readiness.run %}
+        <ul>
+          <li>Preflight run <b>{{ rr.status }}</b> &middot; gate {{ rr.classification_gate or 'not recorded' }}</li>
+          <li>{{ rr.records_evaluated|number }} records evaluated &middot; {{ rr.findings_count|number }} findings{% if readiness.by_disposition %} ({% for k, n in readiness.by_disposition.items() %}{{ k }} {{ n|number }}{% if not loop.last %}, {% endif %}{% endfor %}){% endif %}</li>
+        </ul>
+        {% else %}
+        <p><b>Source readiness: not run.</b> No preflight run is recorded. Not run does not mean the file is ready; nothing was checked.</p>
+        {% endif %}
+        {% if rechecks.available and rechecks.total %}
+        <p style="margin-top: 2pt"><b>{{ rechecks.total|number }} controlled recheck(s)</b> requested:</p>
+        <ul>{% for j in rechecks.rows[:4] %}<li>{{ j.source_id }} &middot; {{ j.state }} &middot; requested by {{ j.requested_by }}{% if j.approved_by %}, approved by {{ j.approved_by }}{% else %}, awaiting a different approver{% endif %} ({{ j.processed_count|number }} of {{ j.target_count|number }}){% endfor %}</ul>
+        {% else %}
+        <p style="margin-top: 2pt">No recheck has been requested for this delivery.</p>
+        {% endif %}
+      </div>
+
+      <div class="agt-box"><h2 class="agt-h2">Evidence limitations</h2>
+        <ul>
+          {% for item in limitations %}<li>{{ item }}</li>
+          {% else %}<li>No limitation was recorded: every section was read from persisted evidence for this delivery.</li>{% endfor %}
+        </ul>
+      </div>
+
+      <div class="agt-box"><h2 class="agt-h2">Required next actions</h2>
+        <ol>
+          {% if not reconciliation.available %}<li><b>Reconcile the delivery.</b> No snapshot exists, so completeness is unproven.</li>
+          {% elif not reconciliation.passed %}<li><b>Resolve the reconciliation failure</b> ({{ reconciliation.failure_reason or 'no reason recorded' }}).</li>{% endif %}
+          {% if findings.available and findings.open_high %}<li><b>Resolve {{ findings.open_high|number }} open HIGH / CRITICAL finding(s).</b> The delivery cannot be treated as clean until then.</li>{% endif %}
+          {% if ns.attempted == 0 %}<li><b>Run source verification</b> for the {{ ns.eligible|number }} eligible entit{{ 'y' if ns.eligible == 1 else 'ies' }} at NPPES, PECOS, OIG LEIE and SAM.gov. Until then there is no screening result.</li>{% endif %}
+          {% if not readiness.available %}<li><b>Run the source-readiness (preflight) check</b> if the file's fitness to process is to be on record.</li>{% endif %}
+          {% if analyst.counts.open %}<li><b>Analyst review:</b> {{ analyst.counts.open|number }} review record(s) are open and need to be claimed and determined.</li>{% endif %}
+          {% if analyst.counts.claimed %}<li><b>Analyst determination:</b> {{ analyst.counts.claimed|number }} claimed record(s) need a determination.</li>{% endif %}
+          {% if analyst.counts.qa_pending %}<li><b>Independent QA:</b> {{ analyst.counts.qa_pending|number }} determination(s) await approval by a QA reviewer other than the analyst.</li>{% endif %}
+          <li><b>Program Manager release decision:</b> review this draft, then record the decision in the Report Register.</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+  <div class="agt-pkg"><b>Package:</b> this report &middot; detailed appendix A&ndash;J (identity and provenance, timeline, reconciliation, dispositions, findings, identifier conflicts, verification detail, analyst actions, lineage, audit note) &middot; CSV export of the same persisted evidence &middot; report {{ snapshot.report_id }}</div>
+  <p class="agt-foot">{{ branding.prepared_by }} &middot; Contract {{ branding.contract_number }} &middot; Delivery processing report &middot; {{ delivery.delivery_label or 'Unlabelled delivery' }} &middot; <span class="mark">{% if dev %}DEVELOPMENT / TEST DATA &mdash; NOT FOR GOVERNMENT DELIVERY{% else %}{{ document_status|upper }}{% endif %}</span> &middot; Generated {{ generated_at_display }} &middot; <span class="pg"></span></p>
+</section>
 {% endblock %}
 
 {% block content %}
 
-<section class="scope-box" aria-labelledby="dp-identity">
-  <h2 id="dp-identity">Delivery Identity</h2>
-  <table>
-    <caption>Identity of the delivery, the evidence it rests on, and the build that produced this document</caption>
-    <thead>
-      <tr><th scope="col">Attribute</th><th scope="col">Value</th></tr>
-    </thead>
-    <tbody>
-      <tr><th scope="row">Delivery</th><td>{{ delivery.delivery_label or 'Not labelled' }}</td></tr>
-      <tr><th scope="row">Job id</th><td>{{ delivery.job_id or 'No job row (legacy synchronous upload)' }}</td></tr>
-      <tr><th scope="row">Intake id</th><td>{{ delivery.intake_id or 'No intake (the job failed before Area 1 was written)' }}</td></tr>
-      <tr><th scope="row">Resolved from</th><td>{{ delivery.resolved_from }}</td></tr>
-      <tr><th scope="row">File</th><td>{{ delivery.filename or 'Not recorded' }}</td></tr>
-      <tr><th scope="row">SHA-256</th><td>{{ delivery.sha256 or 'Not recorded' }}</td></tr>
-      <tr><th scope="row">Size (bytes)</th><td>{{ delivery.file_size_bytes|number }}</td></tr>
-      <tr><th scope="row">Records delivered (Area 1)</th><td>{{ delivery.record_count|number }}</td></tr>
-      <tr><th scope="row">Registrant</th><td>{{ delivery.registrant or 'Not recorded' }}</td></tr>
-      <tr><th scope="row">Government reference</th><td>{{ delivery.government_reference or 'None recorded' }}</td></tr>
-      <tr><th scope="row">Received from ONC/RCE</th><td>{{ delivery.received_date or 'Not recorded' }}</td></tr>
-      <tr><th scope="row">Registered (UTC)</th><td>{{ delivery.registered_at or 'Not recorded' }}</td></tr>
-      <tr><th scope="row">Processing started (UTC)</th><td>{{ delivery.started_at or 'Not recorded' }}</td></tr>
-      <tr><th scope="row">Processing completed (UTC)</th><td>{{ delivery.completed_at or delivery.failed_at or 'Not completed' }}</td></tr>
-      <tr><th scope="row">Job state / stage</th><td>{{ delivery.state or '—' }} / {{ delivery.stage or '—' }} (attempts: {{ delivery.attempt_count|number }})</td></tr>
-      <tr><th scope="row">Build SHA</th><td>{{ build.git_sha }} (built {{ build.build_time }}, version {{ build.version }}, {{ build.environment }})</td></tr>
-      <tr><th scope="row">Migration revision</th><td>{{ build.migration_revision }}</td></tr>
-      <tr><th scope="row">Reconciliation snapshot id</th><td>{{ snapshot_id or 'NONE — no reconciliation snapshot is persisted' }}</td></tr>
-      <tr><th scope="row">Reconciliation snapshot hash</th><td>{{ snapshot_hash or '—' }}</td></tr>
-      <tr><th scope="row">Reconciliation snapshot created (UTC)</th><td>{{ snapshot_created_at or '—' }}</td></tr>
-      <tr><th scope="row">Snapshot sequence</th><td>
-        {%- if snapshot_id -%}{{ snapshot_sequence }} of {{ reconciliation.history_count }} &mdash;
-          {% if snapshot_is_latest %}latest{% else %}NOT the latest (regeneration from an earlier snapshot){% endif %}
-        {%- else -%}—{%- endif -%}
-      </td></tr>
-      <tr><th scope="row">Template version</th><td>{{ template_version }}</td></tr>
-      <tr><th scope="row">Report generated (UTC)</th><td>{{ snapshot.generation_timestamp }}</td></tr>
-      <tr><th scope="row">Report id</th><td>{{ snapshot.report_id }}</td></tr>
-    </tbody>
-  </table>
-</section>
-
-<h2>1. Processing outcome and review state</h2>
-<p>
-  <strong>Processing outcome:</strong> {{ outcome.value }} ({{ outcome.code }}). {{ outcome.detail }}
-</p>
-<p>
-  <strong>Review state:</strong> {{ review.value }} ({{ review.code }}). {{ review.detail }}
-</p>
-{% if outcome.basis %}
-<table>
-  <caption>Basis for the processing outcome: each criterion and whether it held against persisted evidence</caption>
-  <thead>
-    <tr><th scope="col">Criterion</th><th scope="col">Held</th><th scope="col">Evidence</th></tr>
-  </thead>
+<div class="dp-wide">
+<p class="dp-appendix-intro">Appendix A&ndash;J: detailed evidence for this delivery. Report {{ snapshot.report_id }} &middot; {{ delivery.delivery_label or 'Unlabelled delivery' }} &middot; {{ document_status }}. Everything on page one is restated here with its identifiers, hashes and timelines.</p>
+<h2>Appendix A. Delivery Identity and provenance</h2>
+<table class="dp-fixed dp-tight">
+  {{ cols([28, 72]) }}
+  <caption>Identity of the delivery, the evidence it rests on, and the build that produced this document</caption>
+  <thead><tr><th scope="col">Attribute</th><th scope="col">Value</th></tr></thead>
   <tbody>
-    {% for item in outcome.basis %}
-    <tr>
-      <th scope="row">{{ item.criterion }}</th>
-      <td>{{ flag(item.held, 'Held', 'Not held') }}</td>
-      <td>{{ item.detail }}</td>
-    </tr>
-    {% endfor %}
+    <tr><th scope="row">Delivery</th><td>{{ delivery.delivery_label or 'Not labelled' }}</td></tr>
+    <tr><th scope="row">Job id</th><td class="hash">{{ delivery.job_id or 'No job row (legacy synchronous upload)' }}</td></tr>
+    <tr><th scope="row">Intake id</th><td class="hash">{{ delivery.intake_id or 'No intake (the job failed before Area 1 was written)' }}</td></tr>
+    <tr><th scope="row">Resolved from</th><td>{{ delivery.resolved_from }}</td></tr>
+    <tr><th scope="row">File</th><td class="hash">{{ delivery.filename or 'Not recorded' }}</td></tr>
+    <tr><th scope="row">SHA-256</th><td class="hash">{{ delivery.sha256 or 'Not recorded' }}</td></tr>
+    <tr><th scope="row">Size (bytes)</th><td>{{ delivery.file_size_bytes|number }}</td></tr>
+    <tr><th scope="row">Records delivered (Area 1)</th><td>{{ delivery.record_count|number }}</td></tr>
+    <tr><th scope="row">Registrant</th><td>{{ delivery.registrant or 'Not recorded' }}</td></tr>
+    <tr><th scope="row">Government reference</th><td>{{ delivery.government_reference or 'None recorded' }}</td></tr>
+    <tr><th scope="row">Received from ONC/RCE</th><td>{{ delivery.received_date or 'Not recorded' }}</td></tr>
+    <tr><th scope="row">Registered (UTC)</th><td class="nw">{{ ts(delivery.registered_at) }}</td></tr>
+    <tr><th scope="row">Processing started (UTC)</th><td class="nw">{{ ts(delivery.started_at) }}</td></tr>
+    <tr><th scope="row">Processing completed (UTC)</th><td class="nw">{{ ts(delivery.completed_at or delivery.failed_at) }}</td></tr>
+    <tr><th scope="row">Job state / stage</th><td>{{ delivery.state or '—' }} / {{ delivery.stage or '—' }} (attempts: {{ delivery.attempt_count|number }})</td></tr>
+    <tr><th scope="row">Build SHA</th><td class="hash">{{ build.git_sha }} (built {{ build.build_time }}, version {{ build.version }}, {{ build.environment }})</td></tr>
+    <tr><th scope="row">Migration revision</th><td>{{ build.migration_revision }}</td></tr>
+    <tr><th scope="row">Reconciliation snapshot id</th><td class="hash">{{ snapshot_id or 'NONE — no reconciliation snapshot is persisted' }}</td></tr>
+    <tr><th scope="row">Reconciliation snapshot hash</th><td class="hash">{{ snapshot_hash or '—' }}</td></tr>
+    <tr><th scope="row">Reconciliation snapshot created (UTC)</th><td class="nw">{{ ts(snapshot_created_at) }}</td></tr>
+    <tr><th scope="row">Snapshot sequence</th><td>
+      {%- if snapshot_id -%}{{ snapshot_sequence }} of {{ reconciliation.history_count }} &mdash;
+        {% if snapshot_is_latest %}latest{% else %}NOT the latest (regeneration from an earlier snapshot){% endif %}
+      {%- else -%}—{%- endif -%}
+    </td></tr>
+    <tr><th scope="row">Template version</th><td>{{ template_version }}</td></tr>
+    <tr><th scope="row">Report generated (UTC)</th><td class="nw">{{ ts(snapshot.generation_timestamp) }}</td></tr>
+    <tr><th scope="row">Report id</th><td>{{ snapshot.report_id }}</td></tr>
+    {% if readiness.available %}<tr><th scope="row">Preflight run id</th><td class="hash">{{ readiness.run.id }} (preflight {{ readiness.run.preflight_version }}, rules {{ readiness.run.rule_set_version }}, field map {{ readiness.run.field_map_version }})</td></tr>{% endif %}
   </tbody>
 </table>
-{% else %}
-<p>No clean-criteria basis applies to this outcome (the delivery did not reach a reconciled state).</p>
-{% endif %}
 
-<h2>2. Processing timeline</h2>
+<h2>Appendix B. Processing timeline</h2>
 {% if timeline.available %}
 <p>{{ timeline.summary.attempts|number }} stage attempt(s) recorded.
   {% if timeline.summary.failed_stage %}Failed stage: {{ timeline.summary.failed_stage }}.{% endif %}
   Completed stages: {{ timeline.summary.completed_stages|join(', ') or 'none' }}.</p>
-<table>
+<table class="dp-fixed">
+  {{ cols([14, 7, 10, 14, 14, 7, 9, 9, 8, 8]) }}
   <caption>Every stage attempt, oldest first</caption>
   <thead>
     <tr>
       <th scope="col">Stage</th><th scope="col">Attempt</th><th scope="col">Status</th>
       <th scope="col">Started (UTC)</th><th scope="col">Completed (UTC)</th><th scope="col">Duration (ms)</th>
-      <th scope="col">In</th><th scope="col">Out</th><th scope="col">Warnings</th><th scope="col">Held</th><th scope="col">Rejected</th>
-      <th scope="col">Failure</th><th scope="col">Build</th>
+      <th scope="col">Records in / out</th><th scope="col">Warnings / held / rejected</th><th scope="col">Failure</th><th scope="col">Build</th>
     </tr>
   </thead>
   <tbody>
     {% for ev in timeline.events %}
     <tr>
-      <th scope="row">{{ ev.stage }}</th>
+      <th scope="row" class="cd">{{ brk(ev.stage) }}</th>
       <td>{{ ev.attempt }}</td>
-      <td>{{ ev.status }}</td>
-      <td>{{ ev.started_at or '—' }}</td>
-      <td>{{ ev.completed_at or '—' }}</td>
+      <td class="nw">{{ ev.status }}</td>
+      <td class="nw">{{ ts(ev.started_at) }}</td>
+      <td class="nw">{{ ts(ev.completed_at) }}</td>
       <td>{{ ev.duration_ms|number }}</td>
-      <td>{{ ev.input_count|number }}</td>
-      <td>{{ ev.output_count|number }}</td>
-      <td>{{ ev.warning_count|number }}</td>
-      <td>{{ ev.held_count|number }}</td>
-      <td>{{ ev.rejected_count|number }}</td>
-      <td>{% if ev.failure_class %}{{ ev.failure_class }}: {{ ev.failure_reason or '' }}{% else %}—{% endif %}</td>
-      <td>{{ ev.build_sha }}</td>
+      <td class="nw">{{ ev.input_count|number }} / {{ ev.output_count|number }}</td>
+      <td class="nw">{{ ev.warning_count|number }} / {{ ev.held_count|number }} / {{ ev.rejected_count|number }}</td>
+      <td>{% if ev.failure_class %}{{ ev.failure_class }}: {{ ev.failure_reason or '' }}{% else %}&mdash;{% endif %}</td>
+      <td class="hash">{{ (ev.build_sha or '')[:12] }}</td>
     </tr>
     {% endfor %}
   </tbody>
@@ -188,45 +394,41 @@
 <p class="insufficient-data">No stage events are persisted for this delivery. Stage timings cannot be reconstructed; see the limitations section.</p>
 {% endif %}
 
-<h2>3. Reconciliation</h2>
+<h2 class="dp-newpage">Appendix C. Reconciliation detail</h2>
 {% if reconciliation.available %}
+{% set eq = reconciliation.equation %}
 <p>
   Snapshot {{ reconciliation.id }} (sequence {{ reconciliation.sequence }}, trigger {{ reconciliation.trigger }}, actor {{ reconciliation.actor }}),
-  written {{ reconciliation.created_at }} by build {{ reconciliation.build_sha }} at migration {{ reconciliation.migration_revision }}.
+  written {{ ts(reconciliation.created_at) }} UTC by build {{ (reconciliation.build_sha or '')[:12] }} at migration {{ reconciliation.migration_revision }}.
   Result: {{ flag(reconciliation.passed, 'PASSED', 'FAILED') }}
-  {% if not reconciliation.passed %}&mdash; {{ reconciliation.failure_reason or 'no reason recorded' }}{% endif %}
-  {% if reconciliation.reconstructed %}<strong>This snapshot is marked RECONSTRUCTED.</strong>{% endif %}
 </p>
-<table>
+<table class="dp-fixed dp-keep">
+  {{ cols([30, 20, 50]) }}
   <caption>Accounting equation as persisted in the pinned snapshot: Received = Created + Updated + Matched/Unchanged + Held + Rejected + Missing Key + Excluded</caption>
-  <thead>
-    <tr><th scope="col">Term</th><th scope="col">Value</th></tr>
-  </thead>
+  <thead><tr><th scope="col">Term</th><th scope="col">Value</th><th scope="col">&nbsp;</th></tr></thead>
   <tbody>
-    {% set eq = reconciliation.equation %}
-    <tr><th scope="row">Received</th><td>{{ eq.get('received')|number }}</td></tr>
-    <tr><th scope="row">Created</th><td>{{ eq.get('created')|number }}</td></tr>
-    <tr><th scope="row">Updated</th><td>{{ eq.get('updated')|number }}</td></tr>
-    <tr><th scope="row">Matched / unchanged</th><td>{{ eq.get('matched_unchanged')|number }}</td></tr>
-    <tr><th scope="row">Held</th><td>{{ eq.get('held')|number }}</td></tr>
-    <tr><th scope="row">Rejected</th><td>{{ eq.get('rejected')|number }}</td></tr>
-    <tr><th scope="row">Missing key</th><td>{{ eq.get('missing_key')|number }}</td></tr>
-    <tr><th scope="row">Excluded</th><td>{{ eq.get('excluded')|number }}</td></tr>
-    <tr><th scope="row">Accounted</th><td>{{ eq.get('accounted')|number }}</td></tr>
-    <tr><th scope="row">Equation holds</th><td>{{ flag(eq.get('holds'), 'Yes', 'No') }}</td></tr>
+    <tr><th scope="row">Received</th><td>{{ eq.get('received')|number }}</td><td></td></tr>
+    <tr><th scope="row">Created</th><td>{{ eq.get('created')|number }}</td><td></td></tr>
+    <tr><th scope="row">Updated</th><td>{{ eq.get('updated')|number }}</td><td></td></tr>
+    <tr><th scope="row">Matched / unchanged</th><td>{{ eq.get('matched_unchanged')|number }}</td><td></td></tr>
+    <tr><th scope="row">Held</th><td>{{ eq.get('held')|number }}</td><td></td></tr>
+    <tr><th scope="row">Rejected</th><td>{{ eq.get('rejected')|number }}</td><td></td></tr>
+    <tr><th scope="row">Missing key</th><td>{{ eq.get('missing_key')|number }}</td><td></td></tr>
+    <tr><th scope="row">Excluded</th><td>{{ eq.get('excluded')|number }}</td><td></td></tr>
+    <tr><th scope="row">Accounted</th><td>{{ eq.get('accounted')|number }}</td><td></td></tr>
+    <tr><th scope="row">Equation holds</th><td>{{ flag(eq.get('holds'), 'Yes', 'No') }}</td><td></td></tr>
   </tbody>
 </table>
 {% if reconciliation.checks %}
-<table>
+<table class="dp-fixed dp-keep">
+  {{ cols([28, 14, 58]) }}
   <caption>Reconciliation checks recorded in the snapshot</caption>
-  <thead>
-    <tr><th scope="col">Check</th><th scope="col">Result</th><th scope="col">Detail</th></tr>
-  </thead>
+  <thead><tr><th scope="col">Check</th><th scope="col">Result</th><th scope="col">Detail</th></tr></thead>
   <tbody>
     {% for c in reconciliation.checks %}
     <tr>
       <th scope="row">{{ c.get('name') or c.get('check') or c.get('id') or loop.index }}</th>
-      <td>{{ c.get('passed') if c.get('passed') is not none else (c.get('result') or c.get('status') or '—') }}</td>
+      <td class="nw">{{ c.get('passed') if c.get('passed') is not none else (c.get('result') or c.get('status') or '—') }}</td>
       <td>{{ c.get('detail') or c.get('message') or '' }}</td>
     </tr>
     {% endfor %}
@@ -234,17 +436,10 @@
 </table>
 {% endif %}
 {% else %}
-<p class="insufficient-data">No reconciliation snapshot is persisted for this delivery. No reconciliation of record exists, and this report does not compute one.</p>
+<p class="insufficient-data">No reconciliation snapshot is persisted for this delivery.</p>
 {% endif %}
 
-{#
-  Sections 4–9 hold the record-level evidence tables (7–12 columns each). The
-  `dp-wide` wrapper places them on the named landscape page defined in
-  uswds_report.css (`@page dp-landscape`); narrative sections 1–3 and 10–11
-  stay portrait. Layout only: the wrapper adds no content and removes none.
-#}
-<div class="dp-wide">
-<h2>4. Dispositions</h2>
+<h2 class="dp-newpage">Appendix D. Dispositions</h2>
 <p>
   The current disposition of every received record, read from the append-only disposition ledger
   (highest sequence per record). {{ dispositions.records_received|number }} record(s) received;
@@ -256,23 +451,23 @@
     The current table {% if dispositions.agrees_with_snapshot %}agrees with{% else %}DIFFERS from{% endif %} the pinned reconciliation snapshot.
   {% endif %}
 </p>
-<table>
+<table class="dp-fixed dp-keep">
+  {{ cols([50, 20, 30]) }}
   <caption>Disposition totals (current table) and the equation evaluated over them</caption>
-  <thead>
-    <tr><th scope="col">Disposition</th><th scope="col">Records</th></tr>
-  </thead>
+  <thead><tr><th scope="col">Disposition</th><th scope="col">Records</th><th scope="col">&nbsp;</th></tr></thead>
   <tbody>
     {% for key in ('CREATED', 'UPDATED', 'MATCHED_UNCHANGED', 'HELD', 'REJECTED', 'MISSING_KEY', 'EXCLUDED') %}
-    <tr><th scope="row">{{ key }}</th><td>{{ dispositions.counts.get(key, 0)|number }}</td></tr>
+    <tr><th scope="row">{{ key }}</th><td>{{ dispositions.counts.get(key, 0)|number }}</td><td></td></tr>
     {% endfor %}
-    <tr><th scope="row">Total with a disposition</th><td>{{ dispositions.counts.get('total', 0)|number }}</td></tr>
-    <tr><th scope="row">Records received</th><td>{{ dispositions.records_received|number }}</td></tr>
-    <tr><th scope="row">Equation holds on the current table</th><td>{{ flag(dispositions.equation.get('holds'), 'Yes', 'No') }} (difference {{ dispositions.equation.get('difference')|number }})</td></tr>
+    <tr><th scope="row">Total with a disposition</th><td>{{ dispositions.counts.get('total', 0)|number }}</td><td></td></tr>
+    <tr><th scope="row">Records received</th><td>{{ dispositions.records_received|number }}</td><td></td></tr>
+    <tr><th scope="row">Equation holds on the current table</th><td>{{ flag(dispositions.equation.get('holds'), 'Yes', 'No') }}</td><td>difference {{ dispositions.equation.get('difference')|number }}</td></tr>
   </tbody>
 </table>
 
 {% if dispositions.rows %}
-<table>
+<table class="dp-fixed dp-tight">
+  {{ cols([4, 11, 10, 8, 8, 11, 14, 8, 7, 7, 4, 8]) }}
   <caption>Record-level dispositions &mdash; first {{ dispositions.rows_shown|number }} of
     {{ dispositions.rows_total|number }} received record(s), by delivered line number</caption>
   <thead>
@@ -287,17 +482,17 @@
     {% for r in dispositions.rows %}
     <tr>
       <th scope="row">{{ r.line_number }}</th>
-      <td>{{ r.source_rce_id or '—' }}</td>
+      <td class="hash">{{ r.source_rce_id or '—' }}</td>
       <td>{{ r.name or '—' }}</td>
-      <td>{{ r.submitted_npi or '—' }}</td>
-      <td>{{ r.curated_npi or '—' }}</td>
-      <td>{{ r.disposition }}</td>
-      <td>{{ r.reason_code }}</td>
-      <td>{{ r.entity_id or '—' }}</td>
+      <td class="nw">{{ r.submitted_npi or '—' }}</td>
+      <td class="nw">{{ r.curated_npi or '—' }}</td>
+      <td class="cd">{{ brk(r.disposition) }}</td>
+      <td class="cd">{{ brk(r.reason_code) }}</td>
+      <td class="hash">{{ r.entity_id or '—' }}</td>
       <td>{{ r.finding_count|number }}</td>
       <td>{{ r.warning_count|number }}</td>
       <td>{{ r.sequence }}</td>
-      <td>{{ r.actor_type }}{% if r.reconstructed %} (reconstructed){% endif %}</td>
+      <td class="cd">{{ brk(r.actor_type) }}{% if r.reconstructed %} (reconstructed){% endif %}</td>
     </tr>
     {% endfor %}
   </tbody>
@@ -311,27 +506,13 @@
 <p class="insufficient-data">No disposition events are persisted for this delivery; per-record outcomes cannot be stated from evidence.</p>
 {% endif %}
 
-</div>
-<div class="dp-wide">
-<h2>5. Findings</h2>
+<h2>Appendix E. Findings</h2>
 {% if findings.available %}
 <p>{{ findings.total|number }} finding(s) in the current quality run {{ findings.run_id }} (rule set {{ findings.rule_set_version or 'not recorded' }});
   {{ findings.open_high|number }} open at HIGH or CRITICAL severity.</p>
-<table>
-  <caption>Findings by rule, issue type and severity</caption>
-  <thead>
-    <tr><th scope="col">Rule</th><th scope="col">Issue type</th><th scope="col">Severity</th><th scope="col">Count</th></tr>
-  </thead>
-  <tbody>
-    {% for f in findings.by_code %}
-    <tr><th scope="row">{{ f.rule_id }}</th><td>{{ f.issue_type }}</td><td>{{ f.severity }}</td><td>{{ f.count|number }}</td></tr>
-    {% else %}
-    <tr><th scope="row">None</th><td>—</td><td>—</td><td>0</td></tr>
-    {% endfor %}
-  </tbody>
-</table>
 {% if findings.rows %}
-<table>
+<table class="dp-fixed dp-tight">
+  {{ cols([13, 4, 7, 15, 7, 11, 11, 9, 23]) }}
   <caption>Findings &mdash; first {{ findings.rows_shown|number }} of
     {{ findings.rows_total|number }}, open HIGH/CRITICAL first, then by delivered line</caption>
   <thead>
@@ -343,14 +524,14 @@
   <tbody>
     {% for f in findings.rows %}
     <tr>
-      <th scope="row">{{ f.issue_code }}</th>
+      <th scope="row" class="hash">{{ f.issue_code }}</th>
       <td>{{ f.line_number|number }}</td>
-      <td>{{ f.rule_id }}</td>
-      <td>{{ f.issue_type }}</td>
-      <td>{{ f.severity }}</td>
-      <td>{{ f.field_name or '—' }}</td>
-      <td>{{ f.correction_authority }}</td>
-      <td>{{ f.resolution }}</td>
+      <td class="nw">{{ f.rule_id }}</td>
+      <td class="cd">{{ brk(f.issue_type) }}</td>
+      <td class="nw">{{ f.severity }}</td>
+      <td class="cd">{{ brk(f.field_name or '—') }}</td>
+      <td class="cd">{{ brk(f.correction_authority) }}</td>
+      <td class="cd">{{ brk(f.resolution) }}</td>
       <td>{{ f.description }}</td>
     </tr>
     {% endfor %}
@@ -366,12 +547,11 @@
 <p class="insufficient-data">No completed quality run exists for this delivery; findings cannot be stated.</p>
 {% endif %}
 
-</div>
-<div class="dp-wide">
-<h2>6. Identifier conflicts and decisions</h2>
+<h2>Appendix F. Identifier conflicts and decisions</h2>
 {% if identifiers.available and identifiers.conflicts %}
 <p>{{ identifiers.rows_total|number }} identifier conflict(s) raised for this delivery; {{ identifiers.unresolved|number }} unresolved; {{ identifiers.events_total|number }} event(s) in total.</p>
-<table>
+<table class="dp-fixed dp-tight">
+  {{ cols([12, 7, 9, 9, 8, 9, 12, 13, 11, 10]) }}
   <caption>Identifier conflicts &mdash; first {{ identifiers.rows_shown|number }} of
     {{ identifiers.rows_total|number }}, unresolved first</caption>
   <thead>
@@ -383,15 +563,15 @@
   <tbody>
     {% for c in identifiers.conflicts %}
     <tr>
-      <th scope="row">{{ c.entity_id }}</th>
+      <th scope="row" class="hash">{{ c.entity_id }}</th>
       <td>{{ c.identifier_type }}</td>
-      <td>{{ c.submitted_value or '—' }}</td>
-      <td>{{ c.existing_value or '—' }}</td>
-      <td>{{ c.verified_value or '—' }}</td>
-      <td>{{ c.selected_value or '—' }}</td>
-      <td>{{ c.current_decision }}</td>
-      <td>{{ c.decided_at or '—' }}</td>
-      <td>{{ c.actor }}</td>
+      <td class="nw">{{ c.submitted_value or '—' }}</td>
+      <td class="nw">{{ c.existing_value or '—' }}</td>
+      <td class="nw">{{ c.verified_value or '—' }}</td>
+      <td class="nw">{{ c.selected_value or '—' }}</td>
+      <td class="cd">{{ brk(c.current_decision) }}</td>
+      <td class="nw">{{ ts(c.decided_at) }}</td>
+      <td class="cd">{{ brk(c.actor) }}</td>
       <td>{{ c.reason }}</td>
     </tr>
     {% endfor %}
@@ -408,12 +588,11 @@
 <p class="insufficient-data">Identifier decisions are unavailable: the delivery has no intake.</p>
 {% endif %}
 
-</div>
-<div class="dp-wide">
-<h2>7. Verification coverage</h2>
+<h2>Appendix G. Verification coverage detail</h2>
 <p>State: {{ verification.state }} (source: {{ verification.source }}){% if verification.reason %} &mdash; {{ verification.reason }}{% endif %}.
   Coverage is counted from evidence rows for this delivery's entities; connector readiness is not coverage.</p>
-<table>
+<table class="dp-fixed dp-tight">
+  {{ cols([10, 11, 7, 8, 7, 8, 10, 7, 8, 24]) }}
   <caption>Coverage per verification source</caption>
   <thead>
     <tr>
@@ -424,15 +603,15 @@
   <tbody>
     {% for s in verification.sources %}
     <tr>
-      <th scope="row">{{ s.name|upper }}</th>
-      <td>{{ s.state }}</td>
+      <th scope="row" class="nw">{{ s.name|upper }}</th>
+      <td class="nw">{{ s.state }}</td>
       <td>{{ s.eligible|number }}</td>
       <td>{{ s.attempted|number }}</td>
       <td>{{ s.verified|number }}</td>
       <td>{{ s.not_found|number }}</td>
       <td>{{ s.unavailable|number }}</td>
       <td>{{ s.failed|number }}</td>
-      <td>{% if s.coverage_pct is none %}Not run{% else %}{{ s.coverage_pct }}%{% endif %}</td>
+      <td class="nw">{% if s.coverage_pct is none %}Not run{% else %}{{ s.coverage_pct }}%{% endif %}</td>
       <td>{{ s.note or '' }}</td>
     </tr>
     {% endfor %}
@@ -457,9 +636,7 @@
   <code>/api/tefca/rce/deliveries/{{ delivery.intake_id }}/verification-coverage/&lt;source&gt;/&lt;outcome&gt;/csv</code>.</p>
 {% endif %}
 
-</div>
-<div class="dp-wide">
-<h2>8. Analyst actions</h2>
+<h2>Appendix H. Analyst actions</h2>
 <p>{{ analyst.counts.disposition_events|number }} analyst disposition(s), {{ analyst.counts.issue_resolutions|number }} finding resolution(s),
   {{ analyst.counts.review_records|number }} review record(s) ({{ analyst.counts.open|number }} open, {{ analyst.counts.claimed|number }} claimed,
   {{ analyst.counts.qa_pending|number }} awaiting QA, {{ analyst.counts.qa_approved|number }} QA approved).
@@ -476,7 +653,8 @@
   {% endif %}
 </p>
 {% if analyst.disposition_events %}
-<table>
+<table class="dp-fixed">
+  {{ cols([5, 5, 13, 17, 22, 20, 18]) }}
   <caption>Analyst disposition decisions (HUMAN actor), oldest first</caption>
   <thead>
     <tr><th scope="col">Line</th><th scope="col">Seq</th><th scope="col">Disposition</th><th scope="col">Reason code</th><th scope="col">Reason</th><th scope="col">Actor</th><th scope="col">Decided (UTC)</th></tr>
@@ -486,18 +664,19 @@
     <tr>
       <th scope="row">{{ ev.line_number }}</th>
       <td>{{ ev.sequence }}</td>
-      <td>{{ ev.disposition }}</td>
-      <td>{{ ev.reason_code }}</td>
+      <td class="nw">{{ ev.disposition }}</td>
+      <td class="cd">{{ brk(ev.reason_code) }}</td>
       <td>{{ ev.reason or '' }}</td>
-      <td>{{ ev.actor }}</td>
-      <td>{{ ev.decided_at }}</td>
+      <td class="cd">{{ brk(ev.actor) }}</td>
+      <td class="nw">{{ ts(ev.decided_at) }}</td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
 {% endif %}
 {% if analyst.issue_resolutions %}
-<table>
+<table class="dp-fixed">
+  {{ cols([14, 10, 10, 16, 18, 16, 16]) }}
   <caption>Finding resolutions recorded by analysts</caption>
   <thead>
     <tr><th scope="col">Issue code</th><th scope="col">Rule</th><th scope="col">Severity</th><th scope="col">Resolution</th><th scope="col">Resolved by</th><th scope="col">Resolved (UTC)</th><th scope="col">QA approved by</th></tr>
@@ -505,20 +684,21 @@
   <tbody>
     {% for i in analyst.issue_resolutions %}
     <tr>
-      <th scope="row">{{ i.issue_code }}</th>
-      <td>{{ i.rule_id }}</td>
-      <td>{{ i.severity }}</td>
-      <td>{{ i.resolution }}</td>
-      <td>{{ i.resolved_by or '—' }}</td>
-      <td>{{ i.resolved_at or '—' }}</td>
-      <td>{{ i.qa_approved_by or '—' }}</td>
+      <th scope="row" class="hash">{{ i.issue_code }}</th>
+      <td class="nw">{{ i.rule_id }}</td>
+      <td class="nw">{{ i.severity }}</td>
+      <td class="cd">{{ brk(i.resolution) }}</td>
+      <td class="cd">{{ brk(i.resolved_by or '—') }}</td>
+      <td class="nw">{{ ts(i.resolved_at) }}</td>
+      <td class="cd">{{ brk(i.qa_approved_by or '—') }}</td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
 {% endif %}
 {% if analyst.review_records %}
-<table>
+<table class="dp-fixed">
+  {{ cols([18, 10, 18, 18, 8, 14, 14]) }}
   <caption>Review records &mdash; first {{ analyst.review_records_shown|number }} of
     {{ analyst.review_records_total|number }}, unresolved/not-yet-QA-approved first</caption>
   <thead>
@@ -527,13 +707,13 @@
   <tbody>
     {% for r in analyst.review_records %}
     <tr>
-      <th scope="row">{{ r.review_id }}</th>
+      <th scope="row" class="hash">{{ r.review_id }}</th>
       <td>{% if r.bucket in ('B1', 'B2', 'B3', 'B4') %}<span class="agt-chip {{ r.bucket|lower }}">{{ r.bucket }}</span>{% else %}{{ r.bucket or '—' }}{% endif %}</td>
       <td>{{ r.classification_rule or '—' }}{% if r.classification_rule_version is not none %} (v{{ r.classification_rule_version }}){% endif %}</td>
       <td>{{ r.resolution or 'Pending' }}{% if r.reclassified_to %} → {{ r.reclassified_to }}{% endif %}</td>
       <td>{{ 'Yes' if r.assigned else 'No' }}</td>
-      <td>{{ r.reviewed_at or '—' }}</td>
-      <td>{{ r.reportable_at or '—' }}</td>
+      <td class="nw">{{ ts(r.reviewed_at) }}</td>
+      <td class="nw">{{ ts(r.reportable_at) }}</td>
     </tr>
     {% endfor %}
   </tbody>
@@ -548,32 +728,30 @@
 <p>No analyst action has been recorded for this delivery.</p>
 {% endif %}
 
-</div>
-<div class="dp-wide">
-<h2>9. Lineage</h2>
+<h2>Appendix I. Lineage</h2>
 {% if lineage.available %}
 <p>{{ lineage.corrections_total|number }} correction(s) applied to delivered values, each preserving the original;
   {{ lineage.entities_promoted|number }} distinct entity/entities promoted to the registry;
   {% if lineage.entity_versions_in_window is none %}registry version history not scoped (see limitations){% else %}{{ lineage.entity_versions_in_window|number }} registry version(s) written within the job window{% endif %}.</p>
-<table>
+<table class="dp-fixed dp-keep">
+  {{ cols([60, 20, 20]) }}
   <caption>Corrections by authority and by column</caption>
-  <thead>
-    <tr><th scope="col">Measure</th><th scope="col">Count</th></tr>
-  </thead>
+  <thead><tr><th scope="col">Measure</th><th scope="col">Count</th><th scope="col">&nbsp;</th></tr></thead>
   <tbody>
     {% for a, n in lineage.by_authority.items() %}
-    <tr><th scope="row">Corrections under {{ a }}</th><td>{{ n|number }}</td></tr>
+    <tr><th scope="row">Corrections under {{ a }}</th><td>{{ n|number }}</td><td></td></tr>
     {% endfor %}
     {% for col, n in lineage.by_column.items() %}
-    <tr><th scope="row">Column {{ col }}</th><td>{{ n|number }}</td></tr>
+    <tr><th scope="row">Column {{ col }}</th><td>{{ n|number }}</td><td></td></tr>
     {% endfor %}
     {% if not lineage.by_authority %}
-    <tr><th scope="row">No corrections were applied</th><td>0</td></tr>
+    <tr><th scope="row">No corrections were applied</th><td>0</td><td></td></tr>
     {% endif %}
   </tbody>
 </table>
 {% if lineage.rows %}
-<table>
+<table class="dp-fixed">
+  {{ cols([6, 14, 18, 18, 10, 12, 12, 10]) }}
   <caption>Correction detail ({{ lineage.rows_shown|number }} of {{ lineage.corrections_total|number }} shown)</caption>
   <thead>
     <tr><th scope="col">Line</th><th scope="col">Column</th><th scope="col">Original</th><th scope="col">Corrected</th><th scope="col">Rule</th><th scope="col">Authority</th><th scope="col">By</th><th scope="col">QA</th></tr>
@@ -585,7 +763,7 @@
       <td>{{ c.column_name }}</td>
       <td>{{ c.original_value if c.original_value is not none else '—' }}</td>
       <td>{{ c.corrected_value if c.corrected_value is not none else '—' }}</td>
-      <td>{{ c.correction_rule_id or '—' }}</td>
+      <td class="nw">{{ c.correction_rule_id or '—' }}</td>
       <td>{{ c.correction_authority }}</td>
       <td>{{ c.corrected_by }}</td>
       <td>{{ c.qa_status or '—' }}</td>
@@ -598,18 +776,8 @@
 <p class="insufficient-data">Lineage is unavailable: the delivery has no intake.</p>
 {% endif %}
 
-</div>
-<h2>10. Evidence limitations</h2>
-<p>What this report could not state from persisted evidence, and why. This list is never omitted.</p>
-<ul>
-  {% for item in limitations %}
-  <li>{{ item }}</li>
-  {% else %}
-  <li>No limitation was recorded: every section above was read from persisted evidence for this delivery.</li>
-  {% endfor %}
-</ul>
-
-<h2>11. Audit note</h2>
+<h2>Appendix J. Audit note</h2>
 <p>{{ audit_note }}</p>
+</div>
 
 {% endblock %}
