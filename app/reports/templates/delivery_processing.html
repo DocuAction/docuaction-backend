@@ -30,8 +30,10 @@
 {# "2026-09-30T04:44:48.668+00:00" -> "2026-09-30 04:44:48": readable, one line, still sortable #}
 {% macro ts(v) %}{% if v %}{{ (v|string)[:19]|replace('T', ' ') }}{% else %}&mdash;{% endif %}{% endmacro %}
 
-{# escaped value with a break opportunity after each underscore or slash: codes wrap between words #}
-{% macro brk(v) %}{{ ((v if v is not none else '')|string|e)|replace('_', '_<wbr>')|replace('/', '/<wbr>')|safe }}{% endmacro %}
+{# A value with a break opportunity after each underscore or slash, so codes wrap BETWEEN words and never inside one.
+   The break opportunity is a zero-width space (U+200B, invisible in the source and in the PDF); plain string
+   replacement keeps normal HTML escaping of the value itself. #}
+{% macro brk(v) %}{{ (v if v is not none else '')|string|replace('_', '_​')|replace('/', '/​') }}{% endmacro %}
 
 {% macro src_label(name) %}{{ {'nppes': 'NPPES', 'pecos': 'PECOS', 'leie': 'OIG LEIE', 'sam': 'SAM.gov'}.get(name, name|upper) }}{% endmacro %}
 
@@ -102,6 +104,7 @@
   h2, h3 { break-after: avoid; page-break-after: avoid; }
   main table.dp-tight th, main table.dp-tight td { padding: 1.8pt 4pt; font-size: 8pt; line-height: 1.25; }
   .dp-wide p { font-size: 9pt; }
+  main h2.dp-newpage { break-before: page; page-break-before: always; margin-top: 0; }
   main table.dp-fixed tr { break-inside: avoid; page-break-inside: avoid; }
   main table.dp-fixed thead { display: table-header-group; }
   .dp-appendix-intro { font-size: 8.5pt; color: var(--agt-muted); margin: 0 0 6pt 0; }
@@ -361,7 +364,7 @@
   {% if timeline.summary.failed_stage %}Failed stage: {{ timeline.summary.failed_stage }}.{% endif %}
   Completed stages: {{ timeline.summary.completed_stages|join(', ') or 'none' }}.</p>
 <table class="dp-fixed">
-  {{ cols([16, 7, 10, 13, 13, 8, 9, 9, 8, 7]) }}
+  {{ cols([15, 6, 10, 14, 14, 7, 9, 9, 8, 8]) }}
   <caption>Every stage attempt, oldest first</caption>
   <thead>
     <tr>
@@ -391,7 +394,7 @@
 <p class="insufficient-data">No stage events are persisted for this delivery. Stage timings cannot be reconstructed; see the limitations section.</p>
 {% endif %}
 
-<h2>Appendix C. Reconciliation detail</h2>
+<h2 class="dp-newpage">Appendix C. Reconciliation detail</h2>
 {% if reconciliation.available %}
 {% set eq = reconciliation.equation %}
 <p>
@@ -436,7 +439,7 @@
 <p class="insufficient-data">No reconciliation snapshot is persisted for this delivery.</p>
 {% endif %}
 
-<h2>Appendix D. Dispositions</h2>
+<h2 class="dp-newpage">Appendix D. Dispositions</h2>
 <p>
   The current disposition of every received record, read from the append-only disposition ledger
   (highest sequence per record). {{ dispositions.records_received|number }} record(s) received;
@@ -464,7 +467,7 @@
 
 {% if dispositions.rows %}
 <table class="dp-fixed dp-tight">
-  {{ cols([4, 11, 11, 7, 7, 11, 17, 10, 6, 6, 3, 7]) }}
+  {{ cols([4, 11, 10, 8, 8, 11, 15, 9, 7, 7, 4, 6]) }}
   <caption>Record-level dispositions &mdash; first {{ dispositions.rows_shown|number }} of
     {{ dispositions.rows_total|number }} received record(s), by delivered line number</caption>
   <thead>
