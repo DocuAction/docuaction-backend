@@ -39,6 +39,16 @@ on:
         required: false
         type: string
         default: ''
+      sequential_to_head:
+        description: 'When apply=true: instead of one target_revision, apply EVERY pending revision from expected_current to the repository head, one revision per transaction, verifying the database revision after each and stopping at the first failure. Leave target_revision empty.'
+        required: false
+        type: boolean
+        default: false
+      manage_firewall:
+        description: 'Open and close the temporary /32 for this runner automatically (requires the one-time Azure role in docs/review/DEV-RELEASE-AUTOMATION.md). false = the operator adds and removes it by hand, as before.'
+        required: false
+        type: boolean
+        default: false
     outputs:
       readable:
         description: '"true" if this runner could read alembic_version. Unreachable is an EXPECTED, routine result on push-triggered runs, not a workflow defect.'
@@ -87,12 +97,18 @@ jobs:
     # that does not declare it gets a token Azure refuses. Its required-reviewer
     # rule is also the human approval that stands in front of any apply.
     environment: development
+    # A full sequential release (up to seven migrations) plus the firewall window
+    # must finish well inside the lifetime of the federated Azure session.
+    timeout-minutes: 60
     permissions:
       id-token: write
       contents: read
       # Only to post the runner IPv4 handshake comment (to an ISSUE, not a PR)
       # when apply=true. Nothing else in this job writes to GitHub.
       issues: write
+      # Only to ask whether an EARLIER run is finished before removing its
+      # leftover temporary firewall rule (manage_firewall only).
+      actions: read
     outputs:
       readable: ${{ steps.read.outputs.readable }}
       dev_revision: ${{ steps.final.outputs.dev_revision }}
@@ -116,14 +132,38 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Report runner IPv4 and wait for the operator's temporary /32 (bounded)
+      - name: Validate apply inputs
         if: inputs.apply == true
+        run: |
+          test -n "${{ inputs.expected_current }}" || { echo "::error::apply=true requires expected_current"; exit 1; }
+          if [ "${{ inputs.sequential_to_head }}" = "true" ]; then
+            test -z "${{ inputs.target_revision }}" || { echo "::error::sequential_to_head applies up to head; leave target_revision empty"; exit 1; }
+          else
+            test -n "${{ inputs.target_revision }}" || { echo "::error::apply=true requires target_revision (or sequential_to_head)"; exit 1; }
+          fi
+          if [ "${{ inputs.manage_firewall }}" != "true" ]; then
+            test -n "${{ inputs.handshake_issue }}" || { echo "::error::apply=true without manage_firewall requires handshake_issue"; exit 1; }
+          fi
+
+      # AUTOMATED firewall window. Replaces the operator handshake below when
+      # manage_firewall=true. The rule is this runner's own IPv4 only (start =
+      # end), named temp-run-<run id>, and removed by the always() step at the
+      # end of this job. See scripts/release/dev_firewall.sh for the limits.
+      - name: Open the temporary /32 for this runner (automated)
+        if: inputs.manage_firewall == true
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          FIREWALL_RULE_NAME: temp-run-${{ github.run_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash scripts/release/dev_firewall.sh sweep
+          bash scripts/release/dev_firewall.sh open
+
+      - name: Report runner IPv4 and wait for the operator's temporary /32 (bounded)
+        if: inputs.apply == true && inputs.manage_firewall != true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          test -n "${{ inputs.handshake_issue }}" || { echo "::error::apply=true requires handshake_issue"; exit 1; }
-          test -n "${{ inputs.expected_current }}" || { echo "::error::apply=true requires expected_current"; exit 1; }
-          test -n "${{ inputs.target_revision }}" || { echo "::error::apply=true requires target_revision"; exit 1; }
           IP=$(curl -s https://api.ipify.org)
           echo "runner public IPv4: $IP"
           gh issue comment "${{ inputs.handshake_issue }}" --repo "${{ github.repository }}" \
@@ -147,7 +187,7 @@ jobs:
       # credential, scope or long-lived secret is introduced - same OIDC
       # federated identity, same login action, called again.
       - name: Refresh Azure OIDC login after the bounded firewall wait
-        if: inputs.apply == true
+        if: inputs.apply == true || inputs.manage_firewall == true
         uses: azure/login@v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -263,7 +303,7 @@ jobs:
 
       - name: Apply the approved migration as docuaction_owner, then verify
         id: apply
-        if: inputs.apply == true && steps.compare.outputs.migration_needed == 'true'
+        if: inputs.apply == true && inputs.sequential_to_head != true && steps.compare.outputs.migration_needed == 'true'
         env:
           SECRET_KEY: ${{ github.sha }}${{ github.sha }}
           ALLOWED_HOSTS: '*'
@@ -334,6 +374,20 @@ jobs:
           echo "applied=true" >> "$GITHUB_OUTPUT"
           echo "dev_revision_after=$AFTER" >> "$GITHUB_OUTPUT"
 
+      # Every pending revision, in order, one transaction each. The database
+      # revision is read back before and after every step and the sequence stops
+      # at the first failure. See scripts/release/apply_migrations_sequentially.sh.
+      - name: Apply ALL pending revisions in order, verifying each, then require head
+        id: apply_seq
+        if: inputs.apply == true && inputs.sequential_to_head == true && steps.compare.outputs.migration_needed == 'true'
+        env:
+          SECRET_KEY: ${{ github.sha }}${{ github.sha }}
+          ALLOWED_HOSTS: '*'
+          EXPECTED_CURRENT: ${{ inputs.expected_current }}
+        run: |
+          python -m pip install --quiet -r requirements.txt
+          bash scripts/release/apply_migrations_sequentially.sh
+
       - name: Capture Government-integrity baseline (read-only, before deploy)
         id: baseline
         if: steps.read.outputs.readable == 'true'
@@ -345,14 +399,15 @@ jobs:
       - name: Final gate inputs (after any apply)
         id: final
         run: |
-          if [ "${{ steps.apply.outputs.applied }}" = "true" ]; then
+          APPLIED="${{ steps.apply.outputs.applied }}${{ steps.apply_seq.outputs.applied }}"
+          if [ "$APPLIED" = "true" ]; then
             echo "applied=true" >> "$GITHUB_OUTPUT"
             # A targeted apply reaches ONE revision, which is not necessarily the
             # repository head. The gate must compare the revision actually
             # reached with the head the candidate image expects; reporting
             # "not needed" here unconditionally let run 37395143876 proceed to
             # deploy against a schema six revisions short of head.
-            AFTER="${{ steps.apply.outputs.dev_revision_after }}"
+            AFTER="${{ steps.apply.outputs.dev_revision_after }}${{ steps.apply_seq.outputs.dev_revision_after }}"
             HEAD="${{ steps.target.outputs.target_head }}"
             if [ -n "$AFTER" ] && [ "$AFTER" = "$HEAD" ]; then
               echo "migration_needed=false" >> "$GITHUB_OUTPUT"
@@ -367,3 +422,23 @@ jobs:
             echo "dev_revision=${{ steps.read.outputs.dev_revision }}" >> "$GITHUB_OUTPUT"
           fi
           echo "baseline_readable=${{ steps.baseline.outputs.readable }}"
+
+      # ALWAYS runs - success, failure or cancellation - and is the last step.
+      # A fresh OIDC login first: the first one is only good for ~5 minutes of
+      # token refresh, and a long sequence can outlive it. If the rule cannot be
+      # confirmed removed this step FAILS the job, loudly, with the delete
+      # command; the next run's sweep also removes it once this run is complete.
+      - name: Refresh Azure OIDC login for cleanup
+        if: always() && inputs.manage_firewall == true
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Close the temporary /32 and prove it is gone
+        if: always() && inputs.manage_firewall == true
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          FIREWALL_RULE_NAME: temp-run-${{ github.run_id }}
+        run: bash scripts/release/dev_firewall.sh close
