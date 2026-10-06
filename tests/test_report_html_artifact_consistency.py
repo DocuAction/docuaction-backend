@@ -45,11 +45,12 @@ from test_delivery_processing_report import (  # noqa: F401  (fixtures registere
 
 USER = SimpleNamespace(email="qa@synthetic.invalid", id=None)
 
-# The Program Manager sections stay portrait; every detailed table lives in ONE landscape appendix.
-MAIN_SECTIONS = ("1. Summary for the Program Manager", "2. Delivery at a glance", "3. Reconciliation",
-                 "4. Exceptions (findings)", "5. Screening coverage",
-                 "6. Source readiness (preflight) and rechecks", "7. Review and approval",
-                 "8. Evidence limitations", "9. Required next actions")
+# Page one is the approved executive layout (cards, navy tables, boxed panels), portrait; every
+# detailed table lives in ONE landscape appendix after it.
+MAIN_SECTIONS = ("Status &mdash; four separate questions", "Reconciliation &mdash; every record accounted for",
+                 "Exceptions (findings) by rule", "Screening coverage &mdash; what was actually attempted",
+                 "Delivery at a glance", "Reconciliation &amp; source integrity",
+                 "Source readiness (preflight) &amp; rechecks", "Evidence limitations", "Required next actions")
 APPENDIX_SECTIONS = ("Appendix A. Delivery Identity and provenance", "Appendix B. Processing timeline",
                      "Appendix C. Reconciliation detail", "Appendix D. Dispositions", "Appendix E. Findings",
                      "Appendix F. Identifier conflicts and decisions", "Appendix G. Verification coverage detail",
@@ -105,14 +106,21 @@ async def test_delivery_processing_html_carries_the_landscape_layout(rolled_back
     assert "size: letter landscape" in html
     assert html.count('<div class="dp-wide">') == 1
     assert '<div class="dp-wide">\n<h2>Appendix A. Delivery Identity and provenance</h2>' in html
-    for heading in MAIN_SECTIONS + APPENDIX_SECTIONS:
+    for heading in APPENDIX_SECTIONS:
         assert f">{heading}</h2>" in html, heading
-    # Narrative sections stay portrait: all nine come BEFORE the one landscape appendix.
+    for heading in MAIN_SECTIONS:
+        assert f'<h2 class="agt-h2">{heading}</h2>' in html, heading
+    # Page one stays portrait: every executive section comes BEFORE the one landscape appendix.
     wide_at = html.index('<div class="dp-wide">')
     for heading in MAIN_SECTIONS:
-        assert html.index(f">{heading}</h2>") < wide_at, heading
+        assert html.index(f'<h2 class="agt-h2">{heading}</h2>') < wide_at, heading
     for heading in APPENDIX_SECTIONS:
         assert html.index(f">{heading}</h2>") > wide_at, heading
+    # the approved executive grammar is present on page one
+    for needle in ('class="agt-head"', 'class="agt-kpis"', 'class="agt-strip"', 'class="agt-cols"',
+                   'class="agt-pkg"', 'class="agt-foot"', "table class=\"agt\""):
+        assert needle in html, needle
+    assert html.count('class="agt-kpi"') == 5
     # The DEV/TEST running notice is on the landscape page as well as the
     # portrait one (two @top-center boxes in the conditional style block).
     assert html.count('NOT FOR GOVERNMENT DELIVERY";') == 2
@@ -156,9 +164,8 @@ class TestLayoutRulesWithoutADatabase:
         wide = source.index('<div class="dp-wide">')
         assert wide < source.index("<h2>Appendix D. Dispositions</h2>")
         # every Program Manager section sits before the appendix, so it stays portrait
-        assert source.index('id="dp-limits">8. Evidence limitations</h2>') < wide
-        assert source.index('id="dp-next">9. Required next actions</h2>') < wide
-        assert source.index('id="dp-recon">3. Reconciliation</h2>') < wide
+        for heading in ("Evidence limitations", "Required next actions", "Screening coverage"):
+            assert source.index(f'<h2 class="agt-h2">{heading}') < wide, heading
 
 
 @pytest.mark.asyncio

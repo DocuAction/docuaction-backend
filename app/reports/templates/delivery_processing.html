@@ -3,14 +3,19 @@
 
   Every value is a template variable read from the Delivery Processing data
   service, which reads persisted evidence only. There is no literal count
-  anywhere in this file. Page one carries the identity block: what was
-  delivered, which job and intake, which reconciliation snapshot the numbers
-  rest on, and which build produced the document — so a regenerated report
-  can be told apart from the original by reading it.
+  anywhere in this file.
 
-  Structure (2026-10-06): a short Program Manager report (sections 1-9) followed by ONE landscape
-  appendix (A-J) that holds every detailed table, hash, UUID and timeline. Nothing the earlier
-  layout printed was dropped; the technical detail moved out of the narrative.
+  Presentation: the approved Alliance Global Tech design (ONC/TEFCA ARC branded
+  mock-ups of 2026-09-30, the same system the D3.1 / D3.2 progress family ships
+  with, shared from agt_design_system.css — not copied). Page one is the
+  executive page in that grammar: header, contract strip, five metric cards,
+  navy tables with status chips on the left, boxed panels on the right, and the
+  package strip and running footer below. Pages after it are ONE landscape
+  appendix (A–J) that holds every detailed table, hash, UUID and timeline, so
+  the front page stays readable and the report stays traceable.
+
+  This report describes ONE delivery. It is not a D3.1 / D3.2 contract report
+  and it never states a development-data result as a Government finding.
 #}
 {% extends "base.html" %}
 
@@ -27,6 +32,9 @@
 
 {% macro src_label(name) %}{{ {'nppes': 'NPPES', 'pecos': 'PECOS', 'leie': 'OIG LEIE', 'sam': 'SAM.gov'}.get(name, name|upper) }}{% endmacro %}
 
+{# status chip: colour AND text, never colour alone. kind is the approved B1/B2/B4 palette. #}
+{% macro chip(kind, text) %}<span class="agt-chip {{ kind }} wide">{{ text }}</span>{% endmacro %}
+
 {% macro flag(ok, yes_text, no_text) %}
   {%- if ok -%}
     <span class="status status-b1"><span class="glyph" aria-hidden="true">●</span><span class="text">{{ yes_text }}</span></span>
@@ -35,47 +43,60 @@
   {%- endif -%}
 {% endmacro %}
 
-{#
-  Presentation (2026-10-03): the approved Alliance Global Tech design system —
-  the same header band, KPI cards, navy table headings and B1–B4 chips the
-  D3.1 / D3.2 progress family ships with (agt_design_system.css, shared, not
-  copied). Content sections 1–11 and their CSV-annex captions are unchanged:
-  this block adds a header band and a summary row above them, and styles the
-  headings and tables they already have. Every KPI value is a template
-  variable the data service already provides; nothing is typed in.
-#}
+{# Page one carries its own contract strip (the development/test notice) and running footer;
+   later pages keep the running DEVELOPMENT / TEST marking from the base template. #}
+{% block page_marking %}
+{{ super() }}
+<style>
+  @page :first { margin: 0.38in 0.46in 0.5in 0.46in; @top-center { content: none; }
+    @bottom-center { content: element(agtfoot); width: 100%; vertical-align: top; } }
+</style>
+{% endblock %}
+{% block classification_banner %}{% endblock %}
+
 {% block cover %}
+{% set ns = namespace(attempted=0, eligible=0) %}
+{% for s in verification.sources %}{% set ns.attempted = ns.attempted + (s.attempted or 0) %}{% if (s.eligible or 0) > ns.eligible %}{% set ns.eligible = s.eligible %}{% endif %}{% endfor %}
+{% set dev = snapshot.data_classification != 'GOVERNMENT' %}
 <style>
   {{ agt_css|safe }}
   .report-header { display: none; }
-  .dp-band { font-family: "Public Sans", Arial, Helvetica, sans-serif; color: var(--agt-ink); margin: 0 0 8pt 0; }
-  .dp-band, .dp-band * { hyphens: manual; -webkit-hyphens: manual; overflow-wrap: normal; word-break: normal; }
-  .dp-band p { margin: 0; }
-  .dp-band .agt-head .title { string-set: doc-title content(); }
-  .dp-band .agt-kpi .v { font-size: 12.5pt; }
-  .dp-band .agt-kpi .v.sm { font-size: 9.5pt; line-height: 1.3; white-space: normal; }
-  /* the body: section headings and tables follow the same system */
-  main h2 { font-size: 11pt; color: var(--agt-dblue); text-transform: none; letter-spacing: 0; border-left: 3pt solid var(--agt-gold); border-bottom: 0; padding-left: 6pt; margin: 12pt 0 5pt 0; page-break-after: avoid; }
+  section.cover { min-height: auto; padding-top: 0; border-top: 0; margin: 0; }
+  .cover, .cover * { hyphens: manual; -webkit-hyphens: manual; overflow-wrap: normal; word-break: normal; }
+  .cover { font-family: "Public Sans", Arial, Helvetica, sans-serif; font-size: 7.6pt; line-height: 1.22; color: var(--agt-ink); page-break-after: always; }
+  .cover p { margin: 0; }
+  .cover .agt-head .title { string-set: doc-title content(); }
+  /* contract strip, as on the approved mock-ups: gold-edged band, notice left, contract right */
+  .agt-strip { display: table; width: 100%; border: 0.8pt solid var(--agt-gold); background: var(--agt-lgold); font-size: 7.4pt; color: #6b4f0a; margin: 0 0 5pt 0; }
+  .agt-strip .l, .agt-strip .r { display: table-cell; padding: 2.6pt 6pt; vertical-align: middle; }
+  .agt-strip .r { text-align: right; white-space: nowrap; width: 34%; }
+  /* wide status chips for text states (the approved chip, widened) */
+  .agt-chip.wide { white-space: nowrap; padding: 1pt 5pt; font-size: 6.6pt; letter-spacing: .2pt; }
+  .agt-chip.ok { background: var(--agt-b1); } .agt-chip.warn { background: var(--agt-b2); } .agt-chip.bad { background: var(--agt-b4); } .agt-chip.info { background: var(--agt-b3); }
+  .cover table.agt td, .cover table.agt th { vertical-align: top; }
+  .cover table.agt td.nw, .cover table.agt th.nw { white-space: nowrap; }
+  .agt-sec table.agt { margin-bottom: 1pt; }
+  .agt-box .agt-note { margin-top: 2pt; }
+  .agt-box ul li, .agt-box ol li { line-height: 1.22; }
+
+  /* appendix: every detailed table, readable. Fixed widths from <colgroup>, words never broken,
+     one-line values stay on one line; only identifiers (.hash) may break anywhere. */
+  main h2 { font-size: 11pt; color: var(--agt-dblue); text-transform: none; letter-spacing: 0; border-left: 3pt solid var(--agt-gold); border-bottom: 0; padding-left: 6pt; margin: 12pt 0 5pt 0; break-after: avoid; page-break-after: avoid; }
   main table thead th { background: var(--agt-navy); color: #fff; border: 0; }
   main table tbody th[scope="row"] { background: var(--agt-lblue); color: var(--agt-ink); font-weight: 700; }
   main table tbody tr:nth-child(even) td { background: #F6F8FA; }
   main table td, main table th { border-bottom: 0.6pt solid var(--agt-line); }
-  main .scope-box { border-top: 2.5pt solid var(--agt-blue); }
-  /* Readable tables: fixed widths from <colgroup>, words never broken, one-line values stay on one line.
-     Only identifiers (.hash) may break anywhere, because a 36-character id cannot be wrapped otherwise. */
   main table.dp-fixed { table-layout: fixed; width: 100%; border-collapse: collapse; }
-  main table.dp-fixed th, main table.dp-fixed td { hyphens: manual; -webkit-hyphens: manual; overflow-wrap: normal; word-break: normal; vertical-align: top; }
+  main table.dp-fixed th, main table.dp-fixed td { hyphens: manual; -webkit-hyphens: manual; overflow-wrap: normal; word-break: normal; vertical-align: top; padding: 3pt 4pt; font-size: 8.5pt; line-height: 1.3; }
   main table.dp-fixed .nw, main .status { white-space: nowrap; }
   main table.dp-fixed .hash { font-family: "DejaVu Sans Mono", Menlo, Consolas, monospace; font-size: 7pt; overflow-wrap: anywhere; word-break: break-all; hyphens: none; -webkit-hyphens: none; }
-  main table.dp-fixed td, main table.dp-fixed th { padding: 3pt 4pt; font-size: 8.5pt; line-height: 1.3; }
   main table.dp-fixed tr { break-inside: avoid; page-break-inside: avoid; }
   main table.dp-fixed thead { display: table-header-group; }
-  main table.dp-status td:nth-child(2) { font-weight: 600; }
-  main .dp-lead { font-size: 10pt; margin: 4pt 0 8pt 0; }
-  main section { break-inside: auto; }
-  main h2 { break-after: avoid; page-break-after: avoid; }
+  .dp-appendix-intro { font-size: 8.5pt; color: var(--agt-muted); margin: 0 0 6pt 0; }
 </style>
-<div class="dp-band">
+
+<section class="cover" aria-labelledby="dp-title">
+  {# ── header: logo + title block left, badge + identity right (approved header) ── #}
   <div class="agt-head">
     <div class="cell logo" style="width: 0.95in">
       {% if branding.agt_logo %}<img src="{{ branding.agt_logo }}" alt="{{ branding.prepared_by }} logo">{% endif %}
@@ -83,7 +104,7 @@
     <div class="cell">
       <h1 class="title" id="dp-title">RCE Delivery Processing Report</h1>
       <p class="deliv"><b>Delivery processing</b> &middot; {{ delivery.delivery_label or 'Unlabelled delivery' }}{% if delivery.filename %} &middot; {{ delivery.filename }}{% endif %}</p>
-      <p class="meta">Report {{ snapshot.report_id }} &middot; Generated {{ generated_at_display }} &middot; Report Data Service v{{ snapshot.report_data_service_version }} &middot; Template v{{ snapshot.template_version }}{% if snapshot_id %} &middot; Reconciliation snapshot {{ snapshot_sequence }} of {{ reconciliation.history_count }}{% endif %}</p>
+      <p class="meta">Report {{ snapshot.report_id }} &middot; Generated {{ generated_at_display }} &middot; Contract {{ branding.contract_number }} &middot; Prepared for the COR (HHS / ASTP-ONC) &middot; <span class="pg"></span></p>
     </div>
     <div class="cell" style="width: 1.75in; text-align: right">
       <span class="agt-badge">{{ document_status|upper }}</span>
@@ -94,255 +115,198 @@
   <div class="agt-rule"></div>
   <div class="agt-goldrule"></div>
 
-  {# ── five KPI cards: every figure is restated, with its basis, in sections 1–8 ── #}
+  {# ── contract strip: the development/test notice, on page one ── #}
+  <div class="agt-strip" role="note">
+    <div class="l">{% if snapshot.data_classification == 'NO_DATASET_LOADED' %}<b>NO DATASET LOADED</b> &mdash; NOT FOR GOVERNMENT DELIVERY. Nothing here is an ONC finding.{% elif dev %}<b>DEVELOPMENT / TEST DATA &mdash; NOT FOR GOVERNMENT DELIVERY.</b> NOT ONC FINDINGS: every figure is a validation result computed over development data.{% else %}<b>Delivery processing report</b> &mdash; computed from persisted evidence for one delivery.{% endif %}</div>
+    <div class="r">Contract {{ branding.contract_number }} &middot; Prepared for the COR</div>
+  </div>
+
+  {# ── five metric cards ── #}
   <div class="agt-kpis">
     <div class="agt-kpi"><p class="l">Records delivered</p><p class="v">{{ delivery.record_count|number }}</p><p class="n">Source lines registered for this delivery</p></div>
-    <div class="agt-kpi"><p class="l">Processing outcome</p><p class="v sm">{{ outcome.value }}</p><p class="n">Review: {{ review.value }}</p></div>
+    <div class="agt-kpi"><p class="l">Processing outcome</p><p class="v sm" style="font-size: 9.5pt; white-space: normal; line-height: 1.25">{{ outcome.value }}</p><p class="n">Review: {{ review.value }}</p></div>
     <div class="agt-kpi"><p class="l">Reconciliation</p><p class="v">{% if reconciliation.available %}{{ 'PASSED' if reconciliation.passed else 'FAILED' }}{% else %}None{% endif %}</p><p class="n">{% if reconciliation.available %}snapshot {{ reconciliation.sequence }} of {{ reconciliation.history_count }}{% else %}no reconciliation snapshot is persisted{% endif %}</p></div>
     <div class="agt-kpi"><p class="l">Findings</p><p class="v">{% if findings.available %}{{ findings.total|number }}{% else %}&mdash;{% endif %}</p><p class="n">{% if findings.available %}{{ findings.open_high|number }} open at HIGH / CRITICAL{% else %}no completed quality run{% endif %}</p></div>
     <div class="agt-kpi"><p class="l">Review records</p><p class="v">{{ analyst.counts.review_records|number }}</p><p class="n">{{ analyst.counts.qa_approved|number }} independently QA approved &middot; {{ analyst.counts.qa_pending|number }} awaiting QA</p></div>
   </div>
-</div>
+  <p class="agt-cor">This is a draft report for one delivery. It states what the system did and where human review stands; it contains no approved findings. The full detail is in Appendix A&ndash;J.</p>
+
+  <div class="agt-cols">
+    <div class="cell left">
+
+      <div class="agt-sec">
+        <h2 class="agt-h2">Status &mdash; four separate questions</h2>
+        <table class="agt">
+          {{ cols([27, 21, 52]) }}
+          <caption>Did processing finish, what was found, what was checked against outside sources, and has anyone approved it</caption>
+          <thead><tr><th scope="col">Question</th><th scope="col">Status</th><th scope="col">What it means</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><b>Did processing finish?</b></td>
+              <td>{% if outcome.code == 'COMPLETED_CLEAN' %}{{ chip('ok', outcome.value) }}{% elif outcome.code == 'COMPLETED_WITH_EXCEPTIONS' %}{{ chip('warn', outcome.value) }}{% else %}{{ chip('bad', outcome.value) }}{% endif %}</td>
+              <td class="q">{{ outcome.detail }}</td>
+            </tr>
+            <tr>
+              <td><b>What was found?</b></td>
+              <td>{% if findings.available %}{{ chip('warn' if findings.open_high else 'info', findings.total|number ~ ' findings') }}{% else %}{{ chip('warn', 'No quality run') }}{% endif %}</td>
+              <td class="q">{% if findings.available %}{{ findings.open_high|number }} open at HIGH / CRITICAL. Rule-based data-quality results, not analyst determinations.{% else %}Findings cannot be stated.{% endif %}</td>
+            </tr>
+            <tr>
+              <td><b>What was checked against outside sources?</b></td>
+              <td>{% if ns.attempted == 0 %}{{ chip('warn', 'Not run &middot; 0%'|safe) }}{% else %}{{ chip('ok' if verification.state == 'Complete' else 'info', verification.state) }}{% endif %}</td>
+              <td class="q">{% if ns.attempted == 0 %}No external source (NPPES, PECOS, OIG LEIE, SAM.gov) was checked. <b>Not run is not the same as clear.</b>{% else %}{{ ns.attempted|number }} source check(s) attempted. See coverage below.{% endif %}</td>
+            </tr>
+            <tr>
+              <td><b>Has anyone approved it?</b></td>
+              <td>{{ chip('ok' if (analyst.counts.qa_approved > 0 and analyst.counts.qa_pending == 0 and analyst.counts.open == 0) else 'warn', review.value) }}</td>
+              <td class="q">{{ analyst.counts.review_records|number }} review record(s): {{ analyst.counts.open|number }} open, {{ analyst.counts.claimed|number }} claimed, {{ analyst.counts.qa_pending|number }} awaiting independent QA, {{ analyst.counts.qa_approved|number }} QA approved.</td>
+            </tr>
+            <tr>
+              <td><b>Has it been released?</b></td>
+              <td>{{ chip('warn', document_status) }}</td>
+              <td class="q">The Program Manager release decision is recorded in the Report Register. None is recorded in this document.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="agt-sec">
+        <h2 class="agt-h2">Reconciliation &mdash; every record accounted for</h2>
+        {% if reconciliation.available %}
+        {% set eq = reconciliation.equation %}
+        <table class="agt">
+          {{ cols([36, 16, 48]) }}
+          <caption>Records received and what became of them</caption>
+          <thead><tr><th scope="col">Measure</th><th scope="col" class="num">Records</th><th scope="col" class="gap">Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Received</td><td class="num">{{ eq.get('received')|number }}</td><td class="gap q">Lines in the delivered file</td></tr>
+            <tr><td>Accounted for</td><td class="num">{{ eq.get('accounted')|number }}</td><td class="gap q">created {{ eq.get('created')|number }} &middot; updated {{ eq.get('updated')|number }} &middot; unchanged {{ eq.get('matched_unchanged')|number }}</td></tr>
+            <tr><td>Held, rejected, missing key, excluded</td><td class="num">{{ ((eq.get('held') or 0) + (eq.get('rejected') or 0) + (eq.get('missing_key') or 0) + (eq.get('excluded') or 0))|number }}</td><td class="gap q">held {{ eq.get('held')|number }} &middot; rejected {{ eq.get('rejected')|number }} &middot; missing key {{ eq.get('missing_key')|number }} &middot; excluded {{ eq.get('excluded')|number }}</td></tr>
+            <tr class="total"><td>Equation holds</td><td class="num">{{ 'Yes' if eq.get('holds') else 'No' }}</td><td class="gap q">{{ 'PASSED' if reconciliation.passed else 'FAILED' }}{% if not reconciliation.passed %} &mdash; {{ reconciliation.failure_reason or 'no reason recorded' }}{% endif %}{% if reconciliation.reconstructed %} &middot; RECONSTRUCTED snapshot{% endif %}</td></tr>
+          </tbody>
+        </table>
+        {% else %}
+        <p class="agt-note">No reconciliation snapshot is persisted for this delivery. No reconciliation of record exists, and this report does not compute one.</p>
+        {% endif %}
+      </div>
+
+      <div class="agt-sec">
+        <h2 class="agt-h2">Exceptions (findings) by rule</h2>
+        {% if findings.available %}
+        <table class="agt">
+          {{ cols([16, 44, 24, 16]) }}
+          <caption>Findings grouped by rule, issue type and severity</caption>
+          <thead><tr><th scope="col">Rule</th><th scope="col">Issue type</th><th scope="col">Severity</th><th scope="col" class="num">Count</th></tr></thead>
+          <tbody>
+            {% for f in findings.by_code %}
+            <tr><td class="nw"><b>{{ f.rule_id }}</b></td><td class="q">{{ f.issue_type }}</td><td class="nw">{{ f.severity }}</td><td class="num">{{ f.count|number }}</td></tr>
+            {% else %}
+            <tr><td>None</td><td>&mdash;</td><td>&mdash;</td><td class="num">0</td></tr>
+            {% endfor %}
+            <tr class="total"><td colspan="3">Total findings</td><td class="num">{{ findings.total|number }}</td></tr>
+          </tbody>
+        </table>
+        <p class="agt-note">Findings are system results. They are not approved until an analyst determines and a different QA reviewer approves. Line-by-line list: Appendix E.</p>
+        {% else %}
+        <p class="agt-note">No completed quality run exists for this delivery; findings cannot be stated.</p>
+        {% endif %}
+      </div>
+
+      <div class="agt-sec">
+        <h2 class="agt-h2">Screening coverage &mdash; what was actually attempted</h2>
+        <table class="agt">
+          {{ cols([22, 19, 15, 16, 14, 14]) }}
+          <caption>Verification coverage per source</caption>
+          <thead>
+            <tr><th scope="col">Source</th><th scope="col">State</th><th scope="col" class="num">Eligible</th><th scope="col" class="num">Attempted</th><th scope="col" class="num">Verified</th><th scope="col" class="num">Coverage</th></tr>
+          </thead>
+          <tbody>
+            {% for s in verification.sources %}
+            <tr><td class="nw"><b>{{ src_label(s.name) }}</b></td><td class="nw">{{ s.state }}</td><td class="num">{{ s.eligible|number }}</td><td class="num">{{ s.attempted|number }}</td><td class="num">{{ s.verified|number }}</td><td class="num">{% if s.coverage_pct is none %}Not run{% else %}{{ s.coverage_pct }}%{% endif %}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        <p class="agt-note">Coverage counts what was attempted for this delivery's entities; connector readiness is not coverage. Not-found, unavailable and failed counts per source: Appendix G.</p>
+      </div>
+    </div>
+
+    <div class="cell right">
+
+      <div class="agt-box"><h2 class="agt-h2">Delivery at a glance</h2>
+        <div class="agt-src">
+          <div class="r"><div class="k">Delivery</div><div class="n" style="white-space: normal; width: 62%">{{ delivery.delivery_label or 'Not labelled' }}</div></div>
+          <div class="r"><div class="k">Records delivered</div><div class="n">{{ delivery.record_count|number }}</div></div>
+          <div class="r"><div class="k">Registered by</div><div class="n" style="white-space: normal; width: 55%">{{ delivery.registrant or 'Not recorded' }}</div></div>
+          <div class="r"><div class="k">Completed (UTC)</div><div class="n">{{ ts(delivery.completed_at or delivery.failed_at) }}</div></div>
+          <div class="r"><div class="k">Software build</div><div class="n">{{ (build.git_sha or '')[:12] }}</div></div>
+        </div>
+        <p class="agt-note">Identifiers, hashes and provenance: Appendix A.</p>
+      </div>
+
+      <div class="agt-box"><h2 class="agt-h2">Reconciliation &amp; source integrity</h2>
+        <div class="agt-st">
+          <div class="row">
+            <div class="cell"><b class="agt-dot{% if not (reconciliation.available and reconciliation.passed) %} warn{% endif %}">{% if reconciliation.available and reconciliation.passed %}Reconciliation closed{% else %}Reconciliation not closed{% endif %}</b>{% if reconciliation.available %}Received {{ reconciliation.equation.get('received')|number }} = accounted {{ reconciliation.equation.get('accounted')|number }}; snapshot {{ reconciliation.sequence }} of {{ reconciliation.history_count }}.{% else %}No snapshot is persisted.{% endif %}</div>
+            <div class="cell"><b class="agt-dot{% if not delivery.sha256 %} warn{% endif %}">Source integrity</b>{% if delivery.sha256 %}Delivered file hash is retained with the intake ({{ (delivery.sha256 or '')[:12] }}&hellip;).{% else %}No file hash is recorded.{% endif %}</div>
+          </div>
+          <div class="row">
+            <div class="cell"><b class="agt-dot">Audit recorded</b>Generation and every download are written to the audit log.</div>
+            <div class="cell"><b class="agt-dot{% if analyst.counts.qa_approved == 0 %} warn{% endif %}">QA independence</b>{% if analyst.counts.qa_approved %}{{ analyst.counts.qa_approved|number }} of {{ analyst.counts.review_records|number }} approved by a QA reviewer other than the analyst.{% else %}No determination has been QA approved yet.{% endif %}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="agt-box"><h2 class="agt-h2">Source readiness (preflight) &amp; rechecks</h2>
+        {% if readiness.available %}
+        {% set rr = readiness.run %}
+        <ul>
+          <li>Preflight run <b>{{ rr.status }}</b> &middot; gate {{ rr.classification_gate or 'not recorded' }}</li>
+          <li>{{ rr.records_evaluated|number }} records evaluated &middot; {{ rr.findings_count|number }} findings{% if readiness.by_disposition %} ({% for k, n in readiness.by_disposition.items() %}{{ k }} {{ n|number }}{% if not loop.last %}, {% endif %}{% endfor %}){% endif %}</li>
+        </ul>
+        {% else %}
+        <p><b>Source readiness: not run.</b> No preflight run is recorded. Not run does not mean the file is ready; nothing was checked.</p>
+        {% endif %}
+        {% if rechecks.available and rechecks.total %}
+        <p style="margin-top: 2pt"><b>{{ rechecks.total|number }} controlled recheck(s)</b> requested:</p>
+        <ul>{% for j in rechecks.rows[:4] %}<li>{{ j.source_id }} &middot; {{ j.state }} &middot; requested by {{ j.requested_by }}{% if j.approved_by %}, approved by {{ j.approved_by }}{% else %}, awaiting a different approver{% endif %} ({{ j.processed_count|number }} of {{ j.target_count|number }}){% endfor %}</ul>
+        {% else %}
+        <p style="margin-top: 2pt">No recheck has been requested for this delivery.</p>
+        {% endif %}
+      </div>
+
+      <div class="agt-box" style="border-top-color: var(--agt-gold)"><h2 class="agt-h2">Evidence limitations</h2>
+        <ul>
+          {% for item in limitations %}<li>{{ item }}</li>
+          {% else %}<li>No limitation was recorded: every section was read from persisted evidence for this delivery.</li>{% endfor %}
+        </ul>
+        <p class="agt-note">What this report could not state from persisted evidence, and why. This list is never omitted.</p>
+      </div>
+
+      <div class="agt-box"><h2 class="agt-h2">Required next actions</h2>
+        <ol>
+          {% if not reconciliation.available %}<li><b>Reconcile the delivery.</b> No snapshot exists, so completeness is unproven.</li>
+          {% elif not reconciliation.passed %}<li><b>Resolve the reconciliation failure</b> ({{ reconciliation.failure_reason or 'no reason recorded' }}).</li>{% endif %}
+          {% if findings.available and findings.open_high %}<li><b>Resolve {{ findings.open_high|number }} open HIGH / CRITICAL finding(s).</b> The delivery cannot be treated as clean until then.</li>{% endif %}
+          {% if ns.attempted == 0 %}<li><b>Run source verification</b> for the {{ ns.eligible|number }} eligible entit{{ 'y' if ns.eligible == 1 else 'ies' }} at NPPES, PECOS, OIG LEIE and SAM.gov. Until then there is no screening result.</li>{% endif %}
+          {% if not readiness.available %}<li><b>Run the source-readiness (preflight) check</b> if the file's fitness to process is to be on record.</li>{% endif %}
+          {% if analyst.counts.open %}<li><b>Analyst review:</b> {{ analyst.counts.open|number }} review record(s) are open and need to be claimed and determined.</li>{% endif %}
+          {% if analyst.counts.claimed %}<li><b>Analyst determination:</b> {{ analyst.counts.claimed|number }} claimed record(s) need a determination.</li>{% endif %}
+          {% if analyst.counts.qa_pending %}<li><b>Independent QA:</b> {{ analyst.counts.qa_pending|number }} determination(s) await approval by a QA reviewer other than the analyst.</li>{% endif %}
+          <li><b>Program Manager release decision:</b> review this draft, then record the decision in the Report Register.</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+  <div class="agt-pkg"><b>Package:</b> this report &middot; detailed appendix A&ndash;J (identity and provenance, timeline, reconciliation, dispositions, findings, identifier conflicts, verification detail, analyst actions, lineage, audit note) &middot; CSV export of the same persisted evidence &middot; report {{ snapshot.report_id }}</div>
+  <p class="agt-foot">{{ branding.prepared_by }} &middot; Contract {{ branding.contract_number }} &middot; Delivery processing report &middot; {{ delivery.delivery_label or 'Unlabelled delivery' }} &middot; <span class="mark">{% if dev %}DEVELOPMENT / TEST DATA &mdash; NOT FOR GOVERNMENT DELIVERY{% else %}{{ document_status|upper }}{% endif %}</span> &middot; Generated {{ generated_at_display }}</p>
+</section>
 {% endblock %}
 
 {% block content %}
 
-{# ── Program Manager report: eight short sections, then ONE landscape appendix ── #}
-
-<section class="scope-box" aria-labelledby="dp-summary">
-  <h2 id="dp-summary">1. Summary for the Program Manager</h2>
-  <p class="dp-lead">
-    This is a <strong>draft development report</strong> for
-    <strong>{{ delivery.delivery_label or 'an unlabelled delivery' }}</strong>
-    ({{ delivery.record_count|number }} record{{ '' if delivery.record_count == 1 else 's' }} delivered).
-    It states what the system did with the file and where human review stands. It contains
-    <strong>no approved findings</strong> and is not a Government deliverable.
-  </p>
-  <table class="dp-fixed dp-status">
-    {{ cols([22, 24, 54]) }}
-    <caption>Four separate questions, answered separately: did processing finish, what was found, what was checked against outside sources, and has anyone approved it</caption>
-    <thead>
-      <tr><th scope="col">Question</th><th scope="col">Status</th><th scope="col">What it means</th></tr>
-    </thead>
-    <tbody>
-      <tr>
-        <th scope="row">Did processing finish?</th>
-        <td>{{ flag(outcome.code in ('COMPLETED_CLEAN', 'COMPLETED_WITH_EXCEPTIONS'), outcome.value, outcome.value) }}</td>
-        <td>{{ outcome.detail }}</td>
-      </tr>
-      <tr>
-        <th scope="row">What was found?</th>
-        <td class="nw">{% if findings.available %}{{ findings.total|number }} finding{{ '' if findings.total == 1 else 's' }}, {{ findings.open_high|number }} open at HIGH / CRITICAL{% else %}No quality run{% endif %}</td>
-        <td>Data-quality rules applied to the delivered file. These are system results, not analyst determinations. See section 4.</td>
-      </tr>
-      {% set ns = namespace(attempted=0, eligible=0) %}
-      {% for s in verification.sources %}{% set ns.attempted = ns.attempted + (s.attempted or 0) %}{% if (s.eligible or 0) > ns.eligible %}{% set ns.eligible = s.eligible %}{% endif %}{% endfor %}
-      <tr>
-        <th scope="row">What was checked against outside sources?</th>
-        <td>{% if ns.attempted == 0 %}{{ flag(false, 'Not run (0% coverage)', 'Not run (0% coverage)') }}{% else %}{{ flag(true, verification.state, verification.state) }}{% endif %}</td>
-        <td>{% if ns.attempted == 0 %}No external source (NPPES, PECOS, OIG LEIE, SAM.gov) has been checked for this delivery. <strong>Not run is not the same as clear.</strong> See section 5 and section 8.{% else %}{{ ns.attempted|number }} source check(s) attempted across the four sources. See section 5.{% endif %}</td>
-      </tr>
-      <tr>
-        <th scope="row">Has anyone approved it?</th>
-        <td>{{ flag(analyst.counts.qa_approved > 0 and analyst.counts.qa_pending == 0 and analyst.counts.open == 0, review.value, review.value) }}</td>
-        <td>{{ analyst.counts.review_records|number }} review record(s): {{ analyst.counts.open|number }} open, {{ analyst.counts.claimed|number }} claimed, {{ analyst.counts.qa_pending|number }} awaiting independent QA, {{ analyst.counts.qa_approved|number }} QA approved. See section 7.</td>
-      </tr>
-      <tr>
-        <th scope="row">Has it been released?</th>
-        <td>{{ flag(false, document_status, document_status) }}</td>
-        <td>A Program Manager release decision is recorded in the Report Register after review. None is recorded in this document.</td>
-      </tr>
-    </tbody>
-  </table>
-</section>
-
-<section aria-labelledby="dp-glance">
-  <h2 id="dp-glance">2. Delivery at a glance</h2>
-  <table class="dp-fixed">
-    {{ cols([30, 70]) }}
-    <caption>The delivery in one table; identifiers, hashes and provenance are in Appendix A</caption>
-    <thead><tr><th scope="col">Attribute</th><th scope="col">Value</th></tr></thead>
-    <tbody>
-      <tr><th scope="row">Delivery</th><td>{{ delivery.delivery_label or 'Not labelled' }}</td></tr>
-      <tr><th scope="row">File</th><td>{{ delivery.filename or 'Not recorded' }}</td></tr>
-      <tr><th scope="row">Records delivered</th><td>{{ delivery.record_count|number }}</td></tr>
-      <tr><th scope="row">Registered by</th><td>{{ delivery.registrant or 'Not recorded' }}</td></tr>
-      <tr><th scope="row">Processing completed (UTC)</th><td class="nw">{{ ts(delivery.completed_at or delivery.failed_at) }}</td></tr>
-      <tr><th scope="row">Reconciliation snapshot</th><td>{% if snapshot_id %}Snapshot {{ snapshot_sequence }} of {{ reconciliation.history_count }} ({% if snapshot_is_latest %}latest{% else %}not the latest{% endif %}){% else %}None persisted{% endif %}</td></tr>
-      <tr><th scope="row">Software build</th><td class="nw">{{ (build.git_sha or '')[:12] }} &middot; migration {{ build.migration_revision }}</td></tr>
-      <tr><th scope="row">Report</th><td class="nw">{{ snapshot.report_id }} &middot; generated {{ generated_at_display }}</td></tr>
-    </tbody>
-  </table>
-</section>
-
-<section aria-labelledby="dp-recon">
-  <h2 id="dp-recon">3. Reconciliation</h2>
-  {% if reconciliation.available %}
-  {% set eq = reconciliation.equation %}
-  <p>Every received record must be accounted for. Result: {{ flag(reconciliation.passed, 'PASSED', 'FAILED') }}
-    {% if not reconciliation.passed %}&mdash; {{ reconciliation.failure_reason or 'no reason recorded' }}{% endif %}
-    {% if reconciliation.reconstructed %}<strong>This snapshot is marked RECONSTRUCTED.</strong>{% endif %}</p>
-  <table class="dp-fixed">
-    {{ cols([40, 20, 40]) }}
-    <caption>Records received and what became of them</caption>
-    <thead><tr><th scope="col">Measure</th><th scope="col">Records</th><th scope="col">Note</th></tr></thead>
-    <tbody>
-      <tr><th scope="row">Received</th><td>{{ eq.get('received')|number }}</td><td>Lines in the delivered file</td></tr>
-      <tr><th scope="row">Accounted for</th><td>{{ eq.get('accounted')|number }}</td><td>Created {{ eq.get('created')|number }} &middot; updated {{ eq.get('updated')|number }} &middot; unchanged {{ eq.get('matched_unchanged')|number }}</td></tr>
-      <tr><th scope="row">Held, rejected, missing key, excluded</th><td>{{ ((eq.get('held') or 0) + (eq.get('rejected') or 0) + (eq.get('missing_key') or 0) + (eq.get('excluded') or 0))|number }}</td><td>Held {{ eq.get('held')|number }} &middot; rejected {{ eq.get('rejected')|number }} &middot; missing key {{ eq.get('missing_key')|number }} &middot; excluded {{ eq.get('excluded')|number }}</td></tr>
-      <tr><th scope="row">Every record accounted for</th><td>{{ flag(eq.get('holds'), 'Yes', 'No') }}</td><td>Full accounting equation and checks: Appendix C</td></tr>
-    </tbody>
-  </table>
-  {% else %}
-  <p class="insufficient-data">No reconciliation snapshot is persisted for this delivery. No reconciliation of record exists, and this report does not compute one.</p>
-  {% endif %}
-</section>
-
-<section aria-labelledby="dp-findings">
-  <h2 id="dp-findings">4. Exceptions (findings)</h2>
-  {% if findings.available %}
-  <p>{{ findings.total|number }} finding(s) in the current quality run; {{ findings.open_high|number }} open at HIGH or CRITICAL severity.
-    {% if findings.open_high == 0 %}No finding currently holds the delivery.{% endif %}
-    Findings are system results and are not approved until an analyst determines and a different QA reviewer approves.</p>
-  <table class="dp-fixed">
-    {{ cols([16, 44, 24, 16]) }}
-    <caption>Findings grouped by rule, issue type and severity</caption>
-    <thead><tr><th scope="col">Rule</th><th scope="col">Issue type</th><th scope="col">Severity</th><th scope="col">Count</th></tr></thead>
-    <tbody>
-      {% for f in findings.by_code %}
-      <tr><th scope="row" class="nw">{{ f.rule_id }}</th><td>{{ f.issue_type }}</td><td class="nw">{{ f.severity }}</td><td>{{ f.count|number }}</td></tr>
-      {% else %}
-      <tr><th scope="row">None</th><td>&mdash;</td><td>&mdash;</td><td>0</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  <p>The line-by-line list is in Appendix E.</p>
-  {% else %}
-  <p class="insufficient-data">No completed quality run exists for this delivery; findings cannot be stated.</p>
-  {% endif %}
-</section>
-
-<section aria-labelledby="dp-coverage">
-  <h2 id="dp-coverage">5. Screening coverage</h2>
-  <p>Coverage counts what was actually attempted against each outside source for this delivery's entities.
-    A source shown as <strong>Not run</strong> was never checked. Connector readiness is not coverage.</p>
-  <table class="dp-fixed">
-    {{ cols([22, 18, 15, 15, 15, 15]) }}
-    <caption>Verification coverage per source</caption>
-    <thead>
-      <tr><th scope="col">Source</th><th scope="col">State</th><th scope="col">Eligible</th><th scope="col">Attempted</th><th scope="col">Verified</th><th scope="col">Coverage</th></tr>
-    </thead>
-    <tbody>
-      {% for s in verification.sources %}
-      <tr>
-        <th scope="row" class="nw">{{ src_label(s.name) }}</th>
-        <td class="nw">{{ s.state }}</td>
-        <td>{{ s.eligible|number }}</td>
-        <td>{{ s.attempted|number }}</td>
-        <td>{{ s.verified|number }}</td>
-        <td class="nw">{% if s.coverage_pct is none %}Not run{% else %}{{ s.coverage_pct }}%{% endif %}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  <p>Not-found, unavailable and failed counts per source, and the note on the Failed indicator, are in Appendix G.</p>
-</section>
-
-<section aria-labelledby="dp-ready">
-  <h2 id="dp-ready">6. Source readiness (preflight) and rechecks</h2>
-  {% if readiness.available %}
-  {% set rr = readiness.run %}
-  <p>Source readiness asks whether the delivered file was fit to process. It is a technical check, not a compliance finding.</p>
-  <table class="dp-fixed">
-    {{ cols([30, 70]) }}
-    <caption>Latest source-readiness (preflight) run for this delivery</caption>
-    <thead><tr><th scope="col">Attribute</th><th scope="col">Value</th></tr></thead>
-    <tbody>
-      <tr><th scope="row">Run status</th><td>{{ rr.status }}{% if rr.error %} &mdash; {{ rr.error }}{% endif %}</td></tr>
-      <tr><th scope="row">Classification gate</th><td>{{ rr.classification_gate or 'Not recorded' }}</td></tr>
-      <tr><th scope="row">Records evaluated</th><td>{{ rr.records_evaluated|number }}</td></tr>
-      <tr><th scope="row">Findings</th><td>{{ rr.findings_count|number }}{% if readiness.by_disposition %} ({% for k, n in readiness.by_disposition.items() %}{{ k }} {{ n|number }}{% if not loop.last %} &middot; {% endif %}{% endfor %}){% endif %}</td></tr>
-      <tr><th scope="row">Run completed (UTC)</th><td class="nw">{{ ts(rr.completed_at or rr.started_at) }}</td></tr>
-    </tbody>
-  </table>
-  {% else %}
-  <p><strong>Source readiness: not run.</strong> No preflight run is recorded for this delivery. Not run does not mean the file is ready; nothing was checked.</p>
-  {% endif %}
-  {% if rechecks.available and rechecks.total %}
-  <table class="dp-fixed">
-    {{ cols([14, 18, 18, 18, 18, 14]) }}
-    <caption>Controlled rechecks requested for this delivery ({{ rechecks.total|number }}); the person who requests a recheck is not the person who approves it</caption>
-    <thead>
-      <tr><th scope="col">Source</th><th scope="col">Trigger</th><th scope="col">State</th><th scope="col">Requested by</th><th scope="col">Approved by</th><th scope="col">Progress</th></tr>
-    </thead>
-    <tbody>
-      {% for j in rechecks.rows %}
-      <tr>
-        <th scope="row">{{ j.source_id }}</th>
-        <td>{{ j.trigger_kind }}</td>
-        <td class="nw">{{ j.state }}</td>
-        <td>{{ j.requested_by }}</td>
-        <td>{{ j.approved_by or 'Awaiting approval' }}</td>
-        <td class="nw">{{ j.processed_count|number }} of {{ j.target_count|number }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <p>No recheck has been requested for this delivery.</p>
-  {% endif %}
-</section>
-
-<section aria-labelledby="dp-review">
-  <h2 id="dp-review">7. Review and approval</h2>
-  <table class="dp-fixed">
-    {{ cols([40, 20, 40]) }}
-    <caption>Human review of this delivery's review records</caption>
-    <thead><tr><th scope="col">Stage</th><th scope="col">Records</th><th scope="col">Meaning</th></tr></thead>
-    <tbody>
-      <tr><th scope="row">Review records</th><td>{{ analyst.counts.review_records|number }}</td><td>Work items created for analysts</td></tr>
-      <tr><th scope="row">Open</th><td>{{ analyst.counts.open|number }}</td><td>Not yet claimed</td></tr>
-      <tr><th scope="row">Claimed</th><td>{{ analyst.counts.claimed|number }}</td><td>An analyst is working on them</td></tr>
-      <tr><th scope="row">Awaiting independent QA</th><td>{{ analyst.counts.qa_pending|number }}</td><td>Determined; a different QA reviewer must approve</td></tr>
-      <tr><th scope="row">QA approved</th><td>{{ analyst.counts.qa_approved|number }}</td><td>Approved and reportable</td></tr>
-    </tbody>
-  </table>
-  <p>Review state: <strong>{{ review.value }}</strong>. {{ review.detail }}</p>
-</section>
-
-<section aria-labelledby="dp-limits">
-  <h2 id="dp-limits">8. Evidence limitations</h2>
-  <p>What this report could not state from persisted evidence, and why. This list is never omitted.</p>
-  <ul>
-    {% for item in limitations %}
-    <li>{{ item }}</li>
-    {% else %}
-    <li>No limitation was recorded: every section was read from persisted evidence for this delivery.</li>
-    {% endfor %}
-  </ul>
-</section>
-
-<section aria-labelledby="dp-next">
-  <h2 id="dp-next">9. Required next actions</h2>
-  <ol>
-    {% if not reconciliation.available %}<li><strong>Reconcile the delivery.</strong> No reconciliation snapshot exists, so completeness is unproven.</li>
-    {% elif not reconciliation.passed %}<li><strong>Resolve the reconciliation failure</strong> ({{ reconciliation.failure_reason or 'no reason recorded' }}) before relying on any figure.</li>{% endif %}
-    {% if findings.available and findings.open_high %}<li><strong>Resolve {{ findings.open_high|number }} open HIGH / CRITICAL finding(s).</strong> The delivery cannot be treated as clean until they are.</li>{% endif %}
-    {% if ns.attempted == 0 %}<li><strong>Run source verification</strong> for the {{ ns.eligible|number }} eligible entit{{ 'y' if ns.eligible == 1 else 'ies' }} at NPPES, PECOS, OIG LEIE and SAM.gov. Until then this delivery has no screening result.</li>{% endif %}
-    {% if not readiness.available %}<li><strong>Run the source-readiness (preflight) check</strong> if the file's fitness to process is to be on record.</li>{% endif %}
-    {% if analyst.counts.open %}<li><strong>Analyst review:</strong> {{ analyst.counts.open|number }} review record(s) are open and need an analyst to claim and determine them.</li>{% endif %}
-    {% if analyst.counts.claimed %}<li><strong>Analyst determination:</strong> {{ analyst.counts.claimed|number }} claimed record(s) need a determination.</li>{% endif %}
-    {% if analyst.counts.qa_pending %}<li><strong>Independent QA:</strong> {{ analyst.counts.qa_pending|number }} determination(s) await approval by a QA reviewer other than the analyst who made them.</li>{% endif %}
-    <li><strong>Program Manager release decision:</strong> this report is a draft. Review it, then record the release decision in the Report Register.</li>
-  </ol>
-</section>
-
-{#
-  Appendix: everything a reviewer needs to trace the report back to its evidence, kept out of the
-  narrative above. One landscape region (one `.dp-wide` block, no nested div). Every value from the
-  earlier version of this report is still here; nothing was dropped, only moved.
-#}
 <div class="dp-wide">
+<p class="dp-appendix-intro">Appendix A&ndash;J: detailed evidence for this delivery. Report {{ snapshot.report_id }} &middot; {{ delivery.delivery_label or 'Unlabelled delivery' }} &middot; {{ document_status }}. Everything on page one is restated here with its identifiers, hashes and timelines.</p>
 <h2>Appendix A. Delivery Identity and provenance</h2>
 <table class="dp-fixed">
   {{ cols([28, 72]) }}
