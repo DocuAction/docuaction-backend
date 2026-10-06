@@ -616,6 +616,100 @@ class DeliveryProcessingDataService:
             return fallback
         return _normalise_coverage(raw)
 
+    _SOURCE_LABELS = {"nppes": "NPPES", "pecos": "PECOS", "leie": "OIG LEIE", "sam": "SAM.gov"}
+
+    def _note_coverage_limits(self, verification: Dict[str, Any]) -> None:
+        """State, as an evidence limitation, every source that was never attempted.
+
+        "Not run" and 0% coverage are not "clear": a reader who sees zero findings from a source
+        that never ran must be told so in words, in the limitations section, every time.
+        """
+        sources = verification.get("sources") or []
+        idle = [x for x in sources if not (x.get("attempted") or 0)]
+        if not idle:
+            return
+        labels = ", ".join(self._SOURCE_LABELS.get(x.get("name"), str(x.get("name")).upper()) for x in idle)
+        eligible = max([int(x.get("eligible") or 0) for x in sources] or [0])
+        if len(idle) == len(sources):
+            lead = (f"No external source check was attempted for this delivery ({labels}: 0 of {eligible} "
+                    f"eligible entities attempted, 0% coverage). ")
+        else:
+            lead = f"No check was attempted at {labels} (0 attempted, 0% coverage at that source). "
+        self.limit(lead + "'Not run' means no check was performed. It does not mean the entities were "
+                          "checked and found clear, so this report draws no screening or exclusion "
+                          "conclusion for those sources.")
+
+    def _note_review_limits(self, counts: Dict[str, Any]) -> None:
+        total = int(counts.get("review_records") or 0)
+        if total and not int(counts.get("qa_approved") or 0):
+            self.limit(f"{total} review record(s) exist and none has been independently QA approved. The "
+                       "findings and counts in this report are system results, not approved determinations.")
+
+    async def _readiness(self, intake) -> Dict[str, Any]:
+        """The latest source-readiness (preflight) run for this delivery, from persisted rows only."""
+        empty = {"available": False, "run": None, "by_category": {}, "by_disposition": {}}
+        if intake is None:
+            return empty
+        from sqlalchemy import func, select
+        from app.tefca_registry.rce.preflight_shadow_models import RcePreflightFinding, RcePreflightRun
+
+        run = (await self.db.execute(
+            select(RcePreflightRun).where(RcePreflightRun.source_intake_id == intake.id)
+            .order_by(RcePreflightRun.started_at.desc()).limit(1))).scalars().first()
+        if run is None:
+            self.limit("No source-readiness (preflight) check was run for this delivery. 'Not run' does not "
+                       "mean the delivered file is ready: nothing was checked.")
+            return empty
+        rows = (await self.db.execute(
+            select(RcePreflightFinding.category, RcePreflightFinding.disposition, func.count())
+            .where(RcePreflightFinding.run_id == run.id)
+            .group_by(RcePreflightFinding.category, RcePreflightFinding.disposition))).all()
+        by_category: Dict[str, int] = {}
+        by_disposition: Dict[str, int] = {}
+        for category, disposition, n in rows:
+            by_category[category] = by_category.get(category, 0) + int(n)
+            by_disposition[disposition] = by_disposition.get(disposition, 0) + int(n)
+        return {
+            "available": True,
+            "run": {
+                "status": run.status, "classification_gate": run.classification_gate,
+                "records_evaluated": int(run.records_evaluated or 0),
+                "findings_count": int(run.findings_count or 0),
+                "normalizations_count": int(run.normalizations_count or 0),
+                "preflight_version": run.preflight_version, "rule_set_version": run.rule_set_version,
+                "field_map_version": run.field_map_version,
+                "started_at": _iso(run.started_at), "completed_at": _iso(run.completed_at),
+                "actor": run.actor, "error": run.error, "id": str(run.id),
+            },
+            "by_category": by_category, "by_disposition": by_disposition,
+        }
+
+    async def _rechecks(self, intake) -> Dict[str, Any]:
+        """Controlled rechecks requested for this delivery: who asked, who approved, how far they got."""
+        empty = {"available": False, "total": 0, "by_state": {}, "rows": []}
+        if intake is None:
+            return empty
+        from sqlalchemy import func, select
+        from app.tefca_registry.rce.recheck_models import RceRecheckJob
+
+        total = int((await self.db.execute(
+            select(func.count()).select_from(RceRecheckJob)
+            .where(RceRecheckJob.intake_id == intake.id))).scalar() or 0)
+        by_state = {state: int(n) for state, n in (await self.db.execute(
+            select(RceRecheckJob.state, func.count()).where(RceRecheckJob.intake_id == intake.id)
+            .group_by(RceRecheckJob.state))).all()}
+        jobs = (await self.db.execute(
+            select(RceRecheckJob).where(RceRecheckJob.intake_id == intake.id)
+            .order_by(RceRecheckJob.created_at.desc()).limit(20))).scalars().all()
+        rows = [{
+            "source_id": j.source_id, "trigger_kind": j.trigger_kind, "state": j.state,
+            "requested_by": j.requested_by, "approved_by": j.approved_by,
+            "target_count": int(j.target_count or 0), "processed_count": int(j.processed_count or 0),
+            "created_at": _iso(j.created_at), "completed_at": _iso(j.completed_at),
+            "error_reason": j.error_reason,
+        } for j in jobs]
+        return {"available": True, "total": total, "by_state": by_state, "rows": rows}
+
     async def _analyst(self, intake, dispositions: Dict[str, Any]) -> Dict[str, Any]:
         from app.tefca_registry import models as reg
         from app.tefca_registry.rce import models as m
@@ -824,8 +918,12 @@ class DeliveryProcessingDataService:
         findings = await self._findings(intake)
         identifiers = await self._identifiers(intake)
         verification = await self._verification(intake)
+        self._note_coverage_limits(verification)
         analyst = await self._analyst(intake, dispositions)
+        self._note_review_limits(analyst["counts"])
         lineage = await self._lineage(intake, job)
+        readiness = await self._readiness(intake)
+        rechecks = await self._rechecks(intake)
         invalid_promoted = await self._invalid_identifiers_promoted(intake)
 
         outcome = status_model.processing_outcome(
@@ -890,6 +988,8 @@ class DeliveryProcessingDataService:
             "verification": verification,
             "analyst": analyst,
             "lineage": lineage,
+            "readiness": readiness,
+            "rechecks": rechecks,
             "limitations": list(self.limitations),
             "audit_note": (
                 "Generation of this report is recorded in audit_logs "
