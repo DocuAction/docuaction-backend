@@ -93,9 +93,14 @@
   main table.dp-fixed th, main table.dp-fixed td { hyphens: manual; -webkit-hyphens: manual; overflow-wrap: normal; word-break: normal; vertical-align: top; padding: 3pt 4pt; font-size: 8.5pt; line-height: 1.3; }
   main table.dp-fixed .nw, main .status { white-space: nowrap; }
   main table.dp-fixed .hash { font-family: "DejaVu Sans Mono", Menlo, Consolas, monospace; font-size: 7pt; overflow-wrap: anywhere; word-break: break-all; hyphens: none; -webkit-hyphens: none; }
+  main table.dp-fixed .cd { overflow-wrap: anywhere; word-break: normal; hyphens: none; -webkit-hyphens: none; }
+  main table.dp-keep { break-inside: avoid; page-break-inside: avoid; }
+  main table.dp-tight th, main table.dp-tight td { padding: 1.8pt 4pt; font-size: 8pt; line-height: 1.25; }
+  .dp-wide p { font-size: 9pt; }
   main table.dp-fixed tr { break-inside: avoid; page-break-inside: avoid; }
   main table.dp-fixed thead { display: table-header-group; }
   .dp-appendix-intro { font-size: 8.5pt; color: var(--agt-muted); margin: 0 0 6pt 0; }
+  .agt-foot .pg::after { content: "Page " counter(page) " of " counter(pages); font-weight: 700; }
 </style>
 
 <section class="cover" aria-labelledby="dp-title">
@@ -275,7 +280,7 @@
         {% endif %}
       </div>
 
-      <div class="agt-box" style="border-top-color: var(--agt-gold)"><h2 class="agt-h2">Evidence limitations</h2>
+      <div class="agt-box"><h2 class="agt-h2">Evidence limitations</h2>
         <ul>
           {% for item in limitations %}<li>{{ item }}</li>
           {% else %}<li>No limitation was recorded: every section was read from persisted evidence for this delivery.</li>{% endfor %}
@@ -299,7 +304,7 @@
   </div>
 
   <div class="agt-pkg"><b>Package:</b> this report &middot; detailed appendix A&ndash;J (identity and provenance, timeline, reconciliation, dispositions, findings, identifier conflicts, verification detail, analyst actions, lineage, audit note) &middot; CSV export of the same persisted evidence &middot; report {{ snapshot.report_id }}</div>
-  <p class="agt-foot">{{ branding.prepared_by }} &middot; Contract {{ branding.contract_number }} &middot; Delivery processing report &middot; {{ delivery.delivery_label or 'Unlabelled delivery' }} &middot; <span class="mark">{% if dev %}DEVELOPMENT / TEST DATA &mdash; NOT FOR GOVERNMENT DELIVERY{% else %}{{ document_status|upper }}{% endif %}</span> &middot; Generated {{ generated_at_display }}</p>
+  <p class="agt-foot">{{ branding.prepared_by }} &middot; Contract {{ branding.contract_number }} &middot; Delivery processing report &middot; {{ delivery.delivery_label or 'Unlabelled delivery' }} &middot; <span class="mark">{% if dev %}DEVELOPMENT / TEST DATA &mdash; NOT FOR GOVERNMENT DELIVERY{% else %}{{ document_status|upper }}{% endif %}</span> &middot; Generated {{ generated_at_display }} &middot; <span class="pg"></span></p>
 </section>
 {% endblock %}
 
@@ -308,7 +313,7 @@
 <div class="dp-wide">
 <p class="dp-appendix-intro">Appendix A&ndash;J: detailed evidence for this delivery. Report {{ snapshot.report_id }} &middot; {{ delivery.delivery_label or 'Unlabelled delivery' }} &middot; {{ document_status }}. Everything on page one is restated here with its identifiers, hashes and timelines.</p>
 <h2>Appendix A. Delivery Identity and provenance</h2>
-<table class="dp-fixed">
+<table class="dp-fixed dp-tight">
   {{ cols([28, 72]) }}
   <caption>Identity of the delivery, the evidence it rests on, and the build that produced this document</caption>
   <thead><tr><th scope="col">Attribute</th><th scope="col">Value</th></tr></thead>
@@ -351,7 +356,7 @@
   {% if timeline.summary.failed_stage %}Failed stage: {{ timeline.summary.failed_stage }}.{% endif %}
   Completed stages: {{ timeline.summary.completed_stages|join(', ') or 'none' }}.</p>
 <table class="dp-fixed">
-  {{ cols([12, 5, 11, 14, 14, 8, 9, 10, 10, 7]) }}
+  {{ cols([16, 7, 10, 13, 13, 8, 9, 9, 8, 7]) }}
   <caption>Every stage attempt, oldest first</caption>
   <thead>
     <tr>
@@ -363,7 +368,7 @@
   <tbody>
     {% for ev in timeline.events %}
     <tr>
-      <th scope="row" class="nw">{{ ev.stage }}</th>
+      <th scope="row" class="cd">{{ ev.stage }}</th>
       <td>{{ ev.attempt }}</td>
       <td class="nw">{{ ev.status }}</td>
       <td class="nw">{{ ts(ev.started_at) }}</td>
@@ -389,7 +394,7 @@
   written {{ ts(reconciliation.created_at) }} UTC by build {{ (reconciliation.build_sha or '')[:12] }} at migration {{ reconciliation.migration_revision }}.
   Result: {{ flag(reconciliation.passed, 'PASSED', 'FAILED') }}
 </p>
-<table class="dp-fixed">
+<table class="dp-fixed dp-keep">
   {{ cols([30, 20, 50]) }}
   <caption>Accounting equation as persisted in the pinned snapshot: Received = Created + Updated + Matched/Unchanged + Held + Rejected + Missing Key + Excluded</caption>
   <thead><tr><th scope="col">Term</th><th scope="col">Value</th><th scope="col">&nbsp;</th></tr></thead>
@@ -407,7 +412,7 @@
   </tbody>
 </table>
 {% if reconciliation.checks %}
-<table class="dp-fixed">
+<table class="dp-fixed dp-keep">
   {{ cols([28, 14, 58]) }}
   <caption>Reconciliation checks recorded in the snapshot</caption>
   <thead><tr><th scope="col">Check</th><th scope="col">Result</th><th scope="col">Detail</th></tr></thead>
@@ -438,7 +443,7 @@
     The current table {% if dispositions.agrees_with_snapshot %}agrees with{% else %}DIFFERS from{% endif %} the pinned reconciliation snapshot.
   {% endif %}
 </p>
-<table class="dp-fixed">
+<table class="dp-fixed dp-keep">
   {{ cols([50, 20, 30]) }}
   <caption>Disposition totals (current table) and the equation evaluated over them</caption>
   <thead><tr><th scope="col">Disposition</th><th scope="col">Records</th><th scope="col">&nbsp;</th></tr></thead>
@@ -454,7 +459,7 @@
 
 {% if dispositions.rows %}
 <table class="dp-fixed">
-  {{ cols([5, 15, 14, 8, 8, 10, 10, 13, 5, 5, 4, 3]) }}
+  {{ cols([4, 14, 14, 8, 8, 9, 13, 12, 5, 5, 3, 5]) }}
   <caption>Record-level dispositions &mdash; first {{ dispositions.rows_shown|number }} of
     {{ dispositions.rows_total|number }} received record(s), by delivered line number</caption>
   <thead>
@@ -473,13 +478,13 @@
       <td>{{ r.name or '—' }}</td>
       <td class="nw">{{ r.submitted_npi or '—' }}</td>
       <td class="nw">{{ r.curated_npi or '—' }}</td>
-      <td class="nw">{{ r.disposition }}</td>
-      <td>{{ r.reason_code }}</td>
+      <td class="cd">{{ r.disposition }}</td>
+      <td class="cd">{{ r.reason_code }}</td>
       <td class="hash">{{ r.entity_id or '—' }}</td>
       <td>{{ r.finding_count|number }}</td>
       <td>{{ r.warning_count|number }}</td>
       <td>{{ r.sequence }}</td>
-      <td>{{ r.actor_type }}{% if r.reconstructed %} (reconstructed){% endif %}</td>
+      <td class="cd">{{ r.actor_type }}{% if r.reconstructed %} (reconstructed){% endif %}</td>
     </tr>
     {% endfor %}
   </tbody>
@@ -499,7 +504,7 @@
   {{ findings.open_high|number }} open at HIGH or CRITICAL severity.</p>
 {% if findings.rows %}
 <table class="dp-fixed">
-  {{ cols([13, 5, 8, 11, 9, 10, 9, 9, 26]) }}
+  {{ cols([13, 5, 8, 13, 8, 10, 10, 9, 24]) }}
   <caption>Findings &mdash; first {{ findings.rows_shown|number }} of
     {{ findings.rows_total|number }}, open HIGH/CRITICAL first, then by delivered line</caption>
   <thead>
@@ -514,11 +519,11 @@
       <th scope="row" class="hash">{{ f.issue_code }}</th>
       <td>{{ f.line_number|number }}</td>
       <td class="nw">{{ f.rule_id }}</td>
-      <td>{{ f.issue_type }}</td>
+      <td class="cd">{{ f.issue_type }}</td>
       <td class="nw">{{ f.severity }}</td>
-      <td>{{ f.field_name or '—' }}</td>
-      <td>{{ f.correction_authority }}</td>
-      <td>{{ f.resolution }}</td>
+      <td class="cd">{{ f.field_name or '—' }}</td>
+      <td class="cd">{{ f.correction_authority }}</td>
+      <td class="cd">{{ f.resolution }}</td>
       <td>{{ f.description }}</td>
     </tr>
     {% endfor %}
@@ -538,7 +543,7 @@
 {% if identifiers.available and identifiers.conflicts %}
 <p>{{ identifiers.rows_total|number }} identifier conflict(s) raised for this delivery; {{ identifiers.unresolved|number }} unresolved; {{ identifiers.events_total|number }} event(s) in total.</p>
 <table class="dp-fixed">
-  {{ cols([12, 8, 9, 9, 9, 9, 10, 10, 10, 14]) }}
+  {{ cols([12, 7, 9, 9, 8, 9, 11, 13, 11, 11]) }}
   <caption>Identifier conflicts &mdash; first {{ identifiers.rows_shown|number }} of
     {{ identifiers.rows_total|number }}, unresolved first</caption>
   <thead>
@@ -556,9 +561,9 @@
       <td class="nw">{{ c.existing_value or '—' }}</td>
       <td class="nw">{{ c.verified_value or '—' }}</td>
       <td class="nw">{{ c.selected_value or '—' }}</td>
-      <td>{{ c.current_decision }}</td>
+      <td class="cd">{{ c.current_decision }}</td>
       <td class="nw">{{ ts(c.decided_at) }}</td>
-      <td>{{ c.actor }}</td>
+      <td class="cd">{{ c.actor }}</td>
       <td>{{ c.reason }}</td>
     </tr>
     {% endfor %}
@@ -578,8 +583,8 @@
 <h2>Appendix G. Verification coverage detail</h2>
 <p>State: {{ verification.state }} (source: {{ verification.source }}){% if verification.reason %} &mdash; {{ verification.reason }}{% endif %}.
   Coverage is counted from evidence rows for this delivery's entities; connector readiness is not coverage.</p>
-<table class="dp-fixed">
-  {{ cols([12, 11, 8, 9, 8, 9, 11, 8, 9, 15]) }}
+<table class="dp-fixed dp-tight">
+  {{ cols([10, 11, 7, 8, 7, 8, 10, 7, 8, 24]) }}
   <caption>Coverage per verification source</caption>
   <thead>
     <tr>
@@ -641,7 +646,7 @@
 </p>
 {% if analyst.disposition_events %}
 <table class="dp-fixed">
-  {{ cols([6, 6, 14, 14, 24, 18, 18]) }}
+  {{ cols([5, 5, 13, 17, 22, 20, 18]) }}
   <caption>Analyst disposition decisions (HUMAN actor), oldest first</caption>
   <thead>
     <tr><th scope="col">Line</th><th scope="col">Seq</th><th scope="col">Disposition</th><th scope="col">Reason code</th><th scope="col">Reason</th><th scope="col">Actor</th><th scope="col">Decided (UTC)</th></tr>
@@ -652,9 +657,9 @@
       <th scope="row">{{ ev.line_number }}</th>
       <td>{{ ev.sequence }}</td>
       <td class="nw">{{ ev.disposition }}</td>
-      <td>{{ ev.reason_code }}</td>
+      <td class="cd">{{ ev.reason_code }}</td>
       <td>{{ ev.reason or '' }}</td>
-      <td>{{ ev.actor }}</td>
+      <td class="cd">{{ ev.actor }}</td>
       <td class="nw">{{ ts(ev.decided_at) }}</td>
     </tr>
     {% endfor %}
@@ -674,10 +679,10 @@
       <th scope="row" class="hash">{{ i.issue_code }}</th>
       <td class="nw">{{ i.rule_id }}</td>
       <td class="nw">{{ i.severity }}</td>
-      <td>{{ i.resolution }}</td>
-      <td>{{ i.resolved_by or '—' }}</td>
+      <td class="cd">{{ i.resolution }}</td>
+      <td class="cd">{{ i.resolved_by or '—' }}</td>
       <td class="nw">{{ ts(i.resolved_at) }}</td>
-      <td>{{ i.qa_approved_by or '—' }}</td>
+      <td class="cd">{{ i.qa_approved_by or '—' }}</td>
     </tr>
     {% endfor %}
   </tbody>
@@ -720,7 +725,7 @@
 <p>{{ lineage.corrections_total|number }} correction(s) applied to delivered values, each preserving the original;
   {{ lineage.entities_promoted|number }} distinct entity/entities promoted to the registry;
   {% if lineage.entity_versions_in_window is none %}registry version history not scoped (see limitations){% else %}{{ lineage.entity_versions_in_window|number }} registry version(s) written within the job window{% endif %}.</p>
-<table class="dp-fixed">
+<table class="dp-fixed dp-keep">
   {{ cols([60, 20, 20]) }}
   <caption>Corrections by authority and by column</caption>
   <thead><tr><th scope="col">Measure</th><th scope="col">Count</th><th scope="col">&nbsp;</th></tr></thead>
