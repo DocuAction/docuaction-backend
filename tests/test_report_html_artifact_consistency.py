@@ -163,7 +163,7 @@ class TestLayoutRulesWithoutADatabase:
         # finds exactly its own close.
         assert len(re.findall(r'<div class="dp-wide">.*?</div>', source, re.S)) == 1
         wide = source.index('<div class="dp-wide">')
-        assert wide < source.index("<h2>Appendix D. Dispositions</h2>")
+        assert wide < source.index('>Appendix D. Dispositions</h2>')
         # every Program Manager section sits before the appendix, so it stays portrait
         for heading in ("Evidence limitations", "Required next actions", "Screening coverage"):
             assert source.index(f'<h2 class="agt-h2">{heading}') < wide, heading
