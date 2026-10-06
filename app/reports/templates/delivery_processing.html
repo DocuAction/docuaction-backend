@@ -63,7 +63,10 @@
   .report-header { display: none; }
   section.cover { min-height: auto; padding-top: 0; border-top: 0; margin: 0; }
   .cover, .cover * { hyphens: manual; -webkit-hyphens: manual; overflow-wrap: normal; word-break: normal; }
-  .cover { font-family: "Public Sans", Arial, Helvetica, sans-serif; font-size: 7.6pt; line-height: 1.22; color: var(--agt-ink); page-break-after: always; }
+  .cover { font-family: "Public Sans", Arial, Helvetica, sans-serif; font-size: 7.2pt; line-height: 1.2; color: var(--agt-ink); page-break-after: always; }
+  .cover .agt-cor { margin: 0 0 6pt 0; }
+  .cover .agt-sec { margin-bottom: 3.5pt; }
+  .cover .agt-box { margin-bottom: 3pt; }
   .cover p { margin: 0; }
   .cover .agt-head .title { string-set: doc-title content(); }
   /* contract strip, as on the approved mock-ups: gold-edged band, notice left, contract right */
@@ -71,7 +74,7 @@
   .agt-strip .l, .agt-strip .r { display: table-cell; padding: 2.6pt 6pt; vertical-align: middle; }
   .agt-strip .r { text-align: right; white-space: nowrap; width: 34%; }
   /* wide status chips for text states (the approved chip, widened) */
-  .agt-chip.wide { white-space: nowrap; padding: 1pt 5pt; font-size: 6.6pt; letter-spacing: .2pt; }
+  .agt-chip.wide { display: inline-block; max-width: 100%; white-space: normal; text-align: left; padding: 1.2pt 4pt; font-size: 6.5pt; letter-spacing: .1pt; line-height: 1.2; }
   .agt-chip.ok { background: var(--agt-b1); } .agt-chip.warn { background: var(--agt-b2); } .agt-chip.bad { background: var(--agt-b4); } .agt-chip.info { background: var(--agt-b3); }
   .cover table.agt td, .cover table.agt th { vertical-align: top; }
   .cover table.agt td.nw, .cover table.agt th.nw { white-space: nowrap; }
@@ -129,7 +132,7 @@
     <div class="agt-kpi"><p class="l">Findings</p><p class="v">{% if findings.available %}{{ findings.total|number }}{% else %}&mdash;{% endif %}</p><p class="n">{% if findings.available %}{{ findings.open_high|number }} open at HIGH / CRITICAL{% else %}no completed quality run{% endif %}</p></div>
     <div class="agt-kpi"><p class="l">Review records</p><p class="v">{{ analyst.counts.review_records|number }}</p><p class="n">{{ analyst.counts.qa_approved|number }} independently QA approved &middot; {{ analyst.counts.qa_pending|number }} awaiting QA</p></div>
   </div>
-  <p class="agt-cor">This is a draft report for one delivery. It states what the system did and where human review stands; it contains no approved findings. The full detail is in Appendix A&ndash;J.</p>
+  <p class="agt-cor">Draft report for one delivery: system results and review status only, no approved findings. Detail: Appendix A&ndash;J.</p>
 
   <div class="agt-cols">
     <div class="cell left">
@@ -137,19 +140,19 @@
       <div class="agt-sec">
         <h2 class="agt-h2">Status &mdash; four separate questions</h2>
         <table class="agt">
-          {{ cols([27, 21, 52]) }}
+          {{ cols([25, 24, 51]) }}
           <caption>Did processing finish, what was found, what was checked against outside sources, and has anyone approved it</caption>
           <thead><tr><th scope="col">Question</th><th scope="col">Status</th><th scope="col">What it means</th></tr></thead>
           <tbody>
             <tr>
               <td><b>Did processing finish?</b></td>
               <td>{% if outcome.code == 'COMPLETED_CLEAN' %}{{ chip('ok', outcome.value) }}{% elif outcome.code == 'COMPLETED_WITH_EXCEPTIONS' %}{{ chip('warn', outcome.value) }}{% else %}{{ chip('bad', outcome.value) }}{% endif %}</td>
-              <td class="q">{{ outcome.detail }}</td>
+              <td class="q">{% if outcome.code == 'COMPLETED_CLEAN' %}All received records reconciled; no holding finding remains.{% elif outcome.code == 'COMPLETED_WITH_EXCEPTIONS' %}Records reconciled; {{ findings.open_high|number }} holding-severity finding(s) remain undecided.{% else %}{{ outcome.detail }}{% endif %}</td>
             </tr>
             <tr>
               <td><b>What was found?</b></td>
               <td>{% if findings.available %}{{ chip('warn' if findings.open_high else 'info', findings.total|number ~ ' findings') }}{% else %}{{ chip('warn', 'No quality run') }}{% endif %}</td>
-              <td class="q">{% if findings.available %}{{ findings.open_high|number }} open at HIGH / CRITICAL. Rule-based data-quality results, not analyst determinations.{% else %}Findings cannot be stated.{% endif %}</td>
+              <td class="q">{% if findings.available %}{{ findings.open_high|number }} open at HIGH / CRITICAL. System results, not analyst determinations.{% else %}Findings cannot be stated.{% endif %}</td>
             </tr>
             <tr>
               <td><b>What was checked against outside sources?</b></td>
@@ -164,7 +167,7 @@
             <tr>
               <td><b>Has it been released?</b></td>
               <td>{{ chip('warn', document_status) }}</td>
-              <td class="q">The Program Manager release decision is recorded in the Report Register. None is recorded in this document.</td>
+              <td class="q">The Program Manager release decision is recorded in the Report Register; none is recorded here.</td>
             </tr>
           </tbody>
         </table>
@@ -236,11 +239,9 @@
         <div class="agt-src">
           <div class="r"><div class="k">Delivery</div><div class="n" style="white-space: normal; width: 62%">{{ delivery.delivery_label or 'Not labelled' }}</div></div>
           <div class="r"><div class="k">Records delivered</div><div class="n">{{ delivery.record_count|number }}</div></div>
-          <div class="r"><div class="k">Registered by</div><div class="n" style="white-space: normal; width: 55%">{{ delivery.registrant or 'Not recorded' }}</div></div>
           <div class="r"><div class="k">Completed (UTC)</div><div class="n">{{ ts(delivery.completed_at or delivery.failed_at) }}</div></div>
           <div class="r"><div class="k">Software build</div><div class="n">{{ (build.git_sha or '')[:12] }}</div></div>
         </div>
-        <p class="agt-note">Identifiers, hashes and provenance: Appendix A.</p>
       </div>
 
       <div class="agt-box"><h2 class="agt-h2">Reconciliation &amp; source integrity</h2>
@@ -279,7 +280,6 @@
           {% for item in limitations %}<li>{{ item }}</li>
           {% else %}<li>No limitation was recorded: every section was read from persisted evidence for this delivery.</li>{% endfor %}
         </ul>
-        <p class="agt-note">What this report could not state from persisted evidence, and why. This list is never omitted.</p>
       </div>
 
       <div class="agt-box"><h2 class="agt-h2">Required next actions</h2>
