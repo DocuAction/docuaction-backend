@@ -108,8 +108,8 @@ class TestOutcomes:
     @pytest.mark.parametrize("kw,expected", [
         (dict(answered=False), (ss.INCOMPLETE, "CHECK_DID_NOT_COMPLETE")),
         (dict(answered=True, record_count=0), (ss.NO_HIT, "NO_RECORD_FOR_QUERY")),
-        (dict(answered=True, record_count=3, distinct_identities=1, matched_by="uei"), (ss.CONFIRMED_MATCH, "SINGLE_IDENTITY_BY_UEI")),
-        (dict(answered=True, record_count=1, distinct_identities=1, matched_by="npi"), (ss.CONFIRMED_MATCH, "SINGLE_IDENTITY_BY_NPI")),
+        (dict(answered=True, record_count=3, distinct_identities=1, matched_by="uei"), (ss.IDENTIFIER_MATCH, "SINGLE_IDENTITY_BY_UEI")),
+        (dict(answered=True, record_count=1, distinct_identities=1, matched_by="npi"), (ss.IDENTIFIER_MATCH, "SINGLE_IDENTITY_BY_NPI")),
         (dict(answered=True, record_count=1, distinct_identities=1, matched_by="name"), (ss.POTENTIAL_MATCH, "NAME_ONLY_MATCH")),
         (dict(answered=True, record_count=2, distinct_identities=2, matched_by="name"), (ss.POTENTIAL_MATCH, "MULTIPLE_DISTINCT_IDENTITIES")),
         (dict(answered=True, record_count=2, distinct_identities=2, matched_by="uei"), (ss.POTENTIAL_MATCH, "MULTIPLE_DISTINCT_IDENTITIES")),
@@ -117,13 +117,13 @@ class TestOutcomes:
     def test_classification(self, kw, expected):
         assert ss.classify_outcome(**kw) == expected
 
-    def test_a_name_alone_is_never_a_confirmed_match(self):
+    def test_a_name_alone_is_never_an_identifier_match(self):
         for n in (1, 2, 50):
-            assert ss.classify_outcome(answered=True, record_count=n, distinct_identities=1, matched_by="name")[0] != ss.CONFIRMED_MATCH
+            assert ss.classify_outcome(answered=True, record_count=n, distinct_identities=1, matched_by="name")[0] != ss.IDENTIFIER_MATCH
 
     @pytest.mark.parametrize("outcome,by_name,insufficient,expected", [
         (ss.INCOMPLETE, True, False, "UNAVAILABLE"), (ss.INCOMPLETE, True, True, "INSUFFICIENT_EVIDENCE"),
-        (ss.POTENTIAL_MATCH, True, False, "REVIEW"), (ss.CONFIRMED_MATCH, False, False, "REVIEW"),
+        (ss.POTENTIAL_MATCH, True, False, "REVIEW"), (ss.IDENTIFIER_MATCH, False, False, "REVIEW"),
         (ss.NO_HIT, True, False, "NOT_FOUND"), (ss.NO_HIT, False, False, "PASS"),
     ])
     def test_disposition_mapping_is_the_historical_one(self, outcome, by_name, insufficient, expected):
@@ -199,14 +199,14 @@ class TestExtractLoader:
 class TestIdentifierFirstScreening:
     def test_uei_hit_on_one_identity_is_confirmed_and_keeps_all_three_actions(self, index):
         r = index.screen(uei="UEIALPHA0001", name="Synth Alpha Clinic")
-        assert (r.outcome, r.matched_by) == (ss.CONFIRMED_MATCH, "uei")
+        assert (r.outcome, r.matched_by) == (ss.IDENTIFIER_MATCH, "uei")
         assert r.distinct_identities == 1 and r.action_count == 3
         data = r.to_check_exclusions_data()
         assert data["ambiguous"] is False and data["match_count"] == 3
 
     def test_npi_hit_is_confirmed(self, index):
         r = index.screen(npi="1888888884", name="Synth Imaging Partners")
-        assert (r.outcome, r.matched_by) == (ss.CONFIRMED_MATCH, "npi")
+        assert (r.outcome, r.matched_by) == (ss.IDENTIFIER_MATCH, "npi")
 
     def test_an_identifier_whose_holder_has_a_different_name_is_only_potential(self, index):
         r = index.screen(npi="1999999992", name="Synth Unrelated Hospital")
@@ -244,7 +244,7 @@ class TestIdentifierFirstScreening:
         assert r.outcome == ss.NO_HIT and "npi" not in r.provenance["identifiers_tried"]
 
     def test_individuals_are_screened_by_person_name_or_npi(self, index):
-        assert index.screen(npi="1777777775", first="Pat", last="Synthperson", kind="individual").outcome == ss.CONFIRMED_MATCH
+        assert index.screen(npi="1777777775", first="Pat", last="Synthperson", kind="individual").outcome == ss.IDENTIFIER_MATCH
         assert index.screen(first="Pat", last="Synthperson", kind="individual").outcome == ss.POTENTIAL_MATCH
 
     def test_provenance_never_contains_the_search_value_or_a_credential(self, index):
@@ -298,3 +298,44 @@ class TestConnectorIsAdditive:
         assert d["excluded"] is True and d["ambiguous"] is True and d["matched_by"] == "name" and d["match_count"] == 2
         assert d["outcome"] == ss.POTENTIAL_MATCH and d["provenance"]["channel"] == "LIVE_API"
         assert "Some Name" not in str(d["provenance"]) and "k" * 40 not in str(d["provenance"])
+
+
+class TestLabelsAndScope:
+    def test_no_automated_path_emits_confirmed_match(self, index):
+        outs = {index.screen(**kw).outcome for kw in (
+            dict(uei="UEIALPHA0001"), dict(npi="1888888884", name="Synth Imaging Partners"),
+            dict(name="Synth Family Care"), dict(name="Nobody Here"), dict()) }
+        assert ss.CONFIRMED_MATCH not in outs and ss.IDENTIFIER_MATCH in outs
+
+    def test_label_says_pending_adjudication(self):
+        assert "pending adjudication" in ss.OUTCOME_LABELS[ss.IDENTIFIER_MATCH].lower()
+
+    def test_no_hit_is_qualified_by_extract_date_and_scope(self, index):
+        r = index.screen(name="Synth Perfectly Clean Hospital")
+        sc = r.provenance["matching_scope"]
+        assert sc["as_of_extract_date"] == "2026-10-06" and "no fuzzy" in sc["name_matching"]
+        assert "not LEIE" in sc["list"] and sc["identifiers_tried"] == ["name"]
+
+
+class TestIdentityKeysAndIndividuals:
+    def _g(self, recs):
+        return ss.group_identities(recs, normalize_name=lambda s: s.lower())
+
+    def test_identity_keys_are_unique_within_a_call_and_stable_across_calls(self):
+        a = dict(classification="Firm", name="A", uei="U1", state="NY")
+        b = dict(classification="Firm", name="B", uei="U2", state="NY")
+        c = dict(classification="Firm", name="C", state="CA", zip="90001")
+        k1 = {i.identity_key for i in self._g([a, b, c])}
+        k2 = {i.identity_key for i in self._g([c, b, a])}
+        k3 = {i.identity_key for i in self._g([b])}
+        assert len(k1) == 3 and k1 == k2 and next(iter(k3)) in k1
+
+    def test_individuals_with_no_name_field_group_by_person_and_location(self):
+        p = dict(classification="Individual", first="Pat", last="Doe", state="WA", zip="98001")
+        recs = [dict(p, agency="HHS"), dict(p, agency="DOD"), dict(p, last="Roe", agency="HHS")]
+        ids = self._g(recs)
+        assert sorted(i.action_count for i in ids) == [1, 2] and sum(i.action_count for i in ids) == 3
+
+    def test_nameless_unidentified_records_are_kept_not_dropped(self):
+        ids = self._g([dict(classification="Firm"), dict(classification="Firm")])
+        assert sum(i.action_count for i in ids) == 2

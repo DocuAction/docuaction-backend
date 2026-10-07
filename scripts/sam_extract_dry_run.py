@@ -50,11 +50,11 @@ def main() -> int:
     rep = {"extract": idx.meta.anchor(), "snapshot_rows": rows, "snapshot_rows_with_npi": npi_present,
            "outcome": dict(outcome), "reason": dict(reason), "matched_by": dict(by),
            "identifiers_tried": dict(ids_tried),
-           "rows_with_any_hit": outcome["POTENTIAL_MATCH"] + outcome["CONFIRMED_MATCH"],
+           "rows_with_any_hit": outcome["POTENTIAL_MATCH"] + outcome["IDENTIFIER_MATCH"],
            "exclusion_actions_attached": actions_total,
            "distinct_excluded_identities_touched": len(flagged_identities),
            "rows_matching_one_identity_with_several_actions": multi_action_single_identity,
-           "rows_ambiguous_between_identities": ambiguous, "rows_confirmed_by_npi": npi_hit_rows}
+           "rows_ambiguous_between_identities": ambiguous, "rows_identifier_matched_by_npi_pending_adjudication": npi_hit_rows}
     txt = json.dumps(rep, indent=2, sort_keys=True)
     print(txt)
     if a.out:

@@ -948,12 +948,14 @@ class SAMGovConnector:
     fine" about a debarred party, so the exclusions endpoint is queried
     independently rather than inferred.
 
-    The live SAM.gov Entity/Exclusions API is searched by UEI or by name; this
-    connector does not send an NPI to it and no NPI search parameter is
-    documented or verified. That is a statement about THIS CONNECTOR, not about
-    SAM data: the GSA public exclusions extract carries an NPI column (about
-    20,000 populated rows, 258 of them organisations, as of the 2026-10-06
-    extract), so NPI matching is possible on the extract path, not the live API.
+    NPI: GSA's v4 Exclusions API specification documents an `npi` search
+    parameter (open.gsa.gov/api/exclusions-api, checked 2026-10-07), and the
+    public exclusions extract carries an NPI column (about 20,000 populated
+    rows, 258 of them organisations, in the 2026-10-06 extract). THIS CONNECTOR
+    does not send one: it searches by UEI or name only. Live NPI search is
+    therefore documented but UNVERIFIED in operation, because api.sam.gov has
+    not been serving any route (see __init__). NPI presence is also sparse, so
+    an NPI miss is weak evidence of absence.
     Search strategy, in order:
       1. UEI present  -> exact match, authoritative.
       2. No UEI       -> legal-business-name search, which is fuzzy.
@@ -997,8 +999,8 @@ class SAMGovConnector:
         self.api_key = os.getenv("SAM_GOV_API_KEY", "")
 
     async def lookup_by_uei(self, uei: str) -> SourceResult:
-        """Verify registration by UEI. The live API is not queried by NPI here (see the
-        class docstring); the public exclusions extract does carry an NPI column."""
+        """Verify registration by UEI. Registration is a different question from exclusion;
+        NPI search is documented for the v4 exclusions API but not used or verified here."""
         qp = {"uei": uei}
         if not self.api_key:
             return SourceResult.unavailable(
@@ -1262,9 +1264,10 @@ class SAMGovConnector:
         return SourceResult.ok("SAM_GOV", data, qp, self.API_VERSION)
 
     async def lookup_by_npi(self, npi: str) -> SourceResult:
-        # This connector does not query the live SAM.gov API by NPI (no NPI search
-        # parameter is documented or verified), so it fails closed. The public
-        # exclusions extract does carry NPI; see sam_exclusions_extract (offline).
+        # This connector does not send an NPI to the live SAM.gov API. GSA's v4
+        # Exclusions spec documents an `npi` parameter, but live operation is
+        # unverified (api.sam.gov not routing), so this fails closed. The public
+        # extract carries NPI; see sam_exclusions_extract (offline).
         return SourceResult.unavailable(
             "SAM_GOV", "NPI is not queried against the live SAM.gov API by this connector; provide entity UEI + SAM_GOV_API_KEY",
             {"npi": npi}, self.API_VERSION,

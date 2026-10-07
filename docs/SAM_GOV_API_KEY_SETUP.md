@@ -108,12 +108,14 @@ Then confirm the platform sees it:
 
 ## The second blocker — UEI, not NPI
 
-**A key alone is necessary but not sufficient.** This connector queries the live
-SAM.gov API by UEI or by name only; it does not send an NPI, and no NPI search
-parameter is documented or verified for that API. (Earlier wording said SAM "has
-no NPI index"; that overstated it. The GSA public exclusions extract does carry
-an NPI column, about 20,000 populated rows as of the 2026-10-06 extract, so NPI
-matching is available on the extract path, not the live API.) The TEFCA registry does not currently capture UEI for its
+**A key alone is necessary but not sufficient.** GSA's v4 Exclusions API
+specification documents an `npi` search parameter (open.gsa.gov/api/exclusions-api,
+checked 2026-10-07), and the public exclusions extract has an NPI column (about
+20,000 populated rows, 258 organisations, in the 2026-10-06 extract). This
+connector does not send an NPI today, and live NPI search is **documented but
+unverified in operation** because `api.sam.gov` is not routing. Earlier wording
+that SAM "has no NPI index" was wrong. NPI is sparse, so an NPI miss is weak
+evidence of absence. The TEFCA registry does not currently capture UEI for its
 entities.
 
 The connector therefore implements a fallback:

@@ -21,6 +21,8 @@ Registration facts are carried as context and can never make an outcome ambiguou
 """
 from __future__ import annotations
 
+import hashlib
+
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -33,8 +35,28 @@ PROVENANCE_SCHEMA = "sam-screening/1"
 INCOMPLETE = "INCOMPLETE"              # the exclusion check did not complete: NOT a clearance, NOT a finding
 NO_HIT = "NO_HIT"                      # the check completed and returned no record for what was searched
 POTENTIAL_MATCH = "POTENTIAL_MATCH"    # record(s) found, identity NOT confirmed (name only, or several identities)
-CONFIRMED_MATCH = "CONFIRMED_MATCH"    # record(s) found by a strong identifier, ONE identity. Still not an analyst determination
-SCREENING_OUTCOMES = (INCOMPLETE, NO_HIT, POTENTIAL_MATCH, CONFIRMED_MATCH)
+IDENTIFIER_MATCH = "IDENTIFIER_MATCH"  # record(s) found by a strong identifier, ONE identity: identifier-matched, PENDING ADJUDICATION
+CONFIRMED_MATCH = "CONFIRMED_MATCH"    # reserved for an analyst/QA adjudication. No automated path emits it.
+SCREENING_OUTCOMES = (INCOMPLETE, NO_HIT, POTENTIAL_MATCH, IDENTIFIER_MATCH, CONFIRMED_MATCH)
+
+OUTCOME_LABELS = {
+    INCOMPLETE: "Check incomplete (not a clearance)",
+    NO_HIT: "No hit",
+    POTENTIAL_MATCH: "Potential match (identity not established)",
+    IDENTIFIER_MATCH: "Identifier-matched, pending adjudication",
+    CONFIRMED_MATCH: "Confirmed match (adjudicated)",
+}
+
+
+def matching_scope(extract_date, identifiers_tried):
+    """What a result does and does not cover, so a NO_HIT is never read as a blanket clearance."""
+    return {
+        "as_of_extract_date": extract_date,
+        "identifiers_tried": list(identifiers_tried),
+        "name_matching": "exact after normalisation; no fuzzy, alias or former-name matching",
+        "list": "SAM.gov public exclusions extract only (not LEIE, state lists or other sources)",
+        "covers": "records present in that day's extract; says nothing about later changes",
+    }
 
 # ── Why a check was incomplete ───────────────────────────────────────────────
 NO_KEY = "NO_KEY"
@@ -103,7 +125,7 @@ def classify_outcome(*, answered: bool, record_count: int = 0, distinct_identiti
 
     - not answered -> INCOMPLETE
     - answered, no record -> NO_HIT
-    - record(s), matched by a strong identifier and exactly ONE distinct identity -> CONFIRMED_MATCH
+    - record(s), matched by a strong identifier and exactly ONE distinct identity -> IDENTIFIER_MATCH
     - any other record(s) (name only, or more than one distinct identity, or a strong identifier that maps to
       several identities) -> POTENTIAL_MATCH
 
@@ -114,7 +136,7 @@ def classify_outcome(*, answered: bool, record_count: int = 0, distinct_identiti
     if record_count <= 0:
         return NO_HIT, "NO_RECORD_FOR_QUERY"
     if matched_by in STRONG_IDENTIFIERS and distinct_identities == 1:
-        return CONFIRMED_MATCH, f"SINGLE_IDENTITY_BY_{matched_by.upper()}"
+        return IDENTIFIER_MATCH, f"SINGLE_IDENTITY_BY_{matched_by.upper()}"
     if distinct_identities > 1:
         return POTENTIAL_MATCH, "MULTIPLE_DISTINCT_IDENTITIES"
     return POTENTIAL_MATCH, "NAME_ONLY_MATCH" if matched_by not in STRONG_IDENTIFIERS else "IDENTIFIER_NOT_CONFIRMED"
@@ -125,7 +147,7 @@ def disposition_for(outcome: str, *, by_name: bool, insufficient: bool = False) 
     Kept here only so the mapping lives next to the vocabulary; it is NOT a new rule."""
     if outcome == INCOMPLETE:
         return "INSUFFICIENT_EVIDENCE" if insufficient else "UNAVAILABLE"
-    if outcome in (POTENTIAL_MATCH, CONFIRMED_MATCH):
+    if outcome in (POTENTIAL_MATCH, IDENTIFIER_MATCH, CONFIRMED_MATCH):
         return "REVIEW"
     if outcome == NO_HIT:
         return "NOT_FOUND" if by_name else "PASS"
@@ -218,6 +240,19 @@ class _UnionFind:
             self.p[max(ra, rb)] = min(ra, rb)
 
 
+def _stable_key(basis: str, members) -> str:
+    """Stable across calls and runs (a group's position in one call is not): the smallest strong identifier, or a
+    hash of the weak name/location key. Two identities in different calls are the same only if this matches."""
+    if basis != "name_location":
+        vals = sorted({(m.get(basis) or "").strip().upper() for m in members if (m.get(basis) or "").strip()})
+        return f"{basis}:{vals[0]}"
+    m = members[0]
+    raw = "|".join([(m.get("classification") or "").strip(), (m.get("name") or "").strip().lower(),
+                    (m.get("last") or "").strip().lower(), (m.get("first") or "").strip().lower(),
+                    (m.get("state") or "").strip().upper(), (m.get("zip") or "").strip()[:5]])
+    return "name_location:" + hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
 def group_identities(records: Iterable[Dict[str, str]], *, normalize_name) -> List[ExclusionIdentity]:
     """Group exclusion records into identities WITHOUT discarding any record.
 
@@ -242,8 +277,14 @@ def group_identities(records: Iterable[Dict[str, str]], *, normalize_name) -> Li
     for i, r in enumerate(recs):
         if any((r.get(c) or "").strip() for c in ("uei", "npi", "cage")):
             continue
-        k = (normalize_name(r.get("name") or ""), (r.get("state") or "").strip().upper(),
-             (r.get("zip") or "").strip()[:5])
+        if (r.get("classification") or "").strip() == "Individual" and not (r.get("name") or "").strip():
+            # individuals carry First/Last, not Name: key on the person, never on an empty name
+            who = re.sub(r"[^a-z0-9 ]+", "", f"{r.get('last') or ''} {r.get('first') or ''}".lower()).strip()
+            k = ("person:" + who if who else "", (r.get("state") or "").strip().upper(),
+                 (r.get("zip") or "").strip()[:5])
+        else:
+            k = (normalize_name(r.get("name") or ""), (r.get("state") or "").strip().upper(),
+                 (r.get("zip") or "").strip()[:5])
         if not k[0]:
             continue
         if k in weak:
@@ -260,7 +301,7 @@ def group_identities(records: Iterable[Dict[str, str]], *, normalize_name) -> Li
         basis = ("uei" if any((recs[m].get("uei") or "").strip() for m in members) else
                  "npi" if any((recs[m].get("npi") or "").strip() for m in members) else
                  "cage" if any((recs[m].get("cage") or "").strip() for m in members) else "name_location")
-        ident = ExclusionIdentity(identity_key=f"{basis}:{root}", key_basis=basis,
+        ident = ExclusionIdentity(identity_key=_stable_key(basis, [recs[m] for m in members]), key_basis=basis,
                                   classification=(first.get("classification") or "").strip())
         for m in members:
             r = recs[m]

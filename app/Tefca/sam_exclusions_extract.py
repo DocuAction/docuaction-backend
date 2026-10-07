@@ -16,7 +16,7 @@ records), `Unique Entity ID` (about 93% of firms) and `CAGE` (about 5% of firms)
 
 IDENTIFIER-FIRST, AND WHY ABSENCE BY IDENTIFIER IS WEAK
 -------------------------------------------------------
-Order: UEI -> NPI -> CAGE -> name. A hit by a strong identifier on ONE identity is CONFIRMED_MATCH (unless the names
+Order: UEI -> NPI -> CAGE -> name. A hit by a strong identifier on ONE identity is IDENTIFIER_MATCH, pending adjudication (unless the names
 flatly disagree, in which case it is POTENTIAL_MATCH with reason IDENTIFIER_NAME_DISAGREE). But most records lack most
 identifiers, so "no record with this NPI" does NOT mean "not excluded": the search therefore always continues to the
 name stage, and a name-only hit is never better than POTENTIAL_MATCH. A clean screen is NO_HIT (never a stronger word).
@@ -107,7 +107,7 @@ class ScreenResult:
         the same interface later. `ambiguous` means MORE THAN ONE DISTINCT IDENTITY - several actions on one identity
         are not ambiguity."""
         return {
-            "excluded": self.outcome in (ss.POTENTIAL_MATCH, ss.CONFIRMED_MATCH),
+            "excluded": self.outcome in (ss.POTENTIAL_MATCH, ss.IDENTIFIER_MATCH, ss.CONFIRMED_MATCH),
             "match_count": self.action_count,
             "matched_by": self.matched_by,
             "ambiguous": self.distinct_identities > 1,
@@ -193,6 +193,7 @@ class SamExtractIndex:
                                    query_mode="exact_then_name", records_returned=0, total_records=0,
                                    distinct_identities=0, truncated=False, dataset_anchor=anchor)
         prov["identifiers_tried"] = tried
+        prov["matching_scope"] = ss.matching_scope(anchor.get("extract_date"), tried)
         outcome, reason = ss.classify_outcome(answered=True, record_count=0)
         return ScreenResult(outcome, reason, "name", provenance=prov)
 
@@ -204,7 +205,7 @@ class SamExtractIndex:
         corroboration: Dict[str, bool] = {}
         if state:
             corroboration["state"] = any(state.strip().upper() in i.states for i in identities)
-        if matched_by in ss.STRONG_IDENTIFIERS and outcome == ss.CONFIRMED_MATCH:
+        if matched_by in ss.STRONG_IDENTIFIERS and outcome == ss.IDENTIFIER_MATCH:
             # a strong identifier whose holder's NAME flatly disagrees is not a confirmation
             want = self._norm(name) if kind != "individual" else self._person_key(last, first)
             have = {(self._norm(n) if kind != "individual" else self._person_key("", n)) for i in identities
@@ -216,6 +217,7 @@ class SamExtractIndex:
                                    records_returned=len(idxs), total_records=len(idxs),
                                    distinct_identities=len(identities), truncated=False, dataset_anchor=anchor)
         prov["identifiers_tried"] = tried
+        prov["matching_scope"] = ss.matching_scope(anchor.get("extract_date"), tried)
         return ScreenResult(outcome, reason, matched_by, identities=identities, provenance=prov,
                             corroboration=corroboration)
 
