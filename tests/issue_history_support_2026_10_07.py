@@ -51,7 +51,7 @@ def filler_row(tag: str) -> Dict[str, str]:
 async def seed_delivery(db, rows: List[Dict[str, str]], *, received_at: datetime,
                         feed: Optional[str] = FEED, label: Optional[str] = None,
                         status: str = "PARSED", extra_metadata: Optional[dict] = None,
-                        blob_salt: str = "") -> uuid.UUID:
+                        blob_salt: str = "", duplicate_of=None) -> uuid.UUID:
     """One synthetic intake + Area 1 rows. `feed=None` leaves it untagged."""
     blob = ("\r\n".join(["|".join(RCE_FIELDS)]
                         + ["|".join(r[f] for f in RCE_FIELDS) for r in rows])
@@ -69,7 +69,8 @@ async def seed_delivery(db, rows: List[Dict[str, str]], *, received_at: datetime
         line_terminator="CRLF", headers=list(RCE_FIELDS),
         schema_fingerprint=schema_fingerprint(list(RCE_FIELDS)),
         record_count=len(rows), received_at=received_at, received_by=f"{SYN}-operator",
-        status=status, source_metadata=metadata))
+        status=status, source_metadata=metadata,
+        duplicate_of_intake_id=duplicate_of, duplicate_content=bool(duplicate_of)))
     await db.flush()
     for index, r in enumerate(rows, start=1):
         raw = "|".join(r[f] for f in RCE_FIELDS)

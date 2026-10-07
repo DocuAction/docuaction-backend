@@ -125,6 +125,7 @@ jobs:
             tests/test_contract_progress_reports.py \
             tests/test_issue_history_pure_2026_10_07.py \
             tests/test_issue_history_db_2026_10_07.py \
+            tests/test_issue_history_auth_2026_10_07.py \
             -v --tb=short -rs --junitxml=isolation-results.xml
       - name: Fail if any isolation test was skipped for want of a database
         run: |

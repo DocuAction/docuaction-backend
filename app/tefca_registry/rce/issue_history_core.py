@@ -8,7 +8,7 @@ reach data the caller was not meant to see.
 THE FOUR RESOLVED DESIGN POINTS (SCOPE-ISSUE-HISTORY-MIN-SLICE-NPI-PARTOF)
   2.1 feed scoping, fail closed      -> `allowed_feeds`, `parse_feed_list`
   2.2 historical findings as recorded -> `build_lane_cells`, `classify_recurrence`
-  2.3 duplicate-upload provenance     -> `collapse_canonical`
+  2.3 distinct deliveries, provenance -> `build_deliveries`
   2.4 versioned per-record result map -> `record_check_results.read_map`
 
 THREE INDEPENDENT FACTS PER ISSUE CELL
@@ -85,6 +85,9 @@ R_VERSION = "RULE_VERSION_CHANGED"
 R_REQUIRES = "REQUIRES_CHANGED"
 R_SCHEMA = "SCHEMA_CHANGED"
 R_COVERAGE = "COVERAGE_NOT_RECORDED"
+R_REGISTRY = "REGISTRY_STATE_DIFFERS"
+REGISTRY_NOTE = ("The registry state differed between these runs, so a pass is not "
+                 "comparable to this finding.")
 R_EXTERNAL = "EXTERNAL_COVERAGE_NOT_TRACKED_PER_RULE"
 
 # recurrence states
@@ -131,29 +134,50 @@ def allowed_feeds(*, reviewer_or_above: bool, viewer_setting: Optional[str],
     return frozenset(feeds)
 
 
-# ── 2.3 canonical intake collapse ────────────────────────────────────────────
+# ── 2.3 (REVISED) distinct deliveries, identical content kept distinct ───────
+
+IDENTICAL_NOTE = "content identical to delivery {other}; the same file content can be a separate delivery"
+
 
 def _order_key(intake: Dict[str, Any]):
     return (intake["received_at"], str(intake["id"]))
 
 
-def collapse_canonical(intakes: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """One delivery per (feed, sha256): the earliest receipt, id as tie-break.
+def build_deliveries(intakes: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Every non-FAILED intake of the allowed feeds is its OWN delivery.
 
-    Later same-hash intakes collapse into it as `duplicates` (provenance only).
-    A duplicate never becomes "previous" and never creates a gap. A FAILED
-    canonical stays the canonical: it is NOT replaced by a duplicate that
-    happened to succeed. Returns deliveries ordered oldest first.
+    Identical file content is NOT collapsed: ONC can legitimately re-send the
+    same bytes on another date and that is a separate delivery with its own
+    receipt date, label, runs and results. Provenance only is added:
+
+      identical_content_of    nearest EARLIER intake in the same feed with the
+                              same sha256 (None for the first of them)
+      identical_content_also  every other same-feed intake with that sha256
+      duplicate_upload        the intake itself is flagged duplicate_content /
+                              has duplicate_of_intake_id (a same-day accidental
+                              re-upload as the intake path recorded it)
+
+    A duplicate never becomes a gap. Order is received_at then id. FAILED
+    intakes are not deliveries.
     """
-    groups: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
-    for intake in intakes:
-        groups.setdefault((intake["feed"], intake["sha256"]), []).append(intake)
-    deliveries = []
-    for members in groups.values():
-        members = sorted(members, key=_order_key)
-        deliveries.append({"canonical": members[0], "duplicates": members[1:]})
-    deliveries.sort(key=lambda d: _order_key(d["canonical"]))
-    return deliveries
+    usable = [i for i in intakes if i.get("status") != "FAILED"]
+    usable.sort(key=_order_key)
+    by_hash: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+    for intake in usable:
+        by_hash.setdefault((intake["feed"], intake["sha256"]), []).append(intake)
+    out = []
+    for intake in usable:
+        same = by_hash[(intake["feed"], intake["sha256"])]
+        earlier = [o for o in same if _order_key(o) < _order_key(intake)]
+        also = [o["id"] for o in same if o is not intake]
+        out.append({
+            "intake": intake,
+            "identical_content_of": (earlier[-1]["id"] if earlier else None),
+            "identical_content_also": also,
+            "duplicate_upload": bool(intake.get("duplicate_content")
+                                     or intake.get("duplicate_of_intake_id")),
+        })
+    return out
 
 
 # ── run selection (mirrors run_selection.py) ─────────────────────────────────
@@ -204,6 +228,11 @@ def _required_fields_empty(rule_id: str, parsed: Optional[Dict[str, Any]]) -> bo
     return any(not str(values.get(f) or "").strip() for f in rule.requires_fields)
 
 
+def _coverage_recorded(coverage) -> bool:
+    """Coverage counts AND the registry-state watermark were recorded."""
+    return isinstance(coverage, dict) and coverage.get("registry_watermark") is not None
+
+
 def raw_check(facts: Dict[str, Any], rule_id: str, field: str) -> Dict[str, Any]:
     """The persisted check evidence for one rule in one delivery. No inference.
 
@@ -217,7 +246,8 @@ def raw_check(facts: Dict[str, Any], rule_id: str, field: str) -> Dict[str, Any]
     """
     base = {"outcome": OUT_NOT_AVAILABLE, "reason": None, "usable": False,
             "rule_version": None, "requires_hash": None,
-            "coverage_recorded": False, "header_has_field": False,
+            "coverage_recorded": False, "registry_watermark": None,
+            "header_has_field": False,
             "issues": []}
     if facts["intake_status"] == "FAILED" or facts["selected_run"] is None:
         return {**base, "reason": R_NO_RUN}
@@ -237,7 +267,8 @@ def raw_check(facts: Dict[str, Any], rule_id: str, field: str) -> Dict[str, Any]
     if hist is not None:
         out.update(rule_version=hist["rule_version"],
                    requires_hash=hist.get("requires_hash"),
-                   coverage_recorded=hist.get("coverage") is not None)
+                   coverage_recorded=_coverage_recorded(hist.get("coverage")),
+                   registry_watermark=(hist.get("coverage") or {}).get("registry_watermark"))
 
     fail_or_none = OUT_FAIL if lane_issues else OUT_NOT_RECORDED
     result = facts.get("result")
@@ -282,8 +313,11 @@ def compare_identity(a: Dict[str, Any], b: Dict[str, Any], rule_id: str
         return R_VERSION
     if a["requires_hash"] != b["requires_hash"]:
         return R_REQUIRES
-    if rule_id == "INT-002" and not (a["coverage_recorded"] and b["coverage_recorded"]):
-        return R_COVERAGE
+    if rule_id == "INT-002":
+        if not (a["coverage_recorded"] and b["coverage_recorded"]):
+            return R_COVERAGE
+        if a["registry_watermark"] != b["registry_watermark"]:
+            return R_REGISTRY
     if not (a["header_has_field"] and b["header_has_field"]):
         return R_SCHEMA
     return None
@@ -325,7 +359,15 @@ def classify_recurrence(raws: Sequence[Dict[str, Any]], index: int, rule_id: str
     if passing is not None:
         return {"state": REC_RECURRING, "reason": None,
                 "earlier_occurrence": earlier, "comparable_pass": passing}
-    return {"state": REC_PERSISTENT, "reason": None,
+    reason = None
+    if cur["usable"] and rule_id == "INT-002":
+        for p in range(index - 1, earlier, -1):
+            cand = raws[p]
+            if (cand["usable"] and cand["outcome"] == OUT_PASS
+                    and compare_identity(cand, cur, rule_id) == R_REGISTRY):
+                reason = R_REGISTRY
+                break
+    return {"state": REC_PERSISTENT, "reason": reason,
             "earlier_occurrence": earlier, "comparable_pass": None}
 
 
@@ -414,6 +456,8 @@ def build_lane_cells(facts_by_delivery: Sequence[Dict[str, Any]], rule_id: str,
             if earlier_issue and classify_qa(earlier_issue[0])["status"] == QA_APPROVED:
                 # A note beside the badges; it changes neither of them.
                 cell["note"] = APPROVED_NOT_FOLLOWED_NOTE
+        if rec and rec.get("reason") == R_REGISTRY:
+            cell["note"] = REGISTRY_NOTE if not cell["note"] else cell["note"] + "; " + REGISTRY_NOTE
         cells.append(cell)
     # replace recurrence indexes by delivery ids
     for cell in cells:
@@ -425,25 +469,46 @@ def build_lane_cells(facts_by_delivery: Sequence[Dict[str, Any]], rule_id: str,
     return cells
 
 
-def later_stage_cells(facts: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Issues from later-stage rules, shown as OBSERVED and never recurrence-
-    evaluated (their coverage is not tracked per rule)."""
-    cells = []
+def later_stage_findings(facts: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Later-stage issues (NPI-005/006/008/009 and the post-promotion types),
+    kept OUTSIDE the lanes and outside every recurrence calculation.
+
+    Each is labelled with the run it actually belongs to. It is NEVER presented
+    as a selected-run result: `from_selected_run` is true only when its run_id
+    equals the delivery's selected run. Recurrence is fixed at NOT_EVALUATED.
+    """
+    selected = facts.get("selected_run")
+    selected_id = selected["id"] if selected else None
+    runs = facts.get("runs_by_id") or {}
+    out = []
     for issue in facts.get("later_issues", []):
-        cells.append({
+        run_id = issue.get("run_id")
+        run = runs.get(run_id) if run_id is not None else None
+        from_selected = run_id is not None and run_id == selected_id
+        if run_id is None:
+            note = "run not recorded"
+        elif from_selected:
+            note = "from the selected run"
+        else:
+            note = f"from run {str(run_id)[:8]} (not the selected run)"
+        out.append({
             "delivery_id": facts["delivery_id"],
             "rule_id": issue["rule_id"],
             "field": issue.get("field_name") or "NPI",
             "rule_version": issue.get("rule_version"),
+            "issue": issue,
+            "qa": classify_qa(issue),
+            "run_id": run_id,
+            "run_status": (run["status"] if run else None),
+            "run_completed_at": (run.get("completed_at") if run else None),
+            "from_selected_run": from_selected,
+            "run_note": note,
             "check": {"outcome": OUT_OBSERVED, "comparability": NOT_COMPARABLE,
                       "reason": R_EXTERNAL},
-            "issue": issue, "issue_count": 1,
-            "qa": classify_qa(issue),
             "recurrence": {"state": REC_NOT_EVALUATED, "reason": R_EXTERNAL,
                            "earlier_occurrence": None, "comparable_pass": None},
-            "note": None,
         })
-    return cells
+    return out
 
 
 def gaps_from_lanes(lane_cells: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:

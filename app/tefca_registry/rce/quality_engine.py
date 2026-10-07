@@ -161,6 +161,21 @@ async def _build_dataset_context(db, intake_id) -> Dict[str, Any]:
     }
 
 
+async def _registry_watermark(db) -> str:
+    """A cheap, stable stamp of the registry OID namespace INT-002 reads:
+    identifier row count | active count | newest created_at. It does not see an
+    in-place edit that adds no row and changes no status."""
+    from app.tefca_registry import models as reg
+
+    row = (await db.execute(
+        select(func.count(), func.count().filter(
+                   reg.TefcaEntityIdentifier.identifier_status == "active"),
+               func.max(reg.TefcaEntityIdentifier.created_at))
+        .where(reg.TefcaEntityIdentifier.identifier_type == "rce_org_oid"))).one()
+    newest = row[2].isoformat() if row[2] is not None else "none"
+    return f"{row[0]}|{row[1]}|{newest}"
+
+
 def _dataset_level_findings(intake) -> List[Finding]:
     """Findings about the DELIVERY rather than about any one record.
 
@@ -241,6 +256,7 @@ async def run_quality_engine(
     tracked_ids = frozenset(
         r.rule_id for r in RULES if r.declared and r.scope != rcr.SCOPE_RUN)
     result_rows: List[Dict[str, Any]] = []
+    registry_watermark = (await _registry_watermark(db)) if record_results_on else None
 
     per_rule_evaluated: Dict[str, int] = {r.rule_id: 0 for r in RULES}
     per_rule_issues: Dict[str, int] = {r.rule_id: 0 for r in RULES}
@@ -299,7 +315,7 @@ async def run_quality_engine(
                 per_rule_ms[rule.rule_id] += (time.perf_counter() - started) * 1000
                 per_rule_evaluated[rule.rule_id] += 1
                 if record_results_on and rule.rule_id in tracked_ids:
-                    outcomes[rule.rule_id] = rcr.outcome_code(
+                    outcomes[rule.rule_id] = rcr.outcome_code_declared(
                         rule, ctx, findings, errored)
                 for finding in findings:
                     sequence += 1
@@ -350,6 +366,10 @@ async def run_quality_engine(
                     "delivery_ids": len(dataset.get("known_source_ids") or ()),
                     "registry_oids": len(dataset.get("registry_oids") or ()),
                     "qhin_oids": len(dataset.get("qhin_oids") or ()),
+                    # INT-002 resolves partOf against the registry, which changes
+                    # between runs: a stamp of its state, so two runs are only
+                    # comparable on INT-002 when the registry looked the same.
+                    "registry_watermark": registry_watermark,
                 }
         db.add(history)
 
@@ -406,6 +426,8 @@ async def _flush_issues(db, rows: List[Dict[str, Any]]) -> None:
         await db.execute(m.RceIssue.__table__.insert(), rows)
 
 
+_RESULTS_COLUMNS = ["run_id", "source_record_id", "map_version", "rule_count", "outcomes"]
+
 _RESULTS_INSERT = text(
     "INSERT INTO rce_record_check_results "
     "(run_id, source_record_id, map_version, rule_count, outcomes) "
@@ -414,21 +436,52 @@ _RESULTS_INSERT = text(
     "CAST(:outs AS jsonb[])) AS t(rid, rc, o)")
 
 
+def _encode_outcomes(rows: List[Dict[str, Any]]) -> List[str]:
+    """JSON text per row, encoded once per DISTINCT outcome combination.
+
+    Nearly every record shares one of a handful of combinations (8 codes drawn
+    from six letters), so memoising on the value tuple replaces tens of
+    thousands of json.dumps calls with a dict lookup. The text is identical to
+    a per-row dump (sorted keys, compact separators).
+    """
+    cache: Dict[tuple, str] = {}
+    out = []
+    for r in rows:
+        items = tuple(r["outcomes"].items())
+        text_ = cache.get(items)
+        if text_ is None:
+            text_ = cache[items] = json.dumps(r["outcomes"], sort_keys=True,
+                                              separators=(",", ":"))
+        out.append(text_)
+    return out
+
+
 async def _flush_results(db, rows: List[Dict[str, Any]]) -> None:
     """Insert per-record check results in the SAME transaction as the issues.
 
-    One statement per batch (unnest of three arrays) rather than one row per
-    parameter set: the per-row Python and protocol overhead of a 24,589-row
-    executemany was the bulk of the write cost.
+    Uses the driver's COPY on the session's own connection and transaction when
+    it is available (asyncpg), otherwise a single unnest INSERT. Both are plain
+    inserts into the same table: foreign keys and the primary key are enforced
+    in either path, and nothing is committed here.
     """
     if not rows:
+        return
+    encoded = _encode_outcomes(rows)
+    try:
+        conn = await db.connection()
+        raw = await conn.get_raw_connection()
+        copy = getattr(raw.driver_connection, "copy_records_to_table", None)
+    except Exception:  # noqa: BLE001 - fall back to the portable path
+        copy = None
+    if copy is not None:
+        await copy("rce_record_check_results", columns=_RESULTS_COLUMNS, records=[
+            (r["run_id"], r["source_record_id"], r["map_version"], r["rule_count"], j)
+            for r, j in zip(rows, encoded)])
         return
     await db.execute(_RESULTS_INSERT, {
         "run_id": rows[0]["run_id"], "map_version": rows[0]["map_version"],
         "rids": [r["source_record_id"] for r in rows],
-        "rcs": [r["rule_count"] for r in rows],
-        "outs": [json.dumps(r["outcomes"], sort_keys=True, separators=(",", ":"))
-                 for r in rows]})
+        "rcs": [r["rule_count"] for r in rows], "outs": encoded})
 
 
 async def issue_summary(db, intake_id, *, run_id=None,

@@ -68,7 +68,8 @@ def intakes_query(feeds: Sequence[str]):
     return (select(m.RceSourceIntake.id, m.RceSourceIntake.sha256,
                    m.RceSourceIntake.received_at, m.RceSourceIntake.received_by,
                    m.RceSourceIntake.status, m.RceSourceIntake.delivery_label,
-                   m.RceSourceIntake.headers, feed.label("feed"))
+                   m.RceSourceIntake.headers, m.RceSourceIntake.duplicate_content,
+                   m.RceSourceIntake.duplicate_of_intake_id, feed.label("feed"))
             .where(feed.in_(list(feeds))))
 
 
@@ -122,16 +123,16 @@ async def get_issue_history(db, oid: str, *, reviewer_or_above: bool, settings,
         raise HistoryNotFound(0)
 
     intakes = await _rows(db, intakes_query(sorted(feeds)))
-    if not intakes:
+    deliveries = core.build_deliveries(intakes)
+    if not deliveries:
         raise HistoryNotFound(0)
-    all_ids = [i["id"] for i in intakes]
+    all_ids = [d["intake"]["id"] for d in deliveries]
 
     records = await _rows(db, records_query(oid, all_ids))
     if not records:
         raise HistoryNotFound(0)
 
-    deliveries = core.collapse_canonical(intakes)
-    canonical_ids = [d["canonical"]["id"] for d in deliveries]
+    canonical_ids = all_ids
     records_by_intake: Dict[Any, List[Dict[str, Any]]] = {}
     for rec in records:
         records_by_intake.setdefault(rec["source_intake_id"], []).append(rec)
@@ -146,9 +147,9 @@ async def get_issue_history(db, oid: str, *, reviewer_or_above: bool, settings,
     for run in runs:
         runs_by_intake.setdefault(run["source_intake_id"], []).append(run)
 
-    # Only a canonical intake's results are ever read.
-    selection = {d["canonical"]["id"]: core.select_runs(
-        runs_by_intake.get(d["canonical"]["id"], [])) for d in deliveries}
+    # Each delivery's results are read from its own intake only.
+    selection = {d["intake"]["id"]: core.select_runs(
+        runs_by_intake.get(d["intake"]["id"], [])) for d in deliveries}
     selected_run_ids = [s["selected"]["id"] for s in selection.values() if s["selected"]]
 
     history_by_run: Dict[Any, List[Dict[str, Any]]] = {}
@@ -166,7 +167,7 @@ async def get_issue_history(db, oid: str, *, reviewer_or_above: bool, settings,
     # (run, record) pairs and the records whose issues are needed.
     pairs, record_ids = [], []
     for d in deliveries:
-        iid = d["canonical"]["id"]
+        iid = d["intake"]["id"]
         recs = records_by_intake.get(iid, [])
         record_ids.extend(r["id"] for r in recs)
         run = selection[iid]["selected"]
@@ -189,7 +190,7 @@ async def get_issue_history(db, oid: str, *, reviewer_or_above: bool, settings,
     # ── facts per canonical delivery, grouped per feed ──────────────────────
     per_feed: Dict[str, List[Dict[str, Any]]] = {}
     for d in deliveries:
-        c = d["canonical"]
+        c = d["intake"]
         iid = c["id"]
         recs = records_by_intake.get(iid, [])
         sel = selection[iid]
@@ -217,7 +218,8 @@ async def get_issue_history(db, oid: str, *, reviewer_or_above: bool, settings,
             "result": (results.get((run["id"], rec["id"]))
                        if run and rec else None),
             "issues": run_issues, "later_issues": later,
-            "duplicates": d["duplicates"],
+            "provenance": d,
+            "runs_by_id": {r["id"]: r for r in runs_by_intake.get(iid, [])},
             "jobs": jobs_by_intake.get(iid, []),
         }
         per_feed.setdefault(c["feed"], []).append(facts)
@@ -238,7 +240,6 @@ async def get_issue_history(db, oid: str, *, reviewer_or_above: bool, settings,
                       for rule, field in core.SLICE_LANES}
         for idx, facts in enumerate(items):
             cells = [lane_cells[rule][idx] for rule, _ in core.SLICE_LANES]
-            cells += core.later_stage_cells(facts)
             all_cells.extend(cells)
             entries.append(_delivery_entry(facts, cells, reviewer_or_above))
 
@@ -305,13 +306,13 @@ def _delivery_entry(facts: Dict[str, Any], cells: List[Dict[str, Any]],
         status, reason = core.NOT_COMPARABLE, core.R_ABSENT
     elif facts["record_state"] == "DUPLICATE":
         status, reason = core.NOT_COMPARABLE, core.R_DUP_OID
-    dups = []
-    for dup in facts["duplicates"]:
-        item = {"intake_id": str(dup["id"]), "received_at": _iso(dup["received_at"]),
-                "note": core.DUPLICATE_NOTE, "results_used": False}
-        if reviewer:
-            item["received_by"] = dup.get("received_by")
-        dups.append(item)
+    prov = facts["provenance"]
+    of = prov["identical_content_of"]
+    also = prov["identical_content_also"]
+    note = None
+    if of is not None or also or prov["duplicate_upload"]:
+        other = of if of is not None else (also[0] if also else None)
+        note = core.IDENTICAL_NOTE.format(other=other) if other is not None else             "flagged as a duplicate upload; the same file content can be a separate delivery"
     return {
         "_sort": c["received_at"],
         "delivery_id": facts["delivery_id"],
@@ -320,7 +321,10 @@ def _delivery_entry(facts: Dict[str, Any], cells: List[Dict[str, Any]],
         "as_of": None, "as_of_note": "not recorded",
         "label": c.get("delivery_label"),
         "job_ids": [str(j["id"]) for j in facts["jobs"]],
-        "duplicate_uploads": dups,
+        "identical_content_of": (str(of) if of is not None else None),
+        "identical_content_also": [str(x) for x in also],
+        "duplicate_upload": prov["duplicate_upload"],
+        "identical_content_note": note,
         "record_present": (None if facts["intake_status"] == "FAILED"
                            else facts["record_state"] != "ABSENT"),
         "status": status, "status_reason": reason, "flags": flags,
@@ -331,6 +335,8 @@ def _delivery_entry(facts: Dict[str, Any], cells: List[Dict[str, Any]],
                      "count": len(sel["earlier_completed"]),
                      "run_ids": [str(r["id"]) for r in sel["earlier_completed"]]}},
         "lanes": [_cell_view(cell, reviewer) for cell in cells],
+        "later_stage_findings": [_later_view(f, reviewer)
+                                 for f in core.later_stage_findings(facts)],
     }
 
 
@@ -364,4 +370,29 @@ def _cell_view(cell: Dict[str, Any], reviewer: bool) -> Dict[str, Any]:
             view["qa"]["rationale"] = issue.get("resolution_notes")
             view["qa"]["actors"] = {"resolved_by": issue.get("resolved_by"),
                                     "qa_approved_by": issue.get("qa_approved_by")}
+    return view
+
+
+def _later_view(f: Dict[str, Any], reviewer: bool) -> Dict[str, Any]:
+    issue = f["issue"]
+    qa = f["qa"]
+    view: Dict[str, Any] = {
+        "rule_id": f["rule_id"], "field": f["field"], "rule_version": f["rule_version"],
+        "finding": {"issue_id": str(issue["id"]), "finding_type": issue["issue_type"],
+                    "severity": issue["severity"]},
+        "run_id": (str(f["run_id"]) if f["run_id"] is not None else None),
+        "run_status": f["run_status"],
+        "run_completed_at": _iso(f["run_completed_at"]),
+        "from_selected_run": f["from_selected_run"],
+        "run_note": f["run_note"],
+        "check": dict(f["check"]), "recurrence": dict(f["recurrence"]),
+        "qa": {"status": qa["status"], "decision": qa["decision"], "role": qa["role"],
+               "timestamp": _iso(qa["timestamp"]), "qa_required": qa["qa_required"]},
+    }
+    if reviewer:
+        view["finding"]["original_value"] = issue.get("original_value")
+        view["finding"]["suggested_value"] = issue.get("suggested_value")
+        view["qa"]["rationale"] = issue.get("resolution_notes")
+        view["qa"]["actors"] = {"resolved_by": issue.get("resolved_by"),
+                                "qa_approved_by": issue.get("qa_approved_by")}
     return view

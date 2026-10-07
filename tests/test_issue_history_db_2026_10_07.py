@@ -49,7 +49,8 @@ def assert_never_inferred(resp):
             if chk["outcome"] == "PASS":
                 # a PASS exists only as a persisted P, and says so
                 assert chk["reason"] in (None, "RULE_VERSION_CHANGED", "REQUIRES_CHANGED",
-                                         "SCHEMA_CHANGED", "COVERAGE_NOT_RECORDED")
+                                         "SCHEMA_CHANGED", "COVERAGE_NOT_RECORDED",
+                                         "REGISTRY_STATE_DIFFERS")
             if chk["reason"] in ("RECORD_ABSENT", "NO_COMPLETED_RUN",
                                  "DUPLICATE_OID_IN_DELIVERY", "RESULT_SCHEMA_UNSUPPORTED",
                                  "CHECK_RESULT_NOT_PERSISTED", "RULE_ERROR"):
@@ -112,7 +113,9 @@ async def test_engine_persists_a_map_per_record_and_the_interpretation_columns(r
     for rid in core.SLICE_RULE_IDS:
         assert len(hist[rid]["requires_hash"]) == 64
     assert hist["REQ-001"]["requires_hash"] is None
-    assert hist["INT-002"]["coverage"].keys() == {"delivery_ids", "registry_oids", "qhin_oids"}
+    assert hist["INT-002"]["coverage"].keys() == {"delivery_ids", "registry_oids", "qhin_oids",
+                                                  "registry_watermark"}
+    assert hist["INT-002"]["coverage"]["registry_watermark"].count("|") == 2
     assert hist["INT-002"]["coverage"]["delivery_ids"] == 2
     assert hist["NPI-002"]["coverage"] is None
 
@@ -398,48 +401,52 @@ async def test_s10_identity_is_exact(rolled_back_db):
 
 
 @pytest.mark.asyncio
-async def test_s11_duplicate_content_collapses_and_never_becomes_previous(rolled_back_db):
+async def test_s11_identical_hashes_stay_distinct_deliveries(rolled_back_db):
     db = rolled_back_db
     rows = [entity_row(OID, npi=BAD_LEN_NPI), filler_row("dupcontent")]
     jul = await seed_delivery(db, rows, received_at=datetime(2026, 7, 5), label="Same label")
     await run_engine(db, jul)
-    reupload = await seed_delivery(db, rows, received_at=datetime(2026, 8, 10),
-                                   label="Same label")
-    await run_engine(db, reupload)           # a duplicate that WAS processed
-    changed = await seed_delivery(db, rows, received_at=datetime(2026, 8, 20),
-                                  label="Same label", blob_salt="different content")
-    await run_engine(db, changed)
+    aug = await seed_delivery(db, rows, received_at=datetime(2026, 8, 10), label="Same label")
+    await run_engine(db, aug)
+    same_day = await seed_delivery(db, rows, received_at=datetime(2026, 8, 10, 9),
+                                   label="Same label", duplicate_of=jul)
+    await run_engine(db, same_day)
     sep = await deliver(db, 9)
     resp = await history(db)
     assert_never_inferred(resp)
     ids = [e["delivery_id"] for e in resp["deliveries"]]
-    assert ids == [str(jul), str(changed), str(sep)]       # the re-upload is not a delivery
-    first = entry_of(resp, jul)
-    assert [d["intake_id"] for d in first["duplicate_uploads"]] == [str(reupload)]
-    dup = first["duplicate_uploads"][0]
-    assert dup["note"] == "identical re-upload, not a separate delivery"
-    assert dup["results_used"] is False and dup["received_at"] == "2026-08-10T00:00:00"
-    assert first["received_at"] == "2026-07-05T00:00:00"   # canonical receipt date
-    # the different-content delivery with the same label is its own delivery
-    assert entry_of(resp, changed)["label"] == "Same label"
-    # and the duplicate created no pass / gap: Sep is persistent against Aug-20 or Jul
-    assert lane(entry_of(resp, sep), NPI2)["recurrence"]["state"] == "PERSISTENT_OR_UNVERIFIED"
-    assert str(reupload) not in json.dumps(resp["gaps"])
+    assert ids == [str(jul), str(aug), str(same_day), str(sep)]    # none collapsed
+    j, a, s, _ = resp["deliveries"]
+    assert (j["received_at"], a["received_at"]) == ("2026-07-05T00:00:00", "2026-08-10T00:00:00")
+    for entry in (j, a, s):
+        assert entry["runs"]["selected"] is not None and entry["label"] == "Same label"
+        assert lane(entry, NPI2)["check"]["outcome"] == "FAIL"
+    assert len({e["runs"]["selected"]["run_id"] for e in (j, a, s)}) == 3
+    assert j["identical_content_of"] is None
+    assert j["identical_content_also"] == [str(aug), str(same_day)]
+    assert a["identical_content_of"] == str(jul)
+    assert str(jul) in a["identical_content_also"]
+    assert a["duplicate_upload"] is False and s["duplicate_upload"] is True
+    assert str(aug) in s["identical_content_note"] or str(jul) in s["identical_content_note"]
+    assert "the same file content can be a separate delivery" in s["identical_content_note"]
+    assert lane(a, NPI2)["recurrence"]["state"] == "PERSISTENT_OR_UNVERIFIED"
+    assert lane(a, NPI2)["recurrence"]["earlier_occurrence"] == str(jul)
+    other = await seed_delivery(db, rows, received_at=datetime(2026, 8, 20),
+                                label="Same label", blob_salt="different")
+    await run_engine(db, other)
+    resp2 = await history(db)
+    assert entry_of(resp2, other)["identical_content_of"] is None
 
 
 @pytest.mark.asyncio
-async def test_s11b_a_failed_canonical_is_not_promoted_over_its_duplicate(rolled_back_db):
+async def test_s11b_failed_intakes_are_not_deliveries(rolled_back_db):
     db = rolled_back_db
     rows = [entity_row(OID), filler_row("fc")]
-    first = await seed_delivery(db, rows, received_at=datetime(2026, 7, 5), status="FAILED")
-    second = await seed_delivery(db, rows, received_at=datetime(2026, 7, 6))
-    await run_engine(db, second)
+    await seed_delivery(db, rows, received_at=datetime(2026, 7, 5), status="FAILED")
+    ok = await seed_delivery(db, rows, received_at=datetime(2026, 7, 6))
+    await run_engine(db, ok)
     resp = await history(db)
-    (entry,) = resp["deliveries"]
-    assert entry["delivery_id"] == str(first)
-    assert entry["status"] == "NOT_COMPARABLE" and entry["status_reason"] == "NO_COMPLETED_RUN"
-    assert [d["intake_id"] for d in entry["duplicate_uploads"]] == [str(second)]
-    assert entry["duplicate_uploads"][0]["results_used"] is False
+    assert [e["delivery_id"] for e in resp["deliveries"]] == [str(ok)]
 
 
 @pytest.mark.asyncio
@@ -532,24 +539,113 @@ async def test_s13_viewer_redaction_and_s14_reviewer_sees_values(rolled_back_db)
 
 
 @pytest.mark.asyncio
-async def test_later_stage_issues_are_observed_with_recurrence_not_evaluated(rolled_back_db):
+async def test_later_stage_findings_are_separate_labelled_and_never_selected_run_results(rolled_back_db):
     db = rolled_back_db
     jul = await deliver(db, 7, npi=GOOD_NPI)
     rec = await record_of(db, jul)
-    db.add(m.RceIssue(
-        issue_code="DQ-SYN-NPI5-0001", source_intake_id=jul, source_record_id=rec.id,
-        rule_id="NPI-005", rule_version="1.2.0", issue_type="NPI_NOT_FOUND",
-        severity="MEDIUM", field_name="NPI", correction_authority="HUMAN_REQUIRED",
-        description="synthetic", resolution="OPEN"))
+    sel = (await db.execute(select(m.RceIngestionRun).where(
+        m.RceIngestionRun.source_intake_id == jul))).scalar_one()
+    older = m.RceIngestionRun(
+        source_intake_id=jul, rule_set_version="1.3.0", rule_config_hash="0" * 64,
+        started_at=datetime(2026, 1, 1), completed_at=datetime(2026, 1, 2),
+        run_status="COMPLETE")
+    db.add(older)
+    await db.flush()
+
+    def issue(code, rule, typ, run_id):
+        return m.RceIssue(
+            issue_code=code, source_intake_id=jul, source_record_id=rec.id, rule_id=rule,
+            rule_version="1.2.0", issue_type=typ, severity="MEDIUM", field_name="NPI",
+            correction_authority="HUMAN_REQUIRED", description="synthetic",
+            resolution="OPEN", run_id=run_id)
+
+    db.add_all([issue("DQ-SYN-L1", "NPI-005", "NPI_NOT_FOUND", older.id),
+                issue("DQ-SYN-L2", "NPI-006", "NPI_DEACTIVATED", sel.id),
+                issue("DQ-SYN-L3", "NPI-009", "NPI_VERIFICATION_UNAVAILABLE", None),
+                issue("DQ-SYN-L4", "NPI-003", "INVALID_ACTIVE_IDENTIFIER", older.id)])
     await db.commit()
     resp = await history(db)
-    cells = [l for l in entry_of(resp, jul)["lanes"] if l["rule_id"] == "NPI-005"]
-    assert len(cells) == 1
-    assert cells[0]["check"]["comparability"] == "NOT_COMPARABLE"
-    assert cells[0]["check"]["reason"] == "EXTERNAL_COVERAGE_NOT_TRACKED_PER_RULE"
-    assert cells[0]["recurrence"] == {"state": "NOT_EVALUATED",
-                                      "reason": "EXTERNAL_COVERAGE_NOT_TRACKED_PER_RULE",
-                                      "earlier_occurrence": None, "comparable_pass": None}
+    e = entry_of(resp, jul)
+    assert not [l for l in e["lanes"] if l["rule_id"] in ("NPI-005", "NPI-006", "NPI-009")]
+    nl = lane(e, "NPI-003")
+    assert nl["finding"] is None and nl["check"]["outcome"] == "PASS"
+    by = {f["finding"]["finding_type"]: f for f in e["later_stage_findings"]}
+    assert set(by) == {"NPI_NOT_FOUND", "NPI_DEACTIVATED", "NPI_VERIFICATION_UNAVAILABLE",
+                       "INVALID_ACTIVE_IDENTIFIER"}
+    other = by["NPI_NOT_FOUND"]
+    assert other["from_selected_run"] is False and other["run_id"] == str(older.id)
+    assert other["run_note"] == f"from run {str(older.id)[:8]} (not the selected run)"
+    assert other["run_status"] == "COMPLETE" and other["run_completed_at"] == "2026-01-02T00:00:00"
+    assert by["INVALID_ACTIVE_IDENTIFIER"]["from_selected_run"] is False
+    chosen = by["NPI_DEACTIVATED"]
+    assert chosen["from_selected_run"] is True and chosen["run_id"] == str(sel.id)
+    none = by["NPI_VERIFICATION_UNAVAILABLE"]
+    assert none["run_id"] is None and none["run_note"] == "run not recorded"
+    assert none["from_selected_run"] is False
+    for f in by.values():
+        assert f["recurrence"] == {"state": "NOT_EVALUATED",
+                                   "reason": "EXTERNAL_COVERAGE_NOT_TRACKED_PER_RULE",
+                                   "earlier_occurrence": None, "comparable_pass": None}
+        assert f["check"]["reason"] == "EXTERNAL_COVERAGE_NOT_TRACKED_PER_RULE"
+    assert core.forbidden_keys_present(resp) == []
+    await deliver(db, 9, npi=GOOD_NPI)
+    for l in entry_of(await history(db), jul)["lanes"]:
+        assert l["rule_id"] in core.SLICE_RULE_IDS
+
+
+# -- INT-002 registry-state comparability --
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("registry_changes", [False, True])
+async def test_int002_recurrence_requires_the_same_registry_state(rolled_back_db, registry_changes):
+    from rce_traceability_support import seed_entity
+
+    db = rolled_back_db
+    bad_parent = "9.99.777.404.0"
+
+    async def month(m_, parent):
+        rows = [filler_row(f"i2m{m_}")]
+        r = entity_row(OID, npi=GOOD_NPI)
+        r["partOf"] = parent
+        rows.insert(0, r)
+        iid = await seed_delivery(db, rows, received_at=datetime(2026, m_, 5))
+        await run_engine(db, iid)
+        return iid
+
+    jul = await month(7, bad_parent)
+    aug = await month(8, QHIN_OID)
+    if registry_changes:
+        await seed_entity(db, oid="9.99.777.55.1", name="SYN registry change")
+    sep = await month(9, bad_parent)
+    resp = await history(db)
+    assert_never_inferred(resp)
+    j, a, s = (lane(entry_of(resp, x), "INT-002") for x in (jul, aug, sep))
+    assert j["check"]["outcome"] == "FAIL" and a["check"]["outcome"] == "PASS"
+    if not registry_changes:
+        assert s["recurrence"]["state"] == "RECURRING"
+        assert s["recurrence"]["comparable_pass"] == str(aug)
+        assert s["check"]["comparability"] == "COMPARABLE"
+    else:
+        assert s["recurrence"]["state"] == "PERSISTENT_OR_UNVERIFIED"
+        assert s["recurrence"]["reason"] == "REGISTRY_STATE_DIFFERS"
+        assert "registry state differed" in s["note"]
+        assert a["check"] == {"outcome": "PASS", "comparability": "NOT_COMPARABLE",
+                              "reason": "REGISTRY_STATE_DIFFERS"}
+
+
+@pytest.mark.asyncio
+async def test_int002_without_a_recorded_watermark_is_not_comparable(rolled_back_db):
+    db = rolled_back_db
+    jul = await deliver(db, 7)
+    aug = await deliver(db, 8)
+    await db.execute(text(
+        "update rce_rule_execution_history set coverage = coverage - 'registry_watermark' "
+        "where rule_id = 'INT-002' and run_id in (select id from rce_ingestion_runs "
+        "where source_intake_id = :i)"), {"i": jul})
+    resp = await history(db)
+    c = lane(entry_of(resp, jul), "INT-002")["check"]
+    assert c["comparability"] == "NOT_COMPARABLE" and c["reason"] == "COVERAGE_NOT_RECORDED"
+    assert lane(entry_of(resp, aug), "INT-002")["check"]["comparability"] == "COMPARABLE"
 
 
 @pytest.mark.asyncio

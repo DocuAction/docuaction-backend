@@ -91,11 +91,12 @@ def validate_for_write(outcomes: Dict[str, str], rule_count: int,
         raise ResultMapInvalid(f"unsupported map_version {map_version!r}")
     allowed = (run_rule_ids if isinstance(run_rule_ids, (set, frozenset))
                else set(run_rule_ids))
-    unknown_codes = sorted({str(c) for c in outcomes.values() if c not in CODES_V1})
-    if unknown_codes:
+    # Fast checks first (dict views, no copies); detail only on failure.
+    if not set(outcomes.values()) <= CODES_V1:
+        unknown_codes = sorted({str(c) for c in outcomes.values() if c not in CODES_V1})
         raise ResultMapInvalid(f"codes outside the closed set: {unknown_codes}")
-    foreign = sorted(set(outcomes) - allowed)
-    if foreign:
+    if not outcomes.keys() <= allowed:
+        foreign = sorted(set(outcomes) - allowed)
         raise ResultMapInvalid(f"rule ids not in this run: {foreign}")
     if rule_count != len(outcomes):
         raise ResultMapInvalid(
@@ -173,5 +174,19 @@ def outcome_code(rule, ctx, findings, errored: bool) -> str:
         # A finding on a record the predicate calls not-applicable is a
         # declaration bug (the consistency test forbids it); record the fact
         # that a finding was raised rather than hiding it.
+        return CODE_FINDING
+    return CODE_PASS if applicable else CODE_NOT_APPLICABLE
+
+
+def outcome_code_declared(rule, ctx, findings, errored: bool) -> str:
+    """`outcome_code` for a rule the caller already knows is declared (the
+    engine only tracks declared rules), without re-checking `declared`."""
+    if errored:
+        return CODE_ERROR
+    try:
+        applicable = rule.applies(ctx)
+    except Exception:  # noqa: BLE001 - recorded as E, never as P
+        return CODE_ERROR
+    if findings:
         return CODE_FINDING
     return CODE_PASS if applicable else CODE_NOT_APPLICABLE

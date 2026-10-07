@@ -205,36 +205,45 @@ def test_viewer_sees_viewer_feeds_reviewer_adds_its_own():
     assert core.parse_feed_list("onc_rce") == ("onc_rce",)
 
 
-# ── 2.3 canonical collapse ────────────────────────────────────────────────────
+# ── 2.3 (revised): identical content stays distinct ──────────────────────────
 
-def _intake(sha, day, feed="F", status="PARSED", n=None):
+def _intake(sha, day, feed="F", status="PARSED", n=None, dup=False):
     return {"id": uuid.UUID(int=n if n is not None else day * 7 + len(sha)),
-            "sha256": sha, "feed": feed, "status": status,
+            "sha256": sha, "feed": feed, "status": status, "duplicate_content": dup,
+            "duplicate_of_intake_id": None,
             "received_at": datetime(2026, 9, day), "received_by": "u"}
 
 
-def test_same_hash_same_feed_collapses_to_the_earliest():
+def test_identical_hashes_are_distinct_deliveries_with_provenance_only():
     a, b, c = _intake("h1", 5), _intake("h1", 9), _intake("h2", 12)
-    out = core.collapse_canonical([b, c, a])
-    assert [d["canonical"]["id"] for d in out] == [a["id"], c["id"]]
-    assert out[0]["duplicates"] == [b]
+    out = core.build_deliveries([b, c, a])
+    assert [d["intake"]["id"] for d in out] == [a["id"], b["id"], c["id"]]
+    first, second, third = out
+    assert first["identical_content_of"] is None
+    assert first["identical_content_also"] == [b["id"]]
+    assert second["identical_content_of"] == a["id"]
+    assert second["identical_content_also"] == [a["id"]]
+    assert third["identical_content_of"] is None and third["identical_content_also"] == []
 
 
-def test_same_hash_in_different_feeds_is_two_deliveries():
-    out = core.collapse_canonical([_intake("h1", 5, "F"), _intake("h1", 6, "G")])
-    assert len(out) == 2
+def test_same_hash_in_different_feeds_is_not_linked():
+    out = core.build_deliveries([_intake("h1", 5, "F"), _intake("h1", 6, "G")])
+    assert all(d["identical_content_of"] is None and not d["identical_content_also"]
+               for d in out)
 
 
-def test_tie_on_receipt_is_broken_by_id():
+def test_order_is_received_at_then_id():
     lo, hi = _intake("h", 5, n=1), _intake("h", 5, n=2)
-    out = core.collapse_canonical([hi, lo])
-    assert out[0]["canonical"] is lo and out[0]["duplicates"] == [hi]
+    out = core.build_deliveries([hi, lo])
+    assert [d["intake"] for d in out] == [lo, hi]
+    assert out[1]["identical_content_of"] == lo["id"]
 
 
-def test_a_failed_canonical_is_not_replaced_by_its_duplicate():
-    failed, ok = _intake("h", 5, status="FAILED"), _intake("h", 6)
-    out = core.collapse_canonical([ok, failed])
-    assert out[0]["canonical"]["status"] == "FAILED"
+def test_failed_intakes_are_not_deliveries_and_duplicate_flag_is_carried():
+    failed, ok = _intake("h", 5, status="FAILED"), _intake("h", 6, dup=True)
+    out = core.build_deliveries([ok, failed])
+    assert [d["intake"] for d in out] == [ok]
+    assert out[0]["duplicate_upload"] is True and out[0]["identical_content_of"] is None
 
 
 # ── run selection ─────────────────────────────────────────────────────────────
@@ -424,32 +433,73 @@ def test_qa_needs_an_independent_approver():
     assert core.classify_qa(closed)["decision"] == "CLOSED"   # never says "resolved"
 
 
-def test_later_stage_issues_are_observed_and_not_evaluated():
+def _later(run_id, selected_id=7, runs=None):
     f = _facts(1)
+    f["selected_run"] = {"id": selected_id}
+    f["runs_by_id"] = runs if runs is not None else {
+        uuid.UUID(int=9): {"status": "COMPLETE", "completed_at": datetime(2026, 9, 1)}}
     f["later_issues"] = [{"rule_id": "NPI-005", "rule_version": "1.2.0",
                           "issue_type": "NPI_NOT_FOUND", "severity": "MEDIUM",
-                          "field_name": "NPI", "id": uuid.uuid4(),
+                          "field_name": "NPI", "id": uuid.uuid4(), "run_id": run_id,
                           "resolution": "OPEN", "correction_authority": "HUMAN_REQUIRED"}]
-    (cell,) = core.later_stage_cells(f)
-    assert cell["check"] == {"outcome": "OBSERVED", "comparability": "NOT_COMPARABLE",
-                             "reason": "EXTERNAL_COVERAGE_NOT_TRACKED_PER_RULE"}
-    assert cell["recurrence"]["state"] == "NOT_EVALUATED"
-    assert cell["recurrence"]["reason"] == "EXTERNAL_COVERAGE_NOT_TRACKED_PER_RULE"
+    return core.later_stage_findings(f)
 
 
-def test_int002_requires_recorded_coverage_on_both_runs():
-    def f(i, cov):
-        d = _facts(i, issue=(i == 2), rule="INT-002")
-        for h in d["history_rows"]:
-            if h["rule_id"] == "INT-002":
-                h["coverage"] = cov
-        d["headers"] = ["partOf"]
-        return d
-    seq = [f(1, {"delivery_ids": 3}), f(2, None)]
+def test_later_stage_findings_are_outside_lanes_and_labelled_with_their_run():
+    other = uuid.UUID(int=9)
+    (x,) = _later(other)
+    assert x["from_selected_run"] is False
+    assert x["run_note"] == f"from run {str(other)[:8]} (not the selected run)"
+    assert x["run_status"] == "COMPLETE" and x["run_completed_at"] == datetime(2026, 9, 1)
+    assert x["check"] == {"outcome": "OBSERVED", "comparability": "NOT_COMPARABLE",
+                          "reason": "EXTERNAL_COVERAGE_NOT_TRACKED_PER_RULE"}
+    assert x["recurrence"]["state"] == "NOT_EVALUATED"
+    assert x["recurrence"]["reason"] == "EXTERNAL_COVERAGE_NOT_TRACKED_PER_RULE"
+    (y,) = _later(7)
+    assert y["from_selected_run"] is True and y["run_note"] == "from the selected run"
+    (z,) = _later(None)
+    assert z["from_selected_run"] is False and z["run_note"] == "run not recorded"
+    assert z["run_id"] is None and z["run_status"] is None
+    # lanes never carry a later-stage rule
+    assert not hasattr(core, "later_stage_cells")
+    assert {r for r, _ in core.SLICE_LANES}.isdisjoint(core.LATER_STAGE_RULE_IDS)
+
+
+def _int2(i, cov, issue=False):
+    d = _facts(i, issue=issue, rule="INT-002")
+    for h in d["history_rows"]:
+        if h["rule_id"] == "INT-002":
+            h["coverage"] = cov
+    d["headers"] = ["partOf"]
+    return d
+
+
+def test_int002_requires_recorded_coverage_with_a_watermark_on_both_runs():
+    seq = [_int2(1, {"delivery_ids": 3, "registry_watermark": "w"}), _int2(2, None)]
     c = core.build_lane_cells(seq, "INT-002", "partOf")
-    assert c[0]["check"]["reason"] == "COVERAGE_NOT_RECORDED"   # PASS not comparable to ref
-    ok = core.build_lane_cells([f(1, {"x": 1}), f(2, {"x": 2})], "INT-002", "partOf")
+    assert c[0]["check"]["reason"] == "COVERAGE_NOT_RECORDED"
+    # counts without a watermark are not enough
+    seq = [_int2(1, {"delivery_ids": 3}), _int2(2, {"registry_watermark": "w"})]
+    assert core.build_lane_cells(seq, "INT-002", "partOf")[0]["check"]["reason"] ==         "COVERAGE_NOT_RECORDED"
+    ok = core.build_lane_cells([_int2(1, {"registry_watermark": "w"}),
+                                _int2(2, {"registry_watermark": "w"})], "INT-002", "partOf")
     assert ok[0]["check"]["comparability"] == "COMPARABLE"
+
+
+def test_int002_pass_then_fail_is_recurring_only_when_the_registry_state_matches():
+    same = core.build_lane_cells(
+        [_int2(1, {"registry_watermark": "w"}, issue=True),
+         _int2(2, {"registry_watermark": "w"}),
+         _int2(3, {"registry_watermark": "w"}, issue=True)], "INT-002", "partOf")
+    assert same[2]["recurrence"]["state"] == "RECURRING"
+    diff = core.build_lane_cells(
+        [_int2(1, {"registry_watermark": "w"}, issue=True),
+         _int2(2, {"registry_watermark": "w"}),
+         _int2(3, {"registry_watermark": "w2"}, issue=True)], "INT-002", "partOf")
+    rec = diff[2]["recurrence"]
+    assert rec["state"] == "PERSISTENT_OR_UNVERIFIED" and rec["reason"] == "REGISTRY_STATE_DIFFERS"
+    assert "registry state differed" in diff[2]["note"]
+    assert diff[1]["check"]["reason"] == "REGISTRY_STATE_DIFFERS"
 
 
 # ── redaction guard ───────────────────────────────────────────────────────────
