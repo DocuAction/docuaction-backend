@@ -124,6 +124,7 @@ jobs:
             tests/test_report_generate_inflight_2026_10_07.py \
             tests/test_release1_foundation.py \
             tests/test_contract_progress_reports.py \
+            tests/test_report_export_jobs_ownership_repair_2026_10_05.py \
             -v --tb=short -rs --junitxml=isolation-results.xml
       - name: Fail if any isolation test was skipped for want of a database
         run: |
