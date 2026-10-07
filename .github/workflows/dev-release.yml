@@ -77,6 +77,16 @@ on:
         required: false
         type: string
         default: ''
+      sequential_to_head:
+        description: 'With apply_migrations: apply EVERY pending revision from expected_current to head in one approved run (one transaction each, database revision verified after each, stop on first failure). Leave target_revision empty. Deploy happens only if DEV ends exactly at head.'
+        required: false
+        type: boolean
+        default: false
+      manage_firewall:
+        description: 'Open/close the temporary /32 automatically for the database phase and the post-deploy verification. Needs the one-time Azure role (docs/review/DEV-RELEASE-AUTOMATION.md). false = operator handshake as before.'
+        required: false
+        type: boolean
+        default: false
 
 # One DEV release in flight at a time. Queued, not cancelled: killing a run
 # mid-deploy could leave Azure pointed at a half-applied migration or an
@@ -123,11 +133,15 @@ jobs:
       expected_current: ${{ inputs.expected_current || '' }}
       handshake_issue: ${{ inputs.handshake_issue || '' }}
       target_revision: ${{ inputs.target_revision || '' }}
+      sequential_to_head: ${{ inputs.sequential_to_head == true }}
+      manage_firewall: ${{ inputs.manage_firewall == true }}
     permissions:
       contents: read
       id-token: write
       # Only for the runner-IPv4 handshake comment (to an issue) when apply_migrations=true.
       issues: write
+      # Only to check whether an EARLIER run is finished before removing its leftover firewall rule.
+      actions: read
 
   migration-gate:
     name: Controlled migration gate
@@ -223,12 +237,18 @@ jobs:
     needs: [deploy, migration-check]
     runs-on: ubuntu-latest
     environment: development
+    timeout-minutes: 45
     permissions:
       id-token: write
       contents: read
       issues: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
       - name: Login to Azure (OIDC - no stored client secret)
         uses: azure/login@v2
@@ -237,7 +257,19 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      # This job runs on its OWN runner, so it needs its own window (-gv name).
+      - name: Open the temporary /32 for this runner (automated)
+        if: inputs.manage_firewall == true
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          FIREWALL_RULE_NAME: temp-run-${{ github.run_id }}-gv
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash scripts/release/dev_firewall.sh sweep
+          bash scripts/release/dev_firewall.sh open
+
       - name: Report runner IPv4 and wait for the operator's temporary /32 (bounded)
+        if: inputs.manage_firewall != true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -275,6 +307,21 @@ jobs:
           PGTOKEN=$(az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv)
           test -n "$PGTOKEN" || { echo "FAIL: no PostgreSQL access token"; exit 1; }
           PGTOKEN="$PGTOKEN" python "$GITHUB_WORKSPACE/.github/scripts/gov_integrity_verify.py"
+
+      - name: Refresh Azure OIDC login for cleanup
+        if: always() && inputs.manage_firewall == true
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Close the temporary /32 and prove it is gone
+        if: always() && inputs.manage_firewall == true
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          FIREWALL_RULE_NAME: temp-run-${{ github.run_id }}-gv
+        run: bash scripts/release/dev_firewall.sh close
 
   security-smoke:
     name: Post-deploy security + migration smoke

@@ -53,6 +53,26 @@ def _is_login(s):
     return str(s.get("uses", "")).startswith("azure/login@")
 
 
+def _is_cleanup_login(s):
+    """The extra login that precedes the always() firewall-cleanup step (added with the automated
+    firewall window). It is deliberately LAST in the job: it exists so cleanup can still authenticate
+    after a long sequence, and it is not part of the wait -> refresh -> token ordering."""
+    return _is_login(s) and str(s.get("name", "")).startswith("Refresh Azure OIDC login for cleanup")
+
+
+def _setup_logins(steps):
+    return [i for i, s in enumerate(steps) if _is_login(s) and not _is_cleanup_login(s)]
+
+
+def _wait_index(steps):
+    """The bounded wait is EITHER the operator handshake or, with manage_firewall, the automated open
+    step (whose bounded wait is the reachability loop). The refresh must follow whichever runs last."""
+    idx = [i for i, s in enumerate(steps)
+           if "Report runner IPv4" in s.get("name", "") or "Open the temporary /32" in s.get("name", "")]
+    assert idx, "could not locate any firewall wait step"
+    return max(idx)
+
+
 def _token_step_index(steps):
     """The first step (after the wait) that mints a Postgres access token,
     identified by content rather than a job-specific id/name, since the two
@@ -65,12 +85,15 @@ def _token_step_index(steps):
 @pytest.mark.parametrize("path,job", JOBS)
 def test_firewall_wait_precedes_the_fresh_login(path, job):
     steps = _steps(path, job)
-    wait = _index(steps, lambda s: "Report runner IPv4" in s.get("name", ""), "firewall wait")
-    logins = [i for i, s in enumerate(steps) if _is_login(s)]
-    assert len(logins) == 2, f"{job}: expected exactly two azure/login steps (initial + refresh), found {len(logins)}"
+    wait = _wait_index(steps)
+    logins = _setup_logins(steps)
+    assert len(logins) == 2, f"{job}: expected exactly two setup azure/login steps (initial + refresh), found {len(logins)}"
     first_login, refresh_login = logins
     assert first_login < wait, f"{job}: the initial login must still precede the wait (needed to report the runner IP)"
     assert refresh_login > wait, f"{job}: the refreshed login must come after the bounded firewall wait, not before it"
+    # the cleanup login, when present, is the last login and sits after every database step
+    cleanup = [i for i, st in enumerate(steps) if _is_cleanup_login(st)]
+    assert len(cleanup) <= 1 and all(i > refresh_login for i in cleanup)
 
 
 @pytest.mark.parametrize("path,job", JOBS)
@@ -85,26 +108,37 @@ def test_fresh_login_precedes_postgres_token_acquisition(path, job):
 
 
 @pytest.mark.parametrize("path,job", JOBS)
-def test_refresh_login_matches_the_waits_own_condition(path, job):
-    """The refresh must be gated the same way as the wait it follows: the
-    preflight job's wait (and refresh) only run on apply=true; gov-verify's
-    wait (and refresh) are unconditional, since that job only exists on the
-    post-deploy path in the first place."""
+def test_refresh_login_runs_whenever_either_wait_runs(path, job):
+    """The refresh must run whenever a bounded wait ran. There are now two waits per job, mutually
+    exclusive: the operator handshake and the automated firewall open. The preflight job's waits only
+    run on apply=true (handshake) or manage_firewall=true (automated), so its refresh runs on either;
+    gov-verify's waits are one or the other on every run, so its refresh is unconditional."""
     steps = _steps(path, job)
-    wait = next(s for s in steps if "Report runner IPv4" in s.get("name", ""))
-    refresh = next(s for s in steps if _is_login(s) and s.get("name") != "Login to Azure (OIDC - no stored client secret)")
-    assert refresh.get("if") == wait.get("if")
+    manual = next(s for s in steps if "Report runner IPv4" in s.get("name", ""))
+    auto = next(s for s in steps if "Open the temporary /32" in s.get("name", ""))
+    refresh = next(s for s in steps if _is_login(s) and not _is_cleanup_login(s)
+                   and s.get("name") != "Login to Azure (OIDC - no stored client secret)")
+    if job == "preflight":
+        assert manual["if"] == "inputs.apply == true && inputs.manage_firewall != true"
+        assert auto["if"] == "inputs.manage_firewall == true"
+        assert refresh.get("if") == "inputs.apply == true || inputs.manage_firewall == true"
+    else:
+        assert manual["if"] == "inputs.manage_firewall != true"
+        assert auto["if"] == "inputs.manage_firewall == true"
+        assert refresh.get("if") is None
 
 
 @pytest.mark.parametrize("path,job", JOBS)
 def test_refresh_login_uses_the_same_federated_identity_no_new_secret(path, job):
     steps = _steps(path, job)
     initial = next(s for s in steps if s.get("name") == "Login to Azure (OIDC - no stored client secret)")
-    refresh = next(s for s in steps if _is_login(s) and s is not initial)
-    assert refresh["with"] == initial["with"], (
-        f"{job}: the refresh must reuse the exact same OIDC client/tenant/subscription, not a new credential")
-    assert "client-secret" not in refresh["with"]
-    assert "continue-on-error" not in refresh
+    others = [s for s in steps if _is_login(s) and s is not initial]
+    assert others, f"{job}: no refresh login"
+    for refresh in others:     # the post-wait refresh AND the cleanup login
+        assert refresh["with"] == initial["with"], (
+            f"{job}: every refresh must reuse the exact same OIDC client/tenant/subscription, not a new credential")
+        assert "client-secret" not in refresh["with"]
+        assert "continue-on-error" not in refresh
 
 
 @pytest.mark.parametrize("path,job", JOBS)
@@ -121,9 +155,15 @@ def test_the_bounded_wait_is_still_twenty_minutes(path, job):
 
 
 @pytest.mark.parametrize("path,job", JOBS)
-def test_no_firewall_management_command_exists(path, job):
+def test_firewall_is_managed_only_through_the_reviewed_script(path, job):
+    """The migration identity may now create and delete its own temporary firewall rule, but ONLY via
+    scripts/release/dev_firewall.sh, whose limits are tested (runner IP only, managed names only,
+    proven cleanup). No workflow step may embed an inline firewall or ARM call of its own."""
     text = "\n".join(s.get("run") or "" for s in _steps(path, job))
-    assert "firewall-rule" not in text, f"{job}: must not manage firewall rules"
+    assert "firewall-rule" not in text, f"{job}: no inline az firewall-rule commands"
+    assert "az rest" not in text, f"{job}: no inline ARM calls; use scripts/release/dev_firewall.sh"
+    assert "az network" not in text
+    assert "dev_firewall.sh" in text, f"{job}: expected to call the reviewed firewall script"
 
 
 def test_both_pre_and_post_deploy_jobs_refresh_oidc_after_their_own_wait():
@@ -132,8 +172,7 @@ def test_both_pre_and_post_deploy_jobs_refresh_oidc_after_their_own_wait():
     needs its own refresh - fixing one must not be mistaken for fixing both."""
     for path, job in JOBS:
         steps = _steps(path, job)
-        logins = [s for s in steps if _is_login(s)]
-        assert len(logins) == 2, f"{job} does not have a refresh login"
+        assert len(_setup_logins(steps)) == 2, f"{job} does not have a refresh login"
 
 
 def test_government_data_comparison_step_is_unchanged():
