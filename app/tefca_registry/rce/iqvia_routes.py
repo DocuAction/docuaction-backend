@@ -311,6 +311,16 @@ async def upload_chunk(upload_id: uuid.UUID, index: int, request: Request,
            "missing_chunks": session.total_chunks - len(received)}
 
 
+@router.get("/staging-capacity",
+            summary="Read-only measurement of this container's staging disk and memory (admin; numbers only)")
+async def staging_capacity(user=Depends(require_role("admin"))):
+    """For the IQVIA benchmark: free space of the directory chunked uploads are assembled in, bytes already staged,
+    process RSS and the container memory limit. No paths, file names or data are returned."""
+    from app.tefca_registry.rce import iqvia_staging_capacity as cap
+
+    return cap.measure(upload_dir=str(_UPLOAD_DIR))
+
+
 @router.get("/uploads/{upload_id}",
            summary="Which chunks are still missing -- the resume contract")
 async def upload_status(upload_id: uuid.UUID, db: AsyncSession = Depends(get_db),
