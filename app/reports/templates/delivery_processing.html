@@ -108,6 +108,17 @@
   main table.dp-fixed tr { break-inside: avoid; page-break-inside: avoid; }
   main table.dp-fixed thead { display: table-header-group; }
   .dp-appendix-intro { font-size: 8.5pt; color: var(--agt-muted); margin: 0 0 6pt 0; }
+  .dp-wide .agt-pkg { font-size: 8pt; margin: 0 0 6pt 0; }
+  /* Never strand a heading, its lead sentence, or a table caption/header away from the rows they introduce,
+     and never leave one or two rows alone on a page (a table taller than a page still splits, but cleanly). */
+  main h2 + p, main h2 + p + p, main h3 + p { break-after: avoid; page-break-after: avoid; }
+  /* CSS cannot select the paragraph BEFORE a table, so the table asks not to start a page right after one. */
+  main p + table, main h2 + table, main h3 + table { break-before: avoid; page-break-before: avoid; }
+  main table caption { break-after: avoid; page-break-after: avoid; }
+  main table thead, main table thead tr { break-after: avoid; page-break-after: avoid; }
+  main table.dp-fixed tbody tr:nth-child(-n+2) { break-before: avoid; page-break-before: avoid; }
+  main table.dp-fixed tbody tr:nth-last-child(-n+2) { break-before: avoid; page-break-before: avoid; }
+  main table.dp-fixed td.nw { overflow-wrap: normal; }
   .agt-foot .pg::after { content: "Page " counter(page) " of " counter(pages); font-weight: 700; }
 </style>
 
@@ -214,11 +225,15 @@
           <caption>Findings grouped by rule, issue type and severity</caption>
           <thead><tr><th scope="col">Rule</th><th scope="col">Issue type</th><th scope="col">Severity</th><th scope="col" class="num">Count</th></tr></thead>
           <tbody>
-            {% for f in findings.by_code %}
+            {% for f in findings.by_code[:8] %}
             <tr><td class="nw"><b>{{ f.rule_id }}</b></td><td class="q">{{ f.issue_type }}</td><td class="nw">{{ f.severity }}</td><td class="num">{{ f.count|number }}</td></tr>
             {% else %}
             <tr><td>None</td><td>&mdash;</td><td>&mdash;</td><td class="num">0</td></tr>
             {% endfor %}
+            {% if findings.by_code|length > 8 %}
+            {% set rest = findings.by_code[8:] %}
+            <tr><td colspan="3"><i>+ {{ rest|length|number }} more rule(s), listed in Appendix E</i></td><td class="num">{{ rest|sum(attribute='count')|number }}</td></tr>
+            {% endif %}
             <tr class="total"><td colspan="3">Total findings</td><td class="num">{{ findings.total|number }}</td></tr>
           </tbody>
         </table>
@@ -311,7 +326,6 @@
     </div>
   </div>
 
-  <div class="agt-pkg"><b>Package:</b> this report &middot; detailed appendix A&ndash;J (identity and provenance, timeline, reconciliation, dispositions, findings, identifier conflicts, verification detail, analyst actions, lineage, audit note) &middot; CSV export of the same persisted evidence &middot; report {{ snapshot.report_id }}</div>
   <p class="agt-foot">{{ branding.prepared_by }} &middot; Contract {{ branding.contract_number }} &middot; Delivery processing report &middot; {{ delivery.delivery_label or 'Unlabelled delivery' }} &middot; <span class="mark">{% if dev %}DEVELOPMENT / TEST DATA &mdash; NOT FOR GOVERNMENT DELIVERY{% else %}{{ document_status|upper }}{% endif %}</span> &middot; Generated {{ generated_at_display }} &middot; <span class="pg"></span></p>
 </section>
 {% endblock %}
@@ -320,6 +334,7 @@
 
 <div class="dp-wide">
 <p class="dp-appendix-intro">Appendix A&ndash;J: detailed evidence for this delivery. Report {{ snapshot.report_id }} &middot; {{ delivery.delivery_label or 'Unlabelled delivery' }} &middot; {{ document_status }}. Everything on page one is restated here with its identifiers, hashes and timelines.</p>
+<div class="agt-pkg"><b>Package:</b> this report &middot; detailed appendix A&ndash;J (identity and provenance, timeline, reconciliation, dispositions, findings, identifier conflicts, verification detail, analyst actions, lineage, audit note) &middot; CSV export of the same persisted evidence &middot; report {{ snapshot.report_id }}</div>
 <h2>Appendix A. Delivery Identity and provenance</h2>
 <table class="dp-fixed dp-tight">
   {{ cols([28, 72]) }}
@@ -363,7 +378,7 @@
 <p>{{ timeline.summary.attempts|number }} stage attempt(s) recorded.
   {% if timeline.summary.failed_stage %}Failed stage: {{ timeline.summary.failed_stage }}.{% endif %}
   Completed stages: {{ timeline.summary.completed_stages|join(', ') or 'none' }}.</p>
-<table class="dp-fixed">
+<table class="dp-fixed dp-tight{% if timeline.events|length <= 24 %} dp-keep{% endif %}">
   {{ cols([14, 7, 10, 14, 14, 7, 9, 9, 8, 8]) }}
   <caption>Every stage attempt, oldest first</caption>
   <thead>
@@ -420,7 +435,7 @@
   </tbody>
 </table>
 {% if reconciliation.checks %}
-<table class="dp-fixed dp-keep">
+<table class="dp-fixed dp-tight dp-keep">
   {{ cols([28, 14, 58]) }}
   <caption>Reconciliation checks recorded in the snapshot</caption>
   <thead><tr><th scope="col">Check</th><th scope="col">Result</th><th scope="col">Detail</th></tr></thead>
@@ -428,7 +443,7 @@
     {% for c in reconciliation.checks %}
     <tr>
       <th scope="row">{{ c.get('name') or c.get('check') or c.get('id') or loop.index }}</th>
-      <td class="nw">{{ c.get('passed') if c.get('passed') is not none else (c.get('result') or c.get('status') or '—') }}</td>
+      <td class="nw">{% if c.get('passed') is not none %}{{ flag(c.get('passed'), 'Pass', 'Fail') }}{% else %}{{ c.get('result') or c.get('status') or '—' }}{% endif %}</td>
       <td>{{ c.get('detail') or c.get('message') or '' }}</td>
     </tr>
     {% endfor %}
@@ -512,7 +527,7 @@
   {{ findings.open_high|number }} open at HIGH or CRITICAL severity.</p>
 {% if findings.rows %}
 <table class="dp-fixed dp-tight">
-  {{ cols([13, 4, 7, 15, 7, 11, 11, 9, 23]) }}
+  {{ cols([13, 4, 7, 14, 10, 10, 11, 8, 23]) }}
   <caption>Findings &mdash; first {{ findings.rows_shown|number }} of
     {{ findings.rows_total|number }}, open HIGH/CRITICAL first, then by delivered line</caption>
   <thead>
