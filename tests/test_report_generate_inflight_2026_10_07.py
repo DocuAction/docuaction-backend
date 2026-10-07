@@ -18,7 +18,7 @@ from test_delivery_processing_report import (  # noqa: F401  (fixtures registere
 
 
 @pytest.mark.asyncio
-async def test_a_second_holder_of_the_same_key_waits_then_gets_409_not_a_generation(monkeypatch):
+async def test_a_second_holder_of_the_same_key_waits_then_gets_409_not_a_generation(db_required, monkeypatch):
     from app.reports import routes
 
     monkeypatch.setattr(routes, "GENERATION_LOCK_WAIT_SECONDS", 1.0)
@@ -40,7 +40,7 @@ async def test_a_second_holder_of_the_same_key_waits_then_gets_409_not_a_generat
 
 
 @pytest.mark.asyncio
-async def test_a_waiting_retry_proceeds_once_the_first_finishes(monkeypatch):
+async def test_a_waiting_retry_proceeds_once_the_first_finishes(db_required, monkeypatch):
     from app.reports import routes
 
     monkeypatch.setattr(routes, "GENERATION_LOCK_WAIT_SECONDS", 5.0)
