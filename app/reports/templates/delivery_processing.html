@@ -536,7 +536,7 @@
   {{ findings.open_high|number }} open at HIGH or CRITICAL severity.</p>
 {% if findings.rows %}
 <table class="dp-fixed dp-tight">
-  {{ cols([13, 4, 7, 14, 10, 10, 11, 8, 23]) }}
+  {{ cols([12, 4, 7, 13, 12, 10, 11, 8, 23]) }}
   <caption>Findings &mdash; first {{ findings.rows_shown|number }} of
     {{ findings.rows_total|number }}, open HIGH/CRITICAL first, then by delivered line</caption>
   <thead>
@@ -552,7 +552,7 @@
       <td>{{ f.line_number|number }}</td>
       <td class="nw">{{ f.rule_id }}</td>
       <td class="cd">{{ brk(f.issue_type) }}</td>
-      <td class="nw">{{ f.severity }}</td>
+      <td class="cd">{{ f.severity }}</td>
       <td class="cd">{{ brk(f.field_name or '—') }}</td>
       <td class="cd">{{ brk(f.correction_authority) }}</td>
       <td class="cd">{{ brk(f.resolution) }}</td>
