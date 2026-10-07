@@ -210,7 +210,7 @@
    "rows": [
     {
      "correction_authority": "NO_CORRECTION",
-     "description": "A Participant whose partOf equals its orgManagingOrg \u00e2\u20ac\u201d the shape on all 11,077 Participants in the profiled delivery. One managed_by_qhin edge is created; no second sub_participant_of edge is emitted, because both fields express the same fact and two edges would double-count it.",
+     "description": "A Participant whose partOf equals its orgManagingOrg — the shape on all 11,077 Participants in the profiled delivery. One managed_by_qhin edge is created; no second sub_participant_of edge is emitted, because both fields express the same fact and two edges would double-count it.",
      "field_name": "partOf",
      "issue_code": "DQ-20260930-f423fb62-000005",
      "issue_type": "PARTICIPANT_PARENT_IS_QHIN",
@@ -225,7 +225,7 @@
     },
     {
      "correction_authority": "NO_CORRECTION",
-     "description": "address_text holds the label 'Primary' rather than an address \u00e2\u20ac\u201d the pattern on 17,717 of 23,566 records (75.18%). The address of record is built from the component fields instead; parsing this as an address would fabricate one.",
+     "description": "address_text holds the label 'Primary' rather than an address — the pattern on 17,717 of 23,566 records (75.18%). The address of record is built from the component fields instead; parsing this as an address would fabricate one.",
      "field_name": "address_text",
      "issue_code": "DQ-20260930-f423fb62-000003",
      "issue_type": "ADDRESS_TEXT_IS_A_LABEL",
@@ -255,7 +255,7 @@
     },
     {
      "correction_authority": "NO_CORRECTION",
-     "description": "No NPI supplied. This is legitimate for a large share of TEFCA entities \u00e2\u20ac\u201d 4,584 of 23,566 records (19.45%) in the profiled delivery \u00e2\u20ac\u201d and is never treated as a verification failure. Medicare applicability is determined separately in D2.",
+     "description": "No NPI supplied. This is legitimate for a large share of TEFCA entities — 4,584 of 23,566 records (19.45%) in the profiled delivery — and is never treated as a verification failure. Medicare applicability is determined separately in D2.",
      "field_name": "NPI",
      "issue_code": "DQ-20260930-f423fb62-000002",
      "issue_type": "NPI_NOT_SUPPLIED",
@@ -270,7 +270,7 @@
     },
     {
      "correction_authority": "NO_CORRECTION",
-     "description": "A Participant whose partOf equals its orgManagingOrg \u00e2\u20ac\u201d the shape on all 11,077 Participants in the profiled delivery. One managed_by_qhin edge is created; no second sub_participant_of edge is emitted, because both fields express the same fact and two edges would double-count it.",
+     "description": "A Participant whose partOf equals its orgManagingOrg — the shape on all 11,077 Participants in the profiled delivery. One managed_by_qhin edge is created; no second sub_participant_of edge is emitted, because both fields express the same fact and two edges would double-count it.",
      "field_name": "partOf",
      "issue_code": "DQ-20260930-f423fb62-000009",
      "issue_type": "PARTICIPANT_PARENT_IS_QHIN",
@@ -285,7 +285,7 @@
     },
     {
      "correction_authority": "NO_CORRECTION",
-     "description": "address_text holds the label 'Primary' rather than an address \u00e2\u20ac\u201d the pattern on 17,717 of 23,566 records (75.18%). The address of record is built from the component fields instead; parsing this as an address would fabricate one.",
+     "description": "address_text holds the label 'Primary' rather than an address — the pattern on 17,717 of 23,566 records (75.18%). The address of record is built from the component fields instead; parsing this as an address would fabricate one.",
      "field_name": "address_text",
      "issue_code": "DQ-20260930-f423fb62-000007",
      "issue_type": "ADDRESS_TEXT_IS_A_LABEL",
@@ -315,7 +315,7 @@
     },
     {
      "correction_authority": "NO_CORRECTION",
-     "description": "No NPI supplied. This is legitimate for a large share of TEFCA entities \u00e2\u20ac\u201d 4,584 of 23,566 records (19.45%) in the profiled delivery \u00e2\u20ac\u201d and is never treated as a verification failure. Medicare applicability is determined separately in D2.",
+     "description": "No NPI supplied. This is legitimate for a large share of TEFCA entities — 4,584 of 23,566 records (19.45%) in the profiled delivery — and is never treated as a verification failure. Medicare applicability is determined separately in D2.",
      "field_name": "NPI",
      "issue_code": "DQ-20260930-f423fb62-000006",
      "issue_type": "NPI_NOT_SUPPLIED",
@@ -423,7 +423,7 @@
    ],
    "code": "COMPLETED_CLEAN",
    "detail": "Every received record reconciled; no undecided holding-severity findings, holds, rejections, missing keys, conflicts or failed verifications remain. Lower-severity findings may remain and are listed in the exception ledger.",
-   "value": "Completed \u00e2\u20ac\u201d Clean"
+   "value": "Completed — Clean"
   },
   "provenance": {
    "build_sha": "2b6e1abdd5e555e699ad6cb5d03535864aafdfa8",
@@ -464,8 +464,8 @@
      "passed": true
     },
     {
-     "check": "C = A \u00e2\u02c6\u2019 B: eligible population is exact",
-     "detail": "2 eligible = 2 received \u00e2\u02c6\u2019 0 (held 0 + rejected 0 + excluded/missing key 0)",
+     "check": "C = A − B: eligible population is exact",
+     "detail": "2 eligible = 2 received − 0 (held 0 + rejected 0 + excluded/missing key 0)",
      "passed": true
     },
     {
@@ -484,7 +484,7 @@
      "passed": true
     },
     {
-     "check": "F \u00e2\u0160\u2020 E: every verification traces to a promoted entity",
+     "check": "F ⊆ E: every verification traces to a promoted entity",
      "detail": "0 reviews over 0 entities, within 2 promoted",
      "passed": true
     },
@@ -1013,7 +1013,7 @@
       "readiness": {
        "sources": {
         "data_identity": "MOCK_TEST",
-        "data_source": "MOCK \u00e2\u20ac\u201d demonstration data only",
+        "data_source": "MOCK — demonstration data only",
         "environment": "development",
         "findings_available": false,
         "government_dataset": "NOT_LOADED",

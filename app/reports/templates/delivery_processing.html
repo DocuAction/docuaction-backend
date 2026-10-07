@@ -100,7 +100,8 @@
   main table.dp-fixed .hash { font-family: "DejaVu Sans Mono", Menlo, Consolas, monospace; font-size: 7pt; overflow-wrap: anywhere; word-break: break-all; hyphens: none; -webkit-hyphens: none; }
   main table.dp-fixed .cd { overflow-wrap: anywhere; word-break: normal; hyphens: none; -webkit-hyphens: none; }
   main table.dp-keep { break-inside: avoid; page-break-inside: avoid; }
-  main table.dp-keep caption { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+  /* Captions stay visible: a 1px clipped caption leaves its glyphs stacked in the PDF text layer (copy/search/screen-reader garbage). */
+  main table.dp-keep caption { text-align: left; font-weight: 700; font-size: 8pt; margin: 0 0 2pt 0; caption-side: top; }
   h2, h3 { break-after: avoid; page-break-after: avoid; }
   main table.dp-tight th, main table.dp-tight td { padding: 1.8pt 4pt; font-size: 8pt; line-height: 1.25; }
   .dp-wide p { font-size: 9pt; }
@@ -305,21 +306,29 @@
 
       <div class="agt-box"><h2 class="agt-h2">Evidence limitations</h2>
         <ul>
-          {% for item in limitations %}<li>{{ item }}</li>
+          {# Bounded so the cover stays on ONE page: at most four are printed; the rest are counted, and the CSV export carries all of them. #}
+          {% for item in limitations[:4] %}<li>{{ item }}</li>
           {% else %}<li>No limitation was recorded: every section was read from persisted evidence for this delivery.</li>{% endfor %}
+          {% if limitations|length > 4 %}<li><i>+ {{ (limitations|length - 4)|number }} more limitation(s) are stated in the CSV export.</i></li>{% endif %}
         </ul>
       </div>
 
+      {# Required next actions: built as a list so the page can be bounded. At most four conditional actions are printed
+         (in priority order) plus the Program Manager decision, which is always shown; anything cut is counted, never dropped silently. #}
+      {% set acts = [] %}
+      {% if not reconciliation.available %}{% set a %}<li><b>Reconcile the delivery.</b> No snapshot exists, so completeness is unproven.</li>{% endset %}{% set _ = acts.append(a) %}
+      {% elif not reconciliation.passed %}{% set a %}<li><b>Resolve the reconciliation failure</b> ({{ reconciliation.failure_reason or 'no reason recorded' }}).</li>{% endset %}{% set _ = acts.append(a) %}{% endif %}
+      {% if findings.available and findings.open_high %}{% set a %}<li><b>Resolve {{ findings.open_high|number }} open HIGH / CRITICAL finding(s).</b> The delivery cannot be treated as clean until then.</li>{% endset %}{% set _ = acts.append(a) %}{% endif %}
+      {% if ns.attempted == 0 %}{% set a %}<li><b>Run source verification</b> for the {{ ns.eligible|number }} eligible entit{{ 'y' if ns.eligible == 1 else 'ies' }} at NPPES, PECOS, OIG LEIE and SAM.gov. Until then there is no screening result.</li>{% endset %}{% set _ = acts.append(a) %}{% endif %}
+      {% if not readiness.available %}{% set a %}<li><b>Run the source-readiness (preflight) check</b> if the file's fitness to process is to be on record.</li>{% endset %}{% set _ = acts.append(a) %}{% endif %}
+      {% if analyst.counts.open %}{% set a %}<li><b>Analyst review:</b> {{ analyst.counts.open|number }} review record(s) are open and need to be claimed and determined.</li>{% endset %}{% set _ = acts.append(a) %}{% endif %}
+      {% if analyst.counts.claimed %}{% set a %}<li><b>Analyst determination:</b> {{ analyst.counts.claimed|number }} claimed record(s) need a determination.</li>{% endset %}{% set _ = acts.append(a) %}{% endif %}
+      {% if analyst.counts.qa_pending %}{% set a %}<li><b>Independent QA:</b> {{ analyst.counts.qa_pending|number }} determination(s) await approval by a QA reviewer other than the analyst.</li>{% endset %}{% set _ = acts.append(a) %}{% endif %}
       <div class="agt-box"><h2 class="agt-h2">Required next actions</h2>
         <ol>
-          {% if not reconciliation.available %}<li><b>Reconcile the delivery.</b> No snapshot exists, so completeness is unproven.</li>
-          {% elif not reconciliation.passed %}<li><b>Resolve the reconciliation failure</b> ({{ reconciliation.failure_reason or 'no reason recorded' }}).</li>{% endif %}
-          {% if findings.available and findings.open_high %}<li><b>Resolve {{ findings.open_high|number }} open HIGH / CRITICAL finding(s).</b> The delivery cannot be treated as clean until then.</li>{% endif %}
-          {% if ns.attempted == 0 %}<li><b>Run source verification</b> for the {{ ns.eligible|number }} eligible entit{{ 'y' if ns.eligible == 1 else 'ies' }} at NPPES, PECOS, OIG LEIE and SAM.gov. Until then there is no screening result.</li>{% endif %}
-          {% if not readiness.available %}<li><b>Run the source-readiness (preflight) check</b> if the file's fitness to process is to be on record.</li>{% endif %}
-          {% if analyst.counts.open %}<li><b>Analyst review:</b> {{ analyst.counts.open|number }} review record(s) are open and need to be claimed and determined.</li>{% endif %}
-          {% if analyst.counts.claimed %}<li><b>Analyst determination:</b> {{ analyst.counts.claimed|number }} claimed record(s) need a determination.</li>{% endif %}
-          {% if analyst.counts.qa_pending %}<li><b>Independent QA:</b> {{ analyst.counts.qa_pending|number }} determination(s) await approval by a QA reviewer other than the analyst.</li>{% endif %}
+          {% for a in acts[:4] %}{{ a }}
+          {% endfor %}
+          {% if acts|length > 4 %}<li><i>+ {{ (acts|length - 4)|number }} further action(s): see Appendix H (analyst actions) and Appendix E (findings).</i></li>{% endif %}
           <li><b>Program Manager release decision:</b> review this draft, then record the decision in the Report Register.</li>
         </ol>
       </div>

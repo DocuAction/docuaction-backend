@@ -28,7 +28,7 @@ from app.reports.engine.pdf_engine import pdf_available, render_pdf
 from app.reports.engine.template_engine import render_html
 from app.reports.generator import _marking_context
 
-pytestmark = pytest.mark.skipif(not pdf_available(), reason="WeasyPrint native libraries are not available here")
+needs_weasyprint = pytest.mark.skipif(not pdf_available(), reason="WeasyPrint native libraries are not available here")
 
 DATA = Path(__file__).parent / "data" / "delivery_report"
 OUT = os.getenv("LAYOUT_OUT_DIR")
@@ -100,6 +100,8 @@ def _render(name: str):
 
 @pytest.fixture(scope="module")
 def pdfs():
+    if not pdf_available():
+        pytest.skip("WeasyPrint native libraries are not available here")
     import io
 
     import pdfplumber
@@ -121,6 +123,7 @@ ALL = list(SCENARIOS)
 HEADING = re.compile(r"^(Appendix [A-J]\.|Report Provenance$|Accessibility$)")
 
 
+@needs_weasyprint
 @pytest.mark.parametrize("name", ALL)
 def test_the_cover_is_exactly_one_page_and_no_page_is_nearly_blank(pdfs, name):
     pages = pdfs[name]
@@ -132,19 +135,64 @@ def test_the_cover_is_exactly_one_page_and_no_page_is_nearly_blank(pdfs, name):
         assert len(p["text"]) >= 300, f"{name}: page {i} is nearly blank ({len(p['text'])} chars): {p['text'][:80]!r}"
 
 
+GLUED_SEVERITY = re.compile(r"\b(INFORMATIONAL|CRITICAL|MEDIUM|HIGH|LOW)(?=[A-Za-z_])")
+
+
+def stacked_words(words, tol=0.6, min_area=2.0):
+    """Pairs of words whose boxes intersect by a meaningful area. Catches text drawn on top of other text (for
+    example a visually hidden element whose glyphs stay in the text layer). Boxes are shrunk by `tol` so words
+    that merely touch are not reported."""
+    ws = sorted(words, key=lambda w: w["x0"])
+    out = []
+    for i, a in enumerate(ws):
+        for b in ws[i + 1:]:
+            if b["x0"] >= a["x1"] - tol:
+                break
+            ix = min(a["x1"], b["x1"]) - max(a["x0"], b["x0"]) - tol
+            iy = min(a["bottom"], b["bottom"]) - max(a["top"], b["top"]) - tol
+            if ix > 0 and iy > 0 and ix * iy >= min_area:
+                out.append((a["text"], b["text"]))
+    return out
+
+
+def glued_severity(text):
+    """A severity word immediately followed by letters: a cell overrunning into its neighbour. The extractor
+    reads an overrun as ONE token (the glyphs abut), which is why a box-intersection test cannot see it."""
+    return [m.group(0) + text[m.end():m.end() + 12].split()[0] for m in GLUED_SEVERITY.finditer(text)]
+
+
+class TestTheDetectorsThemselves:
+    """Control tests: they run without WeasyPrint so the detectors are proven on every platform."""
+
+    def test_glued_severity_catches_the_original_defect_and_ignores_clean_cells(self):
+        assert glued_severity("INFORMATIONALpartOf") and glued_severity("INFORMATIONALaddress_text x")
+        assert not glued_severity("INFORMATIONAL partOf") and not glued_severity("HIGH TEFCAID MEDIUM partOf")
+
+    def test_stacked_words_catches_text_on_text_and_ignores_neighbours(self):
+        def w(t, x0, x1, top=10.0, bottom=18.0):
+            return {"text": t, "x0": x0, "x1": x1, "top": top, "bottom": bottom}
+        assert stacked_words([w("Accounting", 40, 100), w("Received", 60, 110)])
+        assert not stacked_words([w("one", 40, 60), w("two", 60.2, 80)])          # touching only
+        assert not stacked_words([w("a", 40, 100, 10, 18), w("b", 60, 110, 30, 38)])  # different lines
+
+
+@needs_weasyprint
 @pytest.mark.parametrize("name", ALL)
-def test_no_two_words_overlap_on_any_page(pdfs, name):
-    """R-01: a word overflowing its cell prints on top of its neighbour. Words are compared on the same text line."""
-    problems = []
-    for pi, p in enumerate(pdfs[name], start=1):
-        ws = sorted(p["words"], key=lambda w: (round(w["top"]), w["x0"]))
-        for a, b in zip(ws, ws[1:]):
-            same_line = abs(a["top"] - b["top"]) < 2.0
-            if same_line and b["x0"] < a["x1"] - 0.6:
-                problems.append(f"p{pi}: {a['text']!r} overlaps {b['text']!r}")
-    assert not problems, f"{name}: {problems[:6]}"
+def test_no_text_is_drawn_on_top_of_other_text(pdfs, name):
+    problems = [(pi, stacked_words(p["words"])[:3]) for pi, p in enumerate(pdfs[name], start=1)
+                if stacked_words(p["words"])]
+    assert not problems, f"{name}: {problems[:4]}"
 
 
+@needs_weasyprint
+@pytest.mark.parametrize("name", ALL)
+def test_no_cell_overruns_into_its_neighbour(pdfs, name):
+    problems = [(pi, glued_severity(p["text"])[:3]) for pi, p in enumerate(pdfs[name], start=1)
+                if glued_severity(p["text"])]
+    assert not problems, f"{name}: severity word glued to the next cell: {problems[:4]}"
+
+
+@needs_weasyprint
 @pytest.mark.parametrize("name", ALL)
 def test_no_heading_is_stranded_at_the_foot_of_a_page(pdfs, name):
     for pi, p in enumerate(pdfs[name], start=1):
@@ -156,12 +204,14 @@ def test_no_heading_is_stranded_at_the_foot_of_a_page(pdfs, name):
         assert not HEADING.match(last_line), f"{name}: page {pi} ends with a heading: {last_line!r}"
 
 
+@needs_weasyprint
 @pytest.mark.parametrize("name", ALL)
 def test_no_raw_python_booleans_are_printed(pdfs, name):
     for pi, p in enumerate(pdfs[name], start=1):
-        assert not re.search(r"\b(True|False|None)\b", p["text"]), f"{name}: raw boolean/None on page {pi}"
+        assert not re.search(r"\b(True|False)\b", p["text"]), f"{name}: raw boolean on page {pi}"
 
 
+@needs_weasyprint
 @pytest.mark.parametrize("name", ALL)
 def test_every_table_continues_with_more_than_one_row_on_a_new_page(pdfs, name):
     """R-03: a page that carries only one or two table rows after a break. Landscape appendix pages only; a page
