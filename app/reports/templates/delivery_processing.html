@@ -311,10 +311,10 @@
 
       <div class="agt-box"><h2 class="agt-h2">Evidence limitations</h2>
         <ul>
-          {# Bounded so the cover stays on ONE page: at most four are printed; the rest are counted, and the CSV export carries all of them. #}
-          {% for item in limitations[:4] %}<li>{{ item }}</li>
+          {# Bounded so the cover stays on ONE page: at most three are printed; the rest are counted, and the CSV export carries all of them. #}
+          {% for item in limitations[:3] %}<li>{{ item }}</li>
           {% else %}<li>No limitation was recorded: every section was read from persisted evidence for this delivery.</li>{% endfor %}
-          {% if limitations|length > 4 %}<li><i>+ {{ (limitations|length - 4)|number }} more limitation(s) are stated in the CSV export.</i></li>{% endif %}
+          {% if limitations|length > 3 %}<li><i>+ {{ (limitations|length - 3)|number }} more limitation(s) are stated in the CSV export.</i></li>{% endif %}
         </ul>
       </div>
 
@@ -387,12 +387,13 @@
   </tbody>
 </table>
 
+{# A kept-together table that is taller than the room left after its heading and intro is pushed to the next page ALONE, stranding the heading (seen on DA-ARC-2026-067: 17 attempts). Only a short timeline is kept whole; a longer one flows under its heading and may split between rows. #}
 <h2>Appendix B. Processing timeline</h2>
 {% if timeline.available %}
 <p>{{ timeline.summary.attempts|number }} stage attempt(s) recorded.
   {% if timeline.summary.failed_stage %}Failed stage: {{ timeline.summary.failed_stage }}.{% endif %}
   Completed stages: {{ timeline.summary.completed_stages|join(', ') or 'none' }}.</p>
-<table class="dp-fixed dp-tight{% if timeline.events|length <= 24 %} dp-keep{% endif %}">
+<table class="dp-fixed dp-tight{% if timeline.events|length <= 10 %} dp-keep{% endif %}">
   {{ cols([14, 7, 10, 14, 14, 7, 9, 9, 8, 8]) }}
   <caption>Every stage attempt, oldest first</caption>
   <thead>
