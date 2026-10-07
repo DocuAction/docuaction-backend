@@ -1088,9 +1088,10 @@ async def get_package(
     # evidence in every format at once.
     user=Depends(require_role_audited("reviewer", resource_type="report")),
 ):
-    """ZIP of the stored HTML, the CSV, the PDF where available, a README and a
-    manifest with SHA-256 of every member. Assembled from the STORED report;
-    nothing is regenerated and nothing is transmitted."""
+    """ZIP of the HTML, the CSV, the PDF where available, a README and a manifest with SHA-256 of every
+    member. Each member is the REGISTERED artifact's verified bytes when one exists (so it equals the file
+    downloaded separately); only a report from before artifact registration is assembled from the stored column.
+    Nothing is transmitted."""
     from app.reports.data.release import build_package, current_release
     from app.reports.engine.pdf_engine import pdf_available, render_pdf, unavailable_reason
 
@@ -1098,10 +1099,19 @@ async def get_package(
     data = row.report_data or {}
     snapshot = data.get("snapshot") or {}
     dataset = dict(data.get("dataset") or {})
-    if not row.report_html:
+
+    # CANONICAL SURFACE RULE (QA108-20260927-013): when a registered artifact exists, its verified bytes ARE the
+    # deliverable. The package used to re-render the PDF from the stored HTML on every request, so the PDF it shipped
+    # was a different file from the registered one (same content, different bytes) and its manifest hash could never
+    # equal the hash of the PDF a recipient downloaded separately. Registered bytes first; re-render only when none exist.
+    reg_html = await _registered_bytes(db, report_id, "text/html")
+    reg_csv = await _registered_bytes(db, report_id, "text/csv")
+    reg_pdf = await _registered_bytes(db, report_id, "application/pdf")
+    package_html = reg_html["content"].decode("utf-8") if reg_html else row.report_html
+    if not package_html:
         raise HTTPException(404, f"Report {report_id} has no stored HTML.")
 
-    csv_text = csv_for_stored_report(row)
+    csv_text = (reg_csv["content"].decode("utf-8-sig") if reg_csv else csv_for_stored_report(row))
     stem = _stem_for(row)
     docx_bytes = None
     try:
@@ -1111,16 +1121,18 @@ async def get_package(
 
     pdf_bytes = None
     pdf_reason = None
-    if pdf_available():
+    if reg_pdf is not None:
+        pdf_bytes = reg_pdf["content"]
+    elif pdf_available():
         try:
-            pdf_bytes = await run_in_threadpool(render_pdf, row.report_html, title=stem)
+            pdf_bytes = await run_in_threadpool(render_pdf, package_html, title=stem)
         except Exception as exc:  # noqa: BLE001
             pdf_reason = str(exc)
     else:
         pdf_reason = unavailable_reason()
 
     package = build_package(
-        report_id=report_id, html=row.report_html, csv_text=csv_text,
+        report_id=report_id, html=package_html, csv_text=csv_text,
         pdf_bytes=pdf_bytes, snapshot=snapshot, release=current_release(data),
         deliverable=_deliverable_meta(row.report_type),
         pdf_unavailable_reason=pdf_reason, docx_bytes=docx_bytes, stem=stem)

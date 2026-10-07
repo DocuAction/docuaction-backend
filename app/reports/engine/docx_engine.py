@@ -365,4 +365,24 @@ def render_sow_docx(dataset: Dict[str, Any], snapshot: Dict[str, Any],
 
     buffer = io.BytesIO()
     document.save(buffer)
-    return buffer.getvalue()
+    return _normalise_zip(buffer.getvalue())
+
+
+#: The fixed timestamp written to every container entry (the ZIP epoch). python-docx stamps each entry with the time of
+#: the save, so two builds of the SAME stored report differed in their bytes even though every part was identical, and a
+#: hash recorded for one could never match the other.
+_ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
+
+
+def _normalise_zip(data: bytes) -> bytes:
+    """Rewrite a DOCX container with fixed entry times, same order and content, so identical content gives identical bytes."""
+    import zipfile
+
+    out = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(data)) as src, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as dst:
+        for info in src.infolist():
+            clone = zipfile.ZipInfo(info.filename, date_time=_ZIP_EPOCH)
+            clone.compress_type = zipfile.ZIP_DEFLATED
+            clone.external_attr = info.external_attr
+            dst.writestr(clone, src.read(info.filename))
+    return out.getvalue()
