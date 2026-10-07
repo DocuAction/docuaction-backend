@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional
 
-from app.Tefca import rce_fields
+from app.Tefca import rce_fields, sam_screening
 from app.Tefca.address_evidence import (
     AddressComparison,
     SOURCE_NPPES,
@@ -576,6 +576,22 @@ def _dimension_exclusion(entity: Dict[str, Any], profile: ApplicabilityProfile,
                     "search does not carry the weight of a UEI match.")
         return (Disposition.PASS.value, "No debarment record found.")
 
+    def _sam_screening_values(d: Dict[str, Any], branch: str) -> Dict[str, Any]:
+        """Additive, JSONB-only: which leg actually answered. Never alters the disposition.
+
+        The `sam_name` branch is fed by the v3 registration search, which carries only a summary exclusion
+        flag; the independent v4 exclusion leg did not run. That is recorded here as `registration_only`,
+        so reports and the coverage breakdown can tell it from a real exclusion screen. Disposition is
+        deliberately unchanged (see ASSESSMENT: policy decision, not a bug fix)."""
+        ex = d.get("exclusion_screening") or {}
+        leg = ("exclusion_and_registration" if ex else
+               ("registration_only" if branch == "sam_name" else "exclusion"))
+        out = {"screening_schema": "sam-screening/1", "screening_leg": leg,
+               "outcome": ex.get("outcome") or d.get("outcome"),
+               "outcome_reason": ex.get("outcome_reason") or d.get("outcome_reason"),
+               "provenance": ex.get("provenance") or d.get("provenance")}
+        return {k: v for k, v in out.items() if v is not None}
+
     sam = sources.get("sam_exclusion")
     sam_name = sources.get("sam_name")
     if _ok(sam) and uei:
@@ -589,6 +605,7 @@ def _dimension_exclusion(entity: Dict[str, Any], profile: ApplicabilityProfile,
             query_identifier=f"uei={uei}",
             fields_evaluated=["uei", "registration_status", "exclusions"],
             original_values=dict(d),
+            normalized_values=_sam_screening_values(d, "sam"),
             rule_applied="SAM_DEBARMENT_CHECK_BY_UEI",
             note=note,
         ))
@@ -604,6 +621,7 @@ def _dimension_exclusion(entity: Dict[str, Any], profile: ApplicabilityProfile,
             query_identifier=f"legal_name={org_name}",
             fields_evaluated=["legal_name", "registration_status", "exclusions"],
             original_values=dict(d),
+            normalized_values=_sam_screening_values(d, "sam_name"),
             rule_applied="SAM_ORG_LEVEL_CHECK_NO_UEI",
             note=note,
         ))
@@ -617,6 +635,7 @@ def _dimension_exclusion(entity: Dict[str, Any], profile: ApplicabilityProfile,
             query_timestamp=sam.query_timestamp, dataset_version_anchor=sam.api_version,
             fields_evaluated=["uei", "registration_status", "exclusions"],
             original_values=dict(d),
+            normalized_values=_sam_screening_values(d, "sam"),
             rule_applied="SAM_DEBARMENT_CHECK",
             note=note,
         ))
@@ -634,7 +653,9 @@ def _dimension_exclusion(entity: Dict[str, Any], profile: ApplicabilityProfile,
         any_unavailable = True
         items.append(EvidenceItem(
             dimension=dim, source="SAM_GOV", disposition=Disposition.UNAVAILABLE.value,
-            note=(sam.error if sam else "SAM.gov was not queried."),
+            note=(sam_screening.sanitize_reason(sam.error) if sam and sam.error else "SAM.gov was not queried."),
+            normalized_values={"screening_schema": "sam-screening/1", "outcome": sam_screening.INCOMPLETE,
+                               **sam_screening.failure_record(sam.error if sam else "")},
         ))
 
     revocation = sources.get("cms_revocation")

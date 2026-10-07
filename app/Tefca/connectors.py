@@ -43,6 +43,7 @@ from tenacity import (
 )
 
 from app.services.npi_validator import mask_npi, npi_rejection_reason
+from app.Tefca import sam_screening
 
 logger = logging.getLogger("docuaction.tefca.connectors")
 
@@ -947,7 +948,13 @@ class SAMGovConnector:
     fine" about a debarred party, so the exclusions endpoint is queried
     independently rather than inferred.
 
-    SAM is keyed on UEI/CAGE, never NPI. Search strategy, in order:
+    The live SAM.gov Entity/Exclusions API is searched by UEI or by name; this
+    connector does not send an NPI to it and no NPI search parameter is
+    documented or verified. That is a statement about THIS CONNECTOR, not about
+    SAM data: the GSA public exclusions extract carries an NPI column (about
+    20,000 populated rows, 258 of them organisations, as of the 2026-10-06
+    extract), so NPI matching is possible on the extract path, not the live API.
+    Search strategy, in order:
       1. UEI present  -> exact match, authoritative.
       2. No UEI       -> legal-business-name search, which is fuzzy.
       3. Name search returning MORE THAN ONE entity -> ambiguous; flagged for
@@ -990,8 +997,8 @@ class SAMGovConnector:
         self.api_key = os.getenv("SAM_GOV_API_KEY", "")
 
     async def lookup_by_uei(self, uei: str) -> SourceResult:
-        """SAM.gov is keyed on UEI/CAGE, not NPI. Verify registration + exclusion
-        (debarment) status by UEI."""
+        """Verify registration by UEI. The live API is not queried by NPI here (see the
+        class docstring); the public exclusions extract does carry an NPI column."""
         qp = {"uei": uei}
         if not self.api_key:
             return SourceResult.unavailable(
@@ -1051,7 +1058,7 @@ class SAMGovConnector:
             return SourceResult.ok("SAM_GOV", data, qp, self.API_VERSION, raw_for_hash=payload)
         except Exception as e:
             logger.warning(f"SAM.gov unavailable for UEI {uei}: {e}")
-            return SourceResult.unavailable("SAM_GOV", str(e), qp, self.API_VERSION)
+            return SourceResult.unavailable("SAM_GOV", sam_screening.sanitize_reason(str(e)), qp, self.API_VERSION)
 
     async def lookup_by_name(self, legal_name: str) -> SourceResult:
         """Fuzzy fallback when the registry holds no UEI.
@@ -1116,7 +1123,7 @@ class SAMGovConnector:
                 qp, self.API_VERSION, raw_for_hash=payload)
         except Exception as e:
             logger.warning(f"SAM.gov name lookup failed for {legal_name!r}: {e}")
-            return SourceResult.unavailable("SAM_GOV", str(e), qp, self.API_VERSION)
+            return SourceResult.unavailable("SAM_GOV", sam_screening.sanitize_reason(str(e)), qp, self.API_VERSION)
 
     async def check_exclusions(self, uei: str = "", legal_name: str = "") -> SourceResult:
         """Exclusions (debarment) check against the v4 endpoint.
@@ -1166,9 +1173,21 @@ class SAMGovConnector:
             # collision. Ambiguous here means "identity unconfirmed", not
             # "clear" — the caller must route it to analyst review.
             ambiguous = (not uei) and total > 1
+            outcome, outcome_reason = sam_screening.classify_outcome(
+                answered=True, record_count=int(total or 0),
+                distinct_identities=(2 if ambiguous else (1 if total else 0)),
+                matched_by="uei" if uei else "name")
+            provenance = sam_screening.build_provenance(
+                leg="exclusion", channel="LIVE_API", endpoint_version="v4",
+                identifier_used="uei" if uei else "name",
+                query_mode="exact" if uei else "name_search", page=0, size=10,
+                records_returned=len(records), total_records=int(total or 0),
+                truncated=bool(total and total > len(records)))
             return SourceResult.ok(
                 "SAM_GOV_EXCLUSIONS",
-                {"excluded": bool(total),
+                {"outcome": outcome, "outcome_reason": outcome_reason,
+                 "provenance": provenance,
+                 "excluded": bool(total),
                  "match_count": total,
                  "matched_by": "uei" if uei else "name",
                  "ambiguous": ambiguous,
@@ -1183,7 +1202,7 @@ class SAMGovConnector:
                 qp, "v4", raw_for_hash=payload)
         except Exception as e:
             logger.warning(f"SAM.gov exclusions lookup failed: {e}")
-            return SourceResult.unavailable("SAM_GOV_EXCLUSIONS", str(e), qp, "v4")
+            return SourceResult.unavailable("SAM_GOV_EXCLUSIONS", sam_screening.sanitize_reason(str(e)), qp, "v4")
 
     async def verify(self, uei: str = "", legal_name: str = "") -> SourceResult:
         """Combined registration + exclusion check — the entry point callers want.
@@ -1214,6 +1233,19 @@ class SAMGovConnector:
         # may treat either leg's answer (clear or excluded, current or lapsed)
         # as a confirmed determination until an analyst resolves which
         # candidate is correct.
+        data["registration_screening"] = {
+            "leg": "registration", "answered": reg.success,
+            "note": "registration is NOT exclusion screening"}
+        data["exclusion_screening"] = {
+            "leg": "exclusion", "answered": exc.success,
+            "outcome": (exc.data or {}).get("outcome") if exc.success else sam_screening.INCOMPLETE,
+            "outcome_reason": (exc.data or {}).get("outcome_reason") if exc.success else "CHECK_DID_NOT_COMPLETE",
+            "provenance": (exc.data or {}).get("provenance") if exc.success else
+                sam_screening.build_provenance(
+                    leg="exclusion", channel="LIVE_API", endpoint_version="v4",
+                    identifier_used="uei" if uei else "name",
+                    query_mode="exact" if uei else "name_search",
+                    failure=sam_screening.failure_record(exc.error or ""))}
         data["identity_ambiguous"] = bool(reg.data and reg.data.get("ambiguous")) or (
             exc.success and bool(exc.data.get("ambiguous")))
         if exc.success:
@@ -1230,10 +1262,11 @@ class SAMGovConnector:
         return SourceResult.ok("SAM_GOV", data, qp, self.API_VERSION)
 
     async def lookup_by_npi(self, npi: str) -> SourceResult:
-        # The SAM.gov entity API has no NPI index. Callers should pass UEI via
-        # lookup_by_uei; querying by NPI cannot verify SAM and fails closed.
+        # This connector does not query the live SAM.gov API by NPI (no NPI search
+        # parameter is documented or verified), so it fails closed. The public
+        # exclusions extract does carry NPI; see sam_exclusions_extract (offline).
         return SourceResult.unavailable(
-            "SAM_GOV", "SAM.gov has no NPI lookup; provide entity UEI + SAM_GOV_API_KEY",
+            "SAM_GOV", "NPI is not queried against the live SAM.gov API by this connector; provide entity UEI + SAM_GOV_API_KEY",
             {"npi": npi}, self.API_VERSION,
         )
 
