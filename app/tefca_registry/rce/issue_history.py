@@ -37,6 +37,7 @@ from sqlalchemy import select, tuple_
 
 from app.tefca_registry.rce import issue_history_core as core
 from app.tefca_registry.rce import models as m
+from app.tefca_registry.rce.record_check_tables import RECORD_CHECK_RESULTS
 
 logger = logging.getLogger(__name__)
 
@@ -79,13 +80,9 @@ def records_query(oid: str, intake_ids: Sequence[Any]):
 
 
 def results_query(pairs: Sequence[Any]):
-    return (select(m.RceRecordCheckResult.run_id,
-                   m.RceRecordCheckResult.source_record_id,
-                   m.RceRecordCheckResult.map_version,
-                   m.RceRecordCheckResult.rule_count,
-                   m.RceRecordCheckResult.outcomes)
-            .where(tuple_(m.RceRecordCheckResult.run_id,
-                          m.RceRecordCheckResult.source_record_id).in_(list(pairs))))
+    t = RECORD_CHECK_RESULTS.c
+    return (select(t.run_id, t.source_record_id, t.map_version, t.rule_count, t.outcomes)
+            .where(tuple_(t.run_id, t.source_record_id).in_(list(pairs))))
 
 
 def issues_query(record_ids: Sequence[Any], with_values: bool):

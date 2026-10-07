@@ -23,6 +23,7 @@ from app.tefca_registry.rce import issue_history as svc
 from app.tefca_registry.rce import issue_history_core as core
 from app.tefca_registry.rce import models as m
 from app.tefca_registry.rce.quality_rules import RULE_BY_ID, RULES
+from app.tefca_registry.rce.record_check_tables import RECORD_CHECK_RESULTS as RCR
 
 from issue_history_support_2026_10_07 import (  # noqa: F401  (fixture imported)
     FEED, GOOD_NPI, BAD_LEN_NPI, OID, QHIN_OID, entity_row, entry_of, filler_row,
@@ -90,8 +91,7 @@ async def test_engine_persists_a_map_per_record_and_the_interpretation_columns(r
     intake = await deliver(db, 7, npi=BAD_LEN_NPI)
     run = (await db.execute(select(m.RceIngestionRun).where(
         m.RceIngestionRun.source_intake_id == intake))).scalar_one()
-    rows = (await db.execute(select(m.RceRecordCheckResult).where(
-        m.RceRecordCheckResult.run_id == run.id))).scalars().all()
+    rows = (await db.execute(select(RCR).where(RCR.c.run_id == run.id))).all()
     n_records = (await db.execute(select(func.count()).select_from(m.RceSourceRecord).where(
         m.RceSourceRecord.source_intake_id == intake))).scalar()
     assert len(rows) == n_records == 2
@@ -122,7 +122,7 @@ async def test_a_population_scope_rule_is_recorded_at_run_level_only(rolled_back
     monkeypatch.setattr(RULE_BY_ID["SCH-002"], "scope", "RUN")
     db = rolled_back_db
     intake = await deliver(db, 7)
-    row = (await db.execute(select(m.RceRecordCheckResult))).scalars().first()
+    row = (await db.execute(select(RCR))).first()
     assert "SCH-002" not in row.outcomes and row.rule_count == 8
     scope = (await db.execute(text(
         "select scope from rce_rule_execution_history where rule_id='SCH-002' "
@@ -142,7 +142,7 @@ async def test_flag_off_writes_nothing_new_and_the_issues_are_identical(rolled_b
     intake = await deliver(db, 7, npi=BAD_LEN_NPI, process=False,
                            extra_rows=[entity_row("9.99.777.5.1", part_of="NOPE")])
     off = await run_engine(db, intake)
-    assert (await db.execute(select(func.count()).select_from(m.RceRecordCheckResult))).scalar() == 0
+    assert (await db.execute(select(func.count()).select_from(RCR))).scalar() == 0
     nulls = (await db.execute(text(
         "select count(*) from rce_rule_execution_history where run_id = :r and "
         "(requires_hash is not null or scope is not null or coverage is not null)"),
@@ -150,7 +150,7 @@ async def test_flag_off_writes_nothing_new_and_the_issues_are_identical(rolled_b
     assert nulls == 0
     monkeypatch.setattr(settings, "ENABLE_RECORD_CHECK_RESULTS", True)
     on = await run_engine(db, intake)
-    assert (await db.execute(select(func.count()).select_from(m.RceRecordCheckResult))).scalar() == 3
+    assert (await db.execute(select(func.count()).select_from(RCR))).scalar() == 3
     off_keys, on_keys = set(off), set(on)
     assert off_keys == on_keys
     for k in ("records_evaluated", "issues_generated", "rules_executed", "rules_failed",

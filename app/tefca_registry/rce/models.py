@@ -30,8 +30,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     BigInteger, Boolean, CheckConstraint, Column, DateTime, ForeignKey, Index,
-    Integer, PrimaryKeyConstraint, SmallInteger, String, Text, UniqueConstraint,
-    func, text,
+    Integer, String, Text, UniqueConstraint, func, text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import deferred
@@ -253,36 +252,6 @@ class RceRuleExecutionHistory(Base):
     __table_args__ = (
         UniqueConstraint("run_id", "rule_id", name="uq_rce_rule_exec_run_rule"),
         Index("idx_rce_rule_exec_rule", "rule_id"),
-    )
-
-
-class RceRecordCheckResult(Base):
-    """One record's outcome for every rule in one run. APPEND-ONLY.
-
-    `outcomes` maps rule_id to a one-letter code. For `map_version` 1 the code
-    set is closed: F finding raised, P applicable and no finding, N not
-    applicable, S skipped, E rule raised on this record, U unqualified (the rule
-    has no applicability declaration). Rule versions and declaration hashes are
-    NOT stored per row; they come from the run's `rce_rule_execution_history`
-    rows. See `record_check_results.py` for the writer, the validator and the
-    reader that refuses to guess on an unknown map.
-    """
-
-    __tablename__ = "rce_record_check_results"
-
-    run_id = Column(UUID(as_uuid=True), ForeignKey("rce_ingestion_runs.id"),
-                    nullable=False)
-    source_record_id = Column(UUID(as_uuid=True),
-                              ForeignKey("rce_source_records.id"), nullable=False)
-    map_version = Column(SmallInteger, nullable=False)
-    rule_count = Column(SmallInteger, nullable=False)
-    outcomes = Column(JSONB, nullable=False)
-    created_at = Column(DateTime(timezone=True), nullable=False,
-                        server_default=func.now())
-
-    __table_args__ = (
-        PrimaryKeyConstraint("run_id", "source_record_id",
-                             name="pk_rce_record_check_results"),
     )
 
 
