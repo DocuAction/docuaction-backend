@@ -110,6 +110,11 @@
   main table.dp-fixed thead { display: table-header-group; }
   .dp-appendix-intro { font-size: 8.5pt; color: var(--agt-muted); margin: 0 0 6pt 0; }
   .dp-wide .agt-pkg { font-size: 8pt; margin: 0 0 6pt 0; }
+  /* Closing portrait pages: keep the accessibility statement whole, and keep the provenance record on ONE page.
+     Both are scoped to this report (the shared base styles are untouched). */
+  .accessibility-statement { break-inside: avoid; page-break-inside: avoid; margin-top: 8pt; }
+  section.appendix { break-inside: avoid; page-break-inside: avoid; }
+  section.appendix table th, section.appendix table td { padding: 2.2pt 6pt; font-size: 8.5pt; line-height: 1.25; }
   /* Never strand a heading, its lead sentence, or a table caption/header away from the rows they introduce,
      and never leave one or two rows alone on a page (a table taller than a page still splits, but cleanly). */
   main h2 + p, main h2 + p + p, main h3 + p { break-after: avoid; page-break-after: avoid; }

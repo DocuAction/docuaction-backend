@@ -223,3 +223,18 @@ def test_every_table_continues_with_more_than_one_row_on_a_new_page(pdfs, name):
         body = [w for w in p["words"] if 40 < w["top"] < p["h"] - 48]
         used = (max(w["bottom"] for w in body) - min(w["top"] for w in body)) if body else 0
         assert used > 0.12 * p["h"], f"{name}: landscape page {i + 1} uses only {used:.0f}pt of {p['h']:.0f}pt"
+
+
+@needs_weasyprint
+@pytest.mark.parametrize("name", ALL)
+def test_closing_blocks_are_not_split_across_pages(pdfs, name):
+    """The accessibility statement and the provenance record are each kept whole on one page."""
+    pages = pdfs[name]
+
+    def page_with(text):
+        return [i for i, p in enumerate(pages, start=1) if text in p["text"]]
+
+    for first, last in (("Accessibility", "Zoom / reflow"), ("Report Provenance", "PDF engine")):
+        a, b = page_with(first), page_with(last)
+        assert a and b, f"{name}: missing {first!r} or {last!r}"
+        assert a[-1] == b[0], f"{name}: {first!r} starts on page {a[-1]} but {last!r} is on page {b[0]}"
