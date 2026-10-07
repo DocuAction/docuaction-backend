@@ -74,6 +74,8 @@ def _long_timeline(d):
 
 SCENARIOS = {
     "clean_060": lambda: _fixture("060"),
+    "live_067_timeline_17": lambda: _fixture("067"),
+    "live_068_three_open_high": lambda: _fixture("068"),
     "exceptions_061": lambda: _fixture("061"),
     "many_rules": lambda: _many_rules(_fixture("061")),
     "busy_cover": lambda: _busy_cover(_fixture("061")),
@@ -133,6 +135,9 @@ def test_the_cover_is_exactly_one_page_and_no_page_is_nearly_blank(pdfs, name):
     assert pages[1]["w"] > pages[1]["h"], f"{name}: page 2 is portrait, so the cover spilled over: {pages[1]['text'][:120]!r}"
     for i, p in enumerate(pages[:-1], start=1):
         assert len(p["text"]) >= 300, f"{name}: page {i} is nearly blank ({len(p['text'])} chars): {p['text'][:80]!r}"
+        # a heading and its intro alone on a page (its table pushed to the next) is ~35 words: 60 is above that and
+        # below the shortest legitimate appendix page (DA-ARC-2026-067 Appendix C, 87 words)
+        assert len(p["words"]) >= 60, f"{name}: page {i} holds only {len(p['words'])} words (stranded heading?): {p['text'][:100]!r}"
 
 
 GLUED_SEVERITY = re.compile(r"\b(INFORMATIONAL|CRITICAL|MEDIUM|HIGH|LOW)(?=[A-Za-z_])")

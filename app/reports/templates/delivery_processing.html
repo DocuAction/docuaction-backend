@@ -311,10 +311,10 @@
 
       <div class="agt-box"><h2 class="agt-h2">Evidence limitations</h2>
         <ul>
-          {# Bounded so the cover stays on ONE page: at most four are printed; the rest are counted, and the CSV export carries all of them. #}
-          {% for item in limitations[:4] %}<li>{{ item }}</li>
+          {# Bounded so the cover stays on ONE page: at most three are printed; the rest are counted, and the CSV export carries all of them. #}
+          {% for item in limitations[:3] %}<li>{{ item }}</li>
           {% else %}<li>No limitation was recorded: every section was read from persisted evidence for this delivery.</li>{% endfor %}
-          {% if limitations|length > 4 %}<li><i>+ {{ (limitations|length - 4)|number }} more limitation(s) are stated in the CSV export.</i></li>{% endif %}
+          {% if limitations|length > 3 %}<li><i>+ {{ (limitations|length - 3)|number }} more limitation(s) are stated in the CSV export.</i></li>{% endif %}
         </ul>
       </div>
 
@@ -387,7 +387,8 @@
   </tbody>
 </table>
 
-<h2>Appendix B. Processing timeline</h2>
+{# A timeline of more than ten attempts is taller than the room left after Appendix A's heading and intro, and a kept-together table that does not fit is pushed to the next page ALONE, stranding the heading (seen on DA-ARC-2026-067). Starting the appendix on a fresh page keeps heading, intro and table together. #}
+<h2{% if timeline.available and timeline.events|length > 10 %} class="dp-newpage"{% endif %}>Appendix B. Processing timeline</h2>
 {% if timeline.available %}
 <p>{{ timeline.summary.attempts|number }} stage attempt(s) recorded.
   {% if timeline.summary.failed_stage %}Failed stage: {{ timeline.summary.failed_stage }}.{% endif %}
