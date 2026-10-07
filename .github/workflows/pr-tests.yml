@@ -125,6 +125,7 @@ jobs:
             tests/test_contract_progress_reports.py \
             tests/test_iqvia_import_runtime_privilege_2026_10_06.py \
             tests/test_source_snapshot_immutability_2026_10_06.py \
+            tests/test_preflight_runtime_privilege_2026_10_07.py \
             -v --tb=short -rs --junitxml=isolation-results.xml
       - name: Fail if any isolation test was skipped for want of a database
         run: |
