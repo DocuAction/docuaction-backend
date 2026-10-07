@@ -67,12 +67,29 @@ class TestPayloadIsProjected:
     def test_descriptive_columns_are_not_copied_but_the_full_row_is_hashed(self):
         r = dict(zip(HEADER, _row("1", "2", typ="3", grp="ATT")))
         built = ii._affiliation_payload_and_keys(r)
-        for dropped in ("FRST_NM", "LAST_NM", "YOB", "ADDR_LN_1_TXT", "MON_SLOT_1_STRT_TM", "ORG_SPANISH_IND", "BUS_NM"):
+        for dropped in ("FRST_NM", "LAST_NM", "YOB", "MON_SLOT_1_STRT_TM", "ORG_SPANISH_IND"):
             assert dropped not in built["payload"], dropped
-        for kept in ("HCP_HCE_ID", "HCO_HCE_ID", "AFFL_TYP_ID", "AFFL_GRP_CD", "TITL_TYP_ID", "NPI", "ORG_NPI"):
+        for kept in ("HCP_HCE_ID", "HCO_HCE_ID", "AFFL_TYP_ID", "AFFL_GRP_CD", "TITL_TYP_ID", "NPI", "ORG_NPI",
+                     "BUS_NM", "ADDR_LN_1_TXT"):
             assert kept in built["payload"], kept
         # provenance: the row hash still covers the WHOLE source row, so a stored row verifies against the original
         assert ii._row_sha256(r) == hashlib.sha256(json.dumps(r, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
+
+    def test_projection_layers_are_17_plus_8_and_person_names_are_opt_in(self, monkeypatch):
+        assert len(ii.AFFILIATION_KEYS_AND_IDS) == 17 and len(ii.AFFILIATION_ORG_DESCRIPTORS) == 8
+        assert len(set(ii.AFFILIATION_KEYS_AND_IDS + ii.AFFILIATION_ORG_DESCRIPTORS + ii.AFFILIATION_PERSON_NAMES)) == 27
+        monkeypatch.delenv("IQVIA_AFFIL_STORE_PERSON_NAMES", raising=False)
+        assert len(ii.affiliation_payload_columns()) == 25
+        r = dict(zip(HEADER, _row("1", "2", typ="3")))
+        assert "FRST_NM" not in ii._affiliation_payload_and_keys(r)["payload"]
+        monkeypatch.setenv("IQVIA_AFFIL_STORE_PERSON_NAMES", "1")
+        assert len(ii.affiliation_payload_columns()) == 27
+        got = ii._affiliation_payload_and_keys(r)["payload"]
+        assert got["FRST_NM"] == "SYNFIRST" and got["LAST_NM"] == "SYNLAST"
+
+    def test_phone_is_stored_as_delivered_with_no_normalisation(self):
+        r = dict(zip(HEADER + ["TELEPHN_NBR"], _row("1", "2", typ="3") + ["(555) 010-0000 x2"]))
+        assert ii._affiliation_payload_and_keys(r)["payload"]["TELEPHN_NBR"] == "(555) 010-0000 x2"
 
     def test_statement_size_is_capped(self):
         assert 1 <= ii.MAX_ROWS_PER_STATEMENT <= 200

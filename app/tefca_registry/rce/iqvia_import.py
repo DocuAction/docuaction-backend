@@ -351,11 +351,36 @@ def _hcp_payload_and_keys(row: Dict[str, str]) -> Optional[Dict[str, Any]]:
 #: measured ~3.4 KB/row, ~26 GB for the 7.55M-row file, more than the DEV database has free. The full row is
 #: still hashed into `record_sha256` and the source file's own sha256 is on the snapshot, so any stored row can
 #: be re-verified against the untouched original; only the descriptive duplication is not copied.
-AFFILIATION_PAYLOAD_COLUMNS = (
+#: Layers, so the owner's projection decision is one switch and every column has a stated purpose
+#: (qa-evidence/2026-10-06-iqvia-affil-assessment/PROJECTION-MATRIX-PR123-2026-10-07.md):
+#:   KEYS_AND_IDS (17)      relationship, identifiers and the match inputs that run today
+#:   ORG_DESCRIPTORS (+8)   organisation name/alias, address and phone: the inputs of the declared
+#:                          name+address+phone method and the reviewer's reading of a candidate
+#:   PERSON_NAMES (+2)      HCP first/last name: display only, personal data, never a match input;
+#:                          OFF unless IQVIA_AFFIL_STORE_PERSON_NAMES=1 (data minimisation)
+AFFILIATION_KEYS_AND_IDS = (
     "HCP_HCE_ID", "OK_INDV_ID", "NPI", "HCO_HCE_ID", "OK_WKP_ID", "ORG_NPI", "ORG_CCN_ID", "ORG_TAX_ID", "ADDR_ID",
     "AFFL_TYP_ID", "AFFL_TYP_DESC", "AFFL_GRP_CD", "AFFL_GRP_DESC",
     "TITL_TYP_ID", "TITL_TYP_DESC", "TITL_CATG_CD", "TITL_CATG_DESC",
 )
+AFFILIATION_ORG_DESCRIPTORS = (
+    "BUS_NM", "DBA_NM", "ADDR_LN_1_TXT", "ADDR_LN_2_TXT", "CITY_NM", "ST_CD", "ZIP5_CD", "TELEPHN_NBR",
+)
+AFFILIATION_PERSON_NAMES = ("FRST_NM", "LAST_NM")
+
+
+def affiliation_payload_columns() -> tuple:
+    """The projection in force: 25 columns by default, 27 with IQVIA_AFFIL_STORE_PERSON_NAMES=1. Read per call
+    (not at import) so the switch is testable and takes effect on the next import."""
+    import os
+    cols = AFFILIATION_KEYS_AND_IDS + AFFILIATION_ORG_DESCRIPTORS
+    if os.getenv("IQVIA_AFFIL_STORE_PERSON_NAMES", "").strip().lower() in ("1", "true", "yes"):
+        cols += AFFILIATION_PERSON_NAMES
+    return cols
+
+
+#: Back-compat name for the layer the importer's keys depend on.
+AFFILIATION_PAYLOAD_COLUMNS = AFFILIATION_KEYS_AND_IDS
 
 
 def _affiliation_kind(row: Dict[str, str]) -> str:
@@ -376,7 +401,7 @@ def _affiliation_payload_and_keys(row: Dict[str, str]) -> Optional[Dict[str, Any
     hco_key = _clean(row.get("HCO_HCE_ID"))
     if not hcp_key or not hco_key:
         return None
-    slim = {c: row[c] for c in AFFILIATION_PAYLOAD_COLUMNS if c in row}
+    slim = {c: row[c] for c in affiliation_payload_columns() if c in row}
     if "AFFIL_TYPE_CD" in row:
         slim["AFFIL_TYPE_CD"] = row["AFFIL_TYPE_CD"]
     return {"hcp_record_key": hcp_key, "hco_record_key": hco_key,
