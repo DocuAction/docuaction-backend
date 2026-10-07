@@ -790,6 +790,7 @@ async def list_reports(
             # that, wrapped the way it expects.
             "release": current_release({"release": r.release} if r.release else {}),
             "file_stem": file_stem,
+            "formats": supported_formats(r.report_type),
             "source": _source_summary(r.delivery, r.scope),
             "document_marking": document_marking_for(snapshot.get("data_classification")),
             **meta,
@@ -856,6 +857,30 @@ def _stem_for(row, contract=_UNSET) -> str:
         report_id=row.report_id)
 
 
+def supported_formats(report_type: str) -> Dict[str, Any]:
+    """The download formats a report type supports, stated as data so no client has to guess.
+
+    html, csv, pdf and the package (ZIP) exist for every report type. DOCX exists ONLY for the contract
+    deliverables (`SOW_REPORT_TYPES`); a delivery evidence report (`delivery_processing`) has no editable Word
+    form, and `GET /{report_id}/docx` answers 404 for it. A client must not offer DOCX where `available` is false.
+    """
+    from app.reports.data.sow_report_data import SOW_REPORT_TYPES
+
+    contract = report_type in SOW_REPORT_TYPES
+    return {
+        "html": {"available": True},
+        "csv": {"available": True},
+        "pdf": {"available": True,
+                "note": "Rendered by the report engine; refused with a stated reason only where its native "
+                        "libraries are missing."},
+        "package": {"available": True, "note": "ZIP of the available formats with a README and SHA-256 manifest."},
+        "docx": {"available": contract,
+                 "reason": None if contract else (
+                     f"'{report_type}' is a delivery evidence report, not a contract deliverable; "
+                     f"it has no editable Word form.")},
+    }
+
+
 def _listing_extras(r) -> Dict[str, Any]:
     """Deliverable, period and PM release state for one stored report."""
     from app.reports.data.release import current_release
@@ -871,6 +896,7 @@ def _listing_extras(r) -> Dict[str, Any]:
         "period_end": r.period_end,
         "release": current_release(data),
         "file_stem": _stem_for(r),
+        "formats": supported_formats(r.report_type),
         "source": _source_summary(dataset.get("delivery"), dataset.get("scope")),
         "document_marking": document_marking_for(snapshot.get("data_classification")),
         **_deliverable_meta(r.report_type),
@@ -1403,7 +1429,10 @@ async def get_report_docx(
         raise HTTPException(404, f"Report {report_id} has no stored dataset.")
     docx_bytes = await run_in_threadpool(docx_for_stored_report, row)
     if docx_bytes is None:
-        raise HTTPException(404, f"Report type '{row.report_type}' has no DOCX form.")
+        supported = ", ".join(k for k, v in supported_formats(row.report_type).items() if v["available"])
+        raise HTTPException(
+            404, f"Report type '{row.report_type}' has no DOCX form (FORMAT_NOT_AVAILABLE). "
+                 f"Supported formats for this report: {supported}.")
     await _audit_download(db, row, "docx", user, job_id=job_id)
     return Response(
         content=docx_bytes, media_type=DOCX_CONTENT_TYPE,
