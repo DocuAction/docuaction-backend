@@ -387,13 +387,13 @@
   </tbody>
 </table>
 
-{# A timeline of more than ten attempts is taller than the room left after Appendix A's heading and intro, and a kept-together table that does not fit is pushed to the next page ALONE, stranding the heading (seen on DA-ARC-2026-067). Starting the appendix on a fresh page keeps heading, intro and table together. #}
-<h2{% if timeline.available and timeline.events|length > 10 %} class="dp-newpage"{% endif %}>Appendix B. Processing timeline</h2>
+{# A kept-together table that is taller than the room left after its heading and intro is pushed to the next page ALONE, stranding the heading (seen on DA-ARC-2026-067: 17 attempts). Only a short timeline is kept whole; a longer one flows under its heading and may split between rows. #}
+<h2>Appendix B. Processing timeline</h2>
 {% if timeline.available %}
 <p>{{ timeline.summary.attempts|number }} stage attempt(s) recorded.
   {% if timeline.summary.failed_stage %}Failed stage: {{ timeline.summary.failed_stage }}.{% endif %}
   Completed stages: {{ timeline.summary.completed_stages|join(', ') or 'none' }}.</p>
-<table class="dp-fixed dp-tight{% if timeline.events|length <= 24 %} dp-keep{% endif %}">
+<table class="dp-fixed dp-tight{% if timeline.events|length <= 10 %} dp-keep{% endif %}">
   {{ cols([14, 7, 10, 14, 14, 7, 9, 9, 8, 8]) }}
   <caption>Every stage attempt, oldest first</caption>
   <thead>
