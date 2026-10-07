@@ -339,3 +339,9 @@ class TestIdentityKeysAndIndividuals:
     def test_nameless_unidentified_records_are_kept_not_dropped(self):
         ids = self._g([dict(classification="Firm"), dict(classification="Firm")])
         assert sum(i.action_count for i in ids) == 2
+
+
+def test_name_state_zip_groups_are_flagged_provisional():
+    ids = ss.group_identities([dict(classification="Firm", name="B", state="CA", zip="90001"),
+                               dict(classification="Firm", name="C", uei="U1")], normalize_name=lambda s: s.lower())
+    assert {i.key_basis: i.provisional for i in ids} == {"name_location": True, "uei": False}

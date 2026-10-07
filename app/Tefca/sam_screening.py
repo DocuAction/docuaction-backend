@@ -217,6 +217,13 @@ class ExclusionIdentity:
     def action_count(self) -> int:
         return len(self.actions)
 
+    @property
+    def provisional(self) -> bool:
+        """True for name/state/ZIP grouping: a PROVISIONAL grouping of records, not a confirmed identity. Only a
+        shared UEI, NPI or CAGE (directly or by chain) groups on a strong identifier, and even that is a grouping
+        of SAM records, not a determination about any DocuAction entity."""
+        return self.key_basis == "name_location"
+
 
 def _add(seq: List[str], value: str) -> None:
     value = (value or "").strip()
