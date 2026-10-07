@@ -790,6 +790,7 @@ async def list_reports(
             # that, wrapped the way it expects.
             "release": current_release({"release": r.release} if r.release else {}),
             "file_stem": file_stem,
+            "formats": supported_formats(r.report_type),
             "source": _source_summary(r.delivery, r.scope),
             "document_marking": document_marking_for(snapshot.get("data_classification")),
             **meta,
