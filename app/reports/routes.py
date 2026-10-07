@@ -22,6 +22,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
+from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -243,6 +245,47 @@ def _artifacts_summary(finalised: Optional[Dict[str, Any]]) -> Optional[Dict[str
     }
 
 
+#: How long a retry waits for a still-running generation with the same key before answering 409. Kept under the
+#: browser's 30 s request budget so the caller gets a stated reason instead of another timeout.
+GENERATION_LOCK_WAIT_SECONDS = 20.0
+GENERATION_LOCK_POLL_SECONDS = 0.5
+
+
+@asynccontextmanager
+async def _generation_key_lock(key, user_id):
+    """Serialise generation per (principal, idempotency key) with a Postgres advisory lock on a DEDICATED
+    connection (a session-level lock must outlive the request session's commits and pool checkouts)."""
+    if not key:
+        yield
+        return
+    from sqlalchemy import text
+
+    from app.core.database import engine
+
+    token = f"report-generate:{user_id}:{key}"
+    async with engine.connect() as conn:
+        deadline = time.monotonic() + GENERATION_LOCK_WAIT_SECONDS
+        while True:
+            got = (await conn.execute(text("SELECT pg_try_advisory_lock(hashtextextended(:k, 0))"),
+                                      {"k": token})).scalar()
+            if got:
+                break
+            if time.monotonic() >= deadline:
+                raise HTTPException(409, detail={
+                    "code": "REPORT_GENERATION_IN_PROGRESS",
+                    "message": ("A report for this same action is still being generated. Nothing new was started. "
+                                "Check the Report Register in a minute, or press Generate draft again to pick it up."),
+                })
+            await asyncio.sleep(GENERATION_LOCK_POLL_SECONDS)
+        try:
+            yield
+        finally:
+            try:
+                await conn.execute(text("SELECT pg_advisory_unlock(hashtextextended(:k, 0))"), {"k": token})
+            except Exception:  # noqa: BLE001 - the lock dies with the connection anyway
+                pass
+
+
 @router.post("/generate", summary="Generate a report from frozen verification results")
 async def generate(
     request: GenerateReportRequest,
@@ -268,10 +311,24 @@ async def generate(
 
     require_explicit_scope(request.report_type, parameters)
 
-    if request.idempotency_key:
-        replay = await _replay_for_key(db, request.idempotency_key, getattr(user, "id", None))
-        if replay is not None:
-            return replay
+    # One generation per (principal, key) AT A TIME. The replay lookup below reads the audit row written when a
+    # generation FINISHES, so a retry that arrives while the first is still running (the browser gave up at 30 s;
+    # the server did not) used to find nothing and generate a second report. The lock is held on its own
+    # connection for the whole request: the retry waits for the first to finish, then replays it; if the first is
+    # still running after the wait it gets 409 REPORT_GENERATION_IN_PROGRESS, never a duplicate.
+    async with _generation_key_lock(request.idempotency_key, getattr(user, "id", None)):
+        if request.idempotency_key:
+            replay = await _replay_for_key(db, request.idempotency_key, getattr(user, "id", None))
+            if replay is not None:
+                return replay
+        return await _generate_locked(request, parameters, db, user)
+
+
+async def _generate_locked(request, parameters, db, user):
+    from app.reports.generator import (ReportGenerationError, ReportParameterError,
+                                       generate_report)
+
+    from app.core import request_context
 
     try:
         with request_context.bind(idempotency_key=request.idempotency_key):
