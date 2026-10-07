@@ -23,12 +23,13 @@ than by insertion timing, so a re-run is diffable against the previous one.
 from __future__ import annotations
 
 import collections
+import json
 import logging
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from app.tefca_registry.rce import models as m
 from app.tefca_registry.rce.field_map import (
@@ -37,11 +38,13 @@ from app.tefca_registry.rce.field_map import (
     RCE_FIELDS,
     empty_in_delivery,
 )
+from app.tefca_registry.rce import record_check_results as rcr
 from app.tefca_registry.rce.quality_rules import (
     RULE_SET_VERSION,
     RULES,
     Finding,
     RecordContext,
+    declaration_hash,
     rule_config_hash,
 )
 
@@ -227,6 +230,18 @@ async def run_quality_engine(
 
     dataset = await _build_dataset_context(db, intake.id)
 
+    # Per-record check results (issue-history slice). OFF by default; when off
+    # nothing below this line differs from the behaviour before the slice.
+    from app.core.config import settings as _settings
+    record_results_on = bool(getattr(_settings, "ENABLE_RECORD_CHECK_RESULTS", False))
+    # Only DECLARED record-scope rules are stored; an undeclared rule is "U"
+    # for every record by construction (see record_check_results).
+    result_rule_ids = frozenset(
+        r.rule_id for r in RULES if r.scope != rcr.SCOPE_RUN)
+    tracked_ids = frozenset(
+        r.rule_id for r in RULES if r.declared and r.scope != rcr.SCOPE_RUN)
+    result_rows: List[Dict[str, Any]] = []
+
     per_rule_evaluated: Dict[str, int] = {r.rule_id: 0 for r in RULES}
     per_rule_issues: Dict[str, int] = {r.rule_id: 0 for r in RULES}
     per_rule_ms: Dict[str, float] = {r.rule_id: 0.0 for r in RULES}
@@ -266,8 +281,10 @@ async def run_quality_engine(
                 values=dict(record.parsed or {}),
                 dataset=dataset,
             )
+            outcomes: Dict[str, str] = {}
             for rule in RULES:
                 started = time.perf_counter()
+                errored = False
                 try:
                     findings = rule.evaluate(ctx) or []
                 except Exception as exc:  # noqa: BLE001
@@ -278,8 +295,12 @@ async def run_quality_engine(
                     logger.warning("rule %s raised on line %s: %s",
                                    rule.rule_id, record.line_number, exc)
                     findings = []
+                    errored = True
                 per_rule_ms[rule.rule_id] += (time.perf_counter() - started) * 1000
                 per_rule_evaluated[rule.rule_id] += 1
+                if record_results_on and rule.rule_id in tracked_ids:
+                    outcomes[rule.rule_id] = rcr.outcome_code(
+                        rule, ctx, findings, errored)
                 for finding in findings:
                     sequence += 1
                     severity = rule.severity() if finding.severity is None else finding.severity
@@ -287,17 +308,28 @@ async def run_quality_engine(
                     pending.append(_issue_row(finding, intake.id, record.id,
                                               run.id, sequence, stamp, now))
                     per_rule_issues[rule.rule_id] += 1
+            if record_results_on:
+                # Validated before it is persisted: closed codes, rule ids
+                # that belong to this run, and a rule_count that matches.
+                rcr.validate_for_write(outcomes, len(outcomes), result_rule_ids)
+                result_rows.append({
+                    "run_id": run.id, "source_record_id": record.id,
+                    "map_version": rcr.MAP_VERSION, "rule_count": len(outcomes),
+                    "outcomes": outcomes})
 
         if len(pending) >= ISSUE_INSERT_BATCH:
             await _flush_issues(db, pending)
             pending = []
+        if result_rows:
+            await _flush_results(db, result_rows)
+            result_rows = []
 
     if pending:
         await _flush_issues(db, pending)
 
     # ── per-rule execution history ──
     for rule in RULES:
-        db.add(m.RceRuleExecutionHistory(
+        history = m.RceRuleExecutionHistory(
             run_id=run.id,
             rule_id=rule.rule_id,
             rule_version=rule.version,
@@ -308,7 +340,18 @@ async def run_quality_engine(
             execution_duration_ms=int(per_rule_ms[rule.rule_id]),
             error=per_rule_error[rule.rule_id],
             executed_by=executed_by,
-        ))
+        )
+        if record_results_on:
+            # Everything needed to interpret a stored map without today's code.
+            history.requires_hash = declaration_hash(rule)
+            history.scope = rule.scope
+            if rule.rule_id == "INT-002":
+                history.coverage = {
+                    "delivery_ids": len(dataset.get("known_source_ids") or ()),
+                    "registry_oids": len(dataset.get("registry_oids") or ()),
+                    "qhin_oids": len(dataset.get("qhin_oids") or ()),
+                }
+        db.add(history)
 
     run.completed_at = datetime.utcnow()
     run.records_evaluated = total_records
@@ -361,6 +404,31 @@ def _issue_row(finding: Finding, intake_id, record_id, run_id, sequence: int,
 async def _flush_issues(db, rows: List[Dict[str, Any]]) -> None:
     if rows:
         await db.execute(m.RceIssue.__table__.insert(), rows)
+
+
+_RESULTS_INSERT = text(
+    "INSERT INTO rce_record_check_results "
+    "(run_id, source_record_id, map_version, rule_count, outcomes) "
+    "SELECT CAST(:run_id AS uuid), t.rid, CAST(:map_version AS smallint), t.rc, t.o "
+    "FROM unnest(CAST(:rids AS uuid[]), CAST(:rcs AS smallint[]), "
+    "CAST(:outs AS jsonb[])) AS t(rid, rc, o)")
+
+
+async def _flush_results(db, rows: List[Dict[str, Any]]) -> None:
+    """Insert per-record check results in the SAME transaction as the issues.
+
+    One statement per batch (unnest of three arrays) rather than one row per
+    parameter set: the per-row Python and protocol overhead of a 24,589-row
+    executemany was the bulk of the write cost.
+    """
+    if not rows:
+        return
+    await db.execute(_RESULTS_INSERT, {
+        "run_id": rows[0]["run_id"], "map_version": rows[0]["map_version"],
+        "rids": [r["source_record_id"] for r in rows],
+        "rcs": [r["rule_count"] for r in rows],
+        "outs": [json.dumps(r["outcomes"], sort_keys=True, separators=(",", ":"))
+                 for r in rows]})
 
 
 async def issue_summary(db, intake_id, *, run_id=None,

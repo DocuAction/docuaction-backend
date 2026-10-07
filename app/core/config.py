@@ -95,6 +95,21 @@ class Settings(BaseSettings):
     # automatically in either state.
     ENABLE_CONTROLLED_RECHECKS: bool = False
 
+    # Cross-delivery issue history (minimum slice: NPI and partOf/QHIN rules).
+    # Both default False: with both off the quality engine writes exactly what
+    # it wrote before and the history route answers 404.
+    #   ENABLE_RECORD_CHECK_RESULTS  write one rce_record_check_results row per
+    #                                record per run (needs the migration).
+    #   ENABLE_ISSUE_HISTORY         serve GET .../by-oid/{oid}/issue-history.
+    # The two feed lists are comma-separated rce_source_intakes
+    # source_metadata->>'feed' tags each role may read. Empty means NOTHING is
+    # visible to that role (fail closed); reviewer and above also see the
+    # viewer feeds.
+    ENABLE_RECORD_CHECK_RESULTS: bool = False
+    ENABLE_ISSUE_HISTORY: bool = False
+    ISSUE_HISTORY_FEEDS_VIEWER: str = ""
+    ISSUE_HISTORY_FEEDS_REVIEWER: str = ""
+
     # PROPOSED, INACTIVE. Under the active rules an entity is classified B1
     # and marked verified while SAM.gov or CMS-revocation screening was
     # unavailable / never evaluated (only OIG LEIE is required). The gap is
