@@ -100,7 +100,8 @@
   main table.dp-fixed .hash { font-family: "DejaVu Sans Mono", Menlo, Consolas, monospace; font-size: 7pt; overflow-wrap: anywhere; word-break: break-all; hyphens: none; -webkit-hyphens: none; }
   main table.dp-fixed .cd { overflow-wrap: anywhere; word-break: normal; hyphens: none; -webkit-hyphens: none; }
   main table.dp-keep { break-inside: avoid; page-break-inside: avoid; }
-  main table.dp-keep caption { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+  /* Captions stay visible: a 1px clipped caption leaves its glyphs stacked in the PDF text layer (copy/search/screen-reader garbage). */
+  main table.dp-keep caption { text-align: left; font-weight: 700; font-size: 8pt; margin: 0 0 2pt 0; caption-side: top; }
   h2, h3 { break-after: avoid; page-break-after: avoid; }
   main table.dp-tight th, main table.dp-tight td { padding: 1.8pt 4pt; font-size: 8pt; line-height: 1.25; }
   .dp-wide p { font-size: 9pt; }
@@ -108,6 +109,22 @@
   main table.dp-fixed tr { break-inside: avoid; page-break-inside: avoid; }
   main table.dp-fixed thead { display: table-header-group; }
   .dp-appendix-intro { font-size: 8.5pt; color: var(--agt-muted); margin: 0 0 6pt 0; }
+  .dp-wide .agt-pkg { font-size: 8pt; margin: 0 0 6pt 0; }
+  /* Closing portrait pages: keep the accessibility statement whole, and keep the provenance record on ONE page.
+     Both are scoped to this report (the shared base styles are untouched). */
+  .accessibility-statement { break-inside: avoid; page-break-inside: avoid; margin-top: 8pt; }
+  section.appendix { break-inside: avoid; page-break-inside: avoid; }
+  section.appendix table th, section.appendix table td { padding: 2.2pt 6pt; font-size: 8.5pt; line-height: 1.25; }
+  /* Never strand a heading, its lead sentence, or a table caption/header away from the rows they introduce,
+     and never leave one or two rows alone on a page (a table taller than a page still splits, but cleanly). */
+  main h2 + p, main h2 + p + p, main h3 + p { break-after: avoid; page-break-after: avoid; }
+  /* CSS cannot select the paragraph BEFORE a table, so the table asks not to start a page right after one. */
+  main p + table, main h2 + table, main h3 + table { break-before: avoid; page-break-before: avoid; }
+  main table caption { break-after: avoid; page-break-after: avoid; }
+  main table thead, main table thead tr { break-after: avoid; page-break-after: avoid; }
+  main table.dp-fixed tbody tr:nth-child(-n+2) { break-before: avoid; page-break-before: avoid; }
+  main table.dp-fixed tbody tr:nth-last-child(-n+2) { break-before: avoid; page-break-before: avoid; }
+  main table.dp-fixed td.nw { overflow-wrap: normal; }
   .agt-foot .pg::after { content: "Page " counter(page) " of " counter(pages); font-weight: 700; }
 </style>
 
@@ -214,11 +231,15 @@
           <caption>Findings grouped by rule, issue type and severity</caption>
           <thead><tr><th scope="col">Rule</th><th scope="col">Issue type</th><th scope="col">Severity</th><th scope="col" class="num">Count</th></tr></thead>
           <tbody>
-            {% for f in findings.by_code %}
+            {% for f in findings.by_code[:8] %}
             <tr><td class="nw"><b>{{ f.rule_id }}</b></td><td class="q">{{ f.issue_type }}</td><td class="nw">{{ f.severity }}</td><td class="num">{{ f.count|number }}</td></tr>
             {% else %}
             <tr><td>None</td><td>&mdash;</td><td>&mdash;</td><td class="num">0</td></tr>
             {% endfor %}
+            {% if findings.by_code|length > 8 %}
+            {% set rest = findings.by_code[8:] %}
+            <tr><td colspan="3"><i>+ {{ rest|length|number }} more rule(s), listed in Appendix E</i></td><td class="num">{{ rest|sum(attribute='count')|number }}</td></tr>
+            {% endif %}
             <tr class="total"><td colspan="3">Total findings</td><td class="num">{{ findings.total|number }}</td></tr>
           </tbody>
         </table>
@@ -290,28 +311,35 @@
 
       <div class="agt-box"><h2 class="agt-h2">Evidence limitations</h2>
         <ul>
-          {% for item in limitations %}<li>{{ item }}</li>
+          {# Bounded so the cover stays on ONE page: at most three are printed; the rest are counted, and the CSV export carries all of them. #}
+          {% for item in limitations[:3] %}<li>{{ item }}</li>
           {% else %}<li>No limitation was recorded: every section was read from persisted evidence for this delivery.</li>{% endfor %}
+          {% if limitations|length > 3 %}<li><i>+ {{ (limitations|length - 3)|number }} more limitation(s) are stated in the CSV export.</i></li>{% endif %}
         </ul>
       </div>
 
+      {# Required next actions: built as a list so the page can be bounded. At most four conditional actions are printed
+         (in priority order) plus the Program Manager decision, which is always shown; anything cut is counted, never dropped silently. #}
+      {% set acts = [] %}
+      {% if not reconciliation.available %}{% set a %}<li><b>Reconcile the delivery.</b> No snapshot exists, so completeness is unproven.</li>{% endset %}{% set _ = acts.append(a) %}
+      {% elif not reconciliation.passed %}{% set a %}<li><b>Resolve the reconciliation failure</b> ({{ reconciliation.failure_reason or 'no reason recorded' }}).</li>{% endset %}{% set _ = acts.append(a) %}{% endif %}
+      {% if findings.available and findings.open_high %}{% set a %}<li><b>Resolve {{ findings.open_high|number }} open HIGH / CRITICAL finding(s).</b> The delivery cannot be treated as clean until then.</li>{% endset %}{% set _ = acts.append(a) %}{% endif %}
+      {% if ns.attempted == 0 %}{% set a %}<li><b>Run source verification</b> for the {{ ns.eligible|number }} eligible entit{{ 'y' if ns.eligible == 1 else 'ies' }} at NPPES, PECOS, OIG LEIE and SAM.gov. Until then there is no screening result.</li>{% endset %}{% set _ = acts.append(a) %}{% endif %}
+      {% if not readiness.available %}{% set a %}<li><b>Run the source-readiness (preflight) check</b> if the file's fitness to process is to be on record.</li>{% endset %}{% set _ = acts.append(a) %}{% endif %}
+      {% if analyst.counts.open %}{% set a %}<li><b>Analyst review:</b> {{ analyst.counts.open|number }} review record(s) are open and need to be claimed and determined.</li>{% endset %}{% set _ = acts.append(a) %}{% endif %}
+      {% if analyst.counts.claimed %}{% set a %}<li><b>Analyst determination:</b> {{ analyst.counts.claimed|number }} claimed record(s) need a determination.</li>{% endset %}{% set _ = acts.append(a) %}{% endif %}
+      {% if analyst.counts.qa_pending %}{% set a %}<li><b>Independent QA:</b> {{ analyst.counts.qa_pending|number }} determination(s) await approval by a QA reviewer other than the analyst.</li>{% endset %}{% set _ = acts.append(a) %}{% endif %}
       <div class="agt-box"><h2 class="agt-h2">Required next actions</h2>
         <ol>
-          {% if not reconciliation.available %}<li><b>Reconcile the delivery.</b> No snapshot exists, so completeness is unproven.</li>
-          {% elif not reconciliation.passed %}<li><b>Resolve the reconciliation failure</b> ({{ reconciliation.failure_reason or 'no reason recorded' }}).</li>{% endif %}
-          {% if findings.available and findings.open_high %}<li><b>Resolve {{ findings.open_high|number }} open HIGH / CRITICAL finding(s).</b> The delivery cannot be treated as clean until then.</li>{% endif %}
-          {% if ns.attempted == 0 %}<li><b>Run source verification</b> for the {{ ns.eligible|number }} eligible entit{{ 'y' if ns.eligible == 1 else 'ies' }} at NPPES, PECOS, OIG LEIE and SAM.gov. Until then there is no screening result.</li>{% endif %}
-          {% if not readiness.available %}<li><b>Run the source-readiness (preflight) check</b> if the file's fitness to process is to be on record.</li>{% endif %}
-          {% if analyst.counts.open %}<li><b>Analyst review:</b> {{ analyst.counts.open|number }} review record(s) are open and need to be claimed and determined.</li>{% endif %}
-          {% if analyst.counts.claimed %}<li><b>Analyst determination:</b> {{ analyst.counts.claimed|number }} claimed record(s) need a determination.</li>{% endif %}
-          {% if analyst.counts.qa_pending %}<li><b>Independent QA:</b> {{ analyst.counts.qa_pending|number }} determination(s) await approval by a QA reviewer other than the analyst.</li>{% endif %}
+          {% for a in acts[:4] %}{{ a }}
+          {% endfor %}
+          {% if acts|length > 4 %}<li><i>+ {{ (acts|length - 4)|number }} further action(s): see Appendix H (analyst actions) and Appendix E (findings).</i></li>{% endif %}
           <li><b>Program Manager release decision:</b> review this draft, then record the decision in the Report Register.</li>
         </ol>
       </div>
     </div>
   </div>
 
-  <div class="agt-pkg"><b>Package:</b> this report &middot; detailed appendix A&ndash;J (identity and provenance, timeline, reconciliation, dispositions, findings, identifier conflicts, verification detail, analyst actions, lineage, audit note) &middot; CSV export of the same persisted evidence &middot; report {{ snapshot.report_id }}</div>
   <p class="agt-foot">{{ branding.prepared_by }} &middot; Contract {{ branding.contract_number }} &middot; Delivery processing report &middot; {{ delivery.delivery_label or 'Unlabelled delivery' }} &middot; <span class="mark">{% if dev %}DEVELOPMENT / TEST DATA &mdash; NOT FOR GOVERNMENT DELIVERY{% else %}{{ document_status|upper }}{% endif %}</span> &middot; Generated {{ generated_at_display }} &middot; <span class="pg"></span></p>
 </section>
 {% endblock %}
@@ -320,6 +348,7 @@
 
 <div class="dp-wide">
 <p class="dp-appendix-intro">Appendix A&ndash;J: detailed evidence for this delivery. Report {{ snapshot.report_id }} &middot; {{ delivery.delivery_label or 'Unlabelled delivery' }} &middot; {{ document_status }}. Everything on page one is restated here with its identifiers, hashes and timelines.</p>
+<div class="agt-pkg"><b>Package:</b> this report &middot; detailed appendix A&ndash;J (identity and provenance, timeline, reconciliation, dispositions, findings, identifier conflicts, verification detail, analyst actions, lineage, audit note) &middot; CSV export of the same persisted evidence &middot; report {{ snapshot.report_id }}</div>
 <h2>Appendix A. Delivery Identity and provenance</h2>
 <table class="dp-fixed dp-tight">
   {{ cols([28, 72]) }}
@@ -358,12 +387,13 @@
   </tbody>
 </table>
 
+{# A kept-together table that is taller than the room left after its heading and intro is pushed to the next page ALONE, stranding the heading (seen on DA-ARC-2026-067: 17 attempts). Only a short timeline is kept whole; a longer one flows under its heading and may split between rows. #}
 <h2>Appendix B. Processing timeline</h2>
 {% if timeline.available %}
 <p>{{ timeline.summary.attempts|number }} stage attempt(s) recorded.
   {% if timeline.summary.failed_stage %}Failed stage: {{ timeline.summary.failed_stage }}.{% endif %}
   Completed stages: {{ timeline.summary.completed_stages|join(', ') or 'none' }}.</p>
-<table class="dp-fixed">
+<table class="dp-fixed dp-tight{% if timeline.events|length <= 10 %} dp-keep{% endif %}">
   {{ cols([14, 7, 10, 14, 14, 7, 9, 9, 8, 8]) }}
   <caption>Every stage attempt, oldest first</caption>
   <thead>
@@ -420,7 +450,7 @@
   </tbody>
 </table>
 {% if reconciliation.checks %}
-<table class="dp-fixed dp-keep">
+<table class="dp-fixed dp-tight dp-keep">
   {{ cols([28, 14, 58]) }}
   <caption>Reconciliation checks recorded in the snapshot</caption>
   <thead><tr><th scope="col">Check</th><th scope="col">Result</th><th scope="col">Detail</th></tr></thead>
@@ -428,7 +458,7 @@
     {% for c in reconciliation.checks %}
     <tr>
       <th scope="row">{{ c.get('name') or c.get('check') or c.get('id') or loop.index }}</th>
-      <td class="nw">{{ c.get('passed') if c.get('passed') is not none else (c.get('result') or c.get('status') or '—') }}</td>
+      <td class="nw">{% if c.get('passed') is not none %}{{ flag(c.get('passed'), 'Pass', 'Fail') }}{% else %}{{ c.get('result') or c.get('status') or '—' }}{% endif %}</td>
       <td>{{ c.get('detail') or c.get('message') or '' }}</td>
     </tr>
     {% endfor %}
@@ -512,7 +542,7 @@
   {{ findings.open_high|number }} open at HIGH or CRITICAL severity.</p>
 {% if findings.rows %}
 <table class="dp-fixed dp-tight">
-  {{ cols([13, 4, 7, 15, 7, 11, 11, 9, 23]) }}
+  {{ cols([12, 4, 7, 13, 12, 10, 11, 8, 23]) }}
   <caption>Findings &mdash; first {{ findings.rows_shown|number }} of
     {{ findings.rows_total|number }}, open HIGH/CRITICAL first, then by delivered line</caption>
   <thead>
@@ -528,7 +558,7 @@
       <td>{{ f.line_number|number }}</td>
       <td class="nw">{{ f.rule_id }}</td>
       <td class="cd">{{ brk(f.issue_type) }}</td>
-      <td class="nw">{{ f.severity }}</td>
+      <td class="cd">{{ f.severity }}</td>
       <td class="cd">{{ brk(f.field_name or '—') }}</td>
       <td class="cd">{{ brk(f.correction_authority) }}</td>
       <td class="cd">{{ brk(f.resolution) }}</td>

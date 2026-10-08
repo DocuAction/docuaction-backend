@@ -22,6 +22,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
+from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -243,6 +245,47 @@ def _artifacts_summary(finalised: Optional[Dict[str, Any]]) -> Optional[Dict[str
     }
 
 
+#: How long a retry waits for a still-running generation with the same key before answering 409. Kept under the
+#: browser's 30 s request budget so the caller gets a stated reason instead of another timeout.
+GENERATION_LOCK_WAIT_SECONDS = 20.0
+GENERATION_LOCK_POLL_SECONDS = 0.5
+
+
+@asynccontextmanager
+async def _generation_key_lock(key, user_id):
+    """Serialise generation per (principal, idempotency key) with a Postgres advisory lock on a DEDICATED
+    connection (a session-level lock must outlive the request session's commits and pool checkouts)."""
+    if not key:
+        yield
+        return
+    from sqlalchemy import text
+
+    from app.core.database import engine
+
+    token = f"report-generate:{user_id}:{key}"
+    async with engine.connect() as conn:
+        deadline = time.monotonic() + GENERATION_LOCK_WAIT_SECONDS
+        while True:
+            got = (await conn.execute(text("SELECT pg_try_advisory_lock(hashtextextended(:k, 0))"),
+                                      {"k": token})).scalar()
+            if got:
+                break
+            if time.monotonic() >= deadline:
+                raise HTTPException(409, detail={
+                    "code": "REPORT_GENERATION_IN_PROGRESS",
+                    "message": ("A report for this same action is still being generated. Nothing new was started. "
+                                "Check the Report Register in a minute, or press Generate draft again to pick it up."),
+                })
+            await asyncio.sleep(GENERATION_LOCK_POLL_SECONDS)
+        try:
+            yield
+        finally:
+            try:
+                await conn.execute(text("SELECT pg_advisory_unlock(hashtextextended(:k, 0))"), {"k": token})
+            except Exception:  # noqa: BLE001 - the lock dies with the connection anyway
+                pass
+
+
 @router.post("/generate", summary="Generate a report from frozen verification results")
 async def generate(
     request: GenerateReportRequest,
@@ -268,10 +311,24 @@ async def generate(
 
     require_explicit_scope(request.report_type, parameters)
 
-    if request.idempotency_key:
-        replay = await _replay_for_key(db, request.idempotency_key, getattr(user, "id", None))
-        if replay is not None:
-            return replay
+    # One generation per (principal, key) AT A TIME. The replay lookup below reads the audit row written when a
+    # generation FINISHES, so a retry that arrives while the first is still running (the browser gave up at 30 s;
+    # the server did not) used to find nothing and generate a second report. The lock is held on its own
+    # connection for the whole request: the retry waits for the first to finish, then replays it; if the first is
+    # still running after the wait it gets 409 REPORT_GENERATION_IN_PROGRESS, never a duplicate.
+    async with _generation_key_lock(request.idempotency_key, getattr(user, "id", None)):
+        if request.idempotency_key:
+            replay = await _replay_for_key(db, request.idempotency_key, getattr(user, "id", None))
+            if replay is not None:
+                return replay
+        return await _generate_locked(request, parameters, db, user)
+
+
+async def _generate_locked(request, parameters, db, user):
+    from app.reports.generator import (ReportGenerationError, ReportParameterError,
+                                       generate_report)
+
+    from app.core import request_context
 
     try:
         with request_context.bind(idempotency_key=request.idempotency_key):
@@ -790,6 +847,7 @@ async def list_reports(
             # that, wrapped the way it expects.
             "release": current_release({"release": r.release} if r.release else {}),
             "file_stem": file_stem,
+            "formats": supported_formats(r.report_type),
             "source": _source_summary(r.delivery, r.scope),
             "document_marking": document_marking_for(snapshot.get("data_classification")),
             **meta,
@@ -856,6 +914,30 @@ def _stem_for(row, contract=_UNSET) -> str:
         report_id=row.report_id)
 
 
+def supported_formats(report_type: str) -> Dict[str, Any]:
+    """The download formats a report type supports, stated as data so no client has to guess.
+
+    html, csv, pdf and the package (ZIP) exist for every report type. DOCX exists ONLY for the contract
+    deliverables (`SOW_REPORT_TYPES`); a delivery evidence report (`delivery_processing`) has no editable Word
+    form, and `GET /{report_id}/docx` answers 404 for it. A client must not offer DOCX where `available` is false.
+    """
+    from app.reports.data.sow_report_data import SOW_REPORT_TYPES
+
+    contract = report_type in SOW_REPORT_TYPES
+    return {
+        "html": {"available": True},
+        "csv": {"available": True},
+        "pdf": {"available": True,
+                "note": "Rendered by the report engine; refused with a stated reason only where its native "
+                        "libraries are missing."},
+        "package": {"available": True, "note": "ZIP of the available formats with a README and SHA-256 manifest."},
+        "docx": {"available": contract,
+                 "reason": None if contract else (
+                     f"'{report_type}' is a delivery evidence report, not a contract deliverable; "
+                     f"it has no editable Word form.")},
+    }
+
+
 def _listing_extras(r) -> Dict[str, Any]:
     """Deliverable, period and PM release state for one stored report."""
     from app.reports.data.release import current_release
@@ -871,6 +953,7 @@ def _listing_extras(r) -> Dict[str, Any]:
         "period_end": r.period_end,
         "release": current_release(data),
         "file_stem": _stem_for(r),
+        "formats": supported_formats(r.report_type),
         "source": _source_summary(dataset.get("delivery"), dataset.get("scope")),
         "document_marking": document_marking_for(snapshot.get("data_classification")),
         **_deliverable_meta(r.report_type),
@@ -1088,9 +1171,10 @@ async def get_package(
     # evidence in every format at once.
     user=Depends(require_role_audited("reviewer", resource_type="report")),
 ):
-    """ZIP of the stored HTML, the CSV, the PDF where available, a README and a
-    manifest with SHA-256 of every member. Assembled from the STORED report;
-    nothing is regenerated and nothing is transmitted."""
+    """ZIP of the HTML, the CSV, the PDF where available, a README and a manifest with SHA-256 of every
+    member. Each member is the REGISTERED artifact's verified bytes when one exists (so it equals the file
+    downloaded separately); only a report from before artifact registration is assembled from the stored column.
+    Nothing is transmitted."""
     from app.reports.data.release import build_package, current_release
     from app.reports.engine.pdf_engine import pdf_available, render_pdf, unavailable_reason
 
@@ -1098,10 +1182,19 @@ async def get_package(
     data = row.report_data or {}
     snapshot = data.get("snapshot") or {}
     dataset = dict(data.get("dataset") or {})
-    if not row.report_html:
+
+    # CANONICAL SURFACE RULE (QA108-20260927-013): when a registered artifact exists, its verified bytes ARE the
+    # deliverable. The package used to re-render the PDF from the stored HTML on every request, so the PDF it shipped
+    # was a different file from the registered one (same content, different bytes) and its manifest hash could never
+    # equal the hash of the PDF a recipient downloaded separately. Registered bytes first; re-render only when none exist.
+    reg_html = await _registered_bytes(db, report_id, "text/html")
+    reg_csv = await _registered_bytes(db, report_id, "text/csv")
+    reg_pdf = await _registered_bytes(db, report_id, "application/pdf")
+    package_html = reg_html["content"].decode("utf-8") if reg_html else row.report_html
+    if not package_html:
         raise HTTPException(404, f"Report {report_id} has no stored HTML.")
 
-    csv_text = csv_for_stored_report(row)
+    csv_text = (reg_csv["content"].decode("utf-8-sig") if reg_csv else csv_for_stored_report(row))
     stem = _stem_for(row)
     docx_bytes = None
     try:
@@ -1111,16 +1204,18 @@ async def get_package(
 
     pdf_bytes = None
     pdf_reason = None
-    if pdf_available():
+    if reg_pdf is not None:
+        pdf_bytes = reg_pdf["content"]
+    elif pdf_available():
         try:
-            pdf_bytes = await run_in_threadpool(render_pdf, row.report_html, title=stem)
+            pdf_bytes = await run_in_threadpool(render_pdf, package_html, title=stem)
         except Exception as exc:  # noqa: BLE001
             pdf_reason = str(exc)
     else:
         pdf_reason = unavailable_reason()
 
     package = build_package(
-        report_id=report_id, html=row.report_html, csv_text=csv_text,
+        report_id=report_id, html=package_html, csv_text=csv_text,
         pdf_bytes=pdf_bytes, snapshot=snapshot, release=current_release(data),
         deliverable=_deliverable_meta(row.report_type),
         pdf_unavailable_reason=pdf_reason, docx_bytes=docx_bytes, stem=stem)
@@ -1403,7 +1498,10 @@ async def get_report_docx(
         raise HTTPException(404, f"Report {report_id} has no stored dataset.")
     docx_bytes = await run_in_threadpool(docx_for_stored_report, row)
     if docx_bytes is None:
-        raise HTTPException(404, f"Report type '{row.report_type}' has no DOCX form.")
+        supported = ", ".join(k for k, v in supported_formats(row.report_type).items() if v["available"])
+        raise HTTPException(
+            404, f"Report type '{row.report_type}' has no DOCX form (FORMAT_NOT_AVAILABLE). "
+                 f"Supported formats for this report: {supported}.")
     await _audit_download(db, row, "docx", user, job_id=job_id)
     return Response(
         content=docx_bytes, media_type=DOCX_CONTENT_TYPE,
