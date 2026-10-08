@@ -33,6 +33,12 @@ async def main(out_dir: str) -> None:
             await SEEDERS[case](db)
         from issue_history_legacy_2026_10_08 import LEG, LEG_FEED, legacy_settings, seed_legacy
         ids = await seed_legacy(db)
+        from test_issue_history_other_findings_2026_10_08 import add_issue
+        await add_issue(db, ids["jul"], LEG["BOTH"], "CON-005", "1.0.0")
+        await add_issue(db, ids["jul"], LEG["BOTH"], "FMT-001", "1.0.0", field="npi")
+        await add_issue(db, ids["sep"], LEG["BOTH"], "CON-005", "1.3.0")
+        await add_issue(db, ids["sep"], LEG["BOTH"], "ACT-001", "1.3.0", field="active")
+        await db.commit()
         for key in ("BOTH", "SEPONLY"):
             for audience in ("viewer", "reviewer"):
                 resp = await svc.get_issue_history(

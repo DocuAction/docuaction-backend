@@ -133,6 +133,9 @@ jobs:
             tests/test_issue_history_gaps_2026_10_08.py \
             tests/test_issue_history_gaps_db_2026_10_08.py \
             tests/test_issue_history_access_2026_10_08.py \
+            tests/test_issue_history_cases_2026_10_08.py \
+            tests/test_issue_history_legacy_2026_10_08.py \
+            tests/test_issue_history_other_findings_2026_10_08.py \
             -v --tb=short -rs --junitxml=isolation-results.xml
       - name: Fail if any isolation test was skipped for want of a database
         run: |

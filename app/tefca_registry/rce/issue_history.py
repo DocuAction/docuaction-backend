@@ -110,7 +110,7 @@ def issues_query(record_ids: Sequence[Any], with_values: bool):
             m.RceIssue.created_at]
     if with_values:
         cols += [m.RceIssue.original_value, m.RceIssue.suggested_value,
-                 m.RceIssue.resolution_notes]
+                 m.RceIssue.resolution_notes, m.RceIssue.description]
     return (select(*cols).where(m.RceIssue.source_record_id.in_(list(record_ids)))
             .order_by(m.RceIssue.created_at, m.RceIssue.id))
 
@@ -225,7 +225,7 @@ async def get_issue_history(db, oid: str, *, reviewer_or_above: bool, settings,
         run = sel["selected"]
         state = "ABSENT" if not recs else ("DUPLICATE" if len(recs) > 1 else "PRESENT")
         rec = recs[0] if state == "PRESENT" else None
-        run_issues, later = [], []
+        run_issues, later, other = [], [], []
         if state == "PRESENT":
             for issue in issues_by_record.get(rec["id"], []):
                 is_later = (issue["issue_type"] in NON_QUALITY_ISSUE_TYPES
@@ -234,6 +234,8 @@ async def get_issue_history(db, oid: str, *, reviewer_or_above: bool, settings,
                     later.append(issue)
                 elif run is not None and issue["run_id"] == run["id"]:
                     run_issues.append(issue)
+                    if issue["rule_id"] not in core.SLICE_RULE_IDS:
+                        other.append(issue)
         facts = {
             "delivery_id": str(iid), "feed": c["feed"], "intake": c,
             "intake_status": c["status"], "headers": c["headers"] or [],
@@ -247,7 +249,7 @@ async def get_issue_history(db, oid: str, *, reviewer_or_above: bool, settings,
             "history_rows": history_by_run.get(run["id"], []) if run else [],
             "result": (results.get((run["id"], rec["id"]))
                        if run and rec else None),
-            "issues": run_issues, "later_issues": later,
+            "issues": run_issues, "later_issues": later, "other_issues": other,
             "provenance": d,
             "runs_by_id": {r["id"]: r for r in runs_by_intake.get(iid, [])},
             "jobs": jobs_by_intake.get(iid, []),
@@ -452,6 +454,7 @@ def _delivery_entry(facts: Dict[str, Any], cells: List[Dict[str, Any]],
                      "count": len(sel["earlier_completed"]),
                      "run_ids": [str(r["id"]) for r in sel["earlier_completed"]]}},
         "lanes": [_cell_view(cell, reviewer) for cell in cells],
+        "other_findings": _other_view(facts.get("other_issues") or [], reviewer),
         "later_stage_findings": [_later_view(f, reviewer)
                                  for f in core.later_stage_findings(facts)],
     }
@@ -488,6 +491,30 @@ def _cell_view(cell: Dict[str, Any], reviewer: bool) -> Dict[str, Any]:
             view["qa"]["actors"] = {"resolved_by": issue.get("resolved_by"),
                                     "qa_approved_by": issue.get("qa_approved_by")}
     return view
+
+
+OTHER_NOTE = ("Recorded in this delivery under rules that are not shown as lanes. "
+              "They are recorded only: no comparability or recurrence is assessed "
+              "for them.")
+
+
+def _other_view(issues: List[Dict[str, Any]], reviewer: bool) -> Dict[str, Any]:
+    """Every finding of the selected run outside the lanes, preserved as recorded.
+    Never assessed for comparability or recurrence. The finding description and
+    the original value are reviewer-level only."""
+    items = []
+    for i in sorted(issues, key=lambda x: (x["rule_id"], str(x.get("field_name") or ""),
+                                           str(x["id"]))):
+        item: Dict[str, Any] = {
+            "issue_id": str(i["id"]), "rule_id": i["rule_id"],
+            "rule_version": i.get("rule_version"), "field": i.get("field_name"),
+            "severity": i["severity"], "finding_type": i["issue_type"],
+            "recorded_only": True, "recurrence": None, "comparability": None}
+        if reviewer:
+            item["description"] = i.get("description")
+            item["original_value"] = i.get("original_value")
+        items.append(item)
+    return {"count": len(items), "note": OTHER_NOTE, "items": items}
 
 
 def _later_view(f: Dict[str, Any], reviewer: bool) -> Dict[str, Any]:

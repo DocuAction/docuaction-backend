@@ -102,6 +102,21 @@ What the history then shows for the real July and September, with no new data:
 - Caveat not verifiable here: July findings whose rule ids are not among the eight slice rules do not appear in the lanes
   (they are not later-stage findings either). Findings written under 1.0.0 with the slice rule ids appear.
 
+Check results on current DEV: BOTH July (legacy intake) and September (job 0930826c) predate the persisted
+check-result table, which does not exist on DEV. The real history will therefore show "check result not persisted" for
+both and can never show PASS or RECURRING until NEW deliveries are processed with `ENABLE_RECORD_CHECK_RESULTS` on. The
+synthetic screenshots show a September PASS only because the synthetic September was processed with persisted results;
+those screenshots are demonstration, not what real DEV will show.
+
+No DEV intake carries a feed tag (all 61 are untagged), so BOTH July and September need `ISSUE_HISTORY_INTAKE_FEEDS`
+(or the tag script) before either appears.
+
+Other findings: only about 15.7k of July's 36.9k and 16.0k of September's 36.5k recorded findings fall in the eight lanes.
+Every finding of the selected run under any other rule (CON-005, FMT-001, ACT-001, NPI-008 ...) is preserved and listed per
+delivery under "Other findings recorded in this delivery (rules not shown as lanes above)" with rule, rule version, field,
+severity, finding type and a count; description and original value for reviewer level and above only. They are recorded
+only: no comparability or recurrence is computed for them. (Later-stage findings stay in their own block.)
+
 Governed steps only: (1) release of #133 and #72 (migration 20261008 is needed only for FUTURE persisted check
 results, not for showing July and September); (2) operator enablement of `ENABLE_ISSUE_HISTORY`, the viewer/reviewer feed
 lists, and either the feed tag or `ISSUE_HISTORY_INTAKE_FEEDS`; (3) to persist check results for new runs,
