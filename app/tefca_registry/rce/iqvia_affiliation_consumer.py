@@ -42,7 +42,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
 
-from sqlalchemy import func, select, tuple_
+from sqlalchemy import Text, func, literal_column, select, tuple_
 
 from app.services.npi_validator import validate_npi
 from app.tefca_registry import models as reg
@@ -335,14 +335,27 @@ CONFLICT_HCO_MULTIPLE_CCN = "HCO_KEY_CARRIES_MULTIPLE_ORG_CCN"
 CONFLICT_IDENTIFIER_SHARED = "IDENTIFIER_SHARED_BY_MULTIPLE_HCO_KEYS"
 
 
-def _org_npi_expr():
+def _org_identifier_expr(key: str):
+    """nullif(btrim(payload ->> '<key>'), '') with the key and the empty string INLINED as SQL literals.
+
+    This must stay textually identical to the partial expression indexes of migration
+    20261009_iqvia_affil_org_indexes (ix_iqvia_affil_snapshot_org_npi / _org_ccn). If the key were a
+    bind parameter (SQLAlchemy's `payload["ORG_NPI"].astext` renders `payload ->> $2`), a cached
+    GENERIC plan could not match the index and would fall back to a sequential scan (measured:
+    docs/architecture/iqvia_org_first_design.md, 'Verified indexed path (local)'). `key` is only ever
+    one of the two constants below, never caller input."""
+    assert key in ("ORG_NPI", "ORG_CCN_ID")
     obs = sm.IqviaAffiliationObservation
-    return func.nullif(func.btrim(obs.payload["ORG_NPI"].astext), "")
+    return func.nullif(func.btrim(obs.payload.op("->>", return_type=Text)(literal_column(f"'{key}'"))),
+                       literal_column("''"))
+
+
+def _org_npi_expr():
+    return _org_identifier_expr("ORG_NPI")
 
 
 def _org_ccn_expr():
-    obs = sm.IqviaAffiliationObservation
-    return func.nullif(func.btrim(obs.payload["ORG_CCN_ID"].astext), "")
+    return _org_identifier_expr("ORG_CCN_ID")
 
 
 def _provenance(snap) -> Dict[str, Any]:
