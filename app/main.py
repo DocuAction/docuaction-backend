@@ -685,6 +685,8 @@ safe_load("app.tefca_registry.rce.delivery_routes", "tefca-rce-deliveries")
 # unconditionally like the other RCE route modules; the flag controls access,
 # not whether the routes exist at all.
 safe_load("app.tefca_registry.rce.iqvia_routes", "tefca-rce-iqvia")
+# Advisory HCP_AFFIL consumption: router is empty unless ENABLE_IQVIA_AFFILIATION_CONSUMPTION.
+safe_load("app.tefca_registry.rce.iqvia_affiliation_routes", "tefca-rce-iqvia-affiliation")
 
 # DEF-004 governed original-artifact restoration: DEV-only, admin-only,
 # feature-flagged restore of a delivery's preserved original from a
