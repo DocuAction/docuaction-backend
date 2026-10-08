@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 
 from app.tefca_registry.rce import iqvia_import as ii
 from app.tefca_registry.rce import iqvia_routes as routes
@@ -67,6 +67,12 @@ async def db(db_required):
         # the original cannot be deleted while that successor still
         # references it (RESTRICT) -- delete both in one statement, same as
         # `test_iqvia_routes.py`'s fixture.
+        # Teardown of synthetic rows only. source_snapshot is guarded by trg_source_snapshot_guard
+        # (migration 20261006_snapshot_bookkeeping), which refuses to delete a non-PENDING snapshot; the
+        # approved successor row this test created is exactly that. `replica` skips ordinary triggers for
+        # THIS cleanup transaction only (SET LOCAL; superuser-only, which the test role is). It is not a
+        # production path - the application and the runtime role have no such privilege.
+        await cleanup.execute(text("SET LOCAL session_replication_role = replica"))
         await cleanup.execute(delete(sm.SourceSnapshot).where(
             (sm.SourceSnapshot.id.in_(_created_snapshot_ids or [uuid.uuid4()])) |
             (sm.SourceSnapshot.supersedes_snapshot_id.in_(_created_snapshot_ids or [uuid.uuid4()]))))

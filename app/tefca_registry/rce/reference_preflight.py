@@ -73,9 +73,10 @@ REFERENCE_SCHEMAS: Dict[str, Dict[str, Any]] = {
         "expected": {"NPI": "NPI-keyed practitioner matching"},
     },
     sm.SOURCE_IQVIA_AFFILIATION: {
-        "schema_version": "iqvia-hcp-affil/2026-10-02",
+        "schema_version": "iqvia-hcp-affil/2026-10-06",
         "required": ("HCP_HCE_ID", "HCO_HCE_ID"),
-        "expected": {"AFFIL_TYPE_CD": "affiliation-type classification"},
+        "expected": {"AFFL_TYP_ID": "provider-affiliation type classification",
+                     "TITL_TYP_ID": "contact-affiliation title classification"},
     },
 }
 

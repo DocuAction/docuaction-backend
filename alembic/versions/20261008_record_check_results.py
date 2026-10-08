@@ -1,7 +1,7 @@
 """Per-record check results (issue-history minimum slice).
 
 Revision ID: 20261008_record_check_results
-Revises: 20261004_recheck_jobs
+Revises: 20261006_snapshot_bookkeeping
 Create Date: 2026-10-08
 
 WHY THIS EXISTS
@@ -24,10 +24,8 @@ simply have no result rows and are read as "check result not persisted". The
 writer is behind ENABLE_RECORD_CHECK_RESULTS (default off), so applying this
 migration changes no behaviour by itself.
 
-PARENTING NOTE: this revision is parented on the single head on origin/main at
-the time of writing (20261004_recheck_jobs). If PR #122
-(20261006_snapshot_bookkeeping) or any other migration merges first, this
-revision must be re-parented onto the new head before it merges.
+PARENTING NOTE: re-parented on 20261006_snapshot_bookkeeping (origin/main 0cef73b5 head).
+If another migration merges first, re-parent again.
 
 Applied to a local disposable database only under this round's authorization.
 NOT dispatched against any shared or production database.
@@ -41,7 +39,7 @@ from alembic import context, op
 from sqlalchemy.dialects import postgresql
 
 revision = "20261008_record_check_results"
-down_revision = "20261004_recheck_jobs"
+down_revision = "20261006_snapshot_bookkeeping"
 branch_labels = None
 depends_on = None
 

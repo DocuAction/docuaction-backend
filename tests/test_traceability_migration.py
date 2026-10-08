@@ -33,7 +33,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 #: the five evidence tables -- a CHECK constraint is independent of both --
 #: so "upgrade to head" testing those grants stays valid with the head
 #: moved again, same as every prior bump recorded in this comment's history.
-HEAD = "20261008_record_check_results"   # + one append-only per-record result table (SELECT+INSERT) and three nullable rule-history columns; no grant on the five evidence tables
+HEAD = "20261008_record_check_results"   # 20261006 added column-level UPDATE(record_count, metadata) on source_snapshot; this head adds one append-only per-record result table (SELECT+INSERT) and three nullable rule-history columns; no grant on the five evidence tables
 PREVIOUS = "20260915_curated_text_columns"
 MIG_DB = "mig_test"
 OWNER, APP = "docuaction_owner", "docuaction_app"

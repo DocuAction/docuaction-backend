@@ -64,6 +64,7 @@ from app.tefca_registry.rce.source_matching import register_snapshot
 logger = logging.getLogger(__name__)
 
 DEFAULT_CHUNK_SIZE = 5000
+MAX_ROWS_PER_STATEMENT = 100
 _MAX_SAMPLE_REJECTED_LINES = 25
 
 # Column names confirmed against the real delivered layouts (2026-10-02
@@ -175,7 +176,10 @@ async def _stage_rows(
     # COMMIT-frequency knob only, never something it has to get exactly
     # right to avoid this error.
     cols_per_row = max(1, len(rows[0]))
-    max_rows_per_statement = max(1, 32767 // cols_per_row)
+    # ...and, separately, a throughput cap: one statement's cost grows faster than its row count. Measured on
+    # the real 191-column affiliation shape (PostgreSQL 18, 3,000 JSONB rows): 100 rows/statement ~1,100-1,600
+    # rows/s, 400 ~520, 800 ~335, and the previous ~3,600-row statement ~82 rows/s -- 17x slower.
+    max_rows_per_statement = max(1, min(32767 // cols_per_row, MAX_ROWS_PER_STATEMENT))
     staged = 0
     for start in range(0, len(rows), max_rows_per_statement):
         sub = rows[start:start + max_rows_per_statement]
@@ -341,13 +345,67 @@ def _hcp_payload_and_keys(row: Dict[str, str]) -> Optional[Dict[str, Any]]:
     return {"source_record_key": f"{hcp_id}:{addr_id}", "npi": _clean(row.get(HCP_NPI_FIELD))}
 
 
+#: The columns of the real HCP_AFFIL layout (191 wide, delivered 2026-09-21) that carry the RELATIONSHIP and
+#: the identifiers needed to match it. Every row of that file repeats the full HCP and HCO descriptive blocks
+#: (names, birth year, addresses, 84 opening-hours and language columns, ...); storing all 191 columns as JSONB
+#: measured ~3.4 KB/row, ~26 GB for the 7.55M-row file, more than the DEV database has free. The full row is
+#: still hashed into `record_sha256` and the source file's own sha256 is on the snapshot, so any stored row can
+#: be re-verified against the untouched original; only the descriptive duplication is not copied.
+#: Layers, so the owner's projection decision is one switch and every column has a stated purpose
+#: (qa-evidence/2026-10-06-iqvia-affil-assessment/PROJECTION-MATRIX-PR123-2026-10-07.md):
+#:   KEYS_AND_IDS (17)      relationship, identifiers and the match inputs that run today
+#:   ORG_DESCRIPTORS (+8)   organisation name/alias, address and phone: the inputs of the declared
+#:                          name+address+phone method and the reviewer's reading of a candidate
+#:   PERSON_NAMES (+2)      HCP first/last name: display only, personal data, never a match input;
+#:                          OFF unless IQVIA_AFFIL_STORE_PERSON_NAMES=1 (data minimisation)
+AFFILIATION_KEYS_AND_IDS = (
+    "HCP_HCE_ID", "OK_INDV_ID", "NPI", "HCO_HCE_ID", "OK_WKP_ID", "ORG_NPI", "ORG_CCN_ID", "ORG_TAX_ID", "ADDR_ID",
+    "AFFL_TYP_ID", "AFFL_TYP_DESC", "AFFL_GRP_CD", "AFFL_GRP_DESC",
+    "TITL_TYP_ID", "TITL_TYP_DESC", "TITL_CATG_CD", "TITL_CATG_DESC",
+)
+AFFILIATION_ORG_DESCRIPTORS = (
+    "BUS_NM", "DBA_NM", "ADDR_LN_1_TXT", "ADDR_LN_2_TXT", "CITY_NM", "ST_CD", "ZIP5_CD", "TELEPHN_NBR",
+)
+AFFILIATION_PERSON_NAMES = ("FRST_NM", "LAST_NM")
+
+
+def affiliation_payload_columns() -> tuple:
+    """The projection in force: 25 columns by default, 27 with IQVIA_AFFIL_STORE_PERSON_NAMES=1. Read per call
+    (not at import) so the switch is testable and takes effect on the next import."""
+    import os
+    cols = AFFILIATION_KEYS_AND_IDS + AFFILIATION_ORG_DESCRIPTORS
+    if os.getenv("IQVIA_AFFIL_STORE_PERSON_NAMES", "").strip().lower() in ("1", "true", "yes"):
+        cols += AFFILIATION_PERSON_NAMES
+    return cols
+
+
+#: Back-compat name for the layer the importer's keys depend on.
+AFFILIATION_PAYLOAD_COLUMNS = AFFILIATION_KEYS_AND_IDS
+
+
+def _affiliation_kind(row: Dict[str, str]) -> str:
+    """The affiliation's kind, never NULL (a NULL would defeat the table's unique key and let a resumed run
+    insert the same row twice). The real file holds two kinds of relationship: a PROVIDER affiliation
+    (AFFL_TYP_ID, e.g. attending/admitting) and a CONTACT affiliation (TITL_TYP_ID, a person's role at an
+    organisation) -- in the delivered file every row is exactly one of them. AFFIL_TYPE_CD is the earlier
+    synthetic-fixture spelling, still accepted."""
+    provider = _clean(row.get("AFFL_TYP_ID")) or _clean(row.get("AFFIL_TYPE_CD"))
+    if provider:
+        return provider
+    contact = _clean(row.get("TITL_TYP_ID"))
+    return f"CONTACT:{contact}" if contact else "UNTYPED"
+
+
 def _affiliation_payload_and_keys(row: Dict[str, str]) -> Optional[Dict[str, Any]]:
     hcp_key = _clean(row.get(HCP_HCE_FIELD))
     hco_key = _clean(row.get("HCO_HCE_ID"))
     if not hcp_key or not hco_key:
         return None
+    slim = {c: row[c] for c in affiliation_payload_columns() if c in row}
+    if "AFFIL_TYPE_CD" in row:
+        slim["AFFIL_TYPE_CD"] = row["AFFIL_TYPE_CD"]
     return {"hcp_record_key": hcp_key, "hco_record_key": hco_key,
-            "affiliation_type": _clean(row.get("AFFIL_TYPE_CD"))}
+            "affiliation_type": _affiliation_kind(row), "payload": slim}
 
 
 async def import_hco_csv(db, *, file_path, label: str, created_by: str,

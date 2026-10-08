@@ -311,6 +311,16 @@ async def upload_chunk(upload_id: uuid.UUID, index: int, request: Request,
            "missing_chunks": session.total_chunks - len(received)}
 
 
+@router.get("/staging-capacity",
+            summary="Read-only measurement of this container's staging disk and memory (admin; numbers only)")
+async def staging_capacity(user=Depends(require_role("admin"))):
+    """For the IQVIA benchmark: free space of the directory chunked uploads are assembled in, bytes already staged,
+    process RSS and the container memory limit. No paths, file names or data are returned."""
+    from app.tefca_registry.rce import iqvia_staging_capacity as cap
+
+    return cap.measure(upload_dir=str(_UPLOAD_DIR))
+
+
 @router.get("/uploads/{upload_id}",
            summary="Which chunks are still missing -- the resume contract")
 async def upload_status(upload_id: uuid.UUID, db: AsyncSession = Depends(get_db),
@@ -591,6 +601,49 @@ async def match_snapshot(
     return result
 
 
+async def _ensure_durable_original(db, job) -> None:
+    """Preserve the uploaded original in durable storage before staging, and record the locator (or an explicit
+    "not preserved") on the snapshot. Idempotent: a resumed job that already holds a preserved record skips it.
+    The upload runs in a worker thread with its own heartbeat so the reaper does not take a long upload for a
+    dead worker."""
+    import asyncio
+
+    from starlette.concurrency import run_in_threadpool
+
+    from app.core.database import async_session_maker
+    from app.core.storage import original_blob_store as obs
+
+    snapshot = await db.get(sm.SourceSnapshot, job.snapshot_id)
+    meta = dict(snapshot.metadata_ or {})
+    if (meta.get("durable_original") or {}).get("preserved"):
+        return
+    if not obs.configured():
+        record = obs.not_preserved_record("no durable original backend is configured")
+    else:
+        stop = asyncio.Event()
+
+        async def _beat():
+            while not stop.is_set():
+                try:
+                    async with async_session_maker() as hb:
+                        await jobs.heartbeat(hb, job.id, phase="preserving durable original")
+                except Exception:  # noqa: BLE001 - a missed beat must not kill the upload
+                    logger.warning("heartbeat during durable-original upload failed", exc_info=True)
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=60)
+                except asyncio.TimeoutError:
+                    pass
+
+        beat = asyncio.create_task(_beat())
+        try:
+            record = await run_in_threadpool(obs.preserve_file, Path(job.file_path), snapshot.sha256)
+        finally:
+            stop.set()
+            await beat
+    snapshot.metadata_ = {**meta, "durable_original": record}
+    await db.commit()
+
+
 async def run_import_job(job_id: str) -> None:
     """Runs one durable `IqviaImportJob` to completion (or failure).
 
@@ -628,6 +681,9 @@ async def run_import_job(job_id: str) -> None:
                 await db.commit()
 
         try:
+            # Durable original FIRST: when a durable backend is configured, nothing is staged from a file that
+            # could not be preserved (a failure here fails/requeues the job like any other attempt failure).
+            await _ensure_durable_original(db, job)
             summary = await importer(
                 db, file_path=Path(job.file_path), label=job.label,
                 created_by=job.created_by, snapshot_id=job.snapshot_id,
