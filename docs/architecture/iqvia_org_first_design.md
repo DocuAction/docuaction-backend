@@ -1,6 +1,6 @@
 # IQVIA organisation-first lookup: design for review (no migration, nothing deployed)
 
-Status: DRAFT proposal, default-off code in this PR. No migration is included or applied; no snapshot approved; no policy activated. IQVIA remains a PROPOSED supplemental source (S5) pending COR acceptance; staging is not verified coverage.
+Status: DRAFT proposal, default-off code in this PR. No migration is included or applied; no snapshot approved; no policy activated. HHS/ONC supplied the IQVIA data and directed its use as the fifth source (supplemental to S1-S4); staging is not verified coverage, and activation is separate steps (snapshot QA review, then controlled source-policy activation).
 
 ## Why organisation-first
 The immediate use is RCE organisation verification, so the entry point is an organisation identifier (ORG_NPI / ORG_CCN_ID, or the HCO key), not an HCP key. HCP-key lookups stay available but are not sufficient.
@@ -115,6 +115,6 @@ CREATE INDEX ix_iqvia_affil_snapshot_org_ccn ON public.iqvia_affiliation_observa
 
 ## Decisions required before any index or activation
 1. Option A or B (or neither); approval of the migration, window and storage.
-2. COR acceptance of the S5 amendment; QA-lead approval of snapshot afb55a68; source policy status.
+2. QA review of snapshot afb55a68 (QA lead other than the registrant) and the controlled source-policy activation, as separate steps.
 3. Whether registry candidates may be persisted, and how analysts see the (unwired) coverage statement in reports.
 4. HCO (DEMOGRAPHIC) import to DEV, or retire snapshot de35e15a.

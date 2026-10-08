@@ -15,13 +15,11 @@ AFFILIATION source). This module adds the smallest honest read path:
 
 WHAT THIS IS NOT
 ----------------
-* Not a verification source. The methodology documents (ONC design update
-  2026-10-07, "COR-provided entity data, including the IQVIA data extract ...
-  will be used only to identify which entities to review, not as a validation
-  source") and `docs/architecture/iqvia_release1_schema_proposal.md` keep IQVIA
-  out of the contracted verification set. Nothing here changes a bucket, a
-  determination, a report row, B1/B4 policy or the `source_policy` entry
-  (IQVIA stays PROPOSED_INACTIVE).
+* Not yet wired as a verification source, and it activates nothing. HHS/ONC supplied the IQVIA data and
+  directed its use as the fifth source (supplemental to S1-S4: identity and relationship corroboration, never
+  exclusion clearance). Nothing here changes a bucket, a determination, a report row, B1/B4 policy or the
+  `source_policy` entry (IQVIA stays PROPOSED_INACTIVE). Activation is separate steps: QA review of the
+  snapshot, then the controlled source-policy activation. Staging alone is not verified source coverage.
 * Never confirmed. Every outcome is `AUTOMATED_CANDIDATE_NOT_CONFIRMED` and
   `requires_analyst_review` is always True. There is no AUTO_APPROVED outcome.
 * Writes nothing: no EntitySourceMatch row, no relationship row (the design

@@ -4,8 +4,8 @@ Status: DRAFT proposal with code behind a flag. Not approved policy. Does not ap
 
 ## Intended use, traced to the design documents
 * `docs/architecture/iqvia_release1_schema_proposal.md`: affiliation rows are verbatim licensed observations, "never joined to registry tables directly"; "an affiliation row never becomes a `tefca_entity_relationships` row"; organisation links are candidates unless NPI-exact, Type 2, Luhn-valid and unique.
-* Settled intent: IQVIA is the proposed supplemental fifth source (S5), subordinate to S1-S4. The 2026-10-07 revised methodology (AGT review copies; PROPOSED, COR acceptance required) states it is "a supplemental corroboration source (S5) for identity and relationship evidence only", that it "does not replace authoritative sources, does not establish exclusion clearance, and staging IQVIA files does not by itself constitute verified source coverage", and that this "amends the earlier design-document statement that the IQVIA extract is population identification only and not a validation source" (revised document, Source Independence section; Source numbering; Appendix B S5 row; Appendix D; decision C7 "Adopt; staging is not verified coverage"; open key question B6). The older "population-only" sentence (ONC design update 10_07_2026) is therefore superseded by the proposed revision, not the final word, and acceptance by the COR is still pending.
-* Consequence: three layers stay separate. (1) Methodology acceptance: proposed, not accepted. (2) Technical readiness: this PR, default off. (3) Activation: needs snapshot approval and policy decisions below. The code is ADVISORY: it supplies identity/relationship corroboration candidates for analysts and a truthful coverage statement, and nothing that can raise a bucket, mark an entity verified or add a coverage row.
+* Settled direction: HHS/ONC supplied the IQVIA data and directed its use as the fifth source, supplemental to S1-S4 (identity and relationship corroboration; never exclusion clearance; staging is not verified coverage). That direction supersedes the earlier design-update sentence that described the extract as population identification only, and the AGT review copies of the revised methodology record the same S5 wording. No new acceptance gate is introduced here.
+* Consequence: three layers stay separate. (1) Direction to use IQVIA as the fifth source: given. (2) Technical readiness: this PR, default off. (3) Activation: QA review of the staged snapshot, then the controlled source-policy activation, each its own step. The code is ADVISORY: it supplies identity/relationship corroboration candidates for analysts and a truthful coverage statement, and nothing that can raise a bucket, mark an entity verified or add a coverage row.
 
 ## What the code does (`iqvia_affiliation_consumer.py`)
 | Function | Purpose |
@@ -39,9 +39,8 @@ An earlier version of this section said organisation-side lookups had no index. 
 ## Not included, deliberately
 Writing `entity_source_match` rows; flipping `_matching_capability` for AFFILIATION; any report, bucket or `source_policy` change; the stale "no affiliation file exists" wording (candidate follow-up).
 
-## Remaining activation decisions (human)
-1. COR acceptance of the proposed S5 amendment (until accepted, IQVIA is not a contracted verification source and staging is not coverage).
-2. QA-lead approval of snapshot afb55a68 (registrant testadmin@docuaction.io; approver must differ) after durable-original integrity is verified.
-3. `source_policy` IQVIA moving from PROPOSED_INACTIVE (needs COR position).
-4. Whether any organisation candidate may be persisted as `entity_source_match` CANDIDATE rows, and index/storage approval for org-side lookup.
-5. Whether a report coverage row for IQVIA is wanted, and its wording (this PR provides the truthful statement function only).
+## Remaining activation steps (separate, each its own step)
+1. QA review of snapshot afb55a68 by a QA lead other than the registrant (testadmin@docuaction.io), after durable-original integrity is verified. Approval is explicit and is not implied by deployment.
+2. Controlled `source_policy` activation for IQVIA (currently PROPOSED_INACTIVE), after the snapshot is approved.
+3. Whether any organisation candidate may be persisted as `entity_source_match` CANDIDATE rows, and index/storage approval for org-side lookup.
+4. Whether a report coverage row for IQVIA is wanted, and its wording (this PR provides the truthful statement function only).
