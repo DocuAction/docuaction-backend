@@ -1104,6 +1104,8 @@ async def _audit_download(db, row, fmt: str, user, **extra) -> None:
 class ReleaseRequest(BaseModel):
     action: str = Field(description="PM_REVIEWED | READY_FOR_DELIVERY | RETURNED_TO_DRAFT")
     note: str = Field(default="", max_length=2000)
+    #: PROPOSAL (O-01). Only consulted when ENABLE_RELEASE_READ_ACK is on.
+    acknowledge_read: bool = False
 
 
 @router.get("/{report_id}/release", summary="Release status and decision history")
@@ -1139,11 +1141,35 @@ async def post_release(
 
     row = await _stored(db, report_id)
     actor = getattr(user, "email", None) or "SYSTEM"
+
+    # A3 PROPOSAL (O-01), both controls default OFF: generator != releaser and
+    # an explicit read acknowledgement. Refusals carry a machine code.
+    from app.tefca_registry import qa_controls
+    separation = qa_controls.flag("ENABLE_RELEASE_GENERATOR_SEPARATION")
+    read_ack = qa_controls.flag("ENABLE_RELEASE_READ_ACK")
+    if separation or read_ack:
+        snapshot = ((row.report_data or {}).get("snapshot") or {})
+        denial = qa_controls.release_denial(
+            action=request.action, generator_id=getattr(row, "generated_by", None),
+            generator_email=snapshot.get("generated_by"),
+            actor_id=getattr(user, "id", None), actor_email=actor,
+            acknowledge_read=request.acknowledge_read,
+            separation_enabled=separation, read_ack_enabled=read_ack)
+        if denial:
+            await qa_controls.audit_denial(
+                db, action="report_release_denied", code=denial, user=user,
+                metadata={"report_id": report_id, "release_action": request.action})
+            raise HTTPException(**qa_controls.denial_http(
+                f"report release refused ({denial}); see "
+                f"docs/A3-qa-independence-and-deadline-controls.md", denial))
     try:
         new_data, entry = apply_transition(
             row.report_data, action=request.action, actor=actor, note=request.note)
     except ReleaseTransitionError as exc:
-        raise HTTPException(409, str(exc))
+        raise HTTPException(409, str(exc), headers={
+            "X-Denial-Code": qa_controls.RELEASE_TRANSITION_REFUSED})
+    if read_ack and entry["status"] == "READY_FOR_DELIVERY":
+        entry["read_acknowledged"] = True
 
     row.report_data = new_data
     flag_modified(row, "report_data")
