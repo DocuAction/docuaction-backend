@@ -109,7 +109,8 @@ async def _rows(db, statement) -> List[Dict[str, Any]]:
 
 async def get_issue_history(db, oid: str, *, reviewer_or_above: bool, settings,
                             limit: int = DEFAULT_LIMIT,
-                            before: Optional[Any] = None) -> Dict[str, Any]:
+                            before: Optional[Any] = None,
+                            allowed_modules: Optional[Any] = None) -> Dict[str, Any]:
     """The history response for one OID, or `HistoryNotFound`."""
     from app.tefca_registry.rce.delivery_job_model import RceDeliveryJob
     from app.tefca_registry.rce.quality_rules import NON_QUALITY_ISSUE_TYPES
@@ -119,6 +120,9 @@ async def get_issue_history(db, oid: str, *, reviewer_or_above: bool, settings,
         reviewer_or_above=reviewer_or_above,
         viewer_setting=getattr(settings, "ISSUE_HISTORY_FEEDS_VIEWER", ""),
         reviewer_setting=getattr(settings, "ISSUE_HISTORY_FEEDS_REVIEWER", ""))
+    # Account-level narrowing (`feed:<TAG>` entries in users.allowed_modules):
+    # role feeds INTERSECT account feeds; never widens.
+    feeds = core.narrow_feeds(feeds, allowed_modules)
     if not feeds:
         raise HistoryNotFound(0)
 
@@ -235,6 +239,8 @@ async def get_issue_history(db, oid: str, *, reviewer_or_above: bool, settings,
 
     entries: List[Dict[str, Any]] = []
     all_cells: List[Dict[str, Any]] = []
+    gap_rows: List[Dict[str, Any]] = []
+    failed_intakes = [i for i in intakes if i.get("status") == "FAILED"]
     for feed, items in cut.items():
         lane_cells = {rule: core.build_lane_cells(items, rule, field)
                       for rule, field in core.SLICE_LANES}
@@ -242,6 +248,11 @@ async def get_issue_history(db, oid: str, *, reviewer_or_above: bool, settings,
             cells = [lane_cells[rule][idx] for rule, _ in core.SLICE_LANES]
             all_cells.extend(cells)
             entries.append(_delivery_entry(facts, cells, reviewer_or_above))
+        gap_rows.extend(core.sequence_gaps(
+            feed, items,
+            {f["delivery_id"]: [lane_cells[r][i] for r, _ in core.SLICE_LANES]
+             for i, f in enumerate(items)},
+            failed_intakes))
 
     entries.sort(key=lambda e: (e["_sort"], e["delivery_id"]))
     for e in entries:
@@ -260,6 +271,18 @@ async def get_issue_history(db, oid: str, *, reviewer_or_above: bool, settings,
     gaps = [g for g in core.gaps_from_lanes(all_cells)
             if g["to_delivery_id"] in page_ids]
 
+    window_start = page[0]["received_at"] if page else None
+    window_end = page[-1]["received_at"] if page else None
+    sequence_gaps = []
+    for g in gap_rows:
+        at = _iso(g["received_at"])
+        if g["delivery_id"] is not None:
+            keep = g["delivery_id"] in page_ids
+        else:
+            keep = (window_start is not None and window_start <= at <= window_end)
+        if keep:
+            sequence_gaps.append({**g, "received_at": at})
+
     feed_names = sorted(cut)
     response = {
         "oid": oid,
@@ -268,6 +291,7 @@ async def get_issue_history(db, oid: str, *, reviewer_or_above: bool, settings,
             else "feeds " + ", ".join(feed_names)),
         "deliveries": page,
         "gaps": gaps,
+        "sequence_gaps": sequence_gaps,
         "paging": {"limit": limit, "earlier_available": start > 0,
                    "next_before": (page[0]["delivery_id"] if page and start > 0
                                    else None)},

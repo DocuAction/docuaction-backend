@@ -86,6 +86,8 @@ R_REQUIRES = "REQUIRES_CHANGED"
 R_SCHEMA = "SCHEMA_CHANGED"
 R_COVERAGE = "COVERAGE_NOT_RECORDED"
 R_REGISTRY = "REGISTRY_STATE_DIFFERS"
+R_SCOPE = "RULE_SCOPE_CHANGED"
+R_SOURCE_UNAVAILABLE = "SOURCE_UNAVAILABLE"
 REGISTRY_NOTE = ("The registry state differed between these runs, so a pass is not "
                  "comparable to this finding.")
 R_EXTERNAL = "EXTERNAL_COVERAGE_NOT_TRACKED_PER_RULE"
@@ -132,6 +134,43 @@ def allowed_feeds(*, reviewer_or_above: bool, viewer_setting: Optional[str],
     if reviewer_or_above:
         feeds |= set(parse_feed_list(reviewer_setting))
     return frozenset(feeds)
+
+
+FEED_MODULE_PREFIX = "feed:"
+
+
+def user_feed_tags(allowed_modules) -> Optional[Tuple[str, ...]]:
+    """Per-ACCOUNT feed entries from `users.allowed_modules` (`feed:<TAG>`).
+
+    None  = the account carries no `feed:` entry: the role's feeds apply
+            unchanged (no account-level narrowing configured).
+    tuple = the account IS narrowed to these tags (possibly an empty tuple
+            when every `feed:` entry is blank: that narrows to nothing).
+    Anything that is not a list of strings is treated as "no entries" only when
+    it is empty/absent; a malformed non-empty value narrows to nothing (fail
+    closed) rather than being ignored.
+    """
+    if allowed_modules is None:
+        return None
+    if not isinstance(allowed_modules, (list, tuple)):
+        return ()
+    tags: List[str] = []
+    seen_entry = False
+    for item in allowed_modules:
+        if isinstance(item, str) and item.startswith(FEED_MODULE_PREFIX):
+            seen_entry = True
+            tag = item[len(FEED_MODULE_PREFIX):].strip()
+            if tag and tag not in tags:
+                tags.append(tag)
+    return tuple(tags) if seen_entry else None
+
+
+def narrow_feeds(feeds: frozenset, allowed_modules) -> frozenset:
+    """Role feeds INTERSECT account feeds. Narrows only; never widens."""
+    tags = user_feed_tags(allowed_modules)
+    if tags is None:
+        return feeds
+    return frozenset(feeds & set(tags))
 
 
 # ── 2.3 (REVISED) distinct deliveries, identical content kept distinct ───────
@@ -233,6 +272,21 @@ def _coverage_recorded(coverage) -> bool:
     return isinstance(coverage, dict) and coverage.get("registry_watermark") is not None
 
 
+def _source_unavailable(rule_id: str, coverage) -> bool:
+    """Every dataset a reference-dependent rule resolves against was EMPTY.
+
+    INT-002 resolves partOf against the delivery's own ids, the registry OID
+    namespace and the QHIN OIDs. When the run recorded ALL THREE as holding zero
+    identifiers, a PASS proves nothing: nothing could have been found wanting.
+    It is shown as unavailable, never as clear. Only explicit recorded zeros
+    count; a missing count is handled by the coverage-not-recorded rule.
+    """
+    if rule_id != "INT-002" or not isinstance(coverage, dict):
+        return False
+    counts = [coverage.get(k) for k in ("delivery_ids", "registry_oids", "qhin_oids")]
+    return all(isinstance(c, int) and c == 0 for c in counts)
+
+
 def raw_check(facts: Dict[str, Any], rule_id: str, field: str) -> Dict[str, Any]:
     """The persisted check evidence for one rule in one delivery. No inference.
 
@@ -245,7 +299,8 @@ def raw_check(facts: Dict[str, Any], rule_id: str, field: str) -> Dict[str, Any]
     comparability.
     """
     base = {"outcome": OUT_NOT_AVAILABLE, "reason": None, "usable": False,
-            "rule_version": None, "requires_hash": None,
+            "rule_version": None, "requires_hash": None, "scope": None,
+            "source_unavailable": False,
             "coverage_recorded": False, "registry_watermark": None,
             "header_has_field": False,
             "issues": []}
@@ -267,6 +322,8 @@ def raw_check(facts: Dict[str, Any], rule_id: str, field: str) -> Dict[str, Any]
     if hist is not None:
         out.update(rule_version=hist["rule_version"],
                    requires_hash=hist.get("requires_hash"),
+                   scope=hist.get("scope"),
+                   source_unavailable=_source_unavailable(rule_id, hist.get("coverage")),
                    coverage_recorded=_coverage_recorded(hist.get("coverage")),
                    registry_watermark=(hist.get("coverage") or {}).get("registry_watermark"))
 
@@ -288,6 +345,8 @@ def raw_check(facts: Dict[str, Any], rule_id: str, field: str) -> Dict[str, Any]
     if code == rcr.CODE_FINDING:
         return {**out, "outcome": OUT_FAIL, "usable": True}
     if code == rcr.CODE_PASS:
+        if out["source_unavailable"]:
+            return {**out, "outcome": OUT_PASS, "reason": R_SOURCE_UNAVAILABLE}
         return {**out, "outcome": OUT_PASS, "usable": True}
     if code == rcr.CODE_NOT_APPLICABLE:
         reason = (R_FIELD_ABSENT
@@ -313,6 +372,8 @@ def compare_identity(a: Dict[str, Any], b: Dict[str, Any], rule_id: str
         return R_VERSION
     if a["requires_hash"] != b["requires_hash"]:
         return R_REQUIRES
+    if a.get("scope") != b.get("scope"):
+        return R_SCOPE
     if rule_id == "INT-002":
         if not (a["coverage_recorded"] and b["coverage_recorded"]):
             return R_COVERAGE
@@ -523,6 +584,78 @@ def gaps_from_lanes(lane_cells: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]
                          "to_delivery_id": cell["delivery_id"],
                          "text": GAP_TEXT})
     return gaps
+
+
+# ── explicit sequence gaps ───────────────────────────────────────────────────
+
+K_FAILED_INTAKE = "DELIVERY_NOT_PROCESSED"
+K_NO_RUN = "NO_COMPLETED_RUN"
+K_ABSENT = "ENTITY_ABSENT_OR_REKEYED"
+K_DUP = "DUPLICATE_OID_IN_DELIVERY"
+K_SOURCE = "SOURCE_UNAVAILABLE"
+K_RULE_ERROR = "RULE_ERROR"
+K_RULE_SKIPPED = "RULE_SKIPPED"
+
+GAP_KIND_TEXT = {
+    K_FAILED_INTAKE: ("A delivery in this feed failed intake and was not processed; "
+                      "nothing is known about this entity in it. It is not a pass."),
+    K_NO_RUN: ("No completed check run exists for this delivery; nothing is known "
+               "about this entity in it. It is not a pass."),
+    K_ABSENT: ("This entity key is not in this delivery. The history does not assume "
+               "the entity was removed, re-keyed, or clear; it is a gap."),
+    K_DUP: ("This entity key appears more than once in this delivery, so no single "
+            "result is shown. It is not a pass."),
+    K_SOURCE: ("The reference source this check resolves against was empty when the "
+               "delivery was checked, so a pass here is not a clear result."),
+    K_RULE_ERROR: "The rule failed to run for this record. It is not a pass.",
+    K_RULE_SKIPPED: "The rule was skipped for this record. It is not a pass.",
+}
+_LANE_REASON_KIND = {R_SOURCE_UNAVAILABLE: K_SOURCE, R_RULE_ERROR: K_RULE_ERROR,
+                     R_SKIPPED: K_RULE_SKIPPED}
+
+
+def sequence_gaps(feed: str, items: Sequence[Dict[str, Any]],
+                  cells_by_delivery: Dict[str, Sequence[Dict[str, Any]]],
+                  failed_intakes: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Every place the visible sequence has NO usable evidence, stated outright.
+
+    Never inferred from the absence of a finding. `items` are one feed's
+    deliveries (oldest first) from the first one that carries the entity.
+    FAILED intakes of the same feed received after that point are listed as
+    their own gaps (they are not deliveries). Entries are metadata only.
+    """
+    out: List[Dict[str, Any]] = []
+    if not items:
+        return out
+    first_at = items[0]["intake"]["received_at"]
+    for facts in items:
+        at = facts["intake"]["received_at"]
+        did = facts["delivery_id"]
+        kind = None
+        if facts["selected_run"] is None:
+            kind = K_NO_RUN
+        elif facts["record_state"] == "ABSENT":
+            kind = K_ABSENT
+        elif facts["record_state"] == "DUPLICATE":
+            kind = K_DUP
+        if kind:
+            out.append({"kind": kind, "feed": feed, "delivery_id": did,
+                        "received_at": at, "rule_id": None, "field": None,
+                        "text": GAP_KIND_TEXT[kind]})
+        for cell in cells_by_delivery.get(did, ()):
+            kind = _LANE_REASON_KIND.get(cell["check"].get("reason"))
+            if kind:
+                out.append({"kind": kind, "feed": feed, "delivery_id": did,
+                            "received_at": at, "rule_id": cell["rule_id"],
+                            "field": cell["field"], "text": GAP_KIND_TEXT[kind]})
+    for intake in failed_intakes:
+        if intake.get("feed") == feed and intake["received_at"] >= first_at:
+            out.append({"kind": K_FAILED_INTAKE, "feed": feed, "delivery_id": None,
+                        "received_at": intake["received_at"], "rule_id": None,
+                        "field": None, "text": GAP_KIND_TEXT[K_FAILED_INTAKE]})
+    out.sort(key=lambda g: (g["received_at"], g["kind"], g["rule_id"] or "",
+                            g["delivery_id"] or ""))
+    return out
 
 
 # ── guard ────────────────────────────────────────────────────────────────────

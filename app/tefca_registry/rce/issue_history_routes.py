@@ -26,7 +26,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import ROLE_HIERARCHY, canonical_role, require_role, role_level
+from app.core.security import (ROLE_HIERARCHY, canonical_role, require_role_audited,
+                               role_level)
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,8 @@ async def issue_history_route(
     before: Optional[str] = Query(None, description="Delivery (intake) id; return "
                                                     "deliveries before it."),
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role("viewer")),
+    # Role floor with an audit row on every 403 (who, role, path; never a value).
+    user=Depends(require_role_audited("viewer", resource_type="issue_history")),
 ):
     from app.core.config import settings
     from app.tefca_registry.rce import issue_history as svc
@@ -86,7 +88,8 @@ async def issue_history_route(
     try:
         result = await svc.get_issue_history(
             db, oid, reviewer_or_above=reviewer, settings=settings,
-            limit=limit, before=before_id)
+            limit=limit, before=before_id,
+            allowed_modules=getattr(user, "allowed_modules", None))
     except svc.HistoryNotFound as exc:
         await _audit_read(db, user, request, role, oid, exc.visible_deliveries)
         raise _not_found()

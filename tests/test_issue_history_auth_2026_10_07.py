@@ -44,9 +44,9 @@ async def _seed():
     out = {}
     try:
         async with async_session_maker() as db:
-            async def one(key, month, feed, oid, npi):
+            async def one(key, month, feed, oid, npi, day=5):
                 rows = [entity_row(oid, npi=npi), filler_row(f"{TAG}{key}")]
-                iid = await seed_delivery(db, rows, received_at=datetime(2026, month, 5),
+                iid = await seed_delivery(db, rows, received_at=datetime(2026, month, day),
                                           feed=feed)
                 await run_engine(db, iid)
                 _IDS["intakes"].append(iid)
@@ -56,7 +56,9 @@ async def _seed():
             await one("syn_aug", 8, SYN, OID_A, GOOD_NPI)
             await one("onc_sep", 9, ONC, OID_A, BAD_LEN_NPI)
             await one("unt_oct", 10, None, OID_A, BAD_LEN_NPI)
-            await one("syn_only", 8, SYN, OID_SYN_ONLY, BAD_LEN_NPI)
+            # day 4: strictly before syn_aug (day 5) so the SYN-only record can never
+            # sort into OID_A's sequence on a random uuid tie-break
+            await one("syn_only", 8, SYN, OID_SYN_ONLY, BAD_LEN_NPI, day=4)
             await one("untagged", 9, None, OID_UNTAGGED, BAD_LEN_NPI)
     finally:
         settings.ENABLE_RECORD_CHECK_RESULTS = False
