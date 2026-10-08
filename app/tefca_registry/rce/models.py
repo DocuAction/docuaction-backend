@@ -33,6 +33,7 @@ from sqlalchemy import (
     Integer, String, Text, UniqueConstraint, func, text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import deferred
 
 from app.core.database import Base
 
@@ -239,6 +240,14 @@ class RceRuleExecutionHistory(Base):
     error = Column(Text)
     executed_by = Column(Text, nullable=False, server_default=text("'SYSTEM'"))
     created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    #: Issue-history slice (migration 20261008_record_check_results). NULLABLE
+    #: and DEFERRED: the ORM never selects them implicitly, so a database that
+    #: has not applied the migration keeps working with the flag off, and the
+    #: columns are only touched when ENABLE_RECORD_CHECK_RESULTS is on.
+    requires_hash = deferred(Column(String(64), nullable=True))
+    scope = deferred(Column(String(16), nullable=True))
+    coverage = deferred(Column(JSONB, nullable=True))
 
     __table_args__ = (
         UniqueConstraint("run_id", "rule_id", name="uq_rce_rule_exec_run_rule"),

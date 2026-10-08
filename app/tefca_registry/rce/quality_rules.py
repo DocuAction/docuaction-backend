@@ -131,6 +131,26 @@ class Rule:
     #: written by later stages (NPPES outcomes, identifier conflicts) so that
     #: the one ledger can name their rule id, version and severity.
     stage: str = "QUALITY"
+    #: Applicability declaration (issue-history slice). All optional: a rule
+    #: with `applies=None` is UNDECLARED and its per-record outcome is "U"
+    #: (unqualified), never a pass. `applies(ctx)` is a pure predicate that
+    #: must be True whenever `evaluate(ctx)` can return a finding; a rule it
+    #: marks not-applicable must return no finding (checked by a consistency
+    #: test over a fixture corpus). The declaration is part of the rule's
+    #: identity for comparability: see `declaration_hash`.
+    applies: Optional[Callable[["RecordContext"], bool]] = None
+    #: Delivered fields that must be non-empty for the rule to apply.
+    requires_fields: Tuple[str, ...] = ()
+    #: In-delivery facts the rule reads (keys of `RecordContext.dataset`).
+    requires_dataset: Tuple[str, ...] = ()
+    #: "RECORD" (evaluated per record) or "RUN" (population level).
+    scope: str = "RECORD"
+    #: Outside sources the rule depends on. Empty for QUALITY rules.
+    external_sources: Tuple[str, ...] = ()
+
+    @property
+    def declared(self) -> bool:
+        return self.applies is not None
 
     def severity(self) -> str:
         return SEVERITY_OVERRIDES.get(self.rule_id, self.default_severity)
@@ -959,6 +979,42 @@ def _bus_003(ctx: RecordContext) -> List[Finding]:
         NO_CORRECTION, field_name="partOf", original_value=ctx.get("partOf"))]
 
 
+# ── applicability predicates (issue-history slice: 8 rules) ──────────────────
+#
+# Each predicate answers "could this rule have said anything about this
+# record?" and must be True whenever the rule's `evaluate` can return a
+# finding. They are deliberately conservative where a rule fires on an EMPTY
+# value (NPI-001, INT-001, INT-002 report absence as a finding, so they apply
+# to every record, parsed or not). NPI-004 and NPI-003 apply only on the shapes
+# their rules evaluate: a 9-character value is NOT a pass for NPI-004, it is
+# not applicable ("format was not evaluated because the length is wrong").
+
+def _applies_every_record(ctx: RecordContext) -> bool:
+    return True
+
+
+def _applies_npi_present(ctx: RecordContext) -> bool:
+    return bool(ctx.get("NPI"))
+
+
+def _applies_npi_format(ctx: RecordContext) -> bool:
+    value = ctx.get("NPI")
+    return bool(value) and "," not in value and len(value) == 10
+
+
+def _applies_npi_checksum(ctx: RecordContext) -> bool:
+    value = ctx.get("NPI")
+    return bool(value) and bool(NPI_FORMAT.match(value))
+
+
+def _applies_subparticipant_with_parent(ctx: RecordContext) -> bool:
+    return ctx.get("sequoiaorgtype") == "Subparticipant" and bool(ctx.get("partOf"))
+
+
+def _applies_participant(ctx: RecordContext) -> bool:
+    return ctx.get("sequoiaorgtype") == "Participant"
+
+
 # ── the rule set ─────────────────────────────────────────────────────────────
 
 RULES: Tuple[Rule, ...] = (
@@ -975,12 +1031,14 @@ RULES: Tuple[Rule, ...] = (
     Rule("ID-006", CAT_IDENTIFIER, "1.0.0",
          "TEFCAID shared across records", _id_006, INFO),
     Rule("NPI-001", CAT_NPI, "1.2.0", "NPI supplied (required by profile, "
-         "else recorded)", _npi_001, INFO),
+         "else recorded)", _npi_001, INFO,
+         applies=_applies_every_record),
     Rule("NPI-002", CAT_NPI, "1.2.0", "NPI length (and single value)", _npi_002,
-         HIGH),
-    Rule("NPI-004", CAT_NPI, "1.2.0", "NPI numeric format", _npi_004, HIGH),
+         HIGH, applies=_applies_npi_present, requires_fields=("NPI",)),
+    Rule("NPI-004", CAT_NPI, "1.2.0", "NPI numeric format", _npi_004, HIGH,
+         applies=_applies_npi_format, requires_fields=("NPI",)),
     Rule("NPI-003", CAT_NPI, "1.2.0", "NPI check digit (Luhn 80840)", _npi_003,
-         HIGH),
+         HIGH, applies=_applies_npi_checksum, requires_fields=("NPI",)),
     Rule("REQ-001", CAT_REQUIRED, "1.0.0",
          "sequoiaorgtype present and known", _req_001, CRITICAL),
     Rule("REQ-002", CAT_REQUIRED, "1.0.0", "Name present", _req_002, CRITICAL),
@@ -1007,17 +1065,23 @@ RULES: Tuple[Rule, ...] = (
     Rule("CON-005", CAT_CONTENT, "1.0.0",
          "address_text is a label, not an address", _con_005, INFO),
     Rule("INT-001", CAT_INTEGRITY, "1.0.0",
-         "orgManagingOrg present", _int_001, HIGH),
+         "orgManagingOrg present", _int_001, HIGH,
+         applies=_applies_every_record),
     Rule("INT-002", CAT_INTEGRITY, "1.3.0",
-         "partOf resolves (delivery, registry or QHIN)", _int_002, MEDIUM),
+         "partOf resolves (delivery, registry or QHIN)", _int_002, MEDIUM,
+         applies=_applies_every_record,
+         requires_dataset=("known_source_ids", "qhin_oids", "registry_oids")),
     Rule("INT-003", CAT_INTEGRITY, "1.0.0",
-         "Subparticipant parented to a Participant", _int_003, MEDIUM),
+         "Subparticipant parented to a Participant", _int_003, MEDIUM,
+         applies=_applies_subparticipant_with_parent,
+         requires_fields=("partOf",)),
     Rule("BUS-001", CAT_BUSINESS, "1.0.0",
          "Non-provider organisation signal", _bus_001, INFO),
     Rule("BUS-002", CAT_BUSINESS, "1.0.0",
          "Test-artefact detection", _bus_002, MEDIUM),
     Rule("BUS-003", CAT_BUSINESS, "1.0.0",
-         "Participant parent is its QHIN", _bus_003, INFO),
+         "Participant parent is its QHIN", _bus_003, INFO,
+         applies=_applies_participant),
     # ── 1.3.0 September 2026 snapshot ──
     Rule("SCH-003", CAT_SCHEMA, "1.3.0",
          "Source `id` unique within the delivery (1:1 join key)", _sch_003, CRITICAL),
@@ -1151,6 +1215,26 @@ def rule_config_hash() -> str:
     payload = json.dumps(
         [{"rule_id": r.rule_id, "version": r.version, "severity": r.severity(),
           "category": r.category} for r in RULES],
+        sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def declaration_hash(rule: "Rule") -> Optional[str]:
+    """SHA-256 over what a rule REQUIRES (not what it concludes), or None.
+
+    Deterministic: sorted keys, tuples as lists, no timestamps. None for an
+    undeclared rule, so "no declaration" can never hash equal to a declaration.
+    Rule id and version are deliberately outside the hash: comparability checks
+    them separately and reports a distinct reason for each.
+    """
+    if not rule.declared:
+        return None
+    payload = json.dumps(
+        {"rule_id": rule.rule_id,
+         "requires_fields": list(rule.requires_fields),
+         "requires_dataset": list(rule.requires_dataset),
+         "scope": rule.scope,
+         "external_sources": list(rule.external_sources)},
         sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 

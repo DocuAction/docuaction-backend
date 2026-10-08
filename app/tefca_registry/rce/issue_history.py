@@ -1,0 +1,548 @@
+"""Cross-delivery issue history for one entity OID: the thin database layer.
+
+All classification lives in `issue_history_core` (pure). This module only
+(1) resolves the caller's allowed feeds, (2) reads the rows inside them with a
+fixed number of indexed queries, (3) builds the plain-dict facts the core
+classifies, and (4) serialises through an ALLOWLIST per audience.
+
+ACCESS IS ENFORCED HERE, NOT IN THE FRONTEND (fail closed)
+    The first thing a read does is resolve the allowed intake set from
+    `rce_source_intakes.source_metadata->>'feed'`. Every later query joins only
+    inside that set. An intake with no feed tag is in no set. No allowed feed,
+    an OID found only in a feed the caller may not read, and an OID nobody
+    delivered all raise the SAME `HistoryNotFound`; the response never carries
+    a count or placeholder for hidden deliveries.
+
+QUERY SHAPE (criterion 7: at most 4 queries per delivery, all index-served)
+    intakes in allowed feeds            1 query
+    records with source_rce_id = OID    1 query   (ix source_rce_id)
+    runs of the visible intakes         1 query   (ix source_intake_id)
+    rule history of the selected runs   1 query   (ix run_id)
+    result maps by (run, record)        1 query   (primary key)
+    issues of the OID's records         1 query   (ix source_record_id)
+    delivery jobs of the deliveries     1 query   (ix source_intake_id)
+    records without any id (count)      1 query   (ix source_intake_id)
+    other records sharing an NPI        1 query   (only when the record has an NPI)
+    -> at most 9 queries per request, independent of the number of deliveries.
+
+IDENTITY IS EXACT. `source_rce_id = :oid` is string equality: no trimming and no
+case folding, matching `delivery_delta`. A trailing space is a different OID.
+NULL never equals anything, so a record without an id never joins.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, Dict, List, Optional, Sequence
+
+from sqlalchemy import case, func, literal, select, tuple_
+
+from app.tefca_registry.rce import issue_history_core as core
+from app.tefca_registry.rce import models as m
+from app.tefca_registry.rce.record_check_tables import RECORD_CHECK_RESULTS
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_LIMIT = 12
+HARD_CAP = 60
+AUDIT_ACTION = "issue_history_read"
+
+
+class HistoryNotFound(Exception):
+    """Unknown OID, hidden OID and 'no allowed feed' are indistinguishable.
+
+    `visible_deliveries` is for the audit row only and never reaches a response.
+    """
+
+    def __init__(self, visible_deliveries: int = 0):
+        super().__init__("NOT_FOUND")
+        self.visible_deliveries = visible_deliveries
+
+
+def _iso(value) -> Optional[str]:
+    return value.isoformat() if value is not None else None
+
+
+# ── database reads ───────────────────────────────────────────────────────────
+
+def intakes_query(feeds: Sequence[str], legacy: Optional[Dict[str, str]] = None):
+    tag = m.RceSourceIntake.source_metadata["feed"].astext
+    feed = tag
+    if legacy:
+        import uuid as _uuid
+        pairs = []
+        for key, name in legacy.items():
+            try:
+                pairs.append((m.RceSourceIntake.id == _uuid.UUID(key), literal(name)))
+            except ValueError:
+                continue
+        if pairs:
+            # only an UNTAGGED intake can be mapped; a tag always wins
+            feed = func.coalesce(tag, case(*pairs, else_=None))
+    return (select(m.RceSourceIntake.id, m.RceSourceIntake.sha256,
+                   m.RceSourceIntake.received_at, m.RceSourceIntake.received_by,
+                   m.RceSourceIntake.status, m.RceSourceIntake.delivery_label,
+                   m.RceSourceIntake.headers, m.RceSourceIntake.duplicate_content,
+                   m.RceSourceIntake.duplicate_of_intake_id, feed.label("feed"))
+            .where(feed.in_(list(feeds))))
+
+
+def records_query(oid: str, intake_ids: Sequence[Any]):
+    return (select(m.RceSourceRecord.id, m.RceSourceRecord.source_intake_id,
+                   m.RceSourceRecord.parsed)
+            .where(m.RceSourceRecord.source_rce_id == oid,
+                   m.RceSourceRecord.source_intake_id.in_(list(intake_ids))))
+
+
+def results_query(pairs: Sequence[Any]):
+    t = RECORD_CHECK_RESULTS.c
+    return (select(t.run_id, t.source_record_id, t.map_version, t.rule_count, t.outcomes)
+            .where(tuple_(t.run_id, t.source_record_id).in_(list(pairs))))
+
+
+def issues_query(record_ids: Sequence[Any], with_values: bool):
+    cols = [m.RceIssue.id, m.RceIssue.source_record_id, m.RceIssue.run_id,
+            m.RceIssue.rule_id, m.RceIssue.rule_version, m.RceIssue.issue_type,
+            m.RceIssue.severity, m.RceIssue.field_name,
+            m.RceIssue.correction_authority, m.RceIssue.resolution,
+            m.RceIssue.resolved_by, m.RceIssue.resolved_at,
+            m.RceIssue.qa_approved_by, m.RceIssue.qa_approved_at,
+            m.RceIssue.created_at]
+    if with_values:
+        cols += [m.RceIssue.original_value, m.RceIssue.suggested_value,
+                 m.RceIssue.resolution_notes, m.RceIssue.description]
+    return (select(*cols).where(m.RceIssue.source_record_id.in_(list(record_ids)))
+            .order_by(m.RceIssue.created_at, m.RceIssue.id))
+
+
+async def _rows(db, statement) -> List[Dict[str, Any]]:
+    return [dict(r._mapping) for r in (await db.execute(statement)).all()]
+
+
+# ── the read ─────────────────────────────────────────────────────────────────
+
+async def get_issue_history(db, oid: str, *, reviewer_or_above: bool, settings,
+                            limit: int = DEFAULT_LIMIT,
+                            before: Optional[Any] = None,
+                            allowed_modules: Optional[Any] = None) -> Dict[str, Any]:
+    """The history response for one OID, or `HistoryNotFound`."""
+    from app.tefca_registry.rce.delivery_job_model import RceDeliveryJob
+    from app.tefca_registry.rce.quality_rules import NON_QUALITY_ISSUE_TYPES
+
+    limit = max(1, min(int(limit), HARD_CAP))
+    feeds = core.allowed_feeds(
+        reviewer_or_above=reviewer_or_above,
+        viewer_setting=getattr(settings, "ISSUE_HISTORY_FEEDS_VIEWER", ""),
+        reviewer_setting=getattr(settings, "ISSUE_HISTORY_FEEDS_REVIEWER", ""))
+    # Account-level narrowing (`feed:<TAG>` entries in users.allowed_modules):
+    # role feeds INTERSECT account feeds; never widens.
+    feeds = core.narrow_feeds(feeds, allowed_modules)
+    if not feeds:
+        raise HistoryNotFound(0)
+
+    legacy = core.parse_intake_feeds(getattr(settings, "ISSUE_HISTORY_INTAKE_FEEDS", ""))
+    intakes = await _rows(db, intakes_query(sorted(feeds), legacy))
+    deliveries = core.build_deliveries(intakes)
+    if not deliveries:
+        raise HistoryNotFound(0)
+    all_ids = [d["intake"]["id"] for d in deliveries]
+
+    records = await _rows(db, records_query(oid, all_ids))
+    if not records:
+        raise HistoryNotFound(0)
+
+    canonical_ids = all_ids
+    records_by_intake: Dict[Any, List[Dict[str, Any]]] = {}
+    for rec in records:
+        records_by_intake.setdefault(rec["source_intake_id"], []).append(rec)
+
+    runs = await _rows(db, select(
+        m.RceIngestionRun.id, m.RceIngestionRun.source_intake_id,
+        m.RceIngestionRun.run_status.label("status"),
+        m.RceIngestionRun.started_at, m.RceIngestionRun.completed_at,
+        m.RceIngestionRun.rule_set_version, m.RceIngestionRun.error)
+        .where(m.RceIngestionRun.source_intake_id.in_(all_ids)))
+    runs_by_intake: Dict[Any, List[Dict[str, Any]]] = {}
+    for run in runs:
+        runs_by_intake.setdefault(run["source_intake_id"], []).append(run)
+
+    # Each delivery's results are read from its own intake only.
+    selection = {d["intake"]["id"]: core.select_runs(
+        runs_by_intake.get(d["intake"]["id"], [])) for d in deliveries}
+    selected_run_ids = [s["selected"]["id"] for s in selection.values() if s["selected"]]
+
+    history_by_run: Dict[Any, List[Dict[str, Any]]] = {}
+    if selected_run_ids:
+        for row in await _rows(db, select(
+                m.RceRuleExecutionHistory.run_id, m.RceRuleExecutionHistory.rule_id,
+                m.RceRuleExecutionHistory.rule_version,
+                m.RceRuleExecutionHistory.execution_status,
+                m.RceRuleExecutionHistory.requires_hash,
+                m.RceRuleExecutionHistory.scope,
+                m.RceRuleExecutionHistory.coverage)
+                .where(m.RceRuleExecutionHistory.run_id.in_(selected_run_ids))):
+            history_by_run.setdefault(row["run_id"], []).append(row)
+
+    # (run, record) pairs and the records whose issues are needed.
+    pairs, record_ids = [], []
+    for d in deliveries:
+        iid = d["intake"]["id"]
+        recs = records_by_intake.get(iid, [])
+        record_ids.extend(r["id"] for r in recs)
+        run = selection[iid]["selected"]
+        if run and len(recs) == 1:
+            pairs.append((run["id"], recs[0]["id"]))
+    results: Dict[Any, Dict[str, Any]] = {}
+    if pairs:
+        for row in await _rows(db, results_query(pairs)):
+            results[(row["run_id"], row["source_record_id"])] = row
+    issues_by_record: Dict[Any, List[Dict[str, Any]]] = {}
+    if record_ids:
+        for row in await _rows(db, issues_query(record_ids, reviewer_or_above)):
+            issues_by_record.setdefault(row["source_record_id"], []).append(row)
+    jobs_by_intake: Dict[Any, List[Dict[str, Any]]] = {}
+    for row in await _rows(db, select(RceDeliveryJob.id, RceDeliveryJob.source_intake_id,
+                                      RceDeliveryJob.delivery_label,
+                                      RceDeliveryJob.received_date)
+                           .where(RceDeliveryJob.source_intake_id.in_(canonical_ids))):
+        jobs_by_intake.setdefault(row["source_intake_id"], []).append(row)
+
+    # Records in each visible delivery that carry NO record id: they can never
+    # be linked to any history and are reported as an identity limitation.
+    t = m.RceSourceRecord
+    without_id = {r["source_intake_id"]: r["n"] for r in await _rows(
+        db, select(t.source_intake_id, func.count().label("n"))
+        .where(t.source_intake_id.in_(all_ids), t.source_rce_id.is_(None))
+        .group_by(t.source_intake_id))}
+
+    # ── facts per canonical delivery, grouped per feed ──────────────────────
+    per_feed: Dict[str, List[Dict[str, Any]]] = {}
+    for d in deliveries:
+        c = d["intake"]
+        iid = c["id"]
+        recs = records_by_intake.get(iid, [])
+        sel = selection[iid]
+        run = sel["selected"]
+        state = "ABSENT" if not recs else ("DUPLICATE" if len(recs) > 1 else "PRESENT")
+        rec = recs[0] if state == "PRESENT" else None
+        run_issues, later, other = [], [], []
+        if state == "PRESENT":
+            for issue in issues_by_record.get(rec["id"], []):
+                is_later = (issue["issue_type"] in NON_QUALITY_ISSUE_TYPES
+                            or issue["rule_id"] in core.LATER_STAGE_RULE_IDS)
+                if is_later:
+                    later.append(issue)
+                elif run is not None and issue["run_id"] == run["id"]:
+                    run_issues.append(issue)
+                    if issue["rule_id"] not in core.SLICE_RULE_IDS:
+                        other.append(issue)
+        facts = {
+            "delivery_id": str(iid), "feed": c["feed"], "intake": c,
+            "intake_status": c["status"], "headers": c["headers"] or [],
+            "record_state": state,
+            "record_parsed": (rec["parsed"] if rec else None),
+            "record_id": (rec["id"] if rec else None),
+            "any_record": bool(recs),
+            "record_count_for_oid": len(recs),
+            "records_without_id": int(without_id.get(iid, 0)),
+            "selected_run": run, "selection": sel,
+            "history_rows": history_by_run.get(run["id"], []) if run else [],
+            "result": (results.get((run["id"], rec["id"]))
+                       if run and rec else None),
+            "issues": run_issues, "later_issues": later, "other_issues": other,
+            "provenance": d,
+            "runs_by_id": {r["id"]: r for r in runs_by_intake.get(iid, [])},
+            "jobs": jobs_by_intake.get(iid, []),
+        }
+        per_feed.setdefault(c["feed"], []).append(facts)
+
+    # Only deliveries from the first one that carries the OID onward.
+    cut: Dict[str, List[Dict[str, Any]]] = {}
+    before_first: List[Dict[str, Any]] = []
+    for feed, items in per_feed.items():
+        first = next((i for i, f in enumerate(items) if f["any_record"]), None)
+        if first is not None:
+            cut[feed] = items[first:]
+            before_first.extend(items[:first])
+    if not cut:
+        raise HistoryNotFound(0)
+
+    entries: List[Dict[str, Any]] = []
+    all_cells: List[Dict[str, Any]] = []
+    gap_rows: List[Dict[str, Any]] = []
+    npi_by_delivery: Dict[str, str] = {}
+    failed_intakes = [i for i in intakes if i.get("status") == "FAILED"]
+    for feed, items in cut.items():
+        lane_cells = {rule: core.build_lane_cells(items, rule, field)
+                      for rule, field in core.SLICE_LANES}
+        npis = core.npi_history(items)
+        for idx, facts in enumerate(items):
+            cells = [lane_cells[rule][idx] for rule, _ in core.SLICE_LANES]
+            all_cells.extend(cells)
+            if npis[idx]["submitted_value"]:
+                npi_by_delivery[facts["delivery_id"]] = npis[idx]["submitted_value"]
+            entries.append(_delivery_entry(facts, cells, reviewer_or_above,
+                                           npis[idx], oid))
+        gap_rows.extend(core.sequence_gaps(
+            feed, items,
+            {f["delivery_id"]: [lane_cells[r][i] for r, _ in core.SLICE_LANES]
+             for i, f in enumerate(items)},
+            failed_intakes))
+
+    # Candidate associations are a REVIEWER-level lead. Below that level the
+    # query is not even run and the key is absent, so a response has the same
+    # shape whether or not associations exist. `all_ids` already holds only the
+    # intakes of the caller's role AND account feeds, so the OTHER side of an
+    # association is subject to the same restriction as this record's side.
+    candidates: List[Dict[str, Any]] = []
+    if reviewer_or_above and npi_by_delivery:
+        other = await _rows(db, select(
+            t.source_rce_id, t.source_intake_id, t.npi)
+            .where(t.source_intake_id.in_(all_ids), t.npi.in_(sorted(set(npi_by_delivery.values()))),
+                   (t.source_rce_id.is_(None)) | (t.source_rce_id != oid))
+            .limit(500))
+        candidates = core.candidate_associations(npi_by_delivery, other)
+
+    entries.sort(key=lambda e: (e["_sort"], e["delivery_id"]))
+    for e in entries:
+        e.pop("_sort")
+
+    # ── paging: newest `limit` deliveries before `before` ───────────────────
+    ids = [e["delivery_id"] for e in entries]
+    end = len(entries)
+    if before is not None:
+        if str(before) not in ids:
+            raise HistoryNotFound(0)
+        end = ids.index(str(before))
+    start = max(0, end - limit)
+    page = entries[start:end]
+    page_ids = {e["delivery_id"] for e in page}
+    gaps = [g for g in core.gaps_from_lanes(all_cells)
+            if g["to_delivery_id"] in page_ids]
+
+    window_start = page[0]["received_at"] if page else None
+    window_end = page[-1]["received_at"] if page else None
+    sequence_gaps = []
+    for g in gap_rows:
+        at = _iso(g["received_at"])
+        if g["delivery_id"] is not None:
+            keep = g["delivery_id"] in page_ids
+        else:
+            keep = (window_start is not None and window_start <= at <= window_end)
+        if keep:
+            sequence_gaps.append({**g, "received_at": at})
+
+    feed_names = sorted(cut)
+    response = {
+        "oid": oid,
+        "scope_note": "History for the " + (
+            f"{feed_names[0]} feed" if len(feed_names) == 1
+            else "feeds " + ", ".join(feed_names)),
+        "deliveries": page,
+        "gaps": gaps,
+        "sequence_gaps": sequence_gaps,
+        # Deliveries that PRECEDE the first appearance of this record ID: the ID is
+        # absent from them (not a pass, not corrected). Shown with the oldest page.
+        "earlier_without_record": ({
+            "count": len(before_first),
+            "delivery_ids": [str(f["delivery_id"]) for f in before_first],
+            "text": ("This record ID is absent from the earlier delivery(ies) listed; "
+                     "that is not a pass and not a correction, and it is not assumed "
+                     "to have been re-keyed.")} if (before_first and start == 0) else None),
+
+        "paging": {"limit": limit, "earlier_available": start > 0,
+                   "next_before": (page[0]["delivery_id"] if page and start > 0
+                                   else None)},
+    }
+    if reviewer_or_above:
+        response["candidate_associations"] = [
+            _candidate_view(c, True) for c in candidates]
+    if not reviewer_or_above:
+        leaked = core.forbidden_keys_present(response)
+        if leaked:  # defence in depth: fail closed rather than serve a value
+            logger.error("issue history viewer response contained %s", leaked)
+            raise RuntimeError("viewer response failed the redaction guard")
+    return response
+
+
+# ── serialisation (allowlist per audience) ───────────────────────────────────
+
+def _run_view(run: Dict[str, Any]) -> Dict[str, Any]:
+    return {"run_id": str(run["id"]), "status": run["status"],
+            "rule_set_version": run["rule_set_version"],
+            "started_at": _iso(run["started_at"]),
+            "completed_at": _iso(run["completed_at"])}
+
+
+def _candidate_view(c: Dict[str, Any], reviewer: bool) -> Dict[str, Any]:
+    view = {"record_id": c["record_id"], "status": c["status"], "basis": c["basis"],
+            "deliveries": list(c["deliveries"]),   # all inside the caller's feeds
+            "text": c["text"]}
+    if reviewer:
+        view["shared_npi"] = c["shared_npi"]
+    return view
+
+
+def _npi_view(n: Dict[str, Any], reviewer: bool) -> Dict[str, Any]:
+    view = {k: n[k] for k in ("state", "reason", "note", "change",
+                              "compared_with_delivery_id")}
+    if reviewer:
+        view["submitted_value"] = n["submitted_value"]
+        view["previous_value"] = n["previous_value"]
+    return view
+
+
+def _dates_view(c: Dict[str, Any], jobs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Every date kept apart; a date the system does not hold says so literally."""
+    declared = sorted((j["received_date"] for j in jobs if j.get("received_date")))
+    nr = "not recorded"
+    return {
+        "as_of": {"value": None, "note": nr},
+        "received_at": {"value": _iso(c["received_at"]),
+                        "note": "system receipt time of the intake"},
+        "operator_received_date": ({"value": _iso(declared[0]), "note": "entered by the operator"}
+                                   if declared else {"value": None, "note": nr}),
+        "verified_transmission": {"value": None, "note": nr},
+    }
+
+
+def _delivery_entry(facts: Dict[str, Any], cells: List[Dict[str, Any]],
+                    reviewer: bool, npi: Dict[str, Any], oid: str) -> Dict[str, Any]:
+    c = facts["intake"]
+    sel = facts["selection"]
+    newer = []
+    for run in sel["newer_runs"]:
+        view = _run_view(run)
+        view["error"] = core.sanitize_error(run.get("error"))
+        newer.append(view)
+    flags = ["NEWER_RUN_NOT_COMPLETE"] if sel["newer_runs"] else []
+    status, reason = "OK", None
+    if c["status"] == "FAILED" or sel["selected"] is None:
+        status, reason = core.NOT_COMPARABLE, core.R_NO_RUN
+    elif facts["record_state"] == "ABSENT":
+        status, reason = core.NOT_COMPARABLE, core.R_ABSENT
+    elif facts["record_state"] == "DUPLICATE":
+        status, reason = core.NOT_COMPARABLE, core.R_DUP_OID
+    prov = facts["provenance"]
+    of = prov["identical_content_of"]
+    also = prov["identical_content_also"]
+    note = None
+    if of is not None or also or prov["duplicate_upload"]:
+        other = of if of is not None else (also[0] if also else None)
+        note = core.IDENTICAL_NOTE.format(other=other) if other is not None else             "flagged as a duplicate upload; the same file content can be a separate delivery"
+    return {
+        "_sort": c["received_at"],
+        "delivery_id": facts["delivery_id"],
+        "feed": facts["feed"],
+        "received_at": _iso(c["received_at"]),
+        "as_of": None, "as_of_note": "not recorded",
+        "dates": _dates_view(c, facts["jobs"]),
+        "identity": core.identity_of(facts, oid),
+        "intake_id": facts["delivery_id"],
+        "delivery_job": ({"recorded": True, "job_ids": [str(j["id"]) for j in facts["jobs"]]}
+                         if facts["jobs"] else
+                         {"recorded": False, "job_ids": [],
+                          "note": "not recorded (legacy intake, no delivery job)"}),
+        "npi": _npi_view(npi, reviewer),
+        "label": c.get("delivery_label"),
+        "job_ids": [str(j["id"]) for j in facts["jobs"]],
+        "identical_content_of": (str(of) if of is not None else None),
+        "identical_content_also": [str(x) for x in also],
+        "duplicate_upload": prov["duplicate_upload"],
+        "identical_content_note": note,
+        "record_present": (None if facts["intake_status"] == "FAILED"
+                           else facts["record_state"] != "ABSENT"),
+        "status": status, "status_reason": reason, "flags": flags,
+        "notice": (core.NEWER_RUN_TEXT if flags else None),
+        "runs": {"selected": (_run_view(sel["selected"]) if sel["selected"] else None),
+                 "newer_runs": newer,
+                 "earlier_completed": {
+                     "count": len(sel["earlier_completed"]),
+                     "run_ids": [str(r["id"]) for r in sel["earlier_completed"]]}},
+        "lanes": [_cell_view(cell, reviewer) for cell in cells],
+        "other_findings": _other_view(facts.get("other_issues") or [], reviewer),
+        "later_stage_findings": [_later_view(f, reviewer)
+                                 for f in core.later_stage_findings(facts)],
+    }
+
+
+def _cell_view(cell: Dict[str, Any], reviewer: bool) -> Dict[str, Any]:
+    issue = cell["issue"]
+    version = cell["rule_version"]
+    view: Dict[str, Any] = {
+        "rule_id": cell["rule_id"], "field": cell["field"],
+        "rule_version": version,
+        "label": (f"as recorded in delivery {cell['delivery_id']} under rule "
+                  f"{cell['rule_id']} v{version}" if version else
+                  f"as recorded in delivery {cell['delivery_id']} under rule "
+                  f"{cell['rule_id']}"),
+        "check": dict(cell["check"]),
+        "recurrence": (dict(cell["recurrence"]) if cell["recurrence"] else None),
+        "note": cell["note"],
+        "finding": None, "qa": None,
+    }
+    if issue is not None:
+        view["finding"] = {"issue_id": str(issue["id"]),
+                           "finding_type": issue["issue_type"],
+                           "severity": issue["severity"],
+                           "issue_count": cell["issue_count"]}
+        qa = cell["qa"]
+        view["qa"] = {"status": qa["status"], "decision": qa["decision"],
+                      "role": qa["role"], "timestamp": _iso(qa["timestamp"]),
+                      "qa_required": qa["qa_required"]}
+        if reviewer:
+            view["finding"]["original_value"] = issue.get("original_value")
+            view["finding"]["suggested_value"] = issue.get("suggested_value")
+            view["qa"]["rationale"] = issue.get("resolution_notes")
+            view["qa"]["actors"] = {"resolved_by": issue.get("resolved_by"),
+                                    "qa_approved_by": issue.get("qa_approved_by")}
+    return view
+
+
+OTHER_NOTE = ("Recorded in this delivery under rules that are not shown as lanes. "
+              "They are recorded only: no comparability or recurrence is assessed "
+              "for them.")
+
+
+def _other_view(issues: List[Dict[str, Any]], reviewer: bool) -> Dict[str, Any]:
+    """Every finding of the selected run outside the lanes, preserved as recorded.
+    Never assessed for comparability or recurrence. The finding description and
+    the original value are reviewer-level only."""
+    items = []
+    for i in sorted(issues, key=lambda x: (x["rule_id"], str(x.get("field_name") or ""),
+                                           str(x["id"]))):
+        item: Dict[str, Any] = {
+            "issue_id": str(i["id"]), "rule_id": i["rule_id"],
+            "rule_version": i.get("rule_version"), "field": i.get("field_name"),
+            "severity": i["severity"], "finding_type": i["issue_type"],
+            "recorded_only": True, "recurrence": None, "comparability": None}
+        if reviewer:
+            item["description"] = i.get("description")
+            item["original_value"] = i.get("original_value")
+        items.append(item)
+    return {"count": len(items), "note": OTHER_NOTE, "items": items}
+
+
+def _later_view(f: Dict[str, Any], reviewer: bool) -> Dict[str, Any]:
+    issue = f["issue"]
+    qa = f["qa"]
+    view: Dict[str, Any] = {
+        "rule_id": f["rule_id"], "field": f["field"], "rule_version": f["rule_version"],
+        "finding": {"issue_id": str(issue["id"]), "finding_type": issue["issue_type"],
+                    "severity": issue["severity"]},
+        "run_id": (str(f["run_id"]) if f["run_id"] is not None else None),
+        "run_status": f["run_status"],
+        "run_completed_at": _iso(f["run_completed_at"]),
+        "from_selected_run": f["from_selected_run"],
+        "run_note": f["run_note"],
+        "check": dict(f["check"]), "recurrence": dict(f["recurrence"]),
+        "qa": {"status": qa["status"], "decision": qa["decision"], "role": qa["role"],
+               "timestamp": _iso(qa["timestamp"]), "qa_required": qa["qa_required"]},
+    }
+    if reviewer:
+        view["finding"]["original_value"] = issue.get("original_value")
+        view["finding"]["suggested_value"] = issue.get("suggested_value")
+        view["qa"]["rationale"] = issue.get("resolution_notes")
+        view["qa"]["actors"] = {"resolved_by": issue.get("resolved_by"),
+                                "qa_approved_by": issue.get("qa_approved_by")}
+    return view

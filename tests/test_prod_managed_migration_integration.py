@@ -98,7 +98,9 @@ TRACEABILITY = ["rce_delivery_stage_events", "rce_disposition_events", "rce_reco
                 "iqvia_hco_observation", "iqvia_hcp_observation", "iqvia_affiliation_observation",
                 "rce_preflight_run", "rce_preflight_finding", "rce_preflight_normalization",
                 "rce_shadow_comparison", "rce_shadow_finding_delta", "rce_shadow_approval",
-                "rce_successor_publication_event"]
+                "rce_successor_publication_event",
+                # 20261008_record_check_results: append-only per-record results, SELECT+INSERT
+                "rce_record_check_results"]
 AREA1_FINAL = AREA1_PRESENT + ["rce_delivery_jobs"] + TRACEABILITY
 ENTRA_ADMIN = "entra_admin"
 CK = "ck_review_record_has_subject"
