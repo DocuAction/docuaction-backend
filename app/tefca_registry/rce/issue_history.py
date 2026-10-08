@@ -21,7 +21,9 @@ QUERY SHAPE (criterion 7: at most 4 queries per delivery, all index-served)
     result maps by (run, record)        1 query   (primary key)
     issues of the OID's records         1 query   (ix source_record_id)
     delivery jobs of the deliveries     1 query   (ix source_intake_id)
-    -> 7 queries per request in total, independent of the number of deliveries.
+    records without any id (count)      1 query   (ix source_intake_id)
+    other records sharing an NPI        1 query   (only when the record has an NPI)
+    -> at most 9 queries per request, independent of the number of deliveries.
 
 IDENTITY IS EXACT. `source_rce_id = :oid` is string equality: no trimming and no
 case folding, matching `delivery_delta`. A trailing space is a different OID.
@@ -33,7 +35,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Sequence
 
-from sqlalchemy import select, tuple_
+from sqlalchemy import func, select, tuple_
 
 from app.tefca_registry.rce import issue_history_core as core
 from app.tefca_registry.rce import models as m
@@ -187,9 +189,18 @@ async def get_issue_history(db, oid: str, *, reviewer_or_above: bool, settings,
             issues_by_record.setdefault(row["source_record_id"], []).append(row)
     jobs_by_intake: Dict[Any, List[Dict[str, Any]]] = {}
     for row in await _rows(db, select(RceDeliveryJob.id, RceDeliveryJob.source_intake_id,
-                                      RceDeliveryJob.delivery_label)
+                                      RceDeliveryJob.delivery_label,
+                                      RceDeliveryJob.received_date)
                            .where(RceDeliveryJob.source_intake_id.in_(canonical_ids))):
         jobs_by_intake.setdefault(row["source_intake_id"], []).append(row)
+
+    # Records in each visible delivery that carry NO record id: they can never
+    # be linked to any history and are reported as an identity limitation.
+    t = m.RceSourceRecord
+    without_id = {r["source_intake_id"]: r["n"] for r in await _rows(
+        db, select(t.source_intake_id, func.count().label("n"))
+        .where(t.source_intake_id.in_(all_ids), t.source_rce_id.is_(None))
+        .group_by(t.source_intake_id))}
 
     # ── facts per canonical delivery, grouped per feed ──────────────────────
     per_feed: Dict[str, List[Dict[str, Any]]] = {}
@@ -217,6 +228,8 @@ async def get_issue_history(db, oid: str, *, reviewer_or_above: bool, settings,
             "record_parsed": (rec["parsed"] if rec else None),
             "record_id": (rec["id"] if rec else None),
             "any_record": bool(recs),
+            "record_count_for_oid": len(recs),
+            "records_without_id": int(without_id.get(iid, 0)),
             "selected_run": run, "selection": sel,
             "history_rows": history_by_run.get(run["id"], []) if run else [],
             "result": (results.get((run["id"], rec["id"]))
@@ -240,19 +253,33 @@ async def get_issue_history(db, oid: str, *, reviewer_or_above: bool, settings,
     entries: List[Dict[str, Any]] = []
     all_cells: List[Dict[str, Any]] = []
     gap_rows: List[Dict[str, Any]] = []
+    npi_by_delivery: Dict[str, str] = {}
     failed_intakes = [i for i in intakes if i.get("status") == "FAILED"]
     for feed, items in cut.items():
         lane_cells = {rule: core.build_lane_cells(items, rule, field)
                       for rule, field in core.SLICE_LANES}
+        npis = core.npi_history(items)
         for idx, facts in enumerate(items):
             cells = [lane_cells[rule][idx] for rule, _ in core.SLICE_LANES]
             all_cells.extend(cells)
-            entries.append(_delivery_entry(facts, cells, reviewer_or_above))
+            if npis[idx]["submitted_value"]:
+                npi_by_delivery[facts["delivery_id"]] = npis[idx]["submitted_value"]
+            entries.append(_delivery_entry(facts, cells, reviewer_or_above,
+                                           npis[idx], oid))
         gap_rows.extend(core.sequence_gaps(
             feed, items,
             {f["delivery_id"]: [lane_cells[r][i] for r, _ in core.SLICE_LANES]
              for i, f in enumerate(items)},
             failed_intakes))
+
+    candidates: List[Dict[str, Any]] = []
+    if npi_by_delivery:
+        other = await _rows(db, select(
+            t.source_rce_id, t.source_intake_id, t.npi)
+            .where(t.source_intake_id.in_(all_ids), t.npi.in_(sorted(set(npi_by_delivery.values()))),
+                   (t.source_rce_id.is_(None)) | (t.source_rce_id != oid))
+            .limit(500))
+        candidates = core.candidate_associations(npi_by_delivery, other)
 
     entries.sort(key=lambda e: (e["_sort"], e["delivery_id"]))
     for e in entries:
@@ -292,6 +319,9 @@ async def get_issue_history(db, oid: str, *, reviewer_or_above: bool, settings,
         "deliveries": page,
         "gaps": gaps,
         "sequence_gaps": sequence_gaps,
+        "candidate_associations": [_candidate_view(c, reviewer_or_above, page_ids)
+                                   for c in candidates
+                                   if page_ids.intersection(c["deliveries"])],
         "paging": {"limit": limit, "earlier_available": start > 0,
                    "next_before": (page[0]["delivery_id"] if page and start > 0
                                    else None)},
@@ -313,8 +343,40 @@ def _run_view(run: Dict[str, Any]) -> Dict[str, Any]:
             "completed_at": _iso(run["completed_at"])}
 
 
+def _candidate_view(c: Dict[str, Any], reviewer: bool, page_ids) -> Dict[str, Any]:
+    view = {"record_id": c["record_id"], "status": c["status"], "basis": c["basis"],
+            "deliveries": [d for d in c["deliveries"] if d in page_ids],
+            "text": c["text"]}
+    if reviewer:
+        view["shared_npi"] = c["shared_npi"]
+    return view
+
+
+def _npi_view(n: Dict[str, Any], reviewer: bool) -> Dict[str, Any]:
+    view = {k: n[k] for k in ("state", "reason", "note", "change",
+                              "compared_with_delivery_id")}
+    if reviewer:
+        view["submitted_value"] = n["submitted_value"]
+        view["previous_value"] = n["previous_value"]
+    return view
+
+
+def _dates_view(c: Dict[str, Any], jobs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Every date kept apart; a date the system does not hold says so literally."""
+    declared = sorted((j["received_date"] for j in jobs if j.get("received_date")))
+    nr = "not recorded"
+    return {
+        "as_of": {"value": None, "note": nr},
+        "received_at": {"value": _iso(c["received_at"]),
+                        "note": "system receipt time of the intake"},
+        "operator_received_date": ({"value": _iso(declared[0]), "note": "entered by the operator"}
+                                   if declared else {"value": None, "note": nr}),
+        "verified_transmission": {"value": None, "note": nr},
+    }
+
+
 def _delivery_entry(facts: Dict[str, Any], cells: List[Dict[str, Any]],
-                    reviewer: bool) -> Dict[str, Any]:
+                    reviewer: bool, npi: Dict[str, Any], oid: str) -> Dict[str, Any]:
     c = facts["intake"]
     sel = facts["selection"]
     newer = []
@@ -343,6 +405,9 @@ def _delivery_entry(facts: Dict[str, Any], cells: List[Dict[str, Any]],
         "feed": facts["feed"],
         "received_at": _iso(c["received_at"]),
         "as_of": None, "as_of_note": "not recorded",
+        "dates": _dates_view(c, facts["jobs"]),
+        "identity": core.identity_of(facts, oid),
+        "npi": _npi_view(npi, reviewer),
         "label": c.get("delivery_label"),
         "job_ids": [str(j["id"]) for j in facts["jobs"]],
         "identical_content_of": (str(of) if of is not None else None),

@@ -191,3 +191,75 @@ def test_user_feed_tags_distinguishes_unset_from_empty():
     assert core.user_feed_tags(None) is None
     assert core.user_feed_tags([]) is None
     assert core.user_feed_tags(["feed:"]) == ()
+
+
+# -- NPI state, identity, candidates, completed-check requirement ----------------
+
+@pytest.mark.parametrize("value,state", [
+    ("", "MISSING"), (None, "MISSING"), ("  ", "MISSING"), ("12345", "INVALID"),
+    ("12345678AB", "INVALID"), ("1234567893,1245319599", "INVALID"),
+    ("1234567890", "INVALID"), ("1234567893", "PRESENT")])
+def test_npi_state_words(value, state):
+    assert core.classify_npi_value(value) == state
+
+
+def _n(i, npi, **kw):
+    f = _facts(i, **kw)
+    f["record_parsed"] = {"NPI": npi}
+    return f
+
+
+def test_npi_history_marks_changed_added_removed_and_names_the_comparison():
+    h = core.npi_history([_n(1, "1234567893"), _n(2, "1245319599"), _n(3, ""),
+                          _n(4, "1245319599")])
+    assert [x["change"] for x in h] == [None, "CHANGED", "REMOVED", "ADDED"]
+    assert h[1]["compared_with_delivery_id"] == "D1" and h[1]["previous_value"] == "1234567893"
+    assert h[2]["state"] == "MISSING" and h[3]["compared_with_delivery_id"] == "D3"
+
+
+def test_absent_or_duplicate_record_has_no_npi_and_does_not_break_the_comparison():
+    h = core.npi_history([_n(1, "1234567893"), _facts(2, state="ABSENT"),
+                          _facts(3, state="DUPLICATE"), _n(4, "1245319599")])
+    assert [x["state"] for x in h] == ["PRESENT", "NOT_AVAILABLE", "NOT_AVAILABLE", "PRESENT"]
+    assert h[1]["reason"] == "RECORD_ABSENT" and h[2]["reason"] == "DUPLICATE_OID_IN_DELIVERY"
+    assert h[3]["change"] == "CHANGED" and h[3]["compared_with_delivery_id"] == "D1"
+
+
+def test_a_delivery_without_an_npi_column_says_so():
+    f = _n(1, "1234567893")
+    f["headers"] = ["partOf"]
+    (h,) = core.npi_history([f])
+    assert h["state"] == "NOT_AVAILABLE" and h["reason"] == "NPI_COLUMN_NOT_IN_DELIVERY"
+
+
+def test_candidates_are_unconfirmed_and_only_for_a_shared_npi():
+    rows = [{"source_rce_id": "OTHER", "source_intake_id": "d1", "npi": "1234567893"},
+            {"source_rce_id": "NOPE", "source_intake_id": "d1", "npi": "9999999999"},
+            {"source_rce_id": None, "source_intake_id": "d2", "npi": "1234567893"}]
+    out = core.candidate_associations({"d1": "1234567893"}, rows)
+    assert [(c["record_id"], c["status"]) for c in out] == [
+        (None, "UNCONFIRMED"), ("OTHER", "UNCONFIRMED")]
+    assert core.candidate_associations({"d1": ""}, rows) == []
+
+
+def test_a_pass_from_a_rule_execution_that_did_not_complete_is_not_a_pass():
+    mid = _facts(2)
+    for h in mid["history_rows"]:
+        if h["rule_id"] == "NPI-002":
+            h["execution_status"] = "FAILED"
+    c = cells([_facts(1, issue=True), mid, _facts(3, issue=True)])
+    assert c[1]["check"]["outcome"] == "ERROR"
+    assert c[2]["recurrence"]["state"] == "PERSISTENT_OR_UNVERIFIED"
+    assert c[2]["recurrence"]["statement"] == (
+        "Issue observed again; persistence or recurrence cannot be established.")
+
+
+def test_identity_limitations_are_stated():
+    assert core.identity_of(_facts(1, state="ABSENT"), "O")["match"] == "NONE"
+    dup = _facts(1, state="DUPLICATE")
+    dup["record_count_for_oid"] = 3
+    i = core.identity_of(dup, "O")
+    assert i["match"] == "MULTIPLE" and "3 times" in i["limitation"]
+    ok = _facts(1)
+    ok["records_without_id"] = 2
+    assert "2 record(s)" in core.identity_of(ok, "O")["records_without_id_note"]

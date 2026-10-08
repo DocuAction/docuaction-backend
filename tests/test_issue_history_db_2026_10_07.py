@@ -787,7 +787,7 @@ async def test_query_count_is_constant_and_within_four_per_delivery(rolled_back_
     finally:
         event.remove(conn, "before_cursor_execute", count)
     assert len(resp["deliveries"]) == 12
-    assert len(statements) <= 7
+    assert len(statements) <= 9
     assert len(statements) <= 4 * len(resp["deliveries"])
 
 

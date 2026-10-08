@@ -52,6 +52,12 @@ FIELD_OF_RULE = dict(SLICE_LANES)
 #: Later-stage NPI rules: shown as observed issues, recurrence not evaluated.
 LATER_STAGE_RULE_IDS = frozenset({"NPI-005", "NPI-006", "NPI-008", "NPI-009"})
 
+PERSISTENT_STATEMENT = ("Issue observed again; persistence or recurrence cannot be "
+                        "established.")
+RECURRING_STATEMENT = ("Issue observed again after a comparable, completed check "
+                       "passed in between.")
+FIRST_STATEMENT = "First observed in the history shown."
+
 GAP_TEXT = "No snapshot or correction evidence available."
 NEWER_RUN_TEXT = ("A newer run did not complete; these results are from the "
                   "earlier completed run.")
@@ -105,7 +111,8 @@ QA_NONE, QA_AWAITING, QA_APPROVED, QA_RETURNED = (
 #: Keys that must never appear anywhere in a VIEWER response.
 VIEWER_FORBIDDEN_KEYS = frozenset({
     "original_value", "suggested_value", "field_values", "notes", "rationale",
-    "actor", "email", "raw_line", "parsed"})
+    "actor", "email", "raw_line", "parsed", "submitted_value", "previous_value",
+    "shared_npi"})
 
 
 # ── 2.1 feed scoping ─────────────────────────────────────────────────────────
@@ -345,6 +352,9 @@ def raw_check(facts: Dict[str, Any], rule_id: str, field: str) -> Dict[str, Any]
     if code == rcr.CODE_FINDING:
         return {**out, "outcome": OUT_FAIL, "usable": True}
     if code == rcr.CODE_PASS:
+        if hist.get("execution_status") not in (None, "COMPLETE"):
+            # a "pass" from a rule execution that did not complete is no pass
+            return {**out, "outcome": OUT_ERROR, "reason": R_RULE_ERROR}
         if out["source_unavailable"]:
             return {**out, "outcome": OUT_PASS, "reason": R_SOURCE_UNAVAILABLE}
         return {**out, "outcome": OUT_PASS, "usable": True}
@@ -407,7 +417,7 @@ def classify_recurrence(raws: Sequence[Dict[str, Any]], index: int, rule_id: str
     earlier = next((j for j in range(index - 1, -1, -1)
                     if raws[j]["outcome"] == OUT_FAIL), None)
     if earlier is None:
-        return {"state": REC_FIRST, "reason": None,
+        return {"state": REC_FIRST, "reason": None, "statement": FIRST_STATEMENT,
                 "earlier_occurrence": None, "comparable_pass": None}
     passing = None
     if cur["usable"]:
@@ -419,6 +429,7 @@ def classify_recurrence(raws: Sequence[Dict[str, Any]], index: int, rule_id: str
                 break
     if passing is not None:
         return {"state": REC_RECURRING, "reason": None,
+                "statement": RECURRING_STATEMENT,
                 "earlier_occurrence": earlier, "comparable_pass": passing}
     reason = None
     if cur["usable"] and rule_id == "INT-002":
@@ -429,6 +440,7 @@ def classify_recurrence(raws: Sequence[Dict[str, Any]], index: int, rule_id: str
                 reason = R_REGISTRY
                 break
     return {"state": REC_PERSISTENT, "reason": reason,
+            "statement": PERSISTENT_STATEMENT,
             "earlier_occurrence": earlier, "comparable_pass": None}
 
 
@@ -586,7 +598,146 @@ def gaps_from_lanes(lane_cells: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]
     return gaps
 
 
-# ── explicit sequence gaps ───────────────────────────────────────────────────
+# -- identity, NPI state and candidate associations ---------------------------
+
+NPI_PRESENT, NPI_MISSING, NPI_INVALID, NPI_NA = (
+    "PRESENT", "MISSING", "INVALID", "NOT_AVAILABLE")
+ID_EXACT, ID_NONE, ID_MULTIPLE = "EXACT_ONE", "NONE", "MULTIPLE"
+
+NPI_NOTES = {
+    "RECORD_ABSENT": "Record not present in this delivery; nothing is known about its NPI.",
+    "DUPLICATE_OID_IN_DELIVERY": ("The record ID appears more than once in this "
+                                  "delivery; no record was chosen."),
+    "NPI_COLUMN_NOT_IN_DELIVERY": "This delivery has no NPI column.",
+}
+
+
+def classify_npi_value(value: Any) -> str:
+    """PRESENT / MISSING / INVALID for one submitted NPI value (no repair)."""
+    from app.tefca_registry.rce.quality_rules import NPI_FORMAT
+
+    text = "" if value is None else str(value).strip()
+    if not text:
+        return NPI_MISSING
+    if "," in text or not NPI_FORMAT.match(text):
+        return NPI_INVALID
+    try:
+        from app.services.npi_validator import validate_npi
+        ok, _ = validate_npi(text)
+    except Exception:  # noqa: BLE001
+        return NPI_PRESENT   # checksum unavailable: not claimed invalid
+    return NPI_PRESENT if ok else NPI_INVALID
+
+
+def identity_of(facts: Dict[str, Any], oid: str) -> Dict[str, Any]:
+    """How this delivery relates to the exact record ID. Never picks a record."""
+    n = int(facts.get("record_count_for_oid",
+                      1 if facts["record_state"] == "PRESENT" else 0))
+    if facts["record_state"] == "DUPLICATE":
+        match, limitation = ID_MULTIPLE, (
+            f"The record ID appears {n} times in this delivery; no record was "
+            f"chosen, so no result is shown for it.")
+    elif facts["record_state"] == "ABSENT":
+        match, limitation = ID_NONE, ("No record with this record ID is in this "
+                                      "delivery. It is not assumed to have been "
+                                      "re-keyed or removed.")
+    else:
+        match, limitation = ID_EXACT, None
+    without = int(facts.get("records_without_id") or 0)
+    note = None
+    if without:
+        note = (f"{without} record(s) in this delivery have no record ID and cannot "
+                f"be linked to any history.")
+    return {"record_id": oid, "match": match, "matching_records": n,
+            "limitation": limitation, "records_without_id": without,
+            "records_without_id_note": note}
+
+
+def npi_history(items: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """NPI as supplied in EACH delivery, oldest first.
+
+    state   PRESENT | MISSING | INVALID | NOT_AVAILABLE (+ reason)
+    change  None | CHANGED | ADDED | REMOVED, against the nearest EARLIER
+            delivery of this same record with a determinate NPI state (the
+            comparison target is named). The values are carried separately
+            (`submitted_value`, `previous_value`) and removed by the serializer
+            for audiences without value access.
+    """
+    out: List[Dict[str, Any]] = []
+    last = None   # (delivery_id, value)
+    for facts in items:
+        did = facts["delivery_id"]
+        base = {"delivery_id": did, "state": NPI_NA, "reason": None, "note": None,
+                "change": None, "compared_with_delivery_id": None,
+                "submitted_value": None, "previous_value": None}
+        if facts["record_state"] != "PRESENT":
+            reason = ("DUPLICATE_OID_IN_DELIVERY" if facts["record_state"] == "DUPLICATE"
+                      else "RECORD_ABSENT")
+            out.append({**base, "reason": reason, "note": NPI_NOTES[reason]})
+            continue
+        if "NPI" not in (facts.get("headers") or []):
+            out.append({**base, "reason": "NPI_COLUMN_NOT_IN_DELIVERY",
+                        "note": NPI_NOTES["NPI_COLUMN_NOT_IN_DELIVERY"]})
+            continue
+        value = str((facts.get("record_parsed") or {}).get("NPI") or "").strip()
+        entry = {**base, "state": classify_npi_value(value),
+                 "submitted_value": value or None}
+        if last is not None:
+            prev_id, prev_value = last
+            entry["compared_with_delivery_id"] = prev_id
+            if prev_value and value and prev_value != value:
+                entry["change"] = "CHANGED"
+            elif prev_value and not value:
+                entry["change"] = "REMOVED"
+            elif not prev_value and value:
+                entry["change"] = "ADDED"
+            if entry["change"]:
+                entry["previous_value"] = prev_value or None
+        last = (did, value)
+        out.append(entry)
+    return out
+
+
+def candidate_associations(npi_by_delivery: Dict[str, str],
+                           other_records: Iterable[Dict[str, Any]]
+                           ) -> List[Dict[str, Any]]:
+    """Other record IDs carrying an NPI this record supplied: NEVER merged.
+
+    `npi_by_delivery` maps delivery id -> this record's NPI there; `other_records`
+    are rows (source_rce_id, source_intake_id, npi) of OTHER record IDs (or none)
+    in the visible deliveries. The same NPI under another record ID is a lead for
+    an analyst, not an identity: each result is UNCONFIRMED and carries none of
+    the other record's history.
+    """
+    mine = {v for v in npi_by_delivery.values() if v}
+    found: Dict[Any, Dict[str, Any]] = {}
+    for row in other_records:
+        npi = str(row.get("npi") or "").strip()
+        if not npi or npi not in mine:
+            continue
+        rid = row.get("source_rce_id")
+        slot = found.setdefault(rid, {"deliveries": [], "npis": set()})
+        did = str(row["source_intake_id"])
+        if did not in slot["deliveries"]:
+            slot["deliveries"].append(did)
+        slot["npis"].add(npi)
+    out = []
+    for rid, slot in sorted(found.items(), key=lambda kv: str(kv[0])):
+        out.append({
+            "record_id": rid, "status": "UNCONFIRMED",
+            "basis": "SAME_NPI_DIFFERENT_RECORD_ID",
+            "deliveries": sorted(slot["deliveries"]),
+            "shared_npi": sorted(slot["npis"]),
+            "text": ("Another record ID carries an NPI this record supplied. This "
+                     "is not confirmed to be the same entity and the histories "
+                     "are not merged."
+                     if rid is not None else
+                     "A record with no record ID carries an NPI this record "
+                     "supplied. It cannot be linked and is not merged.")})
+    return out[:10]
+
+
+# -- explicit sequence gaps ───────────────────────────────────────────────────
 
 K_FAILED_INTAKE = "DELIVERY_NOT_PROCESSED"
 K_NO_RUN = "NO_COMPLETED_RUN"

@@ -295,3 +295,39 @@ def test_logs_carry_no_entity_identifier_account_email_or_value(client, seeded, 
     for secret in (OID_B, OID_R, email, "12345", ONC, SYN):
         assert secret not in blob, secret
     assert h_email
+
+
+# -- submitted NPI values: reviewer level and above only ------------------------------
+
+@pytest.mark.parametrize("role", ROLES)
+def test_submitted_npi_values_follow_the_reviewer_level_in_both_directions(
+        client, seeded, conf, role):
+    r = get(client, OID_B, role)
+    assert r.status_code == 200
+    states = {d["npi"]["state"] for d in r.json()["deliveries"]}
+    assert states <= {"PRESENT", "MISSING", "INVALID", "NOT_AVAILABLE"} and states
+    seen = '"submitted_value"' in r.text or "12345" in r.text
+    assert seen == (role in REVIEWER_AND_ABOVE), role
+
+
+def test_nothing_that_is_not_a_response_carries_a_submitted_value(client, seeded, conf, caplog):
+    caplog.set_level(logging.DEBUG)
+    for role in ("viewer", "reviewer", "admin"):
+        get(client, OID_B, role)
+    get(client, OID_R, "viewer")
+    get(client, OID_B, "nobody")
+    assert caplog.records
+    assert not any("12345" in f"{r.getMessage()} {r.args}" for r in caplog.records)
+    # the audit trail stores structure only
+    from sqlalchemy import text
+
+    from app.core.database import async_session_maker
+
+    async def rows():
+        async with async_session_maker() as db:
+            return (await db.execute(text(
+                "select metadata::text from tefca_reg_audit_log "
+                "where action='issue_history_read' and metadata->>'oid' like :l"),
+                {"l": f"A6-%-{TAG}"})).all()
+
+    assert not any("12345" in r[0] for r in run(rows()))

@@ -51,8 +51,10 @@ async def test_absent_and_rekeyed_entity_is_an_explicit_gap_never_a_pass(rolled_
     assert e["record_present"] is False
     assert lane(e, NPI2)["check"]["outcome"] == "NOT_AVAILABLE"
     assert lane(entry_of(resp, sep), NPI2)["recurrence"]["state"] == "PERSISTENT_OR_UNVERIFIED"
-    # no identity is inferred: the other key never appears in the response
-    assert "SYN-OID-REKEYED" not in str(resp)
+    # no identity is inferred: the other key appears ONLY as an unconfirmed lead
+    assert "SYN-OID-REKEYED" not in str(resp["deliveries"])
+    (cand,) = resp["candidate_associations"]
+    assert cand["record_id"] == "SYN-OID-REKEYED" and cand["status"] == "UNCONFIRMED"
 
 
 @pytest.mark.asyncio
