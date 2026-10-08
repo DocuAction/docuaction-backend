@@ -42,7 +42,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
 
-from sqlalchemy import select
+from sqlalchemy import func, select, tuple_
 
 from app.services.npi_validator import validate_npi
 from app.tefca_registry import models as reg
@@ -322,3 +322,137 @@ async def relationships_for_hcp(db, *, snapshot_id, hcp_record_key: str, limit: 
     if snap.status not in sm.SNAPSHOT_EFFECTIVE:
         out["diagnostic_only"] = "NOT_ELIGIBLE_FOR_VERIFICATION_SNAPSHOT_NOT_APPROVED"
     return out
+
+
+# -- organisation-first lookup (read-only; see docs/architecture/iqvia_org_first_design.md) -------------
+PAGE_DEFAULT = 100
+PAGE_MAX = 500          # hard cap; a caller asking for more is told it was capped
+MAX_ORGS_LISTED = 25    # organisations returned with their own summaries; the rest are counted, not listed
+
+CONFLICT_NPI_CCN_DIFFERENT_ORGS = "ORG_NPI_AND_ORG_CCN_IDENTIFY_DIFFERENT_ORGANISATIONS"
+CONFLICT_HCO_MULTIPLE_NPI = "HCO_KEY_CARRIES_MULTIPLE_ORG_NPI"
+CONFLICT_HCO_MULTIPLE_CCN = "HCO_KEY_CARRIES_MULTIPLE_ORG_CCN"
+CONFLICT_IDENTIFIER_SHARED = "IDENTIFIER_SHARED_BY_MULTIPLE_HCO_KEYS"
+
+
+def _org_npi_expr():
+    obs = sm.IqviaAffiliationObservation
+    return func.nullif(func.btrim(obs.payload["ORG_NPI"].astext), "")
+
+
+def _org_ccn_expr():
+    obs = sm.IqviaAffiliationObservation
+    return func.nullif(func.btrim(obs.payload["ORG_CCN_ID"].astext), "")
+
+
+def _provenance(snap) -> Dict[str, Any]:
+    return {"snapshot_id": str(snap.id), "source_system": snap.source_system, "status": snap.status,
+            "record_count": snap.record_count, "sha256_prefix": (snap.sha256 or "")[:12]}
+
+
+async def _hco_keys_for(db, root_id, expr, values: Sequence[str]) -> List[str]:
+    obs = sm.IqviaAffiliationObservation
+    rows = (await db.execute(select(obs.hco_record_key).where(
+        obs.source_snapshot_id == root_id, expr.in_(list(values))).distinct())).scalars().all()
+    return sorted(rows)
+
+
+async def organisation_relationships(db, *, snapshot_id, org_npi: Any = None, org_ccn: Any = None,
+                                     hco_record_key: Optional[str] = None, limit: int = PAGE_DEFAULT,
+                                     cursor: Optional[Dict[str, str]] = None,
+                                     diagnostic_allow_pending: bool = False) -> Dict[str, Any]:
+    """Organisation-first read: find the organisation(s) in the staged snapshot by ORG_NPI / ORG_CCN_ID (or an
+    HCO key), report identifier CONFLICTS, and return ONE PAGE of their relationships with explicit
+    truncation. Every relationship row is preserved; nothing is merged or inferred, and no person-level data
+    beyond the HCP key and relationship kind is returned. Advisory only (see module docstring).
+
+    Pagination is keyset: `cursor` is the {hco, hcp, type} of the last row of the previous page. A page is at
+    most PAGE_MAX rows. `truncated` is true whenever more rows exist beyond this page, and
+    `total_relationships` is the exact count for the matched organisations. The query shape is deliberately
+    two-step (rows of the matched organisations first, ordering second): a one-step ORDER BY (hcp, type) LIMIT
+    makes the planner walk the whole unique index and filter, which measured over 2 minutes against 8.2M
+    synthetic rows."""
+    snap, root_id = await _eligible_observation_snapshot_id(
+        db, snapshot_id, diagnostic_allow_pending=diagnostic_allow_pending)
+    obs = sm.IqviaAffiliationObservation
+    n, c = normalize_npi(org_npi), normalize_ccn(org_ccn)
+    notes: List[str] = []
+    if org_npi not in (None, "") and not n["valid"]:
+        notes.append(n["reason"])
+    if org_ccn not in (None, "") and not c["valid"]:
+        notes.append(c["reason"])
+    base = {"provenance": _provenance(snap), "determination": DETERMINATION,
+            "requires_analyst_review": True, "affects_verification": False}
+    if snap.status not in sm.SNAPSHOT_EFFECTIVE:
+        base["diagnostic_only"] = "NOT_ELIGIBLE_FOR_VERIFICATION_SNAPSHOT_NOT_APPROVED"
+    if hco_record_key is None and not n["valid"] and not c["valid"]:
+        return {**base, "found_in_extract": False, "organisations": [], "organisations_omitted": 0,
+                "conflicts": [], "notes": notes + ["NO_USABLE_IDENTIFIER"], "registry_candidate": None,
+                "relationships": [], "total_relationships": 0, "returned": 0, "page_limit": 0,
+                "truncated": False, "next_cursor": None}
+
+    by_npi = await _hco_keys_for(db, root_id, _org_npi_expr(), [n["value"]]) if n["valid"] else []
+    by_ccn = (await _hco_keys_for(db, root_id, _org_ccn_expr(), ccn_lookup_variants(c["value"]))) if c["valid"] else []
+    keys = sorted(set(by_npi) | set(by_ccn) | ({hco_record_key} if hco_record_key else set()))
+
+    conflicts: List[Dict[str, Any]] = []
+    if by_npi and by_ccn and set(by_npi).isdisjoint(by_ccn):
+        conflicts.append({"code": CONFLICT_NPI_CCN_DIFFERENT_ORGS,
+                          "hco_keys_by_npi": len(by_npi), "hco_keys_by_ccn": len(by_ccn)})
+    if len(by_npi) > 1:
+        conflicts.append({"code": CONFLICT_IDENTIFIER_SHARED, "identifier": "ORG_NPI", "hco_keys": len(by_npi)})
+    if len(by_ccn) > 1:
+        conflicts.append({"code": CONFLICT_IDENTIFIER_SHARED, "identifier": "ORG_CCN_ID", "hco_keys": len(by_ccn)})
+
+    orgs: List[Dict[str, Any]] = []
+    orgs_omitted, total = 0, 0
+    if keys:
+        per = (await db.execute(select(
+            obs.hco_record_key, func.count().label("rows"),
+            func.count(func.distinct(obs.hcp_record_key)).label("hcps"),
+            func.count(func.distinct(_org_npi_expr())).label("n_npi"),
+            func.count(func.distinct(_org_ccn_expr())).label("n_ccn"))
+            .where(obs.source_snapshot_id == root_id, obs.hco_record_key.in_(keys))
+            .group_by(obs.hco_record_key).order_by(obs.hco_record_key))).all()
+        for hco, rows_, hcps, n_npi, n_ccn in per[:MAX_ORGS_LISTED]:
+            orgs.append({"hco_record_key": hco, "relationship_rows": rows_, "distinct_hcp_keys": hcps,
+                         "distinct_org_npi": n_npi, "distinct_org_ccn": n_ccn})
+            if n_npi > 1:
+                conflicts.append({"code": CONFLICT_HCO_MULTIPLE_NPI, "hco_record_key": hco, "distinct_org_npi": n_npi})
+            if n_ccn > 1:
+                conflicts.append({"code": CONFLICT_HCO_MULTIPLE_CCN, "hco_record_key": hco, "distinct_org_ccn": n_ccn})
+        orgs_omitted = max(0, len(per) - MAX_ORGS_LISTED)
+        total = sum(r[1] for r in per)
+
+    wanted = int(limit or PAGE_DEFAULT)
+    page = max(1, min(wanted, PAGE_MAX))
+    if wanted > PAGE_MAX:
+        notes.append("LIMIT_CAPPED_AT_%d" % PAGE_MAX)
+    rel_rows: List[Dict[str, Any]] = []
+    truncated, next_cursor = False, None
+    if keys:
+        hit = (select(obs.hco_record_key, obs.hcp_record_key, obs.affiliation_type)
+               .where(obs.source_snapshot_id == root_id, obs.hco_record_key.in_(keys))
+               .cte("hit").prefix_with("MATERIALIZED"))
+        q = select(hit.c.hco_record_key, hit.c.hcp_record_key, hit.c.affiliation_type)
+        if cursor:
+            q = q.where(tuple_(hit.c.hco_record_key, hit.c.hcp_record_key, hit.c.affiliation_type) >
+                        tuple_(cursor["hco"], cursor["hcp"], cursor["type"]))
+        q = q.order_by(hit.c.hco_record_key, hit.c.hcp_record_key, hit.c.affiliation_type).limit(page + 1)
+        got = (await db.execute(q)).all()
+        truncated = len(got) > page
+        for hco, hcp, typ in got[:page]:
+            rel = classify_relationship(typ)
+            rel_rows.append({"hco_record_key": hco, "hcp_record_key": hcp, "affiliation_type": typ,
+                             "kind": rel["kind"], "type_id": rel["type_id"]})
+        if truncated and rel_rows:
+            last = rel_rows[-1]
+            next_cursor = {"hco": last["hco_record_key"], "hcp": last["hcp_record_key"],
+                           "type": last["affiliation_type"]}
+
+    registry = ((await resolve_organisation(db, org_npi=org_npi, org_ccn=org_ccn)).as_dict()
+                if (n["valid"] or c["valid"]) else None)
+    return {**base, "found_in_extract": bool(keys), "organisations": orgs, "organisations_omitted": orgs_omitted,
+            "conflicts": conflicts, "notes": notes, "registry_candidate": registry, "relationships": rel_rows,
+            "total_relationships": total, "returned": len(rel_rows), "page_limit": page,
+            "truncated": truncated, "next_cursor": next_cursor}

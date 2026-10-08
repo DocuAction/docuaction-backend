@@ -63,6 +63,29 @@ if getattr(settings, ac.FLAG, False):
         except ac.SnapshotNotEligible as exc:
             raise HTTPException(409, detail={"code": "SNAPSHOT_NOT_ELIGIBLE", "error": str(exc)}) from exc
 
+    class OrganisationRequest(BaseModel):
+        snapshot_id: uuid.UUID
+        org_npi: Optional[str] = Field(None, max_length=32)
+        org_ccn: Optional[str] = Field(None, max_length=32)
+        hco_record_key: Optional[str] = Field(None, max_length=64)
+        limit: int = Field(100, ge=1, le=10_000)
+        cursor: Optional[dict] = None
+
+    @router.post("/organisation-relationships",
+                 summary="Advisory: organisation-first lookup with conflicts and explicit pagination (approved snapshot only)")
+    async def organisation_relationships(body: OrganisationRequest, response: Response,
+                                         db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
+        _gate(user)
+        response.headers["Cache-Control"] = "no-store"
+        if body.cursor is not None and not {"hco", "hcp", "type"} <= set(body.cursor):
+            raise HTTPException(422, detail={"code": "BAD_CURSOR", "error": "cursor must carry hco, hcp and type"})
+        try:
+            return await ac.organisation_relationships(
+                db, snapshot_id=body.snapshot_id, org_npi=body.org_npi, org_ccn=body.org_ccn,
+                hco_record_key=body.hco_record_key, limit=body.limit, cursor=body.cursor)
+        except ac.SnapshotNotEligible as exc:
+            raise HTTPException(409, detail={"code": "SNAPSHOT_NOT_ELIGIBLE", "error": str(exc)}) from exc
+
     @router.get("/coverage", summary="Truthful statement of whether IQVIA data was used")
     async def coverage(response: Response, db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
         _gate(user)

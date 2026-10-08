@@ -33,8 +33,8 @@ Page-level random sample (TABLESAMPLE 0.05%, 3,953 relationship rows) of snapsho
 * Relationships: 3,564 provider, 389 contact, 0 untyped; 80 HCP-HCO pairs appear under more than one affiliation type; 0 HCP keys with conflicting NPIs; 3,689 distinct HCP keys across 3,953 rows.
 Reading: even if approved, most IQVIA organisations are simply not in the ONC-delivered registry. "Not in registry" is neither invalid nor cleared.
 
-## Performance finding (needs a decision before any org-side lookup)
-The unique key is (snapshot, HCP key, HCO key, type). HCP-side lookups are indexed. Organisation-side lookups (all HCPs of an HCO, or by ORG_NPI/ORG_CCN_ID, which live inside JSONB) would scan 7.55M rows. This PR therefore ships no org-side query. Options, not included: a btree on (source_snapshot_id, hco_record_key) and expression indexes on `payload->>'ORG_NPI'` and `payload->>'ORG_CCN_ID'` through a governed migration, after a storage check (estimated hundreds of MB; to be measured).
+## Organisation lookups and indexes (corrected)
+An earlier version of this section said organisation-side lookups had no index. That was wrong: the table already has `idx_iqvia_affiliation_hco` on the HCO key. Only lookup BY ORG_NPI / ORG_CCN_ID (inside JSONB) is unindexed (28 s measured on DEV). The organisation-first lookup, the options compared, measured sizes and timings, and the recommendation are in `docs/architecture/iqvia_org_first_design.md`.
 
 ## Not included, deliberately
 Writing `entity_source_match` rows; flipping `_matching_capability` for AFFILIATION; any report, bucket or `source_policy` change; the stale "no affiliation file exists" wording (candidate follow-up).
