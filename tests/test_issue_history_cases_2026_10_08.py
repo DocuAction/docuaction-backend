@@ -95,10 +95,14 @@ async def test_case_d_same_npi_under_different_record_ids_is_never_merged(rolled
         assert "not merged" in cand["text"]
         # the other record's own history is not folded in
         assert other not in json.dumps(resp["deliveries"])
-    # the metadata-only audience sees the lead but not the NPI
+    # below reviewer level the association does not exist at all: no key, no id
     viewer = await hist(rolled_back_db, "D", "D1")
-    (vc,) = viewer["candidate_associations"]
-    assert "shared_npi" not in vc and GOOD_NPI not in json.dumps(viewer)
+    assert "candidate_associations" not in viewer
+    assert OIDS["D2"] not in json.dumps(viewer) and GOOD_NPI not in json.dumps(viewer)
+    # identical top-level shape whether or not associations exist (case C has none)
+    await seed_case_c(rolled_back_db)
+    plain = await hist(rolled_back_db, "C")
+    assert set(plain) == set(viewer)
 
 
 @pytest.mark.asyncio

@@ -31,7 +31,7 @@ Endpoint: `GET /api/tefca/rce/entities/by-oid/{oid}/issue-history` (read only).
    chosen"; neither is silently resolved. Records with no record ID are counted per delivery and stated as unlinkable.
 3. A changed NPI under the same record ID stays in one history (`npi.change` = CHANGED / ADDED / REMOVED, compared
    with the named nearest earlier delivery that has a determinate NPI state). Original values are kept.
-4. The same NPI under a DIFFERENT record ID (or no record ID) is never merged: it is listed under
+4. (Reviewer level and above only; see Access.) The same NPI under a DIFFERENT record ID (or no record ID) is never merged: it is listed under
    `candidate_associations` with status UNCONFIRMED and none of that record's history.
 
 ## Evidence rules
@@ -55,6 +55,19 @@ Endpoint: `GET /api/tefca/rce/entities/by-oid/{oid}/issue-history` (read only).
 - Submitted NPI values and previous values, decision rationale and actor identities: role `reviewer` and above
   (the existing reviewer level). Roles below (viewer, contributor, manager) get the redacted history: NPI state words
   and change words, never values. There is no list, count or export surface; logs and audit rows carry no values.
+
+### Candidate associations: access (2026-10-08 change)
+
+- Below reviewer (viewer, contributor, manager) candidate associations do not exist: the query is not run, the
+  `candidate_associations` key is absent, and the response has the same shape whether or not any association exists.
+  The UI renders no block, count or hint.
+- Reviewer and above: an association is returned only if the OTHER record's delivery belongs to a feed the caller is
+  authorized for (role feed list intersected with the account's `feed:<TAG>` entries). The whole history is read from
+  that one authorized intake set, so every second-record or second-delivery surface is bound by the same check:
+  associations, the "earlier deliveries without this record ID" list, sequence gaps (failed intakes), identical-content
+  links, earlier-occurrence and comparable-pass links, and the other-findings block. Anything outside is omitted with no
+  placeholder, no count and no id. A hidden record answers the same 404 as an unknown one. Logs and audit rows carry
+  only the requested id, role and a count.
 
 ## Open decisions
 

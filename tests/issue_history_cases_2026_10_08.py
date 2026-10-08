@@ -80,5 +80,16 @@ async def seed_case_e(db) -> Dict[str, str]:
     return {"jul": jul, "aug": aug, "sep": sep}
 
 
+FEEDS["F1"], FEEDS["F2"] = "SYN-CASE-F1", "SYN-CASE-F2"
+OIDS["F1"], OIDS["F2"] = "9.99.777.100.71", "9.99.777.100.72"
+
+
+async def seed_case_f(db) -> Dict[str, str]:
+    """The SAME NPI under record ids in two DIFFERENT feeds (cross-feed association)."""
+    a = await _delivery(db, 7, FEEDS["F1"], [entity_row(OIDS["F1"], npi=GOOD_NPI)])
+    b = await _delivery(db, 8, FEEDS["F2"], [entity_row(OIDS["F2"], npi=GOOD_NPI)])
+    return {"a": a, "b": b}
+
+
 SEEDERS = {"A": seed_case_a, "B": seed_case_b, "C": seed_case_c, "D": seed_case_d,
-           "E": seed_case_e}
+           "E": seed_case_e, "F": seed_case_f}

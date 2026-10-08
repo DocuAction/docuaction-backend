@@ -45,8 +45,9 @@ async def test_absent_and_rekeyed_entity_is_an_explicit_gap_never_a_pass(rolled_
     # August carries the same organisation (same NPI) under a DIFFERENT key
     aug = await deliver(db, 8, oid="SYN-OID-REKEYED")
     sep = await deliver(db, 9)
-    resp = await history(db)
+    resp = await history(db, reviewer=True)
     assert kinds(resp) == [("ENTITY_ABSENT_OR_REKEYED", str(aug))]
+    assert "candidate_associations" not in await history(db)
     e = entry_of(resp, aug)
     assert e["record_present"] is False
     assert lane(e, NPI2)["check"]["outcome"] == "NOT_AVAILABLE"

@@ -289,8 +289,13 @@ async def get_issue_history(db, oid: str, *, reviewer_or_above: bool, settings,
              for i, f in enumerate(items)},
             failed_intakes))
 
+    # Candidate associations are a REVIEWER-level lead. Below that level the
+    # query is not even run and the key is absent, so a response has the same
+    # shape whether or not associations exist. `all_ids` already holds only the
+    # intakes of the caller's role AND account feeds, so the OTHER side of an
+    # association is subject to the same restriction as this record's side.
     candidates: List[Dict[str, Any]] = []
-    if npi_by_delivery:
+    if reviewer_or_above and npi_by_delivery:
         other = await _rows(db, select(
             t.source_rce_id, t.source_intake_id, t.npi)
             .where(t.source_intake_id.in_(all_ids), t.npi.in_(sorted(set(npi_by_delivery.values()))),
@@ -344,13 +349,14 @@ async def get_issue_history(db, oid: str, *, reviewer_or_above: bool, settings,
             "text": ("This record ID is absent from the earlier delivery(ies) listed; "
                      "that is not a pass and not a correction, and it is not assumed "
                      "to have been re-keyed.")} if (before_first and start == 0) else None),
-        "candidate_associations": [_candidate_view(c, reviewer_or_above, page_ids)
-                                   for c in candidates
-                                   if page_ids.intersection(c["deliveries"])],
+
         "paging": {"limit": limit, "earlier_available": start > 0,
                    "next_before": (page[0]["delivery_id"] if page and start > 0
                                    else None)},
     }
+    if reviewer_or_above:
+        response["candidate_associations"] = [
+            _candidate_view(c, True) for c in candidates]
     if not reviewer_or_above:
         leaked = core.forbidden_keys_present(response)
         if leaked:  # defence in depth: fail closed rather than serve a value
@@ -368,9 +374,9 @@ def _run_view(run: Dict[str, Any]) -> Dict[str, Any]:
             "completed_at": _iso(run["completed_at"])}
 
 
-def _candidate_view(c: Dict[str, Any], reviewer: bool, page_ids) -> Dict[str, Any]:
+def _candidate_view(c: Dict[str, Any], reviewer: bool) -> Dict[str, Any]:
     view = {"record_id": c["record_id"], "status": c["status"], "basis": c["basis"],
-            "deliveries": [d for d in c["deliveries"] if d in page_ids],
+            "deliveries": list(c["deliveries"]),   # all inside the caller's feeds
             "text": c["text"]}
     if reviewer:
         view["shared_npi"] = c["shared_npi"]

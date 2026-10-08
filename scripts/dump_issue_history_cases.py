@@ -31,6 +31,12 @@ async def main(out_dir: str) -> None:
     async with async_session_maker() as db:
         for case in SEEDERS:
             await SEEDERS[case](db)
+        for name, feeds in (("both-feeds", (FEEDS["F1"], FEEDS["F2"])), ("feed-f1-only", (FEEDS["F1"], ""))):
+            conf = SimpleNamespace(ISSUE_HISTORY_FEEDS_VIEWER=feeds[0], ISSUE_HISTORY_FEEDS_REVIEWER=feeds[1])
+            resp = await svc.get_issue_history(db, OIDS["F1"], reviewer_or_above=True, settings=conf)
+            with open(os.path.join(out_dir, f"case-f-reviewer-{name}.json"), "w", encoding="utf-8") as fh:
+                json.dump(resp, fh, indent=2, default=str)
+            print("case-f", name, len(resp.get("candidate_associations", [])), "associations")
         from issue_history_legacy_2026_10_08 import LEG, LEG_FEED, legacy_settings, seed_legacy
         ids = await seed_legacy(db)
         from test_issue_history_other_findings_2026_10_08 import add_issue
