@@ -63,6 +63,29 @@ INDEXES = (
 )
 
 
+#: Operator and test query: any of this revision's indexes that exist but are INVALID (a build that was
+#: interrupted or failed part-way). Empty result = healthy. Also run it after deployment (release document).
+INVALID_INDEX_SQL = (
+    "SELECT c.relname FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid "
+    "WHERE c.relname IN ('ix_iqvia_affil_snapshot_org_npi', 'ix_iqvia_affil_snapshot_org_ccn') "
+    "AND NOT i.indisvalid ORDER BY 1"
+)
+
+
+def _verify_built() -> None:
+    """Fail loudly instead of recording the revision as applied over a missing or INVALID index."""
+    bind = op.get_bind()
+    present = {r[0]: r[1] for r in bind.exec_driver_sql(
+        "SELECT c.relname, i.indisvalid FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid "
+        "WHERE c.relname IN ('ix_iqvia_affil_snapshot_org_npi', 'ix_iqvia_affil_snapshot_org_ccn')").fetchall()}
+    bad = [n for n, _e in INDEXES if present.get(n) is not True]
+    if bad:
+        raise RuntimeError(
+            "IQVIA organisation index build did not complete cleanly (missing or INVALID): "
+            + ", ".join(bad) + ". The revision is NOT recorded. Re-run the same upgrade: an INVALID leftover "
+            "is dropped and rebuilt; nothing else needs cleaning up.")
+
+
 def _drop_invalid_leftover(name: str) -> None:
     """A failed CONCURRENTLY build leaves an INVALID index that IF NOT EXISTS would skip."""
     op.execute(f"""
@@ -89,6 +112,7 @@ def upgrade() -> None:
                 f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} ON {TABLE} "
                 f"(source_snapshot_id, {expr}) WHERE {expr} IS NOT NULL"
             )
+        _verify_built()
 
 
 def downgrade() -> None:

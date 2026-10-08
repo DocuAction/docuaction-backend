@@ -189,3 +189,46 @@ def test_org_indexes_exist_are_partial_owned_and_used(throwaway_db):
     for s, p in plans.items():
         if "hit" in s and "MATERIALIZED" in s:
             assert "Seq Scan on iqvia_affiliation_observation" not in p, p
+
+
+@pytest.mark.usefixtures("db_required")
+def test_interrupted_build_leaves_an_invalid_index_that_is_detected_and_repaired(throwaway_db):
+    """A CONCURRENTLY build that fails part-way leaves an INVALID index under the same name. Simulate a real
+    failed build (a unique concurrent build over duplicate keys), prove the detection query sees it, then prove the
+    same governed upgrade drops the leftover and rebuilds the CORRECT partial index, with the revision recorded
+    only afterwards."""
+    from sqlalchemy import text
+
+    url, eng = throwaway_db
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "mig_20261009", os.path.join(REPO, "alembic", "versions", "20261009_iqvia_affil_org_indexes.py"))
+    mig = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mig)
+
+    _alembic(url, "downgrade", PARENT)                       # both indexes dropped, version = parent
+    assert _index_rows(eng) == {}
+    admin = __import__("sqlalchemy").create_engine(_mig_url(url, "postgresql://"), isolation_level="AUTOCOMMIT")
+    try:
+        with admin.connect() as c:
+            c.execute(text("SET ROLE docuaction_owner"))
+            with pytest.raises(Exception):                   # duplicate (snapshot) keys: the build FAILS
+                c.execute(text(f"CREATE UNIQUE INDEX CONCURRENTLY {NPI_IDX} ON iqvia_affiliation_observation "
+                               "(source_snapshot_id)"))
+        with eng.connect() as c:
+            invalid = c.execute(text(mig.INVALID_INDEX_SQL)).scalars().all()
+        assert invalid == [NPI_IDX], "detection query must report the leftover INVALID index"
+        assert _index_rows(eng)[NPI_IDX][2] is False
+
+        # IF NOT EXISTS alone would skip this name and leave the broken index in place; the upgrade must not.
+        _alembic(url, "upgrade", "head")
+        rows = _index_rows(eng)
+        assert set(rows) == {NPI_IDX, CCN_IDX}
+        for name, key in ((NPI_IDX, "ORG_NPI"), (CCN_IDX, "ORG_CCN_ID")):
+            assert rows[name][2] is True and rows[name][3] is True, f"{name} must be valid and partial"
+            assert f"'{key}'" in rows[name][4] and "UNIQUE" not in rows[name][4]
+        with eng.connect() as c:
+            assert c.execute(text(mig.INVALID_INDEX_SQL)).scalars().all() == []
+            assert c.execute(text("select version_num from alembic_version")).scalars().all() == [HEAD]
+    finally:
+        admin.dispose()
