@@ -93,6 +93,7 @@ R_SCHEMA = "SCHEMA_CHANGED"
 R_COVERAGE = "COVERAGE_NOT_RECORDED"
 R_REGISTRY = "REGISTRY_STATE_DIFFERS"
 R_SCOPE = "RULE_SCOPE_CHANGED"
+R_RULE_SET = "RULE_SET_CHANGED"
 R_SOURCE_UNAVAILABLE = "SOURCE_UNAVAILABLE"
 REGISTRY_NOTE = ("The registry state differed between these runs, so a pass is not "
                  "comparable to this finding.")
@@ -144,6 +145,17 @@ def allowed_feeds(*, reviewer_or_above: bool, viewer_setting: Optional[str],
 
 
 FEED_MODULE_PREFIX = "feed:"
+
+
+def parse_intake_feeds(value: Optional[str]) -> Dict[str, str]:
+    """`<intake uuid>:<FEED>` pairs (comma separated). Malformed pairs are dropped."""
+    out: Dict[str, str] = {}
+    for part in str(value or "").split(","):
+        key, sep, feed = part.strip().partition(":")
+        key, feed = key.strip().lower(), feed.strip()
+        if sep and key and feed:
+            out[key] = feed
+    return out
 
 
 def user_feed_tags(allowed_modules) -> Optional[Tuple[str, ...]]:
@@ -307,6 +319,7 @@ def raw_check(facts: Dict[str, Any], rule_id: str, field: str) -> Dict[str, Any]
     """
     base = {"outcome": OUT_NOT_AVAILABLE, "reason": None, "usable": False,
             "rule_version": None, "requires_hash": None, "scope": None,
+            "rule_set_version": None,
             "source_unavailable": False,
             "coverage_recorded": False, "registry_watermark": None,
             "header_has_field": False,
@@ -323,6 +336,7 @@ def raw_check(facts: Dict[str, Any], rule_id: str, field: str) -> Dict[str, Any]
     by_rule = {h["rule_id"]: h for h in history_rows}
     hist = by_rule.get(rule_id)
     out = {**base, "issues": lane_issues,
+           "rule_set_version": (facts["selected_run"] or {}).get("rule_set_version"),
            "header_has_field": field in (facts.get("headers") or [])}
     if lane_issues:
         out["rule_version"] = lane_issues[0].get("rule_version")
@@ -378,6 +392,9 @@ def compare_identity(a: Dict[str, Any], b: Dict[str, Any], rule_id: str
     this later), identical declaration hash, the lane's delivered field present
     in both headers, and, for INT-002, dataset coverage recorded on both runs.
     """
+    ra, rb = a.get("rule_set_version"), b.get("rule_set_version")
+    if ra is not None and rb is not None and ra != rb:
+        return R_RULE_SET
     if a["rule_version"] != b["rule_version"]:
         return R_VERSION
     if a["requires_hash"] != b["requires_hash"]:
@@ -439,6 +456,9 @@ def classify_recurrence(raws: Sequence[Dict[str, Any]], index: int, rule_id: str
                     and compare_identity(cand, cur, rule_id) == R_REGISTRY):
                 reason = R_REGISTRY
                 break
+    rs_a, rs_b = raws[earlier].get("rule_set_version"), cur.get("rule_set_version")
+    if reason is None and rs_a is not None and rs_b is not None and rs_a != rs_b:
+        reason = R_RULE_SET
     return {"state": REC_PERSISTENT, "reason": reason,
             "statement": PERSISTENT_STATEMENT,
             "earlier_occurrence": earlier, "comparable_pass": None}
@@ -529,6 +549,12 @@ def build_lane_cells(facts_by_delivery: Sequence[Dict[str, Any]], rule_id: str,
             if earlier_issue and classify_qa(earlier_issue[0])["status"] == QA_APPROVED:
                 # A note beside the badges; it changes neither of them.
                 cell["note"] = APPROVED_NOT_FOLLOWED_NOTE
+        if rec and rec.get("reason") == R_RULE_SET:
+            e = raws[rec["earlier_occurrence"]]["rule_set_version"]
+            n = (f"Rule set changed ({e} to {raw['rule_set_version']}) - "
+                                   f"not comparable. The two findings were recorded under "
+                                   f"different rule sets.")
+            cell["note"] = n if not cell["note"] else cell["note"] + "; " + n
         if rec and rec.get("reason") == R_REGISTRY:
             cell["note"] = REGISTRY_NOTE if not cell["note"] else cell["note"] + "; " + REGISTRY_NOTE
         cells.append(cell)

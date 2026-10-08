@@ -60,3 +60,52 @@ Endpoint: `GET /api/tefca/rce/entities/by-oid/{oid}/issue-history` (read only).
 
 Account-level `feed:<TAG>` design; whether the reviewer level is the right value-visibility line; a source for the
 as-of and verified transmission dates; strict vs relaxed schema comparability.
+
+## Real-data readiness (not demonstration)
+
+Everything above is exercised on synthetic data. This section is about the real DEV data, read-only facts
+supplied by the operator; nothing was queried or written by this work.
+
+What is already in DEV: the July snapshot is loaded as a LEGACY source intake (`onc-snapshot-20260720.csv`,
+label ONC-ASTP-2026-08-21, received 2026-08-21, 23,566 records) with a COMPLETE ingestion run under rule set
+1.0.0 (36,916 issues) and NO delivery job, NO delivery-delta row and NO per-record check results. The September full
+snapshot (intake 4417b334, 24,589 records, received 2026-09-02) has job 0930826c and a COMPLETE run under 1.3.0.
+Record IDs: 23,554 in both, 12 July-only, 1,035 September-only. NPI differs for 360 shared IDs (356 blank to value,
+2 value to blank, 2 value to different value). NPIs shared by several record IDs: 281 in July, 495 in September.
+So real cases C (changed NPI, same record ID) and D (same NPI, different record IDs) exist in the data.
+
+Three statements that must not be confused:
+- "July not loaded in DEV" is FALSE: it is loaded as a legacy intake.
+- "July not visible in history" is TRUE until this change ships and the operator enables it.
+- "July unavailable" is FALSE: the original file exists on the workstation (Downloads copy, 10,042,400 bytes, equals the
+  DEV intake and `field_map.PROFILED_SHA256`; the other copy under ONS HHS is a re-save with trailing commas).
+
+What the history builds from: the delivery sequence is built from `rce_source_intakes` inside the caller's authorized
+feeds, NOT from delivery jobs; jobs only add `job_ids`. A legacy intake with no job is therefore already a delivery.
+The one thing it needs is a feed membership: an intake with no `source_metadata.feed` tag is in no feed (fail closed).
+Two ways to give it one: (1) the existing governed `scripts/tag_intake_feed.py` (a data write, operator step), or
+(2) the new read-only setting `ISSUE_HISTORY_INTAKE_FEEDS="<intake uuid>:<FEED>,..."`, which maps an UNTAGGED intake
+into a feed for history only, never overrides a tag, writes nothing, and still requires the feed to be allowed to the
+caller. Default empty.
+
+What the history then shows for the real July and September, with no new data:
+- July as a delivery: delivery job "not recorded (legacy intake, no delivery job)", intake id, system receipt time
+  (labelled as such), operator receipt date / as-of / verified transmission "not recorded", run id and rule set 1.0.0.
+- July findings come from that run's `rce_issues` as recorded under 1.0.0. Every July check lane says "check result not
+  persisted"; nothing is inferred as a pass.
+- Because July ran under rule set 1.0.0 and September under 1.3.0, a finding seen in both shows "Rule set changed - not
+  comparable" and the exact sentence "Issue observed again; persistence or recurrence cannot be established." It can never
+  be RECURRING.
+- The 12 July-only IDs show September as "absent from this delivery"; the 1,035 September-only IDs list July under
+  "earlier deliveries without this record ID". Neither is a pass or a correction.
+- NPI state per delivery and changes (cases C and D) work on the stored record NPI; values for reviewer level and above only.
+- Caveat not verifiable here: July findings whose rule ids are not among the eight slice rules do not appear in the lanes
+  (they are not later-stage findings either). Findings written under 1.0.0 with the slice rule ids appear.
+
+Governed steps only: (1) release of #133 and #72 (migration 20261008 is needed only for FUTURE persisted check
+results, not for showing July and September); (2) operator enablement of `ENABLE_ISSUE_HISTORY`, the viewer/reviewer feed
+lists, and either the feed tag or `ISSUE_HISTORY_INTAKE_FEEDS`; (3) to persist check results for new runs,
+`ENABLE_RECORD_CHECK_RESULTS`. No reprocessing, upload or backfill is needed or performed.
+
+August: no August delivery exists. Its absence is a real gap in the sequence and is shown as such (no August row).
+An August comparison needs an actual August delivery processed with persisted check results.

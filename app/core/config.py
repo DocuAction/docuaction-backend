@@ -109,6 +109,11 @@ class Settings(BaseSettings):
     ENABLE_ISSUE_HISTORY: bool = False
     ISSUE_HISTORY_FEEDS_VIEWER: str = ""
     ISSUE_HISTORY_FEEDS_REVIEWER: str = ""
+    # Read-only mapping "<intake uuid>:<FEED>,..." that lets a LEGACY intake with
+    # NO feed tag be read as a member of FEED for history purposes only. It never
+    # overrides a tag, writes nothing, and the FEED must still be allowed to the
+    # caller. Empty (default) = untagged intakes stay in no feed (fail closed).
+    ISSUE_HISTORY_INTAKE_FEEDS: str = ""
 
     # PROPOSED, INACTIVE. Under the active rules an entity is classified B1
     # and marked verified while SAM.gov or CMS-revocation screening was

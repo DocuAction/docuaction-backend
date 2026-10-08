@@ -35,7 +35,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Sequence
 
-from sqlalchemy import func, select, tuple_
+from sqlalchemy import case, func, literal, select, tuple_
 
 from app.tefca_registry.rce import issue_history_core as core
 from app.tefca_registry.rce import models as m
@@ -65,8 +65,20 @@ def _iso(value) -> Optional[str]:
 
 # ── database reads ───────────────────────────────────────────────────────────
 
-def intakes_query(feeds: Sequence[str]):
-    feed = m.RceSourceIntake.source_metadata["feed"].astext
+def intakes_query(feeds: Sequence[str], legacy: Optional[Dict[str, str]] = None):
+    tag = m.RceSourceIntake.source_metadata["feed"].astext
+    feed = tag
+    if legacy:
+        import uuid as _uuid
+        pairs = []
+        for key, name in legacy.items():
+            try:
+                pairs.append((m.RceSourceIntake.id == _uuid.UUID(key), literal(name)))
+            except ValueError:
+                continue
+        if pairs:
+            # only an UNTAGGED intake can be mapped; a tag always wins
+            feed = func.coalesce(tag, case(*pairs, else_=None))
     return (select(m.RceSourceIntake.id, m.RceSourceIntake.sha256,
                    m.RceSourceIntake.received_at, m.RceSourceIntake.received_by,
                    m.RceSourceIntake.status, m.RceSourceIntake.delivery_label,
@@ -128,7 +140,8 @@ async def get_issue_history(db, oid: str, *, reviewer_or_above: bool, settings,
     if not feeds:
         raise HistoryNotFound(0)
 
-    intakes = await _rows(db, intakes_query(sorted(feeds)))
+    legacy = core.parse_intake_feeds(getattr(settings, "ISSUE_HISTORY_INTAKE_FEEDS", ""))
+    intakes = await _rows(db, intakes_query(sorted(feeds), legacy))
     deliveries = core.build_deliveries(intakes)
     if not deliveries:
         raise HistoryNotFound(0)
@@ -243,10 +256,12 @@ async def get_issue_history(db, oid: str, *, reviewer_or_above: bool, settings,
 
     # Only deliveries from the first one that carries the OID onward.
     cut: Dict[str, List[Dict[str, Any]]] = {}
+    before_first: List[Dict[str, Any]] = []
     for feed, items in per_feed.items():
         first = next((i for i, f in enumerate(items) if f["any_record"]), None)
         if first is not None:
             cut[feed] = items[first:]
+            before_first.extend(items[:first])
     if not cut:
         raise HistoryNotFound(0)
 
@@ -319,6 +334,14 @@ async def get_issue_history(db, oid: str, *, reviewer_or_above: bool, settings,
         "deliveries": page,
         "gaps": gaps,
         "sequence_gaps": sequence_gaps,
+        # Deliveries that PRECEDE the first appearance of this record ID: the ID is
+        # absent from them (not a pass, not corrected). Shown with the oldest page.
+        "earlier_without_record": ({
+            "count": len(before_first),
+            "delivery_ids": [str(f["delivery_id"]) for f in before_first],
+            "text": ("This record ID is absent from the earlier delivery(ies) listed; "
+                     "that is not a pass and not a correction, and it is not assumed "
+                     "to have been re-keyed.")} if (before_first and start == 0) else None),
         "candidate_associations": [_candidate_view(c, reviewer_or_above, page_ids)
                                    for c in candidates
                                    if page_ids.intersection(c["deliveries"])],
@@ -407,6 +430,11 @@ def _delivery_entry(facts: Dict[str, Any], cells: List[Dict[str, Any]],
         "as_of": None, "as_of_note": "not recorded",
         "dates": _dates_view(c, facts["jobs"]),
         "identity": core.identity_of(facts, oid),
+        "intake_id": facts["delivery_id"],
+        "delivery_job": ({"recorded": True, "job_ids": [str(j["id"]) for j in facts["jobs"]]}
+                         if facts["jobs"] else
+                         {"recorded": False, "job_ids": [],
+                          "note": "not recorded (legacy intake, no delivery job)"}),
         "npi": _npi_view(npi, reviewer),
         "label": c.get("delivery_label"),
         "job_ids": [str(j["id"]) for j in facts["jobs"]],

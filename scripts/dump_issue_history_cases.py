@@ -31,6 +31,17 @@ async def main(out_dir: str) -> None:
     async with async_session_maker() as db:
         for case in SEEDERS:
             await SEEDERS[case](db)
+        from issue_history_legacy_2026_10_08 import LEG, LEG_FEED, legacy_settings, seed_legacy
+        ids = await seed_legacy(db)
+        for key in ("BOTH", "SEPONLY"):
+            for audience in ("viewer", "reviewer"):
+                resp = await svc.get_issue_history(
+                    db, LEG[key], reviewer_or_above=(audience == "reviewer"),
+                    settings=legacy_settings(ids))
+                name = f"case-legacy-{key.lower()}-{audience}.json"
+                with open(os.path.join(out_dir, name), "w", encoding="utf-8") as fh:
+                    json.dump(resp, fh, indent=2, default=str)
+                print(name, len(resp["deliveries"]), "deliveries")
         for case, key in plan:
             for audience in ("viewer", "reviewer"):
                 conf = SimpleNamespace(ISSUE_HISTORY_FEEDS_VIEWER=FEEDS[case],
