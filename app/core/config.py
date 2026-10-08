@@ -104,6 +104,15 @@ class Settings(BaseSettings):
     # withhold `verified` for every entity.
     ENFORCE_COMPLETE_EXCLUSION_SCREENING: bool = False
 
+    # TRACK A2 (default OFF). Records a `screening_state` block (INCOMPLETE_SCREENING / NO_HIT / POTENTIAL_MATCH /
+    # ADJUDICATED_CONFIRMATION, per control) beside the classifier input on each review record. Additive only:
+    # no bucket, rule or status changes. See docs/A2_SCREENING_STATES_AND_UNAVAILABLE_SOURCES.md.
+    ENABLE_SCREENING_STATE_RECORDING: bool = False
+    # PROPOSAL, default OFF. A SAM REGISTRATION lookup (NPI-less path) is not an exclusion screen: when on, such a
+    # result counts as INCOMPLETE_SCREENING for the exclusion question and is added to the exclusion-screening gaps
+    # (which withhold `verified` only if ENFORCE_COMPLETE_EXCLUSION_SCREENING is also on). Needs the recording flag.
+    SAM_REGISTRATION_ONLY_IS_INCOMPLETE_SCREENING: bool = False
+
     class Config:
         env_file = ".env"
         extra = "allow"
