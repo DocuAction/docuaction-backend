@@ -82,6 +82,11 @@ class Settings(BaseSettings):
     # REPORT_ARTIFACT_BACKEND.
     ENABLE_DEV_RESTORE_ORIGINAL: bool = False
 
+    # IQVIA HCP_AFFIL consumption (advisory candidates only; never a verification
+    # source, never confirmed). Default False: the routes do not exist. Also needs
+    # ENABLE_IQVIA_SOURCES and an APPROVED snapshot. Not a policy activation.
+    ENABLE_IQVIA_AFFILIATION_CONSUMPTION: bool = False
+
     # Preflight ENFORCEMENT (not the engine itself, which always exists and
     # is always reachable via the admin dry-run route regardless of this
     # flag). Default False: zero behavior change for any official delivery
