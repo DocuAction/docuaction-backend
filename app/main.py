@@ -704,6 +704,10 @@ safe_load("app.tefca_registry.rce.admin_restore_routes", "tefca-rce-admin-restor
 # app/tefca_registry/rce/preflight_shadow_routes.py.
 safe_load("app.tefca_registry.rce.preflight_shadow_routes", "tefca-rce-preflight-shadow")
 
+# Cross-delivery issue history (NPI and partOf/QHIN). Read-only GET; the flag
+# ENABLE_ISSUE_HISTORY (default off) makes it answer 404.
+safe_load("app.tefca_registry.rce.issue_history_routes", "tefca-rce-issue-history")
+
 # Program Manager + Analyst workflow surface at /api/tefca/workflow/*:
 # QHIN work organisation, workload distribution, and the analyst verification
 # workspace. Read surface plus one audited bulk-assignment write; it creates no
