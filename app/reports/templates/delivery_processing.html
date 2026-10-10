@@ -192,7 +192,7 @@
             <tr>
               <td><b>Has anyone approved it?</b></td>
               <td>{{ chip('ok' if (analyst.counts.qa_approved > 0 and analyst.counts.qa_pending == 0 and (analyst.counts.get('qa_returned') or 0) == 0 and (analyst.counts.get('qa_escalated') or 0) == 0 and analyst.counts.open == 0) else 'warn', review.value) }}</td>
-              <td class="q">{{ analyst.counts.review_records|number }} review record(s): {{ analyst.counts.open|number }} open, {{ analyst.counts.claimed|number }} claimed, {{ analyst.counts.qa_pending|number }} awaiting independent QA, {{ (analyst.counts.get('qa_returned') or 0)|number }} returned by QA, {{ (analyst.counts.get('qa_escalated') or 0)|number }} escalated, {{ analyst.counts.qa_approved|number }} QA approved{% if (analyst.counts.get('qa_inconsistent') or 0) %}; {{ (analyst.counts.get('qa_inconsistent') or 0)|number }} QA timestamp(s) with no determination (not approved){% endif %}.</td>
+              <td class="q">{{ analyst.counts.review_records|number }} record(s): {{ analyst.counts.open|number }} open, {{ analyst.counts.claimed|number }} claimed, {{ analyst.counts.qa_pending|number }} awaiting independent QA, {{ (analyst.counts.get('qa_returned') or 0)|number }} returned by QA, {{ (analyst.counts.get('qa_escalated') or 0)|number }} escalated, {{ analyst.counts.qa_approved|number }} QA approved{% if (analyst.counts.get('qa_inconsistent') or 0) %}; {{ (analyst.counts.get('qa_inconsistent') or 0)|number }} QA timestamp(s) with no determination (not approved){% endif %}.</td>
             </tr>
             <tr>
               <td><b>Has it been released?</b></td>
@@ -215,7 +215,7 @@
             <tr><td>Received</td><td class="num">{{ eq.get('received')|number }}</td><td class="gap q">Lines in the delivered file</td></tr>
             <tr><td>Accounted for</td><td class="num">{{ eq.get('accounted')|number }}</td><td class="gap q">created {{ eq.get('created')|number }} &middot; updated {{ eq.get('updated')|number }} &middot; unchanged {{ eq.get('matched_unchanged')|number }}</td></tr>
             <tr><td>Held, rejected, missing key, excluded</td><td class="num">{{ ((eq.get('held') or 0) + (eq.get('rejected') or 0) + (eq.get('missing_key') or 0) + (eq.get('excluded') or 0))|number }}</td><td class="gap q">held {{ eq.get('held')|number }} &middot; rejected {{ eq.get('rejected')|number }} &middot; missing key {{ eq.get('missing_key')|number }} &middot; excluded {{ eq.get('excluded')|number }}</td></tr>
-            <tr class="total"><td>Equation holds</td><td class="num">{{ 'Yes' if eq.get('holds') else 'No' }}</td><td class="gap q">{{ 'PASSED' if reconciliation.passed else 'FAILED' }}{% if not reconciliation.passed %} &mdash; reason under Required next actions{% endif %}{% if reconciliation.reconstructed %} &middot; RECONSTRUCTED snapshot{% endif %}</td></tr>
+            <tr class="total"><td>Equation holds</td><td class="num">{{ 'Yes' if eq.get('holds') else 'No' }}</td><td class="gap q">{{ 'PASSED' if reconciliation.passed else 'FAILED' }}{% if not reconciliation.passed %} &mdash; see next actions{% endif %}{% if reconciliation.reconstructed %} &middot; RECONSTRUCTED snapshot{% endif %}</td></tr>
           </tbody>
         </table>
         {% else %}
@@ -243,7 +243,7 @@
             <tr class="total"><td colspan="3">Total findings</td><td class="num">{{ findings.total|number }}</td></tr>
           </tbody>
         </table>
-        <p class="agt-note">Findings are system results. They are not approved until an analyst determines and a different QA reviewer approves. Line-by-line list: Appendix E.</p>
+        <p class="agt-note">System results, not approved until an analyst determines and a different QA reviewer approves. List: Appendix E.</p>
         {% else %}
         <p class="agt-note">No completed quality run exists for this delivery; findings cannot be stated.</p>
         {% endif %}
