@@ -74,6 +74,12 @@ async def test_report_generation_has_zero_live_connector_dependency(db_required,
         # timestamps before comparing so this proof isn't defeated by that
         # expected, harmless non-determinism.
         html = re.sub(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?\+00:00", "<TS>", html)
+        # The Report Provenance table prints the SAME generation time as "YYYY-MM-DD HH:MM:SS" (space, no offset). The two
+        # generations run a second or more apart, so that value legitimately differs whenever they straddle a second boundary
+        # (root cause of the intermittent failure, measured 2026-10-10: the only diff line was
+        # "Report generated (UTC) ... 07:26:04" vs "07:26:05"). It is normalised like the ISO form above; every other byte
+        # of the report is still compared.
+        html = re.sub(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?=</td>)", "<TS>", html)
         # report_id is sequential per generation (DA-ARC-YYYY-NNN) — a new,
         # expected value every call, not a function of the evidence.
         html = re.sub(r"DA-ARC-\d{4}-\d+", "<REPORT-ID>", html)

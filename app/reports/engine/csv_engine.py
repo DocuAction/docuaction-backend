@@ -341,7 +341,7 @@ def delivery_processing_to_csv(dataset: Dict[str, Any], report_id: str,
         for r in analyst.get("review_records") or []:
             writer.writerow(neutralise_row([
                 r.get("review_id"), r.get("bucket"), r.get("classification_rule"),
-                r.get("classification_rule_version"), r.get("resolution") or "No determination yet",
+                r.get("classification_rule_version"), r.get("resolution") or ("Not recorded in this stored dataset" if (r.get("reportable_at") and not r.get("determination_source")) else "No determination yet"),
                 r.get("determination_source") or "none", r.get("reviewed_at"),
                 r.get("qa_state") or "", r.get("reportable_at")]))
         writer.writerow(["Rule version here is the version each record was classified under; the rule set in force "

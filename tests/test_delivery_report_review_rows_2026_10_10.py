@@ -181,3 +181,36 @@ def test_reconstructed_071_payload_renders_the_corrected_facts():
     csv_text = delivery_processing_to_csv(ds, "DA-ARC-2026-071R", "2026-10-10T00:00:00", rule_set_version=3)
     assert "## Annex A" in csv_text and "## Annex B" in csv_text and "## Annex C" in csv_text
     assert csv_text.count("\r\nDQ-") == 14                       # every one of the 14 findings is in Annex A
+
+
+def test_frozen_071_payload_never_prints_pending_beside_an_approval():
+    """`ds_071.json` is the ORIGINAL stored payload of DA-ARC-2026-071 as read from the DEV database (synthetic data, retrieved
+    2026-10-10 under a temporary read-only firewall rule). It predates the decision-event fields: REV-2026-000248 carries
+    `reportable_at` but `resolution` is null and nothing says who determined it. A report regenerated from it must not print
+    "Pending" or "No determination yet" beside the approval; it says what the stored dataset cannot tell."""
+    import copy
+    import json
+    import re
+    from pathlib import Path
+
+    from app.reports.branding import current_branding
+    from app.reports.engine.csv_engine import delivery_processing_to_csv
+    from app.reports.engine.template_engine import render_html
+    from app.reports.generator import _marking_context
+
+    d = copy.deepcopy(json.loads((Path(__file__).parent / "data" / "delivery_report" / "ds_071.json").read_text(encoding="utf-8")))
+    ds, snap = d["dataset"], d["snapshot"]
+    assert ds["analyst"]["counts"]["claimed"] == 3 and ds["analyst"]["counts"]["qa_approved"] == 1   # the stored (legacy) double count
+    ctx = {k: v for k, v in ds.items() if k not in ("chart_list", "service_version", "review_cycle_id")}
+    brand = current_branding()
+    ctx.update(chart_images={}, branding={**brand.to_dict(), "agt_logo": brand.agt_logo, "government_logo": brand.government_logo},
+               pdf_author=brand.prepared_by, pdf_keywords="t", document_status="Draft", reviewed_by=None, progress=None, annex=None)
+    html = render_html("delivery_processing.html", {**ctx, "snapshot": snap, **_marking_context(snap)})
+    text = re.sub(r"<[^>]+>", " ", html)
+    row = text[text.index("REV-2026-000248"):][:300]
+    assert "Not recorded in this stored dataset" in row and "Approved 2026-09-15 05:02:31" in row
+    assert "Pending" not in row and "No determination yet" not in row
+    other = text[text.index("REV-2026-000251"):][:300]
+    assert "No determination yet" in other                       # negative control: unapproved rows keep the plain wording
+    csv_text = delivery_processing_to_csv(ds, "DA-ARC-2026-071F", "2026-10-10T00:00:00", rule_set_version=3)
+    assert "Not recorded in this stored dataset" in csv_text
