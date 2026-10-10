@@ -424,7 +424,8 @@
 <p class="insufficient-data">No stage events are persisted for this delivery. Stage timings cannot be reconstructed; see the limitations section.</p>
 {% endif %}
 
-<h2 class="dp-newpage">Appendix C. Reconciliation detail</h2>
+{# A forced page break before an appendix whose body is a one-line "not persisted" notice leaves a nearly blank page (report 071: Appendix B and C were each a notice on a page of their own). Break only when there is real evidence on the page being left or entered. #}
+<h2{% if timeline.available or reconciliation.available %} class="dp-newpage"{% endif %}>Appendix C. Reconciliation detail</h2>
 {% if reconciliation.available %}
 {% set eq = reconciliation.equation %}
 <p>
@@ -469,7 +470,7 @@
 <p class="insufficient-data">No reconciliation snapshot is persisted for this delivery.</p>
 {% endif %}
 
-<h2 class="dp-newpage">Appendix D. Dispositions</h2>
+<h2{% if reconciliation.available %} class="dp-newpage"{% endif %}>Appendix D. Dispositions</h2>
 <p>
   The current disposition of every received record, read from the append-only disposition ledger
   (highest sequence per record). {{ dispositions.records_received|number }} record(s) received;
