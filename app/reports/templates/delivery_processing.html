@@ -187,7 +187,7 @@
             <tr>
               <td><b>What was checked against outside sources?</b></td>
               <td>{% if ns.attempted == 0 %}{{ chip('warn', 'Not run &middot; 0%'|safe) }}{% else %}{{ chip('ok' if verification.state == 'Complete' else 'info', verification.state) }}{% endif %}</td>
-              <td class="q">{% if ns.attempted == 0 %}No external source (NPPES, PECOS, OIG LEIE, SAM.gov) was checked. <b>Not run is not the same as clear.</b>{% else %}{{ ns.attempted|number }} source check(s) attempted. See coverage below.{% endif %}</td>
+              <td class="q">{% if ns.attempted == 0 %}No source check was run (see coverage below). <b>Not run is not the same as clear.</b>{% else %}{{ ns.attempted|number }} source check(s) attempted. See coverage below.{% endif %}</td>
             </tr>
             <tr>
               <td><b>Has anyone approved it?</b></td>
@@ -215,7 +215,7 @@
             <tr><td>Received</td><td class="num">{{ eq.get('received')|number }}</td><td class="gap q">Lines in the delivered file</td></tr>
             <tr><td>Accounted for</td><td class="num">{{ eq.get('accounted')|number }}</td><td class="gap q">created {{ eq.get('created')|number }} &middot; updated {{ eq.get('updated')|number }} &middot; unchanged {{ eq.get('matched_unchanged')|number }}</td></tr>
             <tr><td>Held, rejected, missing key, excluded</td><td class="num">{{ ((eq.get('held') or 0) + (eq.get('rejected') or 0) + (eq.get('missing_key') or 0) + (eq.get('excluded') or 0))|number }}</td><td class="gap q">held {{ eq.get('held')|number }} &middot; rejected {{ eq.get('rejected')|number }} &middot; missing key {{ eq.get('missing_key')|number }} &middot; excluded {{ eq.get('excluded')|number }}</td></tr>
-            <tr class="total"><td>Equation holds</td><td class="num">{{ 'Yes' if eq.get('holds') else 'No' }}</td><td class="gap q">{{ 'PASSED' if reconciliation.passed else 'FAILED' }}{% if not reconciliation.passed %} &mdash; {{ reconciliation.failure_reason or 'no reason recorded' }}{% endif %}{% if reconciliation.reconstructed %} &middot; RECONSTRUCTED snapshot{% endif %}</td></tr>
+            <tr class="total"><td>Equation holds</td><td class="num">{{ 'Yes' if eq.get('holds') else 'No' }}</td><td class="gap q">{{ 'PASSED' if reconciliation.passed else 'FAILED' }}{% if not reconciliation.passed %} &mdash; reason under Required next actions{% endif %}{% if reconciliation.reconstructed %} &middot; RECONSTRUCTED snapshot{% endif %}</td></tr>
           </tbody>
         </table>
         {% else %}
@@ -231,13 +231,13 @@
           <caption>Findings grouped by rule, issue type and severity</caption>
           <thead><tr><th scope="col">Rule</th><th scope="col">Issue type</th><th scope="col">Severity</th><th scope="col" class="num">Count</th></tr></thead>
           <tbody>
-            {% for f in findings.by_code[:8] %}
+            {% for f in findings.by_code[:7] %}
             <tr><td class="nw"><b>{{ f.rule_id }}</b></td><td class="q">{{ f.issue_type }}</td><td class="nw">{{ f.severity }}</td><td class="num">{{ f.count|number }}</td></tr>
             {% else %}
             <tr><td>None</td><td>&mdash;</td><td>&mdash;</td><td class="num">0</td></tr>
             {% endfor %}
-            {% if findings.by_code|length > 8 %}
-            {% set rest = findings.by_code[8:] %}
+            {% if findings.by_code|length > 7 %}
+            {% set rest = findings.by_code[7:] %}
             <tr><td colspan="3"><i>+ {{ rest|length|number }} more rule(s), listed in Appendix E</i></td><td class="num">{{ rest|sum(attribute='count')|number }}</td></tr>
             {% endif %}
             <tr class="total"><td colspan="3">Total findings</td><td class="num">{{ findings.total|number }}</td></tr>
