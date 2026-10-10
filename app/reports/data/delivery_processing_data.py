@@ -723,7 +723,7 @@ class DeliveryProcessingDataService:
                            "issue_resolutions": 0,
                            "review_records": 0, "open": 0,
                            "claimed": 0, "qa_pending": 0,
-                           "qa_returned": 0, "qa_escalated": 0,
+                           "qa_returned": 0, "qa_escalated": 0, "qa_inconsistent": 0,
                            "determinations": 0, "qa_approved": 0}}
         if intake is None:
             return empty
@@ -794,6 +794,13 @@ class DeliveryProcessingDataService:
                         "qa_state": qa_state,
                         "qa_at": last_qa.occurred_at if last_qa else None,
                         "approved": qa_gate.is_reportable(evs)}
+            if r.reviewer_resolution is None and r.reportable_at is not None:
+                # A QA timestamp with NO stored determination. The report does not invent the determination and
+                # does not treat the timestamp as a valid approval: an approval is of a determination.
+                return {"source": None, "determined": False, "inconsistent": True,
+                        "determination": None, "bucket": None, "by_role": None, "at": None,
+                        "qa_state": "TIMESTAMP_WITHOUT_DETERMINATION",
+                        "qa_at": r.reportable_at, "approved": False}
             if r.reviewer_resolution is not None or r.reportable_at is not None:
                 return {"source": "legacy_column", "determined": r.reviewer_resolution is not None,
                         "determination": r.reviewer_resolution, "bucket": r.reclassified_to,
@@ -805,9 +812,12 @@ class DeliveryProcessingDataService:
 
         states = {r.review_id: _state(r) for r in reviews}
         open_items = sum(1 for r in reviews
-                         if r.assigned_to_user_id is None and not states[r.review_id]["determined"])
+                         if r.assigned_to_user_id is None and not states[r.review_id]["determined"]
+                         and not states[r.review_id].get("inconsistent"))
         claimed = sum(1 for r in reviews
-                      if r.assigned_to_user_id is not None and not states[r.review_id]["determined"])
+                      if r.assigned_to_user_id is not None and not states[r.review_id]["determined"]
+                      and not states[r.review_id].get("inconsistent"))
+        qa_inconsistent = sum(1 for r in reviews if states[r.review_id].get("inconsistent"))
         # A determination that is not approved is in one of three different states: nobody
         # at QA has looked at it yet, QA returned it to the analyst, or QA escalated it. Only the
         # first is "awaiting independent QA"; counting a returned or escalated record there told
@@ -860,6 +870,7 @@ class DeliveryProcessingDataService:
                        "review_records": len(reviews), "open": open_items,
                        "claimed": claimed, "qa_pending": qa_pending,
                        "qa_returned": qa_returned, "qa_escalated": qa_escalated,
+                       "qa_inconsistent": qa_inconsistent,
                        # Analyst determinations recorded on review records (decision events or the legacy
                        # column). A different thing from `disposition_events` (record-level dispositions
                        # written by the intake pipeline); the report labels the two separately.
@@ -1010,7 +1021,8 @@ class DeliveryProcessingDataService:
             open_work_items=counts["open"] + findings["open_high"],
             claimed_work_items=counts["claimed"],
             determined_items=0,
-            qa_pending=counts["qa_pending"] + counts["qa_returned"] + counts["qa_escalated"],
+            qa_pending=(counts["qa_pending"] + counts["qa_returned"] + counts["qa_escalated"]
+                        + counts["qa_inconsistent"]),
             qa_approved=counts["qa_approved"])
         if job is None and intake is not None:
             self.limit("Processing outcome is derived from the intake alone (no job "

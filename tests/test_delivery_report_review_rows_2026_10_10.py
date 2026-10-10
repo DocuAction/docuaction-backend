@@ -211,12 +211,13 @@ def test_frozen_071_payload_never_prints_pending_beside_an_approval():
     html = render_html("delivery_processing.html", {**ctx, "snapshot": snap, **_marking_context(snap)})
     text = re.sub(r"<[^>]+>", " ", html)
     row = text[text.index("REV-2026-000248"):][:300]
-    assert "Not recorded in this stored dataset" in row and "Approved 2026-09-15 05:02:31" in row
-    assert "Pending" not in row and "No determination yet" not in row
+    assert "Not recorded" in row and "QA timestamp 2026-09-15 05:02:31 stored with no determination" in row
+    assert "not counted as approved" in row and "Pending" not in row and "No determination yet" not in row
+    assert "Approved 2026-09-15" not in row                      # a timestamp is not an approval of a missing determination
     other = text[text.index("REV-2026-000251"):][:300]
     assert "No determination yet" in other                       # negative control: unapproved rows keep the plain wording
     csv_text = delivery_processing_to_csv(ds, "DA-ARC-2026-071F", "2026-10-10T00:00:00", rule_set_version=3)
-    assert "Not recorded in this stored dataset" in csv_text
+    assert "TIMESTAMP_WITHOUT_DETERMINATION 2026-09-15" in csv_text
 
 
 # ── Returned / Escalated are not "awaiting independent QA" (found on DEV report 072, 2026-10-10) ───────────────
@@ -268,3 +269,34 @@ async def test_a_returned_or_escalated_review_is_not_awaiting_qa(rolled_back_db,
     # still not approved: an unapproved determination never counts toward QA approval
     assert c["qa_approved"] == 0
     assert result["dataset"]["review"]["code"] not in ("APPROVED", "READY_FOR_RELEASE")
+
+
+@pytest.mark.asyncio
+async def test_a_qa_timestamp_without_a_determination_is_not_an_approval(rolled_back_db):
+    """Legacy/inconsistent record: `reportable_at` set, no determination anywhere. The report must not invent a
+    determination, must not count the record as approved, and must not also count it as claimed/open (every record
+    sits in exactly one bucket)."""
+    import re
+
+    from app.tefca_registry import models as reg
+    from app.tefca_registry.rce import models as m
+    from sqlalchemy import select
+
+    ids = await seed_delivery(rolled_back_db)
+    review = (await rolled_back_db.execute(select(reg.ReviewRecord).where(
+        reg.ReviewRecord.source_record_id.in_(
+            select(m.RceSourceRecord.id).where(m.RceSourceRecord.source_intake_id == ids["intake_id"]))
+    ))).scalars().first()
+    assert review.reviewer_resolution is None
+    review.reportable_at = datetime(2026, 9, 15, 5, 2, 31)
+    await rolled_back_db.flush()
+
+    result = await _generate(rolled_back_db, job_id=str(ids["job_id"]))
+    an = result["dataset"]["analyst"]
+    c = an["counts"]
+    assert c["qa_approved"] == 0 and c["qa_inconsistent"] == 1 and c["claimed"] == 0 and c["open"] == 0
+    row = next(r for r in an["review_records"] if r["review_id"] == review.review_id)
+    assert row["resolution"] is None and row["reportable_at"] is None and row["qa_state"] == "TIMESTAMP_WITHOUT_DETERMINATION"
+    text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", result["html"]))
+    assert "QA timestamp 2026-09-15 05:02:31 stored with no determination; not counted as approved" in text
+    assert "Decision history:" in text and "Approved 2026-09-15 05:02:31" not in text
