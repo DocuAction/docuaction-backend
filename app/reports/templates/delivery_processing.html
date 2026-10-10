@@ -160,7 +160,7 @@
     <div class="agt-kpi"><p class="l">Processing outcome</p><p class="v sm" style="font-size: 9.5pt; white-space: normal; line-height: 1.25">{{ outcome.value }}</p><p class="n">Review: {{ review.value }}</p></div>
     <div class="agt-kpi"><p class="l">Reconciliation</p><p class="v">{% if reconciliation.available %}{{ 'PASSED' if reconciliation.passed else 'FAILED' }}{% else %}None{% endif %}</p><p class="n">{% if reconciliation.available %}snapshot {{ reconciliation.sequence }} of {{ reconciliation.history_count }}{% else %}no reconciliation snapshot is persisted{% endif %}</p></div>
     <div class="agt-kpi"><p class="l">Findings</p><p class="v">{% if findings.available %}{{ findings.total|number }}{% else %}&mdash;{% endif %}</p><p class="n">{% if findings.available %}{{ findings.open_high|number }} open at HIGH / CRITICAL{% else %}no completed quality run{% endif %}</p></div>
-    <div class="agt-kpi"><p class="l">Review records</p><p class="v">{{ analyst.counts.review_records|number }}</p><p class="n">{{ analyst.counts.qa_approved|number }} independently QA approved &middot; {{ analyst.counts.qa_pending|number }} awaiting QA</p></div>
+    <div class="agt-kpi"><p class="l">Review records</p><p class="v">{{ analyst.counts.review_records|number }}</p><p class="n">{{ analyst.counts.qa_approved|number }} independently QA approved &middot; {{ analyst.counts.qa_pending|number }} awaiting QA{% if (analyst.counts.get('qa_returned') or 0) or (analyst.counts.get('qa_escalated') or 0) %} &middot; {{ (analyst.counts.get('qa_returned') or 0)|number }} returned &middot; {{ (analyst.counts.get('qa_escalated') or 0)|number }} escalated{% endif %}{% if (analyst.counts.get('qa_inconsistent') or 0) %} &middot; {{ (analyst.counts.get('qa_inconsistent') or 0)|number }} QA timestamp without determination{% endif %}</p></div>
   </div>
   <p class="agt-cor">Draft report for one delivery: system results and review status only, no approved findings. Detail: Appendix A&ndash;J.</p>
 
@@ -191,8 +191,8 @@
             </tr>
             <tr>
               <td><b>Has anyone approved it?</b></td>
-              <td>{{ chip('ok' if (analyst.counts.qa_approved > 0 and analyst.counts.qa_pending == 0 and analyst.counts.open == 0) else 'warn', review.value) }}</td>
-              <td class="q">{{ analyst.counts.review_records|number }} review record(s): {{ analyst.counts.open|number }} open, {{ analyst.counts.claimed|number }} claimed, {{ analyst.counts.qa_pending|number }} awaiting independent QA, {{ analyst.counts.qa_approved|number }} QA approved.</td>
+              <td>{{ chip('ok' if (analyst.counts.qa_approved > 0 and analyst.counts.qa_pending == 0 and (analyst.counts.get('qa_returned') or 0) == 0 and (analyst.counts.get('qa_escalated') or 0) == 0 and analyst.counts.open == 0) else 'warn', review.value) }}</td>
+              <td class="q">{{ analyst.counts.review_records|number }} review record(s): {{ analyst.counts.open|number }} open, {{ analyst.counts.claimed|number }} claimed, {{ analyst.counts.qa_pending|number }} awaiting independent QA, {{ (analyst.counts.get('qa_returned') or 0)|number }} returned by QA to the analyst, {{ (analyst.counts.get('qa_escalated') or 0)|number }} escalated, {{ analyst.counts.qa_approved|number }} QA approved{% if (analyst.counts.get('qa_inconsistent') or 0) %}; {{ (analyst.counts.get('qa_inconsistent') or 0)|number }} with a QA timestamp but no stored determination (not counted as approved){% endif %}.</td>
             </tr>
             <tr>
               <td><b>Has it been released?</b></td>
@@ -329,6 +329,9 @@
       {% if analyst.counts.open %}{% set a %}<li><b>Analyst review:</b> {{ analyst.counts.open|number }} review record(s) are open and need to be claimed and determined.</li>{% endset %}{% set _ = acts.append(a) %}{% endif %}
       {% if analyst.counts.claimed %}{% set a %}<li><b>Analyst determination:</b> {{ analyst.counts.claimed|number }} claimed record(s) need a determination.</li>{% endset %}{% set _ = acts.append(a) %}{% endif %}
       {% if analyst.counts.qa_pending %}{% set a %}<li><b>Independent QA:</b> {{ analyst.counts.qa_pending|number }} determination(s) await approval by a QA reviewer other than the analyst.</li>{% endset %}{% set _ = acts.append(a) %}{% endif %}
+      {% if (analyst.counts.get('qa_returned') or 0) %}{% set a %}<li><b>Analyst rework:</b> {{ (analyst.counts.get('qa_returned') or 0)|number }} determination(s) were returned by QA and need the analyst to revise or re-submit them.</li>{% endset %}{% set _ = acts.append(a) %}{% endif %}
+      {% if (analyst.counts.get('qa_escalated') or 0) %}{% set a %}<li><b>Escalated:</b> {{ (analyst.counts.get('qa_escalated') or 0)|number }} determination(s) were escalated by QA and await a decision.</li>{% endset %}{% set _ = acts.append(a) %}{% endif %}
+      {% if (analyst.counts.get('qa_inconsistent') or 0) %}{% set a %}<li><b>Decision history:</b> {{ (analyst.counts.get('qa_inconsistent') or 0)|number }} review record(s) carry a QA timestamp but no stored analyst determination; confirm the decision history before relying on them.</li>{% endset %}{% set _ = acts.append(a) %}{% endif %}
       <div class="agt-box"><h2 class="agt-h2">Required next actions</h2>
         <ol>
           {% for a in acts[:4] %}{{ a }}
@@ -670,9 +673,9 @@
 {% endif %}
 
 <h2>Appendix H. Analyst actions</h2>
-<p>{{ analyst.counts.disposition_events|number }} analyst disposition(s), {{ analyst.counts.issue_resolutions|number }} finding resolution(s),
+<p>{{ (analyst.counts.get('determinations') or 0)|number if analyst.counts.get('determinations') is not none else 'Not recorded in this stored dataset' }} analyst determination(s) on review records, {{ analyst.counts.disposition_events|number }} record-level disposition event(s) by an analyst (intake pipeline, listed below when present), {{ analyst.counts.issue_resolutions|number }} finding resolution(s),
   {{ analyst.counts.review_records|number }} review record(s) ({{ analyst.counts.open|number }} open, {{ analyst.counts.claimed|number }} claimed,
-  {{ analyst.counts.qa_pending|number }} awaiting QA, {{ analyst.counts.qa_approved|number }} QA approved).
+  {{ analyst.counts.qa_pending|number }} awaiting QA, {{ (analyst.counts.get('qa_returned') or 0)|number }} returned by QA, {{ (analyst.counts.get('qa_escalated') or 0)|number }} escalated, {{ analyst.counts.qa_approved|number }} QA approved{% if (analyst.counts.get('qa_inconsistent') or 0) %}, {{ (analyst.counts.get('qa_inconsistent') or 0)|number }} with a QA timestamp but no stored determination (not counted as approved){% endif %}).
   {% if analyst.rule_versions_in_effect %}
     Classification rule set version{{ 's' if analyst.rule_versions_in_effect|length > 1 else '' }} in effect for this
     delivery's review records:
@@ -743,10 +746,10 @@
       <th scope="row" class="hash">{{ r.review_id }}</th>
       <td>{% if r.bucket in ('B1', 'B2', 'B3', 'B4') %}<span class="agt-chip {{ r.bucket|lower }}">{{ r.bucket }}</span>{% else %}{{ r.bucket or '—' }}{% endif %}</td>
       <td>{{ r.classification_rule or '—' }}{% if r.classification_rule_version is not none %} (v{{ r.classification_rule_version }}){% endif %}</td>
-      <td>{{ r.resolution or ('Not recorded in this stored dataset' if (r.reportable_at and not r.get('determination_source')) else 'No determination yet') }}{% if r.reclassified_to %} &rarr; {{ r.reclassified_to }}{% endif %}{% if r.get('determination_source') == 'legacy_column' %} <i>(legacy column)</i>{% endif %}</td>
+      <td>{{ r.resolution or ('Not recorded' if (r.reportable_at or r.get('qa_state') == 'TIMESTAMP_WITHOUT_DETERMINATION') else 'No determination yet') }}{% if r.reclassified_to %} &rarr; {{ r.reclassified_to }}{% endif %}{% if r.get('determination_source') == 'legacy_column' %} <i>(legacy column)</i>{% endif %}</td>
       <td>{{ 'Yes' if r.assigned else 'No' }}</td>
       <td class="nw">{{ ts(r.reviewed_at) }}</td>
-      <td class="nw">{% if r.reportable_at %}Approved {{ ts(r.reportable_at) }}{% elif r.get('qa_state') == 'RETURNED' %}Returned {{ ts(r.get('qa_event_at')) }}{% elif r.get('qa_state') == 'ESCALATED' %}Escalated {{ ts(r.get('qa_event_at')) }}{% elif r.resolution %}Awaiting QA{% else %}&mdash;{% endif %}</td>
+      <td class="nw">{% if r.reportable_at and r.resolution %}Approved {{ ts(r.reportable_at) }}{% elif r.reportable_at or r.get('qa_state') == 'TIMESTAMP_WITHOUT_DETERMINATION' %}QA timestamp {{ ts(r.reportable_at or r.get('qa_event_at')) }} stored with no determination; not counted as approved{% elif r.get('qa_state') == 'RETURNED' %}Returned {{ ts(r.get('qa_event_at')) }}{% elif r.get('qa_state') == 'ESCALATED' %}Escalated {{ ts(r.get('qa_event_at')) }}{% elif r.resolution %}Awaiting QA{% else %}&mdash;{% endif %}</td>
     </tr>
     {% endfor %}
   </tbody>
