@@ -146,6 +146,9 @@ def test_stored_datasets_from_before_this_change_still_render(name):
                progress=None, annex=None)
     html = render_html("delivery_processing.html", {**ctx, "snapshot": snap, **_marking_context(snap)})
     assert "Classified under rule" in html and "Answered" in html
+    # a stored dataset has no determinations count: it must say so, never print a number it cannot know
+    import re as _re
+    assert "Not recorded in this stored dataset analyst determination" in _re.sub(r"\s+", " ", _re.sub(r"<[^>]+>", " ", html))
 
 
 def test_reconstructed_071_payload_renders_the_corrected_facts():
@@ -214,3 +217,54 @@ def test_frozen_071_payload_never_prints_pending_beside_an_approval():
     assert "No determination yet" in other                       # negative control: unapproved rows keep the plain wording
     csv_text = delivery_processing_to_csv(ds, "DA-ARC-2026-071F", "2026-10-10T00:00:00", rule_set_version=3)
     assert "Not recorded in this stored dataset" in csv_text
+
+
+# ── Returned / Escalated are not "awaiting independent QA" (found on DEV report 072, 2026-10-10) ───────────────
+@pytest.mark.asyncio
+@pytest.mark.parametrize("qa_action,label,counter", [("RETURN", "Returned", "qa_returned"),
+                                                     ("ESCALATE", "Escalated", "qa_escalated")])
+async def test_a_returned_or_escalated_review_is_not_awaiting_qa(rolled_back_db, qa_action, label, counter):
+    """After QA returns or escalates a determination the next action belongs to the analyst / the escalation
+    owner, not to QA. The cover, the status row, the next actions and Appendix H must say so, while the record
+    still counts as NOT approved (so the report is never "ready" because of it)."""
+    import re
+
+    from app.tefca_registry import models as reg
+    from app.tefca_registry.rce import models as m
+    from sqlalchemy import select
+
+    ids = await seed_delivery(rolled_back_db)
+    review = (await rolled_back_db.execute(select(reg.ReviewRecord).where(
+        reg.ReviewRecord.source_record_id.in_(
+            select(m.RceSourceRecord.id).where(m.RceSourceRecord.source_intake_id == ids["intake_id"]))
+    ))).scalars().first()
+    det_at, qa_at = datetime(2026, 9, 15, 4, 37, 33), datetime(2026, 9, 15, 5, 3, 55)
+    rolled_back_db.add(reg.ReviewDecisionEvent(
+        id=uuid.uuid4(), review_id=review.review_id, sequence_number=1, event_type="ANALYST_DETERMINATION",
+        actor_user_id=uuid.uuid4(), actor_email="analyst@example.test", actor_role="reviewer",
+        occurred_at=det_at, determination="CONFIRM", rationale="synthetic determination rationale"))
+    rolled_back_db.add(reg.ReviewDecisionEvent(
+        id=uuid.uuid4(), review_id=review.review_id, sequence_number=2, event_type="QA_REVIEW",
+        actor_user_id=uuid.uuid4(), actor_email="qa@example.test", actor_role="qalead",
+        occurred_at=qa_at, qa_action=qa_action, qa_reason="synthetic QA", rationale="synthetic QA",
+        **({"escalated_to_user_id": uuid.uuid4(), "escalation_reason": "synthetic escalation reason"}
+           if qa_action == "ESCALATE" else {})))
+    await rolled_back_db.flush()
+
+    result = await _generate(rolled_back_db, job_id=str(ids["job_id"]))
+    an = result["dataset"]["analyst"]
+    c = an["counts"]
+    assert c["qa_pending"] == 0 and c[counter] == 1 and c["qa_approved"] == 0
+    text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", result["html"]))
+    assert "0 awaiting independent QA" in text and "0 awaiting QA" in text
+    # determinations (review records) and record-level dispositions (intake pipeline) are labelled as different things
+    assert "1 analyst determination(s) on review records" in text and re.search(r"\d+ record-level disposition event\(s\) by an analyst", text)
+    assert f"{label} 2026-09-15 05:03:55" in text
+    if qa_action == "RETURN":
+        assert "Analyst rework" in text and "1 returned by QA" in text
+    else:
+        assert "Escalated:" in text and "1 escalated" in text
+    assert "await approval by a QA reviewer" not in text      # nobody owes QA a decision on this record
+    # still not approved: an unapproved determination never counts toward QA approval
+    assert c["qa_approved"] == 0
+    assert result["dataset"]["review"]["code"] not in ("APPROVED", "READY_FOR_RELEASE")

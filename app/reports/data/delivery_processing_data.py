@@ -723,7 +723,8 @@ class DeliveryProcessingDataService:
                            "issue_resolutions": 0,
                            "review_records": 0, "open": 0,
                            "claimed": 0, "qa_pending": 0,
-                           "qa_approved": 0}}
+                           "qa_returned": 0, "qa_escalated": 0,
+                           "determinations": 0, "qa_approved": 0}}
         if intake is None:
             return empty
         D = tm.RceDispositionEvent
@@ -807,8 +808,16 @@ class DeliveryProcessingDataService:
                          if r.assigned_to_user_id is None and not states[r.review_id]["determined"])
         claimed = sum(1 for r in reviews
                       if r.assigned_to_user_id is not None and not states[r.review_id]["determined"])
-        qa_pending = sum(1 for r in reviews
-                         if states[r.review_id]["determined"] and not states[r.review_id]["approved"])
+        # A determination that is not approved is in one of three different states: nobody
+        # at QA has looked at it yet, QA returned it to the analyst, or QA escalated it. Only the
+        # first is "awaiting independent QA"; counting a returned or escalated record there told
+        # the reader the wrong party owed the next action.
+        def _unapproved(r, qa_state):
+            st = states[r.review_id]
+            return st["determined"] and not st["approved"] and st["qa_state"] == qa_state
+        qa_pending = sum(1 for r in reviews if _unapproved(r, "NOT_YET_REVIEWED"))
+        qa_returned = sum(1 for r in reviews if _unapproved(r, "RETURNED"))
+        qa_escalated = sum(1 for r in reviews if _unapproved(r, "ESCALATED"))
         qa_approved = sum(1 for r in reviews if states[r.review_id]["approved"])
         return {
             "available": bool(human or resolved or reviews),
@@ -850,6 +859,11 @@ class DeliveryProcessingDataService:
             "counts": {"disposition_events": len(human), "issue_resolutions": len(resolved),
                        "review_records": len(reviews), "open": open_items,
                        "claimed": claimed, "qa_pending": qa_pending,
+                       "qa_returned": qa_returned, "qa_escalated": qa_escalated,
+                       # Analyst determinations recorded on review records (decision events or the legacy
+                       # column). A different thing from `disposition_events` (record-level dispositions
+                       # written by the intake pipeline); the report labels the two separately.
+                       "determinations": sum(1 for r in reviews if states[r.review_id]["determined"]),
                        "qa_approved": qa_approved},
             "review_records_shown": min(len(reviews), _REVIEW_RECORD_ROW_CAP),
             "review_records_total": len(reviews),
@@ -995,7 +1009,8 @@ class DeliveryProcessingDataService:
             snapshot_passed=bool(snapshot and snapshot.get("passed")),
             open_work_items=counts["open"] + findings["open_high"],
             claimed_work_items=counts["claimed"],
-            determined_items=0, qa_pending=counts["qa_pending"],
+            determined_items=0,
+            qa_pending=counts["qa_pending"] + counts["qa_returned"] + counts["qa_escalated"],
             qa_approved=counts["qa_approved"])
         if job is None and intake is not None:
             self.limit("Processing outcome is derived from the intake alone (no job "
