@@ -115,3 +115,31 @@ async def test_a_qa_approved_review_is_not_printed_as_pending(rolled_back_db):
     if sec:
         c = next(v for k, v in sec.items() if k.startswith("Annex C"))
         assert any(r[0] == review.review_id and r[4] == "CONFIRM" and r[7] == "APPROVED" for r in c)
+
+
+# ── the template must still render STORED datasets written before these fields existed ─────────────────────────
+@pytest.mark.parametrize("name", ["060", "061", "067", "068"])
+def test_stored_datasets_from_before_this_change_still_render(name):
+    """A stored report is regenerated from its stored dataset on download. Those datasets carry no `answered_pct`,
+    `determination_source` or `qa_state`; the template must tolerate that (strict undefined) and say nothing it
+    cannot know: Answered shows a dash, never a number."""
+    import copy
+    import json
+    from pathlib import Path
+
+    from app.reports.branding import current_branding
+    from app.reports.engine.template_engine import render_html
+    from app.reports.generator import _marking_context
+
+    d = copy.deepcopy(json.loads((Path(__file__).parent / "data" / "delivery_report" / f"ds_{name}.json")
+                                 .read_text(encoding="utf-8")))
+    ds, snap = d["dataset"], d["snapshot"]
+    assert all("answered_pct" not in s_ for s_ in ds["verification"]["sources"])
+    ctx = {k: v for k, v in ds.items() if k not in ("chart_list", "service_version", "review_cycle_id")}
+    brand = current_branding()
+    ctx.update(chart_images={}, branding={**brand.to_dict(), "agt_logo": brand.agt_logo,
+                                          "government_logo": brand.government_logo},
+               pdf_author=brand.prepared_by, pdf_keywords="t", document_status="Draft", reviewed_by=None,
+               progress=None, annex=None)
+    html = render_html("delivery_processing.html", {**ctx, "snapshot": snap, **_marking_context(snap)})
+    assert "Classified under rule" in html and "Answered" in html
