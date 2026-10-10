@@ -85,8 +85,7 @@ def _every_action_and_long_status(d):
     ds["findings"]["open_high"] = 98765
     ds["reconciliation"]["available"] = True
     ds["reconciliation"]["passed"] = False
-    ds["reconciliation"]["failure_reason"] = ("synthetic: received 123456 records does not equal the 123450 accounted "
-                                              "for; six records carry no disposition and two were counted twice")
+    ds["reconciliation"]["failure_reason"] = "synthetic: received 123456 does not equal accounted 123450 (6 unaccounted, 2 double-counted)"
     ds["readiness"]["available"] = False
     for s in ds["verification"]["sources"]:
         s["attempted"] = 0
