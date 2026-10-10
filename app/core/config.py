@@ -129,6 +129,33 @@ class Settings(BaseSettings):
     # withhold `verified` for every entity.
     ENFORCE_COMPLETE_EXCLUSION_SCREENING: bool = False
 
+    # ── Track A3: QA independence + deadline/notification controls ────────────
+    # EVERY flag below defaults OFF; turning one on is a policy decision, not a
+    # deployment detail. See docs/A3-qa-independence-and-deadline-controls.md.
+    #
+    # Closes the "SoD exception is self-attestable" gap: when on, the named
+    # grantor must be a real, active, admin-role user other than the QA actor
+    # and other than the analyst whose determination is being reviewed.
+    ENABLE_SOD_GRANTOR_VERIFICATION: bool = False
+    # PROPOSAL (open owner decision O-01, not an approved requirement): the
+    # person who generated a report may not record its PM review / ready-for-
+    # delivery decision.
+    ENABLE_RELEASE_GENERATOR_SEPARATION: bool = False
+    # PROPOSAL: READY_FOR_DELIVERY additionally requires an explicit
+    # `acknowledge_read=true` from the releaser (recorded in the history).
+    ENABLE_RELEASE_READ_ACK: bool = False
+    # Writes a durable audit row (machine code) for a refused QA / release act.
+    ENABLE_DENIAL_AUDIT: bool = False
+    # Exposes the deadline dry-run endpoint (computes, sends nothing).
+    ENABLE_DEADLINE_DRY_RUN: bool = False
+    # Deadline configuration (JSON). Empty = nothing resolved; every deadline
+    # reports UNCONFIGURED. No clock-start or hours-vs-business-day default.
+    DEADLINE_CONFIG_JSON: str = ""
+    # Notifications are INACTIVE. Sending needs BOTH the flag AND a named,
+    # registered transport, and is always suppressed under pytest.
+    ENABLE_NOTIFICATIONS: bool = False
+    NOTIFICATION_TRANSPORT: str = ""
+
     class Config:
         env_file = ".env"
         extra = "allow"

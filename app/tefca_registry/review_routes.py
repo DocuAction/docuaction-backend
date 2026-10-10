@@ -891,6 +891,19 @@ class SupersedeDetermination(BaseModel):
     rationale: Optional[str] = Field(None, max_length=4000)
 
 
+async def _refused(db, exc, act: str, review_id: str, user, request):
+    """Turn a QaGateRefused into a 409 carrying its machine code (header
+    `X-Denial-Code`), auditing the denial when ENABLE_DENIAL_AUDIT is on.
+    Status and message text are unchanged from before."""
+    from app.tefca_registry import qa_controls
+    code = getattr(exc, "code", None) or (
+        "NOT_CASE_OWNER" if type(exc).__name__ == "AssignmentRefused" else "QA_REFUSED")
+    await qa_controls.audit_denial(
+        db, action=f"qa_denied_{act}", code=code, user=user,
+        ip_address=get_client_ip(request), metadata={"review_id": review_id})
+    raise HTTPException(**qa_controls.denial_http(str(exc), code))
+
+
 @router.post("/reviews/{review_id}/determination",
              dependencies=[Depends(require_role("reviewer"))])
 async def record_determination(review_id: str, req: AnalystDetermination,
@@ -931,7 +944,7 @@ async def record_determination(review_id: str, req: AnalystDetermination,
     try:
         require_owner(record, user)
     except AssignmentRefused as exc:
-        raise HTTPException(409, str(exc))
+        await _refused(db, exc, "determination", review_id, user, request)
 
     try:
         result = await record_analyst_determination(
@@ -939,7 +952,7 @@ async def record_determination(review_id: str, req: AnalystDetermination,
             determined_bucket=req.determined_bucket, rationale=req.rationale,
             ip_address=get_client_ip(request))
     except QaGateRefused as exc:
-        raise HTTPException(409, str(exc))
+        await _refused(db, exc, "determination", review_id, user, request)
     await db.commit()
     return result
 
@@ -961,7 +974,7 @@ async def submit_qa(review_id: str, req: QaReview, request: Request,
             sod_exception_reason=req.sod_exception_reason,
             ip_address=get_client_ip(request))
     except QaGateRefused as exc:
-        raise HTTPException(409, str(exc))
+        await _refused(db, exc, "qa", review_id, user, request)
     await db.commit()
     return result
 
@@ -983,7 +996,7 @@ async def supersede(review_id: str, req: SupersedeDetermination, request: Reques
             supersession_reason=req.supersession_reason,
             rationale=req.rationale, ip_address=get_client_ip(request))
     except QaGateRefused as exc:
-        raise HTTPException(409, str(exc))
+        await _refused(db, exc, "supersede", review_id, user, request)
     await db.commit()
     return result
 
@@ -1561,3 +1574,39 @@ async def entity_verification_coverage(
     if assessment is None:
         raise HTTPException(404, "No such entity.")
     return assessment.to_dict()
+
+
+# ── Track A3: deadline dry-run (PROPOSAL, flag-gated, computes only) ─────────
+
+class DeadlineItem(BaseModel):
+    item_id: str = Field(max_length=100)
+    rule: str = Field(max_length=60)
+    events: Dict[str, datetime] = Field(default_factory=dict)
+
+
+class DeadlineDryRun(BaseModel):
+    items: List[DeadlineItem] = Field(max_length=500)
+    #: Optional JSON config; when absent DEADLINE_CONFIG_JSON is used.
+    config_json: Optional[str] = Field(None, max_length=20000)
+
+
+@router.post("/deadlines/dry-run", dependencies=[Depends(require_role("admin"))],
+             summary="PROPOSAL: compute deadline due times; sends nothing, stores nothing")
+async def deadlines_dry_run(req: DeadlineDryRun,
+                            user=Depends(require_role("admin"))):
+    from app.core.config import settings
+    from app.tefca_registry import deadlines as dl
+    from app.tefca_registry import qa_controls
+
+    if not qa_controls.flag("ENABLE_DEADLINE_DRY_RUN"):
+        raise HTTPException(409, "deadline dry-run is disabled "
+                                 "(ENABLE_DEADLINE_DRY_RUN is off)",
+                            headers={"X-Denial-Code": "FEATURE_DISABLED"})
+    try:
+        config = dl.parse_config(req.config_json if req.config_json is not None
+                                 else getattr(settings, "DEADLINE_CONFIG_JSON", ""))
+    except dl.DeadlineConfigError as exc:
+        raise HTTPException(422, str(exc))
+    return dl.build_register(
+        [{"item_id": i.item_id, "rule": i.rule, "events": i.events}
+         for i in req.items], config)
