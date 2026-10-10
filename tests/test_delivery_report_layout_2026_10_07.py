@@ -65,6 +65,17 @@ def _busy_cover(d):
     return d
 
 
+def _returned_escalated_cover(d):
+    """The live DA-ARC-2026-073 state: no reconciliation, three open HIGH findings and one record each open,
+    returned, escalated and approved. Its next-actions box spilled onto a near-blank page 2 before this scenario."""
+    ds = d["dataset"]
+    ds["analyst"]["counts"].update({"open": 1, "claimed": 0, "qa_pending": 0, "qa_returned": 1,
+                                    "qa_escalated": 1, "qa_inconsistent": 0, "approved": 1})
+    ds["findings"]["open_high"] = 3
+    ds["reconciliation"]["available"] = False
+    return d
+
+
 def _long_timeline(d):
     ev = d["dataset"]["timeline"]["events"]
     d["dataset"]["timeline"]["events"] = [dict(ev[i % len(ev)], id=f"syn-{i}", attempt=1 + i // len(ev))
@@ -81,6 +92,7 @@ SCENARIOS = {
     "exceptions_061": lambda: _fixture("061"),
     "many_rules": lambda: _many_rules(_fixture("061")),
     "busy_cover": lambda: _busy_cover(_fixture("061")),
+    "returned_escalated_cover": lambda: _returned_escalated_cover(_fixture("060")),
     "worst_case": lambda: _long_timeline(_busy_cover(_many_rules(_fixture("061")))),
 }
 
