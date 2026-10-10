@@ -192,7 +192,7 @@
             <tr>
               <td><b>Has anyone approved it?</b></td>
               <td>{{ chip('ok' if (analyst.counts.qa_approved > 0 and analyst.counts.qa_pending == 0 and (analyst.counts.get('qa_returned') or 0) == 0 and (analyst.counts.get('qa_escalated') or 0) == 0 and analyst.counts.open == 0) else 'warn', review.value) }}</td>
-              <td class="q">{{ analyst.counts.review_records|number }} review record(s): {{ analyst.counts.open|number }} open, {{ analyst.counts.claimed|number }} claimed, {{ analyst.counts.qa_pending|number }} awaiting independent QA, {{ (analyst.counts.get('qa_returned') or 0)|number }} returned by QA to the analyst, {{ (analyst.counts.get('qa_escalated') or 0)|number }} escalated, {{ analyst.counts.qa_approved|number }} QA approved{% if (analyst.counts.get('qa_inconsistent') or 0) %}; {{ (analyst.counts.get('qa_inconsistent') or 0)|number }} with a QA timestamp but no stored determination (not counted as approved){% endif %}.</td>
+              <td class="q">{{ analyst.counts.review_records|number }} review record(s): {{ analyst.counts.open|number }} open, {{ analyst.counts.claimed|number }} claimed, {{ analyst.counts.qa_pending|number }} awaiting independent QA, {{ (analyst.counts.get('qa_returned') or 0)|number }} returned by QA, {{ (analyst.counts.get('qa_escalated') or 0)|number }} escalated, {{ analyst.counts.qa_approved|number }} QA approved{% if (analyst.counts.get('qa_inconsistent') or 0) %}; {{ (analyst.counts.get('qa_inconsistent') or 0)|number }} QA timestamp(s) with no determination (not approved){% endif %}.</td>
             </tr>
             <tr>
               <td><b>Has it been released?</b></td>
