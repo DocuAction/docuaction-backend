@@ -1,0 +1,679 @@
+{
+ "dataset": {
+  "build": {
+   "git_sha": "0130c8ab6cfdf4f24ee0f1b5f45d46b93ab10798",
+   "version": "6.0.0",
+   "build_time": "2026-10-09T16:02:49Z",
+   "environment": "development",
+   "migration_revision": "20261009_iqvia_affil_org_indexes"
+  },
+  "review": {
+   "code": "NOT_READY",
+   "value": "Not Ready",
+   "detail": "Review cannot start until processing has completed and reconciliation has passed."
+  },
+  "analyst": {
+   "counts": {
+    "open": 1,
+    "claimed": 3,
+    "qa_pending": 0,
+    "qa_approved": 1,
+    "review_records": 4,
+    "issue_resolutions": 0,
+    "disposition_events": 0
+   },
+   "available": true,
+   "review_records": [
+    {
+     "bucket": "B3",
+     "assigned": false,
+     "entity_id": "63fa3081-54fb-4218-acb5-d2b18b7ff3f8",
+     "review_id": "REV-2026-000251",
+     "created_at": "2026-09-15T04:07:50.415980",
+     "resolution": null,
+     "reviewed_at": null,
+     "reportable_at": null,
+     "reclassified_to": null,
+     "source_record_id": null,
+     "classification_rule": "RULE-004",
+     "classification_rule_version": 2
+    },
+    {
+     "bucket": "B3",
+     "assigned": true,
+     "entity_id": "ac5696f3-295c-49ef-aba4-1693a6623cc4",
+     "review_id": "REV-2026-000250",
+     "created_at": "2026-09-15T04:07:50.415980",
+     "resolution": null,
+     "reviewed_at": null,
+     "reportable_at": null,
+     "reclassified_to": null,
+     "source_record_id": null,
+     "classification_rule": "RULE-004",
+     "classification_rule_version": 2
+    },
+    {
+     "bucket": "B3",
+     "assigned": true,
+     "entity_id": "6fc2758f-2edb-4859-8370-ff6d1de996e4",
+     "review_id": "REV-2026-000249",
+     "created_at": "2026-09-15T04:07:50.415980",
+     "resolution": null,
+     "reviewed_at": null,
+     "reportable_at": null,
+     "reclassified_to": null,
+     "source_record_id": null,
+     "classification_rule": "RULE-004",
+     "classification_rule_version": 2
+    },
+    {
+     "bucket": "B3",
+     "assigned": true,
+     "entity_id": "fe64453a-caeb-47c7-82e1-0701537b0010",
+     "review_id": "REV-2026-000248",
+     "created_at": "2026-09-15T04:07:50.415980",
+     "resolution": null,
+     "reviewed_at": null,
+     "reportable_at": "2026-09-15T05:02:31.124410",
+     "reclassified_to": null,
+     "source_record_id": null,
+     "classification_rule": "RULE-004",
+     "classification_rule_version": 2
+    }
+   ],
+   "issue_resolutions": [],
+   "disposition_events": [],
+   "review_records_shown": 4,
+   "review_records_total": 4,
+   "rule_versions_in_effect": [
+    2
+   ]
+  },
+  "lineage": {
+   "rows": [],
+   "available": true,
+   "by_column": {},
+   "rows_shown": 0,
+   "by_authority": {},
+   "corrections_total": 0,
+   "entities_promoted": 4,
+   "entity_versions_in_window": 4
+  },
+  "outcome": {
+   "code": "PARTIALLY_PROCESSED",
+   "basis": [
+    {
+     "held": false,
+     "detail": "no reconciliation snapshot persisted",
+     "criterion": "reconciliation_passed"
+    }
+   ],
+   "value": "Partially Processed",
+   "detail": "The job finished but no reconciliation snapshot exists."
+  },
+  "delivery": {
+   "stage": "READY_FOR_REVIEW",
+   "state": "SUCCEEDED",
+   "job_id": "e49c25d1-cd72-4929-9853-0487680cb2ae",
+   "sha256": "884d3ddfa305ee0afedd522812b31f7147d9f710e935d34166debbee9c0c4f93",
+   "encoding": "utf-8",
+   "filename": "synthetic_rce_delivery_QA.txt",
+   "delimiter": "|",
+   "failed_at": null,
+   "intake_id": "61fe1cf6-9a8a-436f-9568-06060b3c4d4a",
+   "registrant": "testadmin@docuaction.io",
+   "started_at": "2026-09-15T04:06:16.641331",
+   "source_name": "SYNTHETIC QA FIXTURE",
+   "completed_at": "2026-09-15T04:06:30.080531",
+   "error_reason": null,
+   "record_count": 6,
+   "attempt_count": 1,
+   "intake_status": "PARSED",
+   "received_date": "2026-09-15T00:00:00",
+   "registered_at": "2026-09-15T04:06:12.782852",
+   "resolved_from": "intake_id",
+   "delivery_label": "September 2026 (synthetic QA)",
+   "file_size_bytes": 1939,
+   "duplicate_content": false,
+   "intake_received_at": "2026-09-15T00:00:00",
+   "schema_fingerprint": "1cd655e9120dc9d0d6a52697ea470519b138fe0f9334af6f69467f3485ade3d0",
+   "government_reference": "SYNTHETIC-QA-2026-09-15",
+   "records_received_by_job": 6,
+   "records_processed_by_job": 6
+  },
+  "findings": {
+   "rows": [
+    {
+     "rule_id": "INT-002",
+     "severity": "HIGH",
+     "field_name": "partOf",
+     "issue_code": "DQ-20260915-3c8a7ac3-000005",
+     "issue_type": "MISSING_PART_OF",
+     "resolution": "OPEN",
+     "description": "No partOf. Every record in the profiled delivery carried one.",
+     "line_number": 2,
+     "resolved_at": null,
+     "resolved_by": null,
+     "rule_version": "1.0.0",
+     "source_record_id": "947eb507-8d67-4c87-8fa7-dbc1d19e0a96",
+     "correction_authority": "NO_CORRECTION"
+    },
+    {
+     "rule_id": "REQ-001",
+     "severity": "HIGH",
+     "field_name": "sequoiaorgtype",
+     "issue_code": "DQ-20260915-3c8a7ac3-000003",
+     "issue_type": "UNKNOWN_SEQUOIA_ORG_TYPE",
+     "resolution": "OPEN",
+     "description": "sequoiaorgtype 'QHIN' is outside the values observed in the profiled delivery ['Participant', 'Subparticipant']. Treated as unknown rather than invalid \u2014 the delivery may legitimately carry a value the profile did not see.",
+     "line_number": 2,
+     "resolved_at": null,
+     "resolved_by": null,
+     "rule_version": "1.0.0",
+     "source_record_id": "947eb507-8d67-4c87-8fa7-dbc1d19e0a96",
+     "correction_authority": "HUMAN_REQUIRED"
+    },
+    {
+     "rule_id": "NPI-002",
+     "severity": "HIGH",
+     "field_name": "NPI",
+     "issue_code": "DQ-20260915-3c8a7ac3-000009",
+     "issue_type": "NPI_MALFORMED",
+     "resolution": "OPEN",
+     "description": "NPI '12345' is not 10 digits (length 5). Preserved unaltered; an NPI is an identity field and is never repaired automatically.",
+     "line_number": 5,
+     "resolved_at": null,
+     "resolved_by": null,
+     "rule_version": "1.0.0",
+     "source_record_id": "bbd08a4c-1ab9-446d-8e84-731190f5486e",
+     "correction_authority": "HUMAN_REQUIRED"
+    },
+    {
+     "rule_id": "FMT-003",
+     "severity": "MEDIUM",
+     "field_name": "address_postalCode",
+     "issue_code": "DQ-20260915-3c8a7ac3-000004",
+     "issue_type": "ZIP_STATE_MISMATCH",
+     "resolution": "OPEN",
+     "description": "ZIP 99999 has a 3-digit prefix normally allocated to AK, but the record states MA. Both values are preserved \u2014 nothing in the record establishes which of the two is wrong, and inferring one from the other would fabricate an address.",
+     "line_number": 2,
+     "resolved_at": null,
+     "resolved_by": null,
+     "rule_version": "1.0.0",
+     "source_record_id": "947eb507-8d67-4c87-8fa7-dbc1d19e0a96",
+     "correction_authority": "HUMAN_REQUIRED"
+    },
+    {
+     "rule_id": "NPI-001",
+     "severity": "INFORMATIONAL",
+     "field_name": "NPI",
+     "issue_code": "DQ-20260915-3c8a7ac3-000002",
+     "issue_type": "NPI_NOT_SUPPLIED",
+     "resolution": "OPEN",
+     "description": "No NPI supplied. This is legitimate for a large share of TEFCA entities \u2014 4,584 of 23,566 records (19.45%) in the profiled delivery \u2014 and is never treated as a verification failure. Medicare applicability is determined separately in D2.",
+     "line_number": 2,
+     "resolved_at": null,
+     "resolved_by": null,
+     "rule_version": "1.0.0",
+     "source_record_id": "947eb507-8d67-4c87-8fa7-dbc1d19e0a96",
+     "correction_authority": "NO_CORRECTION"
+    },
+    {
+     "rule_id": "BUS-003",
+     "severity": "INFORMATIONAL",
+     "field_name": "partOf",
+     "issue_code": "DQ-20260915-3c8a7ac3-000007",
+     "issue_type": "PARTICIPANT_PARENT_IS_QHIN",
+     "resolution": "OPEN",
+     "description": "A Participant whose partOf equals its orgManagingOrg \u2014 the shape on all 11,077 Participants in the profiled delivery. One managed_by_qhin edge is created; no second sub_participant_of edge is emitted, because both fields express the same fact and two edges would double-count it.",
+     "line_number": 3,
+     "resolved_at": null,
+     "resolved_by": null,
+     "rule_version": "1.0.0",
+     "source_record_id": "f1462cac-51f9-4186-ba2b-9a0f5ddb5f64",
+     "correction_authority": "NO_CORRECTION"
+    },
+    {
+     "rule_id": "FMT-003",
+     "severity": "MEDIUM",
+     "field_name": "address_postalCode",
+     "issue_code": "DQ-20260915-3c8a7ac3-000006",
+     "issue_type": "ZIP_STATE_MISMATCH",
+     "resolution": "OPEN",
+     "description": "ZIP 99999 has a 3-digit prefix normally allocated to AK, but the record states MA. Both values are preserved \u2014 nothing in the record establishes which of the two is wrong, and inferring one from the other would fabricate an address.",
+     "line_number": 3,
+     "resolved_at": null,
+     "resolved_by": null,
+     "rule_version": "1.0.0",
+     "source_record_id": "f1462cac-51f9-4186-ba2b-9a0f5ddb5f64",
+     "correction_authority": "HUMAN_REQUIRED"
+    },
+    {
+     "rule_id": "FMT-003",
+     "severity": "MEDIUM",
+     "field_name": "address_postalCode",
+     "issue_code": "DQ-20260915-3c8a7ac3-000008",
+     "issue_type": "ZIP_STATE_MISMATCH",
+     "resolution": "OPEN",
+     "description": "ZIP 99999 has a 3-digit prefix normally allocated to AK, but the record states MA. Both values are preserved \u2014 nothing in the record establishes which of the two is wrong, and inferring one from the other would fabricate an address.",
+     "line_number": 4,
+     "resolved_at": null,
+     "resolved_by": null,
+     "rule_version": "1.0.0",
+     "source_record_id": "1aa25322-a8bf-442b-a439-4ffe8ecbb08f",
+     "correction_authority": "HUMAN_REQUIRED"
+    },
+    {
+     "rule_id": "FMT-003",
+     "severity": "MEDIUM",
+     "field_name": "address_postalCode",
+     "issue_code": "DQ-20260915-3c8a7ac3-000010",
+     "issue_type": "ZIP_STATE_MISMATCH",
+     "resolution": "OPEN",
+     "description": "ZIP 99999 has a 3-digit prefix normally allocated to AK, but the record states MA. Both values are preserved \u2014 nothing in the record establishes which of the two is wrong, and inferring one from the other would fabricate an address.",
+     "line_number": 5,
+     "resolved_at": null,
+     "resolved_by": null,
+     "rule_version": "1.0.0",
+     "source_record_id": "bbd08a4c-1ab9-446d-8e84-731190f5486e",
+     "correction_authority": "HUMAN_REQUIRED"
+    },
+    {
+     "rule_id": "FMT-003",
+     "severity": "MEDIUM",
+     "field_name": "address_postalCode",
+     "issue_code": "DQ-20260915-3c8a7ac3-000012",
+     "issue_type": "ZIP_STATE_MISMATCH",
+     "resolution": "OPEN",
+     "description": "ZIP 99999 has a 3-digit prefix normally allocated to AK, but the record states MA. Both values are preserved \u2014 nothing in the record establishes which of the two is wrong, and inferring one from the other would fabricate an address.",
+     "line_number": 6,
+     "resolved_at": null,
+     "resolved_by": null,
+     "rule_version": "1.0.0",
+     "source_record_id": "d10bd523-f779-4500-aae8-46b03bb3e4c7",
+     "correction_authority": "HUMAN_REQUIRED"
+    },
+    {
+     "rule_id": "NPI-001",
+     "severity": "INFORMATIONAL",
+     "field_name": "NPI",
+     "issue_code": "DQ-20260915-3c8a7ac3-000011",
+     "issue_type": "NPI_NOT_SUPPLIED",
+     "resolution": "OPEN",
+     "description": "No NPI supplied. This is legitimate for a large share of TEFCA entities \u2014 4,584 of 23,566 records (19.45%) in the profiled delivery \u2014 and is never treated as a verification failure. Medicare applicability is determined separately in D2.",
+     "line_number": 6,
+     "resolved_at": null,
+     "resolved_by": null,
+     "rule_version": "1.0.0",
+     "source_record_id": "d10bd523-f779-4500-aae8-46b03bb3e4c7",
+     "correction_authority": "NO_CORRECTION"
+    },
+    {
+     "rule_id": "FMT-003",
+     "severity": "MEDIUM",
+     "field_name": "address_postalCode",
+     "issue_code": "DQ-20260915-3c8a7ac3-000014",
+     "issue_type": "ZIP_STATE_MISMATCH",
+     "resolution": "OPEN",
+     "description": "ZIP 99999 has a 3-digit prefix normally allocated to AK, but the record states MA. Both values are preserved \u2014 nothing in the record establishes which of the two is wrong, and inferring one from the other would fabricate an address.",
+     "line_number": 7,
+     "resolved_at": null,
+     "resolved_by": null,
+     "rule_version": "1.0.0",
+     "source_record_id": "080e33d2-1acb-4005-a172-b7b543a87cb9",
+     "correction_authority": "HUMAN_REQUIRED"
+    },
+    {
+     "rule_id": "NPI-001",
+     "severity": "INFORMATIONAL",
+     "field_name": "NPI",
+     "issue_code": "DQ-20260915-3c8a7ac3-000013",
+     "issue_type": "NPI_NOT_SUPPLIED",
+     "resolution": "OPEN",
+     "description": "No NPI supplied. This is legitimate for a large share of TEFCA entities \u2014 4,584 of 23,566 records (19.45%) in the profiled delivery \u2014 and is never treated as a verification failure. Medicare applicability is determined separately in D2.",
+     "line_number": 7,
+     "resolved_at": null,
+     "resolved_by": null,
+     "rule_version": "1.0.0",
+     "source_record_id": "080e33d2-1acb-4005-a172-b7b543a87cb9",
+     "correction_authority": "NO_CORRECTION"
+    },
+    {
+     "rule_id": "SCH-002",
+     "severity": "INFORMATIONAL",
+     "field_name": "transaction, NAIC, CCN, alias, email, contact_company",
+     "issue_code": "DQ-20260915-3c8a7ac3-000001",
+     "issue_type": "COLUMN_EMPTY_IN_DELIVERY",
+     "resolution": "OPEN",
+     "description": "6 columns are present in the header but empty on every record: transaction, NAIC, CCN, alias, email, contact_company. Structurally delivered, semantically absent. Recorded once for the delivery rather than once per record.",
+     "line_number": null,
+     "resolved_at": null,
+     "resolved_by": null,
+     "rule_version": "1.0.0",
+     "source_record_id": null,
+     "correction_authority": "NO_CORRECTION"
+    }
+   ],
+   "total": 14,
+   "run_id": "3c8a7ac3-3766-4bbe-8bd4-8aa7bf9572a3",
+   "by_code": [
+    {
+     "count": 6,
+     "rule_id": "FMT-003",
+     "severity": "MEDIUM",
+     "issue_type": "ZIP_STATE_MISMATCH"
+    },
+    {
+     "count": 3,
+     "rule_id": "NPI-001",
+     "severity": "INFORMATIONAL",
+     "issue_type": "NPI_NOT_SUPPLIED"
+    },
+    {
+     "count": 1,
+     "rule_id": "BUS-003",
+     "severity": "INFORMATIONAL",
+     "issue_type": "PARTICIPANT_PARENT_IS_QHIN"
+    },
+    {
+     "count": 1,
+     "rule_id": "INT-002",
+     "severity": "HIGH",
+     "issue_type": "MISSING_PART_OF"
+    },
+    {
+     "count": 1,
+     "rule_id": "NPI-002",
+     "severity": "HIGH",
+     "issue_type": "NPI_MALFORMED"
+    },
+    {
+     "count": 1,
+     "rule_id": "REQ-001",
+     "severity": "HIGH",
+     "issue_type": "UNKNOWN_SEQUOIA_ORG_TYPE"
+    },
+    {
+     "count": 1,
+     "rule_id": "SCH-002",
+     "severity": "INFORMATIONAL",
+     "issue_type": "COLUMN_EMPTY_IN_DELIVERY"
+    }
+   ],
+   "available": true,
+   "open_high": 3,
+   "rows_shown": 14,
+   "rows_total": 14,
+   "by_severity": {
+    "LOW": 0,
+    "HIGH": 3,
+    "MEDIUM": 6,
+    "CRITICAL": 0,
+    "INFORMATIONAL": 5
+   },
+   "by_resolution": {
+    "OPEN": 14
+   },
+   "rule_set_version": "1.1.0"
+  },
+  "rechecks": {
+   "rows": [],
+   "total": 0,
+   "by_state": {},
+   "available": true
+  },
+  "timeline": {
+   "events": [],
+   "summary": {
+    "attempts": 0,
+    "failed_stage": null,
+    "completed_stages": []
+   },
+   "available": false
+  },
+  "readiness": {
+   "run": {
+    "id": "da3fd438-717a-42f6-914e-2a7fe6a657dc",
+    "actor": "testadmin@docuaction.io",
+    "error": null,
+    "status": "COMPLETE",
+    "started_at": "2026-10-10T04:40:42.036060+00:00",
+    "completed_at": "2026-10-10T04:40:42.515448+00:00",
+    "findings_count": 19,
+    "rule_set_version": "1.3.0",
+    "field_map_version": "1.0.0",
+    "preflight_version": "1.0.0",
+    "records_evaluated": 6,
+    "classification_gate": "CLEAR_WITH_FINDINGS",
+    "normalizations_count": 0
+   },
+   "available": true,
+   "by_category": {
+    "IDENTIFIER": 13,
+    "MISSING_CONTEXT": 6
+   },
+   "by_disposition": {
+    "open": 15,
+    "informational": 4
+   }
+  },
+  "audit_note": "Generation of this report is recorded in audit_logs (action=report_generated) and linked to the job, intake and snapshot in rce_delivery_report_links. Every download is recorded as report_downloaded. The report reads persisted evidence only: no rule is re-run, no reconciliation is recomputed and no external lookup is performed while it is produced.",
+  "provenance": {
+   "build_sha": "0130c8ab6cfdf4f24ee0f1b5f45d46b93ab10798",
+   "intake_id": "61fe1cf6-9a8a-436f-9568-06060b3c4d4a",
+   "scope_type": "DELIVERY",
+   "delivery_label": "September 2026 (synthetic QA)",
+   "delivery_job_id": "e49c25d1-cd72-4929-9853-0487680cb2ae",
+   "review_cycle_id": null,
+   "source_filename": "synthetic_rce_delivery_QA.txt",
+   "source_file_sha256": "884d3ddfa305ee0afedd522812b31f7147d9f710e935d34166debbee9c0c4f93",
+   "reconciliation_snapshot_id": null
+  },
+  "identifiers": {
+   "available": true,
+   "conflicts": [],
+   "rows_shown": 0,
+   "rows_total": 0,
+   "unresolved": 0,
+   "events_total": 0
+  },
+  "limitations": [
+   "No reconciliation snapshot is persisted for this delivery: reconciliation never ran, never completed, or ran before snapshots were persisted. No reconciliation of record exists.",
+   "No stage events were recorded for this job: it was processed before durable stage events existed. Stage timings cannot be reconstructed.",
+   "No disposition events exist for this delivery: it was processed before record-level accounting was persisted. Per-record outcomes cannot be stated from evidence; see docs/rce/HISTORICAL_RECONSTRUCTION_POLICY.md for the dry-run reconstruction tool.",
+   "No check was attempted at PECOS (0 attempted, 0% coverage at that source). 'Not run' means no check was performed. It does not mean the entities were checked and found clear, so this report draws no screening or exclusion conclusion for those sources."
+  ],
+  "snapshot_id": null,
+  "dispositions": {
+   "rows": [],
+   "counts": {
+    "HELD": 0,
+    "total": 0,
+    "CREATED": 0,
+    "UPDATED": 0,
+    "EXCLUDED": 0,
+    "REJECTED": 0,
+    "MISSING_KEY": 0,
+    "MATCHED_UNCHANGED": 0
+   },
+   "equation": {
+    "held": 0,
+    "holds": false,
+    "created": 0,
+    "updated": 0,
+    "excluded": 0,
+    "received": 6,
+    "rejected": 0,
+    "accounted": 0,
+    "difference": 6,
+    "missing_key": 0,
+    "matched_unchanged": 0
+   },
+   "available": false,
+   "rows_shown": 0,
+   "rows_total": 0,
+   "human_count": 0,
+   "records_received": 6,
+   "reconstructed_count": 0,
+   "agrees_with_snapshot": null,
+   "records_without_disposition": 6
+  },
+  "verification": {
+   "state": "Partial",
+   "reason": null,
+   "source": "verification_coverage",
+   "sources": [
+    {
+     "name": "nppes",
+     "note": "Connector readiness is not coverage: a source counts as attempted only when an evidence row exists for an entity of this delivery.",
+     "state": "Complete",
+     "failed": 0,
+     "eligible": 4,
+     "verified": 0,
+     "attempted": 4,
+     "not_found": 4,
+     "unavailable": 0,
+     "coverage_pct": 100.0
+    },
+    {
+     "name": "pecos",
+     "note": "Connector readiness is not coverage: a source counts as attempted only when an evidence row exists for an entity of this delivery.",
+     "state": "Not Run",
+     "failed": 0,
+     "eligible": 4,
+     "verified": 0,
+     "attempted": 0,
+     "not_found": 0,
+     "unavailable": 0,
+     "coverage_pct": 0.0
+    },
+    {
+     "name": "leie",
+     "note": "Connector readiness is not coverage: a source counts as attempted only when an evidence row exists for an entity of this delivery.",
+     "state": "Complete",
+     "failed": 0,
+     "eligible": 4,
+     "verified": 2,
+     "attempted": 4,
+     "not_found": 2,
+     "unavailable": 0,
+     "coverage_pct": 100.0
+    },
+    {
+     "name": "sam",
+     "note": "Connector readiness is not coverage: a source counts as attempted only when an evidence row exists for an entity of this delivery.",
+     "state": "Unavailable",
+     "failed": 0,
+     "eligible": 4,
+     "verified": 0,
+     "attempted": 4,
+     "not_found": 0,
+     "unavailable": 4,
+     "coverage_pct": 100.0
+    }
+   ],
+   "available": true,
+   "failed_required": 0
+  },
+  "snapshot_hash": null,
+  "reconciliation": {
+   "id": null,
+   "hash": null,
+   "actor": null,
+   "checks": [],
+   "passed": null,
+   "trigger": null,
+   "equation": {},
+   "sequence": null,
+   "available": false,
+   "build_sha": null,
+   "is_latest": false,
+   "created_at": null,
+   "dimensions": {},
+   "history_count": 0,
+   "reconstructed": false,
+   "correlation_id": null,
+   "failure_reason": null,
+   "source_evidence": {},
+   "migration_revision": null
+  },
+  "review_cycle_id": null,
+  "service_version": "1.0.0",
+  "template_version": "1.0.0",
+  "snapshot_sequence": null,
+  "snapshot_is_latest": false,
+  "snapshot_created_at": null
+ },
+ "snapshot": {
+  "report_id": "DA-ARC-2026-071",
+  "pdf_engine": {
+   "note": "A tagged PDF is a precondition for accessibility, not proof of it. No Section 508 conformance is claimed from successful generation.",
+   "engine": "WeasyPrint",
+   "reason": "WeasyPrint and its native dependencies are available.",
+   "version": "70.0",
+   "available": true,
+   "pdf_variant_requested": "pdf/ua-1"
+  },
+  "report_type": "delivery_processing",
+  "generated_by": "testadmin@docuaction.io",
+  "accessibility": {
+   "errors": [],
+   "warnings": [
+    {
+     "check": "image_alt_text",
+     "context": "Alliance Global Tech Inc. logo",
+     "message": "Chart alt text is very short; it should convey the same key finding as the visual, not merely name the chart.",
+     "severity": "warning"
+    }
+   ],
+   "checks_run": [
+    "document_language",
+    "document_title",
+    "image_alt_text",
+    "table_headers",
+    "heading_order",
+    "status_not_colour_only",
+    "no_remote_assets",
+    "contrast"
+   ],
+   "conformance_claim": "Automated structural accessibility checks passed (headings, table headers, image alternatives, document language and title, colour contrast, non-colour status encoding). This establishes the PRESENCE of the required structures only. It is NOT a claim of Section 508 conformance: that determination requires the manual review listed alongside this statement and the project's accessibility sign-off.",
+   "manual_review_required": [
+    "Keyboard-only navigation of the HTML report",
+    "Screen-reader spot check (reading order, announced headings, table semantics)",
+    "PDF logical reading-order inspection against the visual layout",
+    "Confirmation that each chart's narrative conveys the same key finding as the visual",
+    "Zoom / reflow / readability inspection at 200%"
+   ],
+   "automated_checks_passed": true
+  },
+  "review_cycle_id": "DEV-CYCLE-phase6-bulk-1.1.0-884d3ddfa305",
+  "query_parameters": {
+   "intake_id": "61fe1cf6-9a8a-436f-9568-06060b3c4d4a"
+  },
+  "template_version": "1.0.0",
+  "data_payload_hash": "7eb631962640e8bc970c938de70c0d917521d4fdb8d6c39c5c307546ce043668",
+  "source_provenance": {
+   "sha256": "884d3ddfa305ee0afedd522812b31f7147d9f710e935d34166debbee9c0c4f93",
+   "status": "PARSED",
+   "intake_id": "61fe1cf6-9a8a-436f-9568-06060b3c4d4a",
+   "received_at": "2026-09-15T00:00:00",
+   "record_count": 6,
+   "has_no_dataset": false,
+   "original_filename": "synthetic_rce_delivery_QA.txt",
+   "is_government_data": false,
+   "schema_fingerprint": "1cd655e9120dc9d0d6a52697ea470519b138fe0f9334af6f69467f3485ade3d0",
+   "unavailable_reason": null,
+   "data_classification": "DEVELOPMENT_TEST",
+   "has_authoritative_hash": true
+  },
+  "b1_b4_rule_version": "3",
+  "data_classification": "DEVELOPMENT_TEST",
+  "evidence_generation": "2026-10-09T15:25:23.565546",
+  "generation_timestamp": "2026-10-10T04:41:32.161559+00:00",
+  "reporting_period_end": null,
+  "rce_source_file_sha256": "884d3ddfa305ee0afedd522812b31f7147d9f710e935d34166debbee9c0c4f93",
+  "reporting_period_start": null,
+  "dataset_snapshot_version": "2026-10-09T15:25:23.565546",
+  "report_data_service_version": "1.0.0"
+ }
+}

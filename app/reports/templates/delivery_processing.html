@@ -255,15 +255,15 @@
           {{ cols([22, 19, 15, 16, 14, 14]) }}
           <caption>Verification coverage per source</caption>
           <thead>
-            <tr><th scope="col">Source</th><th scope="col">State</th><th scope="col" class="num">Eligible</th><th scope="col" class="num">Attempted</th><th scope="col" class="num">Verified</th><th scope="col" class="num">Coverage</th></tr>
+            <tr><th scope="col">Source</th><th scope="col">State</th><th scope="col" class="num">Eligible</th><th scope="col" class="num">Attempted</th><th scope="col" class="num">Verified</th><th scope="col" class="num">Answered</th></tr>
           </thead>
           <tbody>
             {% for s in verification.sources %}
-            <tr><td class="nw"><b>{{ src_label(s.name) }}</b></td><td class="nw">{{ s.state }}</td><td class="num">{{ s.eligible|number }}</td><td class="num">{{ s.attempted|number }}</td><td class="num">{{ s.verified|number }}</td><td class="num">{% if s.coverage_pct is none %}Not run{% else %}{{ s.coverage_pct }}%{% endif %}</td></tr>
+            <tr><td class="nw"><b>{{ src_label(s.name) }}</b></td><td class="nw">{{ s.state }}</td><td class="num">{{ s.eligible|number }}</td><td class="num">{{ s.attempted|number }}</td><td class="num">{{ s.verified|number }}</td><td class="num">{% if s.get('answered_pct') is none %}{% if s.coverage_pct is none %}Not run{% else %}&mdash;{% endif %}{% else %}{{ s.get('answered_pct') }}%{% endif %}</td></tr>
             {% endfor %}
           </tbody>
         </table>
-        <p class="agt-note">Coverage counts what was attempted for this delivery's entities; connector readiness is not coverage. Not-found, unavailable and failed counts per source: Appendix G.</p>
+        <p class="agt-note">Answered = verified + not found; unavailable or failed checks are attempted, not answered. Connector readiness is not coverage. Detail: Appendix G.</p>
       </div>
     </div>
 
@@ -311,10 +311,10 @@
 
       <div class="agt-box"><h2 class="agt-h2">Evidence limitations</h2>
         <ul>
-          {# Bounded so the cover stays on ONE page: at most three are printed; the rest are counted, and the CSV export carries all of them. #}
-          {% for item in limitations[:3] %}<li>{{ item }}</li>
+          {# Bounded so the cover stays on ONE page (R-02, report 071: the next-actions box spilled to page 2): at most two are printed, each cut at 150 characters; every one is stated in full in the CSV export and counted here. #}
+          {% for item in limitations[:2] %}<li>{{ item|truncate(150, true, '&hellip;'|safe) }}</li>
           {% else %}<li>No limitation was recorded: every section was read from persisted evidence for this delivery.</li>{% endfor %}
-          {% if limitations|length > 3 %}<li><i>+ {{ (limitations|length - 3)|number }} more limitation(s) are stated in the CSV export.</i></li>{% endif %}
+          {% if limitations|length > 2 %}<li><i>+ {{ (limitations|length - 2)|number }} more limitation(s), and the full text of those above, are in the CSV export (&ldquo;Evidence limitations&rdquo;).</i></li>{% endif %}
         </ul>
       </div>
 
@@ -424,7 +424,8 @@
 <p class="insufficient-data">No stage events are persisted for this delivery. Stage timings cannot be reconstructed; see the limitations section.</p>
 {% endif %}
 
-<h2 class="dp-newpage">Appendix C. Reconciliation detail</h2>
+{# A forced page break before an appendix whose body is a one-line "not persisted" notice leaves a nearly blank page (report 071: Appendix B and C were each a notice on a page of their own). Break only when there is real evidence on the page being left or entered. #}
+<h2{% if timeline.available or reconciliation.available %} class="dp-newpage"{% endif %}>Appendix C. Reconciliation detail</h2>
 {% if reconciliation.available %}
 {% set eq = reconciliation.equation %}
 <p>
@@ -469,7 +470,7 @@
 <p class="insufficient-data">No reconciliation snapshot is persisted for this delivery.</p>
 {% endif %}
 
-<h2 class="dp-newpage">Appendix D. Dispositions</h2>
+<h2{% if reconciliation.available %} class="dp-newpage"{% endif %}>Appendix D. Dispositions</h2>
 <p>
   The current disposition of every received record, read from the append-only disposition ledger
   (highest sequence per record). {{ dispositions.records_received|number }} record(s) received;
@@ -620,14 +621,15 @@
 
 <h2>Appendix G. Verification coverage detail</h2>
 <p>State: {{ verification.state }} (source: {{ verification.source }}){% if verification.reason %} &mdash; {{ verification.reason }}{% endif %}.
-  Coverage is counted from evidence rows for this delivery's entities; connector readiness is not coverage.</p>
+  Coverage is counted from evidence rows for this delivery's entities; connector readiness is not coverage.
+  <b>Attempted %</b> is checks asked / eligible. <b>Answered %</b> is (verified + not found) / eligible: unavailable and failed checks are attempts without an answer, so they never count as completed screening.</p>
 <table class="dp-fixed dp-tight">
-  {{ cols([10, 11, 7, 8, 7, 8, 10, 7, 8, 24]) }}
+  {{ cols([9, 10, 6, 8, 7, 7, 9, 6, 7, 7, 24]) }}
   <caption>Coverage per verification source</caption>
   <thead>
     <tr>
       <th scope="col">Source</th><th scope="col">State</th><th scope="col">Eligible</th><th scope="col">Attempted</th>
-      <th scope="col">Verified</th><th scope="col">Not found</th><th scope="col">Unavailable</th><th scope="col">Failed</th><th scope="col">Coverage</th><th scope="col">Note</th>
+      <th scope="col">Verified</th><th scope="col">Not found</th><th scope="col">Unavailable</th><th scope="col">Failed</th><th scope="col">Attempted %</th><th scope="col">Answered %</th><th scope="col">Note</th>
     </tr>
   </thead>
   <tbody>
@@ -642,6 +644,7 @@
       <td>{{ s.unavailable|number }}</td>
       <td>{{ s.failed|number }}</td>
       <td class="nw">{% if s.coverage_pct is none %}Not run{% else %}{{ s.coverage_pct }}%{% endif %}</td>
+      <td class="nw">{% if s.get('answered_pct') is none %}{% if s.coverage_pct is none %}Not run{% else %}&mdash;{% endif %}{% else %}{{ s.get('answered_pct') }}%{% endif %}</td>
       <td>{{ s.note or '' }}</td>
     </tr>
     {% endfor %}
@@ -728,11 +731,11 @@
 {% endif %}
 {% if analyst.review_records %}
 <table class="dp-fixed">
-  {{ cols([18, 10, 18, 18, 8, 14, 14]) }}
+  {{ cols([15, 7, 16, 20, 7, 15, 20]) }}
   <caption>Review records &mdash; first {{ analyst.review_records_shown|number }} of
     {{ analyst.review_records_total|number }}, unresolved/not-yet-QA-approved first</caption>
   <thead>
-    <tr><th scope="col">Review id</th><th scope="col">Category</th><th scope="col">Rule (version)</th><th scope="col">Resolution</th><th scope="col">Assigned</th><th scope="col">Reviewed (UTC)</th><th scope="col">QA approved (UTC)</th></tr>
+    <tr><th scope="col">Review id</th><th scope="col">Category</th><th scope="col">Classified under rule (version)</th><th scope="col">Analyst determination</th><th scope="col">Assigned</th><th scope="col">Determined (UTC)</th><th scope="col">Independent QA</th></tr>
   </thead>
   <tbody>
     {% for r in analyst.review_records %}
@@ -740,14 +743,15 @@
       <th scope="row" class="hash">{{ r.review_id }}</th>
       <td>{% if r.bucket in ('B1', 'B2', 'B3', 'B4') %}<span class="agt-chip {{ r.bucket|lower }}">{{ r.bucket }}</span>{% else %}{{ r.bucket or '—' }}{% endif %}</td>
       <td>{{ r.classification_rule or '—' }}{% if r.classification_rule_version is not none %} (v{{ r.classification_rule_version }}){% endif %}</td>
-      <td>{{ r.resolution or 'Pending' }}{% if r.reclassified_to %} → {{ r.reclassified_to }}{% endif %}</td>
+      <td>{{ r.resolution or ('Not recorded in this stored dataset' if (r.reportable_at and not r.get('determination_source')) else 'No determination yet') }}{% if r.reclassified_to %} &rarr; {{ r.reclassified_to }}{% endif %}{% if r.get('determination_source') == 'legacy_column' %} <i>(legacy column)</i>{% endif %}</td>
       <td>{{ 'Yes' if r.assigned else 'No' }}</td>
       <td class="nw">{{ ts(r.reviewed_at) }}</td>
-      <td class="nw">{{ ts(r.reportable_at) }}</td>
+      <td class="nw">{% if r.reportable_at %}Approved {{ ts(r.reportable_at) }}{% elif r.get('qa_state') == 'RETURNED' %}Returned {{ ts(r.get('qa_event_at')) }}{% elif r.get('qa_state') == 'ESCALATED' %}Escalated {{ ts(r.get('qa_event_at')) }}{% elif r.resolution %}Awaiting QA{% else %}&mdash;{% endif %}</td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
+<p class="agt-note">Rule (version) is the rule-set version each record was <b>classified under</b>. It is not the rule set in force when this report was generated ({{ snapshot.b1_b4_rule_version or 'not recorded' }}; see Report Provenance). Determination and QA status are read from the append-only decision events; a record with none shows only what its legacy columns hold.</p>
 {% if analyst.review_records_total > analyst.review_records_shown %}
 <p>The remaining {{ (analyst.review_records_total - analyst.review_records_shown)|number }} review record(s), each
   with its own classification rule and version, are in the full review-records export:

@@ -760,13 +760,56 @@ class DeliveryProcessingDataService:
         rule_versions_in_effect = sorted({
             r.classification_rule_version for r in reviews
             if r.classification_rule_version is not None})
+        # Determination and QA state come from the APPEND-ONLY decision events (`review_decision_events`), the
+        # system of record since the QA gate (qa_gate.py). `review_records.reviewer_resolution` is a legacy column the
+        # event workflow never writes, so reading it alone printed "Pending" beside a QA approval (report 071,
+        # REV-2026-000248). A review with no events keeps its legacy columns and says so (`determination_source`);
+        # nothing is back-filled and no human act is invented for it.
+        from app.tefca_registry import qa_gate
+
+        events_by_review: Dict[str, list] = {}
+        review_ids = [r.review_id for r in reviews]
+        if review_ids:
+            ev_rows = (await self.db.execute(
+                select(reg.ReviewDecisionEvent)
+                .where(reg.ReviewDecisionEvent.review_id.in_(review_ids))
+                .order_by(reg.ReviewDecisionEvent.review_id,
+                          reg.ReviewDecisionEvent.sequence_number))).scalars().all()
+            for ev in ev_rows:
+                events_by_review.setdefault(ev.review_id, []).append(ev)
+
+        def _state(r) -> Dict[str, Any]:
+            evs = events_by_review.get(r.review_id) or []
+            det = qa_gate.effective_determination(evs) if evs else None
+            if det is not None:
+                latest = qa_gate._latest_determination(evs)
+                after = qa_gate._qa_after(evs, latest)
+                last_qa = after[-1] if after else None
+                qa_state = ({"APPROVE": "APPROVED", "RETURN": "RETURNED", "ESCALATE": "ESCALATED"}
+                            .get(last_qa.qa_action) if last_qa else "NOT_YET_REVIEWED")
+                return {"source": "decision_events", "determined": True,
+                        "determination": det["determination"], "bucket": det["determined_bucket"],
+                        "by_role": det["actor_role"], "at": det["occurred_at"],
+                        "qa_state": qa_state,
+                        "qa_at": last_qa.occurred_at if last_qa else None,
+                        "approved": qa_gate.is_reportable(evs)}
+            if r.reviewer_resolution is not None or r.reportable_at is not None:
+                return {"source": "legacy_column", "determined": r.reviewer_resolution is not None,
+                        "determination": r.reviewer_resolution, "bucket": r.reclassified_to,
+                        "by_role": None, "at": r.reviewed_at,
+                        "qa_state": "APPROVED" if r.reportable_at is not None else "NOT_YET_REVIEWED",
+                        "qa_at": r.reportable_at, "approved": r.reportable_at is not None}
+            return {"source": None, "determined": False, "determination": None, "bucket": None,
+                    "by_role": None, "at": None, "qa_state": None, "qa_at": None, "approved": False}
+
+        states = {r.review_id: _state(r) for r in reviews}
         open_items = sum(1 for r in reviews
-                         if r.assigned_to_user_id is None and r.reviewer_resolution is None)
+                         if r.assigned_to_user_id is None and not states[r.review_id]["determined"])
         claimed = sum(1 for r in reviews
-                      if r.assigned_to_user_id is not None and r.reviewer_resolution is None)
+                      if r.assigned_to_user_id is not None and not states[r.review_id]["determined"])
         qa_pending = sum(1 for r in reviews
-                         if r.reviewer_resolution is not None and r.reportable_at is None)
-        qa_approved = sum(1 for r in reviews if r.reportable_at is not None)
+                         if states[r.review_id]["determined"] and not states[r.review_id]["approved"])
+        qa_approved = sum(1 for r in reviews if states[r.review_id]["approved"])
         return {
             "available": bool(human or resolved or reviews),
             "disposition_events": [{**ev.to_dict(), "line_number": line} for ev, line in human],
@@ -785,14 +828,22 @@ class DeliveryProcessingDataService:
                 "review_id": r.review_id, "source_record_id": _s(r.source_record_id),
                 "entity_id": _s(r.entity_id), "bucket": r.classification_bucket,
                 "classification_rule": r.classification_rule,
+                # The rule-set version this record was CLASSIFIED under (stamped on the review row). It is not the
+                # version in force when the report was generated; that is `b1_b4_rule_version` in provenance.
                 "classification_rule_version": r.classification_rule_version,
-                "resolution": r.reviewer_resolution, "reclassified_to": r.reclassified_to,
+                "resolution": states[r.review_id]["determination"],
+                "reclassified_to": states[r.review_id]["bucket"] if states[r.review_id]["determination"] == "RECLASSIFY" else None,
+                "determination_source": states[r.review_id]["source"],
+                "determined_by_role": states[r.review_id]["by_role"],
+                "qa_state": states[r.review_id]["qa_state"],
                 "assigned": r.assigned_to_user_id is not None,
-                "reviewed_at": _iso(r.reviewed_at), "reportable_at": _iso(r.reportable_at),
+                "reviewed_at": _iso(states[r.review_id]["at"]),
+                "reportable_at": _iso(states[r.review_id]["qa_at"]) if states[r.review_id]["approved"] else None,
+                "qa_event_at": _iso(states[r.review_id]["qa_at"]),
                 "created_at": _iso(r.created_at),
             } for r in sorted(
                 reviews,
-                key=lambda r: (r.reportable_at is not None, r.reviewed_at is not None,
+                key=lambda r: (states[r.review_id]["approved"], states[r.review_id]["determined"],
                               r.created_at),
             )[:_REVIEW_RECORD_ROW_CAP]],
             "rule_versions_in_effect": rule_versions_in_effect,
@@ -1015,7 +1066,17 @@ def _normalise_coverage(raw: Any) -> Dict[str, Any]:
                     for i, s in enumerate(sources_raw))
     for name, s in iterable:
         s = s or {}
+        eligible_n = s.get("eligible")
+        # ATTEMPTED is not COMPLETED. `coverage_pct` is attempted / eligible: a source that was asked and answered
+        # "unavailable" for every entity still reads 100% attempted. `answered` counts only outcomes that are an
+        # answer from the source (verified or not found); unavailable and failed are attempts with no answer.
+        answered_n = None
+        if (s.get("attempted") or 0) > 0 and (s.get("verified") is not None or s.get("not_found") is not None):
+            answered_n = int(s.get("verified") or 0) + int(s.get("not_found") or 0)
+        answered_pct = (round(100.0 * answered_n / int(eligible_n), 1)
+                        if answered_n is not None and eligible_n else None)
         items.append({
+            "answered": answered_n, "answered_pct": answered_pct,
             "name": name,
             "state": s.get("coverage_state") or s.get("state") or "Not Run",
             "eligible": s.get("eligible"), "attempted": s.get("attempted"),
@@ -1028,6 +1089,7 @@ def _normalise_coverage(raw: Any) -> Dict[str, Any]:
     for name in VERIFICATION_SOURCES:
         if name not in present:
             items.append({"name": name, "state": "Not Run", "eligible": None,
+                          "answered": None, "answered_pct": None,
                           "attempted": None, "verified": None, "not_found": None,
                           "unavailable": None, "failed": None, "coverage_pct": None,
                           "note": "No coverage evidence was read for this source."})

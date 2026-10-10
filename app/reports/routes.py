@@ -1540,8 +1540,10 @@ def csv_for_stored_report(row) -> str:
     if row.report_type in SOW_TYPES:
         return sow_report_to_csv(dataset, row.report_id, generated_at)
     if row.report_type == "delivery_processing":
-        # The record-level disposition table, every row, from the STORED dataset.
-        return delivery_processing_to_csv(dataset, row.report_id, generated_at)
+        # Dispositions plus the labelled annexes (findings, coverage, review records), from the STORED dataset. The
+        # rule-set version comes from the stored snapshot so these bytes equal the registered CSV artifact.
+        return delivery_processing_to_csv(dataset, row.report_id, generated_at,
+                                          rule_set_version=snapshot.get("b1_b4_rule_version"))
 
     # Charts were excluded from the stored payload (they are presentation, not
     # data), so rebuild them from the stored numbers for the figure sections.

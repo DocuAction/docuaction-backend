@@ -222,7 +222,7 @@ DELIVERY_DISPOSITION_ORDER = ("CREATED", "UPDATED", "MATCHED_UNCHANGED", "HELD",
 
 
 def delivery_processing_to_csv(dataset: Dict[str, Any], report_id: str,
-                               generated_at: str) -> str:
+                               generated_at: str, rule_set_version: Any = None) -> str:
     """The Delivery Processing Report as data: EVERY record-level disposition.
 
     Not paged, not sampled. The preamble pins the same identity the HTML
@@ -255,6 +255,8 @@ def delivery_processing_to_csv(dataset: Dict[str, Any], report_id: str,
     writer.writerow([f"# Report Data Service version: {dataset.get('service_version')}"])
     writer.writerow(["# Every value below is read from persisted evidence. No rule is "
                      "re-run and no reconciliation is recomputed while this file is produced."])
+    writer.writerow([f"# B1-B4 rule set in force at generation: "
+                     f"{rule_set_version if rule_set_version is not None else 'not stated in this export (see the report provenance)'}"])
     writer.writerow([])
 
     eq = (recon.get("equation") or {}) if recon.get("available") else {}
@@ -289,6 +291,63 @@ def delivery_processing_to_csv(dataset: Dict[str, Any], report_id: str,
     for row in rows:
         writer.writerow(neutralise_row(["" if row.get(key) is None else row.get(key)
                                         for key, _ in DELIVERY_DISPOSITION_COLUMNS]))
+    writer.writerow([])
+
+    # ── Annexes ──────────────────────────────────────────────────────────────────────────────────────────────────
+    # The PDF's package line promises "CSV export of the same persisted evidence". Until 2026-10 this file carried
+    # the dispositions only, so findings, coverage and review records printed in the PDF were absent here. Each
+    # annex below is a SEPARATE labelled section built from the same dataset dict the HTML/PDF render from; where
+    # the dataset caps a table, the section states "rows included N of M" instead of implying completeness.
+    findings = dataset.get("findings") or {}
+    writer.writerow(["## Annex A. Findings (system results, not analyst determinations)"])
+    if findings.get("available"):
+        writer.writerow([f"Rows included {findings.get('rows_shown', 0)} of {findings.get('rows_total', 0)}; "
+                         f"total findings in the current quality run {findings.get('total', 0)}; "
+                         f"open at HIGH/CRITICAL {findings.get('open_high', 0)}"])
+        writer.writerow(["Issue code", "Line", "Rule", "Rule version", "Issue type", "Severity", "Column",
+                         "Correction authority", "Resolution", "Description"])
+        for f in findings.get("rows") or []:
+            writer.writerow(neutralise_row([
+                f.get("issue_code"), f.get("line_number"), f.get("rule_id"), f.get("rule_version"),
+                f.get("issue_type"), f.get("severity"), f.get("field_name"),
+                f.get("correction_authority"), f.get("resolution"), f.get("description")]))
+    else:
+        writer.writerow(["No quality run is recorded for this delivery; findings cannot be stated"])
+    writer.writerow([])
+
+    verification = dataset.get("verification") or {}
+    writer.writerow(["## Annex B. Verification coverage per source (attempted is not answered)"])
+    writer.writerow(["Source", "State", "Eligible", "Attempted", "Verified", "Not found", "Unavailable", "Failed",
+                     "Attempted %", "Answered (verified + not found)", "Answered %", "Note"])
+    for s_ in verification.get("sources") or []:
+        writer.writerow(neutralise_row([
+            s_.get("name"), s_.get("state"), s_.get("eligible"), s_.get("attempted"), s_.get("verified"),
+            s_.get("not_found"), s_.get("unavailable"), s_.get("failed"),
+            "Not run" if s_.get("coverage_pct") is None else s_.get("coverage_pct"),
+            s_.get("answered"), "" if s_.get("answered_pct") is None else s_.get("answered_pct"),
+            s_.get("note") or ""]))
+    writer.writerow(["Unavailable and failed checks are attempts without an answer. Staged data and connector "
+                     "readiness are not coverage. A source check does not clear any other source."])
+    writer.writerow([])
+
+    analyst = dataset.get("analyst") or {}
+    writer.writerow(["## Annex C. Review records (determination and independent QA status)"])
+    if analyst.get("available"):
+        writer.writerow([f"Rows included {analyst.get('review_records_shown', 0)} of "
+                         f"{analyst.get('review_records_total', 0)}"])
+        writer.writerow(["Review id", "Category", "Classified under rule", "Classified under rule version",
+                         "Analyst determination", "Determination source", "Determined (UTC)", "QA status",
+                         "QA approved (UTC)"])
+        for r in analyst.get("review_records") or []:
+            writer.writerow(neutralise_row([
+                r.get("review_id"), r.get("bucket"), r.get("classification_rule"),
+                r.get("classification_rule_version"), r.get("resolution") or ("Not recorded in this stored dataset" if (r.get("reportable_at") and not r.get("determination_source")) else "No determination yet"),
+                r.get("determination_source") or "none", r.get("reviewed_at"),
+                r.get("qa_state") or "", r.get("reportable_at")]))
+        writer.writerow(["Rule version here is the version each record was classified under; the rule set in force "
+                         "when this report was generated is in the preamble/provenance."])
+    else:
+        writer.writerow(["No analyst action has been recorded for this delivery"])
     writer.writerow([])
 
     writer.writerow(["## Evidence limitations"])
