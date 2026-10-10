@@ -479,13 +479,13 @@ def _matching_capability(source_system: str) -> Dict[str, Any]:
 
 
 _HCP_UNAVAILABLE_REASON = (
-    "HCP-to-organisation matching is not available: the delivered data carries no "
-    "usable HCP<->HCO affiliation link (dedicated AFFIL extract absent; HCP_ADDR's own "
-    "HOSP_AFFIL_* fields are unpopulated). This is a data-completeness fact, not a bug -- "
-    "matching will not silently return zero results.")
+    "HCP-to-organisation matching is not available: HCP_ADDR's own HOSP_AFFIL_* fields are "
+    "unpopulated in the delivered file, and matching from the separate HCP_AFFIL extract is not "
+    "implemented. This is a capability fact, not a bug -- matching will not silently return zero results.")
 _AFFIL_UNAVAILABLE_REASON = (
-    "No affiliation snapshot has ever been approved with real data as of this pass; "
-    "matching against it is not yet meaningful.")
+    "Matching from affiliation snapshots is not implemented: staged HCP_AFFIL rows are not consumed by "
+    "any matching step, whether or not the snapshot is approved. Staging is not verified source "
+    "coverage, and no entity is verified from these rows.")
 
 
 @router.post("/snapshots/{snapshot_id}/approve",
