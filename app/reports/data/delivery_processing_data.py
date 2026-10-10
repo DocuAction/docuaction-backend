@@ -1071,7 +1071,7 @@ def _normalise_coverage(raw: Any) -> Dict[str, Any]:
         # "unavailable" for every entity still reads 100% attempted. `answered` counts only outcomes that are an
         # answer from the source (verified or not found); unavailable and failed are attempts with no answer.
         answered_n = None
-        if s.get("verified") is not None or s.get("not_found") is not None:
+        if (s.get("attempted") or 0) > 0 and (s.get("verified") is not None or s.get("not_found") is not None):
             answered_n = int(s.get("verified") or 0) + int(s.get("not_found") or 0)
         answered_pct = (round(100.0 * answered_n / int(eligible_n), 1)
                         if answered_n is not None and eligible_n else None)

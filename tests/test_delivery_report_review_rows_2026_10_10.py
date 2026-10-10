@@ -41,6 +41,9 @@ def test_attempted_is_not_answered():
     assert by["sam"]["answered"] == 0 and by["sam"]["answered_pct"] == 0.0
     assert by["leie"]["answered"] == 4 and by["leie"]["answered_pct"] == 100.0
     assert by["pecos"]["answered_pct"] is None        # never run: no figure, not 0 and not 100
+    never = _normalise_coverage(_sources(pecos={"coverage_state": "Not Run", "eligible": 4, "attempted": 0, "verified": 0,
+                                                "not_found": 0, "unavailable": 0, "failed": 0, "coverage_pct": 0.0}))
+    assert {s_["name"]: s_ for s_ in never["sources"]}["pecos"]["answered_pct"] is None   # attempted == 0 -> no answered figure
 
 
 def test_csv_annexes_are_labelled_and_agree_with_the_dataset():
@@ -143,3 +146,38 @@ def test_stored_datasets_from_before_this_change_still_render(name):
                progress=None, annex=None)
     html = render_html("delivery_processing.html", {**ctx, "snapshot": snap, **_marking_context(snap)})
     assert "Classified under rule" in html and "Answered" in html
+
+
+def test_reconstructed_071_payload_renders_the_corrected_facts():
+    """`ds_071r.json` is rebuilt from the REGISTERED artifact of DA-ARC-2026-071 (its rendered findings, coverage and review
+    rows) plus the decision-event evidence read from DEV for REV-2026-000248. It is NOT the frozen database payload (that
+    needs a database read). It pins the four corrected facts on the real report's own numbers."""
+    import copy
+    import json
+    from pathlib import Path
+
+    from app.reports.branding import current_branding
+    from app.reports.engine.csv_engine import delivery_processing_to_csv
+    from app.reports.engine.template_engine import render_html
+    from app.reports.generator import _marking_context
+
+    d = copy.deepcopy(json.loads((Path(__file__).parent / "data" / "delivery_report" / "ds_071r.json")
+                                 .read_text(encoding="utf-8")))
+    ds, snap = d["dataset"], d["snapshot"]
+    ctx = {k: v for k, v in ds.items() if k not in ("chart_list", "service_version", "review_cycle_id")}
+    brand = current_branding()
+    ctx.update(chart_images={}, branding={**brand.to_dict(), "agt_logo": brand.agt_logo,
+                                          "government_logo": brand.government_logo},
+               pdf_author=brand.prepared_by, pdf_keywords="t", document_status="Draft", reviewed_by=None, progress=None, annex=None)
+    html = render_html("delivery_processing.html", {**ctx, "snapshot": snap, **_marking_context(snap)})
+    import re
+    text = re.sub(r"<[^>]+>", " ", html)
+    i = text.index("REV-2026-000248")
+    row = text[i:i + 300]
+    assert "CONFIRM" in row and "Approved 2026-09-15 05:02:31" in row and "Pending" not in row
+    sam = [s_ for s_ in ds["verification"]["sources"] if s_["name"] == "sam"][0]
+    assert sam["coverage_pct"] == 100.0 and sam["answered_pct"] == 0.0 and sam["unavailable"] == 4
+    assert "Classified under rule" in html and "(v2)" in html and snap["b1_b4_rule_version"] == "3"
+    csv_text = delivery_processing_to_csv(ds, "DA-ARC-2026-071R", "2026-10-10T00:00:00", rule_set_version=3)
+    assert "## Annex A" in csv_text and "## Annex B" in csv_text and "## Annex C" in csv_text
+    assert csv_text.count("\r\nDQ-") == 14                       # every one of the 14 findings is in Annex A

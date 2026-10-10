@@ -74,6 +74,7 @@ def _long_timeline(d):
 
 SCENARIOS = {
     "clean_060": lambda: _fixture("060"),
+    "reconstructed_071": lambda: _fixture("071r"),   # rebuilt from the registered DA-ARC-2026-071 artifact + decision-event evidence
     "live_067_timeline_17": lambda: _fixture("067"),
     "live_068_three_open_high": lambda: _fixture("068"),
     "exceptions_061": lambda: _fixture("061"),
