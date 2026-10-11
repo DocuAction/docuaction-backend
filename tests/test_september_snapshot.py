@@ -112,8 +112,10 @@ def _types(findings):
     return {(f.rule_id, f.issue_type, f.severity, f.correction_authority) for f in findings}
 
 
-def test_rule_set_is_1_3_0_with_the_september_rules():
-    assert qr.RULE_SET_VERSION == "1.3.0"
+def test_rule_set_is_at_least_1_3_0_with_the_september_rules():
+    # 1.3.0 introduced the September rules below; 1.4.0 (2026-10-10) changed
+    # only the INT-003 wording and keeps every one of them.
+    assert tuple(int(x) for x in qr.RULE_SET_VERSION.split(".")) >= (1, 3, 0)
     ids = {r.rule_id for r in qr.RULES}
     assert {"SCH-003", "SO-002", "PUR-001", "PUR-002", "DOA-001", "DOA-002", "ACT-001"} <= ids
 
