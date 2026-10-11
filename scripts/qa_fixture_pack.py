@@ -70,8 +70,10 @@ from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 GENERATOR_VERSION = "1.0.0"
 
 #: The rule set these expectations were derived from
-#: (app/tefca_registry/rce/quality_rules.py RULE_SET_VERSION).
-TARGET_RULE_SET_VERSION = "1.3.0"
+#: (app/tefca_registry/rce/quality_rules.py RULE_SET_VERSION). 1.4.0 changed
+#: only the INT-003 wording (1.1.0); every expected rule code and line
+#: expectation derived under 1.3.0 still holds.
+TARGET_RULE_SET_VERSION = "1.4.0"
 
 #: The locked 41-column ONC/RCE header, verbatim and in delivered order.
 RCE_COLUMNS: Tuple[str, ...] = (

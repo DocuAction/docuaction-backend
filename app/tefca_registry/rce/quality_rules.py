@@ -59,7 +59,11 @@ from app.tefca_registry.rce.field_map import (
 #: (SO-002), purpose-of-use vocabulary (PUR-001/002), delegated-authority OID
 #: syntax and resolution (DOA-001/002), partOf resolution against the registry
 #: (INT-002), inactive new entrants (ACT-001), duplicate `id` guard (SCH-003).
-RULE_SET_VERSION = "1.3.0"
+#: 1.4.0 — October 2026 wording correction: INT-003 (1.1.0) states that direct
+#: technical parenting to a QHIN alone does not prove an invalid agreement
+#: chain. No rule condition, severity or disposition changed; issues raised
+#: under 1.3.0 and earlier keep their stored rule_version and text.
+RULE_SET_VERSION = "1.4.0"
 
 # ── categories ───────────────────────────────────────────────────────────────
 
@@ -908,10 +912,13 @@ def _act_001(ctx: RecordContext) -> List[Finding]:
 
 
 def _int_003(ctx: RecordContext) -> List[Finding]:
-    """A Subparticipant whose parent is a QHIN rather than a Participant.
+    """A Subparticipant whose technical parent is a QHIN rather than a Participant.
 
     Observed on 15 records. The TEFCA hierarchy runs QHIN → Participant →
-    Subparticipant, so this shape skips a level.
+    Subparticipant, so this shape skips a level in the *technical* parenting
+    carried by the directory. The delivery does not carry the agreements, so
+    this shape alone does not prove an invalid agreement chain (1.1.0 wording;
+    the condition, severity and disposition are unchanged from 1.0.0).
     """
     if ctx.get("sequoiaorgtype") != "Subparticipant":
         return []
@@ -921,9 +928,12 @@ def _int_003(ctx: RecordContext) -> List[Finding]:
     return [Finding(
         "INT-003", "SUBPARTICIPANT_PARENTED_TO_QHIN", MEDIUM,
         f"A Subparticipant whose partOf equals its orgManagingOrg ({part_of}), "
-        f"i.e. parented directly to a QHIN rather than to a Participant. "
-        f"Observed on 15 records in the profiled delivery. Recorded for analyst "
-        f"determination; the hierarchy is not rewritten.",
+        f"i.e. technically parented directly to a QHIN rather than to a "
+        f"Participant. Direct technical parenting to a QHIN does not by itself "
+        f"prove an invalid agreement chain: the directory does not carry the "
+        f"Participant/Subparticipant agreements. Observed on 15 records in the "
+        f"profiled delivery. Recorded for analyst determination; the hierarchy "
+        f"is not rewritten.",
         HUMAN_REQUIRED, field_name="partOf", original_value=part_of)]
 
 
@@ -1071,8 +1081,8 @@ RULES: Tuple[Rule, ...] = (
          "partOf resolves (delivery, registry or QHIN)", _int_002, MEDIUM,
          applies=_applies_every_record,
          requires_dataset=("known_source_ids", "qhin_oids", "registry_oids")),
-    Rule("INT-003", CAT_INTEGRITY, "1.0.0",
-         "Subparticipant parented to a Participant", _int_003, MEDIUM,
+    Rule("INT-003", CAT_INTEGRITY, "1.1.0",
+         "Subparticipant technically parented to a QHIN (observation)", _int_003, MEDIUM,
          applies=_applies_subparticipant_with_parent,
          requires_fields=("partOf",)),
     Rule("BUS-001", CAT_BUSINESS, "1.0.0",
