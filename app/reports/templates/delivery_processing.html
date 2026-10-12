@@ -544,6 +544,9 @@
 {% if findings.available %}
 <p>{{ findings.total|number }} finding(s) in the current quality run {{ findings.run_id }} (rule set {{ findings.rule_set_version or 'not recorded' }});
   {{ findings.open_high|number }} open at HIGH or CRITICAL severity.</p>
+<p class="agt-note">Descriptions are the rule text stored with each finding at the time of the run. Where a description quotes
+  &ldquo;the profiled delivery&rdquo; (for example record counts or percentages), that figure is the reference profile the rule set was
+  calibrated against, not a result for this delivery; this delivery&rsquo;s own counts are the Line, Rule and Count columns of this report.</p>
 {% if findings.rows %}
 <table class="dp-fixed dp-tight">
   {{ cols([12, 4, 7, 13, 12, 10, 11, 8, 23]) }}
