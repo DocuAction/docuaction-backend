@@ -129,6 +129,12 @@ class Settings(BaseSettings):
     # withhold `verified` for every entity.
     ENFORCE_COMPLETE_EXCLUSION_SCREENING: bool = False
 
+    # PROPOSAL, default OFF (WP4-SAM). A SAM REGISTRATION-only miss (NPI-less `sam_name` path; evidence
+    # normalized_values.screening_leg == "registration_only") is not an exclusion screen. When on, the bulk-path
+    # translator hands the classifier `unavailable` for sam_gov instead of `clear`. No rule or applicability
+    # change; under the v3 rules the bucket is unchanged (see tests/test_sam_registration_miss_incomplete.py).
+    SAM_REGISTRATION_MISS_IS_UNAVAILABLE_FOR_EXCLUSION: bool = False
+
     class Config:
         env_file = ".env"
         extra = "allow"
