@@ -14,7 +14,8 @@ from pathlib import Path
 import pytest
 
 from app.Tefca import sam_screening as ss
-from app.Tefca.sam_exclusions_extract import (ExtractLayoutError, extract_date_from_name, load_extract)
+from app.Tefca.sam_exclusions_extract import (REQUIRED_COLUMNS, ExtractLayoutError, extract_date_from_name,
+                                              load_extract)
 
 HEADER = ["Classification", "Name", "Prefix", "First", "Middle", "Last", "Suffix", "Address 1", "Address 2",
           "Address 3", "Address 4", "City", "State / Province", "Country", "Zip Code", "Open Data Flag",
@@ -188,6 +189,40 @@ class TestExtractLoader:
             load_extract(_extract(tmp_path, rows=[]))
         with pytest.raises(ExtractLayoutError, match="fields"):
             load_extract(_extract(tmp_path, rows=ROWS + [["Firm", "short row"]]))
+
+    # ---- input contract (CR148-1): header-named columns; all REQUIRED_COLUMNS present; extra columns legal;
+    # ---- column order free; every data row must be exactly as wide as the header it is read against.
+    def test_extra_columns_are_legal_and_ignored(self, tmp_path):
+        header = HEADER + ["Future Column A", "Future Column B"]
+        rows = [r + ["x", "y"] for r in ROWS]
+        idx = load_extract(_extract(tmp_path, rows=rows, header=header))
+        assert idx.meta.row_count == len(ROWS) and idx.screen(npi="1888888884", name="Synth Imaging Partners").outcome == ss.IDENTIFIER_MATCH
+
+    def test_reordered_headers_are_read_by_name(self, tmp_path):
+        order = list(reversed(range(len(HEADER))))
+        header = [HEADER[i] for i in order]
+        rows = [[r[i] for i in order] for r in ROWS]
+        idx = load_extract(_extract(tmp_path, rows=rows, header=header))
+        r = idx.screen(npi="1888888884", name="Synth Imaging Partners")
+        assert (r.outcome, r.matched_by) == (ss.IDENTIFIER_MATCH, "npi")
+
+    def test_a_row_truncated_between_required_count_and_header_width_is_refused(self, tmp_path):
+        """17..30 fields on a 31-column file: NPI/CAGE would read as empty and the record would be unfindable by NPI."""
+        victim = _row(Classification="Firm", Name="Synth Truncated Co", NPI="1555555559")
+        for n in (len(REQUIRED_COLUMNS), 20, len(HEADER) - 1):
+            with pytest.raises(ExtractLayoutError, match="fields"):
+                load_extract(_extract(tmp_path, rows=ROWS + [victim[:n]]))
+
+    def test_a_row_wider_than_the_header_is_refused(self, tmp_path):
+        """An unquoted delimiter shifts every later field; the NPI/CAGE read would be from the wrong column."""
+        with pytest.raises(ExtractLayoutError, match="fields"):
+            load_extract(_extract(tmp_path, rows=ROWS + [_row(Classification="Firm", Name="X") + ["spill"]]))
+
+    def test_rows_exactly_header_width_with_extra_columns_pass_but_short_vs_wide_header_fail(self, tmp_path):
+        """Width is judged against THIS file's header, not against a constant."""
+        header = HEADER + ["Future Column A"]
+        with pytest.raises(ExtractLayoutError, match="fields"):
+            load_extract(_extract(tmp_path, rows=[r + ["x"] for r in ROWS] + [ROWS[0]], header=header))
 
     def test_not_a_zip_is_refused(self, tmp_path):
         p = tmp_path / "x.ZIP"

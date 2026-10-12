@@ -142,3 +142,16 @@ def test_manual_review_persisted_rows_use_the_same_translation():
         sources = {"sam_gov": {"status": svc.NOT_CHECKED}}
         svc.apply_persisted_exclusion_evidence(sources, {"SAM_GOV": row(leg)})
         assert sources["sam_gov"]["status"] == expected
+
+
+def test_registration_miss_note_says_it_is_not_an_exclusion_clearance():
+    """Wording only (disposition and bucket unchanged): the stored note must not read as an exclusion 'no hit'."""
+    sam, _, res = _classify(REG_MISS)
+    assert sam.disposition == "NOT_FOUND"
+    assert "registration-record search only" in sam.note and "NOT an exclusion clearance" in sam.note
+    assert (res.bucket, res.rule_code) == ("B1", "RULE-001")      # correcting source truth does not prevent B1
+
+
+def test_exclusion_leg_note_does_not_carry_the_registration_only_caveat():
+    sam, _, _ = _classify(V4_CLEAR)
+    assert "registration-record search only" not in sam.note

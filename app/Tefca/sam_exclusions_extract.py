@@ -267,8 +267,11 @@ def load_extract(path: Path, *, min_rows: int = 1) -> SamExtractIndex:
     for row in reader:
         if not any(row):
             continue
-        if len(row) < len(REQUIRED_COLUMNS):          # a row shorter than the layout is corruption, not data
-            raise ExtractLayoutError(f"row {len(records) + 2} has {len(row)} fields")
+        # Input contract: columns are located by header NAME (any order, extra columns legal) but every data row
+        # must be exactly as wide as THIS file's header. Shorter = truncated (later columns such as CAGE/NPI would
+        # silently read as empty and the record become unfindable); wider = an unquoted delimiter shifted the fields.
+        if len(row) != len(header):
+            raise ExtractLayoutError(f"row {len(records) + 2} has {len(row)} fields, header has {len(header)}")
         rec = {"classification": cell(row, "Classification"), "name": cell(row, "Name"),
                "first": cell(row, "First"), "last": cell(row, "Last"), "city": cell(row, "City"),
                "state": cell(row, "State / Province"), "zip": cell(row, "Zip Code"),

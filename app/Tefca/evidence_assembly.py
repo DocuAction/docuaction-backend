@@ -571,9 +571,12 @@ def _dimension_exclusion(entity: Dict[str, Any], profile: ApplicabilityProfile,
                     "Potential debarment match — analyst determination required.")
         if by_name:
             return (Disposition.NOT_FOUND.value,
-                    "No UEI available, so SAM.gov was screened by legal name. "
+                    "No UEI available, so SAM.gov was searched by legal name. "
                     "No match found. NOT_FOUND rather than PASS — a name "
-                    "search does not carry the weight of a UEI match.")
+                    "search does not carry the weight of a UEI match."
+                    + ("" if d.get("exclusion_screening") else
+                       " This was a SAM registration-record search only; the independent "
+                       "exclusion check did not run, so this is NOT an exclusion clearance."))
         return (Disposition.PASS.value, "No debarment record found.")
 
     def _sam_screening_values(d: Dict[str, Any], branch: str) -> Dict[str, Any]:
