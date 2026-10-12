@@ -65,6 +65,33 @@ def _busy_cover(d):
     return d
 
 
+def _returned_escalated_cover(d):
+    """The live DA-ARC-2026-073 state: no reconciliation, three open HIGH findings and one record each open,
+    returned, escalated and approved. Its next-actions box spilled onto a near-blank page 2 before this scenario."""
+    ds = d["dataset"]
+    ds["analyst"]["counts"].update({"open": 1, "claimed": 0, "qa_pending": 0, "qa_returned": 1,
+                                    "qa_escalated": 1, "qa_inconsistent": 0, "qa_approved": 1})
+    ds["findings"]["open_high"] = 3
+    ds["reconciliation"]["available"] = False
+    return d
+
+
+def _every_action_and_long_status(d):
+    """Longest cover: every conditional next action fires (reconciliation failed with a long reason, open HIGH,
+    no source run, no preflight, open/claimed/QA-pending/returned/escalated/inconsistent records) with large counts."""
+    ds = d["dataset"]
+    ds["analyst"]["counts"].update({"open": 12345, "claimed": 2345, "qa_pending": 3456, "qa_returned": 4567,
+                                    "qa_escalated": 5678, "qa_inconsistent": 6789, "qa_approved": 7890})
+    ds["findings"]["open_high"] = 98765
+    ds["reconciliation"]["available"] = True
+    ds["reconciliation"]["passed"] = False
+    ds["reconciliation"]["failure_reason"] = "synthetic: received 123456 does not equal accounted 123450 (6 unaccounted, 2 double-counted)"
+    ds["readiness"]["available"] = False
+    for s in ds["verification"]["sources"]:
+        s["attempted"] = 0
+    return d
+
+
 def _long_timeline(d):
     ev = d["dataset"]["timeline"]["events"]
     d["dataset"]["timeline"]["events"] = [dict(ev[i % len(ev)], id=f"syn-{i}", attempt=1 + i // len(ev))
@@ -74,11 +101,16 @@ def _long_timeline(d):
 
 SCENARIOS = {
     "clean_060": lambda: _fixture("060"),
+    "frozen_071": lambda: _fixture("071"),           # the ORIGINAL stored payload of DA-ARC-2026-071 read from DEV (synthetic data)
+    "reconstructed_071": lambda: _fixture("071r"),   # rebuilt from the registered DA-ARC-2026-071 artifact + decision-event evidence
     "live_067_timeline_17": lambda: _fixture("067"),
     "live_068_three_open_high": lambda: _fixture("068"),
     "exceptions_061": lambda: _fixture("061"),
     "many_rules": lambda: _many_rules(_fixture("061")),
     "busy_cover": lambda: _busy_cover(_fixture("061")),
+    "returned_escalated_cover": lambda: _returned_escalated_cover(_fixture("060")),
+    "every_action_long_status": lambda: _every_action_and_long_status(_fixture("060")),
+    "every_action_long_status_worst": lambda: _long_timeline(_every_action_and_long_status(_many_rules(_fixture("061")))),
     "worst_case": lambda: _long_timeline(_busy_cover(_many_rules(_fixture("061")))),
 }
 
