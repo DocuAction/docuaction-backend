@@ -196,7 +196,9 @@ class TestExtractLoader:
         header = HEADER + ["Future Column A", "Future Column B"]
         rows = [r + ["x", "y"] for r in ROWS]
         idx = load_extract(_extract(tmp_path, rows=rows, header=header))
-        assert idx.meta.row_count == len(ROWS) and idx.screen(npi="1888888884", name="Synth Imaging Partners").outcome == ss.IDENTIFIER_MATCH
+        assert idx.meta.row_count == len(ROWS)
+        r = idx.screen(npi="1888888884", name="Synth Imaging Partners")
+        assert r.outcome == ss.IDENTIFIER_MATCH
 
     def test_reordered_headers_are_read_by_name(self, tmp_path):
         order = list(reversed(range(len(HEADER))))
