@@ -1112,6 +1112,9 @@ def _normalise_coverage(raw: Any) -> Dict[str, Any]:
             "coverage_pct": s.get("coverage_pct"),
             "note": s.get("note") or s.get("detail"),
         })
+        if isinstance(s.get("screening_legs"), dict):
+            # SAM only: registration-only vs exclusion vs leg-not-recorded (read-time labels).
+            items[-1]["screening_legs"] = s["screening_legs"]
     present = {i["name"] for i in items}
     for name in VERIFICATION_SOURCES:
         if name not in present:
