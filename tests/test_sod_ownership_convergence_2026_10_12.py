@@ -24,7 +24,6 @@ missing, without touching the existing fixture builder:
 
 Skips unless CONV_SUPERUSER_URL is set (same as the sibling fixture tests). Synthetic data only.
 """
-import importlib.util
 import os
 import re
 import sys
@@ -37,6 +36,7 @@ from test_prod_managed_migration_integration import (  # noqa: E402
     _SCRIPTS, SU, REPO, APP_PW, LEGACY_OWNER, MIGRATION_ID, ENTRA_ADMIN, EXPECTED, HEAD, PENDING, CHAIN_ALTERS,
     AREA1_FINAL, _build_managed_prod_like, _anchors, _tables, _version, _run_conv, _expect_db_error,
     _run_sql_as, _eng, _url_as, _owner, fixture_db,  # noqa: F401
+    _seed_sod_history, _events_checksum, _apply_sod_runbook_as_simulated_dba,
 )
 
 pytestmark = pytest.mark.skipif(not SU, reason="CONV_SUPERUSER_URL not set (needs a superuser test DB)")
@@ -44,14 +44,6 @@ pytestmark = pytest.mark.skipif(not SU, reason="CONV_SUPERUSER_URL not set (need
 TABLE = "review_decision_events"
 RUNBOOK = os.path.join(REPO, "docs", "SOD_DB_OWNERSHIP_PREREQUISITE.sql")
 LONG = "a rationale that is long enough for the check constraint"
-
-
-def _load_20260825():
-    spec = importlib.util.spec_from_file_location(
-        "mig_20260825", os.path.join(REPO, "alembic", "versions", "20260825_qa_decision_events.py"))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
 
 
 def _runbook_sections():
@@ -71,32 +63,6 @@ def _exec_script(url, sql):
         conn.commit()
     finally:
         conn.close()
-
-
-def _model_legacy_sod_objects(su, *, owner_owned):
-    """Add what PROD already has from 20260825 (the SoD function, trigger and the effective view,
-    all still at the OLD body) and set the ownership/ACL of the table and function.
-
-    owner_owned=False  the measured-in-fixture state: docuaction_app owns table, function and view.
-    owner_owned=True   the REQUIRED end state: docuaction_owner owns table + function; the app has
-                       SELECT, INSERT only. The (read-only) view stays app-owned in both variants,
-                       which also exercises the 'dependent view' handling.
-    """
-    from sqlalchemy import text
-    old = _load_20260825()
-    with su.begin() as c:
-        c.execute(text(old.SOD_FUNCTION))
-        c.execute(text("CREATE TRIGGER trg_review_event_sod BEFORE INSERT ON review_decision_events "
-                       "FOR EACH ROW EXECUTE FUNCTION review_event_enforce_sod()"))
-        c.execute(text(old.EFFECTIVE_VIEW))
-        c.execute(text("ALTER VIEW review_effective_determination OWNER TO docuaction_app"))
-        c.execute(text("ALTER FUNCTION review_event_enforce_sod() OWNER TO docuaction_app"))
-        if owner_owned:
-            c.execute(text(f"ALTER TABLE {TABLE} OWNER TO docuaction_owner"))
-            c.execute(text("ALTER FUNCTION review_event_enforce_sod() OWNER TO docuaction_owner"))
-            c.execute(text(f"REVOKE ALL ON {TABLE} FROM PUBLIC, docuaction_app"))
-            c.execute(text(f"GRANT SELECT, INSERT ON {TABLE} TO docuaction_app"))
-            c.execute(text("REVOKE ALL ON FUNCTION review_event_enforce_sod() FROM PUBLIC"))
 
 
 def _sod_fingerprint(su):
@@ -142,7 +108,9 @@ def test_app_owned_fixture_is_refused_by_the_preflight(fixture_db):
     """The guard is correct: with the runtime role owning the table/function the managed migrate
     stops BEFORE any DDL with the documented error, and leaves the database exactly as it was."""
     su = _build_managed_prod_like(fixture_db)
-    _model_legacy_sod_objects(su, owner_owned=False)
+    _seed_sod_history(su)
+    events_before = _events_checksum(su)
+    assert events_before[0] == 4
     admin = _url_as(fixture_db, ENTRA_ADMIN)
     _prepare(admin)
     _map_migration_identity(su)
@@ -159,6 +127,7 @@ def test_app_owned_fixture_is_refused_by_the_preflight(fixture_db):
     assert "Nothing was changed" in out, out[-900:]
     after = _sod_fingerprint(su)
     _assert_sod_objects_untouched(before, after)
+    assert _events_checksum(su) == events_before, "refusal must leave review_decision_events rows byte-identical (count, md5, xmin)"
     # IMPORTANT (documented in the notes): 20261009_iqvia_affil_org_indexes runs CREATE INDEX CONCURRENTLY inside
     # alembic's autocommit_block, which COMMITS everything applied before it. So the refusal at 20261012 leaves
     # the database at the revision before 20261009 (earlier pending revisions committed), not at EXPECTED.
@@ -171,7 +140,8 @@ def test_app_owned_fixture_is_refused_by_the_preflight(fixture_db):
 def test_app_owned_table_with_owner_owned_function_is_still_refused(fixture_db):
     """Half-moved state (function moved, table not): the table-owner leg of the preflight refuses."""
     su = _build_managed_prod_like(fixture_db)
-    _model_legacy_sod_objects(su, owner_owned=False)
+    _seed_sod_history(su)
+    events_before = _events_checksum(su)
     from sqlalchemy import text
     with su.begin() as c:
         c.execute(text("ALTER FUNCTION review_event_enforce_sod() OWNER TO docuaction_owner"))
@@ -184,6 +154,7 @@ def test_app_owned_table_with_owner_owned_function_is_still_refused(fixture_db):
     assert r.returncode != 0 and "SodDbEnforcementPreconditionError" in out, out[-900:]
     assert f"{TABLE} is owned by docuaction_app" in out and "Nothing was changed" in out, out[-900:]
     _assert_sod_objects_untouched(before, _sod_fingerprint(su))
+    assert _events_checksum(su) == events_before
 
 
 def _runtime_role_behaviour(fixture_db):
@@ -251,6 +222,7 @@ def _managed_path_and_assertions(fixture_db, su, *, via):
     admin = _url_as(fixture_db, ENTRA_ADMIN)
     with su.connect() as c:
         pre = _anchors(c)
+    events_before = _events_checksum(su)
     _prepare(admin)
     # review_decision_events is owner-owned and is NOT in the temporarily-re-owned list
     assert TABLE not in CHAIN_ALTERS
@@ -267,6 +239,9 @@ def _managed_path_and_assertions(fixture_db, su, *, via):
         assert sorted(t for t, o in final.items() if o == "docuaction_owner") == \
             sorted(AREA1_FINAL + ["alembic_version", TABLE])
         assert _anchors(c) == pre
+        assert _events_checksum(su) == events_before, "historical events must be byte-identical (count, md5, xmin)"
+        assert c.execute(text("select count(*) from review_decision_events where actor_user_id = "
+                              "sod_exception_granted_by or sod_exception_granted_by is not null")).scalar() == 1,             "the historical self-QA-with-exception row is still present and readable"
         assert sorted(r[0] for r in c.execute(text(
             "select tgname from pg_trigger where tgrelid='public.review_decision_events'::regclass and not tgisinternal"))) == \
             ["trg_review_event_append_only_rows", "trg_review_event_append_only_trunc", "trg_review_event_sod"]
@@ -283,18 +258,16 @@ def _managed_path_and_assertions(fixture_db, su, *, via):
           f"UPDATE/DELETE/TRUNCATE/DISABLE/DROP refused for docuaction_app)")
 
 
-def test_owner_owned_end_state_managed_path_succeeds(fixture_db):
-    su = _build_managed_prod_like(fixture_db)
-    _model_legacy_sod_objects(su, owner_owned=True)
-    fp = _sod_fingerprint(su)
-    assert fp["table_owner"] == "docuaction_owner" and fp["fn"][0] == "docuaction_owner"
-    _managed_path_and_assertions(fixture_db, su, via="modelled-end-state")
-
-
-def test_runbook_applied_to_app_owned_fixture_yields_the_required_end_state(fixture_db):
+def test_transition_app_owned_to_owner_owned_via_runbook_then_managed_path_succeeds(fixture_db):
+    """THE POSITIVE TRANSITION TEST. Starts in the state PROD is modelled in TODAY (table, SoD function and view
+    app-owned, historical events present, including a self-QA that carries a self-attested exception), applies
+    docs/SOD_DB_OWNERSHIP_PREREQUISITE.sql as the SIMULATED DBA identity (scratch role legacy_owner standing in
+    for the server admin; no real DBA/Azure identity), then runs prepare -> migrate -> finalize."""
     from sqlalchemy import text
     su = _build_managed_prod_like(fixture_db)
-    _model_legacy_sod_objects(su, owner_owned=False)
+    _seed_sod_history(su)
+    hist = _events_checksum(su)
+    assert hist[0] == 4
     sections = _runbook_sections()
     dba = _url_as(fixture_db, LEGACY_OWNER)          # models the server admin (member of both roles)
 
@@ -315,15 +288,15 @@ def test_runbook_applied_to_app_owned_fixture_yields_the_required_end_state(fixt
     assert _sod_fingerprint(su) == first, "the runbook must be idempotent"
     _exec_script(dba, sections["POSTCHECKS"])
     assert _sod_fingerprint(su) == first, "POST-CHECKS are read-only"
+    assert _events_checksum(su) == hist, "the ownership move must not touch a single event row"
 
     # the state the migration requires is now met: the managed path succeeds end to end
-    _managed_path_and_assertions(fixture_db, su, via="runbook")
-    print("SOD_RUNBOOK_ON_APP_OWNED_FIXTURE=PASS (applied twice; POSTCHECKS ok; managed path then succeeds)")
+    _managed_path_and_assertions(fixture_db, su, via="simulated-dba-runbook-transition")
+    print("SOD_TRANSITION_TEST=PASS (applied twice; POSTCHECKS ok; managed path then succeeds)")
 
 
 def test_runbook_refuses_wrong_identity_and_changes_nothing(fixture_db):
     su = _build_managed_prod_like(fixture_db)
-    _model_legacy_sod_objects(su, owner_owned=False)
     before = _sod_fingerprint(su)
     app = _url_as(fixture_db, "docuaction_app", pw=APP_PW)
     msg = _expect_db_error(lambda: _exec_script(app, _runbook_sections()["APPLY"]), "prerequisite")
@@ -344,7 +317,7 @@ def test_finalize_hands_back_an_owner_owned_table_that_is_not_in_the_append_only
     role holds more than SELECT+INSERT (or less) is returned to docuaction_app by FINALIZE, as before."""
     from sqlalchemy import text
     su = _build_managed_prod_like(fixture_db)
-    _model_legacy_sod_objects(su, owner_owned=True)
+    _apply_sod_runbook_as_simulated_dba(fixture_db)
     with su.begin() as c:
         c.execute(text(f"GRANT UPDATE ON {TABLE} TO docuaction_app"))      # not the append-only shape
     admin = _url_as(fixture_db, ENTRA_ADMIN)

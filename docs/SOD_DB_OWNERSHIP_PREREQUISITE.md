@@ -58,28 +58,21 @@ MANAGED PREPARE -> MANAGED MIGRATE -> FINALIZE. The runbook works before or afte
    ownership). Such a database would carry the same removable-guard weakness after this migration. Not
    exercised or changed here; it is the same decision in another place.
 
-## 4. The red `fixture` job is expected until merge time
+## 4. How the convergence fixture models this (updated 2026-10-12)
 
-`tests/test_prod_managed_migration_integration.py::test_managed_prepare_migrate_finalize_end_to_end` builds
-the app-owned state and fails at the retained preflight. It is unchanged, not skipped, not xfailed; the
-preflight is not weakened and no environment flag disables it. The `Convergence Fixture Test / fixture` check
-therefore stays red on this PR, and **must not be merged while red**.
+* `_build_managed_prod_like` now also models what PROD is believed to have TODAY from `20260825_qa_events`: the SoD
+  function (old body), trigger and effective view, all owned by `docuaction_app` (UNVERIFIED on the real database).
+* The existing end-to-end test `test_managed_prepare_migrate_finalize_end_to_end` now performs the real TRANSITION
+  first: it seeds historical events, applies `docs/SOD_DB_OWNERSHIP_PREREQUISITE.sql` as a **SIMULATED DBA** (the
+  scratch-cluster role `legacy_owner` standing in for the server admin, with the memberships the runbook requires; no
+  real DBA or Azure identity), asserts the event rows are untouched, then runs prepare -> migrate -> finalize.
+* The retained preflight is exercised by SEPARATE negative tests (`test_app_owned_fixture_is_refused_by_the_preflight`,
+  `test_app_owned_table_with_owner_owned_function_is_still_refused`): documented error, "Nothing was changed",
+  SoD objects and `review_decision_events` rows byte-identical (count, md5 of rows, md5 of xmin).
+* `test_transition_app_owned_to_owner_owned_via_runbook_then_managed_path_succeeds` is the full positive test.
 
-What must change at merge time (a separate follow-up commit, after the owner decision and after the DBA
-completes the move on the real environments):
-
-1. In `tests/test_prod_managed_migration_integration.py`, make `_build_managed_prod_like` finish by calling
-   the owner-owned modelling (`_model_legacy_sod_objects(su, owner_owned=True)` from
-   `tests/test_sod_ownership_convergence_2026_10_12.py`, moved into the shared builder) so the existing
-   end-to-end test models the real, DBA-completed PROD state.
-2. In the same test change the final ownership assertion to
-   `sorted(AREA1_FINAL + ["alembic_version", "review_decision_events"])` (as
-   `_managed_path_and_assertions` already does) and adjust the "89 owned by docuaction_app" assertion in the builder
-   for the extra owner-owned table.
-3. Keep `test_app_owned_fixture_is_refused_by_the_preflight` (it then documents the guard) and
-   `test_runbook_applied_to_app_owned_fixture_yields_the_required_end_state`.
-4. Re-read the real owners with the PRE-CHECKS on DEV and PROD; if they differ from what the fixture models,
-   fix the fixture to the evidence, not the other way round.
+Before ANY governed pipeline run on a real environment: run the runbook PRE-CHECKS read-only and record the live
+owners, ACLs and `alembic_version`; the fixture models believed state, it is not evidence.
 
 ## 5. Option B - keep the table app-owned and convert the guards into the managed chain (rejected)
 
@@ -113,16 +106,14 @@ The PRE-CHECKS section of the runbook reads exactly these.
 
 ## 7. Tests (disposable local PostgreSQL only; skip unless `CONV_SUPERUSER_URL` is set)
 
-`tests/test_sod_ownership_convergence_2026_10_12.py` (run in the `fixture` job):
+`tests/test_sod_ownership_convergence_2026_10_12.py` (run in the `fixture` job; the transition test supersedes the former directly-modelled owner-owned test):
 
 * `test_app_owned_fixture_is_refused_by_the_preflight` - positive test of the retained guard.
 * `test_app_owned_table_with_owner_owned_function_is_still_refused` - the table-owner leg of the guard.
-* `test_owner_owned_end_state_managed_path_succeeds` - modelled end state: prepare -> migrate -> finalize,
-  self-QA refused (also with a self-attested exception), independent QA accepted, `UPDATE`/`DELETE`/`TRUNCATE`
-  refused for the runtime role, runtime role cannot disable/drop the triggers, replace the function, take
-  ownership or `SET ROLE` to the owner, dependent view still readable.
-* `test_runbook_applied_to_app_owned_fixture_yields_the_required_end_state` - PRE-CHECKS (read-only, proven
-  unchanged), APPLY twice (idempotent), POST-CHECKS, then the same managed path and the same behaviour.
+* `test_transition_app_owned_to_owner_owned_via_runbook_then_managed_path_succeeds` - PRE-CHECKS (read-only), APPLY
+  twice (idempotent), POST-CHECKS, then prepare -> migrate -> finalize; historical rows byte-identical (md5 + xmin +
+  count); independent QA accepted; self-QA refused; runtime role: SELECT/INSERT only, no UPDATE/DELETE/TRUNCATE,
+  cannot disable/drop/alter triggers or replace the function.
 * `test_runbook_refuses_wrong_identity_and_changes_nothing` - the runbook's own guards.
 * `test_finalize_hands_back_an_owner_owned_table_that_is_not_in_the_append_only_shape` - the tooling change
   never strips access.

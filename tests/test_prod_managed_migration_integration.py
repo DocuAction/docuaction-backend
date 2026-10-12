@@ -251,7 +251,85 @@ def _build_managed_prod_like(url):
         assert sorted(t for t, o in tables.items() if o == "docuaction_owner") == sorted(AREA1_PRESENT)
         assert _version(c) == [EXPECTED]
         assert not (set(DECISIONS_COLS) & _cols(c, "decisions")) and not (set(REVIEW_COLS) & _cols(c, "review_records"))
+    _model_legacy_sod_objects(eng)
     return eng
+
+
+def _model_legacy_sod_objects(su):
+    """What PROD already has from 20260825_qa_events, modelled as PROD is believed to be TODAY (UNVERIFIED on
+    the real database): the SoD function (OLD body), trigger and effective view, all owned by docuaction_app,
+    like every other table. The table itself is already app-owned by the loop in _build_managed_prod_like."""
+    import importlib.util
+    from sqlalchemy import text
+    spec = importlib.util.spec_from_file_location(
+        "mig_20260825", os.path.join(REPO, "alembic", "versions", "20260825_qa_decision_events.py"))
+    old = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(old)
+    with su.begin() as c:
+        c.execute(text(old.SOD_FUNCTION))
+        c.execute(text("CREATE TRIGGER trg_review_event_sod BEFORE INSERT ON review_decision_events "
+                       "FOR EACH ROW EXECUTE FUNCTION review_event_enforce_sod()"))
+        c.execute(text(old.EFFECTIVE_VIEW))
+        for obj in ("VIEW review_effective_determination", "FUNCTION review_event_enforce_sod()"):
+            c.execute(text(f"ALTER {obj} OWNER TO docuaction_app"))
+
+
+def _seed_sod_history(su):
+    """Historical events written by the OLD trigger: an independent pair and a self-QA that carries a
+    self-attested exception (accepted before 20261012). Returns the review ids. Synthetic data."""
+    from sqlalchemy import text
+    longtxt = "a rationale that is long enough for the check constraint"
+    a, b, g = (str(uuid.uuid4()) for _ in range(3))
+    ids = []
+    with su.begin() as c:
+        for k, (qa_actor, grantor) in enumerate(((b, None), (a, g))):     # independent, then self-QA with exception
+            rid = f"REV-HIST-{k}-{uuid.uuid4().hex[:6]}"
+            ids.append(rid)
+            ent = str(uuid.uuid4())
+            c.execute(text("insert into tefca_reg_entities (id, name, entity_level, entity_type) "
+                           "values (:e, 'Synthetic Entity', 'L1', 'synthetic')"), {"e": ent})
+            c.execute(text("insert into review_records (id, review_id, entity_id) values (:i,:r,:e)"),
+                      {"i": str(uuid.uuid4()), "r": rid, "e": ent})
+            for seq, et, actor in ((1, "ANALYST_DETERMINATION", a), (2, "QA_REVIEW", qa_actor)):
+                c.execute(text(
+                    "insert into review_decision_events (id, review_id, sequence_number, event_type, actor_user_id, "
+                    "actor_email, actor_role, rationale, qa_action, qa_reason, determination, "
+                    "sod_exception_granted_by, sod_exception_reason) values "
+                    "(:i,:r,:s,:t,:a,'h@example.invalid','reviewer',:l,:qa,:ql,:d,:g,:gr)"),
+                    {"i": str(uuid.uuid4()), "r": rid, "s": seq, "t": et, "a": actor, "l": longtxt,
+                     "qa": "APPROVE" if et == "QA_REVIEW" else None, "ql": longtxt if et == "QA_REVIEW" else None,
+                     "d": "CONFIRM" if et != "QA_REVIEW" else None,
+                     "g": grantor if (et == "QA_REVIEW" and grantor) else None,
+                     "gr": longtxt if (et == "QA_REVIEW" and grantor) else None})
+    return ids
+
+
+def _events_checksum(su):
+    """(count, md5 over every row's text in id order, md5 over every row's xmin) of review_decision_events."""
+    from sqlalchemy import text
+    with su.connect() as c:
+        return tuple(c.execute(text(
+            "select count(*), md5(coalesce(string_agg(e::text, '|' order by e.id), '')), "
+            "md5(coalesce(string_agg(e.xmin::text, '|' order by e.id), '')) from review_decision_events e")).first())
+
+
+#: The simulated DBA identity. It is LEGACY_OWNER, a scratch-cluster role standing in for the real server admin
+#: (non-superuser; member of docuaction_app and docuaction_owner WITH ADMIN OPTION; owns schema public), i.e.
+#: the memberships docs/SOD_DB_OWNERSHIP_PREREQUISITE.sql requires. SIMULATED: no real DBA or Azure identity.
+def _apply_sod_runbook_as_simulated_dba(fixture_db):
+    conn = _eng(_url_as(fixture_db, LEGACY_OWNER)).raw_connection()
+    try:
+        text_ = open(os.path.join(REPO, "docs", "SOD_DB_OWNERSHIP_PREREQUISITE.sql"), encoding="utf-8").read()
+        import re as _re
+        parts = _re.split(r"^-- @@SECTION: (\w+).*$", text_, flags=_re.M)
+        sections = {parts[i]: parts[i + 1] for i in range(1, len(parts), 2)}
+        cur = conn.cursor()
+        cur.execute(sections["PRECHECKS"])      # read-only report
+        cur.execute(sections["APPLY"])          # one transaction incl. post-assertions
+        cur.execute(sections["POSTCHECKS"])
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _set_version(url, value):
@@ -335,6 +413,15 @@ def test_managed_prepare_migrate_finalize_end_to_end(fixture_db):
     su = _build_managed_prod_like(fixture_db)
     admin = _url_as(fixture_db, ENTRA_ADMIN)
     mig_url = _url_as(fixture_db, MIGRATION_ID)
+    # 20261012_sod_db_enforcement PREREQUISITE (PR #151): PROD is modelled with review_decision_events and
+    # review_event_enforce_sod() owned by docuaction_app. The migration's preflight refuses that state, so the
+    # DBA ownership move (docs/SOD_DB_OWNERSHIP_PREREQUISITE.sql, run here by a SIMULATED DBA identity) is part
+    # of the certified sequence BEFORE prepare -> migrate -> finalize. The refusal itself is asserted in
+    # tests/test_sod_ownership_convergence_2026_10_12.py (negative control).
+    _seed_sod_history(su)
+    events_before = _events_checksum(su)
+    _apply_sod_runbook_as_simulated_dba(fixture_db)
+    assert _events_checksum(su) == events_before, "the ownership move must not touch a single event row"
     with su.connect() as c:
         pre = _anchors(c); pre_roles = _role_count(c); pre_tables = _tables(c)
         assert _attrs(c, MIGRATION_ID)[:4] == (False, False, False, False)
@@ -435,7 +522,8 @@ def test_managed_prepare_migrate_finalize_end_to_end(fixture_db):
         for t_ in CHAIN_ALTERS:
             assert final[t_] == "docuaction_app", f"FINALIZE returns the temporarily re-owned table {t_}"
         assert all(final[t] == "docuaction_app" for t in LEGACY_ONLY), "legacy-only untouched"
-        assert sorted(t for t, o in final.items() if o == "docuaction_owner") == sorted(AREA1_FINAL + ["alembic_version"])
+        assert final["review_decision_events"] == "docuaction_owner", "the SoD prerequisite must survive FINALIZE"
+        assert sorted(t for t, o in final.items() if o == "docuaction_owner") ==             sorted(AREA1_FINAL + ["alembic_version", "review_decision_events"])
         assert _anchors(c) == pre and _version(c) == [HEAD]
         assert not _member(c, "docuaction_app", "docuaction_owner") and not _member(c, "docuaction_owner", "docuaction_app")
         assert not _member(c, MIGRATION_ID, "docuaction_app") and not _member(c, MIGRATION_ID, LEGACY_OWNER)
