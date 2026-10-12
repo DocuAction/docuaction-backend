@@ -269,6 +269,11 @@ def dimensions_to_verification_results(evidence: Dict[str, Any]) -> Dict[str, An
                     "dimension": name,
                     "rule_applied": item.get("rule_applied"),
                 }
+                # Additive (Track A2): which SAM leg produced this answer, so a registration-only lookup is never
+                # read as an exclusion screen. Absent for every other source, so their shape is unchanged.
+                leg = (item.get("normalized_values") or {}).get("screening_leg")
+                if leg:
+                    sources[key]["screening_leg"] = leg
 
         # Field-level signals the B2/B3 rules look for.
         if name == "ADDRESS":
@@ -694,6 +699,20 @@ async def verify_and_classify(
                 gaps = _prior_risk.exclusion_screening_gaps(verification_results)
                 if gaps:
                     claim = _prior_risk.verification_claim("B1", gaps, prior_risk)
+            # Track A2 (flags default OFF): screening-state block, and the registration-only proposal.
+            screening_block = None
+            from app.core.config import settings
+            if getattr(settings, "ENABLE_SCREENING_STATE_RECORDING", False):
+                from app.tefca_registry.rce import screening_state as _ss
+                reg_only = bool(getattr(settings, "SAM_REGISTRATION_ONLY_IS_INCOMPLETE_SCREENING", False))
+                screening_block = _ss.derive_screening_state(
+                    verification_results, registration_only_is_incomplete=reg_only)
+                if reg_only and classification.bucket == "B1":
+                    from app.tefca_registry.rce import prior_risk as _prior_risk
+                    extra = _ss.registration_only_gaps(verification_results)
+                    if extra:
+                        claim = _prior_risk.verification_claim(
+                            "B1", _prior_risk.exclusion_screening_gaps(verification_results) + extra, prior_risk)
             withhold_verified = bool(prior_risk) or bool(claim and claim["enforced"])
 
             review_id = await _allocate_review_id(db)
@@ -736,6 +755,7 @@ async def verify_and_classify(
                     # the snapshot shape of every other record is unchanged.
                     **({"prior_risk_not_cleared": prior_risk} if prior_risk else {}),
                     **({"verification_claim": claim} if claim else {}),
+                    **({"screening_state": screening_block} if screening_block else {}),
                     # A SNAPSHOT, not a pointer. The report issued from this review
                     # must keep saying what it said after the entity is re-verified.
                     "dimensions": evidence.get("dimensions", []),
