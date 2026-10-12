@@ -59,11 +59,13 @@ def flag_on(monkeypatch):
 
 
 def test_flag_defaults_off():
-    assert settings.SAM_REGISTRATION_MISS_IS_UNAVAILABLE_FOR_EXCLUSION is False
+    """The DECLARED default (independent of any environment override) is OFF."""
+    assert type(settings).model_fields[FLAG].default is False
 
 
-def test_before_registration_miss_is_clear_and_b1_rule001_flag_off():
+def test_before_registration_miss_is_clear_and_b1_rule001_flag_off(monkeypatch):
     """BEFORE (main / flag OFF): the registration-only miss is read as an exclusion clear."""
+    monkeypatch.setattr(settings, FLAG, False, raising=False)
     sam, inp, res = _classify(REG_MISS)
     assert sam.normalized_values["screening_leg"] == "registration_only"
     assert inp["sources"]["sam_gov"]["status"] == "clear"
