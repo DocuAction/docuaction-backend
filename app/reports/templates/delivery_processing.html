@@ -662,7 +662,7 @@
   </thead>
   <tbody>
     <tr><th scope="row">Registration search only</th><td>{{ legs.registration_only.entities|number }}</td><td>n/a</td><td>n/a</td><td>{{ legs.registration_only.no_registration_record_found|number }}</td><td>{{ legs.registration_only.unavailable|number }}</td></tr>
-    <tr><th scope="row">Exclusion screening</th><td>{{ legs.exclusion.entities|number }}</td><td>{{ legs.exclusion.clear|number }}</td><td>{{ legs.exclusion.hit|number }}</td><td>n/a</td><td>{{ legs.exclusion.unavailable|number }}</td></tr>
+    <tr><th scope="row">Exclusion screening</th><td>{{ legs.exclusion.entities|number }}</td><td>{{ legs.exclusion['clear']|number }}</td><td>{{ legs.exclusion.hit|number }}</td><td>n/a</td><td>{{ legs.exclusion.unavailable|number }}</td></tr>
     <tr><th scope="row">Screening leg not recorded</th><td>{{ legs.leg_not_recorded.entities|number }}</td><td>n/a</td><td>n/a</td><td>n/a</td><td>{{ legs.leg_not_recorded.unavailable|number }}</td></tr>
   </tbody>
 </table>

@@ -145,6 +145,10 @@ def test_html_template_renders_the_leg_table():
         verification={"sources": [{"name": "sam", "screening_legs": legs}, {"name": "leie"}]})
     assert "Registration search only" in html and "Screening leg not recorded" in html
     assert "not an exclusion" in html
+    # `legs.exclusion.clear` would resolve to dict.clear (a bound method) in Jinja: it must be the count
+    assert " at 0x" not in html and "built-in method" not in html
+    excl_row = next(r for r in html.split("</tr>") if "Exclusion screening" in r)
+    assert "<td>0</td><td>0</td>" in "".join(excl_row.split())
     assert html.count("SAM.gov results by screening leg") == 1
 
 
