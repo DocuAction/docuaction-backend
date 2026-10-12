@@ -97,3 +97,16 @@ def test_unavailable_sam_is_not_b4_and_still_b1_by_policy():
     sam, state, result = _bucket(_U())
     assert sam.disposition == Disposition.UNAVAILABLE.value and state == "unavailable"
     assert result.bucket == "B1"                  # RULE-001 has no positive SAM requirement (open policy P1)
+
+
+def test_registration_miss_is_labelled_not_an_exclusion_answer_while_disposition_and_bucket_are_unchanged():
+    """#127 changes LABELS only. Same NPI-less registration miss: the evidence now says registration_only and carries
+    no exclusion outcome; disposition NOT_FOUND, classifier state `clear` and bucket B1 are exactly main's."""
+    sam, state, result = _bucket(_R({"found": False, "excluded": False}))
+    nv = sam.normalized_values or {}
+    assert nv.get("screening_leg") == "registration_only"
+    assert "outcome" not in nv                              # no exclusion answer is claimed
+    assert (sam.disposition, state, result.bucket) == (Disposition.NOT_FOUND.value, "clear", "B1")
+    # contrast: a result carrying the v4 exclusion leg is labelled as an exclusion screen (same disposition class)
+    both, _, _ = _bucket(_R({"found": False, "excluded": False, "exclusion_screening": {"outcome": "NO_MATCH"}}))
+    assert both.normalized_values["screening_leg"] == "exclusion_and_registration"
