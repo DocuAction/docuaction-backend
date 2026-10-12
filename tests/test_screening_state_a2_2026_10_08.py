@@ -114,3 +114,50 @@ def test_flags_default_off():
     f = Settings.model_fields if hasattr(Settings, "model_fields") else Settings.__fields__
     for name in ("ENABLE_SCREENING_STATE_RECORDING", "SAM_REGISTRATION_ONLY_IS_INCOMPLETE_SCREENING"):
         assert f[name].default is False
+
+
+def _npi_less_registration_only_input():
+    """Evidence -> translator output for the NPI-less path: SAM registration miss (NOT_FOUND on D3) labelled
+    registration_only by #127, other controls answered."""
+    ev = {"dimensions": [
+        {"dimension": "IDENTITY", "disposition": "PASS", "applicability": "REQUIRED",
+         "evidence": [{"source": "NPPES", "disposition": "PASS"}]},
+        {"dimension": "EXCLUSION_REVOCATION", "disposition": "PASS", "applicability": "APPLICABLE", "evidence": [
+            {"source": "OIG_LEIE", "disposition": "NOT_FOUND"},
+            {"source": "SAM_GOV", "disposition": "NOT_FOUND", "normalized_values": {"screening_leg": "registration_only"}},
+            {"source": "CMS_REVOCATION", "disposition": "PASS"}]}], "data_quality_flags": []}
+    return dimensions_to_verification_results(ev)
+
+
+def test_npi_less_registration_only_miss_old_behaviour_flags_off_vs_corrected_flags_on(monkeypatch):
+    """Mirrors the arc_pipeline decision (DB-free; the inline pipeline block itself needs a DB):
+    OFF = the pipeline records no screening_state and the claim has no extra gap (B1, verified, unchanged);
+    ON  = INCOMPLETE_SCREENING is recorded; `verified` is withheld only if ENFORCE_COMPLETE_EXCLUSION_SCREENING is also on."""
+    from app.core.config import settings
+    from app.tefca_registry.rce import prior_risk as pr
+    inp = _npi_less_registration_only_input()
+
+    def claim(enforce):
+        monkeypatch.setattr(settings, "ENFORCE_COMPLETE_EXCLUSION_SCREENING", enforce)
+        gaps = pr.exclusion_screening_gaps(inp) + ss.registration_only_gaps(inp)
+        return pr.verification_claim("B1", gaps, None)
+
+    # -- flags OFF (defaults): the pipeline's recording branch is skipped, so nothing is derived/recorded; the only
+    # gaps are the legacy ones (none here) -> no claim, entity stays `verified`. Derivation would read as NO_HIT.
+    monkeypatch.setattr(settings, "ENABLE_SCREENING_STATE_RECORDING", False)
+    monkeypatch.setattr(settings, "SAM_REGISTRATION_ONLY_IS_INCOMPLETE_SCREENING", False)
+    monkeypatch.setattr(settings, "ENFORCE_COMPLETE_EXCLUSION_SCREENING", False)
+    assert pr.exclusion_screening_gaps(inp) == []                           # legacy gap logic sees no gap
+    assert ss.derive_screening_state(inp)["overall"] == ss.NO_HIT           # old reading: looks clean
+
+    # -- recording + proposal ON, enforcement OFF: state recorded as INCOMPLETE; verified NOT withheld
+    state = ss.derive_screening_state(inp, registration_only_is_incomplete=True)
+    assert state["overall"] == ss.INCOMPLETE_SCREENING
+    c = claim(enforce=False)
+    assert c["exclusion_screening_incomplete"] and c["enforced"] is False
+    assert c["official"]["entity_marked_verified"] is True                  # still verified
+    assert c["proposed_inactive"]["entity_would_be_marked_verified"] is False
+
+    # -- all three ON: verified withheld
+    c = claim(enforce=True)
+    assert c["enforced"] is True and c["official"]["entity_marked_verified"] is False
