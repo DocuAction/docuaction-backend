@@ -263,8 +263,7 @@
             {% endfor %}
           </tbody>
         </table>
-        {% if verification.sources|selectattr('name','equalto','sam')|list %}<p class="agt-note sam-answered-note"><sup>&dagger;</sup> SAM.gov answered figures combine registration-search and exclusion-screening activity (any answered leg). They are not exclusion clearance: a registration-only result never means the entity was checked and found excluded-clear.</p>{% endif %}
-        <p class="agt-note">Answered = verified + not found; unavailable or failed checks are attempted, not answered. Connector readiness is not coverage. Detail: Appendix G.</p>
+        <p class="agt-note">Answered = verified + not found; unavailable or failed checks are attempted, not answered.{% if verification.sources|selectattr('name','equalto','sam')|list %} <span class="sam-answered-note">&dagger; SAM.gov answered = any answered leg (registration search or exclusion screening); not exclusion clearance.</span>{% endif %} Connector readiness is not coverage. Detail: Appendix G.</p>
       </div>
     </div>
 

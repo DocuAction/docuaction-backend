@@ -235,8 +235,10 @@ async def test_html_sam_rows_carry_the_answered_statement_and_numbers_are_unchan
     result = await _generate(rolled_back_db, job_id=str(ids["job_id"]))
     html, ds = result["html"], result["dataset"]
     sam = next(s for s in ds["verification"]["sources"] if s["name"] == "sam")
-    # statement beside the headline SAM rows: summary table marker + footnote, detailed table row note
-    assert html.count(_SAM_STATEMENT) == 2 and html.count(_NOT_CLEARANCE) == 2
+    # statement beside the headline SAM rows: full text on the detailed row, short form (same note, no extra
+    # line on the one-page cover) under the summary table, marker on both rows
+    assert html.count(_SAM_STATEMENT) == 1 and html.count(_NOT_CLEARANCE) == 2
+    assert html.count("SAM.gov answered = any answered leg (registration search or exclusion screening)") == 1
     summary_rows = [r for r in html.split("</tr>") if "<b>SAM.gov</b>" in r]
     detail_rows = [r for r in html.split("</tr>") if re.search(r'<th scope="row" class="nw">SAM', r)]
     assert summary_rows and "&dagger;" in summary_rows[0]
