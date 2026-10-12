@@ -284,3 +284,53 @@ def test_login_sends_nonce_matching_state(monkeypatch):
     r = c.get("/api/auth/login/azure")
     q = parse_qs(urlparse(r.headers["location"]).query)
     assert q["nonce"][0] == sso._check_state(q["state"][0])["nonce"]
+
+
+# --- AZURE_AD_ID_TOKEN_VALIDATION mode resolution (CWE-1188 guard) ---------------
+
+@pytest.mark.parametrize("raw,expected", [
+    (None, "audit"), ("", "audit"), ("   ", "audit"), ("audit", "audit"),
+    ("AUDIT", "audit"), ("enforce", "enforce"), (" Enforce ", "enforce"),
+])
+def test_mode_valid_values_resolve_without_warning(raw, expected, caplog):
+    with caplog.at_level("WARNING", logger="docuaction.azure_auth"):
+        assert sso.resolve_id_token_validation_mode(raw) == expected
+    assert not caplog.records
+
+
+@pytest.mark.parametrize("raw", ["enforced", "enforce!", "true", "1", "off", "enfroce"])
+def test_mode_unrecognised_value_is_audit_with_redacted_warning(raw, caplog):
+    with caplog.at_level("WARNING", logger="docuaction.azure_auth"):
+        assert sso.resolve_id_token_validation_mode(raw) == "audit"
+    assert len(caplog.records) == 1
+    msg = caplog.records[0].getMessage()
+    assert "UNRECOGNISED" in msg and f"length={len(raw)}" in msg
+    assert "does NOT enforce" in msg
+    assert raw not in msg.replace(f"length={len(raw)}", "")  # offending value is not echoed
+
+
+def test_mode_warning_never_echoes_a_token_shaped_value(caplog):
+    secret = "eyJhbGciOiJSUzI1NiJ9.SECRETPAYLOAD.SIG"
+    with caplog.at_level("WARNING", logger="docuaction.azure_auth"):
+        assert sso.resolve_id_token_validation_mode(secret) == "audit"
+    assert "SECRETPAYLOAD" not in caplog.text and "eyJ" not in caplog.text
+
+
+def test_audit_mode_accepts_bad_signature_and_logs_would_reject(monkeypatch, caplog):
+    """Audit = observation, NOT remediation: a wrongly signed token is still accepted
+    (302 + user created) and only a value-free log line records the would-reject."""
+    c, db = _client(monkeypatch, _token(pem=OTHER_PEM), "audit")
+    with caplog.at_level("WARNING", logger="docuaction.azure_auth"):
+        r = _cb(c, code="c", state=_state())
+    assert r.status_code == 302 and db.added
+    assert any("Azure ID token validation failed: reason=" in m and "mode=audit" in m
+               for m in caplog.messages)
+    assert "eyJ" not in caplog.text
+
+
+def test_catalog_sql_header_and_column_privileges_query():
+    import pathlib
+    sql = (pathlib.Path(__file__).resolve().parents[1] / "docs" / "READ_ONLY_CATALOG_QUERIES_DEV.sql").read_text(encoding="utf-8")
+    head = sql.split("-- 1.")[0]
+    assert "query 10" in head and "reads application rows" in head
+    assert "information_schema.column_privileges" in sql and "column_name" in sql

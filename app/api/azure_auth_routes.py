@@ -19,10 +19,17 @@ and the rest of the app is unaffected):
   AZURE_AD_POST_LOGIN_REDIRECT    default 'https://app.docuaction.io/auth/callback'
   AZURE_AD_ID_TOKEN_VALIDATION    'audit' (default) or 'enforce'. In both modes the
                                   ID token is validated (RS256 signature against the
-                                  tenant JWKS, iss, aud, exp/nbf, tid, nonce). 'audit'
-                                  only logs a failure and keeps the legacy behaviour;
-                                  'enforce' rejects the sign-in. Moving to 'enforce'
-                                  is an operator decision (no flag is changed here).
+                                  tenant JWKS, iss, aud, exp/nbf, tid, nonce).
+                                  AUDIT MODE IS OBSERVATION, NOT REMEDIATION: 'audit'
+                                  only logs a failure and still ACCEPTS a token with a
+                                  bad or absent signature, so the signature-validation
+                                  gap stays exploitable. Only 'enforce' rejects the
+                                  sign-in (403; 502 if JWKS is unreachable). Any
+                                  unrecognised value is treated as 'audit' with a
+                                  startup warning (length/shape only, never the value).
+                                  Moving to 'enforce' is an operator decision (no flag
+                                  is changed here); see
+                                  docs/SSO_ID_TOKEN_ENFORCEMENT_PROPOSAL.md.
 """
 import os
 import hmac
@@ -56,13 +63,43 @@ POST_LOGIN_REDIRECT = os.getenv(
 ).strip()
 
 AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
-# 'audit' (default, non-breaking) logs ID-token validation failures and keeps the
-# legacy behaviour; 'enforce' rejects. Any other value is treated as 'audit'.
-ID_TOKEN_VALIDATION = (os.getenv("AZURE_AD_ID_TOKEN_VALIDATION", "audit").strip().lower() or "audit")
-if ID_TOKEN_VALIDATION not in ("audit", "enforce"):
+# AUDIT MODE IS OBSERVATION, NOT REMEDIATION. In 'audit' (the default) the ID token
+# is validated and a failure is only LOGGED; the sign-in still proceeds on the
+# unverified claims, so a token with a bad or absent signature is still accepted and
+# the signature-validation gap remains exploitable. Only 'enforce' remediates it.
+# An unrecognised value (e.g. a typo such as 'enforced') can look like neither a
+# deliberate enforce nor a deliberate audit, so it is treated as 'audit' (the
+# non-breaking default) and a loud warning is logged at import time carrying only the
+# value's length and character shape, never the value itself.
+VALID_ID_TOKEN_VALIDATION_MODES = ("audit", "enforce")
+
+
+def resolve_id_token_validation_mode(raw) -> str:
+    """Return 'audit' or 'enforce' for the raw AZURE_AD_ID_TOKEN_VALIDATION value.
+
+    Unset/blank -> 'audit'. Case/whitespace-insensitive match on the two valid
+    values. Any other value -> 'audit' PLUS a warning (CWE-1188 guard) that records
+    only len() and a redacted shape (letters->a, digits->9, other->_), so a mistyped
+    value never silently looks like enforcement or like a deliberate audit choice.
+    """
+    value = (raw or "").strip().lower()
+    if not value:
+        return "audit"
+    if value in VALID_ID_TOKEN_VALIDATION_MODES:
+        return value
+    shape = "".join("a" if c.isalpha() else "9" if c.isdigit() else "_" for c in value[:32])
     logging.getLogger("docuaction.azure_auth").warning(
-        "AZURE_AD_ID_TOKEN_VALIDATION has an unrecognised value; using 'audit'.")
-    ID_TOKEN_VALIDATION = "audit"
+        "AZURE_AD_ID_TOKEN_VALIDATION has an UNRECOGNISED value (length=%d, shape=%s); "
+        "falling back to 'audit', which does NOT enforce ID-token signature validation. "
+        "Valid values: 'audit', 'enforce'.", len(value), shape)
+    return "audit"
+
+
+ID_TOKEN_VALIDATION = resolve_id_token_validation_mode(os.getenv("AZURE_AD_ID_TOKEN_VALIDATION", "audit"))
+if ID_TOKEN_VALIDATION == "audit":
+    logging.getLogger("docuaction.azure_auth").info(
+        "SSO ID-token validation mode=audit: failures are logged but sign-in is NOT "
+        "blocked (observation only; set AZURE_AD_ID_TOKEN_VALIDATION=enforce to remediate).")
 JWKS_TTL_SECONDS = 3600          # cached signing keys are reused for up to an hour
 JWKS_REFRESH_COOLDOWN = 60       # unknown-kid (key rotation) refetch at most once a minute
 CLOCK_LEEWAY_SECONDS = 120
@@ -301,6 +338,8 @@ async def callback_azure(
     try:
         claims = await validate_id_token(id_token, st.get("nonce"))
     except IdTokenError as e:
+        # Stable log signature for the pre-flight counter; in audit mode this line
+        # means the token WOULD have been rejected under 'enforce' but was accepted.
         logger.warning("Azure ID token validation failed: reason=%s mode=%s",
                        e.reason, ID_TOKEN_VALIDATION)
         if ID_TOKEN_VALIDATION == "enforce":
