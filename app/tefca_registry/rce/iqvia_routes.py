@@ -79,7 +79,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -409,6 +409,140 @@ async def stage_source(
                  details={"source": source, "label": body.label, "job_id": result["job_id"],
                           "origin": "server_local_path"})
     return result
+
+
+_SNAPSHOT_LIST_MAX_LIMIT = 100
+_IQVIA_SOURCE_SYSTEMS = (sm.SOURCE_IQVIA_HCO, sm.SOURCE_IQVIA_HCP, sm.SOURCE_IQVIA_AFFILIATION)
+
+
+def _stored_counters(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """Import counters exactly as the importer stored them in snapshot
+    metadata -- nothing recomputed here. A snapshot imported before the
+    importer wrote `import_summary` simply has `None` values."""
+    summary = metadata.get("import_summary") or {}
+    preflight = metadata.get("reference_preflight") or {}
+    return {
+        "basis": "stored_import_counters",
+        "rows_read": summary.get("rows_read"),
+        "rows_staged": summary.get("rows_staged"),
+        "rows_rejected": summary.get("rows_rejected", metadata.get("rows_rejected")),
+        "reference_preflight_gate": preflight.get("gate"),
+    }
+
+
+def _decision_of(successor: Optional[sm.SourceSnapshot]) -> Optional[Dict[str, Any]]:
+    """Same shape `snapshot_status` already returns under `decision`."""
+    if successor is None:
+        return None
+    return {
+        "successor_snapshot_id": str(successor.id), "status": successor.status,
+        "approved_by": successor.approved_by, "approved_role": successor.approved_role,
+        "approved_at": successor.approved_at.isoformat() if successor.approved_at else None,
+        "approval_ref": successor.approval_ref,
+    }
+
+
+def _snapshot_summary(snapshot: sm.SourceSnapshot,
+                      successor: Optional[sm.SourceSnapshot]) -> Dict[str, Any]:
+    """One read-only list item. Pure function of two stored rows.
+
+    Approval is APPEND-ONLY (`approve_snapshot`): the registration row
+    (`row_kind=registration`) is never edited and keeps `status` PENDING
+    forever; the decision lives in a separate row (`row_kind=approval_successor`)
+    whose `predecessor_snapshot_id` points back. `decision` on a registration
+    row is therefore "the approved successor, if one exists", never a change to
+    this row. Snapshot approval and affiliation matching/lookup are reported in
+    separate blocks: approval says nothing about whether matching is possible."""
+    metadata = snapshot.metadata_ or {}
+    is_successor = snapshot.supersedes_snapshot_id is not None
+    return {
+        "snapshot_id": str(snapshot.id),
+        "source_system": snapshot.source_system,
+        "label": snapshot.snapshot_label,
+        "sha256": snapshot.sha256,
+        "record_count": snapshot.record_count,
+        "status": snapshot.status,
+        "row_kind": "approval_successor" if is_successor else "registration",
+        "predecessor_snapshot_id": (
+            str(snapshot.supersedes_snapshot_id) if is_successor else None),
+        "decision": _decision_of(successor),
+        "approved_by": snapshot.approved_by,
+        "approved_at": snapshot.approved_at.isoformat() if snapshot.approved_at else None,
+        "created_by": snapshot.created_by,
+        "created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
+        "received_at": snapshot.received_at.isoformat() if snapshot.received_at else None,
+        "import_status": metadata.get("import_status"),
+        "import_error": metadata.get("import_error"),
+        "stored_counters": _stored_counters(metadata),
+        "matching": _matching_capability(snapshot.source_system),
+        "affiliation_lookup": {
+            "flag": "ENABLE_IQVIA_AFFILIATION_CONSUMPTION",
+            "enabled": bool(getattr(settings, "ENABLE_IQVIA_AFFILIATION_CONSUMPTION", False)),
+            "note": ("separate from snapshot approval: an approved snapshot is not "
+                     "used by any report or lookup unless this is enabled"),
+        },
+    }
+
+
+async def _fetch_snapshot_page(
+    db: AsyncSession, *, limit: int, offset: int, source_system: Optional[str],
+    include_successors: bool,
+):
+    """Read-only. Returns (total, [(row, successor_or_None), ...]) with the
+    successors of the page fetched in ONE extra query (no per-row query)."""
+    from sqlalchemy import func
+
+    cond = [sm.SourceSnapshot.source_system.in_(
+        (source_system,) if source_system else _IQVIA_SOURCE_SYSTEMS)]
+    if not include_successors:
+        cond.append(sm.SourceSnapshot.supersedes_snapshot_id.is_(None))
+    total = (await db.execute(
+        select(func.count()).select_from(sm.SourceSnapshot).where(*cond))).scalar() or 0
+    rows = list((await db.execute(
+        select(sm.SourceSnapshot).where(*cond)
+        .order_by(sm.SourceSnapshot.created_at.desc(), sm.SourceSnapshot.id.desc())
+        .limit(limit).offset(offset))).scalars().all())
+    successors: Dict[Any, sm.SourceSnapshot] = {}
+    if rows:
+        found = (await db.execute(
+            select(sm.SourceSnapshot)
+            .where(sm.SourceSnapshot.supersedes_snapshot_id.in_([r.id for r in rows]))
+            .order_by(sm.SourceSnapshot.created_at.asc()))).scalars().all()
+        for succ in found:
+            successors.setdefault(succ.supersedes_snapshot_id, succ)
+    return total, [(r, successors.get(r.id)) for r in rows]
+
+
+@router.get("/snapshots",
+           summary="List IQVIA snapshots (read-only, paginated) so an existing one can be reopened")
+async def list_snapshots(
+    response: Response,
+    limit: int = Query(25, ge=1, le=_SNAPSHOT_LIST_MAX_LIMIT),
+    offset: int = Query(0, ge=0, le=1_000_000),
+    source: Optional[str] = Query(None, description="hco | hcp | affiliation"),
+    include_successors: bool = Query(
+        False, description="Also list the append-only approval successor rows as items of their own."),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("reviewer")),
+):
+    """Discovery only -- no write, no audit row, no row counting over the
+    observation tables. Same gate as the neighbouring snapshot read
+    (`snapshot_status`): `require_role("reviewer")` + `_require_licensed_access`.
+    The live staged-row reconciliation stays on `GET /snapshots/{id}`; this
+    list only echoes counters the importer already stored and says so
+    (`stored_counters.basis`)."""
+    _require_licensed_access(user)
+    source_system = _SOURCE_SYSTEM[_require_known_source(source)] if source else None
+    response.headers["Cache-Control"] = "no-store"
+    total, page = await _fetch_snapshot_page(
+        db, limit=limit, offset=offset, source_system=source_system,
+        include_successors=include_successors)
+    return {
+        "items": [_snapshot_summary(row, succ) for row, succ in page],
+        "total": total, "limit": limit, "offset": offset,
+        "has_more": offset + len(page) < total,
+        "include_successors": include_successors,
+    }
 
 
 @router.get("/snapshots/{snapshot_id}",
