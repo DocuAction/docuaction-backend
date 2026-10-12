@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.tefca_registry.rce import verification_coverage as vc
+from test_delivery_processing_report import rolled_back_db  # noqa: F401  (fixture)
 
 
 # ---------------------------------------------------------------- pure classification
@@ -180,6 +181,76 @@ def test_html_leg_table_has_the_same_columns_and_counts_as_csv_annex_b1():
     assert rows["Registration search only"] == ["7", "n/a", "n/a", "1", "2", "3", "1"]
     assert rows["Exclusion screening"] == ["9", "4", "2", "n/a", "n/a", "1", "2"]
     assert rows["Screening leg not recorded"] == ["5", "n/a", "n/a", "n/a", "n/a", "1", "4"]
+
+
+# ---------------------------------------------------------------- headline row: what "Answered" means for SAM
+_SAM_STATEMENT = ("SAM.gov answered figures combine registration-search and exclusion-screening activity "
+                  "(any answered leg)")
+_NOT_CLEARANCE = "not exclusion clearance"
+
+
+def _csv_with_sources(sources):
+    from app.reports.engine.csv_engine import delivery_processing_to_csv
+
+    ds = {
+        "delivery": {"job_id": "j", "intake_id": "i", "delivery_label": "L", "filename": "f", "sha256": "s"},
+        "build": {}, "dispositions": {"counts": {}, "rows": []}, "reconciliation": {"available": False},
+        "findings": {"available": False}, "verification": {"sources": sources},
+        "analyst": {"available": False}, "limitations": [],
+    }
+    return delivery_processing_to_csv(ds, "DA-ARC-2026-999", "2026-10-12T00:00:00", rule_set_version=3)
+
+
+def _src(name):
+    return {"name": name, "state": "Complete", "eligible": 5, "attempted": 5, "verified": 1, "not_found": 4,
+            "unavailable": 0, "failed": 0, "coverage_pct": 100.0, "answered": 5, "answered_pct": 100.0}
+
+
+def test_csv_annex_b_states_what_the_sam_answered_figure_is_next_to_the_sam_row():
+    import csv
+    import io
+
+    text_ = _csv_with_sources([_src("leie"), _src("sam"), _src("nppes")])
+    rows = [r for r in csv.reader(io.StringIO(text_))]
+    i = next(k for k, r in enumerate(rows) if r and r[0] == "sam")
+    assert rows[i][9] == "5" and rows[i][10] == "100.0"      # numbers unchanged
+    note = rows[i + 1]
+    assert len(note) == 1 and note[0].startswith("Note (SAM.gov row above)")
+    assert _SAM_STATEMENT in note[0] and _NOT_CLEARANCE in note[0]
+    assert "registration-only result never means" in note[0]
+    # Annex B columns unchanged and the note is absent for non-SAM sources
+    header = next(r for r in rows if r and r[0] == "Source" and "Answered %" in r)
+    assert header == ["Source", "State", "Eligible", "Attempted", "Verified", "Not found", "Unavailable",
+                      "Failed", "Attempted %", "Answered (verified + not found)", "Answered %", "Note"]
+    assert text_.count(_SAM_STATEMENT) == 1
+    assert _SAM_STATEMENT not in _csv_with_sources([_src("leie"), _src("nppes")])
+
+
+@pytest.mark.asyncio
+async def test_html_sam_rows_carry_the_answered_statement_and_numbers_are_unchanged(rolled_back_db):
+    import re
+    from test_delivery_processing_report import _generate, seed_delivery
+
+    ids = await seed_delivery(rolled_back_db)
+    result = await _generate(rolled_back_db, job_id=str(ids["job_id"]))
+    html, ds = result["html"], result["dataset"]
+    sam = next(s for s in ds["verification"]["sources"] if s["name"] == "sam")
+    # statement beside the headline SAM rows: summary table marker + footnote, detailed table row note
+    assert html.count(_SAM_STATEMENT) == 2 and html.count(_NOT_CLEARANCE) == 2
+    summary_rows = [r for r in html.split("</tr>") if "<b>SAM.gov</b>" in r]
+    detail_rows = [r for r in html.split("</tr>") if re.search(r'<th scope="row" class="nw">SAM', r)]
+    assert summary_rows and "&dagger;" in summary_rows[0]
+    assert detail_rows and "&dagger;" in detail_rows[0] and _SAM_STATEMENT in detail_rows[0]
+    # absent from every non-SAM row
+    for r in html.split("</tr>"):
+        if re.search(r"<b>(NPPES|PECOS|OIG LEIE)</b>", r) or re.search(
+                r'<th scope="row" class="nw">(NPPES|PECOS|LEIE)', r):
+            assert "&dagger;" not in r and _SAM_STATEMENT not in r
+    # numbers unchanged: still the dataset's own answered_pct
+    pct = sam.get("answered_pct")
+    expected = "Not run" if (pct is None and sam.get("coverage_pct") is None) else (
+        "&mdash;" if pct is None else f"{pct}%")
+    assert expected in detail_rows[0]
 
 
 # ---------------------------------------------------------------- DB: SQL twin parity

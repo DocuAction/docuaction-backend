@@ -326,6 +326,10 @@ def delivery_processing_to_csv(dataset: Dict[str, Any], report_id: str,
             "Not run" if s_.get("coverage_pct") is None else s_.get("coverage_pct"),
             s_.get("answered"), "" if s_.get("answered_pct") is None else s_.get("answered_pct"),
             s_.get("note") or ""]))
+        if s_.get("name") == "sam":
+            writer.writerow(["Note (SAM.gov row above): SAM.gov answered figures combine registration-search and "
+                             "exclusion-screening activity (any answered leg). They are not exclusion clearance: "
+                             "a registration-only result never means the entity was checked and found excluded-clear."])
     writer.writerow(["Unavailable and failed checks are attempts without an answer. Staged data and connector "
                      "readiness are not coverage. A source check does not clear any other source."])
     for s_ in verification.get("sources") or []:

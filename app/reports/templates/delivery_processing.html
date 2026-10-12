@@ -259,10 +259,11 @@
           </thead>
           <tbody>
             {% for s in verification.sources %}
-            <tr><td class="nw"><b>{{ src_label(s.name) }}</b></td><td class="nw">{{ s.state }}</td><td class="num">{{ s.eligible|number }}</td><td class="num">{{ s.attempted|number }}</td><td class="num">{{ s.verified|number }}</td><td class="num">{% if s.get('answered_pct') is none %}{% if s.coverage_pct is none %}Not run{% else %}&mdash;{% endif %}{% else %}{{ s.get('answered_pct') }}%{% endif %}</td></tr>
+            <tr><td class="nw"><b>{{ src_label(s.name) }}</b>{% if s.name == 'sam' %}<sup class="sam-answered-marker">&dagger;</sup>{% endif %}</td><td class="nw">{{ s.state }}</td><td class="num">{{ s.eligible|number }}</td><td class="num">{{ s.attempted|number }}</td><td class="num">{{ s.verified|number }}</td><td class="num">{% if s.get('answered_pct') is none %}{% if s.coverage_pct is none %}Not run{% else %}&mdash;{% endif %}{% else %}{{ s.get('answered_pct') }}%{% endif %}</td></tr>
             {% endfor %}
           </tbody>
         </table>
+        {% if verification.sources|selectattr('name','equalto','sam')|list %}<p class="agt-note sam-answered-note"><sup>&dagger;</sup> SAM.gov answered figures combine registration-search and exclusion-screening activity (any answered leg). They are not exclusion clearance: a registration-only result never means the entity was checked and found excluded-clear.</p>{% endif %}
         <p class="agt-note">Answered = verified + not found; unavailable or failed checks are attempted, not answered. Connector readiness is not coverage. Detail: Appendix G.</p>
       </div>
     </div>
@@ -638,7 +639,7 @@
   <tbody>
     {% for s in verification.sources %}
     <tr>
-      <th scope="row" class="nw">{{ s.name|upper }}</th>
+      <th scope="row" class="nw">{{ s.name|upper }}{% if s.name == 'sam' %}<sup class="sam-answered-marker">&dagger;</sup>{% endif %}</th>
       <td class="nw">{{ s.state }}</td>
       <td>{{ s.eligible|number }}</td>
       <td>{{ s.attempted|number }}</td>
@@ -648,7 +649,7 @@
       <td>{{ s.failed|number }}</td>
       <td class="nw">{% if s.coverage_pct is none %}Not run{% else %}{{ s.coverage_pct }}%{% endif %}</td>
       <td class="nw">{% if s.get('answered_pct') is none %}{% if s.coverage_pct is none %}Not run{% else %}&mdash;{% endif %}{% else %}{{ s.get('answered_pct') }}%{% endif %}</td>
-      <td>{{ s.note or '' }}</td>
+      <td>{{ s.note or '' }}{% if s.name == 'sam' %} <span class="sam-answered-note">&dagger; SAM.gov answered figures combine registration-search and exclusion-screening activity (any answered leg). They are not exclusion clearance: a registration-only result never means the entity was checked and found excluded-clear.</span>{% endif %}</td>
     </tr>
     {% endfor %}
   </tbody>
