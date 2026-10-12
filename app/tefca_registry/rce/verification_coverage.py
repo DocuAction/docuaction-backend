@@ -233,6 +233,140 @@ async def coverage_counts(db, intake_id) -> Dict[str, Dict[str, int]]:
     return out
 
 
+# --------------------------------------------------------------------------
+# SAM.gov screening-leg breakdown (WP7-A). READ-TIME LABELLING ONLY.
+#
+# The headline SAM counts above are unchanged: they say how many entities have
+# a SAM row and what the row's disposition was. They cannot say WHICH question
+# SAM answered. Two different questions share the SAM source:
+#   (1) registration-only -- the v3 entity-registration search (the NPI-less
+#       `sam_name` branch). A miss there means "no registration record found";
+#       it says nothing about exclusion.
+#   (2) exclusion screening -- the independent exclusion leg: clear / hit /
+#       unavailable.
+# Rows persisted before `normalized_values.screening_leg` existed carry no label.
+# They are reported as "screening leg not recorded": never as exclusion-clear,
+# never relabelled as registration. Stored rows are not rewritten; the label is
+# derived when the figures are read. Bucket/rule classification is not touched.
+# --------------------------------------------------------------------------
+SAM_LEG_NOT_RECORDED_LABEL = "screening leg not recorded"
+SAM_LEG_KEYS = ("registration_only", "exclusion", "leg_not_recorded")
+_SAM_REGISTRATION_LEGS = ("registration_only",)
+_SAM_EXCLUSION_LEGS = ("exclusion", "exclusion_and_registration")
+
+
+def sam_leg_class(leg: Optional[str]) -> str:
+    """Which question a SAM evidence row answered, from its recorded leg label.
+
+    Returns `registration_only`, `exclusion` or `leg_not_recorded`. An absent,
+    empty or unrecognised label is `leg_not_recorded` (honest unknown)."""
+    value = (leg or "").strip().lower() if isinstance(leg, str) else ""
+    if value in _SAM_REGISTRATION_LEGS:
+        return "registration_only"
+    if value in _SAM_EXCLUSION_LEGS:
+        return "exclusion"
+    return "leg_not_recorded"
+
+
+def sam_leg_outcome(leg_class: str, disposition: Optional[str]) -> str:
+    """Outcome word for one SAM row within its leg class.
+
+    exclusion: clear (PASS/CORROBORATED/NOT_FOUND) | hit (REVIEW/FAIL/CONFLICT)
+    | unavailable. registration_only: no_registration_record_found
+    (NOT_FOUND) | registration_record_found (PASS/CORROBORATED) | other |
+    unavailable. A registration-only NOT_FOUND is never `clear`. leg_not_recorded
+    rows are not interpreted (`not_interpreted`) beyond unavailable."""
+    d = (disposition or "").strip().upper()
+    if d == "UNAVAILABLE":
+        return "unavailable"
+    if leg_class == "exclusion":
+        if d in ("PASS", "CORROBORATED", "NOT_FOUND"):
+            return "clear"
+        if d in ("REVIEW", "FAIL", "CONFLICT"):
+            return "hit"
+        return "other"
+    if leg_class == "registration_only":
+        if d == "NOT_FOUND":
+            return "no_registration_record_found"
+        if d in ("PASS", "CORROBORATED"):
+            return "registration_record_found"
+        return "other"
+    return "not_interpreted"
+
+
+#: SQL twin of sam_leg_class / sam_leg_outcome (tested for parity). SAM rows
+#: only, both evidence tables; `tefca_verifications` has no leg label so its SAM
+#: rows are `leg_not_recorded` by construction. The outcome is computed per row
+#: BEFORE counting so an entity with two rows that map to one outcome counts once.
+_SAM_LEG_ROWS_CTE = f"""
+    WITH pop_uuid AS (
+        SELECT DISTINCT canonical_entity_id AS eid
+        FROM rce_curated_records
+        WHERE source_intake_id = CAST(:i AS uuid) AND canonical_entity_id IS NOT NULL),
+    pop_text AS (SELECT CAST(eid AS text) AS eid FROM pop_uuid),
+    leg_rows AS (
+        SELECT d.entity_id AS eid,
+               CASE WHEN lower(btrim(coalesce(d.normalized_values->>'screening_leg', '')))
+                         = 'registration_only' THEN 'registration_only'
+                    WHEN lower(btrim(coalesce(d.normalized_values->>'screening_leg', '')))
+                         IN ('exclusion', 'exclusion_and_registration') THEN 'exclusion'
+                    ELSE 'leg_not_recorded' END AS leg,
+               upper(btrim(coalesce(d.disposition, ''))) AS disp
+        FROM tefca_dimension_evidence d
+        WHERE d.entity_id IN (SELECT eid FROM pop_text)
+          AND {_SOURCE_CASE.format(col='d.source')} = 'sam'
+        UNION ALL
+        SELECT v.entity_id::text AS eid, 'leg_not_recorded' AS leg,
+               CASE lower(btrim(coalesce(v.verification_status, '')))
+                    WHEN 'unavailable' THEN 'UNAVAILABLE'
+                    WHEN 'source_unavailable' THEN 'UNAVAILABLE'
+                    ELSE 'OTHER' END AS disp
+        FROM tefca_verifications v
+        WHERE v.entity_id IN (SELECT eid FROM pop_uuid)
+          AND {_SOURCE_CASE.format(col='v.source')} = 'sam'),
+    sam_rows AS (
+        SELECT eid, leg,
+               CASE WHEN disp = 'UNAVAILABLE' THEN 'unavailable'
+                    WHEN leg = 'exclusion' AND disp IN ('PASS', 'CORROBORATED', 'NOT_FOUND') THEN 'clear'
+                    WHEN leg = 'exclusion' AND disp IN ('REVIEW', 'FAIL', 'CONFLICT') THEN 'hit'
+                    WHEN leg = 'registration_only' AND disp = 'NOT_FOUND' THEN 'no_registration_record_found'
+                    WHEN leg = 'registration_only' AND disp IN ('PASS', 'CORROBORATED')
+                         THEN 'registration_record_found'
+                    WHEN leg = 'leg_not_recorded' THEN 'not_interpreted'
+                    ELSE 'other' END AS outcome
+        FROM leg_rows)
+"""
+_SAM_LEG_COUNTS_SQL = _SAM_LEG_ROWS_CTE + (
+    "SELECT leg, outcome, count(DISTINCT eid) AS entities FROM sam_rows GROUP BY leg, outcome")
+_SAM_LEG_ENTITIES_SQL = _SAM_LEG_ROWS_CTE + (
+    "SELECT leg, count(DISTINCT eid) AS entities FROM sam_rows GROUP BY leg")
+
+
+def _empty_sam_legs() -> Dict[str, Any]:
+    return {
+        "registration_only": {
+            "entities": 0, "no_registration_record_found": 0,
+            "registration_record_found": 0, "unavailable": 0, "other": 0},
+        "exclusion": {"entities": 0, "clear": 0, "hit": 0, "unavailable": 0, "other": 0},
+        "leg_not_recorded": {"entities": 0, "unavailable": 0, "not_interpreted": 0,
+                             "label": SAM_LEG_NOT_RECORDED_LABEL},
+    }
+
+
+async def sam_screening_legs(db, intake_id) -> Dict[str, Any]:
+    """Distinct-entity SAM counts split by which question each row answered.
+
+    An entity with rows of more than one kind is counted in each kind it has
+    (and once per outcome within a kind), so the kinds are NOT additive and
+    must not be summed into a single "screened" figure. Reads only."""
+    out = _empty_sam_legs()
+    for leg, outcome, n in (await db.execute(text(_SAM_LEG_COUNTS_SQL), {"i": str(intake_id)})).all():
+        out[leg][outcome] = int(n or 0)
+    for leg, n in (await db.execute(text(_SAM_LEG_ENTITIES_SQL), {"i": str(intake_id)})).all():
+        out[leg]["entities"] = int(n or 0)
+    return out
+
+
 def _tally(verification_rows, dimension_rows) -> Dict[str, Dict[str, set]]:
     """Per source: outcome -> set of entity ids, plus 'attempted'."""
     tally: Dict[str, Dict[str, set]] = {
@@ -298,6 +432,10 @@ async def coverage_for_intake(db, intake_id, *, job=None) -> Dict[str, Any]:
             deactivated=counts["deactivated"], failed=counts["failed"],
             unavailable=counts["unavailable"], in_progress=in_progress)
     stamp_pecos_backing(sources)
+    # Additive: which SAM question each row answered (registration vs exclusion
+    # vs leg not recorded). The headline SAM counts above are not changed.
+    if isinstance(sources.get("sam"), dict):
+        sources["sam"]["screening_legs"] = await sam_screening_legs(db, intake_id)
     provenance = None
     try:
         from app.Tefca.connectors import data_source_labels

@@ -653,6 +653,23 @@
     {% endfor %}
   </tbody>
 </table>
+{% for s in verification.sources %}{% if s.get('screening_legs') %}{% set legs = s.get('screening_legs') %}
+<table class="dp-tight">
+  <caption>SAM.gov results by screening leg (distinct entities; legs are not additive)</caption>
+  <thead>
+    <tr><th scope="col">Screening leg</th><th scope="col">Entities</th><th scope="col">Clear</th><th scope="col">Hit</th>
+      <th scope="col">No registration record found</th><th scope="col">Unavailable</th></tr>
+  </thead>
+  <tbody>
+    <tr><th scope="row">Registration search only</th><td>{{ legs.registration_only.entities|number }}</td><td>n/a</td><td>n/a</td><td>{{ legs.registration_only.no_registration_record_found|number }}</td><td>{{ legs.registration_only.unavailable|number }}</td></tr>
+    <tr><th scope="row">Exclusion screening</th><td>{{ legs.exclusion.entities|number }}</td><td>{{ legs.exclusion.clear|number }}</td><td>{{ legs.exclusion.hit|number }}</td><td>n/a</td><td>{{ legs.exclusion.unavailable|number }}</td></tr>
+    <tr><th scope="row">Screening leg not recorded</th><td>{{ legs.leg_not_recorded.entities|number }}</td><td>n/a</td><td>n/a</td><td>n/a</td><td>{{ legs.leg_not_recorded.unavailable|number }}</td></tr>
+  </tbody>
+</table>
+<p>A registration-only search with no record found is not an exclusion &ldquo;no hit&rdquo;. Results stored before the
+  screening leg was recorded are shown as &ldquo;screening leg not recorded&rdquo;; they are not counted as
+  exclusion-clear and are not relabelled as registration results. The SAM row in the table above combines all legs.</p>
+{% endif %}{% endfor %}
 <p><strong>Failed/error indicator &mdash; reconciliation pending.</strong>
   Each source's Failed column is that source's own count and is not a
   reconciled, mutually exclusive delivery-wide status: an entity failed at one
