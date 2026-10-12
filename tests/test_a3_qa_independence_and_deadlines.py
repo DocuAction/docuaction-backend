@@ -112,6 +112,38 @@ def test_flag_off_keeps_legacy_self_attestable_behaviour(monkeypatch):
     assert out["qa_action"] == "RETURN"
 
 
+@pytest.mark.parametrize("grantor_kw,code", [
+    (dict(role="qalead"), qc.SOD_GRANTOR_NOT_ADMIN),
+    (dict(role="viewer"), qc.SOD_GRANTOR_NOT_ADMIN),
+    (dict(active=False), qc.SOD_GRANTOR_INACTIVE),
+    (dict(status="disabled"), qc.SOD_GRANTOR_INACTIVE),
+])
+def test_old_defect_vs_corrected_for_non_admin_or_inactive_grantor(
+        monkeypatch, grantor_kw, code):
+    """Same input, flag OFF vs ON: OFF accepts the non-admin/inactive grantor
+    (the confirmed defect, live on DEV); ON refuses it with a machine code."""
+    actor = uuid.uuid4()
+    _setup(monkeypatch, analyst_id=actor)
+    g = _user(**{"role": "admin", **grantor_kw})
+    monkeypatch.setattr(settings, "ENABLE_SOD_GRANTOR_VERIFICATION", False)
+    assert run(_qa(FakeDb(grantor=g), actor, g.id))["qa_action"] == "RETURN"
+    monkeypatch.setattr(settings, "ENABLE_SOD_GRANTOR_VERIFICATION", True)
+    with pytest.raises(qa_gate.QaGateRefused) as e:
+        run(_qa(FakeDb(grantor=g), actor, g.id))
+    assert e.value.code == code
+
+
+def test_grantor_equal_to_actor_refused_in_both_flag_states(monkeypatch):
+    """Self-grant is already refused by the legacy `!= actor` check; the flag
+    does not change that (documents the boundary of the defect)."""
+    actor = uuid.uuid4()
+    _setup(monkeypatch, analyst_id=actor)
+    for flag in (False, True):
+        monkeypatch.setattr(settings, "ENABLE_SOD_GRANTOR_VERIFICATION", flag)
+        with pytest.raises(qa_gate.QaGateRefused):
+            run(_qa(FakeDb(grantor=_user()), actor, actor))
+
+
 def test_flag_on_refuses_unverified_grantor_with_code(monkeypatch):
     actor = uuid.uuid4()
     _setup(monkeypatch, analyst_id=actor)
