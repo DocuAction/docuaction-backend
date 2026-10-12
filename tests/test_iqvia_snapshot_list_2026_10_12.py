@@ -27,29 +27,65 @@ PATH = "/api/tefca/rce/iqvia/snapshots"
 
 
 class _User:
+    """Minimal authenticated user row for the role dependency."""
+
     def __init__(self, role):
-        self.id = str(uuid.uuid4()); self.email = f"{role}@test.local"; self.role = role
-        self.is_active = True; self.status = "active"; self.tokens_revoked_at = None
+        """Build an active user with the given role and a random id."""
+        self.id = str(uuid.uuid4())
+        self.email = f"{role}@test.local"
+        self.role = role
+        self.is_active = True
+        self.status = "active"
+        self.tokens_revoked_at = None
 
 
 class _Result:
-    def __init__(self, user): self._user = user
-    def scalar_one_or_none(self): return self._user
-    def scalar(self): return None
+    """Stand-in for a SQLAlchemy result that yields the auth user."""
+
+    def __init__(self, user):
+        """Remember the user returned by the auth lookup."""
+        self._user = user
+
+    def scalar_one_or_none(self):
+        """Return the authenticated user."""
+        return self._user
+
+    def scalar(self):
+        """Return no scalar value."""
+        return None
 
 
 class _Session:
     """Auth lookups succeed; any write is a test failure."""
-    def __init__(self, user): self._user = user
-    async def execute(self, *a, **k): return _Result(self._user)
-    async def commit(self): raise AssertionError("list must never write")
-    async def rollback(self): return None
-    async def close(self): return None
-    def add(self, *a, **k): raise AssertionError("list must never write")
+
+    def __init__(self, user):
+        """Remember the user returned by every execute()."""
+        self._user = user
+
+    async def execute(self, *a, **k):
+        """Answer every statement with the auth user."""
+        return _Result(self._user)
+
+    async def commit(self):
+        """Fail: the list route must never commit."""
+        raise AssertionError("list must never write")
+
+    async def rollback(self):
+        """No-op rollback."""
+        return None
+
+    async def close(self):
+        """No-op close."""
+        return None
+
+    def add(self, *a, **k):
+        """Fail: the list route must never add rows."""
+        raise AssertionError("list must never write")
 
 
 @pytest.fixture
 def as_role(client, monkeypatch):
+    """Return a factory that issues authenticated GETs as the given role."""
     from app.core.config import settings
     from app.core.database import get_db
     from app.core.security import create_access_token
@@ -58,9 +94,11 @@ def as_role(client, monkeypatch):
     monkeypatch.setattr(settings, "ENABLE_IQVIA_SOURCES", True, raising=False)
 
     def make(role):
+        """Create a user of ``role``, override the DB session and return a GET callable."""
         user = _User(role)
 
         async def _override():
+            """Yield the write-refusing session for the dependency override."""
             yield _Session(user)
 
         app.dependency_overrides[get_db] = _override
@@ -75,6 +113,7 @@ def as_role(client, monkeypatch):
 
 
 def _snap(**over):
+    """Build an in-memory SourceSnapshot with overridable fields."""
     now = datetime(2026, 10, 8, 8, 40, tzinfo=timezone.utc)
     base = dict(
         id=uuid.uuid4(), source_system=sm.SOURCE_IQVIA_AFFILIATION, snapshot_label="synthetic HCP_AFFIL",
@@ -90,10 +129,12 @@ def _snap(**over):
 
 @pytest.fixture
 def fake_page(monkeypatch):
+    """Replace the page query with a recorder returning a configurable page."""
     calls = []
     payload = {"total": 0, "page": []}
 
     async def _fake(db, **kw):
+        """Record the call arguments and return the configured page."""
         calls.append(kw)
         return payload["total"], payload["page"]
 
@@ -104,6 +145,7 @@ def fake_page(monkeypatch):
 # -- access control ----------------------------------------------------------
 
 def test_unauthenticated_is_401(client):
+    """Unauthenticated is 401."""
     assert client.get(PATH).status_code in (401, 403)  # missing header: scheme-dependent
     r = client.get(PATH, headers={"Authorization": "Bearer not-a-token"})
     assert r.status_code == 401
@@ -111,12 +153,14 @@ def test_unauthenticated_is_401(client):
 
 @pytest.mark.parametrize("role", ["contributor", "viewer"])
 def test_below_reviewer_is_403(as_role, fake_page, role):
+    """Below reviewer is 403."""
     r = as_role(role)()
     assert r.status_code == 403
     assert fake_page[0] == []  # the query never ran
 
 
 def test_licensed_flag_off_is_403_with_availability(as_role, fake_page, monkeypatch):
+    """Licensed flag off is 403 with availability."""
     from app.core.config import settings
     get = as_role("reviewer")
     monkeypatch.setattr(settings, "ENABLE_IQVIA_SOURCES", False, raising=False)
@@ -128,6 +172,7 @@ def test_licensed_flag_off_is_403_with_availability(as_role, fake_page, monkeypa
 
 @pytest.mark.parametrize("role", ["reviewer", "qalead", "admin"])
 def test_reviewer_and_above_may_read(as_role, fake_page, role):
+    """Reviewer and above may read."""
     r = as_role(role)()
     assert r.status_code == 200
     assert r.headers["cache-control"] == "no-store"
@@ -138,11 +183,13 @@ def test_reviewer_and_above_may_read(as_role, fake_page, role):
 @pytest.mark.parametrize("query", ["limit=0", "limit=101", "limit=-1", "offset=-1",
                                    "offset=1000001", "limit=abc"])
 def test_pagination_out_of_bounds_is_422(as_role, fake_page, query):
+    """Pagination out of bounds is 422."""
     assert as_role("reviewer")(PATH + "?" + query).status_code == 422
     assert fake_page[0] == []
 
 
 def test_pagination_defaults_and_maximum_are_passed_through(as_role, fake_page):
+    """Pagination defaults and maximum are passed through."""
     get = as_role("reviewer")
     assert get().status_code == 200
     assert get(PATH + "?limit=100&offset=200").status_code == 200
@@ -152,6 +199,7 @@ def test_pagination_defaults_and_maximum_are_passed_through(as_role, fake_page):
 
 
 def test_unknown_source_filter_is_422_and_known_one_maps_to_source_system(as_role, fake_page):
+    """Unknown source filter is 422 and known one maps to source system."""
     get = as_role("reviewer")
     assert get(PATH + "?source=nope").status_code == 422
     assert get(PATH + "?source=affiliation").status_code == 200
@@ -161,6 +209,7 @@ def test_unknown_source_filter_is_422_and_known_one_maps_to_source_system(as_rol
 # -- shape and truthfulness --------------------------------------------------
 
 def test_registration_row_with_approved_successor_is_not_changed_in_place(as_role, fake_page):
+    """Registration row with approved successor is not changed in place."""
     root = _snap()
     approved_at = datetime(2026, 10, 12, 9, 0, tzinfo=timezone.utc)
     succ = _snap(id=uuid.uuid4(), status=sm.SNAPSHOT_APPROVED, supersedes_snapshot_id=root.id,
@@ -184,6 +233,7 @@ def test_registration_row_with_approved_successor_is_not_changed_in_place(as_rol
 
 
 def test_successor_row_points_back_to_its_predecessor(as_role, fake_page):
+    """Successor row points back to its predecessor."""
     root_id = uuid.uuid4()
     succ = _snap(status=sm.SNAPSHOT_APPROVED, supersedes_snapshot_id=root_id,
                  approved_by="qa@test.local", approved_at=datetime(2026, 10, 12, tzinfo=timezone.utc))
@@ -197,6 +247,7 @@ def test_successor_row_points_back_to_its_predecessor(as_role, fake_page):
 
 
 def test_matching_and_affiliation_flag_are_separate_from_approval(as_role, fake_page, monkeypatch):
+    """Matching and affiliation flag are separate from approval."""
     from app.core.config import settings
     monkeypatch.setattr(settings, "ENABLE_IQVIA_AFFILIATION_CONSUMPTION", False, raising=False)
     fake_page[1].update(total=1, page=[(_snap(status=sm.SNAPSHOT_APPROVED,
@@ -209,6 +260,7 @@ def test_matching_and_affiliation_flag_are_separate_from_approval(as_role, fake_
 
 
 def test_missing_metadata_yields_none_not_invented_values():
+    """Missing metadata yields none not invented values."""
     summary = routes._snapshot_summary(_snap(metadata_={}), None)
     assert summary["import_status"] is None
     assert summary["stored_counters"]["rows_read"] is None
@@ -224,6 +276,7 @@ from rce_traceability_support import rolled_back_db  # noqa: E402,F401  (fixture
 
 
 async def test_query_embeds_successor_and_hides_successor_rows_by_default(rolled_back_db):
+    """Query embeds successor and hides successor rows by default."""
     session = rolled_back_db
     tag = uuid.uuid4().hex[:8]
     from app.tefca_registry.rce import source_matching as sx
