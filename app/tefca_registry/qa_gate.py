@@ -45,6 +45,7 @@ from sqlalchemy import func, select
 
 from app.tefca_registry import audit as reg_audit
 from app.tefca_registry import models as reg
+from app.tefca_registry import qa_controls
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,15 @@ MIN_RATIONALE = 10
 
 
 class QaGateRefused(RuntimeError):
-    """A QA or determination act was refused. Never a silent no-op."""
+    """A QA or determination act was refused. Never a silent no-op.
+
+    `code` is a machine-readable denial code (qa_controls.*). The default keeps
+    every pre-existing raise site valid; the message text is unchanged.
+    """
+
+    def __init__(self, message: str = "", code: str = "QA_REFUSED"):
+        super().__init__(message)
+        self.code = code
 
 
 # ── reads ────────────────────────────────────────────────────────────────────
@@ -162,7 +171,8 @@ def _actor(user) -> tuple:
     role = str(getattr(user, "role", "") or "")
     if actor_id is None:
         raise QaGateRefused(
-            "the acting user has no id; a decision event must name its actor")
+            "the acting user has no id; a decision event must name its actor",
+            code="ACTOR_UNIDENTIFIED")
     return actor_id, (actor_email or "unknown"), role
 
 
@@ -171,7 +181,8 @@ def _require_rationale(text: Optional[str], field: str) -> str:
     if len(value) < MIN_RATIONALE:
         raise QaGateRefused(
             f"{field} is mandatory and must be at least {MIN_RATIONALE} "
-            f"characters — a decision without a reason is not reviewable")
+            f"characters — a decision without a reason is not reviewable",
+            code="RATIONALE_REQUIRED")
     return value
 
 
@@ -180,7 +191,8 @@ async def _review_or_refuse(db, review_id: str) -> reg.ReviewRecord:
         select(reg.ReviewRecord).where(reg.ReviewRecord.review_id == review_id)
     )).scalars().first()
     if row is None:
-        raise QaGateRefused(f"no review exists with id {review_id}")
+        raise QaGateRefused(f"no review exists with id {review_id}",
+                            code="REVIEW_NOT_FOUND")
     return row
 
 
@@ -220,13 +232,14 @@ async def record_analyst_determination(
         raise QaGateRefused(
             f"RECLASSIFY to {determined_bucket} is a no-op: {review_id} is already "
             f"classified {record.classification_bucket}. Use CONFIRM, or name a "
-            f"different bucket.")
+            f"different bucket.", code="RECLASSIFY_NOOP")
 
     events = await _events(db, review_id)
     if is_reportable(events):
         raise QaGateRefused(
             f"{review_id} already carries a standing QA approval. Issue a "
-            f"superseding determination instead of a second analyst decision.")
+            f"superseding determination instead of a second analyst decision.",
+            code="QA_ALREADY_APPROVED")
 
     event = E(
         id=uuid.uuid4(), review_id=review_id,
@@ -277,12 +290,13 @@ async def submit_qa_review(
     if determination is None:
         raise QaGateRefused(
             f"{review_id} has no analyst determination to review. A system "
-            f"recommendation is not a determination.")
+            f"recommendation is not a determination.",
+            code="NO_DETERMINATION")
     if _qa_after(events, determination) and \
             _qa_after(events, determination)[-1].qa_action == E.QA_APPROVE:
         raise QaGateRefused(
             f"{review_id} already has a standing APPROVE for the current "
-            f"determination")
+            f"determination", code="QA_ALREADY_APPROVED")
 
     # SEGREGATION OF DUTIES — checked here so the caller gets a clear refusal,
     # and again by a database trigger so a future code path cannot bypass it.
@@ -292,7 +306,22 @@ async def submit_qa_review(
             raise QaGateRefused(
                 f"segregation of duties: {actor_email} made the determination on "
                 f"{review_id} and may not QA it. An exception requires an admin "
-                f"grant from a different person, with a reason.")
+                f"grant from a different person, with a reason.",
+                code="SOD_SELF_QA")
+        # A3 (flag-gated, default OFF): the grantor was only ever a UUID in the
+        # request body, checked `!= actor`. With the flag on it must be a real,
+        # active admin who is neither the QA actor nor the analyst.
+        if qa_controls.flag("ENABLE_SOD_GRANTOR_VERIFICATION"):
+            from app.models.database import User
+            grantor = await db.get(User, sod_exception_granted_by)
+            denial = qa_controls.grantor_denial(
+                grantor=grantor, grantor_id=sod_exception_granted_by,
+                actor_id=actor_id, analyst_id=determination.actor_user_id)
+            if denial:
+                raise QaGateRefused(
+                    f"segregation of duties: the exception grant for {review_id} "
+                    f"was refused ({denial}). The grantor must be an active admin "
+                    f"who is neither the QA reviewer nor the analyst.", code=denial)
         sod_exception_reason = _require_rationale(
             sod_exception_reason, "sod_exception_reason")
 
@@ -345,7 +374,7 @@ async def submit_qa_review(
                     f"unresolved post-promotion verification finding. Resolve "
                     f"that finding first; approving a final classification "
                     f"over it would rest on state that may itself be about to "
-                    f"change.")
+                    f"change.", code="UNRESOLVED_BLOCKING_FINDING")
             # The resolve path `qhin_sampling.py`'s own comment describes
             # ("the authorised analyst/QA workflow") for an entity that is
             # `in_review` purely from classification-time tier routing (no
