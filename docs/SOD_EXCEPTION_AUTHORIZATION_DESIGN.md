@@ -105,6 +105,12 @@ existing grant for the same key whose `expires_at <= now()`, audits it as
 unconsumed grant is not replaced (the request is refused; the admin must revoke it
 explicitly). A periodic sweep may also revoke expired rows, but correctness does
 not depend on it.
+`SELECT ... FOR UPDATE` locks only rows that exist, so two concurrent grant requests
+for a key with no row can both reach the insert; the partial unique index is the
+backstop that serialises them: the loser gets a unique violation, rolls back and is
+answered 409 (retry shows the winner's grant). The same applies to an expired row
+revoked by one request while another inserts: whichever commits second re-reads and
+is refused or succeeds against the committed state, never both.
 
 ### 3.4 Consumption by the QA event
 Validation order in `submit_qa_review`, all before the QA event is created:
