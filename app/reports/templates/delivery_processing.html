@@ -263,7 +263,7 @@
             {% endfor %}
           </tbody>
         </table>
-        <p class="agt-note">Answered = verified + not found; unavailable or failed checks are attempted, not answered.{% if verification.sources|selectattr('name','equalto','sam')|list %} <span class="sam-answered-note">&dagger; SAM.gov answered = any answered leg (registration search or exclusion screening); not exclusion clearance.</span>{% endif %} Connector readiness is not coverage. Detail: Appendix G.</p>
+        <p class="agt-note">Answered = verified + not found; unavailable or failed checks are attempted, not answered.{% if verification.sources|selectattr('name','equalto','sam')|list %} <span class="sam-answered-note">&dagger; SAM.gov: any answered leg; not exclusion clearance.</span>{% else %} Connector readiness is not coverage.{% endif %} Detail: Appendix G.</p>
       </div>
     </div>
 

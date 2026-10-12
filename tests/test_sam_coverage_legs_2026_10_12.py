@@ -238,7 +238,7 @@ async def test_html_sam_rows_carry_the_answered_statement_and_numbers_are_unchan
     # statement beside the headline SAM rows: full text on the detailed row, short form (same note, no extra
     # line on the one-page cover) under the summary table, marker on both rows
     assert html.count(_SAM_STATEMENT) == 1 and html.count(_NOT_CLEARANCE) == 2
-    assert html.count("SAM.gov answered = any answered leg (registration search or exclusion screening)") == 1
+    assert html.count("&dagger; SAM.gov: any answered leg; not exclusion clearance.") == 1
     summary_rows = [r for r in html.split("</tr>") if "<b>SAM.gov</b>" in r]
     detail_rows = [r for r in html.split("</tr>") if re.search(r'<th scope="row" class="nw">SAM', r)]
     assert summary_rows and "&dagger;" in summary_rows[0]
