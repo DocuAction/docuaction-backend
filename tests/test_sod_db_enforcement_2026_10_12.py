@@ -255,7 +255,7 @@ class TestEnforcement:
                         "trg_review_event_append_only_trunc"):
                 await _refused(c, APP, f"alter table review_decision_events disable trigger {trg}",
                                needle="must be owner")
-            await _refused(c, APP, f"drop trigger trg_review_event_append_only_rows on review_decision_events",
+            await _refused(c, APP, "drop trigger trg_review_event_append_only_rows on review_decision_events",
                            needle="must be owner")
         _txn(body)
 

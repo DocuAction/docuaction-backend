@@ -1,26 +1,27 @@
 """Convergence tests for the ownership PREREQUISITE of 20261012_sod_db_enforcement (PR #151).
 
 The managed PROD-like fixture in test_prod_managed_migration_integration.py makes
-`docuaction_app` the owner of every table, including `review_decision_events`. The migration's
-preflight (SodDbEnforcementPreconditionError) correctly refuses to install guards on a table the
-runtime role owns, so `test_managed_prepare_migrate_finalize_end_to_end` FAILS on that fixture.
-That failure is EXPECTED until the owner decision + DBA move are made, and that test is
-deliberately left unchanged (not skipped, not xfailed, not edited). These tests add what is
-missing, without touching the existing fixture builder:
+`docuaction_app` the owner of every table and (as PROD is believed to be today, UNVERIFIED) of the
+SoD function, trigger and view and the `review_decision_events` table. The migration's preflight
+(SodDbEnforcementPreconditionError) correctly refuses to install guards on objects the runtime role
+owns. The DBA ownership prerequisite (docs/SOD_DB_OWNERSHIP_PREREQUISITE.sql) is therefore part of
+the certified sequence BEFORE prepare -> migrate -> finalize. The end-to-end test in
+test_prod_managed_migration_integration.py applies it (as a SIMULATED DBA identity, not a real one)
+and expects success; this file holds the negative controls and the transition test:
 
   1. test_app_owned_fixture_is_refused_by_the_preflight
-        positive test of the guard: the app-owned state is refused with the documented error,
-        "Nothing was changed", and the database is byte-for-byte where it was.
-  2. test_owner_owned_end_state_managed_path_succeeds
-        fixture variant modelling the REQUIRED end state (owner owns table + function, app has
-        SELECT, INSERT only): prepare -> migrate -> finalize succeeds, the SoD trigger refuses
-        self-QA, the runtime role cannot UPDATE/DELETE/TRUNCATE nor disable/drop the guards.
-  3. test_runbook_applied_to_app_owned_fixture_yields_the_required_end_state
-        runs docs/SOD_DB_OWNERSHIP_PREREQUISITE.sql (PRE-CHECKS, APPLY twice, POST-CHECKS) as the
-        server-admin model on the app-owned fixture, then proves the same managed path and the
-        same runtime-role behaviour as (2).
+        the app-owned state is refused with the documented error, "Nothing was changed" for the SoD
+        objects, and event rows are identical by count/md5/xmin.
+  2. test_app_owned_table_with_owner_owned_function_is_still_refused
+        the table-owner leg of the preflight.
+  3. test_transition_app_owned_to_owner_owned_via_runbook_then_managed_path_succeeds
+        the real transition: app-owned objects -> runbook (PRE-CHECKS, APPLY twice, POST-CHECKS) ->
+        prepare -> migrate -> finalize; historical rows unchanged, independent QA works, self-QA is
+        refused, and the runtime role cannot UPDATE/DELETE/TRUNCATE or disable/drop/alter the guards.
   4. test_runbook_refuses_wrong_identity_and_changes_nothing
-        the runbook's own guard: run as the runtime role it aborts and changes nothing.
+        the runbook's own identity guard: run as the runtime role it aborts and changes nothing.
+  5. test_finalize_hands_back_an_owner_owned_table_that_is_not_in_the_append_only_shape
+        FINALIZE never strips access: an owner-owned table outside the SELECT/INSERT shape is handed back.
 
 Skips unless CONV_SUPERUSER_URL is set (same as the sibling fixture tests). Synthetic data only.
 """
