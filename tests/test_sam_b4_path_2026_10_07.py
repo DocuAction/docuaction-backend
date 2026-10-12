@@ -58,16 +58,19 @@ def _bucket(sam_result, *, key="sam_name"):
 def test_clean_name_screen_does_not_reach_b4():
     sam, state, result = _bucket(_R({"found": False, "excluded": False, "ambiguous": False}))
     assert sam.disposition == Disposition.NOT_FOUND.value
-    assert state == "clear"                       # translator: NOT_FOUND on D3 -> clear, NOT not_found
+    # WP4-SAM: this NPI-less name screen is registration-only, so the translator no longer calls it `clear`
+    # (it was NOT_FOUND on D3 -> clear). Still NOT `not_found`: it does not reach B4. B1 is still reachable (policy C4).
+    assert state == "unavailable"
     assert result.rule_code != "RULE-005" and result.bucket != "B4"
     assert result.bucket == "B1"
 
 
-def test_a_registration_only_miss_is_indistinguishable_from_a_clean_exclusion_screen_DEFECT():
+def test_a_registration_only_miss_is_no_longer_read_as_a_clean_exclusion_screen_but_b1_is_still_reachable():
     sam, state, result = _bucket(_R({"found": False, "excluded": False}))
     leg = (sam.normalized_values or {}).get("screening_leg")
     assert leg == "registration_only"             # the new diagnostic field labels it...
-    assert state == "clear" and result.bucket == "B1"   # ...but classification still reads it as a clean exclusion screen
+    assert state == "unavailable"                 # ...and (WP4-SAM) the classifier no longer reads it as an exclusion clear
+    assert result.bucket == "B1"                  # bucket rules unchanged (decision C4 pending): B1 still reachable
 
 
 def test_a_name_only_potential_match_reaches_b4_by_the_review_mapping():
@@ -82,7 +85,8 @@ def test_ambiguity_is_honoured_only_under_the_key_verify_sets_DEFECT_on_the_npi_
     # `_sam_disposition` reads only `identity_ambiguous`, so a multi-entity name match on the NPI-less path is
     # reported NOT_FOUND ("No match found") and then classified B1-eligible.
     sam, state, result = _bucket(_R({"found": True, "matched_by": "name", "ambiguous": True, "excluded": False}))
-    assert sam.disposition == Disposition.NOT_FOUND.value and state == "clear" and result.bucket == "B1"
+    # WP4-SAM: labelled registration_only -> `unavailable` for exclusion (was `clear`); bucket rules unchanged.
+    assert sam.disposition == Disposition.NOT_FOUND.value and state == "unavailable" and result.bucket == "B1"
     # Same facts under the key the other path uses: REVIEW -> B4.
     sam, state, result = _bucket(_R({"found": True, "identity_ambiguous": True, "excluded": False}), key="sam_exclusion")
     assert sam.disposition == Disposition.REVIEW.value and result.bucket == "B4"
@@ -100,13 +104,14 @@ def test_unavailable_sam_is_not_b4_and_still_b1_by_policy():
 
 
 def test_registration_miss_is_labelled_not_an_exclusion_answer_while_disposition_and_bucket_are_unchanged():
-    """#127 changes LABELS only. Same NPI-less registration miss: the evidence now says registration_only and carries
-    no exclusion outcome; disposition NOT_FOUND, classifier state `clear` and bucket B1 are exactly main's."""
+    """#127 labels the leg; WP4-SAM (#147) corrects the classifier signal. Same NPI-less registration miss: the evidence
+    says registration_only and carries no exclusion outcome; disposition stays NOT_FOUND; the classifier state is
+    now `unavailable` (was `clear`); bucket B1 is unchanged (rules untouched, decision C4 pending)."""
     sam, state, result = _bucket(_R({"found": False, "excluded": False}))
     nv = sam.normalized_values or {}
     assert nv.get("screening_leg") == "registration_only"
     assert "outcome" not in nv                              # no exclusion answer is claimed
-    assert (sam.disposition, state, result.bucket) == (Disposition.NOT_FOUND.value, "clear", "B1")
+    assert (sam.disposition, state, result.bucket) == (Disposition.NOT_FOUND.value, "unavailable", "B1")
     # contrast: a result carrying the v4 exclusion leg is labelled as an exclusion screen (same disposition class)
     both, _, _ = _bucket(_R({"found": False, "excluded": False, "exclusion_screening": {"outcome": "NO_MATCH"}}))
     assert both.normalized_values["screening_leg"] == "exclusion_and_registration"
