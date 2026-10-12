@@ -1,0 +1,100 @@
+# Entity Identity & Location Intelligence — Architecture (isolated foundation)
+
+Status: DEV engineering foundation. Feature OFF. Not deployed to the shared QA environment. Not Task 7; a reusable evidence-intelligence capability that may later support Tasks 2–5.
+
+## The question it answers
+
+Not "is this address valid?" but: *is this the organisation represented in the delivered data, operating under the represented name, at the represented location, with relationships and independent evidence that explain or challenge the delivered information — and what changed since the prior review?*
+
+## Where the engine stops
+
+```
+SOURCE DATA (program delivery: the SUBJECT)
+   ↓
+INDEPENDENT EVIDENCE (NPPES V2 today; RCE-provided IQVIA later; state registries by design)
+   ↓
+SYSTEM EVIDENCE ASSESSMENT (this capability)   ← STOPS HERE
+   ↓
+ANALYST REVIEW → ANALYST DETERMINATION → INDEPENDENT QA → CONTRACTUAL CLASSIFICATION → REPORT
+```
+
+The engine never emits COMPLIANT / NON_COMPLIANT / APPROVED / REJECTED / PASS / FAIL / VERDICT. `assessment.py` asserts that at import time and tests assert it on payloads.
+
+## Placement in the locked architecture
+
+| Layer | What lives there | Package |
+|---|---|---|
+| CORE | observation model, normalisation, comparison rules, historical delta, system evidence assessment, ports, isolated persistence, feature gates | `app/core/entity_intelligence/` |
+| Source adapters (program-agnostic, source-specific) | NPPES V2 (implemented, file-based), IQVIA OneKey (awaiting schema), state registry (interface only) | `app/evidence_sources/` |
+| PROGRAM CONFIGURATION / TEFCA module | relationship kinds (QHIN→Participant, Participant→Subparticipant), applicability decisions, when to run, what the workbench shows | not built in this sprint |
+
+Core imports nothing from `app/Tefca`, `app/tefca_registry` or the adapters. Adapters import Core. A test walks `app/` and fails if anything outside these two packages (other than the settings declaration) references them.
+
+## Existing components reused vs new
+
+| Concern | EXISTING_REUSABLE_COMPONENT | EXTEND_EXISTING | NEW_COMPONENT_REQUIRED |
+|---|---|---|---|
+| Source version / hashing / provenance | `app.core.evidence_provenance` (`SourceVersionRef`, `observation_hash`, `file_sha256`) — reused as-is | no | `Provenance` wrapper adds source owner, delivery path, received-by |
+| Ingestion contracts | `app.core.ingestion.contracts` (`SourceDescriptor`, `AcquisitionResult`, `ParsedBatch`) — the future NPPES *acquisition* step will register through it | later | not now (adapter is file-in, observations-out) |
+| Canonical entity + identifiers + relationships | `tefca_registry.models` (`TefcaRegEntity`, `TefcaEntityIdentifier`, `TefcaEntityRelationship`, `TefcaEntityVersion`) — the program owns these; observations reference `canonical_entity_id` only | no (shared schema frozen) | none |
+| Delivered source record | `RceSourceRecord`, `TefcaEntityContact` — future TEFCA adapter maps them to PROGRAM_DELIVERY observations | no | none |
+| Evidence store | `TEFCADimensionEvidence` is the program's Layer-1 store (dimension → disposition). Identity observations need role, effective dates and multi-valued names/locations it does not model | no (frozen) | `ei_evidence_observations` etc. on a separate base |
+| Address/name normalisation | `app.Tefca.address_comparison` is program-owned; Core cannot import it | no | `core/entity_intelligence/normalize.py` (same rules, Core-owned) |
+| Applicability | `app.Tefca.source_applicability` (program); `evidence_dimensions.Applicability` | no | `EvidenceApplicability` enum in Core; program decides values |
+| Feature flags | `Settings` (env-backed pydantic) — reused; `PlatformFeature` DB rows exist but would require shared-DB writes | yes: five boolean fields, default False | no library |
+| Connectors | `app.Tefca.connectors.NPPESConnector` (live API, per-NPI) and `IQVIAOneKeyConnector` (keyed API stub) — different purpose; not touched | no | bulk-file adapter (`evidence_sources/nppes_v2`) |
+| Migrations | Alembic chain (head `20260903_delivery_grants`) — untouched | no | pending script outside `alembic/versions`, separate declarative base |
+
+PARALLEL_ARCHITECTURE_CREATED = only where the frozen shared schema could not be extended (observation store) and where Core could not import program code (normalisation). Both are documented as deliberate.
+
+## Five identity dimensions
+
+| Dimension | Delivered (subject) | Evidence | Result |
+|---|---|---|---|
+| A Organisation identity | delivered NPI | NPPES NPI record (Type 2) | `IdentifierSignal` |
+| B Name identity | delivered name | NPPES legal name, Other Names by type code | `NameSignal` |
+| C Location identity | delivered address | NPPES primary, additional (reference file), mailing | `LocationSignal` |
+| D Relationship identity | delivered program relationship (kind code) | same-kind observations only | `RelationshipSignal` |
+| E Historical identity | prior vs current observations | comparison signals | `HistoricalDelta` + `VariationSignal` |
+
+## Feature isolation
+
+`Settings`: `ENTITY_INTELLIGENCE_ENABLED` (master), `NPPES_IDENTITY_CORROBORATION_ENABLED`, `IQVIA_EVIDENCE_ENABLED`, `GOOGLE_ADDRESS_INTELLIGENCE_ENABLED`, `STATE_REGISTRY_INTELLIGENCE_ENABLED` — all False. Gates are enforced at `EntityIntelligenceService.evaluate` (service boundary) and every adapter's `observations_for` (connector boundary). No route or job exists to gate. Flags are read at call time.
+
+Feature OFF means: no external call (no network code exists), no processing (service raises `FeatureDisabled`), no job, no evidence, no assessment, no API change (OpenAPI byte-identical), no report change, no UI change.
+
+## Persistence isolation
+
+`EntityIntelligenceBase` is a separate `DeclarativeBase`. The app's startup `create_all()` and Alembic `target_metadata` bind to `app.core.database.Base`, so the five `ei_*` tables cannot be created on the shared QA database by deployment. Local/CI creation: `python -m app.core.entity_intelligence.migrations.apply --database-url sqlite:///ei_local.db` (refuses non-local URLs).
+
+## Future UI (documented only)
+
+An entity 360 view: ONC/RCE delivered values · independent evidence per source · system observations · prior review · what changed · analyst determination · QA · audit history. Not built.
+
+
+## Additions from the overnight hardening sprint (2026-09-12)
+
+- `SourceAuthority` extended (RCE_PROVIDED_THIRD_PARTY, DOCUACTION_HISTORICAL, PRIOR_HUMAN_DETERMINATION); descriptive only, tested non-weighted.
+- `ValueHandling` on `Provenance` (RAW_PERMITTED / HASHED_REFERENCE_ONLY / TRANSIENT_ONLY / RESTRICTED_DISPLAY) applied by `EvidenceObservation.to_dict()`; `schema_version` on provenance.
+- `DataRights` / `DataRightsClass` / `RightsStatus` on `AdapterDescriptor`; register in `EVIDENCE_SOURCE_DATA_RIGHTS_MODEL.md`.
+- `CapabilityAvailability` for state registries.
+- `DeltaScope` and careful wording; `EntityIntelligenceRun.status` and `prior_review_reference` passthrough.
+- `ParseReport.status` (OK / PARTIAL / FAILED), `rows_skipped`, `stopped_at_line`; csv errors end reading with a note, never an exception mid-file.
+- CMS pointer code 6 and `<UNAVAIL>` placeholder handling (verified against the public weekly sample).
+- `flags._as_bool`: only True / "true" / "1" / "yes" / "on" enable; the master flag wins over every sub-flag.
+- `intake_safety.py`: zip-slip, archive-bomb, allowlist, CSV-injection, limits, decoding, log redaction helpers (isolated; no caller in the platform).
+- Assessment vocabulary guard is a `RuntimeError` at import (holds under `python -O`), not an `assert`.
+
+Model review conclusions (how the model handles each case): multiple names → one NAME observation per name with its source-stated kind; multiple NPIs → MULTIPLE_CANDIDATE_ENTITIES; multiple locations → one LOCATION observation per role, roles never merged; role changes → new observation, delta by (source, type, role); history → deltas with scope; disagreeing sources → CONFLICTING_EVIDENCE with both visible; stale sources → `observed_at` / dataset edition on every observation, freshness is shown not judged; unavailable sources → unavailability observation → SOURCE_UNAVAILABLE signal, run status COMPLETED_WITH_UNAVAILABLE_SOURCES; relationship types → compared only within one kind code; effective dates → `effective_from` / `effective_to` from the source where published (NPPES enumeration/deactivation); corrections → a new edition produces EVIDENCE deltas, prior observations are never rewritten; removals → REMOVED_VALUE delta, never deletion; new entities → NEW_ENTITY, nothing to compare; ambiguity → AMBIGUOUS_* signals, never resolved by the engine.
+
+
+## Additions from the RCE + CMS research & architecture expansion sprint (2026-09-12)
+
+- Sixth dimension **Participation / Program Identity**: `ObservationType.PROGRAM_PARTICIPATION` (role `"<PROGRAM>:<KIND>"`), `Dimension.PARTICIPATION_IDENTITY`, `compare_participation` (same-role only; absence → PARTICIPATION_EVIDENCE_NOT_FOUND with reason and applicability). No program constant in Core (tested).
+- `SourceAuthority` extended: RCE_GOVERNING_MATERIAL, FEDERAL_PROGRAM_ENROLLMENT, FEDERAL_EXCLUSION_OR_INTEGRITY (FEDERAL_REGISTRY = federal identity reference). Descriptive only; the non-weighting test covers every member.
+- `AbsenceReason` + `absence()` helper: NOT_APPLICABLE / NOT_IN_POPULATION / SOURCE_LIMITATION / IDENTIFIER_NOT_AVAILABLE / NOT_FOUND / DATA_ISSUE — every reason maps to an insufficient-class signal, never a conflict.
+- `DeltaScope` refined: PROGRAM_ENROLLMENT, RELATIONSHIP, RULE_VERSION, PRIOR_HUMAN_DECISION added alongside DELIVERED_VALUE / EVIDENCE / SOURCE_VERSION.
+- `AssessmentResult.cross_source_notes` with `multi_source_name_variation()` — produced only when ≥ 2 sources explain the same delivered name through source-stated non-legal names AND each resolved the same delivered identifier uniquely.
+- `policy.py` (RuleDefinition / RuleVersion / PolicyRegister / status_on / applicable / overlapping) and `rce_policy_register.py` (18 cited RCE versions; layer 4 only).
+- Documents: ORGANIZATION_PARTICIPATION_INTELLIGENCE_ARCHITECTURE, RCE_CMS_TASK_2_5_AUTHORITY_MATRIX, CMS_PUBLIC_EVIDENCE_SOURCE_CATALOG, CMS_PROVIDER_EVIDENCE_ADAPTER_DESIGN, CMS_PECOS_EVIDENCE_LIMITATIONS, FEDERAL_LOCATION_EVIDENCE_RESEARCH, POLICY_RULE_VERSIONING_ARCHITECTURE, RCE_POLICY_VERSION_REGISTER, PROPOSED_KYP_PRODUCT_ALIGNMENT, SOURCE_AUTHORITY_AND_APPLICABILITY_MODEL, RCE_CMS_RESEARCH_EXECUTIVE_DECISION.
+- Evidence graph: relational PostgreSQL is sufficient; graph database out of scope (see the participation architecture document).
