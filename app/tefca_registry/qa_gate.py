@@ -62,8 +62,22 @@ ROLE_SOD_EXCEPTION = "admin"         # 8
 MIN_RATIONALE = 10
 
 
+#: Machine-readable denial codes returned in the `X-Denial-Code` header.
+SOD_SELF_QA = "SOD_SELF_QA"
+SOD_EXCEPTION_NOT_AUTHORIZED = "SOD_EXCEPTION_NOT_AUTHORIZED"
+QA_REFUSED = "QA_REFUSED"
+
+
 class QaGateRefused(RuntimeError):
-    """A QA or determination act was refused. Never a silent no-op."""
+    """A QA or determination act was refused. Never a silent no-op.
+
+    `code` is a machine-readable denial code. The default keeps every
+    pre-existing raise site valid; message text is unchanged.
+    """
+
+    def __init__(self, message: str = "", code: str = QA_REFUSED):
+        super().__init__(message)
+        self.code = code
 
 
 # ── reads ────────────────────────────────────────────────────────────────────
@@ -286,15 +300,33 @@ async def submit_qa_review(
 
     # SEGREGATION OF DUTIES — checked here so the caller gets a clear refusal,
     # and again by a database trigger so a future code path cannot bypass it.
+    #
+    # FAIL CLOSED (2026-10-12): there is no mechanism that proves a named admin
+    # actually authorised an exception -- the request body's
+    # `sod_exception_granted_by` is an unauthenticated, self-attested UUID
+    # (CWE-863). Until an authenticated grant exists (see
+    # docs/SOD_EXCEPTION_AUTHORIZATION_DESIGN.md) a self-QA is refused whether
+    # or not an exception grantor/reason is supplied. Unconditional: no flag.
     if determination.actor_user_id == actor_id:
-        if not (sod_exception_granted_by and sod_exception_reason
-                and sod_exception_granted_by != actor_id):
+        if sod_exception_granted_by or sod_exception_reason:
             raise QaGateRefused(
                 f"segregation of duties: {actor_email} made the determination on "
-                f"{review_id} and may not QA it. An exception requires an admin "
-                f"grant from a different person, with a reason.")
-        sod_exception_reason = _require_rationale(
-            sod_exception_reason, "sod_exception_reason")
+                f"{review_id} and may not QA it. A self-attested exception "
+                f"grant is not accepted: no authenticated admin grant "
+                f"mechanism exists yet.",
+                code=SOD_EXCEPTION_NOT_AUTHORIZED)
+        raise QaGateRefused(
+            f"segregation of duties: {actor_email} made the determination on "
+            f"{review_id} and may not QA it.",
+            code=SOD_SELF_QA)
+
+    else:
+        # Independent QA never needs an exception. Caller-supplied exception
+        # fields are unauthenticated, so they are NOT recorded: otherwise the
+        # event and audit row would attribute a SoD exception to an admin who
+        # never granted it (CodeRabbit CR146-1, CWE-863).
+        sod_exception_granted_by = None
+        sod_exception_reason = None
 
     event = E(
         id=uuid.uuid4(), review_id=review_id,
