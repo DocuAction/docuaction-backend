@@ -216,38 +216,29 @@ def test_missing_metadata_yields_none_not_invented_values():
 
 
 # -- real queries (PostgreSQL; skipped locally without a database) -----------
+# Runs inside an outer transaction that is rolled back: an APPROVED
+# source_snapshot row is immutable and undeletable by design, so nothing may
+# be committed here.
 
-@pytest.fixture
-async def pg(db_required):
-    from app.core.database import async_session_maker
-    ids = []
-    async with async_session_maker() as session:
-        yield session, ids
-    async with async_session_maker() as cleanup:
-        from sqlalchemy import delete
-        for snapshot_id, _order in sorted(ids, key=lambda x: x[1], reverse=True):
-            await cleanup.execute(delete(sm.SourceSnapshot).where(sm.SourceSnapshot.id == snapshot_id))
-        await cleanup.commit()
+from rce_traceability_support import rolled_back_db  # noqa: E402,F401  (fixture)
 
 
-async def test_query_embeds_successor_and_hides_successor_rows_by_default(pg):
-    session, ids = pg
+async def test_query_embeds_successor_and_hides_successor_rows_by_default(rolled_back_db):
+    session = rolled_back_db
     tag = uuid.uuid4().hex[:8]
     from app.tefca_registry.rce import source_matching as sx
     now = datetime.now(timezone.utc)
     root = await sx.register_snapshot(
         session, source_system=sm.SOURCE_IQVIA_HCO, label=f"synthetic {tag}", sha256=tag.ljust(64, "0"),
         record_count=1, received_at=now, created_by="maker@test.local",
-        metadata={"import_status": "completed"})
-    ids.append((root.id, 0))
+        metadata={"import_status": "completed"}, commit=False)
     succ = sm.SourceSnapshot(
         id=uuid.uuid4(), source_system=root.source_system, snapshot_label=root.snapshot_label,
         sha256=root.sha256, record_count=1, received_at=now, status=sm.SNAPSHOT_APPROVED,
         approved_by="qa@test.local", approved_role="qalead", approved_at=now, approval_ref="R",
         supersedes_snapshot_id=root.id, metadata_={}, created_by="qa@test.local", correlation_id="t")
     session.add(succ)
-    await session.commit()
-    ids.append((succ.id, 1))
+    await session.flush()
 
     total, page = await routes._fetch_snapshot_page(
         session, limit=100, offset=0, source_system=sm.SOURCE_IQVIA_HCO, include_successors=False)
