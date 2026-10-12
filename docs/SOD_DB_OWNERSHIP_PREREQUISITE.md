@@ -2,7 +2,7 @@
 
 Companion to `docs/SOD_DB_ENFORCEMENT_MIGRATION_NOTES.md` and
 `docs/SOD_DB_OWNERSHIP_PREREQUISITE.sql` (the runbook). Status: **implemented, tested locally on a
-disposable PostgreSQL fixture, CI not green by design (see 4), not applied anywhere, not verified on
+disposable PostgreSQL fixture, not applied anywhere, not verified on
 DEV or PROD, awaiting an owner decision and a DBA.**
 
 ## 1. Why a prerequisite exists
@@ -13,7 +13,7 @@ anyone who owns `review_event_enforce_sod()` can replace it. If the runtime role
 either object, the guards constrain nobody who matters. The migration's preflight
 (`SodDbEnforcementPreconditionError`, "Nothing was changed") therefore REFUSES to install them in that
 state. That refusal is correct and is retained unchanged; it is what turns the PROD-like convergence
-fixture red (see 4).
+fixture red on the earlier draft (see 4 for how the fixture now models the transition).
 
 ## 2. The required end state (option A - recommended)
 
