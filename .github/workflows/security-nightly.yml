@@ -102,6 +102,27 @@ jobs:
           fi
           grep -E "Findings \(|Security score|RESULT" scan-output.txt || true
 
+      - name: Report any scanner that errored (non-blocking)
+        run: |
+          # The two checks above only read the AGGREGATE findings count, which
+          # cannot tell "every scanner ran and found N things combined" apart
+          # from "one scanner crashed while the others ran fine" -- a single
+          # tool silently failing (binary missing, config error, timeout) is
+          # invisible to an aggregate count as long as the OTHER tools still
+          # produced findings. cli.py's own "Scanner coverage:" section
+          # (_print_tools in cli.py) already carries exactly this distinction
+          # per tool: "ran" with a finding count and duration, "ERROR" with the
+          # tool's own error text, or "SKIPPED" with a stated reason -- this
+          # step surfaces it instead of leaving it buried in the uploaded log.
+          # Report-only: never fails the job, so it adds no new gate.
+          cd security-platform
+          echo "### Scanner coverage" >> "$GITHUB_STEP_SUMMARY"
+          awk '/^  Scanner coverage:/{p=1; next} p && /^$/{p=0} p' scan-output.txt \
+            >> "$GITHUB_STEP_SUMMARY" || true
+          if grep -qE "^\s+\S+\s+ERROR" scan-output.txt; then
+            echo "::warning::One or more scanners ERRORed this run (see the Scanner coverage section in the job summary / scan-output.txt). The aggregate findings count above can stay nonzero even when a specific scanner failed to run -- this does not fail the job, but it should not be read as every scanner having run cleanly."
+          fi
+
       - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v4
