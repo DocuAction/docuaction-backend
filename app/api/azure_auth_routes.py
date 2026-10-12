@@ -59,6 +59,10 @@ AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
 # 'audit' (default, non-breaking) logs ID-token validation failures and keeps the
 # legacy behaviour; 'enforce' rejects. Any other value is treated as 'audit'.
 ID_TOKEN_VALIDATION = (os.getenv("AZURE_AD_ID_TOKEN_VALIDATION", "audit").strip().lower() or "audit")
+if ID_TOKEN_VALIDATION not in ("audit", "enforce"):
+    logging.getLogger("docuaction.azure_auth").warning(
+        "AZURE_AD_ID_TOKEN_VALIDATION has an unrecognised value; using 'audit'.")
+    ID_TOKEN_VALIDATION = "audit"
 JWKS_TTL_SECONDS = 3600          # cached signing keys are reused for up to an hour
 JWKS_REFRESH_COOLDOWN = 60       # unknown-kid (key rotation) refetch at most once a minute
 CLOCK_LEEWAY_SECONDS = 120

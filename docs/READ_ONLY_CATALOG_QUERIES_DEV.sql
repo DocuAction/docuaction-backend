@@ -1,7 +1,10 @@
 -- READ_ONLY_CATALOG_QUERIES_DEV.sql
 -- Read-only catalog/metadata queries for the DEV database. For an operator to run
--- in a read-only session; they read pg_catalog / information_schema only and
--- touch no application row. Nothing here has been run by the author.
+-- in a read-only session; queries 1-9, 11 and 12 read pg_catalog /
+-- information_schema only; query 10 runs
+-- full-table min/max/count aggregates over application tables (review_decision_events,
+-- audit_logs): read-only, but it reads application rows, so run it in a quiet window.
+-- Nothing here has been run by the author.
 --
 -- Suggested session guard:
 --   BEGIN READ ONLY;  -- run the queries below, then ROLLBACK;
@@ -37,6 +40,14 @@ WHERE table_schema = 'public'
   AND table_name IN ('review_decision_events','review_records','tefca_entity_relationships',
                      'tefca_identifier_decision_events','report_artifacts')
 ORDER BY table_name, grantee, privilege_type;
+
+-- 3b. Column-level privileges (role_table_grants above omits column-only grants).
+SELECT table_name, column_name, grantee, privilege_type
+FROM information_schema.column_privileges
+WHERE table_schema = 'public'
+  AND table_name IN ('review_decision_events','review_records','tefca_entity_relationships',
+                     'tefca_identifier_decision_events','report_artifacts')
+ORDER BY table_name, column_name, grantee, privilege_type;
 
 -- 4. Triggers (non-internal) on public tables, with the function each calls.
 SELECT c.relname AS table_name, t.tgname AS trigger_name, t.tgenabled AS enabled,
