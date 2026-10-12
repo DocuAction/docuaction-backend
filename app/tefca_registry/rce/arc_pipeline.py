@@ -198,15 +198,19 @@ def is_registration_only_sam_miss(dimension: Optional[str], item: Dict[str, Any]
 
 
 def item_state(dimension: Optional[str], item: Dict[str, Any]) -> str:
-    """Classifier state for one assembled evidence item (bulk path).
+    """Classifier state for one assembled/persisted evidence item.
 
-    Same as `evidence_item_state`, except that - only when
-    `SAM_REGISTRATION_MISS_IS_UNAVAILABLE_FOR_EXCLUSION` is on (default OFF) - a
-    registration-only SAM miss is `unavailable` for the exclusion question
-    rather than `clear`. A genuine exclusion-leg NOT_FOUND is unaffected."""
-    from app.core.config import settings
-    if (getattr(settings, "SAM_REGISTRATION_MISS_IS_UNAVAILABLE_FOR_EXCLUSION", False)
-            and is_registration_only_sam_miss(dimension, item)):
+    FACT, not policy: a SAM registration-only miss (v3 entity search; the NPI-less
+    `sam_name` branch) answers "is there a registration record", never "is the entity
+    excluded", so it is `unavailable` for the exclusion question and is never `clear`.
+    Unconditional. A genuine exclusion-leg NOT_FOUND, REVIEW matches and every other
+    source/dimension are unchanged.
+
+    NOT changed here (decision C4 pending): bucket rules, required-source
+    applicability and `verified` semantics. Under the v3 rules B1 can still be
+    reached with `sam_gov` unavailable: RULE-001 has no positive SAM condition, and
+    RULE-002 is B1-partial when PECOS is also unavailable."""
+    if is_registration_only_sam_miss(dimension, item):
         return "unavailable"
     return evidence_item_state(dimension, item.get("disposition"))
 
