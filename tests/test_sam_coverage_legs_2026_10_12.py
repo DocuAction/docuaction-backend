@@ -152,6 +152,36 @@ def test_html_template_renders_the_leg_table():
     assert html.count("SAM.gov results by screening leg") == 1
 
 
+def test_html_leg_table_has_the_same_columns_and_counts_as_csv_annex_b1():
+    """CodeRabbit (PR #148): the PDF table must carry every Annex B.1 column so the outcome cells add up."""
+    import re
+    from app.reports.engine.template_engine import environment
+
+    legs = _legs(registration_only={"entities": 7, "no_registration_record_found": 1,
+                                    "registration_record_found": 2, "unavailable": 3, "other": 1},
+                 exclusion={"entities": 9, "clear": 4, "hit": 2, "unavailable": 1, "other": 2},
+                 leg_not_recorded={"entities": 5, "unavailable": 1, "not_interpreted": 4})
+    path = os.path.join(os.path.dirname(__file__), "..", "app", "reports", "templates",
+                        "delivery_processing.html")
+    tpl = open(path, encoding="utf-8").read()
+    start = tpl.index("{% for s in verification.sources %}{% if s.get('screening_legs') %}")
+    end = tpl.index("{% endif %}{% endfor %}", start) + len("{% endif %}{% endfor %}")
+    html = environment().from_string(tpl[start:end]).render(
+        verification={"sources": [{"name": "sam", "screening_legs": legs}]})
+    headers = re.findall(r'<th scope="col">([^<]+)</th>', html)
+    assert headers == ["Screening leg", "Entities", "Clear", "Hit", "No registration record found",
+                       "Registration record found", "Unavailable", "Other / not interpreted"]
+    rows = {}
+    for r in html.split("</tr>"):
+        m = re.search(r'<th scope="row">([^<]+)</th>', r)
+        if m:
+            rows[m.group(1)] = re.findall(r"<td>([^<]*)</td>", r)
+    assert all(len(v) == len(headers) - 1 for v in rows.values())
+    assert rows["Registration search only"] == ["7", "n/a", "n/a", "1", "2", "3", "1"]
+    assert rows["Exclusion screening"] == ["9", "4", "2", "n/a", "n/a", "1", "2"]
+    assert rows["Screening leg not recorded"] == ["5", "n/a", "n/a", "n/a", "n/a", "1", "4"]
+
+
 # ---------------------------------------------------------------- DB: SQL twin parity
 @pytest.fixture
 async def sam_seed(db_required):
