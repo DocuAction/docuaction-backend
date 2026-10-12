@@ -251,7 +251,11 @@ class TestEnforcement:
 
     def test_runtime_role_cannot_disable_the_guards(self):
         async def body(c):
-            await _refused(c, APP, "alter table review_decision_events disable trigger trg_review_event_sod",
+            for trg in ("trg_review_event_sod", "trg_review_event_append_only_rows",
+                        "trg_review_event_append_only_trunc"):
+                await _refused(c, APP, f"alter table review_decision_events disable trigger {trg}",
+                               needle="must be owner")
+            await _refused(c, APP, f"drop trigger trg_review_event_append_only_rows on review_decision_events",
                            needle="must be owner")
         _txn(body)
 
