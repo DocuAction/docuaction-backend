@@ -320,6 +320,14 @@ async def submit_qa_review(
             f"{review_id} and may not QA it.",
             code=SOD_SELF_QA)
 
+    else:
+        # Independent QA never needs an exception. Caller-supplied exception
+        # fields are unauthenticated, so they are NOT recorded: otherwise the
+        # event and audit row would attribute a SoD exception to an admin who
+        # never granted it (CodeRabbit CR146-1, CWE-863).
+        sod_exception_granted_by = None
+        sod_exception_reason = None
+
     event = E(
         id=uuid.uuid4(), review_id=review_id,
         sequence_number=await _next_sequence(db, review_id),

@@ -42,7 +42,8 @@ Server-side:
   (grantor must be a third person).
 - Refuse if `determination_event_id` is not the latest determination of
   `review_id` (scope = exact review + exact determination event).
-- Refuse if an unrevoked, unexpired, unconsumed grant already exists for the pair.
+- Refuse if an unrevoked, unexpired, unconsumed grant already exists for the pair
+  (expired ones are revoked first, in the same transaction; see 3.3).
 - Write an audit row `sod_exception_granted`.
 
 Revocation: `DELETE .../sod-exceptions/{grant_id}` (admin) sets `revoked_at`,
@@ -58,6 +59,15 @@ review_decision_events`, `grantee_user_id uuid fk`, `granted_by uuid fk`,
 Constraints: `granted_by <> grantee_user_id`; `expires_at > valid_from`; partial
 unique index on `(review_id, determination_event_id, grantee_user_id)` where
 `revoked_at is null and consumed_at is null`.
+An expired grant is still unrevoked and unconsumed, so it would block the unique
+index. Replacement is therefore transaction-safe by construction: the grant
+endpoint, in one transaction and after `SELECT ... FOR UPDATE` on the matching
+rows, first sets `revoked_at = now()`, `revoked_by = <system marker>` on any
+existing grant for the same key whose `expires_at <= now()`, audits it as
+`sod_exception_expired_revoked`, and only then inserts the new grant. A still-valid
+unconsumed grant is not replaced (the request is refused; the admin must revoke it
+explicitly). A periodic sweep may also revoke expired rows, but correctness does
+not depend on it.
 
 ### 3.4 Consumption by the QA event
 Validation order in `submit_qa_review`, all before the QA event is created:

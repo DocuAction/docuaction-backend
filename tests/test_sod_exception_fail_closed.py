@@ -148,3 +148,19 @@ def test_route_returns_409_with_denial_code_header(monkeypatch):
                          db=FakeDb(), user=SimpleNamespace()))
     assert e.value.status_code == 409
     assert e.value.headers["X-Denial-Code"] == "SOD_EXCEPTION_NOT_AUTHORIZED"
+
+
+def test_independent_qa_does_not_record_unauthenticated_exception_fields(monkeypatch):
+    """CR146-1: an independent QA caller who sends exception fields must not get a
+    false grant attribution stored on the event (or flagged in the audit row)."""
+    analyst, qa_actor = uuid.uuid4(), uuid.uuid4()
+    _setup(monkeypatch, analyst_id=analyst)
+    audited = []
+    monkeypatch.setattr(qa_gate.reg_audit, "record",
+                        lambda *a, **k: audited.append(k["metadata"]))
+    db = FakeDb()
+    run(_qa(db, qa_actor, sod_exception_granted_by=uuid.uuid4(),
+            sod_exception_reason="a long enough reason"))
+    ev = db.added[0]
+    assert ev.sod_exception_granted_by is None and ev.sod_exception_reason is None
+    assert audited[0]["sod_exception"] is False
