@@ -148,6 +148,23 @@ jobs:
           pip install pytest pytest-asyncio httpx
           python -m pytest tests/test_phase75_cutover.py tests/test_reports.py -q
 
+      - name: Delivery report layout (rendered by WeasyPrint on Linux)
+        env:
+          LAYOUT_OUT_DIR: layout-out
+        run: |
+          # Renders the real delivery_processing template for five scenarios and asserts per-page layout
+          # (no overlapping words, no near-blank page, no stranded headings, one-page cover, no raw booleans).
+          python -m pytest tests/test_delivery_report_layout_2026_10_07.py -q -rs
+
+      - name: Upload the rendered layout-check PDFs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: delivery-report-layout-pdfs
+          path: layout-out/*.pdf
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Accessibility note
         run: |
           echo "::notice::A tagged structure tree is a precondition for an"\

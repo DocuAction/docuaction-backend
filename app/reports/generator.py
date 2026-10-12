@@ -477,7 +477,8 @@ async def generate_report(
         elif report_type == "delivery_processing":
             from app.reports.engine.csv_engine import delivery_processing_to_csv
 
-            csv_text = delivery_processing_to_csv(dataset, report_id, snapshot.generation_timestamp)
+            csv_text = delivery_processing_to_csv(dataset, report_id, snapshot.generation_timestamp,
+                                                  rule_set_version=snapshot.b1_b4_rule_version)
         else:
             csv_text = report_to_csv(dataset, report_id, snapshot.generation_timestamp)
 

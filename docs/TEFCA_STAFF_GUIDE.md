@@ -65,7 +65,7 @@ rules engine is the sole classifier.
 only**. It compares the registry's name and address against what the sources
 returned, in order:
 
-1. **Exact identifier** — same NPI/TEFCAID is decisive either way
+1. **Exact identifier** — same NPI/TEFCAID is the strongest *candidate* signal, but a shared NPI or TEFCAID alone does not establish that two records are one entity or that a Node is duplicated (a TEFCAID identifies a Logical Entity that may span Nodes under the Directory SOP v1.1); the analyst determines
 2. **Address** — normalised to USPS Publication 28 form, so "123 North Main
    Street, Suite 400" and "123 N MAIN ST STE 400" are recognised as one address
 3. **Name** — similarity scoring that ignores legal-form suffixes, so

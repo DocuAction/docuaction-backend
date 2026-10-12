@@ -546,10 +546,23 @@ async def run_preflight(db, intake_id, *, actor: str = "SYSTEM") -> Dict[str, An
         run.completed_at = datetime.now(timezone.utc)
         await db.commit()
     except Exception as exc:  # noqa: BLE001
-        run.status = "FAILED"
-        run.error = f"{type(exc).__name__}: {exc}"[:2000]
-        run.completed_at = datetime.now(timezone.utc)
-        await db.commit()
+        # The session may be unusable (a failed flush leaves it needing a rollback), and committing it as it stands
+        # raised PendingRollbackError on DEV, hiding the real cause (a permission error) and persisting nothing.
+        # Roll back everything this attempt wrote (the partial run row, findings, normalizations), then record the
+        # failure as a NEW row - an INSERT, which the append-only grant allows - and re-raise the ORIGINAL error.
+        error_text = f"{type(exc).__name__}: {exc}"[:2000]
+        await db.rollback()
+        failed_at = datetime.now(timezone.utc)
+        try:
+            db.add(pm.RcePreflightRun(
+                source_intake_id=intake_id, field_map_version=FIELD_MAP_VERSION,
+                rule_set_version=RULE_SET_VERSION, preflight_version=PREFLIGHT_VERSION,
+                status="FAILED", error=error_text, started_at=now, completed_at=failed_at,
+                actor=actor[:320], correlation_id=request_context.correlation_id()[:64],
+                build_sha=request_context.build_sha()))
+            await db.commit()
+        except Exception:  # noqa: BLE001 - recording the failure must never replace the real error
+            await db.rollback()
         raise
 
     return run_dto(run)

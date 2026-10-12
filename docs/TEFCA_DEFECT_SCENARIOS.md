@@ -8,7 +8,7 @@ All identifiers are **synthetic** (NPIs in the fake `1234xxxxx` block). Affected
 
 | ID | Title | Expected detection | Affected entities |
 |----|-------|--------------------|-------------------|
-| DEF-ID-001 | Duplicate NPI | npi_duplicate — two active entities share the same NPI. | Northgate Grove Health System (`2814600a`); Clearwater Field Health Plan (`f8449f5c`) |
+| DEF-ID-001 | Duplicate NPI | npi_duplicate (medium, determination required) — two active entities share the same NPI; a shared NPI alone does not establish Node duplication. | Northgate Grove Health System (`2814600a`); Clearwater Field Health Plan (`f8449f5c`) |
 | DEF-ID-002 | Duplicate HCID | hcid_duplicate — HCID reused across two entities. | Brookfield Bay Health Information Exchange (`f16601c5`); Granite Delta Medical Group (`a8b89a12`) |
 | DEF-ID-003 | Missing NPI on treatment entity | identifier_missing — treatment provider has no NPI. | Ironwood Family Clinic (`620fe048`) |
 | DEF-ID-004 | Invalid NPI checksum | npi_invalid — NPI fails the Luhn check. | Harbor Landing Data Clearinghouse (`e83a3fad`) |
@@ -18,7 +18,7 @@ All identifiers are **synthetic** (NPIs in the fake `1234xxxxx` block). Affected
 | DEF-ID-008 | NPI not in NPPES | npi_invalid / not_found — NPI absent from NPPES. | Stonebridge Delta Health System (`d8395718`) |
 | DEF-ID-009 | NPI type mismatch (Type 1 on org) | enrollment_mismatch — Type-1 (individual) NPI on an organization. | Riverbend Heights Health Plan (`920cdd35`) |
 | DEF-ID-010 | Expired CCN | enrollment_expired — CCN past its end date. | Cascade Heights Health Information Exchange (`09b10161`) |
-| DEF-ID-011 | Duplicate TEFCAID across QHINs | identifier_conflict — same TEFCAID under two QHINs. | Highland Point Medical Group (`829a15b3`); Clearwater Field Data Clearinghouse (`816f82b3`) |
+| DEF-ID-011 | Duplicate TEFCAID across QHINs | identifier_conflict (medium, determination required) — same TEFCAID under two QHINs; under the Directory SOP v1.1 a TEFCAID may legitimately span Nodes, so this alone is not a duplication finding. | Highland Point Medical Group (`829a15b3`); Clearwater Field Data Clearinghouse (`816f82b3`) |
 | DEF-ID-012 | Multiple active NPIs on one entity | identifier_conflict — >1 active NPI on a single entity. | Evergreen Peak Health IT Solutions (`df6e1c36`) |
 
 ### DEF-ID-001 — Duplicate NPI
