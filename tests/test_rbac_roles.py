@@ -378,6 +378,13 @@ def test_no_tefca_read_endpoint_sits_above_the_viewer_floor():
         # already sanitized (pseudonymous refs, masked NPIs), so the gate is
         # about who may PLAN retries, not about hiding data.
         "/api/tefca/admin/pecos-retry-plan",
+        # IQVIA staging-capacity probe: admin (8). An OPERATIONAL diagnostic for the
+        # controlled load, not entity data: it returns only numbers (free space of
+        # the container's staging directory, bytes already staged, process and
+        # container memory). No path, file name or row value is returned (a test
+        # asserts that). The gate is about who may inspect infrastructure
+        # capacity, not about hiding data a reviewer needs.
+        "/api/tefca/rce/iqvia/staging-capacity",
         # Platform audit trail — qalead (6). This is the ONE TEFCA read that is
         # not entity data: it is every user's authentication history, with their
         # email addresses and source IPs. Level 6 is "QA Lead — audit access, no

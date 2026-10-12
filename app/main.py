@@ -685,6 +685,8 @@ safe_load("app.tefca_registry.rce.delivery_routes", "tefca-rce-deliveries")
 # unconditionally like the other RCE route modules; the flag controls access,
 # not whether the routes exist at all.
 safe_load("app.tefca_registry.rce.iqvia_routes", "tefca-rce-iqvia")
+# Advisory HCP_AFFIL consumption: router is empty unless ENABLE_IQVIA_AFFILIATION_CONSUMPTION.
+safe_load("app.tefca_registry.rce.iqvia_affiliation_routes", "tefca-rce-iqvia-affiliation")
 
 # DEF-004 governed original-artifact restoration: DEV-only, admin-only,
 # feature-flagged restore of a delivery's preserved original from a
@@ -703,6 +705,10 @@ safe_load("app.tefca_registry.rce.admin_restore_routes", "tefca-rce-admin-restor
 # SHADOW_PUBLICATION_MODE=local_test. See
 # app/tefca_registry/rce/preflight_shadow_routes.py.
 safe_load("app.tefca_registry.rce.preflight_shadow_routes", "tefca-rce-preflight-shadow")
+
+# Cross-delivery issue history (NPI and partOf/QHIN). Read-only GET; the flag
+# ENABLE_ISSUE_HISTORY (default off) makes it answer 404.
+safe_load("app.tefca_registry.rce.issue_history_routes", "tefca-rce-issue-history")
 
 # Program Manager + Analyst workflow surface at /api/tefca/workflow/*:
 # QHIN work organisation, workload distribution, and the analyst verification

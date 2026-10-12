@@ -47,7 +47,7 @@ USER = SimpleNamespace(email="qa@synthetic.invalid", id=None)
 
 # Page one is the approved executive layout (cards, navy tables, boxed panels), portrait; every
 # detailed table lives in ONE landscape appendix after it.
-MAIN_SECTIONS = ("Status &mdash; four separate questions", "Reconciliation &mdash; every record accounted for",
+MAIN_SECTIONS = ("Status &mdash; five separate questions", "Reconciliation &mdash; every record accounted for",
                  "Exceptions (findings) by rule", "Screening coverage &mdash; what was actually attempted",
                  "Delivery at a glance", "Reconciliation &amp; source integrity",
                  "Source readiness (preflight) &amp; rechecks", "Evidence limitations", "Required next actions")

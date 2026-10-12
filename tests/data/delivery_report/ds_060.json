@@ -1,0 +1,1359 @@
+{
+ "dataset": {
+  "analyst": {
+   "available": true,
+   "counts": {
+    "claimed": 0,
+    "disposition_events": 0,
+    "issue_resolutions": 0,
+    "open": 2,
+    "qa_approved": 0,
+    "qa_pending": 0,
+    "review_records": 2
+   },
+   "disposition_events": [],
+   "issue_resolutions": [],
+   "review_records": [
+    {
+     "assigned": false,
+     "bucket": null,
+     "classification_rule": null,
+     "classification_rule_version": null,
+     "created_at": "2026-09-30T04:44:52.940250",
+     "entity_id": null,
+     "reclassified_to": null,
+     "reportable_at": null,
+     "resolution": null,
+     "review_id": "REV-2026-000969",
+     "reviewed_at": null,
+     "source_record_id": "6d781b98-bc6c-45b9-81bf-daa96095fcee"
+    },
+    {
+     "assigned": false,
+     "bucket": null,
+     "classification_rule": null,
+     "classification_rule_version": null,
+     "created_at": "2026-09-30T04:44:52.940250",
+     "entity_id": null,
+     "reclassified_to": null,
+     "reportable_at": null,
+     "resolution": null,
+     "review_id": "REV-2026-000970",
+     "reviewed_at": null,
+     "source_record_id": "ac405a93-f296-457e-8718-9e325ef776f3"
+    }
+   ],
+   "review_records_shown": 2,
+   "review_records_total": 2,
+   "rule_versions_in_effect": []
+  },
+  "audit_note": "Generation of this report is recorded in audit_logs (action=report_generated) and linked to the job, intake and snapshot in rce_delivery_report_links. Every download is recorded as report_downloaded. The report reads persisted evidence only: no rule is re-run, no reconciliation is recomputed and no external lookup is performed while it is produced.",
+  "build": {
+   "build_time": "2026-10-06T22:22:23Z",
+   "environment": "development",
+   "git_sha": "2b6e1abdd5e555e699ad6cb5d03535864aafdfa8",
+   "migration_revision": "20261004_recheck_jobs",
+   "version": "6.0.0"
+  },
+  "delivery": {
+   "attempt_count": 1,
+   "completed_at": "2026-09-30T04:45:14.261415",
+   "delimiter": "|",
+   "delivery_label": "QA Synthetic SEP Batch C 2026-09-30",
+   "duplicate_content": false,
+   "encoding": "utf-8",
+   "error_reason": null,
+   "failed_at": null,
+   "file_size_bytes": 1174,
+   "filename": "BATCH-C-SEP-030-pipe-july-ARC-9.99.777.95.psv",
+   "government_reference": "ARC-9.99.777.95",
+   "intake_id": "dacb9e81-5691-417f-a028-cabe07ace225",
+   "intake_received_at": "2026-09-30T04:44:48.887690",
+   "intake_status": "PARSED",
+   "job_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+   "received_date": null,
+   "record_count": 2,
+   "records_processed_by_job": 2,
+   "records_received_by_job": 2,
+   "registered_at": "2026-09-30T04:44:47.213410",
+   "registrant": "admin@docuaction.io",
+   "resolved_from": "job_id",
+   "schema_fingerprint": "1cd655e9120dc9d0d6a52697ea470519b138fe0f9334af6f69467f3485ade3d0",
+   "sha256": "9d45af158da5571269e33baf944394918413a24d0438b5bddb4b127e4d87028a",
+   "source_name": "QA-SYNTHETIC",
+   "stage": "READY_FOR_REVIEW",
+   "started_at": "2026-09-30T04:44:47.405479",
+   "state": "SUCCEEDED"
+  },
+  "dispositions": {
+   "agrees_with_snapshot": true,
+   "available": true,
+   "counts": {
+    "CREATED": 2,
+    "EXCLUDED": 0,
+    "HELD": 0,
+    "MATCHED_UNCHANGED": 0,
+    "MISSING_KEY": 0,
+    "REJECTED": 0,
+    "UPDATED": 0,
+    "total": 2
+   },
+   "equation": {
+    "accounted": 2,
+    "created": 2,
+    "difference": 0,
+    "excluded": 0,
+    "held": 0,
+    "holds": true,
+    "matched_unchanged": 0,
+    "missing_key": 0,
+    "received": 2,
+    "rejected": 0,
+    "updated": 0
+   },
+   "human_count": 0,
+   "reconstructed_count": 0,
+   "records_received": 2,
+   "records_without_disposition": 0,
+   "rows": [
+    {
+     "actor": "admin@docuaction.io",
+     "actor_type": "SYSTEM",
+     "changed_fields": [],
+     "curated_npi": null,
+     "decided_at": "2026-09-30T04:44:54.988193+00:00",
+     "disposition": "CREATED",
+     "entity_id": "e41ef75e-4ea6-4c68-921c-a0306c9ea4ee",
+     "finding_count": 1,
+     "line_number": 2,
+     "name": "SEP-030 Pipe Row One",
+     "reason": "No registry entity carried this rce_org_oid; a new entity was created from the curated record.",
+     "reason_code": "CREATED_NEW_ENTITY",
+     "reconstructed": false,
+     "record_status": "CLEAN",
+     "sequence": 1,
+     "source_rce_id": "2.16.840.1.113883.3.7204.9.99.777.95.2301",
+     "source_record_id": "6d781b98-bc6c-45b9-81bf-daa96095fcee",
+     "submitted_npi": null,
+     "warning_count": 3
+    },
+    {
+     "actor": "admin@docuaction.io",
+     "actor_type": "SYSTEM",
+     "changed_fields": [],
+     "curated_npi": null,
+     "decided_at": "2026-09-30T04:44:54.988193+00:00",
+     "disposition": "CREATED",
+     "entity_id": "4736d52f-fd6a-4bac-b1f6-41b9bd6e1a86",
+     "finding_count": 1,
+     "line_number": 3,
+     "name": "SEP-030 Pipe Row Two",
+     "reason": "No registry entity carried this rce_org_oid; a new entity was created from the curated record.",
+     "reason_code": "CREATED_NEW_ENTITY",
+     "reconstructed": false,
+     "record_status": "CLEAN",
+     "sequence": 1,
+     "source_rce_id": "2.16.840.1.113883.3.7204.9.99.777.95.2302",
+     "source_record_id": "ac405a93-f296-457e-8718-9e325ef776f3",
+     "submitted_npi": null,
+     "warning_count": 3
+    }
+   ],
+   "rows_shown": 2,
+   "rows_total": 2
+  },
+  "findings": {
+   "available": true,
+   "by_code": [
+    {
+     "count": 2,
+     "issue_type": "PARTICIPANT_PARENT_IS_QHIN",
+     "rule_id": "BUS-003",
+     "severity": "INFORMATIONAL"
+    },
+    {
+     "count": 2,
+     "issue_type": "ADDRESS_TEXT_IS_A_LABEL",
+     "rule_id": "CON-005",
+     "severity": "INFORMATIONAL"
+    },
+    {
+     "count": 2,
+     "issue_type": "PART_OF_UNRESOLVED",
+     "rule_id": "INT-002",
+     "severity": "MEDIUM"
+    },
+    {
+     "count": 2,
+     "issue_type": "NPI_NOT_SUPPLIED",
+     "rule_id": "NPI-001",
+     "severity": "INFORMATIONAL"
+    },
+    {
+     "count": 1,
+     "issue_type": "COLUMN_EMPTY_IN_DELIVERY",
+     "rule_id": "SCH-002",
+     "severity": "INFORMATIONAL"
+    }
+   ],
+   "by_resolution": {
+    "OPEN": 9
+   },
+   "by_severity": {
+    "CRITICAL": 0,
+    "HIGH": 0,
+    "INFORMATIONAL": 7,
+    "LOW": 0,
+    "MEDIUM": 2
+   },
+   "open_high": 0,
+   "rows": [
+    {
+     "correction_authority": "NO_CORRECTION",
+     "description": "A Participant whose partOf equals its orgManagingOrg — the shape on all 11,077 Participants in the profiled delivery. One managed_by_qhin edge is created; no second sub_participant_of edge is emitted, because both fields express the same fact and two edges would double-count it.",
+     "field_name": "partOf",
+     "issue_code": "DQ-20260930-f423fb62-000005",
+     "issue_type": "PARTICIPANT_PARENT_IS_QHIN",
+     "line_number": 2,
+     "resolution": "OPEN",
+     "resolved_at": null,
+     "resolved_by": null,
+     "rule_id": "BUS-003",
+     "rule_version": "1.0.0",
+     "severity": "INFORMATIONAL",
+     "source_record_id": "6d781b98-bc6c-45b9-81bf-daa96095fcee"
+    },
+    {
+     "correction_authority": "NO_CORRECTION",
+     "description": "address_text holds the label 'Primary' rather than an address — the pattern on 17,717 of 23,566 records (75.18%). The address of record is built from the component fields instead; parsing this as an address would fabricate one.",
+     "field_name": "address_text",
+     "issue_code": "DQ-20260930-f423fb62-000003",
+     "issue_type": "ADDRESS_TEXT_IS_A_LABEL",
+     "line_number": 2,
+     "resolution": "OPEN",
+     "resolved_at": null,
+     "resolved_by": null,
+     "rule_id": "CON-005",
+     "rule_version": "1.0.0",
+     "severity": "INFORMATIONAL",
+     "source_record_id": "6d781b98-bc6c-45b9-81bf-daa96095fcee"
+    },
+    {
+     "correction_authority": "HUMAN_REQUIRED",
+     "description": "partOf '2.16.840.1.113883.3.7204.9.99.777.95' does not resolve to any record in this delivery, to the registry, nor to a QHIN named in orgManagingOrg. The parent may legitimately sit outside the delivered scope; recorded for analyst determination rather than treated as a broken hierarchy.",
+     "field_name": "partOf",
+     "issue_code": "DQ-20260930-f423fb62-000004",
+     "issue_type": "PART_OF_UNRESOLVED",
+     "line_number": 2,
+     "resolution": "OPEN",
+     "resolved_at": null,
+     "resolved_by": null,
+     "rule_id": "INT-002",
+     "rule_version": "1.3.0",
+     "severity": "MEDIUM",
+     "source_record_id": "6d781b98-bc6c-45b9-81bf-daa96095fcee"
+    },
+    {
+     "correction_authority": "NO_CORRECTION",
+     "description": "No NPI supplied. This is legitimate for a large share of TEFCA entities — 4,584 of 23,566 records (19.45%) in the profiled delivery — and is never treated as a verification failure. Medicare applicability is determined separately in D2.",
+     "field_name": "NPI",
+     "issue_code": "DQ-20260930-f423fb62-000002",
+     "issue_type": "NPI_NOT_SUPPLIED",
+     "line_number": 2,
+     "resolution": "OPEN",
+     "resolved_at": null,
+     "resolved_by": null,
+     "rule_id": "NPI-001",
+     "rule_version": "1.2.0",
+     "severity": "INFORMATIONAL",
+     "source_record_id": "6d781b98-bc6c-45b9-81bf-daa96095fcee"
+    },
+    {
+     "correction_authority": "NO_CORRECTION",
+     "description": "A Participant whose partOf equals its orgManagingOrg — the shape on all 11,077 Participants in the profiled delivery. One managed_by_qhin edge is created; no second sub_participant_of edge is emitted, because both fields express the same fact and two edges would double-count it.",
+     "field_name": "partOf",
+     "issue_code": "DQ-20260930-f423fb62-000009",
+     "issue_type": "PARTICIPANT_PARENT_IS_QHIN",
+     "line_number": 3,
+     "resolution": "OPEN",
+     "resolved_at": null,
+     "resolved_by": null,
+     "rule_id": "BUS-003",
+     "rule_version": "1.0.0",
+     "severity": "INFORMATIONAL",
+     "source_record_id": "ac405a93-f296-457e-8718-9e325ef776f3"
+    },
+    {
+     "correction_authority": "NO_CORRECTION",
+     "description": "address_text holds the label 'Primary' rather than an address — the pattern on 17,717 of 23,566 records (75.18%). The address of record is built from the component fields instead; parsing this as an address would fabricate one.",
+     "field_name": "address_text",
+     "issue_code": "DQ-20260930-f423fb62-000007",
+     "issue_type": "ADDRESS_TEXT_IS_A_LABEL",
+     "line_number": 3,
+     "resolution": "OPEN",
+     "resolved_at": null,
+     "resolved_by": null,
+     "rule_id": "CON-005",
+     "rule_version": "1.0.0",
+     "severity": "INFORMATIONAL",
+     "source_record_id": "ac405a93-f296-457e-8718-9e325ef776f3"
+    },
+    {
+     "correction_authority": "HUMAN_REQUIRED",
+     "description": "partOf '2.16.840.1.113883.3.7204.9.99.777.95' does not resolve to any record in this delivery, to the registry, nor to a QHIN named in orgManagingOrg. The parent may legitimately sit outside the delivered scope; recorded for analyst determination rather than treated as a broken hierarchy.",
+     "field_name": "partOf",
+     "issue_code": "DQ-20260930-f423fb62-000008",
+     "issue_type": "PART_OF_UNRESOLVED",
+     "line_number": 3,
+     "resolution": "OPEN",
+     "resolved_at": null,
+     "resolved_by": null,
+     "rule_id": "INT-002",
+     "rule_version": "1.3.0",
+     "severity": "MEDIUM",
+     "source_record_id": "ac405a93-f296-457e-8718-9e325ef776f3"
+    },
+    {
+     "correction_authority": "NO_CORRECTION",
+     "description": "No NPI supplied. This is legitimate for a large share of TEFCA entities — 4,584 of 23,566 records (19.45%) in the profiled delivery — and is never treated as a verification failure. Medicare applicability is determined separately in D2.",
+     "field_name": "NPI",
+     "issue_code": "DQ-20260930-f423fb62-000006",
+     "issue_type": "NPI_NOT_SUPPLIED",
+     "line_number": 3,
+     "resolution": "OPEN",
+     "resolved_at": null,
+     "resolved_by": null,
+     "rule_id": "NPI-001",
+     "rule_version": "1.2.0",
+     "severity": "INFORMATIONAL",
+     "source_record_id": "ac405a93-f296-457e-8718-9e325ef776f3"
+    },
+    {
+     "correction_authority": "NO_CORRECTION",
+     "description": "6 columns are present in the header but empty on every record: transaction, NAIC, CCN, alias, email, contact_company. Structurally delivered, semantically absent. Recorded once for the delivery rather than once per record.",
+     "field_name": "transaction, NAIC, CCN, alias, email, contact_company",
+     "issue_code": "DQ-20260930-f423fb62-000001",
+     "issue_type": "COLUMN_EMPTY_IN_DELIVERY",
+     "line_number": null,
+     "resolution": "OPEN",
+     "resolved_at": null,
+     "resolved_by": null,
+     "rule_id": "SCH-002",
+     "rule_version": "1.0.0",
+     "severity": "INFORMATIONAL",
+     "source_record_id": null
+    }
+   ],
+   "rows_shown": 9,
+   "rows_total": 9,
+   "rule_set_version": "1.3.0",
+   "run_id": "f423fb62-8c3f-435c-bfb3-b0a7898a60e7",
+   "total": 9
+  },
+  "identifiers": {
+   "available": true,
+   "conflicts": [],
+   "events_total": 0,
+   "rows_shown": 0,
+   "rows_total": 0,
+   "unresolved": 0
+  },
+  "limitations": [
+   "No external source check was attempted for this delivery (NPPES, PECOS, OIG LEIE, SAM.gov: 0 of 2 eligible entities attempted, 0% coverage). 'Not run' means no check was performed. It does not mean the entities were checked and found clear, so this report draws no screening or exclusion conclusion for those sources.",
+   "2 review record(s) exist and none has been independently QA approved. The findings and counts in this report are system results, not approved determinations.",
+   "No source-readiness (preflight) check was run for this delivery. 'Not run' does not mean the delivered file is ready: nothing was checked."
+  ],
+  "lineage": {
+   "available": true,
+   "by_authority": {},
+   "by_column": {},
+   "corrections_total": 0,
+   "entities_promoted": 2,
+   "entity_versions_in_window": 2,
+   "rows": [],
+   "rows_shown": 0
+  },
+  "outcome": {
+   "basis": [
+    {
+     "criterion": "reconciliation_passed",
+     "detail": "snapshot 802f361a-7512-426e-b3f2-f054ce7dc947 passed=True; received 2 accounted 2",
+     "held": true
+    },
+    {
+     "criterion": "no_unresolved_findings",
+     "detail": "0 undecided holding-severity (HIGH/CRITICAL) finding(s)",
+     "held": true
+    },
+    {
+     "criterion": "no_held_records",
+     "detail": "0 held",
+     "held": true
+    },
+    {
+     "criterion": "no_rejected_records",
+     "detail": "0 rejected",
+     "held": true
+    },
+    {
+     "criterion": "no_missing_key_records",
+     "detail": "0 missing key",
+     "held": true
+    },
+    {
+     "criterion": "no_failed_required_verification",
+     "detail": "0 failed required verification(s)",
+     "held": true
+    },
+    {
+     "criterion": "no_invalid_identifier_promoted",
+     "detail": "0 invalid identifier(s) promoted",
+     "held": true
+    },
+    {
+     "criterion": "no_unresolved_conflicts",
+     "detail": "0 unresolved identifier conflict(s)",
+     "held": true
+    },
+    {
+     "criterion": "no_unexplained_records",
+     "detail": "0 record(s) without a disposition reason",
+     "held": true
+    }
+   ],
+   "code": "COMPLETED_CLEAN",
+   "detail": "Every received record reconciled; no undecided holding-severity findings, holds, rejections, missing keys, conflicts or failed verifications remain. Lower-severity findings may remain and are listed in the exception ledger.",
+   "value": "Completed — Clean"
+  },
+  "provenance": {
+   "build_sha": "2b6e1abdd5e555e699ad6cb5d03535864aafdfa8",
+   "delivery_job_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+   "delivery_label": "QA Synthetic SEP Batch C 2026-09-30",
+   "intake_id": "dacb9e81-5691-417f-a028-cabe07ace225",
+   "reconciliation_snapshot_id": "802f361a-7512-426e-b3f2-f054ce7dc947",
+   "review_cycle_id": null,
+   "scope_type": "DELIVERY",
+   "source_file_sha256": "9d45af158da5571269e33baf944394918413a24d0438b5bddb4b127e4d87028a",
+   "source_filename": "BATCH-C-SEP-030-pipe-july-ARC-9.99.777.95.psv"
+  },
+  "readiness": {
+   "available": false,
+   "by_category": {},
+   "by_disposition": {},
+   "run": null
+  },
+  "rechecks": {
+   "available": true,
+   "by_state": {},
+   "rows": [],
+   "total": 0
+  },
+  "reconciliation": {
+   "actor": "admin@docuaction.io",
+   "available": true,
+   "build_sha": "85cf97a75975ab7b2bc5a5c62c8cedabb396b0e2",
+   "checks": [
+    {
+     "check": "A: every delivered line stored",
+     "detail": "2 source records vs 2 declared on the intake",
+     "passed": true
+    },
+    {
+     "check": "D == A: every source record curated",
+     "detail": "2 curated vs 2 source records",
+     "passed": true
+    },
+    {
+     "check": "C = A − B: eligible population is exact",
+     "detail": "2 eligible = 2 received − 0 (held 0 + rejected 0 + excluded/missing key 0)",
+     "passed": true
+    },
+    {
+     "check": "E == C: every eligible record promoted",
+     "detail": "2 promoted vs 2 eligible",
+     "passed": true
+    },
+    {
+     "check": "E: Area 1 promotion markers agree with Area 2",
+     "detail": "2 source records marked promoted vs 2 curated records carrying an entity id",
+     "passed": true
+    },
+    {
+     "check": "E: one registry entity per promoted record",
+     "detail": "2 distinct entities vs 2 promoted records",
+     "passed": true
+    },
+    {
+     "check": "F ⊆ E: every verification traces to a promoted entity",
+     "detail": "0 reviews over 0 entities, within 2 promoted",
+     "passed": true
+    },
+    {
+     "check": "Zero orphan Area 2 records",
+     "detail": "0 curated records with no Area 1 parent",
+     "passed": true
+    },
+    {
+     "check": "Zero orphan promotions",
+     "detail": "0 curated records pointing at a missing entity",
+     "passed": true
+    },
+    {
+     "check": "Zero orphan issues",
+     "detail": "0 issues pointing at a missing source record",
+     "passed": true
+    },
+    {
+     "check": "Zero orphan corrections",
+     "detail": "0 corrections with no curated record",
+     "passed": true
+    },
+    {
+     "check": "Every correction is explained",
+     "detail": "0 of 0 corrections cite neither an issue nor a reason",
+     "passed": true
+    },
+    {
+     "check": "Every rule evaluated every record",
+     "detail": "0 rule(s) did not evaluate all 2 records: []",
+     "passed": true
+    },
+    {
+     "check": "No rule execution failed",
+     "detail": "0 rule(s) failed: []",
+     "passed": true
+    },
+    {
+     "check": "Every determination traces to evidence",
+     "detail": "0 review(s) carry no dimension evidence",
+     "passed": true
+    },
+    {
+     "check": "Every determination cites a rule",
+     "detail": "0 classified review(s) carry no rule_code",
+     "passed": true
+    },
+    {
+     "check": "Every source record has a current disposition",
+     "detail": "0 of 2 source records carry no disposition event",
+     "passed": true
+    },
+    {
+     "check": "Disposition equation: Received = Created + Updated + Matched/Unchanged + Held + Rejected + Missing Key + Excluded",
+     "detail": "2 received vs 2 accounted (difference 0): created 2, updated 0, unchanged 0, held 0, rejected 0, missing key 0, excluded 0",
+     "passed": true
+    },
+    {
+     "check": "Zero orphan report links",
+     "detail": "0 of 0 delivery report links name a report or snapshot that does not exist",
+     "passed": true
+    },
+    {
+     "check": "Unresolved identifier conflicts are all HELD",
+     "detail": "0 unresolved conflict(s); 0 on record(s) that are not held",
+     "passed": true
+    },
+    {
+     "check": "Snapshot effects completed (PENDING or APPROVED snapshot)",
+     "detail": "snapshot tip status 'PENDING'",
+     "passed": true
+    },
+    {
+     "check": "Area 1 raw lines still hash to their intake values",
+     "detail": "0 mismatch(es) across 2 records",
+     "passed": true
+    },
+    {
+     "check": "Original delivery file unmodified",
+     "detail": "stored sha256 matches",
+     "passed": true
+    }
+   ],
+   "correlation_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+   "created_at": "2026-09-30T04:45:10.874603+00:00",
+   "dimensions": {
+    "findings": {
+     "by_severity": {
+      "INFORMATIONAL": 7,
+      "MEDIUM": 2
+     },
+     "open_high_or_critical": 0,
+     "total": 9
+    },
+    "relationships": {
+     "edges": 2
+    },
+    "verification": {
+     "entities": 0,
+     "reviews": 0,
+     "without_evidence": 0,
+     "without_rule": 0
+    },
+    "warnings": 7
+   },
+   "equation": {
+    "accounted": 2,
+    "created": 2,
+    "excluded": 0,
+    "held": 0,
+    "holds": true,
+    "matched_unchanged": 0,
+    "missing_key": 0,
+    "received": 2,
+    "rejected": 0,
+    "updated": 0
+   },
+   "failure_reason": null,
+   "hash": "335b3715f1edcfe17fb842768102483a847a05a623fd71a27520e8beaa3de128",
+   "history_count": 1,
+   "id": "802f361a-7512-426e-b3f2-f054ce7dc947",
+   "is_latest": true,
+   "migration_revision": "unknown",
+   "passed": true,
+   "reconstructed": false,
+   "sequence": 1,
+   "source_evidence": {
+    "area1_record_hashes": {
+     "detail": [],
+     "intact": true,
+     "mismatches": 0,
+     "records_checked": 2
+    },
+    "corrections": {
+     "total": 0,
+     "unexplained": 0
+    },
+    "curated_status_counts": {
+     "CLEAN": 2
+    },
+    "dispositions": {
+     "CREATED": 2,
+     "EXCLUDED": 0,
+     "HELD": 0,
+     "MATCHED_UNCHANGED": 0,
+     "MISSING_KEY": 0,
+     "REJECTED": 0,
+     "UPDATED": 0,
+     "total": 2
+    },
+    "identifier_conflicts": {
+     "not_held": 0,
+     "unresolved": 0
+    },
+    "intake_id": "dacb9e81-5691-417f-a028-cabe07ace225",
+    "job_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+    "populations": {
+     "A_source_records_received": 2,
+     "B_excluded_or_missing_key": 0,
+     "B_held": 0,
+     "B_rejected": 0,
+     "B_rejected_or_held": 0,
+     "C_eligible": 2,
+     "D_curated_records": 2,
+     "E_distinct_entities": 2,
+     "E_promoted_to_registry": 2,
+     "F_verification_reviews": 0,
+     "F_verified_entities": 0
+    },
+    "records_without_disposition": 0,
+    "report_links": {
+     "orphans": 0,
+     "total": 0
+    },
+    "rule_execution": {
+     "rules_executed": 40,
+     "rules_failed": [],
+     "rules_under_evaluated": [],
+     "run_id": "f423fb62-8c3f-435c-bfb3-b0a7898a60e7"
+    }
+   },
+   "trigger": "PIPELINE"
+  },
+  "review": {
+   "code": "READY_FOR_ANALYST_REVIEW",
+   "detail": "2 open item(s); a review cycle may be created. Readiness for review is a workflow state, not a statement that the data is clean.",
+   "open_breakdown": {},
+   "value": "Ready for Analyst Review"
+  },
+  "review_cycle_id": null,
+  "service_version": "1.0.0",
+  "snapshot_created_at": "2026-09-30T04:45:10.874603+00:00",
+  "snapshot_hash": "335b3715f1edcfe17fb842768102483a847a05a623fd71a27520e8beaa3de128",
+  "snapshot_id": "802f361a-7512-426e-b3f2-f054ce7dc947",
+  "snapshot_is_latest": true,
+  "snapshot_sequence": 1,
+  "template_version": "1.0.0",
+  "timeline": {
+   "available": true,
+   "events": [
+    {
+     "attempt": 1,
+     "build_sha": "85cf97a75975ab7b2bc5a5c62c8cedabb396b0e2",
+     "completed_at": "2026-09-30T04:44:47.614032+00:00",
+     "correlation_id": "7dca26d5-cb64-4baf-8b61-18d5e4e76327",
+     "detail": {
+      "delivery_period": "QA Synthetic SEP Batch C 2026-09-30",
+      "government_reference": "ARC-9.99.777.95",
+      "original_filename": "BATCH-C-SEP-030-pipe-july-ARC-9.99.777.95.psv",
+      "registered_by": "admin@docuaction.io",
+      "source": "QA-SYNTHETIC"
+     },
+     "duration_ms": 0,
+     "failure_class": null,
+     "failure_reason": null,
+     "held_count": null,
+     "id": "41cf1106-9a30-4399-9793-cf60f9579e22",
+     "input_count": null,
+     "intake_id": null,
+     "job_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+     "output_count": null,
+     "rejected_count": null,
+     "stage": "REGISTERED",
+     "started_at": "2026-09-30T04:44:47.614032+00:00",
+     "status": "COMPLETED",
+     "warning_count": null,
+     "worker_id": "05e621c4ee1e:7"
+    },
+    {
+     "attempt": 1,
+     "build_sha": "85cf97a75975ab7b2bc5a5c62c8cedabb396b0e2",
+     "completed_at": "2026-09-30T04:44:47.747838+00:00",
+     "correlation_id": "7dca26d5-cb64-4baf-8b61-18d5e4e76327",
+     "detail": {
+      "file_size_bytes": 1174,
+      "storage": "immutable_original"
+     },
+     "duration_ms": 0,
+     "failure_class": null,
+     "failure_reason": null,
+     "held_count": null,
+     "id": "b9e121b7-4d99-473d-8c28-1f9fec87c35d",
+     "input_count": null,
+     "intake_id": null,
+     "job_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+     "output_count": null,
+     "rejected_count": null,
+     "stage": "RECEIPT_PRESERVED",
+     "started_at": "2026-09-30T04:44:47.747838+00:00",
+     "status": "COMPLETED",
+     "warning_count": null,
+     "worker_id": "05e621c4ee1e:7"
+    },
+    {
+     "attempt": 1,
+     "build_sha": "85cf97a75975ab7b2bc5a5c62c8cedabb396b0e2",
+     "completed_at": "2026-09-30T04:44:49.333569+00:00",
+     "correlation_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+     "detail": {
+      "delimiter": "|",
+      "encoding": "utf-8",
+      "line_terminator": "LF",
+      "schema_drift": false,
+      "schema_fingerprint": "1cd655e9120dc9d0d6a52697ea470519b138fe0f9334af6f69467f3485ade3d0"
+     },
+     "duration_ms": 1523,
+     "failure_class": null,
+     "failure_reason": null,
+     "held_count": null,
+     "id": "a9363356-2471-4b4f-a1a4-1ad0e1340d1c",
+     "input_count": 2,
+     "intake_id": "dacb9e81-5691-417f-a028-cabe07ace225",
+     "job_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+     "output_count": 2,
+     "rejected_count": null,
+     "stage": "SCHEMA_VALIDATION",
+     "started_at": "2026-09-30T04:44:47.810492+00:00",
+     "status": "COMPLETED",
+     "warning_count": 0,
+     "worker_id": "05e621c4ee1e:7"
+    },
+    {
+     "attempt": 1,
+     "build_sha": "85cf97a75975ab7b2bc5a5c62c8cedabb396b0e2",
+     "completed_at": "2026-09-30T04:44:48.044668+00:00",
+     "correlation_id": "7dca26d5-cb64-4baf-8b61-18d5e4e76327",
+     "detail": {
+      "sha256": "9d45af158da5571269e33baf944394918413a24d0438b5bddb4b127e4d87028a"
+     },
+     "duration_ms": 0,
+     "failure_class": null,
+     "failure_reason": null,
+     "held_count": null,
+     "id": "d15e542b-7de8-4649-8885-0f5874f9f450",
+     "input_count": null,
+     "intake_id": null,
+     "job_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+     "output_count": null,
+     "rejected_count": null,
+     "stage": "SHA256",
+     "started_at": "2026-09-30T04:44:48.044668+00:00",
+     "status": "COMPLETED",
+     "warning_count": null,
+     "worker_id": "05e621c4ee1e:7"
+    },
+    {
+     "attempt": 1,
+     "build_sha": "85cf97a75975ab7b2bc5a5c62c8cedabb396b0e2",
+     "completed_at": "2026-09-30T04:44:49.562208+00:00",
+     "correlation_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+     "detail": {
+      "duplicate_content": false,
+      "every_line_stored": true,
+      "parse_malformed": 0,
+      "parse_ok": 2
+     },
+     "duration_ms": 1476,
+     "failure_class": null,
+     "failure_reason": null,
+     "held_count": null,
+     "id": "adfd8281-6826-4ee5-a6f6-67c7fb87cfb2",
+     "input_count": 2,
+     "intake_id": "dacb9e81-5691-417f-a028-cabe07ace225",
+     "job_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+     "output_count": 2,
+     "rejected_count": 0,
+     "stage": "PARSING",
+     "started_at": "2026-09-30T04:44:48.085214+00:00",
+     "status": "COMPLETED",
+     "warning_count": 0,
+     "worker_id": "05e621c4ee1e:7"
+    },
+    {
+     "attempt": 1,
+     "build_sha": "85cf97a75975ab7b2bc5a5c62c8cedabb396b0e2",
+     "completed_at": "2026-09-30T04:44:51.888586+00:00",
+     "correlation_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+     "detail": {
+      "rule_set_version": "1.3.0",
+      "rules_failed": [],
+      "run_id": "f423fb62-8c3f-435c-bfb3-b0a7898a60e7"
+     },
+     "duration_ms": 1619,
+     "failure_class": null,
+     "failure_reason": null,
+     "held_count": null,
+     "id": "3352e117-b958-4da3-9817-20c88fe55f79",
+     "input_count": 2,
+     "intake_id": "dacb9e81-5691-417f-a028-cabe07ace225",
+     "job_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+     "output_count": 2,
+     "rejected_count": null,
+     "stage": "QUALITY",
+     "started_at": "2026-09-30T04:44:50.269105+00:00",
+     "status": "COMPLETED",
+     "warning_count": 9,
+     "worker_id": "05e621c4ee1e:7"
+    },
+    {
+     "attempt": 1,
+     "build_sha": "85cf97a75975ab7b2bc5a5c62c8cedabb396b0e2",
+     "completed_at": "2026-09-30T04:44:53.558841+00:00",
+     "correlation_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+     "detail": {
+      "review_bridge": {
+       "cases_already_present": 0,
+       "cases_created": 2,
+       "completed": true,
+       "human_required_issues": 2,
+       "planned_cases": 2,
+       "pre_promotion_cases": 2
+      },
+      "status_counts": {
+       "CLEAN": 2,
+       "CORRECTED": 0,
+       "HELD": 0,
+       "REJECTED": 0
+      }
+     },
+     "duration_ms": 1160,
+     "failure_class": null,
+     "failure_reason": null,
+     "held_count": 0,
+     "id": "0f932a1e-3d07-4fbd-9e43-1635a96425c1",
+     "input_count": 2,
+     "intake_id": "dacb9e81-5691-417f-a028-cabe07ace225",
+     "job_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+     "output_count": 2,
+     "rejected_count": 0,
+     "stage": "CURATION",
+     "started_at": "2026-09-30T04:44:52.398675+00:00",
+     "status": "COMPLETED",
+     "warning_count": 0,
+     "worker_id": "05e621c4ee1e:7"
+    },
+    {
+     "attempt": 1,
+     "build_sha": "85cf97a75975ab7b2bc5a5c62c8cedabb396b0e2",
+     "completed_at": "2026-09-30T04:45:09.564191+00:00",
+     "correlation_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+     "detail": {
+      "conflicts_raised": 0,
+      "dispositions": {
+       "CREATED": 2,
+       "EXCLUDED": 0,
+       "HELD": 0,
+       "MATCHED_UNCHANGED": 0,
+       "MISSING_KEY": 0,
+       "REJECTED": 0,
+       "UPDATED": 0,
+       "total": 2
+      },
+      "entities_created": 2,
+      "entities_unchanged": 0,
+      "entities_updated": 0,
+      "not_promoted_by_status": {},
+      "review_bridge": {
+       "cases_already_present": 2,
+       "cases_created": 0,
+       "completed": true,
+       "human_required_issues": 2,
+       "planned_cases": 2,
+       "pre_promotion_cases": 0
+      }
+     },
+     "duration_ms": 15547,
+     "failure_class": null,
+     "failure_reason": null,
+     "held_count": 0,
+     "id": "fa93536f-05a8-41aa-b860-de0cedff18e9",
+     "input_count": 2,
+     "intake_id": "dacb9e81-5691-417f-a028-cabe07ace225",
+     "job_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+     "output_count": 2,
+     "rejected_count": 0,
+     "stage": "PROMOTION",
+     "started_at": "2026-09-30T04:44:54.016709+00:00",
+     "status": "COMPLETED",
+     "warning_count": 0,
+     "worker_id": "05e621c4ee1e:7"
+    },
+    {
+     "attempt": 1,
+     "build_sha": "85cf97a75975ab7b2bc5a5c62c8cedabb396b0e2",
+     "completed_at": "2026-09-30T04:45:08.467041+00:00",
+     "correlation_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+     "detail": {
+      "conflicts_raised": 0,
+      "entities_unchanged": 0,
+      "entities_updated": 0,
+      "records_in_identifier_conflict": 0,
+      "snapshot": {
+       "completed": true,
+       "delta_counts": {
+        "CHANGED": 0,
+        "HELD_IN_CURRENT_DELIVERY": 0,
+        "NEW": 2,
+        "NOT_PRESENT_IN_CURRENT_DELIVERY": 2,
+        "UNCHANGED": 0
+       },
+       "delta_state": "COMPARED",
+       "error": null,
+       "material_changes": 0,
+       "presence": {
+        "absent": 2,
+        "already": 0,
+        "present": 2,
+        "previous_intake_id": "a8232253-e36a-4c45-a7a3-592660043cba"
+       },
+       "stale_marked": 2
+      }
+     },
+     "duration_ms": 0,
+     "failure_class": null,
+     "failure_reason": null,
+     "held_count": null,
+     "id": "3e69e2f1-d9c6-467f-b32d-05aa837ed43e",
+     "input_count": 2,
+     "intake_id": "dacb9e81-5691-417f-a028-cabe07ace225",
+     "job_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+     "output_count": 0,
+     "rejected_count": null,
+     "stage": "MATCHING",
+     "started_at": "2026-09-30T04:45:08.467041+00:00",
+     "status": "COMPLETED",
+     "warning_count": null,
+     "worker_id": "05e621c4ee1e:7"
+    },
+    {
+     "attempt": 1,
+     "build_sha": "85cf97a75975ab7b2bc5a5c62c8cedabb396b0e2",
+     "completed_at": "2026-09-30T04:45:08.675247+00:00",
+     "correlation_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+     "detail": {
+      "managed_by_qhin": 2,
+      "qhin_entities": 1,
+      "refused": null,
+      "sub_participant_of": 0,
+      "superseded": null,
+      "unresolved_parents": 0
+     },
+     "duration_ms": 0,
+     "failure_class": null,
+     "failure_reason": null,
+     "held_count": null,
+     "id": "5237e982-6ce7-4d66-9129-4e423533a907",
+     "input_count": null,
+     "intake_id": "dacb9e81-5691-417f-a028-cabe07ace225",
+     "job_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+     "output_count": 2,
+     "rejected_count": null,
+     "stage": "RELATIONSHIPS",
+     "started_at": "2026-09-30T04:45:08.675247+00:00",
+     "status": "COMPLETED",
+     "warning_count": null,
+     "worker_id": "05e621c4ee1e:7"
+    },
+    {
+     "attempt": 1,
+     "build_sha": "85cf97a75975ab7b2bc5a5c62c8cedabb396b0e2",
+     "completed_at": "2026-09-30T04:45:10.240650+00:00",
+     "correlation_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+     "detail": {
+      "deferred": true,
+      "readiness": {
+       "sources": {
+        "data_identity": "MOCK_TEST",
+        "data_source": "MOCK — demonstration data only",
+        "environment": "development",
+        "findings_available": false,
+        "government_dataset": "NOT_LOADED",
+        "mock_data_warning": "This report uses synthetic demonstration data. Do not use for operational decisions."
+       },
+       "usps": {
+        "circuit_breaker": "open",
+        "configured": true,
+        "environment": "production",
+        "metrics": {
+         "usps_circuit_breaker_status": "open",
+         "usps_dpv_success_rate": 0,
+         "usps_errors_total": 6,
+         "usps_fallback_rate": 1,
+         "usps_latency_avg_ms": 0,
+         "usps_requests_total": 0,
+         "usps_zip4_success_rate": 0
+        },
+        "status": "Authentication failed"
+       },
+       "website": {
+        "authoritative_for": [],
+        "configured": true,
+        "note": "One page per entity, no crawling. Resolve-and-check, pinned connection, every redirect re-checked, streamed byte cap. Corroborating identity and contact evidence only; never authoritative for NPI, enrolment, exclusion, registration or TEFCA status.",
+        "source": "ORGANIZATION_WEBSITE",
+        "status": "available"
+       }
+      }
+     },
+     "duration_ms": 257,
+     "failure_class": null,
+     "failure_reason": null,
+     "held_count": null,
+     "id": "63c184c1-46f1-42ef-8a9e-39238b057602",
+     "input_count": 2,
+     "intake_id": "dacb9e81-5691-417f-a028-cabe07ace225",
+     "job_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+     "output_count": null,
+     "rejected_count": null,
+     "stage": "VERIFICATION_READINESS",
+     "started_at": "2026-09-30T04:45:09.982750+00:00",
+     "status": "COMPLETED",
+     "warning_count": null,
+     "worker_id": "05e621c4ee1e:7"
+    },
+    {
+     "attempt": 1,
+     "build_sha": "85cf97a75975ab7b2bc5a5c62c8cedabb396b0e2",
+     "completed_at": "2026-09-30T04:45:13.998278+00:00",
+     "correlation_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+     "detail": {
+      "equation": {
+       "accounted": 2,
+       "created": 2,
+       "difference": 0,
+       "excluded": 0,
+       "held": 0,
+       "holds": true,
+       "matched_unchanged": 0,
+       "missing_key": 0,
+       "received": 2,
+       "rejected": 0,
+       "updated": 0
+      },
+      "failed_checks": [],
+      "passed": true,
+      "snapshot_error": null,
+      "snapshot_id": "802f361a-7512-426e-b3f2-f054ce7dc947"
+     },
+     "duration_ms": 3290,
+     "failure_class": null,
+     "failure_reason": null,
+     "held_count": 0,
+     "id": "2df082be-da41-4a76-8bbe-b23a9a316686",
+     "input_count": 2,
+     "intake_id": "dacb9e81-5691-417f-a028-cabe07ace225",
+     "job_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+     "output_count": 2,
+     "rejected_count": 0,
+     "stage": "RECONCILIATION",
+     "started_at": "2026-09-30T04:45:10.707724+00:00",
+     "status": "COMPLETED",
+     "warning_count": 0,
+     "worker_id": "05e621c4ee1e:7"
+    },
+    {
+     "attempt": 1,
+     "build_sha": "85cf97a75975ab7b2bc5a5c62c8cedabb396b0e2",
+     "completed_at": "2026-09-30T04:45:14.057613+00:00",
+     "correlation_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+     "detail": {
+      "note": "Readiness for review is a workflow state, not a statement that the data is clean.",
+      "snapshot_id": "802f361a-7512-426e-b3f2-f054ce7dc947"
+     },
+     "duration_ms": 0,
+     "failure_class": null,
+     "failure_reason": null,
+     "held_count": null,
+     "id": "d715610d-5a26-4019-aad1-f78455a67883",
+     "input_count": null,
+     "intake_id": "dacb9e81-5691-417f-a028-cabe07ace225",
+     "job_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+     "output_count": 2,
+     "rejected_count": null,
+     "stage": "READY_FOR_REVIEW",
+     "started_at": "2026-09-30T04:45:14.057613+00:00",
+     "status": "COMPLETED",
+     "warning_count": null,
+     "worker_id": "05e621c4ee1e:7"
+    },
+    {
+     "attempt": 1,
+     "build_sha": "a6bf241bed0536533bacddd2adb3712d906762f7",
+     "completed_at": "2026-10-05T19:42:50.963470+00:00",
+     "correlation_id": "4d62b9b9-6868-4d95-8141-5b3ee84474f4",
+     "detail": {
+      "artifact_ids": [
+       "18da4e48-70d9-4cdd-9d27-65180937d6ad",
+       "e61fabdf-f670-4d2a-9846-7616f345dbdf",
+       "ed6543a0-49c7-4d5c-b60c-44a94615d811"
+      ],
+      "audit_id": "209c599e-41c5-4646-8021-6237ba3b7d16",
+      "link_id": "3f37c31b-957a-4147-8611-800b5ed74df3",
+      "link_ids": [
+       "3f37c31b-957a-4147-8611-800b5ed74df3",
+       "05b1fcfe-ee27-459a-a9df-c8cc663f87f2",
+       "059d6442-2255-4436-9d93-c732a3d4bab9"
+      ],
+      "report_id": "DA-ARC-2026-058",
+      "report_type": "delivery_processing",
+      "snapshot_id": "802f361a-7512-426e-b3f2-f054ce7dc947",
+      "storage_backend": "azure_blob",
+      "template_version": "1.0.0"
+     },
+     "duration_ms": 0,
+     "failure_class": null,
+     "failure_reason": null,
+     "held_count": null,
+     "id": "1ed48679-b6d0-45e6-a011-f50ed6ddafde",
+     "input_count": null,
+     "intake_id": "dacb9e81-5691-417f-a028-cabe07ace225",
+     "job_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+     "output_count": null,
+     "rejected_count": null,
+     "stage": "REPORT_GENERATION",
+     "started_at": "2026-10-05T19:42:50.963470+00:00",
+     "status": "COMPLETED",
+     "warning_count": null,
+     "worker_id": "831b2c475c7c:8"
+    },
+    {
+     "attempt": 2,
+     "build_sha": "139489c13b86feebaa2c9ead163d266fb6621f87",
+     "completed_at": "2026-10-06T04:49:27.857540+00:00",
+     "correlation_id": "591e432c-447b-4b87-9ecc-fc5b7de04607",
+     "detail": {
+      "artifact_ids": [
+       "60a6294b-3cfa-42ef-a710-7ea23ed83e4e",
+       "ae4f8645-5a68-4d44-b403-95a401ab6e97",
+       "9653de2a-511d-42c9-b557-ec102d109819"
+      ],
+      "audit_id": "e8b0e47d-124d-497c-955c-cf715149eccd",
+      "link_id": "10d49bc7-982b-49f2-b2c6-39eca12b51de",
+      "link_ids": [
+       "10d49bc7-982b-49f2-b2c6-39eca12b51de",
+       "bcf23d79-90a4-46fe-9614-20c9fb4540d9",
+       "4164bd2c-a4e8-41ed-ad2a-889cc8162827"
+      ],
+      "report_id": "DA-ARC-2026-059",
+      "report_type": "delivery_processing",
+      "snapshot_id": "802f361a-7512-426e-b3f2-f054ce7dc947",
+      "storage_backend": "azure_blob",
+      "template_version": "1.0.0"
+     },
+     "duration_ms": 0,
+     "failure_class": null,
+     "failure_reason": null,
+     "held_count": null,
+     "id": "74bb711c-2712-4610-9571-3f698885e39a",
+     "input_count": null,
+     "intake_id": "dacb9e81-5691-417f-a028-cabe07ace225",
+     "job_id": "9115960b-7b6c-442b-ba0a-4056b490cdce",
+     "output_count": null,
+     "rejected_count": null,
+     "stage": "REPORT_GENERATION",
+     "started_at": "2026-10-06T04:49:27.857540+00:00",
+     "status": "COMPLETED",
+     "warning_count": null,
+     "worker_id": "f3b81b535f1a:8"
+    }
+   ],
+   "summary": {
+    "attempts": 15,
+    "completed_stages": [
+     "CURATION",
+     "MATCHING",
+     "PARSING",
+     "PROMOTION",
+     "QUALITY",
+     "READY_FOR_REVIEW",
+     "RECEIPT_PRESERVED",
+     "RECONCILIATION",
+     "REGISTERED",
+     "RELATIONSHIPS",
+     "REPORT_GENERATION",
+     "SCHEMA_VALIDATION",
+     "SHA256",
+     "VERIFICATION_READINESS"
+    ],
+    "failed_stage": null
+   }
+  },
+  "verification": {
+   "available": true,
+   "failed_required": 0,
+   "reason": null,
+   "source": "verification_coverage",
+   "sources": [
+    {
+     "attempted": 0,
+     "coverage_pct": 0,
+     "eligible": 2,
+     "failed": 0,
+     "name": "nppes",
+     "not_found": 0,
+     "note": "Connector readiness is not coverage: a source counts as attempted only when an evidence row exists for an entity of this delivery.",
+     "state": "Not Run",
+     "unavailable": 0,
+     "verified": 0
+    },
+    {
+     "attempted": 0,
+     "coverage_pct": 0,
+     "eligible": 2,
+     "failed": 0,
+     "name": "pecos",
+     "not_found": 0,
+     "note": "Connector readiness is not coverage: a source counts as attempted only when an evidence row exists for an entity of this delivery.",
+     "state": "Not Run",
+     "unavailable": 0,
+     "verified": 0
+    },
+    {
+     "attempted": 0,
+     "coverage_pct": 0,
+     "eligible": 2,
+     "failed": 0,
+     "name": "leie",
+     "not_found": 0,
+     "note": "Connector readiness is not coverage: a source counts as attempted only when an evidence row exists for an entity of this delivery.",
+     "state": "Not Run",
+     "unavailable": 0,
+     "verified": 0
+    },
+    {
+     "attempted": 0,
+     "coverage_pct": 0,
+     "eligible": 2,
+     "failed": 0,
+     "name": "sam",
+     "not_found": 0,
+     "note": "Connector readiness is not coverage: a source counts as attempted only when an evidence row exists for an entity of this delivery.",
+     "state": "Not Run",
+     "unavailable": 0,
+     "verified": 0
+    }
+   ],
+   "state": "Not Run"
+  }
+ },
+ "snapshot": {
+  "accessibility": {
+   "automated_checks_passed": true,
+   "checks_run": [
+    "document_language",
+    "document_title",
+    "image_alt_text",
+    "table_headers",
+    "heading_order",
+    "status_not_colour_only",
+    "no_remote_assets",
+    "contrast"
+   ],
+   "conformance_claim": "Automated structural accessibility checks passed (headings, table headers, image alternatives, document language and title, colour contrast, non-colour status encoding). This establishes the PRESENCE of the required structures only. It is NOT a claim of Section 508 conformance: that determination requires the manual review listed alongside this statement and the project's accessibility sign-off.",
+   "errors": [],
+   "manual_review_required": [
+    "Keyboard-only navigation of the HTML report",
+    "Screen-reader spot check (reading order, announced headings, table semantics)",
+    "PDF logical reading-order inspection against the visual layout",
+    "Confirmation that each chart's narrative conveys the same key finding as the visual",
+    "Zoom / reflow / readability inspection at 200%"
+   ],
+   "warnings": [
+    {
+     "check": "image_alt_text",
+     "context": "Alliance Global Tech Inc. logo",
+     "message": "Chart alt text is very short; it should convey the same key finding as the visual, not merely name the chart.",
+     "severity": "warning"
+    }
+   ]
+  },
+  "b1_b4_rule_version": "2",
+  "data_classification": "DEVELOPMENT_TEST",
+  "data_payload_hash": "6d9ca2a05f8f659227283cb8e3caca81f313f569048bd597952c594920bcd2bc",
+  "dataset_snapshot_version": "2026-09-30T23:55:52.606784",
+  "evidence_generation": "2026-09-30T23:55:52.606784",
+  "generated_by": "testadmin@docuaction.io",
+  "generation_timestamp": "2026-10-06T23:02:06.415966+00:00",
+  "pdf_engine": {
+   "available": true,
+   "engine": "WeasyPrint",
+   "note": "A tagged PDF is a precondition for accessibility, not proof of it. No Section 508 conformance is claimed from successful generation.",
+   "pdf_variant_requested": "pdf/ua-1",
+   "reason": "WeasyPrint and its native dependencies are available.",
+   "version": "70.0"
+  },
+  "query_parameters": {
+   "job_id": "9115960b-7b6c-442b-ba0a-4056b490cdce"
+  },
+  "rce_source_file_sha256": "9d45af158da5571269e33baf944394918413a24d0438b5bddb4b127e4d87028a",
+  "report_data_service_version": "1.0.0",
+  "report_id": "DA-ARC-2026-060",
+  "report_type": "delivery_processing",
+  "reporting_period_end": null,
+  "reporting_period_start": null,
+  "review_cycle_id": "DEV-CYCLE-phase6-bulk-1.1.0-9d45af158da5",
+  "source_provenance": {
+   "data_classification": "DEVELOPMENT_TEST",
+   "has_authoritative_hash": true,
+   "has_no_dataset": false,
+   "intake_id": "dacb9e81-5691-417f-a028-cabe07ace225",
+   "is_government_data": false,
+   "original_filename": "BATCH-C-SEP-030-pipe-july-ARC-9.99.777.95.psv",
+   "received_at": "2026-09-30T04:44:48.887690",
+   "record_count": 2,
+   "schema_fingerprint": "1cd655e9120dc9d0d6a52697ea470519b138fe0f9334af6f69467f3485ade3d0",
+   "sha256": "9d45af158da5571269e33baf944394918413a24d0438b5bddb4b127e4d87028a",
+   "status": "PARSED",
+   "unavailable_reason": null
+  },
+  "template_version": "1.0.0"
+ }
+}

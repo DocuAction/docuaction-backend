@@ -204,24 +204,40 @@ def _check_identity(e, ctx) -> list[dict]:
                                 f"CCN {c.identifier_value} is expired.",
                                 {"ccn": c.identifier_value, "end_date": str(c.end_date)}))
 
-    # duplicate identifiers (global)
+    # Shared identifiers (global). A shared NPI or TEFCAID ALONE does not
+    # establish prohibited Node duplication: the Directory SOP v1.1 reads
+    # TEFCAID as a Logical Entity identifier that may legitimately span Nodes,
+    # and one NPI can sit under several directory records (organisation, site
+    # or Node). These are therefore recorded as MEDIUM observations that need
+    # analyst determination (entity status `in_review`), never as an
+    # `exception` on the identifier match by itself. The finding_type values
+    # are unchanged so historical rows and consumers keep working.
     for n in active_npis:
         owners = ctx.npi_owners.get(n.identifier_value, set())
         if len(owners) > 1:
-            out.append(_finding("npi_duplicate", "high", "Duplicate NPI",
-                                f"NPI {n.identifier_value} is shared by {len(owners)} entities.",
-                                {"npi": n.identifier_value, "entity_ids": [str(x) for x in owners]}))
+            out.append(_finding("npi_duplicate", "medium", "Shared NPI (determination required)",
+                                f"NPI {n.identifier_value} is shared by {len(owners)} entities. "
+                                f"A shared NPI alone does not establish prohibited Node duplication; "
+                                f"analyst determination is required.",
+                                {"npi": n.identifier_value, "entity_ids": [str(x) for x in owners],
+                                 "evidence_basis": "shared_identifier_only"}))
     for h in hcids:
         if h.identifier_status == "active" and len(ctx.hcid_owners.get(h.identifier_value, set())) > 1:
-            out.append(_finding("hcid_duplicate", "high", "Duplicate HCID",
-                                f"HCID {h.identifier_value} is shared by multiple entities.",
-                                {"hcid": h.identifier_value}))
+            out.append(_finding("hcid_duplicate", "medium", "Shared HCID (determination required)",
+                                f"HCID {h.identifier_value} is shared by multiple entities. "
+                                f"A shared HCID alone is not a duplication finding; analyst "
+                                f"determination is required.",
+                                {"hcid": h.identifier_value, "evidence_basis": "shared_identifier_only"}))
     for t in tefcaids:
         if t.identifier_status == "active" and len(ctx.tefcaid_owners.get(t.identifier_value, set())) > 1:
-            out.append(_finding("identifier_conflict", "high", "Duplicate TEFCAID",
-                                f"TEFCAID {t.identifier_value} is shared by multiple entities.",
+            out.append(_finding("identifier_conflict", "medium", "Shared TEFCAID (determination required)",
+                                f"TEFCAID {t.identifier_value} is shared by multiple entities. "
+                                f"Under the Directory SOP v1.1 a TEFCAID identifies a Logical Entity "
+                                f"that may span Nodes, so a shared TEFCAID alone does not establish "
+                                f"prohibited Node duplication; analyst determination is required.",
                                 {"tefcaid": t.identifier_value,
-                                 "entity_ids": [str(x) for x in ctx.tefcaid_owners[t.identifier_value]]}))
+                                 "entity_ids": [str(x) for x in ctx.tefcaid_owners[t.identifier_value]],
+                                 "evidence_basis": "shared_identifier_only"}))
     return out
 
 

@@ -108,6 +108,9 @@ AREA1_OWNER_TABLES = {
     "rce_preflight_run", "rce_preflight_finding", "rce_preflight_normalization",
     "rce_shadow_comparison", "rce_shadow_finding_delta", "rce_shadow_approval",
     "rce_successor_publication_event",
+    # 20261008_record_check_results: append-only per-record check results; the app
+    # holds SELECT+INSERT only. Created by the chain AS the owner role and kept there.
+    "rce_record_check_results",
 }
 
 
@@ -535,6 +538,9 @@ MANAGED_CHAIN_CREATES = {
     # 20261004_recheck_jobs -- SELECT+INSERT+UPDATE job bookkeeping (the app
     # updates progress), so app-owned at FINALIZE like the IQVIA job tables.
     "rce_recheck_job", "rce_recheck_item",
+    # 20261008_record_check_results -- append-only (SELECT+INSERT); owner-owned, so it
+    # is in AREA1_OWNER_TABLES and is NOT moved to docuaction_app at FINALIZE.
+    "rce_record_check_results",
 }
 # Tables the 20260917 revision declares FOREIGN KEYS to that docuaction_app owns
 # in PROD and that no pending revision ALTERs (so they are not re-owned). CREATE
