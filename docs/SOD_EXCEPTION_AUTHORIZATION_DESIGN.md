@@ -20,8 +20,45 @@ the exception, because the QA actor writes the UUID.
 Until a genuine mechanism exists, a QA request by the determination actor is
 refused with 409, `X-Denial-Code: SOD_EXCEPTION_NOT_AUTHORIZED` (exception fields
 supplied) or `SOD_SELF_QA` (not supplied). Unconditional, no flag. Independent QA
-is unchanged. The database trigger is unchanged. The columns
+is unchanged. The database trigger is unchanged and still permits the exception path at the database level (see 2.1).
+The columns
 `sod_exception_granted_by` / `sod_exception_reason` remain for history.
+
+### 2.1 Scope of the interim control and the residual database-enforcement gap
+
+The interim control is **application-level (service layer) only**. It does not
+remove the exception path from the database. Verified by reading
+`alembic/versions/20260825_qa_decision_events.py`:
+
+- `trg_review_event_sod` is a `BEFORE INSERT` row trigger calling
+  `review_event_enforce_sod()`. For a `QA_REVIEW` row whose actor equals the
+  analyst of the preceding determination, it raises **unless**
+  `sod_exception_granted_by IS NOT NULL AND sod_exception_reason IS NOT NULL AND
+  sod_exception_granted_by <> actor_user_id`.
+- It therefore *permits* a self-QA insert that carries any non-null UUID other than
+  the actor plus any non-null reason. It does not check that the UUID exists, is an
+  admin, is active, or consented. A direct database write (or any future code path
+  that inserts a `QA_REVIEW` event without going through `qa_gate.submit_qa_review`)
+  can still bypass segregation of duties this way.
+- The trigger is `INSERT`-only. The migration contains no `UPDATE`/`DELETE` guard
+  and no `REVOKE`/`GRANT` for `review_decision_events`; "append-only" is a design
+  intent in the docstring, not a database-enforced property in this migration.
+- Application code: the only place that constructs `ReviewDecisionEvent` rows is
+  `app/tefca_registry/qa_gate.py` (determination, QA, supersede); `qa_gate`
+  `submit_qa_review` is the only writer of `sod_exception_granted_by`. Other modules
+  only read events. (Read of `app/` at main bc5f7d71.)
+- Which DEV roles can write `review_decision_events`: UNVERIFIED. The as-built
+  `dev_verified.md` records no catalog read of this table's owner/ACL or of the
+  trigger's state on DEV; the application role normally writes it via the service.
+
+Closing the gap requires a governed Alembic migration (described, NOT written or
+applied here): replace `review_event_enforce_sod()` so a self-QA row is accepted
+only if it references an existing, unrevoked, unexpired, unconsumed grant row
+(section 3.3) whose `granted_by` is a third person; with the grants table absent,
+the safest interim database change is to drop the exception branch entirely
+(self-QA always raises). Add `UPDATE`/`DELETE` guards or revoke those privileges
+from the application role. Needs an owner decision (section 5) and the governed
+migration process.
 
 ## 3. Proposed mechanism: authenticated, scoped, single-use grant
 
