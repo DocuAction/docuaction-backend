@@ -332,8 +332,38 @@ def delivery_processing_to_csv(dataset: Dict[str, Any], report_id: str,
             "Not run" if s_.get("coverage_pct") is None else s_.get("coverage_pct"),
             s_.get("answered"), "" if s_.get("answered_pct") is None else s_.get("answered_pct"),
             s_.get("note") or ""]))
+        if s_.get("name") == "sam":
+            writer.writerow(["Note (SAM.gov row above): SAM.gov answered figures combine registration-search and "
+                             "exclusion-screening activity (any answered leg). They are not exclusion clearance: "
+                             "a registration-only result never means the entity was checked and found excluded-clear."])
     writer.writerow(["Unavailable and failed checks are attempts without an answer. Staged data and connector "
                      "readiness are not coverage. A source check does not clear any other source."])
+    for s_ in verification.get("sources") or []:
+        legs = s_.get("screening_legs")
+        if not isinstance(legs, dict):
+            continue
+        reg = legs.get("registration_only") or {}
+        exc = legs.get("exclusion") or {}
+        unk = legs.get("leg_not_recorded") or {}
+        writer.writerow([])
+        writer.writerow(["## Annex B.1. SAM.gov results by screening leg (distinct entities; legs are not additive)"])
+        writer.writerow(["Screening leg", "Entities", "Clear", "Hit", "No registration record found",
+                         "Registration record found", "Unavailable", "Other / not interpreted"])
+        writer.writerow(neutralise_row([
+            "Registration search only", reg.get("entities"), "n/a", "n/a",
+            reg.get("no_registration_record_found"), reg.get("registration_record_found"),
+            reg.get("unavailable"), reg.get("other")]))
+        writer.writerow(neutralise_row([
+            "Exclusion screening", exc.get("entities"), exc.get("clear"), exc.get("hit"),
+            "n/a", "n/a", exc.get("unavailable"), exc.get("other")]))
+        writer.writerow(neutralise_row([
+            "Screening leg not recorded", unk.get("entities"), "n/a", "n/a", "n/a", "n/a",
+            unk.get("unavailable"), unk.get("not_interpreted")]))
+        writer.writerow(["A registration-only search with no record found is not an exclusion 'no hit'. Results "
+                         "stored before the screening leg was recorded are labelled 'screening leg not recorded' "
+                         "and are not counted as exclusion-clear or as registration results. The SAM figures in "
+                         "Annex B above combine all legs."])
+        break
     writer.writerow([])
 
     analyst = dataset.get("analyst") or {}

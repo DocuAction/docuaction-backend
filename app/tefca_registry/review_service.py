@@ -358,12 +358,17 @@ def apply_persisted_exclusion_evidence(sources: Dict[str, dict],
     # The SAME translation the bulk path's classifier input uses — including
     # the 2026-10-03 correction that a clean exclusion-list name screen
     # (NOT_FOUND on this dimension) is "clear", not a disqualifying not_found.
-    from app.tefca_registry.rce.arc_pipeline import evidence_item_state
+    from app.tefca_registry.rce.arc_pipeline import item_state
 
     used: List[dict] = []
     for source_name, row in latest_rows.items():
         key = PERSISTED_EVIDENCE_SOURCES[source_name]
-        state = evidence_item_state(PERSISTED_EXCLUSION_DIMENSION, row.disposition)
+        # Same translation as the bulk path, including the registration-only SAM
+        # miss -> unavailable. Rows persisted before the `screening_leg` label
+        # existed carry no label and keep the legacy reading.
+        state = item_state(PERSISTED_EXCLUSION_DIMENSION, {
+            "source": source_name, "disposition": row.disposition,
+            "normalized_values": getattr(row, "normalized_values", None)})
         live = sources.get(key) or {}
         live_status = live.get("status")
         live_answered = live_status in ("excluded", "clear", VERIFIED, NOT_FOUND)

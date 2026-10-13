@@ -124,6 +124,12 @@ jobs:
             tests/test_report_generate_inflight_2026_10_07.py \
             tests/test_release1_foundation.py \
             tests/test_contract_progress_reports.py \
+            tests/test_sam_e2e_delivery_path.py \
+            tests/test_sam_manual_review_asymmetry.py \
+            tests/test_npi_evidence_to_finding_workflow.py \
+            tests/test_qhin_sampling_operational.py \
+            tests/test_sampling_eligibility_review_required.py \
+            tests/test_report_generation_reads_only_persisted_evidence.py \
             tests/test_iqvia_import_runtime_privilege_2026_10_06.py \
             tests/test_source_snapshot_immutability_2026_10_06.py \
             tests/test_preflight_runtime_privilege_2026_10_07.py \
