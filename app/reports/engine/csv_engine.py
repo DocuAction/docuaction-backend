@@ -303,7 +303,13 @@ def delivery_processing_to_csv(dataset: Dict[str, Any], report_id: str,
     if findings.get("available"):
         writer.writerow([f"Rows included {findings.get('rows_shown', 0)} of {findings.get('rows_total', 0)}; "
                          f"total findings in the current quality run {findings.get('total', 0)}; "
-                         f"open at HIGH/CRITICAL {findings.get('open_high', 0)}"])
+                         f"open at HIGH/CRITICAL {findings.get('open_high', 0)}; "
+                         # Same note as Appendix E: a description's "profiled delivery" figures are the reference
+                         # profile the rule set was calibrated against, never this delivery's results. Kept on this
+                         # line so the annex keeps its shape (line 0 summary, line 1 header, rows from line 2).
+                         f"descriptions are the rule text stored at the time of the run, and figures quoting "
+                         f"'the profiled delivery' are the reference profile the rule set was calibrated against, "
+                         f"not results for this delivery"])
         writer.writerow(["Issue code", "Line", "Rule", "Rule version", "Issue type", "Severity", "Column",
                          "Correction authority", "Resolution", "Description"])
         for f in findings.get("rows") or []:
