@@ -13,7 +13,8 @@ disclosure query read/write this table only when that flag is on).
 
 WHAT IT ADDS
   iqvia_advisory_assessment: one row per analyst assessment of an organisation-first IQVIA lookup
-  (snapshot id/status/sha prefix, masked + keyed-hash query inputs, result summary, decision,
+  (delivery_intake_id NOT NULL, FK to rce_source_intakes: every assessment belongs to exactly one delivery;
+  snapshot id/status/sha prefix, masked + keyed-hash query inputs, result summary, decision,
   rationale, assessor, role, timestamp). CHECK constraints pin determination to
   'ANALYST_ADVISORY_NOT_VERIFICATION' and affects_verification to false: a row can never be read as
   verification or exclusion clearance.
@@ -66,7 +67,7 @@ def upgrade() -> None:
         sa.Column("decision", sa.String(40), nullable=False),
         sa.Column("rationale", sa.Text(), nullable=False),
         sa.Column("entity_id", pg.UUID(as_uuid=True)),
-        sa.Column("delivery_intake_id", pg.UUID(as_uuid=True)),
+        sa.Column("delivery_intake_id", pg.UUID(as_uuid=True), sa.ForeignKey("rce_source_intakes.id", ondelete="RESTRICT"), nullable=False),
         sa.Column("determination", sa.String(40), nullable=False, server_default=sa.text("'ANALYST_ADVISORY_NOT_VERIFICATION'")),
         sa.Column("affects_verification", sa.Boolean(), nullable=False, server_default=sa.text("false")),
         sa.Column("assessed_by", sa.String(320), nullable=False),
@@ -81,7 +82,7 @@ def upgrade() -> None:
             "'NOT_FOUND_IN_EXTRACT','CONFLICT_REFERRED','INSUFFICIENT_EVIDENCE')", name="ck_iqvia_assess_decision"),
     )
     op.create_index("ix_iqvia_assess_snapshot", TABLE, ["snapshot_id", "assessed_at"])
-    op.create_index("ix_iqvia_assess_intake", TABLE, ["delivery_intake_id"], postgresql_where=sa.text("delivery_intake_id IS NOT NULL"))
+    op.create_index("ix_iqvia_assess_intake", TABLE, ["delivery_intake_id"])
     op.create_index("ix_iqvia_assess_assessed_at", TABLE, ["assessed_at"])
     op.execute("""
         CREATE FUNCTION iqvia_advisory_assessment_append_only() RETURNS trigger AS $$

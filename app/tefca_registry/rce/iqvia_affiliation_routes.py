@@ -107,7 +107,7 @@ if getattr(settings, ac.FLAG, False):
         decision: str = Field(..., max_length=40)
         rationale: str = Field(..., min_length=10, max_length=2000)
         entity_id: Optional[uuid.UUID] = None
-        delivery_intake_id: Optional[uuid.UUID] = None
+        delivery_intake_id: uuid.UUID  # required; validated server-side against rce_source_intakes
 
     @router.post("/assessments", status_code=201,
                  summary="Advisory: record an analyst assessment of one organisation lookup (append-only evidence)")

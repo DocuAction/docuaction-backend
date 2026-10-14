@@ -63,6 +63,10 @@ def patch_lookup(monkeypatch):
                 raise exc
             return result
         monkeypatch.setattr(ac, "organisation_relationships", fake)
+
+        async def delivery_ok(db, **kw):  # delivery validation has its own tests below and a DB-backed file
+            return None
+        monkeypatch.setattr(aa, "require_delivery_context", delivery_ok)
     return _set
 
 
@@ -171,7 +175,7 @@ def test_disclosure_states_actual_use_only_and_never_verification():
     none = aa.disclosure_from_rows(flag_enabled=True, rows=[])
     assert none["state"] == "IQVIA_NOT_USED" and "not use" in none["statement"]
     off = aa.disclosure_from_rows(flag_enabled=False, rows=[{"decision": aa.D_IDENTITY, "snapshot_id": SNAP}])
-    assert off["state"] == "IQVIA_NOT_USED"                 # flag off: stored rows are not claimed as use
+    assert off["state"] == "IQVIA_ADVISORY_USED"            # flag off must NOT erase recorded past use
     rows = [{"decision": aa.D_IDENTITY, "snapshot_id": SNAP, "snapshot_sha256_prefix": "aaaaaaaaaaaa",
              "assessed_at": datetime(2026, 10, 14, 9, tzinfo=timezone.utc), "assessed_by": "a@t"},
             {"decision": aa.D_CONFLICT, "snapshot_id": SNAP, "snapshot_sha256_prefix": "aaaaaaaaaaaa",
@@ -183,26 +187,72 @@ def test_disclosure_states_actual_use_only_and_never_verification():
     assert "a@t" not in repr(used)                          # no names in report text
 
 
-def test_disclosure_for_intake_does_not_touch_the_table_when_flag_off():
-    class Boom:
-        async def execute(self, *a, **k):
-            raise AssertionError("table must not be read with the flag off")
-    out = run(aa.disclosure_for_intake(Boom(), flag_enabled=False, intake_id=uuid.uuid4()))
-    assert out["state"] == "IQVIA_NOT_USED"
+class _Rows:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def all(self):
+        return self._rows
+
+    def one(self):
+        return self._rows[0]
+
+
+class _FakeDb:
+    """Answers the catalogue probe first, then the assessment select."""
+
+    def __init__(self, *, present=True, readable=True, rows=()):
+        self.calls, self._answers = [], [_Rows([(present, readable)]), _Rows(list(rows))]
+
+    async def execute(self, stmt, *a, **k):
+        self.calls.append(str(stmt))
+        return self._answers.pop(0)
+
+
+def test_disclosure_reads_recorded_use_even_when_consumption_is_disabled():
+    got = [(aa.D_IDENTITY, SNAP, "aaaaaaaaaaaa", datetime(2026, 10, 14, tzinfo=timezone.utc), "a@t")]
+    out = run(aa.disclosure_for_intake(_FakeDb(rows=got), flag_enabled=False, intake_id=uuid.uuid4()))
+    assert out["state"] == "IQVIA_ADVISORY_USED" and out["assessments"] == 1
+    assert out["consumption_currently_enabled"] is False
+    assert "currently disabled" in out["statement"] and "historical records of past use" in out["statement"]
 
 
 def test_disclosure_for_intake_reads_rows_when_flag_on():
     got = [(aa.D_IDENTITY, SNAP, "aaaaaaaaaaaa", datetime(2026, 10, 14, tzinfo=timezone.utc), "a@t")]
-
-    class Res:
-        def all(self):
-            return got
-
-    class FakeDb:
-        async def execute(self, *a, **k):
-            return Res()
-    out = run(aa.disclosure_for_intake(FakeDb(), flag_enabled=True, intake_id=uuid.uuid4()))
+    out = run(aa.disclosure_for_intake(_FakeDb(rows=got), flag_enabled=True, intake_id=uuid.uuid4()))
     assert out["state"] == "IQVIA_ADVISORY_USED" and out["assessments"] == 1
+    assert "currently disabled" not in out["statement"]
+
+
+def test_empty_readable_store_says_not_used_for_this_delivery():
+    out = run(aa.disclosure_for_intake(_FakeDb(rows=[]), flag_enabled=False, intake_id=uuid.uuid4()))
+    assert out["state"] == "IQVIA_NOT_USED" and out["assessments"] == 0
+
+
+def test_unapplied_store_is_stated_not_reported_as_not_used():
+    db = _FakeDb(present=False, readable=False)
+    out = run(aa.disclosure_for_intake(db, flag_enabled=True, intake_id=uuid.uuid4()))
+    assert out["state"] == "IQVIA_ASSESSMENT_STORE_NOT_APPLIED" and out["store"] == "NOT_APPLIED"
+    assert "not present in this environment" in out["statement"] and len(db.calls) == 1  # table never selected
+
+
+def test_unreadable_store_says_use_cannot_be_stated():
+    db = _FakeDb(present=True, readable=False)
+    out = run(aa.disclosure_for_intake(db, flag_enabled=False, intake_id=uuid.uuid4()))
+    assert out["state"] == "IQVIA_ASSESSMENT_STORE_UNREADABLE" and "cannot be stated" in out["statement"]
+    assert len(db.calls) == 1
+
+
+def test_delivery_context_is_required_before_any_lookup_or_row(monkeypatch):
+    async def boom(db, **kw):
+        raise AssertionError("lookup must not run without a delivery context")
+    monkeypatch.setattr(ac, "organisation_relationships", boom)
+    db = Db()
+    with pytest.raises(aa.AssessmentRefused) as e:
+        run(aa.record_assessment(db, user=user("reviewer"), secret=SECRET, correlation_id="c1", build_sha="b" * 8,
+                                 snapshot_id=SNAP, org_npi=NPI, decision=aa.D_INSUFFICIENT,
+                                 rationale="synthetic rationale text", delivery_intake_id=None))
+    assert e.value.code == "DELIVERY_CONTEXT_REQUIRED" and db.added == []
 
 
 def _csv_rows(dataset):

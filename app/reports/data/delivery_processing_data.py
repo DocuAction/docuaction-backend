@@ -964,8 +964,9 @@ class DeliveryProcessingDataService:
         return bad
 
     async def _iqvia_use(self, intake) -> Dict[str, Any]:
-        """Actual (not staged) IQVIA use for this delivery. The table is read only when the consumption
-        flag is on; flag off states, truthfully, that no IQVIA data was used. Identifier-free."""
+        """Actual (not staged) IQVIA use for THIS delivery, identifier-free. Read from the assessment store
+        whatever the consumption flag says: the flag gates new lookups, never the record of past use. An absent
+        store is stated as such, not as "not used"."""
         from app.core.config import settings
         from app.tefca_registry.rce import iqvia_advisory_assessment as aa
         return await aa.disclosure_for_intake(

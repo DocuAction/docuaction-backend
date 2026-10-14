@@ -28,6 +28,10 @@ REDACTION BY ROLE (see `redact_for_role`)
   qalead and above         : everything stored, including HCO keys, rationale, hashes and entity id.
 Reports and CSVs carry only the aggregate `disclosure_from_rows` (no identifiers, no names).
 
+DELIVERY CONTEXT: `delivery_intake_id` is required and validated server-side (DELIVERY_CONTEXT_REQUIRED /
+DELIVERY_NOT_FOUND / ENTITY_NOT_IN_DELIVERY). The report disclosure is read per delivery and is NOT gated by the
+consumption flag: disabling future lookups never erases the record of past use.
+
 SCHEMA: table `iqvia_advisory_assessment` is created by DRAFT migration
 20261014_iqvia_advisory_assessment.py -- NOT APPLIED to any database by this change.
 """
@@ -81,7 +85,9 @@ class IqviaAdvisoryAssessment(Base):
     decision = Column(String(40), nullable=False)
     rationale = Column(Text, nullable=False)
     entity_id = Column(UUID(as_uuid=True))
-    delivery_intake_id = Column(UUID(as_uuid=True))
+    #: Every assessment belongs to exactly ONE delivery; the report disclosure is scoped by this column.
+    delivery_intake_id = Column(UUID(as_uuid=True), ForeignKey("rce_source_intakes.id", ondelete="RESTRICT"),
+                                nullable=False)
     determination = Column(String(40), nullable=False, server_default=text(f"'{DETERMINATION}'"))
     affects_verification = Column(Boolean, nullable=False, server_default=text("false"))
     assessed_by = Column(String(320), nullable=False)
@@ -174,28 +180,51 @@ def redact_for_role(row: Dict[str, Any], user) -> Dict[str, Any]:
     return out
 
 
-def disclosure_from_rows(*, flag_enabled: bool, rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+STATE_NOT_USED = "IQVIA_NOT_USED"
+STATE_USED = "IQVIA_ADVISORY_USED"
+STATE_STORE_NOT_APPLIED = "IQVIA_ASSESSMENT_STORE_NOT_APPLIED"
+STATE_STORE_UNREADABLE = "IQVIA_ASSESSMENT_STORE_UNREADABLE"
+
+
+def disclosure_from_rows(*, flag_enabled: bool, rows: Sequence[Dict[str, Any]],
+                         store: str = "READABLE") -> Dict[str, Any]:
     """The truthful, identifier-free statement of ACTUAL IQVIA use for a report or CSV.
     `rows`: dicts with decision, snapshot_id, snapshot_sha256_prefix, assessed_at, assessed_by.
-    Staged or approved snapshots are not use; only recorded assessments are."""
-    if not flag_enabled or not rows:
-        return {"state": "IQVIA_NOT_USED", "assessments": 0, "by_decision": {}, "snapshots": [],
-                "first_assessed_at": None, "last_assessed_at": None, "distinct_assessors": 0,
-                "verification_source": False,
+    Staged or approved snapshots are not use; only recorded assessments are.
+
+    `flag_enabled` says whether FUTURE lookups are allowed. It never hides a recorded assessment: switching
+    consumption off stops new use, it does not erase the fact of past use. `store` is READABLE, NOT_APPLIED (the
+    table does not exist in this database) or UNREADABLE (it exists but the runtime role cannot read it); in the
+    last two cases the report says it cannot tell, rather than claiming "not used"."""
+    base = {"assessments": 0, "by_decision": {}, "snapshots": [], "first_assessed_at": None,
+            "last_assessed_at": None, "distinct_assessors": 0, "verification_source": False,
+            "consumption_currently_enabled": bool(flag_enabled), "store": store}
+    if store == "NOT_APPLIED":
+        return {**base, "state": STATE_STORE_NOT_APPLIED,
+                "statement": ("The IQVIA advisory-assessment store is not present in this environment, so no IQVIA "
+                              "assessment can have been recorded here. IQVIA is not a verification source.")}
+    if store == "UNREADABLE":
+        return {**base, "state": STATE_STORE_UNREADABLE,
+                "statement": ("The IQVIA advisory-assessment store exists but could not be read by the reporting "
+                              "role, so whether IQVIA was used for this delivery cannot be stated from this report.")}
+    if not rows:
+        return {**base, "state": STATE_NOT_USED,
                 "statement": ("No IQVIA data was used for this delivery. A staged or approved IQVIA snapshot "
                               "is not use, and IQVIA is not a verification source.")}
     snaps = sorted({(str(r["snapshot_id"]), r.get("snapshot_sha256_prefix") or "") for r in rows})
     times = sorted(str(r["assessed_at"]) for r in rows if r.get("assessed_at"))
     n = len(rows)
-    return {"state": "IQVIA_ADVISORY_USED", "assessments": n,
+    tail = ("" if flag_enabled else
+            " IQVIA lookup is currently disabled; these are historical records of past use and remain part of "
+            "the evidence.")
+    return {**base, "state": STATE_USED, "assessments": n,
             "by_decision": dict(sorted(Counter(r["decision"] for r in rows).items())),
             "snapshots": [{"snapshot_id": s, "sha256_prefix": p} for s, p in snaps],
             "first_assessed_at": times[0] if times else None, "last_assessed_at": times[-1] if times else None,
             "distinct_assessors": len({r.get("assessed_by") for r in rows}),
-            "verification_source": False,
             "statement": (f"IQVIA affiliation data was consulted in {n} analyst advisory assessment(s) for this "
                           "delivery. It is supplemental: it did not verify any entity, is not exclusion "
-                          "clearance, and did not set or change any B1-B4 determination.")}
+                          "clearance, and did not set or change any B1-B4 determination." + tail)}
 
 
 # ── database access ──────────────────────────────────────────────────────────
@@ -206,6 +235,26 @@ def _row_dict(r: IqviaAdvisoryAssessment) -> Dict[str, Any]:
         "determination", "affects_verification", "assessed_by", "assessed_role", "assessed_at")}
 
 
+async def require_delivery_context(db, *, delivery_intake_id, entity_id=None) -> None:
+    """The assessment must name a delivery that exists; an entity, if given, must be present in that delivery.
+    Server-side, because the delivery chosen decides which report discloses the use."""
+    if delivery_intake_id is None:
+        raise AssessmentRefused("DELIVERY_CONTEXT_REQUIRED",
+                                "delivery_intake_id is required: an assessment is recorded against one delivery")
+    from app.tefca_registry.rce import models as rm
+
+    found = (await db.execute(select(rm.RceSourceIntake.id).where(rm.RceSourceIntake.id == delivery_intake_id))
+             ).first()
+    if found is None:
+        raise AssessmentRefused("DELIVERY_NOT_FOUND", "no delivery with that id exists")
+    if entity_id is not None:
+        present = (await db.execute(select(sm.RceEntityPresence.id).where(
+            sm.RceEntityPresence.intake_id == delivery_intake_id,
+            sm.RceEntityPresence.entity_id == entity_id).limit(1))).first()
+        if present is None:
+            raise AssessmentRefused("ENTITY_NOT_IN_DELIVERY", "the entity is not present in that delivery")
+
+
 async def record_assessment(db, *, user, secret: str, correlation_id: str, build_sha: str,
                             snapshot_id, org_npi: Any = None, org_ccn: Any = None,
                             hco_record_key: Optional[str] = None, decision: str, rationale: str,
@@ -213,6 +262,7 @@ async def record_assessment(db, *, user, secret: str, correlation_id: str, build
     """Run the lookup server-side, validate the decision against it, add ONE evidence row (no commit)."""
     if not (rationale or "").strip():
         raise AssessmentRefused("RATIONALE_REQUIRED", "an analyst rationale is required")
+    await require_delivery_context(db, delivery_intake_id=delivery_intake_id, entity_id=entity_id)
     result = await ac.organisation_relationships(  # raises SnapshotNotEligible for a non-approved snapshot
         db, snapshot_id=snapshot_id, org_npi=org_npi, org_ccn=org_ccn, hco_record_key=hco_record_key, limit=1)
     summary = summarise_result(result)
@@ -243,13 +293,30 @@ async def list_assessments(db, *, snapshot_id=None, delivery_intake_id=None, lim
     return [_row_dict(r) for r in (await db.execute(q)).scalars().all()]
 
 
+async def _store_state(db) -> str:
+    """READABLE / NOT_APPLIED / UNREADABLE, decided by catalogue functions. No statement can fail, so the
+    caller's transaction is never poisoned and nothing is retried."""
+    row = (await db.execute(text(
+        "SELECT to_regclass('public.iqvia_advisory_assessment') IS NOT NULL AS present, "
+        "CASE WHEN to_regclass('public.iqvia_advisory_assessment') IS NULL THEN false "
+        "ELSE has_table_privilege('public.iqvia_advisory_assessment', 'SELECT') END AS readable"))).one()
+    if not row[0]:
+        return "NOT_APPLIED"
+    return "READABLE" if row[1] else "UNREADABLE"
+
+
 async def disclosure_for_intake(db, *, flag_enabled: bool, intake_id) -> Dict[str, Any]:
-    """Report/CSV disclosure for one delivery. The table is read ONLY when the flag is on."""
-    if not flag_enabled or intake_id is None:
-        return disclosure_from_rows(flag_enabled=False, rows=[])
+    """Report/CSV disclosure for ONE delivery. Reads the assessment store whatever the consumption flag says:
+    the flag gates new lookups, not the record of past use. An absent or unreadable store is stated, never
+    reported as 'not used'. Rows are matched on the delivery's own id only."""
+    if intake_id is None:
+        return disclosure_from_rows(flag_enabled=flag_enabled, rows=[])
+    store = await _store_state(db)
+    if store != "READABLE":
+        return disclosure_from_rows(flag_enabled=flag_enabled, rows=[], store=store)
     a = IqviaAdvisoryAssessment  # unbounded: a disclosure must not understate use. Columns only, no rationale.
     got = (await db.execute(select(a.decision, a.snapshot_id, a.snapshot_sha256_prefix, a.assessed_at,
                                    a.assessed_by).where(a.delivery_intake_id == intake_id))).all()
-    return disclosure_from_rows(flag_enabled=True, rows=[
+    return disclosure_from_rows(flag_enabled=flag_enabled, rows=[
         {"decision": d, "snapshot_id": s, "snapshot_sha256_prefix": p, "assessed_at": t, "assessed_by": u}
         for d, s, p, t, u in got])
