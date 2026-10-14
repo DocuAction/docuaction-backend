@@ -153,7 +153,10 @@ async def test_states_are_separate_and_legacy_pecos_is_not_cms_enrollment(seeded
     # ... and genuine CMS enrollment is only the CMS_PPEF_ENROLLMENT rows (1 found + 1 N/A)
     assert s["cms_enrollment"]["attempted"] == 2
     assert s["cms_enrollment"]["answered"] == 1 and s["cms_enrollment"]["not_applicable"] == 1
-    assert out["independent_cms_enrollment_entities"] == 2   # never 2 + 2
+    # Independent CMS enrollment = entities with a DEFINITIVE CMS_PPEF_ENROLLMENT row
+    # (confirmed_result), never the NPPES-proxy rows and never merely "attempted".
+    assert out["independent_cms_enrollment_entities"] == s["cms_enrollment"]["confirmed_result"]
+    assert out["independent_cms_enrollment_entities"] <= s["cms_enrollment"]["answered"]
     # SAM: attempted twice (entity 4 has a verification AND a dimension row), never an answer
     assert s["sam"]["attempted"] == 2 and s["sam"]["answered"] == 0
     assert s["sam"]["attempted_not_answered"] == 2 and s["sam"]["is_exclusion_clearance"] is False

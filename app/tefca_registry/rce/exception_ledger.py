@@ -204,14 +204,21 @@ def _apply_filters(stmt, *, source_row=None, entity_name=None, npi=None,
     if issue_type:
         stmt = stmt.where(m.RceIssue.issue_type == issue_type.strip())
     if severity:
-        stmt = stmt.where(m.RceIssue.severity == severity.strip().upper())
+        # One value or a comma list (HIGH,CRITICAL) - the same form /dispositions accepts.
+        sev = [x.strip().upper() for x in severity.split(",") if x.strip()]
+        stmt = stmt.where(m.RceIssue.severity.in_(sev))
     if stage:
         wanted = stage.strip().upper()
         if wanted not in STAGES:
             raise ValueError(f"stage must be one of {STAGES}")
         stmt = stmt.where(stage_expr() == wanted)
     if status:
-        stmt = stmt.where(m.RceIssue.resolution == status.strip().upper())
+        # `UNDECIDED` = the resolutions that still hold a record (open, proposed, under
+        # review); otherwise one value or a comma list.
+        wanted = [x.strip().upper() for x in status.split(",") if x.strip()]
+        if wanted == [UNDECIDED]:
+            wanted = list(OPEN_RESOLUTIONS)
+        stmt = stmt.where(m.RceIssue.resolution.in_(wanted))
     if from_:
         stmt = stmt.where(m.RceIssue.created_at >= _parse_when(from_))
     if to:

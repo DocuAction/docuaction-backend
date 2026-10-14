@@ -579,7 +579,7 @@ async def source_states(db, intake_id, *, eligible: int) -> Dict[str, Any]:
     return {
         "eligible": eligible,
         "sources": out,
-        "independent_cms_enrollment_entities": out["cms_enrollment"]["attempted"],
+        "independent_cms_enrollment_entities": out["cms_enrollment"]["confirmed_result"],
         "aggregation_rule": AGGREGATION_RULE,
         "overlap_note": ("States overlap: an entity can be answered by one row and "
                          "unavailable on another, so states do not sum to 'attempted'."),
@@ -599,14 +599,17 @@ _NOT_ATTEMPTED_SQL = """
         SELECT d.entity_id AS eid FROM tefca_dimension_evidence d
         WHERE d.entity_id IN (SELECT CAST(eid AS text) FROM pop_uuid)
           AND {d_key} = :k)
-    SELECT rec.canonical_entity_id::text AS entity_id, src.line_number,
-           src.source_rce_id, rec.name AS entity_name, rec.npi, rec.source_record_id::text
-    FROM pop_uuid p
-    JOIN rce_curated_records rec ON rec.canonical_entity_id = p.eid
-         AND rec.source_intake_id = CAST(:i AS uuid)
-    JOIN rce_source_records src ON src.id = rec.source_record_id
-    WHERE CAST(p.eid AS text) NOT IN (SELECT eid FROM attempted)
-    ORDER BY src.line_number
+    SELECT entity_id, line_number, source_rce_id, entity_name, npi, source_record_id FROM (
+        SELECT DISTINCT ON (rec.canonical_entity_id)
+               rec.canonical_entity_id::text AS entity_id, src.line_number,
+               src.source_rce_id, rec.name AS entity_name, rec.npi, rec.source_record_id::text AS source_record_id
+        FROM pop_uuid p
+        JOIN rce_curated_records rec ON rec.canonical_entity_id = p.eid
+             AND rec.source_intake_id = CAST(:i AS uuid)
+        JOIN rce_source_records src ON src.id = rec.source_record_id
+        WHERE CAST(p.eid AS text) NOT IN (SELECT eid FROM attempted)
+        ORDER BY rec.canonical_entity_id, src.line_number) one_row_per_entity
+    ORDER BY line_number
     LIMIT :n
 """
 
@@ -628,7 +631,9 @@ async def list_not_attempted(db, intake_id, source: str, *, limit: int = 200) ->
             "items": [{"entity_id": r[0], "line_number": r[1], "source_rce_id": r[2],
                        "entity_name": r[3], "npi": r[4], "source_record_id": r[5]}
                       for r in rows],
-            "count": len(rows)}
+            "count": len(rows),
+            # `count` is this page; a full page means there may be more (limit is capped at 200).
+            "truncated": len(rows) >= max(1, min(int(limit), 200))}
 
 
 def overall_state(sources: Dict[str, Dict[str, Any]]) -> str:

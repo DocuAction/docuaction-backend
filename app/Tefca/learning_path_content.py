@@ -85,7 +85,7 @@ DELIVERY = Module(
               "dispositions (created, updated, matched/unchanged, held, rejected, missing "
               "key, excluded) add up to the records received. A FINDING is one rule result "
               "on a record, and one record can carry several. In the 2 September DEV capacity "
-              "delivery 24,589 records produced 36,540 findings; 82 records were held, and "
+              "delivery (figures as of 2026-10-13; analyst decisions change them) 24,589 records produced 36,540 findings; 82 records were held, and "
               "the 83 undecided HIGH/CRITICAL findings all sit on those 82 held records "
               "(one held record carries two). The 89 HIGH findings are on 87 records; the "
               "other 6 HIGH findings are already resolved and their records were released. "

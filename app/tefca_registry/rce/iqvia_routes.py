@@ -599,7 +599,9 @@ def derive_iqvia_source_status(pairs, *, total: int, consumption_enabled: bool) 
         "state": state,
         "display_text": SOURCE_STATUS_STATES[state],
         "counts": {"snapshots_registered": int(total), "staged_complete": len(staged),
-                   "approved": len(approved), "listed_in_this_read": len(pairs)},
+                   "approved": len(approved), "listed_in_this_read": len(pairs),
+                   # staged/approved are counted over the newest page only; false = more exist
+                   "counts_complete": len(pairs) >= int(total)},
         "latest_snapshot": None if latest is None else {
             "snapshot_id": str(latest.id), "source_system": latest.source_system,
             "label": latest.snapshot_label, "record_count": latest.record_count,

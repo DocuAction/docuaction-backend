@@ -1219,7 +1219,7 @@ async def dispositions_csv_route(
 async def exception_records_csv_route(
     intake_id: str,
     scope: str = Query("held", description="held | all-with-findings"),
-    limit: int = Query(50000, ge=1, le=200000),
+    limit: int = Query(50000, ge=1, le=50000),
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role(EVIDENCE_ROLE)),
 ):
@@ -1549,11 +1549,13 @@ async def verification_coverage_route(
     result["population"] = {
         "records_received": received,
         "eligible": result.get("eligible"),
-        "not_promoted": max(0, received - int(result.get("eligible") or 0)),
-        "explanation": ("Eligible = promoted entities. Records that were held, rejected, "
+        "received_minus_eligible": max(0, received - int(result.get("eligible") or 0)),
+        "explanation": ("Eligible = distinct promoted entities. Records that were held, rejected, "
                         "missing a key or excluded are not promoted, so they are outside "
                         "every source's denominator; they are neither attempted nor "
-                        "'not attempted'. See the Records tab (disposition HELD) for them."),
+                        "'not attempted'. Records that merge into an entity already counted "
+                        "also make the two numbers differ. See the Records tab "
+                        "(disposition HELD) for held records."),
     }
     result["automated_coverage"] = await av.coverage_progress(db, intake.id)
     result["automated_coverage"]["automatic_scheduling_enabled"] = av.automated_coverage_enabled()
