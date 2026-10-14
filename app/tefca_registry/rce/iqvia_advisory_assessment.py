@@ -216,7 +216,8 @@ def disclosure_from_rows(*, flag_enabled: bool, rows: Sequence[Dict[str, Any]],
                 "statement": ("The IQVIA advisory-assessment store is not present in this environment, so no IQVIA "
                               "assessment can have been recorded here. IQVIA is not a verification source.")}
     if store == "UNREADABLE":
-        return {**base, "state": STATE_STORE_UNREADABLE,
+        # the counts are UNKNOWN, not zero: the store could not be read
+        return {**base, "assessments": None, "reviews_linked": None, "state": STATE_STORE_UNREADABLE,
                 "statement": ("The IQVIA advisory-assessment store exists but could not be read by the reporting "
                               "role, so whether IQVIA was used for this delivery cannot be stated from this report.")}
     if not rows:
@@ -229,9 +230,11 @@ def disclosure_from_rows(*, flag_enabled: bool, rows: Sequence[Dict[str, Any]],
     tail = ("" if flag_enabled else
             " IQVIA lookup is currently disabled; these are historical records of past use and remain part of "
             "the evidence.")
+    with_review = sum(1 for r in rows if r.get("review_id"))
     linked = len({r.get("review_id") for r in rows if r.get("review_id")})
-    review_tail = (f" {linked} distinct review(s) are linked to these assessments; the rest are delivery-level evidence."
-                   if linked else " None is linked to a review (delivery-level evidence).")
+    review_tail = (f" {with_review} of these assessment(s) are linked to a review ({linked} distinct review(s)); "
+                   f"{n - with_review} are delivery-level evidence with no review."
+                   if with_review else " None is linked to a review (delivery-level evidence).")
     return {**base, "state": STATE_USED, "assessments": n, "reviews_linked": linked,
             "by_decision": dict(sorted(Counter(r["decision"] for r in rows).items())),
             "snapshots": [{"snapshot_id": s, "sha256_prefix": p} for s, p in snaps],

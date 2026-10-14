@@ -247,6 +247,21 @@ def test_unapplied_store_is_stated_not_reported_as_not_used():
     assert "not present in this environment" in out["statement"] and len(db.calls) == 1  # table never selected
 
 
+def test_two_assessments_of_one_review_are_not_called_delivery_level_and_unreadable_counts_are_unknown():
+    row = {"decision": aa.D_IDENTITY, "snapshot_id": SNAP, "snapshot_sha256_prefix": "aaaaaaaaaaaa",
+           "assessed_at": datetime(2026, 10, 14, tzinfo=timezone.utc), "assessed_by": "a@t", "review_id": "REV-2026-000001"}
+    out = aa.disclosure_from_rows(flag_enabled=True, rows=[row, dict(row)])
+    assert (out["assessments"], out["reviews_linked"]) == (2, 1)
+    assert "2 of these assessment(s) are linked to a review (1 distinct review(s)); 0 are delivery-level" in out["statement"]
+    mixed = aa.disclosure_from_rows(flag_enabled=True, rows=[row, {**row, "review_id": None}])
+    assert "1 of these assessment(s) are linked to a review (1 distinct review(s)); 1 are delivery-level" in mixed["statement"]
+    unknown = aa.disclosure_from_rows(flag_enabled=True, rows=[], store="UNREADABLE")
+    assert unknown["assessments"] is None and unknown["reviews_linked"] is None
+    rows_, _ = _csv_rows({"iqvia_use": unknown})
+    assert ["Advisory assessments recorded", "unknown (assessment store could not be read)"] in rows_
+    assert ["Distinct reviews linked", "unknown (assessment store could not be read)"] in rows_
+
+
 def test_unreadable_store_says_use_cannot_be_stated():
     db = _FakeDb(present=True, readable=False)
     out = run(aa.disclosure_for_intake(db, flag_enabled=False, intake_id=uuid.uuid4()))
