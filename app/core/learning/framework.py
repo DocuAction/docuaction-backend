@@ -17,7 +17,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 #: Bump when content changes materially, so a screenshot can be dated.
-KNOWLEDGE_VERSION = "1.2.0"
+KNOWLEDGE_VERSION = "1.3.0"
 
 
 class Role(str, Enum):
