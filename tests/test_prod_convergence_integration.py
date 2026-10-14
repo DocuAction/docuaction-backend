@@ -61,6 +61,9 @@ ABSENT = {"rce_source_intakes", "rce_source_records", "rce_ingestion_runs", "rce
           # (what md.sorted_tables below actually walks) carry them anyway, so they
           # must be named here too or this exact FK-ordering bug recurs for them.
           "iqvia_upload_session", "iqvia_upload_chunk", "iqvia_import_job",
+          # 20261014_iqvia_advisory_assess: FK to source_snapshot (already ABSENT above),
+          # so the append-only assessment table cannot exist before the chain either
+          "iqvia_advisory_assessment",
           # 20261003_preflight_shadow_workspace: the whole preflight/shadow-reassessment
           # chain FKs (directly or transitively) to rce_source_intakes/rce_source_records
           # or review_records (already ABSENT above) -- none of it could exist pre-chain
