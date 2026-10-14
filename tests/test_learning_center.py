@@ -194,7 +194,7 @@ class TestGlossary:
 
     def test_sam_is_described_as_unevaluated_not_as_clear(self):
         d = GLOSSARY.get("SAM.gov").definition.lower()
-        assert "not evaluated" in d or "no credential" in d
+        assert "not a clearance" in d and "unavailable" in d and "no credential" not in d
 
 
 class TestProhibitedConclusions:

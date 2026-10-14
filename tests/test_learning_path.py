@@ -198,11 +198,11 @@ class TestApi:
 
     def test_registry_payload_carries_paths_features_and_library(self):
         payload = REGISTRY.to_dict(role=Role.PROGRAM_MANAGER)
-        assert payload["knowledge_version"] == "1.2.0"
+        assert payload["knowledge_version"] == "1.3.0"
         assert len(payload["paths"]) == len(PATHS)
         assert len(payload["features"]) == len(FEATURES)
         assert len(payload["library"]) == len(LIBRARY)
-        assert payload["last_updated"] == "2026-09-11"
+        assert payload["last_updated"] == "2026-10-13"
 
     def test_help_payload_has_an_in_app_learning_center_path(self):
         assert REGISTRY.learning_center_path("pm-review-and-delivery", "release-and-package") == \
@@ -214,3 +214,29 @@ class TestApi:
         from app.core.learning import routes as r
         code = ast.unparse(ast.parse(inspect.getsource(r)))  # docstrings/comments aside
         assert "tefca-arc" not in code.lower()
+
+
+class TestCountClarityTeaching:
+    """2026-10-13: records, findings and holds are taught as separate counts;
+    corrections as proposed-versus-applied; the unwired gates are not claimed."""
+
+    def _text(self, slug):
+        from app.Tefca.learning_content import MODULES
+        m = next(m for m in MODULES if m.slug == slug)
+        return " ".join(l.body for l in m.lessons).lower()
+
+    def test_delivery_module_separates_records_findings_and_holds(self):
+        t = self._text("delivery-and-ingestion")
+        assert "one record can carry several" in t
+        assert "never add a finding count to a record count" in t
+        assert "proposed" in t and "applied correction" in t
+        assert "not external screening" in t
+
+    def test_release_gates_are_not_claimed_as_enforced(self):
+        assert "not yet wired" in self._text("maker-checker")
+        assert "does not currently evaluate the release gates" in self._text("pm-review-and-delivery")
+
+    def test_sources_module_separates_proxy_from_cms_enrollment_and_iqvia_states(self):
+        t = self._text("evidence-and-sources")
+        assert "cms_ppef_enrollment" in t and "second independent source" in t
+        assert "staged" in t and "approved" in t and "consumed" in t

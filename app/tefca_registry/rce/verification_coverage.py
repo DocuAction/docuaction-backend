@@ -394,6 +394,248 @@ def _tally(verification_rows, dimension_rows) -> Dict[str, Dict[str, set]]:
     return tally
 
 
+# --------------------------------------------------------------------------
+# Per-source STATES (2026-10-13). ADDITIVE, READ-TIME ONLY.
+#
+# The headline counts above answer "how many entities have a row for the source
+# and what did the row's disposition map to". They overlap (an entity can be
+# `verified` by one row and `failed` by another, so the outcome counts do NOT
+# sum to `attempted`) and they cannot say whether a source ANSWERED, or whether
+# an attempt that came back "unavailable" was ever an answer. `source_states`
+# restates the same evidence as separate, named states per source:
+#
+#   eligible          promoted entities of this delivery (reconciliation's E);
+#                     records that were held / rejected / missing-key / excluded
+#                     are NOT promoted and are therefore outside this
+#                     denominator -- they are not "unattempted", they were never
+#                     eligible for automated lookup
+#   attempted         eligible entities with >=1 evidence row for the source
+#   answered          attempted entities with >=1 row in which the source gave
+#                     an answer: found, not found, potential match or
+#                     deactivated. A row that says unavailable / failed /
+#                     not-applicable is NOT an answer
+#   unavailable       entities with >=1 row recorded as source-unavailable
+#   failed            entities with >=1 row recorded as failed/error/conflict
+#   potential_match   entities with >=1 REVIEW row: an ambiguous or possible
+#                     match awaiting an analyst. NOT confirmed
+#   confirmed_result  entities with >=1 DEFINITIVE row: found (PASS /
+#                     CORROBORATED / verified) or definitively not found
+#                     (NOT_FOUND), or deactivated. A potential match is excluded
+#   not_applicable    entities with >=1 row whose disposition is NOT_APPLICABLE
+#   not_attempted     eligible - attempted (no evidence row at all)
+#   attempted_not_answered
+#                     attempted entities with NO answering row and no
+#                     not-applicable row (every row unavailable/failed/other)
+#
+# Entities are counted once per state; states overlap and must not be summed.
+#
+# AGGREGATION RULE FOR "CMS ENROLLMENT" (documented, enforced by the keys):
+#   * the legacy `pecos` key is an NPPES-backed PROXY (connectors.PECOS_BACKING).
+#     It keeps its own entry, labelled as the NPPES proxy, and is never added to
+#     or reported as genuine CMS enrollment evidence;
+#   * genuine CMS enrollment evidence is ONLY rows whose source is
+#     CMS_PPEF_ENROLLMENT (`cms_enrollment` below); CMS_REVOCATION is a
+#     separate control (`cms_revocation`). Neither is folded into `pecos`,
+#     `nppes`, or each other;
+#   * `independent_cms_enrollment_entities` is the count for `cms_enrollment`
+#     alone. The proxy never raises it.
+# SAM: `attempted`/`answered` for SAM say a lookup was made / answered. They are
+# NOT exclusion clearance -- see `screening_legs` for which question each row
+# answered, and "screening leg not recorded" for historical rows.
+# --------------------------------------------------------------------------
+STATE_SOURCE_KEYS = ("nppes", "pecos", "leie", "sam", "cms_enrollment", "cms_revocation")
+
+#: Truthful display names. `pecos` is the legacy proxy, never "PECOS (CMS)".
+SOURCE_DISPLAY_NAMES: Dict[str, str] = {
+    "nppes": "NPPES NPI Registry (CMS)",
+    "pecos": "NPPES Registry — Legacy PECOS Proxy (not CMS enrollment)",
+    "leie": "OIG LEIE (HHS OIG)",
+    "sam": "SAM.gov (GSA) — lookup attempts; not exclusion clearance",
+    "cms_enrollment": "CMS Public Provider Enrollment (PPEF, PECOS-derived)",
+    "cms_revocation": "CMS Revoked Medicare Providers and Suppliers",
+}
+
+AGGREGATION_RULE = (
+    "Counts are distinct promoted entities of this delivery, once per source per state; "
+    "states overlap and are not additive. Records that were held, rejected, missing a key "
+    "or excluded are not promoted and are outside the eligible denominator. 'Attempted' "
+    "means an evidence row exists; 'answered' means the source returned found / not found "
+    "/ potential match / deactivated; unavailable, failed and not-applicable rows are not "
+    "answers. A potential match is not a confirmed result. The legacy 'pecos' key is an "
+    "NPPES-backed proxy and is reported separately; it is never counted as CMS enrollment. "
+    "Genuine CMS enrollment evidence is only CMS_PPEF_ENROLLMENT rows ('cms_enrollment'). "
+    "SAM attempts are not exclusion clearance; rows stored before the screening leg was "
+    "recorded are 'screening leg not recorded'.")
+
+#: evidence row -> state word. Python twin of `_STATE_ROWS_SQL` (tested for parity).
+_VERIFICATION_STATE = {
+    "verified": "found", "match": "found", "matched": "found",
+    "not_found": "not_found", "no_match": "not_found",
+    "unavailable": "unavailable", "source_unavailable": "unavailable",
+    "failed": "failed", "error": "failed",
+    "deactivated": "deactivated",
+}
+_DIMENSION_STATE = {
+    "PASS": "found", "CORROBORATED": "found",
+    "NOT_FOUND": "not_found", "REVIEW": "potential_match",
+    "UNAVAILABLE": "unavailable", "FAIL": "failed", "CONFLICT": "failed",
+    "NOT_APPLICABLE": "not_applicable",
+}
+
+_STATE_ANSWERING = ("found", "not_found", "potential_match", "deactivated")
+_STATE_CONFIRMED = ("found", "not_found", "deactivated")
+
+
+def evidence_state(table: str, value: Optional[str], detail: Optional[str] = None) -> str:
+    """The state word for one evidence row. `table` is 'verification' or
+    'dimension'. Unmapped values are `other` (attempted, not an answer)."""
+    if table == "verification":
+        if "deactivat" in (detail or "").lower():
+            return "deactivated"
+        return _VERIFICATION_STATE.get((value or "").strip().lower(), "other")
+    return _DIMENSION_STATE.get((value or "").strip().upper(), "other")
+
+
+_STATE_SOURCE_CASE = """
+        CASE lower(btrim({col}))
+          WHEN 'nppes' THEN 'nppes' WHEN 'npi_registry' THEN 'nppes' WHEN 'cms_nppes' THEN 'nppes'
+          WHEN 'pecos' THEN 'pecos'
+          WHEN 'leie' THEN 'leie' WHEN 'oig_leie' THEN 'leie' WHEN 'oig' THEN 'leie' WHEN 'oig-leie' THEN 'leie'
+          WHEN 'sam' THEN 'sam' WHEN 'sam_gov' THEN 'sam' WHEN 'sam.gov' THEN 'sam' WHEN 'samgov' THEN 'sam'
+          WHEN 'cms_ppef_enrollment' THEN 'cms_enrollment'
+          WHEN 'cms_revocation' THEN 'cms_revocation'
+        END"""
+
+_STATE_ROWS_SQL = f"""
+    WITH pop_uuid AS (
+        SELECT DISTINCT canonical_entity_id AS eid
+        FROM rce_curated_records
+        WHERE source_intake_id = CAST(:i AS uuid) AND canonical_entity_id IS NOT NULL),
+    pop_text AS (SELECT CAST(eid AS text) AS eid FROM pop_uuid),
+    state_rows AS (
+        SELECT {_STATE_SOURCE_CASE.format(col='v.source')} AS key, v.entity_id::text AS eid,
+               CASE WHEN lower(coalesce(v.detail, '')) LIKE '%deactivat%' THEN 'deactivated'
+                    ELSE (CASE lower(btrim(coalesce(v.verification_status, '')))
+                       WHEN 'verified' THEN 'found' WHEN 'match' THEN 'found' WHEN 'matched' THEN 'found'
+                       WHEN 'not_found' THEN 'not_found' WHEN 'no_match' THEN 'not_found'
+                       WHEN 'unavailable' THEN 'unavailable' WHEN 'source_unavailable' THEN 'unavailable'
+                       WHEN 'failed' THEN 'failed' WHEN 'error' THEN 'failed'
+                       WHEN 'deactivated' THEN 'deactivated' ELSE 'other' END) END AS state
+        FROM tefca_verifications v
+        WHERE v.entity_id IN (SELECT eid FROM pop_uuid)
+        UNION ALL
+        SELECT {_STATE_SOURCE_CASE.format(col='d.source')} AS key, d.entity_id AS eid,
+               CASE upper(btrim(coalesce(d.disposition, '')))
+                    WHEN 'PASS' THEN 'found' WHEN 'CORROBORATED' THEN 'found'
+                    WHEN 'NOT_FOUND' THEN 'not_found' WHEN 'REVIEW' THEN 'potential_match'
+                    WHEN 'UNAVAILABLE' THEN 'unavailable'
+                    WHEN 'FAIL' THEN 'failed' WHEN 'CONFLICT' THEN 'failed'
+                    WHEN 'NOT_APPLICABLE' THEN 'not_applicable' ELSE 'other' END AS state
+        FROM tefca_dimension_evidence d
+        WHERE d.entity_id IN (SELECT eid FROM pop_text)),
+    per_entity AS (
+        SELECT key, eid,
+               bool_or(state IN ('found','not_found','potential_match','deactivated')) AS answered,
+               bool_or(state = 'unavailable') AS unavailable,
+               bool_or(state = 'failed') AS failed,
+               bool_or(state = 'potential_match') AS potential_match,
+               bool_or(state IN ('found','not_found','deactivated')) AS confirmed,
+               bool_or(state = 'not_applicable') AS not_applicable
+        FROM state_rows WHERE key IS NOT NULL GROUP BY key, eid)
+    SELECT key, count(*) AS attempted,
+           count(*) FILTER (WHERE answered) AS answered,
+           count(*) FILTER (WHERE unavailable) AS unavailable,
+           count(*) FILTER (WHERE failed) AS failed,
+           count(*) FILTER (WHERE potential_match) AS potential_match,
+           count(*) FILTER (WHERE confirmed) AS confirmed_result,
+           count(*) FILTER (WHERE not_applicable) AS not_applicable,
+           count(*) FILTER (WHERE NOT answered AND NOT not_applicable) AS attempted_not_answered
+    FROM per_entity GROUP BY key
+"""
+
+_STATE_FIELDS = ("attempted", "answered", "unavailable", "failed", "potential_match",
+                 "confirmed_result", "not_applicable", "attempted_not_answered")
+
+
+async def source_states(db, intake_id, *, eligible: int) -> Dict[str, Any]:
+    """The per-source state breakdown (see the block comment above).
+
+    Reads only; one aggregate query returning at most one row per source."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for key in STATE_SOURCE_KEYS:
+        out[key] = {"display_name": SOURCE_DISPLAY_NAMES[key], "eligible": eligible,
+                    **{f: 0 for f in _STATE_FIELDS}}
+    for row in (await db.execute(text(_STATE_ROWS_SQL), {"i": str(intake_id)})).all():
+        key = row[0]
+        if key not in out:
+            continue
+        for field, value in zip(_STATE_FIELDS, row[1:]):
+            out[key][field] = int(value or 0)
+    for block in out.values():
+        block["not_attempted"] = max(0, eligible - block["attempted"])
+    out["pecos"]["backing"] = "nppes_proxy"
+    out["pecos"]["is_independent_cms_enrollment"] = False
+    out["sam"]["is_exclusion_clearance"] = False
+    return {
+        "eligible": eligible,
+        "sources": out,
+        "independent_cms_enrollment_entities": out["cms_enrollment"]["confirmed_result"],
+        "aggregation_rule": AGGREGATION_RULE,
+        "overlap_note": ("States overlap: an entity can be answered by one row and "
+                         "unavailable on another, so states do not sum to 'attempted'."),
+    }
+
+
+_NOT_ATTEMPTED_SQL = """
+    WITH pop_uuid AS (
+        SELECT DISTINCT canonical_entity_id AS eid
+        FROM rce_curated_records
+        WHERE source_intake_id = CAST(:i AS uuid) AND canonical_entity_id IS NOT NULL),
+    attempted AS (
+        SELECT v.entity_id::text AS eid FROM tefca_verifications v
+        WHERE v.entity_id IN (SELECT eid FROM pop_uuid)
+          AND {v_key} = :k
+        UNION
+        SELECT d.entity_id AS eid FROM tefca_dimension_evidence d
+        WHERE d.entity_id IN (SELECT CAST(eid AS text) FROM pop_uuid)
+          AND {d_key} = :k)
+    SELECT entity_id, line_number, source_rce_id, entity_name, npi, source_record_id FROM (
+        SELECT DISTINCT ON (rec.canonical_entity_id)
+               rec.canonical_entity_id::text AS entity_id, src.line_number,
+               src.source_rce_id, rec.name AS entity_name, rec.npi, rec.source_record_id::text AS source_record_id
+        FROM pop_uuid p
+        JOIN rce_curated_records rec ON rec.canonical_entity_id = p.eid
+             AND rec.source_intake_id = CAST(:i AS uuid)
+        JOIN rce_source_records src ON src.id = rec.source_record_id
+        WHERE CAST(p.eid AS text) NOT IN (SELECT eid FROM attempted)
+        ORDER BY rec.canonical_entity_id, src.line_number) one_row_per_entity
+    ORDER BY line_number
+    LIMIT :n
+"""
+
+
+async def list_not_attempted(db, intake_id, source: str, *, limit: int = 200) -> Dict[str, Any]:
+    """The promoted entities with NO evidence row for `source` (bounded list).
+
+    This is the `not_attempted` state: it identifies WHO was not looked up. It
+    says nothing about why; held records are not in this population at all."""
+    if source not in STATE_SOURCE_KEYS:
+        raise ValueError(f"unknown source {source!r}; expected one of {STATE_SOURCE_KEYS}")
+    sql = _NOT_ATTEMPTED_SQL.format(
+        v_key=_STATE_SOURCE_CASE.format(col="v.source"),
+        d_key=_STATE_SOURCE_CASE.format(col="d.source"))
+    rows = (await db.execute(text(sql), {"i": str(intake_id), "k": source,
+                                         "n": max(1, min(int(limit), 200))})).all()
+    return {"source": source, "outcome": "not_attempted",
+            "display_name": SOURCE_DISPLAY_NAMES[source],
+            "items": [{"entity_id": r[0], "line_number": r[1], "source_rce_id": r[2],
+                       "entity_name": r[3], "npi": r[4], "source_record_id": r[5]}
+                      for r in rows],
+            "count": len(rows),
+            # `count` is this page; a full page means there may be more (limit is capped at 200).
+            "truncated": len(rows) >= max(1, min(int(limit), 200))}
+
+
 def overall_state(sources: Dict[str, Dict[str, Any]]) -> str:
     """One word for the delivery, from the per-source states."""
     states = [s["state"] for s in sources.values()]
@@ -436,6 +678,7 @@ async def coverage_for_intake(db, intake_id, *, job=None) -> Dict[str, Any]:
     # vs leg not recorded). The headline SAM counts above are not changed.
     if isinstance(sources.get("sam"), dict):
         sources["sam"]["screening_legs"] = await sam_screening_legs(db, intake_id)
+    states = await source_states(db, intake_id, eligible=eligible)
     provenance = None
     try:
         from app.Tefca.connectors import data_source_labels
@@ -448,6 +691,7 @@ async def coverage_for_intake(db, intake_id, *, job=None) -> Dict[str, Any]:
         "state": overall_state(sources),
         "eligible": eligible,
         "sources": sources,
+        "source_states": states,
         "provenance": provenance,
         "evidence_tables": ["tefca_verifications", "tefca_dimension_evidence"],
         "note": ("Counts are distinct promoted entities of this delivery with an "
