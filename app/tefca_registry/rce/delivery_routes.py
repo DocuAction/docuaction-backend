@@ -1057,22 +1057,34 @@ async def list_dispositions_route(
     source_row: Optional[int] = Query(None, ge=1),
     entity_name: Optional[str] = Query(None, max_length=200),
     npi: Optional[str] = Query(None, max_length=40),
+    severity: Optional[str] = Query(
+        None, max_length=80, description="Keep records with a finding of this severity "
+        "(comma-separated; HIGH,CRITICAL)."),
+    resolution: Optional[str] = Query(
+        None, max_length=120, description="Keep records with a finding in this state "
+        "(comma-separated; UNDECIDED = OPEN, PROPOSED, UNDER_REVIEW)."),
+    rule_code: Optional[str] = Query(None, max_length=40),
     limit: int = Query(200, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role(EVIDENCE_ROLE)),
 ):
+    """`total` counts RECORDS. The finding filters keep a record when one of its
+    current-run findings matches all of them; each row carries its own finding
+    counts, hold reasons (rule codes), NPI lineage state and review linkage."""
     from app.tefca_registry.rce.exception_ledger import list_dispositions
 
     intake = await _intake_or_404(db, intake_id)
     try:
         rows, total = await list_dispositions(
             db, intake.id, disposition=disposition, source_row=source_row,
-            entity_name=entity_name, npi=npi, limit=limit, offset=offset)
+            entity_name=entity_name, npi=npi, severity=severity,
+            resolution=resolution, rule_code=rule_code, enrich=True,
+            limit=limit, offset=offset)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     return {"intake_id": str(intake.id), "items": rows, "count": len(rows),
-            "total": total, "offset": offset, "limit": limit}
+            "total": total, "unit": "records", "offset": offset, "limit": limit}
 
 
 async def _open_consistent_snapshot():
@@ -1200,6 +1212,57 @@ async def dispositions_csv_route(
         content=body, media_type="text/csv; charset=utf-8",
         headers=manifest.headers(f"dispositions-{intake.id}.csv",
                                  **{"X-Total-Rows": str(total), "X-Returned-Rows": str(len(rows))}))
+
+
+@router.get("/deliveries/{intake_id}/exception-records.csv",
+            summary="Per-record exception export (one row per source record)")
+async def exception_records_csv_route(
+    intake_id: str,
+    scope: str = Query("held", description="held | all-with-findings"),
+    limit: int = Query(50000, ge=1, le=200000),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role(EVIDENCE_ROLE)),
+):
+    """READ-ONLY. One row per SOURCE RECORD (not per finding): submitted and
+    curated name/NPI, whether the NPI change is applied or only proposed, the
+    hold reason with rule codes, finding ids, severity and state counts, and
+    review linkage. `scope=held` is the records whose current disposition is
+    HELD; `all-with-findings` is every record with at least one current-run
+    finding. Grain: `CSV_ROW_GRAINS.md`."""
+    from app.tefca_registry.rce.exception_ledger import (exception_records_csv,
+                                                          list_dispositions)
+
+    wanted = scope.strip().lower()
+    if wanted not in ("held", "all-with-findings"):
+        raise HTTPException(422, "scope must be 'held' or 'all-with-findings'")
+    intake = await _intake_or_404(db, intake_id)
+    job_id = await _job_id_for_intake(db, intake.id)
+    conn, snap = await _open_consistent_snapshot()
+    try:
+        rows, total = await list_dispositions(
+            snap, intake.id, disposition="HELD" if wanted == "held" else None,
+            has_findings=(wanted != "held"), enrich=True, limit=limit, offset=0)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    finally:
+        await _close_consistent_snapshot(conn, snap)
+    body = exception_records_csv(rows, job_id=job_id, intake_id=str(intake.id))
+    manifest = _CsvExportManifest(route="exception-records.csv", intake_id=intake.id,
+                                  registered_row_count=total, limit=limit, scope=wanted)
+    manifest.emit(body)
+    manifest.streamed_rows = len(rows)
+    manifest.log()
+    return Response(
+        content=body, media_type="text/csv; charset=utf-8",
+        headers=manifest.headers(f"exception-records-{wanted}-{intake.id}.csv",
+                                 **{"X-Total-Rows": str(total), "X-Returned-Rows": str(len(rows))}))
+
+
+async def _job_id_for_intake(db, intake_id) -> Optional[str]:
+    from app.tefca_registry.rce.exception_ledger import _job_for_intake
+
+    job = await _job_for_intake(db, intake_id)
+    return str(job) if job else None
 
 
 @router.get("/deliveries/{intake_id}/findings.csv",
