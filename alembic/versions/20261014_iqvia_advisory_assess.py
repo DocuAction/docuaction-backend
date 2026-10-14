@@ -20,10 +20,13 @@ WHAT IT ADDS
   A trigger rejects UPDATE and DELETE (append-only, independent of database roles).
 
 SAFETY
-  Additive only: a new table, one function, one trigger, three indexes. No existing object is altered.
+  Additive only: a new table, one function, one trigger, three indexes, and GRANT SELECT, INSERT to DB_APP_ROLE
+  (owner-owned like the other append-only evidence tables; the app never owns it). No existing object is altered.
   downgrade() drops them (data in the table is lost; take a copy first if any rows exist).
 """
 from __future__ import annotations
+
+import os
 
 import sqlalchemy as sa
 from alembic import op
@@ -35,6 +38,19 @@ branch_labels = None
 depends_on = None
 
 TABLE = "iqvia_advisory_assessment"
+
+
+def _app_role() -> str:
+    """The runtime role that gets SELECT+INSERT (append-only by grant, as 20261002_iqvia_observations).
+    Refuses to guess the role online, the same discipline the September and IQVIA migrations use."""
+    role = os.getenv("DB_APP_ROLE", "").strip()
+    if op.get_context().as_sql:
+        return role or "docuaction_app"
+    if not role:
+        raise RuntimeError(
+            "DB_APP_ROLE is not set. This migration grants runtime privileges on iqvia_advisory_assessment "
+            "to a named application role and refuses to guess which role that is. Set DB_APP_ROLE=docuaction_app.")
+    return role
 
 
 def upgrade() -> None:
@@ -77,6 +93,7 @@ def upgrade() -> None:
         CREATE TRIGGER trg_iqvia_assess_append_only BEFORE UPDATE OR DELETE ON {TABLE}
         FOR EACH ROW EXECUTE FUNCTION iqvia_advisory_assessment_append_only()
     """)
+    op.execute(f'GRANT SELECT, INSERT ON "{TABLE}" TO "{_app_role()}"')
 
 
 def downgrade() -> None:
