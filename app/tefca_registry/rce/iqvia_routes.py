@@ -545,6 +545,95 @@ async def list_snapshots(
     }
 
 
+# -- source-inventory status (2026-10-13) -------------------------------------
+#
+# SOURCE INVENTORY, NOT COVERAGE. This answers "is an IQVIA source known to the
+# system, and how far has it got" for the Sources & Connectors page. It is derived
+# from the persisted snapshot rows and the consumption flag; it is never read by,
+# and never adds to, per-delivery verification coverage (`verification_coverage`
+# has no IQVIA key, and a staged snapshot has no evidence rows for any delivery).
+
+SOURCE_STATUS_STATES = {
+    "NOT_STAGED": "No IQVIA snapshot has been staged",
+    "IMPORT_INCOMPLETE": "IQVIA import not complete",
+    "STAGED_APPROVAL_PENDING": "Staged\u2014approval/consumption pending",
+    "APPROVED_NOT_CONSUMED": "Approved\u2014not consumed (consumption disabled)",
+    "APPROVED_CONSUMPTION_ENABLED": "Approved\u2014consumption enabled",
+}
+_DISCOVERY_API = "/api/tefca/rce/iqvia/snapshots"
+_DISCOVERY_UI = "/tefca-arc/iqvia/"
+
+
+def derive_iqvia_source_status(pairs, *, total: int, consumption_enabled: bool) -> Dict[str, Any]:
+    """Pure: the inventory status of the IQVIA source from stored rows.
+
+    `pairs` is the page of (registration_row, approval_successor_or_None)
+    `_fetch_snapshot_page` returns, newest first; `total` is the registration
+    count. States, in order of how far the source has got:
+      NOT_STAGED                    no snapshot row exists
+      IMPORT_INCOMPLETE             rows exist, none has `import_status == completed`
+      STAGED_APPROVAL_PENDING       a snapshot is staged; none has an APPROVED successor
+      APPROVED_NOT_CONSUMED         a snapshot is approved but the
+                                    affiliation consumption is not enabled
+      APPROVED_CONSUMPTION_ENABLED  an AFFILIATION snapshot is approved and the flag is on
+    Consumption is a separate switch from approval, and only the affiliation flag
+    exists: approval of an HCO/HCP snapshot alone never reads as "consumed"."""
+    staged = [r for r, _ in pairs if ((r.metadata_ or {}).get("import_status") == "completed")]
+    approved = [(r, succ) for r, succ in pairs
+                if succ is not None and succ.status == sm.SNAPSHOT_APPROVED]
+    approved_affiliation = [r for r, _ in approved if r.source_system == sm.SOURCE_IQVIA_AFFILIATION]
+    if total == 0:
+        state = "NOT_STAGED"
+    elif not staged and not approved:
+        state = "IMPORT_INCOMPLETE"
+    elif approved_affiliation and consumption_enabled:
+        state = "APPROVED_CONSUMPTION_ENABLED"
+    elif approved:
+        state = "APPROVED_NOT_CONSUMED"
+    else:
+        state = "STAGED_APPROVAL_PENDING"
+    latest = pairs[0][0] if pairs else None
+    return {
+        "source_key": "iqvia",
+        "display_name": "IQVIA (licensed reference snapshots)",
+        "state": state,
+        "display_text": SOURCE_STATUS_STATES[state],
+        "counts": {"snapshots_registered": int(total), "staged_complete": len(staged),
+                   "approved": len(approved), "listed_in_this_read": len(pairs)},
+        "latest_snapshot": None if latest is None else {
+            "snapshot_id": str(latest.id), "source_system": latest.source_system,
+            "label": latest.snapshot_label, "record_count": latest.record_count,
+            "import_status": (latest.metadata_ or {}).get("import_status"),
+            "created_at": latest.created_at.isoformat() if latest.created_at else None},
+        "affiliation_consumption": {"flag": "ENABLE_IQVIA_AFFILIATION_CONSUMPTION",
+                                    "enabled": bool(consumption_enabled)},
+        "discovery": {"api": _DISCOVERY_API, "ui": _DISCOVERY_UI},
+        "affects_delivery_coverage": False,
+        "note": ("Source inventory only. A staged or approved IQVIA snapshot adds nothing "
+                 "to any delivery's verification coverage; approval and consumption are "
+                 "separate steps, and no report uses the snapshot unless consumption is enabled."),
+    }
+
+
+@router.get("/source-status",
+           summary="Inventory status of the IQVIA source (read-only; not coverage)")
+async def source_status(
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("reviewer")),
+):
+    """Same gate as snapshot discovery (reviewer + licensed access). Counters and
+    one label only -- no licensed row content."""
+    _require_licensed_access(user)
+    response.headers["Cache-Control"] = "no-store"
+    total, page = await _fetch_snapshot_page(
+        db, limit=_SNAPSHOT_LIST_MAX_LIMIT, offset=0, source_system=None,
+        include_successors=False)
+    return derive_iqvia_source_status(
+        page, total=total,
+        consumption_enabled=bool(getattr(settings, "ENABLE_IQVIA_AFFILIATION_CONSUMPTION", False)))
+
+
 @router.get("/snapshots/{snapshot_id}",
            summary="Snapshot status, progress, and reconciliation")
 async def snapshot_status(
