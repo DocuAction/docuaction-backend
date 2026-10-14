@@ -391,6 +391,18 @@ def delivery_processing_to_csv(dataset: Dict[str, Any], report_id: str,
         writer.writerow(["No analyst action has been recorded for this delivery"])
     writer.writerow([])
 
+    iq = dataset.get("iqvia_use") or {}
+    writer.writerow(["## IQVIA use disclosure (supplemental; not verification, not exclusion clearance)"])
+    writer.writerow(["State", iq.get("state") or "IQVIA_NOT_USED"])
+    writer.writerow(["Advisory assessments recorded", iq.get("assessments", 0)])
+    for dec, cnt in (iq.get("by_decision") or {}).items():
+        writer.writerow([f"Decision {dec}", cnt])
+    for sn in iq.get("snapshots") or []:
+        writer.writerow(["Snapshot consulted", sn.get("snapshot_id"), f"sha256 prefix {sn.get('sha256_prefix')}"])
+    writer.writerow(["First / last assessed (UTC)", iq.get("first_assessed_at") or "-", iq.get("last_assessed_at") or "-"])
+    writer.writerow([iq.get("statement") or "No IQVIA data was used for this delivery."])
+    writer.writerow([])
+
     writer.writerow(["## Evidence limitations"])
     for item in dataset.get("limitations") or ["None recorded"]:
         writer.writerow([item])

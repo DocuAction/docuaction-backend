@@ -681,6 +681,11 @@
   must not be summed across sources into a single figure until a governed
   read-only reconciliation confirms what such a total would mean.</p>
 
+{% set iq = iqvia_use if iqvia_use is defined else none %}
+<p><strong>IQVIA use.</strong> {{ iq.statement if iq else 'No IQVIA data was used for this delivery.' }}
+  {% if iq and iq.assessments %}Assessments: {{ iq.assessments|number }}{% for dec, cnt in iq.by_decision.items() %}; {{ dec }}: {{ cnt|number }}{% endfor %}.
+  Snapshot(s) consulted: {% for sn in iq.snapshots %}{{ sn.snapshot_id }} (sha256 {{ sn.sha256_prefix }}){% if not loop.last %}, {% endif %}{% endfor %}.{% endif %}</p>
+
 {% if delivery.intake_id %}
 <p><strong>Investigation CSV annexes.</strong> The entities behind any
   Verified / Not found / Unavailable total above are available as a CSV

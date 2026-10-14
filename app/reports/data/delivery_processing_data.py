@@ -963,6 +963,15 @@ class DeliveryProcessingDataService:
             bad += 0 if ok else 1
         return bad
 
+    async def _iqvia_use(self, intake) -> Dict[str, Any]:
+        """Actual (not staged) IQVIA use for this delivery. The table is read only when the consumption
+        flag is on; flag off states, truthfully, that no IQVIA data was used. Identifier-free."""
+        from app.core.config import settings
+        from app.tefca_registry.rce import iqvia_advisory_assessment as aa
+        return await aa.disclosure_for_intake(
+            self.db, flag_enabled=bool(getattr(settings, "ENABLE_IQVIA_AFFILIATION_CONSUMPTION", False)),
+            intake_id=getattr(intake, "id", None))
+
     # -- assembly ------------------------------------------------------------
 
     async def build_dataset(self) -> Dict[str, Any]:
@@ -1000,6 +1009,7 @@ class DeliveryProcessingDataService:
         lineage = await self._lineage(intake, job)
         readiness = await self._readiness(intake)
         rechecks = await self._rechecks(intake)
+        iqvia_use = await self._iqvia_use(intake)
         invalid_promoted = await self._invalid_identifiers_promoted(intake)
 
         outcome = status_model.processing_outcome(
@@ -1068,6 +1078,7 @@ class DeliveryProcessingDataService:
             "lineage": lineage,
             "readiness": readiness,
             "rechecks": rechecks,
+            "iqvia_use": iqvia_use,
             "limitations": list(self.limitations),
             "audit_note": (
                 "Generation of this report is recorded in audit_logs "
