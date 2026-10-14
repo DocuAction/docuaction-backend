@@ -117,6 +117,7 @@ if getattr(settings, ac.FLAG, False):
         rationale: str = Field(..., min_length=10, max_length=2000)
         entity_id: Optional[uuid.UUID] = None
         delivery_intake_id: uuid.UUID  # required; validated server-side against rce_source_intakes
+        review_id: Optional[str] = Field(None, min_length=1, max_length=20, pattern=r"^[A-Za-z0-9_-]+$")  # optional review link
 
     @router.post("/assessments", status_code=201,
                  summary="Advisory: record an analyst assessment of one organisation lookup (append-only evidence)")
@@ -133,7 +134,8 @@ if getattr(settings, ac.FLAG, False):
                 db, user=user, secret=settings.SECRET_KEY, correlation_id=request_context.correlation_id(),
                 build_sha=request_context.build_sha(), snapshot_id=body.snapshot_id, org_npi=body.org_npi,
                 org_ccn=body.org_ccn, hco_record_key=body.hco_record_key, decision=body.decision,
-                rationale=body.rationale, entity_id=body.entity_id, delivery_intake_id=body.delivery_intake_id)
+                rationale=body.rationale, entity_id=body.entity_id, delivery_intake_id=body.delivery_intake_id,
+                review_id=body.review_id)
         except ac.SnapshotNotEligible as exc:
             raise HTTPException(409, detail={"code": "SNAPSHOT_NOT_ELIGIBLE", "error": str(exc)}) from exc
         except aa.AssessmentRefused as exc:
@@ -147,11 +149,13 @@ if getattr(settings, ac.FLAG, False):
 
     @router.get("/assessments", summary="Advisory: list recorded assessments (role-redacted)")
     async def list_assessments(response: Response, snapshot_id: Optional[uuid.UUID] = None,
-                               delivery_intake_id: Optional[uuid.UUID] = None, limit: int = 50, offset: int = 0,
+                               delivery_intake_id: Optional[uuid.UUID] = None, review_id: Optional[str] = None,
+                               limit: int = 50, offset: int = 0,
                                db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer"))):
         _gate(user)
         response.headers["Cache-Control"] = "no-store"
         rows = await aa.list_assessments(db, snapshot_id=snapshot_id, delivery_intake_id=delivery_intake_id,
+                                         review_id=review_id,
                                          limit=limit, offset=offset)
         return {"limit": max(1, min(limit, 200)), "offset": max(0, offset), "returned": len(rows),
                 "assessments": [aa.redact_for_role(r, user) for r in rows]}

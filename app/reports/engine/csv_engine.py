@@ -395,6 +395,7 @@ def delivery_processing_to_csv(dataset: Dict[str, Any], report_id: str,
     writer.writerow(["## IQVIA use disclosure (supplemental; not verification, not exclusion clearance)"])
     writer.writerow(["State", iq.get("state") or "IQVIA_NOT_USED"])
     writer.writerow(["Advisory assessments recorded", iq.get("assessments", 0)])
+    writer.writerow(["Distinct reviews linked", iq.get("reviews_linked", 0)])
     for dec, cnt in (iq.get("by_decision") or {}).items():
         writer.writerow([f"Decision {dec}", cnt])
     for sn in iq.get("snapshots") or []:

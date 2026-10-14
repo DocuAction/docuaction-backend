@@ -221,7 +221,7 @@ class _FakeDb:
 
 
 def test_disclosure_reads_recorded_use_even_when_consumption_is_disabled():
-    got = [(aa.D_IDENTITY, SNAP, "aaaaaaaaaaaa", datetime(2026, 10, 14, tzinfo=timezone.utc), "a@t")]
+    got = [(aa.D_IDENTITY, SNAP, "aaaaaaaaaaaa", datetime(2026, 10, 14, tzinfo=timezone.utc), "a@t", None)]
     out = run(aa.disclosure_for_intake(_FakeDb(rows=got), flag_enabled=False, intake_id=uuid.uuid4()))
     assert out["state"] == "IQVIA_ADVISORY_USED" and out["assessments"] == 1
     assert out["consumption_currently_enabled"] is False
@@ -229,7 +229,7 @@ def test_disclosure_reads_recorded_use_even_when_consumption_is_disabled():
 
 
 def test_disclosure_for_intake_reads_rows_when_flag_on():
-    got = [(aa.D_IDENTITY, SNAP, "aaaaaaaaaaaa", datetime(2026, 10, 14, tzinfo=timezone.utc), "a@t")]
+    got = [(aa.D_IDENTITY, SNAP, "aaaaaaaaaaaa", datetime(2026, 10, 14, tzinfo=timezone.utc), "a@t", None)]
     out = run(aa.disclosure_for_intake(_FakeDb(rows=got), flag_enabled=True, intake_id=uuid.uuid4()))
     assert out["state"] == "IQVIA_ADVISORY_USED" and out["assessments"] == 1
     assert "currently disabled" not in out["statement"]
