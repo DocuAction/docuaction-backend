@@ -2331,10 +2331,24 @@ async def delivery_delta_route(
     previous_id = (await db.execute(
         select(sm.RceDeliveryDelta.previous_intake_id)
         .where(sm.RceDeliveryDelta.current_intake_id == intake.id).limit(1))).scalar_one_or_none()
+    from app.tefca_registry.rce import delivery_delta as _dd
+    from app.tefca_registry.rce import models as _m
     from app.tefca_registry.rce import snapshot_effects as se
     snap = await se.snapshot_state(db, intake.id)
+    previous_intake = await db.get(_m.RceSourceIntake, previous_id) if previous_id else None
+    current_facts = _dd.intake_facts(intake)
+    predecessor_facts = _dd.intake_facts(previous_intake) if previous_intake is not None else None
+    comparability = _dd.assess_comparability(current_facts, predecessor_facts)
     out: Dict[str, Any] = {
         "intake_id": str(intake.id),
+        # Additive (2026-10-13): WHAT the predecessor is, and whether the pair is
+        # comparable. The persisted counts below are unchanged and are a
+        # month-over-month change only when comparability.status is COMPARABLE.
+        "current": current_facts,
+        "predecessor": predecessor_facts,
+        "comparability": comparability,
+        "baseline_candidates": (await _dd.comparable_baseline_candidates(db, intake)
+                                if comparability["status"] == "NOT_COMPARABLE" else []),
         "previous_intake_id": str(previous_id) if previous_id else None,
         "state": "COMPARED" if previous_id else "BASELINE_OR_NOT_COMPUTED",
         # PENDING / FAILED / ROLLED_BACK deltas are evidence about the delivery,
