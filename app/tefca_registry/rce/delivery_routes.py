@@ -1544,6 +1544,17 @@ async def verification_coverage_route(
     intake = await _intake_or_404(db, intake_id)
     job = await jobs.job_for_intake(db, intake.id)
     result = await vc.coverage_for_intake(db, intake.id, job=job)
+    # Additive: why the denominator is smaller than the file (2026-10-13).
+    received = int(intake.record_count or 0)
+    result["population"] = {
+        "records_received": received,
+        "eligible": result.get("eligible"),
+        "not_promoted": max(0, received - int(result.get("eligible") or 0)),
+        "explanation": ("Eligible = promoted entities. Records that were held, rejected, "
+                        "missing a key or excluded are not promoted, so they are outside "
+                        "every source's denominator; they are neither attempted nor "
+                        "'not attempted'. See the Records tab (disposition HELD) for them."),
+    }
     result["automated_coverage"] = await av.coverage_progress(db, intake.id)
     result["automated_coverage"]["automatic_scheduling_enabled"] = av.automated_coverage_enabled()
     result["analyst_sample"] = await _analyst_sample_summary(db, intake.id)
@@ -1596,6 +1607,15 @@ async def verification_coverage_entities_route(
                                                           list_outcome_entities)
 
     intake = await _intake_or_404(db, intake_id)
+    if outcome == "not_attempted":
+        # Not an evidence outcome: the promoted entities with NO row for the source.
+        from app.tefca_registry.rce import verification_coverage as _vc
+        try:
+            result = await _vc.list_not_attempted(db, intake.id, source, limit=limit)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        result["correlation"] = {"request_id": request_context.get("request_id")}
+        return result
     try:
         result = await list_outcome_entities(
             db, intake.id, source=source, outcome=outcome,
@@ -2374,10 +2394,24 @@ async def delivery_delta_route(
     previous_id = (await db.execute(
         select(sm.RceDeliveryDelta.previous_intake_id)
         .where(sm.RceDeliveryDelta.current_intake_id == intake.id).limit(1))).scalar_one_or_none()
+    from app.tefca_registry.rce import delivery_delta as _dd
+    from app.tefca_registry.rce import models as _m
     from app.tefca_registry.rce import snapshot_effects as se
     snap = await se.snapshot_state(db, intake.id)
+    previous_intake = await db.get(_m.RceSourceIntake, previous_id) if previous_id else None
+    current_facts = _dd.intake_facts(intake)
+    predecessor_facts = _dd.intake_facts(previous_intake) if previous_intake is not None else None
+    comparability = _dd.assess_comparability(current_facts, predecessor_facts)
     out: Dict[str, Any] = {
         "intake_id": str(intake.id),
+        # Additive (2026-10-13): WHAT the predecessor is, and whether the pair is
+        # comparable. The persisted counts below are unchanged and are a
+        # month-over-month change only when comparability.status is COMPARABLE.
+        "current": current_facts,
+        "predecessor": predecessor_facts,
+        "comparability": comparability,
+        "baseline_candidates": (await _dd.comparable_baseline_candidates(db, intake)
+                                if comparability["status"] == "NOT_COMPARABLE" else []),
         "previous_intake_id": str(previous_id) if previous_id else None,
         "state": "COMPARED" if previous_id else "BASELINE_OR_NOT_COMPUTED",
         # PENDING / FAILED / ROLLED_BACK deltas are evidence about the delivery,
