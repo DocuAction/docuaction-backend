@@ -227,3 +227,15 @@ async def test_unapplied_assessment_store_is_stated_not_reported_as_not_used(rol
     assert ["State", "IQVIA_ASSESSMENT_STORE_NOT_APPLIED"] in _csv_rows(ra["csv"])
     assert "not present in this environment" in ra["html"]
     assert "No IQVIA data was used for this delivery" not in ra["html"]
+
+
+async def test_coverage_route_reports_an_unapplied_store_instead_of_failing(routes, rolled_back_db):
+    db = rolled_back_db
+    await db.execute(text("ALTER TABLE iqvia_advisory_assessment RENAME TO iqvia_advisory_assessment_hidden"))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=_app(routes, db, USER)),
+                                 base_url="http://t") as c:
+        resp = await c.get("/api/tefca/rce/iqvia/affiliation/coverage")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["assessment_store"] == "NOT_APPLIED" and body["verification_source"] is False
+    assert "recorded use cannot be confirmed from here" in body["statement"]

@@ -152,6 +152,10 @@ def check_decision(decision: str, summary: Dict[str, Any]) -> None:
     if decision in _CORROBORATING:
         if not summary["found_in_extract"]:
             raise AssessmentRefused("NOT_FOUND_CANNOT_CORROBORATE", "nothing was found in the extract")
+        if decision == D_RELATIONSHIP and not summary["total_relationships"]:
+            raise AssessmentRefused("NO_RELATIONSHIP_TO_CORROBORATE",
+                                    "the lookup returned no relationship rows; record IDENTITY_CORROBORATED_ADVISORY "
+                                    "or INSUFFICIENT_EVIDENCE instead")
         if summary["conflict_codes"]:
             raise AssessmentRefused("CONFLICT_CANNOT_CORROBORATE",
                                     "identifier conflicts exist; record CONFLICT_REFERRED instead")

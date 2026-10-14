@@ -96,8 +96,17 @@ if getattr(settings, ac.FLAG, False):
                                  .where(sm.SourceSnapshot.source_system.like("IQVIA%")))).all()
         snaps = [{"id": r[0], "source_system": r[1], "status": r[2], "record_count": r[3]} for r in rows]
         # "consumed" is a stored fact (an assessment row exists), not a flag reading.
-        used = (await db.execute(select(func.count()).select_from(aa.IqviaAdvisoryAssessment))).scalar_one() > 0
-        return ac.coverage_statement(flag_enabled=True, snapshots=snaps, consumed=used)
+        # The table exists only after the draft migration is applied; an absent or unreadable store is reported
+        # as such, never counted (that would be a 500) and never read as "no use".
+        store = await aa._store_state(db)
+        used = store == "READABLE" and (await db.execute(
+            select(func.count()).select_from(aa.IqviaAdvisoryAssessment))).scalar_one() > 0
+        out = ac.coverage_statement(flag_enabled=True, snapshots=snaps, consumed=used)
+        out["assessment_store"] = store
+        if store != "READABLE":
+            out["statement"] += (f" The assessment store is {store.replace('_', ' ').lower()}, so recorded use "
+                                 "cannot be confirmed from here.")
+        return out
 
     class AssessmentRequest(BaseModel):
         snapshot_id: uuid.UUID

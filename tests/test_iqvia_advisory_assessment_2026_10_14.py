@@ -97,6 +97,17 @@ def test_evidence_row_binds_snapshot_inputs_result_and_timestamp_without_raw_ide
     assert "assessed_at" in aa.IqviaAdvisoryAssessment.__table__.c            # DB default stamps the time
 
 
+def test_relationship_corroboration_needs_a_relationship_row(patch_lookup):
+    res = lookup_result()
+    res["total_relationships"] = 0
+    patch_lookup(res)
+    db = Db()
+    with pytest.raises(aa.AssessmentRefused) as e:
+        record(db, user("reviewer"), aa.D_RELATIONSHIP)
+    assert e.value.code == "NO_RELATIONSHIP_TO_CORROBORATE" and db.added == []
+    assert record(db, user("reviewer"), aa.D_IDENTITY).decision == aa.D_IDENTITY  # identity may still be recorded
+
+
 @pytest.mark.parametrize("decision,kw,code", [
     (aa.D_IDENTITY, dict(found=False), "NOT_FOUND_CANNOT_CORROBORATE"),
     (aa.D_RELATIONSHIP, dict(conflicts=[ac.CONFLICT_IDENTIFIER_SHARED]), "CONFLICT_CANNOT_CORROBORATE"),
