@@ -252,9 +252,12 @@ async def require_delivery_context(db, *, delivery_intake_id, entity_id=None) ->
     if found is None:
         raise AssessmentRefused("DELIVERY_NOT_FOUND", "no delivery with that id exists")
     if entity_id is not None:
+        # `present` matters: record_presence also writes present=false rows for entities the PREVIOUS delivery carried
+        # and this one does not, so a row existing is not the same as the entity being in this delivery.
         present = (await db.execute(select(sm.RceEntityPresence.id).where(
             sm.RceEntityPresence.intake_id == delivery_intake_id,
-            sm.RceEntityPresence.entity_id == entity_id).limit(1))).first()
+            sm.RceEntityPresence.entity_id == entity_id,
+            sm.RceEntityPresence.present.is_(True)).limit(1))).first()
         if present is None:
             raise AssessmentRefused("ENTITY_NOT_IN_DELIVERY", "the entity is not present in that delivery")
 

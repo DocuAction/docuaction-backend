@@ -138,6 +138,7 @@ jobs:
             tests/test_iqvia_affil_org_indexes_2026_10_08.py \
             tests/test_iqvia_snapshot_list_2026_10_12.py \
             tests/test_iqvia_assessment_delivery_linkage_2026_10_14.py \
+            tests/test_iqvia_assessment_entity_linkage_2026_10_14.py \
             tests/test_issue_history_pure_2026_10_07.py \
             tests/test_issue_history_db_2026_10_07.py \
             tests/test_issue_history_auth_2026_10_07.py \
