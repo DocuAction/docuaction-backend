@@ -394,7 +394,12 @@ def delivery_processing_to_csv(dataset: Dict[str, Any], report_id: str,
     iq = dataset.get("iqvia_use") or {}
     writer.writerow(["## IQVIA use disclosure (supplemental; not verification, not exclusion clearance)"])
     writer.writerow(["State", iq.get("state") or "IQVIA_NOT_USED"])
-    writer.writerow(["Advisory assessments recorded", iq.get("assessments", 0)])
+    def _count(key):  # None = unknown (an unreadable store), which must not read as zero
+        v = iq.get(key, 0)
+        return "unknown (assessment store could not be read)" if v is None and iq else (0 if v is None else v)
+
+    writer.writerow(["Advisory assessments recorded", _count("assessments")])
+    writer.writerow(["Distinct reviews linked", _count("reviews_linked")])
     for dec, cnt in (iq.get("by_decision") or {}).items():
         writer.writerow([f"Decision {dec}", cnt])
     for sn in iq.get("snapshots") or []:

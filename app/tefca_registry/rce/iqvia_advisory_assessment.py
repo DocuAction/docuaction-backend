@@ -28,6 +28,13 @@ REDACTION BY ROLE (see `redact_for_role`)
   qalead and above         : everything stored, including HCO keys, rationale, hashes and entity id.
 Reports and CSVs carry only the aggregate `disclosure_from_rows` (no identifiers, no names).
 
+REVIEW LINK (optional): `review_id` attaches the assessment to the review it informs, as the written workflow
+(WP6-C spec) describes. It is validated server-side (REVIEW_NOT_FOUND / REVIEW_NOT_IN_DELIVERY / ENTITY_NOT_IN_REVIEW) and
+is NOT required: delivery-level evidence stays permitted, and an entity is never required. The database enforces
+EXISTENCE with a foreign key to review_records(review_id) ON DELETE RESTRICT (its migration needs REFERENCES on that
+app-owned table for the migration role and stops with the exact GRANT if it is missing); that the review belongs to
+the delivery and the entity to the review stays the write-time check, and rows are never edited: a correction is a NEW row.
+
 DELIVERY CONTEXT: `delivery_intake_id` is required and validated server-side (DELIVERY_CONTEXT_REQUIRED /
 DELIVERY_NOT_FOUND / ENTITY_NOT_IN_DELIVERY). The report disclosure is read per delivery and is NOT gated by the
 consumption flag: disabling future lookups never erases the record of past use.
@@ -85,6 +92,8 @@ class IqviaAdvisoryAssessment(Base):
     decision = Column(String(40), nullable=False)
     rationale = Column(Text, nullable=False)
     entity_id = Column(UUID(as_uuid=True))
+    #: Optional review this evidence informs (review_records.review_id). Added by 20261015_iqvia_assess_review; FK to review_records.review_id (RESTRICT), see module doc.
+    review_id = Column(String(20), ForeignKey("review_records.review_id", ondelete="RESTRICT", name="fk_iqvia_assess_review"))
     #: Every assessment belongs to exactly ONE delivery; the report disclosure is scoped by this column.
     delivery_intake_id = Column(UUID(as_uuid=True), ForeignKey("rce_source_intakes.id", ondelete="RESTRICT"),
                                 nullable=False)
@@ -174,7 +183,7 @@ def redact_for_role(row: Dict[str, Any], user) -> Dict[str, Any]:
     out = {k: row.get(k) for k in (
         "id", "snapshot_id", "snapshot_status", "snapshot_sha256_prefix", "snapshot_record_count", "decision",
         "determination", "affects_verification", "assessed_by", "assessed_role", "assessed_at",
-        "delivery_intake_id")}
+        "delivery_intake_id", "review_id")}
     out["query_inputs"] = {k: v for k, v in qi.items() if full or not k.endswith("keyed_hash")}
     out["result_summary"] = {k: v for k, v in rs.items() if full or k != "hco_record_keys"}
     out["rationale"] = row.get("rationale") if (full or own) else None
@@ -200,7 +209,7 @@ def disclosure_from_rows(*, flag_enabled: bool, rows: Sequence[Dict[str, Any]],
     consumption off stops new use, it does not erase the fact of past use. `store` is READABLE, NOT_APPLIED (the
     table does not exist in this database) or UNREADABLE (it exists but the runtime role cannot read it); in the
     last two cases the report says it cannot tell, rather than claiming "not used"."""
-    base = {"assessments": 0, "by_decision": {}, "snapshots": [], "first_assessed_at": None,
+    base = {"assessments": 0, "reviews_linked": 0, "by_decision": {}, "snapshots": [], "first_assessed_at": None,
             "last_assessed_at": None, "distinct_assessors": 0, "verification_source": False,
             "consumption_currently_enabled": bool(flag_enabled), "store": store}
     if store == "NOT_APPLIED":
@@ -208,7 +217,8 @@ def disclosure_from_rows(*, flag_enabled: bool, rows: Sequence[Dict[str, Any]],
                 "statement": ("The IQVIA advisory-assessment store is not present in this environment, so no IQVIA "
                               "assessment can have been recorded here. IQVIA is not a verification source.")}
     if store == "UNREADABLE":
-        return {**base, "state": STATE_STORE_UNREADABLE,
+        # the counts are UNKNOWN, not zero: the store could not be read
+        return {**base, "assessments": None, "reviews_linked": None, "state": STATE_STORE_UNREADABLE,
                 "statement": ("The IQVIA advisory-assessment store exists but could not be read by the reporting "
                               "role, so whether IQVIA was used for this delivery cannot be stated from this report.")}
     if not rows:
@@ -221,25 +231,30 @@ def disclosure_from_rows(*, flag_enabled: bool, rows: Sequence[Dict[str, Any]],
     tail = ("" if flag_enabled else
             " IQVIA lookup is currently disabled; these are historical records of past use and remain part of "
             "the evidence.")
-    return {**base, "state": STATE_USED, "assessments": n,
+    with_review = sum(1 for r in rows if r.get("review_id"))
+    linked = len({r.get("review_id") for r in rows if r.get("review_id")})
+    review_tail = (f" {with_review} of these assessment(s) are linked to a review ({linked} distinct review(s)); "
+                   f"{n - with_review} are delivery-level evidence with no review."
+                   if with_review else " None is linked to a review (delivery-level evidence).")
+    return {**base, "state": STATE_USED, "assessments": n, "reviews_linked": linked,
             "by_decision": dict(sorted(Counter(r["decision"] for r in rows).items())),
             "snapshots": [{"snapshot_id": s, "sha256_prefix": p} for s, p in snaps],
             "first_assessed_at": times[0] if times else None, "last_assessed_at": times[-1] if times else None,
             "distinct_assessors": len({r.get("assessed_by") for r in rows}),
             "statement": (f"IQVIA affiliation data was consulted in {n} analyst advisory assessment(s) for this "
                           "delivery. It is supplemental: it did not verify any entity, is not exclusion "
-                          "clearance, and did not set or change any B1-B4 determination." + tail)}
+                          "clearance, and did not set or change any B1-B4 determination." + review_tail + tail)}
 
 
 # ── database access ──────────────────────────────────────────────────────────
 def _row_dict(r: IqviaAdvisoryAssessment) -> Dict[str, Any]:
     return {c: getattr(r, c) for c in (
         "id", "snapshot_id", "snapshot_status", "snapshot_sha256_prefix", "snapshot_record_count",
-        "query_inputs", "result_summary", "decision", "rationale", "entity_id", "delivery_intake_id",
+        "query_inputs", "result_summary", "decision", "rationale", "entity_id", "delivery_intake_id", "review_id",
         "determination", "affects_verification", "assessed_by", "assessed_role", "assessed_at")}
 
 
-async def require_delivery_context(db, *, delivery_intake_id, entity_id=None) -> None:
+async def require_delivery_context(db, *, delivery_intake_id, entity_id=None, review_id=None) -> None:
     """The assessment must name a delivery that exists; an entity, if given, must be present in that delivery.
     Server-side, because the delivery chosen decides which report discloses the use."""
     if delivery_intake_id is None:
@@ -260,16 +275,61 @@ async def require_delivery_context(db, *, delivery_intake_id, entity_id=None) ->
             sm.RceEntityPresence.present.is_(True)).limit(1))).first()
         if present is None:
             raise AssessmentRefused("ENTITY_NOT_IN_DELIVERY", "the entity is not present in that delivery")
+    if review_id is not None:
+        await _require_review_context(db, delivery_intake_id=delivery_intake_id, entity_id=entity_id,
+                                      review_id=review_id)
+
+
+async def _require_review_context(db, *, delivery_intake_id, entity_id, review_id) -> None:
+    """The review must exist and belong to THIS delivery, by the same linkage the delivery's own record list uses
+    (a review matches a delivery record by source_record_id, or by the record's entity). A selected entity must be
+    one of the review's own entities. Reads only; nothing is written on refusal."""
+    from app.tefca_registry import models as reg
+    from app.tefca_registry.rce import models as rm
+
+    review = (await db.execute(select(reg.ReviewRecord.review_id, reg.ReviewRecord.entity_id,
+                                      reg.ReviewRecord.source_record_id)
+                               .where(reg.ReviewRecord.review_id == review_id))).first()
+    if review is None:
+        raise AssessmentRefused("REVIEW_NOT_FOUND", "no review with that id exists")
+    _, review_entity, review_record = review
+
+    # the delivery's own source records and the entities present in it
+    in_delivery = False
+    review_entities = set()
+    if review_entity is not None:
+        review_entities.add(review_entity)
+    rec = None
+    if review_record is not None:
+        rec = (await db.execute(select(rm.RceSourceRecord.source_intake_id, rm.RceSourceRecord.canonical_entity_id)
+                                .where(rm.RceSourceRecord.id == review_record))).first()
+        if rec is not None and rec[0] == delivery_intake_id:
+            in_delivery = True
+            if rec[1] is not None:
+                review_entities.add(rec[1])
+    # A source record is authoritative: when the review points at one, it belongs to that record's delivery only. The
+    # entity-presence fallback applies solely to a review with no (resolvable) source record, otherwise a review of a
+    # record in delivery A could be filed under delivery B merely because its entity is also present in B.
+    if not in_delivery and rec is None and review_entity is not None:
+        in_delivery = (await db.execute(select(sm.RceEntityPresence.id).where(
+            sm.RceEntityPresence.intake_id == delivery_intake_id,
+            sm.RceEntityPresence.entity_id == review_entity,
+            sm.RceEntityPresence.present.is_(True)).limit(1))).first() is not None
+    if not in_delivery:
+        raise AssessmentRefused("REVIEW_NOT_IN_DELIVERY", "that review does not belong to the selected delivery")
+    if entity_id is not None and entity_id not in review_entities:
+        raise AssessmentRefused("ENTITY_NOT_IN_REVIEW", "the selected entity is not an entity of that review")
 
 
 async def record_assessment(db, *, user, secret: str, correlation_id: str, build_sha: str,
                             snapshot_id, org_npi: Any = None, org_ccn: Any = None,
                             hco_record_key: Optional[str] = None, decision: str, rationale: str,
-                            entity_id=None, delivery_intake_id=None) -> IqviaAdvisoryAssessment:
+                            entity_id=None, delivery_intake_id=None, review_id=None) -> IqviaAdvisoryAssessment:
     """Run the lookup server-side, validate the decision against it, add ONE evidence row (no commit)."""
     if not (rationale or "").strip():
         raise AssessmentRefused("RATIONALE_REQUIRED", "an analyst rationale is required")
-    await require_delivery_context(db, delivery_intake_id=delivery_intake_id, entity_id=entity_id)
+    await require_delivery_context(db, delivery_intake_id=delivery_intake_id, entity_id=entity_id,
+                                   review_id=review_id)
     result = await ac.organisation_relationships(  # raises SnapshotNotEligible for a non-approved snapshot
         db, snapshot_id=snapshot_id, org_npi=org_npi, org_ccn=org_ccn, hco_record_key=hco_record_key, limit=1)
     summary = summarise_result(result)
@@ -280,7 +340,7 @@ async def record_assessment(db, *, user, secret: str, correlation_id: str, build
         snapshot_sha256_prefix=prov["sha256_prefix"], snapshot_record_count=prov["record_count"],
         query_inputs=build_query_inputs(org_npi=org_npi, org_ccn=org_ccn, hco_record_key=hco_record_key, key=secret),
         result_summary=summary, decision=decision, rationale=rationale.strip(),
-        entity_id=entity_id, delivery_intake_id=delivery_intake_id,
+        entity_id=entity_id, delivery_intake_id=delivery_intake_id, review_id=review_id,
         determination=DETERMINATION, affects_verification=False,
         assessed_by=getattr(user, "email", None) or "UNKNOWN", assessed_role=str(getattr(user, "role", "") or ""),
         correlation_id=correlation_id, build_sha=build_sha)
@@ -288,13 +348,15 @@ async def record_assessment(db, *, user, secret: str, correlation_id: str, build
     return row
 
 
-async def list_assessments(db, *, snapshot_id=None, delivery_intake_id=None, limit: int = 50,
+async def list_assessments(db, *, snapshot_id=None, delivery_intake_id=None, review_id=None, limit: int = 50,
                            offset: int = 0) -> List[Dict[str, Any]]:
     q = select(IqviaAdvisoryAssessment)
     if snapshot_id is not None:
         q = q.where(IqviaAdvisoryAssessment.snapshot_id == snapshot_id)
     if delivery_intake_id is not None:
         q = q.where(IqviaAdvisoryAssessment.delivery_intake_id == delivery_intake_id)
+    if review_id is not None:
+        q = q.where(IqviaAdvisoryAssessment.review_id == review_id)
     q = q.order_by(IqviaAdvisoryAssessment.assessed_at.desc(), IqviaAdvisoryAssessment.id).limit(
         max(1, min(limit, 200))).offset(max(0, offset))
     return [_row_dict(r) for r in (await db.execute(q)).scalars().all()]
@@ -323,7 +385,7 @@ async def disclosure_for_intake(db, *, flag_enabled: bool, intake_id) -> Dict[st
         return disclosure_from_rows(flag_enabled=flag_enabled, rows=[], store=store)
     a = IqviaAdvisoryAssessment  # unbounded: a disclosure must not understate use. Columns only, no rationale.
     got = (await db.execute(select(a.decision, a.snapshot_id, a.snapshot_sha256_prefix, a.assessed_at,
-                                   a.assessed_by).where(a.delivery_intake_id == intake_id))).all()
+                                   a.assessed_by, a.review_id).where(a.delivery_intake_id == intake_id))).all()
     return disclosure_from_rows(flag_enabled=flag_enabled, rows=[
-        {"decision": d, "snapshot_id": s, "snapshot_sha256_prefix": p, "assessed_at": t, "assessed_by": u}
-        for d, s, p, t, u in got])
+        {"decision": d, "snapshot_id": s, "snapshot_sha256_prefix": p, "assessed_at": t, "assessed_by": u,
+         "review_id": r} for d, s, p, t, u, r in got])
