@@ -1,7 +1,7 @@
 # SoD database enforcement - migration notes (DRAFT)
 
 Migration: `alembic/versions/20261012_sod_db_enforcement.py`
-(`20261012_sod_db_enforcement`, down_revision `20261009_iqvia_affil_org_indexes`)
+(`20261012_sod_db_enforcement`, down_revision `20261015_iqvia_assess_review`)
 
 Status: **implemented, tested locally on a scratch PostgreSQL, not deployed, not verified on DEV.**
 It is a file in a draft PR. It has not been applied to DEV or PROD and must not be, except through
@@ -68,7 +68,7 @@ extended (a decision for the PROD runbook owner; not changed here).
 
 ```sql
 BEGIN TRANSACTION READ ONLY;
--- current Alembic revision: expect 20261009_iqvia_affil_org_indexes before this migration
+-- current Alembic revision: expect 20261015_iqvia_assess_review before this migration
 SELECT version_num FROM alembic_version;
 
 -- who owns the table, and what is its ACL?
@@ -185,7 +185,7 @@ transferred by this change.
 * **Test-suite impact.** Cleanup that runs as the runtime role would fail; the repository's suites run
   as a privileged role (CI: `postgres`), which keeps the DELETE carve-out. The shared test databases
   are migrated to head, so the guards are active in the `isolation-postgres` job.
-* **Another open migration** with `down_revision = 20261009_iqvia_affil_org_indexes` would create a
+* **Another open migration** with the same `down_revision` as this one (`20261015_iqvia_assess_review`) would create a
   second head; as of this change none exists on the fetched remote branches. `alembic heads` must show
   one head before merge.
 

@@ -39,7 +39,7 @@ pytestmark = pytest.mark.regression
 
 OWNER, APP = "docuaction_owner", "docuaction_app"
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PARENT = "20261009_iqvia_affil_org_indexes"
+PARENT = "20261015_iqvia_assess_review"
 REVISION = "20261012_sod_db_enforcement"
 SOD_MSG = "segregation of duties"
 APPEND_MSG = "review_decision_events_append_only"

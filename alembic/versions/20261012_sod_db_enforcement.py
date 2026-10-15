@@ -98,7 +98,7 @@ import sqlalchemy as sa
 from alembic import context, op
 
 revision = "20261012_sod_db_enforcement"
-down_revision = "20261009_iqvia_affil_org_indexes"
+down_revision = "20261015_iqvia_assess_review"
 branch_labels = None
 depends_on = None
 
