@@ -111,6 +111,8 @@ AREA1_OWNER_TABLES = {
     # 20261008_record_check_results: append-only per-record check results; the app
     # holds SELECT+INSERT only. Created by the chain AS the owner role and kept there.
     "rce_record_check_results",
+    # 20261014_iqvia_advisory_assess: append-only (trigger + SELECT/INSERT grant); owner-owned
+    "iqvia_advisory_assessment",
 }
 
 
@@ -552,6 +554,8 @@ MANAGED_CHAIN_CREATES = {
     # 20261008_record_check_results -- append-only (SELECT+INSERT); owner-owned, so it
     # is in AREA1_OWNER_TABLES and is NOT moved to docuaction_app at FINALIZE.
     "rce_record_check_results",
+    # 20261014_iqvia_advisory_assess: append-only (trigger + SELECT/INSERT grant); owner-owned
+    "iqvia_advisory_assessment",
 }
 # Tables the 20260917 revision declares FOREIGN KEYS to that docuaction_app owns
 # in PROD and that no pending revision ALTERs (so they are not re-owned). CREATE

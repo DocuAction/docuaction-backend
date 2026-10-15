@@ -147,16 +147,35 @@ M2 = Module(
               "licensing or credentialing.\n\n"
               "**PPEF Enrollment** — CMS. Medicare enrolment. Key: NPI → "
               "ENRLMT_ID. Limitation: one-to-many by design; several enrolments "
-              "is normal, and payment suspension is not published.\n\n"
+              "is normal, and payment suspension is not published. NPPES answers "
+              "identity; CMS enrollment answers Medicare enrolment; they are different "
+              "questions. On delivery coverage the older source key 'pecos' is, for most "
+              "stored results, answered by an NPPES-based proxy and not by CMS enrollment. "
+              "Genuine CMS enrollment evidence is stored under CMS_PPEF_ENROLLMENT. Count "
+              "the proxy as NPPES, never as a second independent source, and do not "
+              "report a 'pecos' result as CMS enrollment verification unless its stored "
+              "source says so.\n\n"
               "**PPEF Practice Location** — CMS. Key: ENRLMT_ID. **Publishes city, "
               "state and ZIP and NO street line.**\n\n"
               "**OIG LEIE** — HHS OIG. Exclusion. Key: NPI, or business name where "
               "no NPI. Limitation: most individual rows carry 0000000000, so a "
               "name-only hit is AMBIGUOUS, never an exclusion.\n\n"
               "**CMS Revocation** — CMS. Revoked billing privileges. Key: NPI.\n\n"
-              "**SAM.gov** — GSA. Federal registration and debarment. **Not "
-              "evaluated: no credential is configured.** Recorded as "
-              "SOURCE_UNAVAILABLE for all 23,566 records."),
+              "**SAM.gov** — GSA. Two separate legs: REGISTRATION (is the entity "
+              "registered) and EXCLUSIONS (is it excluded). An attempt is not a "
+              "result and an answered registration search is not exclusion "
+              "clearance. In the DEV September delivery SAM was attempted for 24,502 "
+              "records and every attempt is stored as UNAVAILABLE; the stored result "
+              "does not say why. Results stored before the leg was recorded show "
+              "'screening leg not recorded' and are never counted as exclusion-clear.\n\n"
+              "**IQVIA** — licensed affiliation reference data, not a verification "
+              "source and not part of per-delivery coverage. Its states are "
+              "different things: STAGED (file loaded, pending, used by nothing), "
+              "APPROVED (an independent QA lead approved the snapshot; still not "
+              "used), and CONSUMED (a check actually read it; this needs the "
+              "consumption setting, which is off by default, and returns candidates "
+              "for an analyst, not verified facts). A staged or approved snapshot does "
+              "not raise any coverage figure."),
         example="OIG returned 1 NPI match and 2 name-only matches. The 2 are "
                 "AMBIGUOUS and are not exclusions.",
         common_mistakes=["Treating a name-only LEIE hit as an exclusion.",
@@ -190,8 +209,9 @@ M3 = Module(
               "**The last four are never adverse.** Conflating them with "
               "NO_MATCH_OBSERVED is the most consequential mistake available in "
               "this work."),
-        example="SAM_GOV is SOURCE_UNAVAILABLE on all 23,566 records because no "
-                "API key is configured. Zero entities are implicated by that.",
+        example="SAM_GOV is SOURCE_UNAVAILABLE for every attempted record in the DEV "
+                "September delivery. The stored result does not say why. Zero entities "
+                "are implicated by that, and none is cleared.",
         common_mistakes=["Counting SOURCE_UNAVAILABLE as a failed check."],
         prohibited=_UNAVAILABLE_PROHIBITED,
         vocabulary=_OBS),
@@ -378,6 +398,16 @@ M7 = Module(
               "Evidence is append-only. A correction is a NEW version; the "
               "superseded version stays queryable and is never rewritten. Reports "
               "read the current version only.\n\n"
+              "The same holds for a delivered file. The file and its rows are kept "
+              "exactly as received. A data-quality correction is a separate, attributed "
+              "event in the curated layer with a before and an after value; a PROPOSED "
+              "correction has no effect until it is applied, so submitted and curated "
+              "values can legitimately be identical. A record's lineage lists the "
+              "findings, any applied correction (who, when, why) and the disposition "
+              "events. The file inventory lists every registered delivery with its own "
+              "file name, source and dates, including earlier, synthetic and test files; "
+              "a delivery is compared with the intake the system selected, which may not "
+              "be the previous official file.\n\n"
               "The chain runs: reported value → query → observation → source "
               "edition and hash → source row key → the row in the retained file."),
         example=("Two evidence versions exist: phase6-bulk-1.0.0 (164,962, "
@@ -424,10 +454,15 @@ GLOSSARY = Glossary([
     GlossaryTerm("Subparticipant", "An organisation participating under a Participant. 12,489 in the current delivery.", authority="TEFCA (delivery field sequoiaorgtype)"),
     GlossaryTerm("NPI", "National Provider Identifier. 10 digits. Enumeration only — it does not validate licensing or credentialing.", authority="CMS"),
     GlossaryTerm("NPPES", "CMS registry publishing NPI identity, name, practice location and taxonomy.", authority="CMS"),
-    GlossaryTerm("PECOS", "CMS Medicare enrolment system. Its public extract is PPEF.", authority="CMS", not_to_be_confused_with="PPEF, which is the published extract"),
+    GlossaryTerm("PECOS", "CMS Medicare enrolment system. Its public extract is PPEF. In delivery coverage the legacy 'pecos' source key is mostly answered by an NPPES-based proxy; genuine CMS enrollment evidence is stored as CMS_PPEF_ENROLLMENT.", authority="CMS", not_to_be_confused_with="PPEF, which is the published extract, and the NPPES-backed 'pecos' proxy"),
     GlossaryTerm("PPEF", "Public Provider Enrollment File — CMS's published Medicare enrolment extract and its sub-files.", authority="CMS"),
     GlossaryTerm("LEIE", "List of Excluded Individuals and Entities, published by HHS OIG.", authority="HHS OIG"),
-    GlossaryTerm("SAM.gov", "Federal registration and debarment system. Not evaluated in the current run — no credential configured.", authority="GSA"),
+    GlossaryTerm("SAM.gov", "Federal registration and exclusions system, with two separate legs (registration, exclusions). An attempt is not a clearance: in the DEV September delivery every SAM attempt is stored as unavailable, which is not evaluated evidence either way.", authority="GSA"),
+    GlossaryTerm("Record", "One delivered line of a delivery. Dispositions (created, updated, matched/unchanged, held, rejected, missing key, excluded) count records and add up to the records received.", not_to_be_confused_with="a finding; one record can have several findings"),
+    GlossaryTerm("Finding (data-quality)", "One rule result on one record, with a rule code, severity and a resolution state. Counted separately from records.", not_to_be_confused_with="a government finding, which needs an analyst determination and QA approval"),
+    GlossaryTerm("Held record", "A record not promoted because an undecided HIGH/CRITICAL finding or an unresolved identifier conflict holds it. Held counts records, not findings.", not_to_be_confused_with="undecided high/critical findings, which are a count of findings"),
+    GlossaryTerm("Proposed correction", "A suggested corrected value. It changes nothing; the submitted and curated values stay the same until a correction is applied.", not_to_be_confused_with="an applied correction, which is a separate attributed event"),
+    GlossaryTerm("IQVIA snapshot state", "Staged (loaded, pending), approved (independent QA approved, not used) or consumed (a check read it). Only consumption affects an analyst's work, and none changes coverage.", not_to_be_confused_with="per-delivery verification coverage"),
     GlossaryTerm("Area 1", "The immutable delivery layer: the source file byte-for-byte plus one row per delivered line. Never updated."),
     GlossaryTerm("Area 2", "The curated layer, where deterministic non-substantive corrections are applied. Area 1 is never touched."),
     GlossaryTerm("Evidence", "A recorded statement of what a source said about one entity, with the provenance needed to re-derive it."),
@@ -472,7 +507,7 @@ HELP = [
     ContextualHelp(
         key="evidence.source_unavailable",
         what_is_this="An applicable source did not answer.",
-        why_am_i_seeing_it="Access to the source is unavailable — for SAM.gov, no credential is configured.",
+        why_am_i_seeing_it="The source was attempted and did not answer. The stored result does not always say why, and for SAM.gov an unavailable attempt is neither registration nor exclusion evidence.",
         allowed_actions=["Record the gap", "Escalate the access question"],
         prohibited_conclusions=_UNAVAILABLE_PROHIBITED,
         evidence_location="observation_result = SOURCE_UNAVAILABLE",

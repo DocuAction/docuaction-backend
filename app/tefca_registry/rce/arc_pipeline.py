@@ -184,6 +184,37 @@ def evidence_item_state(dimension: Optional[str], disposition: Optional[str]) ->
     return _DISPOSITION_TO_STATE.get(disposition, "not_checked")
 
 
+def is_registration_only_sam_miss(dimension: Optional[str], item: Dict[str, Any]) -> bool:
+    """True for a NOT_FOUND SAM item on the exclusion dimension whose evidence
+    says only the v3 registration search ran (`screening_leg == registration_only`,
+    the NPI-less `sam_name` branch). Such a miss answers "is there a registration
+    record", not "is the entity excluded"."""
+    if dimension != EXCLUSION_DIMENSION or item.get("source") != "SAM_GOV":
+        return False
+    if item.get("disposition") != "NOT_FOUND":
+        return False
+    leg = (item.get("normalized_values") or {}).get("screening_leg")
+    return leg == "registration_only"
+
+
+def item_state(dimension: Optional[str], item: Dict[str, Any]) -> str:
+    """Classifier state for one assembled/persisted evidence item.
+
+    FACT, not policy: a SAM registration-only miss (v3 entity search; the NPI-less
+    `sam_name` branch) answers "is there a registration record", never "is the entity
+    excluded", so it is `unavailable` for the exclusion question and is never `clear`.
+    Unconditional. A genuine exclusion-leg NOT_FOUND, REVIEW matches and every other
+    source/dimension are unchanged.
+
+    NOT changed here (decision C4 pending): bucket rules, required-source
+    applicability and `verified` semantics. Under the v3 rules B1 can still be
+    reached with `sam_gov` unavailable: RULE-001 has no positive SAM condition, and
+    RULE-002 is B1-partial when PECOS is also unavailable."""
+    if is_registration_only_sam_miss(dimension, item):
+        return "unavailable"
+    return evidence_item_state(dimension, item.get("disposition"))
+
+
 #: The worst disposition wins when a source appears in several of the dimensions
 #: below, so a source that failed somewhere is not reported verified because it
 #: also passed elsewhere. "clear" ranks with "verified" (least bad).
@@ -258,7 +289,7 @@ def dimensions_to_verification_results(evidence: Dict[str, Any]) -> Dict[str, An
             key = _EVIDENCE_SOURCE_TO_RULE_SOURCE.get(item.get("source"))
             if not key:
                 continue
-            state = evidence_item_state(name, item.get("disposition"))
+            state = item_state(name, item)
             current = sources.get(key, {}).get("status")
             if current is None or (
                 _STATE_PRECEDENCE.index(state) < _STATE_PRECEDENCE.index(current)

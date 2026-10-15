@@ -28,8 +28,8 @@ from app.core.learning import (
     ProhibitedConclusion, Role, Statement)
 
 CONTRACT = "Contract 7571MN26F80064"
-EFFECTIVE = "2026-09-11"
-CONTENT_VERSION = "1.2.0"
+EFFECTIVE = "2026-10-13"
+CONTENT_VERSION = "1.3.0"
 OWNER = "AGT product owner (TEFCA ARC)"
 
 _SOW_TASK3 = f"{CONTRACT}, Section C, Task 3"
@@ -59,6 +59,10 @@ DELIVERY = Module(
     audience=[Role.ANY],
     objective="Register an official delivery correctly and understand what the system does with it before any review exists.",
     version=CONTENT_VERSION, effective_date=EFFECTIVE,
+    history=[ModuleRevision("1.2.0", "2026-09-11",
+                            "Records, findings and holds were not distinguished; intake was not "
+                            "separated from external screening; proposed vs applied corrections "
+                            "were not stated.", status="superseded")],
     lessons=[Lesson(
         slug="register-a-delivery", title="Registering the official delivery",
         objective="Know what a delivery is, who may register one, and what is immutable afterwards.",
@@ -70,13 +74,36 @@ DELIVERY = Module(
               "role. An analyst who opens the screen is told so plainly rather than "
               "shown a blank denial.\n\n"
               "The Data Import (Non-Official) screen is not the same thing: it exists "
-              "for exercises and demonstrations and its data is never an ONC delivery."),
+              "for exercises and demonstrations and its data is never an ONC delivery.\n\n"
+              "Registering and processing a delivery is intake: the file is stored, parsed, "
+              "checked against the data-quality rules, curated and promoted. It is not "
+              "external screening. NPPES, CMS enrollment, OIG LEIE and SAM.gov are asked in a "
+              "separate step, and each source's own attempted/answered counts say how far "
+              "that step got. Records that are held at intake are not promoted and are "
+              "outside the screening population.\n\n"
+              "Count records and findings separately. A RECORD is one delivered line; the "
+              "dispositions (created, updated, matched/unchanged, held, rejected, missing "
+              "key, excluded) add up to the records received. A FINDING is one rule result "
+              "on a record, and one record can carry several. In the 2 September DEV capacity "
+              "delivery (figures as of 2026-10-13; analyst decisions change them) 24,589 records produced 36,540 findings; 82 records were held, and "
+              "the 83 undecided HIGH/CRITICAL findings all sit on those 82 held records "
+              "(one held record carries two). The 89 HIGH findings are on 87 records; the "
+              "other 6 HIGH findings are already resolved and their records were released. "
+              "Never add a finding count to a record count.\n\n"
+              "A held record is held for a stated rule or identifier conflict; read the rule "
+              "code, not just HELD_QUALITY_ISSUE. The delivered values are never changed. A "
+              "correction is a separate, attributed event in the curated layer: a PROPOSED "
+              "correction is a suggestion, and only an APPLIED correction changes the "
+              "curated value. Until one is applied, the submitted and curated values are the "
+              "same. The record's lineage shows both."),
         example=("The synthetic end-to-end proof registered a two-record delivery under "
                  "a DOCUACTION E2E label; every later artefact traced back to that job id."),
         common_mistakes=[
             "Registering an edited copy of the file instead of the file as received.",
             "Using Data Import (Non-Official) for real ONC/RCE material.",
             "Registering the same delivery twice under two labels.",
+            "Reading 'held 82' and '83 undecided findings' as two different populations of records, or adding them.",
+            "Reading a proposed correction as an applied one, or intake as external screening.",
         ],
         prohibited=[ProhibitedConclusion(
             "The delivery has been reviewed.",
@@ -85,6 +112,9 @@ DELIVERY = Module(
         statements=[
             _impl("Area 1 stores the delivered file and one row per delivered line; it is never updated."),
             _impl("Registering a delivery requires a role above analyst; reads are viewer-gated."),
+            _impl("Held counts records; findings are counted separately and one record can have several."),
+            _impl("Held records are not promoted and are outside the external-screening population."),
+            _impl("A proposed correction changes nothing; an applied correction is a separate attributed event and the delivered value is never edited."),
         ])],
     checks=[KnowledgeCheck(
         "A column in the delivered file has a trailing space in every value. Where is it corrected?",
@@ -104,13 +134,16 @@ DELIVERY = Module(
             "Choose the file exactly as received from ONC/RCE.",
             "Enter the delivery label used in correspondence with the COR.",
             "Register the delivery and wait for the processing job to complete.",
-            "Read the intake summary: promoted, held and rejected counts, and the reasons.",
+            "Read the intake summary: promoted, held and rejected counts of RECORDS, and the rule code behind each hold.",
+            "Read the findings totals separately; do not add them to the record counts.",
             "Open the QHIN view for the delivery to confirm the population resolved.",
         ],
         what_not_to_do=[
             "Do not edit the file before registering it.",
             "Do not use Data Import (Non-Official) for Government material.",
             "Do not treat held or unresolved rows as reviewed or as findings.",
+            "Do not treat intake or a passed reconciliation as external screening or as human review.",
+            "Do not treat a proposed correction as applied.",
         ],
         what_happens_next="A sampling plan is drawn from the promoted population and review work is created from it (Stratification and Sampling; Review Work Creation and Assignment)."))
 
@@ -335,6 +368,10 @@ MAKER_CHECKER = Module(
     audience=[Role.ANY],
     objective="Understand the segregation of duties that makes a determination reportable.",
     version=CONTENT_VERSION, effective_date=EFFECTIVE,
+    history=[ModuleRevision("1.2.0", "2026-09-11",
+                            "Stated the same-person refusal without its error codes or the "
+                            "limits of enforcement, and did not mention the unwired release "
+                            "gates.", status="superseded")],
     lessons=[Lesson(
         slug="two-people", title="Two people, two roles, one record",
         objective="Explain why the same person cannot make and check a determination.",
@@ -346,7 +383,15 @@ MAKER_CHECKER = Module(
               "RETURN or ESCALATE revokes reportability. The contract report lists a "
               "Participant or Subparticipant only while its approval stands.\n\n"
               "The PM release of a report is a third, separate control: it does not "
-              "approve determinations and cannot make an unapproved one reportable."),
+              "approve determinations and cannot make an unapproved one reportable.\n\n"
+              "What the server enforces today: a QA action by the person who made the "
+              "determination is refused with a 409 (SOD_SELF_QA), and a self-QA that names a "
+              "grantor is refused too (SOD_EXCEPTION_NOT_AUTHORIZED) unless the grantor is "
+              "authorised; a caller-supplied grantor is not trusted. This is enforced in the "
+              "application service, not yet by a database constraint. The five report "
+              "release gates exist as code but are not yet wired to the PM release action, "
+              "so the PM release does not itself re-check QA approval; the PM must read the "
+              "QA position before releasing."),
         common_mistakes=[
             "Assuming an admin can QA their own case because they can see the button.",
             "Reading PM release as approval of the findings.",
@@ -355,7 +400,8 @@ MAKER_CHECKER = Module(
             "The PM released the report, so every listed determination is approved.",
             "PM release controls the document. Reportability comes from QA, per case.")],
         statements=[
-            _impl("Same-person QA is refused by the server regardless of role."),
+            _impl("Same-person QA is refused by the server regardless of role (409 SOD_SELF_QA); the control is in the application service, not a database constraint."),
+            _impl("PM release records the transition and does not currently evaluate the release gates or re-check QA approval."),
             _impl("Reportability requires a standing QA APPROVE; RETURN or ESCALATE revokes it."),
         ])],
     checks=[KnowledgeCheck(
@@ -390,7 +436,10 @@ PM_DELIVERY = Module(
               "transmittal", "COR", "logo"],
     history=[ModuleRevision("1.0.0", "2026-09-11",
                             "First version: DRAFT → PM_REVIEWED → READY_FOR_DELIVERY, "
-                            "package with HTML/CSV/PDF.", status="superseded")],
+                            "package with HTML/CSV/PDF.", status="superseded"),
+             ModuleRevision("1.2.0", "2026-09-11",
+                            "Did not say that the release gates are not applied by the PM "
+                            "release action.", status="superseded")],
     lessons=[Lesson(
         slug="release-and-package", title="Release states and the delivery package",
         objective="Move a report through release and know what the package contains.",
@@ -407,7 +456,14 @@ PM_DELIVERY = Module(
               "The report identifies the recipient in text. No HHS, ASTP or ONC mark is "
               "placed unless written authorization is on file and the deployment flag is "
               "set; by default it is off. Transmission to the COR happens outside "
-              "DocuAction, by the programme manager."),
+              "DocuAction, by the programme manager.\n\n"
+              "A release transition records who moved the report and when. It does not "
+              "currently evaluate the release gates (evidence version, QA, methodology, "
+              "provenance, report QA) and does not refuse a report whose findings lack QA "
+              "approval. Before READY_FOR_DELIVERY the programme manager reads the QA "
+              "position and the report's own limitations. Delivery-scoped reports (for "
+              "example delivery processing) describe system results for one delivery; they "
+              "are not analyst determinations."),
         common_mistakes=[
             "Sending a DRAFT.",
             "Editing the DOCX and sending it without regenerating the record it came from.",
@@ -419,6 +475,7 @@ PM_DELIVERY = Module(
         statements=[
             _gov("All reports shall reference and cite the contract number.", _SOW_SECTION_F),
             _impl("PM release is DRAFT → PM_REVIEWED → READY_FOR_DELIVERY, returnable to draft; every step is an audit event."),
+            _impl("The five release gates are not yet applied by the PM release action; the programme manager checks QA approval manually."),
             _impl("Government marks are off by default and require written authorization plus a deployment setting; the recipient is named in text."),
         ])],
     checks=[KnowledgeCheck(
@@ -428,8 +485,8 @@ PM_DELIVERY = Module(
     guide=ModuleGuide(
         what_is_this="The programme manager's control over what leaves DocuAction as a contract deliverable.",
         why_it_matters="The Government receives one document per period. Its identity, version, status and provenance must be unambiguous.",
-        what_automation_does="Generates the report from QA-approved data, freezes the dataset, builds DOCX/PDF/HTML/CSV from the same record, names the files traceably, and records release transitions.",
-        what_human_does="Reads the draft, records PM review, marks it ready, downloads the package, and transmits it to the COR outside the system.",
+        what_automation_does="Generates the report from QA-approved data, freezes the dataset, builds DOCX/PDF/HTML/CSV from the same record, names the files traceably, and records release transitions (it does not yet apply the release gates).",
+        what_human_does="Reads the draft, checks the QA position, records PM review, marks it ready, downloads the package, and transmits it to the COR outside the system.",
         steps=[
             "Open Contract Reports and generate the deliverable for the period.",
             "Read the draft (DOCX or PDF) end to end.",
@@ -522,6 +579,19 @@ KEYWORDS = {
 #: Versions of the evidence-vocabulary modules. A module whose text changed in
 #: the LMS hardening (2026-09-11) carries the change in its history.
 BASE_VERSIONS = {
+    "evidence-and-sources": {"version": "1.3.0", "history": [ModuleRevision(
+        "1.0.0", "2026-09-11", "SAM.gov described as not evaluated for lack of a credential; "
+        "PECOS/CMS enrollment and IQVIA staged/approved/consumed states not stated.",
+        status="superseded")]},
+    "automated-observations": {"version": "1.3.0", "history": [ModuleRevision(
+        "1.0.0", "2026-09-11", "SAM.gov unavailability explained by a missing credential.",
+        status="superseded")]},
+    "discrepancies-and-methodology": {"version": "1.3.0", "history": [ModuleRevision(
+        "1.0.0", "2026-09-11", "SAM.gov unavailability explained by a missing credential.",
+        status="superseded")]},
+    "auditability": {"version": "1.3.0", "history": [ModuleRevision(
+        "1.0.0", "2026-09-11", "Corrections, file history and proposed-versus-applied "
+        "values not covered.", status="superseded")]},
     "analyst-review": {"version": "1.0.1", "history": [ModuleRevision(
         "1.0.0", "2026-08-24", "Triage counts described as 'current'.", status="superseded")]},
     "qa-review": {"version": "1.1.0", "history": [ModuleRevision(
@@ -758,10 +828,10 @@ LIBRARY = [
     LibraryItem(
         title="SAM.gov entity registration and exclusions",
         authority=Authority.EVIDENCE_SOURCE_GUIDE,
-        summary="Federal registration and exclusion records. Not evaluated in the current run: no credential is configured.",
+        summary="Federal registration and exclusion records, two separate legs. An attempt is not a clearance; on DEV every stored SAM attempt is unavailable.",
         reference="https://sam.gov/",
         module_slugs=["evidence-and-sources"],
-        note="Source limitation: unavailable in the current configuration."),
+        note="Source limitation: attempts are stored as unavailable on DEV; not exclusion clearance."),
     LibraryItem(
         title="HHS logo policy for contractors",
         authority=Authority.FEDERAL_GUIDANCE,

@@ -100,7 +100,7 @@ curl -G "https://api.sam.gov/entity-information/v3/entities" \
 |----------|---------|
 | JSON with `entityData` | Key works — SAM becomes operational with no code change |
 | HTTP 403 | Key invalid or expired |
-| HTTP 404 | Key not recognised (this is what an unregistered key returns) |
+| HTTP 404, empty body | Not a key problem: `api.sam.gov` served no route (observed 2026-08 and 2026-10 for valid, invalid and absent keys alike). Recorded as failure class `NOT_ROUTING` |
 | HTTP 429 | Rate limited — the free tier is limited per hour |
 
 Then confirm the platform sees it:
@@ -108,8 +108,14 @@ Then confirm the platform sees it:
 
 ## The second blocker — UEI, not NPI
 
-**A key alone is necessary but not sufficient.** SAM is keyed on UEI/CAGE and
-has no NPI index. The TEFCA registry does not currently capture UEI for its
+**A key alone is necessary but not sufficient.** GSA's v4 Exclusions API
+specification documents an `npi` search parameter (open.gsa.gov/api/exclusions-api,
+checked 2026-10-07), and the public exclusions extract has an NPI column (about
+20,000 populated rows, 258 organisations, in the 2026-10-06 extract). This
+connector does not send an NPI today, and live NPI search is **documented but
+unverified in operation** because `api.sam.gov` is not routing. Earlier wording
+that SAM "has no NPI index" was wrong. NPI is sparse, so an NPI miss is weak
+evidence of absence. The TEFCA registry does not currently capture UEI for its
 entities.
 
 The connector therefore implements a fallback:
