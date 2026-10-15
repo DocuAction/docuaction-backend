@@ -9,6 +9,7 @@ evidence stays permitted; an entity is never required) and is validated server-s
   * a review of delivery B, an unknown review, or an entity that is not the review's own entity is refused with a stable
     code and nothing is written;
   * two assessments for one review are two rows (append-only), and a direct UPDATE is refused by the trigger;
+  * the database refuses a review that does not exist and a delete of a referenced review (foreign key, RESTRICT);
   * the migration adds the column without widening the app role's privileges (SELECT, INSERT only).
 
 Synthetic data only; presence rows come from the real `snapshot_effects.record_presence`.
@@ -161,4 +162,21 @@ async def test_migration_adds_the_column_without_widening_app_role_privileges(ro
     fks = (await db.execute(text(
         "SELECT count(*) FROM pg_constraint WHERE conrelid = to_regclass('public.iqvia_advisory_assessment') "
         "AND contype = 'f'"))).scalar_one()
-    assert fks == 2                       # snapshot and delivery only: deliberately no FK to review_records
+    assert fks == 3                       # snapshot, delivery and the review link
+    target = (await db.execute(text(
+        "SELECT confrelid::regclass::text, confdeltype::text FROM pg_constraint WHERE conname = 'fk_iqvia_assess_review'"))).one()
+    assert tuple(target) == ("review_records", "r")                   # RESTRICT
+
+
+async def test_database_refuses_an_unknown_review_and_deleting_a_referenced_review(
+        routes, rolled_back_db, artifact_root, stub_lookup):
+    db = rolled_back_db
+    a, _b = await _setup(db)
+    snap = await _snapshot(db)
+    stub_lookup(snap)
+    review = await _review(db, entity_id=a["created_entity_id"])
+    assert (await _post(_app(routes, db, USER), _ui_body(snap, a["intake_id"], review_id=review))).status_code == 201
+    nested = await db.begin_nested()
+    with pytest.raises(Exception, match="fk_iqvia_assess_review"):
+        await db.execute(text("DELETE FROM review_records WHERE review_id = :r"), {"r": review})
+    await nested.rollback()

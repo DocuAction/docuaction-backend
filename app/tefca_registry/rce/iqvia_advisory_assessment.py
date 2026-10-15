@@ -30,9 +30,10 @@ Reports and CSVs carry only the aggregate `disclosure_from_rows` (no identifiers
 
 REVIEW LINK (optional): `review_id` attaches the assessment to the review it informs, as the written workflow
 (WP6-C spec) describes. It is validated server-side (REVIEW_NOT_FOUND / REVIEW_NOT_IN_DELIVERY / ENTITY_NOT_IN_REVIEW) and
-is NOT required: delivery-level evidence stays permitted, and an entity is never required. There is deliberately no
-database FK to review_records (an owner-owned append-only table must not depend on a REFERENCES grant on an
-app-owned table); the check is made at write time and rows are never edited, so a later correction is a NEW row.
+is NOT required: delivery-level evidence stays permitted, and an entity is never required. The database enforces
+EXISTENCE with a foreign key to review_records(review_id) ON DELETE RESTRICT (its migration needs REFERENCES on that
+app-owned table for the migration role and stops with the exact GRANT if it is missing); that the review belongs to
+the delivery and the entity to the review stays the write-time check, and rows are never edited: a correction is a NEW row.
 
 DELIVERY CONTEXT: `delivery_intake_id` is required and validated server-side (DELIVERY_CONTEXT_REQUIRED /
 DELIVERY_NOT_FOUND / ENTITY_NOT_IN_DELIVERY). The report disclosure is read per delivery and is NOT gated by the
@@ -91,8 +92,8 @@ class IqviaAdvisoryAssessment(Base):
     decision = Column(String(40), nullable=False)
     rationale = Column(Text, nullable=False)
     entity_id = Column(UUID(as_uuid=True))
-    #: Optional review this evidence informs (review_records.review_id). Added by 20261015_iqvia_assess_review; no FK, see module doc.
-    review_id = Column(String(20))
+    #: Optional review this evidence informs (review_records.review_id). Added by 20261015_iqvia_assess_review; FK to review_records.review_id (RESTRICT), see module doc.
+    review_id = Column(String(20), ForeignKey("review_records.review_id", ondelete="RESTRICT", name="fk_iqvia_assess_review"))
     #: Every assessment belongs to exactly ONE delivery; the report disclosure is scoped by this column.
     delivery_intake_id = Column(UUID(as_uuid=True), ForeignKey("rce_source_intakes.id", ondelete="RESTRICT"),
                                 nullable=False)
