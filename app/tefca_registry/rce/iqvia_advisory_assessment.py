@@ -299,6 +299,7 @@ async def _require_review_context(db, *, delivery_intake_id, entity_id, review_i
     review_entities = set()
     if review_entity is not None:
         review_entities.add(review_entity)
+    rec = None
     if review_record is not None:
         rec = (await db.execute(select(rm.RceSourceRecord.source_intake_id, rm.RceSourceRecord.canonical_entity_id)
                                 .where(rm.RceSourceRecord.id == review_record))).first()
@@ -306,7 +307,10 @@ async def _require_review_context(db, *, delivery_intake_id, entity_id, review_i
             in_delivery = True
             if rec[1] is not None:
                 review_entities.add(rec[1])
-    if not in_delivery and review_entity is not None:
+    # A source record is authoritative: when the review points at one, it belongs to that record's delivery only. The
+    # entity-presence fallback applies solely to a review with no (resolvable) source record, otherwise a review of a
+    # record in delivery A could be filed under delivery B merely because its entity is also present in B.
+    if not in_delivery and rec is None and review_entity is not None:
         in_delivery = (await db.execute(select(sm.RceEntityPresence.id).where(
             sm.RceEntityPresence.intake_id == delivery_intake_id,
             sm.RceEntityPresence.entity_id == review_entity,

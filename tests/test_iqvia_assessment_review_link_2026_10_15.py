@@ -168,6 +168,27 @@ async def test_migration_adds_the_column_without_widening_app_role_privileges(ro
     assert tuple(target) == ("review_records", "r")                   # RESTRICT
 
 
+async def test_a_source_record_in_one_delivery_is_not_overridden_by_the_entity_present_in_another(
+        routes, rolled_back_db, artifact_root, stub_lookup):
+    db = rolled_back_db
+    a, b = await _setup(db)
+    snap = await _snapshot(db)
+    stub_lookup(snap)
+    entity = a["created_entity_id"]
+    review = await _review(db, entity_id=entity, source_record_id=await _a_source_record(db, a["intake_id"]))
+    from app.tefca_registry.rce import snapshot_models as sm
+    # make the same entity present in delivery B, so only the source record can say the review is A's
+    from datetime import datetime
+    db.add(sm.RceEntityPresence(intake_id=b["intake_id"], entity_id=entity, present=True, rce_org_oid="1.2.3.SYN", correlation_id="syn-rl",
+                                snapshot_received_at=datetime.utcnow()))
+    await db.flush()
+    app = _app(routes, db, USER)
+    resp = await _post(app, _ui_body(snap, b["intake_id"], review_id=review))
+    assert resp.status_code == 422 and resp.json()["detail"]["code"] == "REVIEW_NOT_IN_DELIVERY", resp.text
+    assert await _row_count(db) == 0
+    assert (await _post(app, _ui_body(snap, a["intake_id"], review_id=review))).status_code == 201
+
+
 async def test_database_refuses_an_unknown_review_and_deleting_a_referenced_review(
         routes, rolled_back_db, artifact_root, stub_lookup):
     db = rolled_back_db
