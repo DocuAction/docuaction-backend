@@ -290,7 +290,10 @@ def test_closing_blocks_are_not_split_across_pages(pdfs, name):
 
 
 def words_past_margin(page, margin=45.0, tolerance=0.5):
-    """Words whose right edge is beyond the content margin (the table border sits on it)."""
+    """Words whose right edge is beyond the content margin (the table border sits on it). Landscape appendix pages only:
+    the portrait cover and closing pages have their own, narrower content box."""
+    if page["w"] < 700:
+        return []
     return [w["text"] for w in page["words"] if w["x1"] > page["w"] - margin + tolerance]
 
 
@@ -298,6 +301,9 @@ class TestTheMarginDetector:
     def test_flags_a_word_in_the_margin_and_ignores_one_on_it(self):
         page = {"w": 792.0, "words": [{"text": "inside", "x1": 747.0}, {"text": "spill", "x1": 772.0}]}
         assert words_past_margin(page) == ["spill"]
+
+    def test_ignores_the_portrait_pages(self):
+        assert words_past_margin({"w": 612.0, "words": [{"text": "cover", "x1": 581.0}]}) == []
 
 
 @needs_weasyprint
