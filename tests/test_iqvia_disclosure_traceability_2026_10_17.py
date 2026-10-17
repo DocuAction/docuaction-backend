@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import csv
 import io
+import hashlib
 import json
 import uuid
 from datetime import datetime, timezone
@@ -155,3 +156,28 @@ def test_every_disclosure_state_renders_in_the_real_template_and_csv(kwargs):
     assert "IQ-" not in html                      # no references invented where nothing was assessed
     assert "Assessment reference" not in _csv(iq)
     assert "availability" in _csv(iq)
+
+
+def _bytes(iq):
+    from app.reports.engine.csv_engine import to_bytes
+    return to_bytes(_csv(iq))
+
+
+@pytest.mark.parametrize("kwargs", [
+    dict(flag_enabled=True, rows=_rows()),
+    dict(flag_enabled=False, rows=_rows()),
+    dict(flag_enabled=True, rows=[]),
+    dict(flag_enabled=False, rows=[]),
+    dict(flag_enabled=True, rows=[], store="NOT_APPLIED"),
+    dict(flag_enabled=True, rows=[], store="UNREADABLE"),
+])
+def test_downloaded_csv_bytes_equal_the_persisted_artifact_bytes_in_every_state(kwargs):
+    """The registered artifact is rendered from the freshly built dataset; the Download CSV route re-renders from the
+    STORED dataset (report_data is JSONB, which reorders keys). Both must produce the same BYTES, repeatedly, in the used
+    and the not-used / store-unavailable states."""
+    fresh = json.loads(json.dumps(aa.disclosure_from_rows(**kwargs), default=str))      # what generation renders and persists
+    stored = _jsonb_roundtrip(fresh)                                                     # what the download route reads back
+    persisted_bytes = _bytes(fresh)
+    downloads = [_bytes(stored) for _ in range(5)]
+    assert all(d == persisted_bytes for d in downloads)
+    assert len({hashlib.sha256(d).hexdigest() for d in downloads + [persisted_bytes]}) == 1
