@@ -219,7 +219,14 @@ def disclosure_from_rows(*, flag_enabled: bool, rows: Sequence[Dict[str, Any]],
     last two cases the report says it cannot tell, rather than claiming "not used"."""
     base = {"assessments": 0, "reviews_linked": 0, "by_decision": {}, "snapshots": [], "first_assessed_at": None,
             "last_assessed_at": None, "distinct_assessors": 0, "verification_source": False,
-            "consumption_currently_enabled": bool(flag_enabled), "store": store}
+            "consumption_currently_enabled": bool(flag_enabled), "store": store,
+            # present in EVERY state: the report template reads them for any delivery (strict undefined), including
+            # deliveries where IQVIA was not used
+            "decision_counts": [], "entities_linked": 0, "assessor_roles": [], "assessment_refs": [],
+            "lookup_availability": "ENABLED" if flag_enabled else "DISABLED",
+            "lookup_availability_statement": ("Current IQVIA lookup availability when this report was generated: "
+                                              + ("ENABLED" if flag_enabled else "DISABLED")
+                                              + ". This is separate from the historical use listed above.")}
     if store == "NOT_APPLIED":
         return {**base, "state": STATE_STORE_NOT_APPLIED,
                 "statement": ("The IQVIA advisory-assessment store is not present in this environment, so no IQVIA "

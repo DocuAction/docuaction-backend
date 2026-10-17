@@ -138,3 +138,20 @@ def test_no_assessments_still_says_not_used_and_adds_no_empty_linkage_rows():
     rows = list(csv.reader(io.StringIO(_csv(aa.disclosure_from_rows(flag_enabled=True, rows=[])))))
     assert ["State", "IQVIA_NOT_USED"] in rows
     assert not any(r and r[0] in ("Assessment reference", "Assessments linked to a registry entity") for r in rows)
+
+
+@pytest.mark.parametrize("kwargs", [
+    dict(flag_enabled=True, rows=[]),
+    dict(flag_enabled=False, rows=[]),
+    dict(flag_enabled=True, rows=[], store="NOT_APPLIED"),
+    dict(flag_enabled=True, rows=[], store="UNREADABLE"),
+])
+def test_every_disclosure_state_renders_in_the_real_template_and_csv(kwargs):
+    """CI found this: the new fields were added only to the 'used' state, and the template (strict undefined) raised
+    UndefinedError for every delivery where IQVIA was NOT used, failing all report generation."""
+    iq = json.loads(json.dumps(aa.disclosure_from_rows(**kwargs), default=str))
+    html = _html(iq)
+    assert "IQVIA use." in html and "separate from the historical use" in html
+    assert "IQ-" not in html                      # no references invented where nothing was assessed
+    assert "Assessment reference" not in _csv(iq)
+    assert "availability" in _csv(iq)
