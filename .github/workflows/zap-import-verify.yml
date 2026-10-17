@@ -1,0 +1,117 @@
+name: ZAP OpenAPI import verification
+
+# Verifies, against an INERT LOCAL STUB on the runner (never DEV, never PROD,
+# no active scan: ZAP runs in safe mode -S), that the scan-local specification
+# produced by scripts/zap_prepare_spec.py imports > 0 URLs, and records - as a
+# non-gating control - that the unmodified spec imports 0 (the failure seen in
+# OWASP ZAP DAST Scan run 38265533318). It is a setup check, not a security scan.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/zap_prepare_spec.py'
+      - 'scripts/zap_stub_target.py'
+      - '.github/workflows/zap-scan.yml'
+      - '.github/workflows/zap-import-verify.yml'
+      - 'tests/test_zap_prepare_spec.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  import-verify:
+    runs-on: ubuntu-latest
+    env:
+      STUB: http://127.0.0.1:8000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx
+      - name: Unit tests for the spec preparation
+        run: python -m pytest tests/test_zap_prepare_spec.py -v --tb=short
+        env:
+          SECRET_KEY: ${{ github.sha }}${{ github.sha }}
+          ALLOWED_HOSTS: '*'
+      - name: Generate the application's own spec offline (no DB, no network)
+        run: |
+          python - <<'PY'
+          import json
+          from app.main import app
+          json.dump(app.openapi(), open("openapi.original.json", "w"))
+          print("paths:", len(json.load(open("openapi.original.json"))["paths"]))
+          PY
+        env:
+          SECRET_KEY: ${{ github.sha }}${{ github.sha }}
+          DATABASE_URL: postgresql://unused:unused@127.0.0.1:1/unused
+          ENVIRONMENT: development
+          ALLOWED_HOSTS: '*'
+      - name: Prepare scan-local spec for the local stub (verification-only allowlist)
+        run: |
+          python scripts/zap_prepare_spec.py \
+            --input openapi.original.json --output openapi.scan.json \
+            --server-url "$STUB" --allow-origin "$STUB" \
+            --report zap_spec_prepare_report.json
+      - name: Start inert stub target
+        run: |
+          nohup python scripts/zap_stub_target.py 8000 > stub.log 2>&1 &
+          for i in $(seq 1 20); do curl -s -o /dev/null "$STUB/" && exit 0; sleep 1; done
+          echo "::error::stub did not start"; exit 1
+      - name: ZAP import - scan-local spec (must import > 0 URLs)
+        run: |
+          # zaproxy/action-api-scan does the same so the container user can write reports
+          chmod a+w "$PWD"
+          set +e
+          docker run --network=host -v "$PWD":/zap/wrk/:rw ghcr.io/zaproxy/zaproxy:stable \
+            zap-api-scan.py -t openapi.scan.json -f openapi -S -I -d \
+            -J verify_report.json 2>&1 | tee zap_verify_scan_local.log
+          rc=${PIPESTATUS[0]}
+          echo "zap exit: $rc" | tee -a zap_verify_scan_local.log
+          n=$(grep -oE 'Number of Imported URLs: [0-9]+' zap_verify_scan_local.log | grep -oE '[0-9]+$' | tail -1)
+          echo "imported URLs (scan-local spec): ${n:-none}"
+          if [ -z "$n" ] || [ "$n" -le 0 ]; then
+            echo "::error::scan-local spec imported ${n:-no} URLs; setup not fixed"; exit 1
+          fi
+          # 0 = clean, 1/2 = FAIL/WARN alerts on the inert stub (about the stub, not the app);
+          # 3 = ZAP could not complete (e.g. report write failure) and is a setup failure.
+          if [ "$rc" -ge 3 ] || [ ! -s verify_report.json ]; then
+            echo "::error::ZAP exit $rc or no report written; setup incomplete"; exit 1
+          fi
+          echo "alerts in this run concern the inert local stub only; they are not application findings" >> "$GITHUB_STEP_SUMMARY"
+      - name: Control - ZAP import of the UNMODIFIED spec (non-gating, documents the original failure)
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          s = json.load(open("openapi.original.json"))
+          assert "servers" not in s
+          PY
+          set +e
+          docker run --network=host -v "$PWD":/zap/wrk/:rw ghcr.io/zaproxy/zaproxy:stable \
+            zap-api-scan.py -t openapi.original.json -f openapi -S -I -d \
+            -J control_report.json 2>&1 | tee zap_verify_control_original.log
+          grep -E "Number of Imported URLs|Unable to obtain any server URL" zap_verify_control_original.log | sort -u \
+            | sed 's/^/control: /' >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-import-verify-${{ github.run_number }}
+          retention-days: 30
+          if-no-files-found: warn
+          path: |
+            zap_verify_scan_local.log
+            zap_verify_control_original.log
+            zap_spec_prepare_report.json
+            openapi.original.json
+            openapi.scan.json
+            stub.log
+            zap.out

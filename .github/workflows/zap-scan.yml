@@ -55,30 +55,77 @@ jobs:
           echo "::error::dev did not become healthy; not scanning a cold target"
           exit 1
 
-      - name: Fetch OpenAPI spec
+      - name: Fetch OpenAPI spec (original, preserved)
         run: |
-          curl -sf --max-time 60 "$TARGET/openapi.json" -o openapi.json
-          python -c "import json;s=json.load(open('openapi.json'));print('paths:',len(s['paths']))"
+          curl -sf --max-time 60 "$TARGET/openapi.json" -o openapi.original.json
+          python -c "import json;s=json.load(open('openapi.original.json'));print('paths:',len(s['paths']))"
+
+      # ZAP cannot resolve the app's relative server URL ("/") when it scans a
+      # local file and then imports 0 URLs (run 38265533318). Give the SCAN-LOCAL
+      # copy one explicit, allowlisted DEV server (root, path and operation
+      # overrides checked). The original above is never modified. Production
+      # origins and non-allowlisted overrides fail the job.
+      - name: Prepare scan-local spec (explicit allowlisted DEV server)
+        run: |
+          python scripts/zap_prepare_spec.py \
+            --input openapi.original.json --output openapi.scan.json \
+            --server-url "$TARGET" --report zap_spec_prepare_report.json
 
       - name: Run ZAP API scan
         uses: zaproxy/action-api-scan@v0.9.0
         with:
-          target: openapi.json
+          target: openapi.scan.json
           format: openapi
           # Do not fail the build on findings. A DAST report is evidence to be
-          # triaged, not a merge gate — gating on raw findings trains people to
-          # silence the scanner rather than read it.
+          # triaged, not a merge gate - gating on raw findings trains people to
+          # silence the scanner rather than read it. This does NOT cover setup
+          # failures: a spec that imports 0 URLs makes the scan exit non-zero
+          # and the job fails, as it must.
           allow_issue_writing: true
           fail_action: false
-          cmd_options: '-z "-config scanner.strength=MEDIUM" -I'
+          cmd_options: '-d -z "-config scanner.strength=MEDIUM" -I'
 
-      - name: Upload ZAP report
+      # Belt and braces: a scan that produced no report, or a report with no
+      # scanned site, did not obtain coverage and must not look like a pass.
+      - name: Assert ZAP scanned the target (coverage obtained)
+        run: |
+          python - <<'PY'
+          import json, sys
+          try:
+              rep = json.load(open("report_json.json"))
+          except Exception as exc:
+              print(f"::error::no usable ZAP report ({exc}); security coverage not obtained")
+              sys.exit(1)
+          sites = [s.get("@name") for s in rep.get("site", [])]
+          print("sites scanned:", sites)
+          if not sites:
+              print("::error::ZAP report lists no scanned site; security coverage not obtained")
+              sys.exit(1)
+          PY
+
+      - name: Record DAST setup failure (not a security pass)
+        if: failure()
+        run: |
+          {
+            echo "### DAST setup failed - security coverage NOT obtained"
+            echo
+            echo "This run did not complete a scan of the API surface. It is **not** a security pass"
+            echo "and it is **not** an application finding. See the uploaded diagnostics"
+            echo "(zap.out, spec preparation report, original and scan-local specs)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload ZAP report and diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: zap-report-${{ github.run_number }}
           retention-days: 90
+          if-no-files-found: warn
           path: |
             report_html.html
             report_json.json
             report_md.md
+            zap.out
+            zap_spec_prepare_report.json
+            openapi.original.json
+            openapi.scan.json
