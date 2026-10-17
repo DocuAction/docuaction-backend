@@ -689,8 +689,8 @@
   {% if iq and iq.lookup_availability_statement %}{{ iq.lookup_availability_statement }}{% endif %}</p>
 {% if iq and iq.assessment_refs %}
 <table class="iqvia-refs" aria-label="IQVIA assessment references">
-  <thead><tr><th scope="col">Assessment reference</th><th scope="col">Decision</th><th scope="col">Assessed (UTC)</th><th scope="col">Assessor role</th><th scope="col">Review</th><th scope="col">Entity</th></tr></thead>
-  <tbody>{% for ar in iq.assessment_refs %}<tr><td>{{ ar.ref }}</td><td>{{ ar.decision }}</td><td>{{ ar.assessed_at or '-' }}</td><td>{{ ar.assessed_role }}</td><td>{{ 'linked' if ar.review_linked else 'none' }}</td><td>{{ 'linked' if ar.entity_linked else 'none' }}</td></tr>{% endfor %}</tbody>
+  <thead><tr><th scope="col">Assessment reference</th><th scope="col">Snapshot ID</th><th scope="col">Decision</th><th scope="col">Assessed (UTC)</th><th scope="col">Assessor role</th><th scope="col">Review</th><th scope="col">Entity</th></tr></thead>
+  <tbody>{% for ar in iq.assessment_refs %}<tr><td>{{ ar.ref }}</td><td>{{ ar.snapshot_id or 'not recorded' }}</td><td>{{ ar.decision }}</td><td>{{ ar.assessed_at or '-' }}</td><td>{{ ar.assessed_role }}</td><td>{{ 'linked' if ar.review_linked else 'none' }}</td><td>{{ 'linked' if ar.entity_linked else 'none' }}</td></tr>{% endfor %}</tbody>
 </table>
 {% endif %}
 

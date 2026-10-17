@@ -123,8 +123,9 @@ def test_csv_lists_each_assessment_reference_with_linkage_and_role():
     rows = list(csv.reader(io.StringIO(_csv(_disclosure()))))
     refs = [r for r in rows if r and r[0] == "Assessment reference"]
     assert [r[1] for r in refs] == ["IQ-190fcede", "IQ-f5a8e089"]
-    assert refs[0][5:] == ["review linked", "entity linked"] and refs[1][5:] == ["no review", "no entity"]
-    assert all(r[4] == "role qalead" for r in refs)
+    assert [r[2:4] for r in refs] == [["Snapshot ID", str(SNAP)]] * 2     # each reference names ITS snapshot
+    assert refs[0][7:] == ["review linked", "entity linked"] and refs[1][7:] == ["no review", "no entity"]
+    assert all(r[6] == "role qalead" for r in refs)
 
 
 def test_current_availability_is_separate_from_historical_use():
@@ -181,3 +182,29 @@ def test_downloaded_csv_bytes_equal_the_persisted_artifact_bytes_in_every_state(
     downloads = [_bytes(stored) for _ in range(5)]
     assert all(d == persisted_bytes for d in downloads)
     assert len({hashlib.sha256(d).hexdigest() for d in downloads + [persisted_bytes]}) == 1
+
+
+def test_a_delivery_with_assessments_from_two_snapshots_names_each_assessments_own_snapshot():
+    other = uuid.UUID("11111111-2222-3333-4444-555555555555")
+    rows = _rows()
+    rows[1] = {**rows[1], "snapshot_id": other, "snapshot_sha256_prefix": "ffffffffffff"}
+    d = json.loads(json.dumps(aa.disclosure_from_rows(flag_enabled=True, rows=rows), default=str))
+    by_ref = {r["ref"]: r["snapshot_id"] for r in d["assessment_refs"]}
+    assert by_ref == {"IQ-190fcede": str(SNAP), "IQ-f5a8e089": str(other)}
+    html = _html(d)
+    assert str(other) in html and html.count(str(SNAP)) >= 2        # snapshot list + the reference table
+    csv_rows = list(csv.reader(io.StringIO(_csv(d))))
+    assert {r[1]: r[3] for r in csv_rows if r and r[0] == "Assessment reference"} == by_ref
+
+
+def test_timestamps_are_converted_to_utc_before_the_date_is_labelled_utc():
+    from datetime import timedelta
+    west = timezone(timedelta(hours=-7))
+    rows = _rows()
+    rows[0] = {**rows[0], "snapshot_received_at": datetime(2026, 10, 7, 17, 30, tzinfo=west),      # = 2026-10-08 00:30 UTC
+               "assessed_at": datetime(2026, 10, 15, 21, 42, 30, tzinfo=west)}                      # = 2026-10-16 04:42:30 UTC
+    d = aa.disclosure_from_rows(flag_enabled=True, rows=rows)
+    assert d["snapshots"][0]["received_on"] == "2026-10-08"
+    ref = [r for r in d["assessment_refs"] if r["ref"] == "IQ-190fcede"][0]
+    assert ref["assessed_at"].startswith("2026-10-16 04:42:30") and ref["assessed_at"].endswith("+00:00")
+    assert d["first_assessed_at"].startswith("2026-10-16 04:42:30")

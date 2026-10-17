@@ -412,7 +412,8 @@ def delivery_processing_to_csv(dataset: Dict[str, Any], report_id: str,
         writer.writerow(["Snapshot source received (UTC date)", sn.get("received_on") or "not recorded"])
         writer.writerow(["Snapshot source effective date", sn.get("source_effective_date") or "not recorded"])
     for ar in iq.get("assessment_refs") or []:
-        writer.writerow(["Assessment reference", ar.get("ref"), ar.get("decision"), ar.get("assessed_at") or "-",
+        writer.writerow(["Assessment reference", ar.get("ref"), "Snapshot ID", ar.get("snapshot_id") or "not recorded",
+                         ar.get("decision"), ar.get("assessed_at") or "-",
                          f"role {ar.get('assessed_role')}", "review linked" if ar.get("review_linked") else "no review",
                          "entity linked" if ar.get("entity_linked") else "no entity"])
     writer.writerow(["First / last assessed (UTC)", iq.get("first_assessed_at") or "-", iq.get("last_assessed_at") or "-"])

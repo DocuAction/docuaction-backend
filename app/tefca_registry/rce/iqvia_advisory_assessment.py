@@ -199,6 +199,15 @@ STATE_STORE_NOT_APPLIED = "IQVIA_ASSESSMENT_STORE_NOT_APPLIED"
 STATE_STORE_UNREADABLE = "IQVIA_ASSESSMENT_STORE_UNREADABLE"
 
 
+def _utc_text(value) -> str:
+    """Text of a timestamp in UTC. A timezone-aware value is converted first (PostgreSQL returns values in the session
+    time zone), so a date taken from it and labelled UTC is the UTC date."""
+    from datetime import timezone as _tz
+    if hasattr(value, "tzinfo") and getattr(value, "tzinfo", None) is not None and hasattr(value, "astimezone"):
+        return str(value.astimezone(_tz.utc))
+    return str(value)
+
+
 def assessment_ref(assessment_id) -> str:
     """A stable, identifier-free reference to one assessment row for reviewer traceability: 'IQ-' plus the first
     eight hex digits of the row id. It carries no NPI, entity, reviewer or snapshot-content data."""
@@ -244,8 +253,8 @@ def disclosure_from_rows(*, flag_enabled: bool, rows: Sequence[Dict[str, Any]],
     received = {}
     for r in rows:
         if r.get("snapshot_received_at") is not None:
-            received.setdefault(str(r["snapshot_id"]), str(r["snapshot_received_at"])[:10])
-    times = sorted(str(r["assessed_at"]) for r in rows if r.get("assessed_at"))
+            received.setdefault(str(r["snapshot_id"]), _utc_text(r["snapshot_received_at"])[:10])
+    times = sorted(_utc_text(r["assessed_at"]) for r in rows if r.get("assessed_at"))
     n = len(rows)
     tail = ("" if flag_enabled else
             " IQVIA lookup is currently disabled; these are historical records of past use and remain part of "
@@ -257,7 +266,7 @@ def disclosure_from_rows(*, flag_enabled: bool, rows: Sequence[Dict[str, Any]],
                    if with_review else " None is linked to a review (delivery-level evidence).")
     decision_counts = sorted(Counter(r["decision"] for r in rows).items())
     refs = sorted(({"ref": assessment_ref(r.get("id")), "decision": r["decision"],
-                    "assessed_at": str(r["assessed_at"]) if r.get("assessed_at") else None,
+                    "assessed_at": _utc_text(r["assessed_at"]) if r.get("assessed_at") else None,
                     "assessed_role": r.get("assessed_role") or "not recorded",
                     "review_linked": bool(r.get("review_id")), "entity_linked": bool(r.get("entity_id")),
                     "snapshot_id": str(r["snapshot_id"])} for r in rows),
