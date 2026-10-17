@@ -426,6 +426,17 @@ def finalize_ownership(engine, become_role=None):
             "select relname from pg_class where relnamespace='public'::regnamespace "
             "and relkind='r' and relowner::regrole::text = :owner"), {"owner": OWNER_ROLE}).scalars().all()
         keep = AREA1_OWNER_TABLES | {"alembic_version"}
+        # review_decision_events stays with docuaction_owner ONLY when the DBA prerequisite
+        # (docs/SOD_DB_OWNERSHIP_PREREQUISITE.sql) left it in the append-only-by-grant shape: the runtime
+        # role holds SELECT and INSERT and neither UPDATE nor DELETE. Otherwise (e.g. a legacy-path
+        # build whose owner has granted the runtime role nothing, relying on ownership) it is handed to
+        # the runtime role exactly as before -- this change never strips access.
+        for t in sorted(set(owned) & MANAGED_SOD_PREREQUISITE_TABLES):
+            held = {p: conn.execute(text("select has_table_privilege(:r, cast(:t as regclass), :p)"),
+                                    {"r": APP_ROLE, "t": f'public."{t}"', "p": p}).scalar()
+                    for p in ("SELECT", "INSERT", "UPDATE", "DELETE")}
+            if held == {"SELECT": True, "INSERT": True, "UPDATE": False, "DELETE": False}:
+                keep = keep | {t}
         to_app = sorted(set(owned) - keep)
         for t in to_app:
             conn.execute(text(f'ALTER TABLE public."{t}" OWNER TO "{APP_ROLE}"'))
@@ -567,6 +578,13 @@ MANAGED_LEGACY_ONLY = [
 ]
 MANAGED_AREA1_PRESENT = {"rce_source_records", "rce_source_intakes", "rce_ingestion_runs",
                          "rce_rule_execution_history"}
+# 20261012_sod_db_enforcement (PR #151) PREREQUISITE: a DBA moves review_decision_events (and the SoD
+# function) to docuaction_owner with SELECT+INSERT only for the runtime role
+# (docs/SOD_DB_OWNERSHIP_PREREQUISITE.sql) so the guards it installs cannot be removed by the role they
+# constrain. Once moved, the table is legitimately owner-owned: the managed gate tolerates it (it is NOT
+# part of the measured Area-1 set; an app-owned table is also tolerated here - the migration's own
+# preflight is what refuses that), and FINALIZE keeps it owner-owned only when it is already in that shape.
+MANAGED_SOD_PREREQUISITE_TABLES = {"review_decision_events"}
 
 
 def _refuse(msg):
@@ -651,7 +669,7 @@ def managed_gate(conn, expected_revision, after_prepare=False):
         _refuse(f"{len(foreign)} table(s) owned by neither {APP_ROLE} nor {OWNER_ROLE}: {foreign[:8]}")
     owner_owned = {t for t, o in owners.items() if o == OWNER_ROLE}
     prepared = {"alembic_version", *MANAGED_CHAIN_ALTERS}
-    if owner_owned - prepared != MANAGED_AREA1_PRESENT:
+    if owner_owned - prepared - MANAGED_SOD_PREREQUISITE_TABLES != MANAGED_AREA1_PRESENT:
         _refuse(f"{OWNER_ROLE} owns {sorted(owner_owned)}; expected exactly the measured Area-1 set "
                 f"{sorted(MANAGED_AREA1_PRESENT)} (+ {sorted(prepared)} after PREPARE).")
     if after_prepare and not prepared <= owner_owned:
