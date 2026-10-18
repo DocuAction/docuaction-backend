@@ -192,7 +192,9 @@ def test_a_delivery_with_assessments_from_two_snapshots_names_each_assessments_o
     by_ref = {r["ref"]: r["snapshot_id"] for r in d["assessment_refs"]}
     assert by_ref == {"IQ-190fcede": str(SNAP), "IQ-f5a8e089": str(other)}
     html = _html(d)
-    assert str(other) in html and html.count(str(SNAP)) >= 2        # snapshot list + the reference table
+    # each reference row pairs ITS assessment with ITS snapshot (a swapped row assignment must fail)
+    assert f"<td>IQ-190fcede</td><td>{SNAP}</td>" in html
+    assert f"<td>IQ-f5a8e089</td><td>{other}</td>" in html
     csv_rows = list(csv.reader(io.StringIO(_csv(d))))
     assert {r[1]: r[3] for r in csv_rows if r and r[0] == "Assessment reference"} == by_ref
 
