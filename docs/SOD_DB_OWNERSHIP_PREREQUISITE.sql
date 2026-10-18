@@ -268,8 +268,24 @@ SELECT t.tgname, t.tgenabled::text FROM pg_trigger t
 -- @@SECTION: ROLLBACK  (reference only; NOT run together with the other sections)
 -- Use only if the move itself causes an outage. It restores ownership to the runtime role. NOTE:
 --  * If migration 20261012_sod_db_enforcement has ALREADY been applied, roll the MIGRATION back
---    first (alembic downgrade 20261009_iqvia_affil_org_indexes, via the governed pipeline). After
---    returning ownership to docuaction_app the guards would be removable by the runtime role.
+--    first -- alembic downgrade 20261015_iqvia_assess_review (i.e. one step, -1, from 20261012),
+--    via the governed pipeline. Do NOT downgrade to 20261009_iqvia_affil_org_indexes: that is two
+--    revisions further back (through 20261015_iqvia_assess_review and
+--    20261014_iqvia_advisory_assess) and would also undo those unrelated migrations, which can drop
+--    populated tables (e.g. iqvia_advisory_assessment) -- a correctness bug, not a hypothetical one
+--    (CodeRabbit, PR #151, verified against the actual down_revision chain).
+--  * LOSS OF PROTECTIVE CONTROLS ON DOWNGRADE, stated explicitly, not just "downgrade succeeds":
+--    the downgrade DROPS trg_review_event_append_only_rows, trg_review_event_append_only_trunc and
+--    the SoD-tightened review_event_enforce_sod() body, reverting to the original (pre-20261012)
+--    function. After that, review_decision_events is UPDATE/DELETE/TRUNCATE-able again by whichever
+--    role owns it at that point, and a self-attested sod_exception_granted_by/reason once again
+--    passes the DB layer (the application-layer refusal in qa_gate.submit_qa_review, merged
+--    separately on main, is NOT affected by this downgrade and keeps blocking it at that layer --
+--    but any write path that bypasses the API, or runs before that application fix, is not).
+--  * Returning ownership to docuaction_app ALSO means the guards (if the downgrade above has not
+--    already removed them) would be removable by the runtime role via ALTER TABLE ... DISABLE
+--    TRIGGER -- the documented, narrow, intentional residual risk of the owner carve-out, now
+--    doubled: the runtime role regains both ownership and the ability to strip the guards itself.
 --  * The ORIGINAL ACL cannot be reconstructed from this file. Re-create it from the PRE-CHECK 1.1
 --    (relacl) and 1.4 output you saved. The statements below are the shape; fill in the saved
 --    values. Unknown original state means: do not guess, escalate.

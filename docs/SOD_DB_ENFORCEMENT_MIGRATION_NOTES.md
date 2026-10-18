@@ -58,11 +58,17 @@ therefore refuses to start (before any DDL, error `SodDbEnforcementPreconditionE
 
 If any of these fires, a DBA must first move ownership of `review_decision_events` and the function to
 `docuaction_owner` and give the runtime role only the privileges it needs (`SELECT, INSERT` on the
-table; see 5). That is a separate, approved change; this migration does not do it. Note also that the
-PROD "managed convergence" tooling (`scripts/prod_legacy_convergence.py`, `MANAGED_CHAIN_ALTERS`)
-temporarily re-owns only four tables to the owner role; `review_decision_events` is not in that list,
-so the PROD convergence path will hit this preflight until ownership is arranged or that tooling is
-extended (a decision for the PROD runbook owner; not changed here).
+table; see 5). That is a separate, approved change; this migration does not do it. The PROD "managed
+convergence" tooling (`scripts/prod_legacy_convergence.py`) **is changed by this PR**, not left alone:
+it adds `MANAGED_SOD_PREREQUISITE_TABLES = {"review_decision_events"}` (distinct from
+`MANAGED_CHAIN_ALTERS`, which still only covers its original four tables), relaxes the managed-path
+ownership gate to account for it, and adds a FINALIZE keep rule: this table stays `docuaction_owner`-
+owned (instead of being handed back to `docuaction_app` the way `MANAGED_CHAIN_ALTERS` tables are)
+*only when* the runtime role's privileges on it are exactly the append-only-by-grant shape (`SELECT,
+INSERT`, neither `UPDATE` nor `DELETE`) -- otherwise it is handed back exactly as before, never
+stripping access that was already there. Ownership of `review_decision_events` is
+still not transferred automatically by any of this -- the DBA runbook (`SOD_DB_OWNERSHIP_PREREQUISITE.sql`)
+remains a required, separate, manual step before the managed path will proceed past this preflight.
 
 ### Read-only catalog queries (run in one `BEGIN TRANSACTION READ ONLY` session; no writes)
 
@@ -115,20 +121,25 @@ Decision table from the answers: owner of table and function is `docuaction_owne
 ownership first. Do not open a firewall rule for these queries from this repository's automation;
 they are for a DBA session.
 
-### Known CI consequence of this prerequisite
+### Known CI consequence of this prerequisite (resolved via option A; was previously open)
 
-The `fixture` job (`convergence-fixture.yml`, runs `tests/test_prod_managed_migration_integration.py`)
-builds a PROD-like database in which `docuaction_app` owns `review_decision_events`, and applies the
-chain as a migration identity that is a member of `docuaction_owner` only. With this revision that
-test **fails at the preflight** (`review_decision_events is owned by docuaction_app ... Nothing was
-changed`); on main the same two files pass (9 passed). This is the preflight doing its job, not a
-defect in the fixture: the managed PROD path cannot install a trigger on an app-owned table. Resolving
-it is an owner decision, not made here: (A) a DBA moves `review_decision_events` and the function to
-`docuaction_owner` with `SELECT, INSERT` for the runtime role (the `20260917` convention; recommended,
-because it is also what makes the guard unbypassable by the runtime role), then the fixture is updated
-to model that; or (B) extend `MANAGED_CHAIN_ALTERS` so PREPARE re-owns the table for the chain - but
-FINALIZE would hand it back to `docuaction_app`, leaving the guard removable by the runtime role.
-Ownership is not transferred by this change.
+An earlier draft of this PR left this section describing the `fixture` job as failing at the preflight,
+with the ownership resolution (option A vs B below) still open. That has since been resolved as option
+A: `tests/test_prod_managed_migration_integration.py`'s `test_managed_prepare_migrate_finalize_end_to_end`
+now applies the DBA runbook (`SOD_DB_OWNERSHIP_PREREQUISITE.sql`, as a simulated DBA identity) before
+the managed `prepare -> migrate -> finalize` path, and expects success rather than the preflight
+refusal. The refusal itself is still covered -- now as an explicit negative control, in
+`tests/test_sod_ownership_convergence_2026_10_12.py` (`test_app_owned_fixture_is_refused_by_the_preflight`
+and `test_app_owned_table_with_owner_owned_function_is_still_refused`). Both files pass in CI (19
+DB-backed tests total across the `isolation-postgres` and `fixture` jobs, verified directly against
+their run logs on this PR's current head, not inferred from a green checkmark).
+Option (B) -- extending `MANAGED_CHAIN_ALTERS` so PREPARE re-owns the table for the chain, with
+FINALIZE handing it back to `docuaction_app` and leaving the guard removable by the runtime role --
+was **not** the path taken, and remains documented here only as the rejected alternative: it would
+have left the runtime role able to strip its own guard, exactly the risk this migration exists to
+close. Ownership of `review_decision_events` on an actual DEV/PROD database is still not transferred
+by this migration or by this change to the convergence tooling -- the DBA runbook remains a required,
+separate, manual precondition (see §2 above and `docs/SOD_DB_OWNERSHIP_PREREQUISITE.md`).
 
 ## 3. Upgrade steps (governed pipeline only)
 

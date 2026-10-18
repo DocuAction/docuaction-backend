@@ -1,7 +1,7 @@
 """Database enforcement of "no self-QA" and append-only guards on review_decision_events.
 
 Revision ID: 20261012_sod_db_enforcement
-Revises: 20261009_iqvia_affil_org_indexes
+Revises: 20261015_iqvia_assess_review
 Create Date: 2026-10-12
 
 STATUS: DRAFT. Written for review. NOT applied to DEV or PROD by this change; it must
