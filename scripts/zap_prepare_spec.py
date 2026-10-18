@@ -29,6 +29,7 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 import sys
 from urllib.parse import urlsplit
 
@@ -152,6 +153,16 @@ def _sha256(path: str) -> str:
         return hashlib.sha256(fh.read()).hexdigest()
 
 
+def _same_file(input_path: str, output_path: str) -> bool:
+    """True when input_path and output_path name the same file via a symlink
+    or hard link, even though the strings differ. Only meaningful when both
+    already exist; a nonexistent --output is a normal (non-aliasing) write."""
+    try:
+        return os.path.samefile(input_path, output_path)
+    except OSError:
+        return False
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--input", required=True, help="original spec (read only)")
@@ -166,7 +177,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--report", help="write a JSON change report here")
     args = ap.parse_args(argv)
-    if args.input == args.output:
+    if args.input == args.output or _same_file(args.input, args.output):
+        # CodeRabbit CR152-1: a string comparison alone misses a symlink or
+        # hard link aliasing --output onto --input under a different path --
+        # the open(..., "w") below would then silently overwrite the original
+        # spec the docstring promises is "read only". os.path.samefile() opens
+        # both paths and compares (st_dev, st_ino), so it is immune to the
+        # string-level alias; a nonexistent --output can't alias anything, so
+        # that case is left to the normal write path.
         print("::error::--output must differ from --input; the original is preserved", file=sys.stderr)
         return 2
     allowed = tuple(args.allow_origin) if args.allow_origin else DEFAULT_ALLOWED_ORIGINS

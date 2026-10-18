@@ -111,6 +111,37 @@ def test_cli_exit_codes_and_no_output_on_refusal(tmp_path):
     assert z.main(["--input", str(src), "--output", str(src), "--server-url", DEV]) == 2
 
 
+def test_cli_refuses_a_hardlinked_output_that_aliases_the_input(tmp_path):
+    """CodeRabbit CR152-1: a plain string compare (input == output) misses a
+    hard link pointing --output at the same file as --input under a different
+    path. Without this check, open(output, "w") would silently overwrite the
+    "read only" original spec through the alias. Hard links (unlike symlinks
+    on Windows) need no elevated privilege, so this variant always runs."""
+    import os
+
+    src = tmp_path / "o.json"
+    src.write_text(json.dumps(_spec()))
+    digest = hashlib.sha256(src.read_bytes()).hexdigest()
+    alias = tmp_path / "alias.json"
+    os.link(src, alias)
+    assert z.main(["--input", str(src), "--output", str(alias), "--server-url", DEV]) == 2
+    assert hashlib.sha256(src.read_bytes()).hexdigest() == digest
+
+
+def test_cli_refuses_a_symlinked_output_that_aliases_the_input(tmp_path):
+    """Same bypass as above, via a symlink rather than a hard link."""
+    src = tmp_path / "o.json"
+    src.write_text(json.dumps(_spec()))
+    digest = hashlib.sha256(src.read_bytes()).hexdigest()
+    alias = tmp_path / "alias.json"
+    try:
+        alias.symlink_to(src)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not available on this filesystem/OS")
+    assert z.main(["--input", str(src), "--output", str(alias), "--server-url", DEV]) == 2
+    assert hashlib.sha256(src.read_bytes()).hexdigest() == digest
+
+
 def test_real_app_spec_prepares_with_no_overrides_and_original_has_no_servers():
     """The generated spec is what ZAP failed on: no servers at any level."""
     from app.main import app
