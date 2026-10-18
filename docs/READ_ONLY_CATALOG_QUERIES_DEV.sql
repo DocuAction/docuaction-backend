@@ -1,7 +1,8 @@
 -- READ_ONLY_CATALOG_QUERIES_DEV.sql
 -- Read-only catalog/metadata queries for the DEV database. For an operator to run
--- in a read-only session; queries 1-9, 11 and 12 read pg_catalog /
--- information_schema only; query 10 runs
+-- in a read-only session; queries 1-7, 9, 11 and 12 read pg_catalog /
+-- information_schema only; query 8 reads the alembic_version table (one row);
+-- query 10 runs
 -- full-table min/max/count aggregates over application tables (review_decision_events,
 -- audit_logs): read-only, but it reads application rows, so run it in a quiet window.
 -- Nothing here has been run by the author.
@@ -98,6 +99,15 @@ SELECT pg_postmaster_start_time() AS server_started_at, now() AS now, version() 
 -- 10. Oldest/newest timestamp per history-bearing table (retention as observed in data).
 --     These aggregate over the whole table; run in a quiet window. Remove any line
 --     whose table or column does not exist in the connected schema.
+--     TRANSACTION-ERROR HANDLING: the BEGIN READ ONLY guard at the top of this file
+--     wraps every query below it in ONE transaction. If a query 10 statement (or any
+--     later one) references a table/column that does not exist in the connected
+--     schema, PostgreSQL aborts that transaction -- every subsequent statement in the
+--     same session then fails with "current transaction is aborted, commands ignored
+--     until end of transaction block" until a ROLLBACK is issued, not just the one
+--     that was actually wrong. If query 10 is being customized per-schema (see the
+--     line above), run it in its own BEGIN READ ONLY / ROLLBACK pair, separate from
+--     queries 11-12, so a removed-but-still-wrong line only costs that one query.
 SELECT 'review_decision_events' AS tbl, min(occurred_at) AS oldest, max(occurred_at) AS newest, count(*) AS n
 FROM review_decision_events;
 SELECT 'audit_logs' AS tbl, min(created_at) AS oldest, max(created_at) AS newest, count(*) AS n

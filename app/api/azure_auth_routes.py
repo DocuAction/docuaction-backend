@@ -32,6 +32,7 @@ and the rest of the app is unaffected):
                                   docs/SSO_ID_TOKEN_ENFORCEMENT_PROPOSAL.md.
 """
 import os
+import asyncio
 import hmac
 import time
 import logging
@@ -102,8 +103,24 @@ if ID_TOKEN_VALIDATION == "audit":
         "blocked (observation only; set AZURE_AD_ID_TOKEN_VALIDATION=enforce to remediate).")
 JWKS_TTL_SECONDS = 3600          # cached signing keys are reused for up to an hour
 JWKS_REFRESH_COOLDOWN = 60       # unknown-kid (key rotation) refetch at most once a minute
+# Separate backoff for a FAILED fetch attempt (Microsoft's discovery endpoint
+# unreachable/erroring), security-reviewed 2026-10-19: without this, every
+# request carrying an unrecognized kid during an outage triggered its own
+# fresh 10s-timeout HTTP attempt with zero rate limiting -- `fetched_at` is
+# only ever set on a SUCCESSFUL fetch (see _get_signing_key), so a failure
+# left the cooldown gate permanently open. A login storm during a real JWKS
+# outage would have hammered Microsoft's endpoint with one outbound request
+# per incoming login, each held open for the full timeout. `last_attempt_at`
+# tracks success OR failure and gates retries independently of `fetched_at`.
+JWKS_FAILURE_COOLDOWN_SECONDS = 60
 CLOCK_LEEWAY_SECONDS = 120
-_jwks_cache: dict = {"keys": {}, "fetched_at": 0.0}
+_jwks_cache: dict = {"keys": {}, "fetched_at": 0.0, "last_attempt_at": 0.0, "last_attempt_ok": True}
+# Concurrent refresh: asyncio is single-threaded (cooperative, not parallel),
+# but _fetch_jwks awaits network I/O, which yields control -- without this
+# lock, two concurrent logins that both see needs_refetch=True (cold start,
+# or simultaneous key-rotation discovery) each fire their own outbound
+# request to Microsoft instead of one request serving both.
+_jwks_fetch_lock = asyncio.Lock()
 SCOPE = "openid profile email"
 STATE_TTL = timedelta(minutes=10)
 
@@ -185,24 +202,81 @@ async def _fetch_jwks() -> list:
         return list(resp.json().get("keys") or [])
     except (httpx.HTTPError, ValueError) as e:
         logger.warning("Azure JWKS fetch failed: %s", type(e).__name__)
-        raise IdTokenError("jwks_unavailable", 502)
+        raise IdTokenError("jwks_unavailable", 502) from e
 
 
 async def _get_signing_key(kid: str) -> dict:
     """Signing key for `kid`: cached for JWKS_TTL_SECONDS; an unknown kid (key
-    rotation) triggers one refetch, rate limited by JWKS_REFRESH_COOLDOWN."""
-    now = time.monotonic()
-    age = now - _jwks_cache["fetched_at"]
+    rotation) triggers one refetch, rate limited by JWKS_REFRESH_COOLDOWN.
+
+    Security-reviewed cache policy (2026-10-19, CodeRabbit + independent
+    review on PR #150, same finding from both):
+
+    1. A failed fetch is rate limited too (JWKS_FAILURE_COOLDOWN_SECONDS),
+       independently of the success path. `fetched_at` only ever advances on
+       a successful fetch (so a stale cache is never mistaken for a fresh
+       one); `last_attempt_ok`/`last_attempt_at` record the outcome of every
+       attempt, success or failure. Without this, `fetched_at` never moving
+       on failure meant every later request re-attempted immediately -- an
+       outage at Microsoft's discovery endpoint would have turned every
+       incoming login into its own unthrottled outbound HTTP call.
+    2. Concurrent refresh is serialized by `_jwks_fetch_lock` with a
+       double-check inside it, so simultaneous cold-start logins share one
+       fetch rather than each firing their own.
+    3. A FAILED refetch falls back to an already-cached key for the
+       requested `kid`, even past JWKS_TTL_SECONDS, rather than failing
+       every sign-in closed for the cooldown's duration: a key Microsoft
+       published in the past does not stop being cryptographically valid
+       just because our cache's refresh window missed its deadline, and a
+       short outage must not be equivalent to "every session is now
+       unverifiable". This is bounded, not indefinite retention: the stale
+       key is used only while fetch attempts are actively failing, and the
+       very next successful fetch (at the next cooldown-respecting attempt)
+       replaces the whole key set, including dropping any kid Microsoft has
+       genuinely revoked in the meantime. A kid with NO prior successful
+       fetch to fall back on still fails closed with jwks_unavailable --
+       this never accepts a kid-bearing token whose key was never actually
+       verified against Microsoft at least once.
+    """
+    def _stale_key_or_none() -> dict | None:
+        return _jwks_cache["keys"].get(kid)
+
+    async def _refetch_locked() -> None:
+        async with _jwks_fetch_lock:
+            # Re-check inside the lock: another coroutine may have already
+            # fetched (or failed) while this one waited to acquire it --
+            # without this, the lock would only serialize the HTTP calls,
+            # not avoid making the extra ones.
+            inner_age = time.monotonic() - _jwks_cache["fetched_at"]
+            if kid in _jwks_cache["keys"] and inner_age < JWKS_TTL_SECONDS:
+                return
+            in_cooldown = (not _jwks_cache["last_attempt_ok"]
+                          and (time.monotonic() - _jwks_cache["last_attempt_at"]) < JWKS_FAILURE_COOLDOWN_SECONDS)
+            if in_cooldown:
+                return  # caller falls back to a stale key, or raises unknown_kid/jwks_unavailable
+            if _jwks_cache["fetched_at"] == 0.0 or inner_age >= JWKS_REFRESH_COOLDOWN:
+                _jwks_cache["last_attempt_at"] = time.monotonic()
+                try:
+                    keys = await _fetch_jwks()
+                except IdTokenError:
+                    _jwks_cache["last_attempt_ok"] = False
+                    return  # caller decides: stale key fallback, or raise
+                _jwks_cache["keys"] = {k["kid"]: k for k in keys if k.get("kid")}
+                _jwks_cache["fetched_at"] = time.monotonic()
+                _jwks_cache["last_attempt_at"] = _jwks_cache["fetched_at"]
+                _jwks_cache["last_attempt_ok"] = True
+
+    age = time.monotonic() - _jwks_cache["fetched_at"]
     if kid in _jwks_cache["keys"] and age < JWKS_TTL_SECONDS:
         return _jwks_cache["keys"][kid]
     if _jwks_cache["fetched_at"] == 0.0 or age >= JWKS_REFRESH_COOLDOWN:
-        keys = await _fetch_jwks()
-        _jwks_cache["keys"] = {k["kid"]: k for k in keys if k.get("kid")}
-        _jwks_cache["fetched_at"] = time.monotonic()
+        await _refetch_locked()
     key = _jwks_cache["keys"].get(kid)
-    if key is None:
-        raise IdTokenError("unknown_kid")
-    return key
+    if key is not None:
+        return key  # fresh (just refetched) or a stale-but-previously-valid fallback
+    if not _jwks_cache["last_attempt_ok"]:
+        raise IdTokenError("jwks_unavailable", 502)
+    raise IdTokenError("unknown_kid")
 
 
 async def validate_id_token(id_token: str, expected_nonce: str = None) -> dict:

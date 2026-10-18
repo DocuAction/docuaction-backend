@@ -65,7 +65,7 @@ def _cfg(monkeypatch):
     monkeypatch.setattr(sso, "CLIENT_SECRET", "s")
     monkeypatch.setattr(sso, "TENANT_ID", TENANT)
     monkeypatch.setattr(sso, "AUTHORITY", f"https://login.microsoftonline.com/{TENANT}")
-    sso._jwks_cache.update({"keys": {}, "fetched_at": 0.0})
+    sso._jwks_cache.update({"keys": {}, "fetched_at": 0.0, "last_attempt_at": 0.0, "last_attempt_ok": True})
     calls = {"n": 0}
 
     async def fake_jwks():
@@ -204,6 +204,111 @@ async def test_jwks_unavailable_is_502(monkeypatch):
     monkeypatch.setattr(sso, "_fetch_jwks", boom)
     err = await _rejects(_token(), reason="jwks_unavailable")
     assert err.status == 502
+
+
+# ---- JWKS cache policy: failure cooldown, repeated requests, recovery (2026-10-19) ----
+
+async def test_repeated_requests_during_an_outage_do_not_each_retry(monkeypatch):
+    """Security-reviewed cache policy: a failed fetch must be rate limited the
+    same way a successful one is. Before this, `fetched_at` only advanced on
+    success, so every request carrying an unrecognized kid during an outage
+    made its own fresh outbound attempt -- a login storm during a real JWKS
+    outage would have hammered Microsoft's discovery endpoint once per
+    incoming login, unthrottled."""
+    calls = {"n": 0}
+
+    async def boom():
+        calls["n"] += 1
+        raise sso.IdTokenError("jwks_unavailable", 502)
+    monkeypatch.setattr(sso, "_fetch_jwks", boom)
+
+    await _rejects(_token(), reason="jwks_unavailable")
+    await _rejects(_token(), reason="jwks_unavailable")
+    await _rejects(_token(), reason="jwks_unavailable")
+    assert calls["n"] == 1, "a second and third request inside the failure cooldown must not retry"
+
+
+async def test_recovery_after_the_failure_cooldown_expires(monkeypatch, _cfg):
+    """A later attempt, once the cooldown has elapsed, can still succeed and
+    the cache genuinely recovers -- the failure path is a rate limit, not a
+    permanent circuit-breaker trip."""
+    async def boom():
+        raise sso.IdTokenError("jwks_unavailable", 502)
+    monkeypatch.setattr(sso, "_fetch_jwks", boom)
+    await _rejects(_token(), reason="jwks_unavailable")
+
+    monkeypatch.setattr(sso, "_fetch_jwks", _cfg_fake_jwks_for(_cfg))
+    sso._jwks_cache["last_attempt_at"] -= sso.JWKS_FAILURE_COOLDOWN_SECONDS + 1
+    claims = await sso.validate_id_token(_token(), "N1")
+    assert claims["tid"] == TENANT
+    assert sso._jwks_cache["last_attempt_ok"] is True
+
+
+def _cfg_fake_jwks_for(calls):
+    async def fake_jwks():
+        calls["n"] += 1
+        return [GOOD_JWK]
+    return fake_jwks
+
+
+async def test_an_unrelated_kid_during_the_failure_cooldown_is_still_jwks_unavailable_not_unknown_kid(monkeypatch):
+    """While in the failure cooldown, the caller must not get a misleading
+    'unknown_kid' (which would read as "your token is wrong") for what is
+    actually "we could not check" -- the distinction matters because only
+    one of the two is the caller's fault."""
+    async def boom():
+        raise sso.IdTokenError("jwks_unavailable", 502)
+    monkeypatch.setattr(sso, "_fetch_jwks", boom)
+    await _rejects(_token(), reason="jwks_unavailable")
+    err = await _rejects(_token(kid="some-other-kid"))
+    assert err.reason == "jwks_unavailable", "must not surface as unknown_kid while the cause is an outage"
+
+
+async def test_a_failed_refetch_falls_back_to_the_already_cached_key_not_jwks_unavailable(monkeypatch, _cfg):
+    """CodeRabbit (PR #150, Advanced-Tier security pass): a key already
+    verified once against Microsoft does not stop being cryptographically
+    valid just because a later refresh attempt happens to fail -- a short
+    outage must not turn an already-trusted key into a 502 for every sign-in
+    using it. Bounded, not indefinite: this only engages while refetch
+    attempts are actively failing; the next successful fetch replaces the
+    whole key set."""
+    await sso.validate_id_token(_token(), "N1")  # populate the cache for KID
+    assert KID in sso._jwks_cache["keys"]
+
+    async def boom():
+        raise sso.IdTokenError("jwks_unavailable", 502)
+    monkeypatch.setattr(sso, "_fetch_jwks", boom)
+    sso._jwks_cache["fetched_at"] -= sso.JWKS_TTL_SECONDS + 1  # past the TTL -> forces a real refetch attempt
+
+    claims = await sso.validate_id_token(_token(), "N1")  # same kid as before
+    assert claims["tid"] == TENANT
+    assert sso._jwks_cache["last_attempt_ok"] is False  # the refetch genuinely failed
+
+
+async def test_an_unknown_kid_with_no_prior_success_still_fails_closed_during_an_outage(monkeypatch):
+    """The stale-key fallback above must never extend to a kid that was never
+    actually fetched and verified -- that would be "accept an unverifiable
+    token", exactly what it must not do."""
+    async def boom():
+        raise sso.IdTokenError("jwks_unavailable", 502)
+    monkeypatch.setattr(sso, "_fetch_jwks", boom)
+    err = await _rejects(_token(kid="never-seen-before"), reason="jwks_unavailable")
+    assert err.status == 502
+
+
+async def test_concurrent_cold_start_requests_fetch_jwks_only_once(_cfg):
+    """Concurrent refresh: asyncio is cooperative, not parallel, but
+    _fetch_jwks awaits network I/O and yields control -- without the lock,
+    two simultaneous logins on a cold cache would each independently decide
+    a refetch is needed and both call out to Microsoft."""
+    import asyncio as _asyncio
+
+    results = await _asyncio.gather(
+        sso.validate_id_token(_token(), "N1"),
+        sso.validate_id_token(_token(), "N1"),
+    )
+    assert all(r["tid"] == TENANT for r in results)
+    assert _cfg["n"] == 1, "two concurrent cold-start validations must share one JWKS fetch"
 
 
 # ---- callback integration: the only browser-supplied inputs are code/state ----
