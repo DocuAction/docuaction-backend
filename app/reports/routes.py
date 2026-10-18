@@ -1579,8 +1579,8 @@ async def get_report_csv(
     """
     from app.reports.engine.csv_engine import to_bytes
 
+    row = await _stored(db, report_id, job_id, defer_html=True)    # delivery-scope check first (409 on a mismatched job_id)
     registered = await _registered_bytes(db, report_id, "text/csv")
-    row = await _stored(db, report_id, job_id, defer_html=True)
     if registered is not None:
         art = registered.get("artifact") or {}
         await _audit_download(db, row, "csv", user, job_id=job_id, source="artifact-registry",
