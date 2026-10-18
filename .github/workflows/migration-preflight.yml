@@ -304,11 +304,18 @@ jobs:
           # the two only agree when the target IS head, which a controlled apply
           # to an intermediate revision must not assume (run 35154986185, which
           # correctly refused to execute anything against a two-step gap).
-          PARENT=$(python -c "
+          # CodeRabbit (PR #112, CWE-94): $TARGET was spliced as a Python string
+          # literal inside this -c source (bash interpolates it into the double-
+          # quoted heredoc before Python ever sees it), so a value containing a
+          # single quote could break out of the literal and inject Python. Reads
+          # it from the environment instead -- no string construction, no
+          # injection surface regardless of what TARGET_REVISION_FOR_PY contains.
+          PARENT=$(TARGET_REVISION_FOR_PY="$TARGET" python -c "
+          import os
           from alembic.config import Config
           from alembic.script import ScriptDirectory
           sd = ScriptDirectory.from_config(Config('alembic.ini'))
-          down = sd.get_revision('${TARGET}').down_revision
+          down = sd.get_revision(os.environ['TARGET_REVISION_FOR_PY']).down_revision
           if isinstance(down, tuple):
               down = down[0] if len(down) == 1 else None
           print(down or '')
