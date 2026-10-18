@@ -239,7 +239,7 @@ class _Row:
 @pytest.mark.asyncio
 async def test_csv_download_serves_the_registered_bytes_unchanged_for_a_historical_report(monkeypatch):
     from app.reports import routes
-    registered_bytes = "\ufeffissued,exactly,these,bytes\r\n".encode("utf-8").replace(b"\xef\xbb\xbf", b"")
+    registered_bytes = b"issued,exactly,these,bytes\r\n"
     seen = {}
 
     async def fake_registered(db, report_id, content_type):
@@ -282,3 +282,24 @@ async def test_csv_download_of_a_legacy_report_without_an_artifact_regenerates_a
     resp = await routes.get_report_csv("DA-ARC-2026-080", job_id=None, db=None, user=None)
     assert resp.headers["X-Report-Source"] == "regenerated-from-stored-dataset"
     assert b"Advisory assessments recorded" in resp.body
+
+
+@pytest.mark.asyncio
+async def test_csv_download_checks_the_delivery_scope_before_looking_up_the_registered_artifact(monkeypatch):
+    from app.reports import routes
+    from fastapi import HTTPException
+    calls = []
+
+    async def refuse(db, report_id, job_id=None, **kw):
+        calls.append("scope")
+        raise HTTPException(409, "REPORT_DELIVERY_MISMATCH")
+
+    async def must_not_run(db, report_id, content_type):
+        calls.append("registry")
+        return None
+
+    monkeypatch.setattr(routes, "_stored", refuse)
+    monkeypatch.setattr(routes, "_registered_bytes", must_not_run)
+    with pytest.raises(HTTPException) as exc:
+        await routes.get_report_csv("DA-ARC-2026-080", job_id="another-delivery", db=None, user=None)
+    assert exc.value.status_code == 409 and calls == ["scope"]
