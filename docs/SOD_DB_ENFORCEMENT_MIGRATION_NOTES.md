@@ -65,8 +65,13 @@ it adds `MANAGED_SOD_PREREQUISITE_TABLES = {"review_decision_events"}` (distinct
 ownership gate to account for it, and adds a FINALIZE keep rule: this table stays `docuaction_owner`-
 owned (instead of being handed back to `docuaction_app` the way `MANAGED_CHAIN_ALTERS` tables are)
 *only when* the runtime role's privileges on it are exactly the append-only-by-grant shape (`SELECT,
-INSERT`, neither `UPDATE` nor `DELETE`) -- otherwise it is handed back exactly as before, never
-stripping access that was already there. Ownership of `review_decision_events` is
+INSERT`, none of `UPDATE`, `DELETE` or `TRUNCATE`). It is handed back to `docuaction_app` *only when*
+the runtime role instead holds nothing at all (the pre-prerequisite legacy shape, where there is no
+guard to strip). Any other grant shape -- drift that matches neither pattern -- is a refusal
+(`REFUSED (finalize ownership drift)`), not a handback: silently converting an unexplained grant state
+into full ownership can only widen access, which was CodeRabbit's finding against an earlier version of
+this PR (head `64af1587`) that handed the table back on *any* shape other than the exact append-only
+one. Ownership of `review_decision_events` is
 still not transferred automatically by any of this -- the DBA runbook (`SOD_DB_OWNERSHIP_PREREQUISITE.sql`)
 remains a required, separate, manual step before the managed path will proceed past this preflight.
 

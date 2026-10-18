@@ -428,15 +428,32 @@ def finalize_ownership(engine, become_role=None):
         keep = AREA1_OWNER_TABLES | {"alembic_version"}
         # review_decision_events stays with docuaction_owner ONLY when the DBA prerequisite
         # (docs/SOD_DB_OWNERSHIP_PREREQUISITE.sql) left it in the append-only-by-grant shape: the runtime
-        # role holds SELECT and INSERT and neither UPDATE nor DELETE. Otherwise (e.g. a legacy-path
-        # build whose owner has granted the runtime role nothing, relying on ownership) it is handed to
-        # the runtime role exactly as before -- this change never strips access.
+        # role holds SELECT and INSERT and none of UPDATE, DELETE or TRUNCATE. When the runtime role
+        # instead holds NOTHING at all (a build that never ran the DBA prerequisite, relying on ownership
+        # alone, as PROD is believed to be today) it is handed to the runtime role exactly as before --
+        # this change never strips access, since no DB-level guard existed there to strip. Any OTHER grant
+        # shape is drift: it proves neither that the prerequisite ran nor that nothing was ever granted, so
+        # FINALIZE refuses outright rather than silently replacing an unexplained grant state with full
+        # ownership -- ownership implies every privilege regardless of the row above, so handing over in an
+        # unknown state can only widen access, never narrow it. The whole step runs in one transaction, so a
+        # refusal here leaves every table's ownership and every table's grants exactly as they were.
         for t in sorted(set(owned) & MANAGED_SOD_PREREQUISITE_TABLES):
             held = {p: conn.execute(text("select has_table_privilege(:r, cast(:t as regclass), :p)"),
                                     {"r": APP_ROLE, "t": f'public."{t}"', "p": p}).scalar()
-                    for p in ("SELECT", "INSERT", "UPDATE", "DELETE")}
-            if held == {"SELECT": True, "INSERT": True, "UPDATE": False, "DELETE": False}:
+                    for p in ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE")}
+            append_only = held == {"SELECT": True, "INSERT": True, "UPDATE": False, "DELETE": False,
+                                    "TRUNCATE": False}
+            legacy_none = all(v is False for v in held.values())
+            if append_only:
                 keep = keep | {t}
+            elif not legacy_none:
+                raise SystemExit(
+                    f"REFUSED (finalize ownership drift): {OWNER_ROLE} owns {t} but {APP_ROLE}'s "
+                    f"privileges on it are {held}, matching neither the append-only prerequisite shape "
+                    "(SELECT+INSERT only, nothing else) nor the pre-prerequisite legacy shape (nothing "
+                    f"granted). Investigate who granted {t}'s current privileges and why (inspect its "
+                    "relacl with a superuser session) before re-running FINALIZE.")
+            # else: legacy_none -- falls through, handed to APP_ROLE by the loop below exactly as before.
         to_app = sorted(set(owned) - keep)
         for t in to_app:
             conn.execute(text(f'ALTER TABLE public."{t}" OWNER TO "{APP_ROLE}"'))
