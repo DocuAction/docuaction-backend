@@ -199,6 +199,23 @@ STATE_STORE_NOT_APPLIED = "IQVIA_ASSESSMENT_STORE_NOT_APPLIED"
 STATE_STORE_UNREADABLE = "IQVIA_ASSESSMENT_STORE_UNREADABLE"
 
 
+def _utc_text(value) -> str:
+    """Text of a timestamp in UTC. A timezone-aware value is converted first (PostgreSQL returns values in the session
+    time zone), so a date taken from it and labelled UTC is the UTC date."""
+    from datetime import timezone as _tz
+    if hasattr(value, "tzinfo") and getattr(value, "tzinfo", None) is not None and hasattr(value, "astimezone"):
+        return str(value.astimezone(_tz.utc))
+    return str(value)
+
+
+def assessment_ref(assessment_id) -> str:
+    """A stable, identifier-free reference to one assessment row for reviewer traceability: 'IQ-' plus the first
+    eight hex digits of the row id. It carries no NPI, entity, reviewer or snapshot-content data."""
+    if not assessment_id:
+        return "IQ-unrecorded"
+    return "IQ-" + str(assessment_id).replace("-", "")[:8].lower()
+
+
 def disclosure_from_rows(*, flag_enabled: bool, rows: Sequence[Dict[str, Any]],
                          store: str = "READABLE") -> Dict[str, Any]:
     """The truthful, identifier-free statement of ACTUAL IQVIA use for a report or CSV.
@@ -211,7 +228,14 @@ def disclosure_from_rows(*, flag_enabled: bool, rows: Sequence[Dict[str, Any]],
     last two cases the report says it cannot tell, rather than claiming "not used"."""
     base = {"assessments": 0, "reviews_linked": 0, "by_decision": {}, "snapshots": [], "first_assessed_at": None,
             "last_assessed_at": None, "distinct_assessors": 0, "verification_source": False,
-            "consumption_currently_enabled": bool(flag_enabled), "store": store}
+            "consumption_currently_enabled": bool(flag_enabled), "store": store,
+            # present in EVERY state: the report template reads them for any delivery (strict undefined), including
+            # deliveries where IQVIA was not used
+            "decision_counts": [], "entities_linked": 0, "assessor_roles": [], "assessment_refs": [],
+            "lookup_availability": "ENABLED" if flag_enabled else "DISABLED",
+            "lookup_availability_statement": ("Current IQVIA lookup availability when this report was generated: "
+                                              + ("ENABLED" if flag_enabled else "DISABLED")
+                                              + ". This is separate from the historical use listed above.")}
     if store == "NOT_APPLIED":
         return {**base, "state": STATE_STORE_NOT_APPLIED,
                 "statement": ("The IQVIA advisory-assessment store is not present in this environment, so no IQVIA "
@@ -226,7 +250,11 @@ def disclosure_from_rows(*, flag_enabled: bool, rows: Sequence[Dict[str, Any]],
                 "statement": ("No IQVIA data was used for this delivery. A staged or approved IQVIA snapshot "
                               "is not use, and IQVIA is not a verification source.")}
     snaps = sorted({(str(r["snapshot_id"]), r.get("snapshot_sha256_prefix") or "") for r in rows})
-    times = sorted(str(r["assessed_at"]) for r in rows if r.get("assessed_at"))
+    received = {}
+    for r in rows:
+        if r.get("snapshot_received_at") is not None:
+            received.setdefault(str(r["snapshot_id"]), _utc_text(r["snapshot_received_at"])[:10])
+    times = sorted(_utc_text(r["assessed_at"]) for r in rows if r.get("assessed_at"))
     n = len(rows)
     tail = ("" if flag_enabled else
             " IQVIA lookup is currently disabled; these are historical records of past use and remain part of "
@@ -236,9 +264,27 @@ def disclosure_from_rows(*, flag_enabled: bool, rows: Sequence[Dict[str, Any]],
     review_tail = (f" {with_review} of these assessment(s) are linked to a review ({linked} distinct review(s)); "
                    f"{n - with_review} are delivery-level evidence with no review."
                    if with_review else " None is linked to a review (delivery-level evidence).")
+    decision_counts = sorted(Counter(r["decision"] for r in rows).items())
+    refs = sorted(({"ref": assessment_ref(r.get("id")), "decision": r["decision"],
+                    "assessed_at": _utc_text(r["assessed_at"]) if r.get("assessed_at") else None,
+                    "assessed_role": r.get("assessed_role") or "not recorded",
+                    "review_linked": bool(r.get("review_id")), "entity_linked": bool(r.get("entity_id")),
+                    "snapshot_id": str(r["snapshot_id"])} for r in rows),
+                  key=lambda x: (x["assessed_at"] or "", x["ref"], x["decision"]))
+    availability = "ENABLED" if flag_enabled else "DISABLED"
     return {**base, "state": STATE_USED, "assessments": n, "reviews_linked": linked,
-            "by_decision": dict(sorted(Counter(r["decision"] for r in rows).items())),
-            "snapshots": [{"snapshot_id": s, "sha256_prefix": p} for s, p in snaps],
+            "by_decision": dict(decision_counts),
+            # A list as well as a mapping: a JSONB round trip reorders object keys (shortest first), so a renderer that
+            # iterates a mapping can print the same data in another order and change the artifact hash.
+            "decision_counts": [[d, c] for d, c in decision_counts],
+            "entities_linked": sum(1 for r in rows if r.get("entity_id")),
+            "assessor_roles": sorted({r.get("assessed_role") or "not recorded" for r in rows}),
+            "assessment_refs": refs,
+            "lookup_availability": availability,
+            "lookup_availability_statement": ("Current IQVIA lookup availability when this report was generated: "
+                                              + availability + ". This is separate from the historical use listed above."),
+            "snapshots": [{"snapshot_id": s, "sha256_prefix": p, "received_on": received.get(s),
+                           "source_effective_date": None} for s, p in snaps],
             "first_assessed_at": times[0] if times else None, "last_assessed_at": times[-1] if times else None,
             "distinct_assessors": len({r.get("assessed_by") for r in rows}),
             "statement": (f"IQVIA affiliation data was consulted in {n} analyst advisory assessment(s) for this "
@@ -385,7 +431,11 @@ async def disclosure_for_intake(db, *, flag_enabled: bool, intake_id) -> Dict[st
         return disclosure_from_rows(flag_enabled=flag_enabled, rows=[], store=store)
     a = IqviaAdvisoryAssessment  # unbounded: a disclosure must not understate use. Columns only, no rationale.
     got = (await db.execute(select(a.decision, a.snapshot_id, a.snapshot_sha256_prefix, a.assessed_at,
-                                   a.assessed_by, a.review_id).where(a.delivery_intake_id == intake_id))).all()
+                                   a.assessed_by, a.review_id, a.id, a.assessed_role, a.entity_id,
+                                   sm.SourceSnapshot.received_at)
+                            .join(sm.SourceSnapshot, sm.SourceSnapshot.id == a.snapshot_id, isouter=True)
+                            .where(a.delivery_intake_id == intake_id))).all()
     return disclosure_from_rows(flag_enabled=flag_enabled, rows=[
         {"decision": d, "snapshot_id": s, "snapshot_sha256_prefix": p, "assessed_at": t, "assessed_by": u,
-         "review_id": r} for d, s, p, t, u, r in got])
+         "review_id": r, "id": i, "assessed_role": role, "entity_id": e, "snapshot_received_at": rc}
+        for d, s, p, t, u, r, i, role, e, rc in got])
