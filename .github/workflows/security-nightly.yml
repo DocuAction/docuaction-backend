@@ -17,6 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       # Optional. The frontend is a separate repo, so without a token the nightly
@@ -25,6 +26,8 @@ jobs:
       # when this step does not produce a directory, so the run stays honest.
       - name: Checkout frontend (optional second target)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
         continue-on-error: true
         with:
           repository: DocuAction/docuaction-frontend

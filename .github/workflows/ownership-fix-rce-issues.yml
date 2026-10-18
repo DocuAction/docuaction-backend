@@ -70,7 +70,7 @@ jobs:
       issues: write
     steps:
       - name: Login to Azure (OIDC - no stored client secret)
-        uses: azure/login@v2
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -79,13 +79,19 @@ jobs:
       - name: Report runner IPv4 and wait for the operator's temporary /32 (bounded)
         env:
           GH_TOKEN: ${{ github.token }}
+          # zizmor template-injection: ${{ }} spliced directly into run script
+          # source text, not just read as a string. Passed through env: instead.
+          HANDSHAKE_ISSUE: ${{ inputs.handshake_issue }}
+          EXPECTED_ALEMBIC_VERSION_IN: ${{ inputs.expected_alembic_version }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_RUN_ID: ${{ github.run_id }}
         run: |
-          test -n "${{ inputs.handshake_issue }}" || { echo "::error::handshake_issue is required"; exit 1; }
-          test -n "${{ inputs.expected_alembic_version }}" || { echo "::error::expected_alembic_version is required"; exit 1; }
+          test -n "$HANDSHAKE_ISSUE" || { echo "::error::handshake_issue is required"; exit 1; }
+          test -n "$EXPECTED_ALEMBIC_VERSION_IN" || { echo "::error::expected_alembic_version is required"; exit 1; }
           IP=$(curl -s https://api.ipify.org)
           echo "runner public IPv4: $IP"
-          gh issue comment "${{ inputs.handshake_issue }}" --repo "${{ github.repository }}" \
-            --body "ownership-fix run ${{ github.run_id }}: runner public IPv4 **$IP** - waiting up to 20 min for a temporary /32 (start = end = this address). Remove it when this run finishes."
+          gh issue comment "$HANDSHAKE_ISSUE" --repo "$GH_REPOSITORY" \
+            --body "ownership-fix run $GH_RUN_ID: runner public IPv4 **$IP** - waiting up to 20 min for a temporary /32 (start = end = this address). Remove it when this run finishes."
           for i in $(seq 1 80); do
             if python -c "import socket;s=socket.socket();s.settimeout(5);s.connect(('$PGHOST',5432))" 2>/dev/null; then
               echo "DEV Postgres reachable after $i attempt(s)"; exit 0

@@ -193,11 +193,21 @@ def test_a_tag_push_builds_but_cannot_deploy():
 
 # ── promotion preserves identity ─────────────────────────────────────────────
 
+def _promote_step(job: dict) -> dict:
+    return next(s for s in job["steps"] if s.get("id") == "promote")
+
+
 def test_prod_promotes_the_dev_validated_digest_rather_than_rebuilding():
-    body = _steps_text(_job(DEPLOY, "deploy-prod"))
+    job = _job(DEPLOY, "deploy-prod")
+    body = _steps_text(job)
     assert "az acr import" in body, (
         "production must receive the image DEV validated, not a fresh build")
-    assert "needs.deploy-dev.outputs.deployed_digest" in body
+    # zizmor template-injection fix (2026-10-18): needs.deploy-dev's output is
+    # no longer spliced with ${{ }} into the run script; it's passed through
+    # env: and read back as a shell variable. Check it at its new source of
+    # truth instead of in the script text.
+    assert _promote_step(job)["env"]["DEV_DEPLOYED_DIGEST"] == "${{ needs.deploy-dev.outputs.deployed_digest }}"
+    assert "${DEV_DEPLOYED_DIGEST}" in body
     assert "docker build" not in body
 
 
@@ -208,12 +218,13 @@ def test_prod_import_authenticates_by_source_registry_resource_id():
     disabled). Naming the source registry by its Azure resource ID makes the
     import use the caller's ARM RBAC - AcrPull on DEV, Data Importer on PROD -
     with no credential, admin user, or anonymous pull."""
-    body = _steps_text(_job(DEPLOY, "deploy-prod"))
+    job = _job(DEPLOY, "deploy-prod")
+    body = _steps_text(job)
     line = next(l for l in body.splitlines() if "az acr import" in l)
     assert '--registry "$SRC_REGISTRY_ID"' in line, "source registry must be passed by resource ID"
     assert "Microsoft.ContainerRegistry/registries/${DEV_REGISTRY}" in body
     assert "resourceGroups/${DEV_RG}/providers" in body
-    assert 'SRC="${IMAGE_REPO}@${{ needs.deploy-dev.outputs.deployed_digest }}"' in body,         "with --registry the source is the bare repo@digest"
+    assert 'SRC="${IMAGE_REPO}@${DEV_DEPLOYED_DIGEST}"' in body,         "with --registry the source is the bare repo@digest"
     for banned in ("--username", "--password", "admin-enabled", "anonymous-pull", "acr login"):
         assert banned not in body, f"import must not use credentials/anonymous pull: {banned}"
 

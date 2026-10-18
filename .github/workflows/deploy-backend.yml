@@ -61,6 +61,15 @@ on:
       - 'sprint*'
       - 'platform*'
 
+# Least-privilege default (zizmor: excessive-permissions). This is the
+# ceiling for any job below that doesn't declare its own `permissions:` --
+# today that's only build-and-test (checkout + test + upload-artifact, none
+# of which need more than read). deploy-dev and deploy-prod already declare
+# their own job-level permissions (id-token: write, etc.), which replace
+# rather than add to this default, so they are unaffected.
+permissions:
+  contents: read
+
 env:
   DEV_APP: docuaction-dev
   DEV_RG: rg-docuaction-dev
@@ -89,13 +98,14 @@ jobs:
         # branch or tag, so checking it out fails - there is no ref by that
         # name. The dispatch ref is the right source: main contains the release
         # commit this candidate was built from.
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
           ref: ${{ github.ref }}
           fetch-depth: 0
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12'
 
@@ -118,7 +128,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: test-results-${{ github.sha }}
           path: test-results.xml
@@ -227,14 +237,14 @@ jobs:
             -x "**/__pycache__/*" "**/*.pyc" "**/.env"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: backend-deploy-${{ github.sha }}
           path: deploy.zip
           retention-days: 30
 
       - name: Upload security reports
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: security-reports-${{ github.sha }}
           path: |
@@ -286,8 +296,9 @@ jobs:
       # never needed the source in the first place.
       - name: Checkout the release source
         if: inputs.run_migrations == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
           ref: ${{ inputs.image_tag }}
 
       # `python` is not guaranteed to resolve on the runner image; `python3` is.
@@ -295,12 +306,12 @@ jobs:
       # only by Alembic, so it follows the same gate.
       - name: Set up Python 3.12
         if: inputs.run_migrations == 'true'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12'
 
       - name: Login to Azure (OIDC - no stored client secret)
-        uses: azure/login@v2
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
         with:
           # Identifiers, not credentials. See container-release.yml for why
           # these are environment variables rather than secrets.
@@ -310,15 +321,20 @@ jobs:
 
       - name: Verify the candidate image exists in the DEV registry
         id: resolve
+        env:
+          # zizmor template-injection: inputs.image_tag is a caller-supplied
+          # string, not a trusted context value, and was spliced with ${{ }}
+          # directly into this step's run script source text.
+          IMAGE_TAG_IN: ${{ inputs.image_tag }}
         run: |
           # Fail before touching anything if the image is not there. Resolving
           # the digest here also pins what follows: every later step uses this
           # value, not the tag, so a tag moved mid-deploy cannot change what
           # ships.
-          DIGEST=$(az acr manifest show-metadata "${DEV_LOGIN_SERVER}/${IMAGE_REPO}:${{ inputs.image_tag }}" --query digest -o tsv)
+          DIGEST=$(az acr manifest show-metadata "${DEV_LOGIN_SERVER}/${IMAGE_REPO}:${IMAGE_TAG_IN}" --query digest -o tsv)
           test -n "$DIGEST" || { echo "candidate image not found in ${DEV_REGISTRY}"; exit 1; }
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
-          echo "candidate: ${IMAGE_REPO}:${{ inputs.image_tag }} -> $DIGEST"
+          echo "candidate: ${IMAGE_REPO}:${IMAGE_TAG_IN} -> $DIGEST"
 
       - name: Capture the rollback point BEFORE any change
         id: capture
@@ -521,7 +537,7 @@ jobs:
       # (gated by the required reviewer). The former stored client-secret login
       # is gone: no long-lived secret on this path.
       - name: Login to Azure (OIDC - no stored client secret)
-        uses: azure/login@v2
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -529,6 +545,14 @@ jobs:
 
       - name: Import the DEV-validated digest into the PROD registry
         id: promote
+        env:
+          # zizmor template-injection: inputs.image_tag is caller-supplied, not
+          # a trusted context value, and was spliced with ${{ }} directly into
+          # this step's run script source text (the others here are lower-risk
+          # pipeline-internal values, moved for the same reason).
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          DEV_DEPLOYED_DIGEST: ${{ needs.deploy-dev.outputs.deployed_digest }}
+          IMAGE_TAG_IN: ${{ inputs.image_tag }}
         run: |
           # SAME BYTES. The digest validated in DEV is imported into the PROD
           # registry rather than rebuilt from source, so what production runs is
@@ -544,12 +568,12 @@ jobs:
           # Data Importer and Data Reader on the PROD registry (target). No
           # credential, admin user, or anonymous pull is involved. The resource ID
           # is built from the same identifiers the rest of this job already uses.
-          SRC_REGISTRY_ID="/subscriptions/${{ vars.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${DEV_RG}/providers/Microsoft.ContainerRegistry/registries/${DEV_REGISTRY}"
-          SRC="${IMAGE_REPO}@${{ needs.deploy-dev.outputs.deployed_digest }}"
-          az acr import --name "$PROD_REGISTRY" --registry "$SRC_REGISTRY_ID" --source "$SRC" --image "${IMAGE_REPO}:${{ inputs.image_tag }}" --force
-          PROD_DIGEST=$(az acr manifest show-metadata "${PROD_LOGIN_SERVER}/${IMAGE_REPO}:${{ inputs.image_tag }}" --query digest -o tsv)
+          SRC_REGISTRY_ID="/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${DEV_RG}/providers/Microsoft.ContainerRegistry/registries/${DEV_REGISTRY}"
+          SRC="${IMAGE_REPO}@${DEV_DEPLOYED_DIGEST}"
+          az acr import --name "$PROD_REGISTRY" --registry "$SRC_REGISTRY_ID" --source "$SRC" --image "${IMAGE_REPO}:${IMAGE_TAG_IN}" --force
+          PROD_DIGEST=$(az acr manifest show-metadata "${PROD_LOGIN_SERVER}/${IMAGE_REPO}:${IMAGE_TAG_IN}" --query digest -o tsv)
           echo "digest=$PROD_DIGEST" >> "$GITHUB_OUTPUT"
-          echo "DEV digest : ${{ needs.deploy-dev.outputs.deployed_digest }}"
+          echo "DEV digest : ${DEV_DEPLOYED_DIGEST}"
           echo "PROD digest: $PROD_DIGEST"
 
       - name: Capture the PROD rollback point BEFORE any change

@@ -119,6 +119,11 @@ def test_no_parallel_migration_workflow_exists():
 
 
 def test_release_summary_reports_the_database_phase_truthfully():
-    text = _runs_text(_steps(DEV_RELEASE, "summary"))
+    """zizmor template-injection fix (2026-10-18): these needs.* references are
+    no longer spliced with ${{ }} into the run script; they're passed through
+    env: on the "Record what shipped" step and read back as shell variables.
+    Check the env: dict (the new source of truth) instead of the script text."""
+    step = next(s for s in _steps(DEV_RELEASE, "summary") if s.get("name") == "Record what shipped")
+    env = {k: str(v) for k, v in step["env"].items()}
     for key in ("applied", "baseline_readable", "migration-gate.result", "gov-verify.result"):
-        assert key in text
+        assert any(key in v for v in env.values()), f"{key!r} not found in any env: value"
