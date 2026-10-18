@@ -300,11 +300,12 @@ L6_2 = Lesson(
         "answering a question that belongs to the COR — the first by asserting "
         "a threshold of 'any difference at all', the second by asserting "
         "'never'.\n\n"
-        "The same applies to a source that could not answer. SAM.gov currently "
-        "has no credential, so it is unavailable across the whole population. "
+        "The same applies to a source that could not answer. SAM.gov is "
+        "currently stored as unavailable for every attempt on the DEV deliveries. "
         "That is a fact about the lookup. It is never evidence about an entity, "
         "and an entity is never placed in a category because a Federal system "
-        "was unreachable."),
+        "was unreachable. An attempt is not a clearance, and SAM registration and "
+        "SAM exclusions are different questions."),
     example=("9,032 development records show some address difference. They "
              "appear in reports as awaiting methodology, with the count shown, "
              "and in no category."),
@@ -328,8 +329,8 @@ L6_2 = Lesson(
         Statement("Address materiality is not settled and affected records are "
                   "reported as awaiting a methodology decision.",
                   Classification.PROGRAM_GUIDANCE_REQUESTED),
-        Statement("SAM.gov cannot be queried because no credential has been "
-                  "issued; its answers are recorded as unavailable.",
+        Statement("SAM.gov answers are currently recorded as unavailable on DEV; "
+                  "an unavailable attempt is neither registration nor exclusion evidence.",
                   Classification.SOURCE_LIMITATION),
         Statement("AGT proposes treating a registered-address versus "
                   "practice-location street difference as informational, and a "

@@ -99,8 +99,20 @@ def _long_timeline(d):
     return d
 
 
+LONG_TOKEN = "2.16.840.1.113883.3.7204.9.99.777.96.20.0"   # a 41-character OID: no space, hyphen or underscore to break at
+
+
+def _long_unbreakable_token(d):
+    """Found on DEV 2026-10-15 (reports DA-ARC-2026-077/078/079, Appendix E): the Description cell could not break a long
+    OID, so it ran 25 pt past the table border into the page margin (legible, but outside the table)."""
+    rows = d["dataset"]["findings"]["rows"]
+    rows[0] = dict(rows[0], description=f"partOf '{LONG_TOKEN}' does not resolve to any record in this delivery.")
+    return d
+
+
 SCENARIOS = {
     "clean_060": lambda: _fixture("060"),
+    "long_unbreakable_token": lambda: _long_unbreakable_token(_fixture("061")),
     "frozen_071": lambda: _fixture("071"),           # the ORIGINAL stored payload of DA-ARC-2026-071 read from DEV (synthetic data)
     "reconstructed_071": lambda: _fixture("071r"),   # rebuilt from the registered DA-ARC-2026-071 artifact + decision-event evidence
     "live_067_timeline_17": lambda: _fixture("067"),
@@ -275,3 +287,29 @@ def test_closing_blocks_are_not_split_across_pages(pdfs, name):
         a, b = page_with(first), page_with(last)
         assert a and b, f"{name}: missing {first!r} or {last!r}"
         assert a[-1] == b[0], f"{name}: {first!r} starts on page {a[-1]} but {last!r} is on page {b[0]}"
+
+
+def words_past_margin(page, margin=45.0, tolerance=0.5):
+    """Words whose right edge is beyond the content margin (the table border sits on it). Landscape appendix pages only:
+    the portrait cover and closing pages have their own, narrower content box."""
+    if page["w"] < 700:
+        return []
+    return [w["text"] for w in page["words"] if w["x1"] > page["w"] - margin + tolerance]
+
+
+class TestTheMarginDetector:
+    def test_flags_a_word_in_the_margin_and_ignores_one_on_it(self):
+        page = {"w": 792.0, "words": [{"text": "inside", "x1": 747.0}, {"text": "spill", "x1": 772.0}]}
+        assert words_past_margin(page) == ["spill"]
+
+    def test_ignores_the_portrait_pages(self):
+        assert words_past_margin({"w": 612.0, "words": [{"text": "cover", "x1": 581.0}]}) == []
+
+
+@needs_weasyprint
+def test_a_long_unbreakable_token_stays_inside_the_table_and_is_complete(pdfs):
+    pages = pdfs["long_unbreakable_token"]
+    assert not [(pi, words_past_margin(p)) for pi, p in enumerate(pages, start=1) if words_past_margin(p)]
+    # complete: its fragments, in reading order, rebuild the whole token (a wrap may split it across lines)
+    joined = "".join(w["text"] for p in pages for w in p["words"])
+    assert LONG_TOKEN in joined.replace("'", "")
