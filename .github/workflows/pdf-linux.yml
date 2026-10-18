@@ -33,6 +33,12 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Least-privilege default; no job in this workflow writes to the repo or
+# creates releases/comments. Added 2026-10-18 (zizmor excessive-permissions
+# survey, doc 61/65) -- no prior permissions declaration existed here at all.
+permissions:
+  contents: read
+
 jobs:
   render:
     runs-on: ubuntu-latest
