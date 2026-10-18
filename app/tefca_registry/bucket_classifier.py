@@ -220,6 +220,94 @@ def _v2_rules() -> List[dict]:
 SEED_RULES_V2: List[dict] = _v2_rules()
 
 
+def _v3_rules() -> List[dict]:
+    """Version 3 — v2's SAM disqualifier made REACHABLE on the RCE/delivery
+    path. Purely ADDITIVE: every v1/v2 condition stays exactly as it was.
+
+    INVESTIGATED 2026-10-02 (SAM verification-contract review), CONFIRMED,
+    FIXED HERE — not deferred, because it does not depend on the separate,
+    still-open "1,298 Failed indicator" question (that question is about
+    `verification_coverage.py`'s DASHBOARD COUNT semantics across sources;
+    this is about whether THIS CLASSIFIER can ever disqualify an entity for a
+    pending SAM/LEIE exclusion review on the RCE path — two unrelated
+    consumers of the same underlying D1-D6 disposition, confirmed by reading
+    both: `verification_coverage.py` reads `tefca_dimension_evidence.
+    disposition` directly via its own `_DIMENSION_DISPOSITION` mapping, never
+    through this classifier or `arc_pipeline._DISPOSITION_TO_STATE` at all).
+
+    WHAT WAS ACTUALLY WRONG
+    `BucketClassifier.classify()` has exactly two real callers.
+    `review_service.probe_sources()` (manual single-entity review) emits the
+    literal status "excluded" for a confirmed LEIE hit — v1/v2's conditions
+    are correct and reachable THERE, and stay completely unchanged below.
+    `arc_pipeline.dimensions_to_verification_results()` (the RCE/delivery
+    path — the one that produces client-facing reports) NEVER emits
+    "excluded"/"debarred" literally: its five-state vocabulary (verified/
+    not_found/not_checked/unavailable/failed) maps a REVIEW disposition (a
+    potential SAM debarment, or a confirmed one before the 2026-10-02
+    connector/evidence fix) to "not_found" -- proven reachable already,
+    because RULE-002's own v1 condition
+    (`{"source": "sam_gov", "status": "not_found"}`) already uses it
+    correctly. v2's SAM_BAD conditions on RULE-001/003/005 used the
+    UNREACHABLE literal instead, so they could never fire on the RCE path --
+    confirmed by tracing both callers, not inferred from the symptom alone.
+
+    THE FIX, PRECISELY
+      RULE-001  gained NO sam_gov condition at all in v1 or v2 (only
+                oig_leie, via its own `all_of ... status == clear`
+                requirement, which a pending LEIE review already correctly
+                fails). Adds `none_of: sam_gov == not_found`.
+      RULE-003  had a `none_of: oig_leie == excluded` since v1 (dead on the
+                RCE path, same reachability problem, independent of SAM) and
+                v2's vacuous SAM_BAD none_of; RULE-003 has NO positive
+                `all_of` on either source, so neither guard has ever worked
+                on the RCE path. Adds `none_of: sam_gov == not_found` and
+                `none_of: oig_leie == not_found`.
+      RULE-005  (B4, the disqualifier) had the same dead literals for BOTH
+                sam_gov and oig_leie since v1. Adds the `not_found` variant
+                of each to `any_of`, alongside the existing (still correct,
+                still needed for the other path) `excluded`/`debarred`
+                conditions.
+      RULE-002, RULE-004  UNCHANGED. RULE-002 already had a working sam_gov
+                guard and LEIE is covered by its own `all_of clear`
+                requirement; RULE-004 is the unmatched/manual-review default
+                and is not where this disqualifier belongs.
+
+    RULE-005 runs at priority 5 (first, by design -- see its own v1
+    comment), so fixing it alone would already protect every other bucket;
+    RULE-001/003 are fixed too anyway, matching the defense-in-depth
+    `none_of` pattern v2 already established rather than relying on
+    evaluation order alone.
+    """
+    import copy
+
+    PENDING = [{"source": "sam_gov", "status": "not_found"},
+               {"source": "oig_leie", "status": "not_found"}]
+
+    def _add(cond: dict, clause: str, items: List[dict]) -> None:
+        existing = {(c.get("source"), c.get("status"))
+                    for c in cond.get(clause, []) if isinstance(c, dict)}
+        for c in items:
+            if (c["source"], c["status"]) not in existing:
+                cond.setdefault(clause, []).append(c)
+
+    out = []
+    for spec in copy.deepcopy(SEED_RULES_V2):
+        code = spec["rule_code"]
+        cond = spec["conditions"]
+        if code == "RULE-001":
+            _add(cond, "none_of", [{"source": "sam_gov", "status": "not_found"}])
+        elif code == "RULE-003":
+            _add(cond, "none_of", PENDING)
+        elif code == "RULE-005":
+            _add(cond, "any_of", PENDING)
+        out.append(spec)
+    return out
+
+
+SEED_RULES_V3: List[dict] = _v3_rules()
+
+
 class BucketClassifier:
     """Evaluates verification results against the active rule set.
 
@@ -533,3 +621,38 @@ async def ensure_rules_v2(session, effective: Optional[date] = None) -> int:
     logger.info("Retired %d v1 rules; activated %d v2 rules",
                 len(v1), len(SEED_RULES_V2))
     return len(SEED_RULES_V2)
+
+
+async def ensure_rules_v3(session, effective: Optional[date] = None) -> int:
+    """Retire version 2 rules and activate version 3 (SAM/LEIE disqualifier
+    made reachable on the RCE path -- see `_v3_rules()`'s docstring).
+
+    Idempotent: returns 0 if any version-3 row already exists. v2 rows are
+    RETIRED, never deleted, same reasoning as `ensure_rules_v2`.
+    """
+    from sqlalchemy import func as sqlfunc, select
+    from app.tefca_registry import models as reg
+
+    eff = effective or date.today()
+    already = int((await session.execute(
+        select(sqlfunc.count()).select_from(reg.ReviewRule)
+        .where(reg.ReviewRule.version == 3))).scalar() or 0)
+    if already:
+        return 0
+
+    v2 = (await session.execute(
+        select(reg.ReviewRule).where(reg.ReviewRule.version == 2))).scalars().all()
+    for row in v2:
+        row.is_active = False
+        row.retired_date = eff
+
+    for spec in SEED_RULES_V3:
+        session.add(reg.ReviewRule(
+            rule_code=spec["rule_code"], name=spec["name"], bucket=spec["bucket"],
+            priority=spec["priority"], conditions=spec["conditions"],
+            description=spec["description"], version=3,
+            effective_date=eff, is_active=True))
+    await session.commit()
+    logger.info("Retired %d v2 rules; activated %d v3 rules",
+                len(v2), len(SEED_RULES_V3))
+    return len(SEED_RULES_V3)

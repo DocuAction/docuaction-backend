@@ -204,14 +204,21 @@ def _apply_filters(stmt, *, source_row=None, entity_name=None, npi=None,
     if issue_type:
         stmt = stmt.where(m.RceIssue.issue_type == issue_type.strip())
     if severity:
-        stmt = stmt.where(m.RceIssue.severity == severity.strip().upper())
+        # One value or a comma list (HIGH,CRITICAL) - the same form /dispositions accepts.
+        sev = [x.strip().upper() for x in severity.split(",") if x.strip()]
+        stmt = stmt.where(m.RceIssue.severity.in_(sev))
     if stage:
         wanted = stage.strip().upper()
         if wanted not in STAGES:
             raise ValueError(f"stage must be one of {STAGES}")
         stmt = stmt.where(stage_expr() == wanted)
     if status:
-        stmt = stmt.where(m.RceIssue.resolution == status.strip().upper())
+        # `UNDECIDED` = the resolutions that still hold a record (open, proposed, under
+        # review); otherwise one value or a comma list.
+        wanted = [x.strip().upper() for x in status.split(",") if x.strip()]
+        if wanted == [UNDECIDED]:
+            wanted = list(OPEN_RESOLUTIONS)
+        stmt = stmt.where(m.RceIssue.resolution.in_(wanted))
     if from_:
         stmt = stmt.where(m.RceIssue.created_at >= _parse_when(from_))
     if to:
@@ -434,6 +441,13 @@ def _row(row, *, job_id, intake_id, histories, ident_events, assignees, legacy,
     existing_value = (latest_event["existing_value"] if latest_event
                       else (issue.suggested_value if is_conflict else None))
     terminal = is_terminal_resolution(issue.resolution)
+    # WF-S22: a delivery-level finding (no `source_record_id`) has nothing for
+    # a disposition to attach to -- `curation.apply_disposition` refuses it
+    # with 409 ("names no source record... has no record disposition"), same
+    # as a terminal finding. `can_dispose` must say so BEFORE the form is
+    # offered, not after the server rejects the Save (SCH-002 is the case
+    # that surfaced this: a dataset-level rule with no source record).
+    dispositionable = not terminal and issue.source_record_id is not None
     out = {
         "issue_id": str(issue.id),
         "issue_code": issue.issue_code,
@@ -465,7 +479,11 @@ def _row(row, *, job_id, intake_id, histories, ident_events, assignees, legacy,
         # A settled finding accepts no decision (`curation.apply_disposition`
         # refuses it with 409); the UI disables its controls on these.
         "terminal": terminal,
-        "can_dispose": not terminal,
+        "can_dispose": dispositionable,
+        "disposition_blocked_reason": (
+            None if dispositionable
+            else ("delivery_level_finding" if issue.source_record_id is None
+                  else "terminal")),
         "assignee": assignees.get(issue.source_record_id),
         "disposition": (latest_disposition or {}).get("disposition"),
         "disposition_history": history,
@@ -553,16 +571,78 @@ async def list_exceptions(db, intake_id, *, source_row: Optional[int] = None,
     }
 
 
+#: label -> unit and population, for every count the `exceptions` block carries.
+#: Findings and records are DIFFERENT units: one record can carry several
+#: findings, so no finding total is a record total and the two never substitute.
+COUNT_DEFINITIONS = {
+    "total": "findings - every finding of the current quality run",
+    "open": "findings - OPEN, PROPOSED or UNDER_REVIEW (no final decision)",
+    "resolved": "findings - APPROVED, REJECTED, WAIVED or RESOLVED",
+    "held_records": "source records - current disposition HELD",
+    "high_critical_findings": "findings - severity HIGH or CRITICAL, any state",
+    "high_critical_records": "source records - at least one HIGH/CRITICAL finding, any state",
+    "open_high_critical_findings": ("findings - HIGH/CRITICAL and undecided "
+                                    "(the 'undecided high/critical findings' count)"),
+    "open_high_critical_records": "source records - at least one undecided HIGH/CRITICAL finding",
+    "records_with_findings": "source records - at least one finding of any severity",
+}
+
+
+async def _record_level_counts(db, intake_uuid, sub) -> Dict[str, Any]:
+    """Distinct-record counts beside the finding counts, from the same current-run set."""
+    hc = sub.c.severity.in_(("HIGH", "CRITICAL"))
+    undecided = sub.c.resolution.in_(OPEN_RESOLUTIONS)
+    row = (await db.execute(select(
+        func.count().filter(hc),
+        func.count(sub.c.source_record_id.distinct()).filter(hc),
+        func.count().filter(hc & undecided),
+        func.count(sub.c.source_record_id.distinct()).filter(hc & undecided),
+        func.count(sub.c.source_record_id.distinct()),
+    ))).one()
+    held = int((await db.execute(text(
+        f"SELECT count(*) FROM {tm.CURRENT_DISPOSITIONS_VIEW} "
+        "WHERE intake_id = CAST(:i AS uuid) AND disposition = 'HELD'"),
+        {"i": str(intake_uuid)})).scalar() or 0)
+    return {
+        "held_records": held,
+        "high_critical_findings": int(row[0] or 0),
+        "high_critical_records": int(row[1] or 0),
+        "open_high_critical_findings": int(row[2] or 0),
+        "open_high_critical_records": int(row[3] or 0),
+        "records_with_findings": int(row[4] or 0),
+        "definitions": dict(COUNT_DEFINITIONS),
+    }
+
+
 async def totals_for_intake(db, intake_id, *, all_runs: bool = False) -> Dict[str, Any]:
-    """Counts only - what the job detail's `exceptions` block carries."""
+    """Counts only - what the job detail's `exceptions` block carries.
+
+    The finding keys (`total`, `open`, `resolved`, `by_*`) are unchanged. The
+    record-level keys and `definitions` are additive (2026-10-13): a finding
+    total is never a record total.
+    """
     intake_uuid = as_uuid(intake_id)
     if intake_uuid is None:
         return {"total": 0, "open": 0, "resolved": 0, "by_code": {}, "by_severity": {},
-                "by_resolution": {}}
-    return await _totals(db, _base_statement(intake_uuid, all_runs=all_runs).subquery())
+                "by_resolution": {}, "held_records": 0, "high_critical_findings": 0,
+                "high_critical_records": 0, "open_high_critical_findings": 0,
+                "open_high_critical_records": 0, "records_with_findings": 0,
+                "definitions": dict(COUNT_DEFINITIONS)}
+    sub = _base_statement(intake_uuid, all_runs=all_runs).subquery()
+    totals = await _totals(db, sub)
+    totals.update(await _record_level_counts(db, intake_uuid, sub))
+    return totals
 
 
 # -- record-level dispositions ------------------------------------------------
+
+_CURRENT_RUN_SQL = """(SELECT r.id FROM rce_ingestion_runs r
+         WHERE r.source_intake_id = CAST(:i AS uuid)
+           AND r.run_status = 'COMPLETE' AND r.completed_at IS NOT NULL
+         ORDER BY r.completed_at DESC, r.started_at DESC, r.id DESC LIMIT 1)"""
+
+#: `resolution` filter value meaning "no final decision" (the set that holds a record).
+UNDECIDED = "UNDECIDED"
 
 _DISPOSITION_SQL = f"""
     SELECT d.id, d.intake_id, d.source_record_id,
@@ -571,6 +651,7 @@ _DISPOSITION_SQL = f"""
            d.changed_fields, d.actor, d.actor_type, d.decided_at,
            d.correlation_id, d.build_sha, d.reconstructed,
            s.line_number, s.source_rce_id, s.npi AS submitted_npi,
+           s.parsed->>'name' AS submitted_name,
            c.record_status, c.name AS curated_name, c.npi AS curated_npi
     FROM {tm.CURRENT_DISPOSITIONS_VIEW} d
     JOIN rce_source_records s ON s.id = d.source_record_id
@@ -578,36 +659,199 @@ _DISPOSITION_SQL = f"""
     WHERE d.intake_id = CAST(:i AS uuid)
       AND (CAST(:disp AS TEXT) IS NULL OR d.disposition = :disp)
       AND (CAST(:row AS INTEGER) IS NULL OR s.line_number = :row)
-      AND (CAST(:name AS TEXT) IS NULL OR c.name ILIKE :name)
+      AND (CAST(:name AS TEXT) IS NULL OR c.name ILIKE :name OR s.parsed->>'name' ILIKE :name)
       AND (CAST(:npi AS TEXT) IS NULL OR s.npi = :npi OR c.npi = :npi)
+      AND (NOT :finding_filter OR EXISTS (
+            SELECT 1 FROM rce_issues i
+            WHERE i.source_record_id = d.source_record_id
+              AND i.run_id = {_CURRENT_RUN_SQL}
+              AND (CAST(:sev AS TEXT[]) IS NULL OR i.severity = ANY(CAST(:sev AS TEXT[])))
+              AND (CAST(:res AS TEXT[]) IS NULL OR i.resolution = ANY(CAST(:res AS TEXT[])))
+              AND (CAST(:rule AS TEXT) IS NULL OR i.rule_id = :rule)))
 """
+
+
+def _rule_titles() -> Dict[str, str]:
+    try:
+        from app.tefca_registry.rce import quality_rules
+        return {r.rule_id: r.description for r in quality_rules.RULES}
+    except Exception:  # noqa: BLE001 - a catalogue problem must not stop the ledger
+        return {}
+
+
+def _one_line(text_value: Optional[str], limit: int = 220) -> Optional[str]:
+    if not text_value:
+        return None
+    flat = " ".join(str(text_value).split())
+    return flat if len(flat) <= limit else flat[:limit - 1] + "..."
+
+
+async def _enrich_dispositions(db, intake_uuid, rows: List[Dict[str, Any]]) -> None:
+    """Add the per-record explanation to a page of disposition rows, in place.
+
+    Four grouped queries over the page's record ids, whatever the page size:
+    the current run's findings, applied NPI corrections, identifier conflict
+    state and review linkage. Writes nothing.
+    """
+    ids = [str(r["source_record_id"]) for r in rows if r.get("source_record_id")]
+    entity_ids = [str(r["entity_id"]) for r in rows if r.get("entity_id")]
+    findings: Dict[str, List[Dict[str, Any]]] = {}
+    corrections: Dict[str, Dict[str, Any]] = {}
+    conflicts: Dict[str, List[Dict[str, Any]]] = {}
+    reviews: Dict[str, List[str]] = {}
+    if ids:
+        for r in (await db.execute(text(f"""
+            SELECT i.source_record_id::text AS rid, i.issue_code, i.rule_id, i.severity,
+                   i.resolution, i.description, i.field_name, i.original_value,
+                   i.suggested_value
+            FROM rce_issues i
+            WHERE i.source_record_id = ANY(CAST(:ids AS uuid[]))
+              AND i.run_id = {_CURRENT_RUN_SQL}
+            ORDER BY i.issue_code"""), {"i": str(intake_uuid), "ids": ids})).mappings():
+            findings.setdefault(r["rid"], []).append(dict(r))
+        for r in (await db.execute(text("""
+            SELECT DISTINCT ON (cd.source_record_id) cd.source_record_id::text AS rid,
+                   cd.id::text AS correction_id, cd.column_name, cd.original_value,
+                   cd.corrected_value, cd.corrected_by, cd.approval_actor, cd.created_at,
+                   cd.correction_rule_id, cd.issue_id::text AS issue_id
+            FROM rce_correction_details cd
+            WHERE cd.source_record_id = ANY(CAST(:ids AS uuid[])) AND lower(cd.column_name) = 'npi'
+            ORDER BY cd.source_record_id, cd.created_at DESC"""), {"ids": ids})).mappings():
+            corrections[r["rid"]] = dict(r)
+        for r in (await db.execute(text("""
+            SELECT x.source_record_id::text AS rid, x.identifier_type, x.decision, x.decided_at
+            FROM (SELECT DISTINCT ON (entity_id, identifier_type) *
+                  FROM tefca_identifier_decision_events
+                  WHERE intake_id = CAST(:i AS uuid)
+                    AND source_record_id = ANY(CAST(:ids AS uuid[]))
+                  ORDER BY entity_id, identifier_type, sequence DESC) x"""),
+                {"i": str(intake_uuid), "ids": ids})).mappings():
+            conflicts.setdefault(r["rid"], []).append({
+                "identifier_type": r["identifier_type"], "latest_decision": r["decision"],
+                "unresolved": r["decision"] == "CONFLICT_RAISED",
+                "decided_at": _iso(r["decided_at"])})
+        for r in (await db.execute(text("""
+            SELECT review_id, source_record_id::text AS rid, entity_id::text AS eid
+            FROM review_records
+            WHERE source_record_id = ANY(CAST(:ids AS uuid[]))
+               OR entity_id = ANY(CAST(:eids AS uuid[]))
+            ORDER BY created_at"""), {"ids": ids, "eids": entity_ids or []})).mappings():
+            for key in (r["rid"], r["eid"]):
+                if key:
+                    reviews.setdefault(key, []).append(r["review_id"])
+    titles = _rule_titles()
+    for row in rows:
+        rid = str(row.get("source_record_id"))
+        fs = findings.get(rid, [])
+        hc = [f for f in fs if f["severity"] in ("HIGH", "CRITICAL")]
+        undecided_hc = [f for f in hc if f["resolution"] in OPEN_RESOLUTIONS]
+        by_sev: Dict[str, int] = {}
+        by_res: Dict[str, int] = {}
+        for f in fs:
+            by_sev[f["severity"]] = by_sev.get(f["severity"], 0) + 1
+            by_res[f["resolution"]] = by_res.get(f["resolution"], 0) + 1
+        row["finding_ids"] = [f["issue_code"] for f in fs]
+        row["finding_counts"] = {
+            "total": len(fs), "by_severity": by_sev, "by_resolution": by_res,
+            "high_critical": len(hc), "undecided_high_critical": len(undecided_hc),
+            "resolved_high_critical": len(hc) - len(undecided_hc)}
+        row["rule_codes"] = sorted({f["rule_id"] for f in undecided_hc})
+        row["hold_reasons"] = [
+            {"rule_code": f["rule_id"], "rule_title": titles.get(f["rule_id"]),
+             "issue_code": f["issue_code"], "severity": f["severity"],
+             "resolution": f["resolution"], "reason": _one_line(f["description"])}
+            for f in undecided_hc]
+        row["identifier_conflicts"] = conflicts.get(rid, [])
+        # NPI lineage. APPLIED = an rce_correction_details row exists (the curated
+        # value was written). PROPOSED = an undecided finding on the NPI field
+        # carries a suggested value that nothing has applied. Never inferred from
+        # submitted != curated alone.
+        applied = corrections.get(rid)
+        proposed = [f for f in fs if str(f["field_name"] or "").lower() == "npi"
+                    and f["resolution"] in OPEN_RESOLUTIONS and f["suggested_value"]
+                    and f["suggested_value"] != row.get("curated_npi")]
+        if applied:
+            row["npi_change"] = "CORRECTED_APPLIED"
+            row["npi_correction"] = {
+                "correction_id": applied["correction_id"],
+                "original_value": applied["original_value"],
+                "corrected_value": applied["corrected_value"],
+                "corrected_by": applied["corrected_by"],
+                "approval_actor": applied["approval_actor"],
+                "applied_at": _iso(applied["created_at"]),
+                "rule_code": applied["correction_rule_id"], "issue_id": applied["issue_id"]}
+        elif proposed:
+            row["npi_change"] = "PROPOSED_NOT_APPLIED"
+            row["npi_correction"] = {"proposed_value": proposed[0]["suggested_value"],
+                                     "issue_code": proposed[0]["issue_code"], "applied": False}
+        else:
+            row["npi_change"] = "UNCHANGED"
+            row["npi_correction"] = None
+        linked = list(dict.fromkeys(
+            reviews.get(rid, []) + reviews.get(str(row.get("entity_id")), [])))
+        row["review_ids"] = linked
+        row["review_id"] = linked[-1] if linked else None
 
 
 async def list_dispositions(db, intake_id, *, disposition: Optional[str] = None,
                             source_row: Optional[int] = None,
                             entity_name: Optional[str] = None,
                             npi: Optional[str] = None,
+                            severity: Optional[str] = None,
+                            resolution: Optional[str] = None,
+                            rule_code: Optional[str] = None,
+                            has_findings: bool = False,
+                            enrich: bool = False,
                             limit: int = 200, offset: int = 0
                             ) -> Tuple[List[Dict[str, Any]], int]:
-    """Current disposition per delivered line, filtered; returns (rows, total)."""
+    """Current disposition per delivered line, filtered; returns (rows, total).
+
+    `severity` / `resolution` / `rule_code` / `has_findings` keep a record when
+    at least ONE of its current-run findings matches ALL the given finding
+    filters. `severity` and `resolution` accept comma-separated values;
+    `resolution=UNDECIDED` means OPEN, PROPOSED or UNDER_REVIEW. `total` counts
+    RECORDS (never findings). `enrich=True` adds the per-record explanation.
+    """
     intake_uuid = as_uuid(intake_id)
     if intake_uuid is None:
         raise ValueError("intake_id must be a uuid")
     if disposition and disposition.strip().upper() not in tm.DISPOSITIONS:
         raise ValueError(f"disposition must be one of {tm.DISPOSITIONS}")
+
+    def _list(value, allowed):
+        if not value:
+            return None
+        out: List[str] = []
+        for part in str(value).split(","):
+            part = part.strip().upper()
+            if part:
+                out.extend(OPEN_RESOLUTIONS if part == UNDECIDED else (part,))
+        bad = [v for v in out if v not in allowed]
+        if bad:
+            raise ValueError(f"unknown value(s) {bad}; allowed {sorted(allowed)}")
+        return out or None
+
+    sev = _list(severity, {"CRITICAL", "HIGH", "MEDIUM", "LOW", "INFORMATIONAL"})
+    res = _list(resolution, set(OPEN_RESOLUTIONS) | set(RESOLVED_RESOLUTIONS))
+    rule = rule_code.strip() if rule_code else None
     params = {
         "i": str(intake_uuid),
         "disp": disposition.strip().upper() if disposition else None,
         "row": int(source_row) if source_row is not None else None,
         "name": f"%{entity_name.strip()}%" if entity_name else None,
         "npi": npi.strip() if npi else None,
+        "sev": sev, "res": res, "rule": rule,
+        "finding_filter": bool(sev or res or rule or has_findings),
     }
     total = int((await db.execute(
         text(f"SELECT count(*) FROM ({_DISPOSITION_SQL}) x"), params)).scalar() or 0)
     rows = (await db.execute(
         text(f"{_DISPOSITION_SQL} ORDER BY s.line_number LIMIT :lim OFFSET :off"),
         {**params, "lim": limit, "off": offset})).mappings().all()
-    return [_jsonable(dict(r)) for r in rows], total
+    out = [_jsonable(dict(r)) for r in rows]
+    if enrich and out:
+        await _enrich_dispositions(db, intake_uuid, out)
+    return out, total
 
 
 DISPOSITION_CSV_COLUMNS = (
@@ -635,4 +879,46 @@ def dispositions_csv(rows: Iterable[Dict[str, Any]]) -> str:
                 value = str(value)
             out.append("" if value is None else value)
         writer.writerow(neutralise_row(out))
+    return buf.getvalue()
+
+
+EXCEPTION_RECORD_CSV_COLUMNS = (
+    "delivery_job_id", "delivery_intake_id", "source_row", "source_rce_id",
+    "submitted_name", "submitted_npi", "curated_name", "curated_npi", "npi_change",
+    "disposition", "reason_code", "rule_codes", "hold_reasons", "finding_ids",
+    "max_severity", "findings_total", "undecided_high_critical",
+    "resolved_high_critical", "findings_by_resolution", "identifier_conflicts",
+    "entity_id", "review_id",
+)
+
+_SEVERITY_ORDER = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFORMATIONAL")
+
+
+def exception_records_csv(rows: Iterable[Dict[str, Any]], *, job_id, intake_id) -> str:
+    """RFC 4180 CSV, ONE ROW PER SOURCE RECORD (not per finding), from enriched
+    disposition rows. Multi-valued cells are `;`-joined."""
+    from app.reports.engine.csv_engine import neutralise_row
+
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\r\n")
+    writer.writerow(EXCEPTION_RECORD_CSV_COLUMNS)
+    for r in rows:
+        fc = r.get("finding_counts") or {}
+        sev = fc.get("by_severity") or {}
+        max_sev = next((s for s in _SEVERITY_ORDER if sev.get(s)), "")
+        out = [
+            job_id or "", intake_id or "", r.get("line_number"), r.get("source_rce_id"),
+            r.get("submitted_name"), r.get("submitted_npi"), r.get("curated_name"),
+            r.get("curated_npi"), r.get("npi_change"), r.get("disposition"),
+            r.get("reason_code"), ";".join(r.get("rule_codes") or []),
+            " | ".join(f"{h['rule_code']}: {h.get('reason') or ''}"
+                       for h in r.get("hold_reasons") or []),
+            ";".join(r.get("finding_ids") or []), max_sev, fc.get("total"),
+            fc.get("undecided_high_critical"), fc.get("resolved_high_critical"),
+            ";".join(f"{k}={v}" for k, v in sorted((fc.get("by_resolution") or {}).items())),
+            ";".join(f"{c['identifier_type']}:{c['latest_decision']}"
+                     for c in r.get("identifier_conflicts") or []),
+            r.get("entity_id"), r.get("review_id"),
+        ]
+        writer.writerow(neutralise_row(["" if v is None else v for v in out]))
     return buf.getvalue()

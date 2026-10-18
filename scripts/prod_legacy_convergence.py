@@ -101,6 +101,18 @@ AREA1_OWNER_TABLES = {
     # app holds SELECT+INSERT only.
     "rce_delivery_delta", "rce_entity_presence", "tefca_relationship_observations",
     "arc_stale_marks", "source_snapshot", "entity_source_match", "arc_assessment_run",
+    # 20261002_iqvia_observations / 20261003_preflight_shadow_workspace: both
+    # migrations grant the app SELECT+INSERT only ("APPEND-ONLY BY GRANT, SAME
+    # AS THE SEPTEMBER MIGRATION" per their own docstrings) -- same model.
+    "iqvia_hco_observation", "iqvia_hcp_observation", "iqvia_affiliation_observation",
+    "rce_preflight_run", "rce_preflight_finding", "rce_preflight_normalization",
+    "rce_shadow_comparison", "rce_shadow_finding_delta", "rce_shadow_approval",
+    "rce_successor_publication_event",
+    # 20261008_record_check_results: append-only per-record check results; the app
+    # holds SELECT+INSERT only. Created by the chain AS the owner role and kept there.
+    "rce_record_check_results",
+    # 20261014_iqvia_advisory_assess: append-only (trigger + SELECT/INSERT grant); owner-owned
+    "iqvia_advisory_assessment",
 }
 
 
@@ -510,6 +522,29 @@ MANAGED_CHAIN_CREATES = {
     # 20260921_september_snapshot
     "rce_delivery_delta", "rce_entity_presence", "tefca_relationship_observations",
     "arc_stale_marks", "source_snapshot", "entity_source_match", "arc_assessment_run",
+    # 20261002_iqvia_observations -- each FKs to source_snapshot (already above)
+    "iqvia_hco_observation", "iqvia_hcp_observation", "iqvia_affiliation_observation",
+    # 20261003_preflight_shadow_workspace -- FK-chained to rce_source_intakes/
+    # rce_source_records (Area-1, owner-owned) and review_records (MANAGED_CHAIN_ALTERS)
+    "rce_preflight_run", "rce_preflight_finding", "rce_preflight_normalization",
+    "rce_shadow_comparison", "rce_shadow_finding_delta", "rce_shadow_approval",
+    "rce_successor_publication_event",
+    # 20261003_iqvia_upload_durability -- grants SELECT+INSERT+UPDATE (the app
+    # actively updates upload progress; NOT append-only like the observation/
+    # preflight tables above), so these move to docuaction_app at FINALIZE like
+    # report_export_jobs, not into AREA1_OWNER_TABLES. Not part of the 72-table
+    # candidate set either: iqvia_upload_models is outside _candidate_metadata()'s
+    # five imported modules, so it is invisible to the clean-subprocess measurement
+    # the same way it always has been for this module.
+    "iqvia_upload_session", "iqvia_upload_chunk", "iqvia_import_job",
+    # 20261004_recheck_jobs -- SELECT+INSERT+UPDATE job bookkeeping (the app
+    # updates progress), so app-owned at FINALIZE like the IQVIA job tables.
+    "rce_recheck_job", "rce_recheck_item",
+    # 20261008_record_check_results -- append-only (SELECT+INSERT); owner-owned, so it
+    # is in AREA1_OWNER_TABLES and is NOT moved to docuaction_app at FINALIZE.
+    "rce_record_check_results",
+    # 20261014_iqvia_advisory_assess: append-only (trigger + SELECT/INSERT grant); owner-owned
+    "iqvia_advisory_assessment",
 }
 # Tables the 20260917 revision declares FOREIGN KEYS to that docuaction_app owns
 # in PROD and that no pending revision ALTERs (so they are not re-owned). CREATE

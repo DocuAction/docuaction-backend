@@ -244,23 +244,43 @@ class ValidationEngine:
                 # Address comparison
                 nppes_addrs = nppes_data.get("addresses", [])
                 if nppes_addrs:
+                    # Practice LOCATION only. Falling back to `nppes_addrs[0]`
+                    # compared the submitted practice address against a
+                    # MAILING row (a lockbox or corporate office) whenever
+                    # NPPES listed no LOCATION, which manufactured
+                    # ADDRESS_STATE_CONFLICT / FORMAT findings out of two
+                    # addresses with different meanings. No LOCATION row is
+                    # "not compared" — neither a match nor a finding.
+                    # (2026-10-03, safeguard 5.)
                     primary = next(
                         (a for a in nppes_addrs if a.get("address_purpose") == "LOCATION"),
-                        nppes_addrs[0]
+                        None
                     )
-                    addr_finding, addr_deduction = self._classify_address(
-                        submitted_address, primary
-                    )
-                    if addr_finding:
-                        findings.append(addr_finding)
-                        deductions += addr_deduction
-                    field_comparisons.append({
-                        "field": "address",
-                        "submitted": submitted_address,
-                        "nppes": primary,
-                        "result": "MATCH" if not addr_finding else "MISMATCH",
-                        "finding": addr_finding
-                    })
+                    if primary is None:
+                        field_comparisons.append({
+                            "field": "address",
+                            "submitted": submitted_address,
+                            "nppes": None,
+                            "result": "NOT_COMPARED",
+                            "finding": None,
+                            "note": ("NPPES returned no LOCATION (practice) address; "
+                                     "a MAILING address is not compared against "
+                                     "the submitted practice address."),
+                        })
+                    else:
+                        addr_finding, addr_deduction = self._classify_address(
+                            submitted_address, primary
+                        )
+                        if addr_finding:
+                            findings.append(addr_finding)
+                            deductions += addr_deduction
+                        field_comparisons.append({
+                            "field": "address",
+                            "submitted": submitted_address,
+                            "nppes": primary,
+                            "result": "MATCH" if not addr_finding else "MISMATCH",
+                            "finding": addr_finding
+                        })
 
                 # Entity type check
                 nppes_enum = nppes_data.get("enumeration_type", "")
@@ -316,7 +336,25 @@ class ValidationEngine:
         sam_entity = source_results.get("sam_entity")
         sam_excl = source_results.get("sam_exclusion")
 
-        if sam_excl and sam_excl.success and sam_excl.data.get("excluded"):
+        # An ambiguous name match means SAM matched more than one entity;
+        # neither a clean nor a debarred reading belongs to a confirmed
+        # identity. Treated the same as source-unavailable below — fail
+        # closed, route to a human, never auto-classify.
+        sam_ambiguous = bool(
+            (sam_entity and sam_entity.success and sam_entity.data.get("identity_ambiguous"))
+            or (sam_excl and sam_excl.success and sam_excl.data.get("identity_ambiguous"))
+        )
+        # The independent v4 exclusions leg can fail even when v3 registration
+        # succeeds (SourceConnectorManager.verify() reports both legs'
+        # availability separately). A registration success does not mean the
+        # debarment question was ever actually answered.
+        sam_exclusion_unknown = bool(
+            sam_excl and sam_excl.success
+            and not sam_excl.data.get("excluded_known", True)
+        )
+
+        if (sam_excl and sam_excl.success and not sam_ambiguous
+                and not sam_exclusion_unknown and sam_excl.data.get("excluded")):
             findings.append(FindingCode.SAM_ACTIVE_DEBARMENT)
             deductions += 0.40
             field_comparisons.append({
@@ -327,8 +365,13 @@ class ValidationEngine:
                 "finding": FindingCode.SAM_ACTIVE_DEBARMENT
             })
 
-        if sam_entity and sam_entity.success and sam_entity.data.get("found"):
-            if not sam_entity.data.get("registration_current"):
+        if (sam_entity and sam_entity.success and not sam_ambiguous
+                and sam_entity.data.get("found")):
+            # `is False`, not `not ...`: registration_current is None for an
+            # ambiguous name match (identity unconfirmed, already excluded
+            # above) and must never be read the same as a confirmed False
+            # (actually looked up and found expired).
+            if sam_entity.data.get("registration_current") is False:
                 findings.append(FindingCode.SAM_REGISTRATION_LAPSED)
                 deductions += 0.25
                 field_comparisons.append({
@@ -356,10 +399,22 @@ class ValidationEngine:
         # Collect the DISTINCT authoritative sources that were unavailable
         # (success=False or missing). One confidence penalty per distinct source
         # — SAM's two keys collapse to one, so no double-counting.
+        #
+        # An ambiguous SAM identity match, or a SAM result where the
+        # independent exclusions leg never completed, answers nothing
+        # trustworthy either — both are treated as unavailable here even
+        # though `result.success` is True, so the entity is never
+        # auto-classified on the strength of a check that did not actually
+        # resolve a confirmed identity or a confirmed exclusion status.
         unavailable_sources: list[str] = []
         for key in self.REQUIRED_SOURCE_KEYS:
             result = source_results.get(key)
-            if result is None or not result.success:
+            unresolved_sam = (
+                key in ("sam_entity", "sam_exclusion")
+                and result is not None and result.success
+                and (sam_ambiguous or (key == "sam_exclusion" and sam_exclusion_unknown))
+            )
+            if result is None or not result.success or unresolved_sam:
                 name = result.source_name if result is not None else key
                 if name not in unavailable_sources:
                     unavailable_sources.append(name)

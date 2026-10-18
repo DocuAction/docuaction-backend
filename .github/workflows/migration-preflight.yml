@@ -347,8 +347,20 @@ jobs:
         run: |
           if [ "${{ steps.apply.outputs.applied }}" = "true" ]; then
             echo "applied=true" >> "$GITHUB_OUTPUT"
-            echo "migration_needed=false" >> "$GITHUB_OUTPUT"
-            echo "dev_revision=${{ steps.apply.outputs.dev_revision_after }}" >> "$GITHUB_OUTPUT"
+            # A targeted apply reaches ONE revision, which is not necessarily the
+            # repository head. The gate must compare the revision actually
+            # reached with the head the candidate image expects; reporting
+            # "not needed" here unconditionally let run 37395143876 proceed to
+            # deploy against a schema six revisions short of head.
+            AFTER="${{ steps.apply.outputs.dev_revision_after }}"
+            HEAD="${{ steps.target.outputs.target_head }}"
+            if [ -n "$AFTER" ] && [ "$AFTER" = "$HEAD" ]; then
+              echo "migration_needed=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "migration_needed=true" >> "$GITHUB_OUTPUT"
+              echo "applied $AFTER; repository head is $HEAD - further controlled migrations are required before deploy"
+            fi
+            echo "dev_revision=$AFTER" >> "$GITHUB_OUTPUT"
           else
             echo "applied=false" >> "$GITHUB_OUTPUT"
             echo "migration_needed=${{ steps.compare.outputs.migration_needed }}" >> "$GITHUB_OUTPUT"

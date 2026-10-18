@@ -1,7 +1,12 @@
 # ADR-006: External sources are observations; ONC RCE is the only TEFCA authority
 
 **Alliance Global Tech, Inc. (AGT)** — Copyright © 2024–2026
-**Status:** Accepted (foundation); IQVIA observation tables PROPOSED, blocked on licensed specifications
+**Status:** Accepted (foundation); IQVIA observation tables IMPLEMENTED
+(2026-10-02, migration `20261002_iqvia_observations`) and the importer/
+matcher/application-journey routes built and tested locally against the
+real, received, authorized files. Not yet deployed to any live environment
+-- see `qa-evidence/2026-10-02-sam-trace-and-reporting-plan/REVIEW-PACKAGE.md`
+for current status and remaining gaps.
 **Deciders:** DocuAction Engineering (@imran-agt), TEFCA ARC QA lead
 **Applies to:** DocuAction TEFCA ARC backend, rule set 1.3.0 and later
 
@@ -11,11 +16,30 @@
 
 The ARC programme is adding IQVIA OneKey (HCO, HCP, affiliation) as an
 evidence source beside NPPES, CMS PECOS/CCN and the monthly ONC RCE snapshot.
-The licensed file specifications, sample files and a data-use approval for
-IQVIA are **not in DocuAction's possession** at the time of this decision.
-The September 2026 snapshot work (`docs/rce/SEPTEMBER_2026_RECONCILIATION.md`)
-established the persistence the sources will share: a `source_snapshot`
-ledger, `entity_source_match`, and `arc_assessment_run`.
+
+**UPDATE (2026-10-02): the licensed files have been received and processing
+is authorized.** ONC/HHS supplied the DEMOGRAPHIC (HCO) and HCP_ADDR (HCP)
+extracts plus their layout specifications; local, read-only profiling
+confirmed their structure against the real files (row counts, delimiter/
+encoding, identifier formats -- no row content left that analysis). The
+dedicated HCP_AFFIL extract was delivered as a LAYOUT ONLY, with no
+accompanying data file -- confirmed by direct inventory, not assumed -- and
+HCP_ADDR's own inline affiliation fields are unpopulated in every delivered
+row. There is, as of this writing, no usable HCP<->HCO affiliation link in
+the data DocuAction actually has, independent of authorization or technical
+capability; this ADR's decisions on affiliation observations (below) remain
+correct but currently APPLY TO NO DATA. The original context below, describing
+the pre-arrival blocked state, is kept for history rather than deleted, since
+the decisions it motivated did not change when the files arrived.
+
+*(Original context, 2026-09-20, before the files arrived:)* The licensed file
+specifications, sample files and a data-use approval for IQVIA were not in
+DocuAction's possession at the time of this decision. The September 2026
+snapshot work (`docs/rce/SEPTEMBER_2026_RECONCILIATION.md`) established the
+persistence the sources would share: a `source_snapshot` ledger,
+`entity_source_match`, and `arc_assessment_run` -- all unchanged by the
+2026-10-02 implementation; the IQVIA observation tables plug into this
+existing layer exactly as this ADR originally specified.
 
 Two failure modes drove the decision: (1) an external record that *looks* like
 a TEFCA organisation being used to create, end or re-parent a TEFCA

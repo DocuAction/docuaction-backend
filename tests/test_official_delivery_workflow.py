@@ -136,6 +136,19 @@ class TestAreaOneStaysImmutable:
                 continue
             if "issue" in path:
                 continue  # Issues DO mutate — resolving one is the workflow.
+            if "/rce/iqvia/" in path:
+                # IQVIA (2026-10-02) is a separate, explicitly non-Area-1
+                # subsystem — ADR-006: licensed-source rows are
+                # "observations," never Area 1 official delivery data, and
+                # never written to rce_source_intakes/rce_curated_records or
+                # any other Area 1 table this invariant protects. Its one PUT
+                # (chunk upload) writes only to the new iqvia_upload_chunk
+                # bookkeeping table and is itself idempotent/retry-safe by
+                # design (tests/test_iqvia_import_durability.py proves
+                # retrying a chunk overwrites, never duplicates). It happens
+                # to live under the shared /rce/ URL prefix for routing
+                # convenience, not because it is part of Area 1.
+                continue
             for method in ("put", "patch", "delete"):
                 if method in operations:
                     offenders.append(f"{method.upper()} {path}")

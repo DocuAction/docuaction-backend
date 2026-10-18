@@ -100,6 +100,27 @@ def finding_dict(f: reg.TefcaEntityFinding) -> dict:
     }
 
 
+async def _attach_completeness(session: AsyncSession, summaries: list[dict]) -> list[dict]:
+    """Qualify `verified` on a page of rows (one query, verified rows only).
+
+    `verification_status` is left exactly as stored. `verification_overall`
+    is what a screen should SHOW: an entity classified with no discrepancy
+    while a source was unavailable reads "Verified - checks incomplete"."""
+    from app.tefca_registry.rce import verification_completeness as vcomp
+
+    verified_ids = [s["id"] for s in summaries if s.get("verification_status") == "verified"]
+    try:
+        by_entity = await vcomp.latest_completeness(session, verified_ids) if verified_ids else {}
+    except Exception:  # noqa: BLE001 - weaker claim, never the stronger one
+        by_entity = {}
+    for s in summaries:
+        block = vcomp.describe(s.get("verification_status"), by_entity.get(s["id"]))
+        s["verification_overall"] = block["overall_status"]
+        s["verification_overall_label"] = block["overall_label"]
+        s["verification_incomplete_sources"] = [i["label"] for i in block["incomplete"]]
+    return summaries
+
+
 # ── entity list / detail ──────────────────────────────────────────────────────
 
 async def list_entities(session: AsyncSession, *, entity_level=None, entity_type=None,
@@ -135,6 +156,7 @@ async def list_entities(session: AsyncSession, *, entity_level=None, entity_type
         base.order_by(reg.TefcaRegEntity.entity_level, reg.TefcaRegEntity.name)
         .limit(limit).offset(offset))).scalars().all()
     items = await _attach_identifiers(session, [entity_summary(e) for e in rows])
+    await _attach_completeness(session, items)
     return {
         "items": items,
         "total": int(total or 0), "limit": limit, "offset": offset,
@@ -189,6 +211,7 @@ async def get_entity_detail(session: AsyncSession, entity_id: uuid.UUID) -> Opti
         }
 
     detail = entity_full(e)
+    await _attach_completeness(session, [detail])
     detail.update({
         "identifiers": [identifier_dict(i) for i in idents],
         "endpoints": [{
@@ -344,6 +367,17 @@ async def list_findings(session: AsyncSession, *, finding_type=None, severity=No
             "total": int(total or 0), "limit": limit, "offset": offset}
 
 
+async def _qualified_status_counts(session: AsyncSession, counts: dict) -> dict:
+    from app.tefca_registry.rce import verification_completeness as vcomp
+    try:
+        return (await vcomp.split_verified_counts(session, dict(counts)))["counts"]
+    except Exception:  # noqa: BLE001
+        out = dict(counts)
+        if out.get("verified"):
+            out[vcomp.VERIFIED_CHECKS_NOT_RECORDED] = out.pop("verified")
+        return out
+
+
 # ── stats ─────────────────────────────────────────────────────────────────────
 
 async def stats(session: AsyncSession) -> dict:
@@ -365,6 +399,11 @@ async def stats(session: AsyncSession) -> dict:
         "entities_deleted": deleted_total,
         "by_level": await group_count(reg.TefcaRegEntity.entity_level),
         "by_verification_status": await group_count(reg.TefcaRegEntity.verification_status),
+        # The same counts with `verified` split by screening completeness.
+        # Screens should present THIS one; the raw grouping above is kept for
+        # existing consumers and reconciles with it exactly.
+        "by_verification_overall": await _qualified_status_counts(
+            session, await group_count(reg.TefcaRegEntity.verification_status)),
         "by_operational_status": await group_count(reg.TefcaRegEntity.operational_status),
         "findings_total": int(await session.scalar(
             select(func.count()).select_from(reg.TefcaEntityFinding)) or 0),

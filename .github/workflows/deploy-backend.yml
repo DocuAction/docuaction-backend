@@ -149,6 +149,12 @@ jobs:
             echo "Security platform not found - skipping gate"
           fi
 
+      # Wheel-only resolution accepts BOTH manylinux2014 (glibc 2.17) and
+      # manylinux_2_28 wheels. pikepdf 10.x publishes only manylinux_2_28
+      # wheels, so the 2014-only constraint rejected the pinned version
+      # (run 37395143876). The runtime image is python:3.12-slim (Debian
+      # bookworm, glibc 2.36), which satisfies 2_28; the GitHub runner
+      # (glibc 2.39) is why a plain `pip install` never showed this.
       - name: Build pydeps (production artifact)
         run: |
           mkdir -p pydeps
@@ -164,6 +170,7 @@ jobs:
             --target pydeps \
             --only-binary=:all: \
             --platform manylinux2014_x86_64 \
+            --platform manylinux_2_28_x86_64 \
             --python-version 3.12 \
             --implementation cp \
             --abi cp312
@@ -182,6 +189,7 @@ jobs:
             --target pydeps \
             --only-binary=:all: \
             --platform manylinux2014_x86_64 \
+            --platform manylinux_2_28_x86_64 \
             --python-version 3.12 \
             --implementation cp \
             --abi cp312

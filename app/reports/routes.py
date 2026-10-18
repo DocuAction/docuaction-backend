@@ -22,6 +22,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
+from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -54,6 +56,31 @@ _FILENAME_SAFE = re.compile(r"[^A-Za-z0-9._-]")
 #: Longer than any identifier this system issues, short enough that no
 #: filesystem or header refuses it.
 MAX_FILENAME = 120
+
+
+#: AP-001: `GET /{report_id}` is a metadata/provenance endpoint (<2s gate,
+#: workbook case AP-001 — 0.96s/0.88s normally, 3.95s on the 24,589-row job).
+#: `report_data["dataset"]` carries whatever record-level arrays the generator
+#: built to render annexes (e.g. `dataset["progress"]["annex_rows"]`) — full
+#: rows are already reachable through the dedicated annex/CSV download route,
+#: so this endpoint has no reason to also serialise and transfer them. Any
+#: list this long gets summarised instead of transferred.
+_DATASET_LIST_PREVIEW_LIMIT = 25
+
+
+def _lightweight_dataset(value: Any) -> Any:
+    """`value` with any list longer than `_DATASET_LIST_PREVIEW_LIMIT` replaced
+    by a count summary. Recurses into dicts and lists; scalars pass through.
+    """
+    if isinstance(value, list):
+        if len(value) > _DATASET_LIST_PREVIEW_LIMIT:
+            return {"_truncated": True, "count": len(value),
+                    "note": "Full rows are available from this report's annex/CSV download, "
+                            "not this metadata endpoint."}
+        return [_lightweight_dataset(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _lightweight_dataset(item) for key, item in value.items()}
+    return value
 
 
 def safe_filename(stem: str, extension: str) -> str:
@@ -218,6 +245,47 @@ def _artifacts_summary(finalised: Optional[Dict[str, Any]]) -> Optional[Dict[str
     }
 
 
+#: How long a retry waits for a still-running generation with the same key before answering 409. Kept under the
+#: browser's 30 s request budget so the caller gets a stated reason instead of another timeout.
+GENERATION_LOCK_WAIT_SECONDS = 20.0
+GENERATION_LOCK_POLL_SECONDS = 0.5
+
+
+@asynccontextmanager
+async def _generation_key_lock(key, user_id):
+    """Serialise generation per (principal, idempotency key) with a Postgres advisory lock on a DEDICATED
+    connection (a session-level lock must outlive the request session's commits and pool checkouts)."""
+    if not key:
+        yield
+        return
+    from sqlalchemy import text
+
+    from app.core.database import engine
+
+    token = f"report-generate:{user_id}:{key}"
+    async with engine.connect() as conn:
+        deadline = time.monotonic() + GENERATION_LOCK_WAIT_SECONDS
+        while True:
+            got = (await conn.execute(text("SELECT pg_try_advisory_lock(hashtextextended(:k, 0))"),
+                                      {"k": token})).scalar()
+            if got:
+                break
+            if time.monotonic() >= deadline:
+                raise HTTPException(409, detail={
+                    "code": "REPORT_GENERATION_IN_PROGRESS",
+                    "message": ("A report for this same action is still being generated. Nothing new was started. "
+                                "Check the Report Register in a minute, or press Generate draft again to pick it up."),
+                })
+            await asyncio.sleep(GENERATION_LOCK_POLL_SECONDS)
+        try:
+            yield
+        finally:
+            try:
+                await conn.execute(text("SELECT pg_advisory_unlock(hashtextextended(:k, 0))"), {"k": token})
+            except Exception:  # noqa: BLE001 - the lock dies with the connection anyway
+                pass
+
+
 @router.post("/generate", summary="Generate a report from frozen verification results")
 async def generate(
     request: GenerateReportRequest,
@@ -243,10 +311,24 @@ async def generate(
 
     require_explicit_scope(request.report_type, parameters)
 
-    if request.idempotency_key:
-        replay = await _replay_for_key(db, request.idempotency_key, getattr(user, "id", None))
-        if replay is not None:
-            return replay
+    # One generation per (principal, key) AT A TIME. The replay lookup below reads the audit row written when a
+    # generation FINISHES, so a retry that arrives while the first is still running (the browser gave up at 30 s;
+    # the server did not) used to find nothing and generate a second report. The lock is held on its own
+    # connection for the whole request: the retry waits for the first to finish, then replays it; if the first is
+    # still running after the wait it gets 409 REPORT_GENERATION_IN_PROGRESS, never a duplicate.
+    async with _generation_key_lock(request.idempotency_key, getattr(user, "id", None)):
+        if request.idempotency_key:
+            replay = await _replay_for_key(db, request.idempotency_key, getattr(user, "id", None))
+            if replay is not None:
+                return replay
+        return await _generate_locked(request, parameters, db, user)
+
+
+async def _generate_locked(request, parameters, db, user):
+    from app.reports.generator import (ReportGenerationError, ReportParameterError,
+                                       generate_report)
+
+    from app.core import request_context
 
     try:
         with request_context.bind(idempotency_key=request.idempotency_key):
@@ -278,6 +360,154 @@ async def generate(
                         headers=download_headers(
                             safe_filename(result["report_id"], "html")))
     return _summary(result)
+
+
+@router.post("/generate/jobs", status_code=202,
+             summary="Queue report generation as a durable background job")
+async def generate_async(
+    request: GenerateReportRequest,
+    db: AsyncSession = Depends(get_db),
+    # Same floor as the synchronous route (Decision 1): the completed job
+    # answers with the report's full content, so queuing one needs the same
+    # role as reading one.
+    user=Depends(require_role_audited("reviewer", resource_type="report")),
+):
+    """Queue a report generation instead of rendering it inline.
+
+    `POST /generate` still exists unchanged for every existing caller. This is
+    the same request body, answered in under two seconds with a receipt
+    instead of the document: `POST /reports/{id}/html` etc. still serve the
+    finished report once `GET /generate/jobs/{job_id}` reports SUCCEEDED, the
+    same download routes the synchronous path already uses.
+
+    Reuses `report_export_jobs` (added for the ONC review workbook export,
+    Step #17) rather than a second job table or queue: the durable state,
+    heartbeat, reaper and partial-unique-index concurrency guard it already
+    has are exactly what a queued report generation needs too.
+    """
+    from app.reports.data.delivery_processing_data import resolve_delivery
+    from app.reports.data.export_jobs import (ExportJobConflict, active_job,
+                                              REPORT_GENERATION_EXPORT_TYPE_PREFIX,
+                                              report_generation_identity, request_job)
+    from app.reports.data.source_provenance import resolve_classification
+    from app.reports.engine.template_engine import TEMPLATE_VERSION
+    from app.reports.generator import ReportParameterError
+
+    parameters = dict(request.parameters or {})
+    for key in ("period_start", "period_end", "suggested_changes", "implemented_changes"):
+        value = getattr(request, key)
+        if value:
+            parameters[key] = value
+    if request.review_cycle_id and "review_cycle_id" not in parameters:
+        parameters["review_cycle_id"] = request.review_cycle_id
+
+    require_explicit_scope(request.report_type, parameters)
+
+    # Async generation is delivery-scoped ONLY (migration review,
+    # qa-evidence/2026-10-01-reporting-architecture/MIGRATION-REVIEW-20261001-report-generation-jobs.md):
+    # `report_export_jobs.source_intake_id` stays NOT NULL on purpose, so a
+    # review-cycle-only or period-only request -- valid for the synchronous
+    # route, but naming no one delivery -- is refused here rather than
+    # queued with no intake. A caller that needs one of those report types
+    # still has the unchanged synchronous `POST /generate`.
+    if not (parameters.get("job_id") or parameters.get("intake_id")):
+        raise HTTPException(422, detail={
+            "error": ("Asynchronous generation requires a delivery: "
+                      "parameters.job_id or parameters.intake_id. A "
+                      "review-cycle-only or period-only report is not yet "
+                      "supported on this path -- use POST /generate."),
+            "code": "ASYNC_GENERATION_REQUIRES_DELIVERY"})
+    try:
+        resolved = await resolve_delivery(
+            db, job_id=parameters.get("job_id"), intake_id=parameters.get("intake_id"))
+    except ReportParameterError as exc:
+        raise parameter_error_http(exc)
+    intake = resolved.get("intake")
+    if intake is None:
+        raise HTTPException(404, detail={
+            "error": "The named delivery has no intake to scope this report to.",
+            "code": "DELIVERY_NOT_FOUND"})
+    intake_id = intake.id
+
+    classification = await resolve_classification(db)
+    requested_by = getattr(user, "email", None) or "SYSTEM"
+
+    # Carries everything `generate_report()` needs to replay this exact
+    # request from the worker (`run_report_generation_job`): the normal
+    # `parameters` dict, plus `format` and `review_cycle_id`, which the
+    # synchronous route keeps as separate call arguments rather than folding
+    # into `parameters`.
+    stored_parameters = {**parameters, "format": request.format,
+                         "review_cycle_id": request.review_cycle_id}
+
+    identity = report_generation_identity(
+        report_type=request.report_type, format=request.format,
+        parameters=parameters, review_cycle_id=request.review_cycle_id,
+        template_version=TEMPLATE_VERSION, principal=requested_by,
+        idempotency_key=request.idempotency_key)
+
+    before = await active_job(db, identity)
+    try:
+        job = await request_job(
+            db, identity=identity,
+            export_type=f"{REPORT_GENERATION_EXPORT_TYPE_PREFIX}{request.report_type}",
+            intake_id=intake_id, classification=classification,
+            generator_version=TEMPLATE_VERSION, requested_by=requested_by,
+            report_type=request.report_type, request_parameters=stored_parameters)
+    except ExportJobConflict as exc:
+        raise HTTPException(409, str(exc))
+
+    reused = before is not None and str(before.id) == str(job.id)
+    return {
+        **job.to_dict(),
+        "reused_existing_job": reused,
+        "status_url": f"/api/reports/generate/jobs/{job.id}",
+        # Short and fixed: the job table has no progress percentage to base a
+        # longer estimate on, and a client should poll promptly after a 202.
+        "retry_after": 2,
+    }
+
+
+@router.get("/generate/jobs/{job_id}",
+            summary="Status of one queued report generation")
+async def generate_job_status(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("viewer")),
+):
+    """Where one queued generation got to. READS ONLY -- polling must never
+    start work (same rule the ONC export's status route follows).
+
+    Readable by whoever requested it, and by a program manager or
+    administrator who supervise the queue. Everyone else gets 404, not 403,
+    for the same enumeration-oracle reason the ONC export status route gives.
+    """
+    from app.core.security import ROLE_HIERARCHY
+    from app.reports.data.export_jobs import get_job
+
+    job = await get_job(db, job_id)
+    if job is None:
+        raise HTTPException(404, "No such report generation job.")
+
+    email = (getattr(user, "email", None) or "").lower()
+    role = (getattr(user, "role", "") or "").lower()
+    supervises = ROLE_HIERARCHY.get(role, 0) >= ROLE_HIERARCHY["program_manager"]
+    if not supervises and (job.requested_by or "").lower() != email:
+        raise HTTPException(404, "No such report generation job.")
+
+    payload = job.to_dict()
+    if job.state == job.STATE_SUCCEEDED and job.report_id:
+        report_format = (job.request_parameters or {}).get("format", "html")
+        payload["report"] = {
+            "report_id": job.report_id,
+            "formats": {
+                "html": f"/api/reports/{job.report_id}/html",
+                "pdf": f"/api/reports/{job.report_id}/pdf",
+                "csv": f"/api/reports/{job.report_id}/csv",
+            },
+            "requested_format": report_format,
+        }
+    return payload
 
 
 async def _replay_for_key(db, key: str, user_id) -> Optional[Dict[str, Any]]:
@@ -355,6 +585,68 @@ async def _pdf_response(html: str, report_id: str) -> Response:
     """
     from app.reports.engine.pdf_engine import (
         PDFEngineUnavailable, pdf_available, render_pdf, unavailable_reason)
+
+    # DEV-ONLY OPT-IN, 2026-10-02: this module's own docstring is "ONE ENGINE,
+    # DELIBERATELY" — WeasyPrint only, no silent fallback, because a different
+    # engine produces a structurally different, differently-accessible
+    # document. That policy is preserved: WeasyPrint stays the unconditional
+    # default below. The ONLY way to reach the Chromium/Playwright renderer is
+    # an operator or test explicitly setting `PDF_ENGINE_DEV_OVERRIDE` to the
+    # exact, loudly-named value below — never implied by WeasyPrint being
+    # unavailable, never a silent substitution. Its own response header marks
+    # it as untagged/non-production so a caller can never mistake it for the
+    # real engine's output.
+    import os
+
+    from app.reports.engine.pdf_engine import (
+        PDF_ENGINE_DEV_OVERRIDE_ENV, PDF_ENGINE_DEV_OVERRIDE_VALUE,
+        PlaywrightEngineUnavailable, render_pdf_dev_chromium_UNTAGGED,
+        render_pdf_dev_chromium_tagged)
+
+    #: A second, separate opt-in value, same ENV var. Produces a single-
+    #: document, tagged render (real /StructTreeRoot, confirmed non-trivial —
+    #: see pdf_engine.inspect_pdf_tagging) instead of the split+merge
+    #: UNTAGGED path above, which was confirmed to drop its structure tree
+    #: entirely on merge. Still explicitly opt-in, still not the production
+    #: default, still NOT claimed Section 508/PDF-UA conformant — a
+    #: structure tree is a precondition, not a certificate.
+    PDF_ENGINE_DEV_OVERRIDE_TAGGED_VALUE = "playwright_chromium_tagged_dev_only"
+
+    if os.environ.get(PDF_ENGINE_DEV_OVERRIDE_ENV) == PDF_ENGINE_DEV_OVERRIDE_TAGGED_VALUE:
+        try:
+            pdf = await asyncio.wait_for(
+                asyncio.to_thread(render_pdf_dev_chromium_tagged, html, title=report_id),
+                timeout=PDF_RENDER_BUDGET_SECONDS)
+        except asyncio.TimeoutError:
+            raise HTTPException(503, (
+                f"PDF rendering exceeded the {PDF_RENDER_BUDGET_SECONDS:.0f}s "
+                "budget (dev Chromium tagged engine)."))
+        except PlaywrightEngineUnavailable as exc:
+            raise HTTPException(503, str(exc))
+        return Response(
+            content=pdf, media_type="application/pdf",
+            headers=download_headers(
+                safe_filename(report_id, "pdf"),
+                extra={"X-PDF-Engine": "playwright-chromium-dev-only-TAGGED",
+                      "X-PDF-Accessibility": "STRUCTURE-TREE-PRESENT-NOT-508-EVALUATED"}))
+
+    if os.environ.get(PDF_ENGINE_DEV_OVERRIDE_ENV) == PDF_ENGINE_DEV_OVERRIDE_VALUE:
+        try:
+            pdf = await asyncio.wait_for(
+                asyncio.to_thread(render_pdf_dev_chromium_UNTAGGED, html, title=report_id),
+                timeout=PDF_RENDER_BUDGET_SECONDS)
+        except asyncio.TimeoutError:
+            raise HTTPException(503, (
+                f"PDF rendering exceeded the {PDF_RENDER_BUDGET_SECONDS:.0f}s "
+                "budget (dev Chromium engine)."))
+        except PlaywrightEngineUnavailable as exc:
+            raise HTTPException(503, str(exc))
+        return Response(
+            content=pdf, media_type="application/pdf",
+            headers=download_headers(
+                safe_filename(report_id, "pdf"),
+                extra={"X-PDF-Engine": "playwright-chromium-dev-only-UNTAGGED",
+                      "X-PDF-Accessibility": "NOT-EVALUATED-NOT-ACCESSIBLE"}))
 
     if not pdf_available():
         raise HTTPException(503, f"PDF generation is unavailable: {unavailable_reason()}")
@@ -555,6 +847,7 @@ async def list_reports(
             # that, wrapped the way it expects.
             "release": current_release({"release": r.release} if r.release else {}),
             "file_stem": file_stem,
+            "formats": supported_formats(r.report_type),
             "source": _source_summary(r.delivery, r.scope),
             "document_marking": document_marking_for(snapshot.get("data_classification")),
             **meta,
@@ -621,6 +914,30 @@ def _stem_for(row, contract=_UNSET) -> str:
         report_id=row.report_id)
 
 
+def supported_formats(report_type: str) -> Dict[str, Any]:
+    """The download formats a report type supports, stated as data so no client has to guess.
+
+    html, csv, pdf and the package (ZIP) exist for every report type. DOCX exists ONLY for the contract
+    deliverables (`SOW_REPORT_TYPES`); a delivery evidence report (`delivery_processing`) has no editable Word
+    form, and `GET /{report_id}/docx` answers 404 for it. A client must not offer DOCX where `available` is false.
+    """
+    from app.reports.data.sow_report_data import SOW_REPORT_TYPES
+
+    contract = report_type in SOW_REPORT_TYPES
+    return {
+        "html": {"available": True},
+        "csv": {"available": True},
+        "pdf": {"available": True,
+                "note": "Rendered by the report engine; refused with a stated reason only where its native "
+                        "libraries are missing."},
+        "package": {"available": True, "note": "ZIP of the available formats with a README and SHA-256 manifest."},
+        "docx": {"available": contract,
+                 "reason": None if contract else (
+                     f"'{report_type}' is a delivery evidence report, not a contract deliverable; "
+                     f"it has no editable Word form.")},
+    }
+
+
 def _listing_extras(r) -> Dict[str, Any]:
     """Deliverable, period and PM release state for one stored report."""
     from app.reports.data.release import current_release
@@ -636,6 +953,7 @@ def _listing_extras(r) -> Dict[str, Any]:
         "period_end": r.period_end,
         "release": current_release(data),
         "file_stem": _stem_for(r),
+        "formats": supported_formats(r.report_type),
         "source": _source_summary(dataset.get("delivery"), dataset.get("scope")),
         "document_marking": document_marking_for(snapshot.get("data_classification")),
         **_deliverable_meta(r.report_type),
@@ -751,7 +1069,7 @@ async def get_report(
     artifacts = [link_artifact_summary(a) for a in await artifacts_for_report(db, report_id)]
     return {
         **base,
-        "dataset": data.get("dataset", {}),
+        "dataset": _lightweight_dataset(data.get("dataset", {})),
         # Present only when the report was generated for a named delivery and
         # a reconciliation snapshot existed to link it to. One link per stored
         # rendering; `delivery_link` is the first (the HTML) for callers that
@@ -853,9 +1171,10 @@ async def get_package(
     # evidence in every format at once.
     user=Depends(require_role_audited("reviewer", resource_type="report")),
 ):
-    """ZIP of the stored HTML, the CSV, the PDF where available, a README and a
-    manifest with SHA-256 of every member. Assembled from the STORED report;
-    nothing is regenerated and nothing is transmitted."""
+    """ZIP of the HTML, the CSV, the PDF where available, a README and a manifest with SHA-256 of every
+    member. Each member is the REGISTERED artifact's verified bytes when one exists (so it equals the file
+    downloaded separately); only a report from before artifact registration is assembled from the stored column.
+    Nothing is transmitted."""
     from app.reports.data.release import build_package, current_release
     from app.reports.engine.pdf_engine import pdf_available, render_pdf, unavailable_reason
 
@@ -863,10 +1182,19 @@ async def get_package(
     data = row.report_data or {}
     snapshot = data.get("snapshot") or {}
     dataset = dict(data.get("dataset") or {})
-    if not row.report_html:
+
+    # CANONICAL SURFACE RULE (QA108-20260927-013): when a registered artifact exists, its verified bytes ARE the
+    # deliverable. The package used to re-render the PDF from the stored HTML on every request, so the PDF it shipped
+    # was a different file from the registered one (same content, different bytes) and its manifest hash could never
+    # equal the hash of the PDF a recipient downloaded separately. Registered bytes first; re-render only when none exist.
+    reg_html = await _registered_bytes(db, report_id, "text/html")
+    reg_csv = await _registered_bytes(db, report_id, "text/csv")
+    reg_pdf = await _registered_bytes(db, report_id, "application/pdf")
+    package_html = reg_html["content"].decode("utf-8") if reg_html else row.report_html
+    if not package_html:
         raise HTTPException(404, f"Report {report_id} has no stored HTML.")
 
-    csv_text = csv_for_stored_report(row)
+    csv_text = (reg_csv["content"].decode("utf-8-sig") if reg_csv else csv_for_stored_report(row))
     stem = _stem_for(row)
     docx_bytes = None
     try:
@@ -876,16 +1204,18 @@ async def get_package(
 
     pdf_bytes = None
     pdf_reason = None
-    if pdf_available():
+    if reg_pdf is not None:
+        pdf_bytes = reg_pdf["content"]
+    elif pdf_available():
         try:
-            pdf_bytes = await run_in_threadpool(render_pdf, row.report_html, title=stem)
+            pdf_bytes = await run_in_threadpool(render_pdf, package_html, title=stem)
         except Exception as exc:  # noqa: BLE001
             pdf_reason = str(exc)
     else:
         pdf_reason = unavailable_reason()
 
     package = build_package(
-        report_id=report_id, html=row.report_html, csv_text=csv_text,
+        report_id=report_id, html=package_html, csv_text=csv_text,
         pdf_bytes=pdf_bytes, snapshot=snapshot, release=current_release(data),
         deliverable=_deliverable_meta(row.report_type),
         pdf_unavailable_reason=pdf_reason, docx_bytes=docx_bytes, stem=stem)
@@ -1168,7 +1498,10 @@ async def get_report_docx(
         raise HTTPException(404, f"Report {report_id} has no stored dataset.")
     docx_bytes = await run_in_threadpool(docx_for_stored_report, row)
     if docx_bytes is None:
-        raise HTTPException(404, f"Report type '{row.report_type}' has no DOCX form.")
+        supported = ", ".join(k for k, v in supported_formats(row.report_type).items() if v["available"])
+        raise HTTPException(
+            404, f"Report type '{row.report_type}' has no DOCX form (FORMAT_NOT_AVAILABLE). "
+                 f"Supported formats for this report: {supported}.")
     await _audit_download(db, row, "docx", user, job_id=job_id)
     return Response(
         content=docx_bytes, media_type=DOCX_CONTENT_TYPE,
@@ -1207,8 +1540,10 @@ def csv_for_stored_report(row) -> str:
     if row.report_type in SOW_TYPES:
         return sow_report_to_csv(dataset, row.report_id, generated_at)
     if row.report_type == "delivery_processing":
-        # The record-level disposition table, every row, from the STORED dataset.
-        return delivery_processing_to_csv(dataset, row.report_id, generated_at)
+        # Dispositions plus the labelled annexes (findings, coverage, review records), from the STORED dataset. The
+        # rule-set version comes from the stored snapshot so these bytes equal the registered CSV artifact.
+        return delivery_processing_to_csv(dataset, row.report_id, generated_at,
+                                          rule_set_version=snapshot.get("b1_b4_rule_version"))
 
     # Charts were excluded from the stored payload (they are presentation, not
     # data), so rebuild them from the stored numbers for the figure sections.
@@ -1234,21 +1569,31 @@ async def get_report_csv(
     # dataset as HTML/PDF/DOCX.
     user=Depends(require_role_audited("reviewer", resource_type="report")),
 ):
-    """Regenerated from the STORED dataset, not from a fresh query.
+    """The report's CSV - REGISTERED artifact first, regenerated only when none exists.
 
-    The numbers therefore match the stored report exactly, including when the
-    live data has since moved on. For a SOW deliverable this is the stratified
-    entity list; for a technical report it is the figure data.
+    Same canonical-surface rule as /html and /pdf (QA108-20260927-013): a report is what the recipient received. When a
+    verified text/csv artifact is registered its bytes are served unchanged, so a historical report is never quietly
+    re-rendered by a later version of the renderer. A report with no registered CSV (legacy) is regenerated from the
+    STORED dataset, not from a fresh query, so its numbers still match the stored report. For a SOW deliverable this is
+    the stratified entity list; for a technical report it is the figure data.
     """
     from app.reports.engine.csv_engine import to_bytes
 
-    row = await _stored(db, report_id, job_id, defer_html=True)
+    row = await _stored(db, report_id, job_id, defer_html=True)    # delivery-scope check first (409 on a mismatched job_id)
+    registered = await _registered_bytes(db, report_id, "text/csv")
+    if registered is not None:
+        art = registered.get("artifact") or {}
+        await _audit_download(db, row, "csv", user, job_id=job_id, source="artifact-registry",
+                              artifact_version=art.get("artifact_version"), sha256=art.get("rendered_sha256"))
+        headers = download_headers(safe_filename(_stem_for(row), "csv"))
+        headers["X-Report-Source"] = "artifact-registry"
+        return Response(content=registered["content"], media_type="text/csv", headers=headers)
     if not (row.report_data or {}).get("dataset"):
         raise HTTPException(404, f"Report {report_id} has no stored dataset.")
-    await _audit_download(db, row, "csv", user, job_id=job_id)
-    return Response(
-        content=to_bytes(csv_for_stored_report(row)), media_type="text/csv",
-        headers=download_headers(safe_filename(_stem_for(row), "csv")))
+    await _audit_download(db, row, "csv", user, job_id=job_id, source="regenerated-from-stored-dataset")
+    headers = download_headers(safe_filename(_stem_for(row), "csv"))
+    headers["X-Report-Source"] = "regenerated-from-stored-dataset"
+    return Response(content=to_bytes(csv_for_stored_report(row)), media_type="text/csv", headers=headers)
 
 
 @router.get("/health/engine", summary="Report engine health (PDF availability)")

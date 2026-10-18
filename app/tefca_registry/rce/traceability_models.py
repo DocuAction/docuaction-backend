@@ -38,6 +38,10 @@ import app.tefca_registry.rce.snapshot_models  # noqa: F401  (September 2026 sna
 
 STAGE_EVENT_STAGES = (
     "REGISTERED", "RECEIPT_PRESERVED", "SHA256", "SCHEMA_VALIDATION", "PARSING",
+    # Added 2026-10-04 (Round 22): delivery_runner._stage_preflight's event,
+    # only ever opened when ENABLE_PREFLIGHT_ENFORCEMENT is on -- see
+    # docs/review/DELTA-2026-10-04.md. Additive.
+    "PREFLIGHT",
     "QUALITY", "CURATION", "MATCHING", "PROMOTION", "RELATIONSHIPS",
     "VERIFICATION_READINESS", "RECONCILIATION", "READY_FOR_REVIEW",
     "REPORT_GENERATION",

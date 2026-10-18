@@ -832,6 +832,10 @@ class TestReportAPI:
             "/api/reports/exports/onc-review-workbook",
             # Step #17C — its background job
             "/api/reports/exports/jobs/{job_id}",
+            # 2026-10-01 — report generation as a durable background job,
+            # reusing report_export_jobs (Step #17C's table)
+            "/api/reports/generate/jobs",
+            "/api/reports/generate/jobs/{job_id}",
         }
 
     def test_report_endpoints_require_authentication(self):

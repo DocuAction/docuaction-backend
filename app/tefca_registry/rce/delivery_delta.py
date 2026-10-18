@@ -387,3 +387,129 @@ def reprocessing_scope(changed_fields: List[str]) -> Dict[str, Any]:
         "function: evidence-refresh policy on a source change is not "
         "contractually established and is not invented here.")
     return scope
+
+
+# ── predecessor identity and comparability (2026-10-13) ──────────────────────
+#
+# `previous_delivery` picks "the delivery received immediately before" with NO
+# regard to feed, source or size. For the September 2 full snapshot that was an
+# 8-record synthetic test intake, so every one of its 24,589 records was NEW and
+# the eight predecessor records were NOT_PRESENT. The arithmetic was right; the
+# comparison was meaningless. These helpers say WHAT the predecessor is and whether
+# the pair is comparable, additively, without changing which delivery is chosen
+# or any stored delta.
+#
+# COMPARABILITY RULE (small and documented; a delivery is NOT_COMPARABLE when ANY
+# reason holds):
+#   PREDECESSOR_SYNTHETIC / CURRENT_SYNTHETIC   exactly one side is declared synthetic
+#   DIFFERENT_DECLARED_SOURCE                    both declare a source and they differ
+#   SIZE_ORDER_OF_MAGNITUDE                      record counts differ by >= 10x
+#   SCHEMA_FINGERPRINT_DIFFERS                   different field set
+# COMPARABLE means "none of these reasons applies"; it is not a certification that
+# the two files are consecutive feeds of one series.
+
+SIZE_RATIO_LIMIT = 10
+
+
+def _declared_source(meta: Optional[Dict[str, Any]]) -> Optional[str]:
+    value = (meta or {}).get("declared_source")
+    return str(value).strip() if value else None
+
+
+def is_synthetic_intake(*, filename: Optional[str], label: Optional[str],
+                        meta: Optional[Dict[str, Any]]) -> bool:
+    """True when the intake declares itself synthetic/test data.
+
+    Looks only at what the registrant wrote (declared source, registration notes,
+    label, filename). It never infers synthetic-ness from record content."""
+    meta = meta or {}
+    haystack = " ".join(str(x or "") for x in (
+        meta.get("declared_source"), meta.get("registration_notes"), label, filename)).lower()
+    return "synthetic" in haystack
+
+
+def intake_facts(intake) -> Dict[str, Any]:
+    """Identity of one intake, with the three kinds of time kept apart.
+
+    received_date  the calendar date of the delivery (what the registrant stated;
+                   `received_at` is that date at 00:00, stored WITHOUT an offset)
+    received_at    the stored value, ISO, no offset -- treat as UTC midnight of
+                   received_date, not as an instant a person acted
+    created_at     when DocuAction ingested the file (the registry row's creation)
+    """
+    received = intake.received_at
+    created = getattr(intake, "created_at", None)
+    meta = intake.source_metadata or {}
+    return {
+        "intake_id": str(intake.id),
+        "original_filename": intake.original_filename,
+        "delivery_label": intake.delivery_label,
+        "declared_source": _declared_source(meta),
+        "synthetic": is_synthetic_intake(filename=intake.original_filename,
+                                         label=intake.delivery_label, meta=meta),
+        "record_count": intake.record_count,
+        "schema_fingerprint": intake.schema_fingerprint,
+        "received_date": received.date().isoformat() if received else None,
+        "received_at": received.isoformat() if received else None,
+        "received_at_tz": "UTC (stored without an offset; a delivery date at 00:00)",
+        "created_at": created.isoformat() if created else None,
+        "created_at_meaning": "ingestion time: when this file was registered in DocuAction",
+        "status": intake.status,
+    }
+
+
+def assess_comparability(current: Dict[str, Any],
+                         previous: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """COMPARABLE / NOT_COMPARABLE / NO_PREDECESSOR for two `intake_facts`."""
+    if previous is None:
+        return {"status": "NO_PREDECESSOR", "reasons": [],
+                "rule": "No earlier delivery exists; this is a baseline."}
+    reasons: List[Dict[str, str]] = []
+    if previous["synthetic"] and not current["synthetic"]:
+        reasons.append({"code": "PREDECESSOR_SYNTHETIC",
+                        "detail": "The predecessor declares itself synthetic/test data "
+                                  f"({previous['declared_source'] or previous['delivery_label']})."})
+    if current["synthetic"] and not previous["synthetic"]:
+        reasons.append({"code": "CURRENT_SYNTHETIC",
+                        "detail": "This delivery declares itself synthetic/test data; the predecessor does not."})
+    cs, ps = current["declared_source"], previous["declared_source"]
+    if cs and ps and cs.strip().lower() != ps.strip().lower():
+        reasons.append({"code": "DIFFERENT_DECLARED_SOURCE",
+                        "detail": f"Declared sources differ: this delivery '{cs}', predecessor '{ps}'."})
+    a, b = int(current["record_count"] or 0), int(previous["record_count"] or 0)
+    if a > 0 and b > 0 and max(a, b) >= SIZE_RATIO_LIMIT * min(a, b):
+        reasons.append({"code": "SIZE_ORDER_OF_MAGNITUDE",
+                        "detail": f"Record counts differ by {max(a, b) / min(a, b):.0f}x "
+                                  f"({a:,} vs {b:,}); a feed of this size is not a successor of that one."})
+    if current["schema_fingerprint"] != previous["schema_fingerprint"]:
+        reasons.append({"code": "SCHEMA_FINGERPRINT_DIFFERS",
+                        "detail": "The two files do not carry the same field set."})
+    return {
+        "status": "NOT_COMPARABLE" if reasons else "COMPARABLE",
+        "reasons": reasons,
+        "rule": ("NOT_COMPARABLE when exactly one side is synthetic, the declared sources "
+                 f"differ, the record counts differ by {SIZE_RATIO_LIMIT}x or more, or the "
+                 "schema fingerprints differ. COMPARABLE only means none of these applies."),
+    }
+
+
+async def comparable_baseline_candidates(db, current, *, limit: int = 5) -> List[Dict[str, Any]]:
+    """Earlier deliveries that pass `assess_comparability`, most recent first.
+
+    Read-only discovery. It does NOT change which delivery the persisted delta
+    used; a different baseline would need a separate, approved recomputation."""
+    cur = intake_facts(current)
+    rows = (await db.execute(
+        select(m.RceSourceIntake)
+        .where(m.RceSourceIntake.received_at < current.received_at,
+               m.RceSourceIntake.status != "FAILED")
+        .order_by(m.RceSourceIntake.received_at.desc(), m.RceSourceIntake.id.desc())
+        .limit(500))).scalars().all()
+    out = []
+    for row in rows:
+        facts = intake_facts(row)
+        if assess_comparability(cur, facts)["status"] == "COMPARABLE":
+            out.append(facts)
+            if len(out) >= limit:
+                break
+    return out

@@ -127,8 +127,19 @@ def npi_outcome_from_evidence(evidence: Dict[str, Any]) -> Optional[Dict[str, An
     caller (`record_from_evidence`) already treats as "nothing to record" -
     never as VERIFIED.
     """
+    # 2026-10-04 (Part B): this compared against the literal "D1_IDENTITY" --
+    # the enum MEMBER NAME. Every real bundle carries the member's VALUE,
+    # "IDENTITY" (`Dimension.D1_IDENTITY.value`; `DimensionResult.to_dict()`),
+    # so this loop never matched real evidence and returned None for every
+    # entity: a deactivated NPI found by NPPES on the delivery, coverage and
+    # recheck paths was never written to the issue ledger, so
+    # `has_unresolved_blocking_finding` (the QA gate) never saw it. Hand-built
+    # test evidence used the same wrong literal, which is why nothing failed.
+    # Both spellings are accepted so those fixtures keep meaning what they did.
+    from app.Tefca.evidence_dimensions import Dimension
+    identity_names = (Dimension.D1_IDENTITY.value, "D1_IDENTITY")
     for dimension in evidence.get("dimensions") or []:
-        if dimension.get("dimension") != "D1_IDENTITY":
+        if dimension.get("dimension") not in identity_names:
             continue
         dim_evidence = dimension.get("evidence")
         if not isinstance(dim_evidence, list):
@@ -294,6 +305,14 @@ async def record_from_evidence(db, *, entity_id, npi: Optional[str],
     """Convenience for `arc_pipeline.verify_and_classify`."""
     derived = npi_outcome_from_evidence(evidence)
     if derived is None:
+        return None
+    # No NPI on the entity: there was nothing for NPPES to verify. That is a
+    # fact about the entity (many TEFCA entities legitimately hold no NPI),
+    # not a source outage and not a finding. Without this, every NPI-less
+    # record would get an NPI_VERIFICATION_UNAVAILABLE issue -- one technical
+    # non-event manufactured into a finding per record (2026-10-04, found the
+    # moment the dimension-name fix above made this function live).
+    if not npi and derived["outcome"] == NPI_VERIFICATION_UNAVAILABLE:
         return None
     return await record_npi_outcome(db, entity_id=entity_id, npi=npi,
                                     outcome=derived["outcome"], detail=derived)

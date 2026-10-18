@@ -91,6 +91,19 @@ def base_css() -> str:
     return inlined_font_face_css() + "\n" + css
 
 
+AGT_CSS_FILE = os.path.join(STYLES_DIR, "agt_design_system.css")
+
+
+@functools.lru_cache(maxsize=1)
+def agt_design_css() -> str:
+    """The approved Alliance Global Tech design system (header band, KPI
+    cards, navy table headings, B1–B4 chips), shared by the progress family
+    and the delivery client report. One file, so the two never drift. Read
+    once and cached, like `base_css()`."""
+    with open(AGT_CSS_FILE, "r", encoding="utf-8") as handle:
+        return handle.read()
+
+
 def _format_date(value: Any) -> str:
     """"7 September 2026" — the one display form shared with the DOCX engine
     (`docx_engine._fmt_date`), so every format states the same period text."""
@@ -152,6 +165,7 @@ def render_html(template_name: str, context: Dict[str, Any]) -> str:
     template = env.get_template(template_name)
     full_context = {
         "css": base_css(),
+        "agt_css": agt_design_css(),
         # Defaults the base template needs; a report family overrides them.
         "pdf_author": "Alliance Global Tech Inc.",
         "pdf_keywords": "DocuAction; TEFCA ARC",

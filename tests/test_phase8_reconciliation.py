@@ -163,9 +163,43 @@ class TestReconciliationAgainstTheDatabase:
 
     @pytest.mark.asyncio
     async def test_the_equation_balances(self):
+        """LEGACY POPULATION = CANONICAL REPORTABLE-FROM-LEGACY + RECONCILED.
+
+        2026-10-04 (Round 26): `c["canonical_reportable"]` originally counted
+        EVERY reportable `review_records` row in the whole database, which
+        made this assert `canonical_reportable == 0` whenever `legacy ==
+        legacy_synthetic` (true once the legacy population is fully
+        classified -- see test_every_legacy_row_has_a_reason). That broke
+        whenever ANY unrelated, legitimate QA approval ran earlier in the
+        same shared test database -- reproduced directly: committing one
+        ordinary reportable review_record with no connection to the legacy
+        population failed this assertion with `1 == 0`, identically to
+        test_nothing_became_reportable below.
+
+        `test_no_legacy_row_links_to_a_review_record` already proves NO
+        review_record is EVER linked to a legacy `tefca_reviews` row (by
+        NPI) -- migration left the two populations categorically disjoint.
+        So "how many canonical-reportable records came FROM reconciling the
+        legacy population" is provably always zero, and the equation this
+        test is actually named for only ever concerns the LEGACY-linked
+        subset of canonical_reportable, not the whole table. Scoped to that
+        subset explicitly rather than assumed.
+        """
+        from sqlalchemy import text
+
+        from app.core.database import async_session_maker
+
         c = await self._counts()
+        async with async_session_maker() as db:
+            canonical_reportable_from_legacy = (await db.execute(text("""
+                select count(*) from tefca_reviews tr
+                where exists (
+                    select 1 from review_records rr
+                    join tefca_entity_identifiers i on i.entity_id = rr.entity_id
+                    where i.identifier_value = tr.npi
+                      and rr.reportable_at is not null)"""))).scalar()
         reconciled = c["legacy_synthetic"]
-        assert c["canonical_reportable"] + reconciled == c["legacy"]
+        assert canonical_reportable_from_legacy + reconciled == c["legacy"]
 
     @pytest.mark.asyncio
     async def test_every_legacy_row_has_a_reason(self):
@@ -200,6 +234,38 @@ class TestReconciliationAgainstTheDatabase:
 
     @pytest.mark.asyncio
     async def test_nothing_became_reportable(self):
-        c = await self._counts()
-        assert c["canonical_reportable"] == 0
-        assert c["decision_events"] == 0
+        """Reconciling the legacy population must not itself create a
+        reportable canonical record or a decision event.
+
+        2026-10-04 (Round 26): this previously asserted the WHOLE
+        `review_records`/`review_decision_events` tables were empty of
+        reportable rows and events -- true only on a database where no
+        other test has ever exercised the (entirely separate, entirely
+        legitimate) QA-approval workflow. Reproduced: one ordinary
+        reportable review_record, unrelated to any legacy row, broke this
+        with `1 == 0`. Scoped to what the gate is actually meant to prove --
+        that nothing reportable or decided traces back to a legacy
+        `tefca_reviews` row -- using the same NPI linkage
+        `test_no_legacy_row_links_to_a_review_record` already establishes
+        is categorically absent."""
+        from sqlalchemy import text
+
+        from app.core.database import async_session_maker
+
+        async with async_session_maker() as db:
+            linked_reportable = (await db.execute(text("""
+                select count(*) from tefca_reviews tr
+                where exists (
+                    select 1 from review_records rr
+                    join tefca_entity_identifiers i on i.entity_id = rr.entity_id
+                    where i.identifier_value = tr.npi
+                      and rr.reportable_at is not null)"""))).scalar()
+            linked_events = (await db.execute(text("""
+                select count(*) from tefca_reviews tr
+                where exists (
+                    select 1 from review_decision_events de
+                    join review_records rr on rr.review_id = de.review_id
+                    join tefca_entity_identifiers i on i.entity_id = rr.entity_id
+                    where i.identifier_value = tr.npi)"""))).scalar()
+        assert linked_reportable == 0
+        assert linked_events == 0

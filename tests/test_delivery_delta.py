@@ -43,6 +43,41 @@ from app.tefca_registry.rce.field_map import RCE_FIELDS, schema_fingerprint
 
 SYN = "SYNTHETIC-DELTA"
 BASE_DAY = datetime(2026, 10, 1, 9, 0)
+#: Floor for the dynamic anchor below. Kept as a named constant so the
+#: "earliest" test (which computes its own anchor independently) and this
+#: anchor agree on what "the synthetic window" nominally starts at when the
+#: database happens to be empty.
+
+
+async def _anchor(db):
+    """A base date for this test's own month-1/month-2 pair, placed strictly
+    after every `RceSourceIntake.received_at` any OTHER test module has
+    already committed to the shared database.
+
+    WHY THIS EXISTS (2026-10-04, Round 26): `delivery_delta.previous_delivery`
+    is DELIBERATELY unscoped -- it matches `rce_report_data.get_delta_from_previous`
+    exactly ("most recent earlier delivery on record", full stop), which is
+    correct production behaviour for a single monthly delivery stream and is
+    NOT changed here. But a fixed `BASE_DAY` of 2026-10-01 sits inside the
+    "now" window every OTHER test's real (non-rolled-back) commit uses by
+    default (`ingest_delivery(received_at=None)` -> `datetime.utcnow()`), so
+    when this file ran after one of those tests in the same full-suite run,
+    `previous_delivery(m2)` found that unrelated row instead of this file's
+    own `m1` -- 8 tests failed, identically reproducible, order-dependent,
+    and NOT caused by a leak in `rolled_back_db` (which correctly isolates
+    each test's OWN writes; the pollution is from a different, already-
+    committed test's data, which no rollback here can undo).
+
+    Anchoring 400 days past whatever is already in the table -- rather than
+    a second fixed constant -- means this file's window can never again
+    collide with another module's "now", however many times the whole suite
+    is rerun on the same long-lived disposable database."""
+    latest = (await db.execute(
+        select(func.max(m.RceSourceIntake.received_at)))).scalar()
+    anchor = BASE_DAY
+    if latest is not None and latest >= anchor:
+        anchor = latest + timedelta(days=400)
+    return anchor
 
 
 # ── synthetic delivery construction ──────────────────────────────────────────
@@ -133,12 +168,12 @@ async def rolled_back_db(db_required):
 MONTH1 = ["A", "B", "C", "D", "E", "F", "G"]
 
 
-async def _month1(db):
+async def _month1(db, anchor):
     rows = [_record(t) for t in MONTH1]
-    return await _deliver(db, rows, received_at=BASE_DAY, label=f"{SYN}-M1")
+    return await _deliver(db, rows, received_at=anchor, label=f"{SYN}-M1")
 
 
-async def _month2(db):
+async def _month2(db, anchor):
     """A: unchanged · B: name · C: address · D: NPI · E: relationship
        F: absent · G: present but HELD · H: brand new."""
     rows = [
@@ -150,15 +185,16 @@ async def _month2(db):
         _record("G"),
         _record("H"),
     ]
-    return await _deliver(db, rows, received_at=BASE_DAY + timedelta(days=30),
+    return await _deliver(db, rows, received_at=anchor + timedelta(days=30),
                           label=f"{SYN}-M2")
 
 
 @pytest.fixture
 async def two_months(rolled_back_db):
     db = rolled_back_db
-    m1 = await _month1(db)
-    m2 = await _month2(db)
+    anchor = await _anchor(db)
+    m1 = await _month1(db, anchor)
+    m2 = await _month2(db, anchor)
     await _curate_stub(db, m1)
     await _curate_stub(db, m2, held_ids={"9.99.444.G"})
     return db, m1, m2

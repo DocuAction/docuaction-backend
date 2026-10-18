@@ -222,7 +222,7 @@ DELIVERY_DISPOSITION_ORDER = ("CREATED", "UPDATED", "MATCHED_UNCHANGED", "HELD",
 
 
 def delivery_processing_to_csv(dataset: Dict[str, Any], report_id: str,
-                               generated_at: str) -> str:
+                               generated_at: str, rule_set_version: Any = None) -> str:
     """The Delivery Processing Report as data: EVERY record-level disposition.
 
     Not paged, not sampled. The preamble pins the same identity the HTML
@@ -255,6 +255,8 @@ def delivery_processing_to_csv(dataset: Dict[str, Any], report_id: str,
     writer.writerow([f"# Report Data Service version: {dataset.get('service_version')}"])
     writer.writerow(["# Every value below is read from persisted evidence. No rule is "
                      "re-run and no reconciliation is recomputed while this file is produced."])
+    writer.writerow([f"# B1-B4 rule set in force at generation: "
+                     f"{rule_set_version if rule_set_version is not None else 'not stated in this export (see the report provenance)'}"])
     writer.writerow([])
 
     eq = (recon.get("equation") or {}) if recon.get("available") else {}
@@ -289,6 +291,135 @@ def delivery_processing_to_csv(dataset: Dict[str, Any], report_id: str,
     for row in rows:
         writer.writerow(neutralise_row(["" if row.get(key) is None else row.get(key)
                                         for key, _ in DELIVERY_DISPOSITION_COLUMNS]))
+    writer.writerow([])
+
+    # ── Annexes ──────────────────────────────────────────────────────────────────────────────────────────────────
+    # The PDF's package line promises "CSV export of the same persisted evidence". Until 2026-10 this file carried
+    # the dispositions only, so findings, coverage and review records printed in the PDF were absent here. Each
+    # annex below is a SEPARATE labelled section built from the same dataset dict the HTML/PDF render from; where
+    # the dataset caps a table, the section states "rows included N of M" instead of implying completeness.
+    findings = dataset.get("findings") or {}
+    writer.writerow(["## Annex A. Findings (system results, not analyst determinations)"])
+    if findings.get("available"):
+        writer.writerow([f"Rows included {findings.get('rows_shown', 0)} of {findings.get('rows_total', 0)}; "
+                         f"total findings in the current quality run {findings.get('total', 0)}; "
+                         f"open at HIGH/CRITICAL {findings.get('open_high', 0)}; "
+                         # Same note as Appendix E: a description's "profiled delivery" figures are the reference
+                         # profile the rule set was calibrated against, never this delivery's results. Kept on this
+                         # line so the annex keeps its shape (line 0 summary, line 1 header, rows from line 2).
+                         f"descriptions are the rule text stored at the time of the run, and figures quoting "
+                         f"'the profiled delivery' are the reference profile the rule set was calibrated against, "
+                         f"not results for this delivery"])
+        writer.writerow(["Issue code", "Line", "Rule", "Rule version", "Issue type", "Severity", "Column",
+                         "Correction authority", "Resolution", "Description"])
+        for f in findings.get("rows") or []:
+            writer.writerow(neutralise_row([
+                f.get("issue_code"), f.get("line_number"), f.get("rule_id"), f.get("rule_version"),
+                f.get("issue_type"), f.get("severity"), f.get("field_name"),
+                f.get("correction_authority"), f.get("resolution"), f.get("description")]))
+    else:
+        writer.writerow(["No quality run is recorded for this delivery; findings cannot be stated"])
+    writer.writerow([])
+
+    verification = dataset.get("verification") or {}
+    writer.writerow(["## Annex B. Verification coverage per source (attempted is not answered)"])
+    writer.writerow(["Source", "State", "Eligible", "Attempted", "Verified", "Not found", "Unavailable", "Failed",
+                     "Attempted %", "Answered (verified + not found)", "Answered %", "Note"])
+    for s_ in verification.get("sources") or []:
+        writer.writerow(neutralise_row([
+            s_.get("name"), s_.get("state"), s_.get("eligible"), s_.get("attempted"), s_.get("verified"),
+            s_.get("not_found"), s_.get("unavailable"), s_.get("failed"),
+            "Not run" if s_.get("coverage_pct") is None else s_.get("coverage_pct"),
+            s_.get("answered"), "" if s_.get("answered_pct") is None else s_.get("answered_pct"),
+            s_.get("note") or ""]))
+        if s_.get("name") == "sam":
+            writer.writerow(["Note (SAM.gov row above): SAM.gov answered figures combine registration-search and "
+                             "exclusion-screening activity (any answered leg). They are not exclusion clearance: "
+                             "a registration-only result never means the entity was checked and found excluded-clear."])
+    writer.writerow(["Unavailable and failed checks are attempts without an answer. Staged data and connector "
+                     "readiness are not coverage. A source check does not clear any other source."])
+    for s_ in verification.get("sources") or []:
+        legs = s_.get("screening_legs")
+        if not isinstance(legs, dict):
+            continue
+        reg = legs.get("registration_only") or {}
+        exc = legs.get("exclusion") or {}
+        unk = legs.get("leg_not_recorded") or {}
+        writer.writerow([])
+        writer.writerow(["## Annex B.1. SAM.gov results by screening leg (distinct entities; legs are not additive)"])
+        writer.writerow(["Screening leg", "Entities", "Clear", "Hit", "No registration record found",
+                         "Registration record found", "Unavailable", "Other / not interpreted"])
+        writer.writerow(neutralise_row([
+            "Registration search only", reg.get("entities"), "n/a", "n/a",
+            reg.get("no_registration_record_found"), reg.get("registration_record_found"),
+            reg.get("unavailable"), reg.get("other")]))
+        writer.writerow(neutralise_row([
+            "Exclusion screening", exc.get("entities"), exc.get("clear"), exc.get("hit"),
+            "n/a", "n/a", exc.get("unavailable"), exc.get("other")]))
+        writer.writerow(neutralise_row([
+            "Screening leg not recorded", unk.get("entities"), "n/a", "n/a", "n/a", "n/a",
+            unk.get("unavailable"), unk.get("not_interpreted")]))
+        writer.writerow(["A registration-only search with no record found is not an exclusion 'no hit'. Results "
+                         "stored before the screening leg was recorded are labelled 'screening leg not recorded' "
+                         "and are not counted as exclusion-clear or as registration results. The SAM figures in "
+                         "Annex B above combine all legs."])
+        break
+    writer.writerow([])
+
+    analyst = dataset.get("analyst") or {}
+    writer.writerow(["## Annex C. Review records (determination and independent QA status)"])
+    if analyst.get("available"):
+        writer.writerow([f"Rows included {analyst.get('review_records_shown', 0)} of "
+                         f"{analyst.get('review_records_total', 0)}"])
+        writer.writerow(["Review id", "Category", "Classified under rule", "Classified under rule version",
+                         "Analyst determination", "Determination source", "Determined (UTC)", "QA status",
+                         "QA approved (UTC)"])
+        for r in analyst.get("review_records") or []:
+            writer.writerow(neutralise_row([
+                r.get("review_id"), r.get("bucket"), r.get("classification_rule"),
+                r.get("classification_rule_version"),
+                r.get("resolution") or ("Not recorded" if (r.get("reportable_at") or r.get("qa_state") == "TIMESTAMP_WITHOUT_DETERMINATION") else "No determination yet"),
+                r.get("determination_source") or "none", r.get("reviewed_at"),
+                # a QA timestamp with no stored determination is never an approval
+                (f"TIMESTAMP_WITHOUT_DETERMINATION {r.get('reportable_at') or r.get('qa_event_at')}"
+                 if (not r.get("resolution") and (r.get("reportable_at") or r.get("qa_state") == "TIMESTAMP_WITHOUT_DETERMINATION"))
+                 else (r.get("qa_state") or "")),
+                r.get("reportable_at") if r.get("resolution") else ""]))
+        writer.writerow(["Rule version here is the version each record was classified under; the rule set in force "
+                         "when this report was generated is in the preamble/provenance."])
+    else:
+        writer.writerow(["No analyst action has been recorded for this delivery"])
+    writer.writerow([])
+
+    iq = dataset.get("iqvia_use") or {}
+    writer.writerow(["## IQVIA use disclosure (supplemental; not verification, not exclusion clearance)"])
+    writer.writerow(["State", iq.get("state") or "IQVIA_NOT_USED"])
+    def _count(key):  # None = unknown (an unreadable store), which must not read as zero
+        v = iq.get(key, 0)
+        return "unknown (assessment store could not be read)" if v is None and iq else (0 if v is None else v)
+
+    writer.writerow(["Advisory assessments recorded", _count("assessments")])
+    writer.writerow(["Distinct reviews linked", _count("reviews_linked")])
+    # Sorted explicitly: the stored dataset is a JSONB round trip that reorders mapping keys, so iterating the mapping in
+    # stored order printed the same decision rows in a different order (and hash) on different render paths.
+    for dec, cnt in sorted((iq.get("by_decision") or {}).items()):
+        writer.writerow([f"Decision {dec}", cnt])
+    if iq.get("assessments"):
+        writer.writerow(["Assessments linked to a registry entity", iq.get("entities_linked", "not recorded")])
+        writer.writerow(["Assessor roles (no names)", "; ".join(iq.get("assessor_roles") or []) or "not recorded"])
+    for sn in iq.get("snapshots") or []:
+        writer.writerow(["Snapshot consulted", sn.get("snapshot_id"), f"sha256 prefix {sn.get('sha256_prefix')}"])
+        writer.writerow(["Snapshot source received (UTC date)", sn.get("received_on") or "not recorded"])
+        writer.writerow(["Snapshot source effective date", sn.get("source_effective_date") or "not recorded"])
+    for ar in iq.get("assessment_refs") or []:
+        writer.writerow(["Assessment reference", ar.get("ref"), "Snapshot ID", ar.get("snapshot_id") or "not recorded",
+                         ar.get("decision"), ar.get("assessed_at") or "-",
+                         f"role {ar.get('assessed_role')}", "review linked" if ar.get("review_linked") else "no review",
+                         "entity linked" if ar.get("entity_linked") else "no entity"])
+    writer.writerow(["First / last assessed (UTC)", iq.get("first_assessed_at") or "-", iq.get("last_assessed_at") or "-"])
+    if iq.get("lookup_availability_statement"):
+        writer.writerow([iq["lookup_availability_statement"]])
+    writer.writerow([iq.get("statement") or "No IQVIA data was used for this delivery."])
     writer.writerow([])
 
     writer.writerow(["## Evidence limitations"])

@@ -378,6 +378,13 @@ def test_no_tefca_read_endpoint_sits_above_the_viewer_floor():
         # already sanitized (pseudonymous refs, masked NPIs), so the gate is
         # about who may PLAN retries, not about hiding data.
         "/api/tefca/admin/pecos-retry-plan",
+        # IQVIA staging-capacity probe: admin (8). An OPERATIONAL diagnostic for the
+        # controlled load, not entity data: it returns only numbers (free space of
+        # the container's staging directory, bytes already staged, process and
+        # container memory). No path, file name or row value is returned (a test
+        # asserts that). The gate is about who may inspect infrastructure
+        # capacity, not about hiding data a reviewer needs.
+        "/api/tefca/rce/iqvia/staging-capacity",
         # Platform audit trail — qalead (6). This is the ONE TEFCA read that is
         # not entity data: it is every user's authentication history, with their
         # email addresses and source IPs. Level 6 is "QA Lead — audit access, no
@@ -442,8 +449,94 @@ def test_no_tefca_read_endpoint_sits_above_the_viewer_floor():
         "/api/tefca/rce/deliveries/{intake_id}/issues",
         "/api/tefca/rce/deliveries/{intake_id}/dispositions",
         "/api/tefca/rce/deliveries/{intake_id}/dispositions.csv",
+        # ── Reporting-architecture task (2026-10-02): concise-report CSV
+        # annexes ── Same floor, same justification, as dispositions.csv
+        # immediately above: each is the full-detail CSV behind a table the
+        # report now caps at 100 inline rows, not a new category of content.
+        "/api/tefca/rce/deliveries/{intake_id}/findings.csv",
+        "/api/tefca/rce/deliveries/{intake_id}/identifier-conflicts.csv",
+        "/api/tefca/rce/deliveries/{intake_id}/review-records.csv",
         "/api/tefca/rce/deliveries/{intake_id}/exceptions",
         "/api/tefca/rce/deliveries/{intake_id}/audit",
+        # ── Reporting-architecture task (2026-10-01): verification drill-down ──
+        # Same principle as the delivery-workflow exceptions immediately above:
+        # /verification-coverage (plural sources, counts only) stays viewer, but
+        # the entity-level list behind ONE (source, outcome) count -- entity
+        # name and NPI, a delivered value -- sits at reviewer, same floor as
+        # /dispositions and /exceptions right above it.
+        "/api/tefca/rce/deliveries/{intake_id}/verification-coverage/{source}/{outcome}",
+        "/api/tefca/rce/deliveries/{intake_id}/verification-coverage/{source}/{outcome}/csv",
+        # ── IQVIA Release 1 application journey (2026-10-02) ──
+        # Snapshot status/progress/reconciliation for a staged licensed
+        # extract -- reviewer (4), the SAME floor `source_matching.
+        # LICENSED_ACCESS_ROLE` already requires for any licensed-source
+        # content (ADR-006). Gated above viewer by that pre-existing,
+        # unchanged rule, not a new decision made here: licensed content is
+        # served only above the reviewer floor AND only when
+        # ENABLE_IQVIA_SOURCES is on (`_require_licensed_access`, checked
+        # first by every route in `iqvia_routes.py`). The route returns a
+        # snapshot's progress/rejected-row counts, never a raw delivered
+        # row value -- same shape of exception as the delivery-workflow
+        # reads immediately above, applied to a different source family.
+        # Snapshot LIST (2026-10-12, IQ-01): the discovery twin of the entry below,
+        # behind the identical gate (`require_role("reviewer")` +
+        # `_require_licensed_access`). Returns snapshot metadata and the counters the
+        # importer stored (labels, hashes, counts, actor emails) -- never an observation
+        # row or any delivered value. Not a new access decision.
+        "/api/tefca/rce/iqvia/snapshots",
+        "/api/tefca/rce/iqvia/snapshots/{snapshot_id}",
+        # 2026-10-13 delivery-clarity drafts: the IQVIA inventory status reads the same
+        # licensed snapshot rows as snapshot discovery above and shares its gate (reviewer +
+        # licensed access); it returns counters and one label only. The per-record exception
+        # export returns delivered names, NPIs and finding text per record, so it sits at the
+        # reviewer floor like the sibling findings/dispositions exports.
+        "/api/tefca/rce/iqvia/source-status",
+        "/api/tefca/rce/deliveries/{intake_id}/exception-records.csv",
+        # Same rule, same source family, applied to the chunked-upload
+        # resume contract added 2026-10-03: `_require_licensed_access` is
+        # the first thing this route does too (identical to every other
+        # iqvia_routes.py route), so this is the SAME pre-existing
+        # ADR-006/reviewer-floor-plus-ENABLE_IQVIA_SOURCES rule as the
+        # snapshot-status entry immediately above, not a new access
+        # decision. The route returns only chunk-receipt bookkeeping
+        # (received/missing counts) -- never a byte of delivered content.
+        "/api/tefca/rce/iqvia/uploads/{upload_id}",
+        # Read-only rollback REHEARSAL -- program_manager (7), the same floor
+        # `scripts/rce_snapshot_rollback.py --apply` already requires. Same
+        # reasoning as /api/tefca/admin/pecos-retry-plan above: this is an
+        # OPERATIONAL planning surface (what an apply WOULD restore/retire),
+        # not entity data a reviewer needs day to day, and it exists
+        # specifically so a program manager can rehearse the real operator
+        # tool's plan before anyone runs --apply. No apply/mutating route
+        # exists at any floor -- see ROL-001..015's root-cause note in
+        # app/tefca_registry/rce/delivery_routes.py.
+        "/api/tefca/rce/deliveries/{intake_id}/rollback-plan",
+        # ── Preflight + analyst workspace (2026-10-03, items 9-10) ──
+        # Preflight findings carry the ORIGINAL delivered value of every
+        # identifier or field they are about, and the normalization list is
+        # original-beside-derived by definition; the workspace consolidates
+        # delivered values, Issue Ledger rows and dimension evidence per
+        # entity. Same principle as the delivery-workflow exceptions above:
+        # reads that return delivered values sit at reviewer (4). The shadow
+        # comparison reads stay viewer: buckets, rules and hashes only.
+        "/api/tefca/rce/deliveries/{intake_id}/preflight",
+        "/api/tefca/rce/preflight-runs/{run_id}/findings",
+        "/api/tefca/rce/preflight-runs/{run_id}/normalizations",
+        "/api/tefca/rce/deliveries/{intake_id}/workspace",
+        # ── Controlled rechecks (2026-10-04) ──
+        # The per-entity drill-down of a recheck and its CSV list each
+        # targeted organisation by its delivered identifier (rce_org_oid)
+        # with its prior and new disposition. Same principle as the
+        # preflight findings above and the delivery-workflow drill-downs:
+        # a read that returns delivered values sits at reviewer (4). The
+        # job-level reads (`/rechecks/{job_id}`, `/deliveries/{intake_id}/
+        # rechecks`) carry counts, versions and states only and stay viewer.
+        # Found by this test in the 2026-10-04 full regression: the routes
+        # were added at the reviewer floor without being listed here.
+        # RAISED FOR INDEPENDENT REVIEW as an access decision, not settled
+        # by this entry.
+        "/api/tefca/rce/rechecks/{job_id}/items",
+        "/api/tefca/rce/rechecks/{job_id}/items.csv",
         # ── Pre-merge review Decision 1 (2026-09-16) ──
         # Deprecated legacy aliases for the current /api/reports/* content
         # routes, which the same review raised from viewer to reviewer

@@ -151,10 +151,29 @@ def test_viewer_gets_null_evidence_blocks_with_availability(client, succeeded):
 
 
 def test_reviewer_gets_the_evidence_blocks(client, succeeded):
-    r = client.get(f"{BASE}/delivery-jobs/{succeeded['job_id']}/detail",
-                   headers=headers_for("reviewer"))
+    # 2026-10-04: this test predates QA108-20260927-002, which made the three
+    # heavy blocks (records, lineage, audit) opt-in via `?include=` because
+    # computing them inline took 11-16 s on the 24,589-record delivery and
+    # each tab reads its own endpoint anyway. It asserted the OLD default and
+    # failed identically at the PR #110 head (it needs a database, so no CI
+    # job ran it). Both halves of the documented contract are asserted now.
+    url = f"{BASE}/delivery-jobs/{succeeded['job_id']}/detail"
+
+    # Default: deferred, said so, and never reported as a role problem.
+    default = client.get(url, headers=headers_for("reviewer"))
+    assert default.status_code == 200, default.text
+    d = default.json()
+    assert sorted(d["blocks_deferred"]) == ["audit", "lineage", "records"]
+    assert d["exceptions"] is not None
+    for block in ("records", "lineage", "audit"):
+        assert d[block] is None, block
+        assert d["availability"][block] != "requires_role:reviewer", block
+
+    # Asked for: all four evidence blocks are present.
+    r = client.get(url + "?include=records,lineage,audit", headers=headers_for("reviewer"))
     assert r.status_code == 200, r.text
     body = r.json()
+    assert body["blocks_deferred"] == []
     for block in ("records", "exceptions", "lineage", "audit"):
         assert body[block] is not None, block
         assert body["availability"][block] != "requires_role:reviewer", block

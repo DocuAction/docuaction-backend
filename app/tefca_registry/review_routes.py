@@ -877,8 +877,10 @@ class QaReview(BaseModel):
     qa_reason: str = Field(min_length=10, max_length=4000)
     escalated_to_user_id: Optional[uuid.UUID] = None
     escalation_reason: Optional[str] = Field(None, max_length=4000)
-    #: Segregation-of-duties exception. Requires an admin grant from a DIFFERENT
-    #: person. Recorded, counted, and expected to be disabled in production.
+    #: Segregation-of-duties exception fields. Self-attested and NOT honoured:
+    #: a self-QA is refused (SOD_EXCEPTION_NOT_AUTHORIZED) even when these are
+    #: supplied, until an authenticated admin grant mechanism exists
+    #: (docs/SOD_EXCEPTION_AUTHORIZATION_DESIGN.md).
     sod_exception_granted_by: Optional[uuid.UUID] = None
     sod_exception_reason: Optional[str] = Field(None, max_length=4000)
 
@@ -961,7 +963,9 @@ async def submit_qa(review_id: str, req: QaReview, request: Request,
             sod_exception_reason=req.sod_exception_reason,
             ip_address=get_client_ip(request))
     except QaGateRefused as exc:
-        raise HTTPException(409, str(exc))
+        # The machine code reaches the client in `X-Denial-Code`.
+        raise HTTPException(409, str(exc), headers={
+            "X-Denial-Code": getattr(exc, "code", "QA_REFUSED")})
     await db.commit()
     return result
 
@@ -1414,6 +1418,11 @@ async def operations_work_queue(
         reportable: Optional[bool] = Query(None),
         deadline_state: Optional[str] = Query(None),
         search: Optional[str] = Query(None, max_length=200),
+        unresolved_exclusion_candidate: bool = Query(
+            False, description="Cases carrying an uncleared prior "
+                              "exclusion/identity-conflict signal. "
+                              "Listed individually for triage; the list "
+                              "itself selects or closes nothing."),
         sort: str = Query("age"),
         offset: int = Query(0, ge=0),
         limit: int = Query(50, ge=1, le=200),
@@ -1429,6 +1438,7 @@ async def operations_work_queue(
             assignee=assignee, intake_id=intake_id, unassigned_only=unassigned_only,
             qhin_entity_id=qhin_entity_id, limited_only=limited_only,
             reportable=reportable, deadline_state=deadline_state, search=search,
+            unresolved_exclusion_candidate=unresolved_exclusion_candidate,
             sort=sort, offset=offset, limit=limit,
             due_soon_within_hours=due_soon_within_hours,
             stale_after_days=stale_after_days)

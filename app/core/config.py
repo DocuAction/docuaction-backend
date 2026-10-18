@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     # ── Storage ───────────────────────────────────────────────────────────────
     STORAGE_PROVIDER: str = "local"
     UPLOAD_DIR: str = "./uploads"
+    # Server-local drop directory for operator-placed IQVIA extracts (the
+    # `/sources/{source}/stage` route) — the only directory a stage request's
+    # client-supplied file_path is allowed to resolve into; see
+    # app.core.upload_security.safe_existing_path.
+    IQVIA_IMPORT_DIR: str = "./uploads/iqvia-source"
     WHISPER_MODEL: str = "whisper-1"
 
     # ── Optional integrations ─────────────────────────────────────────────────
@@ -76,6 +81,53 @@ class Settings(BaseSettings):
     # and restarts — the same on/off/restart pattern already used for
     # REPORT_ARTIFACT_BACKEND.
     ENABLE_DEV_RESTORE_ORIGINAL: bool = False
+
+    # IQVIA HCP_AFFIL consumption (advisory candidates only; never a verification
+    # source, never confirmed). Default False: the routes do not exist. Also needs
+    # ENABLE_IQVIA_SOURCES and an APPROVED snapshot. Not a policy activation.
+    ENABLE_IQVIA_AFFILIATION_CONSUMPTION: bool = False
+
+    # Preflight ENFORCEMENT (not the engine itself, which always exists and
+    # is always reachable via the admin dry-run route regardless of this
+    # flag). Default False: zero behavior change for any official delivery
+    # or reference-snapshot write. See
+    # docs/review/DELTA-2026-10-04.md and delivery_runner._stage_preflight.
+    # New enforcement stays in shadow (off) until explicitly approved.
+    ENABLE_PREFLIGHT_ENFORCEMENT: bool = False
+
+    # Controlled rechecks (rce/rechecks.py) re-query real, rate-limited
+    # sources. Default False: the routes refuse. Nothing schedules a recheck
+    # automatically in either state.
+    ENABLE_CONTROLLED_RECHECKS: bool = False
+
+    # Cross-delivery issue history (minimum slice: NPI and partOf/QHIN rules).
+    # Both default False: with both off the quality engine writes exactly what
+    # it wrote before and the history route answers 404.
+    #   ENABLE_RECORD_CHECK_RESULTS  write one rce_record_check_results row per
+    #                                record per run (needs the migration).
+    #   ENABLE_ISSUE_HISTORY         serve GET .../by-oid/{oid}/issue-history.
+    # The two feed lists are comma-separated rce_source_intakes
+    # source_metadata->>'feed' tags each role may read. Empty means NOTHING is
+    # visible to that role (fail closed); reviewer and above also see the
+    # viewer feeds.
+    ENABLE_RECORD_CHECK_RESULTS: bool = False
+    ENABLE_ISSUE_HISTORY: bool = False
+    ISSUE_HISTORY_FEEDS_VIEWER: str = ""
+    ISSUE_HISTORY_FEEDS_REVIEWER: str = ""
+    # Read-only mapping "<intake uuid>:<FEED>,..." that lets a LEGACY intake with
+    # NO feed tag be read as a member of FEED for history purposes only. It never
+    # overrides a tag, writes nothing, and the FEED must still be allowed to the
+    # caller. Empty (default) = untagged intakes stay in no feed (fail closed).
+    ISSUE_HISTORY_INTAKE_FEEDS: str = ""
+
+    # PROPOSED, INACTIVE. Under the active rules an entity is classified B1
+    # and marked verified while SAM.gov or CMS-revocation screening was
+    # unavailable / never evaluated (only OIG LEIE is required). The gap is
+    # always RECORDED on the review record (verification_claim). Turning
+    # this on additionally withholds `verified` for such records. It is a
+    # policy decision, not a default: with no SAM key configured it would
+    # withhold `verified` for every entity.
+    ENFORCE_COMPLETE_EXCLUSION_SCREENING: bool = False
 
     class Config:
         env_file = ".env"

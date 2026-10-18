@@ -24,11 +24,16 @@ from datetime import datetime, timezone
 import pytest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-#: The chain's actual head. 20260918 (Decision 2, added 2026-09-18) only adds
-#: nullable columns to `rce_issues` and widens the snapshot trigger CHECK; it
-#: does not touch the five evidence tables' grants this module tests, so
-#: "upgrade to head" testing those grants stays valid with the head moved.
-HEAD = "20260918_pp_verification"
+#: The chain's actual head. Bumped again 2026-10-04 (Round 22) past
+#: 20261003_preflight_shadow to 20261004_stage_event_preflight -- two new
+#: migrations (20261004_preflight_exec_held, 20261004_stage_event_preflight)
+#: widen two CHECK constraints (rce_preflight_finding.execution;
+#: rce_delivery_stage_events.stage, one of this module's own TABLES) to
+#: admit new enum values. Neither touches ownership or GRANTs on any of
+#: the five evidence tables -- a CHECK constraint is independent of both --
+#: so "upgrade to head" testing those grants stays valid with the head
+#: moved again, same as every prior bump recorded in this comment's history.
+HEAD = "20261009_iqvia_affil_org_indexes"   # 20261006 added column-level UPDATE(record_count, metadata) on source_snapshot; 20261007 added column-level UPDATE on the completion columns of rce_preflight_run (preflight finalize) plus a guard trigger; this head adds one append-only per-record result table (SELECT+INSERT) and three nullable rule-history columns; no grant on the five evidence tables; 20261008 is now the parent of this head, and the head adds two partial expression indexes only (no data, no grant)
 PREVIOUS = "20260915_curated_text_columns"
 MIG_DB = "mig_test"
 OWNER, APP = "docuaction_owner", "docuaction_app"

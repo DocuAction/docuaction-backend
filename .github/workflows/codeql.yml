@@ -3,7 +3,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, 'feat/reporting-architecture-2026-10-01']
   schedule:
     - cron: '0 8 * * 1'
 

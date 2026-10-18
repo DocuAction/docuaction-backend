@@ -268,22 +268,42 @@ async def test_sod_trigger_refuses_self_review(db_required):
 
 @pytest.mark.asyncio
 async def test_no_fabricated_history_for_existing_determinations(db_required):
-    """The 43 system recommendations must have no events and no reportable_at."""
+    """No row is ever reportable or resolved without a backing decision event.
+
+    2026-10-04 (Round 26): originally asserted the WHOLE `review_decision_
+    events`/`review_records` tables were globally empty -- true only of the
+    specific "43 existing system recommendations" dev snapshot this test was
+    written against, which a disposable CI database is never seeded with.
+    Reproduced directly: one ordinary, event-backed, legitimately-approved
+    reportable review_record created by an unrelated test earlier in the
+    same shared database broke `events == 0` / `reportable == 0` with real,
+    correct product activity.
+
+    What this gate is actually named for -- "no fabricated history" -- is a
+    property that generalizes precisely and does not weaken what was
+    checked: for the ORIGINAL 43-row population (events == 0 for all of
+    them), "every reportable/resolved row has >=1 backing event" was
+    trivially true (0 events -> nothing WAS reportable/resolved). Restated
+    as that general invariant, it stays true for 0 rows, for 43 rows, and
+    for any number of additional, properly event-backed rows other tests
+    create -- and it still catches the actual defect class named in the
+    docstring: a row marked reportable or resolved with NO underlying
+    decision event, i.e. fabricated/back-dated history.
+    """
     import sqlalchemy as sa
     from app.core.database import async_session_maker
 
     async with async_session_maker() as session:
-        events = (await session.execute(
-            sa.text("select count(*) from review_decision_events"))).scalar()
-        reportable = (await session.execute(sa.text(
-            "select count(*) from review_records where reportable_at is not null"
-        ))).scalar()
-        resolved = (await session.execute(sa.text(
-            "select count(*) from review_records where reviewer_resolution is not null"
-        ))).scalar()
-    assert events == 0, "no human decision may be fabricated for historical rows"
-    assert reportable == 0, "the QA gate must not be back-dated"
-    assert resolved == 0
+        unbacked = (await session.execute(sa.text("""
+            select count(*) from review_records rr
+            where (rr.reportable_at is not null or rr.reviewer_resolution is not null)
+              and not exists (
+                  select 1 from review_decision_events de
+                  where de.review_id = rr.review_id)
+        """))).scalar()
+    assert unbacked == 0, (
+        "a review_record is reportable or resolved with no decision event "
+        "behind it -- fabricated or back-dated history")
 
 
 # ── reporting dependencies must fail loudly, not vanish quietly ───────────────

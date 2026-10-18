@@ -35,7 +35,7 @@ import logging
 import uuid
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, or_, select
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +56,22 @@ _PAGE = 5000
 
 #: Lineage rows printed in the report (the totals are always complete).
 _LINEAGE_ROW_CAP = 200
+
+#: PROFILED 2026-10-02: for a delivery at the real ~24,563-record September
+#: scale, `_dispositions`/`_findings`/`_identifiers` each materialised and
+#: inline-rendered one table row PER RECORD ("every received record", per the
+#: dispositions template caption) — unbounded report size, unbounded peak
+#: memory, and a PDF nobody could usefully read. The summary tables above each
+#: (counts, totals, by-severity) always come from separate aggregate COUNT
+#: queries and stay complete regardless of this cap; only the per-record
+#: detail TABLE is capped. Full per-record detail is the already-existing CSV
+#: annex (`dispositions.csv`, and the two new `findings.csv`/
+#: `identifiers.csv` routes added alongside this cap), referenced by the
+#: template next to each capped table — detail is redirected, never dropped.
+_DISPOSITIONS_ROW_CAP = 100
+_FINDINGS_ROW_CAP = 100
+_IDENTIFIER_ROW_CAP = 100
+_REVIEW_RECORD_ROW_CAP = 100
 
 
 def _iso(value: Any) -> Optional[str]:
@@ -361,17 +377,32 @@ class DeliveryProcessingDataService:
             return {"available": False, "counts": empty_counts,
                     "equation": disp.equation(empty_counts, 0), "records_received": 0,
                     "records_without_disposition": 0, "agrees_with_snapshot": None,
-                    "rows": [], "human_count": 0, "reconstructed_count": 0}
+                    "rows": [], "rows_shown": 0, "rows_total": 0,
+                    "human_count": 0, "reconstructed_count": 0}
 
         counts = await disp.counts_for_intake(self.db, intake.id)
         without = await disp.records_without_disposition(self.db, intake.id)
         per_record = await self._issue_counts_by_record(intake)
 
         rows: List[Dict[str, Any]] = []
+        human_count = 0
+        reconstructed_count = 0
+        rows_total = 0
         offset = 0
         while True:
             page = await disp.current_for_intake(self.db, intake.id, limit=_PAGE, offset=offset)
             for r in page:
+                rows_total += 1
+                # These two counters are summed across the WHOLE delivery, not
+                # just the capped detail table below — paging continues to the
+                # end regardless of the cap so these stay delivery-wide totals,
+                # matching what the summary paragraph above the table states.
+                if r.get("actor_type") == "HUMAN":
+                    human_count += 1
+                if r.get("reconstructed"):
+                    reconstructed_count += 1
+                if len(rows) >= _DISPOSITIONS_ROW_CAP:
+                    continue
                 f, w = per_record.get(str(r.get("source_record_id")), (0, 0))
                 rows.append({
                     "line_number": r.get("line_number"),
@@ -427,8 +458,10 @@ class DeliveryProcessingDataService:
             "records_without_disposition": without,
             "agrees_with_snapshot": agrees,
             "rows": rows,
-            "human_count": sum(1 for r in rows if r["actor_type"] == "HUMAN"),
-            "reconstructed_count": sum(1 for r in rows if r["reconstructed"]),
+            "rows_shown": len(rows),
+            "rows_total": rows_total,
+            "human_count": human_count,
+            "reconstructed_count": reconstructed_count,
         }
 
     async def _findings(self, intake) -> Dict[str, Any]:
@@ -436,7 +469,8 @@ class DeliveryProcessingDataService:
         from app.tefca_registry.rce import run_selection
 
         base = {"available": False, "total": 0, "by_severity": {s: 0 for s in SEVERITY_ORDER},
-                "by_code": [], "by_resolution": {}, "rows": [], "run_id": None,
+                "by_code": [], "by_resolution": {}, "rows": [], "rows_shown": 0,
+                "rows_total": 0, "run_id": None,
                 "rule_set_version": None, "open_high": 0}
         if intake is None:
             return base
@@ -452,22 +486,41 @@ class DeliveryProcessingDataService:
         by_res = dict((k or "(none)", int(v)) for k, v in (await self.db.execute(
             select(m.RceIssue.resolution, func.count()).where(scope)
             .group_by(m.RceIssue.resolution))).all())
+        # Delivery-wide, independent of the capped `rows` below (which only
+        # feeds the printed detail table) — see `_DISPOSITIONS_ROW_CAP`'s
+        # comment for why this delivery can have one issue row per record.
+        open_high_total = int((await self.db.execute(
+            select(func.count()).select_from(m.RceIssue)
+            .where(scope, m.RceIssue.resolution == "OPEN",
+                  m.RceIssue.severity.in_(("HIGH", "CRITICAL"))))).scalar() or 0)
+        rows_total = int((await self.db.execute(
+            select(func.count()).select_from(m.RceIssue).where(scope))).scalar() or 0)
+        # OPEN HIGH/CRITICAL first (the actionable ones), then by line number —
+        # a capped sample should show the findings that matter, not an
+        # arbitrary prefix of the delivery.
+        severity_rank = case(
+            (m.RceIssue.resolution == "OPEN",
+             case((m.RceIssue.severity == "CRITICAL", 0),
+                  (m.RceIssue.severity == "HIGH", 1), else_=2)),
+            else_=3)
         rows = (await self.db.execute(
             select(m.RceIssue, m.RceSourceRecord.line_number)
             .join(m.RceSourceRecord, m.RceSourceRecord.id == m.RceIssue.source_record_id,
                   isouter=True)
             .where(scope)
-            .order_by(m.RceSourceRecord.line_number, m.RceIssue.rule_id))).all()
+            .order_by(severity_rank, m.RceSourceRecord.line_number, m.RceIssue.rule_id)
+            .limit(_FINDINGS_ROW_CAP))).all()
         by_severity = {s: 0 for s in SEVERITY_ORDER}
         for _rule, _type, severity, n in by_code:
             by_severity[severity] = by_severity.get(severity, 0) + int(n)
-        open_high = sum(1 for issue, _ in rows
-                        if issue.resolution == "OPEN" and issue.severity in ("HIGH", "CRITICAL"))
+        open_high = open_high_total
         if run is None:
             self.limit("No completed quality run exists for this delivery; findings "
                        "cannot be stated (quality never ran, or never completed).")
         return {
             "available": run is not None,
+            "rows_shown": len(rows),
+            "rows_total": rows_total,
             "total": sum(by_severity.values()),
             "by_severity": by_severity,
             "by_code": [{"rule_id": r, "issue_type": t, "severity": s, "count": int(n)}
@@ -492,7 +545,8 @@ class DeliveryProcessingDataService:
         from app.tefca_registry.rce import traceability_models as tm
 
         if intake is None:
-            return {"available": False, "conflicts": [], "unresolved": 0, "events_total": 0}
+            return {"available": False, "conflicts": [], "rows_shown": 0, "rows_total": 0,
+                    "unresolved": 0, "events_total": 0}
         E = tm.TefcaIdentifierDecisionEvent
         events = (await self.db.execute(
             select(E).where(E.intake_id == intake.id)
@@ -518,7 +572,16 @@ class DeliveryProcessingDataService:
         unresolved = sum(1 for c in items if c["current_decision"] in ("CONFLICT_RAISED",
                                                                        "REQUEST_EVIDENCE",
                                                                        "DEFERRED", "ESCALATED"))
-        return {"available": True, "conflicts": items, "unresolved": unresolved,
+        # Unresolved conflicts first (the actionable ones) — see
+        # `_DISPOSITIONS_ROW_CAP`'s comment; the printed table is capped, the
+        # counts above it (unresolved, events_total) stay delivery-wide.
+        UNRESOLVED = ("CONFLICT_RAISED", "REQUEST_EVIDENCE", "DEFERRED", "ESCALATED")
+        items.sort(key=lambda c: (c["current_decision"] not in UNRESOLVED,
+                                  c["entity_id"], c["identifier_type"]))
+        conflicts_total = len(items)
+        shown = items[:_IDENTIFIER_ROW_CAP]
+        return {"available": True, "conflicts": shown, "rows_shown": len(shown),
+                "rows_total": conflicts_total, "unresolved": unresolved,
                 "events_total": len(events)}
 
     async def _verification(self, intake) -> Dict[str, Any]:
@@ -553,6 +616,100 @@ class DeliveryProcessingDataService:
             return fallback
         return _normalise_coverage(raw)
 
+    _SOURCE_LABELS = {"nppes": "NPPES", "pecos": "PECOS", "leie": "OIG LEIE", "sam": "SAM.gov"}
+
+    def _note_coverage_limits(self, verification: Dict[str, Any]) -> None:
+        """State, as an evidence limitation, every source that was never attempted.
+
+        "Not run" and 0% coverage are not "clear": a reader who sees zero findings from a source
+        that never ran must be told so in words, in the limitations section, every time.
+        """
+        sources = verification.get("sources") or []
+        idle = [x for x in sources if not (x.get("attempted") or 0)]
+        if not idle:
+            return
+        labels = ", ".join(self._SOURCE_LABELS.get(x.get("name"), str(x.get("name")).upper()) for x in idle)
+        eligible = max([int(x.get("eligible") or 0) for x in sources] or [0])
+        if len(idle) == len(sources):
+            lead = (f"No external source check was attempted for this delivery ({labels}: 0 of {eligible} "
+                    f"eligible entities attempted, 0% coverage). ")
+        else:
+            lead = f"No check was attempted at {labels} (0 attempted, 0% coverage at that source). "
+        self.limit(lead + "'Not run' means no check was performed. It does not mean the entities were "
+                          "checked and found clear, so this report draws no screening or exclusion "
+                          "conclusion for those sources.")
+
+    def _note_review_limits(self, counts: Dict[str, Any]) -> None:
+        total = int(counts.get("review_records") or 0)
+        if total and not int(counts.get("qa_approved") or 0):
+            self.limit(f"{total} review record(s) exist and none has been independently QA approved. The "
+                       "findings and counts in this report are system results, not approved determinations.")
+
+    async def _readiness(self, intake) -> Dict[str, Any]:
+        """The latest source-readiness (preflight) run for this delivery, from persisted rows only."""
+        empty = {"available": False, "run": None, "by_category": {}, "by_disposition": {}}
+        if intake is None:
+            return empty
+        from sqlalchemy import func, select
+        from app.tefca_registry.rce.preflight_shadow_models import RcePreflightFinding, RcePreflightRun
+
+        run = (await self.db.execute(
+            select(RcePreflightRun).where(RcePreflightRun.source_intake_id == intake.id)
+            .order_by(RcePreflightRun.started_at.desc()).limit(1))).scalars().first()
+        if run is None:
+            self.limit("No source-readiness (preflight) check was run for this delivery. 'Not run' does not "
+                       "mean the delivered file is ready: nothing was checked.")
+            return empty
+        rows = (await self.db.execute(
+            select(RcePreflightFinding.category, RcePreflightFinding.disposition, func.count())
+            .where(RcePreflightFinding.run_id == run.id)
+            .group_by(RcePreflightFinding.category, RcePreflightFinding.disposition))).all()
+        by_category: Dict[str, int] = {}
+        by_disposition: Dict[str, int] = {}
+        for category, disposition, n in rows:
+            by_category[category] = by_category.get(category, 0) + int(n)
+            by_disposition[disposition] = by_disposition.get(disposition, 0) + int(n)
+        return {
+            "available": True,
+            "run": {
+                "status": run.status, "classification_gate": run.classification_gate,
+                "records_evaluated": int(run.records_evaluated or 0),
+                "findings_count": int(run.findings_count or 0),
+                "normalizations_count": int(run.normalizations_count or 0),
+                "preflight_version": run.preflight_version, "rule_set_version": run.rule_set_version,
+                "field_map_version": run.field_map_version,
+                "started_at": _iso(run.started_at), "completed_at": _iso(run.completed_at),
+                "actor": run.actor, "error": run.error, "id": str(run.id),
+            },
+            "by_category": by_category, "by_disposition": by_disposition,
+        }
+
+    async def _rechecks(self, intake) -> Dict[str, Any]:
+        """Controlled rechecks requested for this delivery: who asked, who approved, how far they got."""
+        empty = {"available": False, "total": 0, "by_state": {}, "rows": []}
+        if intake is None:
+            return empty
+        from sqlalchemy import func, select
+        from app.tefca_registry.rce.recheck_models import RceRecheckJob
+
+        total = int((await self.db.execute(
+            select(func.count()).select_from(RceRecheckJob)
+            .where(RceRecheckJob.intake_id == intake.id))).scalar() or 0)
+        by_state = {state: int(n) for state, n in (await self.db.execute(
+            select(RceRecheckJob.state, func.count()).where(RceRecheckJob.intake_id == intake.id)
+            .group_by(RceRecheckJob.state))).all()}
+        jobs = (await self.db.execute(
+            select(RceRecheckJob).where(RceRecheckJob.intake_id == intake.id)
+            .order_by(RceRecheckJob.created_at.desc()).limit(20))).scalars().all()
+        rows = [{
+            "source_id": j.source_id, "trigger_kind": j.trigger_kind, "state": j.state,
+            "requested_by": j.requested_by, "approved_by": j.approved_by,
+            "target_count": int(j.target_count or 0), "processed_count": int(j.processed_count or 0),
+            "created_at": _iso(j.created_at), "completed_at": _iso(j.completed_at),
+            "error_reason": j.error_reason,
+        } for j in jobs]
+        return {"available": True, "total": total, "by_state": by_state, "rows": rows}
+
     async def _analyst(self, intake, dispositions: Dict[str, Any]) -> Dict[str, Any]:
         from app.tefca_registry import models as reg
         from app.tefca_registry.rce import models as m
@@ -560,11 +717,14 @@ class DeliveryProcessingDataService:
         from app.tefca_registry.rce import traceability_models as tm
 
         empty = {"available": False, "disposition_events": [], "issue_resolutions": [],
-                 "review_records": [], "counts": {"disposition_events": 0,
-                                                  "issue_resolutions": 0,
-                                                  "review_records": 0, "open": 0,
-                                                  "claimed": 0, "qa_pending": 0,
-                                                  "qa_approved": 0}}
+                 "review_records": [], "rule_versions_in_effect": [],
+                 "review_records_shown": 0, "review_records_total": 0,
+                 "counts": {"disposition_events": 0,
+                           "issue_resolutions": 0,
+                           "review_records": 0, "open": 0,
+                           "claimed": 0, "qa_pending": 0,
+                           "qa_returned": 0, "qa_escalated": 0, "qa_inconsistent": 0,
+                           "determinations": 0, "qa_approved": 0}}
         if intake is None:
             return empty
         D = tm.RceDispositionEvent
@@ -580,17 +740,95 @@ class DeliveryProcessingDataService:
             .order_by(m.RceIssue.resolved_at))).scalars().all()
         record_ids = select(m.RceSourceRecord.id).where(
             m.RceSourceRecord.source_intake_id == intake.id)
+        # ReviewRecord is reachable two ways depending on which path created
+        # it: the manual single-entity review path (`review_service.
+        # run_review`) sets `source_record_id`; the bulk delivery-processing
+        # path (`arc_pipeline.verify_and_classify` — the one this report is
+        # FOR) sets `entity_id` instead and leaves `source_record_id` null.
+        # Filtering on `source_record_id` alone, as this query did before,
+        # silently excluded every arc_pipeline-created record from a delivery
+        # processed that way — this delivery's own classification history.
+        # `RceCuratedRecord.canonical_entity_id` is this intake's promoted
+        # entities; OR-ing both reaches both creation paths.
+        entity_ids = select(m.RceCuratedRecord.canonical_entity_id).where(
+            m.RceCuratedRecord.source_intake_id == intake.id,
+            m.RceCuratedRecord.canonical_entity_id.isnot(None))
         reviews = (await self.db.execute(
             select(reg.ReviewRecord)
-            .where(reg.ReviewRecord.source_record_id.in_(record_ids))
+            .where(or_(reg.ReviewRecord.source_record_id.in_(record_ids),
+                      reg.ReviewRecord.entity_id.in_(entity_ids)))
             .order_by(reg.ReviewRecord.created_at))).scalars().all()
+        rule_versions_in_effect = sorted({
+            r.classification_rule_version for r in reviews
+            if r.classification_rule_version is not None})
+        # Determination and QA state come from the APPEND-ONLY decision events (`review_decision_events`), the
+        # system of record since the QA gate (qa_gate.py). `review_records.reviewer_resolution` is a legacy column the
+        # event workflow never writes, so reading it alone printed "Pending" beside a QA approval (report 071,
+        # REV-2026-000248). A review with no events keeps its legacy columns and says so (`determination_source`);
+        # nothing is back-filled and no human act is invented for it.
+        from app.tefca_registry import qa_gate
+
+        events_by_review: Dict[str, list] = {}
+        review_ids = [r.review_id for r in reviews]
+        if review_ids:
+            ev_rows = (await self.db.execute(
+                select(reg.ReviewDecisionEvent)
+                .where(reg.ReviewDecisionEvent.review_id.in_(review_ids))
+                .order_by(reg.ReviewDecisionEvent.review_id,
+                          reg.ReviewDecisionEvent.sequence_number))).scalars().all()
+            for ev in ev_rows:
+                events_by_review.setdefault(ev.review_id, []).append(ev)
+
+        def _state(r) -> Dict[str, Any]:
+            evs = events_by_review.get(r.review_id) or []
+            det = qa_gate.effective_determination(evs) if evs else None
+            if det is not None:
+                latest = qa_gate._latest_determination(evs)
+                after = qa_gate._qa_after(evs, latest)
+                last_qa = after[-1] if after else None
+                qa_state = ({"APPROVE": "APPROVED", "RETURN": "RETURNED", "ESCALATE": "ESCALATED"}
+                            .get(last_qa.qa_action) if last_qa else "NOT_YET_REVIEWED")
+                return {"source": "decision_events", "determined": True,
+                        "determination": det["determination"], "bucket": det["determined_bucket"],
+                        "by_role": det["actor_role"], "at": det["occurred_at"],
+                        "qa_state": qa_state,
+                        "qa_at": last_qa.occurred_at if last_qa else None,
+                        "approved": qa_gate.is_reportable(evs)}
+            if r.reviewer_resolution is None and r.reportable_at is not None:
+                # A QA timestamp with NO stored determination. The report does not invent the determination and
+                # does not treat the timestamp as a valid approval: an approval is of a determination.
+                return {"source": None, "determined": False, "inconsistent": True,
+                        "determination": None, "bucket": None, "by_role": None, "at": None,
+                        "qa_state": "TIMESTAMP_WITHOUT_DETERMINATION",
+                        "qa_at": r.reportable_at, "approved": False}
+            if r.reviewer_resolution is not None or r.reportable_at is not None:
+                return {"source": "legacy_column", "determined": r.reviewer_resolution is not None,
+                        "determination": r.reviewer_resolution, "bucket": r.reclassified_to,
+                        "by_role": None, "at": r.reviewed_at,
+                        "qa_state": "APPROVED" if r.reportable_at is not None else "NOT_YET_REVIEWED",
+                        "qa_at": r.reportable_at, "approved": r.reportable_at is not None}
+            return {"source": None, "determined": False, "determination": None, "bucket": None,
+                    "by_role": None, "at": None, "qa_state": None, "qa_at": None, "approved": False}
+
+        states = {r.review_id: _state(r) for r in reviews}
         open_items = sum(1 for r in reviews
-                         if r.assigned_to_user_id is None and r.reviewer_resolution is None)
+                         if r.assigned_to_user_id is None and not states[r.review_id]["determined"]
+                         and not states[r.review_id].get("inconsistent"))
         claimed = sum(1 for r in reviews
-                      if r.assigned_to_user_id is not None and r.reviewer_resolution is None)
-        qa_pending = sum(1 for r in reviews
-                         if r.reviewer_resolution is not None and r.reportable_at is None)
-        qa_approved = sum(1 for r in reviews if r.reportable_at is not None)
+                      if r.assigned_to_user_id is not None and not states[r.review_id]["determined"]
+                      and not states[r.review_id].get("inconsistent"))
+        qa_inconsistent = sum(1 for r in reviews if states[r.review_id].get("inconsistent"))
+        # A determination that is not approved is in one of three different states: nobody
+        # at QA has looked at it yet, QA returned it to the analyst, or QA escalated it. Only the
+        # first is "awaiting independent QA"; counting a returned or escalated record there told
+        # the reader the wrong party owed the next action.
+        def _unapproved(r, qa_state):
+            st = states[r.review_id]
+            return st["determined"] and not st["approved"] and st["qa_state"] == qa_state
+        qa_pending = sum(1 for r in reviews if _unapproved(r, "NOT_YET_REVIEWED"))
+        qa_returned = sum(1 for r in reviews if _unapproved(r, "RETURNED"))
+        qa_escalated = sum(1 for r in reviews if _unapproved(r, "ESCALATED"))
+        qa_approved = sum(1 for r in reviews if states[r.review_id]["approved"])
         return {
             "available": bool(human or resolved or reviews),
             "disposition_events": [{**ev.to_dict(), "line_number": line} for ev, line in human],
@@ -601,18 +839,45 @@ class DeliveryProcessingDataService:
                 "resolution_notes": i.resolution_notes,
                 "qa_approved_by": i.qa_approved_by, "qa_approved_at": _iso(i.qa_approved_at),
             } for i in resolved],
+            # Open/unresolved first (the actionable ones) — see
+            # `_DISPOSITIONS_ROW_CAP`'s comment; one ReviewRecord per entity
+            # means this is delivery-scale too since the entity_id-linkage fix
+            # above now actually returns arc_pipeline's rows.
             "review_records": [{
                 "review_id": r.review_id, "source_record_id": _s(r.source_record_id),
                 "entity_id": _s(r.entity_id), "bucket": r.classification_bucket,
-                "resolution": r.reviewer_resolution, "reclassified_to": r.reclassified_to,
+                "classification_rule": r.classification_rule,
+                # The rule-set version this record was CLASSIFIED under (stamped on the review row). It is not the
+                # version in force when the report was generated; that is `b1_b4_rule_version` in provenance.
+                "classification_rule_version": r.classification_rule_version,
+                "resolution": states[r.review_id]["determination"],
+                "reclassified_to": states[r.review_id]["bucket"] if states[r.review_id]["determination"] == "RECLASSIFY" else None,
+                "determination_source": states[r.review_id]["source"],
+                "determined_by_role": states[r.review_id]["by_role"],
+                "qa_state": states[r.review_id]["qa_state"],
                 "assigned": r.assigned_to_user_id is not None,
-                "reviewed_at": _iso(r.reviewed_at), "reportable_at": _iso(r.reportable_at),
+                "reviewed_at": _iso(states[r.review_id]["at"]),
+                "reportable_at": _iso(states[r.review_id]["qa_at"]) if states[r.review_id]["approved"] else None,
+                "qa_event_at": _iso(states[r.review_id]["qa_at"]),
                 "created_at": _iso(r.created_at),
-            } for r in reviews],
+            } for r in sorted(
+                reviews,
+                key=lambda r: (states[r.review_id]["approved"], states[r.review_id]["determined"],
+                              r.created_at),
+            )[:_REVIEW_RECORD_ROW_CAP]],
+            "rule_versions_in_effect": rule_versions_in_effect,
             "counts": {"disposition_events": len(human), "issue_resolutions": len(resolved),
                        "review_records": len(reviews), "open": open_items,
                        "claimed": claimed, "qa_pending": qa_pending,
+                       "qa_returned": qa_returned, "qa_escalated": qa_escalated,
+                       "qa_inconsistent": qa_inconsistent,
+                       # Analyst determinations recorded on review records (decision events or the legacy
+                       # column). A different thing from `disposition_events` (record-level dispositions
+                       # written by the intake pipeline); the report labels the two separately.
+                       "determinations": sum(1 for r in reviews if states[r.review_id]["determined"]),
                        "qa_approved": qa_approved},
+            "review_records_shown": min(len(reviews), _REVIEW_RECORD_ROW_CAP),
+            "review_records_total": len(reviews),
         }
 
     async def _lineage(self, intake, job) -> Dict[str, Any]:
@@ -698,6 +963,16 @@ class DeliveryProcessingDataService:
             bad += 0 if ok else 1
         return bad
 
+    async def _iqvia_use(self, intake) -> Dict[str, Any]:
+        """Actual (not staged) IQVIA use for THIS delivery, identifier-free. Read from the assessment store
+        whatever the consumption flag says: the flag gates new lookups, never the record of past use. An absent
+        store is stated as such, not as "not used"."""
+        from app.core.config import settings
+        from app.tefca_registry.rce import iqvia_advisory_assessment as aa
+        return await aa.disclosure_for_intake(
+            self.db, flag_enabled=bool(getattr(settings, "ENABLE_IQVIA_AFFILIATION_CONSUMPTION", False)),
+            intake_id=getattr(intake, "id", None))
+
     # -- assembly ------------------------------------------------------------
 
     async def build_dataset(self) -> Dict[str, Any]:
@@ -729,8 +1004,13 @@ class DeliveryProcessingDataService:
         findings = await self._findings(intake)
         identifiers = await self._identifiers(intake)
         verification = await self._verification(intake)
+        self._note_coverage_limits(verification)
         analyst = await self._analyst(intake, dispositions)
+        self._note_review_limits(analyst["counts"])
         lineage = await self._lineage(intake, job)
+        readiness = await self._readiness(intake)
+        rechecks = await self._rechecks(intake)
+        iqvia_use = await self._iqvia_use(intake)
         invalid_promoted = await self._invalid_identifiers_promoted(intake)
 
         outcome = status_model.processing_outcome(
@@ -751,7 +1031,9 @@ class DeliveryProcessingDataService:
             snapshot_passed=bool(snapshot and snapshot.get("passed")),
             open_work_items=counts["open"] + findings["open_high"],
             claimed_work_items=counts["claimed"],
-            determined_items=0, qa_pending=counts["qa_pending"],
+            determined_items=0,
+            qa_pending=(counts["qa_pending"] + counts["qa_returned"] + counts["qa_escalated"]
+                        + counts["qa_inconsistent"]),
             qa_approved=counts["qa_approved"])
         if job is None and intake is not None:
             self.limit("Processing outcome is derived from the intake alone (no job "
@@ -795,6 +1077,9 @@ class DeliveryProcessingDataService:
             "verification": verification,
             "analyst": analyst,
             "lineage": lineage,
+            "readiness": readiness,
+            "rechecks": rechecks,
+            "iqvia_use": iqvia_use,
             "limitations": list(self.limitations),
             "audit_note": (
                 "Generation of this report is recorded in audit_logs "
@@ -820,7 +1105,17 @@ def _normalise_coverage(raw: Any) -> Dict[str, Any]:
                     for i, s in enumerate(sources_raw))
     for name, s in iterable:
         s = s or {}
+        eligible_n = s.get("eligible")
+        # ATTEMPTED is not COMPLETED. `coverage_pct` is attempted / eligible: a source that was asked and answered
+        # "unavailable" for every entity still reads 100% attempted. `answered` counts only outcomes that are an
+        # answer from the source (verified or not found); unavailable and failed are attempts with no answer.
+        answered_n = None
+        if (s.get("attempted") or 0) > 0 and (s.get("verified") is not None or s.get("not_found") is not None):
+            answered_n = int(s.get("verified") or 0) + int(s.get("not_found") or 0)
+        answered_pct = (round(100.0 * answered_n / int(eligible_n), 1)
+                        if answered_n is not None and eligible_n else None)
         items.append({
+            "answered": answered_n, "answered_pct": answered_pct,
             "name": name,
             "state": s.get("coverage_state") or s.get("state") or "Not Run",
             "eligible": s.get("eligible"), "attempted": s.get("attempted"),
@@ -829,10 +1124,14 @@ def _normalise_coverage(raw: Any) -> Dict[str, Any]:
             "coverage_pct": s.get("coverage_pct"),
             "note": s.get("note") or s.get("detail"),
         })
+        if isinstance(s.get("screening_legs"), dict):
+            # SAM only: registration-only vs exclusion vs leg-not-recorded (read-time labels).
+            items[-1]["screening_legs"] = s["screening_legs"]
     present = {i["name"] for i in items}
     for name in VERIFICATION_SOURCES:
         if name not in present:
             items.append({"name": name, "state": "Not Run", "eligible": None,
+                          "answered": None, "answered_pct": None,
                           "attempted": None, "verified": None, "not_found": None,
                           "unavailable": None, "failed": None, "coverage_pct": None,
                           "note": "No coverage evidence was read for this source."})

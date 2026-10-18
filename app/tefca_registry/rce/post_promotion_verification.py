@@ -271,6 +271,39 @@ async def record_post_promotion_conflict(db, *, entity_id, identifier_type: str,
         existing_value=existing_value, actor=actor)
 
 
+# ── reading: is there a genuine, still-open blocking finding right now ──────
+
+async def has_unresolved_blocking_finding(db, entity_id) -> bool:
+    """True iff this entity has at least one OPEN finding of a BLOCKING
+    type (`NPI_DEACTIVATED`/`INVALID_ACTIVE_IDENTIFIER`/
+    `MATERIAL_IDENTIFIER_CONFLICT`) -- the exact, narrow condition this
+    module's own docstring and `qa_gate.submit_qa_review`'s comment both
+    describe ("an unresolved post-promotion BLOCKING finding... the finding
+    may itself change the answer").
+
+    Added 2026-10-03 (local fix, directive-authorized): `qa_gate.py` used to
+    answer this question by reading `TefcaRegEntity.verification_status ==
+    "in_review"` directly -- but `arc_pipeline.py` ALSO writes that same
+    value for every classification bucket other than B1, independent of
+    whether any `RceIssue` was ever opened (confirmed by reading
+    `arc_pipeline.py` directly, not inferred). That made QA_APPROVE refuse
+    for every B2/B3/B4 entity, not only the ones this module's own finding
+    mechanism actually flagged -- a materially broader, undocumented
+    restriction with no test asserting it was intended, and no resolution
+    path for it at all (unlike a genuine finding, which
+    `resolve_post_promotion_finding` can clear). This function answers the
+    narrower, DOCUMENTED question directly from `rce_issues`, the same
+    table `resolve_post_promotion_finding` itself reads, rather than from
+    the overloaded status flag."""
+    rows = (await db.execute(select(m.RceIssue.id).where(
+        m.RceIssue.issue_type.in_(sorted(BLOCKING_OUTCOMES)),
+        m.RceIssue.resolution.in_(sorted(curation.UNDECIDED_RESOLUTIONS)),
+        m.RceIssue.source_record_id.in_(
+            select(m.RceCuratedRecord.source_record_id).where(
+                m.RceCuratedRecord.canonical_entity_id == entity_id))))).scalars().all()
+    return bool(rows)
+
+
 # ── resolution (append-only: a new decision, never a rewrite) ───────────────
 
 async def resolve_post_promotion_finding(db, issue_id, *, decision: str, actor: str,

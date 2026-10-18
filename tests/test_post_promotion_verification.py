@@ -341,9 +341,107 @@ async def test_final_classification_is_refused_while_unresolved(rolled_back_db):
         db, review.review_id, user=analyst_user, determination="CONFIRM",
         rationale="Reviewed against NPPES; looks fine.")
 
-    with pytest.raises(qa_gate.QaGateRefused, match="in_review"):
+    with pytest.raises(qa_gate.QaGateRefused, match="unresolved post-promotion verification finding"):
         await qa_gate.submit_qa_review(
             db, review.review_id, user=qa_user, qa_action=qa_gate.E.QA_APPROVE,
             qa_reason="Concur with the analyst determination.")
     await db.refresh(review)
     assert review.reportable_at is None
+
+
+async def test_non_b1_entity_with_no_open_finding_can_now_be_qa_approved(rolled_back_db):
+    """The fix, directly: a B2/B3/B4 classification is itself the system's
+    answer, not a pending one. An entity that is `in_review` purely from
+    classification-time tier routing (no genuine post-promotion finding
+    ever opened against it) must be approvable -- this is what independent
+    QA exists to confirm. Before the 2026-10-03 fix, this raised
+    unconditionally for every non-B1 bucket."""
+    import uuid as _uuid
+
+    from app.tefca_registry import qa_gate
+
+    db = rolled_back_db
+    _rows, _intake_id, _job, curated, _promo = await _promoted(db, "9.99.888.13")
+    entity_id = curated.canonical_entity_id
+
+    # Simulate arc_pipeline.py's own bucket-driven write for a non-B1
+    # classification -- no RceIssue, no genuine finding, exactly the
+    # tier-routing-only case this fix targets.
+    entity = await db.get(reg.TefcaRegEntity, entity_id)
+    entity.verification_status = "in_review"
+    await db.flush()
+
+    review = reg.ReviewRecord(
+        review_id="REV-2026-900002", entity_id=entity_id,
+        source_record_id=curated.source_record_id, verification_results={},
+        classification_bucket="B2", classification_rule="RULE-003",
+        classification_rule_version=3)
+    db.add(review)
+    await db.flush()
+
+    analyst_user = _FakeUser(_uuid.uuid4(), ANALYST, "reviewer")
+    qa_user = _FakeUser(_uuid.uuid4(), QA, "qalead")
+    await qa_gate.record_analyst_determination(
+        db, review.review_id, user=analyst_user, determination="CONFIRM",
+        rationale="Minor name variance reviewed; immaterial.")
+
+    result = await qa_gate.submit_qa_review(
+        db, review.review_id, user=qa_user, qa_action=qa_gate.E.QA_APPROVE,
+        qa_reason="Concur -- minor administrative variance, no action needed.")
+    assert result["decision_event_id"]
+
+    # submit_qa_review does not flush/commit itself (callers manage the
+    # transaction, matching this module's existing pattern) -- flush
+    # explicitly before refresh so refresh's own SELECT does not read back a
+    # pre-mutation row and silently wipe the pending in-memory change.
+    await db.flush()
+    await db.refresh(review)
+    assert review.reportable_at is not None, (
+        "a B2 entity with no genuine open finding was still refused -- the fix did not take")
+    assert review.classification_bucket == "B2", (
+        "the approved report must reflect the actual approved determination, not B1")
+
+    await db.refresh(entity)
+    assert entity.verification_status == "verified", (
+        "QA_APPROVE succeeding on a tier-routed in_review entity must resolve it, "
+        "matching qhin_sampling.py's own documented expectation "
+        "('resolved via the authorised analyst/QA workflow')")
+
+
+async def test_b1_bucket_does_not_bypass_a_genuine_open_finding(rolled_back_db):
+    """Symmetric proof: the fix is keyed on the FINDING, not the bucket, in
+    both directions. An entity that somehow carries a B1-shaped
+    classification_bucket but ALSO has a genuine, still-open blocking
+    post-promotion finding must still be refused -- bucket B1 must never be
+    read as a bypass."""
+    import uuid as _uuid
+
+    from app.tefca_registry import qa_gate
+
+    db = rolled_back_db
+    _rows, _intake_id, _job, curated, _promo = await _promoted(db, "9.99.888.14")
+    entity_id = curated.canonical_entity_id
+    await ppv.record_finding(db, entity_id=entity_id, outcome=ppv.NPI_DEACTIVATED,
+                             npi=NPI_VALID_OTHER, actor="SYSTEM")
+
+    review = reg.ReviewRecord(
+        review_id="REV-2026-900003", entity_id=entity_id,
+        source_record_id=curated.source_record_id, verification_results={},
+        classification_bucket="B1", classification_rule="RULE-001",
+        classification_rule_version=3)
+    db.add(review)
+    await db.flush()
+
+    analyst_user = _FakeUser(_uuid.uuid4(), ANALYST, "reviewer")
+    qa_user = _FakeUser(_uuid.uuid4(), QA, "qalead")
+    await qa_gate.record_analyst_determination(
+        db, review.review_id, user=analyst_user, determination="CONFIRM",
+        rationale="Reviewed; system says B1.")
+
+    with pytest.raises(qa_gate.QaGateRefused, match="unresolved post-promotion verification finding"):
+        await qa_gate.submit_qa_review(
+            db, review.review_id, user=qa_user, qa_action=qa_gate.E.QA_APPROVE,
+            qa_reason="Concur with B1.")
+    await db.refresh(review)
+    assert review.reportable_at is None, (
+        "a B1 bucket must not bypass a genuine, still-open blocking finding")

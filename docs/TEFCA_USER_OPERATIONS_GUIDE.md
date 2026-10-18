@@ -975,7 +975,7 @@ The Registry area runs a different and complementary set of checks. These are in
 | Retired TEFCAID on active entity | High | Identifier retired but entity still active |
 | Invalid NPI | High | Fails the check digit |
 | Multiple active NPIs | High | One entity holding several active NPIs |
-| Duplicate NPI / HCID / TEFCAID | High | One identifier shared across entities |
+| Shared NPI / HCID / TEFCAID | Medium (determination required) | One identifier shared across entities. A shared identifier alone does not establish prohibited Node duplication (a TEFCAID identifies a Logical Entity that may span Nodes under the Directory SOP v1.1); the analyst determines |
 | Orphan entity | High | No parent relationship, or all parent relationships inactive |
 | Multiple active parents | High | Entity parented by more than one entity |
 | Incorrect parent level | High | A Participant parented by something other than a QHIN, and so on |
@@ -1713,7 +1713,7 @@ Each entry gives the symptom as a user sees it, what it most likely means, what 
 
 **Symptom: duplicate entity**
 *Likely meaning:* the same identifier appears on more than one record, or an import ran twice.
-*User action:* check import history for a repeated batch. Duplicate NPI, HCID, and TEFCAID are detected and raised as high-severity findings.
+*User action:* check import history for a repeated batch. Shared NPI, HCID, and TEFCAID are detected and raised as medium-severity observations that require analyst determination; a shared identifier alone is not treated as a duplication finding.
 *Escalate:* administrator, to resolve the underlying record.
 
 **Symptom: import failure**

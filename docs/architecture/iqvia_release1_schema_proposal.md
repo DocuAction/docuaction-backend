@@ -1,12 +1,34 @@
-# IQVIA Release 1 — observation-layer schema PROPOSAL (not implemented)
+# IQVIA Release 1 — observation-layer schema
 
-**Status:** PROPOSAL. Blocked on (a) the licensed IQVIA OneKey file
-specifications, (b) sample files, (c) a data-use approval naming the
-programme. None of the three is in the repository or in DocuAction's
-possession as of 2026-09-20. Nothing below is created by any migration;
-the generic layer it plugs into (`source_snapshot`, `entity_source_match`,
-`arc_assessment_run`) IS created by `20260921_september_snapshot`.
-Governing decisions: ADR-006.
+**Status (2026-10-02): IMPLEMENTED.** The licensed files arrived and
+processing is authorized (ONC/HHS-supplied; see ADR-006's 2026-10-02 update).
+Migration `20261002_iqvia_observations` creates the three tables below with
+REAL column names (confirmed against the actual delivered layouts by local,
+read-only profiling — no row content left that analysis). The generic layer
+they plug into (`source_snapshot`, `entity_source_match`, `arc_assessment_run`)
+is unchanged, exactly as this document originally specified. Importer
+(`app/tefca_registry/rce/iqvia_import.py`), matcher
+(`app/tefca_registry/rce/iqvia_match.py`), and the HTTP application-journey
+routes (`app/tefca_registry/rce/iqvia_routes.py`, including chunked/resumable
+upload) are built and tested locally — see
+`qa-evidence/2026-10-02-sam-trace-and-reporting-plan/REVIEW-PACKAGE.md` for
+current status, test evidence, and what has NOT yet been deployed anywhere.
+
+**Confirmed, locally, about the actual delivered data** (structural facts
+only — no row content below): DEMOGRAPHIC (HCO) is 154,692 rows,
+organisation-level; HCP_ADDR (HCP) is 6,817,131 rows, one row per
+(practitioner, address). **The dedicated HCP_AFFIL extract was delivered as
+a LAYOUT ONLY — no data file accompanies it** — and HCP_ADDR's own inline
+affiliation fields are 0% populated in the delivered file. There is
+currently no usable HCP↔HCO affiliation link in the data DocuAction has.
+This is a data-completeness fact about THIS delivery, not a limitation of
+the schema or the authorization to process it — `iqvia_affiliation_observation`
+below is ready to receive a populated file the day one is delivered.
+
+*(Original framing, 2026-09-20, kept for history:)* This was a PROPOSAL,
+blocked on (a) the licensed IQVIA OneKey file specifications, (b) sample
+files, (c) a data-use approval naming the programme — none of the three was
+in DocuAction's possession at that time. Governing decisions: ADR-006.
 
 ## Five-layer model
 
@@ -18,11 +40,13 @@ Governing decisions: ADR-006.
 | 4 | `entity_source_match` | yes (20260921) | The analyst/QA-determined link between an entity and a source record key |
 | 5 | `arc_assessment_run` | yes (20260921) | Which snapshot ids and model/rule versions an assessment used |
 
-## Proposed observation tables (subject to the licensed spec)
+## Observation tables (implemented, migration `20261002_iqvia_observations`)
 
-Column names below are placeholders for the licensed field names and will be
-replaced by the specification's names verbatim; nothing is renamed or
-derived at ingestion.
+`source_record_key`/`npi`/`ccn` etc. below are the REAL column names, now
+implemented exactly as shown. `payload jsonb` carries every other delivered
+field verbatim (`HCO_HCE_ID`, `ORG_NPI`, `ORG_CCN_ID`, `BUS_NM`, address
+fields, etc. for HCO; `HCP_HCE_ID`+`ADDR_ID` pair, `NPI` for HCP) — nothing
+is renamed or derived at ingestion.
 
 ```
 iqvia_hco_observation
@@ -66,10 +90,11 @@ Rules that will bind these tables (already in code, `source_matching.py`):
 
 `matching_model_version = r1-foundation-1.0.0`.
 
-## Tests to add when the spec arrives
+## Tests (implemented, `tests/test_iqvia_import.py`, `tests/test_iqvia_routes.py`)
 
 * Ingest refuses RECEIVED snapshots; accepts APPROVED; idempotent per
-  (snapshot, key).
+  (snapshot, key) — including resumed/retried imports under the same
+  snapshot id, and resumed/retried chunked uploads under the same upload id.
 * Payload round-trip: `record_sha256` reproduces from the stored payload.
 * An affiliation between an HCP and an HCO creates no registry relationship.
 * A licensed value never appears in a log line (extend

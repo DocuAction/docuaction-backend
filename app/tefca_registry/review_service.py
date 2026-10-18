@@ -14,13 +14,13 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from app.tefca_registry import audit as reg_audit
 from app.tefca_registry import models as reg
 from app.tefca_registry.bucket_classifier import (
     BucketClassifier, FAILED, NOT_CHECKED, NOT_FOUND, UNAVAILABLE, VERIFIED,
-    ensure_seed_rules, ensure_rules_v2)
+    ensure_seed_rules, ensure_rules_v2, ensure_rules_v3)
 from app.services.npi_validator import npi_rejection_reason
 from app.Tefca.connectors import PECOS_UI_LABEL, PECOS_UI_SUBTITLE
 
@@ -99,6 +99,13 @@ async def probe_sources(db, entity_id) -> Dict[str, dict]:
             out[key] = {"status": NOT_CHECKED,
                         "reason": "entity has no NPI identifier to look up",
                         "label": SOURCE_LABELS.get(key), "subtitle": SOURCE_SUBTITLES.get(key)}
+        # A missing NPI must not remove the entity from exclusion NAME
+        # screening (2026-10-04, Part B). NPPES/PECOS are NPI-keyed and stay
+        # NOT_CHECKED; the OIG LEIE is also searchable by organisation name,
+        # and the delivery path already does that (`evidence_service.
+        # gather_sources`, `leie_org`). Before this, a manual review of an
+        # NPI-less entity never screened the exclusion list at all.
+        out["oig_leie"] = await _leie_org_name_screen(db, entity_id)
         return out
 
     # Centralised gate (Fix 1), ahead of the connector loop: a present but
@@ -212,6 +219,200 @@ async def probe_sources(db, entity_id) -> Dict[str, dict]:
     return out
 
 
+#: Marker carried by an exclusion result that came from a NAME search rather
+#: than an identifier match. Weaker evidence: never counted as a verified
+#: source, and a hit is a CANDIDATE for an analyst, never a confirmed exclusion.
+MATCHED_BY_ORG_NAME = "organisation_name"
+
+
+async def _leie_org_name_screen(db, entity_id) -> dict:
+    """OIG LEIE screened by organisation name for an entity with no NPI.
+
+    Uses the SAME two classifier states the delivery path produces for the
+    same evidence (`arc_pipeline.evidence_item_state` on the exclusion
+    dimension), so the two paths cannot disagree about what a name screen
+    means:
+        candidate found  REVIEW    -> "not_found"  potential hit; a person
+                                                   decides; never "excluded"
+        nothing listed   NOT_FOUND -> "clear"      screened by name only
+        list unreachable           -> UNAVAILABLE  never a clearance
+        no name either             -> NOT_CHECKED  screening did not happen
+    Never raises.
+    """
+    from sqlalchemy import select
+    from app.tefca_registry.rce.arc_pipeline import EXCLUSION_DIMENSION, evidence_item_state
+
+    base = {"label": SOURCE_LABELS.get("oig_leie"), "subtitle": SOURCE_SUBTITLES.get("oig_leie"),
+            "matched_by": MATCHED_BY_ORG_NAME}
+    name = ((await db.execute(
+        select(reg.TefcaRegEntity.name).where(reg.TefcaRegEntity.id == entity_id))
+    ).scalar_one_or_none() or "").strip()
+    if not name:
+        return {**base, "status": NOT_CHECKED, "matched_by": None,
+                "reason": ("entity has neither an NPI nor an organisation name; no "
+                           "exclusion screening could be performed -- this is NOT a "
+                           "clearance")}
+    try:
+        from app.Tefca.connectors import SourceConnectorManager
+        r = await SourceConnectorManager().leie.lookup_by_name(last="", first="", org=name)
+    except Exception as exc:  # noqa: BLE001 -- one source must not sink the run
+        return {**base, "status": FAILED, "reason": f"{type(exc).__name__}: {exc}"[:200]}
+    if getattr(r, "error", None) or not getattr(r, "success", False):
+        return {**base, "status": UNAVAILABLE,
+                "reason": str(getattr(r, "error", None) or "source did not complete")[:200]}
+    data = getattr(r, "data", None) or {}
+    hit = bool(data.get("excluded") or data.get("exclusion_found"))
+    disposition = "REVIEW" if hit else "NOT_FOUND"
+    return {**base,
+            "status": evidence_item_state(EXCLUSION_DIMENSION, disposition),
+            "disposition": disposition,
+            "potential_hit": hit,
+            "exclusion_count": data.get("exclusion_count", 0),
+            "lookup_identifier": f"org={name}"[:50],
+            "verified_at": datetime.utcnow().isoformat() + "Z",
+            "reason": (
+                "No NPI. OIG LEIE screened by organisation name: a CANDIDATE match "
+                "was found. A name match alone does not confirm an exclusion and "
+                "does not clear one -- analyst determination required."
+                if hit else
+                "No NPI. OIG LEIE screened by organisation name: no candidate found "
+                "in the current list using an exact organisation-name search. Weaker "
+                "than an identifier match; not an equivalent clearance.")}
+
+
+#: Persisted exclusion/revocation evidence the manual path CONSUMES (2026-10-03).
+#:
+#: `probe_sources` only ever queries the live NPPES/PECOS/LEIE connectors and
+#: stubs `sam_gov` as a permanent NOT_CHECKED. The bulk path
+#: (`arc_pipeline.verify_and_classify`) does query SAM.gov and persists the
+#: answer as `tefca_dimension_evidence` rows. Until this helper existed the
+#: manual path ignored those rows entirely — a confirmed SAM exclusion
+#: persisted at B4 by the bulk path was followed by a NEWER manual
+#: ReviewRecord at B1 (proven in tests/test_sam_manual_review_asymmetry.py).
+#:
+#: Rules, fail-closed:
+#:   * If persisted evidence exists for a source, the classifier sees its real
+#:     state, translated through the SAME `_DISPOSITION_TO_STATE` the bulk
+#:     path uses (REVIEW -> not_found, PASS -> verified, ...). A persisted
+#:     exclusion can never be classified B1 here.
+#:   * A live answer is kept when it is at least as bad as the persisted one
+#:     (a live "excluded" beats a persisted "not_found"); persisted evidence
+#:     overrides a live "clear"/verified only when it is worse. The worse
+#:     state always wins, mirroring `arc_pipeline._STATE_PRECEDENCE`.
+#:   * With NO persisted evidence the existing NOT_CHECKED stub stands, with
+#:     its reason; nothing is invented.
+#:   * No network call; `IMPLEMENTED_SOURCES` (the live-probe set) is unchanged.
+#:   * The evidence generation timestamp is carried into the review's
+#:     rationale so a reviewer can see how old the SAM/LEIE evidence is. No
+#:     freshness cutoff is applied — that is a policy decision (proposed, not
+#:     applied, in SAM_MANUAL_REVIEW_ASYMMETRY.md).
+PERSISTED_EXCLUSION_DIMENSION = "EXCLUSION_REVOCATION"
+PERSISTED_EVIDENCE_SOURCES = {"SAM_GOV": "sam_gov", "OIG_LEIE": "oig_leie",
+                              "CMS_REVOCATION": "cms_revocation"}
+#: Worst first. "excluded"/"clear" are the manual path's own literals for the
+#: exclusion list; the five canonical states sit between them.
+_PERSISTED_PRECEDENCE = {"excluded": 0, FAILED: 1, NOT_FOUND: 2, UNAVAILABLE: 3,
+                         NOT_CHECKED: 4, VERIFIED: 5, "clear": 5}
+
+
+def _precedence(status: Optional[str]) -> int:
+    # An unknown literal never outranks evidence.
+    return _PERSISTED_PRECEDENCE.get(status, len(_PERSISTED_PRECEDENCE))
+
+
+async def latest_persisted_exclusion_evidence(db, entity_id) -> Dict[str, Any]:
+    """Most recent `tefca_dimension_evidence` row per source for the
+    EXCLUSION_REVOCATION dimension. Rows are append-only, so the newest
+    `created_at` is the newest generation."""
+    from sqlalchemy import select
+    from app.Tefca.models import TEFCADimensionEvidence as DE
+
+    rows = (await db.execute(
+        select(DE).where(DE.entity_id == str(entity_id),
+                         DE.evidence_dimension == PERSISTED_EXCLUSION_DIMENSION,
+                         DE.source.in_(list(PERSISTED_EVIDENCE_SOURCES)))
+        .order_by(DE.created_at.desc(), DE.generation_timestamp.desc()))).scalars().all()
+    latest: Dict[str, Any] = {}
+    for row in rows:
+        latest.setdefault(row.source, row)
+    return latest
+
+
+def _evidence_age_days(generation_timestamp: Optional[str]) -> Optional[float]:
+    if not generation_timestamp:
+        return None
+    try:
+        stamp = datetime.fromisoformat(str(generation_timestamp).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if stamp.tzinfo is not None:
+        stamp = stamp.replace(tzinfo=None)
+    return round((datetime.utcnow() - stamp).total_seconds() / 86400, 2)
+
+
+def apply_persisted_exclusion_evidence(sources: Dict[str, dict],
+                                       latest_rows: Dict[str, Any]) -> List[dict]:
+    """Fold persisted exclusion/revocation evidence into `sources`, in place.
+    Returns one provenance record per source whose state came from persisted
+    evidence — carried into the rationale and the review snapshot."""
+    # The SAME translation the bulk path's classifier input uses — including
+    # the 2026-10-03 correction that a clean exclusion-list name screen
+    # (NOT_FOUND on this dimension) is "clear", not a disqualifying not_found.
+    from app.tefca_registry.rce.arc_pipeline import item_state
+
+    used: List[dict] = []
+    for source_name, row in latest_rows.items():
+        key = PERSISTED_EVIDENCE_SOURCES[source_name]
+        # Same translation as the bulk path, including the registration-only SAM
+        # miss -> unavailable. Rows persisted before the `screening_leg` label
+        # existed carry no label and keep the legacy reading.
+        state = item_state(PERSISTED_EXCLUSION_DIMENSION, {
+            "source": source_name, "disposition": row.disposition,
+            "normalized_values": getattr(row, "normalized_values", None)})
+        live = sources.get(key) or {}
+        live_status = live.get("status")
+        live_answered = live_status in ("excluded", "clear", VERIFIED, NOT_FOUND)
+        if live_answered and _precedence(live_status) <= _precedence(state):
+            # The live probe already said something at least as bad. Keep it;
+            # note that the persisted row was seen and not needed.
+            live["persisted_evidence_seen"] = {
+                "source": source_name, "disposition": row.disposition,
+                "generation_timestamp": row.generation_timestamp}
+            continue
+        provenance = {
+            "source": source_name, "disposition": row.disposition,
+            "state": state, "generation_timestamp": row.generation_timestamp,
+            "age_days": _evidence_age_days(row.generation_timestamp),
+            "evidence_id": str(row.id), "review_id": row.review_id,
+            "rule_applied": row.rule_applied,
+            "superseded_live_status": live_status,
+        }
+        sources[key] = {
+            "status": state,
+            "label": SOURCE_LABELS.get(key, source_name),
+            "subtitle": SOURCE_SUBTITLES.get(key),
+            "reason": (f"persisted {source_name} evidence ({PERSISTED_EXCLUSION_DIMENSION}) "
+                       f"disposition {row.disposition}, generated "
+                       f"{row.generation_timestamp or 'unknown'}"
+                       + (f"; replaces live {live_status}" if live_status else "")),
+            "verified_at": row.generation_timestamp,
+            "lookup_identifier": row.query_identifier,
+            "persisted_evidence": provenance,
+        }
+        used.append(provenance)
+    return used
+
+
+def persisted_evidence_rationale(used: List[dict]) -> str:
+    if not used:
+        return ""
+    parts = [f"{u['source']} {u['disposition']} -> {u['state']} (generated "
+             f"{u['generation_timestamp'] or 'unknown'}"
+             + (f", {u['age_days']} days old" if u.get("age_days") is not None else "")
+             + ")" for u in used]
+    return " Persisted exclusion/revocation evidence consumed: " + "; ".join(parts) + "."
+
+
 #: Connectors that EXIST and are queried on every verification. Coverage is
 #: measured against this set, not against every source the model can name.
 #: Counting an unbuilt connector as a missing source would report permanently
@@ -219,6 +420,15 @@ async def probe_sources(db, entity_id) -> Dict[str, dict]:
 #: look broken rather than incomplete, and no verification could ever reach
 #: full coverage no matter how healthy the live sources were.
 IMPLEMENTED_SOURCES = ("nppes", "pecos", "oig_leie")
+
+
+def _completeness_of(sources, bucket):
+    from app.tefca_registry.rce import verification_completeness as vcomp
+    comp = vcomp.completeness({"sources": sources})
+    block = vcomp.describe("verified" if bucket == "B1" else "in_review", comp)
+    block["basis"] = ("classification " + str(bucket) + " by the active rules; "
+                      "completeness is reported separately and does not change it")
+    return block
 
 
 def coverage_note(sources: Dict[str, dict]) -> dict:
@@ -231,9 +441,18 @@ def coverage_note(sources: Dict[str, dict]) -> dict:
     unavailable = [k for k, v in impl.items() if v.get("status") == UNAVAILABLE]
     not_checked = [k for k, v in impl.items() if v.get("status") == NOT_CHECKED]
     failed = [k for k, v in impl.items() if v.get("status") == FAILED]
-    verified = [k for k, v in impl.items() if v.get("status") in (VERIFIED, "clear")]
+    # A name-only exclusion screen is weaker than an identifier match: it is
+    # CHECKED, but never counted among the VERIFIED sources (2026-10-04).
+    name_only = sorted(k for k, v in impl.items()
+                       if v.get("matched_by") == MATCHED_BY_ORG_NAME
+                       and v.get("status") in ("clear", NOT_FOUND))
+    verified = [k for k, v in impl.items()
+                if v.get("status") in (VERIFIED, "clear") and k not in name_only]
 
     parts = [f"{len(checked)} of {len(impl)} implemented sources checked."]
+    if name_only:
+        parts.append(f"Screened by organisation name only (not counted as verified): "
+                     f"{', '.join(name_only)}.")
     if unavailable:
         parts.append(f"Unavailable: {', '.join(sorted(unavailable))}.")
     if not_checked:
@@ -250,6 +469,7 @@ def coverage_note(sources: Dict[str, dict]) -> dict:
         "sources_checked": len(checked),
         "sources_available": len(impl),          # implemented connectors only
         "sources_verified": len(verified),
+        "sources_name_screen_only": len(name_only),
         "sources_unavailable": len(unavailable),
         "sources_not_checked": len(not_checked),
         "sources_failed": len(failed),
@@ -402,9 +622,15 @@ def _practice_address(data: dict) -> str:
     addresses = data.get("addresses") or []
     chosen = next((a for a in addresses
                    if str(a.get("address_purpose", "")).upper() == "LOCATION"), None)
-    if chosen is None and addresses:
-        chosen = addresses[0]
-    if not chosen:
+    # No LOCATION row means NO practice address is known, not "use whatever
+    # row NPPES listed first". That first row is a MAILING address whenever
+    # LOCATION is absent, and comparing the submitted practice address against
+    # a lockbox manufactured a mismatch no one could act on. Fail closed: an
+    # empty string makes `_compare_addresses` record `not_compared`, which is
+    # neither a match nor a finding. (2026-10-03, safeguard 5.)
+    if chosen is None:
+        if addresses:
+            return ""
         return data.get("practice_address") or data.get("address") or ""
     parts = [chosen.get("address_1"), chosen.get("address_2"),
              chosen.get("city"), chosen.get("state"),
@@ -481,6 +707,10 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
     # on a positive finding, so with no SAM key this is a no-op on bucketing
     # (test_v2_is_identical_to_v1_when_sam_is_silent). Idempotent.
     await ensure_rules_v2(db)
+    # v3 makes v2's SAM/LEIE disqualifier reachable on the RCE path too
+    # (2026-10-02; see bucket_classifier._v3_rules's docstring). Purely
+    # additive over v2, same no-op-when-silent guarantee. Idempotent.
+    await ensure_rules_v3(db)
     actor_id, actor_email = reg_audit.actor_of(user)
 
     reg_audit.record(db, reg_audit.VERIFICATION_STARTED, entity.id,
@@ -488,6 +718,18 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
                      ip_address=ip_address, metadata={"trigger": trigger})
 
     sources = await probe_sources(db, entity.id)
+
+    # Persisted exclusion/revocation evidence from the bulk path (2026-10-03).
+    # Read-only, no network; see PERSISTED_EVIDENCE_SOURCES. A query failure
+    # here must not fail the review, but it must not pass silently either:
+    # the stub stays NOT_CHECKED and the failure is logged, never "clear".
+    persisted_used: List[dict] = []
+    try:
+        persisted_rows = await latest_persisted_exclusion_evidence(db, entity.id)
+        persisted_used = apply_persisted_exclusion_evidence(sources, persisted_rows)
+    except Exception as exc:  # noqa: BLE001 — evidence read must not sink the review
+        logger.error("Persisted exclusion evidence not consumed for %s: %s",
+                     entity.id, type(exc).__name__, exc_info=True)
 
     # The NPPES outcome goes to the delivery's issue ledger too (NPI-005/006/
     # 009), so the exception view shows every NPI question in one place. A
@@ -507,7 +749,15 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
     npi_flagged = bool(npi) and not validate_npi(npi)[0]
 
     results = {"sources": sources, "fields": _derived_fields(sources, npi_flagged),
-               "confidence_score": None}
+               "confidence_score": None,
+               # Provenance of every source state taken from persisted evidence
+               # rather than a live probe — part of the review snapshot.
+               "persisted_evidence": persisted_used}
+    # Policy status beside the sources (2026-10-04). Not read by the
+    # classifier (`classify_with_db` reads sources/fields only).
+    from app.Tefca import source_policy as _source_policy
+    results["source_policy"] = _source_policy.manual_sources_block(
+        sources, verified_at=datetime.utcnow().isoformat() + "Z")
 
     # ── Steps 2-4: entity resolution (USPS -> Jaro-Winkler -> AI) ────────────
     # Runs BEFORE classification and contributes nothing to the bucket: the B1-B4
@@ -537,14 +787,21 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
         results["address_match"] = {"method": "skipped", "reason": str(e)[:200]}
 
     classification = await _classifier.classify_with_db(db, results)
+    # The rule set and version path are unchanged; only the rationale text
+    # gains the evidence provenance, so a reviewer can see how old the
+    # SAM/LEIE evidence behind this determination is.
+    rationale = classification.rationale + persisted_evidence_rationale(persisted_used)
     review_id = await generate_review_id(db)
 
     # One audit row per source — the minimal record an auditor needs to retrace
     # the decision, without storing full provenance.
     for src, info in sources.items():
+        lookup = info.get("lookup_identifier")
         db.add(reg.TefcaVerification(
             entity_id=entity.id, review_id=review_id, source=src,
-            lookup_identifier=info.get("lookup_identifier"),
+            # String(50); a persisted-evidence query identifier can be longer
+            # than a bare NPI (the bulk path truncates the same way).
+            lookup_identifier=(str(lookup)[:50] if lookup else None),
             verification_status=("verified" if info.get("status") == "clear"
                                  else info.get("status")),
             detail=info.get("reason"), data_source_label=info.get("label")))
@@ -555,7 +812,7 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
         classification_bucket=classification.bucket,
         classification_rule=classification.rule_code,
         classification_rule_version=classification.rule_version,
-        classification_rationale=classification.rationale,
+        classification_rationale=rationale,
         reviewed_at=datetime.utcnow()))
 
     if sample_id:
@@ -590,9 +847,16 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
         "verification": sources,
         "classification": {
             **classification.as_dict(),
+            "rationale": rationale,
             "classified_at": datetime.utcnow().isoformat() + "Z",
         },
+        "persisted_evidence": persisted_used,
         "confidence": coverage_note(sources),
+        # Source outcome, classification and completeness are three facts.
+        # On this path SAM.gov is never evaluated, so a B1 here is never a
+        # completed verification -- stated on the response, not left to be
+        # inferred from the per-source list.
+        "verification_completeness": _completeness_of(sources, classification.bucket),
         # Steps 6-7 of the documented pipeline. Both were already computed and
         # persisted into verification_results, but neither was returned — so a
         # caller who had just run a verification could not see what the name and

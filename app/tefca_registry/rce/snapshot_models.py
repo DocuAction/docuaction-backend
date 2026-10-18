@@ -23,6 +23,21 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from app.core.database import Base
 
+# Several tables below carry a string-target `ForeignKey("rce_source_intakes.id",
+# ...)`. SQLAlchemy resolves a string FK target lazily, the first time a mapper
+# actually needs it (e.g. the first flush touching this table) -- and
+# `RceSourceIntake` (app/tefca_registry/rce/models.py) is otherwise imported
+# ONLY lazily, inside individual route-handler function bodies throughout
+# `delivery_routes.py`, never at that module's own top level. A process whose
+# first flush of one of these tables happens before ANY delivery route has
+# run even once (confirmed live: a freshly booted server driving only the
+# IQVIA upload journey) hits `NoReferencedTableError` at that first flush --
+# not a bug in this module's FKs, but in WHEN the referenced table's Python
+# class gets imported. This import guarantees it has already happened by the
+# time anything in this module is used, the same fix pattern
+# `app/models/__init__.py` already documents for an analogous case.
+from app.tefca_registry.rce import models as _rce_models  # noqa: F401
+
 # delta classifications (mirrors delivery_delta vocabulary; persisted here)
 DELTA_NEW = "NEW"
 DELTA_CHANGED = "CHANGED"
@@ -265,3 +280,72 @@ class ArcAssessmentRun(Base):
     actor = Column(String(320), nullable=False)
     correlation_id = Column(String(64), nullable=False)
     build_sha = Column(String(40), nullable=False, server_default=text("'unknown'"))
+
+
+# ── IQVIA Release-1 observation tables (20261002_iqvia_observation_tables) ───
+# Layer 3 of the five-layer model in docs/architecture/
+# iqvia_release1_schema_proposal.md. Verbatim licensed rows keyed by snapshot;
+# never joined to registry tables directly -- `iqvia_match.py` reads these and
+# writes `EntitySourceMatch` rows, which IS the only sanctioned link to a
+# registry entity.
+
+class IqviaHcoObservation(Base):
+    __tablename__ = "iqvia_hco_observation"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_snapshot_id = Column(UUID(as_uuid=True),
+                                ForeignKey("source_snapshot.id", ondelete="RESTRICT"),
+                                nullable=False)
+    source_record_key = Column(Text, nullable=False)  # DEMOGRAPHIC.HCO_HCE_ID, verbatim
+    record_sha256 = Column(String(64), nullable=False)
+    payload = Column(JSONB, nullable=False)
+    npi = Column(String(10))
+    ccn = Column(String(20))
+    observed_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    correlation_id = Column(String(64), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("source_snapshot_id", "source_record_key",
+                         name="uq_iqvia_hco_snapshot_key"),
+    )
+
+
+class IqviaHcpObservation(Base):
+    __tablename__ = "iqvia_hcp_observation"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_snapshot_id = Column(UUID(as_uuid=True),
+                                ForeignKey("source_snapshot.id", ondelete="RESTRICT"),
+                                nullable=False)
+    source_record_key = Column(Text, nullable=False)  # HCP_ADDR.HCP_HCE_ID+ADDR_ID pair, verbatim
+    record_sha256 = Column(String(64), nullable=False)
+    payload = Column(JSONB, nullable=False)
+    npi = Column(String(10))
+    observed_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    correlation_id = Column(String(64), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("source_snapshot_id", "source_record_key",
+                         name="uq_iqvia_hcp_snapshot_key"),
+    )
+
+
+class IqviaAffiliationObservation(Base):
+    __tablename__ = "iqvia_affiliation_observation"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_snapshot_id = Column(UUID(as_uuid=True),
+                                ForeignKey("source_snapshot.id", ondelete="RESTRICT"),
+                                nullable=False)
+    hcp_record_key = Column(Text, nullable=False)
+    hco_record_key = Column(Text, nullable=False)
+    affiliation_type = Column(Text)
+    record_sha256 = Column(String(64), nullable=False)
+    payload = Column(JSONB, nullable=False)
+    observed_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    correlation_id = Column(String(64), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("source_snapshot_id", "hcp_record_key", "hco_record_key",
+                         "affiliation_type", name="uq_iqvia_affiliation_snapshot_key"),
+    )

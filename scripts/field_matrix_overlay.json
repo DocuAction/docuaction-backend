@@ -1,0 +1,378 @@
+{
+ "source_markdown": "FIELD_MATRIX_41.md",
+ "source_markdown_sha256": "de925d56ec46de8e5ef7850d1d69cfd6ce724a05bf1043a1542bd8d6c67b126b",
+ "evaluated_date": "2026-10-02",
+ "preamble_A": "## A. Facts that apply to every row (stated once)\n\n**Governing documents in force on 2026-10-02** (the only ones cited below):\n- **G1** Contract 7571MN26F80064, Task 3 requirement (quoted in `backend/docs/cor_activation_package/01_Contract_Traceability_Matrix.md`, 2026-08-24): *\"review a statistically representative sample … of Participants and Subparticipants from each QHIN, to assess the accuracy of their information … Information may come from publicly available data, contractor-owned data, data provided by the COR, and any other relevant sources.\"* The contract requires accuracy assessment of **the information submitted**; it does not itself make any one field mandatory.\n- **G2** `docs/TEFCA_REQUIREMENTS_DOCUMENT_V2.md` v2.0 (Aug 2026), FR-T3-003 (NPI format + Luhn), FR-T3-008/009 (NPPES identity, taxonomy, enrolment derived from NPPES), FR-T3-010 (payment suspension `None`, never fabricated), FR-T3-011 (OIG LEIE), FR-T3-012 (SAM.gov — status DEGRADED, no credential), FR-T3-013/014 (USPS Pub-28 / USPS API v3 — PARTIAL / zero production calls), FR-T3-015 (Jaro-Winkler). This is AGT's own requirements document — an **AGT policy** source, not a Government requirement.\n- **G3** 45 CFR 162 Subpart D (NPI standard): §162.406 (10-digit, check digit), §162.408/§162.410 (**covered health care providers** must obtain and use an NPI), with \"health care provider\" / \"covered entity\" as defined in 45 CFR 160.103. Federal law; applies to covered providers, not to \"TEFCA participants\" as such.\n- **G4** OIG LEIE (42 CFR 1001 exclusion authority) and SAM.gov exclusions (2 CFR 180 / FAR 9.4) — the screening sources named in G1's evidence list. They govern whether an organisation may be paid/contracted, not any RCE field's format.\n- **RCE delivery specification**: `field_map.py` states for ~30 of 41 fields that *\"No RCE/TEFCA specification text for this field is in DocuAction's possession.\"* Where that is true the row below says **no external spec in hand** and the requiredness is AGT policy only. No draft RCE provision is cited as authoritative anywhere in this document.\n\n**Freshness controls that actually exist (code-verified)**: every evidence item carries `query_timestamp`/`retrieved_at` (`evidence_dimensions.py:149`, `models.py:442/531`); the LEIE CSV cache refreshes after `_LEIE_TTL_SECONDS = 86400` (`connectors.py:468-479`); `tefca_source_cache.data_freshness_date` / `cache_expires_at` columns exist (`models.py:216-218`). **No code on the RCE/bulk path gates classification on evidence age** — a result pinned at verification time is consumed as-is by reports (proven in `test_report_generation_reads_only_persisted_evidence.py`). Freshness is therefore \"as of the recorded query timestamp\", enforced nowhere else.\n\n**Correction authority that actually exists**: the delivered row is Area-1 immutable (`rce_source_records`, append-only; `test_official_delivery_workflow.py::TestAreaOneStaysImmutable`). The only AUTO_SAFE transformation in the whole map is ZIP zero-padding (original preserved beside it). Every other change is an analyst disposition (`HUMAN_REQUIRED`) recorded against the record, made reportable only by a different QA approver (`ck_esm_maker_checker`, `review_service` self-QA refusal — proven in Part 2 §8.4). \"ONC only\" below means the value can change only through a new ONC delivery.\n\n**Connector reality that applies to several rows**: `PECOSConnector` is an NPPES proxy (`PECOS_BACKING = \"nppes_proxy\"`, `payment_suspension` always `None`); real enrolment evidence comes from the quarterly public PPEF extract (`cms_ppef_enrollment`, `evidence_assembly._dimension_medicare`). SAM.gov has **no NPI index** and is keyed by UEI; **no RCE field carries a UEI**, so on this delivery SAM is always screened by legal name (`SAM_ORG_LEVEL_CHECK_NO_UEI`), whose clean result is `NOT_FOUND`, never `PASS`. LEIE is keyed by NPI, with organisation-name fallback only when the NPI is absent (`evidence_service.py:300-315`). IQVIA is an observation source only (ADR-006) and never an evidence source for any of these 41 fields.",
+ "appendix_C": "## C. Effective governing version per field (the \"which spec\" column, consolidated)\n\n| Fields | Authoritative document in force 2026-10-02 | AGT-policy document (kept separate) |\n|---|---|---|\n| 10 NPI | 45 CFR 162.406/408/410 (G3); contract G1 for accuracy | G2 FR-T3-003/008/009; `quality_rules.npi_required` (56-record internal predicate) |\n| 19 name, 24–27 address | Contract G1 (accuracy of submitted information) | G2 FR-T3-013/014/015; `validation_engine` thresholds |\n| 3, 17, 29 (QHIN, class, parent) | Contract G1 (population \"from each QHIN\", Participants/Subparticipants) | `field_map` necessity; INT/REQ rules |\n| 16 active | Contract G1 | CON-003, ACT-001 |\n| 11 NAIC | None in hand | SO-002 (payer-only, keyed on 1 record's `hl7orgrole`) |\n| All other 29 fields | **No external specification text in DocuAction's possession** (`field_map._UNDOCUMENTED`) | `field_map.py` necessity/role decisions; SCH/CON/FMT/ID/DOA/PUR/BUS rules |\n\nThe September 2, 2026 snapshot (24,589 records) widened `organizationNodeType`, `active`\nformats and `NAIC` formats; `FIELD_MAP_VERSION` stayed 1.0.0 because no mapping decision\nchanged — only vocabularies and normalisers (`field_map.py` §\"September 2026\"). No draft\nRCE provision or proposed AGT policy is treated as authoritative in this matrix.",
+ "appendix_D": "## D. NPI — six separate assessments with counts (the correction the user asked for)\n\nPopulation: 23,566 ONC records; 18,982 carry an NPI value, 4,584 do not. Counts are from\n`field_map.py`'s profile of the real delivery and from the phase6-bulk-1.1.0 population run\nrecorded in `backend/docs/deliverables/TEFCA_ARC_Requirements_Traceability_Matrix_DRAFT.md`\n(labelled DRAFT — NOT FOR COR RELEASE; used here only as a source of measured counts, not as\na requirement). Where a count is not in any evidence held, that is stated instead of estimated.\n**None of these six is allowed to decide another.** In particular, assessment 6 being\nunresolved does not make 1–5 unresolved.\n\n| # | Assessment | Governing basis | Determinable for | Measured count | Not measurable / caveat |\n|---|---|---|---|---|---|\n| 1 | **Syntax** — 10 digits, Luhn check digit | 45 CFR 162.406 (A); FR-T3-003 (P); rules NPI-002/003/004 | every present value: **18,982 / 18,982** | **18,976 valid**; **6 invalid** = 4 length/format (incl. 1 cell holding two NPIs → NPI-002 `MULTIPLE_NPI_IN_ONE_FIELD`, one 6-digit, one 9-digit) + 2 check-digit failures (NPI-003). 18,673 distinct valid values. | Absence (4,584) is assessment 4, not a syntax outcome. |\n| 2 | **Type fitness** — NPPES `enumeration_type` NPI-2 expected for an organisation record | NPPES is the type authority (FR-T3-008, P); 45 CFR 162 defines Type 1/Type 2 (A) | every syntactically valid NPI that NPPES resolves: **18,671 of 18,673** distinct (2 not found) | NPI-1-on-organisation count (`ENTITY_TYPE_MISMATCH`) for the real delivery: **not in any evidence held** — the RTM records \"18,976 matched\" without the type split. Synthetic test DBs: 0 (not representative). | Measurable by the pipeline (`validation_engine.py:266-277`; `applicability.classify_entity` → `INDIVIDUAL_PROVIDER`), but the real-delivery figure was not captured in the retained artefacts. Named gap. |\n| 3 | **Identity matching** — does NPPES's record match this organisation's name/address? | Contract G1 accuracy (A); FR-T3-008/015 (P) | every resolved NPI: **18,671 distinct / 18,976 occurrences** | NPPES returned a record for **18,976** occurrences (FR-T3-008/009 VERIFIED); **2** distinct NPIs `NOT_FOUND`; **10,426 address conflicts** detected (FR-T2-011), materiality **pending COR decision D4**. Name-similarity split (MATCH / ABBREVIATION / DBA / DIFFERENT / UNRESOLVABLE): **not in evidence held** — the RTM states the population run used exact name matching (→ AMBIGUOUS), not the 0.90/0.70/0.50/0.30 bands. | 307 NPIs shared by >1 record are an identity question (which record does NPPES describe?) — counted under row 10's observed defects, disposition INFO/analyst. |\n| 4 | **Own-NPI presence requirement** — is *this* record required to carry an NPI? | A: 45 CFR 162.410 — only a covered health care provider (→ assessment 6). P: `quality_rules.npi_required()` = Participant/Subparticipant **and** `hl7orgrole` present and not payer/agency/HIE-HIO | A: identical to assessment 6's population. P: **56 records** (provider 52 + diagnostics 4) — the only records where the code can raise NPI-001 `NPI_REQUIRED` HIGH | A: **0 records affirmatively required by law from delivered data** (no field states covered-provider status). P: of the 56, how many lack an NPI is **not computable here** (needs the profiled file's cross-tab; not estimated). **No record is ever held for a blank `hl7orgrole` alone** — `npi_required()` returns False and NPI-001 writes INFO `NPI_NOT_SUPPLIED` (confirmed in code). | `_NPI_BEARING_ORG_TYPES` is an internal grouping, not a legal basis; it is used only as a *precondition* of the policy predicate and is not cited as authority anywhere in this matrix. |\n| 5 | **Representative-provider evidence** — an individual's NPI (or NPPES authorised-official data) standing in for the organisation | A: 45 CFR 160.103 distinguishes the provider entity from its workforce; G1 accuracy applies to the organisation. P: `ENTITY_TYPE_MISMATCH` (−0.25, Bucket 3), `applicability.classify_entity` → `INDIVIDUAL_PROVIDER`; IQVIA Type-1 → EXCEPTION, never auto-match; `contact_name` (row 32) never used as identity | every resolved NPI (18,671 distinct) | Real-delivery count: **not in evidence held** (same gap as assessment 2 — it is the same NPPES signal read for a different purpose). Synthetic: 0. | The safeguard exists on both the bulk path (`validation_engine`) and the IQVIA path (`evaluate_npi_match`); what is missing is the retained count, not the control. |\n| 6 | **Covered-provider eligibility** — HIPAA covered health care provider conducting standard electronic transactions | A: 45 CFR 160.103 (\"health care provider\", \"covered entity\"), 162.408/410 | Prong 1 (is a health care provider): partially, via NPPES taxonomy → `EntityCategory.PROVIDER_ORGANIZATION`/`INDIVIDUAL_PROVIDER` (`applicability._taxonomy_category`) for resolved NPIs; via RCE name heuristics only in the *relaxing* direction (HIE/payer/public-health). Prong 2 (standard transactions): only PPEF enrolment evidence (`pecos_found` → Medicare relevance LIKELY) — an affirmative signal, never a negative one. | **Resolvable-in-principle population: ≤ 18,976** (records whose NPI resolves; prong 1 by taxonomy, prong 2 by PPEF presence). **Irreducibly unresolved from delivered data: 4,584 no-NPI records**, less any that hit a non-provider relax signal (`BUS-001`, name patterns — count not retained). Real-delivery counts of `PROVIDER_ORGANIZATION` category and PPEF-found: **not in evidence held** (the benchmark DB's 51,626 `MEDICARE_ENROLLMENT NOT_FOUND` rows are synthetic). | This is the only assessment that is *genuinely unresolved from the delivered fields alone* — and even here the pipeline already narrows it with NPPES taxonomy and PPEF evidence for the 80.55% that carry an NPI. The earlier \"~100% unresolved\" statement collapsed assessments 1–5 into 6; this table separates them. The honest headline: **syntax, type fitness, identity matching and representative-evidence are determinable (or at least measurable) for every resolved NPI; own-NPI requirement and covered-provider status are affirmatively establishable for a measurable subset (PPEF-enrolled / provider-taxonomy) and unresolved for the remainder, concentrated in the 4,584 no-NPI records.** |\n\nCounts that the pipeline *could* retain but the current artefacts do not: ENTITY_TYPE_MISMATCH\ntotal, name-similarity band totals, `EntityCategory` distribution, PPEF-found total. These\nare one aggregation query on the next governed run — they are listed in\n`EXCEPTION_INVENTORY.md` §6 as the open measurement items, not estimated here.",
+ "fields": {
+  "id": {
+   "meaning": "Record key; HL7 OID string, 17–54 chars, 23,565 OID-shaped + 1 bare UUID; 100% populated, 100% unique.",
+   "applicability": "**applies** to every record regardless of type/purpose/node — it is the identity key.",
+   "requiredness": "`REQUIRED`. A: none (no external spec in hand). P: `field_map` — only unique column, chosen as canonical key; SCH-001/ID-001 CRITICAL when absent.",
+   "sources": "None external. **N**. RCE Directory connector resolves it internally (`RCEDirectoryConnector.get_organization_by_id`).",
+   "comparison": "Exact match within the delivery (partOf resolution). No freshness concept. Limitation: cannot be checked against any external registry.",
+   "correction": "ONC only. Disposition: none; a missing/duplicate `id` is CRITICAL and holds the record (SCH-001, SCH-003)."
+  },
+  "domains": {
+   "meaning": "Constant literal `RCE`.",
+   "applicability": "**does not apply** per entity — delivery-scope marker.",
+   "requiredness": "`OPTIONAL`. A: none. P: not promoted (CON-001 reports a non-`RCE` value).",
+   "sources": "None. **N**.",
+   "comparison": "Equality to the constant. n/a.",
+   "correction": "ONC only. Disposition: INFO only."
+  },
+  "initiatoronly": {
+   "meaning": "5/23,566 populated; sole value `OTHER` (not boolean).",
+   "applicability": "**unresolved** — 0.02% populated, meaning undocumented; cannot be tied to type or node.",
+   "requiredness": "`LEGITIMATELY_NULLABLE`. A: none. P: preserved verbatim, no rule.",
+   "sources": "None. **N**.",
+   "comparison": "None coded.",
+   "correction": "ONC only. No disposition."
+  },
+  "orgManagingOrg": {
+   "meaning": "OID of the managing QHIN; 11 distinct; resolves to no row in the file (external referent).",
+   "applicability": "**applies** to every Participant and Subparticipant (QHIN attribution). Technical role irrelevant.",
+   "requiredness": "`REQUIRED`. A: G1 (the review is \"from each QHIN\" — the QHIN attribution is the sampling stratum). P: INT-001 HIGH when missing.",
+   "sources": "None external today. **C** — the 11 OIDs are self-reported; no QHIN directory check is wired.",
+   "comparison": "Membership of `OBSERVED_QHIN_OIDS` (unknown OID → HUMAN_REQUIRED). No freshness. Limitation: the RCE QHIN list is not independently fetched.",
+   "correction": "ONC only. Disposition: analyst may annotate; never rewritten."
+  },
+  "purposesofuse": {
+   "meaning": "Comma-separated HL7-style tokens (11 observed); 98.25% populated; T-TRTMNT/T-TREAT variants present.",
+   "applicability": "**applies by purpose of use** — this *is* the purpose axis; 412 records with none are `NOT_APPLICABLE` for D5's purpose facet (`evidence_assembly.py:907-914`).",
+   "requiredness": "`LEGITIMATELY_NULLABLE`. A: none in hand. P: CON-002/PUR-001/PUR-002; variants REPORTED, never merged (`SUSPECTED_PURPOSE_VARIANTS`).",
+   "sources": "None external. **N**.",
+   "comparison": "Token membership in `PURPOSE_VOCABULARY`; unknown token HIGH (PUR-001). No freshness.",
+   "correction": "ONC only. Disposition: INFO/HIGH findings; no normalisation of the raw cell."
+  },
+  "stateofoperation": {
+   "meaning": "Comma-separated state list; 7 records.",
+   "applicability": "**unresolved** (0.03%).",
+   "requiredness": "`LEGITIMATELY_NULLABLE`. A: none. P: verbatim.",
+   "sources": "None. **N**.",
+   "comparison": "None.",
+   "correction": "ONC only. None."
+  },
+  "doa": {
+   "meaning": "OID-shaped; 105 records, 32 distinct; may carry multiple OIDs.",
+   "applicability": "**unresolved** meaning (name suggests Designated Organisation Authority).",
+   "requiredness": "`LEGITIMATELY_NULLABLE`. A: none. P: DOA-001 (OID syntax, MEDIUM), DOA-002 (external reference unverified, MEDIUM).",
+   "sources": "None external. **N**.",
+   "comparison": "`is_oid_syntax`. No freshness.",
+   "correction": "ONC only. MEDIUM findings only."
+  },
+  "transaction": {
+   "meaning": "Empty on all records.",
+   "applicability": "**does not apply** in this delivery.",
+   "requiredness": "`LEGITIMATELY_NULLABLE`. A: none. P: SCH-002 marks the empty column so a future delivery that fills it is visibly different.",
+   "sources": "None. **N**.",
+   "comparison": "n/a.",
+   "correction": "ONC only. INFO."
+  },
+  "delegationRole": {
+   "meaning": "2 records, `principal`.",
+   "applicability": "**unresolved**.",
+   "requiredness": "`LEGITIMATELY_NULLABLE`. A: none. P: verbatim.",
+   "sources": "None. **N**.",
+   "comparison": "None.",
+   "correction": "ONC only. None."
+  },
+  "organizationNodeType": {
+   "meaning": "2 records, `initiating-node` (vocab in `ORG_NODE_TYPE_VOCABULARY`).",
+   "applicability": "**applies to technical role only** — explicitly never read for TEFCA class (`applicability.node_type_of`, enforced by test).",
+   "requiredness": "`LEGITIMATELY_NULLABLE`. A: none. P: CON-004.",
+   "sources": "None. **N**.",
+   "comparison": "Vocabulary membership. No freshness.",
+   "correction": "ONC only. HIGH (unknown value) / INFO."
+  },
+  "NPI": {
+   "meaning": "10-digit string; 18,982 populated / 4,584 empty; 18,675 distinct; defects: 4 length/format (one multi-value cell), 2 check-digit failures, 307 shared values.",
+   "applicability": "**Six separate assessments — see §D.** Applicability of the *field* to an organisation record depends on covered-provider status (G3), which no delivered field states. Type applicability (Type 2 expected for an organisation) is decided by NPPES `enumeration_type`, not by any RCE field.",
+   "requiredness": "`LEGITIMATELY_NULLABLE` (field_map). A: G3 — required only of covered health care providers; G1 does not add a requirement. P: FR-T3-003 (format/Luhn), NPI-001..004 rules; `npi_required()` = internal predicate (56 records), see §D.4.",
+   "sources": "NPPES (`lookup_by_npi`): returns `found`, `enumeration_type` (NPI-1/NPI-2), `status` ACTIVE/DEACTIVATED, `legal_name`, `addresses`, `taxonomy`/`taxonomy_code`, `enumeration_date`, `deactivation_date`; malformed NPI never sent (fail-closed `unavailable`). PECOS = NPPES proxy, `payment_suspension=None`. PPEF enrolment by NPI. LEIE by NPI. SAM: no NPI index (`lookup_by_npi` → unavailable). IQVIA: `NPI_EXACT_TYPE2` auto-approves only Luhn-valid, Type-2, unique in registry; Type-1 → EXCEPTION.",
+   "comparison": "Syntax: regex + Luhn (`npi_rejection_reason`). Type: `enumeration_type == \"NPI-1\"` on an org → `ENTITY_TYPE_MISMATCH` (`validation_engine.py:266-277`). Identity: name similarity + address (rows 19, 24-27). Freshness: query timestamp only; NPPES is live; PPEF quarterly. Limitation: an absent NPI cannot be looked up on the organisation's behalf (never inferred).",
+   "correction": "ONC only for the value. Dispositions: NPI-001 `NPI_REQUIRED` HIGH `HUMAN_REQUIRED` (only when `npi_required()`), else `NPI_NOT_SUPPLIED` INFO; NPI-002/003/004 HIGH, value preserved unaltered."
+  },
+  "NAIC": {
+   "meaning": "Empty on all records (Sept snapshot delivered float artefacts, `normalize_naic`).",
+   "applicability": "**applies only to payers** — SO-002 `MISSING_NAIC_FOR_PAYER` fires only when `hl7orgrole=payer` (1 record).",
+   "requiredness": "`LEGITIMATELY_NULLABLE`. A: none. P: SO-002.",
+   "sources": "None external (no NAIC registry connector). **N**.",
+   "comparison": "4–5 digit text; float artefact normalised with raw kept.",
+   "correction": "ONC only. HIGH for a payer without NAIC; INFO otherwise."
+  },
+  "CCN": {
+   "meaning": "Empty on all records.",
+   "applicability": "**applies only to CMS-certified facilities** — none identifiable from the delivery; unresolved per record.",
+   "requiredness": "`LEGITIMATELY_NULLABLE`. A: none. P: SCH-002.",
+   "sources": "Would be **C** via PPEF/IQVIA `ORG_CCN_ID` (7.44% of IQVIA HCO rows) — never on this field in this delivery.",
+   "comparison": "None coded for this field.",
+   "correction": "ONC only. INFO."
+  },
+  "HCID": {
+   "meaning": "`urn:oid:` + `id` on 23,561/23,566; 100% populated; 4 duplicates.",
+   "applicability": "**applies** to every record (exchange identity).",
+   "requiredness": "`CONDITIONAL`. A: none in hand (HCID is a Common-Agreement/QTF concept, text not held). P: ID-002 INFO when absent, ID-003 MEDIUM duplicate.",
+   "sources": "None external. **N**.",
+   "comparison": "Construction check vs `id`. No freshness.",
+   "correction": "ONC only. INFO/MEDIUM."
+  },
+  "AAID": {
+   "meaning": "OID; 31.6% populated; equals HCID on 7,423/7,447.",
+   "applicability": "**applies when present**; absence normal.",
+   "requiredness": "`LEGITIMATELY_NULLABLE`. A: none. P: ID-004.",
+   "sources": "None. **N**.",
+   "comparison": "Equality to HCID where both present.",
+   "correction": "ONC only. INFO."
+  },
+  "TEFCAID": {
+   "meaning": "`urn:uuid:` 45-char; 100% populated; 23,325 distinct (43 values shared across 241 extra rows — organisation families).",
+   "applicability": "**applies** to every record, but identifies a FAMILY, not a record.",
+   "requiredness": "`REQUIRED`. A: none in hand. P: ID-005 HIGH missing, ID-006 INFO shared.",
+   "sources": "None external (no TEFCA directory lookup wired). **N**.",
+   "comparison": "Format + sharing report.",
+   "correction": "ONC only. Shared value is INFO, never a duplicate-entity finding."
+  },
+  "active": {
+   "meaning": "`0`/`1` (+ float/boolean round-trip forms normalised, raw kept). 972 inactive.",
+   "applicability": "**applies** to every record. Inactive is a reportable state, never dropped.",
+   "requiredness": "`REQUIRED`. A: G1 (accuracy of submitted information — status is reviewed). P: CON-003, ACT-001 (inactive new entrant HIGH).",
+   "sources": "NPPES `status`/`deactivation_date` is a *different* status (NPI active) — **C** at best; no source states TEFCA participation status.",
+   "comparison": "Equality after `normalize_active`. No freshness. Limitation: TEFCA-active cannot be independently confirmed.",
+   "correction": "ONC only. HIGH/INFO findings."
+  },
+  "sequoiaorgtype": {
+   "meaning": "`Participant` 11,077 / `Subparticipant` 12,489; 100%.",
+   "applicability": "**applies** — THE authority for TEFCA class (`tefca_class_of`). Not a covered-provider signal (G3) — see §D.",
+   "requiredness": "`REQUIRED`. A: G1 (population = Participants and Subparticipants). P: REQ-001 CRITICAL/HIGH.",
+   "sources": "None external. **C** (self-reported class).",
+   "comparison": "Vocabulary membership. No freshness.",
+   "correction": "ONC only. CRITICAL when missing."
+  },
+  "hl7orgrole": {
+   "meaning": "60 records: provider 52, diagnostics 4, agency 2, payer 1, HIE/HIO 1.",
+   "applicability": "**applies when present**; used ONLY to relax Medicare/NPI obligations (`NON_PROVIDER_HL7_ROLES`), never to impose beyond the internal predicate.",
+   "requiredness": "`LEGITIMATELY_NULLABLE`. A: none. P: BUS-001 INFO (non-provider), `npi_required()`.",
+   "sources": "None. **N**. Note: `rce_fields.PROVISIONAL_VOCABULARIES[\"hl7orgrole\"]` still lists placeholder codes (`prov`,`pay`,…) that do not match the observed values — stale documentation only; `npi_required()` uses the observed-value set.",
+   "comparison": "Membership. No freshness.",
+   "correction": "ONC only. INFO."
+  },
+  "name": {
+   "meaning": "Free text 4–99 chars; 100%; 282 shared; 9 test-artefact patterns.",
+   "applicability": "**applies** to every record; also the organisation-level screening key for LEIE/SAM when no NPI/UEI.",
+   "requiredness": "`REQUIRED`. A: G1 (accuracy of submitted information); G4 screening keys on it. P: REQ-002 CRITICAL, BUS-002 MEDIUM.",
+   "sources": "NPPES `legal_name`/`organization_name` (**V** when NPI present); LEIE `BUSNAME` exact-uppercase (`lookup_by_name`); SAM legal-name search (ambiguity → `identity_ambiguous`).",
+   "comparison": "`validation_engine._classify_name_similarity` thresholds 0.90/0.70/0.50/0.30 (FR-T3-015 Jaro-Winkler per G2; the RTM records the population run used exact matching → AMBIGUOUS); `evidence_assembly` D1 uses exact-uppercase equality. Freshness: query timestamp. Limitation: LEIE/SAM name screens are exact/weak — a clean result is `NOT_FOUND`, never `PASS`.",
+   "correction": "ONC only. A name change is an identity change → `HUMAN_REQUIRED`; never auto-corrected."
+  },
+  "alias": {
+   "meaning": "Empty.",
+   "applicability": "**does not apply** this delivery.",
+   "requiredness": "`LEGITIMATELY_NULLABLE`. A: none. P: SCH-002.",
+   "sources": "NPPES Other-Name (DBA) would be **V** — not wired to this field.",
+   "comparison": "None.",
+   "correction": "ONC only. INFO."
+  },
+  "phone": {
+   "meaning": "`(NNN) NNN-NNNN`; 84 records.",
+   "applicability": "**applies when present**.",
+   "requiredness": "`OPTIONAL`. A: none. P: FMT-007 INFO fragments.",
+   "sources": "NPPES `addresses[].telephone_number` exists — **not compared** today.",
+   "comparison": "None coded.",
+   "correction": "ONC only. INFO."
+  },
+  "email": {
+   "meaning": "Empty.",
+   "applicability": "does not apply.",
+   "requiredness": "`LEGITIMATELY_NULLABLE`. A/P: SCH-002.",
+   "sources": "None.",
+   "comparison": "None.",
+   "correction": "ONC only. INFO."
+  },
+  "address_text": {
+   "meaning": "Literal label `Primary` on 75.18%; otherwise free text.",
+   "applicability": "**unresolved per record** — a label, not an address; never parsed (CON-005).",
+   "requiredness": "`OPTIONAL`. A: none. P: CON-005 INFO, FMT-004.",
+   "sources": "None — explicitly excluded from address comparison. **N**.",
+   "comparison": "Not compared.",
+   "correction": "ONC only. INFO."
+  },
+  "address_line": {
+   "meaning": "Street line; 100%; 4 cells with embedded TAB.",
+   "applicability": "**applies** (address of record; purpose = *practice/location* by AGT policy — the delivery does not say which address purpose it is).",
+   "requiredness": "`REQUIRED`. A: G1 (accuracy). P: REQ-003 MEDIUM, FMT-004.",
+   "sources": "NPPES `addresses[]` with `address_purpose` LOCATION preferred (`validation_engine.py:247-250`) — **V**. USPS: FR-T3-014 configured, zero production calls.",
+   "comparison": "`_classify_address`: state equality → ZIP5 equality → suite-stripped street similarity ≥0.70 (`validation_engine.py:462-485`). Freshness: query timestamp. Limitation: compared only to the LOCATION purpose; mailing/corporate addresses not distinguished on the RCE side (one address only). 10,426 conflicts detected in the population run; materiality pending COR decision D4.",
+   "correction": "ONC only. MEDIUM/HIGH findings; `HUMAN_REQUIRED`; no rewriting."
+  },
+  "address_city": {
+   "meaning": "100%; 5,333 distinct.",
+   "applicability": "applies (as row 24).",
+   "requiredness": "`REQUIRED`. A: G1. P: REQ-003.",
+   "sources": "NPPES LOCATION `city` — **V**.",
+   "comparison": "As row 24 (city not compared directly; state/ZIP/street are).",
+   "correction": "As row 24."
+  },
+  "address_state": {
+   "meaning": "USPS code; 100%; 54 distinct, all valid.",
+   "applicability": "applies.",
+   "requiredness": "`REQUIRED`. A: G1. P: FMT-002, REQ-003.",
+   "sources": "NPPES LOCATION `state` — **V**.",
+   "comparison": "Exact equality → `ADDRESS_STATE_CONFLICT` (0.25 deduction).",
+   "correction": "As row 24."
+  },
+  "address_postalCode": {
+   "meaning": "5-digit; 1,627 with stripped leading zeros.",
+   "applicability": "applies.",
+   "requiredness": "`REQUIRED`. A: G1. P: FMT-001 LOW, FMT-003 MEDIUM, REQ-003.",
+   "sources": "NPPES LOCATION `postal_code` (ZIP5 prefix) — **V**.",
+   "comparison": "ZIP5 equality → `ADDRESS_FORMAT_DIFF`. Zero-padding is the one AUTO_SAFE transform (original kept).",
+   "correction": "ONC only for the value; zero-pad is AUTO_SAFE with original preserved; mismatch → finding."
+  },
+  "address_country": {
+   "meaning": "Constant `US`.",
+   "applicability": "applies (no signal).",
+   "requiredness": "`OPTIONAL`. A: none. P: verbatim.",
+   "sources": "None compared. **N**.",
+   "comparison": "None.",
+   "correction": "ONC only. None."
+  },
+  "partOf": {
+   "meaning": "OID; 100%; 300 distinct; resolves to a Participant `id` for 12,474 Subparticipants; equals QHIN for all Participants; 15 Subparticipants parented to a QHIN.",
+   "applicability": "**applies** by entity type: Subparticipant → parent Participant; Participant → QHIN (no second edge).",
+   "requiredness": "`REQUIRED`. A: G1 (the hierarchy is the population structure). P: INT-002 HIGH/MEDIUM, INT-003 MEDIUM, BUS-003 INFO.",
+   "sources": "**C** — resolved within the delivery only. NPPES Parent-Organisation LBN (subpart flag) and IQVIA `CORP_PAR_HCE_ID` (18.95%) could corroborate; neither is wired to this field.",
+   "comparison": "Exact OID resolution against `id` in the same delivery (`INT-002`). No freshness. Limitation: no external confirmation of the parent relationship; a missing parent never establishes a relationship (`evidence_assembly.py:1138-1140`).",
+   "correction": "ONC only. 15 QHIN-parented Subparticipants → analyst determination (INT-003)."
+  },
+  "contact_company": {
+   "meaning": "Empty.",
+   "applicability": "does not apply.",
+   "requiredness": "`LEGITIMATELY_NULLABLE`. A/P: SCH-002.",
+   "sources": "None. **N**.",
+   "comparison": "n/a.",
+   "correction": "ONC only. INFO."
+  },
+  "contact_purpose": {
+   "meaning": "`ADMIN` on 72.97%.",
+   "applicability": "applies when present.",
+   "requiredness": "`OPTIONAL`. A: none. P: vocabulary `OBSERVED_CONTACT_PURPOSES`.",
+   "sources": "None. **N**.",
+   "comparison": "Membership.",
+   "correction": "ONC only. None."
+  },
+  "contact_name": {
+   "meaning": "Named individual; 77.4%; 10,876 distinct. PII.",
+   "applicability": "applies when present. **Representative individual — never organisation identity** (G3/§D.5).",
+   "requiredness": "`OPTIONAL`. A: none. P: PII role floor; never rendered unauthenticated.",
+   "sources": "None — deliberately not screened or matched (an individual contact is not the organisation). **N**.",
+   "comparison": "None.",
+   "correction": "ONC only. None."
+  },
+  "contact_phone": {
+   "meaning": "75.43%; 34 distinct; fragments such as `-NNNN`. PII.",
+   "applicability": "applies when present.",
+   "requiredness": "`OPTIONAL`. A: none. P: FMT-005 INFO.",
+   "sources": "None. **N**.",
+   "comparison": "Format only.",
+   "correction": "ONC only. INFO; fragments never reconstructed."
+  },
+  "contact_email": {
+   "meaning": "75.44%; 37 distinct. PII.",
+   "applicability": "applies when present.",
+   "requiredness": "`OPTIONAL`. A: none. P: FMT-006 LOW.",
+   "sources": "None. **N**.",
+   "comparison": "Format only.",
+   "correction": "ONC only. LOW."
+  },
+  "contact_address_text": {
+   "meaning": "0.69%. PII.",
+   "applicability": "applies when present.",
+   "requiredness": "`OPTIONAL`. A: none. P: verbatim.",
+   "sources": "None. **N**.",
+   "comparison": "None.",
+   "correction": "ONC only. None."
+  },
+  "contact_address_line": {
+   "meaning": "30.51%; 64 distinct. PII.",
+   "applicability": "applies when present (contact *mailing* address — distinct from the organisation's address of record; never compared to NPPES).",
+   "requiredness": "`OPTIONAL`. A: none. P: verbatim.",
+   "sources": "None. **N**.",
+   "comparison": "None.",
+   "correction": "ONC only. None."
+  },
+  "contact_address_city": {
+   "meaning": "30.51%; 62 distinct. PII.",
+   "applicability": "as row 36.",
+   "requiredness": "`OPTIONAL`.",
+   "sources": "None. **N**.",
+   "comparison": "None.",
+   "correction": "ONC only. None."
+  },
+  "contact_address_state": {
+   "meaning": "30.51%; 26 distinct; some values not 2-letter. PII.",
+   "applicability": "as row 36.",
+   "requiredness": "`OPTIONAL`. P: no FMT rule (noted gap — FMT-002 applies to the entity state only).",
+   "sources": "None. **N**.",
+   "comparison": "None.",
+   "correction": "ONC only. None."
+  },
+  "contact_address_postalCode": {
+   "meaning": "30.51%; same leading-zero loss as row 27. PII.",
+   "applicability": "as row 36.",
+   "requiredness": "`OPTIONAL`. P: not zero-padded (AUTO_SAFE applies to the entity ZIP only).",
+   "sources": "None. **N**.",
+   "comparison": "None.",
+   "correction": "ONC only. None."
+  },
+  "contact_address_country": {
+   "meaning": "`US` on 30.48%. PII.",
+   "applicability": "as row 36.",
+   "requiredness": "`OPTIONAL`.",
+   "sources": "None. **N**.",
+   "comparison": "None.",
+   "correction": "ONC only. None."
+  }
+ },
+ "measured_npi": {
+  "label": "REAL-ONC-2026-07-20-profiled-copy",
+  "file": "onc-snapshot-20260720.csv",
+  "sha256": "689472073480b1cc4faf604527eda47e4e59928f7a6128d84b2f28bb6e9e9e8d",
+  "records": 23566,
+  "nppes_edition": "npidata_pfile_20050523-20260809.csv",
+  "ppef_file": "PPEF_ENROLLMENT__PPEF_Enrollment_Extract_2026.07.17.csv",
+  "rows": [
+   [
+    "1 Syntax",
+    "18976 valid · 6 invalid · 4584 absent (of 23566); 18669 distinct valid; 281 NPIs shared by >1 record (588 records)",
+    "every present value"
+   ],
+   [
+    "2 Type fitness",
+    "distinct valid NPIs resolved in NPPES: 18669; by record: NPI-1 individual 1504, NPI-2 organization 17449, <blank> 23",
+    "every resolved NPI"
+   ],
+   [
+    "3 Identity matching",
+    "name bands: COMPLETELY_DIFFERENT 2353, UNRESOLVABLE 2210, DBA_VS_LEGAL 1975, ABBREVIATION 2216, PUNCTUATION 80, MATCH 10119, NOT_COMPARED 23; practice address: CONFLICT 8584, NORMALIZED_MATCH 3299, EXACT_MATCH 7070, INSUFFICIENT_DATA 23",
+    "18976 records with an NPPES record"
+   ],
+   [
+    "4 Own-NPI presence (policy predicate)",
+    "56 records where npi_required() is true, 56 of them without an NPI; 4524 blank-role records without an NPI (INFO, never held)",
+    "all records (policy predicate); legal requirement = assessment 6"
+   ],
+   [
+    "5 Representative evidence",
+    "1504 records carry an individual's (NPI-1) NPI (1500 distinct); 23 records carry a deactivated NPI",
+    "every resolved NPI"
+   ],
+   [
+    "6 Covered-provider eligibility",
+    "prong 1 by NPPES taxonomy (records): PROVIDER_ORGANIZATION 3659, UNKNOWN 13631, INDIVIDUAL_PROVIDER 1504, PAYER 44, PUBLIC_HEALTH_AGENCY 138; prong 2: 17431 distinct NPIs PPEF-enrolled (17727 records); resolvable-in-principle 18976 records; irreducibly unresolved 4590 records (no valid NPI)",
+    "affirmative signals only; absence never a negative finding"
+   ]
+  ]
+ }
+}

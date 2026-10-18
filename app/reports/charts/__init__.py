@@ -200,7 +200,10 @@ def entity_status_chart(statuses: Dict[str, Any], figure_number: int = 4) -> Cha
         ),
         source=SOURCE_LINE,
         notes=("Status is the entity's current registry state. An entity may be "
-               "counted here without having been sampled in this review cycle."),
+               "counted here without having been sampled in this review cycle. "
+               "\"Verified checks incomplete\" means no discrepancy was found "
+               "but at least one source was unavailable or not checked; it is "
+               "shown separately and is not a completed verification."),
     )
 
 

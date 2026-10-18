@@ -29,6 +29,9 @@ reportlab==4.2.5
 anthropic==0.39.0
 python-docx==1.1.2
 pdfplumber==0.11.10
+pikepdf==10.16.0  # PDF/UA post-processing (app/reports/engine/pdf_engine.py) -- tagged-structure/artifact edits on the rendered PDF, no new native dependency (ships its own qpdf build)
+beautifulsoup4==4.15.0  # PDF/UA post-processing (app/reports/engine/pdf_engine.py) -- parses the rendered HTML to find the chrome/margin bands and decorative elements the postprocess marks as artifacts
+pypdf==6.19.0  # PDF/UA post-processing (app/reports/engine/pdf_engine.py) -- reads back the tagged structure tree to verify it; landscape-page merge
 openpyxl==3.1.5
 # RSS/Atom from feeds we do not control is parsed with defusedxml rather than
 # stdlib ElementTree, which is vulnerable to entity-expansion (billion-laughs).
