@@ -210,3 +210,75 @@ def test_timestamps_are_converted_to_utc_before_the_date_is_labelled_utc():
     ref = [r for r in d["assessment_refs"] if r["ref"] == "IQ-190fcede"][0]
     assert ref["assessed_at"].startswith("2026-10-16 04:42:30") and ref["assessed_at"].endswith("+00:00")
     assert d["first_assessed_at"].startswith("2026-10-16 04:42:30")
+
+
+# ── Historical downloads keep the stored artifact (report DA-ARC-2026-080 was made by the OLD renderer) ─────────────────
+HISTORIC_080_IQVIA = {  # the shape stored before this change: none of the new traceability keys
+    "state": "IQVIA_USED", "assessments": 2, "reviews_linked": 1,
+    "by_decision": {"NOT_FOUND_IN_EXTRACT": 1, "INSUFFICIENT_EVIDENCE": 1},
+    "snapshots": [{"snapshot_id": str(SNAP), "sha256_prefix": "dbc52f5269a3"}],
+    "statement": "Advisory IQVIA assessments were recorded for this delivery.",
+}
+
+
+def test_an_old_shape_stored_dataset_still_renders_but_not_to_the_bytes_it_was_issued_with():
+    """The renderer now adds rows for keys an old dataset never stored ("not recorded"), so regenerating a historical
+    report is NOT byte-identical to what was issued. That is why the download must serve the registered artifact."""
+    text = _csv(HISTORIC_080_IQVIA)
+    assert "Assessments linked to a registry entity,not recorded" in text
+    assert "<table" in _html(HISTORIC_080_IQVIA)                  # renders in the template (strict undefined) without raising
+    assert text == _csv(HISTORIC_080_IQVIA)                      # deterministic, but not the issued bytes
+
+
+class _Row:
+    report_id = "DA-ARC-2026-080"
+    report_type = "delivery_processing"
+    report_data = {"dataset": {"iqvia_use": HISTORIC_080_IQVIA}, "snapshot": {"generation_timestamp": "2026-10-17T22:44:00Z"}}
+
+
+@pytest.mark.asyncio
+async def test_csv_download_serves_the_registered_bytes_unchanged_for_a_historical_report(monkeypatch):
+    from app.reports import routes
+    registered_bytes = "\ufeffissued,exactly,these,bytes\r\n".encode("utf-8").replace(b"\xef\xbb\xbf", b"")
+    seen = {}
+
+    async def fake_registered(db, report_id, content_type):
+        seen["ct"] = content_type
+        return {"content": registered_bytes, "artifact": {"artifact_version": 1, "rendered_sha256": hashlib.sha256(registered_bytes).hexdigest()}}
+
+    async def fake_stored(db, report_id, job_id=None, **kw):
+        return _Row()
+
+    async def fake_audit(db, row, fmt, user, **extra):
+        seen["audit"] = (fmt, extra)
+
+    monkeypatch.setattr(routes, "_registered_bytes", fake_registered)
+    monkeypatch.setattr(routes, "_stored", fake_stored)
+    monkeypatch.setattr(routes, "_audit_download", fake_audit)
+    for _ in range(3):                                              # repeated downloads: identical bytes every time
+        resp = await routes.get_report_csv("DA-ARC-2026-080", job_id=None, db=None, user=None)
+        assert resp.body == registered_bytes
+        assert resp.headers["X-Report-Source"] == "artifact-registry"
+    assert seen["ct"] == "text/csv"
+    assert seen["audit"][1]["source"] == "artifact-registry" and seen["audit"][1]["sha256"] == hashlib.sha256(registered_bytes).hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_csv_download_of_a_legacy_report_without_an_artifact_regenerates_and_says_so(monkeypatch):
+    from app.reports import routes
+
+    async def none_registered(db, report_id, content_type):
+        return None
+
+    async def fake_stored(db, report_id, job_id=None, **kw):
+        return _Row()
+
+    async def fake_audit(db, row, fmt, user, **extra):
+        return None
+
+    monkeypatch.setattr(routes, "_registered_bytes", none_registered)
+    monkeypatch.setattr(routes, "_stored", fake_stored)
+    monkeypatch.setattr(routes, "_audit_download", fake_audit)
+    resp = await routes.get_report_csv("DA-ARC-2026-080", job_id=None, db=None, user=None)
+    assert resp.headers["X-Report-Source"] == "regenerated-from-stored-dataset"
+    assert b"Advisory assessments recorded" in resp.body

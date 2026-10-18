@@ -1569,21 +1569,31 @@ async def get_report_csv(
     # dataset as HTML/PDF/DOCX.
     user=Depends(require_role_audited("reviewer", resource_type="report")),
 ):
-    """Regenerated from the STORED dataset, not from a fresh query.
+    """The report's CSV - REGISTERED artifact first, regenerated only when none exists.
 
-    The numbers therefore match the stored report exactly, including when the
-    live data has since moved on. For a SOW deliverable this is the stratified
-    entity list; for a technical report it is the figure data.
+    Same canonical-surface rule as /html and /pdf (QA108-20260927-013): a report is what the recipient received. When a
+    verified text/csv artifact is registered its bytes are served unchanged, so a historical report is never quietly
+    re-rendered by a later version of the renderer. A report with no registered CSV (legacy) is regenerated from the
+    STORED dataset, not from a fresh query, so its numbers still match the stored report. For a SOW deliverable this is
+    the stratified entity list; for a technical report it is the figure data.
     """
     from app.reports.engine.csv_engine import to_bytes
 
+    registered = await _registered_bytes(db, report_id, "text/csv")
     row = await _stored(db, report_id, job_id, defer_html=True)
+    if registered is not None:
+        art = registered.get("artifact") or {}
+        await _audit_download(db, row, "csv", user, job_id=job_id, source="artifact-registry",
+                              artifact_version=art.get("artifact_version"), sha256=art.get("rendered_sha256"))
+        headers = download_headers(safe_filename(_stem_for(row), "csv"))
+        headers["X-Report-Source"] = "artifact-registry"
+        return Response(content=registered["content"], media_type="text/csv", headers=headers)
     if not (row.report_data or {}).get("dataset"):
         raise HTTPException(404, f"Report {report_id} has no stored dataset.")
-    await _audit_download(db, row, "csv", user, job_id=job_id)
-    return Response(
-        content=to_bytes(csv_for_stored_report(row)), media_type="text/csv",
-        headers=download_headers(safe_filename(_stem_for(row), "csv")))
+    await _audit_download(db, row, "csv", user, job_id=job_id, source="regenerated-from-stored-dataset")
+    headers = download_headers(safe_filename(_stem_for(row), "csv"))
+    headers["X-Report-Source"] = "regenerated-from-stored-dataset"
+    return Response(content=to_bytes(csv_for_stored_report(row)), media_type="text/csv", headers=headers)
 
 
 @router.get("/health/engine", summary="Report engine health (PDF availability)")
