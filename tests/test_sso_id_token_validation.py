@@ -93,6 +93,19 @@ async def test_alg_none_rejected():
     await _rejects(tok, reason="bad_alg")
 
 
+async def test_malformed_token_rejected():
+    """Not a JWT at all (no valid header to parse) -> the 'malformed' path,
+    distinct from 'bad_alg' (parseable header, wrong alg) and 'no_kid'
+    (parseable header, missing kid) below."""
+    await _rejects("not-a-jwt-at-all", reason="malformed")
+    await _rejects("", reason="malformed")
+
+
+async def test_header_missing_kid_rejected():
+    tok = f"{_b64({'alg': 'RS256', 'typ': 'JWT'})}.{_b64(_claims())}.sig"
+    await _rejects(tok, reason="no_kid")
+
+
 async def test_hs256_algorithm_confusion_rejected():
     tok = jwt.encode(_claims(), "secret", algorithm="HS256", headers={"kid": KID})
     await _rejects(tok, reason="bad_alg")
@@ -108,6 +121,15 @@ async def test_expired_rejected():
 
 async def test_not_yet_valid_rejected():
     await _rejects(_token(_claims(nbf=int(time.time()) + 3600)))
+
+
+async def test_clock_leeway_boundary_accepted_outside_rejected():
+    """CLOCK_LEEWAY_SECONDS=120 must actually be wired into the decode call, not
+    just documented. A token 60s past exp (inside the leeway) should still be
+    accepted; one 180s past exp (outside it) must still be rejected."""
+    claims = await sso.validate_id_token(_token(_claims(exp=int(time.time()) - 60)), "N1")
+    assert claims["tid"] == TENANT
+    await _rejects(_token(_claims(exp=int(time.time()) - 180)))
 
 
 async def test_wrong_audience_rejected():
@@ -138,6 +160,16 @@ async def test_tampered_payload_rejected():
 async def test_nonce_mismatch_and_missing_rejected():
     await _rejects(_token(), nonce="OTHER", reason="nonce_mismatch")
     await _rejects(_token(_claims(nonce=None)), reason="nonce_mismatch")
+
+
+async def test_no_expected_nonce_skips_the_check():
+    """expected_nonce=None means the caller isn't doing nonce-bound login (e.g.
+    a non-interactive flow) -- the nonce check must be skipped entirely, not
+    compared against the string 'None'."""
+    claims = await sso.validate_id_token(_token(), None)
+    assert claims["nonce"] == "N1"
+    claims = await sso.validate_id_token(_token(_claims(nonce=None)), None)
+    assert "nonce" not in claims
 
 
 async def test_unknown_kid_rejected_after_single_refetch(_cfg):
