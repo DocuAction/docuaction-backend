@@ -400,11 +400,25 @@ def delivery_processing_to_csv(dataset: Dict[str, Any], report_id: str,
 
     writer.writerow(["Advisory assessments recorded", _count("assessments")])
     writer.writerow(["Distinct reviews linked", _count("reviews_linked")])
-    for dec, cnt in (iq.get("by_decision") or {}).items():
+    # Sorted explicitly: the stored dataset is a JSONB round trip that reorders mapping keys, so iterating the mapping in
+    # stored order printed the same decision rows in a different order (and hash) on different render paths.
+    for dec, cnt in sorted((iq.get("by_decision") or {}).items()):
         writer.writerow([f"Decision {dec}", cnt])
+    if iq.get("assessments"):
+        writer.writerow(["Assessments linked to a registry entity", iq.get("entities_linked", "not recorded")])
+        writer.writerow(["Assessor roles (no names)", "; ".join(iq.get("assessor_roles") or []) or "not recorded"])
     for sn in iq.get("snapshots") or []:
         writer.writerow(["Snapshot consulted", sn.get("snapshot_id"), f"sha256 prefix {sn.get('sha256_prefix')}"])
+        writer.writerow(["Snapshot source received (UTC date)", sn.get("received_on") or "not recorded"])
+        writer.writerow(["Snapshot source effective date", sn.get("source_effective_date") or "not recorded"])
+    for ar in iq.get("assessment_refs") or []:
+        writer.writerow(["Assessment reference", ar.get("ref"), "Snapshot ID", ar.get("snapshot_id") or "not recorded",
+                         ar.get("decision"), ar.get("assessed_at") or "-",
+                         f"role {ar.get('assessed_role')}", "review linked" if ar.get("review_linked") else "no review",
+                         "entity linked" if ar.get("entity_linked") else "no entity"])
     writer.writerow(["First / last assessed (UTC)", iq.get("first_assessed_at") or "-", iq.get("last_assessed_at") or "-"])
+    if iq.get("lookup_availability_statement"):
+        writer.writerow([iq["lookup_availability_statement"]])
     writer.writerow([iq.get("statement") or "No IQVIA data was used for this delivery."])
     writer.writerow([])
 
