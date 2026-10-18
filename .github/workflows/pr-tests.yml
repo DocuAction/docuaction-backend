@@ -130,6 +130,7 @@ jobs:
             tests/test_qhin_sampling_operational.py \
             tests/test_sampling_eligibility_review_required.py \
             tests/test_report_generation_reads_only_persisted_evidence.py \
+            tests/test_report_csv_registered_bytes_2026_10_18.py \
             tests/test_iqvia_import_runtime_privilege_2026_10_06.py \
             tests/test_source_snapshot_immutability_2026_10_06.py \
             tests/test_preflight_runtime_privilege_2026_10_07.py \

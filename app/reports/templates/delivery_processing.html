@@ -569,7 +569,7 @@
       <td class="cd">{{ brk(f.field_name or '—') }}</td>
       <td class="cd">{{ brk(f.correction_authority) }}</td>
       <td class="cd">{{ brk(f.resolution) }}</td>
-      <td>{{ f.description }}</td>
+      <td class="cd">{{ f.description }}</td>
     </tr>
     {% endfor %}
   </tbody>
@@ -683,8 +683,16 @@
 
 {% set iq = iqvia_use if iqvia_use is defined else none %}
 <p><strong>IQVIA use.</strong> {{ iq.statement if iq else 'No IQVIA data was used for this delivery.' }}
-  {% if iq and iq.assessments %}Assessments: {{ iq.assessments|number }}{% for dec, cnt in iq.by_decision.items() %}; {{ dec }}: {{ cnt|number }}{% endfor %}.
-  Snapshot(s) consulted: {% for sn in iq.snapshots %}{{ sn.snapshot_id }} (sha256 {{ sn.sha256_prefix }}){% if not loop.last %}, {% endif %}{% endfor %}.{% endif %}</p>
+  {% if iq and iq.assessments %}Assessments: {{ iq.assessments|number }}{% for dec, cnt in (iq.get('by_decision') or {})|dictsort %}; {{ dec }}: {{ cnt|number }}{% endfor %}.
+  Snapshot(s) consulted: {% for sn in iq.snapshots %}{{ sn.snapshot_id }} (sha256 {{ sn.sha256_prefix }}; source received {{ sn.get('received_on') or 'not recorded' }}; source effective date {{ sn.get('source_effective_date') or 'not recorded' }}){% if not loop.last %}, {% endif %}{% endfor %}.
+  Linked to a registry entity: {{ iq.get('entities_linked') if iq.get('entities_linked') is not none else 'not recorded' }} of {{ iq.assessments|number }}. Assessor role(s): {{ (iq.get('assessor_roles') or [])|join(', ') or 'not recorded' }} (no names).{% endif %}
+  {% if iq and iq.get('lookup_availability_statement') %}{{ iq.get('lookup_availability_statement') }}{% endif %}</p>
+{% if iq and iq.get('assessment_refs') %}
+<table class="iqvia-refs" aria-label="IQVIA assessment references">
+  <thead><tr><th scope="col">Assessment reference</th><th scope="col">Snapshot ID</th><th scope="col">Decision</th><th scope="col">Assessed (UTC)</th><th scope="col">Assessor role</th><th scope="col">Review</th><th scope="col">Entity</th></tr></thead>
+  <tbody>{% for ar in iq.get('assessment_refs') %}<tr><td>{{ ar.ref }}</td><td>{{ ar.get('snapshot_id') or 'not recorded' }}</td><td>{{ ar.decision }}</td><td>{{ ar.assessed_at or '-' }}</td><td>{{ ar.assessed_role }}</td><td>{{ 'linked' if ar.review_linked else 'none' }}</td><td>{{ 'linked' if ar.entity_linked else 'none' }}</td></tr>{% endfor %}</tbody>
+</table>
+{% endif %}
 
 {% if delivery.intake_id %}
 <p><strong>Investigation CSV annexes.</strong> The entities behind any
