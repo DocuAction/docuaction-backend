@@ -184,6 +184,23 @@ def test_google_news_url_unwrapping():
     assert gnc.unwrap_google_news_url("") == ""
 
 
+def test_google_news_host_check_is_not_a_bare_substring_match():
+    """CodeQL py/incomplete-url-substring-sanitization: a plain `"news.google.com"
+    in url` check is bypassable by a lookalike host. unwrap_google_news_url must
+    not treat these as Google wrappers, and the re-wrap guard inside it must not
+    be fooled into returning a spoofed decoded URL either."""
+    spoofed_host = "https://news.google.com.evil.example/rss/articles/x?oc=5"
+    assert gnc.unwrap_google_news_url(spoofed_host) == spoofed_host
+
+    spoofed_query = "https://evil.example/rss/articles/x?u=news.google.com"
+    assert gnc.unwrap_google_news_url(spoofed_query) == spoofed_query
+
+    assert gnc._is_google_news_host("https://news.google.com/x") is True
+    assert gnc._is_google_news_host("https://sub.news.google.com/x") is True
+    assert gnc._is_google_news_host("https://news.google.com.evil.example/x") is False
+    assert gnc._is_google_news_host("https://evil.example/?x=news.google.com") is False
+
+
 def test_google_news_today_only_filter():
     """`when:1d` is a rolling 24h window, not a calendar day, so it still returns
     yesterday-evening stories."""

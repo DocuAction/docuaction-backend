@@ -1141,8 +1141,15 @@ def _inject_download_bar(html: str, briefing_id: str) -> str:
     Never raises. If the header anchor isn't found (e.g. the simple-HTML
     fallback render), the page is returned exactly as stored — the preview
     working matters more than the buttons.
+
+    briefing_id is HTML-escaped before being placed in the href attributes
+    below. It's always server-generated today (no caller can make it resolve
+    to a stored briefing otherwise), so this is defense-in-depth rather than
+    a fix for a reachable path — CodeQL flagged this sink (alert: reflected
+    XSS) because the taint tracker can't see that upstream constraint.
     """
-    base = f"/api/v1/bulletin/briefings/{briefing_id}"
+    import html as _html
+    base = f"/api/v1/bulletin/briefings/{_html.escape(briefing_id, quote=True)}"
     bar = (
         '<div style="text-align:center;margin-top:12px">'
         f'<a href="{base}/preview" '

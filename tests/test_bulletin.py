@@ -161,3 +161,21 @@ def test_bulletin_quality_gate_is_advisory(client):
     assert "available" in data
     if data.get("available") is False:
         assert "reason" in data
+
+
+def test_inject_download_bar_escapes_briefing_id_in_the_href():
+    """CodeQL flagged this as a reflected-XSS sink (briefing_id -> href,
+    unescaped). briefing_id is always server-generated today (see
+    engine.next npi-style IDs: '{agency_id}_{timestamp}'), so this isn't
+    reachable via any current route, but the sink itself must still not
+    break out of the href attribute if that ever changes."""
+    from app.bulletin_intelligence.routes import _inject_download_bar
+
+    anchor = '<div style="border-top:1px solid #4f7fbd;margin:12px auto;max-width:560px"></div>'
+    html = f"<html><body>{anchor}</body></html>"
+    hostile_id = '"><script>alert(1)</script>'
+    out = _inject_download_bar(html, hostile_id)
+    assert "<script>" not in out
+    assert "&lt;script&gt;" in out
+    assert '"><script>' not in out
+    assert 'href="/api/v1/bulletin/briefings/&quot;&gt;&lt;script&gt;' in out
