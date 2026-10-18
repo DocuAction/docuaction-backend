@@ -478,7 +478,20 @@ def test_no_tefca_read_endpoint_sits_above_the_viewer_floor():
         # snapshot's progress/rejected-row counts, never a raw delivered
         # row value -- same shape of exception as the delivery-workflow
         # reads immediately above, applied to a different source family.
+        # Snapshot LIST (2026-10-12, IQ-01): the discovery twin of the entry below,
+        # behind the identical gate (`require_role("reviewer")` +
+        # `_require_licensed_access`). Returns snapshot metadata and the counters the
+        # importer stored (labels, hashes, counts, actor emails) -- never an observation
+        # row or any delivered value. Not a new access decision.
+        "/api/tefca/rce/iqvia/snapshots",
         "/api/tefca/rce/iqvia/snapshots/{snapshot_id}",
+        # 2026-10-13 delivery-clarity drafts: the IQVIA inventory status reads the same
+        # licensed snapshot rows as snapshot discovery above and shares its gate (reviewer +
+        # licensed access); it returns counters and one label only. The per-record exception
+        # export returns delivered names, NPIs and finding text per record, so it sits at the
+        # reviewer floor like the sibling findings/dispositions exports.
+        "/api/tefca/rce/iqvia/source-status",
+        "/api/tefca/rce/deliveries/{intake_id}/exception-records.csv",
         # Same rule, same source family, applied to the chunked-upload
         # resume contract added 2026-10-03: `_require_licensed_access` is
         # the first thing this route does too (identical to every other

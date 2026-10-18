@@ -192,6 +192,11 @@ class RceDeliveryJob(Base):
             "government_reference": self.government_reference,
             "notes": self.notes,
             "received_date": utc_isoformat(self.received_date),
+            # 2026-10-13: the delivery's CALENDAR date as a date-only string. `received_date`
+            # above is that date at 00:00 UTC (an instant), which a browser west of
+            # Greenwich renders as the previous evening. A date-only string is a date.
+            "received_on": (self.received_date.date() if isinstance(self.received_date, datetime)
+                            else self.received_date).isoformat() if self.received_date else None,
             "registered_by": self.registered_by,
             # QA-010: naive columns (UTC by construction, written via
             # datetime.utcnow()) are given an explicit +00:00 offset here so

@@ -877,8 +877,10 @@ class QaReview(BaseModel):
     qa_reason: str = Field(min_length=10, max_length=4000)
     escalated_to_user_id: Optional[uuid.UUID] = None
     escalation_reason: Optional[str] = Field(None, max_length=4000)
-    #: Segregation-of-duties exception. Requires an admin grant from a DIFFERENT
-    #: person. Recorded, counted, and expected to be disabled in production.
+    #: Segregation-of-duties exception fields. Self-attested and NOT honoured:
+    #: a self-QA is refused (SOD_EXCEPTION_NOT_AUTHORIZED) even when these are
+    #: supplied, until an authenticated admin grant mechanism exists
+    #: (docs/SOD_EXCEPTION_AUTHORIZATION_DESIGN.md).
     sod_exception_granted_by: Optional[uuid.UUID] = None
     sod_exception_reason: Optional[str] = Field(None, max_length=4000)
 
@@ -961,7 +963,9 @@ async def submit_qa(review_id: str, req: QaReview, request: Request,
             sod_exception_reason=req.sod_exception_reason,
             ip_address=get_client_ip(request))
     except QaGateRefused as exc:
-        raise HTTPException(409, str(exc))
+        # The machine code reaches the client in `X-Denial-Code`.
+        raise HTTPException(409, str(exc), headers={
+            "X-Denial-Code": getattr(exc, "code", "QA_REFUSED")})
     await db.commit()
     return result
 
