@@ -183,3 +183,64 @@ def evaluate(
             "Fix the rendering errors and regenerate."))
 
     return ReleaseDecision(results=results)
+
+
+#: Open COR methodology decisions, mirrored from docs/OFFICIAL_FINDING_RELEASE_GATE.md
+#: condition 9 ("4 open" as of that document's version). This names a current
+#: contract fact, not a policy choice -- it must track that document and is not
+#: meant to be edited to make a report pass.
+OPEN_METHODOLOGY_DECISIONS = (
+    "C1-C3 sample design (one overall vs per-QHIN; population and unit)",
+    "C4 which sources are mandatory for a No Discrepancy classification",
+    "C5 the '24 hours' clock",
+    "C9 written COR acceptance of D2",
+)
+
+
+def evaluate_from_report(
+    report_type: str, dataset: Dict[str, Any], *,
+    html: Optional[str] = None, render_errors: Optional[List[str]] = None,
+) -> ReleaseDecision:
+    """Compute a ReleaseDecision from one stored report's own dataset, for the
+    deterministic gates only (EVIDENCE, HUMAN_QA, METHODOLOGY, REPORT_QA).
+
+    This is deliberately conservative, not complete: where a report type's
+    dataset does not yet carry a fact this function needs, the fact defaults
+    to the value that keeps the corresponding gate CLOSED, never the value
+    that would open it. A gate opening because a field was simply absent would
+    be worse than one staying shut for a fact that was never wired -- the
+    second is this function being honest about its own limits; the first
+    would be exactly the "release because nobody checked" failure the whole
+    gate exists to prevent.
+
+    PROVENANCE is NOT computed here: docs/OFFICIAL_FINDING_RELEASE_GATE.md
+    treats the dataset's contractual sender/transmittal/control-total as
+    something only documentary evidence (never this function) establishes,
+    and no such record exists anywhere in this system today. Callers must
+    pass `provenance_documented` to `evaluate()` separately and explicitly;
+    this function does not default it, so it is never silently assumed True.
+    """
+    qa = dataset.get("qa_summary") if isinstance(dataset.get("qa_summary"), dict) else None
+    if qa is not None and "qa_approved" in qa and "asserted" in qa:
+        qa_approved_findings, asserted_findings = int(qa["qa_approved"]), int(qa["asserted"])
+    else:
+        # Not wired for this report_type's dataset shape yet: fail closed (an
+        # asserted finding with no recorded QA approval) rather than vacuously
+        # passing on an assumed 0/0.
+        qa_approved_findings, asserted_findings = 0, 1
+
+    methodology_pending = dataset.get("methodology_pending")
+    pending_ids = list(OPEN_METHODOLOGY_DECISIONS) if methodology_pending else []
+
+    return evaluate(
+        evidence_rule_version=dataset.get("evidence_rule_version"),
+        qa_approved_findings=qa_approved_findings,
+        asserted_findings=asserted_findings,
+        methodology_pending_ids=pending_ids,
+        # This report's own data services disclose pending methodology as a
+        # count, never as the basis for a conclusion (app/reports/data/
+        # sow_report_data.py: "They are not findings and are not failures.").
+        asserts_conclusion_on_pending=False,
+        report_rendered=bool(html) if html is not None else False,
+        render_errors=render_errors,
+    )

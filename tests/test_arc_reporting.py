@@ -94,6 +94,56 @@ class TestReleaseGates:
         assert "NOT FOR COR RELEASE" in DRAFT_WATERMARK
 
 
+class TestEvaluateFromReport:
+    """app.reports.release_gates.evaluate_from_report: the gap this closes is
+    that evaluate() existed with zero production callers. These prove the
+    bridge from a stored report's own dataset fails CLOSED wherever a fact
+    isn't actually wired yet, rather than opening a gate on an absence."""
+
+    def test_a_dataset_with_no_qa_summary_fails_closed_not_vacuously_open(self):
+        from app.reports.release_gates import Gate, evaluate_from_report
+
+        d = evaluate_from_report("delivery_processing", {}, html="<html>x</html>")
+        human_qa = next(r for r in d.results if r.gate is Gate.HUMAN_QA)
+        assert human_qa.open is False, "an unwired dataset must not pass HUMAN_QA for free"
+        assert d.is_cor_releasable is False
+
+    def test_an_explicit_qa_summary_is_honoured(self):
+        from app.reports.release_gates import Gate, evaluate_from_report
+
+        dataset = {"qa_summary": {"qa_approved": 3, "asserted": 3},
+                  "evidence_rule_version": current_rule_version()}
+        d = evaluate_from_report("delivery_processing", dataset, html="<html>x</html>")
+        assert next(r for r in d.results if r.gate is Gate.HUMAN_QA).open is True
+        assert next(r for r in d.results if r.gate is Gate.EVIDENCE).open is True
+
+    def test_methodology_pending_is_disclosed_never_concluded_on(self):
+        from app.reports.release_gates import Gate, evaluate_from_report
+
+        dataset = {"methodology_pending": {"disposition": "METHODOLOGY_PENDING"}}
+        d = evaluate_from_report("sow_weekly", dataset, html="<html>x</html>")
+        assert next(r for r in d.results if r.gate is Gate.METHODOLOGY).open is True
+
+    def test_no_html_fails_report_qa_closed(self):
+        from app.reports.release_gates import Gate, evaluate_from_report
+
+        d = evaluate_from_report("delivery_processing", {}, html=None)
+        assert next(r for r in d.results if r.gate is Gate.REPORT_QA).open is False
+
+    def test_provenance_is_never_computed_here_evaluate_still_defaults_it_closed(self):
+        """evaluate_from_report never asserts PROVENANCE true -- it is a
+        documentary fact docs/OFFICIAL_FINDING_RELEASE_GATE.md reserves to a
+        human, and no sender/transmittal/control-total record exists in this
+        system today for any report that has ever been generated."""
+        from app.reports.release_gates import Gate, evaluate_from_report
+
+        dataset = {"qa_summary": {"qa_approved": 1, "asserted": 1},
+                  "evidence_rule_version": current_rule_version()}
+        d = evaluate_from_report("delivery_processing", dataset, html="<html>x</html>")
+        assert next(r for r in d.results if r.gate is Gate.PROVENANCE).open is False
+        assert d.is_cor_releasable is False
+
+
 class TestMetricContract:
     """A number without a denominator is not reportable."""
 
