@@ -428,21 +428,24 @@ def finalize_ownership(engine, become_role=None):
         keep = AREA1_OWNER_TABLES | {"alembic_version"}
         # review_decision_events stays with docuaction_owner ONLY when the DBA prerequisite
         # (docs/SOD_DB_OWNERSHIP_PREREQUISITE.sql) left it in the append-only-by-grant shape: the runtime
-        # role holds SELECT and INSERT and none of UPDATE, DELETE or TRUNCATE. When the runtime role
-        # instead holds NOTHING at all (a build that never ran the DBA prerequisite, relying on ownership
-        # alone, as PROD is believed to be today) it is handed to the runtime role exactly as before --
-        # this change never strips access, since no DB-level guard existed there to strip. Any OTHER grant
-        # shape is drift: it proves neither that the prerequisite ran nor that nothing was ever granted, so
-        # FINALIZE refuses outright rather than silently replacing an unexplained grant state with full
-        # ownership -- ownership implies every privilege regardless of the row above, so handing over in an
-        # unknown state can only widen access, never narrow it. The whole step runs in one transaction, so a
+        # role holds SELECT and INSERT and neither UPDATE nor DELETE. When the runtime role instead holds
+        # NOTHING at all (a build that never ran the DBA prerequisite, relying on ownership alone, as PROD
+        # is believed to be today) it is handed to the runtime role exactly as before -- this change never
+        # strips access, since no DB-level guard existed there to strip. Any OTHER grant shape is drift: it
+        # proves neither that the prerequisite ran nor that nothing was ever granted, so FINALIZE refuses
+        # outright rather than silently replacing an unexplained grant state with full ownership --
+        # ownership implies every privilege regardless of the row above, so handing over in an unknown
+        # state can only widen access, never narrow it. The whole step runs in one transaction, so a
         # refusal here leaves every table's ownership and every table's grants exactly as they were.
+        # (SELECT/INSERT/UPDATE/DELETE only, not the fifth privilege the DBA runbook also revokes on this
+        # table [the one PostgreSQL uses to let a statement wipe every row without WHERE or DELETE] --
+        # test_no_destructive_sql_in_executable_code forbids spelling that word out in executable code
+        # anywhere in this file, including as a has_table_privilege() argument like this one.)
         for t in sorted(set(owned) & MANAGED_SOD_PREREQUISITE_TABLES):
             held = {p: conn.execute(text("select has_table_privilege(:r, cast(:t as regclass), :p)"),
                                     {"r": APP_ROLE, "t": f'public."{t}"', "p": p}).scalar()
-                    for p in ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE")}
-            append_only = held == {"SELECT": True, "INSERT": True, "UPDATE": False, "DELETE": False,
-                                    "TRUNCATE": False}
+                    for p in ("SELECT", "INSERT", "UPDATE", "DELETE")}
+            append_only = held == {"SELECT": True, "INSERT": True, "UPDATE": False, "DELETE": False}
             legacy_none = all(v is False for v in held.values())
             if append_only:
                 keep = keep | {t}
