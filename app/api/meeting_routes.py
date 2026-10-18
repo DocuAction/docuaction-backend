@@ -180,9 +180,12 @@ async def process_meeting(
             pass
 
     except Exception as e:
+        # CodeQL py/stack-trace-exposure (alert #8): "pipeline_phases" is
+        # returned to the caller; the raw exception text (potentially
+        # provider/internal error detail) stays in the log only.
         logger.error(f"Intelligence extraction failed: {e}")
         phases[-1]["status"] = "degraded"
-        phases[-1]["error"] = str(e)[:100]
+        phases[-1]["error"] = "Intelligence extraction failed; see server logs."
 
     if not intelligence:
         intelligence = {

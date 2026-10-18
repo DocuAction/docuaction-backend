@@ -2138,8 +2138,10 @@ async def tefca_search(
             else:
                 nppes = {"found": False, "unavailable": True}
         except Exception as e:
+            # CodeQL py/stack-trace-exposure (alert #30): full detail is
+            # already in the log line above; the caller gets a generic flag.
             logger.warning(f"tefca_search NPPES lookup failed: {e}")
-            nppes = {"error": str(e)[:120]}
+            nppes = {"error": "NPPES lookup unavailable; see server logs."}
 
     return {
         "query": term, "type": type, "is_npi": is_npi,

@@ -182,3 +182,46 @@ class TestRegressionSecurity:
         raise_pos = src.find("raise HTTPException")
         assert 0 <= audit_pos < raise_pos, \
             "the audit row must be written before the rejection is raised"
+
+
+class TestSignupEmailRegexNotPolynomial:
+    """CodeQL py/polynomial-redos, alert #22 (app/api/routes.py:242,
+    `_EMAIL_RE = r'^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$'`). One timing point on one
+    input shape is not a disposition; this exercises several adversarial
+    shapes and asserts the FULL-SIZE case stays well under what would
+    indicate polynomial behaviour, rather than only comparing relative
+    growth."""
+
+    @staticmethod
+    def _email_re():
+        from app.api.routes import _EMAIL_RE
+        return _EMAIL_RE
+
+    @pytest.mark.parametrize("make_input", [
+        lambda n: "a" * n,                      # no "@" at all
+        lambda n: "a@" + "b" * n,                # "@" present, no "." ever
+        lambda n: "a@" + ("x." * (n // 2)),      # many dots, ends ON a dot (every one must be tried and fail)
+        lambda n: "a@" + ("x." * (n // 2)) + "y",  # many dots, final match still succeeds
+    ], ids=["no-at", "at-no-dot", "many-dots-all-fail", "many-dots-succeeds"])
+    def test_adversarial_shapes_stay_linear(self, make_input):
+        import time
+
+        pattern = self._email_re()
+        s = make_input(100_000)
+        t0 = time.perf_counter()
+        pattern.match(s)
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        # A polynomial (let alone exponential) backtracker would not finish a
+        # 100k-char adversarial input in low-double-digit milliseconds on any
+        # machine; a linear one does this in under 1ms. 50ms gives generous
+        # headroom for a slow CI runner while still failing hard on a real
+        # polynomial regression.
+        assert elapsed_ms < 50, f"{elapsed_ms:.2f}ms for 100k chars -- looks polynomial, not linear"
+
+    def test_signup_schema_caps_email_length(self):
+        """The regex is linear (above), but the field was unbounded until
+        this round -- defence in depth, RFC 5321's 254-octet cap."""
+        from app.models.schemas import SignupRequest
+
+        field = SignupRequest.model_fields["email"]
+        assert field.metadata and any(getattr(m, "max_length", None) == 254 for m in field.metadata)

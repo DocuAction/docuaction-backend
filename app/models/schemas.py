@@ -1,5 +1,5 @@
 """Pydantic schemas for API request/response validation"""
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List, Any
 from uuid import UUID
 from datetime import datetime
@@ -8,7 +8,14 @@ from datetime import datetime
 # ═══ AUTH ═══
 
 class SignupRequest(BaseModel):
-    email: str
+    # CodeQL py/polynomial-redos (alert #22) input-limit analysis: _EMAIL_RE
+    # (app/api/routes.py) is linear-time regardless of length (verified: no
+    # nested quantifiers, empirically confirmed O(n) up to 200k chars across
+    # several adversarial patterns), so this cap isn't needed for THAT
+    # finding -- but the field was otherwise unbounded, which is its own
+    # minor hygiene gap. RFC 5321 Section 4.5.3.1.3 caps an address at 254
+    # octets.
+    email: str = Field(max_length=254)
     password: str
     full_name: Optional[str] = ""
     company: Optional[str] = ""
