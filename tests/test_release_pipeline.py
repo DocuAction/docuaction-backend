@@ -43,6 +43,7 @@ DEPLOY = os.path.join(REPO, ".github", "workflows", "deploy-backend.yml")
 CONTAINER = os.path.join(REPO, ".github", "workflows", "container-release.yml")
 DEV_RELEASE = os.path.join(REPO, ".github", "workflows", "dev-release.yml")
 MIGRATION_PREFLIGHT = os.path.join(REPO, ".github", "workflows", "migration-preflight.yml")
+SECURITY_NIGHTLY = os.path.join(REPO, ".github", "workflows", "security-nightly.yml")
 
 pytestmark = pytest.mark.skipif(yaml is None, reason="PyYAML unavailable")
 
@@ -609,6 +610,44 @@ def test_migration_preflight_reports_readable_rather_than_only_failing():
     trigger = doc.get("on", doc.get(True))  # PyYAML 1.1: bare `on` parses as True
     call_outputs = trigger["workflow_call"]["outputs"]
     assert "readable" in call_outputs
+
+
+def test_target_revision_reaches_python_through_the_environment_not_string_interpolation():
+    """CodeRabbit (PR #112, CWE-94): $TARGET used to be spliced as a literal
+    into a `python -c "..."` source string -- bash interpolates ${TARGET}
+    into the double-quoted heredoc before Python ever sees it, so a
+    target_revision value containing a single quote could break out of the
+    Python string literal and inject code. inputs.target_revision (the
+    original source of $TARGET) is workflow_dispatch input, genuinely
+    caller-supplied, not a trusted context value. Verifies the fix: the
+    value now reaches Python only via os.environ, never spliced into the
+    script's source text."""
+    body = _steps_text(_job(MIGRATION_PREFLIGHT, "preflight"))
+    assert "sd.get_revision(os.environ['TARGET_REVISION_FOR_PY'])" in body
+    assert "sd.get_revision('${TARGET}')" not in body, "must not reintroduce the string-interpolation form"
+    assert "sd.get_revision(f'" not in body and 'sd.get_revision(f"' not in body
+
+
+def test_frontend_checkout_step_has_exactly_one_with_block_including_persist_credentials():
+    """CodeRabbit (PR #112): an earlier automated persist-credentials pass
+    inserted a SECOND `with:` key into this step (its original with: block,
+    repository/token/path, sits after `continue-on-error:`, not immediately
+    after `uses:`, which that script's detection didn't anticipate). YAML
+    permits the duplicate key syntactically -- PyYAML silently keeps only
+    the LAST mapping, so the bug wasn't a parse error, it was
+    persist-credentials being silently discarded while the file still
+    "parsed fine". Raw-text check (not yaml.safe_load) because the loader
+    itself can't detect the duplicate -- it would only let it keep winning."""
+    text = _text(SECURITY_NIGHTLY)
+    assert text.count("Checkout frontend (optional second target)") == 1
+    idx = text.index("Checkout frontend (optional second target)")
+    step_block = text[idx:idx + 400]
+    assert step_block.count("with:") == 1, "the frontend checkout step must have exactly one with: block"
+    doc = _doc(SECURITY_NIGHTLY)
+    frontend_step = next(s for s in doc["jobs"]["security-scan"]["steps"]
+                         if s.get("name") == "Checkout frontend (optional second target)")
+    assert frontend_step["with"]["persist-credentials"] is False
+    assert frontend_step["with"]["repository"] == "DocuAction/docuaction-frontend"
 
 
 def test_deploy_cannot_run_without_the_migration_gates_permission():
