@@ -227,15 +227,36 @@ class TestReleaseControl:
     def test_happy_path_and_refusals(self):
         from app.reports.data.release import (ReleaseTransitionError,
                                               apply_transition)
+        from app.reports.release_gates import Gate, GateResult, ReleaseDecision
+
+        all_open = ReleaseDecision(results=[GateResult(g, True, "synthetic: open for this test")
+                                            for g in Gate])
+        attestation = "COR assignment 2026-10-18, email ref ABC-123; D2 accepted in writing."
 
         data = {"snapshot": {"report_id": "X"}, "dataset": {"a": 1}}
         with pytest.raises(ReleaseTransitionError):
             apply_transition(data, action="READY_FOR_DELIVERY", actor="pm")
         data, e1 = apply_transition(data, action="PM_REVIEWED", actor="pm@x", note="ok")
         assert data["release"]["status"] == "PM_REVIEWED"
-        data, e2 = apply_transition(data, action="READY_FOR_DELIVERY", actor="pm@x")
+        # READY_FOR_DELIVERY refuses without a gate decision, without one that
+        # isn't fully open, and without a PM attestation -- it never defaults
+        # any of the three to "proceed".
+        with pytest.raises(ReleaseTransitionError, match="gate decision"):
+            apply_transition(data, action="READY_FOR_DELIVERY", actor="pm@x",
+                             pm_attestation=attestation)
+        closed = ReleaseDecision(results=[GateResult(Gate.EVIDENCE, False, "not recorded", "regenerate")])
+        with pytest.raises(ReleaseTransitionError, match="Closed"):
+            apply_transition(data, action="READY_FOR_DELIVERY", actor="pm@x",
+                             gate_decision=closed, pm_attestation=attestation)
+        with pytest.raises(ReleaseTransitionError, match="pm_attestation"):
+            apply_transition(data, action="READY_FOR_DELIVERY", actor="pm@x",
+                             gate_decision=all_open)
+        data, e2 = apply_transition(data, action="READY_FOR_DELIVERY", actor="pm@x",
+                                    gate_decision=all_open, pm_attestation=attestation)
         assert data["release"]["status"] == "READY_FOR_DELIVERY"
         assert [h["status"] for h in data["release"]["history"]] == ["PM_REVIEWED", "READY_FOR_DELIVERY"]
+        assert data["release"]["history"][-1]["pm_attestation"] == attestation
+        assert data["release"]["history"][-1]["gate_decision"]["is_cor_releasable"] is True
         with pytest.raises(ReleaseTransitionError):
             apply_transition(data, action="PM_REVIEWED", actor="pm@x")
         data, _ = apply_transition(data, action="RETURNED_TO_DRAFT", actor="pm@x")

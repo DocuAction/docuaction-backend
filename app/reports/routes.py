@@ -1104,6 +1104,11 @@ async def _audit_download(db, row, fmt: str, user, **extra) -> None:
 class ReleaseRequest(BaseModel):
     action: str = Field(description="PM_REVIEWED | READY_FOR_DELIVERY | RETURNED_TO_DRAFT")
     note: str = Field(default="", max_length=2000)
+    #: Required only for READY_FOR_DELIVERY. The PM's own written reference to
+    #: the documentary evidence behind docs/OFFICIAL_FINDING_RELEASE_GATE.md's
+    #: human-judgment conditions (1, 2, 3, 6, 7, 8, 9). Never evaluated for
+    #: adequacy by this system -- see app/reports/data/release.py.
+    pm_attestation: str = Field(default="", max_length=2000)
 
 
 @router.get("/{report_id}/release", summary="Release status and decision history")
@@ -1134,14 +1139,21 @@ async def post_release(
     from sqlalchemy.orm.attributes import flag_modified
 
     from app.models.database import AuditLog
-    from app.reports.data.release import (ReleaseTransitionError,
+    from app.reports.data.release import (STATUS_READY, ReleaseTransitionError,
                                           apply_transition, current_release)
 
     row = await _stored(db, report_id)
     actor = getattr(user, "email", None) or "SYSTEM"
+    gate_decision = None
+    if (request.action or "").strip().upper() == STATUS_READY:
+        from app.reports.release_gates import evaluate_from_report
+
+        dataset = (row.report_data or {}).get("dataset") or {}
+        gate_decision = evaluate_from_report(row.report_type, dataset, html=row.report_html)
     try:
         new_data, entry = apply_transition(
-            row.report_data, action=request.action, actor=actor, note=request.note)
+            row.report_data, action=request.action, actor=actor, note=request.note,
+            gate_decision=gate_decision, pm_attestation=request.pm_attestation)
     except ReleaseTransitionError as exc:
         raise HTTPException(409, str(exc))
 

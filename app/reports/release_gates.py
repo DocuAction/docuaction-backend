@@ -70,7 +70,12 @@ class ReleaseDecision:
 
     @property
     def is_cor_releasable(self) -> bool:
-        return bool(self.results) and all(r.open for r in self.results)
+        # Every gate, exactly once -- not just "every gate present is open". A
+        # decision missing a gate (or carrying a duplicate) must never read as
+        # releasable merely because nothing closed was in the list it was given.
+        if {r.gate for r in self.results} != set(Gate) or len(self.results) != len(Gate):
+            return False
+        return all(r.open for r in self.results)
 
     @property
     def label(self) -> str:
@@ -183,3 +188,66 @@ def evaluate(
             "Fix the rendering errors and regenerate."))
 
     return ReleaseDecision(results=results)
+
+
+#: Open COR methodology decisions, mirrored from docs/OFFICIAL_FINDING_RELEASE_GATE.md
+#: condition 9 ("4 open" as of that document's version). This names a current
+#: contract fact, not a policy choice -- it must track that document and is not
+#: meant to be edited to make a report pass.
+OPEN_METHODOLOGY_DECISIONS = (
+    "C1-C3 sample design (one overall vs per-QHIN; population and unit)",
+    "C4 which sources are mandatory for a No Discrepancy classification",
+    "C5 the '24 hours' clock",
+    "C9 written COR acceptance of D2",
+)
+
+
+def evaluate_from_report(
+    report_type: str, dataset: Dict[str, Any], *,
+    html: Optional[str] = None, render_errors: Optional[List[str]] = None,
+) -> ReleaseDecision:
+    """Compute a ReleaseDecision from one stored report's own dataset, for the
+    deterministic gates only (EVIDENCE, HUMAN_QA, METHODOLOGY, REPORT_QA).
+
+    This is deliberately conservative, not complete: where a report type's
+    dataset does not yet carry a fact this function needs, the fact defaults
+    to the value that keeps the corresponding gate CLOSED, never the value
+    that would open it. A gate opening because a field was simply absent would
+    be worse than one staying shut for a fact that was never wired -- the
+    second is this function being honest about its own limits; the first
+    would be exactly the "release because nobody checked" failure the whole
+    gate exists to prevent.
+
+    PROVENANCE is NOT computed here: docs/OFFICIAL_FINDING_RELEASE_GATE.md
+    treats the dataset's contractual sender/transmittal/control-total as
+    something only documentary evidence (never this function) establishes,
+    and no such record exists anywhere in this system today. Callers must
+    pass `provenance_documented` to `evaluate()` separately and explicitly;
+    this function does not default it, so it is never silently assumed True.
+    """
+    qa = dataset.get("qa_summary") if isinstance(dataset.get("qa_summary"), dict) else None
+    qa_approved_findings, asserted_findings = 0, 1  # fail closed: see docstring
+    if qa is not None and "qa_approved" in qa and "asserted" in qa:
+        try:
+            qa_approved_findings, asserted_findings = int(qa["qa_approved"]), int(qa["asserted"])
+        except (TypeError, ValueError):
+            pass  # a stored count that is null or not a number is a missing fact, not a crash
+
+    # methodology_pending() (app/reports/data/sow_report_data.py) always
+    # returns a truthy disclosure dict for the SOW family, where the B1-B4 /
+    # No-Discrepancy classification it accompanies IS the conclusion that
+    # depends on it -- COR acceptance of D2 is "NOT MET" today (governance
+    # doc condition 2), so a disclosed pending methodology is treated as a
+    # conclusion drawn on it, not merely a disclosure, until that changes.
+    methodology_pending = dataset.get("methodology_pending")
+    pending_ids = list(OPEN_METHODOLOGY_DECISIONS) if methodology_pending else []
+
+    return evaluate(
+        evidence_rule_version=dataset.get("evidence_rule_version"),
+        qa_approved_findings=qa_approved_findings,
+        asserted_findings=asserted_findings,
+        methodology_pending_ids=pending_ids,
+        asserts_conclusion_on_pending=bool(methodology_pending),
+        report_rendered=bool(html) if html is not None else False,
+        render_errors=render_errors,
+    )

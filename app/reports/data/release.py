@@ -35,12 +35,24 @@ import io
 import json
 import zipfile
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 #: Contract reference every report must cite (RFQ 7571MN26Q00038, Section F:
 #: "All reports shall reference and cite the contract number.")
 # One source for the contract number: the branding module (env-overridable).
 from app.reports.branding import CONTRACT_NUMBER  # noqa: E402
+
+if TYPE_CHECKING:
+    from app.reports.release_gates import ReleaseDecision
+
+#: Minimum length for the PM's written reference to the documentary evidence
+#: behind docs/OFFICIAL_FINDING_RELEASE_GATE.md's human-judgment conditions
+#: (1, 2, 3, 6, 7, 8, 9 -- lineage, methodology acceptance, assignment, analyst
+#: determination, QA approval, sampling, open COR decisions). The gate document
+#: is explicit that "No automated process may open this gate": this code never
+#: evaluates whether the PM's reference is adequate, only that one was given,
+#: so the human judgment itself is never made by, or delegated to, the system.
+MIN_PM_ATTESTATION_LENGTH = 20
 
 STATUS_DRAFT = "DRAFT"
 STATUS_PM_REVIEWED = "PM_REVIEWED"
@@ -85,12 +97,27 @@ def current_release(report_data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def apply_transition(report_data: Optional[Dict[str, Any]], *, action: str,
-                     actor: str, note: str = "", at: Optional[datetime] = None
+                     actor: str, note: str = "", at: Optional[datetime] = None,
+                     gate_decision: Optional[ReleaseDecision] = None,
+                     pm_attestation: str = "",
                      ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Return (new_report_data, history_entry) or raise.
 
     Pure: the caller persists. The snapshot and dataset keys are carried across
-    untouched — this function only ever writes the `release` key.
+    untouched -- this function only ever writes the `release` key.
+
+    READY_FOR_DELIVERY additionally requires two things no other transition
+    needs, per docs/OFFICIAL_FINDING_RELEASE_GATE.md: `gate_decision`, the
+    deterministic app.reports.release_gates.evaluate() result computed by the
+    caller from this report's actual evidence version, QA-approval counts,
+    disclosed methodology and render outcome (conditions 4, 5, 10, 11, 12 --
+    "capability ready" in the gate document); and `pm_attestation`, the PM's
+    own written reference to the documentary evidence behind the conditions
+    the gate document says no automated process may evaluate (1, 2, 3, 6, 7,
+    8, 9 -- lineage, methodology acceptance, assignment, analyst determination,
+    QA approval, sampling, open COR decisions). Missing or failing either one
+    refuses the transition; this code never decides the human conditions are
+    met, only that the PM has put something on the record for them.
     """
     action = (action or "").strip().upper()
     if action not in TRANSITIONS:
@@ -102,9 +129,30 @@ def apply_transition(report_data: Optional[Dict[str, Any]], *, action: str,
         raise ReleaseTransitionError(
             f"Cannot apply {action} from {block['status']}. Allowed from: "
             f"{', '.join(TRANSITIONS[action])}")
+    if action == STATUS_READY:
+        if gate_decision is None or not gate_decision.is_cor_releasable:
+            closed = [] if gate_decision is None else [
+                f"{r.gate.value}: {r.reason} ({r.remedy or 'no remedy recorded'})"
+                for r in gate_decision.closed]
+            raise ReleaseTransitionError(
+                "Cannot apply READY_FOR_DELIVERY: the deterministic release "
+                "gates (docs/OFFICIAL_FINDING_RELEASE_GATE.md conditions 4, 5, "
+                "10, 11, 12) are not all open. " +
+                ("No gate decision was supplied." if gate_decision is None
+                 else "Closed: " + "; ".join(closed)))
+        if len((pm_attestation or "").strip()) < MIN_PM_ATTESTATION_LENGTH:
+            raise ReleaseTransitionError(
+                "Cannot apply READY_FOR_DELIVERY: pm_attestation must reference "
+                "the documentary evidence for the human-judgment conditions in "
+                "docs/OFFICIAL_FINDING_RELEASE_GATE.md (1, 2, 3, 6, 7, 8, 9) -- "
+                f"at least {MIN_PM_ATTESTATION_LENGTH} characters, not inferred "
+                "or defaulted by this system.")
     stamp = (at or datetime.now(timezone.utc)).isoformat()
     entry = {"status": action, "actor": actor, "at": stamp,
              "note": (note or "").strip()[:2000]}
+    if action == STATUS_READY:
+        entry["gate_decision"] = gate_decision.to_dict()
+        entry["pm_attestation"] = pm_attestation.strip()[:2000]
     new_block = {
         "status": action,
         "history": list(block["history"]) + [entry],
