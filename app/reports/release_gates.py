@@ -70,7 +70,12 @@ class ReleaseDecision:
 
     @property
     def is_cor_releasable(self) -> bool:
-        return bool(self.results) and all(r.open for r in self.results)
+        # Every gate, exactly once -- not just "every gate present is open". A
+        # decision missing a gate (or carrying a duplicate) must never read as
+        # releasable merely because nothing closed was in the list it was given.
+        if {r.gate for r in self.results} != set(Gate) or len(self.results) != len(Gate):
+            return False
+        return all(r.open for r in self.results)
 
     @property
     def label(self) -> str:
@@ -221,14 +226,19 @@ def evaluate_from_report(
     this function does not default it, so it is never silently assumed True.
     """
     qa = dataset.get("qa_summary") if isinstance(dataset.get("qa_summary"), dict) else None
+    qa_approved_findings, asserted_findings = 0, 1  # fail closed: see docstring
     if qa is not None and "qa_approved" in qa and "asserted" in qa:
-        qa_approved_findings, asserted_findings = int(qa["qa_approved"]), int(qa["asserted"])
-    else:
-        # Not wired for this report_type's dataset shape yet: fail closed (an
-        # asserted finding with no recorded QA approval) rather than vacuously
-        # passing on an assumed 0/0.
-        qa_approved_findings, asserted_findings = 0, 1
+        try:
+            qa_approved_findings, asserted_findings = int(qa["qa_approved"]), int(qa["asserted"])
+        except (TypeError, ValueError):
+            pass  # a stored count that is null or not a number is a missing fact, not a crash
 
+    # methodology_pending() (app/reports/data/sow_report_data.py) always
+    # returns a truthy disclosure dict for the SOW family, where the B1-B4 /
+    # No-Discrepancy classification it accompanies IS the conclusion that
+    # depends on it -- COR acceptance of D2 is "NOT MET" today (governance
+    # doc condition 2), so a disclosed pending methodology is treated as a
+    # conclusion drawn on it, not merely a disclosure, until that changes.
     methodology_pending = dataset.get("methodology_pending")
     pending_ids = list(OPEN_METHODOLOGY_DECISIONS) if methodology_pending else []
 
@@ -237,10 +247,7 @@ def evaluate_from_report(
         qa_approved_findings=qa_approved_findings,
         asserted_findings=asserted_findings,
         methodology_pending_ids=pending_ids,
-        # This report's own data services disclose pending methodology as a
-        # count, never as the basis for a conclusion (app/reports/data/
-        # sow_report_data.py: "They are not findings and are not failures.").
-        asserts_conclusion_on_pending=False,
+        asserts_conclusion_on_pending=bool(methodology_pending),
         report_rendered=bool(html) if html is not None else False,
         render_errors=render_errors,
     )
