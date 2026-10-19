@@ -52,6 +52,17 @@ class TestSixteenModulePath:
                 assert getattr(g, part).strip(), f"{m.slug}.{part}"
             assert g.steps and g.what_not_to_do, m.slug
 
+    def test_guide_download_url_is_opt_in_and_only_set_where_intended(self):
+        """A downloadable reference document is optional per module, not a feature every
+        module gets by default -- only the overview module carries one today."""
+        overview = next(m for m in MODULES if m.slug == "tefca-arc-overview")
+        assert overview.guide.guide_download_url == "/guides/DocuAction_TEFCA_ARC_User_Guide.pdf"
+        assert overview.guide.to_dict()["guide_download_url"] == overview.guide.guide_download_url
+        others = [m for m in MODULES if m.slug != "tefca-arc-overview"]
+        assert others, "expected more than one module"
+        for m in others:
+            assert m.guide.guide_download_url is None, m.slug
+
     def test_every_module_is_versioned_with_an_effective_date(self):
         for m in MODULES:
             assert m.version and m.effective_date and m.status == "current", m.slug

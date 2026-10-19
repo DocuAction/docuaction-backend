@@ -635,7 +635,8 @@ GUIDES = {
         what_human_does="Determines, checks, releases.",
         steps=["Read the programme overview.", "Learn the four Government categories by name.", "Locate your role's path in the Learning Center."],
         what_not_to_do=["Do not call an observation a finding.", "Do not use B1–B4 outside AGT."],
-        what_happens_next="Follow your role's learning path."),
+        what_happens_next="Follow your role's learning path.",
+        guide_download_url="/guides/DocuAction_TEFCA_ARC_User_Guide.pdf"),
     "automated-observations": ModuleGuide(
         what_is_this="What the automated processing records for every applicable source and every record.",
         why_it_matters="Analysts must read the eight observation states correctly; four of them are never adverse.",

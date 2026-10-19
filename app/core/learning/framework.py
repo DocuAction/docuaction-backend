@@ -198,6 +198,11 @@ class ModuleGuide:
     steps: List[str]
     what_not_to_do: List[str]
     what_happens_next: str
+    guide_download_url: Optional[str] = None
+    """Static, deployed-with-the-frontend path to a downloadable reference document for this
+    module (for example a PDF user guide). Optional: most modules have none. Never a
+    user-supplied or database-backed value -- always a literal path baked into this file at
+    review time, so it carries the same change-control as everything else here."""
 
     def to_dict(self) -> Dict[str, Any]:
         return {"what_is_this": self.what_is_this,
@@ -206,6 +211,7 @@ class ModuleGuide:
                 "what_human_does": self.what_human_does,
                 "steps": list(self.steps),
                 "what_not_to_do": list(self.what_not_to_do),
+                "guide_download_url": self.guide_download_url,
                 "what_happens_next": self.what_happens_next}
 
 
