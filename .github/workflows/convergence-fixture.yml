@@ -55,4 +55,4 @@ jobs:
           SECRET_KEY: convtestconvtestconvtestconvtestconvtestconvtestconvtestconvtest
           ALLOWED_HOSTS: '*'
         run: |
-          python -m pytest tests/test_prod_convergence_integration.py tests/test_prod_managed_migration_integration.py -v -s --tb=short
+          python -m pytest tests/test_prod_convergence_integration.py tests/test_prod_managed_migration_integration.py tests/test_sod_ownership_convergence_2026_10_12.py -v -s --tb=short

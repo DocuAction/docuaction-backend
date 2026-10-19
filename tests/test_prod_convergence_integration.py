@@ -260,6 +260,24 @@ def test_three_step_convergence_and_all_gates(fixture_db):
         assert c.execute(text("select version_num from alembic_version")).scalars().all() == [_current_head()]
     print("MIGRATION_B=PASS")
 
+    # The head chain includes 20261012_sod_db_enforcement, which only requires
+    # review_decision_events to already be owner-owned (Bootstrap A did that for
+    # the chain, like every other candidate table) -- it installs its append-only
+    # guard triggers without granting anything. So by this point the table is
+    # owner-owned AND guarded, but docuaction_app holds none of SELECT/INSERT/
+    # UPDATE/DELETE on it: exactly the state docs/SOD_DB_OWNERSHIP_PREREQUISITE.sql
+    # exists to close, and FINALIZE now correctly refuses to hand back a guarded
+    # table with no grants (tests/test_sod_ownership_convergence_2026_10_12.py::
+    # test_finalize_refuses_a_guarded_table_with_missing_grants_even_though_legacy_none).
+    # A real DBA running this three-step path would run that runbook here; this
+    # test does the equivalent grant directly, as the superuser, so FINALIZE
+    # below can focus on the chain's own ownership gates rather than re-proving
+    # the SOD prerequisite this file does not otherwise exercise.
+    with su.begin() as c:
+        c.execute(text("REVOKE ALL ON TABLE public.review_decision_events FROM PUBLIC"))
+        c.execute(text("REVOKE ALL ON TABLE public.review_decision_events FROM docuaction_app"))
+        c.execute(text("GRANT SELECT, INSERT ON TABLE public.review_decision_events TO docuaction_app"))
+
     # FINALIZE (legacy_owner) - reassign to DEV ownership model
     rf = _run_conv(_url_as(fixture_db, LEGACY_OWNER), "--finalize", "--i-understand-finalize-writes")
     assert "FINALIZE COMPLETE" in rf.stdout

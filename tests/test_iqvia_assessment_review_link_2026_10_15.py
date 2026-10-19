@@ -179,8 +179,29 @@ async def test_a_source_record_in_one_delivery_is_not_overridden_by_the_entity_p
     from app.tefca_registry.rce import snapshot_models as sm
     # make the same entity present in delivery B, so only the source record can say the review is A's
     from datetime import datetime
-    db.add(sm.RceEntityPresence(intake_id=b["intake_id"], entity_id=entity, present=True, rce_org_oid="1.2.3.SYN", correlation_id="syn-rl",
-                                snapshot_received_at=datetime.utcnow()))
+    # Upsert, not a blind insert: _setup()'s record_presence(b["intake_id"])
+    # calls snapshot_effects.previous_delivery(), which is GLOBAL (the most
+    # recent earlier intake by received_at, any delivery -- see
+    # app/tefca_registry/rce/delivery_delta.py) and seed_delivery() truncates
+    # received_at to whole seconds (`.replace(microsecond=0)`). Whenever A's
+    # and B's seed_delivery() calls happen to straddle a wall-clock second
+    # boundary (more likely under slower/loaded CI, e.g. a larger combined
+    # test suite), A becomes B's "previous delivery" and record_presence
+    # auto-inserts an ABSENT row for this exact (entity, intake) pair before
+    # this line ever runs -- a blind db.add() then hits
+    # uq_rce_presence_entity_intake. When both calls land in the same
+    # second (the common case), no such row exists and this is a plain
+    # insert, unchanged from before.
+    existing = (await db.execute(select(sm.RceEntityPresence).where(
+        sm.RceEntityPresence.entity_id == entity,
+        sm.RceEntityPresence.intake_id == b["intake_id"]))).scalar_one_or_none()
+    if existing is not None:
+        existing.present = True
+        existing.snapshot_received_at = datetime.utcnow()
+    else:
+        db.add(sm.RceEntityPresence(intake_id=b["intake_id"], entity_id=entity, present=True,
+                                    rce_org_oid="1.2.3.SYN", correlation_id="syn-rl",
+                                    snapshot_received_at=datetime.utcnow()))
     await db.flush()
     app = _app(routes, db, USER)
     resp = await _post(app, _ui_body(snap, b["intake_id"], review_id=review))

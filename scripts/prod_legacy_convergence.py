@@ -426,6 +426,61 @@ def finalize_ownership(engine, become_role=None):
             "select relname from pg_class where relnamespace='public'::regnamespace "
             "and relkind='r' and relowner::regrole::text = :owner"), {"owner": OWNER_ROLE}).scalars().all()
         keep = AREA1_OWNER_TABLES | {"alembic_version"}
+        # review_decision_events stays with docuaction_owner ONLY when the DBA prerequisite
+        # (docs/SOD_DB_OWNERSHIP_PREREQUISITE.sql) left it in the append-only-by-grant shape: the runtime
+        # role holds SELECT and INSERT and neither UPDATE nor DELETE. When the runtime role instead holds
+        # NOTHING at all (a build that never ran the DBA prerequisite, relying on ownership alone, as PROD
+        # is believed to be today) it is handed to the runtime role exactly as before -- this change never
+        # strips access, since no DB-level guard existed there to strip. Any OTHER grant shape is drift: it
+        # proves neither that the prerequisite ran nor that nothing was ever granted, so FINALIZE refuses
+        # outright rather than silently replacing an unexplained grant state with full ownership --
+        # ownership implies every privilege regardless of the row above, so handing over in an unknown
+        # state can only widen access, never narrow it. The whole step runs in one transaction, so a
+        # refusal here leaves every table's ownership and every table's grants exactly as they were.
+        # (SELECT/INSERT/UPDATE/DELETE only, not the fifth privilege the DBA runbook also revokes on this
+        # table [the one PostgreSQL uses to let a statement wipe every row without WHERE or DELETE] --
+        # test_no_destructive_sql_in_executable_code forbids spelling that word out in executable code
+        # anywhere in this file, including as a has_table_privilege() argument like this one.)
+        for t in sorted(set(owned) & MANAGED_SOD_PREREQUISITE_TABLES):
+            held = {p: conn.execute(text("select has_table_privilege(:r, cast(:t as regclass), :p)"),
+                                    {"r": APP_ROLE, "t": f'public."{t}"', "p": p}).scalar()
+                    for p in ("SELECT", "INSERT", "UPDATE", "DELETE")}
+            append_only = held == {"SELECT": True, "INSERT": True, "UPDATE": False, "DELETE": False}
+            legacy_none = all(v is False for v in held.values())
+            # The 20261012_sod_db_enforcement migration installs its append-only guard triggers
+            # on ownership alone -- by its own docstring it "does not GRANT or REVOKE anything"
+            # and never requires a specific grant shape first. So legacy_none (nothing granted)
+            # does NOT prove nothing was ever protected here: a DBA could move ownership without
+            # ever running the GRANT step, the migration would still install the triggers, and
+            # this table would be both guarded AND legacy_none at once. Handing it back in that
+            # state would be safe from the grants' point of view but not from the owner's: as
+            # owner, docuaction_app could ALTER TABLE ... DISABLE TRIGGER or DROP TRIGGER the
+            # guards outright (CodeRabbit, CWE-863) -- so a guarded table is never handed back,
+            # regardless of what is or is not granted on it.
+            guards_present = conn.execute(text(
+                "select exists (select 1 from pg_trigger where tgrelid = cast(:t as regclass) "
+                "and not tgisinternal and tgname in ('trg_review_event_append_only_rows', "
+                "'trg_review_event_append_only_trunc'))"), {"t": f'public."{t}"'}).scalar()
+            if append_only:
+                keep = keep | {t}
+            elif legacy_none and guards_present:
+                raise SystemExit(
+                    f"REFUSED (finalize ownership): {OWNER_ROLE} owns {t} and its append-only "
+                    f"guard trigger(s) are already installed, but {APP_ROLE} holds none of "
+                    "SELECT/INSERT/UPDATE/DELETE on it. This is a protected table with missing "
+                    "grants, not an untouched legacy table -- handing it back would let the "
+                    f"runtime role disable or drop its own guard. Grant SELECT, INSERT to "
+                    f"{APP_ROLE} (docs/SOD_DB_OWNERSHIP_PREREQUISITE.sql) before re-running "
+                    "FINALIZE.")
+            elif not legacy_none:
+                raise SystemExit(
+                    f"REFUSED (finalize ownership drift): {OWNER_ROLE} owns {t} but {APP_ROLE}'s "
+                    f"privileges on it are {held}, matching neither the append-only prerequisite shape "
+                    "(SELECT+INSERT only, nothing else) nor the pre-prerequisite legacy shape (nothing "
+                    f"granted). Investigate who granted {t}'s current privileges and why (inspect its "
+                    "relacl with a superuser session) before re-running FINALIZE.")
+            # else: legacy_none and no guard triggers installed -- genuinely untouched; falls
+            # through, handed to APP_ROLE by the loop below exactly as before.
         to_app = sorted(set(owned) - keep)
         for t in to_app:
             conn.execute(text(f'ALTER TABLE public."{t}" OWNER TO "{APP_ROLE}"'))
@@ -567,6 +622,13 @@ MANAGED_LEGACY_ONLY = [
 ]
 MANAGED_AREA1_PRESENT = {"rce_source_records", "rce_source_intakes", "rce_ingestion_runs",
                          "rce_rule_execution_history"}
+# 20261012_sod_db_enforcement (PR #151) PREREQUISITE: a DBA moves review_decision_events (and the SoD
+# function) to docuaction_owner with SELECT+INSERT only for the runtime role
+# (docs/SOD_DB_OWNERSHIP_PREREQUISITE.sql) so the guards it installs cannot be removed by the role they
+# constrain. Once moved, the table is legitimately owner-owned: the managed gate tolerates it (it is NOT
+# part of the measured Area-1 set; an app-owned table is also tolerated here - the migration's own
+# preflight is what refuses that), and FINALIZE keeps it owner-owned only when it is already in that shape.
+MANAGED_SOD_PREREQUISITE_TABLES = {"review_decision_events"}
 
 
 def _refuse(msg):
@@ -651,7 +713,7 @@ def managed_gate(conn, expected_revision, after_prepare=False):
         _refuse(f"{len(foreign)} table(s) owned by neither {APP_ROLE} nor {OWNER_ROLE}: {foreign[:8]}")
     owner_owned = {t for t, o in owners.items() if o == OWNER_ROLE}
     prepared = {"alembic_version", *MANAGED_CHAIN_ALTERS}
-    if owner_owned - prepared != MANAGED_AREA1_PRESENT:
+    if owner_owned - prepared - MANAGED_SOD_PREREQUISITE_TABLES != MANAGED_AREA1_PRESENT:
         _refuse(f"{OWNER_ROLE} owns {sorted(owner_owned)}; expected exactly the measured Area-1 set "
                 f"{sorted(MANAGED_AREA1_PRESENT)} (+ {sorted(prepared)} after PREPARE).")
     if after_prepare and not prepared <= owner_owned:
