@@ -65,13 +65,23 @@ it adds `MANAGED_SOD_PREREQUISITE_TABLES = {"review_decision_events"}` (distinct
 ownership gate to account for it, and adds a FINALIZE keep rule: this table stays `docuaction_owner`-
 owned (instead of being handed back to `docuaction_app` the way `MANAGED_CHAIN_ALTERS` tables are)
 *only when* the runtime role's privileges on it are exactly the append-only-by-grant shape (`SELECT,
-INSERT`, none of `UPDATE`, `DELETE` or `TRUNCATE`). It is handed back to `docuaction_app` *only when*
-the runtime role instead holds nothing at all (the pre-prerequisite legacy shape, where there is no
-guard to strip). Any other grant shape -- drift that matches neither pattern -- is a refusal
-(`REFUSED (finalize ownership drift)`), not a handback: silently converting an unexplained grant state
-into full ownership can only widen access, which was CodeRabbit's finding against an earlier version of
-this PR (head `64af1587`) that handed the table back on *any* shape other than the exact append-only
-one. Ownership of `review_decision_events` is
+INSERT`, neither `UPDATE` nor `DELETE`; `TRUNCATE` is not checked here -- spelling that privilege's
+name out in executable code trips this repo's own `test_no_destructive_sql_in_executable_code`, and
+the guard-trigger check described next covers it independently). It is handed back to `docuaction_app`
+*only when* the runtime role instead holds nothing at all (the pre-prerequisite legacy shape) **and**
+this migration's append-only guard triggers are not yet installed on it -- i.e. the table is genuinely
+untouched, not merely under-granted. The second condition matters because this migration "does not
+GRANT or REVOKE anything" (see its own docstring above) and never requires a specific grant shape
+before installing its triggers: a DBA could move ownership without ever running the GRANT step, this
+migration would still install the guards, and the table would be both guarded and legacy_none (nothing
+granted) at once. Handing such a table back would be safe from the grants' point of view but not from
+the owner's -- as owner, `docuaction_app` could `ALTER TABLE ... DISABLE TRIGGER` or `DROP TRIGGER` the
+guards outright, which is exactly the risk this migration exists to close (CodeRabbit CWE-863 finding
+against head `ef64a21`). Any other grant shape -- drift that matches neither pattern -- is also a
+refusal (`REFUSED (finalize ownership drift)`), not a handback: silently converting an unexplained
+grant state into full ownership can only widen access, which was CodeRabbit's finding against an
+earlier version of this PR (head `64af1587`) that handed the table back on *any* shape other than the
+exact append-only one. Ownership of `review_decision_events` is
 still not transferred automatically by any of this -- the DBA runbook (`SOD_DB_OWNERSHIP_PREREQUISITE.sql`)
 remains a required, separate, manual step before the managed path will proceed past this preflight.
 

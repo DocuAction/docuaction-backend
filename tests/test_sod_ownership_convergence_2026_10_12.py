@@ -27,6 +27,9 @@ and expects success; this file holds the negative controls and the transition te
   6. test_finalize_hands_back_an_owner_owned_table_with_no_grants_at_all
         FINALIZE's other safe branch: the runtime role holding no privileges at all on an owner-owned
         table is handed the table back, since there is no guard in that state for a handback to strip.
+  7. test_finalize_refuses_a_guarded_table_with_missing_grants_even_though_legacy_none
+        legacy_none alone is not enough: if the append-only guard triggers are already installed,
+        FINALIZE refuses the handback regardless of what is or is not granted.
 
 Skips unless CONV_SUPERUSER_URL is set (same as the sibling fixture tests). Synthetic data only.
 """
@@ -366,3 +369,38 @@ def test_finalize_hands_back_an_owner_owned_table_with_no_grants_at_all(fixture_
         assert _tables(c)[TABLE] == "docuaction_app"
     assert _events_checksum(su) == events_before
     print("SOD_FINALIZE_LEGACY_NONE_HANDBACK=PASS (zero prior grants; table handed back, rows untouched)")
+
+
+def test_finalize_refuses_a_guarded_table_with_missing_grants_even_though_legacy_none(fixture_db):
+    """The migration installs its append-only guard triggers on ownership alone -- by its own
+    docstring it "does not GRANT or REVOKE anything" and never requires a specific grant shape
+    first. So a table can be owner-owned, fully guarded (triggers installed), and still show
+    legacy_none (nothing granted) if the DBA runbook's GRANT step was skipped or its grants were
+    later revoked. FINALIZE must not treat that as the untouched-legacy case: handing the table
+    to docuaction_app would let the runtime role, as owner, disable or drop the guard it
+    currently cannot touch (CodeRabbit CWE-863 finding on PR #151 head ef64a21)."""
+    from sqlalchemy import text
+    su = _build_managed_prod_like(fixture_db)
+    _seed_sod_history(su)
+    events_before = _events_checksum(su)
+    dba = _url_as(fixture_db, LEGACY_OWNER)
+    sections = _runbook_sections()
+    _exec_script(dba, sections["PRECHECKS"])
+    _exec_script(dba, sections["APPLY"])          # ownership -> docuaction_owner, grants SELECT+INSERT
+    admin = _url_as(fixture_db, ENTRA_ADMIN)
+    _prepare(admin)
+    _map_migration_identity(su)
+    rm = _run_conv(*_migrate_args(fixture_db), extra_env={"CONV_ADMIN_ROLE": LEGACY_OWNER})
+    assert "MANAGED MIGRATE COMPLETE" in rm.stdout, rm.stdout[-800:]   # guard triggers now installed
+    with su.begin() as c:
+        c.execute(text(f"REVOKE ALL ON TABLE {TABLE} FROM docuaction_app"))   # grants later stripped
+    before = _sod_fingerprint(su)
+    rf = _run_conv(admin, "--finalize", "--i-understand-finalize-writes", "--bootstrap-as-role", LEGACY_OWNER,
+                   expect_ok=False)
+    assert rf.returncode != 0 and "REFUSED (finalize ownership)" in (rf.stdout + rf.stderr), \
+        (rf.stdout + rf.stderr)[-800:]
+    with su.connect() as c:
+        assert _tables(c)[TABLE] == "docuaction_owner", "a guarded table must never be handed back"
+    assert _sod_fingerprint(su) == before, "a refused FINALIZE must leave ownership/grants/guards unchanged"
+    assert _events_checksum(su) == events_before, "a refused FINALIZE must not touch a single event row"
+    print("SOD_FINALIZE_GUARDED_MISSING_GRANTS_REFUSAL=PASS (guards installed + no grants -> refused, not handed back)")

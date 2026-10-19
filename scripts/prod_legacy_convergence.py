@@ -447,8 +447,31 @@ def finalize_ownership(engine, become_role=None):
                     for p in ("SELECT", "INSERT", "UPDATE", "DELETE")}
             append_only = held == {"SELECT": True, "INSERT": True, "UPDATE": False, "DELETE": False}
             legacy_none = all(v is False for v in held.values())
+            # The 20261012_sod_db_enforcement migration installs its append-only guard triggers
+            # on ownership alone -- by its own docstring it "does not GRANT or REVOKE anything"
+            # and never requires a specific grant shape first. So legacy_none (nothing granted)
+            # does NOT prove nothing was ever protected here: a DBA could move ownership without
+            # ever running the GRANT step, the migration would still install the triggers, and
+            # this table would be both guarded AND legacy_none at once. Handing it back in that
+            # state would be safe from the grants' point of view but not from the owner's: as
+            # owner, docuaction_app could ALTER TABLE ... DISABLE TRIGGER or DROP TRIGGER the
+            # guards outright (CodeRabbit, CWE-863) -- so a guarded table is never handed back,
+            # regardless of what is or is not granted on it.
+            guards_present = conn.execute(text(
+                "select exists (select 1 from pg_trigger where tgrelid = cast(:t as regclass) "
+                "and not tgisinternal and tgname in ('trg_review_event_append_only_rows', "
+                "'trg_review_event_append_only_trunc'))"), {"t": f'public."{t}"'}).scalar()
             if append_only:
                 keep = keep | {t}
+            elif legacy_none and guards_present:
+                raise SystemExit(
+                    f"REFUSED (finalize ownership): {OWNER_ROLE} owns {t} and its append-only "
+                    f"guard trigger(s) are already installed, but {APP_ROLE} holds none of "
+                    "SELECT/INSERT/UPDATE/DELETE on it. This is a protected table with missing "
+                    "grants, not an untouched legacy table -- handing it back would let the "
+                    f"runtime role disable or drop its own guard. Grant SELECT, INSERT to "
+                    f"{APP_ROLE} (docs/SOD_DB_OWNERSHIP_PREREQUISITE.sql) before re-running "
+                    "FINALIZE.")
             elif not legacy_none:
                 raise SystemExit(
                     f"REFUSED (finalize ownership drift): {OWNER_ROLE} owns {t} but {APP_ROLE}'s "
@@ -456,7 +479,8 @@ def finalize_ownership(engine, become_role=None):
                     "(SELECT+INSERT only, nothing else) nor the pre-prerequisite legacy shape (nothing "
                     f"granted). Investigate who granted {t}'s current privileges and why (inspect its "
                     "relacl with a superuser session) before re-running FINALIZE.")
-            # else: legacy_none -- falls through, handed to APP_ROLE by the loop below exactly as before.
+            # else: legacy_none and no guard triggers installed -- genuinely untouched; falls
+            # through, handed to APP_ROLE by the loop below exactly as before.
         to_app = sorted(set(owned) - keep)
         for t in to_app:
             conn.execute(text(f'ALTER TABLE public."{t}" OWNER TO "{APP_ROLE}"'))

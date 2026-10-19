@@ -193,12 +193,14 @@ async def test_a_source_record_in_one_delivery_is_not_overridden_by_the_entity_p
     # second (the common case), no such row exists and this is a plain
     # insert, unchanged from before.
     existing = (await db.execute(select(sm.RceEntityPresence).where(
-        sm.RceEntityPresence.entity_id == entity, sm.RceEntityPresence.intake_id == b["intake_id"]))).scalar_one_or_none()
+        sm.RceEntityPresence.entity_id == entity,
+        sm.RceEntityPresence.intake_id == b["intake_id"]))).scalar_one_or_none()
     if existing is not None:
         existing.present = True
         existing.snapshot_received_at = datetime.utcnow()
     else:
-        db.add(sm.RceEntityPresence(intake_id=b["intake_id"], entity_id=entity, present=True, rce_org_oid="1.2.3.SYN", correlation_id="syn-rl",
+        db.add(sm.RceEntityPresence(intake_id=b["intake_id"], entity_id=entity, present=True,
+                                    rce_org_oid="1.2.3.SYN", correlation_id="syn-rl",
                                     snapshot_received_at=datetime.utcnow()))
     await db.flush()
     app = _app(routes, db, USER)
