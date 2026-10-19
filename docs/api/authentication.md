@@ -144,6 +144,10 @@ login paths resolve to the same account and RBAC context.
 - The HS256 `SECRET_KEY` and the Entra confidential-client secret are sourced from
   the environment / Azure Key Vault and are **never committed** to source control.
 - Access tokens are short-lived; revocation is available to invalidate sessions.
+- Entra ID-token validation (`AZURE_AD_ID_TOKEN_VALIDATION`): `audit` (default) is
+  observation, not remediation - a token with a bad or absent signature is still
+  accepted and only logged; only `enforce` rejects it. See
+  `../SSO_ID_TOKEN_ENFORCEMENT_PROPOSAL.md`.
 - Failed authentication and authorization decisions are audit-logged without
   exposing PHI/PII or secrets.
 
