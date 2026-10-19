@@ -228,10 +228,12 @@ jobs:
       contents: read
       issues: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Login to Azure (OIDC - no stored client secret)
-        uses: azure/login@v2
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -240,11 +242,16 @@ jobs:
       - name: Report runner IPv4 and wait for the operator's temporary /32 (bounded)
         env:
           GH_TOKEN: ${{ github.token }}
+          # zizmor template-injection: ${{ }} spliced directly into run script
+          # source text, not just read as a string. Passed through env: instead.
+          HANDSHAKE_ISSUE: ${{ inputs.handshake_issue }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_RUN_ID: ${{ github.run_id }}
         run: |
           IP=$(curl -s https://api.ipify.org); echo "runner public IPv4: $IP"
-          if [ -n "${{ inputs.handshake_issue }}" ]; then
-            gh issue comment "${{ inputs.handshake_issue }}" --repo "${{ github.repository }}" \
-              --body "dev-release run ${{ github.run_id }} (post-deploy verify): runner public IPv4 **$IP** - waiting up to 20 min for a temporary /32. Remove it when this run finishes."
+          if [ -n "$HANDSHAKE_ISSUE" ]; then
+            gh issue comment "$HANDSHAKE_ISSUE" --repo "$GH_REPOSITORY" \
+              --body "dev-release run $GH_RUN_ID (post-deploy verify): runner public IPv4 **$IP** - waiting up to 20 min for a temporary /32. Remove it when this run finishes."
           fi
           for i in $(seq 1 80); do
             if python -c "import socket;s=socket.socket();s.settimeout(5);s.connect(('$PGHOST',5432))" 2>/dev/null; then echo "reachable after $i attempt(s)"; exit 0; fi
@@ -261,7 +268,7 @@ jobs:
       # the Postgres access token is minted - no new credential, scope, or
       # firewall authority.
       - name: Refresh Azure OIDC login after the bounded firewall wait
-        uses: azure/login@v2
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -308,30 +315,58 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Record what shipped
+        env:
+          # zizmor template-injection: every value below used to be spliced
+          # with ${{ }} directly into this step's run script source text.
+          # Most originate from this workflow's own earlier job outputs
+          # rather than raw external input, but the textual splice is the
+          # same shape either way, and env: costs nothing here.
+          COMMIT: ${{ github.sha }}
+          IMAGE_TAG: ${{ needs.build.outputs.tag }}
+          IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
+          DEV_READABLE: ${{ needs.migration-check.outputs.readable }}
+          DEV_REVISION: ${{ needs.migration-check.outputs.dev_revision }}
+          TARGET_HEAD: ${{ needs.migration-check.outputs.target_head }}
+          MIGRATION_APPLIED: ${{ needs.migration-check.outputs.applied }}
+          BASELINE_READABLE: ${{ needs.migration-check.outputs.baseline_readable }}
+          INTAKE_COUNT: ${{ needs.migration-check.outputs.intake_count }}
+          MIGRATION_GATE_RESULT: ${{ needs.migration-gate.result }}
+          MIGRATION_GATE_PROCEED: ${{ needs.migration-gate.outputs.proceed }}
+          DEPLOYED_DIGEST: ${{ needs.deploy.outputs.deployed_digest }}
+          PREVIOUS_IMAGE: ${{ needs.deploy.outputs.previous_image }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          GOV_VERIFY_RESULT: ${{ needs.gov-verify.result }}
+          SECURITY_SMOKE_RESULT: ${{ needs.security-smoke.result }}
+          TRIGGER_ACTOR: ${{ github.actor }}
+          TRIGGER_EVENT: ${{ github.event_name }}
+          GH_SERVER_URL: ${{ github.server_url }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_RUN_ID: ${{ github.run_id }}
         run: |
           {
             echo "## DEV release summary"
             echo ""
             echo "| field | value |"
             echo "|---|---|"
-            echo "| commit | ${{ github.sha }} |"
-            echo "| image tag | ${{ needs.build.outputs.tag }} |"
-            echo "| image digest | ${{ needs.build.outputs.digest }} |"
-            echo "| DEV readable from CI | ${{ needs.migration-check.outputs.readable }} |"
-            echo "| DEV revision (last known) | ${{ needs.migration-check.outputs.dev_revision }} |"
-            echo "| target head | ${{ needs.migration-check.outputs.target_head }} |"
-            echo "| migration applied this run | ${{ needs.migration-check.outputs.applied }} |"
-            echo "| Government baseline captured | ${{ needs.migration-check.outputs.baseline_readable }} (intakes=${{ needs.migration-check.outputs.intake_count }}) |"
-            echo "| migration gate | ${{ needs.migration-gate.result }} (proceed=${{ needs.migration-gate.outputs.proceed }}) |"
-            echo "| deployed digest | ${{ needs.deploy.outputs.deployed_digest }} |"
-            echo "| previous image (rollback point) | ${{ needs.deploy.outputs.previous_image }} |"
-            echo "| build result | ${{ needs.build.result }} |"
-            echo "| deploy result | ${{ needs.deploy.result }} |"
-            echo "| Government integrity result | ${{ needs.gov-verify.result }} |"
-            echo "| security smoke result | ${{ needs.security-smoke.result }} |"
-            echo "| triggered by | ${{ github.actor }} via ${{ github.event_name }} |"
-            echo "| run | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |"
-            if [ "${{ needs.migration-gate.outputs.proceed }}" != "true" ]; then
+            echo "| commit | $COMMIT |"
+            echo "| image tag | $IMAGE_TAG |"
+            echo "| image digest | $IMAGE_DIGEST |"
+            echo "| DEV readable from CI | $DEV_READABLE |"
+            echo "| DEV revision (last known) | $DEV_REVISION |"
+            echo "| target head | $TARGET_HEAD |"
+            echo "| migration applied this run | $MIGRATION_APPLIED |"
+            echo "| Government baseline captured | $BASELINE_READABLE (intakes=$INTAKE_COUNT) |"
+            echo "| migration gate | $MIGRATION_GATE_RESULT (proceed=$MIGRATION_GATE_PROCEED) |"
+            echo "| deployed digest | $DEPLOYED_DIGEST |"
+            echo "| previous image (rollback point) | $PREVIOUS_IMAGE |"
+            echo "| build result | $BUILD_RESULT |"
+            echo "| deploy result | $DEPLOY_RESULT |"
+            echo "| Government integrity result | $GOV_VERIFY_RESULT |"
+            echo "| security smoke result | $SECURITY_SMOKE_RESULT |"
+            echo "| triggered by | $TRIGGER_ACTOR via $TRIGGER_EVENT |"
+            echo "| run | $GH_SERVER_URL/$GH_REPOSITORY/actions/runs/$GH_RUN_ID |"
+            if [ "$MIGRATION_GATE_PROCEED" != "true" ]; then
               echo ""
               echo "**BLOCKED at the controlled migration gate — see the migration-gate job's own summary for the exact runbook.**"
             fi

@@ -103,14 +103,16 @@ jobs:
       baseline_json: ${{ steps.baseline.outputs.baseline_json }}
       intake_count: ${{ steps.baseline.outputs.intake_count }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12'
 
       - name: Login to Azure (OIDC - no stored client secret)
-        uses: azure/login@v2
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -120,14 +122,26 @@ jobs:
         if: inputs.apply == true
         env:
           GH_TOKEN: ${{ github.token }}
+          # zizmor template-injection (CR-audit 2026-10-18): these workflow_dispatch
+          # string inputs were previously spliced with ${{ }} directly into the run
+          # script's source text, so a crafted input value (e.g. containing `"; rm
+          # -rf / #` or a command substitution) would execute as shell, not just be
+          # read as a string. Passed through env: instead -- the runner sets these as
+          # ordinary process environment variables, so their content can never be
+          # interpreted as script syntax.
+          HANDSHAKE_ISSUE: ${{ inputs.handshake_issue }}
+          EXPECTED_CURRENT: ${{ inputs.expected_current }}
+          TARGET_REVISION: ${{ inputs.target_revision }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_RUN_ID: ${{ github.run_id }}
         run: |
-          test -n "${{ inputs.handshake_issue }}" || { echo "::error::apply=true requires handshake_issue"; exit 1; }
-          test -n "${{ inputs.expected_current }}" || { echo "::error::apply=true requires expected_current"; exit 1; }
-          test -n "${{ inputs.target_revision }}" || { echo "::error::apply=true requires target_revision"; exit 1; }
+          test -n "$HANDSHAKE_ISSUE" || { echo "::error::apply=true requires handshake_issue"; exit 1; }
+          test -n "$EXPECTED_CURRENT" || { echo "::error::apply=true requires expected_current"; exit 1; }
+          test -n "$TARGET_REVISION" || { echo "::error::apply=true requires target_revision"; exit 1; }
           IP=$(curl -s https://api.ipify.org)
           echo "runner public IPv4: $IP"
-          gh issue comment "${{ inputs.handshake_issue }}" --repo "${{ github.repository }}" \
-            --body "dev-release run ${{ github.run_id }}: runner public IPv4 **$IP** - waiting up to 20 min for a temporary /32 (start = end = this address). Remove it when this run finishes."
+          gh issue comment "$HANDSHAKE_ISSUE" --repo "$GH_REPOSITORY" \
+            --body "dev-release run $GH_RUN_ID: runner public IPv4 **$IP** - waiting up to 20 min for a temporary /32 (start = end = this address). Remove it when this run finishes."
           for i in $(seq 1 80); do
             if python -c "import socket;s=socket.socket();s.settimeout(5);s.connect(('$PGHOST',5432))" 2>/dev/null; then
               echo "DEV Postgres reachable after $i attempt(s)"; exit 0
@@ -148,7 +162,7 @@ jobs:
       # federated identity, same login action, called again.
       - name: Refresh Azure OIDC login after the bounded firewall wait
         if: inputs.apply == true
-        uses: azure/login@v2
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -237,14 +251,20 @@ jobs:
 
       - name: Compare - is a migration actually needed
         id: compare
+        env:
+          # zizmor template-injection: see the note on the IPv4-wait step above.
+          READABLE_IN: ${{ steps.read.outputs.readable }}
+          DEV_IN: ${{ steps.read.outputs.dev_revision }}
+          TARGET_REVISION: ${{ inputs.target_revision }}
+          TARGET_HEAD_IN: ${{ steps.target.outputs.target_head }}
         run: |
-          READABLE="${{ steps.read.outputs.readable }}"
-          DEV="${{ steps.read.outputs.dev_revision }}"
+          READABLE="$READABLE_IN"
+          DEV="$DEV_IN"
           # A targeted apply compares against the one revision it was asked to
           # reach; a read-only/push-triggered run has no target_revision and
           # falls back to the repository's single head, unchanged from before.
-          TARGET="${{ inputs.target_revision }}"
-          if [ -z "$TARGET" ]; then TARGET="${{ steps.target.outputs.target_head }}"; fi
+          TARGET="$TARGET_REVISION"
+          if [ -z "$TARGET" ]; then TARGET="$TARGET_HEAD_IN"; fi
           echo "DEV readable from this runner: $READABLE"
           echo "DEV is at:    $DEV"
           echo "target head:  $TARGET"
@@ -267,9 +287,13 @@ jobs:
         env:
           SECRET_KEY: ${{ github.sha }}${{ github.sha }}
           ALLOWED_HOSTS: '*'
+          # zizmor template-injection: see the note on the IPv4-wait step above.
+          DEV_REVISION_IN: ${{ steps.read.outputs.dev_revision }}
+          TARGET_REVISION: ${{ inputs.target_revision }}
+          EXPECTED_CURRENT: ${{ inputs.expected_current }}
         run: |
-          CUR="${{ steps.read.outputs.dev_revision }}"; TARGET="${{ inputs.target_revision }}"
-          test "$CUR" = "${{ inputs.expected_current }}" || { echo "::error::DEV is at $CUR, operator expected ${{ inputs.expected_current }} - nothing executed"; exit 1; }
+          CUR="$DEV_REVISION_IN"; TARGET="$TARGET_REVISION"
+          test "$CUR" = "$EXPECTED_CURRENT" || { echo "::error::DEV is at $CUR, operator expected $EXPECTED_CURRENT - nothing executed"; exit 1; }
           python -m pip install --quiet -r requirements.txt
           # target_revision must be the DIRECT CHILD of CUR - one controlled
           # migration per apply, never zero (target == CUR, its own node has no
@@ -280,11 +304,18 @@ jobs:
           # the two only agree when the target IS head, which a controlled apply
           # to an intermediate revision must not assume (run 35154986185, which
           # correctly refused to execute anything against a two-step gap).
-          PARENT=$(python -c "
+          # CodeRabbit (PR #112, CWE-94): $TARGET was spliced as a Python string
+          # literal inside this -c source (bash interpolates it into the double-
+          # quoted heredoc before Python ever sees it), so a value containing a
+          # single quote could break out of the literal and inject Python. Reads
+          # it from the environment instead -- no string construction, no
+          # injection surface regardless of what TARGET_REVISION_FOR_PY contains.
+          PARENT=$(TARGET_REVISION_FOR_PY="$TARGET" python -c "
+          import os
           from alembic.config import Config
           from alembic.script import ScriptDirectory
           sd = ScriptDirectory.from_config(Config('alembic.ini'))
-          down = sd.get_revision('${TARGET}').down_revision
+          down = sd.get_revision(os.environ['TARGET_REVISION_FOR_PY']).down_revision
           if isinstance(down, tuple):
               down = down[0] if len(down) == 1 else None
           print(down or '')
