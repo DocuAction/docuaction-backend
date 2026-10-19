@@ -26,6 +26,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import httpx
 
@@ -177,7 +178,7 @@ def unwrap_google_news_url(link: str, source_url: str = "") -> str:
     dropped: a wrapped link still works for a human clicking it.
     """
     link = (link or "").strip()
-    if not link or "news.google.com" not in link:
+    if not link or not _is_google_news_host(link):
         return link
 
     m = re.search(r"/(?:rss/)?articles/([A-Za-z0-9_\-]+)", link)
@@ -192,11 +193,25 @@ def unwrap_google_news_url(link: str, source_url: str = "") -> str:
             if found:
                 url = found.group(0).rstrip("\\").strip()
                 # Guard against decoding into another Google wrapper.
-                if "news.google.com" not in url:
+                if not _is_google_news_host(url):
                     return url
             break
 
     return link
+
+
+def _is_google_news_host(url: str) -> bool:
+    """True only when url's actual host is (or is a subdomain of) news.google.com.
+
+    A plain substring check (`"news.google.com" in url`) is bypassable by an
+    attacker-controlled feed entry like `https://news.google.com.evil.example/x`
+    or `https://evil.example/?x=news.google.com` (CodeQL:
+    py/incomplete-url-substring-sanitization). Parsing the host is the real fix;
+    the substring form never gated a trust/fetch decision here (no request is
+    made from either branch), so the exposure was link-attribution only.
+    """
+    host = (urlparse(url).hostname or "").lower()
+    return host == "news.google.com" or host.endswith(".news.google.com")
 
 
 def parse_rss(xml_text: str) -> List[Dict[str, str]]:

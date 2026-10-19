@@ -157,7 +157,9 @@ async def transcribe_audio(
             'segments': None,
             'processing': {
                 'original_format': ext.replace('.', ''),
-                'pipeline_steps': [f'Error: {str(e)[:100]}'],
+                # CodeQL py/stack-trace-exposure (alert #3): raw exception text
+                # stays in the log line above; the caller gets a generic step.
+                'pipeline_steps': ['Error: transcription pipeline failed; see server logs.'],
                 'retries': 0,
                 'processing_time_ms': 0,
             },

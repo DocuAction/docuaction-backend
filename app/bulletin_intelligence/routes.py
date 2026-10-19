@@ -80,7 +80,10 @@ async def bulletin_costs(
         from app.bulletin_intelligence import bulletin_store
         return await bulletin_store.fetch_cost_summary(agency_id=agency_id, days=days)
     except Exception as e:
-        return {"enabled": False, "error": str(e)[:200]}
+        # CodeQL py/stack-trace-exposure (alert #24): keep the raw exception
+        # server-side; a DB-backed lookup's error text can carry schema detail.
+        logger.warning(f"bulletin_costs fetch_cost_summary failed: {e}")
+        return {"enabled": False, "error": "cost summary unavailable; see server logs."}
 
 
 # ── Boolean search profiles (Phase 2) ──────────────────────────────────────────
@@ -100,7 +103,11 @@ async def list_search_profiles(agency_id: str = Query("fcc")):
         from app.bulletin_intelligence.profiles.boolean_profiles import profiles_status
         status = profiles_status()
     except Exception as e:
-        return {"error": str(e)[:200]}
+        # CodeQL py/stack-trace-exposure (alert #25): see the note on
+        # bulletin_costs above -- same pattern, same fix. Early return
+        # preserved exactly as before (no db_rows/profiles on this path).
+        logger.warning(f"list_search_profiles profiles_status failed: {e}")
+        return {"error": "profile status unavailable; see server logs."}
     try:
         from app.bulletin_intelligence import bulletin_store
         db_rows = await bulletin_store.fetch_search_profiles(agency_id, enabled_only=False)
@@ -1141,8 +1148,15 @@ def _inject_download_bar(html: str, briefing_id: str) -> str:
     Never raises. If the header anchor isn't found (e.g. the simple-HTML
     fallback render), the page is returned exactly as stored — the preview
     working matters more than the buttons.
+
+    briefing_id is HTML-escaped before being placed in the href attributes
+    below. It's always server-generated today (no caller can make it resolve
+    to a stored briefing otherwise), so this is defense-in-depth rather than
+    a fix for a reachable path — CodeQL flagged this sink (alert: reflected
+    XSS) because the taint tracker can't see that upstream constraint.
     """
-    base = f"/api/v1/bulletin/briefings/{briefing_id}"
+    import html as _html
+    base = f"/api/v1/bulletin/briefings/{_html.escape(briefing_id, quote=True)}"
     bar = (
         '<div style="text-align:center;margin-top:12px">'
         f'<a href="{base}/preview" '

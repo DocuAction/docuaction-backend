@@ -56,7 +56,11 @@ async def process_claim_from_document(
     try:
         text = await extract_text(doc.file_path, doc.file_type)
     except Exception as e:
-        raise HTTPException(500, f"Failed to read document: {str(e)}")
+        # CodeQL py/stack-trace-exposure (alert #6): the raw exception could
+        # echo doc.file_path (internal storage path/key) back to the caller.
+        # Full detail stays server-side; the caller gets a generic message.
+        logger.error(f"Failed to read document {doc_id}: {e}")
+        raise HTTPException(500, "Failed to read document.")
     
     if not text or len(text.strip()) < 20:
         raise HTTPException(400, "Could not extract readable text from this document")

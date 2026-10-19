@@ -51,9 +51,19 @@ def _function_source(path: Path, func_name: str) -> str:
 
 PRODUCTION_CHECK = re.compile(
     r'os\.getenv\(\s*["\']ENVIRONMENT["\'].*?\)'      # reads ENVIRONMENT
-    r'(?:.|\n)*?'
+    r'.*?'
     r'==\s*["\']production["\']',                      # compares to production
     re.S)
+# CodeQL py/redos (alert #29): `(?:.|\n)*?` under re.S is catastrophically
+# exponential on a non-matching input -- re.S already makes `.` match `\n`,
+# so the `|\n` branch is pure redundant ambiguity for the backtracker to
+# explore. Empirically: 24 non-matching newlines took ~7.7s before this fix,
+# <1ms after (and the real match -- a getenv call followed eventually by an
+# ENVIRONMENT=="production" comparison -- is unaffected; this file's own
+# input is always a small, trusted, developer-authored function body read
+# from this repo's own source, never attacker-controlled, so this was not
+# reachable as a DoS, but the pattern shouldn't be copied into a context
+# that is).
 
 
 def test_seed_mock_data_blocked_on_production():

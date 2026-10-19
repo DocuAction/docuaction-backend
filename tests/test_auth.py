@@ -14,6 +14,22 @@ def test_login_empty_body(client):
     assert response.status_code == 422
 
 
+def test_signup_oversized_email_is_rejected_before_any_db_access(client):
+    """CodeQL py/polynomial-redos (alert #22) input-limit analysis: email had
+    no length cap, so the worst-case input to _EMAIL_RE was bounded only by
+    the HTTP layer, not this app. The regex itself is linear (verified
+    separately), but the field should still have a cap -- Pydantic's
+    max_length rejects this with a 422 before the handler (and therefore
+    the regex and the DB) are ever reached."""
+    response = client.post("/api/auth/signup", json={
+        "email": "a" * 300 + "@test.local",
+        "password": "a-fine-password-1",
+        "full_name": "Oversized Email",
+        "company": "Test",
+    })
+    assert response.status_code == 422
+
+
 def test_signup_weak_password(client, db_required):
     response = client.post("/api/auth/signup", json={
         "email": "weak@test.local",
