@@ -2,11 +2,12 @@
 synthetic data (same convention as `test_iqvia_import.py`: no real IQVIA
 content exists in this repository or test file).
 
-Covers all four outcome buckets the module reasons about: MATCHED,
-NO_IDENTIFIER, NOT_FOUND, AMBIGUOUS -- plus the access gate
-(`ENABLE_IQVIA_SOURCES` off, or no approved snapshot) raising rather than
-silently returning zero. Writes nothing: every test asserts zero
-`EntitySourceMatch` rows exist afterward.
+Covers all five outcome buckets the module reasons about: MATCHED,
+MISSING_IDENTIFIER, NOT_FOUND, AMBIGUOUS, PROCESSING_ERROR -- plus the
+reconciliation invariant (every considered record lands in exactly one
+bucket) and the access gate (`ENABLE_IQVIA_SOURCES` off, or no approved
+snapshot) raising rather than silently returning zero. Writes nothing:
+every test asserts zero `EntitySourceMatch` rows exist afterward.
 """
 from __future__ import annotations
 
@@ -84,7 +85,7 @@ class TestAccessGate:
         await _no_matches_written(db, approved.id)
 
 
-class TestFourBuckets:
+class TestFiveOutcomes:
     async def test_clean_npi_hit_is_matched(self, rolled_back_db, tmp_path, monkeypatch):
         monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
         db = rolled_back_db
@@ -97,11 +98,11 @@ class TestFourBuckets:
 
         assert summary.considered == 1
         assert summary.matched == 1
-        assert summary.no_identifier == summary.not_found == summary.ambiguous == 0
+        assert summary.missing_identifier == summary.not_found == summary.ambiguous == 0
         assert summary.details[0]["bucket"] == bc.BUCKET_MATCHED
         await _no_matches_written(db, approved.id)
 
-    async def test_entity_with_no_identifier_is_no_identifier(self, rolled_back_db, tmp_path, monkeypatch):
+    async def test_entity_with_missing_identifier_is_missing_identifier(self, rolled_back_db, tmp_path, monkeypatch):
         monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
         db = rolled_back_db
         oid = f"{SYN}.BATCH.BARE"
@@ -112,9 +113,9 @@ class TestFourBuckets:
         summary = await bc.compare_entities_to_approved_iqvia_hco(db, entity_ids=[entity_id])
 
         assert summary.considered == 1
-        assert summary.no_identifier == 1
+        assert summary.missing_identifier == 1
         assert summary.matched == summary.not_found == summary.ambiguous == 0
-        assert summary.details[0]["bucket"] == bc.BUCKET_NO_IDENTIFIER
+        assert summary.details[0]["bucket"] == bc.BUCKET_MISSING_IDENTIFIER
         await _no_matches_written(db, approved.id)
 
     async def test_npi_present_but_absent_from_extract_is_not_found(self, rolled_back_db, tmp_path, monkeypatch):
@@ -130,7 +131,7 @@ class TestFourBuckets:
 
         assert summary.considered == 1
         assert summary.not_found == 1
-        assert summary.matched == summary.no_identifier == summary.ambiguous == 0
+        assert summary.matched == summary.missing_identifier == summary.ambiguous == 0
         assert summary.details[0]["bucket"] == bc.BUCKET_NOT_FOUND
         await _no_matches_written(db, approved.id)
 
@@ -152,7 +153,7 @@ class TestFourBuckets:
 
         assert summary.considered == 1
         assert summary.ambiguous == 1
-        assert summary.matched == summary.no_identifier == summary.not_found == 0
+        assert summary.matched == summary.missing_identifier == summary.not_found == 0
         assert summary.details[0]["bucket"] == bc.BUCKET_AMBIGUOUS
         await _no_matches_written(db, approved.id)
 
@@ -193,6 +194,62 @@ class TestFourBuckets:
         assert summary.details[0]["reason"] == "entity carries more than one identifier of the same type"
         await _no_matches_written(db, approved.id)
 
+    async def test_malformed_npi_is_processing_error_not_not_found(
+            self, rolled_back_db, tmp_path, monkeypatch):
+        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        db = rolled_back_db
+        oid = f"{SYN}.BATCH.MALFORMED"
+        entity_id = await seed_entity(db, oid=oid, name=f"{SYN} Malformed NPI")
+        # Too short / fails the Luhn check -- present, but not a usable identifier.
+        _add_identifier(db, entity_id, "npi", "123")
+        await db.flush()
+        approved = await _approve_hco_snapshot(db, tmp_path, "malformed", [
+            [f"{SYN}-HCO-MALFORMED", NPI_REGISTERED, "", f"{SYN} Unrelated", "02101"]])
+
+        summary = await bc.compare_entities_to_approved_iqvia_hco(db, entity_ids=[entity_id])
+
+        assert summary.considered == 1
+        assert summary.processing_error == 1
+        assert summary.matched == summary.missing_identifier == summary.not_found == summary.ambiguous == 0
+        assert summary.details[0]["bucket"] == bc.BUCKET_PROCESSING_ERROR
+        assert "NPI fails validation" in summary.details[0]["reason"]
+        await _no_matches_written(db, approved.id)
+
+
+class TestReconciliationInvariant:
+    async def test_every_outcome_count_sums_to_considered_across_all_five_buckets(
+            self, rolled_back_db, tmp_path, monkeypatch):
+        """The exact property a full-population run's own report must satisfy
+        before its totals are trusted: outcome totals equal the input
+        population, with all five buckets represented in the same pass."""
+        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        db = rolled_back_db
+        matched_id = await seed_entity(db, oid=f"{SYN}.RECON.1", name=f"{SYN} Recon Matched", npi=NPI_REGISTERED)
+        bare_id = await seed_entity(db, oid=f"{SYN}.RECON.2", name=f"{SYN} Recon Bare")
+        notfound_id = await seed_entity(db, oid=f"{SYN}.RECON.3", name=f"{SYN} Recon NotFound", npi=NPI_VALID_OTHER)
+        ambiguous_id = await seed_entity(db, oid=f"{SYN}.RECON.4", name=f"{SYN} Recon Ambiguous")
+        _add_identifier(db, ambiguous_id, "ccn", "049999",
+                        system_uri="urn:oid:2.16.840.1.113883.4.336")
+        error_id = await seed_entity(db, oid=f"{SYN}.RECON.5", name=f"{SYN} Recon Malformed")
+        _add_identifier(db, error_id, "npi", "999")
+        await db.flush()
+        approved = await _approve_hco_snapshot(db, tmp_path, "recon", [
+            [f"{SYN}-HCO-RECON-MATCHED", NPI_REGISTERED, "", f"{SYN} Recon Matched", "02101"],
+            [f"{SYN}-HCO-RECON-AMBIG", "", "049999", f"{SYN} Recon Ambiguous Target", "02101"],
+        ])
+
+        summary = await bc.compare_entities_to_approved_iqvia_hco(
+            db, entity_ids=[matched_id, bare_id, notfound_id, ambiguous_id, error_id])
+
+        assert summary.considered == 5
+        assert summary.matched == 1
+        assert summary.missing_identifier == 1
+        assert summary.not_found == 1
+        assert summary.ambiguous == 1
+        assert summary.processing_error == 1
+        assert summary.outcomes_equal_considered()
+        await _no_matches_written(db, approved.id)
+
 
 class TestBatchedNotOneAtATime:
     async def test_a_mixed_population_is_bucketed_correctly_in_one_pass(
@@ -215,7 +272,7 @@ class TestBatchedNotOneAtATime:
 
         assert summary.considered == 3
         assert summary.matched == 1
-        assert summary.no_identifier == 1
+        assert summary.missing_identifier == 1
         assert summary.not_found == 1
         assert summary.ambiguous == 0
         await _no_matches_written(db, approved.id)

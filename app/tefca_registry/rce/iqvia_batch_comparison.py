@@ -20,32 +20,61 @@ with its own bounded, indexed batch query and compares them in application
 memory -- a hash-join, not a SQL join -- which replaces N per-record round
 trips with two bounded batch reads while keeping the separation intact.
 
-Four outcomes, not three, and that is a deliberate choice: the original ask
-named three buckets (successful match / missing / ambiguous), but
-collapsing "the record HAS an identifier but no IQVIA observation carries
-it" into either MATCHED or NO_IDENTIFIER would misrepresent the data -- an
-identifier present with zero IQVIA hits is an expected, common outcome
-(IQVIA's extract does not necessarily cover every one of our entities), not
-an error and not the same thing as "nothing to compare." So:
+FIVE OUTCOMES, matching the full taxonomy a full-population pass must
+account every input record under -- {matched, ambiguous, not_found,
+missing_identifier, processing_error} -- not the three originally sketched
+(successful match / missing / ambiguous). Collapsing "the record HAS an
+identifier but no IQVIA observation carries it" into either MATCHED or
+MISSING_IDENTIFIER would misrepresent the data -- an identifier present
+with zero IQVIA hits is an expected, common outcome (IQVIA's extract does
+not necessarily cover every one of our entities), not an error. Likewise, a
+malformed identifier is not the same thing as a missing one -- it is
+recorded as PROCESSING_ERROR, never silently folded into NOT_FOUND. So:
 
-  MATCHED      -- exactly one NPI on our side, held by exactly one approved
-                 IQVIA_HCO observation. The only automatic bucket, mirroring
-                 `evaluate_npi_match`'s own "exactly one" gate -- but this
-                 tool makes no NPPES-type determination (no live lookup is
-                 performed here), so MATCHED means "an IQVIA record for this
-                 NPI exists," not "this would auto-approve."
-  NO_IDENTIFIER -- the record's entity carries neither NPI nor CCN (or the
-                 record names no entity at all). The "missing" bucket asked
-                 for: no usable identifier on the record.
-  NOT_FOUND    -- an identifier is present but zero approved IQVIA
-                 observations carry it. Expected and common; not an error.
-  AMBIGUOUS    -- more than one candidate on either side: our entity itself
-                 carries >1 identifier of the same type, an NPI is not
-                 unique in the approved extract, a CCN is not unique in the
-                 approved extract, or the only evidence is a CCN at all --
-                 CCN is CANDIDATE-only by this codebase's own existing rule
-                 (`evaluate_ccn_candidate`), never auto-matched, so even a
-                 single clean CCN hit lands here, not in MATCHED.
+  MATCHED            -- exactly one NPI on our side, held by exactly one
+                        approved IQVIA_HCO observation. The only automatic
+                        bucket, mirroring `evaluate_npi_match`'s own
+                        "exactly one" gate -- but this tool makes no
+                        NPPES-type determination (no live lookup is
+                        performed here), so MATCHED means "an IQVIA record
+                        for this NPI exists," not "this would auto-approve."
+  MISSING_IDENTIFIER -- the record's entity carries neither NPI nor CCN (or
+                        the record names no entity at all). No usable
+                        identifier on the record -- nothing to compare.
+  NOT_FOUND          -- a well-formed identifier is present but zero
+                        approved IQVIA observations carry it. Expected and
+                        common; not an error.
+  AMBIGUOUS          -- more than one candidate on either side: our entity
+                        itself carries >1 identifier of the same type (one
+                        organisation, several NPIs -- the shape IQVIA's own
+                        requested-but-never-delivered `ORG_ALL_NPI` field
+                        would have carried, see note below), an NPI is not
+                        unique in the approved extract, a CCN is not unique
+                        in the approved extract, or the only evidence is a
+                        CCN at all -- CCN is CANDIDATE-only by this
+                        codebase's own existing rule
+                        (`evaluate_ccn_candidate`), never auto-matched, so
+                        even a single clean CCN hit lands here, not in
+                        MATCHED.
+  PROCESSING_ERROR   -- an identifier is present but is not well-formed
+                        enough to compare (fails `validate_npi`'s Luhn/
+                        format check), or comparing this one entity raised
+                        an unexpected exception. Recorded and the batch
+                        continues; one bad record must never abort or
+                        silently drop the rest of the population.
+
+ORG_ALL_NPI: checked against the real delivered files (2026-10-20).
+`IQVIA Data Fields Requested.xlsx` (sheet "HCP w HCO Affiliation") asked for
+it -- "If a facility has multiple NPI numbers, they will be listed in this
+field separated by a ^" -- but neither delivered file
+(`..._DEMOGRAPHIC.csv`, `..._HCP_AFFIL.csv`) nor either layout CSV contains
+an `ORG_ALL_NPI` column; only the singular `ORG_NPI` exists in both. There
+is therefore nothing to split on `^` in the real September-era extract.
+The multi-NPI-per-organisation case this field would have carried is still
+handled correctly here: it is exactly the "our entity carries >1 identifier
+of the same type" AMBIGUOUS branch below, driven by however many `npi`-type
+rows `TefcaEntityIdentifier` actually holds for that entity, regardless of
+whether a future delivery ever populates `ORG_ALL_NPI`.
 
 Writes nothing: no `EntitySourceMatch` row, no `ReviewRecord` change, no
 snapshot row, no commit.
@@ -58,6 +87,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from sqlalchemy import select
 
+from app.services.npi_validator import validate_npi
 from app.tefca_registry import models as reg
 from app.tefca_registry.rce import snapshot_models as sm
 from app.tefca_registry.rce.source_matching import (current_approved_snapshot,
@@ -65,9 +95,10 @@ from app.tefca_registry.rce.source_matching import (current_approved_snapshot,
                                                       licensed_source_enabled)
 
 BUCKET_MATCHED = "MATCHED"
-BUCKET_NO_IDENTIFIER = "NO_IDENTIFIER"
+BUCKET_MISSING_IDENTIFIER = "MISSING_IDENTIFIER"
 BUCKET_NOT_FOUND = "NOT_FOUND"
 BUCKET_AMBIGUOUS = "AMBIGUOUS"
+BUCKET_PROCESSING_ERROR = "PROCESSING_ERROR"
 
 #: How many entity ids go in one identifier-lookup query. Bounded so a
 #: 24,589-record population still costs a handful of round trips, not one
@@ -85,10 +116,19 @@ class BatchComparisonSummary:
     snapshot_id: Any
     considered: int = 0
     matched: int = 0
-    no_identifier: int = 0
+    missing_identifier: int = 0
     not_found: int = 0
     ambiguous: int = 0
+    processing_error: int = 0
     details: List[Dict[str, Any]] = field(default_factory=list)
+
+    def outcomes_equal_considered(self) -> bool:
+        """Every input record must land in exactly one bucket -- this is the
+        reconciliation check a full-population run's own report must pass
+        before its totals are trusted."""
+        return self.considered == (self.matched + self.missing_identifier
+                                   + self.not_found + self.ambiguous
+                                   + self.processing_error)
 
     def as_dict(self) -> Dict[str, Any]:
         d = dict(self.__dict__)
@@ -182,54 +222,86 @@ async def compare_entities_to_approved_iqvia_hco(
     # --- compare, in memory, no further DB round trips ---
     for entity_id in entity_ids:
         summary.considered += 1
-        npis = entity_npi.get(entity_id, [])
-        ccns = entity_ccn.get(entity_id, [])
+        try:
+            _classify_one(entity_id, entity_npi.get(entity_id, []),
+                         entity_ccn.get(entity_id, []),
+                         iqvia_npi_counts, iqvia_ccn_counts, summary)
+        except Exception as exc:  # noqa: BLE001 -- one bad record must not sink the batch
+            summary.processing_error += 1
+            summary.details.append({"entity_id": str(entity_id), "bucket": BUCKET_PROCESSING_ERROR,
+                                    "reason": f"unexpected error comparing this record: {exc}"})
 
-        if not npis and not ccns:
-            summary.no_identifier += 1
-            summary.details.append({"entity_id": str(entity_id), "bucket": BUCKET_NO_IDENTIFIER})
-            continue
+    assert summary.outcomes_equal_considered(), (
+        "every considered record must land in exactly one bucket -- "
+        f"{summary.considered} considered vs "
+        f"{summary.matched + summary.missing_identifier + summary.not_found + summary.ambiguous + summary.processing_error} bucketed")
+    return summary
 
-        if len(npis) > 1 or len(ccns) > 1:
+
+def _classify_one(entity_id, npis: List[str], ccns: List[str],
+                  iqvia_npi_counts: Dict[str, int], iqvia_ccn_counts: Dict[str, int],
+                  summary: BatchComparisonSummary) -> None:
+    """Classify exactly one entity into exactly one bucket, appending to
+    `summary` in place. Raises on an unexpected condition rather than
+    guessing; the caller turns that into PROCESSING_ERROR."""
+    if not npis and not ccns:
+        summary.missing_identifier += 1
+        summary.details.append({"entity_id": str(entity_id), "bucket": BUCKET_MISSING_IDENTIFIER})
+        return
+
+    if len(npis) > 1 or len(ccns) > 1:
+        summary.ambiguous += 1
+        summary.details.append({
+            "entity_id": str(entity_id), "bucket": BUCKET_AMBIGUOUS,
+            "reason": "entity carries more than one identifier of the same type",
+            "candidate_count": max(len(npis), len(ccns))})
+        return
+
+    if npis:
+        npi = npis[0]
+        ok, why = validate_npi(npi)
+        if not ok:
+            # Present, but not well-formed enough to compare -- a data-quality
+            # problem on OUR side, distinct from "no IQVIA hit" (NOT_FOUND) and
+            # from "nothing to compare" (MISSING_IDENTIFIER).
+            summary.processing_error += 1
+            summary.details.append({
+                "entity_id": str(entity_id), "bucket": BUCKET_PROCESSING_ERROR,
+                "reason": f"NPI fails validation: {why}"})
+            return
+        hits = iqvia_npi_counts.get(npi, 0)
+        if hits == 1:
+            summary.matched += 1
+            summary.details.append({"entity_id": str(entity_id), "bucket": BUCKET_MATCHED,
+                                    "method": "npi"})
+            return
+        if hits > 1:
             summary.ambiguous += 1
             summary.details.append({
                 "entity_id": str(entity_id), "bucket": BUCKET_AMBIGUOUS,
-                "reason": "entity carries more than one identifier of the same type"})
-            continue
-
-        if npis:
-            hits = iqvia_npi_counts.get(npis[0], 0)
-            if hits == 1:
-                summary.matched += 1
-                summary.details.append({"entity_id": str(entity_id), "bucket": BUCKET_MATCHED,
-                                        "method": "npi"})
-                continue
-            if hits > 1:
-                summary.ambiguous += 1
-                summary.details.append({
-                    "entity_id": str(entity_id), "bucket": BUCKET_AMBIGUOUS,
-                    "reason": "npi value is not unique in the approved IQVIA extract"})
-                continue
-            if not ccns:
-                summary.not_found += 1
-                summary.details.append({"entity_id": str(entity_id), "bucket": BUCKET_NOT_FOUND,
-                                        "method": "npi"})
-                continue
-
-        # CCN-only, or NPI present but unmatched and a CCN is also available.
-        hits = iqvia_ccn_counts.get(ccns[0], 0)
-        if hits >= 1:
-            # CANDIDATE-only by this codebase's own rule -- never automatic,
-            # same posture whether one or many observations carry it.
-            summary.ambiguous += 1
-            summary.details.append({
-                "entity_id": str(entity_id), "bucket": BUCKET_AMBIGUOUS,
-                "reason": "ccn-only evidence; CCN is never auto-matched"
-                          if hits == 1 else
-                          "ccn value is not unique in the approved IQVIA extract"})
-        else:
+                "reason": "npi value is not unique in the approved IQVIA extract",
+                "candidate_count": hits})
+            return
+        if not ccns:
             summary.not_found += 1
             summary.details.append({"entity_id": str(entity_id), "bucket": BUCKET_NOT_FOUND,
-                                    "method": "ccn"})
+                                    "method": "npi"})
+            return
 
-    return summary
+    # CCN-only, or NPI present but unmatched and a CCN is also available.
+    ccn = ccns[0]
+    hits = iqvia_ccn_counts.get(ccn, 0)
+    if hits >= 1:
+        # CANDIDATE-only by this codebase's own rule -- never automatic,
+        # same posture whether one or many observations carry it.
+        summary.ambiguous += 1
+        summary.details.append({
+            "entity_id": str(entity_id), "bucket": BUCKET_AMBIGUOUS,
+            "reason": "ccn-only evidence; CCN is never auto-matched"
+                      if hits == 1 else
+                      "ccn value is not unique in the approved IQVIA extract",
+            "candidate_count": hits})
+    else:
+        summary.not_found += 1
+        summary.details.append({"entity_id": str(entity_id), "bucket": BUCKET_NOT_FOUND,
+                                "method": "ccn"})
