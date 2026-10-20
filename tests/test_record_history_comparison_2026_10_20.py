@@ -265,3 +265,58 @@ class TestQhinScopedSearch:
 
         assert result["count"] == 1
         assert result["results"][0]["source_rce_id"] == "9.99.777.9.QA"
+
+
+class TestFullPopulationChangeReport:
+    async def test_two_consecutive_deliveries_report_only_actual_changes(self, rolled_back_db):
+        db = rolled_back_db
+        hcid = "urn:oid:9.99.777.888001"
+        earlier = entity_row("9.99.777.9.CR1", tag="CR1")
+        earlier["HCID"] = hcid
+        earlier["name"] = "Change Report Org"
+        later = dict(earlier)
+        later["name"] = "Change Report Org Renamed"
+        await seed_delivery(db, [earlier], received_at=datetime(2026, 7, 20), feed=FEED, blob_salt="cr-e")
+        await seed_delivery(db, [later], received_at=datetime(2026, 9, 2), feed=FEED, blob_salt="cr-l")
+
+        rows = await svc.full_population_change_report(
+            db, reviewer_or_above=False, settings=settings_for())
+
+        name_rows = [r for r in rows if r["hcid"] == hcid and r["field"] == "name"]
+        assert len(name_rows) == 1
+        assert name_rows[0]["change_type"] == svc.OUTCOME_CHANGED
+        assert name_rows[0]["earlier_value"] == "Change Report Org"
+        assert name_rows[0]["later_value"] == "Change Report Org Renamed"
+        # Unchanged fields (e.g. TEFCAID, untouched) are not in the report.
+        assert not [r for r in rows if r["hcid"] == hcid and r["field"] == "TEFCAID"]
+
+    async def test_single_delivery_hcid_contributes_nothing(self, rolled_back_db):
+        db = rolled_back_db
+        hcid = "urn:oid:9.99.777.888002"
+        row = entity_row("9.99.777.9.CR2", tag="CR2")
+        row["HCID"] = hcid
+        await seed_delivery(db, [row], received_at=datetime(2026, 9, 2), feed=FEED)
+
+        rows = await svc.full_population_change_report(
+            db, reviewer_or_above=False, settings=settings_for())
+
+        assert not [r for r in rows if r["hcid"] == hcid]
+
+    async def test_ambiguous_linkage_pair_is_reported_not_silently_compared(self, rolled_back_db):
+        db = rolled_back_db
+        hcid = "urn:oid:9.99.777.888003"
+        earlier = entity_row("9.99.777.9.CR3", tag="CR3")
+        earlier["HCID"] = hcid
+        later_a = entity_row("9.99.777.9.CR3A", tag="CR3A")
+        later_a["HCID"] = hcid
+        later_b = entity_row("9.99.777.9.CR3B", tag="CR3B")
+        later_b["HCID"] = hcid
+        await seed_delivery(db, [earlier], received_at=datetime(2026, 7, 20), feed=FEED, blob_salt="cr3-e")
+        await seed_delivery(db, [later_a, later_b], received_at=datetime(2026, 9, 2), feed=FEED, blob_salt="cr3-l")
+
+        rows = await svc.full_population_change_report(
+            db, reviewer_or_above=False, settings=settings_for())
+
+        hcid_rows = [r for r in rows if r["hcid"] == hcid]
+        assert len(hcid_rows) == 1
+        assert hcid_rows[0]["change_type"] == "AMBIGUOUS_LINKAGE_NOT_COMPARED"

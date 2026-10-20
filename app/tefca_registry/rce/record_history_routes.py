@@ -79,6 +79,23 @@ async def hcid_history_route(
         raise HTTPException(404, NOT_FOUND)
 
 
+@router.get("/records/change-report",
+            summary="Full-population change report (July/August/September change "
+                    "CSV shape): one row per changed field, across every HCID "
+                    "with two or more allowed deliveries.")
+async def change_report_route(
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("viewer")),
+):
+    from app.core.config import settings
+    from app.tefca_registry.rce import record_history_comparison as svc
+
+    rows = await svc.full_population_change_report(
+        db, reviewer_or_above=_reviewer_or_above(user), settings=settings,
+        allowed_modules=getattr(user, "allowed_modules", None))
+    return {"rows": rows, "count": len(rows)}
+
+
 @router.get("/records/compare",
             summary="Field-by-field comparison between two specific delivered "
                     "records (e.g. one from an earlier delivery, one from a "

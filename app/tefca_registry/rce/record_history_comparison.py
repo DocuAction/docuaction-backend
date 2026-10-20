@@ -342,3 +342,78 @@ async def compare_two_records(db, *, earlier_record_id, later_record_id) -> Dict
             "earlier_value": active_diff["earlier_value"], "later_value": active_diff["later_value"],
         } if active_diff else None,
     }
+
+
+# ── 4. full-population change report (July/August/September change CSV shape) ──
+
+async def full_population_change_report(
+    db, *, reviewer_or_above: bool, settings, allowed_modules=None,
+) -> List[Dict[str, Any]]:
+    """Every actual field change across EVERY HCID with two or more allowed
+    deliveries, as a flat list of rows shaped for direct CSV export: record
+    reference, delivery pair, affected field, old/new values, change type.
+
+    Compares each CONSECUTIVE pair of deliveries per HCID (not just
+    first-vs-last), so a three-delivery history yields two delivery-pair
+    comparisons, not one that hides the middle transition. Rows where
+    `change_type == UNCHANGED` are omitted -- this is a CHANGE report, not a
+    full field dump; `UNCHANGED_FORMATTING_ONLY` IS included (it is still a
+    disclosed difference, just not a substantive one).
+
+    An HCID whose EITHER side of a pair is `ambiguous_linkage` contributes
+    one row stating that explicitly (`field` = "(ambiguous linkage)") instead
+    of silently comparing one arbitrarily-chosen record.
+
+    O(N) delivery-list queries plus one `compare_two_records` call per
+    consecutive pair -- bounded by the number of HCIDs with real history, not
+    the full population size, since an HCID appearing in only one delivery
+    has nothing to compare and is skipped before any comparison runs.
+    """
+    intakes = await _allowed_intake_ids(
+        db, reviewer_or_above=reviewer_or_above, settings=settings,
+        allowed_modules=allowed_modules)
+    if not intakes:
+        return []
+    intake_ids = [i["id"] for i in intakes]
+
+    hcid_rows = (await db.execute(
+        select(m.RceSourceRecord.hcid, m.RceSourceRecord.source_intake_id,
+               m.RceSourceRecord.id)
+        .where(m.RceSourceRecord.source_intake_id.in_(intake_ids),
+               m.RceSourceRecord.hcid.isnot(None)))).all()
+    by_hcid: Dict[str, Dict[Any, List[Any]]] = {}
+    for hcid, intake_id, record_id in hcid_rows:
+        by_hcid.setdefault(hcid, {}).setdefault(intake_id, []).append(record_id)
+
+    intake_by_id = {i["id"]: i for i in intakes}
+    report: List[Dict[str, Any]] = []
+
+    for hcid, per_intake in by_hcid.items():
+        ordered_intake_ids = sorted(
+            per_intake, key=lambda iid: intake_by_id[iid]["received_at"])
+        if len(ordered_intake_ids) < 2:
+            continue
+        for earlier_iid, later_iid in zip(ordered_intake_ids, ordered_intake_ids[1:]):
+            earlier_ambiguous = len(per_intake[earlier_iid]) > 1
+            later_ambiguous = len(per_intake[later_iid]) > 1
+            pair_label = (f"{intake_by_id[earlier_iid]['delivery_label']} -> "
+                         f"{intake_by_id[later_iid]['delivery_label']}")
+            if earlier_ambiguous or later_ambiguous:
+                report.append({
+                    "hcid": hcid, "delivery_pair": pair_label,
+                    "field": "(ambiguous linkage)", "earlier_value": None, "later_value": None,
+                    "change_type": "AMBIGUOUS_LINKAGE_NOT_COMPARED",
+                })
+                continue
+            comparison = await compare_two_records(
+                db, earlier_record_id=per_intake[earlier_iid][0],
+                later_record_id=per_intake[later_iid][0])
+            for f in comparison["fields"]:
+                if f["change_type"] == OUTCOME_UNCHANGED:
+                    continue
+                report.append({
+                    "hcid": hcid, "delivery_pair": pair_label,
+                    "field": f["field"], "earlier_value": f["earlier_value"],
+                    "later_value": f["later_value"], "change_type": f["change_type"],
+                })
+    return report
