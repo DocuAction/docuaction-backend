@@ -746,10 +746,10 @@
 {% endif %}
 {% if analyst.issue_resolutions %}
 <table class="dp-fixed">
-  {{ cols([14, 10, 10, 16, 18, 16, 16]) }}
+  {{ cols([12, 9, 9, 13, 13, 12, 12, 20]) }}
   <caption>Finding resolutions recorded by analysts</caption>
   <thead>
-    <tr><th scope="col">Issue code</th><th scope="col">Rule</th><th scope="col">Severity</th><th scope="col">Resolution</th><th scope="col">Resolved by</th><th scope="col">Resolved (UTC)</th><th scope="col">QA approved by</th></tr>
+    <tr><th scope="col">Issue code</th><th scope="col">Rule</th><th scope="col">Severity</th><th scope="col">Resolution</th><th scope="col">Resolved by</th><th scope="col">Resolved (UTC)</th><th scope="col">QA approved by</th><th scope="col">Notes</th></tr>
   </thead>
   <tbody>
     {% for i in analyst.issue_resolutions %}
@@ -761,6 +761,7 @@
       <td class="cd">{{ brk(i.resolved_by or '—') }}</td>
       <td class="nw">{{ ts(i.resolved_at) }}</td>
       <td class="cd">{{ brk(i.qa_approved_by or '—') }}</td>
+      <td class="cd">{{ brk(i.resolution_notes) if i.resolution_notes else '—' }}</td>
     </tr>
     {% endfor %}
   </tbody>
@@ -768,11 +769,11 @@
 {% endif %}
 {% if analyst.review_records %}
 <table class="dp-fixed">
-  {{ cols([15, 7, 16, 20, 7, 15, 20]) }}
+  {{ cols([13, 6, 13, 15, 6, 12, 15, 20]) }}
   <caption>Review records &mdash; first {{ analyst.review_records_shown|number }} of
     {{ analyst.review_records_total|number }}, unresolved/not-yet-QA-approved first</caption>
   <thead>
-    <tr><th scope="col">Review id</th><th scope="col">Category</th><th scope="col">Classified under rule (version)</th><th scope="col">Analyst determination</th><th scope="col">Assigned</th><th scope="col">Determined (UTC)</th><th scope="col">Independent QA</th></tr>
+    <tr><th scope="col">Review id</th><th scope="col">Category</th><th scope="col">Classified under rule (version)</th><th scope="col">Analyst determination</th><th scope="col">Assigned</th><th scope="col">Determined (UTC)</th><th scope="col">Independent QA</th><th scope="col">Analyst rationale</th></tr>
   </thead>
   <tbody>
     {% for r in analyst.review_records %}
@@ -784,6 +785,7 @@
       <td>{{ 'Yes' if r.assigned else 'No' }}</td>
       <td class="nw">{{ ts(r.reviewed_at) }}</td>
       <td class="nw">{% if r.reportable_at and r.resolution %}Approved {{ ts(r.reportable_at) }}{% elif r.reportable_at or r.get('qa_state') == 'TIMESTAMP_WITHOUT_DETERMINATION' %}QA timestamp {{ ts(r.reportable_at or r.get('qa_event_at')) }} stored with no determination; not counted as approved{% elif r.get('qa_state') == 'RETURNED' %}Returned {{ ts(r.get('qa_event_at')) }}{% elif r.get('qa_state') == 'ESCALATED' %}Escalated {{ ts(r.get('qa_event_at')) }}{% elif r.resolution %}Awaiting QA{% else %}&mdash;{% endif %}</td>
+      <td class="cd">{{ brk(r.get('resolution_rationale') or r.get('classification_rationale')) if (r.get('resolution_rationale') or r.get('classification_rationale')) else '—' }}</td>
     </tr>
     {% endfor %}
   </tbody>

@@ -854,6 +854,8 @@ class DeliveryProcessingDataService:
                 "reclassified_to": states[r.review_id]["bucket"] if states[r.review_id]["determination"] == "RECLASSIFY" else None,
                 "determination_source": states[r.review_id]["source"],
                 "determined_by_role": states[r.review_id]["by_role"],
+                "resolution_rationale": r.resolution_rationale,
+                "classification_rationale": r.classification_rationale,
                 "qa_state": states[r.review_id]["qa_state"],
                 "assigned": r.assigned_to_user_id is not None,
                 "reviewed_at": _iso(states[r.review_id]["at"]),

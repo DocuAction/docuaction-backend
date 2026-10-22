@@ -272,6 +272,34 @@ async def test_a_returned_or_escalated_review_is_not_awaiting_qa(rolled_back_db,
 
 
 @pytest.mark.asyncio
+async def test_analyst_rationale_reaches_the_rendered_report(rolled_back_db):
+    """`review_records.resolution_rationale` / `classification_rationale` are analyst/QA free-text comments
+    that were fetched into no report field at all and so never appeared in the PDF, even though disposition,
+    review date and QA status for the same record did (found 2026-10-22). The dataset must carry the text and
+    the rendered table must print it, with `resolution_rationale` preferred over `classification_rationale`
+    when both are set."""
+    from app.tefca_registry import models as reg
+    from app.tefca_registry.rce import models as m
+    from sqlalchemy import select
+
+    ids = await seed_delivery(rolled_back_db)
+    review = (await rolled_back_db.execute(select(reg.ReviewRecord).where(
+        reg.ReviewRecord.source_record_id.in_(
+            select(m.RceSourceRecord.id).where(m.RceSourceRecord.source_intake_id == ids["intake_id"]))
+    ))).scalars().first()
+    review.classification_rationale = "synthetic classification rationale (should be overridden)"
+    review.resolution_rationale = "synthetic analyst resolution rationale"
+    await rolled_back_db.flush()
+
+    result = await _generate(rolled_back_db, job_id=str(ids["job_id"]))
+    row = next(r for r in result["dataset"]["analyst"]["review_records"] if r["review_id"] == review.review_id)
+    assert row["resolution_rationale"] == "synthetic analyst resolution rationale"
+    assert row["classification_rationale"] == "synthetic classification rationale (should be overridden)"
+    assert "synthetic analyst resolution rationale" in result["html"]
+    assert "synthetic classification rationale (should be overridden)" not in result["html"]
+
+
+@pytest.mark.asyncio
 async def test_a_qa_timestamp_without_a_determination_is_not_an_approval(rolled_back_db):
     """Legacy/inconsistent record: `reportable_at` set, no determination anywhere. The report must not invent a
     determination, must not count the record as approved, and must not also count it as claimed/open (every record
