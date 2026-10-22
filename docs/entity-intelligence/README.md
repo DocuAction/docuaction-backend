@@ -1,0 +1,71 @@
+# Entity Identity & Location Intelligence — engineering artifacts
+
+Isolated foundation, feature OFF, DEV engineering only. Draft PR #54; not merged, not deployed. Start with the architecture, then the rules, then the overnight summary.
+
+## Foundation (2026-09-11)
+
+1. [ENTITY_IDENTITY_INTELLIGENCE_ARCHITECTURE.md](ENTITY_IDENTITY_INTELLIGENCE_ARCHITECTURE.md)
+2. [NPPES_V2_IDENTITY_MAPPING.md](NPPES_V2_IDENTITY_MAPPING.md) — now with the per-code traceability table
+3. [IQVIA_ONEKEY_ADAPTER_CONTRACT.md](IQVIA_ONEKEY_ADAPTER_CONTRACT.md)
+4. [GOOGLE_ADDRESS_COMPLIANCE_BLUEPRINT.md](GOOGLE_ADDRESS_COMPLIANCE_BLUEPRINT.md)
+5. [STATE_REGISTRY_CONNECTOR_DESIGN.md](STATE_REGISTRY_CONNECTOR_DESIGN.md)
+6. [IDENTITY_COMPARISON_RULES.md](IDENTITY_COMPARISON_RULES.md)
+7. [HISTORICAL_DELTA_RULES.md](HISTORICAL_DELTA_RULES.md)
+8. [SYSTEM_EVIDENCE_ASSESSMENT_MODEL.md](SYSTEM_EVIDENCE_ASSESSMENT_MODEL.md)
+9. [QA_BASELINE_ISOLATION_PROOF.md](QA_BASELINE_ISOLATION_PROOF.md)
+
+## Overnight research, hardening & validation sprint (2026-09-12)
+
+10. [OVERNIGHT_EXECUTIVE_SUMMARY.md](OVERNIGHT_EXECUTIVE_SUMMARY.md) — read this first in the morning; decision gates A–H
+11. [ENTITY_INTELLIGENCE_PERSISTENCE_ADR.md](ENTITY_INTELLIGENCE_PERSISTENCE_ADR.md) — options A/B/C, recommendation B
+12. [EVIDENCE_SOURCE_DATA_RIGHTS_MODEL.md](EVIDENCE_SOURCE_DATA_RIGHTS_MODEL.md)
+13. [RCE_IQVIA_DATA_INTAKE_CHECKLIST.md](RCE_IQVIA_DATA_INTAKE_CHECKLIST.md) — questions only
+14. [NPPES_ACQUISITION_AND_REFRESH_DESIGN.md](NPPES_ACQUISITION_AND_REFRESH_DESIGN.md) — design, no downloader
+15. [ENTITY_INTELLIGENCE_PERFORMANCE_REPORT.md](ENTITY_INTELLIGENCE_PERFORMANCE_REPORT.md) — 2k–50k synthetic, PostgreSQL validation, security review
+16. [ENTITY_INTELLIGENCE_TERMINOLOGY.md](ENTITY_INTELLIGENCE_TERMINOLOGY.md)
+17. [ENTITY_INTELLIGENCE_TASK_2_5_INTEGRATION_ANALYSIS.md](ENTITY_INTELLIGENCE_TASK_2_5_INTEGRATION_ANALYSIS.md)
+18. [ENTITY_INTELLIGENCE_FUTURE_UI_SPEC.md](ENTITY_INTELLIGENCE_FUTURE_UI_SPEC.md) — not built
+19. [OBSERVABILITY_AND_FAILURE_MODEL.md](OBSERVABILITY_AND_FAILURE_MODEL.md)
+20. [HUMAN_AND_AI_BOUNDARY.md](HUMAN_AND_AI_BOUNDARY.md)
+21. [ACTIVE_FALSIFICATION_FUTURE_EXTENSION.md](ACTIVE_FALSIFICATION_FUTURE_EXTENSION.md) — design note
+
+## RCE + CMS research, policy traceability & architecture expansion sprint (2026-09-12, later the same day)
+
+22. [RCE_CMS_RESEARCH_EXECUTIVE_DECISION.md](RCE_CMS_RESEARCH_EXECUTIVE_DECISION.md) — read first; answers 1–16 and the source tiers
+23. [RCE_POLICY_VERSION_REGISTER.md](RCE_POLICY_VERSION_REGISTER.md) — current / approved-future / draft / under consideration, verified 2026-09-12
+24. [PROPOSED_KYP_PRODUCT_ALIGNMENT.md](PROPOSED_KYP_PRODUCT_ALIGNMENT.md) — proposal status preserved
+25. [RCE_CMS_TASK_2_5_AUTHORITY_MATRIX.md](RCE_CMS_TASK_2_5_AUTHORITY_MATRIX.md)
+26. [CMS_PUBLIC_EVIDENCE_SOURCE_CATALOG.md](CMS_PUBLIC_EVIDENCE_SOURCE_CATALOG.md)
+27. [CMS_PECOS_EVIDENCE_LIMITATIONS.md](CMS_PECOS_EVIDENCE_LIMITATIONS.md)
+28. [CMS_PROVIDER_EVIDENCE_ADAPTER_DESIGN.md](CMS_PROVIDER_EVIDENCE_ADAPTER_DESIGN.md) — reads existing snapshots; not built
+29. [FEDERAL_LOCATION_EVIDENCE_RESEARCH.md](FEDERAL_LOCATION_EVIDENCE_RESEARCH.md)
+30. [ORGANIZATION_PARTICIPATION_INTELLIGENCE_ARCHITECTURE.md](ORGANIZATION_PARTICIPATION_INTELLIGENCE_ARCHITECTURE.md) — sixth dimension; evidence graph decision
+31. [SOURCE_AUTHORITY_AND_APPLICABILITY_MODEL.md](SOURCE_AUTHORITY_AND_APPLICABILITY_MODEL.md)
+32. [POLICY_RULE_VERSIONING_ARCHITECTURE.md](POLICY_RULE_VERSIONING_ARCHITECTURE.md)
+
+## Architecture v1.0 foundation sprint (2026-09-13)
+
+33. [ARCHITECTURE_V1_AUDIT_MATRIX.md](ARCHITECTURE_V1_AUDIT_MATRIX.md) — REQUIREMENT / EXISTS / PARTIAL / MISSING / REUSE / MODIFY / NEW
+34. [GATE_H_RECOMMENDATION.md](GATE_H_RECOMMENDATION.md) — recommendation only; GATE_H_AUTHORIZED_BY_IMRAN = PENDING
+
+New Core modules: `authority_matrix.py` (SOURCE_QUESTION_AUTHORITY_MATRIX v1.0, no voting), `profile.py` (evidence inquiry + Entity Evidence Profile), `evidence_plan.py` (25K scale planning). Platform-wide `tests/test_core_boundary.py` enforces CORE → TEFCA prohibited (AST, dynamic imports).
+
+Code: `app/core/entity_intelligence/` (Core incl. `intake_safety.py`, `policy.py`, `rce_policy_register.py`), `app/evidence_sources/` (adapters), `tests/test_entity_intelligence_*.py` (10 files, 436 tests), `tests/ei_fixtures.py` (synthetic only), `scripts/ei_perf.py`, `scripts/ei_pg_isolated_validation.py`.
+
+## OVERNIGHT VALIDATION SUMMARY
+
+| Item | Status |
+|---|---|
+| Baseline regression | 3202 passed / 333 skipped / 0 failed (baseline existing 2860 + new 342) |
+| OpenAPI vs main | byte-identical (411 paths, 106 schemas) |
+| Alembic head | `20260903_delivery_grants`, unchanged |
+| Pre-existing files changed | `app/core/config.py` only (+12 lines, five flags default False) |
+| Research re-verified | NPPES V2 from the CMS readme v.2 (May 12, 2026), CodeValues (Feb 1, 2025), NPI_Files.html and the weekly sample; IQVIA public page; Google policies page (terms page only partially retrievable — recorded) |
+| New verified NPPES facts | type code 6 is a pointer to the reference file, not a name type; `<UNAVAIL>` placeholder in EIN / other-name / parent-TIN columns; both handled and tested |
+| Defects fixed (isolated) | flag string parsing (`"false"` was truthy); `<UNAVAIL>` would have become a name; pointer code 6 would have produced an UNKNOWN-kind name and false ambiguity; parse status was implicit; csv-module errors could raise mid-file; import-time `assert` |
+| Security | bandit 0 issues; secret/network/exec/logging static checks tested; intake safety helpers with tests |
+| Performance | ≈1.1 ms per entity end-to-end; 50k entities in 60 s single-process; linear |
+| PostgreSQL | POSTGRESQL_ISOLATED_VALIDATION = PASSED (ephemeral local cluster, deleted) |
+| Persistence | ADR written; decision required (gate D) |
+| Not changed | Tasks 1–6 code, RBAC, auth, reports, LMS (1.2.0), frontend, shared DEV DB, PROD, OIDC, secrets |
+| Not merged, not deployed | PR #54 remains DRAFT |
