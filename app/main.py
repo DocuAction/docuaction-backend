@@ -710,6 +710,13 @@ safe_load("app.tefca_registry.rce.preflight_shadow_routes", "tefca-rce-preflight
 # ENABLE_ISSUE_HISTORY (default off) makes it answer 404.
 safe_load("app.tefca_registry.rce.issue_history_routes", "tefca-rce-issue-history")
 
+# Month-to-month record investigation: search by NPI/HCID/TEFCAID/name/QHIN,
+# delivery history by HCID, and field-by-field comparison between two
+# selected deliveries. Read-only GETs only; reuses issue_history_core's own
+# feed-scoped access control rather than a separate rule. See
+# app/tefca_registry/rce/record_history_routes.py.
+safe_load("app.tefca_registry.rce.record_history_routes", "tefca-rce-record-history")
+
 # Program Manager + Analyst workflow surface at /api/tefca/workflow/*:
 # QHIN work organisation, workload distribution, and the analyst verification
 # workspace. Read surface plus one audited bulk-assignment write; it creates no
