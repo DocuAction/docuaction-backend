@@ -39,6 +39,11 @@ on:
         required: false
         type: string
         default: ''
+      baseline_handshake_issue:
+        description: 'Read-only path (apply=false): PR/issue number where this job posts its runner IPv4 for the operator temporary /32, so the pre-deploy Government-integrity baseline can actually be captured. Ignored when apply=true (that path already has its own handshake via handshake_issue). Leave empty to keep the existing fast, no-wait, EXPECTED-to-fail-closed behavior.'
+        required: false
+        type: string
+        default: ''
     outputs:
       readable:
         description: '"true" if this runner could read alembic_version. Unreachable is an EXPECTED, routine result on push-triggered runs, not a workflow defect.'
@@ -118,7 +123,7 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Report runner IPv4 and wait for the operator's temporary /32 (bounded)
+      - name: Report runner IPv4 and wait for the operator's temporary /32 (bounded) - APPLY path
         if: inputs.apply == true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -142,6 +147,35 @@ jobs:
           echo "runner public IPv4: $IP"
           gh issue comment "$HANDSHAKE_ISSUE" --repo "$GH_REPOSITORY" \
             --body "dev-release run $GH_RUN_ID: runner public IPv4 **$IP** - waiting up to 20 min for a temporary /32 (start = end = this address). Remove it when this run finishes."
+          for i in $(seq 1 80); do
+            if python -c "import socket;s=socket.socket();s.settimeout(5);s.connect(('$PGHOST',5432))" 2>/dev/null; then
+              echo "DEV Postgres reachable after $i attempt(s)"; exit 0
+            fi
+            sleep 15
+          done
+
+      # Fills the gap the apply-path handshake above does not cover: a release that
+      # needs no migration (apply=false, migration_confirmed_current=true at the
+      # dev-release.yml level) still has NO way to get baseline_readable=true,
+      # because the plain "read" step below makes exactly one 20-second connection
+      # attempt and gives up -- by design, since widening to GitHub's dynamic IP
+      # ranges unconditionally would be the firewall weakening this pipeline must
+      # never do on its own. This step is the same bounded, single-IP, operator-
+      # confirmed handshake the apply path already has, offered for the read-only
+      # path too, and ONLY when the operator opts in by naming an issue. Leaving
+      # baseline_handshake_issue empty reproduces the exact previous behavior.
+      - name: Report runner IPv4 and wait for the operator's temporary /32 (bounded) - READ-ONLY baseline path
+        if: inputs.apply == false && inputs.baseline_handshake_issue != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HANDSHAKE_ISSUE: ${{ inputs.baseline_handshake_issue }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_RUN_ID: ${{ github.run_id }}
+        run: |
+          IP=$(curl -s https://api.ipify.org)
+          echo "runner public IPv4: $IP"
+          gh issue comment "$HANDSHAKE_ISSUE" --repo "$GH_REPOSITORY" \
+            --body "dev-release run $GH_RUN_ID (read-only baseline capture, no migration): runner public IPv4 **$IP** - waiting up to 20 min for a temporary /32 (start = end = this address). Remove it when this run finishes."
           for i in $(seq 1 80); do
             if python -c "import socket;s=socket.socket();s.settimeout(5);s.connect(('$PGHOST',5432))" 2>/dev/null; then
               echo "DEV Postgres reachable after $i attempt(s)"; exit 0
