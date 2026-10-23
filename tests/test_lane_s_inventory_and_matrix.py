@@ -80,7 +80,9 @@ def _synthetic_delivery(tmp_path: pathlib.Path) -> pathlib.Path:
     from app.tefca_registry.rce.field_map import RCE_FIELDS
 
     def valid_npi(seed: int) -> str:
-        base = f"{1_000_000_000 + seed:09d}"[-9:]
+        # Base must start with 1 or 2 (real NPPES numbering range; see
+        # app/services/npi_validator.py) to pass validate_npi() at all.
+        base = f"1{seed:08d}"
         for d in range(10):
             if _luhn_total(CMS_PREFIX + base + str(d)) % 10 == 0:
                 return base + str(d)

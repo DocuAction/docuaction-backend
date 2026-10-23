@@ -114,7 +114,7 @@ def test_filenames_follow_the_convention(pack):
 @pytest.mark.parametrize("n", [0, 1, 2, 7, 99, 12345, 24999, 99999999])
 def test_synthetic_npis_agree_with_the_project_validator(n):
     valid = fp.synthetic_npi(n)
-    assert len(valid) == 10 and valid.startswith("9")
+    assert len(valid) == 10 and valid.startswith("2")
     assert compute_check_digit(valid[:9]) == valid[9]
     assert validate_npi(valid) == (True, "")
     bad = fp.luhn_invalid_npi(n)
@@ -145,8 +145,13 @@ def test_valid_npi_scenarios_pass_and_luhn_invalid_rows_fail(pack, manifest):
                 assert validate_npi(npi)[0] is False, (scenario.name, line.line_number)
             elif npi and re.fullmatch(r"[0-9]{10}", npi):
                 assert validate_npi(npi) == (True, ""), (scenario.name, line.line_number, npi)
-            if npi and re.fullmatch(r"[0-9]{10}", npi):
-                assert npi.startswith("9"), "synthetic NPIs never start with 1 or 2"
+                # Synthetic-ness is guaranteed by the row's `id` (OID arc
+                # 9.99.777.QA<TAG>.<n>) and SYNTHETIC name, not by the NPI
+                # digits -- a syntactically valid NPI must be in the real
+                # NPPES range (1 or 2) to pass validate_npi() at all, same as
+                # a real one. See scripts/qa_fixture_pack.py's module
+                # docstring.
+                assert npi.startswith("2")
 
 
 # ── manifest ─────────────────────────────────────────────────────────────────

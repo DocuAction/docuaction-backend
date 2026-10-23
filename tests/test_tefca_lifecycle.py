@@ -124,7 +124,7 @@ def test_registry_verification_uses_the_shared_validator():
     """verification.py carried its own copy of the Luhn check. Two
     implementations of one rule is one chance for them to disagree."""
     from app.tefca_registry.verification import _npi_valid
-    good = make_valid_npi("300000001")
+    good = make_valid_npi("200000001")
     assert _npi_valid(good) is True
     assert _npi_valid("1234567890") is False
     assert _npi_valid("") is False

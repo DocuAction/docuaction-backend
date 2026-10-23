@@ -21,11 +21,18 @@ WHY EVERYTHING HERE IS UNMISTAKABLY SYNTHETIC
   * Every `id` lives under the unassigned OID arc 9.99.777.QA<TAG>.<n>. The
     first arc of a real OID is 0, 1 or 2; nothing real can collide with 9.
   * Every organisation name contains the word SYNTHETIC.
-  * Every NPI is generated: a 9-digit base starting with 9 followed by the CMS
-    check digit (Luhn over 80840 + base). CMS assigns NPIs beginning with 1 or
-    2 only, so a 9xxxxxxxxx value cannot be a real provider. Luhn-INVALID
-    values are the same bases with the check digit deliberately shifted, so
-    they are still 10 digits and still cannot be real.
+  * Every NPI is generated: a 9-digit base starting with 2 followed by the CMS
+    check digit (Luhn over 80840 + base), so it satisfies the real NPPES
+    numbering-range check in `app.services.npi_validator.validate_npi` the
+    same way a real NPI would. (An earlier version of this file used a base
+    starting with 9 specifically because NPPES never issues that range -- but
+    that made every synthetic NPI format-INVALID once `validate_npi` started
+    checking the range too, which defeated fixtures that need a syntactically
+    valid NPI. The NPI digits no longer carry the synthetic-safety guarantee;
+    the `id` OID arc and the SYNTHETIC name marker do that job, as they
+    already did for every other field.) Luhn-INVALID values are the same
+    bases with the check digit deliberately shifted, so they are still 10
+    digits and still fail validation -- just on the checksum, not the range.
   * The address is "1 Synthetic Way, Testville, AK 99999, USA". The state is
     AK rather than MA because rule FMT-003 allocates the ZIP prefix 999 to
     Alaska; "MA 99999" would raise ZIP_STATE_MISMATCH on every row and no
@@ -159,8 +166,13 @@ def _check_digit(base9: str) -> str:
 
 
 def synthetic_npi(n: int) -> str:
-    """A Luhn-valid 10-digit NPI that cannot be real: base 9xxxxxxxx."""
-    base = f"9{n:08d}"
+    """A Luhn-valid 10-digit NPI in the real NPPES numbering range (base 2xxxxxxxx).
+
+    Not guaranteed non-real by the digit pattern alone -- see the module
+    docstring. Synthetic-ness is guaranteed by the surrounding row's `id`
+    (OID arc 9.99.777.QA<TAG>.<n>) and SYNTHETIC name, not by this value.
+    """
+    base = f"2{n:08d}"
     return base + _check_digit(base)
 
 
@@ -634,7 +646,7 @@ _QHIN_NOTE = ("Line 2 (the QHIN row) is HELD by design: rule set 1.3.0 accepts o
 _SCH002_NOTE = ("Every file also raises the dataset-level SCH-002 COLUMN_EMPTY_IN_DELIVERY "
                 "(INFORMATIONAL) once, because transaction/NAIC/CCN/contact_company are "
                 "empty as in the profiled delivery.")
-_NPPES_NOTE = ("Synthetic 9xxxxxxxxx NPIs do not exist in NPPES. If automated "
+_NPPES_NOTE = ("These synthetic NPIs are not registered in NPPES. If automated "
                "verification runs, expect NPI-005 NPI_NOT_FOUND (MEDIUM, HUMAN_REQUIRED) "
                "or NPI-009 when the source is unavailable; that is verification-time "
                "behaviour, not a fixture defect.")
