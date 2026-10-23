@@ -793,7 +793,8 @@ class DeliveryProcessingDataService:
                         "by_role": det["actor_role"], "at": det["occurred_at"],
                         "qa_state": qa_state,
                         "qa_at": last_qa.occurred_at if last_qa else None,
-                        "approved": qa_gate.is_reportable(evs)}
+                        "approved": qa_gate.is_reportable(evs),
+                        "rationale": latest.rationale}
             if r.reviewer_resolution is None and r.reportable_at is not None:
                 # A QA timestamp with NO stored determination. The report does not invent the determination and
                 # does not treat the timestamp as a valid approval: an approval is of a determination.
@@ -854,7 +855,7 @@ class DeliveryProcessingDataService:
                 "reclassified_to": states[r.review_id]["bucket"] if states[r.review_id]["determination"] == "RECLASSIFY" else None,
                 "determination_source": states[r.review_id]["source"],
                 "determined_by_role": states[r.review_id]["by_role"],
-                "resolution_rationale": r.resolution_rationale,
+                "resolution_rationale": states[r.review_id].get("rationale") or r.resolution_rationale,
                 "classification_rationale": r.classification_rationale,
                 "qa_state": states[r.review_id]["qa_state"],
                 "assigned": r.assigned_to_user_id is not None,
