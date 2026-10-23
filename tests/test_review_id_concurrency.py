@@ -45,11 +45,14 @@ def _valid_npi(seed: int) -> str:
 
     Reuses the actual validator's own constants rather than reimplementing
     the Luhn algorithm, so a generated NPI is guaranteed to satisfy whatever
-    `NPI-003` currently checks.
+    `NPI-003` currently checks. Base starts with "1" so it also satisfies
+    the NPPES numbering-range check (app/services/npi_validator.py) -- a
+    base starting with any other digit is format-INVALID now, not just
+    "not Luhn-checked yet".
     """
     from app.services.npi_validator import CMS_PREFIX, _luhn_total
 
-    base = f"{1_000_000_000 + (seed % 900_000_000):09d}"[-9:]
+    base = f"1{seed % 100_000_000:08d}"
     for d in range(10):
         candidate = base + str(d)
         if _luhn_total(CMS_PREFIX + candidate) % 10 == 0:

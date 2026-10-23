@@ -31,7 +31,7 @@ def make_npi(prefix9: str) -> str:
     raise AssertionError
 
 
-NPI_A, NPI_B = make_npi("123456789"), make_npi("987654321")
+NPI_A, NPI_B = make_npi("123456789"), make_npi("287654321")
 E1, E2, E3 = "ent-1", "ent-2", "ent-3"
 
 

@@ -104,7 +104,7 @@ class TestConstantQueryCount:
         """The regression this guards against: query count scaling with the
         number of scanned/candidate rows. 200 distinct, all-missing entities
         must cost exactly the same two queries as three."""
-        rows = [(f"entity-{i}", {"npi": make_valid_npi(str(300000000 + i))}) for i in range(200)]
+        rows = [(f"entity-{i}", {"npi": make_valid_npi(str(100000000 + i))}) for i in range(200)]
         db = FakeDB(rows, existing_rows=[])  # nothing pre-covered
         report = await plan_pecos_retry(db, limit=25)
         assert db.call_count == 2
