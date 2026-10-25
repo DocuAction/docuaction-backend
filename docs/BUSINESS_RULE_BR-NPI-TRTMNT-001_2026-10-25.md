@@ -38,8 +38,13 @@ introduced, so historical rows need no legacy mapping and nothing is rewritten.
 
 ## Historical applicability (September population, intake `4417b334`)
 
-Rule effective date is the implementation date; the governing requirement's own effective date (when
-the T-TRTMNT requirement began to bind participants) was **not supplied** and is not inferred. The
+**The rule's effective date (2026-10-25) is an implementation choice, not a confirmed business effective
+date.** It is the day the clarification was relayed and the rule was coded, chosen so that a quality run
+stamped before the rule existed keeps producing the result it produced (no silent retroactive rewrite on
+re-execution). It must not be described as Meley's accepted policy date. Three dates stay separate: the
+September population date (snapshot 2026-09-02, registered 2026-09-24, run of record on rule set 1.3.0),
+this implementation date, and the governing SOP/requirement effective date (when the T-TRTMNT requirement
+began to bind participants), which was **not supplied** and is not inferred. The
 2026-09-24 quality run (rule set 1.3.0) stands as written. Impact if assessed as of 2026-10-25
 (read-only DEV count, 24,589 records, all parsed): **3,464** records carry T-TRTMNT with a blank
 NPI — every one also has a blank `hl7orgrole` (so all 3,464 are `NPI_NOT_SUPPLIED` INFO today and
