@@ -51,48 +51,72 @@ root_walk AS (
     JOIN root_walk rw ON s.id = rw.prev_id
 )
 SELECT approved_id AS approved_snapshot_id,
-       current_id  AS observation_root_snapshot_id
+       current_id  AS root_snapshot_id
 FROM root_walk
-WHERE prev_id IS NULL;
--- ^ Note this value (observation_root_snapshot_id) -- it is substituted as
---   :root_id below. psql does not carry a result into a later \set
---   automatically across a plain script; if running interactively, copy the
---   UUID printed above into the two placeholders marked <ROOT_SNAPSHOT_ID>
---   before running the rest of this file.
+WHERE prev_id IS NULL
+\gset
+-- ^ \gset stores the one-row result as psql variables, so steps 4/4b read
+--   :'root_snapshot_id' directly and the file runs end to end without a
+--   manual pause or placeholder edit. Run with -v ON_ERROR_STOP=1 so an
+--   aborted step returns a non-zero exit status instead of a misleading
+--   step-5 result. (Two-phase alternative: run step 1 alone, then
+--   psql -v root_snapshot_id=<uuid> -f <this file>.)
+\echo approved_snapshot_id = :'approved_snapshot_id'  root_snapshot_id = :'root_snapshot_id'
+
+-- The September population, by the application's own linkage (curated record
+-- -> canonical entity), so every timing below describes THE intended
+-- population and not the earliest 1,000 review records of any delivery.
+\set september_intake '4417b334-7440-4c30-9afa-05f4268f17c7'
 
 -- ── Step 2: bounded, representative sample of September review records ──
 -- LIMIT 1000, not all 24,589 -- this is a timing sample, not the real run.
 -- Ordered by created_at so the sample is a contiguous, representative slice
 -- rather than an arbitrary unordered LIMIT.
+-- Scoped to the September delivery through rce_curated_records.canonical_entity_id
+-- (the same linkage the application uses), not to review records of any delivery.
 EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)
-SELECT rr.id, rr.entity_id
-FROM review_records rr
-WHERE rr.entity_id IS NOT NULL
-ORDER BY rr.created_at
+SELECT c.id, c.canonical_entity_id
+FROM rce_curated_records c
+WHERE c.source_intake_id = :'september_intake'::uuid
+  AND c.canonical_entity_id IS NOT NULL
+ORDER BY c.created_at, c.id
 LIMIT 1000;
 
 -- ── Step 3: side A -- our registry identifiers for that sample, ONE batch query ──
 -- (the application code chunks this at 500-5,000 entity_ids per call; here,
 -- for a single-shot benchmark, it is run as one query over the same 1,000
--- entity ids captured by step 2's WHERE/LIMIT shape.)
+-- September entity ids captured by step 2's WHERE/LIMIT shape.)
 EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)
 SELECT tei.entity_id, tei.identifier_type, tei.identifier_value
 FROM tefca_entity_identifiers tei
 WHERE tei.identifier_type IN ('npi', 'ccn')
   AND tei.entity_id IN (
-      SELECT rr.entity_id
-      FROM review_records rr
-      WHERE rr.entity_id IS NOT NULL
-      ORDER BY rr.created_at
+      SELECT c.canonical_entity_id
+      FROM rce_curated_records c
+      WHERE c.source_intake_id = :'september_intake'::uuid
+        AND c.canonical_entity_id IS NOT NULL
+      ORDER BY c.created_at, c.id
       LIMIT 1000
   );
 
 -- ── Step 4: side B -- the full approved IQVIA_HCO observation set, ONE query ──
--- Replace <ROOT_SNAPSHOT_ID> with the UUID step 1 printed before running.
+-- (a) the server-side plan only: EXPLAIN ANALYZE does not transfer rows to the client.
 EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)
 SELECT npi, ccn
 FROM iqvia_hco_observation
-WHERE source_snapshot_id = '<ROOT_SNAPSHOT_ID>'::uuid;
+WHERE source_snapshot_id = :'root_snapshot_id'::uuid;
+
+-- ── Step 4b: side B -- the ACTUAL fetch the application performs (.all()) ──
+-- Rows are transferred and discarded (\o /dev/null) so the \timing line below
+-- measures plan + execution + row transfer + client materialisation, which is
+-- what a full run pays. Report 4 (plan) and 4b (fetch) as two separate numbers.
+\timing on
+\o /dev/null
+SELECT npi, ccn
+FROM iqvia_hco_observation
+WHERE source_snapshot_id = :'root_snapshot_id'::uuid;
+\o
+\timing off
 
 -- ── Step 5: how many September records total, and how many lack any NPI/CCN ──
 -- Read-only population characterization (answers doc 74's open question:
@@ -102,14 +126,19 @@ WHERE source_snapshot_id = '<ROOT_SNAPSHOT_ID>'::uuid;
 -- records are the right population; the operator should confirm against
 -- the known September intake id from the delivery records rather than
 -- trusting an unscoped count, which would include non-September reviews.
+-- Scoped to the September delivery's curated records (one row per source
+-- record); blank/whitespace identifier rows do not count as identifiers, which
+-- is the comparison code's own definition (it trims and skips empties).
 SELECT
-    count(*)                                                        AS total_review_records,
-    count(*) FILTER (WHERE entity_id IS NULL)                       AS no_entity_at_all,
+    count(*)                                                        AS total_september_records,
+    count(*) FILTER (WHERE canonical_entity_id IS NULL)             AS no_entity_at_all,
     count(*) FILTER (
-        WHERE entity_id IS NOT NULL AND entity_id NOT IN (
+        WHERE canonical_entity_id IS NOT NULL AND canonical_entity_id NOT IN (
             SELECT entity_id FROM tefca_entity_identifiers
-            WHERE identifier_type IN ('npi', 'ccn'))
+            WHERE identifier_type IN ('npi', 'ccn')
+              AND NULLIF(BTRIM(identifier_value), '') IS NOT NULL)
     )                                                                AS entity_present_no_npi_or_ccn
-FROM review_records;
+FROM rce_curated_records
+WHERE source_intake_id = :'september_intake'::uuid;
 
 ROLLBACK;

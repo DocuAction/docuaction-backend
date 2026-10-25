@@ -147,12 +147,24 @@ async def _observation_root_snapshot_id(db, snapshot: sm.SourceSnapshot):
     return current.id
 
 
-def _require_licensed_access(user) -> None:
+def _require_licensed_access(user, *, system_run: bool = False) -> None:
+    """The module's access contract, applied to every caller.
+
+    A user is checked through `licensed_access_allowed` (reviewer floor + flag).
+    A caller with NO user must say so explicitly with `system_run=True` — a
+    scheduled/system comparison is a deliberate, auditable choice, never the
+    default a forgotten keyword falls into (CodeRabbit finding on #168,
+    2026-10-25). Even then the licensed-source flag still gates the read.
+    """
     if user is not None:
         decision = licensed_access_allowed(user)
         if not decision["allowed"]:
             raise IqviaSourceNotAvailable(decision["reason"])
         return
+    if not system_run:
+        raise IqviaSourceNotAvailable(
+            "a user is required to read licensed IQVIA observations; a system "
+            "run must pass system_run=True explicitly")
     if not licensed_source_enabled():
         raise IqviaSourceNotAvailable(
             "ENABLE_IQVIA_SOURCES is off; this comparison reads the same "
@@ -162,6 +174,7 @@ def _require_licensed_access(user) -> None:
 
 async def compare_entities_to_approved_iqvia_hco(
     db, *, entity_ids: Iterable[Any], user=None,
+    system_run: bool = False,
     batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> BatchComparisonSummary:
     """Compare `entity_ids` (e.g. the entities September's `ReviewRecord`s
@@ -173,7 +186,7 @@ async def compare_entities_to_approved_iqvia_hco(
     returning an empty/misleading summary when the source isn't readable at
     all (flag off, role too low, or no approved snapshot) -- the caller
     should surface that distinctly from "zero records matched"."""
-    _require_licensed_access(user)
+    _require_licensed_access(user, system_run=system_run)
 
     snapshot = await current_approved_snapshot(db, sm.SOURCE_IQVIA_HCO)
     if snapshot is None:

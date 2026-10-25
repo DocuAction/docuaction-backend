@@ -40,16 +40,19 @@ with a SELECT-only script the operator runs themselves against the real DEV data
 1. Open Azure Cloud Shell (or any host already firewalled for DEV Postgres access).
 2. Connect to the real DEV database with the existing read-capable credential already used for this
    engagement's other read-only checks.
-3. Run:
+3. Run the file in ONE command. Step 1 captures `observation_root_snapshot_id` into a `psql` variable
+   with `\gset`, and steps 4/4b/5 read it as `:'root_snapshot_id'`, so there is no manual pause and
+   no placeholder to edit. `ON_ERROR_STOP` makes a failed step return a non-zero exit status instead of
+   printing a misleading step-5 result after an aborted transaction:
    ```
-   psql "$DEV_DATABASE_URL" -f IQVIA_BATCH_COMPARISON_BENCHMARK_2026-10-19.sql
+   psql "$DEV_DATABASE_URL" -v ON_ERROR_STOP=1 -f IQVIA_BATCH_COMPARISON_BENCHMARK_2026-10-19.sql
    ```
    (Upload the file first, or paste its body into an interactive `psql` session - the file is plain
    SQL, no external tooling needed.)
-4. **Before running step 4 of the script**, copy the `observation_root_snapshot_id` UUID printed by
-   step 1 into the `<ROOT_SNAPSHOT_ID>` placeholder.
-5. Report back the four `\timing`/`Execution Time` lines and the step 5 result set. No other action
-   is needed from this file alone.
+4. If you prefer two phases, run step 1 alone, then the rest with
+   `psql ... -v root_snapshot_id=<uuid> -f ...` — the `\gset` line is harmless either way.
+5. Report back the `\timing`/`Execution Time` lines for steps 2, 3, 4 (plan) and 4b (actual fetch,
+   labelled separately) and the step 5 result set. No other action is needed from this file alone.
 
 ## 5. Checksum
 

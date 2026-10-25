@@ -67,19 +67,19 @@ class TestAccessGate:
     async def test_raises_when_the_licensed_flag_is_off(self, rolled_back_db, monkeypatch):
         monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "false")
         with pytest.raises(bc.IqviaSourceNotAvailable, match="ENABLE_IQVIA_SOURCES"):
-            await bc.compare_entities_to_approved_iqvia_hco(rolled_back_db, entity_ids=[uuid.uuid4()])
+            await bc.compare_entities_to_approved_iqvia_hco(rolled_back_db, entity_ids=[uuid.uuid4()], system_run=True)
 
     async def test_raises_when_no_approved_snapshot_exists(self, rolled_back_db, monkeypatch):
         monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
         with pytest.raises(bc.IqviaSourceNotAvailable, match="no APPROVED"):
-            await bc.compare_entities_to_approved_iqvia_hco(rolled_back_db, entity_ids=[uuid.uuid4()])
+            await bc.compare_entities_to_approved_iqvia_hco(rolled_back_db, entity_ids=[uuid.uuid4()], system_run=True)
 
     async def test_empty_population_is_a_no_op_not_an_error(self, rolled_back_db, tmp_path, monkeypatch):
         monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
         db = rolled_back_db
         approved = await _approve_hco_snapshot(db, tmp_path, "empty", [
             [f"{SYN}-HCO-X", NPI_REGISTERED, "", f"{SYN} X", "02101"]])
-        summary = await bc.compare_entities_to_approved_iqvia_hco(db, entity_ids=[])
+        summary = await bc.compare_entities_to_approved_iqvia_hco(db, entity_ids=[], system_run=True)
         assert summary.considered == 0
         assert summary.as_dict()["snapshot_id"] == str(approved.id)
         await _no_matches_written(db, approved.id)
@@ -94,7 +94,7 @@ class TestFiveOutcomes:
         approved = await _approve_hco_snapshot(db, tmp_path, "matched", [
             [f"{SYN}-HCO-MATCHED", NPI_REGISTERED, "", f"{SYN} Matched Target", "02101"]])
 
-        summary = await bc.compare_entities_to_approved_iqvia_hco(db, entity_ids=[entity_id])
+        summary = await bc.compare_entities_to_approved_iqvia_hco(db, entity_ids=[entity_id], system_run=True)
 
         assert summary.considered == 1
         assert summary.matched == 1
@@ -110,7 +110,7 @@ class TestFiveOutcomes:
         approved = await _approve_hco_snapshot(db, tmp_path, "bare", [
             [f"{SYN}-HCO-BARE", NPI_REGISTERED, "", f"{SYN} Unrelated", "02101"]])
 
-        summary = await bc.compare_entities_to_approved_iqvia_hco(db, entity_ids=[entity_id])
+        summary = await bc.compare_entities_to_approved_iqvia_hco(db, entity_ids=[entity_id], system_run=True)
 
         assert summary.considered == 1
         assert summary.missing_identifier == 1
@@ -127,7 +127,7 @@ class TestFiveOutcomes:
         approved = await _approve_hco_snapshot(db, tmp_path, "notfound", [
             [f"{SYN}-HCO-OTHER", NPI_REGISTERED, "", f"{SYN} Someone Else", "02101"]])
 
-        summary = await bc.compare_entities_to_approved_iqvia_hco(db, entity_ids=[entity_id])
+        summary = await bc.compare_entities_to_approved_iqvia_hco(db, entity_ids=[entity_id], system_run=True)
 
         assert summary.considered == 1
         assert summary.not_found == 1
@@ -149,7 +149,7 @@ class TestFiveOutcomes:
             [f"{SYN}-HCO-AMBIG-2", "", "029999", f"{SYN} Facility B", "02101"],
         ])
 
-        summary = await bc.compare_entities_to_approved_iqvia_hco(db, entity_ids=[entity_id])
+        summary = await bc.compare_entities_to_approved_iqvia_hco(db, entity_ids=[entity_id], system_run=True)
 
         assert summary.considered == 1
         assert summary.ambiguous == 1
@@ -169,7 +169,7 @@ class TestFiveOutcomes:
         approved = await _approve_hco_snapshot(db, tmp_path, "ccnone", [
             [f"{SYN}-HCO-CCNONE", "", "039999", f"{SYN} CCN Only", "02101"]])
 
-        summary = await bc.compare_entities_to_approved_iqvia_hco(db, entity_ids=[entity_id])
+        summary = await bc.compare_entities_to_approved_iqvia_hco(db, entity_ids=[entity_id], system_run=True)
 
         # CCN is CANDIDATE-only by this codebase's existing rule, even with
         # exactly one clean hit -- never reported as an automatic MATCHED.
@@ -188,7 +188,7 @@ class TestFiveOutcomes:
         approved = await _approve_hco_snapshot(db, tmp_path, "dualnpi", [
             [f"{SYN}-HCO-DUAL", NPI_REGISTERED, "", f"{SYN} Dual NPI", "02101"]])
 
-        summary = await bc.compare_entities_to_approved_iqvia_hco(db, entity_ids=[entity_id])
+        summary = await bc.compare_entities_to_approved_iqvia_hco(db, entity_ids=[entity_id], system_run=True)
 
         assert summary.ambiguous == 1
         assert summary.details[0]["reason"] == "entity carries more than one identifier of the same type"
@@ -206,7 +206,7 @@ class TestFiveOutcomes:
         approved = await _approve_hco_snapshot(db, tmp_path, "malformed", [
             [f"{SYN}-HCO-MALFORMED", NPI_REGISTERED, "", f"{SYN} Unrelated", "02101"]])
 
-        summary = await bc.compare_entities_to_approved_iqvia_hco(db, entity_ids=[entity_id])
+        summary = await bc.compare_entities_to_approved_iqvia_hco(db, entity_ids=[entity_id], system_run=True)
 
         assert summary.considered == 1
         assert summary.processing_error == 1
@@ -239,7 +239,7 @@ class TestReconciliationInvariant:
         ])
 
         summary = await bc.compare_entities_to_approved_iqvia_hco(
-            db, entity_ids=[matched_id, bare_id, notfound_id, ambiguous_id, error_id])
+            db, entity_ids=[matched_id, bare_id, notfound_id, ambiguous_id, error_id], system_run=True)
 
         assert summary.considered == 5
         assert summary.matched == 1
@@ -268,7 +268,7 @@ class TestBatchedNotOneAtATime:
             [f"{SYN}-HCO-MIX", NPI_REGISTERED, "", f"{SYN} Mix Matched", "02101"]])
 
         summary = await bc.compare_entities_to_approved_iqvia_hco(
-            db, entity_ids=[matched_id, bare_id, notfound_id], batch_size=1)
+            db, entity_ids=[matched_id, bare_id, notfound_id], batch_size=1, system_run=True)
 
         assert summary.considered == 3
         assert summary.matched == 1
@@ -276,3 +276,20 @@ class TestBatchedNotOneAtATime:
         assert summary.not_found == 1
         assert summary.ambiguous == 0
         await _no_matches_written(db, approved.id)
+
+
+# ── access contract (pure; CodeRabbit finding on #168, 2026-10-25) ───────────
+
+def test_no_user_requires_an_explicit_system_run_opt_in(monkeypatch):
+    """`user=None` must not silently fall through to the flag-only check: a
+    system run is a deliberate, auditable choice stated with system_run=True."""
+    monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+    with pytest.raises(bc.IqviaSourceNotAvailable, match="system_run=True"):
+        bc._require_licensed_access(None)
+    bc._require_licensed_access(None, system_run=True)  # flag on + explicit opt-in: allowed
+
+
+def test_system_run_still_respects_the_licensed_source_flag(monkeypatch):
+    monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "false")
+    with pytest.raises(bc.IqviaSourceNotAvailable, match="ENABLE_IQVIA_SOURCES"):
+        bc._require_licensed_access(None, system_run=True)
