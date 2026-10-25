@@ -106,10 +106,17 @@ async def compare_records_route(
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role("viewer")),
 ):
+    from app.core.config import settings
     from app.tefca_registry.rce import record_history_comparison as svc
 
     try:
         return await svc.compare_two_records(
-            db, earlier_record_id=earlier_record_id, later_record_id=later_record_id)
-    except ValueError as exc:
-        raise HTTPException(404, str(exc))
+            db, earlier_record_id=earlier_record_id, later_record_id=later_record_id,
+            reviewer_or_above=_reviewer_or_above(user), settings=settings,
+            allowed_modules=getattr(user, "allowed_modules", None))
+    except svc.ChronologyError as exc:
+        raise HTTPException(422, str(exc))
+    except svc.RecordHistoryNotFound:
+        # A record outside the caller's feeds and a record that does not exist
+        # are the same 404, by design.
+        raise HTTPException(404, NOT_FOUND)

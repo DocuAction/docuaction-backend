@@ -59,6 +59,7 @@ from sqlalchemy import select
 from app.tefca_registry import models as reg
 from app.tefca_registry.rce import issue_history_core as core
 from app.tefca_registry.rce import models as m
+from app.tefca_registry.rce.field_map import normalize_active
 from app.tefca_registry.rce.issue_history import intakes_query
 
 OUTCOME_NEWLY_OBSERVED = "NEWLY_OBSERVED"
@@ -72,6 +73,37 @@ class RecordHistoryNotFound(Exception):
     """No allowed feed, or nothing visible under this HCID/id in any allowed
     feed. Deliberately indistinguishable from each other in the response,
     matching `issue_history.HistoryNotFound`'s own fail-closed convention."""
+
+
+class ChronologyError(ValueError):
+    """`earlier_record_id` belongs to a delivery received after (or, on the
+    same instant, ordered after) `later_record_id`'s delivery."""
+
+
+ACTIVE_DEACTIVATED = "DEACTIVATED"
+ACTIVE_REACTIVATED = "REACTIVATED"
+ACTIVE_CHANGED_OTHER = "CHANGED_OTHER"
+
+
+def active_direction(earlier_value: Any, later_value: Any) -> Optional[str]:
+    """Direction of an `active` change on the NORMALISED delivered values
+    ('1'/'0'; spreadsheet float forms accepted by `normalize_active`). None
+    when nothing changed. `1 -> 0` is a DEACTIVATION, `0 -> 1` a REACTIVATION
+    -- never the other way round."""
+    e, l = normalize_active(earlier_value), normalize_active(later_value)
+    if e == l:
+        return None
+    if e == "1" and l == "0":
+        return ACTIVE_DEACTIVATED
+    if e == "0" and l == "1":
+        return ACTIVE_REACTIVATED
+    return ACTIVE_CHANGED_OTHER
+
+
+def delivery_order_key(received_at: Any, intake_id: Any) -> tuple:
+    """Deterministic delivery chronology: receipt instant, then intake id as a
+    string, so two same-instant deliveries always order the same way."""
+    return (received_at, str(intake_id))
 
 
 async def _rows(db, stmt) -> List[Dict[str, Any]]:
@@ -174,6 +206,17 @@ async def search_records(
     if name:
         conds.append(m.RceSourceRecord.parsed["name"].astext.ilike(f"%{name.strip()}%"))
         matched_on.append("name")
+    if qhin_entity_id:
+        # Managing-QHIN scope is part of the WHERE clause, so it is applied
+        # before LIMIT: a matching record outside the first page is never
+        # silently dropped, and a record with no promoted entity is excluded
+        # (NULL canonical_entity_id cannot be IN any set), not matched.
+        member_ids = (
+            select(reg.TefcaEntityRelationship.child_entity_id)
+            .where(reg.TefcaEntityRelationship.parent_entity_id == qhin_entity_id,
+                   reg.TefcaEntityRelationship.relationship_type == "belongs_to",
+                   reg.TefcaEntityRelationship.status == "active"))
+        conds.append(m.RceSourceRecord.canonical_entity_id.in_(member_ids))
 
     rows = (await db.execute(
         select(m.RceSourceRecord.id, m.RceSourceRecord.source_intake_id,
@@ -184,19 +227,6 @@ async def search_records(
         .where(*conds)
         .order_by(m.RceSourceRecord.source_intake_id.desc(), m.RceSourceRecord.line_number)
         .limit(limit))).all()
-
-    if qhin_entity_id:
-        entity_ids = [r.canonical_entity_id for r in rows if r.canonical_entity_id]
-        belongs: set = set()
-        if entity_ids:
-            belongs = set((await db.execute(
-                select(reg.TefcaEntityRelationship.child_entity_id)
-                .where(reg.TefcaEntityRelationship.parent_entity_id == qhin_entity_id,
-                       reg.TefcaEntityRelationship.relationship_type == "belongs_to",
-                       reg.TefcaEntityRelationship.status == "active",
-                       reg.TefcaEntityRelationship.child_entity_id.in_(entity_ids)))
-            ).scalars().all())
-        rows = [r for r in rows if r.canonical_entity_id in belongs]
 
     results = []
     for r in rows:
@@ -288,19 +318,49 @@ class FieldDiff:
                 "later_value": self.later_value, "change_type": self.change_type}
 
 
-async def compare_two_records(db, *, earlier_record_id, later_record_id) -> Dict[str, Any]:
+async def compare_two_records(
+    db, *, earlier_record_id, later_record_id,
+    reviewer_or_above: bool, settings, allowed_modules=None,
+    _allowed_intakes: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     """Field-by-field diff between two SPECIFIC `rce_source_records` rows the
     caller already selected (typically from `hcid_delivery_history`'s own
     list) -- this function does not re-derive linkage; it trusts the two ids
-    given to it. Raises ValueError if either id does not exist, rather than
-    returning a partial/misleading diff."""
+    given to it ONLY after checking both rows sit in a delivery the caller is
+    allowed to read (`_allowed_intake_ids`, the same fail-closed feed check
+    `search_records` and `hcid_delivery_history` apply). A record outside the
+    allowed feeds and a record that does not exist are deliberately
+    indistinguishable (`RecordHistoryNotFound`), so a UUID obtained elsewhere
+    cannot be used to read another feed's delivered fields.
+
+    Chronology is enforced: `earlier_record_id` must belong to the delivery
+    that orders first by `delivery_order_key` (receipt instant, then intake
+    id), or `ChronologyError` is raised rather than a diff with its sides
+    silently swapped. `_allowed_intakes` lets a caller that already resolved
+    the allowed deliveries (the population change report) pass them in."""
+    intakes = _allowed_intakes
+    if intakes is None:
+        intakes = await _allowed_intake_ids(
+            db, reviewer_or_above=reviewer_or_above, settings=settings,
+            allowed_modules=allowed_modules)
+    intake_by_id = {i["id"]: i for i in intakes}
+    if not intake_by_id:
+        raise RecordHistoryNotFound()
+
     earlier = await db.get(m.RceSourceRecord, earlier_record_id)
     later = await db.get(m.RceSourceRecord, later_record_id)
     if earlier is None or later is None:
-        raise ValueError("both earlier_record_id and later_record_id must exist")
+        raise RecordHistoryNotFound()
+    earlier_intake = intake_by_id.get(earlier.source_intake_id)
+    later_intake = intake_by_id.get(later.source_intake_id)
+    if earlier_intake is None or later_intake is None:
+        raise RecordHistoryNotFound()
 
-    earlier_intake = await db.get(m.RceSourceIntake, earlier.source_intake_id)
-    later_intake = await db.get(m.RceSourceIntake, later.source_intake_id)
+    if (delivery_order_key(earlier_intake["received_at"], earlier.source_intake_id)
+            > delivery_order_key(later_intake["received_at"], later.source_intake_id)):
+        raise ChronologyError(
+            "earlier_record_id must belong to the delivery received first "
+            "(same-instant deliveries order by intake id)")
 
     e_fields: Dict[str, Any] = dict(earlier.parsed or {})
     l_fields: Dict[str, Any] = dict(later.parsed or {})
@@ -325,22 +385,30 @@ async def compare_two_records(db, *, earlier_record_id, later_record_id) -> Dict
 
     active_diff = next((d for d in diffs if d["field"] == "active"
                         and d["change_type"] == OUTCOME_CHANGED), None)
+    direction = (active_direction(active_diff["earlier_value"], active_diff["later_value"])
+                 if active_diff else None)
+    active_change = ({
+        "direction": direction,
+        "earlier_value": active_diff["earlier_value"], "later_value": active_diff["later_value"],
+    } if active_diff and direction else None)
+
+    def _side(rec, intake):
+        return {
+            "source_record_id": str(rec.id), "intake_id": str(rec.source_intake_id),
+            "received_at": intake["received_at"].isoformat() if intake.get("received_at") else None,
+            "delivery_label": intake.get("delivery_label"),
+        }
 
     return {
-        "earlier": {
-            "source_record_id": str(earlier.id), "intake_id": str(earlier.source_intake_id),
-            "received_at": earlier_intake.received_at.isoformat() if earlier_intake else None,
-            "delivery_label": earlier_intake.delivery_label if earlier_intake else None,
-        },
-        "later": {
-            "source_record_id": str(later.id), "intake_id": str(later.source_intake_id),
-            "received_at": later_intake.received_at.isoformat() if later_intake else None,
-            "delivery_label": later_intake.delivery_label if later_intake else None,
-        },
+        "earlier": _side(earlier, earlier_intake),
+        "later": _side(later, later_intake),
         "fields": diffs,
-        "inactive_reactivated": {
-            "earlier_value": active_diff["earlier_value"], "later_value": active_diff["later_value"],
-        } if active_diff else None,
+        # Direction is stated, never inferred from "the field changed": a
+        # 1 -> 0 transition is a DEACTIVATION and must not read as reactivated.
+        "active_status_change": active_change,
+        "inactive_reactivated": (
+            {"earlier_value": active_change["earlier_value"], "later_value": active_change["later_value"]}
+            if active_change and direction == ACTIVE_REACTIVATED else None),
     }
 
 
@@ -407,7 +475,9 @@ async def full_population_change_report(
                 continue
             comparison = await compare_two_records(
                 db, earlier_record_id=per_intake[earlier_iid][0],
-                later_record_id=per_intake[later_iid][0])
+                later_record_id=per_intake[later_iid][0],
+                reviewer_or_above=reviewer_or_above, settings=settings,
+                allowed_modules=allowed_modules, _allowed_intakes=intakes)
             for f in comparison["fields"]:
                 if f["change_type"] == OUTCOME_UNCHANGED:
                     continue

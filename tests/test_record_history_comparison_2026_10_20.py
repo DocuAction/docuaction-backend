@@ -130,13 +130,21 @@ class TestHcidDeliveryHistory:
                 settings=settings_for(viewer=""))
 
 
+async def _compare(db, earlier_id, later_id, **over):
+    kwargs = dict(reviewer_or_above=False, settings=settings_for())
+    kwargs.update(over)
+    return await svc.compare_two_records(
+        db, earlier_record_id=earlier_id, later_record_id=later_id, **kwargs)
+
+
 class TestFieldComparison:
-    async def _two_records(self, db, earlier_row, later_row):
-        from rce_traceability_support import SYN
-        earlier_id = await seed_delivery(db, [earlier_row], received_at=datetime(2026, 7, 20),
-                                         feed=FEED, blob_salt="earlier")
-        later_id = await seed_delivery(db, [later_row], received_at=datetime(2026, 9, 2),
-                                       feed=FEED, blob_salt="later")
+    async def _two_records(self, db, earlier_row, later_row, *,
+                           earlier_feed=FEED, later_feed=FEED,
+                           earlier_at=datetime(2026, 7, 20), later_at=datetime(2026, 9, 2)):
+        earlier_id = await seed_delivery(db, [earlier_row], received_at=earlier_at,
+                                         feed=earlier_feed, blob_salt="earlier")
+        later_id = await seed_delivery(db, [later_row], received_at=later_at,
+                                       feed=later_feed, blob_salt="later")
         from sqlalchemy import select
         from app.tefca_registry.rce import models as m
         earlier_rec = (await db.execute(select(m.RceSourceRecord).where(
@@ -155,8 +163,7 @@ class TestFieldComparison:
         later["address_city"] = "  TESTVILLE  "        # formatting-only change
         earlier_rec, later_rec = await self._two_records(db, earlier, later)
 
-        result = await svc.compare_two_records(
-            db, earlier_record_id=earlier_rec.id, later_record_id=later_rec.id)
+        result = await _compare(db, earlier_rec.id, later_rec.id)
 
         by_field = {f["field"]: f for f in result["fields"]}
         assert by_field["name"]["change_type"] == svc.OUTCOME_CHANGED
@@ -165,7 +172,7 @@ class TestFieldComparison:
         assert result["earlier"]["received_at"].startswith("2026-07-20")
         assert result["later"]["received_at"].startswith("2026-09-02")
 
-    async def test_active_field_change_surfaces_as_inactive_reactivated(self, rolled_back_db):
+    async def test_deactivation_is_reported_as_deactivation_not_reactivation(self, rolled_back_db):
         db = rolled_back_db
         earlier = entity_row("9.99.777.9.CMP2", tag="CMP2")
         earlier["active"] = "1"
@@ -173,10 +180,60 @@ class TestFieldComparison:
         later["active"] = "0"
         earlier_rec, later_rec = await self._two_records(db, earlier, later)
 
-        result = await svc.compare_two_records(
-            db, earlier_record_id=earlier_rec.id, later_record_id=later_rec.id)
+        result = await _compare(db, earlier_rec.id, later_rec.id)
 
-        assert result["inactive_reactivated"] == {"earlier_value": "1", "later_value": "0"}
+        assert result["active_status_change"] == {
+            "direction": svc.ACTIVE_DEACTIVATED, "earlier_value": "1", "later_value": "0"}
+        assert result["inactive_reactivated"] is None
+
+    async def test_reactivation_is_reported_as_reactivation(self, rolled_back_db):
+        db = rolled_back_db
+        earlier = entity_row("9.99.777.9.CMP2R", tag="CMP2R")
+        earlier["active"] = "0"
+        later = dict(earlier)
+        later["active"] = "1"
+        earlier_rec, later_rec = await self._two_records(db, earlier, later)
+
+        result = await _compare(db, earlier_rec.id, later_rec.id)
+
+        assert result["active_status_change"]["direction"] == svc.ACTIVE_REACTIVATED
+        assert result["inactive_reactivated"] == {"earlier_value": "0", "later_value": "1"}
+
+    async def test_record_outside_the_callers_feeds_is_not_found_not_compared(self, rolled_back_db):
+        """A viewer holding two UUIDs must not be able to read a record from a
+        feed they are not allowed to see; the response is the same 404 as a
+        non-existent id, so the id itself leaks nothing."""
+        db = rolled_back_db
+        earlier = entity_row("9.99.777.9.CMPF", tag="CMPF")
+        earlier_rec, later_rec = await self._two_records(
+            db, earlier, dict(earlier), later_feed="OTHER-FEED")
+
+        with pytest.raises(svc.RecordHistoryNotFound):
+            await _compare(db, earlier_rec.id, later_rec.id, settings=settings_for(viewer=FEED))
+        with pytest.raises(svc.RecordHistoryNotFound):
+            await _compare(db, earlier_rec.id, later_rec.id, settings=settings_for(viewer=""))
+
+    async def test_swapped_chronology_is_refused_not_silently_diffed(self, rolled_back_db):
+        db = rolled_back_db
+        earlier = entity_row("9.99.777.9.CMPC", tag="CMPC")
+        earlier_rec, later_rec = await self._two_records(db, earlier, dict(earlier))
+
+        with pytest.raises(svc.ChronologyError):
+            await _compare(db, later_rec.id, earlier_rec.id)
+        assert isinstance(svc.ChronologyError("x"), ValueError)
+
+    async def test_same_instant_deliveries_order_deterministically_by_intake_id(self, rolled_back_db):
+        db = rolled_back_db
+        row = entity_row("9.99.777.9.CMPT", tag="CMPT")
+        same = datetime(2026, 9, 2, 12, 0, 0)
+        rec_x, rec_y = await self._two_records(db, row, dict(row), earlier_at=same, later_at=same)
+        first, second = sorted(
+            (rec_x, rec_y), key=lambda r: svc.delivery_order_key(same, r.source_intake_id))
+
+        result = await _compare(db, first.id, second.id)
+        assert result["earlier"]["intake_id"] == str(first.source_intake_id)
+        with pytest.raises(svc.ChronologyError):
+            await _compare(db, second.id, first.id)
 
     async def test_field_present_only_later_is_newly_observed_not_created(self, rolled_back_db):
         db = rolled_back_db
@@ -190,8 +247,7 @@ class TestFieldComparison:
         earlier_rec.parsed = {k: v for k, v in earlier_rec.parsed.items() if k != "alias"}
         await db.flush()
 
-        result = await svc.compare_two_records(
-            db, earlier_record_id=earlier_rec.id, later_record_id=later_rec.id)
+        result = await _compare(db, earlier_rec.id, later_rec.id)
 
         by_field = {f["field"]: f for f in result["fields"]}
         assert by_field["alias"]["change_type"] == svc.OUTCOME_NEWLY_OBSERVED
@@ -204,23 +260,66 @@ class TestFieldComparison:
         later_rec.parsed = {k: v for k, v in later_rec.parsed.items() if k != "alias"}
         await db.flush()
 
-        result = await svc.compare_two_records(
-            db, earlier_record_id=earlier_rec.id, later_record_id=later_rec.id)
+        result = await _compare(db, earlier_rec.id, later_rec.id)
 
         by_field = {f["field"]: f for f in result["fields"]}
         assert by_field["alias"]["change_type"] == svc.OUTCOME_ABSENT_FROM_LATER
 
-    async def test_unknown_record_id_raises_value_error(self, rolled_back_db):
+    async def test_unknown_record_id_is_not_found_indistinguishable_from_hidden(self, rolled_back_db):
         import uuid
         db = rolled_back_db
         row = entity_row("9.99.777.9.CMP5", tag="CMP5")
         _, later_rec = await self._two_records(db, row, dict(row))
-        with pytest.raises(ValueError):
-            await svc.compare_two_records(
-                db, earlier_record_id=uuid.uuid4(), later_record_id=later_rec.id)
+        with pytest.raises(svc.RecordHistoryNotFound):
+            await _compare(db, uuid.uuid4(), later_rec.id)
 
 
 class TestQhinScopedSearch:
+    async def _seed_scoped_pair(self, db):
+        """Two promoted entities under two QHINs, delivered as two consecutive
+        lines of one intake (A on line 2, B on line 3). Returns (qhin_a, qhin_b)."""
+        import uuid as _uuid
+        from datetime import date
+        from sqlalchemy import select
+        from app.tefca_registry import models as reg
+        from app.tefca_registry.rce import models as m
+
+        qhin_a = await seed_entity(db, oid="9.99.777.QHIN.A", name="QHIN A")
+        qhin_b = await seed_entity(db, oid="9.99.777.QHIN.B", name="QHIN B")
+        entity_a = await seed_entity(db, oid="9.99.777.ENT.A", name="Scoped Org A")
+        entity_b = await seed_entity(db, oid="9.99.777.ENT.B", name="Scoped Org B")
+        for parent, child in ((qhin_a, entity_a), (qhin_b, entity_b)):
+            db.add(reg.TefcaEntityRelationship(
+                id=_uuid.uuid4(), parent_entity_id=parent, child_entity_id=child,
+                relationship_type="belongs_to", status="active", effective_date=date(2026, 1, 1)))
+        await db.flush()
+        row_a = entity_row("9.99.777.9.QA", tag="QA")
+        row_a["name"] = "Scoped Org A Delivered"
+        row_b = entity_row("9.99.777.9.QB", tag="QB")
+        row_b["name"] = "Scoped Org B Delivered"
+        intake_id = await seed_delivery(db, [row_a, row_b], received_at=datetime(2026, 9, 2), feed=FEED)
+        for oid, entity in (("9.99.777.9.QA", entity_a), ("9.99.777.9.QB", entity_b)):
+            rec = (await db.execute(select(m.RceSourceRecord).where(
+                m.RceSourceRecord.source_intake_id == intake_id,
+                m.RceSourceRecord.source_rce_id == oid))).scalar_one()
+            rec.canonical_entity_id = entity
+        await db.flush()
+        return qhin_a, qhin_b
+
+    async def test_qhin_scope_is_applied_before_the_limit(self, rolled_back_db):
+        """With LIMIT 1 and the first-ordered line belonging to the OTHER QHIN,
+        the matching record must still be returned: the scope is part of the
+        SQL WHERE, not a filter over the first page."""
+        db = rolled_back_db
+        _qhin_a, qhin_b = await self._seed_scoped_pair(db)
+
+        result = await svc.search_records(
+            db, name="Scoped Org", qhin_entity_id=qhin_b, limit=1,
+            reviewer_or_above=False, settings=settings_for())
+
+        assert result["count"] == 1
+        assert result["results"][0]["source_rce_id"] == "9.99.777.9.QB"
+
     async def test_search_filters_to_only_the_named_qhin(self, rolled_back_db):
         """Two promoted entities, same NPI-less search by name, different
         QHINs -- qhin_entity_id must exclude the one that does not belong."""
