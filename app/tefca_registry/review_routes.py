@@ -1518,9 +1518,35 @@ async def case_update_import_preview(
     apply endpoint in this release (owner decision on the follow-up event model).
     """
     from app.tefca_registry.rce import case_update_import as cui
-    from app.tefca_registry.rce import models as m
 
     data = await file.read()
+    actor_id, actor_email = reg_audit.actor_of(user)
+    try:
+        result = await cui.build_preview(file.filename or "upload", data, purpose=purpose,
+                                         worksheet=worksheet, resolve=_case_identity_resolver(db),
+                                         uploaded_by=actor_email or str(actor_id or "unknown"))
+    except cui.SpreadsheetRefused as exc:
+        raise HTTPException(400, f"import refused: {exc}")
+    # The preview itself is the auditable act (a file was read against real case ids),
+    # even though nothing is written.
+    reg_audit.record(db, "case_update_import_previewed", None, actor_id=actor_id,
+                     actor_email=actor_email, ip_address=get_client_ip(request),
+                     metadata={"purpose": purpose,
+                               "file_sha256": (result.get("file") or {}).get("sha256"),
+                               "idempotency_key": result.get("idempotency_key"),
+                               "rows_read": (result.get("preview") or {}).get("rows_read"),
+                               "counts": (result.get("preview") or {}).get("counts"),
+                               "written": False})
+    await db.commit()
+    return result
+
+
+def _case_identity_resolver(db):
+    """Identity resolution shared by the import preview and apply: review_id, or
+    intake_id + source_rce_id through the curated record (0 or several matches are
+    returned as such; nothing is guessed)."""
+    from app.tefca_registry.rce import case_update_import as cui
+    from app.tefca_registry.rce import models as m
 
     async def resolve(identity: Dict[str, str]) -> List[str]:
         rid = identity.get(cui.IDENTITY_REVIEW)
@@ -1546,24 +1572,59 @@ async def case_update_import_preview(
             .where(reg.ReviewRecord.entity_id.in_(list(set(entity_ids))))
             .order_by(reg.ReviewRecord.review_id))).scalars().all())
 
+    return resolve
+
+
+@router.post("/cases/import/apply", dependencies=[Depends(require_role("senior_analyst"))])
+async def case_update_import_apply(
+        request: Request,
+        purpose: str = Query(..., description="must be case_updates"),
+        worksheet: Optional[str] = Query(None, max_length=120),
+        confirm: bool = Query(False, description="Explicit confirmation of the previewed file; required."),
+        file: UploadFile = File(..., description="The SAME file that was previewed."),
+        db: AsyncSession = Depends(get_db),
+        user=Depends(require_role("senior_analyst"))):
+    """Apply a previewed case-update file — ownership (assign_to_email) only, exactly once.
+
+    The server re-stages the uploaded bytes (never trusts a client-side preview), derives the same
+    idempotency key, serialises appliers of that key with a transaction-scoped advisory lock and refuses
+    to apply a key that already has a `case_update_import_applied` audit row — so a retry or a concurrent
+    duplicate submission cannot apply twice. Assignments go through `case_assignment.assign` (the QHIN
+    Assignment screen's own service: compare-and-set, audit, APPROVED refused, held cases need an override
+    reason — refused here rather than overridden). Notes/proposed corrections are STAGED, not applied
+    (recorded in the apply audit row) pending the follow-up event model decision; requested
+    release/approval/bucket values are never applied.
+    """
+    from app.models.database import User
+    from app.tefca_registry.rce import case_update_import as cui
+
+    if purpose != cui.PURPOSE_CASE_UPDATES:
+        raise HTTPException(400, "only purpose=case_updates can be applied here; source deliveries and "
+                                 "reference data keep their own importers")
+    if not confirm:
+        raise HTTPException(400, "confirm=true is required: apply only a file you have previewed")
+    data = await file.read()
     actor_id, actor_email = reg_audit.actor_of(user)
     try:
-        result = await cui.build_preview(file.filename or "upload", data, purpose=purpose,
-                                         worksheet=worksheet, resolve=resolve,
+        staged = await cui.build_preview(file.filename or "upload", data, purpose=purpose, worksheet=worksheet,
+                                         resolve=_case_identity_resolver(db),
                                          uploaded_by=actor_email or str(actor_id or "unknown"))
     except cui.SpreadsheetRefused as exc:
         raise HTTPException(400, f"import refused: {exc}")
-    # The preview itself is the auditable act (a file was read against real case ids),
-    # even though nothing is written.
-    reg_audit.record(db, "case_update_import_previewed", None, actor_id=actor_id,
-                     actor_email=actor_email, ip_address=get_client_ip(request),
-                     metadata={"purpose": purpose,
-                               "file_sha256": (result.get("file") or {}).get("sha256"),
-                               "idempotency_key": result.get("idempotency_key"),
-                               "rows_read": (result.get("preview") or {}).get("rows_read"),
-                               "counts": (result.get("preview") or {}).get("counts"),
-                               "written": False})
+    if not staged.get("header", {}).get("ok"):
+        raise HTTPException(400, "header validation failed; nothing applied")
+
+    async def resolve_user_id(email: str):
+        row = (await db.execute(
+            select(User.id).where(func.lower(User.email) == email.strip().lower(), User.is_active.is_(True)))).scalar_one_or_none()
+        return row
+
+    result = await cui.apply_case_updates(
+        db, preview=staged["preview"], actor_user=user, idempotency_key=staged["idempotency_key"],
+        ip_address=get_client_ip(request), resolve_user_id=resolve_user_id)
     await db.commit()
+    result["file"] = staged["file"]
+    result["mapping_version"] = staged["mapping_version"]
     return result
 
 

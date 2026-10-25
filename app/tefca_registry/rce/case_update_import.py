@@ -360,4 +360,138 @@ async def build_preview(filename: str, data: bytes, *, purpose: str, worksheet: 
                              "blocked": "header validation failed; no row was staged"}
         return result
     result["preview"] = await preview_rows(table.rows, resolve)
+    result["apply"] = describe_apply(result["preview"])
     return result
+
+
+# ── apply (2026-10-25): the ONE update type with an existing, supported, audited path ──
+#
+# WHAT IS APPLIED            `assign_to_email` on an ACCEPTED row -> `case_assignment.assign`
+#                            (supervisor role, compare-and-set, audit row `review_case_assigned`
+#                            / `review_case_reassigned`, APPROVED cases refused, held cases need an
+#                            override reason). Nothing new was invented: the import is just another
+#                            caller of the same service the QHIN Assignment screen uses.
+# WHAT IS STAGED, NOT APPLIED  `analyst_note`, `proposed_correction_field/value`. They are preserved in
+#                            the apply audit row (traceable, never lost) but written to NO case table,
+#                            because the application has no append-only store for a free-text analyst
+#                            note that is not a determination. THE EXACT UNRESOLVED BUSINESS CHOICE:
+#                            (a) a new append-only `case_followup_events` table (migration) that
+#                            holds notes/proposed corrections/next action/follow-up date, or
+#                            (b) treating an imported note as the rationale of an analyst
+#                            DETERMINATION in `review_decision_events` (which would make an import
+#                            a decision — rejected here as a bypass of the analyst's own act), or
+#                            (c) `rce_issues.resolution_notes` (mutable, and it closes a finding).
+#                            Until an owner picks (a) or another model, these rows stay staged.
+# WHAT IS NEVER APPLIED      `requested_state` / bucket values: recorded as REQUESTED only. Approval,
+#                            release and reclassification stay on the determination and QA routes.
+# DURABLE IDEMPOTENCY        the apply is serialised per idempotency key with a transaction-scoped
+#                            advisory lock and refused if an `case_update_import_applied` audit row
+#                            already carries that key — so a retry or a concurrent duplicate submission
+#                            cannot apply twice. Matching preview hashes alone decide nothing.
+
+ACTION_ASSIGN = "assign_owner"
+STAGED_REASON_NOTES = ("staged, not applied: analyst notes / proposed corrections have no append-only "
+                       "case store yet — owner decision between a new case_followup_events table and the "
+                       "existing decision-event model (doc 13 §2 / doc 20)")
+AUDIT_APPLIED_ACTION = "case_update_import_applied"
+
+
+def plan_apply(preview: Dict[str, Any]) -> Dict[str, Any]:
+    """Partition the preview's rows into what apply will do. Pure; reconciles to rows read."""
+    assign: List[Dict[str, Any]] = []
+    staged: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    for row in preview.get("rows", []):
+        if row.get("disposition") != DISP_ACCEPTED:
+            skipped.append({"row": row["row"], "disposition": row.get("disposition"), "reason": "; ".join(row.get("reasons") or []) or "not accepted"})
+            continue
+        changes = row.get("changes") or {}
+        target = (row.get("matched_review_ids") or [None])[0]
+        if changes.get("assign_to_email"):
+            assign.append({"row": row["row"], "review_id": target, "assign_to_email": changes["assign_to_email"]})
+        other = {k: v for k, v in changes.items() if k != "assign_to_email"}
+        if other:
+            staged.append({"row": row["row"], "review_id": target, "content": other, "reason": STAGED_REASON_NOTES})
+    total = preview.get("rows_read", 0)
+    rows_with_assign = {a["row"] for a in assign}
+    rows_with_staged = {s["row"] for s in staged}
+    accounted = len(rows_with_assign | rows_with_staged) + len(skipped)
+    return {"assignments": assign, "staged_not_applied": staged, "not_applicable": skipped,
+            "rows_read": total, "reconciles": accounted == total}
+
+
+def describe_apply(preview: Dict[str, Any]) -> Dict[str, Any]:
+    plan = plan_apply(preview)
+    n_assign = len(plan["assignments"])
+    return {
+        "available": n_assign > 0,
+        "applies": "assign_to_email on accepted rows, through case_assignment.assign (senior_analyst or above; "
+                   "audit-logged; APPROVED cases refused; held cases refused without an override reason)",
+        "assignments_ready": n_assign,
+        "staged_not_applied": len(plan["staged_not_applied"]),
+        "never_applied": "requested_state / bucket values (recorded as requested only)",
+        "reason": (None if n_assign else
+                   ("no assignable rows; notes/corrections are staged, not applied — see staged_not_applied"
+                    if plan["staged_not_applied"] else
+                    "no accepted row carries assign_to_email; nothing is applicable to apply")),
+        "unresolved_business_choice": STAGED_REASON_NOTES,
+        "endpoint": "POST /api/tefca/arc/cases/import/apply?purpose=case_updates[&worksheet=]&confirm=true (same file)",
+    }
+
+
+async def apply_case_updates(db, *, preview: Dict[str, Any], actor_user, idempotency_key: str,
+                             ip_address: Optional[str] = None, resolve_user_id) -> Dict[str, Any]:
+    """Apply the plan for ONE staged file, exactly once per idempotency key.
+
+    `resolve_user_id(email) -> uuid | None` is supplied by the route (users table lookup).
+    Returns a reconciliation: applied + refused + staged_not_applied + not_applicable = rows read,
+    or `already_applied` with the original outcome when the key was applied before.
+    """
+    from sqlalchemy import select, text
+    from app.tefca_registry import audit as reg_audit
+    from app.tefca_registry import case_assignment as ca
+    from app.tefca_registry import models as reg
+
+    # Serialise all appliers of this key; the lock is held until the surrounding transaction ends,
+    # so a concurrent duplicate waits and then sees the audit row the first one committed.
+    await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": idempotency_key})
+    prior = (await db.execute(
+        select(reg.TefcaRegAuditLog.created_at, reg.TefcaRegAuditLog.metadata_)
+        .where(reg.TefcaRegAuditLog.action == AUDIT_APPLIED_ACTION,
+               reg.TefcaRegAuditLog.metadata_["idempotency_key"].astext == idempotency_key)
+        .order_by(reg.TefcaRegAuditLog.created_at.asc()).limit(1))).first()
+    if prior is not None:
+        return {"already_applied": True, "idempotency_key": idempotency_key,
+                "first_applied_at": prior.created_at.isoformat() if prior.created_at else None,
+                "original": (prior.metadata_ or {}).get("counts"),
+                "note": "this file (same bytes, purpose and mapping version) was already applied; nothing was changed"}
+
+    plan = plan_apply(preview)
+    applied: List[Dict[str, Any]] = []
+    refused: List[Dict[str, Any]] = []
+    actor_id, actor_email = reg_audit.actor_of(actor_user)
+    for a in plan["assignments"]:
+        to_user = await resolve_user_id(a["assign_to_email"])
+        if to_user is None:
+            refused.append({**a, "reason": "assign_to_email does not match an active account"})
+            continue
+        try:
+            out = await ca.assign(db, a["review_id"], user=actor_user, to_user_id=to_user,
+                                 reason=f"case-update import {idempotency_key[:12]} row {a['row']}",
+                                 ip_address=ip_address)
+            applied.append({**a, "previous_owner": out.get("previous_owner"), "state": out.get("state")})
+        except ca.AssignmentRefused as exc:
+            refused.append({**a, "reason": str(exc)})
+    counts = {"rows_read": plan["rows_read"], "applied": len(applied), "refused": len(refused),
+              "staged_not_applied": len(plan["staged_not_applied"]), "not_applicable": len(plan["not_applicable"])}
+    rows_touched = {r["row"] for r in applied} | {r["row"] for r in refused} | {s["row"] for s in plan["staged_not_applied"]} | {s["row"] for s in plan["not_applicable"]}
+    counts["reconciles"] = len(rows_touched) == plan["rows_read"]
+    reg_audit.record(db, AUDIT_APPLIED_ACTION, None, actor_id=actor_id, actor_email=actor_email,
+                     ip_address=ip_address,
+                     metadata={"idempotency_key": idempotency_key, "counts": counts, "applied": applied,
+                               "refused": refused, "staged_not_applied": plan["staged_not_applied"],
+                               "mapping_version": MAPPING_VERSION})
+    return {"already_applied": False, "idempotency_key": idempotency_key, "counts": counts,
+            "applied": applied, "refused": refused, "staged_not_applied": plan["staged_not_applied"],
+            "not_applicable": plan["not_applicable"],
+            "unresolved_business_choice": STAGED_REASON_NOTES}

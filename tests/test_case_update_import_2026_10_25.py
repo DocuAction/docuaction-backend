@@ -9,8 +9,10 @@ from __future__ import annotations
 import io
 
 import pytest
+import uuid
 
 from app.tefca_registry.rce import case_update_import as cui
+from rce_traceability_support import rolled_back_db  # noqa: F401
 
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
@@ -188,11 +190,13 @@ async def test_other_purposes_are_redirected_not_imported():
                                 resolve=fake_resolve, uploaded_by="t")
 
 
-async def test_build_preview_reports_idempotency_key_and_never_offers_apply():
+async def test_build_preview_reports_idempotency_key_and_apply_availability():
     data = csv_bytes(["review_id", "analyst_note"], [["REV-2026-000001", "a"], ["REV-2026-000001", "a"]])
     res = await cui.build_preview("u.csv", data, purpose="case_updates", worksheet=None,
                                   resolve=fake_resolve, uploaded_by="analyst@example.invalid")
+    # one accepted note-only row: nothing assignable -> apply not available, note staged
     assert res["apply"]["available"] is False
+    assert res["apply"]["staged_not_applied"] == 1 and "staged" in res["apply"]["reason"]
     assert res["idempotency_key"] == cui.idempotency_key(res["file"]["sha256"], "case_updates")
     # Same bytes again → same key: a retry is recognisable and cannot double-apply.
     again = await cui.build_preview("u.csv", data, purpose="case_updates", worksheet=None,
@@ -210,9 +214,100 @@ async def test_header_failure_stages_no_rows():
 
 # ── /cases window arithmetic (route module, no DB) ───────────────────────────
 
-def test_cases_route_is_registered_with_viewer_floor_and_preview_requires_reviewer():
+def test_cases_routes_are_registered():
     from app.tefca_registry import review_routes as rr
     paths = {r.path: r for r in rr.router.routes}
     assert "/api/tefca/arc/cases" in paths
     assert "/api/tefca/arc/cases/import/preview" in paths
-    assert "/api/tefca/arc/cases/import/apply" not in paths  # no apply path in this release
+    assert "/api/tefca/arc/cases/import/apply" in paths  # ownership-only apply, exactly once per key
+
+
+# ── apply plan + durable idempotency (2026-10-25) ────────────────────────────
+
+PREVIEW = {
+    "rows_read": 5, "reconciles": True,
+    "rows": [
+        {"row": 1, "disposition": "accepted", "matched_review_ids": ["REV-2026-000001"], "changes": {"assign_to_email": "sup@example.invalid"}, "reasons": []},
+        {"row": 2, "disposition": "accepted", "matched_review_ids": ["REV-2026-000002"], "changes": {"analyst_note": "n"}, "reasons": []},
+        {"row": 3, "disposition": "accepted", "matched_review_ids": ["REV-2026-000003"], "changes": {"assign_to_email": "sup@example.invalid", "proposed_correction_field": "address"}, "reasons": []},
+        {"row": 4, "disposition": "needs_review", "matched_review_ids": ["REV-2026-000001"], "changes": {"requested_state": "Released"}, "reasons": ["workflow value requested"]},
+        {"row": 5, "disposition": "rejected", "matched_review_ids": [], "changes": {}, "reasons": ["no existing case matches this identity"]},
+    ],
+}
+
+
+def test_plan_apply_partitions_rows_and_reconciles():
+    plan = cui.plan_apply(PREVIEW)
+    assert [a["row"] for a in plan["assignments"]] == [1, 3]
+    assert [x["row"] for x in plan["staged_not_applied"]] == [2, 3]          # row 3 is both: assign applied, correction staged
+    assert [x["row"] for x in plan["not_applicable"]] == [4, 5]
+    assert plan["reconciles"] is True
+    assert all("case_followup_events" in x["reason"] for x in plan["staged_not_applied"])
+
+
+def test_describe_apply_states_what_is_and_is_not_applied():
+    d = cui.describe_apply(PREVIEW)
+    assert d["available"] is True and d["assignments_ready"] == 2 and d["staged_not_applied"] == 2
+    assert "requested_state" in d["never_applied"]
+    assert "case_followup_events" in d["unresolved_business_choice"]
+    none = cui.describe_apply({"rows_read": 1, "rows": [{"row": 1, "disposition": "unchanged", "matched_review_ids": ["REV-2026-000001"], "changes": {}, "reasons": []}]})
+    assert none["available"] is False and "nothing is applicable" in none["reason"]
+
+
+class TestApplyIdempotency:
+    """Durable, database-backed: a second apply of the same key (retry or concurrent duplicate)
+    applies nothing and reports the first outcome; the assignment service is the one that writes."""
+
+    async def test_second_apply_of_same_key_is_refused_and_changes_nothing(self, rolled_back_db, monkeypatch):
+        from types import SimpleNamespace
+        from sqlalchemy import select
+        from app.tefca_registry import case_assignment as ca
+        from app.tefca_registry import models as reg
+        calls = []
+
+        async def fake_assign(db, review_id, *, user, to_user_id, reason=None, override_reason=None, ip_address=None):
+            calls.append((review_id, str(to_user_id), reason))
+            return {"review_id": review_id, "previous_owner": None, "state": "CLAIMED"}
+        monkeypatch.setattr(ca, "assign", fake_assign)
+
+        async def resolve_user_id(email):
+            return uuid.UUID("11111111-1111-1111-1111-111111111111") if email == "sup@example.invalid" else None
+
+        actor = SimpleNamespace(id=uuid.uuid4(), email="senior@example.invalid", role="senior_analyst")
+        key = "k" * 64
+        first = await cui.apply_case_updates(rolled_back_db, preview=PREVIEW, actor_user=actor, idempotency_key=key,
+                                             resolve_user_id=resolve_user_id)
+        assert first["already_applied"] is False
+        assert first["counts"] == {"rows_read": 5, "applied": 2, "refused": 0, "staged_not_applied": 2, "not_applicable": 2, "reconciles": True}
+        assert len(calls) == 2 and all("case-update import" in c[2] for c in calls)
+
+        second = await cui.apply_case_updates(rolled_back_db, preview=PREVIEW, actor_user=actor, idempotency_key=key,
+                                              resolve_user_id=resolve_user_id)
+        assert second["already_applied"] is True and second["original"]["applied"] == 2
+        assert len(calls) == 2, "a retry must not call the assignment service again"
+        audits = (await rolled_back_db.execute(select(reg.TefcaRegAuditLog).where(
+            reg.TefcaRegAuditLog.action == cui.AUDIT_APPLIED_ACTION,
+            reg.TefcaRegAuditLog.metadata_["idempotency_key"].astext == key))).scalars().all()
+        assert len(audits) == 1
+        assert audits[0].metadata_["staged_not_applied"][0]["content"] == {"analyst_note": "n"}
+
+    async def test_unknown_assignee_and_service_refusal_are_reported_not_applied(self, rolled_back_db, monkeypatch):
+        from types import SimpleNamespace
+        from app.tefca_registry import case_assignment as ca
+
+        async def refusing_assign(db, review_id, *, user, to_user_id, **kw):
+            raise ca.AssignmentRefused(f"{review_id} is APPROVED; reassigning it would imply the settled determination is back in play")
+        monkeypatch.setattr(ca, "assign", refusing_assign)
+
+        async def resolve_user_id(email):
+            return None if email.startswith("nobody") else uuid.uuid4()
+
+        preview = {"rows_read": 2, "rows": [
+            {"row": 1, "disposition": "accepted", "matched_review_ids": ["REV-2026-000009"], "changes": {"assign_to_email": "nobody@example.invalid"}, "reasons": []},
+            {"row": 2, "disposition": "accepted", "matched_review_ids": ["REV-2026-000010"], "changes": {"assign_to_email": "sup@example.invalid"}, "reasons": []},
+        ]}
+        actor = SimpleNamespace(id=uuid.uuid4(), email="senior@example.invalid", role="senior_analyst")
+        out = await cui.apply_case_updates(rolled_back_db, preview=preview, actor_user=actor, idempotency_key="r" * 64,
+                                           resolve_user_id=resolve_user_id)
+        assert out["counts"]["applied"] == 0 and out["counts"]["refused"] == 2 and out["counts"]["reconciles"] is True
+        assert "active account" in out["refused"][0]["reason"] and "APPROVED" in out["refused"][1]["reason"]
