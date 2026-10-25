@@ -13,7 +13,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,7 +23,7 @@ from app.core.security import require_role
 from app.tefca_registry import audit as reg_audit
 from app.tefca_registry import models as reg
 from app.tefca_registry.bucket_classifier import (
-    BucketClassifier, ensure_seed_rules, ensure_rules_v2)
+    BucketClassifier, ensure_seed_rules, ensure_rules_v2, has_positive_clause)
 from app.tefca_registry.report_generator import (
     build_report_data, render_html, report_id_for)
 from app.tefca_registry.sampling_engine import CochranSampler
@@ -77,6 +77,11 @@ class RuleCreate(BaseModel):
     description: Optional[str] = None
     effective_date: Optional[date] = None
 
+    @field_validator("conditions")
+    @classmethod
+    def _must_assert_something(cls, v: dict) -> dict:
+        return _require_positive_clause(v)
+
 
 class RuleUpdate(BaseModel):
     """Creates a NEW version. The existing row is retired, never edited."""
@@ -86,6 +91,20 @@ class RuleUpdate(BaseModel):
     conditions: Optional[dict] = None
     description: Optional[str] = None
     effective_date: Optional[date] = None
+
+    @field_validator("conditions")
+    @classmethod
+    def _must_assert_something(cls, v: Optional[dict]) -> Optional[dict]:
+        return v if v is None else _require_positive_clause(v)
+
+
+def _require_positive_clause(conditions: dict) -> dict:
+    if not has_positive_clause(conditions):
+        raise ValueError(
+            "conditions must contain a non-empty all_of, any_of or any_unavailable "
+            "clause; a rule that asserts nothing would match every input and replace "
+            "the B3 default")
+    return conditions
 
 
 class SampleCreate(BaseModel):

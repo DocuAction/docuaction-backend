@@ -66,10 +66,13 @@ def _classify(results, probe_retired):
     return asyncio.run(clf.classify_with_db(_StubSession(rows), results))
 
 
-def test_active_empty_conditions_probe_turns_the_b3_default_into_b1():
-    """Characterisation of the defect (this is what DEV does today)."""
+def test_active_empty_conditions_probe_no_longer_turns_the_b3_default_into_b1():
+    """Until 2026-10-25 this case classified B1 via RULE-RBAC-PROBE on DEV (220 records).
+    The loader now refuses the row even while it is still active, so the documented
+    default holds; `test_classifier_rejects_empty_conditions_2026_10_25.py` pins the guards."""
     r = _classify(UNMATCHED, probe_retired=False)
-    assert (r.bucket, r.rule_code) == ("B1", "RULE-RBAC-PROBE")
+    assert (r.bucket, r.rule_code) == ("B3", None)
+    assert "RULE-RBAC-PROBEv1" not in r.evaluated_rules
 
 
 def test_retired_probe_is_not_loaded_and_an_unmatched_case_falls_back_to_b3():
