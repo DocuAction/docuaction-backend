@@ -244,6 +244,9 @@ async def run_quality_engine(
     await db.flush()
 
     dataset = await _build_dataset_context(db, intake.id)
+    # Effective-dated rules (BR-NPI-TRTMNT-001) read the run's own date, so a
+    # re-run of an old delivery is assessed as of today and says so.
+    dataset["assessment_date"] = run.started_at.date()
 
     # Per-record check results (issue-history slice). OFF by default; when off
     # nothing below this line differs from the behaviour before the slice.

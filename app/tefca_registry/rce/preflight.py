@@ -62,7 +62,7 @@ from app.tefca_registry.rce.field_map import (
 )
 from app.tefca_registry.rce.quality_engine import _build_dataset_context
 from app.tefca_registry.rce.quality_rules import (
-    RULE_BY_ID, RULE_SET_VERSION, Finding, RecordContext,
+    RULE_BY_ID, RULE_SET_VERSION, Finding, RecordContext, npi_requirement_basis,
 )
 
 logger = logging.getLogger(__name__)
@@ -410,15 +410,18 @@ def _record_findings(acc: _Acc, record, ctx: RecordContext) -> None:
                     record_id=rid, line_number=line)
 
     # 3. Missing context: the NPI-requirement question cannot be decided.
-    #    `quality_rules.npi_required` deliberately returns False on a blank
-    #    hl7orgrole (no case is ever created solely for a blank role). That
-    #    is the right escalation behaviour; it is NOT the same as the
-    #    requirement being resolved, and preflight records the difference.
-    if not ctx.get("NPI") and not ctx.get("hl7orgrole") and ctx.get("sequoiaorgtype"):
+    #    A blank hl7orgrole alone never creates a requirement (no case is ever
+    #    created solely for a blank role). Since 1.5.0, BR-NPI-TRTMNT-001 CAN
+    #    decide it — T-TRTMNT in purposesofuse requires an NPI regardless of
+    #    the role — so this context finding is recorded only while the
+    #    question is still genuinely open on every documented basis.
+    if (not ctx.get("NPI") and not ctx.get("hl7orgrole") and ctx.get("sequoiaorgtype")
+            and npi_requirement_basis(ctx) is None):
         acc.finding(category="MISSING_CONTEXT", code="PF-CTX-001", field_name="NPI",
                     applicability=pm.UNRESOLVED, execution=pm.EXEC_INSUFFICIENT,
                     disposition=pm.DISP_INFORMATIONAL,
                     evidence={"hl7orgrole": "", "sequoiaorgtype": ctx.get("sequoiaorgtype"),
+                              "purposesofuse": ctx.get("purposesofuse"),
                               "npi_required_predicate": False,
                               "why_unresolved": "no delivered field captures the HIPAA "
                                                 "covered-provider test (45 CFR 160.103 / "

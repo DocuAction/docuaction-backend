@@ -87,7 +87,7 @@ HUMAN_REQUIRED / QA_REQUIRED findings do).
 | Scenario | Rows | Content | Expected quality findings (beyond the QHIN row) | Record status / cases |
 |---|---|---|---|---|
 | CLEAN_B1 | 5 | QHIN + P2, P3 + S4→P2, S5→P3; valid NPIs; all profiled fields populated | Participants: `BUS-003 PARTICIPANT_PARENT_IS_QHIN` (INFO). Subparticipants: none | 4 CLEAN, 0 cases; outcome "Completed — With Exceptions" (1 held QHIN) |
-| MISSING_NPI | 5 | All four members with empty NPI, empty hl7orgrole | `NPI-001 NPI_NOT_SUPPLIED` (INFO, NO_CORRECTION) | 4 CLEAN, 0 cases |
+| MISSING_NPI | 5 | All four members with empty NPI, empty hl7orgrole; lines 3/5 purposesofuse T-TRTMNT, lines 4/6 T-PYMNT | Lines 4/6: `NPI-001 NPI_NOT_SUPPLIED` (INFO, NO_CORRECTION). Lines 3/5: `NPI-001 NPI_REQUIRED` (HIGH, HUMAN_REQUIRED) under BR-NPI-TRTMNT-001 (rule set 1.5.0) | 2 CLEAN, 2 HELD for analyst determination (requiredness finding only — not a bucket or exclusion) |
 | MALFORMED_NPI | 5 | 9-digit (l.3), 11-digit (l.4), lettered 10-char (l.5), comma-separated (l.6) | `NPI-002 NPI_LENGTH_INVALID` ×2, `NPI-004 NPI_FORMAT_INVALID`, `NPI-002 MULTIPLE_NPI_IN_ONE_FIELD` — all HIGH, HUMAN_REQUIRED | 4 HELD, 4 IDENTITY cases |
 | LUHN_INVALID_NPI | 5 | l.3 and l.5 fail the CMS check digit; l.4, l.6 valid controls | `NPI-003 NPI_CHECKSUM_INVALID` (HIGH, HUMAN_REQUIRED) ×2 | 2 HELD + 2 CLEAN, 2 IDENTITY cases |
 | MISSING_PARTOF | 6 | P2 (l.3) and S4 (l.5) with empty partOf; S6 (l.7) partOf `…QAMISSINGPARTOF.0` (never delivered) | `INT-002 MISSING_PART_OF` (HIGH, **NO_CORRECTION**) ×2; `INT-002 PART_OF_UNRESOLVED` (MEDIUM, HUMAN_REQUIRED) | 2 HELD **without** a case; l.7 CLEAN with 1 RELATIONSHIP case |

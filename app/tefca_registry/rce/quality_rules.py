@@ -38,6 +38,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.tefca_registry.rce.field_map import (
@@ -52,6 +53,7 @@ from app.tefca_registry.rce.field_map import (
     normalize_active,
     normalize_naic,
     split_doa_references,
+    split_purpose_tokens,
 )
 
 #: 1.3.0 — September 2026 snapshot: quote-aware reading, `active` normalisation
@@ -63,7 +65,12 @@ from app.tefca_registry.rce.field_map import (
 #: technical parenting to a QHIN alone does not prove an invalid agreement
 #: chain. No rule condition, severity or disposition changed; issues raised
 #: under 1.3.0 and earlier keep their stored rule_version and text.
-RULE_SET_VERSION = "1.4.0"
+#: 1.5.0 — business rule BR-NPI-TRTMNT-001 (see `npi_requirement_basis`):
+#: NPI-001 (1.3.0) also requires an NPI when `purposesofuse` contains the exact
+#: token T-TRTMNT, for assessments on/after 2026-10-25. Issue type, severity and
+#: authority are unchanged (NPI_REQUIRED, HIGH, HUMAN_REQUIRED); only the
+#: predicate widened. Earlier runs keep their stored rule_version and text.
+RULE_SET_VERSION = "1.5.0"
 
 # ── categories ───────────────────────────────────────────────────────────────
 
@@ -296,34 +303,95 @@ LEGACY_ISSUE_TYPES: Dict[str, List[str]] = {
 #: Organisation classes that can be expected to hold an NPI at all.
 _NPI_BEARING_ORG_TYPES = frozenset({"Participant", "Subparticipant"})
 
+#: BR-NPI-TRTMNT-001 — "Under purposeofuse, T-TRTMNT requires an NPI."
+#: Business clarification from Meley, relayed by Imran Siddiqui (AGT) on
+#: 2026-10-25. A clarification of this one requirement, NOT an acceptance of the
+#: methodology as a whole. Exact token; T-TREAT and other purposes are NOT
+#: covered (no supporting policy). Effective for assessments dated on/after
+#: BR_NPI_TRTMNT_EFFECTIVE; an assessment dated earlier keeps the 1.2.0
+#: predicate, so historical runs are never silently re-interpreted.
+BR_NPI_TRTMNT_RULE_ID = "BR-NPI-TRTMNT-001"
+BR_NPI_TRTMNT_TOKEN = "T-TRTMNT"
+BR_NPI_TRTMNT_EFFECTIVE = date(2026, 10, 25)
+
+BASIS_PROFILE_ROLE = "PROFILE_ROLE"
+BASIS_PURPOSE_T_TRTMNT = "PURPOSE_T_TRTMNT"
+
+
+def assessment_date(ctx: RecordContext) -> date:
+    """The date the run is assessing AS OF. `RecordContext.dataset` carries it
+    (`assessment_date`, a date or ISO string) — the quality engine sets it to the
+    run's start; a context without one is a current assessment (today)."""
+    raw = ctx.dataset.get("assessment_date")
+    if isinstance(raw, datetime):
+        return raw.date()
+    if isinstance(raw, date):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        return date.fromisoformat(raw.strip()[:10])
+    return date.today()
+
+
+def purpose_requires_npi(ctx: RecordContext) -> bool:
+    """BR-NPI-TRTMNT-001 predicate: the delivered `purposesofuse` list, split on
+    its documented separators with surrounding whitespace removed, contains the
+    exact token T-TRTMNT, and the assessment is on/after the effective date.
+    Membership, not substring: `T-TRTMNT-X` or `XT-TRTMNT` do not match."""
+    if assessment_date(ctx) < BR_NPI_TRTMNT_EFFECTIVE:
+        return False
+    return BR_NPI_TRTMNT_TOKEN in split_purpose_tokens(ctx.get("purposesofuse"))
+
+
+def npi_requirement_basis(ctx: RecordContext) -> Optional[str]:
+    """WHY this record requires an NPI, or None if nothing requires one.
+
+    PROFILE_ROLE (1.2.0): Participant/Subparticipant whose `hl7orgrole` is
+    populated and not in `NON_PROVIDER_HL7_ROLES`. An EMPTY role imposes nothing
+    on this basis — the field is populated on 0.25% of the profiled delivery.
+
+    PURPOSE_T_TRTMNT (1.3.0, BR-NPI-TRTMNT-001): `purposesofuse` contains
+    T-TRTMNT. Deliberately independent of `hl7orgrole` (blank role must not
+    suppress it), of `sequoiaorgtype` (Participant/Subparticipant labels must
+    not suppress it) and of `active` (source status is a separate fact).
+
+    A record with neither basis: absence of an NPI is a fact (NPI_NOT_SUPPLIED,
+    INFORMATIONAL), never a failure. Nothing here infers that an NPI is never
+    required when T-TRTMNT is absent — other documented bases still apply.
+    This function is the single place the requiredness decision lives.
+    """
+    if ctx.get("sequoiaorgtype") in _NPI_BEARING_ORG_TYPES:
+        role = ctx.get("hl7orgrole")
+        if role and role not in NON_PROVIDER_HL7_ROLES:
+            return BASIS_PROFILE_ROLE
+    if purpose_requires_npi(ctx):
+        return BASIS_PURPOSE_T_TRTMNT
+    return None
+
 
 def npi_required(ctx: RecordContext) -> bool:
-    """Does this record's profile REQUIRE an NPI?
-
-    Required when the record is a Participant or Subparticipant AND its
-    `hl7orgrole` explicitly indicates a provider organisation — that is, the
-    role is populated and is not one of `NON_PROVIDER_HL7_ROLES` (payer,
-    agency, HIE/HIO).
-
-    An EMPTY `hl7orgrole` does not impose the requirement. The field is
-    populated on 0.25% of the profiled delivery, and a field that sparse must
-    not create requirements (the same principle BUS-001 records): 19.45% of
-    delivered organisations carry no NPI, and most of them — networks,
-    clearinghouses, public-health agencies — have no reason to. Absence of an
-    NPI on such a record is a fact (NPI_NOT_SUPPLIED, INFORMATIONAL), never a
-    failure. This predicate is the single place that decision lives.
-    """
-    if ctx.get("sequoiaorgtype") not in _NPI_BEARING_ORG_TYPES:
-        return False
-    role = ctx.get("hl7orgrole")
-    return bool(role) and role not in NON_PROVIDER_HL7_ROLES
+    """Does this record REQUIRE an NPI (on any documented basis)?"""
+    return npi_requirement_basis(ctx) is not None
 
 
 def _npi_001(ctx: RecordContext) -> List[Finding]:
-    """Presence. Required by the profile → HIGH; otherwise a recorded fact."""
+    """Presence. Required (profile role or BR-NPI-TRTMNT-001) → HIGH, a review
+    finding for analyst determination — NOT an exclusion, not a bucket, not a
+    final non-compliance; otherwise a recorded fact."""
     if ctx.get("NPI"):
         return []
-    if npi_required(ctx):
+    basis = npi_requirement_basis(ctx)
+    if basis == BASIS_PURPOSE_T_TRTMNT:
+        return [Finding(
+            "NPI-001", "NPI_REQUIRED", HIGH,
+            f"No NPI supplied, and {BR_NPI_TRTMNT_RULE_ID} requires one: "
+            f"purposesofuse={ctx.get('purposesofuse')!r} contains "
+            f"{BR_NPI_TRTMNT_TOKEN} (hl7orgrole={ctx.get('hl7orgrole')!r}, "
+            f"sequoiaorgtype={ctx.get('sequoiaorgtype')!r}, "
+            f"active={ctx.get('active')!r} recorded, not consulted). Review "
+            f"finding for analyst determination; an NPI is never inferred or "
+            f"looked up on the organisation's behalf.",
+            HUMAN_REQUIRED, field_name="NPI")]
+    if basis == BASIS_PROFILE_ROLE:
         return [Finding(
             "NPI-001", "NPI_REQUIRED", HIGH,
             f"No NPI supplied, and the record's profile requires one: "
@@ -1040,9 +1108,9 @@ RULES: Tuple[Rule, ...] = (
     Rule("ID-005", CAT_IDENTIFIER, "1.0.0", "TEFCAID present", _id_005, HIGH),
     Rule("ID-006", CAT_IDENTIFIER, "1.0.0",
          "TEFCAID shared across records", _id_006, INFO),
-    Rule("NPI-001", CAT_NPI, "1.2.0", "NPI supplied (required by profile, "
-         "else recorded)", _npi_001, INFO,
-         applies=_applies_every_record),
+    Rule("NPI-001", CAT_NPI, "1.3.0", "NPI supplied (required by profile role "
+         "or by BR-NPI-TRTMNT-001 T-TRTMNT purpose, else recorded)", _npi_001,
+         INFO, applies=_applies_every_record),
     Rule("NPI-002", CAT_NPI, "1.2.0", "NPI length (and single value)", _npi_002,
          HIGH, applies=_applies_npi_present, requires_fields=("NPI",)),
     Rule("NPI-004", CAT_NPI, "1.2.0", "NPI numeric format", _npi_004, HIGH,
