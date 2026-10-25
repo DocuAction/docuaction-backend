@@ -15,6 +15,7 @@ Role floor `viewer`, same as every other TEFCA read in this codebase.
 from __future__ import annotations
 
 import uuid
+from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -41,6 +42,12 @@ async def search_records_route(
     tefcaid: Optional[str] = Query(None), name: Optional[str] = Query(None),
     qhin_entity_id: Optional[uuid.UUID] = Query(None),
     limit: int = Query(25, ge=1, le=200),
+    as_of: Optional[date] = Query(
+        None, description="End of a trailing window on the delivery receipt date "
+                          "(inclusive, end of day UTC). Omit both as_of and months for no window."),
+    months: Optional[int] = Query(
+        None, ge=1, le=36, description="Trailing window length in months (30.4-day months) ending at "
+                                       "as_of; default 12 when as_of is given."),
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role("viewer")),
 ):
@@ -54,7 +61,8 @@ async def search_records_route(
             db, npi=npi, hcid=hcid, tefcaid=tefcaid, name=name,
             qhin_entity_id=qhin_entity_id, limit=limit,
             reviewer_or_above=_reviewer_or_above(user), settings=settings,
-            allowed_modules=getattr(user, "allowed_modules", None))
+            allowed_modules=getattr(user, "allowed_modules", None),
+            as_of=as_of, months=months)
     except svc.RecordHistoryNotFound:
         return {"results": [], "count": 0}
 

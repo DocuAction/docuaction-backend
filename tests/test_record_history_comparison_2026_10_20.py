@@ -419,3 +419,43 @@ class TestFullPopulationChangeReport:
         hcid_rows = [r for r in rows if r["hcid"] == hcid]
         assert len(hcid_rows) == 1
         assert hcid_rows[0]["change_type"] == "AMBIGUOUS_LINKAGE_NOT_COMPARED"
+
+
+# ── trailing window on the record search (2026-10-25) ───────────────────────
+
+class TestSearchWindow:
+    def test_no_window_when_neither_bound_is_given(self):
+        assert svc.search_window(None, None) is None
+
+    def test_window_is_stated_explicitly_and_defaults_to_twelve_months(self):
+        from datetime import date
+        w = svc.search_window(date(2026, 10, 25), None)
+        assert w["as_of"] == "2026-10-25" and w["months"] == 12
+        assert w["received_to"] == "2026-10-25T23:59:59"
+        assert w["received_from"] == "2025-10-25T23:59:59"  # 12 x 30.4 = 365 days
+        assert w["applies_to"] == "rce_source_intakes.received_at"
+        assert "interpolated" in w["note"]
+
+    async def test_search_honours_the_window_and_reports_it(self, rolled_back_db):
+        """July and September deliveries carry the same organisation; a one-month
+        window ending 30 Sep returns only September, a twelve-month window both,
+        and a window before either returns nothing (not an interpolated July)."""
+        from datetime import date
+        db = rolled_back_db
+        july = entity_row("9.99.777.9.W1", tag="W1"); july["name"] = "Windowed Org July"
+        sept = entity_row("9.99.777.9.W2", tag="W2"); sept["name"] = "Windowed Org Sept"
+        await seed_delivery(db, [july], received_at=datetime(2026, 7, 20), feed=FEED, blob_salt="win-j")
+        await seed_delivery(db, [sept], received_at=datetime(2026, 9, 2), feed=FEED, blob_salt="win-s")
+
+        one_month = await svc.search_records(db, name="Windowed Org", reviewer_or_above=False,
+                                             settings=settings_for(), as_of=date(2026, 9, 30), months=1)
+        assert [r["name"] for r in one_month["results"]] == ["Windowed Org Sept"]
+        assert one_month["window"]["months"] == 1
+
+        twelve = await svc.search_records(db, name="Windowed Org", reviewer_or_above=False,
+                                          settings=settings_for(), as_of=date(2026, 9, 30), months=12)
+        assert sorted(r["name"] for r in twelve["results"]) == ["Windowed Org July", "Windowed Org Sept"]
+
+        before = await svc.search_records(db, name="Windowed Org", reviewer_or_above=False,
+                                          settings=settings_for(), as_of=date(2026, 6, 30), months=1)
+        assert before["results"] == [] and before["count"] == 0 and "window" in before

@@ -156,11 +156,39 @@ class SearchResult:
         }
 
 
+#: Trailing-window arithmetic shared by the route and the tests. A "month" is
+#: 30.4 days so the window is a stated, reproducible span rather than a
+#: calendar-month guess; the result echoes both bounds so a reader never has
+#: to infer them.
+WINDOW_DAYS_PER_MONTH = 30.4
+DEFAULT_WINDOW_MONTHS = 12
+
+
+def search_window(as_of: Optional[Any], months: Optional[int]) -> Optional[Dict[str, Any]]:
+    """None when no window was asked for; otherwise the inclusive bounds applied
+    to the delivery's `received_at` (end of `as_of` day, trailing `months`)."""
+    if as_of is None and months is None:
+        return None
+    from datetime import date as _date, datetime as _dt, timedelta as _td
+    end_day = as_of or _dt.utcnow().date()
+    if isinstance(end_day, _dt):
+        end_day = end_day.date()
+    months = int(months or DEFAULT_WINDOW_MONTHS)
+    end = _dt(end_day.year, end_day.month, end_day.day, 23, 59, 59)
+    start = end - _td(days=round(months * WINDOW_DAYS_PER_MONTH))
+    return {"as_of": end_day.isoformat(), "months": months,
+            "received_from": start.isoformat(), "received_to": end.isoformat(),
+            "applies_to": "rce_source_intakes.received_at",
+            "note": "a month with no delivery inside the window simply has no rows; nothing is interpolated",
+            "_start": start, "_end": end}
+
+
 async def search_records(
     db, *, npi: Optional[str] = None, hcid: Optional[str] = None,
     tefcaid: Optional[str] = None, name: Optional[str] = None,
     qhin_entity_id: Optional[Any] = None, limit: int = 25,
     reviewer_or_above: bool, settings, allowed_modules=None,
+    as_of: Optional[Any] = None, months: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Read-only search across every allowed delivery's own records.
 
@@ -189,6 +217,27 @@ async def search_records(
         # that found nothing -- the normal, expected shape of "no results",
         # not an error condition to raise on.
         return {"results": [], "count": 0}
+    window = search_window(as_of, months)
+    if window is not None:
+        # Window on the delivery's receipt date, applied to the ALLOWED intake set
+        # before the record query — so it narrows which deliveries are searched,
+        # never which of the first `limit` rows are kept.
+        def _in_window(i):
+            ra = i.get("received_at")
+            if ra is None:
+                return False
+            if isinstance(ra, str):
+                try:
+                    from datetime import datetime as _dt
+                    ra = _dt.fromisoformat(ra.replace("Z", "+00:00"))
+                except ValueError:
+                    return False
+            ra = ra.replace(tzinfo=None) if getattr(ra, "tzinfo", None) else ra
+            return window["_start"] <= ra <= window["_end"]
+        intakes = [i for i in intakes if _in_window(i)]
+        public_window = {k: v for k, v in window.items() if not k.startswith("_")}
+        if not intakes:
+            return {"results": [], "count": 0, "window": public_window}
     intake_ids = [i["id"] for i in intakes]
     intake_by_id = {i["id"]: i for i in intakes}
 
@@ -239,7 +288,10 @@ async def search_records(
             npi=r.npi, hcid=r.hcid, tefcaid=r.tefcaid,
             canonical_entity_id=r.canonical_entity_id, name=r.name,
             matched_on="+".join(matched_on)).as_dict())
-    return {"results": results, "count": len(results)}
+    out: Dict[str, Any] = {"results": results, "count": len(results)}
+    if window is not None:
+        out["window"] = {k: v for k, v in window.items() if not k.startswith("_")}
+    return out
 
 
 # ── 2. delivery history by HCID ──────────────────────────────────────────
