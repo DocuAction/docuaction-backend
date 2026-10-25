@@ -75,7 +75,7 @@
 -- Export 1; Export 2 twice -- the obs CTE and the JOIN condition; Export 3).
 -- Use a one-time find/replace on the whole file (grep -c "'<ROOT_SNAPSHOT_ID>'::uuid"
 -- must print 0 afterwards); a hand replacement that stops early aborts the
--- single transaction at the first unreplaced '<ROOT_SNAPSHOT_ID>'::uuid cast.
+-- single transaction at the first unreplaced placeholder cast.
 -- Report back: the reconciliation row (must show total_records = 24589,
 -- and the last column = 0), and the three CSV files' row counts.
 --
