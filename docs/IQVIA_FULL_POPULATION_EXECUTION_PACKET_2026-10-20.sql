@@ -73,8 +73,8 @@
 -- Before running, replace EVERY <ROOT_SNAPSHOT_ID> placeholder with the UUID
 -- the step-1 query below prints -- there are FIVE occurrences (Step 2;
 -- Export 1; Export 2 twice -- the obs CTE and the JOIN condition; Export 3).
--- Use a one-time find/replace on the whole file (grep -c "'<ROOT_SNAPSHOT_ID>'::uuid"
--- must print 0 afterwards); a hand replacement that stops early aborts the
+-- Use a one-time find/replace on the whole file (grep -c "'<ROOT_SNAPSHOT_ID>'::uuid" must print 1 afterwards:
+-- only this comment line remains); a hand replacement that stops early aborts the
 -- single transaction at the first unreplaced placeholder cast.
 -- Report back: the reconciliation row (must show total_records = 24589,
 -- and the last column = 0), and the three CSV files' row counts.

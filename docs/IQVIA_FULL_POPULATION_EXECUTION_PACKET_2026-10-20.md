@@ -70,7 +70,7 @@ the script.
    not request or add one).
 2. Run psql interactively against `$DEV_DATABASE_URL`, run Step 1 of the script, copy the printed
    `observation_root_snapshot_id` UUID.
-3. Replace EVERY `<ROOT_SNAPSHOT_ID>` placeholder in the file with that UUID (there are five: Step 2, Export 1, Export 2 twice, Export 3) with one whole-file find/replace; `grep -c "'<ROOT_SNAPSHOT_ID>'::uuid"` must print 0 before running.
+3. Replace EVERY `<ROOT_SNAPSHOT_ID>` placeholder in the file with that UUID (there are five: Step 2, Export 1, Export 2 twice, Export 3) with one whole-file find/replace; `grep -c "'<ROOT_SNAPSHOT_ID>'::uuid"` must print 1 (the header comment line only) before running.
 4. Run: `psql "$DEV_DATABASE_URL" -f IQVIA_FULL_POPULATION_EXECUTION_PACKET_2026-10-20.sql`
 5. Report back the reconciliation row (confirm `total_records = 24589` and the last column `= 0`)
    and the three CSV files, for the next step (building the PDF/data-dictionary deliverables from
