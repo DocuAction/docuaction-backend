@@ -1316,6 +1316,16 @@ async def get_report_html(
                               sha256=(registered.get("artifact") or {}).get("rendered_sha256"))
         headers = download_headers(safe_filename(stem, "html"))
         headers["X-Report-Source"] = "artifact-registry"
+        # DEF-2026-10-26-06: the registered hash is of the application's own
+        # bytes, re-verified above by _registered_bytes/_verified -- it does
+        # NOT cover anything an intermediary adds after this Response leaves
+        # the process (e.g. the App Service platform's HTML script injection,
+        # confirmed present on unrelated routes like /docs too). Exposing it
+        # as a header, not just in the body, gives a caller a value to check
+        # that the platform's body transformation cannot touch.
+        headers["X-Artifact-SHA256"] = (registered.get("artifact") or {}).get("rendered_sha256")
+        headers["X-Artifact-Version"] = str((registered.get("artifact") or {}).get("artifact_version"))
+        headers["X-Artifact-Verified"] = "true" if registered.get("verified") else "false"
         return Response(content=registered["content"], media_type="text/html",
                         headers=headers)
     if not row.report_html:
@@ -1357,6 +1367,9 @@ async def get_report_pdf(
                               sha256=(registered.get("artifact") or {}).get("rendered_sha256"))
         headers = download_headers(safe_filename(stem, "pdf"))
         headers["X-Report-Source"] = "artifact-registry"
+        headers["X-Artifact-SHA256"] = (registered.get("artifact") or {}).get("rendered_sha256")
+        headers["X-Artifact-Version"] = str((registered.get("artifact") or {}).get("artifact_version"))
+        headers["X-Artifact-Verified"] = "true" if registered.get("verified") else "false"
         return Response(content=registered["content"], media_type="application/pdf",
                         headers=headers)
     if not row.report_html:
@@ -1599,6 +1612,9 @@ async def get_report_csv(
                               artifact_version=art.get("artifact_version"), sha256=art.get("rendered_sha256"))
         headers = download_headers(safe_filename(_stem_for(row), "csv"))
         headers["X-Report-Source"] = "artifact-registry"
+        headers["X-Artifact-SHA256"] = art.get("rendered_sha256")
+        headers["X-Artifact-Version"] = str(art.get("artifact_version"))
+        headers["X-Artifact-Verified"] = "true" if registered.get("verified") else "false"
         return Response(content=registered["content"], media_type="text/csv", headers=headers)
     if not (row.report_data or {}).get("dataset"):
         raise HTTPException(404, f"Report {report_id} has no stored dataset.")

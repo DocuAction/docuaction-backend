@@ -91,6 +91,46 @@ async def test_csv_route_serves_the_registered_bytes_even_when_the_stored_datase
 
 
 @pytest.mark.asyncio
+async def test_registered_downloads_expose_the_artifact_hash_as_a_header_not_only_in_the_body(
+        rolled_back_db, artifact_root):
+    """DEF-2026-10-26-06: the body of a served HTML report can be altered by something OUTSIDE this
+    application (confirmed live: the Azure App Service platform injects a per-request script tag into
+    every text/html response from this App Service, including unrelated ones like /docs -- not this
+    app's own code). A caller who re-hashes the HTML body can never reproduce the registered hash
+    because of that, through no fault of the artifact system.
+
+    X-Artifact-SHA256 carries the hash of the REGISTERED bytes -- re-verified server-side by
+    _registered_bytes/_verified before this header is ever set -- so a caller has something to check
+    that a body-level transformation cannot touch. CSV and PDF aren't subject to the same platform
+    behaviour (confirmed: their downloads are byte-identical across repeats), but they get the same
+    header for the same reason: the header is the artifact's identity; the body is one way to deliver it.
+    """
+    from app.reports import routes
+    from app.reports.engine.pdf_engine import pdf_available
+
+    db = rolled_back_db
+    _ids, result = await _persisted_delivery_report(db)
+    registered_csv = await _registered_csv(db, result["report_id"])
+
+    html_first = await routes.get_report_html(result["report_id"], job_id=None, db=db, user=USER)
+    html_second = await routes.get_report_html(result["report_id"], job_id=None, db=db, user=USER)
+    for resp in (html_first, html_second):
+        assert resp.headers.get("X-Artifact-Verified") == "true"
+        assert resp.headers.get("X-Artifact-SHA256") == hashlib.sha256(resp.body).hexdigest()
+    assert html_first.headers["X-Artifact-SHA256"] == html_second.headers["X-Artifact-SHA256"], \
+        "same report, same registered artifact -- the header must not vary call to call"
+
+    csv_resp = await routes.get_report_csv(result["report_id"], job_id=None, db=db, user=USER)
+    assert csv_resp.headers.get("X-Artifact-SHA256") == registered_csv["artifact"]["rendered_sha256"]
+    assert csv_resp.headers.get("X-Artifact-Verified") == "true"
+
+    if pdf_available():
+        pdf_resp = await routes.get_report_pdf(result["report_id"], job_id=None, db=db, user=USER)
+        assert pdf_resp.headers.get("X-Artifact-SHA256") == hashlib.sha256(pdf_resp.body).hexdigest()
+        assert pdf_resp.headers.get("X-Artifact-Verified") == "true"
+
+
+@pytest.mark.asyncio
 async def test_csv_route_refuses_a_mismatched_delivery_before_any_registry_access(rolled_back_db, artifact_root, monkeypatch):
     """Scope first. A caller naming another delivery's job_id is refused with 409 REPORT_DELIVERY_MISMATCH before the
     registry is consulted, so the refusal can trigger neither the registry's integrity error nor its audit rows."""
