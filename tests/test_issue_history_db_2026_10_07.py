@@ -879,8 +879,15 @@ async def test_route_writes_one_audit_row_per_read_and_a_uniform_404(rolled_back
     assert core.forbidden_keys_present(out) == []
     rev = await routes.issue_history_route(OID, request, 12, None, db=db, user=reviewer)
     assert lane(rev["deliveries"][0], NPI2)["finding"]["original_value"] == "7770007"
-    assert (await _audit_rows(db))[-1].metadata_["role"] == "reviewer"
-    assert len(await _audit_rows(db)) == base + 2
+    # ORDER-INDEPENDENT (2026-10-25): every audit row written inside this one test
+    # transaction carries the same `now()` timestamp, so `ORDER BY created_at` does not
+    # order them and `[-1]` was whichever row Postgres returned last — this assertion
+    # failed intermittently on PRs that never touched this code (#169 fcf7ef4, #174
+    # first run). Identify the reviewer's row by its content instead of its position.
+    new_rows = (await _audit_rows(db))[base:]
+    assert len(new_rows) == 2
+    assert any(r.actor_email == "rev@syn.invalid" and r.metadata_["role"] == "reviewer"
+               for r in new_rows)
 
     # 404s are identical for unknown and out-of-scope OIDs, and are audited too
     bodies = []
@@ -889,8 +896,10 @@ async def test_route_writes_one_audit_row_per_read_and_a_uniform_404(rolled_back
             await routes.issue_history_route(oid, request, 12, None, db=db, user=viewer)
         bodies.append((exc.value.status_code, exc.value.detail))
     assert bodies[0] == bodies[1] == (404, "NOT_FOUND")
-    assert len(await _audit_rows(db)) == base + 4
-    assert (await _audit_rows(db))[-1].metadata_["visible_deliveries"] == 0
+    after_404 = (await _audit_rows(db))[base:]
+    assert len(after_404) == 4
+    # the two 404 reads are audited with zero visible deliveries (order-independent, see above)
+    assert sum(1 for r in after_404 if r.metadata_["visible_deliveries"] == 0) == 2
 
     # an account with no configured feed gets 404 for every OID
     monkeypatch.setattr(settings, "ISSUE_HISTORY_FEEDS_VIEWER", "")
