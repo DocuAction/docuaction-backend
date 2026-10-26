@@ -40,6 +40,13 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio httpx
 
+      # 2026-10-26 (DEF-2026-10-26-05's root cause): static, no database, no network --
+      # catches a rolled_back_db-based test file silently wired into neither CI database
+      # job below before CI spends minutes on it, and stops this specific gap from
+      # growing again. scripts/ci/check_db_test_coverage.py has the full rationale.
+      - name: Check DB-backed test coverage (static)
+        run: python scripts/ci/check_db_test_coverage.py
+
       - name: Run tests (no live database - boundary/routing/auth coverage)
         run: python -m pytest tests/ -v --tb=short --junitxml=test-results.xml
         env:

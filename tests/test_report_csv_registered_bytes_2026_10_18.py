@@ -96,14 +96,21 @@ async def test_registered_downloads_expose_the_artifact_hash_as_a_header_not_onl
     """DEF-2026-10-26-06: the body of a served HTML report can be altered by something OUTSIDE this
     application (confirmed live: the Azure App Service platform injects a per-request script tag into
     every text/html response from this App Service, including unrelated ones like /docs -- not this
-    app's own code). A caller who re-hashes the HTML body can never reproduce the registered hash
-    because of that, through no fault of the artifact system.
+    app's own code, and not stopped by Content-Disposition: attachment -- this route was already
+    attachment-only when the defect was found). A caller who re-hashes the HTML body can never
+    reproduce the registered hash because of that, through no fault of the artifact system.
 
     X-Artifact-SHA256 carries the hash of the REGISTERED bytes -- re-verified server-side by
-    _registered_bytes/_verified before this header is ever set -- so a caller has something to check
-    that a body-level transformation cannot touch. CSV and PDF aren't subject to the same platform
-    behaviour (confirmed: their downloads are byte-identical across repeats), but they get the same
-    header for the same reason: the header is the artifact's identity; the body is one way to deliver it.
+    _registered_bytes/_verified before this header is ever set. It is a REFERENCE value a caller can
+    cross-check against the registry out of band and rely on being stable call to call; it does NOT
+    let a caller verify the literal bytes of a text/html response body, which are expected to differ
+    whenever the platform injects into them. The registered-HTML branch of /html therefore serves as
+    application/octet-stream instead (see routes.py), since nothing depends on this always-attachment
+    route rendering inline, and the platform's confirmed injection targets text/html specifically --
+    an untested-live candidate fix, not a proven one. CSV and PDF aren't subject to the same platform
+    behaviour at all (confirmed: their downloads are byte-identical across repeats) -- they are the
+    only channels with a CONFIRMED end-to-end byte guarantee today. All three get the header for the
+    same reason: the header is the artifact's identity regardless of channel.
     """
     from app.reports import routes
     from app.reports.engine.pdf_engine import pdf_available
@@ -117,6 +124,10 @@ async def test_registered_downloads_expose_the_artifact_hash_as_a_header_not_onl
     for resp in (html_first, html_second):
         assert resp.headers.get("X-Artifact-Verified") == "true"
         assert resp.headers.get("X-Artifact-SHA256") == hashlib.sha256(resp.body).hexdigest()
+        # Not text/html: the one condition the platform's confirmed injection needs. This is what
+        # makes a byte-for-byte client re-hash of THIS response theoretically possible again; it is
+        # not itself proof the platform stops injecting (that needs a live request -- see docstring).
+        assert resp.media_type != "text/html"
     assert html_first.headers["X-Artifact-SHA256"] == html_second.headers["X-Artifact-SHA256"], \
         "same report, same registered artifact -- the header must not vary call to call"
 

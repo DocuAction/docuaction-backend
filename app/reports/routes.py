@@ -1320,13 +1320,33 @@ async def get_report_html(
         # bytes, re-verified above by _registered_bytes/_verified -- it does
         # NOT cover anything an intermediary adds after this Response leaves
         # the process (e.g. the App Service platform's HTML script injection,
-        # confirmed present on unrelated routes like /docs too). Exposing it
-        # as a header, not just in the body, gives a caller a value to check
-        # that the platform's body transformation cannot touch.
+        # confirmed present on unrelated routes like /docs too, independent of
+        # Content-Disposition: attachment -- that injection is what DEF-06
+        # found in the first place, on this same always-attachment route).
+        # X-Artifact-SHA256 is a REFERENCE value: stable across calls, equal to
+        # the registry's own re-verified hash, and useful for cross-checking
+        # against the registry out of band. It does NOT let a caller verify
+        # the literal bytes of a text/html response body -- those are EXPECTED
+        # to differ from the header whenever the platform injects into them,
+        # through no fault of this application. True byte-for-byte client
+        # verification of THIS content requires the body to never be
+        # text/html, which is why this branch serves it as
+        # application/octet-stream below: the platform's injection targets
+        # text/html responses specifically (confirmed on /docs), and nothing
+        # depends on this route rendering inline -- it is always a forced
+        # download (Content-Disposition: attachment) and the frontend reads
+        # the bytes as an opaque Blob regardless of declared type, naming the
+        # saved file from its own `.html` filename, not from Content-Type.
+        # NOT YET VERIFIED LIVE: this removes the one condition (text/html)
+        # the platform's injection is confirmed to require, but confirming it
+        # actually stops the injection needs a deployment and a live request;
+        # until that is checked, treat this as a reasoned candidate fix, not a
+        # proven one. CSV and PDF remain the only channels with a CONFIRMED
+        # (not just candidate) byte-identical-on-repeat guarantee today.
         headers["X-Artifact-SHA256"] = (registered.get("artifact") or {}).get("rendered_sha256")
         headers["X-Artifact-Version"] = str((registered.get("artifact") or {}).get("artifact_version"))
         headers["X-Artifact-Verified"] = "true" if registered.get("verified") else "false"
-        return Response(content=registered["content"], media_type="text/html",
+        return Response(content=registered["content"], media_type="application/octet-stream",
                         headers=headers)
     if not row.report_html:
         raise HTTPException(404, f"Report {report_id} has no stored HTML.")
