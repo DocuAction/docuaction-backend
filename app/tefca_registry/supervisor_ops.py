@@ -483,6 +483,9 @@ async def work_queue(db, *, queue_source: Optional[str] = None,
                      reportable: Optional[bool] = None,
                      deadline_state: Optional[str] = None,
                      search: Optional[str] = None,
+                     identifier: Optional[str] = None,
+                     created_from: Optional[datetime] = None,
+                     created_to: Optional[datetime] = None,
                      unresolved_exclusion_candidate: bool = False,
                      sort: str = "age", offset: int = 0, limit: int = 50,
                      now: Optional[datetime] = None,
@@ -538,6 +541,33 @@ async def work_queue(db, *, queue_source: Optional[str] = None,
             reg.ReviewRecord.entity_id.in_(
                 select(reg.TefcaRegEntity.id)
                 .where(reg.TefcaRegEntity.name.ilike(f"{term}%")))))
+    if identifier:
+        # Case Management (2026-10-25): an EXACT identifier — NPI, HCID, TEFCAID
+        # or RCE org OID — never a prefix. Resolved through every place the value
+        # can legitimately live: the identifier rows (unique values), the entity
+        # family columns (values shared across an organisation family carry no
+        # identifier row), and the curated record's NPI (an NPI shared within a
+        # delivery is withheld from identifier rows, see promotion). Several
+        # entities sharing one identifier all come back — multiple matches stay
+        # distinguishable as separate rows; nothing is merged or guessed.
+        from app.tefca_registry.rce import models as m
+        term = identifier.strip()
+        urn = term if term.lower().startswith("urn:oid:") else f"urn:oid:{term}"
+        candidates = (term, urn)
+        stmt = stmt.where(reg.ReviewRecord.entity_id.in_(
+            select(reg.TefcaEntityIdentifier.entity_id)
+            .where(reg.TefcaEntityIdentifier.identifier_value.in_(candidates))
+            .union(select(reg.TefcaRegEntity.id)
+                   .where(or_(reg.TefcaRegEntity.rce_hcid.in_(candidates),
+                              reg.TefcaRegEntity.rce_tefcaid.in_(candidates),
+                              reg.TefcaRegEntity.rce_org_oid == term)))
+            .union(select(m.RceCuratedRecord.canonical_entity_id)
+                   .where(m.RceCuratedRecord.canonical_entity_id.isnot(None),
+                          func.trim(m.RceCuratedRecord.npi) == term))))
+    if created_from is not None:
+        stmt = stmt.where(reg.ReviewRecord.created_at >= created_from)
+    if created_to is not None:
+        stmt = stmt.where(reg.ReviewRecord.created_at <= created_to)
     if qhin_entity_id is not None:
         stmt = stmt.where(reg.ReviewRecord.entity_id.in_(
             select(reg.TefcaEntityRelationship.child_entity_id)

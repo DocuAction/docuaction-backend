@@ -12,7 +12,7 @@ import uuid
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1463,6 +1463,192 @@ async def operations_work_queue(
             stale_after_days=stale_after_days)
     except SupervisorRefused as exc:
         raise HTTPException(400, str(exc))
+
+
+@router.get("/cases", dependencies=[Depends(require_role("viewer"))])
+async def case_management_list(
+        identifier: Optional[str] = Query(
+            None, max_length=120,
+            description="EXACT NPI, HCID, TEFCAID or RCE org OID. Several cases may share one "
+                        "identifier; all are returned as separate rows, nothing is merged."),
+        search: Optional[str] = Query(None, max_length=200,
+                                      description="Organisation name or case reference prefix."),
+        state: Optional[str] = Query(None),
+        assignee: Optional[uuid.UUID] = Query(None),
+        qhin_entity_id: Optional[uuid.UUID] = Query(None),
+        intake_id: Optional[uuid.UUID] = Query(None),
+        reportable: Optional[bool] = Query(None),
+        as_of: Optional[date] = Query(None, description="End of the window (inclusive). Default: today."),
+        months: int = Query(12, ge=1, le=36, description="Trailing window length in months, ending at as_of."),
+        sort: str = Query("created"),
+        offset: int = Query(0, ge=0),
+        limit: int = Query(50, ge=1, le=200),
+        db: AsyncSession = Depends(get_db)):
+    """Case Management (TEFCA ARC): existing cases, searched by identifier or name, over a
+    trailing window — built on the supervisor work queue, so authorization (QHIN scope),
+    filtering and pagination happen in SQL before any LIMIT, and the derived workflow
+    state is the ONE existing derivation (`case_states`). No new case store; no merge.
+
+    Window semantics are stated, not implied: `months` × 30.4 days ending at `as_of`
+    23:59:59 UTC, applied to the case's `created_at`. A month with no cases is simply a
+    month with no rows — nothing is fabricated to fill it.
+    """
+    from app.tefca_registry.supervisor_ops import SupervisorRefused, work_queue
+
+    end_day = as_of or date.today()
+    created_to = datetime(end_day.year, end_day.month, end_day.day, 23, 59, 59)
+    created_from = created_to - timedelta(days=round(months * 30.4))
+    try:
+        page = await work_queue(
+            db, state=state, assignee=assignee, intake_id=intake_id,
+            qhin_entity_id=qhin_entity_id, reportable=reportable, search=search,
+            identifier=identifier, created_from=created_from, created_to=created_to,
+            sort=sort, offset=offset, limit=limit)
+    except SupervisorRefused as exc:
+        raise HTTPException(400, str(exc))
+    page["window"] = {"as_of": end_day.isoformat(), "months": months,
+                      "created_from": created_from.isoformat(), "created_to": created_to.isoformat(),
+                      "applies_to": "review_records.created_at"}
+    page["identifier"] = identifier
+    page["labels"] = {
+        "state": "workflow state derived from decision events (not a stored status)",
+        "reportable": "QA gate passed (reportable_at set)",
+        "bucket": "B1-B4 candidate classification; never a determination",
+        "next_action_follow_up": "not stored in this release (append-only follow-up events pending owner decision)",
+    }
+    return page
+
+
+@router.post("/cases/import/preview", dependencies=[Depends(require_role("reviewer"))])
+async def case_update_import_preview(
+        request: Request,
+        purpose: str = Query(..., description="case_updates | source_delivery | reference_data"),
+        worksheet: Optional[str] = Query(None, max_length=120),
+        file: UploadFile = File(..., description="A .csv/.psv/.tsv/.txt or .xlsx of case updates."),
+        db: AsyncSession = Depends(get_db),
+        user=Depends(require_role("reviewer"))):
+    """Stage and preview an analyst/case-update spreadsheet. Writes no case data (this
+    step only records that a preview ran: the audit row below, committed at the end of
+    this call).
+
+    Every row gets exactly one disposition (accepted / unchanged / rejected / needs_review)
+    and the four reconcile to the rows read. Identity is review_id, or intake_id +
+    source_rce_id through the curated record; zero or several matches are never guessed.
+    Requested release/approval/bucket values are recorded as REQUESTED and routed to
+    needs_review — a spreadsheet cannot bypass the determination and QA routes. The companion
+    apply endpoint (`POST /cases/import/apply`, below) applies ownership (`assign_to_email`)
+    only; notes, proposed corrections and requested workflow values stay staged pending the
+    owner decision on the follow-up event model.
+    """
+    from app.tefca_registry.rce import case_update_import as cui
+
+    data = await file.read()
+    actor_id, actor_email = reg_audit.actor_of(user)
+    try:
+        result = await cui.build_preview(file.filename or "upload", data, purpose=purpose,
+                                         worksheet=worksheet, resolve=_case_identity_resolver(db),
+                                         uploaded_by=actor_email or str(actor_id or "unknown"))
+    except cui.SpreadsheetRefused as exc:
+        raise HTTPException(400, f"import refused: {exc}")
+    # The preview itself is the auditable act (a file was read against real case ids),
+    # even though nothing is written.
+    reg_audit.record(db, "case_update_import_previewed", None, actor_id=actor_id,
+                     actor_email=actor_email, ip_address=get_client_ip(request),
+                     metadata={"purpose": purpose,
+                               "file_sha256": (result.get("file") or {}).get("sha256"),
+                               "idempotency_key": result.get("idempotency_key"),
+                               "rows_read": (result.get("preview") or {}).get("rows_read"),
+                               "counts": (result.get("preview") or {}).get("counts"),
+                               "written": False})
+    await db.commit()
+    return result
+
+
+def _case_identity_resolver(db):
+    """Identity resolution shared by the import preview and apply: review_id, or
+    intake_id + source_rce_id through the curated record (0 or several matches are
+    returned as such; nothing is guessed)."""
+    from app.tefca_registry.rce import case_update_import as cui
+    from app.tefca_registry.rce import models as m
+
+    async def resolve(identity: Dict[str, str]) -> List[str]:
+        rid = identity.get(cui.IDENTITY_REVIEW)
+        if rid:
+            rows = (await db.execute(
+                select(reg.ReviewRecord.review_id).where(reg.ReviewRecord.review_id == rid))).scalars().all()
+            return list(rows)
+        intake = identity.get(cui.IDENTITY_INTAKE)
+        src = identity.get(cui.IDENTITY_SOURCE)
+        try:
+            intake_uuid = uuid.UUID(str(intake))
+        except (ValueError, TypeError):
+            return []
+        entity_ids = (await db.execute(
+            select(m.RceCuratedRecord.canonical_entity_id)
+            .where(m.RceCuratedRecord.source_intake_id == intake_uuid,
+                   m.RceCuratedRecord.rce_org_oid == src,
+                   m.RceCuratedRecord.canonical_entity_id.isnot(None)))).scalars().all()
+        if not entity_ids:
+            return []
+        return list((await db.execute(
+            select(reg.ReviewRecord.review_id)
+            .where(reg.ReviewRecord.entity_id.in_(list(set(entity_ids))))
+            .order_by(reg.ReviewRecord.review_id))).scalars().all())
+
+    return resolve
+
+
+@router.post("/cases/import/apply", dependencies=[Depends(require_role("senior_analyst"))])
+async def case_update_import_apply(
+        request: Request,
+        purpose: str = Query(..., description="must be case_updates"),
+        worksheet: Optional[str] = Query(None, max_length=120),
+        confirm: bool = Query(False, description="Explicit confirmation of the previewed file; required."),
+        file: UploadFile = File(..., description="The SAME file that was previewed."),
+        db: AsyncSession = Depends(get_db),
+        user=Depends(require_role("senior_analyst"))):
+    """Apply a previewed case-update file — ownership (assign_to_email) only, exactly once.
+
+    The server re-stages the uploaded bytes (never trusts a client-side preview), derives the same
+    idempotency key, serialises appliers of that key with a transaction-scoped advisory lock and refuses
+    to apply a key that already has a `case_update_import_applied` audit row — so a retry or a concurrent
+    duplicate submission cannot apply twice. Assignments go through `case_assignment.assign` (the QHIN
+    Assignment screen's own service: compare-and-set, audit, APPROVED refused, held cases need an override
+    reason — refused here rather than overridden). Notes/proposed corrections are STAGED, not applied
+    (recorded in the apply audit row) pending the follow-up event model decision; requested
+    release/approval/bucket values are never applied.
+    """
+    from app.models.database import User
+    from app.tefca_registry.rce import case_update_import as cui
+
+    if purpose != cui.PURPOSE_CASE_UPDATES:
+        raise HTTPException(400, "only purpose=case_updates can be applied here; source deliveries and "
+                                 "reference data keep their own importers")
+    if not confirm:
+        raise HTTPException(400, "confirm=true is required: apply only a file you have previewed")
+    data = await file.read()
+    actor_id, actor_email = reg_audit.actor_of(user)
+    try:
+        staged = await cui.build_preview(file.filename or "upload", data, purpose=purpose, worksheet=worksheet,
+                                         resolve=_case_identity_resolver(db),
+                                         uploaded_by=actor_email or str(actor_id or "unknown"))
+    except cui.SpreadsheetRefused as exc:
+        raise HTTPException(400, f"import refused: {exc}")
+    if not staged.get("header", {}).get("ok"):
+        raise HTTPException(400, "header validation failed; nothing applied")
+
+    async def resolve_user_id(email: str):
+        row = (await db.execute(
+            select(User.id).where(func.lower(User.email) == email.strip().lower(), User.is_active.is_(True)))).scalar_one_or_none()
+        return row
+
+    result = await cui.apply_case_updates(
+        db, preview=staged["preview"], actor_user=user, idempotency_key=staged["idempotency_key"],
+        ip_address=get_client_ip(request), resolve_user_id=resolve_user_id)
+    await db.commit()
+    result["file"] = staged["file"]
+    result["mapping_version"] = staged["mapping_version"]
+    return result
 
 
 @router.get("/operations/analyst-workload",
