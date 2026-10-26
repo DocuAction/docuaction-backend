@@ -62,3 +62,58 @@ missing/malformed/checksum-invalid/valid NPI; null/other/similar-looking purpose
 gating with date, datetime and ISO strings; no bucket keys on the finding; vocabulary untouched).
 `tests/test_preflight.py` updated: PF-CTX-001 ("requirement undecidable") is no longer recorded
 for a blank-role record whose purposes include T-TRTMNT.
+
+## Reconciliation with the September logic draft (second opinion), 2026-10-26
+
+Source compared: `DocuAction_Sept_Records_Logic_Draft (3).xlsx` (draft logic workbook, 24,589 rows,
+"proposed, not verified as implemented or tested", no bucket assigned). Read-only DEV counts from
+intake `4417b334` (`rce_source_records.parsed`), exact-token split on `, ; |` and whitespace.
+
+### Blank-NPI population: one partition, mutually exclusive, reconciling to 4,573
+
+| Delivered purpose set (blank NPI) | Records | active=1 | active=0 | T-TRTMNT basis |
+|---|---:|---:|---:|---|
+| T-TRTMNT only | 2,622 | 2,199 | 423 | required |
+| T-TRTMNT with other purpose(s) (7 combinations: +T-PH-ECR 698, +T-GOVDTRM-ACP+T-PH-ECR 52, +T-GOVDTRM-ACP 48, +T-IAS 40, nine-token row 2, +T-TREAT 1, +T-HCO 1) | 842 | 762 | 80 | required |
+| purposes blank | 683 | 651 | 32 | not on this basis (60 carry a role → PROFILE_ROLE basis decides, as before) |
+| single other purpose (T-PH-ECR 156, T-GOVDTRM-ACP 55, T-IAS 38, T-PH 7, T-GOVDTRM-SSD 1, T-TREAT 1) | 258 | 240 | 18 | not required |
+| multiple other purposes (T-GOVDTRM-ACP,T-PH-ECR) | 168 | 168 | 0 | not required |
+| **Total** | **4,573** | **4,020** | **553** | **3,464 required / 1,109 not** |
+
+The two "required" rows are the 3,464 T-TRTMNT/blank-NPI observations (2,961 active / 503 inactive;
+633 Participant / 2,831 Subparticipant). The second-opinion workbook reproduces the same figures
+("Treatment asserted with NPI missing" 3,464; its NPI-missing rows split 2,961 / 503 / 1,059 / 50 by
+treatment × inactive). A purpose-category subtotal of 3,997 that leaves 576 unexplained is **not** a
+category of this partition; the only arithmetic that reproduces it exactly is 2,622 + 692 + 683 (T-TRTMNT-
+only, plus blank purposes counted at two grains — 692 across all records, 683 among blank-NPI records),
+i.e. a double count, not a missing population. Multi-purpose combinations are counted once each above.
+Tests: `tests/test_npi_required_t_trtmnt_2026_10_25.py::SEPTEMBER_BLANK_NPI_COMBINATIONS`.
+
+### Four dates, kept apart
+
+| Date | Meaning | Status |
+|---|---|---|
+| **2026-09-02** | snapshot (population) date of `onc-snapshot-20260902.csv` | fixed |
+| **2026-09-03** | the "NPI date" the second-opinion draft cites against (its wording: "snapshot date versus the 2026-09-03 NPI date") | **not on file** in this repository as a governing document; recorded as the draft's reference, not adopted. A 2026-09-02 snapshot pre-dates it, so it cannot violate that deadline **solely** because it is assessed in October; any earlier obligation is a separate question for the owner |
+| **assessment date** | when a quality run or labelled reassessment is executed (persisted as `assessment_date`) | per run |
+| **2026-10-25** | software effective date (`BR_NPI_TRTMNT_EFFECTIVE`) — implementation choice, see above | fixed |
+
+### Points the draft raised, and what the rule does
+
+- **Blank `hl7orgrole`** never suppresses the T-TRTMNT basis (all 3,464 are blank-role; tested).
+- **Inactive records** are not exempted and are not routed to B4: `active` is recorded in the finding text and
+  never consulted; no seed rule (v1–v3) keys on `NPI_REQUIRED` (tested). Their findings are preserved
+  separately (503 of the 3,464) while applicability remains an owner question.
+- **T-TREAT** (10 records; 4 with blank NPI, of which 3 also carry T-TRTMNT and 1 does not) stays a reported
+  variant with its own documented exception; it is not merged into T-TRTMNT (tested).
+- **Purpose-of-use grain:** the delivered `purposesofuse` is one organization-row attribute of the RCE
+  directory export. Nothing on file (data contract, 41-field matrices, profile) states whether it enumerates
+  initiating purposes, responding purposes or their union; `initiatoronly` is populated on 5 of the 4,573
+  blank-NPI rows (value `OTHER`, undocumented). **Applicability by exchange direction is therefore unknown and
+  is recorded as unknown**; the rule asserts only token membership.
+- **Shared NPIs** remain available to screening without merging entities (resolver fallback, PR #175);
+  Case Management returns each entity sharing an identifier as its own row (PR #176).
+- **Malformed NPIs:** the September intake carries exactly 3 (`854565` line 2; `116442605` line 4667;
+  `1780787176, 1770559767` line 13171). Each parsed value is byte-identical to the NPI field of its original
+  source line (CSV-parsed with the intake's delimiter), and 0 of 24,589 records differ between original line
+  and parsed NPI — the importer transformed nothing; the malformation is in the delivery.

@@ -193,3 +193,61 @@ def test_historical_issue_vocabulary_is_untouched():
         "NPI_CHECK_DIGIT_FAILED": ["NPI_CHECKSUM_INVALID"],
     }
     assert "NPI_REQUIRED" not in qr.LEGACY_ISSUE_TYPES
+
+
+# ── the sixteen purpose combinations actually delivered on 2026-09-02 (added 2026-10-26) ──
+# Read-only DEV partition of the 4,573 blank-NPI September records by exact purpose set
+# (qa-evidence 2026-10-26 release closeout, doc 22). Requiredness on this basis is token
+# MEMBERSHIP: it holds for every combination that contains T-TRTMNT, including the
+# nine-token row, and for none of the others, including T-TREAT alone. `active` is
+# recorded, never consulted: an inactive record is not exempted and is not a bucket.
+
+SEPTEMBER_BLANK_NPI_COMBINATIONS = [
+    # (delivered purposesofuse, records, expected requiredness on the T-TRTMNT basis)
+    ("T-TRTMNT", 2622, True),
+    ("T-PH-ECR,T-TRTMNT", 698, True),
+    ("", 683, False),
+    ("T-GOVDTRM-ACP,T-PH-ECR", 168, False),
+    ("T-PH-ECR", 156, False),
+    ("T-GOVDTRM-ACP", 55, False),
+    ("T-GOVDTRM-ACP,T-PH-ECR,T-TRTMNT", 52, True),
+    ("T-GOVDTRM-ACP,T-TRTMNT", 48, True),
+    ("T-IAS,T-TRTMNT", 40, True),
+    ("T-IAS", 38, False),
+    ("T-PH", 7, False),
+    ("T-GOVDTRM,T-HCO,T-IAS,T-PH,T-PH-ECR,T-PH-ELR,T-PYMNT,T-TREAT,T-TRTMNT", 2, True),
+    ("T-GOVDTRM-SSD", 1, False),
+    ("T-TREAT", 1, False),
+    ("T-TREAT,T-TRTMNT", 1, True),
+    ("T-HCO,T-TRTMNT", 1, True),
+]
+
+
+def test_september_combinations_partition_the_blank_npi_population():
+    assert sum(n for _, n, _ in SEPTEMBER_BLANK_NPI_COMBINATIONS) == 4573
+    assert sum(n for _, n, req in SEPTEMBER_BLANK_NPI_COMBINATIONS if req) == 3464
+    assert sum(n for _, n, req in SEPTEMBER_BLANK_NPI_COMBINATIONS if not req) == 1109
+
+
+@pytest.mark.parametrize("value, _n, required", SEPTEMBER_BLANK_NPI_COMBINATIONS)
+@pytest.mark.parametrize("active", ["1", "0"])
+def test_each_delivered_combination_is_decided_by_membership_only(value, _n, required, active):
+    c = ctx(purposesofuse=value, active=active, hl7orgrole="")
+    assert qr.purpose_requires_npi(c) is required
+    expected = ["NPI_REQUIRED"] if required else ["NPI_NOT_SUPPLIED"]
+    result = npi_001(c)
+    assert [f.issue_type for f in result] == expected, f"{value!r} active={active}"
+    if required:
+        assert f"active={active!r}" in result[0].description, "status is recorded in the finding text"
+    assert not hasattr(result[0], "bucket"), "a finding, not a bucket"
+
+
+def test_inactive_records_are_neither_exempted_nor_bucketed():
+    inactive = npi_001(ctx(purposesofuse="T-TRTMNT", active="0"))
+    active = npi_001(ctx(purposesofuse="T-TRTMNT", active="1"))
+    assert [f.issue_type for f in inactive] == [f.issue_type for f in active] == ["NPI_REQUIRED"]
+    assert inactive[0].severity == active[0].severity == qr.HIGH
+    # No seed rule, in any version, reads this finding — inactive + missing NPI cannot route to B4.
+    for rules in (SEED_RULES, SEED_RULES_V2, SEED_RULES_V3):
+        for r in rules:
+            assert "NPI_REQUIRED" not in str(r.get("conditions", r)), r.get("rule_code")
