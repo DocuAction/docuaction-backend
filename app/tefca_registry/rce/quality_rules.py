@@ -70,7 +70,16 @@ from app.tefca_registry.rce.field_map import (
 #: token T-TRTMNT, for assessments on/after 2026-10-25. Issue type, severity and
 #: authority are unchanged (NPI_REQUIRED, HIGH, HUMAN_REQUIRED); only the
 #: predicate widened. Earlier runs keep their stored rule_version and text.
-RULE_SET_VERSION = "1.5.0"
+#: 1.6.0 — NPI-001 1.4.0: the six NPI applicability decision cases (methodology v1.4,
+#: revision 2026-10-25; Treatment XP SOP v2.0 §7/§8) decide the presence finding for
+#: assessments on/after 2026-10-26. Case 1 keeps NPI_REQUIRED (HIGH, HUMAN_REQUIRED);
+#: cases 3 and 5 raise NPI_APPLICABILITY_UNRESOLVED (MEDIUM, HUMAN_REQUIRED) instead of
+#: the informational NPI_NOT_SUPPLIED, because the NPI is not assumed optional there;
+#: case 4 stays NPI_NOT_SUPPLIED. The finding carries the case, the exchange-direction
+#: provenance, the snapshot/assessment/governing/software dates and never a bucket,
+#: a hold, a correction or an approval (see npi_applicability.py; curation exempts
+#: NPI-001 from automatic HELD). Earlier runs keep their stored rule_version and text.
+RULE_SET_VERSION = "1.6.0"
 
 # ── categories ───────────────────────────────────────────────────────────────
 
@@ -317,6 +326,11 @@ BR_NPI_TRTMNT_EFFECTIVE = date(2026, 10, 25)
 BASIS_PROFILE_ROLE = "PROFILE_ROLE"
 BASIS_PURPOSE_T_TRTMNT = "PURPOSE_T_TRTMNT"
 
+#: Six-case assignment (NPI-001 1.4.0): effective for assessments on/after this date.
+#: Imported from the pure module so there is exactly one definition.
+from app.tefca_registry.rce import npi_applicability as npa  # noqa: E402
+NPI_CASES_EFFECTIVE = npa.CASES_SOFTWARE_EFFECTIVE_DATE
+
 
 def assessment_date(ctx: RecordContext) -> date:
     """The date the run is assessing AS OF. `RecordContext.dataset` carries it
@@ -373,13 +387,45 @@ def npi_required(ctx: RecordContext) -> bool:
     return npi_requirement_basis(ctx) is not None
 
 
+def snapshot_date(ctx: RecordContext):
+    """The delivery's population (snapshot) date — the intake's `received_at` as the
+    quality engine records it in `dataset["snapshot_date"]`. None when absent: it is
+    NEVER replaced by the assessment date."""
+    return npa._as_date(ctx.dataset.get("snapshot_date"))
+
+
+def npi_case(ctx: RecordContext) -> "npa.CaseAssignment":
+    """The record's six-case assignment from `purposesofuse` and `NPI`, raw values kept."""
+    return npa.assign_case(ctx.values.get("purposesofuse"), ctx.values.get("NPI"))
+
+
+def npi_applicability(ctx: RecordContext, assignment=None) -> "npa.ApplicabilityAssessment":
+    """Requirement and deadline applicability for the record (separate from the finding)."""
+    assignment = assignment or npi_case(ctx)
+    return npa.assess_applicability(
+        assignment, snapshot_date=snapshot_date(ctx), assessment_date=assessment_date(ctx),
+        exchange_direction=npa.exchange_direction_from_record(ctx.get("organizationNodeType")))
+
+
 def _npi_001(ctx: RecordContext) -> List[Finding]:
-    """Presence. Required (profile role or BR-NPI-TRTMNT-001) → HIGH, a review
-    finding for analyst determination — NOT an exclusion, not a bucket, not a
-    final non-compliance; otherwise a recorded fact."""
+    """Presence, decided by the six applicability cases (1.4.0) on top of the unchanged
+    profile-role basis (1.2.0).
+
+    Case 1 / profile role → NPI_REQUIRED, HIGH, HUMAN_REQUIRED: a requiredness review finding
+    for analyst determination — NOT an exclusion, NOT a bucket, NOT a hold (curation exempts
+    NPI-001), NOT a final non-compliance. Cases 3 and 5 → NPI_APPLICABILITY_UNRESOLVED, MEDIUM,
+    HUMAN_REQUIRED: review required, the NPI is not assumed optional. Case 4 → NPI_NOT_SUPPLIED,
+    INFO. Cases 2 and 6 (NPI supplied) raise nothing here; validity (NPI-002/004/003) and
+    verification are separate rules. Assessments dated before NPI_CASES_EFFECTIVE keep the
+    1.3.0 behaviour (cases 3 and 5 recorded as NPI_NOT_SUPPLIED).
+    """
     if ctx.get("NPI"):
         return []
     basis = npi_requirement_basis(ctx)
+    assignment = npi_case(ctx)
+    cases_effective = assessment_date(ctx) >= NPI_CASES_EFFECTIVE
+    applicability = npi_applicability(ctx, assignment) if cases_effective else None
+    facts = (" " + npa.describe(assignment, applicability)) if applicability else ""
     if basis == BASIS_PURPOSE_T_TRTMNT:
         return [Finding(
             "NPI-001", "NPI_REQUIRED", HIGH,
@@ -389,7 +435,9 @@ def _npi_001(ctx: RecordContext) -> List[Finding]:
             f"sequoiaorgtype={ctx.get('sequoiaorgtype')!r}, "
             f"active={ctx.get('active')!r} recorded, not consulted). Review "
             f"finding for analyst determination; an NPI is never inferred or "
-            f"looked up on the organisation's behalf.",
+            f"looked up on the organisation's behalf. Observation only: requirement "
+            f"applicability and the governing date are assessed separately and no "
+            f"compliance determination is made here.{facts}",
             HUMAN_REQUIRED, field_name="NPI")]
     if basis == BASIS_PROFILE_ROLE:
         return [Finding(
@@ -397,15 +445,23 @@ def _npi_001(ctx: RecordContext) -> List[Finding]:
             f"No NPI supplied, and the record's profile requires one: "
             f"sequoiaorgtype={ctx.get('sequoiaorgtype')!r} with "
             f"hl7orgrole={ctx.get('hl7orgrole')!r} indicates a provider "
-            f"organisation. Held for analyst determination; an NPI is never "
-            f"inferred or looked up on the organisation's behalf.",
+            f"organisation. Review finding for analyst determination; an NPI is never "
+            f"inferred or looked up on the organisation's behalf.{facts}",
+            HUMAN_REQUIRED, field_name="NPI")]
+    if cases_effective and assignment.review_required:
+        return [Finding(
+            "NPI-001", "NPI_APPLICABILITY_UNRESOLVED", MEDIUM,
+            f"No NPI supplied and whether one is required cannot be decided from the "
+            f"delivered fields ({assignment.label}): {assignment.handling} The NPI is not "
+            f"assumed optional; analyst review required. Not a hold, not a bucket, not a "
+            f"compliance determination.{facts}",
             HUMAN_REQUIRED, field_name="NPI")]
     return [Finding(
         "NPI-001", "NPI_NOT_SUPPLIED", INFO,
         "No NPI supplied. This is legitimate for a large share of TEFCA "
         "entities — 4,584 of 23,566 records (19.45%) in the profiled delivery — "
         "and is never treated as a verification failure. Medicare applicability "
-        "is determined separately in D2.",
+        f"is determined separately in D2.{facts}",
         NO_CORRECTION, field_name="NPI")]
 
 
@@ -1108,8 +1164,8 @@ RULES: Tuple[Rule, ...] = (
     Rule("ID-005", CAT_IDENTIFIER, "1.0.0", "TEFCAID present", _id_005, HIGH),
     Rule("ID-006", CAT_IDENTIFIER, "1.0.0",
          "TEFCAID shared across records", _id_006, INFO),
-    Rule("NPI-001", CAT_NPI, "1.3.0", "NPI supplied (required by profile role "
-         "or by BR-NPI-TRTMNT-001 T-TRTMNT purpose, else recorded)", _npi_001,
+    Rule("NPI-001", CAT_NPI, "1.4.0", "NPI supplied (required by profile role "
+         "or by BR-NPI-TRTMNT-001 T-TRTMNT purpose; six applicability cases; else recorded)", _npi_001,
          INFO, applies=_applies_every_record),
     Rule("NPI-002", CAT_NPI, "1.2.0", "NPI length (and single value)", _npi_002,
          HIGH, applies=_applies_npi_present, requires_fields=("NPI",)),

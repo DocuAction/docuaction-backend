@@ -247,6 +247,9 @@ async def run_quality_engine(
     # Effective-dated rules (BR-NPI-TRTMNT-001) read the run's own date, so a
     # re-run of an old delivery is assessed as of today and says so.
     dataset["assessment_date"] = run.started_at.date()
+    # The population (snapshot) date is the intake's received_at, recorded separately from
+    # the assessment date; absent -> None, never substituted (NPI-001 1.4.0 deadline logic).
+    dataset["snapshot_date"] = intake.received_at.date() if getattr(intake, "received_at", None) else None
 
     # Per-record check results (issue-history slice). OFF by default; when off
     # nothing below this line differs from the behaviour before the slice.

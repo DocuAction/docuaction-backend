@@ -117,3 +117,58 @@ Tests: `tests/test_npi_required_t_trtmnt_2026_10_25.py::SEPTEMBER_BLANK_NPI_COMB
   `1780787176, 1770559767` line 13171). Each parsed value is byte-identical to the NPI field of its original
   source line (CSV-parsed with the intake's delimiter), and 0 of 24,589 records differ between original line
   and parsed NPI — the importer transformed nothing; the malformation is in the delivery.
+
+## NPI-001 1.4.0 / rule set 1.6.0 — the six applicability decision cases (2026-10-26)
+
+Source: TEFCA ARC Task 2 Methodology v1.4, revision of 2026-10-25, "NPI applicability decision cases
+(proposed)"; `DocuAction_Sept_Records_Logic_Draft (5).xlsx`, sheet "NPI Decision Cases". Official basis:
+**Treatment XP SOP v2.0** (RCE, 7.1.2026; SOP effective 2026-08-03) — §7(a): a Participant or
+Subparticipant that operates a Principal Node initiating Queries for either Treatment XP Code MUST have
+appropriate NPIs populated in the RCE Directory Service; §7(a)(v): an entry with no NPI and no CLIA Number
+that initiates Queries for T-TREAT is not required to populate one; §8: compliance date for §7
+**2026-09-03**, applicability QHINs. Implementation: `app/tefca_registry/rce/npi_applicability.py` (pure),
+wired into NPI-001 for assessments dated on/after **2026-10-26** (software effective date; implementation
+choice, not a policy date).
+
+| Case | Condition | Finding (NPI-001) | Separate applicability record |
+|---|---|---|---|
+| 1 | `T-TRTMNT` ∈ purposes; NPI missing | `NPI_REQUIRED` HIGH HUMAN_REQUIRED (observation under BR-NPI-TRTMNT-001) | §7 requirement: applies / does not apply / **unresolved** by exchange direction; deadline by snapshot date |
+| 2 | `T-TRTMNT` ∈ purposes; NPI supplied | none here — validity NPI-002/004/003, then verification | supplied ≠ verified |
+| 3 | `T-TREAT` without `T-TRTMNT`; NPI missing | `NPI_APPLICABILITY_UNRESOLVED` MEDIUM HUMAN_REQUIRED | §7(a)(v) exception: established / not established / **unknown**; never auto pass or fail |
+| 4 | other recognized purposes only; NPI missing | `NPI_NOT_SUPPLIED` INFO | does not apply under this rule; other checks preserved |
+| 5 | purpose missing or any unrecognized code; NPI missing | `NPI_APPLICABILITY_UNRESOLVED` MEDIUM HUMAN_REQUIRED | unresolved; NPI not assumed optional |
+| 6 | `T-TRTMNT` absent; NPI supplied (incl. missing/unrecognized purpose) | none here — validity, then verification | supplied ≠ verified |
+
+Rules: exact-token membership on the parsed `purposesofuse` list (`, ; |` and whitespace); `T-TRTMNT` anywhere
+takes precedence; look-alikes never match; unknown codes stay unrecognized (a mixed list with an unknown code is
+case 5 unless `T-TRTMNT` is present or an NPI is supplied); raw purposes and raw NPI are preserved on the
+assignment; blank `hl7orgrole` never suppresses; `active` is recorded, never a case input (no exemption, no
+non-compliance); the 1.2.0 PROFILE_ROLE basis is unchanged and still labels the finding when both apply.
+
+**Field mapping (requirement 1):** source header `purposesofuse` → `RecordContext.values["purposesofuse"]` →
+`rce_curated_records.exchange_purposes` / `tefca_reg_entities.exchange_purposes` (JSON token lists) with the raw
+cell kept in `rce_attributes.purposesofuse_raw`. Tested in `test_source_header_is_purposesofuse_and_the_mapping_is_documented`.
+
+**Kept separate (requirements 6–7, 11–12):** observation (case) · requirement applicability (`initiating_requirement`)
+· deadline applicability (`deadline_applicability`) · NPI validity (NPI-002/004/003) · verification outcome (NPPES/PPEF/
+LEIE/SAM evidence) · severity · HELD (curation now exempts NPI-001 from automatic hold: `curation.NON_HOLDING_RULES`;
+identifier validity still holds) · B1–B4 (no seed rule keys on either finding) · NPPES candidates (never written to the
+submitted NPI; analyst confirmation + independent QA stay in the review routes) · IQVIA (not an input anywhere here).
+
+**Exchange direction (requirement 8):** only a delivered `organizationNodeType = initiating-node` marks a record
+`initiating`; everything else is `unknown` and the §7 requirement stays **unresolved** with the observation retained.
+Whether `purposesofuse` enumerates Organization-level initiating or Endpoint-level responding purposes is not
+documented in any delivered specification on file; nothing is inferred from a blank role or a Participant label.
+
+**Four dates (requirements 9–10):** snapshot date (intake `received_at`, recorded by the engine as
+`dataset["snapshot_date"]`; **missing → unresolved, never the assessment date**) · assessment date (run start) ·
+governing requirement date (§8: 2026-09-03) · software rule-version effective date (2026-10-26; T-TRTMNT basis
+2026-10-25). A 2026-09-02 snapshot is `pre_deadline`: it cannot establish a §7 breach; earlier requirements are a
+separate assessment and are not asserted by this rule.
+
+**September 2026 reconciliation (descriptive, not compliance):** applying the assignment to the 24,589 delivered
+records (fixture `tests/fixtures/september_2026_purpose_npi_distribution.csv`, read-only DEV 2026-10-26) gives
+Case 1 **3,464** (active 2,961 / inactive 503; Participant 633 / Subparticipant 2,831) · Case 2 **20,002** · Case 3 **1**
+· Case 4 **425** · Case 5 **683** · Case 6 **14** — total 24,589, equal to the independently verified counts. The
+September run of record (rule set 1.3.0) is unchanged; any new assessment is saved separately with lineage and
+rule version. Tests: `tests/test_npi_applicability_six_cases_2026_10_26.py`.

@@ -39,8 +39,8 @@ def all_npi(c):
 # ── versions ─────────────────────────────────────────────────────────────────
 
 def test_rule_set_and_rule_versions_were_bumped_not_edited_in_place():
-    assert tuple(int(x) for x in qr.RULE_SET_VERSION.split(".")) >= (1, 5, 0)
-    assert qr.RULE_BY_ID["NPI-001"].version == "1.3.0"
+    assert tuple(int(x) for x in qr.RULE_SET_VERSION.split(".")) >= (1, 6, 0)
+    assert qr.RULE_BY_ID["NPI-001"].version == "1.4.0"   # 1.3.0 (T-TRTMNT basis) → 1.4.0 (six cases)
     assert qr.BR_NPI_TRTMNT_EFFECTIVE == date(2026, 10, 25)
     assert qr.BR_NPI_TRTMNT_TOKEN == "T-TRTMNT"
 

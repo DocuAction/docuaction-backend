@@ -76,8 +76,13 @@ GENERATOR_VERSION = "1.0.0"
 #: NPI_REQUIRED (HIGH, HUMAN_REQUIRED) instead of NPI_NOT_SUPPLIED. The pack's
 #: base row carries T-TRTMNT, so the QHIN row and the odd-numbered missing-NPI
 #: rows exhibit the new finding; even-numbered missing-NPI rows carry T-PYMNT
-#: and keep the informational, no-hold path.
-TARGET_RULE_SET_VERSION = "1.5.0"
+#: and keep the informational, no-hold path. 1.6.0 (NPI-001 1.4.0, the six
+#: applicability cases): the presence finding itself never holds a record any
+#: more (curation NON_HOLDING_RULES), so the T-TRTMNT missing-NPI rows are
+#: CLEAN with an open HIGH review finding; a blank/unrecognized purpose with a
+#: blank NPI is NPI_APPLICABILITY_UNRESOLVED (MEDIUM). The pack's rows carry
+#: T-TRTMNT or T-PYMNT, so no row exhibits that third outcome here.
+TARGET_RULE_SET_VERSION = "1.6.0"
 
 #: The locked 41-column ONC/RCE header, verbatim and in delivered order.
 RCE_COLUMNS: Tuple[str, ...] = (
@@ -220,7 +225,8 @@ QHIN_ROW_FINDINGS: Tuple[Finding, ...] = (
     ("INT-002", "MISSING_PART_OF"),
     # The QHIN row carries the base purposesofuse (T-TRTMNT) and no NPI, so
     # BR-NPI-TRTMNT-001 (1.5.0) makes its presence finding NPI_REQUIRED. The row
-    # was already HELD on REQ-001; this adds a second HUMAN_REQUIRED finding.
+    # was already HELD on REQ-001; this adds a second HUMAN_REQUIRED finding (which
+    # does not itself hold since 1.6.0).
     ("NPI-001", "NPI_REQUIRED"),
 )
 PARTICIPANT_FINDINGS: Tuple[Finding, ...] = (("BUS-003", "PARTICIPANT_PARENT_IS_QHIN"),)
@@ -685,7 +691,9 @@ SCENARIOS: Tuple[Scenario, ...] = (
             "Lines 3 and 5 (T-TRTMNT): since rule set 1.5.0, BR-NPI-TRTMNT-001 makes the "
             "blank NPI NPI_REQUIRED (HIGH, HUMAN_REQUIRED) even though hl7orgrole is blank. "
             "It is a review finding for analyst determination — not an exclusion, not a "
-            "bucket, not a final non-compliance.",
+            "bucket, not a final non-compliance. Since rule set 1.6.0 (six applicability "
+            "cases, case 1) it is also not a hold: the record stays CLEAN and reaches "
+            "verification while the finding stays open for review.",
             _QHIN_NOTE, _SCH002_NOTE,
         ],
         workflow_uses=["informational-only findings", "no-hold path",
@@ -984,7 +992,9 @@ def _summarise(lines: Sequence[Line]) -> Dict[str, object]:
             key = f"{rule} {issue}"
             rule_codes[key] = rule_codes.get(key, 0) + 1
             severity, authority = FINDING_CATALOG[(rule, issue)]
-            if severity in ("CRITICAL", "HIGH"):
+            # NPI-001 (presence / applicability) is a requiredness review item and
+            # never holds on its own (curation.NON_HOLDING_RULES, rule set 1.6.0).
+            if severity in ("CRITICAL", "HIGH") and rule != "NPI-001":
                 line_holds = True
             if authority == "HUMAN_REQUIRED":
                 human_required += 1

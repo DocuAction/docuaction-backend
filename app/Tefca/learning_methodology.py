@@ -202,7 +202,11 @@ DECISIONS: List[Dict[str, Any]] = [
      "provenance": ("Business clarification from Meley, relayed by Imran Siddiqui "
                     "(AGT) on 2026-10-25. Implemented as quality rule NPI-001 "
                     "1.3.0 / rule set 1.5.0, effective for assessments dated on or "
-                    "after 2026-10-25. Covers the exact T-TRTMNT token only; not "
+                    "after 2026-10-25; extended as NPI-001 1.4.0 / rule set 1.6.0 "
+                    "(six applicability decision cases, methodology v1.4 rev. "
+                    "2026-10-25; Treatment XP SOP v2.0 s7/s8, s7 compliance date "
+                    "2026-09-03) for assessments dated on or after 2026-10-26. "
+                    "Covers the exact T-TRTMNT token only; not "
                     "T-TREAT or other purposes. This is a clarification of one "
                     "requirement, not acceptance of the methodology (D1-D9 stay "
                     "open)."),
@@ -210,8 +214,10 @@ DECISIONS: List[Dict[str, Any]] = [
                      "no NPI raises a HIGH review finding for analyst "
                      "determination, regardless of a blank provider role or its "
                      "Participant/Subparticipant label. It is a requiredness "
-                     "finding only: not an exclusion, not a category, not a final "
-                     "non-compliance. Assessments dated before 2026-10-25 are not "
+                     "finding only: not an exclusion, not a category, not a hold, not a final "
+                     "non-compliance; applicability (initiating node, s7 date vs the "
+                     "snapshot date) is recorded separately and a 2026-09-02 snapshot "
+                     "cannot establish a s7 breach. Assessments dated before 2026-10-25 are not "
                      "re-interpreted; a separately labelled reassessment of the "
                      "September population is prepared for the owner."),
      "affects": ["Analyst queue", "Retrospective report", "Ongoing report"]},
