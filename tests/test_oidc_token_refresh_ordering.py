@@ -84,16 +84,52 @@ def test_fresh_login_precedes_postgres_token_acquisition(path, job):
     assert refresh_login < token_step, f"{job}: the refreshed login must run before Postgres token acquisition"
 
 
+def _truth(expr, apply, baseline_issue):
+    """Evaluate the small GitHub-expression dialect these `if:` conditions use
+    (`inputs.apply == true/false`, `inputs.baseline_handshake_issue != ''`,
+    `&&`, `||`, parentheses). An absent condition is unconditional."""
+    if expr is None:
+        return True
+    py = (str(expr)
+          .replace("inputs.apply == true", str(apply))
+          .replace("inputs.apply == false", str(not apply))
+          .replace("inputs.baseline_handshake_issue != ''", str(baseline_issue != ""))
+          .replace("inputs.baseline_handshake_issue == ''", str(baseline_issue == ""))
+          .replace("&&", " and ").replace("||", " or "))
+    assert all(tok in ("True", "False", "and", "or", "(", ")") for tok in py.replace("(", " ( ").replace(")", " ) ").split()), \
+        f"unrecognised condition fragment in {expr!r}"
+    return bool(eval(py))  # noqa: S307 - vocabulary asserted above
+
+
 @pytest.mark.parametrize("path,job", JOBS)
 def test_refresh_login_matches_the_waits_own_condition(path, job):
-    """The refresh must be gated the same way as the wait it follows: the
-    preflight job's wait (and refresh) only run on apply=true; gov-verify's
-    wait (and refresh) are unconditional, since that job only exists on the
-    post-deploy path in the first place."""
+    """The refresh must run whenever ANY bounded wait it follows could have run,
+    and never when none did. The preflight job now has two waits (apply path,
+    and the opt-in read-only baseline path added on PR #172); gov-verify has
+    one unconditional wait, since that job only exists on the post-deploy path.
+    Checked by truth table over the inputs, not by string equality, so an
+    equivalent but differently spelt condition is not a false failure."""
     steps = _steps(path, job)
-    wait = next(s for s in steps if "Report runner IPv4" in s.get("name", ""))
+    waits = [s for s in steps if "Report runner IPv4" in s.get("name", "")]
+    assert waits, f"{job}: no bounded wait step found"
     refresh = next(s for s in steps if _is_login(s) and s.get("name") != "Login to Azure (OIDC - no stored client secret)")
-    assert refresh.get("if") == wait.get("if")
+    for apply in (True, False):
+        for issue in ("", "93"):
+            any_wait_ran = any(_truth(w.get("if"), apply, issue) for w in waits)
+            assert _truth(refresh.get("if"), apply, issue) == any_wait_ran, (
+                f"{job}: apply={apply} baseline_handshake_issue={issue!r}: a wait ran={any_wait_ran} "
+                f"but the refresh condition {refresh.get('if')!r} evaluates to {not any_wait_ran}")
+
+
+def test_preflight_every_bounded_wait_fails_closed_on_timeout():
+    """CodeRabbit on PR #172: the apply-path wait had lost its trailing exit 1
+    when the read-only wait was added. Every wait must end by failing the job
+    when the /32 never arrives; none may fall through as success."""
+    for s in _steps(MIGRATION, "preflight"):
+        if "Report runner IPv4" in s.get("name", ""):
+            run = s["run"]
+            tail = run[run.rindex("done"):]
+            assert "::error::" in tail and "exit 1" in tail, f"{s['name']!r} does not fail closed after its loop"
 
 
 @pytest.mark.parametrize("path,job", JOBS)
