@@ -49,6 +49,18 @@ NO_SIGNAL_STATES = frozenset({NOT_CHECKED, UNAVAILABLE, FAILED})
 DEFAULT_BUCKET = "B3"
 CACHE_TTL_SECONDS = 3600
 
+#: Clauses that ASSERT something about the input. `none_of` only excludes.
+POSITIVE_CLAUSES = ("all_of", "any_of", "any_unavailable")
+
+
+def has_positive_clause(conditions: Any) -> bool:
+    """A rule with no positive clause matches every input, so it silently
+    replaces the documented B3 default with whatever bucket the row names.
+    That happened on DEV (RULE-RBAC-PROBE, `{}`, B1, 2026-08-02 → 2026-10-25)."""
+    if not isinstance(conditions, dict):
+        return False
+    return any(conditions.get(k) for k in POSITIVE_CLAUSES)
+
 
 @dataclass
 class ClassificationResult:
@@ -321,6 +333,8 @@ class BucketClassifier:
         self._rules: Optional[List[dict]] = None
         self._loaded_at: float = 0.0
         self._ttl = ttl_seconds
+        #: Active DB rows refused at load because they could match every input.
+        self.rejected_rules: List[dict] = []
         if rules is not None:
             self._rules = self._sorted(rules)
             self._loaded_at = time.monotonic()
@@ -366,6 +380,16 @@ class BucketClassifier:
             "priority": r.priority, "conditions": r.conditions or {},
             "description": r.description, "version": r.version,
         } for r in best.values()])
+
+        rejected = [r for r in loaded if not has_positive_clause(r["conditions"])]
+        if rejected:
+            logger.warning(
+                "Ignoring %d active review_rules row(s) with no positive condition; "
+                "each would match every input and override the B3 default: %s",
+                len(rejected),
+                [f"{r['rule_code']}v{r.get('version')}" for r in rejected])
+            loaded = [r for r in loaded if has_positive_clause(r["conditions"])]
+        self.rejected_rules = rejected
 
         # CHECK 4 — the vocabulary contract, enforced BEFORE the rules are cached.
         #
@@ -454,6 +478,9 @@ class BucketClassifier:
     def _evaluate(self, results: dict, conditions: dict) -> tuple:
         """(matched, [descriptions of what matched])"""
         matched: List[str] = []
+
+        if not has_positive_clause(conditions):
+            return False, []
 
         for cond in conditions.get("all_of", []):
             if not self._match(results, cond):
