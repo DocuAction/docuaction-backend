@@ -1,4 +1,4 @@
-"""Analyst / case-update spreadsheet import — STAGE AND PREVIEW ONLY (2026-10-25).
+"""Analyst / case-update spreadsheet import — stage, preview, and an ownership-only apply (2026-10-25).
 
 THREE IMPORT PURPOSES, KEPT SEPARATE (never one importer)
     source_delivery   → the official ONC/RCE intake (`/api/tefca/rce/deliveries`, delimited text).
@@ -22,8 +22,14 @@ WHAT THIS RELEASE DOES AND DOES NOT DO
       segregation-of-duties checks.
     * Computes an idempotency key over (file sha256, purpose, mapping version) so a retry of the
       same file is recognisable and cannot double-apply.
-    * WRITES NOTHING. There is no apply path in this release: applying imported notes needs the
-      append-only follow-up event model, which is an owner decision (doc 13 §2).
+    * PREVIEW WRITES NOTHING. `build_preview` / `preview_rows` only stage and classify; the preview
+      step itself commits no case data (the route does write its own audit row that a preview ran).
+    * APPLY IS OWNERSHIP-ONLY. `apply_case_updates` (below) applies exactly ONE update type —
+      `assign_to_email`, through the existing, already-audited `case_assignment.assign` service —
+      serialised per idempotency key with a transaction-scoped advisory lock, so a retry or a
+      concurrent duplicate submission cannot apply twice (see `TestApplyIdempotency`). Notes,
+      proposed corrections and requested workflow values are STAGED, never applied: applying them
+      needs the append-only follow-up event model, which is still an owner decision (doc 13 §2).
 """
 from __future__ import annotations
 

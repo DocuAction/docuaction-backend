@@ -1527,14 +1527,18 @@ async def case_update_import_preview(
         file: UploadFile = File(..., description="A .csv/.psv/.tsv/.txt or .xlsx of case updates."),
         db: AsyncSession = Depends(get_db),
         user=Depends(require_role("reviewer"))):
-    """Stage and preview an analyst/case-update spreadsheet. WRITES NOTHING.
+    """Stage and preview an analyst/case-update spreadsheet. Writes no case data (this
+    step only records that a preview ran: the audit row below, committed at the end of
+    this call).
 
     Every row gets exactly one disposition (accepted / unchanged / rejected / needs_review)
     and the four reconcile to the rows read. Identity is review_id, or intake_id +
     source_rce_id through the curated record; zero or several matches are never guessed.
     Requested release/approval/bucket values are recorded as REQUESTED and routed to
-    needs_review — a spreadsheet cannot bypass the determination and QA routes. There is no
-    apply endpoint in this release (owner decision on the follow-up event model).
+    needs_review — a spreadsheet cannot bypass the determination and QA routes. The companion
+    apply endpoint (`POST /cases/import/apply`, below) applies ownership (`assign_to_email`)
+    only; notes, proposed corrections and requested workflow values stay staged pending the
+    owner decision on the follow-up event model.
     """
     from app.tefca_registry.rce import case_update_import as cui
 
