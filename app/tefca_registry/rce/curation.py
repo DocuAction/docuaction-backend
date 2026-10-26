@@ -67,6 +67,12 @@ CLEAN, CORRECTED, HELD, REJECTED = "CLEAN", "CORRECTED", "HELD", "REJECTED"
 #: Severities that HOLD a record until a human resolves them. A record carrying
 #: an unresolved issue at one of these levels never reaches verification.
 HOLDING_SEVERITIES = frozenset({"CRITICAL", "HIGH"})
+#: Rules whose findings never hold a record on their own, whatever their severity.
+#: NPI-001 (presence / applicability) is a requiredness REVIEW item: methodology v1.4
+#: ("a missing NPI ... is not by itself a hold") and the 2026-10-26 instruction (no
+#: automatic HELD or B4 from a missing NPI alone). Identifier validity (NPI-002/004/003)
+#: and every other rule keep holding exactly as before.
+NON_HOLDING_RULES = frozenset({"NPI-001"})
 
 #: Resolutions that mean the question is still open in substance. PROPOSED is in
 #: here deliberately: the state machine is
@@ -78,7 +84,8 @@ HOLDING_SEVERITIES = frozenset({"CRITICAL", "HIGH"})
 UNDECIDED_RESOLUTIONS = frozenset({"OPEN", "PROPOSED", "UNDER_REVIEW"})
 
 
-def blocks_promotion(severity: Optional[str], resolution: Optional[str]) -> bool:
+def blocks_promotion(severity: Optional[str], resolution: Optional[str],
+                     rule_id: Optional[str] = None) -> bool:
     """Does this issue hold its record back from promotion and verification?
 
     One definition, used by both curate_delivery (at curation time) and
@@ -86,6 +93,8 @@ def blocks_promotion(severity: Optional[str], resolution: Optional[str]) -> bool
     code paths, and the original defect existed in only one of them - which is
     what happens when the rule gets written out twice.
     """
+    if rule_id in NON_HOLDING_RULES:
+        return False
     return (severity in HOLDING_SEVERITIES
             and (resolution or "OPEN") in UNDECIDED_RESOLUTIONS)
 
@@ -356,7 +365,7 @@ async def curate_delivery(db, intake_id, *, run_id=None,
                 applied += 1
 
             blocking = [i for i in issues
-                        if blocks_promotion(i.severity, i.resolution)]
+                        if blocks_promotion(i.severity, i.resolution, i.rule_id)]
             row["issue_count"] = len(issues)
             row["correction_count"] = applied
             if blocking:
@@ -619,11 +628,11 @@ async def _blocking_by_record(db, intake_id, *, run_id=None) -> Dict[Any, Dict[s
     current run, plus unresolved identifier conflicts."""
     undecided_rows = (await db.execute(
         select(m.RceIssue.source_record_id, m.RceIssue.severity,
-               m.RceIssue.resolution)
+               m.RceIssue.resolution, m.RceIssue.rule_id)
         .where(run_selection.issues_filter(intake_id, run_id=run_id)))).all()
     blocking: Dict[Any, Dict[str, int]] = {}
-    for record_id, severity, resolution in undecided_rows:
-        if record_id is not None and blocks_promotion(severity, resolution):
+    for record_id, severity, resolution, rule_id in undecided_rows:
+        if record_id is not None and blocks_promotion(severity, resolution, rule_id):
             entry = blocking.setdefault(record_id, {"issues": 0, "conflicts": 0})
             entry["issues"] += 1
     for record_id, n in (await _conflict_held_records(db, intake_id)).items():

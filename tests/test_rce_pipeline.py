@@ -291,12 +291,22 @@ class TestQualityRules:
                 f"rule — the correction gate would silently never match it.")
 
     def test_missing_npi_is_informational_never_a_failure(self):
-        """19.45% of the delivered population has no NPI. Absence is a fact."""
-        result = findings("NPI-001", ctx(row(NPI="")))
+        """19.45% of the delivered population has no NPI. Absence is a fact —
+        unless a documented basis requires the NPI. Since rule set 1.5.0 a
+        T-TRTMNT purpose is such a basis (BR-NPI-TRTMNT-001), so the
+        informational case is a row whose purposes do not include it."""
+        result = findings("NPI-001", ctx(row(NPI="", purposesofuse="T-PYMNT")))
         assert len(result) == 1
         assert result[0].severity == qr.INFO
         assert result[0].correction_authority == qr.NO_CORRECTION
         assert "never treated as a verification failure" in result[0].description
+
+    def test_missing_npi_with_t_trtmnt_purpose_is_a_review_finding_not_a_failure(self):
+        result = findings("NPI-001", ctx(row(NPI="")))   # row() carries T-TRTMNT
+        assert [f.issue_type for f in result] == ["NPI_REQUIRED"]
+        assert result[0].severity == qr.HIGH
+        assert result[0].correction_authority == qr.HUMAN_REQUIRED
+        assert "BR-NPI-TRTMNT-001" in result[0].description
 
     def test_present_npi_raises_no_absence_issue(self):
         assert findings("NPI-001", ctx(row())) == []

@@ -44,11 +44,16 @@ def _rows(tag: str):
         #    blank role (NPI present, so no PF-CTX-001)
         {"NPI": NPI_BAD_CHECKSUM, "address_postalCode": "2718", "address_state": "ma",
          "address_line": "  2 Synthetic Way  ", "hl7orgrole": ""},
-        # 2: no NPI + blank role (PF-CTX-001), unresolved parent, bad HCID/CCN shapes
+        # 2: no NPI + blank role, unresolved parent, bad HCID/CCN shapes. Purpose is
+        #    T-TRTMNT (base), so since 1.5.0 BR-NPI-TRTMNT-001 DECIDES the NPI
+        #    requirement and PF-CTX-001 must NOT be recorded for this line.
         {"NPI": "", "hl7orgrole": "", "partOf": "9.99.777.does.not.exist",
          "HCID": "not-a-urn", "CCN": "ABC"},
         # 3: blank name (REQ-002) and blank TEFCAID (ID-005)
         {"NPI": _valid_npi(13), "hl7orgrole": "provider", "name": "", "TEFCAID": ""},
+        # 4: no NPI + blank role + a purpose the business rule does not cover:
+        #    the requirement is genuinely undecided -> PF-CTX-001.
+        {"NPI": "", "hl7orgrole": "", "purposesofuse": "T-PYMNT"},
     )):
         v = dict(base)
         v.update({"id": f"9.99.777.{tag}.{i}",
@@ -108,7 +113,7 @@ async def test_preflight_four_dimensions_and_untouched_originals(db_required):
         run = await pf.run_preflight(db, intake_id, actor="pytest-preflight")
     assert run["status"] == "COMPLETE"
     assert run["classification_gate"] == pm.GATE_CLEAR_WITH_FINDINGS
-    assert run["records_evaluated"] == 4
+    assert run["records_evaluated"] == 5
     assert run["summary"]["every_record_evaluated"] is True
     assert run["summary"]["originals_modified"] is False
 
@@ -142,18 +147,21 @@ async def test_preflight_four_dimensions_and_untouched_originals(db_required):
     assert any(f["line_number"] == 4 for f in by_code.get("PF-CCN-001", []))
 
     # Missing context: unresolved applicability, insufficient execution,
-    # informational -- never an "open" finding against the record.
-    ctx = [f for f in by_code.get("PF-CTX-001", []) if f["line_number"] == 4]
+    # informational -- never an "open" finding against the record. Line 6 has
+    # no NPI, a blank role and a purpose no rule covers.
+    ctx = [f for f in by_code.get("PF-CTX-001", []) if f["line_number"] == 6]
     assert ctx and ctx[0]["category"] == "MISSING_CONTEXT"
     assert ctx[0]["applicability"] == pm.UNRESOLVED
     assert ctx[0]["execution"] == pm.EXEC_INSUFFICIENT
     assert ctx[0]["disposition"] == pm.DISP_INFORMATIONAL
     assert ctx[0]["evidence"]["npi_required_predicate"] is False
-    # ...and not for line 3, whose NPI is present.
-    assert not any(f["line_number"] == 3 for f in by_code.get("PF-CTX-001", []))
+    assert ctx[0]["evidence"]["purposesofuse"] == "T-PYMNT"
+    # ...not for line 3, whose NPI is present, and not for line 4, whose blank
+    # role is irrelevant because T-TRTMNT decides the requirement (BR-NPI-TRTMNT-001).
+    assert not any(f["line_number"] in (3, 4) for f in by_code.get("PF-CTX-001", []))
     # Delivery-level context fact recorded exactly once.
     assert len(by_code.get("PF-CTX-000", [])) == 1
-    assert by_code["PF-CTX-000"][0]["evidence"]["hl7orgrole_blank"] == 2
+    assert by_code["PF-CTX-000"][0]["evidence"]["hl7orgrole_blank"] == 3
 
     unresolved = [f for f in by_code.get("PART_OF_UNRESOLVED", []) if f["line_number"] == 4]
     assert unresolved and unresolved[0]["category"] == "MISSING_CONTEXT"

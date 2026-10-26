@@ -71,9 +71,18 @@ GENERATOR_VERSION = "1.0.0"
 
 #: The rule set these expectations were derived from
 #: (app/tefca_registry/rce/quality_rules.py RULE_SET_VERSION). 1.4.0 changed
-#: only the INT-003 wording (1.1.0); every expected rule code and line
-#: expectation derived under 1.3.0 still holds.
-TARGET_RULE_SET_VERSION = "1.4.0"
+#: only the INT-003 wording (1.1.0). 1.5.0 added BR-NPI-TRTMNT-001 (NPI-001
+#: 1.3.0): a blank NPI on a row whose purposesofuse contains T-TRTMNT is now
+#: NPI_REQUIRED (HIGH, HUMAN_REQUIRED) instead of NPI_NOT_SUPPLIED. The pack's
+#: base row carries T-TRTMNT, so the QHIN row and the odd-numbered missing-NPI
+#: rows exhibit the new finding; even-numbered missing-NPI rows carry T-PYMNT
+#: and keep the informational, no-hold path. 1.6.0 (NPI-001 1.4.0, the six
+#: applicability cases): the presence finding itself never holds a record any
+#: more (curation NON_HOLDING_RULES), so the T-TRTMNT missing-NPI rows are
+#: CLEAN with an open HIGH review finding; a blank/unrecognized purpose with a
+#: blank NPI is NPI_APPLICABILITY_UNRESOLVED (MEDIUM). The pack's rows carry
+#: T-TRTMNT or T-PYMNT, so no row exhibits that third outcome here.
+TARGET_RULE_SET_VERSION = "1.6.0"
 
 #: The locked 41-column ONC/RCE header, verbatim and in delivered order.
 RCE_COLUMNS: Tuple[str, ...] = (
@@ -179,6 +188,7 @@ def luhn_invalid_npi(n: int) -> str:
 
 FINDING_CATALOG: Dict[Tuple[str, str], Tuple[str, str]] = {
     ("NPI-001", "NPI_NOT_SUPPLIED"): ("INFORMATIONAL", "NO_CORRECTION"),
+    ("NPI-001", "NPI_REQUIRED"): ("HIGH", "HUMAN_REQUIRED"),
     ("NPI-002", "NPI_LENGTH_INVALID"): ("HIGH", "HUMAN_REQUIRED"),
     ("NPI-002", "MULTIPLE_NPI_IN_ONE_FIELD"): ("HIGH", "HUMAN_REQUIRED"),
     ("NPI-004", "NPI_FORMAT_INVALID"): ("HIGH", "HUMAN_REQUIRED"),
@@ -213,7 +223,11 @@ Finding = Tuple[str, str]
 QHIN_ROW_FINDINGS: Tuple[Finding, ...] = (
     ("REQ-001", "UNKNOWN_SEQUOIA_ORG_TYPE"),
     ("INT-002", "MISSING_PART_OF"),
-    ("NPI-001", "NPI_NOT_SUPPLIED"),
+    # The QHIN row carries the base purposesofuse (T-TRTMNT) and no NPI, so
+    # BR-NPI-TRTMNT-001 (1.5.0) makes its presence finding NPI_REQUIRED. The row
+    # was already HELD on REQ-001; this adds a second HUMAN_REQUIRED finding (which
+    # does not itself hold since 1.6.0).
+    ("NPI-001", "NPI_REQUIRED"),
 )
 PARTICIPANT_FINDINGS: Tuple[Finding, ...] = (("BUS-003", "PARTICIPANT_PARENT_IS_QHIN"),)
 
@@ -318,9 +332,18 @@ class RowFactory:
 # `new_entrant_ids` from the previous intake); on a fresh database the first
 # registration is a baseline and only CON-003 INACTIVE_RECORD appears.
 
-def d_missing_npi(line: Line, _f: RowFactory, _n: int) -> None:
+def d_missing_npi(line: Line, _f: RowFactory, n: int) -> None:
+    """Blank NPI, blank hl7orgrole. Odd rows keep the base purpose (T-TRTMNT) and
+    so, under BR-NPI-TRTMNT-001, raise NPI_REQUIRED; even rows carry T-PYMNT and
+    stay informational — both halves of the 1.5.0 presence rule are exhibited."""
     line.values["NPI"] = ""
-    line.expected.append(("NPI-001", "NPI_NOT_SUPPLIED"))
+    # n is the FILE line number (2 = QHIN row, members start at 3): odd file lines 3/5 keep
+    # the base purpose (T-TRTMNT), even file lines 4/6 carry T-PYMNT - as documented.
+    if n % 2:
+        line.expected.append(("NPI-001", "NPI_REQUIRED"))
+    else:
+        line.values["purposesofuse"] = "T-PYMNT"
+        line.expected.append(("NPI-001", "NPI_NOT_SUPPLIED"))
     line.kind = "missing_npi"
 
 
@@ -500,7 +523,7 @@ def build_clean_b1(f: RowFactory, _scale: int) -> List[Line]:
 
 def build_missing_npi(f: RowFactory, _scale: int) -> List[Line]:
     lines = _family(f)
-    for i, line in enumerate(lines[1:], start=2):
+    for i, line in enumerate(lines[1:], start=3):   # file line numbers: QHIN row is line 2
         d_missing_npi(line, f, i)
     return lines
 
@@ -660,16 +683,23 @@ SCENARIOS: Tuple[Scenario, ...] = (
     ),
     Scenario(
         "MISSING_NPI", "MISSINGNPI",
-        "All four member rows deliver an empty NPI with an empty hl7orgrole.",
+        "All four member rows deliver an empty NPI with an empty hl7orgrole; lines 3 and 5 "
+        "carry purposesofuse T-TRTMNT, lines 4 and 6 carry T-PYMNT.",
         build_missing_npi,
         notes=[
-            "NPI-001 NPI_NOT_SUPPLIED is INFORMATIONAL / NO_CORRECTION: no hold, no review "
-            "case. Absence of an NPI is a recorded fact, never a failure.",
-            "Setting hl7orgrole=provider on such a row would escalate NPI-001 to "
-            "NPI_REQUIRED (HIGH, HUMAN_REQUIRED); this file deliberately does not.",
+            "Lines 4 and 6 (T-PYMNT): NPI-001 NPI_NOT_SUPPLIED is INFORMATIONAL / "
+            "NO_CORRECTION: no hold, no review case. Absence of an NPI is a recorded fact, "
+            "never a failure.",
+            "Lines 3 and 5 (T-TRTMNT): since rule set 1.5.0, BR-NPI-TRTMNT-001 makes the "
+            "blank NPI NPI_REQUIRED (HIGH, HUMAN_REQUIRED) even though hl7orgrole is blank. "
+            "It is a review finding for analyst determination — not an exclusion, not a "
+            "bucket, not a final non-compliance. Since rule set 1.6.0 (six applicability "
+            "cases, case 1) it is also not a hold: the record stays CLEAN and reaches "
+            "verification while the finding stays open for review.",
             _QHIN_NOTE, _SCH002_NOTE,
         ],
-        workflow_uses=["informational-only findings", "no-hold path"],
+        workflow_uses=["informational-only findings", "no-hold path",
+                       "T-TRTMNT NPI-required review finding (BR-NPI-TRTMNT-001)"],
     ),
     Scenario(
         "MALFORMED_NPI", "MALFORMEDNPI",
@@ -964,7 +994,9 @@ def _summarise(lines: Sequence[Line]) -> Dict[str, object]:
             key = f"{rule} {issue}"
             rule_codes[key] = rule_codes.get(key, 0) + 1
             severity, authority = FINDING_CATALOG[(rule, issue)]
-            if severity in ("CRITICAL", "HIGH"):
+            # NPI-001 (presence / applicability) is a requiredness review item and
+            # never holds on its own (curation.NON_HOLDING_RULES, rule set 1.6.0).
+            if severity in ("CRITICAL", "HIGH") and rule != "NPI-001":
                 line_holds = True
             if authority == "HUMAN_REQUIRED":
                 human_required += 1

@@ -46,7 +46,11 @@ NPI_VALID_OTHER = "1234567893"
 def base_row(**over) -> Dict[str, str]:
     values = {f: "" for f in RCE_FIELDS}
     values.update({
-        "domains": "RCE", "orgManagingOrg": QHIN_OID, "purposesofuse": "T-TRTMNT",
+        # T-PYMNT, not T-TRTMNT: these synthetic rows carry no NPI by default,
+        # and under BR-NPI-TRTMNT-001 (rule set 1.5.0) a T-TRTMNT row with no
+        # NPI is a HUMAN_REQUIRED finding that HOLDS the record. Tests about the
+        # Treatment purpose set purposesofuse explicitly.
+        "domains": "RCE", "orgManagingOrg": QHIN_OID, "purposesofuse": "T-PYMNT",
         "active": "1", "sequoiaorgtype": "Participant",
         "address_line": "1 Synthetic Way", "address_city": "Testville",
         "address_state": "MA", "address_postalCode": "02101",
