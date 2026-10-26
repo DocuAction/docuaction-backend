@@ -384,10 +384,14 @@ async def resolve_from_db(db, reference: str) -> Optional[Dict[str, Any]]:
         if entity_row is None or getattr(entity_row, "is_deleted", False):
             return None
 
-        identifiers = (await db.execute(
+        identifiers = list((await db.execute(
             select(reg.TefcaEntityIdentifier)
             .where(reg.TefcaEntityIdentifier.entity_id == entity_id)
-        )).scalars().all()
+        )).scalars().all())
+
+        fallback = await _curated_npi_fallback(db, entity_id, identifiers)
+        if fallback is not None:
+            identifiers.append(fallback)
 
         parent_tefcaid = await _parent_tefcaid(db, entity_id)
         return registry_entity_to_evidence_shape(entity_row, identifiers, parent_tefcaid)
@@ -396,6 +400,68 @@ async def resolve_from_db(db, reference: str) -> Optional[Dict[str, Any]]:
         logger.warning("registry entity resolution failed for %r: %s: %s",
                        reference, type(exc).__name__, exc, exc_info=True)
         return None
+
+
+class CuratedNpiIdentifier:
+    """An identifier-row look-alike carrying the delivery's NPI for an entity
+    that has NO `tefca_entity_identifiers` row of type `npi`.
+
+    WHY THIS EXISTS (2026-10-25, September intake `4417b334`). Promotion
+    deliberately withholds an NPI identifier row when the same NPI is shared by
+    several records in the delivery (`promotion._add_missing_identifiers`:
+    "values shared within the delivery ... are withheld"), and
+    `tefca_reg_entities` has no `npi` column. The evidence shape therefore read
+    an empty NPI for every such entity, and NPPES / PECOS / OIG LEIE screened
+    them by organisation name or recorded them UNAVAILABLE ("entity has no NPI
+    identifier to look up") although the delivery supplied an NPI. On the
+    September population that was 804 entities / 488 distinct NPIs.
+
+    The delivered NPI is still the delivered NPI. Sharing it across
+    organisations is a data-quality fact the quality rules already report; it is
+    not a reason to screen the organisation as if no NPI had been delivered. So
+    the resolver falls back to the NPI on the entity's most recently promoted
+    curated record, exactly where an identifier row would have put it. Nothing is
+    written: this is a read-side projection, and `registry_entity_to_evidence_shape`
+    still carries the value through unmodified.
+    """
+
+    __slots__ = ("identifier_type", "identifier_value", "system_uri", "is_primary", "identifier_status")
+
+    def __init__(self, value: str):
+        self.identifier_type = "npi"
+        self.identifier_value = value
+        self.system_uri = _IDENTIFIER_SYSTEMS.get("npi")
+        self.is_primary = False
+        self.identifier_status = "curated_record_fallback"
+
+
+async def _curated_npi_fallback(db, entity_id, identifiers) -> Optional[CuratedNpiIdentifier]:
+    """The curated-record NPI for `entity_id` when no `npi` identifier row exists.
+
+    Returns None when an identifier row already supplies the NPI, when no
+    curated record names this entity, or when every such record's NPI is blank.
+    The newest promotion wins (then the newest row), so a later delivery that
+    changes the NPI is what the screening layer sees.
+    """
+    for ident in identifiers or []:
+        if (getattr(ident, "identifier_type", None) or "").strip().lower() == "npi" \
+                and (getattr(ident, "identifier_value", None) or "").strip():
+            return None
+    from app.tefca_registry.rce import models as m
+
+    npi = (await db.execute(
+        select(m.RceCuratedRecord.npi)
+        .where(m.RceCuratedRecord.canonical_entity_id == entity_id)
+        .where(func.coalesce(func.trim(m.RceCuratedRecord.npi), "") != "")
+        .order_by(m.RceCuratedRecord.promoted_at.desc().nullslast(),
+                  m.RceCuratedRecord.created_at.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+    npi = (npi or "").strip()
+    if not npi:
+        return None
+    logger.debug("entity %s has no npi identifier row; using curated-record NPI for screening", entity_id)
+    return CuratedNpiIdentifier(npi)
 
 
 async def _parent_tefcaid(db, entity_id) -> Optional[str]:
