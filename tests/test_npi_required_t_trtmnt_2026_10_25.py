@@ -24,8 +24,14 @@ def ctx(dataset=None, **over) -> qr.RecordContext:
     values.update({"id": "9.99.777.1.1", "sequoiaorgtype": "Participant", "name": "SYNTHETIC ORG",
                    "NPI": "", "hl7orgrole": "", "purposesofuse": "T-TRTMNT", "active": "1"})
     values.update(over)
+    # This module pins the 1.5.0 semantics (the T-TRTMNT basis). Assessments are dated
+    # explicitly so the expectations do not depend on the wall clock: 2026-10-25 is on/after
+    # BR_NPI_TRTMNT_EFFECTIVE and before NPI_CASES_EFFECTIVE (1.6.0, covered in
+    # tests/test_npi_applicability_six_cases_2026_10_26.py).
+    ds = {"assessment_date": date(2026, 10, 25)}
+    ds.update(dataset or {})
     return qr.RecordContext(line_number=2, parse_status="ok", field_count=41, values=values,
-                            dataset=dict(dataset or {}))
+                            dataset=ds)
 
 
 def npi_001(c):
@@ -232,6 +238,8 @@ def test_september_combinations_partition_the_blank_npi_population():
 @pytest.mark.parametrize("value, _n, required", SEPTEMBER_BLANK_NPI_COMBINATIONS)
 @pytest.mark.parametrize("active", ["1", "0"])
 def test_each_delivered_combination_is_decided_by_membership_only(value, _n, required, active):
+    from app.tefca_registry.rce import npi_applicability as npa
+    # 1.5.0 semantics (assessment 2026-10-25): required → NPI_REQUIRED, else NPI_NOT_SUPPLIED.
     c = ctx(purposesofuse=value, active=active, hl7orgrole="")
     assert qr.purpose_requires_npi(c) is required
     expected = ["NPI_REQUIRED"] if required else ["NPI_NOT_SUPPLIED"]
@@ -240,6 +248,13 @@ def test_each_delivered_combination_is_decided_by_membership_only(value, _n, req
     if required:
         assert f"active={active!r}" in result[0].description, "status is recorded in the finding text"
     assert not hasattr(result[0], "bucket"), "a finding, not a bucket"
+    # 1.6.0 semantics (assessment 2026-10-26): the six cases decide the not-required side —
+    # case 4 (other recognized purposes) stays informational, cases 3/5 become review-required.
+    c6 = ctx(purposesofuse=value, active=active, hl7orgrole="", dataset={"assessment_date": date(2026, 10, 26)})
+    case = npa.assign_case(value, "").case
+    expected6 = {1: "NPI_REQUIRED", 3: "NPI_APPLICABILITY_UNRESOLVED", 4: "NPI_NOT_SUPPLIED",
+                 5: "NPI_APPLICABILITY_UNRESOLVED"}[case]
+    assert [f.issue_type for f in npi_001(c6)] == [expected6], f"{value!r} case {case}"
 
 
 def test_inactive_records_are_neither_exempted_nor_bucketed():
