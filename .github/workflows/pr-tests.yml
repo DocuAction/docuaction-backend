@@ -100,6 +100,13 @@ jobs:
       - name: Migrate to head (Alembic, owner role)
         run: python -m alembic upgrade head
       - name: Run the database-backed isolation suites
+        # 2026-10-26: this list is explicit and manually maintained, not a glob --
+        # which is exactly how four DB-backed test files added across the 2026-10-25/26
+        # release (including the one covering DEF-2026-10-26-05's identifier-search
+        # bug) were silently never run here. A new rolled_back_db-based test file
+        # must be ADDED to this list, or it only ever gets the "no database reachable"
+        # skip path in the plain `pytest` job and this job's green status does not
+        # cover it.
         run: |
           python -m pytest \
             tests/test_reconciliation_evidence_shape.py \
@@ -156,6 +163,10 @@ jobs:
             tests/test_issue_history_legacy_2026_10_08.py \
             tests/test_issue_history_other_findings_2026_10_08.py \
             tests/test_sod_db_enforcement_2026_10_12.py \
+            tests/test_cases_route_level_2026_10_26.py \
+            tests/test_npi_snapshot_date_and_curation_integration_2026_10_26.py \
+            tests/test_resolver_shared_npi_fallback_2026_10_25.py \
+            tests/test_record_history_comparison_2026_10_20.py \
             -v --tb=short -rs --junitxml=isolation-results.xml
       - name: Fail if any isolation test was skipped for want of a database
         run: |
