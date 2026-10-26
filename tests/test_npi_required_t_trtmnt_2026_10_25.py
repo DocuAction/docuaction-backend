@@ -169,7 +169,11 @@ def test_assessments_on_or_after_the_effective_date_apply_the_rule(as_of):
 
 
 def test_a_context_without_an_assessment_date_is_a_current_assessment():
-    assert qr.assessment_date(ctx()) == date.today()
+    # ctx() pins 2026-10-25 by default (see above); build the "no date" contexts explicitly.
+    bare = qr.RecordContext(line_number=2, parse_status="ok", field_count=41,
+                            values=ctx().values, dataset={})
+    assert qr.assessment_date(bare) == date.today()
+    assert qr.assessment_date(ctx(dataset={"assessment_date": None})) == date.today()
     assert qr.assessment_date(ctx(dataset={"assessment_date": ""})) == date.today()
 
 
