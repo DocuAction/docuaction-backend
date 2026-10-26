@@ -25,8 +25,12 @@ NPI_RULES = tuple(r for r in qr.RULES if r.category == qr.CAT_NPI)
 
 def ctx(**over) -> qr.RecordContext:
     values = {f: "" for f in RCE_FIELDS}
+    # A recognized non-Treatment purpose, so "not required -> informational" (case 4 of the
+    # 1.6.0 applicability cases) is what these 1.2.0-era expectations exercise; a blank
+    # purpose list is case 5 (review required) since NPI-001 1.4.0 and is tested in
+    # tests/test_npi_applicability_six_cases_2026_10_26.py.
     values.update({"id": "9.99.777.1.1", "sequoiaorgtype": "Participant",
-                   "name": "SYNTHETIC ORG", "NPI": "1982916078"})
+                   "name": "SYNTHETIC ORG", "NPI": "1982916078", "purposesofuse": "T-PYMNT"})
     values.update(over)
     return qr.RecordContext(line_number=2, parse_status="ok", field_count=41,
                             values=values, dataset={})

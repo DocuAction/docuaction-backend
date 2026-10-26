@@ -77,6 +77,11 @@ on:
         required: false
         type: string
         default: ''
+      baseline_handshake_issue:
+        description: 'Without apply_migrations (no migration needed): PR/issue number where the database job posts its runner IPv4 for a temporary /32, so the pre-deploy Government-integrity baseline can actually be captured. Leave empty to keep the previous fast-fail (deploy skips) behavior.'
+        required: false
+        type: string
+        default: ''
 
 # One DEV release in flight at a time. Queued, not cancelled: killing a run
 # mid-deploy could leave Azure pointed at a half-applied migration or an
@@ -123,10 +128,12 @@ jobs:
       expected_current: ${{ inputs.expected_current || '' }}
       handshake_issue: ${{ inputs.handshake_issue || '' }}
       target_revision: ${{ inputs.target_revision || '' }}
+      baseline_handshake_issue: ${{ inputs.baseline_handshake_issue || '' }}
     permissions:
       contents: read
       id-token: write
-      # Only for the runner-IPv4 handshake comment (to an issue) when apply_migrations=true.
+      # Only for the runner-IPv4 handshake comment (to an issue) when apply_migrations=true,
+      # or when baseline_handshake_issue is set on a no-migration run.
       issues: write
 
   migration-gate:
