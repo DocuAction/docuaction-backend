@@ -55,3 +55,35 @@ Thumbs.db
 .claude/
 
 # Keep Alembic migration versions IN the image (do NOT ignore alembic/versions).
+
+# ── 2026-10-26: non-runtime content that was still reaching `COPY . .` ─────────
+# Evidence, spreadsheets, archives, fixtures, local reports and tooling folders are
+# never runtime assets. Runtime data that IS required stays: app/**, alembic/**,
+# requirements.txt, alembic.ini, Procfile, pyproject.toml (and app/bulletin_intelligence/
+# data/*.csv, which the application reads).
+qa-evidence/
+security-platform/
+bulletin-stabilization/
+infra/
+*.zip
+*.7z
+*.xlsx
+*.xlsm
+*.xls
+*.docx
+*.pptx
+*.pdf
+*.psv
+*.log
+test-results.xml
+# Stray root-level files (empty placeholders and one-off patch scripts)
+patch.py
+fix2.py
+fix3.py
+curl
+config
+python
+*Sonnet
+nixpacks.toml
+railway.json
+stackhawk.yml
