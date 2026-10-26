@@ -223,6 +223,36 @@ def test_initiating_responding_unknown_applicability_for_case_1(direction, expec
     assert r.initiating_requirement == expected
 
 
+@pytest.mark.parametrize("purposes, direction, expected", [
+    ("T-TREAT", npa.INITIATING, npa.APPLIES),              # supplied NPI satisfies presence; §7 still applies
+    ("T-TREAT", npa.RESPONDING, npa.DOES_NOT_APPLY),
+    ("T-TREAT", npa.DIRECTION_UNKNOWN, npa.UNRESOLVED),
+    ("", npa.DIRECTION_UNKNOWN, npa.UNRESOLVED),           # purpose missing: unresolved even with an NPI
+    ("ZZZ", npa.DIRECTION_UNKNOWN, npa.UNRESOLVED),        # unrecognized code: unresolved even with an NPI
+    ("T-PH-ECR,ZZZ", npa.INITIATING, npa.UNRESOLVED),
+    ("T-PYMNT", npa.DIRECTION_UNKNOWN, npa.DOES_NOT_APPLY),  # other recognized purposes only
+    ("T-PH-ECR,T-GOVDTRM-ACP", npa.INITIATING, npa.DOES_NOT_APPLY),
+])
+def test_case_6_presence_satisfied_does_not_mean_requirement_inapplicable(purposes, direction, expected):
+    a = npa.assign_case(purposes, VALID)
+    assert a.case == 6
+    r = npa.assess_applicability(a, snapshot_date=date(2026, 9, 2), assessment_date=TODAY, exchange_direction=direction)
+    assert r.npi_presence == npa.NPI_SUPPLIED
+    assert r.initiating_requirement == expected
+    assert r.compliance_determination is None
+
+
+def test_case_2_records_presence_supplied_and_decides_by_direction():
+    a = npa.assign_case("T-TRTMNT", VALID)
+    for direction, expected in ((npa.INITIATING, npa.APPLIES), (npa.RESPONDING, npa.DOES_NOT_APPLY),
+                                (npa.DIRECTION_UNKNOWN, npa.UNRESOLVED)):
+        r = npa.assess_applicability(a, snapshot_date=date(2026, 9, 2), assessment_date=TODAY, exchange_direction=direction)
+        assert (r.npi_presence, r.initiating_requirement) == (npa.NPI_SUPPLIED, expected)
+    missing = npa.assess_applicability(npa.assign_case("T-TRTMNT", ""), snapshot_date=None, assessment_date=TODAY)
+    assert missing.npi_presence == npa.NPI_MISSING
+    assert "NPI=missing" in npa.describe(npa.assign_case("T-TRTMNT", ""), missing)
+
+
 def test_direction_is_never_inferred_from_a_blank_role_or_label():
     assert npa.exchange_direction_from_record("") == npa.DIRECTION_UNKNOWN
     assert npa.exchange_direction_from_record(None) == npa.DIRECTION_UNKNOWN
@@ -274,12 +304,85 @@ def test_the_four_dates_are_distinct_fields_with_the_sop_values():
     assert {"snapshot_date", "assessment_date", "governing_requirement_date", "software_effective_date"} <= fields
 
 
-def test_engine_records_snapshot_date_from_the_intake_separately(monkeypatch):
+def test_engine_reads_snapshot_date_only_from_authoritative_metadata_never_receipt_date():
     import inspect
+    from types import SimpleNamespace
+    from datetime import datetime
     from app.tefca_registry.rce import quality_engine
     src = inspect.getsource(quality_engine)
-    assert 'dataset["snapshot_date"] = intake.received_at.date()' in src
+    assert 'dataset["snapshot_date"] = snapshot_date_from_metadata(intake)' in src
+    assert "received_at.date()" not in src, "the stated receipt date is not a population date"
     assert 'dataset["assessment_date"] = run.started_at.date()' in src
+    # received later than the snapshot, no metadata → unresolved (None); with metadata → the recorded date
+    later = SimpleNamespace(received_at=datetime(2026, 9, 24), created_at=datetime(2026, 9, 24), source_metadata={})
+    assert quality_engine.snapshot_date_from_metadata(later) is None
+    recorded = SimpleNamespace(received_at=datetime(2026, 9, 24), source_metadata={"snapshot_date": "2026-09-02"})
+    assert quality_engine.snapshot_date_from_metadata(recorded) == date(2026, 9, 2)
+    assert quality_engine.snapshot_date_from_metadata(SimpleNamespace(source_metadata={"snapshot_date": "not-a-date"})) is None
+
+
+def test_snapshot_date_recording_is_explicit_bounded_and_audited():
+    from types import SimpleNamespace
+    from datetime import datetime
+    from app.tefca_registry.rce import snapshot_date as sd
+    from app.tefca_registry import audit as reg_audit
+
+    recorded = []
+    original = reg_audit.record
+    reg_audit.record = lambda db, action, entity_id, **kw: recorded.append((action, kw))  # pure stand-in
+    try:
+        intake = SimpleNamespace(id="00000000-0000-0000-0000-000000000001", received_at=datetime(2026, 9, 24),
+                                 source_metadata={"declared_source": "ONC/RCE"})
+        user = SimpleNamespace(id="u1", email="pm@example.invalid", role="program_manager")
+        out = sd.record_snapshot_date(None, intake, snapshot_date=date(2026, 9, 2),
+                                      basis="ONC transmittal: directory extract as of 2026-09-02 (file onc-snapshot-20260902.csv)", user=user)
+        assert intake.source_metadata["snapshot_date"] == "2026-09-02" and intake.received_at == datetime(2026, 9, 24)
+        assert intake.source_metadata["declared_source"] == "ONC/RCE", "other metadata preserved"
+        assert out["received_at"] == "2026-09-24T00:00:00" and out["previous_snapshot_date"] is None
+        assert recorded and recorded[0][0] == "source_snapshot_date_recorded"
+        assert recorded[0][1]["metadata"]["snapshot_date"] == "2026-09-02"
+        with pytest.raises(sd.SnapshotDateRefused):
+            sd.record_snapshot_date(None, intake, snapshot_date=date(2026, 9, 2), basis="short", user=user)
+        with pytest.raises(sd.SnapshotDateRefused):   # after the stated receipt date
+            sd.record_snapshot_date(None, intake, snapshot_date=date(2026, 9, 25), basis="x" * 20, user=user)
+        with pytest.raises(sd.SnapshotDateRefused):   # future
+            sd.record_snapshot_date(None, intake, snapshot_date=date(2099, 1, 1), basis="x" * 20, user=user)
+    finally:
+        reg_audit.record = original
+
+
+def test_snapshot_date_route_is_registered_and_gated_to_program_manager(client):
+    from app.core.database import get_db
+    from app.core.security import create_access_token
+    from app.main import app
+    from app.tefca_registry.rce import delivery_routes as dr
+    from test_rbac_roles import _Session, _User
+
+    assert any(r.path == "/api/tefca/rce/deliveries/{intake_id}/snapshot-date" and "POST" in r.methods
+               for r in dr.router.routes)
+    url = "/api/tefca/rce/deliveries/00000000-0000-0000-0000-000000000001/snapshot-date"
+    form = {"snapshot_date": "2026-09-02", "basis": "synthetic basis text for the role gate"}
+    assert client.post(url, data=form).status_code == 401
+    try:
+        for role in ("viewer", "reviewer", "senior_analyst", "qalead"):
+            user = _User(role)
+
+            async def _override(user=user):
+                yield _Session(user)
+            app.dependency_overrides[get_db] = _override
+            token = create_access_token({"sub": user.id, "role": role})
+            assert client.post(url, data=form, headers={"Authorization": f"Bearer {token}"}).status_code == 403, role
+        user = _User("program_manager")
+
+        async def _pm():
+            yield _Session(user)
+        app.dependency_overrides[get_db] = _pm
+        token = create_access_token({"sub": user.id, "role": "program_manager"})
+        r = client.post(url, data={"snapshot_date": "not-a-date", "basis": form["basis"]},
+                        headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 422, "an unparseable date is refused before any lookup"
+    finally:
+        app.dependency_overrides.pop(get_db, None)
 
 
 # ── no automatic B4 / HELD / correction / QA ─────────────────────────────────

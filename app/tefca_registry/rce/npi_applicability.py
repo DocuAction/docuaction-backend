@@ -61,6 +61,7 @@ CASES_SOFTWARE_EFFECTIVE_DATE = date(2026, 10, 26)
 # ── vocabularies (strings, so they survive JSON and reports unchanged) ───────
 
 INITIATING, RESPONDING, DIRECTION_UNKNOWN = "initiating", "responding", "unknown"
+NPI_SUPPLIED, NPI_MISSING = "supplied", "missing"
 APPLIES, DOES_NOT_APPLY, UNRESOLVED = "applies", "does_not_apply", "unresolved"
 PRE_DEADLINE, ON_OR_AFTER_DEADLINE = "pre_deadline", "on_or_after_deadline"
 EXCEPTION_ESTABLISHED, EXCEPTION_NOT_ESTABLISHED, EXCEPTION_UNKNOWN = (
@@ -184,6 +185,7 @@ class ApplicabilityAssessment:
     severity, from HELD and from B1–B4. There is deliberately no field for any of those."""
 
     case: int
+    npi_presence: str                       # supplied | missing — a fact about the record, NOT applicability
     exchange_direction: str                 # initiating | responding | unknown
     initiating_requirement: str             # applies | does_not_apply | unresolved
     treat_exception: str                    # established | not_established | unknown
@@ -213,6 +215,11 @@ def assess_applicability(assignment: CaseAssignment, *,
       for either Treatment XP Code (applicability: QHINs populate the directory). Direction
       `responding` → does not apply; `initiating` → applies (case 3: unless the §7(a)(v)
       exception is established); `unknown` → unresolved. Never inferred from a blank role.
+    - Whether an NPI is SUPPLIED is a separate fact (`npi_presence`). A supplied NPI satisfies
+      presence; it never makes the requirement "inapplicable". So case 6 is decided by the
+      purposes exactly as the missing-NPI cases are: T-TREAT present → by direction (applies /
+      does not apply / unresolved); purposes missing or unrecognized → unresolved; other
+      recognized purposes only → does not apply under this Treatment rule.
     - Deadline applicability is the SNAPSHOT date against 2026-09-03. A missing snapshot
       date is UNRESOLVED and is never replaced by the assessment date. A snapshot dated
       2026-09-02 is PRE_DEADLINE: it cannot establish a breach of §7; any requirement that
@@ -249,9 +256,27 @@ def assess_applicability(assignment: CaseAssignment, *,
     elif assignment.case == 5:
         requirement = UNRESOLVED
         notes.append("Purpose missing or unrecognized: the NPI is not assumed optional; analyst review required.")
-    else:  # case 6
-        requirement = DOES_NOT_APPLY
-        notes.append("NPI supplied without T-TRTMNT: validity and verification checks apply; presence is satisfied.")
+    else:  # case 6 — NPI supplied, T-TRTMNT absent: presence satisfied, applicability by the purposes
+        if assignment.has_treat:
+            if exchange_direction == INITIATING:
+                requirement = APPLIES
+                notes.append("T-TREAT initiating node: §7 applies; the supplied NPI satisfies presence (validity and "
+                             "verification are separate checks).")
+            elif exchange_direction == RESPONDING:
+                requirement = DOES_NOT_APPLY
+                notes.append("§7 binds initiating Principal Nodes; a responding-only node is outside it.")
+            else:
+                requirement = UNRESOLVED
+                notes.append("T-TREAT with an NPI supplied: presence satisfied, but exchange direction is unknown, so "
+                             "whether §7 applies stays unresolved.")
+        elif not assignment.tokens or assignment.unrecognized_tokens:
+            requirement = UNRESOLVED
+            notes.append("Purpose missing or unrecognized with an NPI supplied: presence satisfied; applicability of the "
+                         "Treatment requirement cannot be decided from the delivered purposes.")
+        else:
+            requirement = DOES_NOT_APPLY
+            notes.append("No Treatment purpose asserted; NPI supplied: validity and verification checks apply; this "
+                         "Treatment rule does not.")
 
     if snap is None:
         deadline = UNRESOLVED
@@ -265,7 +290,9 @@ def assess_applicability(assignment: CaseAssignment, *,
         deadline = ON_OR_AFTER_DEADLINE
 
     return ApplicabilityAssessment(
-        case=assignment.case, exchange_direction=exchange_direction,
+        case=assignment.case,
+        npi_presence=NPI_SUPPLIED if assignment.npi_supplied else NPI_MISSING,
+        exchange_direction=exchange_direction,
         initiating_requirement=requirement, treat_exception=treat_exception,
         snapshot_date=snap, assessment_date=assessed,
         governing_requirement_date=SECTION_7_COMPLIANCE_DATE,
@@ -278,6 +305,7 @@ def describe(assignment: CaseAssignment, assessment: ApplicabilityAssessment) ->
     """One line for a finding description or an audit note — facts, no verdict."""
     snap = assessment.snapshot_date.isoformat() if assessment.snapshot_date else "missing"
     return (f"case {assignment.case} ({assignment.label}); purposes={assignment.raw_purposes!r}; "
+            f"NPI={assessment.npi_presence}; "
             f"direction={assessment.exchange_direction}; §7 requirement={assessment.initiating_requirement}; "
             f"T-TREAT exception={assessment.treat_exception}; snapshot={snap}; "
             f"assessed={assessment.assessment_date.isoformat()}; "

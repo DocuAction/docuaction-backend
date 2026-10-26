@@ -26,7 +26,7 @@ import collections
 import json
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import func, select, text
@@ -98,6 +98,24 @@ def issue_code(sequence: int, when: Optional[datetime] = None,
         return f"DQ-{stamp}-{sequence:06d}"
     ref = getattr(run_ref, "hex", None) or str(run_ref).replace("-", "")
     return f"DQ-{stamp}-{ref[:8]}-{sequence:06d}"
+
+
+SNAPSHOT_DATE_KEY = "snapshot_date"
+
+
+def snapshot_date_from_metadata(intake):
+    """The delivery's population (snapshot) date, or None. Read only from
+    `source_metadata[SNAPSHOT_DATE_KEY]` (ISO date), which an authorised operator records with
+    a stated basis and an audit row. Never derived from received_at, created_at, the file name
+    or the assessment date."""
+    meta = getattr(intake, "source_metadata", None) or {}
+    raw = meta.get(SNAPSHOT_DATE_KEY)
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(str(raw).strip()[:10])
+    except ValueError:
+        return None
 
 
 async def _build_dataset_context(db, intake_id) -> Dict[str, Any]:
@@ -247,9 +265,12 @@ async def run_quality_engine(
     # Effective-dated rules (BR-NPI-TRTMNT-001) read the run's own date, so a
     # re-run of an old delivery is assessed as of today and says so.
     dataset["assessment_date"] = run.started_at.date()
-    # The population (snapshot) date is the intake's received_at, recorded separately from
-    # the assessment date; absent -> None, never substituted (NPI-001 1.4.0 deadline logic).
-    dataset["snapshot_date"] = intake.received_at.date() if getattr(intake, "received_at", None) else None
+    # The population (snapshot) date comes ONLY from authoritative, auditable delivery metadata
+    # (source_metadata.snapshot_date, recorded by an authorised operator with its basis; see
+    # delivery_routes snapshot-date). `received_at` is the registrant-stated RECEIPT date and
+    # `created_at` the ingestion instant: neither is a population date, so neither is used.
+    # Absent -> None: the deadline assessment stays unresolved rather than guessing.
+    dataset["snapshot_date"] = snapshot_date_from_metadata(intake)
 
     # Per-record check results (issue-history slice). OFF by default; when off
     # nothing below this line differs from the behaviour before the slice.

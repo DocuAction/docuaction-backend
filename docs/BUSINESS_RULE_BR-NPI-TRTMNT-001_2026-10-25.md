@@ -83,10 +83,7 @@ intake `4417b334` (`rce_source_records.parsed`), exact-token split on `, ; |` an
 The two "required" rows are the 3,464 T-TRTMNT/blank-NPI observations (2,961 active / 503 inactive;
 633 Participant / 2,831 Subparticipant). The second-opinion workbook reproduces the same figures
 ("Treatment asserted with NPI missing" 3,464; its NPI-missing rows split 2,961 / 503 / 1,059 / 50 by
-treatment × inactive). A purpose-category subtotal of 3,997 that leaves 576 unexplained is **not** a
-category of this partition; the only arithmetic that reproduces it exactly is 2,622 + 692 + 683 (T-TRTMNT-
-only, plus blank purposes counted at two grains — 692 across all records, 683 among blank-NPI records),
-i.e. a double count, not a missing population. Multi-purpose combinations are counted once each above.
+treatment × inactive). A purpose-category subtotal of 3,997 that left 576 records unexplained is superseded by this partition, which places every one of the 4,573 blank-NPI records in exactly one row; the earlier category list is not on file, so the omitted rows cannot be named, and the subtotal matches no row or union of rows here (an arithmetic coincidence, 2,622 + 692 + 683, is noted as an unverified hypothesis only). Multi-purpose combinations are counted once each above.
 Tests: `tests/test_npi_required_t_trtmnt_2026_10_25.py::SEPTEMBER_BLANK_NPI_COMBINATIONS`.
 
 ### Four dates, kept apart
@@ -137,7 +134,7 @@ choice, not a policy date).
 | 3 | `T-TREAT` without `T-TRTMNT`; NPI missing | `NPI_APPLICABILITY_UNRESOLVED` MEDIUM HUMAN_REQUIRED | §7(a)(v) exception: established / not established / **unknown**; never auto pass or fail |
 | 4 | other recognized purposes only; NPI missing | `NPI_NOT_SUPPLIED` INFO | does not apply under this rule; other checks preserved |
 | 5 | purpose missing or any unrecognized code; NPI missing | `NPI_APPLICABILITY_UNRESOLVED` MEDIUM HUMAN_REQUIRED | unresolved; NPI not assumed optional |
-| 6 | `T-TRTMNT` absent; NPI supplied (incl. missing/unrecognized purpose) | none here — validity, then verification | supplied ≠ verified |
+| 6 | `T-TRTMNT` absent; NPI supplied (incl. missing/unrecognized purpose) | none here — validity, then verification | `npi_presence = supplied` is a fact, not inapplicability: T-TREAT present → §7 by direction (applies / does not apply / unresolved); purpose missing or unrecognized → **unresolved**; other recognized purposes only → does not apply |
 
 Rules: exact-token membership on the parsed `purposesofuse` list (`, ; |` and whitespace); `T-TRTMNT` anywhere
 takes precedence; look-alikes never match; unknown codes stay unrecognized (a mixed list with an unknown code is
@@ -160,8 +157,8 @@ submitted NPI; analyst confirmation + independent QA stay in the review routes) 
 Whether `purposesofuse` enumerates Organization-level initiating or Endpoint-level responding purposes is not
 documented in any delivered specification on file; nothing is inferred from a blank role or a Participant label.
 
-**Four dates (requirements 9–10):** snapshot date (intake `received_at`, recorded by the engine as
-`dataset["snapshot_date"]`; **missing → unresolved, never the assessment date**) · assessment date (run start) ·
+**Four dates (requirements 9–10):** snapshot date (**only** `source_metadata.snapshot_date`, recorded by a Program Manager with its basis through `POST /api/tefca/rce/deliveries/{intake_id}/snapshot-date` and audited as `source_snapshot_date_recorded` — `received_at` is the registrant-stated RECEIPT date and `created_at` the ingestion instant; neither is a population date and neither is used; the engine exposes the recorded value as
+`dataset["snapshot_date"]`; **missing → unresolved, never the receipt date, the ingestion date, a file-name inference or the assessment date**). Integration test: snapshot 2026-09-02 recorded, received 2026-09-24, assessed in October → `pre_deadline` (`tests/test_npi_snapshot_date_and_curation_integration_2026_10_26.py`) · assessment date (run start) ·
 governing requirement date (§8: 2026-09-03) · software rule-version effective date (2026-10-26; T-TRTMNT basis
 2026-10-25). A 2026-09-02 snapshot is `pre_deadline`: it cannot establish a §7 breach; earlier requirements are a
 separate assessment and are not asserted by this rule.

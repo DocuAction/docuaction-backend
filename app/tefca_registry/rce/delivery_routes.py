@@ -2627,6 +2627,39 @@ async def delivery_snapshot_approve_route(
     return result
 
 
+@router.post("/deliveries/{intake_id}/snapshot-date",
+             summary="Record the delivery's population (snapshot) date with its basis (Program Manager or above)")
+async def delivery_snapshot_date_route(
+    intake_id: str,
+    request: Request,
+    snapshot_date: str = Form(..., description="ISO date the publisher's extract represents (population date)."),
+    basis: str = Form(..., min_length=10, max_length=2000,
+                      description="What establishes the date: transmittal, publisher statement, file provenance "
+                                  "note. Recorded verbatim in the audit row."),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("program_manager")),
+):
+    """Explicit, auditable operator confirmation of the snapshot date (NPI-001 1.4.0 reads it for the
+    SOP s7 deadline assessment). It never changes `received_at` (the stated receipt date) and is
+    refused when later than the receipt date or in the future. Append-only audit row
+    `source_snapshot_date_recorded`; previously issued quality runs are not re-run."""
+    from datetime import date as _date
+    from app.tefca_registry.rce import snapshot_date as sd
+
+    try:
+        value = _date.fromisoformat(snapshot_date.strip()[:10])
+    except ValueError:
+        raise HTTPException(422, f"snapshot_date {snapshot_date!r} is not an ISO date (YYYY-MM-DD)")
+    intake = await _intake_or_404(db, intake_id)
+    try:
+        result = sd.record_snapshot_date(db, intake, snapshot_date=value, basis=basis, user=user,
+                                         ip_address=request.client.host if request.client else None)
+    except sd.SnapshotDateRefused as exc:
+        raise HTTPException(409, str(exc))
+    await db.commit()
+    return result
+
+
 @router.post("/deliveries/{intake_id}/snapshot-effects/retry",
              summary="Idempotently re-apply the snapshot effects after a failure")
 async def delivery_snapshot_effects_retry_route(
