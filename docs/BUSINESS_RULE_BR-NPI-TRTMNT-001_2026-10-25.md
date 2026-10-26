@@ -1,14 +1,16 @@
 # BR-NPI-TRTMNT-001 — T-TRTMNT purpose of use requires an NPI
 
+> **Current implementation (2026-10-26): NPI-001 v1.4.0 / rule set 1.6.0** — see the section "NPI-001 1.4.0 / rule set 1.6.0 — the six applicability decision cases" below. Since 1.6.0 the NPI-001 finding never holds a record by itself (curation `NON_HOLDING_RULES`), the governing §7 date is 2026-09-03 (Treatment XP SOP v2.0 §8) and the snapshot date comes only from audited delivery metadata. The table immediately below records the 2026-10-25 clarification as first implemented (**historical**, v1.3.0 / rule set 1.5.0); rows marked *historical* are superseded where the 1.6.0 section says so.
+
 | Field | Value |
 |---|---|
 | Rule id | `BR-NPI-TRTMNT-001` |
 | Statement (as received) | "Under purposeofuse, T-TRTMNT requires an NPI." |
 | Provenance | Business clarification from **Meley**, relayed by Imran Siddiqui (Alliance Global Tech) on **2026-10-25**. Meley's organisational role and the written form of the clarification are not on file in this repository; record them when received. |
 | What it is | A clarification of **one** requiredness question. It is **not** COR acceptance of the ARC methodology, and it does not close any of the open decisions D1-D9. |
-| Implemented as | Quality rule **NPI-001 v1.3.0**, rule set **1.5.0** (`app/tefca_registry/rce/quality_rules.py`: `purpose_requires_npi`, `npi_requirement_basis`). Issue type, severity and authority unchanged: `NPI_REQUIRED`, HIGH, HUMAN_REQUIRED. |
-| Effective | Assessments dated **on/after 2026-10-25** (`BR_NPI_TRTMNT_EFFECTIVE`). The quality engine stamps each run with its own `assessment_date`; a run dated earlier keeps the 1.2.0 predicate. |
-| Scope | The exact token `T-TRTMNT` in the delivered `purposesofuse` list (split on `, ; |` and whitespace; surrounding whitespace removed; nothing else normalised). **Not** `T-TREAT` (a suspected variant the RCE never equated), not `T-PYMNT`, not any other purpose — no supporting policy. |
+| Implemented as (*historical, 2026-10-25*) | Quality rule **NPI-001 v1.3.0**, rule set **1.5.0** (now v1.4.0 / 1.6.0, see below) (`app/tefca_registry/rce/quality_rules.py`: `purpose_requires_npi`, `npi_requirement_basis`). Issue type, severity and authority unchanged: `NPI_REQUIRED`, HIGH, HUMAN_REQUIRED. |
+| Effective (*T-TRTMNT basis*) | Assessments dated **on/after 2026-10-25** (`BR_NPI_TRTMNT_EFFECTIVE`). The quality engine stamps each run with its own `assessment_date`; a run dated earlier keeps the 1.2.0 predicate. |
+| Scope | The exact token `T-TRTMNT` in the delivered `purposesofuse` list (split on `, ; \|` and whitespace; surrounding whitespace removed; nothing else normalised). **Not** `T-TREAT` (a suspected variant the RCE never equated), not `T-PYMNT`, not any other purpose — no supporting policy. |
 | Independent of | `hl7orgrole` (a blank role does not suppress it), `sequoiaorgtype` (Participant/Subparticipant labels do not suppress it), `active` (source status is recorded in the finding text, never consulted). |
 
 ## Rule dictionary entry (NPI-001 v1.3.0)

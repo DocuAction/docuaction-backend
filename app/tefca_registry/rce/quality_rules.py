@@ -388,9 +388,11 @@ def npi_required(ctx: RecordContext) -> bool:
 
 
 def snapshot_date(ctx: RecordContext):
-    """The delivery's population (snapshot) date — the intake's `received_at` as the
-    quality engine records it in `dataset["snapshot_date"]`. None when absent: it is
-    NEVER replaced by the assessment date."""
+    """The delivery's population (snapshot) date as the quality engine places it in
+    `dataset["snapshot_date"]` — read ONLY from the intake's audited
+    `source_metadata["snapshot_date"]` (quality_engine.snapshot_date_from_metadata).
+    `received_at` is the registrant-stated receipt date and is never used. None when
+    absent: it is NEVER replaced by the receipt date or the assessment date."""
     return npa._as_date(ctx.dataset.get("snapshot_date"))
 
 

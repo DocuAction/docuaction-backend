@@ -337,6 +337,8 @@ def d_missing_npi(line: Line, _f: RowFactory, n: int) -> None:
     so, under BR-NPI-TRTMNT-001, raise NPI_REQUIRED; even rows carry T-PYMNT and
     stay informational — both halves of the 1.5.0 presence rule are exhibited."""
     line.values["NPI"] = ""
+    # n is the FILE line number (2 = QHIN row, members start at 3): odd file lines 3/5 keep
+    # the base purpose (T-TRTMNT), even file lines 4/6 carry T-PYMNT - as documented.
     if n % 2:
         line.expected.append(("NPI-001", "NPI_REQUIRED"))
     else:
@@ -521,7 +523,7 @@ def build_clean_b1(f: RowFactory, _scale: int) -> List[Line]:
 
 def build_missing_npi(f: RowFactory, _scale: int) -> List[Line]:
     lines = _family(f)
-    for i, line in enumerate(lines[1:], start=2):
+    for i, line in enumerate(lines[1:], start=3):   # file line numbers: QHIN row is line 2
         d_missing_npi(line, f, i)
     return lines
 
