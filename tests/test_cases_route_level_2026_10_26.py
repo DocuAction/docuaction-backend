@@ -203,6 +203,7 @@ class TestIdentifierResolutionPaths:
         await _case(db, c_id, "REV-9100-000003", now - timedelta(days=3))
         await _case(db, c2_id, "REV-9100-000004", now - timedelta(days=3))
         await _case(db, a, "REV-9100-000005", now - timedelta(days=400))   # same entity, outside 12 months
+        self._c_id = c_id
         return now
 
     @staticmethod
@@ -232,3 +233,42 @@ class TestIdentifierResolutionPaths:
         inside = await work_queue(db, identifier=self.NPI_ROW, created_from=now - timedelta(days=365),
                                   created_to=now + timedelta(seconds=1))
         assert self._ids(inside) == ["REV-9100-000001"]
+
+    async def test_identifier_combines_with_qhin_scope_and_pagination(self, rolled_back_db):
+        # DEF-2026-10-26-05 regression: the identifier filter's three-way union
+        # (identifier row / entity family column / curated NPI) must combine
+        # correctly with the OTHER filters applied alongside it in the same
+        # query -- QHIN scope (SQL, before pagination) and offset/limit
+        # (applied to the already-filtered, already-SQL-scoped statement).
+        from app.tefca_registry.supervisor_ops import work_queue
+        db = rolled_back_db
+        now = await self._seed(db)
+        window = dict(created_from=now - timedelta(days=365), created_to=now + timedelta(seconds=1))
+
+        # Pagination over the two shared-identifier rows (C and C2, both NPI_CURATED):
+        # total reflects the SQL-filtered set regardless of page size, and the two
+        # pages are disjoint and together cover both rows -- nothing dropped, nothing
+        # duplicated by the union.
+        page0 = await work_queue(db, identifier=self.NPI_CURATED, limit=1, offset=0, **window)
+        page1 = await work_queue(db, identifier=self.NPI_CURATED, limit=1, offset=1, **window)
+        assert page0["total"] == page1["total"] == 2
+        assert len(page0["items"]) == len(page1["items"]) == 1
+        assert self._ids(page0) != self._ids(page1)
+        assert set(self._ids(page0)) | set(self._ids(page1)) == {"REV-9100-000003", "REV-9100-000004"}
+
+        # QHIN scope narrows the shared identifier match down to the one entity (C)
+        # actually managed by that QHIN -- C2 is excluded even though it shares the
+        # same curated NPI, because scope is authorization, not identity.
+        qhin_id = uuid.uuid4()
+        db.add(reg.TefcaRegEntity(id=qhin_id, name=f"{SYN} QHIN", display_name=f"{SYN} QHIN",
+                                  entity_level="qhin", entity_type="health_information_network",
+                                  operational_status="active", verification_status="not_verified",
+                                  current_version=1, is_active=True, is_test_record=False, rce_attributes={}))
+        await db.flush()  # the QHIN row must exist before the relationship FK can reference it
+        db.add(reg.TefcaEntityRelationship(
+            id=uuid.uuid4(), parent_entity_id=qhin_id, child_entity_id=self._c_id,
+            relationship_type="managed_by_qhin", status="active", source="import",
+            effective_date=now.date()))
+        await db.flush()
+        scoped = await work_queue(db, identifier=self.NPI_CURATED, qhin_entity_id=qhin_id, **window)
+        assert self._ids(scoped) == ["REV-9100-000003"]

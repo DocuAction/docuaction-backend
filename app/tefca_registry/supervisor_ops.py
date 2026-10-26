@@ -554,16 +554,22 @@ async def work_queue(db, *, queue_source: Optional[str] = None,
         term = identifier.strip()
         urn = term if term.lower().startswith("urn:oid:") else f"urn:oid:{term}"
         candidates = (term, urn)
+        # Select.union() returns a CompoundSelect, which has no .union() method
+        # of its own -- chaining a second .union() here raised AttributeError
+        # on every call (DEF-2026-10-26-05). Pass all three selects to ONE
+        # union() call instead; this combines them in a single CompoundSelect
+        # exactly like the chained form was meant to.
+        identifier_rows = (select(reg.TefcaEntityIdentifier.entity_id)
+                           .where(reg.TefcaEntityIdentifier.identifier_value.in_(candidates)))
+        entity_family_rows = (select(reg.TefcaRegEntity.id)
+                              .where(or_(reg.TefcaRegEntity.rce_hcid.in_(candidates),
+                                         reg.TefcaRegEntity.rce_tefcaid.in_(candidates),
+                                         reg.TefcaRegEntity.rce_org_oid == term)))
+        curated_npi_rows = (select(m.RceCuratedRecord.canonical_entity_id)
+                           .where(m.RceCuratedRecord.canonical_entity_id.isnot(None),
+                                  func.trim(m.RceCuratedRecord.npi) == term))
         stmt = stmt.where(reg.ReviewRecord.entity_id.in_(
-            select(reg.TefcaEntityIdentifier.entity_id)
-            .where(reg.TefcaEntityIdentifier.identifier_value.in_(candidates))
-            .union(select(reg.TefcaRegEntity.id)
-                   .where(or_(reg.TefcaRegEntity.rce_hcid.in_(candidates),
-                              reg.TefcaRegEntity.rce_tefcaid.in_(candidates),
-                              reg.TefcaRegEntity.rce_org_oid == term)))
-            .union(select(m.RceCuratedRecord.canonical_entity_id)
-                   .where(m.RceCuratedRecord.canonical_entity_id.isnot(None),
-                          func.trim(m.RceCuratedRecord.npi) == term))))
+            identifier_rows.union(entity_family_rows, curated_npi_rows)))
     if created_from is not None:
         stmt = stmt.where(reg.ReviewRecord.created_at >= created_from)
     if created_to is not None:
