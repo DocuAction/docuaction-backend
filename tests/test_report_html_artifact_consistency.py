@@ -34,7 +34,6 @@ as test_delivery_processing_report.py; the fixtures are imported from there.
 """
 from __future__ import annotations
 
-import gzip
 import hashlib
 import os
 from types import SimpleNamespace
@@ -83,58 +82,13 @@ async def test_html_route_body_hashes_to_the_registered_artifact(rolled_back_db,
 
     response = await routes.get_report_html(result["report_id"], job_id=None,
                                             db=db, user=USER)
-    # DEF-2026-10-26-06 fix (2026-10-27): the wire body is now gzip-compressed
-    # (Content-Encoding: gzip) so a text-sniffing intermediary has no literal
-    # "<html"/"<script" to find in the transmitted bytes — see routes.py's own
-    # comment at this call site. `response.body` is therefore the COMPRESSED
-    # bytes; decompress before comparing against the registered (uncompressed)
-    # artifact, exactly as a browser's HTTP stack does transparently for the
-    # real client.
-    assert response.headers.get("Content-Encoding") == "gzip"
-    body = gzip.decompress(response.body)
-
-    assert hashlib.sha256(body).hexdigest() == artifact["rendered_sha256"]
-    assert len(body) == artifact["size_bytes"]
+    assert hashlib.sha256(response.body).hexdigest() == artifact["rendered_sha256"]
+    assert len(response.body) == artifact["size_bytes"]
     # The same bytes three ways: the generator's string, the stored column as
-    # served (after undoing the transport-only gzip wrapping), and what the
-    # registry hands back after re-hashing.
-    assert body == result["html"].encode("utf-8")
+    # served, and what the registry hands back after re-hashing.
+    assert response.body == result["html"].encode("utf-8")
     stored = await retrieve_artifact(db, result["report_id"], content_type="text/html")
-    assert stored["verified"] and stored["content"] == body
-
-
-@pytest.mark.asyncio
-async def test_html_route_gzip_wire_body_contains_no_sniffable_html(rolled_back_db, artifact_root):
-    """DEF-2026-10-26-06 fix, pinned at the level that actually matters: the
-    bytes a platform-level text-sniffing injector would see on the wire.
-
-    Live-tested 2026-10-27 (first session this closeout had): the prior
-    candidate fix (Content-Type: application/octet-stream alone) was deployed
-    and did NOT stop the injection — the registered-vs-served hash mismatch
-    reproduced, root-caused to the same injected <script> tag seen on /docs.
-    That proved the injector does not key off declared Content-Type. This
-    test pins the new candidate's actual mechanism: the TRANSMITTED bytes
-    (what `response.body` is before any client decompresses it) must not
-    contain a literal, pattern-matchable "<html" or "<script" substring for
-    such a sniffer to find — because they are gzip-compressed, not because of
-    any header claim. The header claim is checked too, but is not, by itself,
-    proof of anything (the same mistake this whole defect was first missed by
-    with X-Artifact-SHA256)."""
-    from app.reports import routes
-
-    db = rolled_back_db
-    result = await _persisted_delivery_report(db)
-
-    response = await routes.get_report_html(result["report_id"], job_id=None,
-                                            db=db, user=USER)
-    wire_bytes = response.body  # NOT decompressed — this is what leaves the process
-    assert response.headers.get("Content-Encoding") == "gzip"
-    assert wire_bytes[:2] == b"\x1f\x8b", "body is not actually gzip-formatted despite the header claim"
-    assert b"<html" not in wire_bytes.lower()
-    assert b"<script" not in wire_bytes.lower()
-    # And decompressing recovers exactly the registered artifact — the fix
-    # changes the transport encoding only, never the registered content.
-    assert gzip.decompress(wire_bytes) == result["html"].encode("utf-8")
+    assert stored["verified"] and stored["content"] == response.body
 
 
 @pytest.mark.asyncio
@@ -238,8 +192,7 @@ async def test_html_route_serves_the_registered_bytes_even_when_the_column_drift
 
     response = await routes.get_report_html(result["report_id"], job_id=None,
                                             db=db, user=USER)
-    assert response.headers.get("Content-Encoding") == "gzip"
-    assert hashlib.sha256(gzip.decompress(response.body)).hexdigest() == artifact["rendered_sha256"], (
+    assert hashlib.sha256(response.body).hexdigest() == artifact["rendered_sha256"], (
         "/html served the drifted column instead of the registered artifact")
     assert response.headers.get("X-Report-Source") == "artifact-registry"
 

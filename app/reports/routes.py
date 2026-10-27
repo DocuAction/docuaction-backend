@@ -20,7 +20,6 @@ delivered values is reachable below `reviewer`.
 from __future__ import annotations
 
 import asyncio
-import gzip
 import logging
 import re
 import time
@@ -1352,37 +1351,40 @@ async def get_report_html(
         # alone cannot defeat a sniffer that reads the bytes regardless of
         # what header they are labelled with.
         #
-        # THIS FIX: gzip-compress the body and declare Content-Encoding: gzip.
-        # The wire bytes a text-sniffing intermediary would see are now a
-        # compressed binary stream containing no literal "<html" or "<script"
-        # substring for it to find and inject after -- compression operates
-        # byte-for-byte on the ORIGINAL content, so there is nothing
-        # human/pattern-readable left in the transmitted body for a
-        # string-injection point to act on. The browser's own HTTP stack
-        # transparently decompresses a Content-Encoding: gzip response before
-        # handing bytes to any caller (fetch, XHR, `<a download>` via a Blob
-        # alike) -- this needs NO frontend change: tefcaDownload's `res.blob()`
-        # already receives the decompressed, original bytes.
-        # X-Artifact-SHA256 below is unchanged in meaning: it is still the
-        # hash of the ORIGINAL (uncompressed) artifact content, matching the
-        # registry record -- gzip is a transport-layer detail, not a new
-        # "registered" value, and does not require re-registering anything.
-        # NOT YET VERIFIED LIVE: this is a reasoned candidate fix for the
-        # SAME reason the prior one was -- confirming it actually defeats the
-        # injector needs a deployment and a live repeated-download hash
-        # comparison, which this pass does not have authorization to perform
-        # (not merged, not deployed). If this candidate also fails live, the
+        # THIS FIX: gzip-compress the wire bytes so a text-sniffing
+        # intermediary has no literal "<html"/"<script" to find. Deliberately
+        # NOT done here by hand-compressing `registered["content"]` into this
+        # Response: that broke two pre-existing, independent contracts caught
+        # by CI's isolation-postgres job on first attempt --
+        # test_contract_progress_reports.py calls this route directly and
+        # reads `html.body` expecting the literal HTML text (no transport
+        # encoding applied to a function-level return value), and
+        # test_report_csv_registered_bytes_2026_10_18.py pins
+        # `X-Artifact-SHA256 == sha256(resp.body)`, i.e. the header must match
+        # whatever bytes are ACTUALLY in this Response object, not a
+        # pre-compression reference. Compressing here made both false.
+        #
+        # Correct layer: Starlette's GZipMiddleware (app/main.py), which
+        # compresses the OUTGOING wire bytes of every response (including
+        # this one) when the real client sends Accept-Encoding: gzip, entirely
+        # outside the ASGI boundary this function's Response object lives
+        # inside. A direct `await get_report_html(...)` call -- every test in
+        # this codebase, and any other in-process caller -- never passes
+        # through that middleware, so `response.body` here is unchanged: the
+        # original, uncompressed, octet-stream-typed content, exactly as
+        # before. Only a real HTTP request sees Content-Encoding: gzip.
+        # NOT YET VERIFIED LIVE: confirming this candidate actually defeats
+        # the platform's injector needs a deployment and a live repeated-
+        # download hash comparison (see EVIDENCE_DOCS). If it also fails, the
         # remaining explanation is an Azure App Service / Application
         # Insights auto-instrumentation feature operating at the platform
-        # layer regardless of the app's own response encoding -- which would
-        # need an infrastructure/platform configuration change, not an
-        # application code change, and is out of this fix's scope.
-        gz_content = gzip.compress(registered["content"])
-        headers["Content-Encoding"] = "gzip"
+        # layer regardless of the app's own response encoding -- an
+        # infrastructure/platform configuration change, not an application
+        # code change, and out of this fix's scope.
         headers["X-Artifact-SHA256"] = (registered.get("artifact") or {}).get("rendered_sha256")
         headers["X-Artifact-Version"] = str((registered.get("artifact") or {}).get("artifact_version"))
         headers["X-Artifact-Verified"] = "true" if registered.get("verified") else "false"
-        return Response(content=gz_content, media_type="application/octet-stream",
+        return Response(content=registered["content"], media_type="application/octet-stream",
                         headers=headers)
     if not row.report_html:
         raise HTTPException(404, f"Report {report_id} has no stored HTML.")

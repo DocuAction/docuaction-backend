@@ -518,6 +518,35 @@ def test_missing_bytes_answer_410_artifact_missing_and_are_audited(committed, cl
         assert "local://" not in str(r.details)
 
 
+def test_registered_html_is_gzip_encoded_over_the_real_wire(committed, client):
+    """DEF-2026-10-26-06 fix (2026-10-27): GZipMiddleware (app/main.py), not
+    the route handler, compresses this response. A direct in-process call to
+    `get_report_html` (every test in test_report_html_artifact_consistency.py)
+    never passes through ASGI middleware, so it cannot see this — only a real
+    HTTP request can, which is why this test goes through `client` (a real
+    TestClient over the full app) instead of calling the route function.
+
+    This pins that the middleware is actually wired up and that the round
+    trip is lossless; it does not re-prove gzip itself produces no literal
+    "<html"/"<script" substring, which is an inherent property of the
+    well-tested Starlette/stdlib gzip implementation, not something specific
+    to this application worth a bespoke test for. Whether this candidate
+    actually stops the Azure platform's injection is unproven until a live
+    deployed-download comparison (see EVIDENCE_DOCS/48 and 44)."""
+    report_id = committed.result["report_id"]
+    headers = _reviewer_headers()
+    headers["Accept-Encoding"] = "gzip"
+
+    response = client.get(f"/api/reports/{report_id}/html", headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.headers.get("content-encoding") == "gzip"
+    # httpx decodes the body transparently when reading .content; the
+    # decoded bytes must still be exactly the registered artifact.
+    assert response.content == committed.stored_bytes["text/html"]
+    assert response.headers.get("X-Artifact-SHA256") == hashlib.sha256(
+        committed.stored_bytes["text/html"]).hexdigest()
+
+
 def test_reviewer_is_the_floor_and_roles_are_global(committed, client):
     """`viewer` and `contributor` are refused; `reviewer` and above are served.
 
