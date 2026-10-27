@@ -20,6 +20,7 @@ delivered values is reachable below `reviewer`.
 from __future__ import annotations
 
 import asyncio
+import gzip
 import logging
 import re
 import time
@@ -1337,16 +1338,51 @@ async def get_report_html(
         # download (Content-Disposition: attachment) and the frontend reads
         # the bytes as an opaque Blob regardless of declared type, naming the
         # saved file from its own `.html` filename, not from Content-Type.
-        # NOT YET VERIFIED LIVE: this removes the one condition (text/html)
-        # the platform's injection is confirmed to require, but confirming it
-        # actually stops the injection needs a deployment and a live request;
-        # until that is checked, treat this as a reasoned candidate fix, not a
-        # proven one. CSV and PDF remain the only channels with a CONFIRMED
-        # (not just candidate) byte-identical-on-repeat guarantee today.
+        # DEF-2026-10-26-06, UPDATE 2026-10-27: the application/octet-stream
+        # change above was deployed and LIVE-TESTED for the first time this
+        # pass (prior passes never had a session to test it with). RESULT:
+        # the injection still occurred -- the registered-vs-downloaded hash
+        # mismatch reproduced, root-caused to the same injected <script> tag,
+        # byte-identical in shape to the one on /docs. So "the platform's
+        # injection targets text/html responses specifically" was WRONG, or
+        # at least incomplete: whatever performs the injection evidently does
+        # not key strictly off the declared Content-Type -- most consistent
+        # with a body-content sniffer (looking for literal `<html`/`<script`
+        # text) rather than a Content-Type-gated one. A Content-Type change
+        # alone cannot defeat a sniffer that reads the bytes regardless of
+        # what header they are labelled with.
+        #
+        # THIS FIX: gzip-compress the body and declare Content-Encoding: gzip.
+        # The wire bytes a text-sniffing intermediary would see are now a
+        # compressed binary stream containing no literal "<html" or "<script"
+        # substring for it to find and inject after -- compression operates
+        # byte-for-byte on the ORIGINAL content, so there is nothing
+        # human/pattern-readable left in the transmitted body for a
+        # string-injection point to act on. The browser's own HTTP stack
+        # transparently decompresses a Content-Encoding: gzip response before
+        # handing bytes to any caller (fetch, XHR, `<a download>` via a Blob
+        # alike) -- this needs NO frontend change: tefcaDownload's `res.blob()`
+        # already receives the decompressed, original bytes.
+        # X-Artifact-SHA256 below is unchanged in meaning: it is still the
+        # hash of the ORIGINAL (uncompressed) artifact content, matching the
+        # registry record -- gzip is a transport-layer detail, not a new
+        # "registered" value, and does not require re-registering anything.
+        # NOT YET VERIFIED LIVE: this is a reasoned candidate fix for the
+        # SAME reason the prior one was -- confirming it actually defeats the
+        # injector needs a deployment and a live repeated-download hash
+        # comparison, which this pass does not have authorization to perform
+        # (not merged, not deployed). If this candidate also fails live, the
+        # remaining explanation is an Azure App Service / Application
+        # Insights auto-instrumentation feature operating at the platform
+        # layer regardless of the app's own response encoding -- which would
+        # need an infrastructure/platform configuration change, not an
+        # application code change, and is out of this fix's scope.
+        gz_content = gzip.compress(registered["content"])
+        headers["Content-Encoding"] = "gzip"
         headers["X-Artifact-SHA256"] = (registered.get("artifact") or {}).get("rendered_sha256")
         headers["X-Artifact-Version"] = str((registered.get("artifact") or {}).get("artifact_version"))
         headers["X-Artifact-Verified"] = "true" if registered.get("verified") else "false"
-        return Response(content=registered["content"], media_type="application/octet-stream",
+        return Response(content=gz_content, media_type="application/octet-stream",
                         headers=headers)
     if not row.report_html:
         raise HTTPException(404, f"Report {report_id} has no stored HTML.")
