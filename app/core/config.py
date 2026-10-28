@@ -82,6 +82,18 @@ class Settings(BaseSettings):
     # REPORT_ARTIFACT_BACKEND.
     ENABLE_DEV_RESTORE_ORIGINAL: bool = False
 
+    # The reviewer-floor-gated flag that licenses reading any IQVIA-derived
+    # content at all (source_matching.py's LICENSED_SOURCE_FLAG). Previously
+    # undeclared here, so every reader fell through `getattr(settings, ...,
+    # None)` to an os.environ lookup -- which worked for reads, but left
+    # `monkeypatch.setattr(settings, "ENABLE_IQVIA_SOURCES", ..., raising=False)`
+    # with no real attribute to restore at teardown; pydantic's BaseModel
+    # `__delattr__` refuses to delete anything not in a declared field,
+    # so every test that set this flag failed at teardown deterministically.
+    # Declaring it here is backward-compatible: BaseSettings already reads
+    # the matching env var automatically, same effective default (off).
+    ENABLE_IQVIA_SOURCES: bool = False
+
     # IQVIA HCP_AFFIL consumption (advisory candidates only; never a verification
     # source, never confirmed). Default False: the routes do not exist. Also needs
     # ENABLE_IQVIA_SOURCES and an APPROVED snapshot. Not a policy activation.
