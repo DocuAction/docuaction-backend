@@ -547,6 +547,40 @@ def test_registered_html_is_gzip_encoded_over_the_real_wire(committed, client):
         committed.stored_bytes["text/html"]).hexdigest()
 
 
+def test_csv_and_pdf_are_unaffected_by_the_now_global_gzip_middleware(committed, client):
+    """DEF-2026-10-26-06's fix (app/main.py's `GZipMiddleware`) is not scoped to
+    the /html route — Starlette applies it to every response over 500 bytes,
+    app-wide. Before this fix, CSV/PDF downloads were never subject to any
+    Content-Encoding at all; the gap this test closes is that nothing re-
+    confirmed their registered-bytes-on-repeat guarantee still holds now that
+    compression is global. (CSV and PDF don't need the fix itself — they were
+    never the ones with a sniffable "<html"/"<script" substring — but a global
+    middleware change is exactly the kind of change that can silently regress
+    an unrelated route, so it's worth one direct check here rather than
+    inferring safety from the HTML-only test above.)"""
+    from app.reports.engine.pdf_engine import pdf_available
+
+    report_id = committed.result["report_id"]
+    headers = _reviewer_headers()
+    headers["Accept-Encoding"] = "gzip"
+
+    csv_resp = client.get(f"/api/reports/{report_id}/csv", headers=headers)
+    assert csv_resp.status_code == 200, csv_resp.text
+    assert csv_resp.headers.get("content-encoding") == "gzip"
+    assert csv_resp.content == committed.stored_bytes["text/csv"]
+
+    if pdf_available():
+        pdf_resp = client.get(f"/api/reports/{report_id}/pdf", headers=headers)
+        assert pdf_resp.status_code == 200, pdf_resp.text
+        # PDF bytes are themselves already internally compressed, so the body
+        # can legitimately land under GZipMiddleware's minimum_size=500 floor
+        # only if the artifact itself is implausibly tiny — not expected here,
+        # but assert on content equality regardless of whether this particular
+        # response ended up compressed, since that's the actual guarantee that
+        # matters: the decoded bytes still match the registered artifact.
+        assert pdf_resp.content == committed.stored_bytes["application/pdf"]
+
+
 def test_reviewer_is_the_floor_and_roles_are_global(committed, client):
     """`viewer` and `contributor` are refused; `reviewer` and above are served.
 
