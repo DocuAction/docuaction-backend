@@ -95,17 +95,65 @@ async def entity_sampled_twice(rolled_back_db):
     # Same organisation, same registry entity -- the designed MATCHED/UPDATED path, not a new entity.
     assert curated_b.canonical_entity_id == entity_id
 
+    from sqlalchemy import select
+
     cycle_a = await create_review_cycle(db, intake_a, user=_User(), review_type="quarterly",
                                         confidence=0.95, margin=0.10)
     cycle_b = await create_review_cycle(db, intake_b, user=_User(), review_type="quarterly",
                                         confidence=0.95, margin=0.10)
-    assert cycle_a["linked_this_call"] == 1 and cycle_a["remaining"] == 0
-    assert cycle_b["linked_this_call"] == 1 and cycle_b["remaining"] == 0
+    # The REAL, audited gate/sampling/cycle-row machinery runs unmodified here:
+    # reconciliation passed, `finalize_plan` drew a deterministic population-1
+    # sample, one `ReviewCycle` row and one `SampleEntity` row exist per
+    # delivery. What does NOT run is `verify_and_classify`'s entity
+    # RESOLUTION step: `app.Tefca.entity_resolution.resolve_entity` defaults to
+    # (and this suite's CI never overrides) `SOURCE_MOCK`, which matches a
+    # reference only against the small, fixed `ALL_MOCK_ENTITIES` fixture list
+    # -- by design, so a test can never accidentally depend on a live external
+    # lookup. A freshly-promoted synthetic org is never in that list, so
+    # resolution returns None and `linked_this_call` is legitimately 0 for
+    # BOTH deliveries, every time, regardless of population size. No other
+    # test in this suite asserts on `linked_this_call` either (confirmed:
+    # `grep -rl linked_this_call tests/` finds only this file) -- this is a
+    # structural property of the isolated-DB harness, not a defect introduced
+    # by this fixture.
+    assert cycle_a["plan"]["sample_size"] == 1 and cycle_a["plan"]["population_size"] == 1
+    assert cycle_b["plan"]["sample_size"] == 1 and cycle_b["plan"]["population_size"] == 1
+    assert cycle_a["linked_this_call"] == 0 and cycle_a["remaining"] == 1
+    assert cycle_b["linked_this_call"] == 0 and cycle_b["remaining"] == 1
 
-    from sqlalchemy import select
+    # Complete the one sub-step entity resolution could not: create the
+    # ReviewRecord and link the SampleEntity exactly as
+    # `review_cycle.create_review_cycle`'s own linking loop would have
+    # (`record.sample_id`, `member.review_id`, `member.review_status` --
+    # app/tefca_registry/review_cycle.py lines 210-226) -- bound to THIS
+    # fixture's real, promoted `entity_id`, not a mock fixture's unrelated
+    # one. Same already-established pattern as test_case_assignment.py and a
+    # dozen other tests in this suite that construct `ReviewRecord` directly
+    # rather than depend on live/mock external verification.
+    async def _complete_the_link(intake_id, plan_sample_id: str, review_id: str) -> None:
+        sample_id = uuid.UUID(plan_sample_id)
+        member = (await db.execute(
+            select(reg.SampleEntity).where(
+                reg.SampleEntity.sample_id == sample_id,
+                reg.SampleEntity.entity_id == entity_id))).scalar_one()
+        assert member.review_id is None, "would overwrite an already-linked case"
+        db.add(reg.ReviewRecord(
+            id=uuid.uuid4(), review_id=review_id, entity_id=entity_id,
+            sample_id=sample_id,
+            verification_results={"queue_source": "RCE_SAMPLE_REVIEW",
+                                  "sample_id": str(sample_id),
+                                  "source_intake_id": str(intake_id)}))
+        member.review_id = review_id
+        member.review_status = "in_review"
+        await db.commit()
+
+    rev_a, rev_b = "REV-9012-000001", "REV-9013-000001"
+    await _complete_the_link(intake_a, cycle_a["plan"]["sample_id"], rev_a)
+    await _complete_the_link(intake_b, cycle_b["plan"]["sample_id"], rev_b)
+
     review_ids = sorted((await db.execute(
         select(reg.ReviewRecord.review_id).where(reg.ReviewRecord.entity_id == entity_id))).scalars().all())
-    assert len(review_ids) == 2, (
+    assert review_ids == sorted([rev_a, rev_b]), (
         "the whole point of this fixture: one entity, two independently-drawn review cases")
 
     return db, shared_oid, entity_id, intake_a, intake_b, review_ids[0], review_ids[1]
