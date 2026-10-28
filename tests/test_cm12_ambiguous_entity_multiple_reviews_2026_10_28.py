@@ -59,10 +59,15 @@ async def entity_sampled_twice(rolled_back_db):
     review_id_a, review_id_b)."""
     db = rolled_back_db
 
+    # Same `arc` on both calls -> identical id/TEFCAID/HCID/name: the ordinary
+    # "re-delivered next month, nothing about this org's identifiers changed"
+    # case. A DIFFERENT TEFCAID/HCID for the same rce_org_oid is a genuine
+    # identifier conflict (`promotion._identifier_conflicts`) and correctly
+    # HELDs the record -- that is a different, already-covered scenario
+    # (the NPI-008/IDENTIFIER_EXISTING_VALUE_CONFLICT family), not this one.
     rows_a = make_rows(1, arc="9.99.777.81")
-    rows_b = make_rows(1, arc="9.99.777.82")
+    rows_b = make_rows(1, arc="9.99.777.81")
     shared_oid = rows_a[0]["id"]
-    rows_b[0]["id"] = shared_oid  # same organisation, redelivered next month under its own HCID/TEFCAID
 
     intake_a, _ = await seed_intake(db, rows_a)
     await run_quality_and_curation(db, intake_a)
