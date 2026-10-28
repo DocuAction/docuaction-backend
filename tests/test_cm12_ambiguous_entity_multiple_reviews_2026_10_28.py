@@ -65,8 +65,18 @@ async def entity_sampled_twice(rolled_back_db):
     # identifier conflict (`promotion._identifier_conflicts`) and correctly
     # HELDs the record -- that is a different, already-covered scenario
     # (the NPI-008/IDENTIFIER_EXISTING_VALUE_CONFLICT family), not this one.
+    #
+    # The two deliveries' raw bytes must NOT be fully identical, though: the
+    # fixture's own `seed_intake` registers a `RceDeliveryJob` keyed by a
+    # content hash, and `uq_rce_delivery_job_active_identity` (a real,
+    # intentional guard against double-registering one file while it is still
+    # in flight) refuses a second ACTIVE job for byte-identical content -- this
+    # fixture's two jobs are never finalised to terminal, so both are active at
+    # once. A trivial non-identifier field (address_line) makes the second
+    # delivery's bytes genuinely different, same as any two real monthly files
+    # would be, without touching anything `_identifier_conflicts` compares.
     rows_a = make_rows(1, arc="9.99.777.81")
-    rows_b = make_rows(1, arc="9.99.777.81")
+    rows_b = make_rows(1, arc="9.99.777.81", address_line="1 Synthetic Way, Suite 2")
     shared_oid = rows_a[0]["id"]
 
     intake_a, _ = await seed_intake(db, rows_a)
