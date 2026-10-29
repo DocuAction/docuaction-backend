@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -313,6 +314,28 @@ class EvidenceService:
                 sources["leie_org"] = leie_org
             if sam_name is not None:
                 sources["sam_name"] = sam_name
+
+        # SAM public-extract supplementary screen — flag-gated, additive only.
+        #
+        # ENABLE_SAM_EXTRACT_SCREENING is default OFF (see sam_extract.py's
+        # module docstring). The connector itself already no-ops and returns
+        # UNAVAILABLE when the flag is off, with no network call attempted —
+        # but we still gate the call here, rather than calling it
+        # unconditionally, so a flag-off deployment makes exactly the same
+        # number of calls it made before this existed. This key is PURELY
+        # ADDITIVE: it must never be read as replacing or clearing the
+        # primary api.sam.gov check above (sam_exclusion/sam_name), which
+        # stays authoritative for the debarment determination regardless of
+        # what this key says.
+        from app.Tefca.sam_extract import SAMExtractConnector
+        if os.getenv("ENABLE_SAM_EXTRACT_SCREENING", "").strip().lower() in ("1", "true", "yes"):
+            # screen() unions NPI and name lookups: exclusion rows in the
+            # extract often carry no NPI, so an NPI-bearing entity can still
+            # only be findable by name. NPI-first-else-name would miss those.
+            sam_extract_result = await self._safe_lookup(
+                SAMExtractConnector().screen, npi, org_name)
+            if sam_extract_result is not None:
+                sources["sam_extract_candidate"] = sam_extract_result
 
         # Relational components are keyed on the enrolment ids the Enrollment
         # extract just gave us — the documented ENRLMT_ID linkage. They resolve
