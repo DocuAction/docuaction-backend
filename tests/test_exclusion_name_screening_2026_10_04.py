@@ -88,6 +88,49 @@ async def test_exact_and_normalized_matches_are_not_double_counted(monkeypatch):
     assert r.data["candidates_exact"] == 1 and r.data["candidates_normalized_only"] == 0
 
 
+@pytest.mark.asyncio
+async def test_npi_lookup_stamps_the_same_list_edition_provenance_as_name_lookup(monkeypatch):
+    """lookup_by_npi used to omit list_rows_searched/list_loaded_at_epoch --
+    an NPI hit's evidence couldn't say which day's CSV it was checked
+    against, unlike a name-based hit. Fixed in _build, which both share.
+    """
+    from app.Tefca import connectors as c
+
+    # A Luhn-valid NPI is required -- lookup_by_npi rejects anything that
+    # fails the check digit before it ever reaches the cache lookup.
+    npi = "1891430989"
+    by_npi = {npi: [{**ACTIVE, "npi": npi}]}
+    monkeypatch.setattr(c, "_LEIE_CACHE", {"loaded_at": time.time(), "by_npi": by_npi,
+                                           "by_name": {}, "row_count": 1})
+
+    async def loaded():
+        return True
+    monkeypatch.setattr(c, "_ensure_leie_loaded", loaded)
+
+    r = await c.OIGLEIEConnector().lookup_by_npi(npi)
+    assert r.success and r.data["exclusion_found"] is True
+    assert r.data["list_rows_searched"] == 1 and r.data["list_loaded_at_epoch"]
+
+
+@pytest.mark.asyncio
+async def test_plain_last_first_name_lookup_also_stamps_list_edition_provenance(monkeypatch):
+    """The last/first branch (no org) shared the same gap as the NPI path --
+    only the org branch stamped these fields before the _build fix."""
+    from app.Tefca import connectors as c
+
+    by_name = {("SYNTHETIC", "JANE"): [ACTIVE]}
+    monkeypatch.setattr(c, "_LEIE_CACHE", {"loaded_at": time.time(), "by_npi": {},
+                                           "by_name": by_name, "row_count": 1})
+
+    async def loaded():
+        return True
+    monkeypatch.setattr(c, "_ensure_leie_loaded", loaded)
+
+    r = await c.OIGLEIEConnector().lookup_by_name(last="Synthetic", first="Jane")
+    assert r.success and r.data["exclusion_found"] is True
+    assert r.data["list_rows_searched"] == 1 and r.data["list_loaded_at_epoch"]
+
+
 # ── manual review path ───────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
