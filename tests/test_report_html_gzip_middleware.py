@@ -129,12 +129,17 @@ async def test_already_encoded_response_is_passed_through():
 
 
 @pytest.mark.anyio
-async def test_streaming_body_is_passed_through_uncompressed_not_corrupted():
-    chunks = [b"<html>", b"part2", b"part3"]
+async def test_chunked_body_is_buffered_and_compressed_as_one_unit():
+    """The real middleware stack re-chunks single-shot responses into
+    more_body=True + an empty terminal chunk (verified 2026-10-29; the first
+    draft passed chunked traffic through UNCOMPRESSED and CI's wire tests
+    caught it). End-of-body is the compression trigger, never chunk count."""
+    chunks = [b"<html>", b"part2", b"part3", b""]  # empty terminal chunk, as observed
     mw = RegisteredReportHTMLGzip(_app_returning(b"", chunks=chunks))
     headers, body = await _drive(mw, REPORT_PATH, "gzip")
-    assert "content-encoding" not in headers
-    assert body == b"".join(chunks)
+    assert headers.get("content-encoding") == "gzip"
+    assert gzip.decompress(body) == b"".join(chunks)
+    assert int(headers["content-length"]) == len(body)
 
 
 # ── finding 2: compression runs off the event loop ──────────────────────────

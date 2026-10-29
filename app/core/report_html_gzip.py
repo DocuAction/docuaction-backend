@@ -89,11 +89,19 @@ def gzip_accepted(accept_encoding: str) -> bool:
 class RegisteredReportHTMLGzip:
     """Compress the registered-HTML download's wire bytes, off the event loop.
 
-    Single-shot responses only (the route returns a plain ``Response``). A
-    streaming body on this path would be a code change in the route — passed
-    through untouched rather than half-compressed, and the route's own 406
-    gate is what guarantees no unprotected HTML ever leaves regardless.
-    Responses that already carry a Content-Encoding are passed through.
+    The whole body is buffered before compressing — deliberately. The route
+    serves an already-in-memory registered artifact, so buffering costs what
+    the route already paid, and the body must be compressed as one unit so
+    no sniffer-visible text ever goes out ahead of compression. Responses
+    can arrive here CHUNKED even though the route returns a plain
+    ``Response`` — verified against this app's real middleware stack
+    (2026-10-29): an inner layer re-chunks single-shot bodies into
+    ``more_body=True`` plus an empty terminal chunk, so end-of-body, not
+    message count, is the only correct compression trigger (the first
+    draft's "single-shot only" assumption silently passed real wire traffic
+    through uncompressed — caught by CI's wire tests, exactly what they are
+    for). Responses that already carry a Content-Encoding are passed
+    through untouched.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -110,10 +118,10 @@ class RegisteredReportHTMLGzip:
 
         initial_message: Message = {}
         passthrough = False
-        started = False
+        chunks: list[bytes] = []
 
         async def send_compressed(message: Message) -> None:
-            nonlocal initial_message, passthrough, started
+            nonlocal initial_message, passthrough
             if message["type"] == "http.response.start":
                 headers = Headers(raw=message["headers"])
                 if "content-encoding" in headers:
@@ -125,16 +133,10 @@ class RegisteredReportHTMLGzip:
             if message["type"] != "http.response.body" or passthrough:
                 await send(message)
                 return
-            if started or message.get("more_body", False):
-                # Streaming on this path is not a supported shape (see class
-                # docstring): first chunk flushes everything uncompressed.
-                if not started:
-                    started = True
-                    await send(initial_message)
-                await send(message)
-                return
-            started = True
-            body = message.get("body", b"")
+            chunks.append(message.get("body", b""))
+            if message.get("more_body", False):
+                return  # buffer until end-of-body
+            body = b"".join(chunks)
             # Megabyte-scale HTML: compress in a worker thread, never on the
             # event loop. No minimum size — the integrity guarantee is not
             # conditional on the report being big enough.
