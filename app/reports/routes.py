@@ -26,7 +26,7 @@ import time
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -1290,6 +1290,7 @@ async def _registered_bytes(db, report_id: str, content_type: str):
 @router.get("/{report_id}/html", summary="Download a report as HTML")
 async def get_report_html(
     report_id: str,
+    request: Request = None,
     job_id: Optional[str] = JOB_SCOPE_QUERY,
     db: AsyncSession = Depends(get_db),
     # `reviewer` (Decision 1, 2026-09-16): identical bytes to the artifact
@@ -1306,6 +1307,21 @@ async def get_report_html(
     QA108-20260927-005/013); a report from before artifact registration falls
     back to the stored column, exactly as before.
     """
+    # DEF-2026-10-26-06 (revised 2026-10-29): this route's integrity defense
+    # is gzip-coding the wire bytes so the platform's HTML sniffer has no
+    # literal "<html"/"<script" text to inject into (app/core/
+    # report_html_gzip.py). A client that does not accept gzip would receive
+    # exactly the unprotected bytes the defense exists to never emit, under a
+    # hash header the response could then no longer honour — refused, not
+    # served. q-aware on purpose: `gzip;q=0` is a refusal. `request` is None
+    # only for direct in-process callers (tests), which never cross the wire
+    # and are not subject to the platform injector.
+    from app.core.report_html_gzip import gzip_accepted
+    if request is not None and not gzip_accepted(request.headers.get("accept-encoding", "")):
+        raise HTTPException(
+            406,
+            "This download is integrity-protected and served gzip-encoded "
+            "(DEF-2026-10-26-06); request it with Accept-Encoding: gzip.")
     registered = await _registered_bytes(db, report_id, "text/html")
     row, stem = await _stored_html_light(db, report_id, job_id,
                                          defer_html=registered is not None)

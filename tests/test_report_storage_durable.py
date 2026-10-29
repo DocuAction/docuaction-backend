@@ -519,20 +519,19 @@ def test_missing_bytes_answer_410_artifact_missing_and_are_audited(committed, cl
 
 
 def test_registered_html_is_gzip_encoded_over_the_real_wire(committed, client):
-    """DEF-2026-10-26-06 fix (2026-10-27): GZipMiddleware (app/main.py), not
-    the route handler, compresses this response. A direct in-process call to
+    """DEF-2026-10-26-06 fix (revised 2026-10-29): RegisteredReportHTMLGzip
+    (app/core/report_html_gzip.py, wired in app/main.py), not the route
+    handler, compresses this response. A direct in-process call to
     `get_report_html` (every test in test_report_html_artifact_consistency.py)
     never passes through ASGI middleware, so it cannot see this — only a real
     HTTP request can, which is why this test goes through `client` (a real
     TestClient over the full app) instead of calling the route function.
 
     This pins that the middleware is actually wired up and that the round
-    trip is lossless; it does not re-prove gzip itself produces no literal
-    "<html"/"<script" substring, which is an inherent property of the
-    well-tested Starlette/stdlib gzip implementation, not something specific
-    to this application worth a bespoke test for. Whether this candidate
-    actually stops the Azure platform's injection is unproven until a live
-    deployed-download comparison (see EVIDENCE_DOCS/48 and 44)."""
+    trip is lossless. Whether this candidate actually stops the Azure
+    platform's injection is unproven until a live deployed-download
+    comparison (see EVIDENCE_DOCS/48 and 44) — DEF-06 stays OPEN until that
+    passes."""
     report_id = committed.result["report_id"]
     headers = _reviewer_headers()
     headers["Accept-Encoding"] = "gzip"
@@ -547,17 +546,35 @@ def test_registered_html_is_gzip_encoded_over_the_real_wire(committed, client):
         committed.stored_bytes["text/html"]).hexdigest()
 
 
-def test_csv_and_pdf_are_unaffected_by_the_now_global_gzip_middleware(committed, client):
-    """DEF-2026-10-26-06's fix (app/main.py's `GZipMiddleware`) is not scoped to
-    the /html route — Starlette applies it to every response over 500 bytes,
-    app-wide. Before this fix, CSV/PDF downloads were never subject to any
-    Content-Encoding at all; the gap this test closes is that nothing re-
-    confirmed their registered-bytes-on-repeat guarantee still holds now that
-    compression is global. (CSV and PDF don't need the fix itself — they were
-    never the ones with a sniffable "<html"/"<script" substring — but a global
-    middleware change is exactly the kind of change that can silently regress
-    an unrelated route, so it's worth one direct check here rather than
-    inferring safety from the HTML-only test above.)"""
+def test_html_download_refuses_clients_that_do_not_accept_gzip(committed, client):
+    """Review finding 3 (2026-10-29): serving these bytes UNCOMPRESSED would
+    hand the platform sniffer exactly the "<html"/"<script" text the defense
+    denies it, under an X-Artifact-SHA256 the response could no longer
+    honour. Refused (406), never served unprotected — and q-aware, so an
+    explicit `gzip;q=0` refusal is honoured as a refusal (review finding 1),
+    not substring-matched into compression."""
+    report_id = committed.result["report_id"]
+
+    # "" (an explicitly empty header) stands in for "no Accept-Encoding":
+    # the test client injects its own `gzip, deflate` default when the header
+    # is absent, so absence can't be expressed over this transport directly.
+    for ae in ("", "identity", "deflate, br", "gzip;q=0", "gzip; q=0"):
+        headers = _reviewer_headers()
+        headers["Accept-Encoding"] = ae
+        response = client.get(f"/api/reports/{report_id}/html", headers=headers)
+        assert response.status_code == 406, (ae, response.status_code)
+        assert "Accept-Encoding: gzip" in response.json()["detail"]
+
+
+def test_csv_and_pdf_stay_exactly_as_they_were_before_def06(committed, client):
+    """Revised 2026-10-29: the DEF-06 gzip is PATH-SCOPED to /html (see
+    app/core/report_html_gzip.py for the three review findings that forced
+    the retreat from the earlier app-wide GZipMiddleware — `gzip;q=0`
+    mishandling and event-loop compression of large unrelated responses
+    among them). CSV and PDF therefore carry NO Content-Encoding, exactly as
+    they did before DEF-06 existed — their CONFIRMED byte-identical-on-repeat
+    guarantee is reverified here against the registered bytes, with gzip
+    offered by the client and deliberately not taken."""
     from app.reports.engine.pdf_engine import pdf_available
 
     report_id = committed.result["report_id"]
@@ -566,18 +583,13 @@ def test_csv_and_pdf_are_unaffected_by_the_now_global_gzip_middleware(committed,
 
     csv_resp = client.get(f"/api/reports/{report_id}/csv", headers=headers)
     assert csv_resp.status_code == 200, csv_resp.text
-    assert csv_resp.headers.get("content-encoding") == "gzip"
+    assert "content-encoding" not in csv_resp.headers
     assert csv_resp.content == committed.stored_bytes["text/csv"]
 
     if pdf_available():
         pdf_resp = client.get(f"/api/reports/{report_id}/pdf", headers=headers)
         assert pdf_resp.status_code == 200, pdf_resp.text
-        # PDF bytes are themselves already internally compressed, so the body
-        # can legitimately land under GZipMiddleware's minimum_size=500 floor
-        # only if the artifact itself is implausibly tiny — not expected here,
-        # but assert on content equality regardless of whether this particular
-        # response ended up compressed, since that's the actual guarantee that
-        # matters: the decoded bytes still match the registered artifact.
+        assert "content-encoding" not in pdf_resp.headers
         assert pdf_resp.content == committed.stored_bytes["application/pdf"]
 
 
