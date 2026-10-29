@@ -106,3 +106,109 @@ def test_candidate_match_still_escalates_even_if_primary_sam_is_unreachable():
     assert d3.disposition == Disposition.REVIEW.value
     sources_seen = {i.source for i in d3.items}
     assert {"SAM_GOV", "SAM_EXTRACT_SUPPLEMENTARY"} <= sources_seen
+
+
+# ── the October BULK path's consumption point (2026-10-29) ───────────────────
+#
+# arc_pipeline._resolve_and_gather_evidence -> EvidenceService.build_evidence
+# -> gather_sources is the ONE chain both the bulk October run and the
+# single-entity review share. These tests drive gather_sources itself (all
+# other connectors stubbed, no network), proving the bulk path consumes the
+# extract screen in all three outcomes -- candidate, no-candidate,
+# unavailable -- and that flag-off means the key is ABSENT, not a silent
+# clean result.
+
+import time as _time_mod
+
+import pytest as _pytest
+
+from app.Tefca.evidence_service import EvidenceService
+
+
+class _StubManager:
+    class _L:
+        async def lookup_by_name(self, **kw):
+            return _R(True, {"excluded": False, "exclusion_found": False})
+
+    class _S:
+        async def lookup_by_name(self, *a, **kw):
+            return _R(True, {"found": False, "excluded": False, "ambiguous": False})
+
+    leie, sam = _L(), _S()
+
+    async def query_all_sources(self, entity):
+        return {}
+
+
+class _StubPPEF:
+    async def lookup_by_npi(self, npi):
+        return _R(True, {"found": False, "records": [], "enrollment_ids": []})
+
+
+async def _gather(monkeypatch, cache_over=None, flag="true", npi=None):
+    from app.Tefca import sam_extract as s
+    from app.Tefca.connectors import normalize_org_name
+
+    if flag is None:
+        monkeypatch.delenv(s.ENV_FLAG, raising=False)
+    else:
+        monkeypatch.setenv(s.ENV_FLAG, flag)
+    base = {
+        "loaded_at": _time_mod.time(), "row_count": 1,
+        "by_npi": {}, "by_name": {normalize_org_name("Bulk Path Test Org"):
+                                   [{"Name": "Bulk Path Test Org", "NPI": ""}]},
+        "filename": "SAM_Exclusions_Public_Extract_V2_26301.ZIP",
+        "publication_date": __import__("datetime").date.today(),
+        "date_modified": "Oct 28,2026",
+        "http_last_modified": "Wed, 28 Oct 2026 09:39:36 GMT",
+        "sha256": "cafe", "source_url": None,
+    }
+    base.update(cache_over or {})
+    monkeypatch.setattr(s, "_SAM_CACHE", base)
+    monkeypatch.setattr(s, "_SAM_LOAD_LOCK", None)
+
+    svc = EvidenceService(manager=_StubManager())
+    svc.ppef = _StubPPEF()
+    svc.revocation = _StubPPEF()
+
+    class _Rel:
+        async def practice_locations(self, ids):
+            return _R(False, error="unavailable")
+        reassignments = practice_locations
+        additional_npis = practice_locations
+    svc.relational = _Rel()
+
+    ent = {"id": "bulk-test", "name": "Bulk Path Test Org"}
+    if npi:
+        ent["identifier"] = [{"system": "http://hl7.org/fhir/sid/us-npi", "value": npi}]
+    return await svc.gather_sources(ent)
+
+
+@_pytest.mark.asyncio
+async def test_bulk_gather_carries_a_candidate_result(monkeypatch):
+    sources = await _gather(monkeypatch)
+    r = sources["sam_extract_candidate"]
+    assert r.success and r.data["candidate_match"] is True
+    assert r.data["extract_sha256"] == "cafe"  # edition/hash provenance rides along
+
+
+@_pytest.mark.asyncio
+async def test_bulk_gather_carries_a_no_candidate_result(monkeypatch):
+    sources = await _gather(monkeypatch, cache_over={"by_name": {}})
+    r = sources["sam_extract_candidate"]
+    assert r.success and r.data["candidate_match"] is False
+
+
+@_pytest.mark.asyncio
+async def test_bulk_gather_carries_an_unavailable_result_distinct_from_clean(monkeypatch):
+    import datetime as _dt
+    stale = _dt.date.today() - _dt.timedelta(days=9)
+    sources = await _gather(monkeypatch, cache_over={"publication_date": stale})
+    r = sources["sam_extract_candidate"]
+    assert r.success is False and "stale_source" in r.error
+
+
+@_pytest.mark.asyncio
+async def test_bulk_gather_flag_off_means_no_key_at_all(monkeypatch):
+    sources = await _gather(monkeypatch, flag=None)
+    assert "sam_extract_candidate" not in sources
