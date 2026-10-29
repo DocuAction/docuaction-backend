@@ -563,7 +563,12 @@ def test_html_download_refuses_clients_that_do_not_accept_gzip(committed, client
         headers["Accept-Encoding"] = ae
         response = client.get(f"/api/reports/{report_id}/html", headers=headers)
         assert response.status_code == 406, (ae, response.status_code)
-        assert "Accept-Encoding: gzip" in response.json()["detail"]
+        # The app's error handler reshapes HTTPException bodies to
+        # {"error": <detail>, "code": ..., "request_id": ...} -- read the
+        # message from whichever key this deployment emits.
+        payload = response.json()
+        message = payload.get("detail") or payload.get("error") or ""
+        assert "Accept-Encoding: gzip" in message, payload
 
 
 def test_csv_and_pdf_stay_exactly_as_they_were_before_def06(committed, client):
