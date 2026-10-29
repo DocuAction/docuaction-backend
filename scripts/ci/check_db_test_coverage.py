@@ -54,7 +54,6 @@ EXEMPT: dict[str, str] = {
         "test_disposition_events.py",
         "test_download_security.py",
         "test_dq_issue_code_namespace.py",
-        "test_exclusion_name_screening_2026_10_04.py",
         "test_export_jobs.py",
         "test_gov_governance_anchor_fixture.py",
         "test_held_queue.py",
