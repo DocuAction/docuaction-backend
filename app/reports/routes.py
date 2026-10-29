@@ -26,7 +26,7 @@ import time
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -1290,6 +1290,7 @@ async def _registered_bytes(db, report_id: str, content_type: str):
 @router.get("/{report_id}/html", summary="Download a report as HTML")
 async def get_report_html(
     report_id: str,
+    request: Request = None,
     job_id: Optional[str] = JOB_SCOPE_QUERY,
     db: AsyncSession = Depends(get_db),
     # `reviewer` (Decision 1, 2026-09-16): identical bytes to the artifact
@@ -1306,6 +1307,21 @@ async def get_report_html(
     QA108-20260927-005/013); a report from before artifact registration falls
     back to the stored column, exactly as before.
     """
+    # DEF-2026-10-26-06 (revised 2026-10-29): this route's integrity defense
+    # is gzip-coding the wire bytes so the platform's HTML sniffer has no
+    # literal "<html"/"<script" text to inject into (app/core/
+    # report_html_gzip.py). A client that does not accept gzip would receive
+    # exactly the unprotected bytes the defense exists to never emit, under a
+    # hash header the response could then no longer honour — refused, not
+    # served. q-aware on purpose: `gzip;q=0` is a refusal. `request` is None
+    # only for direct in-process callers (tests), which never cross the wire
+    # and are not subject to the platform injector.
+    from app.core.report_html_gzip import gzip_accepted
+    if request is not None and not gzip_accepted(request.headers.get("accept-encoding", "")):
+        raise HTTPException(
+            406,
+            "This download is integrity-protected and served gzip-encoded "
+            "(DEF-2026-10-26-06); request it with Accept-Encoding: gzip.")
     registered = await _registered_bytes(db, report_id, "text/html")
     row, stem = await _stored_html_light(db, report_id, job_id,
                                          defer_html=registered is not None)
@@ -1337,12 +1353,50 @@ async def get_report_html(
         # download (Content-Disposition: attachment) and the frontend reads
         # the bytes as an opaque Blob regardless of declared type, naming the
         # saved file from its own `.html` filename, not from Content-Type.
-        # NOT YET VERIFIED LIVE: this removes the one condition (text/html)
-        # the platform's injection is confirmed to require, but confirming it
-        # actually stops the injection needs a deployment and a live request;
-        # until that is checked, treat this as a reasoned candidate fix, not a
-        # proven one. CSV and PDF remain the only channels with a CONFIRMED
-        # (not just candidate) byte-identical-on-repeat guarantee today.
+        # DEF-2026-10-26-06, UPDATE 2026-10-27: the application/octet-stream
+        # change above was deployed and LIVE-TESTED for the first time this
+        # pass (prior passes never had a session to test it with). RESULT:
+        # the injection still occurred -- the registered-vs-downloaded hash
+        # mismatch reproduced, root-caused to the same injected <script> tag,
+        # byte-identical in shape to the one on /docs. So "the platform's
+        # injection targets text/html responses specifically" was WRONG, or
+        # at least incomplete: whatever performs the injection evidently does
+        # not key strictly off the declared Content-Type -- most consistent
+        # with a body-content sniffer (looking for literal `<html`/`<script`
+        # text) rather than a Content-Type-gated one. A Content-Type change
+        # alone cannot defeat a sniffer that reads the bytes regardless of
+        # what header they are labelled with.
+        #
+        # THIS FIX: gzip-compress the wire bytes so a text-sniffing
+        # intermediary has no literal "<html"/"<script" to find. Deliberately
+        # NOT done here by hand-compressing `registered["content"]` into this
+        # Response: that broke two pre-existing, independent contracts caught
+        # by CI's isolation-postgres job on first attempt --
+        # test_contract_progress_reports.py calls this route directly and
+        # reads `html.body` expecting the literal HTML text (no transport
+        # encoding applied to a function-level return value), and
+        # test_report_csv_registered_bytes_2026_10_18.py pins
+        # `X-Artifact-SHA256 == sha256(resp.body)`, i.e. the header must match
+        # whatever bytes are ACTUALLY in this Response object, not a
+        # pre-compression reference. Compressing here made both false.
+        #
+        # Correct layer: Starlette's GZipMiddleware (app/main.py), which
+        # compresses the OUTGOING wire bytes of every response (including
+        # this one) when the real client sends Accept-Encoding: gzip, entirely
+        # outside the ASGI boundary this function's Response object lives
+        # inside. A direct `await get_report_html(...)` call -- every test in
+        # this codebase, and any other in-process caller -- never passes
+        # through that middleware, so `response.body` here is unchanged: the
+        # original, uncompressed, octet-stream-typed content, exactly as
+        # before. Only a real HTTP request sees Content-Encoding: gzip.
+        # NOT YET VERIFIED LIVE: confirming this candidate actually defeats
+        # the platform's injector needs a deployment and a live repeated-
+        # download hash comparison (see EVIDENCE_DOCS). If it also fails, the
+        # remaining explanation is an Azure App Service / Application
+        # Insights auto-instrumentation feature operating at the platform
+        # layer regardless of the app's own response encoding -- an
+        # infrastructure/platform configuration change, not an application
+        # code change, and out of this fix's scope.
         headers["X-Artifact-SHA256"] = (registered.get("artifact") or {}).get("rendered_sha256")
         headers["X-Artifact-Version"] = str((registered.get("artifact") or {}).get("artifact_version"))
         headers["X-Artifact-Verified"] = "true" if registered.get("verified") else "false"

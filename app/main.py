@@ -85,6 +85,25 @@ app.add_middleware(
 # ── Trusted Host (FIX 8 — NIST SC-7) — reject Host-header spoofing. ──
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.trusted_hosts)
 
+# ── Registered-HTML gzip (DEF-2026-10-26-06, revised 2026-10-29) — compresses
+#    the OUTGOING wire bytes of /api/reports/{id}/html ONLY, so the Azure App
+#    Service platform-level content sniffer (confirmed live to inject a
+#    <script> tag into that route's response regardless of declared
+#    Content-Type) has no literal "<html"/"<script" text to find. Path-scoped
+#    after pre-merge review found the earlier app-wide GZipMiddleware (a)
+#    honoured `gzip;q=0` wrongly on every route, (b) newly blocked the event
+#    loop compressing large unrelated responses (CSV exports), and (c) STILL
+#    left this route unprotected for non-gzip clients and sub-500-byte bodies.
+#    See app/core/report_html_gzip.py for the full reasoning, and the route
+#    itself for the 406 that refuses to serve these bytes unprotected.
+#    Applied here, not inside the route handler, so a direct in-process call
+#    to the route function (every test in this codebase) is unaffected —
+#    only a real HTTP request passes through this middleware.
+#    NOT YET VERIFIED LIVE that this actually stops the injection; DEF-06
+#    stays OPEN until a deployed repeated-download byte verification passes.
+from app.core.report_html_gzip import RegisteredReportHTMLGzip  # noqa: E402
+app.add_middleware(RegisteredReportHTMLGzip)
+
 
 # ── Request-level NUL-byte rejection (AGT-SA-001 F-002 / Block 3 Suite A test A9).
 #    Postgres cannot store or compare a NUL inside a text value, so a raw \x00 that

@@ -82,15 +82,13 @@ async def test_html_route_body_hashes_to_the_registered_artifact(rolled_back_db,
 
     response = await routes.get_report_html(result["report_id"], job_id=None,
                                             db=db, user=USER)
-    body = response.body
-
-    assert hashlib.sha256(body).hexdigest() == artifact["rendered_sha256"]
-    assert len(body) == artifact["size_bytes"]
+    assert hashlib.sha256(response.body).hexdigest() == artifact["rendered_sha256"]
+    assert len(response.body) == artifact["size_bytes"]
     # The same bytes three ways: the generator's string, the stored column as
     # served, and what the registry hands back after re-hashing.
-    assert body == result["html"].encode("utf-8")
+    assert response.body == result["html"].encode("utf-8")
     stored = await retrieve_artifact(db, result["report_id"], content_type="text/html")
-    assert stored["verified"] and stored["content"] == body
+    assert stored["verified"] and stored["content"] == response.body
 
 
 @pytest.mark.asyncio
