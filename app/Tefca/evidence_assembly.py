@@ -661,6 +661,54 @@ def _dimension_exclusion(entity: Dict[str, Any], profile: ApplicabilityProfile,
                                **sam_screening.failure_record(sam.error if sam else "")},
         ))
 
+    # ── SAM public exclusions extract — supplementary, additive only ──
+    #
+    # Flag-gated (ENABLE_SAM_EXTRACT_SCREENING, default OFF); see
+    # sam_extract.py's module docstring. When the key is absent (flag off),
+    # this block does nothing and nothing about D3 changes. A candidate hit
+    # here escalates `any_hit` (it is real information an analyst should
+    # see), but a CLEAN result here never clears `any_unavailable` — this
+    # check must never be read as substituting for api.sam.gov being
+    # reachable, and it is never, by itself, an exclusion finding.
+    sam_extract = sources.get("sam_extract_candidate")
+    if sam_extract is not None and _ok(sam_extract):
+        d = sam_extract.data or {}
+        candidate = bool(d.get("candidate_match"))
+        any_hit = any_hit or candidate
+        items.append(EvidenceItem(
+            dimension=dim, source="SAM_EXTRACT_SUPPLEMENTARY",
+            disposition=Disposition.REVIEW.value if candidate else Disposition.PASS.value,
+            query_timestamp=sam_extract.query_timestamp,
+            dataset_version_anchor=sam_extract.api_version,
+            fields_evaluated=["npi", "normalized_business_name"],
+            original_values=dict(d),
+            rule_applied="SAM_PUBLIC_EXTRACT_SUPPLEMENTARY_SCREEN",
+            note=(
+                "Potential match in the GSA public SAM exclusions extract — a "
+                "CANDIDATE only, never a confirmed exclusion. Analyst "
+                "determination required. Supplementary to, and does not "
+                "replace, the api.sam.gov debarment check above."
+                if candidate else
+                "No candidate match in the GSA public SAM exclusions extract. "
+                "Supplementary only — does not substitute for the api.sam.gov "
+                "check above, which remains the primary SAM control."
+            ),
+        ))
+    elif sam_extract is not None and not _ok(sam_extract):
+        # Unavailable / flag-off / malformed body / stale edition / no usable
+        # identifier — all distinct reasons, carried in sam_extract.error.
+        # Disclosed, never silently dropped, and never counted toward
+        # any_unavailable: the primary api.sam.gov check's own availability
+        # is reported separately above and must not be double-counted or
+        # papered over by this supplementary check's own state.
+        items.append(EvidenceItem(
+            dimension=dim, source="SAM_EXTRACT_SUPPLEMENTARY",
+            disposition=Disposition.UNAVAILABLE.value,
+            rule_applied="SAM_PUBLIC_EXTRACT_SUPPLEMENTARY_SCREEN",
+            note=(sam_extract.error or
+                  "SAM public extract supplementary screen could not be performed."),
+        ))
+
     revocation = sources.get("cms_revocation")
     if _ok(revocation):
         d = revocation.data or {}

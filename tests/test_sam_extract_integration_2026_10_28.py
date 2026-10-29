@@ -17,6 +17,7 @@ from __future__ import annotations
 import io
 import time
 import zipfile
+from email.utils import formatdate
 
 import httpx
 import pytest
@@ -143,7 +144,7 @@ async def test_positive_control_real_excluded_npi_is_a_candidate_not_an_exclusio
     _reset_cache(monkeypatch, {
         "loaded_at": time.time(), "row_count": 1,
         "by_npi": {"1841517737": [{"Name": "", "NPI": "1841517737"}]},
-        "by_name": {}, "edition_date": "Wed, 28 Oct 2026 09:39:36 GMT",
+        "by_name": {}, "edition_date": formatdate(timeval=time.time(), usegmt=True),
         "sha256": "deadbeef", "source_url": "https://sam.gov/...",
     })
 
@@ -167,7 +168,13 @@ async def test_negative_control_known_good_npi_is_no_match(monkeypatch):
     _reset_cache(monkeypatch, {
         "loaded_at": time.time(), "row_count": 1,
         "by_npi": {"1841517737": [{"Name": "", "NPI": "1841517737"}]},
-        "by_name": {}, "edition_date": None, "sha256": "deadbeef", "source_url": None,
+        "by_name": {},
+        # A real loaded cache always carries the source's own Last-Modified
+        # edition date (see sam_extract.py's staleness check) -- "now" here,
+        # not None, so this test exercises the no-match path, not the
+        # separate stale-source path covered by its own test below.
+        "edition_date": formatdate(timeval=time.time(), usegmt=True),
+        "sha256": "deadbeef", "source_url": None,
     })
 
     r = await s.SAMExtractConnector().lookup_by_npi("1891430989")
@@ -183,6 +190,62 @@ async def test_malformed_npi_is_rejected_before_any_cache_lookup(monkeypatch):
     monkeypatch.setenv(s.ENV_FLAG, "true")
     r = await s.SAMExtractConnector().lookup_by_npi("0000000001")  # fails Luhn
     assert r.success is False
+
+
+# ── missing identifier / stale-source handling ───────────────────────────────
+
+@pytest.mark.asyncio
+async def test_lookup_by_name_with_blank_org_name_is_a_missing_identifier_not_a_lookup(monkeypatch):
+    """Mirrors npi_rejection_reason's missing-vs-malformed distinction: no name
+    to look up is a normal state, and must never fall through to
+    normalize_org_name("") asking the cache for an empty key."""
+    from app.Tefca import sam_extract as s
+
+    monkeypatch.setenv(s.ENV_FLAG, "true")
+    r = await s.SAMExtractConnector().lookup_by_name("")
+    assert r.success is False
+    assert "no_org_name_submitted" in r.error
+
+
+@pytest.mark.asyncio
+async def test_stale_edition_date_fails_closed_rather_than_screening_as_current(monkeypatch):
+    """A cache that re-downloads successfully every day but is secretly
+    serving the same old edition would pass the TTL freshness check forever.
+    The edition date itself -- not just the cache's own load time -- must be
+    checked, and a stale edition must disclose as UNAVAILABLE, never as a
+    silent clean screen."""
+    from app.Tefca import sam_extract as s
+
+    monkeypatch.setenv(s.ENV_FLAG, "true")
+    nine_days_ago = formatdate(timeval=time.time() - 9 * 86400, usegmt=True)
+    _reset_cache(monkeypatch, {
+        "loaded_at": time.time(), "row_count": 1,  # cache itself looks "fresh"
+        "by_npi": {"1841517737": [{"Name": "", "NPI": "1841517737"}]},
+        "by_name": {}, "edition_date": nine_days_ago,
+        "sha256": "deadbeef", "source_url": None,
+    })
+
+    r = await s.SAMExtractConnector().lookup_by_npi("1841517737")
+    assert r.success is False
+    assert "stale_source" in r.error
+
+
+@pytest.mark.asyncio
+async def test_missing_edition_date_also_fails_closed(monkeypatch):
+    """A cache somehow populated without an edition date can't have its
+    freshness confirmed, so it must refuse rather than assume current."""
+    from app.Tefca import sam_extract as s
+
+    monkeypatch.setenv(s.ENV_FLAG, "true")
+    _reset_cache(monkeypatch, {
+        "loaded_at": time.time(), "row_count": 1,
+        "by_npi": {"1841517737": [{"Name": "", "NPI": "1841517737"}]},
+        "by_name": {}, "edition_date": None, "sha256": "deadbeef", "source_url": None,
+    })
+
+    r = await s.SAMExtractConnector().lookup_by_npi("1841517737")
+    assert r.success is False
+    assert "stale_source" in r.error
 
 
 # ── malformed-body rejection (fetch + index path) ────────────────────────────

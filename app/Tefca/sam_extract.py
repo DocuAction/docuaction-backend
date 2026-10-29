@@ -36,6 +36,8 @@ import io as _io
 import logging
 import os
 import time as _time
+from datetime import timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Dict, Optional
 from urllib.parse import quote
 
@@ -54,6 +56,10 @@ _SAM_LISTFILES_URL = "https://sam.gov/api/prod/fileextractservices/v1/api/listfi
 _SAM_DOMAIN = "Exclusions/Public V2"
 _SAM_DOWNLOAD_ROOT = "https://sam.gov/api/prod/fileextractservices/v1/api/download"
 _SAM_TTL_SECONDS = 86400  # the source itself refreshes daily
+#: The source refreshes daily; call a loaded extract stale after two missed
+#: cycles rather than one, to tolerate a single late/delayed publish without
+#: manufacturing an outage out of normal source timing noise.
+_SAM_STALE_THRESHOLD_SECONDS = 2 * 86400
 
 API_VERSION = "GSA-Public-Extract-V2"
 
@@ -100,6 +106,36 @@ def sam_extract_schema_problem(fieldnames) -> Optional[str]:
 def _sam_cache_fresh(now: float) -> bool:
     return (_SAM_CACHE["row_count"] > 0
             and (now - _SAM_CACHE["loaded_at"]) < _SAM_TTL_SECONDS)
+
+
+def _extract_staleness_reason(now: float) -> Optional[str]:
+    """None when the loaded extract's own edition date is recent enough to
+    trust for screening; otherwise the reason it is not.
+
+    `_sam_cache_fresh` only says the in-memory CACHE was refreshed recently --
+    it says nothing about whether the SOURCE itself stopped updating. A
+    extract that successfully re-downloads every day but is secretly serving
+    the same stale edition over and over would pass the cache-freshness check
+    forever. A stale edition must fail closed and be disclosed as a distinct
+    reason, never silently screened as if current -- that would look
+    identical to a clean, up-to-date screen.
+    """
+    edition_date = _SAM_CACHE.get("edition_date")
+    if not edition_date:
+        return "extract loaded with no edition date; freshness cannot be confirmed"
+    try:
+        edition_dt = parsedate_to_datetime(edition_date)
+        if edition_dt.tzinfo is None:
+            edition_dt = edition_dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        return f"extract edition date {edition_date!r} could not be parsed"
+    age_seconds = now - edition_dt.timestamp()
+    if age_seconds > _SAM_STALE_THRESHOLD_SECONDS:
+        return (f"extract edition dated {edition_date} is "
+                f"{age_seconds / 86400:.1f} day(s) old; source refreshes daily and "
+                f"this is treated as stale past "
+                f"{_SAM_STALE_THRESHOLD_SECONDS / 86400:.0f} day(s)")
+    return None
 
 
 async def _find_current_extract_file(client: httpx.AsyncClient) -> Optional[str]:
@@ -239,6 +275,7 @@ class SAMExtractConnector:
             "source_url": _SAM_CACHE.get("source_url"),
             "list_rows_searched": _SAM_CACHE.get("row_count", 0),
             "list_loaded_at_epoch": _SAM_CACHE.get("loaded_at"),
+            "schema_version": _SAM_CACHE.get("schema_version"),
         }
 
     def _build(self, matches: list, qp: dict) -> SourceResult:
@@ -262,6 +299,9 @@ class SAMExtractConnector:
             return SourceResult.unavailable("SAM_EXTRACT", rejection, qp, API_VERSION)
         if not await _load_sam_extract():
             return SourceResult.unavailable("SAM_EXTRACT", "extract unavailable or refused", qp, API_VERSION)
+        stale = _extract_staleness_reason(_time.time())
+        if stale:
+            return SourceResult.unavailable("SAM_EXTRACT", f"stale_source: {stale}", qp, API_VERSION)
         matches = _SAM_CACHE["by_npi"].get(npi.strip(), [])
         return self._build(matches, qp)
 
@@ -269,8 +309,20 @@ class SAMExtractConnector:
         qp = {"org": org_name}
         if not self._flag_enabled():
             return SourceResult.unavailable("SAM_EXTRACT", f"{ENV_FLAG} not enabled", qp, API_VERSION)
+        if not (org_name or "").strip():
+            # Same missing-vs-malformed distinction as npi_rejection_reason:
+            # no name to look up is a normal, common state, not a data
+            # defect. Must not fall through to `normalize_org_name("")`,
+            # which would ask the cache for an empty key.
+            return SourceResult.unavailable(
+                "SAM_EXTRACT",
+                "no_org_name_submitted: entity has no organisation name to look up",
+                qp, API_VERSION)
         if not await _load_sam_extract():
             return SourceResult.unavailable("SAM_EXTRACT", "extract unavailable or refused", qp, API_VERSION)
+        stale = _extract_staleness_reason(_time.time())
+        if stale:
+            return SourceResult.unavailable("SAM_EXTRACT", f"stale_source: {stale}", qp, API_VERSION)
         key = normalize_org_name(org_name)
         matches = _SAM_CACHE["by_name"].get(key, []) if key else []
         result = self._build(matches, qp)
