@@ -616,7 +616,15 @@ class DeliveryProcessingDataService:
             return fallback
         return _normalise_coverage(raw)
 
-    _SOURCE_LABELS = {"nppes": "NPPES", "pecos": "PECOS", "leie": "OIG LEIE", "sam": "SAM.gov"}
+    # "pecos" here is the legacy connector-availability key the B1-B4
+    # classifier keys on (NPPES reachability used as an enrolment proxy) --
+    # see app/Tefca/source_registry.py. Rendering it as bare "PECOS" would
+    # read as a claim about the genuine CMS PPEF Enrollment connector
+    # (CMS_PPEF_ENROLLMENT), which this idle-sources disclosure never
+    # actually reports on. Labelled honestly, matching the wording already
+    # used in verification_detail.html for the same legacy key.
+    _SOURCE_LABELS = {"nppes": "NPPES", "pecos": "PECOS (legacy NPPES proxy)",
+                       "leie": "OIG LEIE", "sam": "SAM.gov"}
 
     def _note_coverage_limits(self, verification: Dict[str, Any]) -> None:
         """State, as an evidence limitation, every source that was never attempted.
