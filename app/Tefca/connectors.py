@@ -810,6 +810,12 @@ class OIGLEIEConnector:
             "exclusion_date": (active[0]["exclusion_date"] if active else None),
             "exclusion_type": (active[0]["exclusion_type"] if active else None),
             "reinstatement_date": (historical[0]["reinstatement_date"] if historical else None),
+            # Which day's CSV this match (or clean result) was checked against.
+            # Previously only stamped on the by_name/org branch, so an NPI hit's
+            # evidence couldn't say which edition it was screened against —
+            # stamped here, once, so every caller of _build gets it alike.
+            "list_rows_searched": _LEIE_CACHE.get("row_count", 0),
+            "list_loaded_at_epoch": _LEIE_CACHE.get("loaded_at"),
         }
         return SourceResult.ok("OIG_LEIE", data, qp, self.API_VERSION, raw_for_hash={"matches": len(matches)})
 
@@ -848,12 +854,11 @@ class OIGLEIEConnector:
             result = self._build(matches, qp)
             # What was searched, with what, so a clean screen can be reported
             # as "no candidate found in THIS list using THESE methods" rather
-            # than as a blanket clearance.
+            # than as a blanket clearance. (list_rows_searched/list_loaded_at_epoch
+            # are now stamped uniformly inside _build.)
             result.data["match_methods"] = ["exact_business_name", "normalized_business_name"]
             result.data["candidates_exact"] = len(exact)
             result.data["candidates_normalized_only"] = len(matches) - len(exact)
-            result.data["list_rows_searched"] = _LEIE_CACHE.get("row_count", 0)
-            result.data["list_loaded_at_epoch"] = _LEIE_CACHE.get("loaded_at")
             return result
         matches = _LEIE_CACHE["by_name"].get((last.strip().upper(), first.strip().upper()), [])
         return self._build(matches, qp)
