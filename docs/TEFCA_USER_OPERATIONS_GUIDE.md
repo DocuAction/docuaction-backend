@@ -276,7 +276,7 @@ This section is the one most often requested by oversight reviewers. It states p
 | OIG LEIE — HHS Exclusion List | **PRODUCTION** | Yes |
 | Medicare enrollment indicator | **PRODUCTION** | No — same NPPES endpoint |
 | SAM.gov — GSA federal registration | **CONFIGURED, NON-FUNCTIONAL** | Would be |
-| USPS Address APIs v3 | **PRODUCTION (configured)** | Supporting |
+| USPS Address APIs v3 | **CONFIGURED, NON-FUNCTIONAL** (OAuth 401 — see §USPS) | Supporting |
 | Address normalizer (code-only) | **PRODUCTION** | Supporting |
 | Name matching | **PRODUCTION** | Supporting |
 | AI entity resolution | **DISABLED** | Advisory only when enabled |
@@ -402,12 +402,12 @@ Because this indicator and the NPI check use the same endpoint, they succeed and
 | | |
 |---|---|
 | **Source** | USPS APIs v3, OAuth 2.0 client credentials, `apis.usps.com` |
-| **Status** | **PRODUCTION — configured on both environments**, environment set to production, circuit breaker closed. **Zero production calls recorded to date** |
+| **Status** | **CONFIGURED, NON-FUNCTIONAL (verified live 2026-10-29)**: credentials are set and the environment points at production (`apis.usps.com`), but the OAuth token endpoint (`/oauth2/v3/token`) rejects them with **HTTP 401** — authentication failed, circuit breaker open, zero successful requests, every call falling back. The earlier statement here ("circuit breaker closed, zero production calls") described the state at configuration time and is superseded. Owner action: verify the app's production consumer key/secret in the USPS developer portal (or whether the keys are TEM/test-issued) and read the token response's `error`/`error_description` for the sub-cause; the application logs only the HTTP status, never the body or the credentials |
 | **Purpose** | Standardize and validate a street address against USPS records |
 | **Data received** | Standardized address line, city, state, ZIP5, ZIP+4, delivery-point validation indicators |
 | **Mode** | Real-time, on demand |
 | **Protections** | Bounded retries with exponential backoff; no retry on 400, 401 or 404; circuit breaker opens after five consecutive failures and stays open for five minutes; address values are never written to application logs |
-| **If unavailable** | The system falls back to code-only normalization automatically. An address check can never break a review. The result records that the standardization came from the fallback rather than from USPS |
+| **If unavailable** | The system falls back to code-only Publication-28 normalization automatically. An address check can never break a review. The result records that the standardization came from the fallback rather than from USPS (`method` is `usps_not_configured`/`usps_error`, never `usps_api`; the workspace section reports NOT_CONFIGURED / SOURCE_UNAVAILABLE). **The fallback is formatting normalization only — it is NOT a successful USPS verification, NOT delivery-point validation (DPV) and NOT proof an address is deliverable or exists.** `dpv_confirmed`/`is_deliverable` can only come from a real `usps_api` answer, and nothing in the application labels a fallback result "USPS validated" (verified by code trace and repository-wide search, 2026-10-29). Proceeding with USPS unavailable requires **no methodology/COR decision**: USPS is supporting address evidence, not a screening source, and the labeled fallback is the designed behavior |
 
 ### Address normalization — USPS Publication 28
 
