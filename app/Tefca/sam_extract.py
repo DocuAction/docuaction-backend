@@ -13,10 +13,15 @@ name indexing, 24h TTL, single-flight load.
 
 This is prepared for review, not activated. `ENABLE_SAM_EXTRACT_SCREENING`
 (default OFF) gates every network call this module makes -- with it unset,
-`lookup_by_npi`/`lookup_by_name` return UNAVAILABLE immediately, no fetch
-attempted. No caller in `evidence_service.py`, `arc_pipeline.py`, or anywhere
-else in the live pipeline has been changed to invoke this module. Wiring it
-in, and deciding the flag's deployed value, is a separate, later decision.
+every lookup returns UNAVAILABLE immediately, no fetch attempted. It IS wired
+into the pipeline, but only behind that same flag:
+`evidence_service.gather_sources` calls `screen()` (both identifiers, flag
+checked before the call too, so a flag-off deployment makes exactly the same
+calls it made before this existed) and publishes the result under the
+`sam_extract_candidate` key, which `evidence_assembly._dimension_exclusion`
+renders as a separate, additive `SAM_EXTRACT_SUPPLEMENTARY` D3 item. Setting
+the flag's deployed value remains a separate, explicit decision (and the
+D4-SRC required-source question remains open regardless).
 
 CANDIDATE, NEVER EXCLUSION
 ───────────────────────────
@@ -31,13 +36,14 @@ from __future__ import annotations
 
 import asyncio
 import csv as _csv
+import datetime as _dt
 import hashlib
 import io as _io
 import logging
 import os
+import re as _re
 import time as _time
 from datetime import timezone
-from email.utils import parsedate_to_datetime
 from typing import Any, Dict, Optional
 from urllib.parse import quote
 
@@ -79,7 +85,9 @@ SAM_EXTRACT_REQUIRED_COLUMNS = (
 SAM_EXTRACT_SCHEMA_VERSION = "gsa-sam-exclusions-public-v2/required-columns-v1"
 
 _SAM_CACHE: Dict[str, Any] = {"loaded_at": 0.0, "by_npi": {}, "by_name": {},
-                               "row_count": 0, "edition_date": None, "sha256": None,
+                               "row_count": 0, "filename": None,
+                               "publication_date": None, "date_modified": None,
+                               "http_last_modified": None, "sha256": None,
                                "source_url": None}
 _SAM_LOAD_LOCK: Optional[asyncio.Lock] = None
 
@@ -120,27 +128,83 @@ def _extract_staleness_reason(now: float) -> Optional[str]:
     reason, never silently screened as if current -- that would look
     identical to a clean, up-to-date screen.
     """
-    edition_date = _SAM_CACHE.get("edition_date")
-    if not edition_date:
-        return "extract loaded with no edition date; freshness cannot be confirmed"
-    try:
-        edition_dt = parsedate_to_datetime(edition_date)
-        if edition_dt.tzinfo is None:
-            edition_dt = edition_dt.replace(tzinfo=timezone.utc)
-    except Exception:
-        return f"extract edition date {edition_date!r} could not be parsed"
-    age_seconds = now - edition_dt.timestamp()
+    # The authoritative edition date is the SOURCE's own publication date,
+    # decoded from the file's julian-coded name (see
+    # publication_date_from_filename). The HTTP Last-Modified header is kept
+    # separately as http_last_modified and is deliberately NOT what staleness
+    # keys on -- it says when the file object was written, not which edition
+    # GSA says it is.
+    pub = _SAM_CACHE.get("publication_date")
+    if pub is None:
+        return ("extract loaded with no decodable publication date in its "
+                "filename; edition freshness cannot be confirmed")
+    age_seconds = now - _dt.datetime(pub.year, pub.month, pub.day,
+                                      tzinfo=timezone.utc).timestamp()
     if age_seconds > _SAM_STALE_THRESHOLD_SECONDS:
-        return (f"extract edition dated {edition_date} is "
-                f"{age_seconds / 86400:.1f} day(s) old; source refreshes daily and "
-                f"this is treated as stale past "
+        return (f"extract edition {pub.isoformat()} (from the filename's julian "
+                f"date code) is {age_seconds / 86400:.1f} day(s) old; the source "
+                f"refreshes daily and this is treated as stale past "
                 f"{_SAM_STALE_THRESHOLD_SECONDS / 86400:.0f} day(s)")
     return None
 
 
-async def _find_current_extract_file(client: httpx.AsyncClient) -> Optional[str]:
-    """Ask the listfiles API which file is current today. Returns the exact
-    filename, or None if the listing itself failed/was unusable."""
+#: `SAM_Exclusions_Public_Extract_V2_26301.ZIP` -> ("26301", date(2026, 10, 28)).
+#: GSA's own listing description: "The links include the three-digit Julian
+#: date for easier identification of the most recent file" -- YYDDD, where
+#: DDD is the day-of-year.
+_FILENAME_DATE_RE = _re.compile(
+    r"SAM_Exclusions_Public_Extract_V2_(\d{2})(\d{3})\.ZIP$", _re.IGNORECASE)
+
+
+def publication_date_from_filename(filename: str) -> Optional[_dt.date]:
+    """The extract's own publication date, decoded from its julian-coded name.
+
+    This is SOURCE metadata (what day GSA says this edition is), kept distinct
+    from the HTTP Last-Modified header (when the file object was written),
+    which is retained separately as `http_last_modified`.
+    """
+    m = _FILENAME_DATE_RE.search(filename or "")
+    if not m:
+        return None
+    yy, ddd = int(m.group(1)), int(m.group(2))
+    try:
+        return _dt.date(2000 + yy, 1, 1) + _dt.timedelta(days=ddd - 1)
+    except ValueError:
+        return None
+
+
+def parse_listfiles_payload(payload) -> list[dict]:
+    """The VERIFIED shape of the listfiles response (checked against the real
+    endpoint, 2026-10-29): `{"_embedded": {"customS3ObjectSummaryList": [
+    {"displayKey": "<filename>.ZIP", "dateModified": "Oct 28,2026", ...}]}}`.
+
+    Returns `[{"filename", "date_modified", "publication_date"}, ...]` for
+    every entry whose filename carries a decodable julian date code, or []
+    when the payload does not match the verified shape -- an unexpected shape
+    REFUSES (empty list -> caller reports unavailable), it never guesses.
+    """
+    if not isinstance(payload, dict):
+        return []
+    entries = (payload.get("_embedded") or {}).get("customS3ObjectSummaryList")
+    if not isinstance(entries, list):
+        return []
+    out = []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        filename = e.get("displayKey")
+        pub = publication_date_from_filename(filename or "")
+        if filename and pub:
+            out.append({"filename": filename,
+                        "date_modified": e.get("dateModified"),
+                        "publication_date": pub})
+    return out
+
+
+async def _find_current_extract_file(client: httpx.AsyncClient) -> Optional[Dict[str, Any]]:
+    """Ask the listfiles API which file is current. Returns the newest entry
+    (by the filename's own julian date code, not lexicographic guesswork), or
+    None if the listing failed or did not match the verified shape."""
     try:
         resp = await client.get(_SAM_LISTFILES_URL,
                                  params={"domain": _SAM_DOMAIN, "privacy": "Public"},
@@ -151,19 +215,13 @@ async def _find_current_extract_file(client: httpx.AsyncClient) -> Optional[str]
     except Exception as e:  # noqa: BLE001
         logger.warning("SAM extract listfiles failed: %s", e)
         return None
-    # The API's exact response shape is not pinned here beyond "it has
-    # file entries with names" -- tolerate the two most likely shapes rather
-    # than assume one, but refuse (return None) if neither is present.
-    entries = payload if isinstance(payload, list) else payload.get("files") or payload.get("data") or []
-    names = [e.get("name") or e.get("fileName") for e in entries if isinstance(e, dict)]
-    names = [n for n in names if n]
-    if not names:
+    entries = parse_listfiles_payload(payload)
+    if not entries:
+        logger.warning("SAM extract listfiles answered, but not in the verified "
+                       "shape (_embedded.customS3ObjectSummaryList); refusing "
+                       "rather than guessing")
         return None
-    # Exactly one Public V2 extract file is expected; if more than one is
-    # listed, take the lexicographically last (filenames carry a date-coded
-    # suffix) rather than guess -- this is diagnosable from the cache's
-    # recorded source_url if it ever matters.
-    return sorted(names)[-1]
+    return max(entries, key=lambda e: e["publication_date"])
 
 
 async def _load_sam_extract() -> bool:
@@ -187,17 +245,21 @@ async def _fetch_and_index_sam_extract() -> bool:
     now = _time.time()
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(60.0), follow_redirects=True) as client:
-            filename = await _find_current_extract_file(client)
-            if not filename:
+            entry = await _find_current_extract_file(client)
+            if not entry:
                 logger.warning("SAM extract: could not determine current file from listfiles")
                 return False
+            filename = entry["filename"]
             download_url = f"{_SAM_DOWNLOAD_ROOT}/{quote(_SAM_DOMAIN)}/{quote(filename)}"
+            # Verified live (2026-10-29): this endpoint answers 303 to a signed
+            # S3 URL; the bare S3 href in the listing's _links 403s without the
+            # signature, so follow_redirects is required, not optional.
             resp = await client.get(download_url, params={"privacy": "Public"}, headers=HTTP_HEADERS)
             if resp.status_code != 200:
                 logger.warning("SAM extract download failed: HTTP %s", resp.status_code)
                 return False
             raw_bytes = resp.content
-            edition_date = resp.headers.get("Last-Modified")
+            http_last_modified = resp.headers.get("Last-Modified")
             source_url = str(resp.request.url) if resp.request else download_url
     except Exception as e:  # noqa: BLE001
         logger.warning("SAM extract fetch failed: %s", e)
@@ -252,8 +314,13 @@ async def _fetch_and_index_sam_extract() -> bool:
 
     _SAM_CACHE.update(loaded_at=now, by_npi=by_npi, by_name=by_name, row_count=count,
                        schema_version=SAM_EXTRACT_SCHEMA_VERSION, last_refusal=None,
-                       edition_date=edition_date, sha256=sha256, source_url=source_url)
-    logger.info("SAM extract index loaded: %s rows", count)
+                       filename=filename,
+                       publication_date=publication_date_from_filename(filename),
+                       date_modified=entry.get("date_modified"),
+                       http_last_modified=http_last_modified,
+                       sha256=sha256, source_url=source_url)
+    logger.info("SAM extract index loaded: %s rows (edition %s)", count,
+                _SAM_CACHE["publication_date"])
     return True
 
 
@@ -268,9 +335,18 @@ class SAMExtractConnector:
         return os.getenv(ENV_FLAG, "").strip().lower() in ("1", "true", "yes")
 
     def _edition_evidence(self) -> Dict[str, Any]:
+        pub = _SAM_CACHE.get("publication_date")
         return {
             "source_dataset": "SAM_Exclusions_Public_Extract_V2",
-            "edition_date": _SAM_CACHE.get("edition_date"),
+            "extract_filename": _SAM_CACHE.get("filename"),
+            # The edition, as three separate facts, never conflated:
+            # the filename's own julian-coded publication date (authoritative,
+            # what staleness keys on), the listing's dateModified string, and
+            # the HTTP Last-Modified header (object-write time, retained
+            # separately as the directive requires).
+            "publication_date": pub.isoformat() if pub else None,
+            "listing_date_modified": _SAM_CACHE.get("date_modified"),
+            "http_last_modified": _SAM_CACHE.get("http_last_modified"),
             "extract_sha256": _SAM_CACHE.get("sha256"),
             "source_url": _SAM_CACHE.get("source_url"),
             "list_rows_searched": _SAM_CACHE.get("row_count", 0),
@@ -327,6 +403,58 @@ class SAMExtractConnector:
         matches = _SAM_CACHE["by_name"].get(key, []) if key else []
         result = self._build(matches, qp)
         result.data["match_methods"] = ["normalized_business_name"]
+        return result
+
+    async def screen(self, npi: Optional[str], org_name: Optional[str]) -> SourceResult:
+        """Screen by EVERY available identifier, never just the strongest one.
+
+        Many exclusion rows in the extract carry no NPI at all (the NPI column
+        is optional in GSA's data), so an entity that HAS an NPI can still
+        only be findable by name. Screening NPI-first-else-name would silently
+        miss exactly those rows. This unions both lookups: a candidate found
+        by either method is a candidate, and `match_methods` records which
+        method(s) actually matched.
+        """
+        qp = {"npi": npi, "org": org_name}
+        if not self._flag_enabled():
+            return SourceResult.unavailable("SAM_EXTRACT", f"{ENV_FLAG} not enabled", qp, API_VERSION)
+        has_usable_npi = bool(npi) and npi_rejection_reason(npi) is None
+        has_name = bool((org_name or "").strip())
+        if not has_usable_npi and not has_name:
+            return SourceResult.unavailable(
+                "SAM_EXTRACT",
+                "no_usable_identifier: neither a valid NPI nor an organisation "
+                "name is available to screen on",
+                qp, API_VERSION)
+        if not await _load_sam_extract():
+            return SourceResult.unavailable("SAM_EXTRACT", "extract unavailable or refused", qp, API_VERSION)
+        stale = _extract_staleness_reason(_time.time())
+        if stale:
+            return SourceResult.unavailable("SAM_EXTRACT", f"stale_source: {stale}", qp, API_VERSION)
+        methods_used, methods_matched, matches, seen = [], [], [], set()
+
+        def _add(rows, method):
+            matched = False
+            for row in rows:
+                rid = id(row)
+                if rid not in seen:
+                    seen.add(rid)
+                    matches.append(row)
+                matched = True
+            if matched:
+                methods_matched.append(method)
+
+        if has_usable_npi:
+            methods_used.append("npi")
+            _add(_SAM_CACHE["by_npi"].get(npi.strip(), []), "npi")
+        if has_name:
+            methods_used.append("normalized_business_name")
+            key = normalize_org_name(org_name)
+            if key:
+                _add(_SAM_CACHE["by_name"].get(key, []), "normalized_business_name")
+        result = self._build(matches, qp)
+        result.data["match_methods"] = methods_used
+        result.data["match_methods_matched"] = methods_matched
         return result
 
     async def probe(self) -> bool:

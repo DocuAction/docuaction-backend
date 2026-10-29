@@ -329,11 +329,11 @@ class EvidenceService:
         # what this key says.
         from app.Tefca.sam_extract import SAMExtractConnector
         if os.getenv("ENABLE_SAM_EXTRACT_SCREENING", "").strip().lower() in ("1", "true", "yes"):
-            extract = SAMExtractConnector()
+            # screen() unions NPI and name lookups: exclusion rows in the
+            # extract often carry no NPI, so an NPI-bearing entity can still
+            # only be findable by name. NPI-first-else-name would miss those.
             sam_extract_result = await self._safe_lookup(
-                extract.lookup_by_npi, npi) if npi else (
-                await self._safe_lookup(extract.lookup_by_name, org_name)
-                if org_name else None)
+                SAMExtractConnector().screen, npi, org_name)
             if sam_extract_result is not None:
                 sources["sam_extract_candidate"] = sam_extract_result
 
