@@ -403,6 +403,27 @@ def apply_persisted_exclusion_evidence(sources: Dict[str, dict],
     return used
 
 
+def classification_provenance(classification) -> tuple:
+    """(rule_code, rule_version, rationale) as PERSISTED for a classification.
+
+    A matched rule passes through unchanged. The unmatched default is recorded
+    under the SAME documented reserved code the bulk path writes
+    (`arc_pipeline.UNMATCHED_RULE_CODE`, "THE UNMATCHED PATH STILL HAS TO CITE
+    ITS PROVENANCE") — never as a NULL rule, which reconciliation correctly
+    reads as a determination nobody can explain. This path was the one writer
+    still storing the raw None (REV-2026-001521, 2026-10-28), which is a
+    consistency defect, not a policy: the routing is documented either way.
+    """
+    from app.tefca_registry.rce.arc_pipeline import (
+        UNMATCHED_RULE_CODE, UNMATCHED_RULE_VERSION)
+
+    if classification.rule_code:
+        return (classification.rule_code, classification.rule_version,
+                classification.rationale)
+    return (UNMATCHED_RULE_CODE, UNMATCHED_RULE_VERSION,
+            f"[{UNMATCHED_RULE_CODE}] {classification.rationale}")
+
+
 def persisted_evidence_rationale(used: List[dict]) -> str:
     if not used:
         return ""
@@ -790,7 +811,8 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
     # The rule set and version path are unchanged; only the rationale text
     # gains the evidence provenance, so a reviewer can see how old the
     # SAM/LEIE evidence behind this determination is.
-    rationale = classification.rationale + persisted_evidence_rationale(persisted_used)
+    rule_code, rule_version, base_rationale = classification_provenance(classification)
+    rationale = base_rationale + persisted_evidence_rationale(persisted_used)
     review_id = await generate_review_id(db)
 
     # One audit row per source — the minimal record an auditor needs to retrace
@@ -810,8 +832,8 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
         review_id=review_id, entity_id=entity.id, sample_id=sample_id,
         verification_results=results,          # snapshot, not a live pointer
         classification_bucket=classification.bucket,
-        classification_rule=classification.rule_code,
-        classification_rule_version=classification.rule_version,
+        classification_rule=rule_code,
+        classification_rule_version=rule_version,
         classification_rationale=rationale,
         reviewed_at=datetime.utcnow()))
 
@@ -829,8 +851,8 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
                      ip_address=ip_address,
                      metadata={"review_id": review_id,
                                "bucket": classification.bucket,
-                               "rule": classification.rule_code,
-                               "rule_version": classification.rule_version,
+                               "rule": rule_code,
+                               "rule_version": rule_version,
                                # Which address path decided this review, and what
                                # it cost. An auditor asking "was an external API
                                # consulted for this record" needs to answer it
@@ -847,6 +869,10 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
         "verification": sources,
         "classification": {
             **classification.as_dict(),
+            # What the record actually carries — the reserved default-routing
+            # code when no rule matched, never a null that reads as "unknown".
+            "rule_code": rule_code,
+            "rule_version": rule_version,
             "rationale": rationale,
             "classified_at": datetime.utcnow().isoformat() + "Z",
         },
