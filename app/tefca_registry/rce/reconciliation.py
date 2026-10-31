@@ -297,14 +297,19 @@ async def reconcile_delivery(db, intake_id) -> Dict[str, Any]:
     # classification writer records the documented reserved code
     # (`arc_pipeline.UNMATCHED_RULE_CODE`) — honest provenance, but by its own
     # definition ("defaults to B3 for manual examination") the routing is a
-    # question FOR a human, so it must not rest unexamined. `reviewer_resolution`
-    # is written only by the audited analyst confirm/reclassify path
-    # (`review_routes.resolve_review`), never by the system — so this count is
-    # exactly "default-routed and no human has adjudicated it". A blanket
-    # `reviewer_resolution IS NOT NULL` exemption on the rule-citation check was
-    # considered and rejected (2026-10-30): it would have let a resolved review
-    # with NO recorded provenance pass, which is the one thing that check exists
-    # to catch.
+    # question FOR a human, so it must not rest unexamined. Adjudication is
+    # recognised through BOTH audited human paths (2026-10-31, CodeRabbit
+    # review on PR #188): the direct confirm/reclassify route
+    # (`review_routes.resolve_review`, which sets `reviewer_resolution`) and
+    # the QA-gate event flow (`qa_gate.record_analyst_determination`, which
+    # writes a ReviewDecisionEvent and deliberately leaves
+    # `reviewer_resolution` NULL). The EXISTS below mirrors
+    # `qa_gate._latest_determination`: a determination event counts only while
+    # nothing supersedes it. Neither path is ever written by the system. A
+    # blanket `reviewer_resolution IS NOT NULL` exemption on the rule-citation
+    # check was considered and rejected (2026-10-30): it would have let a
+    # resolved review with NO recorded provenance pass, which is the one thing
+    # that check exists to catch.
     from app.tefca_registry.rce.arc_pipeline import UNMATCHED_RULE_CODE
 
     reviews_default_unadjudicated = await _scalar(db, text(
@@ -314,8 +319,16 @@ async def reconcile_delivery(db, intake_id) -> Dict[str, Any]:
         "                        AND canonical_entity_id IS NOT NULL) "
         + _not_work_item +
         "  AND r.classification_rule = :dc "
-        "  AND r.reviewer_resolution IS NULL").bindparams(
-            i=intake_id, dc=UNMATCHED_RULE_CODE))
+        "  AND r.reviewer_resolution IS NULL "
+        "  AND NOT EXISTS ("
+        "      SELECT 1 FROM review_decision_events e "
+        "      WHERE e.review_id = r.review_id "
+        "        AND e.event_type IN (:det, :sup) "
+        "        AND NOT EXISTS (SELECT 1 FROM review_decision_events s "
+        "                        WHERE s.supersedes_decision_id = e.id))").bindparams(
+            i=intake_id, dc=UNMATCHED_RULE_CODE,
+            det=reg.ReviewDecisionEvent.ANALYST_DETERMINATION,
+            sup=reg.ReviewDecisionEvent.SUPERSEDING_DETERMINATION))
 
     checks: List[Dict[str, Any]] = []
 

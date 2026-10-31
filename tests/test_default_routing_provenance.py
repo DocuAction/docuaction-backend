@@ -167,6 +167,7 @@ async def test_backfill_is_deterministic_and_the_check_pair_behaves(rolled_back_
     #   not an exemption from provenance.
 
     # Downgrade determinism: only the audited backfill row reverts.
+    # (kept below in this test; the QA-gate event path has its own test)
     await db.execute(text(
         "UPDATE review_records SET classification_rule = NULL, "
         "classification_rule_version = NULL "
@@ -179,3 +180,51 @@ async def test_backfill_is_deterministic_and_the_check_pair_behaves(rolled_back_
          "rev": mig.revision})
     await db.refresh(legacy)
     assert legacy.classification_rule is None
+
+
+async def test_qa_gate_determination_also_counts_as_adjudication(rolled_back_db):
+    """The modern audited path — `qa_gate.record_analyst_determination`, which
+    writes a ReviewDecisionEvent and deliberately leaves `reviewer_resolution`
+    NULL — must clear "Every default-routed determination is adjudicated" just
+    like the direct resolve route does. Found by review on PR #188
+    (2026-10-31): the first cut read only `reviewer_resolution` and would have
+    stayed red after a genuine event-based adjudication."""
+    import uuid as _uuid
+    from types import SimpleNamespace
+
+    from app.tefca_registry.qa_gate import record_analyst_determination
+
+    db = rolled_back_db
+    rows = make_rows(2, arc="9.99.777.47")
+    intake_id, job = await seed_intake(db, rows)
+    await run_quality_and_curation(db, intake_id)
+    await promote_delivery(db, intake_id, actor=SYN)
+    entity_id = await _promoted_entity_id(db, intake_id)
+    assert entity_id is not None
+
+    review_id = "REV-9999-000003"
+    db.add(reg.ReviewRecord(
+        review_id=review_id, entity_id=entity_id,
+        classification_bucket="B3",
+        classification_rule="DEFAULT-UNMATCHED", classification_rule_version=0,
+        classification_rationale=f"[DEFAULT-UNMATCHED] {_DEFAULT_TEXT}"))
+    await db.flush()
+
+    before = await reconciliation.reconcile_delivery(db, intake_id)
+    assert _check(before, "Every default-routed determination is adjudicated")[
+        "passed"] is False
+
+    analyst = SimpleNamespace(id=_uuid.uuid4(),
+                              email="analyst-provenance@synthetic.test",
+                              role="reviewer")
+    await record_analyst_determination(
+        db, review_id, user=analyst, determination="CONFIRM",
+        rationale="Default routing examined; B3 confirmed after review.")
+
+    after = await reconciliation.reconcile_delivery(db, intake_id)
+    assert _check(after, "Every default-routed determination is adjudicated")[
+        "passed"] is True
+    record = (await db.execute(text(
+        "SELECT reviewer_resolution FROM review_records "
+        "WHERE review_id = :r"), {"r": review_id})).scalar()
+    assert record is None  # the event flow never writes reviewer_resolution
