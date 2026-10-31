@@ -1,0 +1,253 @@
+name: DBA Ownership Correction - public.review_records + public.tefca_reg_audit_log (one-time, DEV only)
+
+# Prepared 2026-10-31 after governed release run 41170540825 failed applying
+# 20261030_default_routing_prov with "permission denied for table
+# review_records". The run's own log proves the mechanics worked as designed:
+# session_user = github-actions-docuaction-backend-dev, current_user =
+# docuaction_owner (SET ROLE took effect), expected_current matched, the
+# direct-child gate passed, Alembic began the one migration -- and its FIRST
+# statement, a SELECT on review_records, was refused. docuaction_owner
+# therefore holds no privilege on public.review_records on DEV: the table
+# predates the governed pipeline and is owned by some other role. Nothing was
+# migrated or written (verified live after the run: alembic_version still
+# 20261012_sod_db_enforcement; the one rule-less review row unchanged; no
+# backfill audit row).
+#
+# Same failure class, same repair shape as ownership-fix-rce-issues.yml
+# (authorized 2026-09-16): exactly one metadata-only correction per table --
+# ALTER TABLE ... OWNER TO docuaction_owner -- for the SET of tables the
+# blocked migration touches, and nothing else:
+#
+#   * public.review_records        (migration SELECTs and UPDATEs it)
+#   * public.tefca_reg_audit_log   (migration INSERTs its audit rows;
+#                                   downgrade SELECTs it)
+#
+# No GRANT or REVOKE. No migration. No application data. Never selects
+# environment: production.
+#
+# HARD STOPS, each before anything changes:
+#   1. DEV's alembic_version must equal the operator-supplied
+#      expected_alembic_version.
+#   2. A table already owned by docuaction_owner is SKIPPED (printed, not
+#      altered) -- but if NO listed table needs correction, the run errors:
+#      a redundant dispatch is refused rather than silently "succeeding".
+#   3. Explicit grants are read before AND after each change and compared
+#      row-for-row, EXCLUDING rows whose grantee is the old or new owner:
+#      PostgreSQL's implicit owner privileges move between exactly those two
+#      grantees by definition of an ownership transfer (information_schema
+#      synthesizes them), and treating that documented movement as "grants
+#      changed" would fail every correct transfer. Both full grant sets are
+#      printed for the record; any OTHER difference is an error.
+#
+# OWNERSHIP MECHANICS: identical to ownership-fix-rce-issues.yml -- try the
+# ALTER as docuaction_owner first; if refused, SET ROLE to the role pg_tables
+# reports as the current owner (the one role always permitted to transfer its
+# own object) and retry once. If neither works, stop and report.
+#
+# Uses the SAME dedicated OIDC identity, temporary-runner-IP handshake and
+# bounded firewall wait as migration-preflight.yml. This identity cannot add
+# or remove the /32; the operator does, and removes it when the run finishes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_alembic_version:
+        description: 'DEV must be at exactly this Alembic revision before anything runs (hard stop otherwise)'
+        required: true
+        type: string
+      handshake_issue:
+        description: 'PR/issue number where this job posts its runner IPv4 for the operator-added temporary /32'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  PGHOST: docuaction-db-dev.postgres.database.azure.com
+  PGDATABASE: postgres
+  PG_PRINCIPAL: github-actions-docuaction-backend-dev
+
+jobs:
+  fix-ownership:
+    name: Verify and correct review_records + tefca_reg_audit_log ownership
+    runs-on: ubuntu-latest
+    environment: development
+    permissions:
+      id-token: write
+      contents: read
+      issues: write
+    steps:
+      - name: Login to Azure (OIDC - no stored client secret)
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Report runner IPv4 and wait for the operator's temporary /32 (bounded)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # zizmor template-injection: ${{ }} spliced directly into run script
+          # source text, not just read as a string. Passed through env: instead.
+          HANDSHAKE_ISSUE: ${{ inputs.handshake_issue }}
+          EXPECTED_ALEMBIC_VERSION_IN: ${{ inputs.expected_alembic_version }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_RUN_ID: ${{ github.run_id }}
+        run: |
+          test -n "$HANDSHAKE_ISSUE" || { echo "::error::handshake_issue is required"; exit 1; }
+          test -n "$EXPECTED_ALEMBIC_VERSION_IN" || { echo "::error::expected_alembic_version is required"; exit 1; }
+          IP=$(curl -s https://api.ipify.org)
+          echo "runner public IPv4: $IP"
+          gh issue comment "$HANDSHAKE_ISSUE" --repo "$GH_REPOSITORY" \
+            --body "ownership-fix (review_records + tefca_reg_audit_log) run $GH_RUN_ID: runner public IPv4 **$IP** - waiting up to 20 min for a temporary /32 (start = end = this address). Remove it when this run finishes."
+          for i in $(seq 1 80); do
+            if python -c "import socket;s=socket.socket();s.settimeout(5);s.connect(('$PGHOST',5432))" 2>/dev/null; then
+              echo "DEV Postgres reachable after $i attempt(s)"; exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::DEV Postgres not reachable within 20 minutes - no /32 was authorised. Nothing was changed."
+          exit 1
+
+      - name: Refresh Azure OIDC login after the bounded firewall wait
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify preconditions and correct ownership
+        env:
+          EXPECTED_ALEMBIC_VERSION: ${{ inputs.expected_alembic_version }}
+        run: |
+          python -m pip install --quiet psycopg2-binary
+          PGTOKEN=$(az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv)
+          test -n "$PGTOKEN" || { echo "FAIL: no PostgreSQL access token"; exit 1; }
+          PGTOKEN="$PGTOKEN" python - <<'PY'
+          import os, sys, psycopg2
+
+          #: The set of tables migration 20261030_default_routing_prov touches.
+          TABLES = ["review_records", "tefca_reg_audit_log"]
+
+          conn = psycopg2.connect(
+              host=os.environ["PGHOST"], dbname=os.environ["PGDATABASE"],
+              user=os.environ["PG_PRINCIPAL"], password=os.environ["PGTOKEN"],
+              sslmode="require", connect_timeout=20)
+          conn.autocommit = True
+          c = conn.cursor()
+
+          c.execute("select current_user")
+          print("authenticated as:", c.fetchone()[0])
+          c.execute("set role docuaction_owner")
+          c.execute("select current_user")
+          assumed = c.fetchone()[0]
+          print("after SET ROLE   :", assumed)
+          assert assumed == "docuaction_owner", "SET ROLE docuaction_owner did not take effect"
+
+          # -- Hard stop 1: alembic_version --------------------------------
+          c.execute("select version_num from alembic_version")
+          rows = [r[0] for r in c.fetchall()]
+          assert len(rows) == 1, f"alembic_version has {len(rows)} rows, expected exactly 1 ({rows!r})"
+          current_rev = rows[0]
+          print("DEV alembic_version:", current_rev)
+          expected = os.environ["EXPECTED_ALEMBIC_VERSION"]
+          if current_rev != expected:
+              print(f"::error::DEV is at {current_rev}, operator expected {expected} - nothing changed")
+              sys.exit(1)
+
+          def grants(table):
+              c.execute("select grantee, privilege_type from information_schema.table_privileges "
+                        "where table_schema='public' and table_name=%s order by grantee, privilege_type", (table,))
+              return c.fetchall()
+
+          corrected = 0
+          for TABLE in TABLES:
+              print(f"\n===== public.{TABLE} =====")
+              c.execute("select tableowner from pg_tables where schemaname='public' and tablename=%s", (TABLE,))
+              row = c.fetchone()
+              assert row is not None, f"table {TABLE} not found in public schema"
+              owner_before = row[0]
+              print(f"BEFORE: public.{TABLE} owner = {owner_before}")
+              if owner_before == "docuaction_owner":
+                  print(f"SKIP: public.{TABLE} is already owned by docuaction_owner - not altered")
+                  continue
+
+              before_grants = grants(TABLE)
+              print(f"BEFORE grants ({len(before_grants)} rows):")
+              for grantee, ptype in before_grants:
+                  print(f"  {grantee}: {ptype}")
+
+              print(f"--- ALTER TABLE public.{TABLE} OWNER TO docuaction_owner (as docuaction_owner) ---")
+              altered_as = None
+              try:
+                  c.execute(f'ALTER TABLE public."{TABLE}" OWNER TO docuaction_owner')
+                  altered_as = "docuaction_owner"
+              except psycopg2.errors.InsufficientPrivilege as exc:
+                  print(f"docuaction_owner cannot reassign ownership directly ({exc}); "
+                        f"PostgreSQL requires the session to already own the object. "
+                        f"Trying SET ROLE to the current owner ({owner_before!r}) instead - "
+                        f"the current owner is always permitted to transfer its own object.")
+                  try:
+                      c.execute(f'set role "{owner_before}"')
+                      c.execute("select current_user")
+                      print("assumed role:", c.fetchone()[0])
+                      c.execute(f'ALTER TABLE public."{TABLE}" OWNER TO docuaction_owner')
+                      altered_as = owner_before
+                      c.execute("reset role")
+                      c.execute("set role docuaction_owner")
+                  except Exception as exc2:
+                      print(f"::error::cannot assume role {owner_before!r} either ({exc2}). "
+                            f"Nothing further was changed. A DBA with direct rights on {owner_before!r} "
+                            f"or superuser must run: ALTER TABLE public.{TABLE} OWNER TO docuaction_owner;")
+                      sys.exit(1)
+
+              print(f"ALTER executed as: {altered_as}")
+
+              c.execute("select tableowner from pg_tables where schemaname='public' and tablename=%s", (TABLE,))
+              owner_after = c.fetchone()[0]
+              print(f"AFTER: public.{TABLE} owner = {owner_after}")
+              if owner_after != "docuaction_owner":
+                  print(f"::error::ownership did not take effect: still {owner_after}")
+                  sys.exit(1)
+
+              after_grants = grants(TABLE)
+              print(f"AFTER grants ({len(after_grants)} rows):")
+              for grantee, ptype in after_grants:
+                  print(f"  {grantee}: {ptype}")
+
+              # Implicit owner privileges move from old owner to new owner by
+              # definition of the transfer (information_schema synthesizes
+              # them); every OTHER grantee's rows must be identical.
+              moved = {owner_before, "docuaction_owner"}
+              before_rest = {g for g in before_grants if g[0] not in moved}
+              after_rest = {g for g in after_grants if g[0] not in moved}
+              if before_rest != after_rest:
+                  print(f"::error::grants changed beyond the owner transfer - "
+                        f"lost: {before_rest - after_rest}, gained: {after_rest - before_rest}")
+                  sys.exit(1)
+              print("CONFIRMED: all non-owner grants unchanged "
+                    f"({len(before_rest)} rows, before == after)")
+              corrected += 1
+
+          c.execute("reset role")
+          conn.close()
+          if corrected == 0:
+              print("::error::no listed table needed correction - redundant dispatch refused, nothing changed")
+              sys.exit(1)
+          print(f"\nOWNERSHIP CORRECTION COMPLETE: {corrected} table(s) corrected. "
+                f"Nothing else was touched. No migration was run.")
+          PY
+
+      - name: Tell the operator the temporary /32 can be removed now
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HANDSHAKE_ISSUE: ${{ inputs.handshake_issue }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          case "$HANDSHAKE_ISSUE" in ''|*[!0-9]*) exit 0;; esac
+          gh issue comment "$HANDSHAKE_ISSUE" --repo "$REPO" \
+            --body "ownership-fix run $RUN_ID finished ($JOB_STATUS). Remove the temporary /32 added for this run now, then confirm no temporary rule remains." || true
