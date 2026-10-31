@@ -351,7 +351,11 @@ class TestMigrationLifecycle:
         run(seed())
 
         # ── upgrade ──
-        _alembic(db, "upgrade", "head")
+        # To THIS revision, not "head": the test is this migration's lifecycle
+        # (its version assertion below, and the "-1" downgrade landing on
+        # PARENT), and "head" broke the moment a later migration joined the
+        # chain (20261030_default_routing_prov).
+        _alembic(db, "upgrade", REVISION)
 
         async def after_upgrade():
             c = await _connect(db)
@@ -395,7 +399,7 @@ class TestMigrationLifecycle:
         run(after_downgrade())
 
         # ── upgrade again (idempotent re-application) ──
-        _alembic(db, "upgrade", "head")
+        _alembic(db, "upgrade", REVISION)
 
         async def after_reapply():
             c = await _connect(db)

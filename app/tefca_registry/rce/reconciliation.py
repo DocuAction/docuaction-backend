@@ -292,6 +292,43 @@ async def reconcile_delivery(db, intake_id) -> Dict[str, Any]:
         + _not_work_item +
         "  AND r.classification_bucket IS NOT NULL "
         "  AND r.classification_rule IS NULL").bindparams(i=intake_id))
+    # Default-routed determinations are the complement of the rule-citation
+    # check above, not an exemption from it. When no active rule matches, every
+    # classification writer records the documented reserved code
+    # (`arc_pipeline.UNMATCHED_RULE_CODE`) — honest provenance, but by its own
+    # definition ("defaults to B3 for manual examination") the routing is a
+    # question FOR a human, so it must not rest unexamined. Adjudication is
+    # recognised through BOTH audited human paths (2026-10-31, CodeRabbit
+    # review on PR #188): the direct confirm/reclassify route
+    # (`review_routes.resolve_review`, which sets `reviewer_resolution`) and
+    # the QA-gate event flow (`qa_gate.record_analyst_determination`, which
+    # writes a ReviewDecisionEvent and deliberately leaves
+    # `reviewer_resolution` NULL). The EXISTS below mirrors
+    # `qa_gate._latest_determination`: a determination event counts only while
+    # nothing supersedes it. Neither path is ever written by the system. A
+    # blanket `reviewer_resolution IS NOT NULL` exemption on the rule-citation
+    # check was considered and rejected (2026-10-30): it would have let a
+    # resolved review with NO recorded provenance pass, which is the one thing
+    # that check exists to catch.
+    from app.tefca_registry.rce.arc_pipeline import UNMATCHED_RULE_CODE
+
+    reviews_default_unadjudicated = await _scalar(db, text(
+        "SELECT count(*) FROM review_records r "
+        "WHERE r.entity_id IN (SELECT canonical_entity_id FROM rce_curated_records "
+        "                      WHERE source_intake_id = CAST(:i AS uuid) "
+        "                        AND canonical_entity_id IS NOT NULL) "
+        + _not_work_item +
+        "  AND r.classification_rule = :dc "
+        "  AND r.reviewer_resolution IS NULL "
+        "  AND NOT EXISTS ("
+        "      SELECT 1 FROM review_decision_events e "
+        "      WHERE e.review_id = r.review_id "
+        "        AND e.event_type IN (:det, :sup) "
+        "        AND NOT EXISTS (SELECT 1 FROM review_decision_events s "
+        "                        WHERE s.supersedes_decision_id = e.id))").bindparams(
+            i=intake_id, dc=UNMATCHED_RULE_CODE,
+            det=reg.ReviewDecisionEvent.ANALYST_DETERMINATION,
+            sup=reg.ReviewDecisionEvent.SUPERSEDING_DETERMINATION))
 
     checks: List[Dict[str, Any]] = []
 
@@ -343,6 +380,10 @@ async def reconcile_delivery(db, intake_id) -> Dict[str, Any]:
           f"{reviews_without_evidence} review(s) carry no dimension evidence")
     check("Every determination cites a rule", reviews_without_rule == 0,
           f"{reviews_without_rule} classified review(s) carry no rule_code")
+    check("Every default-routed determination is adjudicated",
+          reviews_default_unadjudicated == 0,
+          f"{reviews_default_unadjudicated} default-routed "
+          f"({UNMATCHED_RULE_CODE}) review(s) await an analyst resolution")
     # ── the 2026-09-17 additions ──
     check("Every source record has a current disposition",
           without_disposition == 0,
@@ -432,7 +473,8 @@ async def reconcile_delivery(db, intake_id) -> Dict[str, Any]:
                          "total": sum(findings_by_severity.values())},
             "verification": {"reviews": f_reviews, "entities": f_entities,
                              "without_evidence": reviews_without_evidence,
-                             "without_rule": reviews_without_rule},
+                             "without_rule": reviews_without_rule,
+                             "default_unadjudicated": reviews_default_unadjudicated},
             "relationships": {"edges": relationship_edges},
         },
         "area1_integrity": {"record_hashes": hashes, "stored_file": stored_file,
