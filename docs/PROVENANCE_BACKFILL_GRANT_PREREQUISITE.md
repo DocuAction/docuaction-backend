@@ -37,11 +37,14 @@ against the repository's own record killed it, twice over:
    `docs/SOD_DB_OWNERSHIP_PREREQUISITE.md` §5 records that the managed
    convergence chain DELIBERATELY keeps `review_records` runtime-owned:
    PREPARE temporarily re-owns it for DDL and FINALIZE hands it back —
-   "access by ownership", no explicit grants. A permanent transfer to
-   `docuaction_owner` would have silently stripped the application's entire
-   access to `review_records` (no explicit grants exist to preserve), while
-   the workflow's grants-unchanged check passed. The application's review,
-   reconciliation and reporting paths all read this table.
+   "access by ownership". Whether any EXPLICIT grants also exist on the live
+   table is unverified from here (the PRE-CHECKS read the actual ACL, and the
+   DBA must confirm it before APPLY); if the runtime role's access rests on
+   ownership alone — the documented convention — a permanent transfer to
+   `docuaction_owner` would have stripped the application's entire access to
+   `review_records`, while the workflow's grants-unchanged check passed. The
+   application's review, reconciliation and reporting paths all read this
+   table, so that risk alone disqualifies the transfer shape.
 
 The smallest correct change is therefore two narrow GRANTs **to the migration
 role**, leaving ownership and the runtime role untouched:
@@ -63,7 +66,8 @@ docuaction_app`), over an authorized connection to
 `docuaction-db-dev.postgres.database.azure.com` — e.g. the operator's own
 temporary workstation /32. Not CI, not the pipeline identity, not the app.
 
-Order: PRE-CHECKS (read-only, save output — includes the expected affected-set
+Order: PRE-CHECKS (read-only, save output — includes the live ACLs of both
+tables, which the DBA confirms before APPLY, and the expected affected-set
 count, which must be exactly 1) → APPLY (one transaction,
 `psql -v ON_ERROR_STOP=1`) → POST-CHECKS (save output) → re-dispatch the
 governed release unchanged (`apply_migrations=true`,

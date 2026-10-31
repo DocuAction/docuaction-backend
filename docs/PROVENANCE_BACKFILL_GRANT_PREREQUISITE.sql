@@ -88,13 +88,28 @@ BEGIN;
 DO $$
 DECLARE rev text; own_rr regrole; own_al regrole;
 BEGIN
+  -- Target guard (CodeRabbit, 2026-10-31): this runbook is for
+  -- docuaction-db-dev ONLY. current_database() is 'postgres' on every server
+  -- in this estate, so the guard anchors on data that exists only on DEV:
+  -- the October 2026 DEV delivery intake. PROD has never carried it (no PROD
+  -- changes were made in this workstream), so running this against the wrong
+  -- server aborts here, before anything else.
+  IF NOT EXISTS (SELECT 1 FROM public.rce_source_intakes
+                  WHERE id = 'e8eb0a91-c707-44f3-92ec-b5a163f64e92'::uuid) THEN
+    RAISE EXCEPTION 'target guard: the October DEV intake e8eb0a91 is absent - '
+      'this does not look like docuaction-db-dev; nothing changed';
+  END IF;
+  -- IS DISTINCT FROM (CodeRabbit, 2026-10-31): an EMPTY alembic_version
+  -- leaves rev NULL, and NULL <> x is not true - the assertion must abort on
+  -- a missing revision exactly as it does on a wrong one.
   SELECT version_num INTO rev FROM alembic_version;
-  IF rev <> '20261012_sod_db_enforcement' THEN
-    RAISE EXCEPTION 'alembic_version is % - expected 20261012_sod_db_enforcement; nothing changed', rev;
+  IF rev IS DISTINCT FROM '20261012_sod_db_enforcement' THEN
+    RAISE EXCEPTION 'alembic_version is % - expected 20261012_sod_db_enforcement; nothing changed', coalesce(rev, '(no row)');
   END IF;
   SELECT relowner::regrole INTO own_rr FROM pg_class WHERE oid = 'public.review_records'::regclass;
   SELECT relowner::regrole INTO own_al FROM pg_class WHERE oid = 'public.tefca_reg_audit_log'::regclass;
-  IF own_rr::text <> 'docuaction_app' OR own_al::text <> 'docuaction_app' THEN
+  IF own_rr::text IS DISTINCT FROM 'docuaction_app'
+     OR own_al::text IS DISTINCT FROM 'docuaction_app' THEN
     RAISE EXCEPTION 'owners are % / % - APPLY assumes docuaction_app owns both; stop and escalate', own_rr, own_al;
   END IF;
 END $$;
