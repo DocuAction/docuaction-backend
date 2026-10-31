@@ -1790,6 +1790,11 @@ async def _analyst_sample_summary(db, intake_id) -> Dict[str, Any]:
 async def run_verification_coverage(
     intake_id: str,
     batch_size: int = Query(100, ge=1, le=500),
+    scope: str = Query("full", pattern="^(full|sam_extract)$", description=(
+        "full: all-source first lookup for entities with no evidence at all. "
+        "sam_extract: append ONLY the SAM public-extract supplementary row to "
+        "entities that have evidence but no SAM_EXTRACT_SUPPLEMENTARY row — "
+        "no other source is re-asked, no quota re-spent.")),
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role("program_manager")),
 ):
@@ -1798,13 +1803,17 @@ async def run_verification_coverage(
     is on. Never creates a ReviewRecord or a review cycle; see
     `automated_verification.py` for why that separation is deliberate. Call
     again (or let the scheduler, if enabled) until the response's `remaining`
-    is 0."""
+    is 0. Batches for one delivery are serialized; a concurrent call returns
+    `skipped_lock: true` and processes nothing."""
     from app.tefca_registry.rce import automated_verification as av
 
     intake = await _intake_or_404(db, intake_id)
-    return await av.run_coverage_batch(
-        db, intake.id, batch_size=batch_size,
-        actor=getattr(user, "email", None) or "SYSTEM")
+    try:
+        return await av.run_coverage_batch(
+            db, intake.id, batch_size=batch_size, scope=scope,
+            actor=getattr(user, "email", None) or "SYSTEM")
+    except av.SamExtractScreeningDisabled as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 # ═══ audit ═══════════════════════════════════════════════════════════════════

@@ -173,6 +173,7 @@ jobs:
             tests/test_cases_route_level_2026_10_26.py \
             tests/test_npi_snapshot_date_and_curation_integration_2026_10_26.py \
             tests/test_resolver_shared_npi_fallback_2026_10_25.py \
+            tests/test_sam_extract_only_coverage.py \
             tests/test_record_history_comparison_2026_10_20.py \
             tests/test_exclusion_name_screening_2026_10_04.py \
             tests/test_sam_extract_persistence_db_2026_10_29.py \

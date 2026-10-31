@@ -428,6 +428,60 @@ def _dimension_medicare(profile: ApplicabilityProfile,
 
 # ── D3 EXCLUSION / DEBARMENT / REVOCATION ────────────────────────────────────
 
+def sam_extract_evidence_items(
+    dim: str, sam_extract: Optional[SourceResult],
+) -> "tuple[List[EvidenceItem], bool]":
+    """The SAM public-extract supplementary screen's D3 evidence item(s).
+
+    Factored out of `_dimension_exclusion` (2026-10-30) so the extract-only
+    coverage path (`automated_verification.record_sam_extract_attempt`) builds
+    the EXACT same item -- same source label, dispositions, rule and notes --
+    as a full evidence build, instead of a hand-rolled copy that could drift.
+
+    Returns `(items, candidate_hit)`. `items` is empty when `sam_extract` is
+    None (flag off: the key is simply absent and nothing about D3 changes).
+    `candidate_hit` escalates the caller's `any_hit` (real information an
+    analyst should see); an UNAVAILABLE result never contributes to
+    `any_unavailable` -- this check must never be read as substituting for
+    api.sam.gov being reachable, and it is never, by itself, an exclusion
+    finding.
+    """
+    if sam_extract is None:
+        return [], False
+    if _ok(sam_extract):
+        d = sam_extract.data or {}
+        candidate = bool(d.get("candidate_match"))
+        return [EvidenceItem(
+            dimension=dim, source="SAM_EXTRACT_SUPPLEMENTARY",
+            disposition=Disposition.REVIEW.value if candidate else Disposition.PASS.value,
+            query_timestamp=sam_extract.query_timestamp,
+            dataset_version_anchor=sam_extract.api_version,
+            fields_evaluated=["npi", "normalized_business_name"],
+            original_values=dict(d),
+            rule_applied="SAM_PUBLIC_EXTRACT_SUPPLEMENTARY_SCREEN",
+            note=(
+                "Potential match in the GSA public SAM exclusions extract — a "
+                "CANDIDATE only, never a confirmed exclusion. Analyst "
+                "determination required. Supplementary to, and does not "
+                "replace, the api.sam.gov debarment check above."
+                if candidate else
+                "No candidate match in the GSA public SAM exclusions extract. "
+                "Supplementary only — does not substitute for the api.sam.gov "
+                "check above, which remains the primary SAM control."
+            ),
+        )], candidate
+    # Unavailable / flag-off / malformed body / stale edition / no usable
+    # identifier — all distinct reasons, carried in sam_extract.error.
+    # Disclosed, never silently dropped.
+    return [EvidenceItem(
+        dimension=dim, source="SAM_EXTRACT_SUPPLEMENTARY",
+        disposition=Disposition.UNAVAILABLE.value,
+        rule_applied="SAM_PUBLIC_EXTRACT_SUPPLEMENTARY_SCREEN",
+        note=(sam_extract.error or
+              "SAM public extract supplementary screen could not be performed."),
+    )], False
+
+
 def _dimension_exclusion(entity: Dict[str, Any], profile: ApplicabilityProfile,
                          sources: Dict[str, SourceResult]) -> DimensionResult:
     """Three controls, three separately identifiable results, one dimension.
@@ -665,49 +719,15 @@ def _dimension_exclusion(entity: Dict[str, Any], profile: ApplicabilityProfile,
     #
     # Flag-gated (ENABLE_SAM_EXTRACT_SCREENING, default OFF); see
     # sam_extract.py's module docstring. When the key is absent (flag off),
-    # this block does nothing and nothing about D3 changes. A candidate hit
-    # here escalates `any_hit` (it is real information an analyst should
-    # see), but a CLEAN result here never clears `any_unavailable` — this
-    # check must never be read as substituting for api.sam.gov being
-    # reachable, and it is never, by itself, an exclusion finding.
-    sam_extract = sources.get("sam_extract_candidate")
-    if sam_extract is not None and _ok(sam_extract):
-        d = sam_extract.data or {}
-        candidate = bool(d.get("candidate_match"))
-        any_hit = any_hit or candidate
-        items.append(EvidenceItem(
-            dimension=dim, source="SAM_EXTRACT_SUPPLEMENTARY",
-            disposition=Disposition.REVIEW.value if candidate else Disposition.PASS.value,
-            query_timestamp=sam_extract.query_timestamp,
-            dataset_version_anchor=sam_extract.api_version,
-            fields_evaluated=["npi", "normalized_business_name"],
-            original_values=dict(d),
-            rule_applied="SAM_PUBLIC_EXTRACT_SUPPLEMENTARY_SCREEN",
-            note=(
-                "Potential match in the GSA public SAM exclusions extract — a "
-                "CANDIDATE only, never a confirmed exclusion. Analyst "
-                "determination required. Supplementary to, and does not "
-                "replace, the api.sam.gov debarment check above."
-                if candidate else
-                "No candidate match in the GSA public SAM exclusions extract. "
-                "Supplementary only — does not substitute for the api.sam.gov "
-                "check above, which remains the primary SAM control."
-            ),
-        ))
-    elif sam_extract is not None and not _ok(sam_extract):
-        # Unavailable / flag-off / malformed body / stale edition / no usable
-        # identifier — all distinct reasons, carried in sam_extract.error.
-        # Disclosed, never silently dropped, and never counted toward
-        # any_unavailable: the primary api.sam.gov check's own availability
-        # is reported separately above and must not be double-counted or
-        # papered over by this supplementary check's own state.
-        items.append(EvidenceItem(
-            dimension=dim, source="SAM_EXTRACT_SUPPLEMENTARY",
-            disposition=Disposition.UNAVAILABLE.value,
-            rule_applied="SAM_PUBLIC_EXTRACT_SUPPLEMENTARY_SCREEN",
-            note=(sam_extract.error or
-                  "SAM public extract supplementary screen could not be performed."),
-        ))
+    # this adds nothing and nothing about D3 changes. A candidate hit
+    # escalates `any_hit` (it is real information an analyst should see),
+    # but this check never touches `any_unavailable` — see
+    # `sam_extract_evidence_items`, which builds the item(s) and is shared
+    # with the extract-only coverage path.
+    extract_items, extract_hit = sam_extract_evidence_items(
+        dim, sources.get("sam_extract_candidate"))
+    any_hit = any_hit or extract_hit
+    items.extend(extract_items)
 
     revocation = sources.get("cms_revocation")
     if _ok(revocation):

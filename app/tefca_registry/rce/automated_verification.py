@@ -123,8 +123,13 @@ _DISPOSITION_TO_OUTCOME = {
     "CONFLICT": OUTCOME_VERIFIED_WITH_DIFFERENCES,
 }
 
+#: DISTINCT ON (2026-10-30): several curated records can share one canonical
+#: entity; without it one batch would look that entity up once per record and
+#: persist duplicate generations within a single batch — the within-batch
+#: cousin of the cross-batch overlap `_try_advisory_batch_lock` serializes.
 _ELIGIBLE_NOT_COVERED_SQL = """
-    SELECT r.rce_org_oid, r.canonical_entity_id
+    SELECT DISTINCT ON (r.canonical_entity_id)
+           r.rce_org_oid, r.canonical_entity_id
     FROM rce_curated_records r
     WHERE r.source_intake_id = CAST(:intake_id AS uuid)
       AND r.canonical_entity_id IS NOT NULL
@@ -133,7 +138,7 @@ _ELIGIBLE_NOT_COVERED_SQL = """
           SELECT 1 FROM tefca_dimension_evidence d
           WHERE d.entity_id = CAST(r.canonical_entity_id AS TEXT)
       )
-    ORDER BY r.rce_org_oid
+    ORDER BY r.canonical_entity_id, r.rce_org_oid
     LIMIT :limit
 """
 
@@ -156,17 +161,79 @@ _NOT_COVERED_COUNT_SQL = """
 """
 
 
+#: Batch scopes. FULL is the existing behavior: entities with no evidence at
+#: all get a full all-source build. SAM_EXTRACT covers entities that already
+#: HAVE evidence but lack a SAM_EXTRACT_SUPPLEMENTARY row (the extract leg
+#: was wired in after most of a delivery's evidence was built), by running
+#: ONLY the extract screen and appending ONLY its row — never re-asking the
+#: other sources, so no quota is re-spent on an already-covered entity.
+SCOPE_FULL = "full"
+SCOPE_SAM_EXTRACT = "sam_extract"
+SCOPES = (SCOPE_FULL, SCOPE_SAM_EXTRACT)
+
+EXTRACT_SOURCE = "SAM_EXTRACT_SUPPLEMENTARY"
+
+#: DISTINCT ON: several curated records can share one canonical entity, and a
+#: non-distinct candidate list would screen that entity once per record in
+#: the SAME batch — the within-batch cousin of the cross-batch duplication
+#: `_try_advisory_batch_lock` prevents (both observed on the 2026-10
+#: delivery, where overlapping batches wrote 2–3 duplicate generations for
+#: ~1,007 entities).
+_SAM_EXTRACT_NOT_COVERED_SQL = """
+    SELECT DISTINCT ON (r.canonical_entity_id)
+           r.rce_org_oid, r.canonical_entity_id
+    FROM rce_curated_records r
+    WHERE r.source_intake_id = CAST(:intake_id AS uuid)
+      AND r.canonical_entity_id IS NOT NULL
+      AND r.rce_org_oid IS NOT NULL
+      AND NOT EXISTS (
+          SELECT 1 FROM tefca_dimension_evidence d
+          WHERE d.entity_id = CAST(r.canonical_entity_id AS TEXT)
+            AND d.source = 'SAM_EXTRACT_SUPPLEMENTARY'
+      )
+    ORDER BY r.canonical_entity_id, r.rce_org_oid
+    LIMIT :limit
+"""
+
+_SAM_EXTRACT_NOT_COVERED_COUNT_SQL = """
+    SELECT count(DISTINCT r.canonical_entity_id)
+    FROM rce_curated_records r
+    WHERE r.source_intake_id = CAST(:intake_id AS uuid)
+      AND r.canonical_entity_id IS NOT NULL
+      AND NOT EXISTS (
+          SELECT 1 FROM tefca_dimension_evidence d
+          WHERE d.entity_id = CAST(r.canonical_entity_id AS TEXT)
+            AND d.source = 'SAM_EXTRACT_SUPPLEMENTARY'
+      )
+"""
+
+
+class SamExtractScreeningDisabled(RuntimeError):
+    """A sam_extract-scope batch was requested while ENABLE_SAM_EXTRACT_SCREENING
+    is off. Refused up front: with the flag off the connector answers
+    UNAVAILABLE without looking anything up, so a mass run would append one
+    useless UNAVAILABLE row per entity and cover nothing."""
+
+
+def sam_extract_screening_enabled() -> bool:
+    from app.Tefca import sam_extract as se
+    return os.environ.get(se.ENV_FLAG, "").strip().lower() in ("1", "true", "yes")
+
+
 def automated_coverage_enabled() -> bool:
     return os.environ.get(ENV_FLAG, "").strip().lower() in ("1", "true", "yes", "on")
 
 
-async def coverage_progress(db, intake_id) -> Dict[str, int]:
+async def coverage_progress(db, intake_id, *, scope: str = SCOPE_FULL) -> Dict[str, int]:
     """Read-only: how many of the delivery's eligible entities still need a
-    first coverage attempt. Never writes."""
+    first coverage attempt (for `scope="sam_extract"`: a first SAM-extract
+    row). Never writes."""
+    count_sql = (_SAM_EXTRACT_NOT_COVERED_COUNT_SQL if scope == SCOPE_SAM_EXTRACT
+                 else _NOT_COVERED_COUNT_SQL)
     eligible = int((await db.execute(
         text(_ELIGIBLE_COUNT_SQL), {"intake_id": str(intake_id)})).scalar() or 0)
     remaining = int((await db.execute(
-        text(_NOT_COVERED_COUNT_SQL), {"intake_id": str(intake_id)})).scalar() or 0)
+        text(count_sql), {"intake_id": str(intake_id)})).scalar() or 0)
     return {"eligible": eligible, "remaining": remaining, "covered": eligible - remaining}
 
 
@@ -274,29 +341,161 @@ async def record_coverage_attempt(db, *, ref: str, canonical_entity_id,
             "outcome": outcome, "dimensions_recorded": len(rows)}
 
 
+async def record_sam_extract_attempt(db, *, ref: str,
+                                     canonical_entity_id) -> Dict[str, Any]:
+    """Run ONLY the SAM public-extract supplementary screen for one entity and
+    append ONLY that source's evidence row. Never calls `build_evidence`, so
+    no other source is re-asked and no quota is re-spent. The row is built by
+    `sam_extract_evidence_items` — the exact code the full build uses — so the
+    persisted item cannot drift from what a full generation would have written.
+
+    Like `record_coverage_attempt`, a connector-level failure is recorded as
+    an outcome (RETRY_PENDING), never raised out of the batch."""
+    from app.Tefca import rce_fields
+    from app.Tefca.connectors import _extract_npi
+    from app.Tefca.entity_resolution import resolve_entity
+    from app.Tefca.evidence_assembly import sam_extract_evidence_items
+    from app.Tefca.evidence_dimensions import Dimension
+    from app.Tefca.evidence_service import evidence_rows_for_persistence
+    from app.Tefca.models import TEFCADimensionEvidence
+    from app.Tefca.sam_extract import SAMExtractConnector
+
+    entity = await resolve_entity(db, ref)
+    if entity is None:
+        return {"ref": ref, "outcome": OUTCOME_NOT_ELIGIBLE,
+                "reason": "entity did not resolve for this reference"}
+    entity_uuid = entity.get("_registry_entity_id") or canonical_entity_id
+
+    npi = rce_fields.rce_npi(entity) or _extract_npi(entity)
+    org_name = (rce_fields.rce_value(entity, "name")
+                or entity.get("name") or "").strip()
+    try:
+        screen = await SAMExtractConnector().screen(npi, org_name)
+    except Exception as exc:  # noqa: BLE001 - an outage must not crash the batch
+        logger.warning("sam-extract coverage: screen failed for %s: %s: %s",
+                       ref, type(exc).__name__, exc)
+        return {"ref": ref, "entity_id": str(entity_uuid) if entity_uuid else None,
+                "outcome": OUTCOME_RETRY_PENDING,
+                "reason": f"{type(exc).__name__}: {exc}"}
+
+    dim = Dimension.D3_EXCLUSION_REVOCATION.value
+    items, candidate = sam_extract_evidence_items(dim, screen)
+    # A one-source, one-dimension partial generation. The dimension-level
+    # disposition recorded here reflects ONLY this supplementary item — the
+    # full D3 determination already persisted for this entity is untouched
+    # (rows are only ever inserted; see evidence_rows_for_persistence).
+    evidence = {
+        "generated_at": datetime.utcnow().isoformat(),
+        "dimensions": [{
+            "dimension": dim,
+            "disposition": item.disposition,
+            "applicability": "APPLICABLE",
+            "evidence": [item.to_dict()],
+        } for item in items],
+    }
+    outcome = _classify_entity_outcome(evidence)
+
+    rows = evidence_rows_for_persistence(
+        str(entity_uuid or entity.get("id")), None, evidence)
+    for row in rows:
+        row["review_cycle_id"] = None
+        db.add(TEFCADimensionEvidence(**row))
+
+    if candidate and entity_uuid is not None:
+        row_shape = await _entity_row_shape(db, entity_uuid)
+        if row_shape is not None and row_shape.verification_status != "in_review":
+            row_shape.verification_status = "in_review"
+            row_shape.updated_at = datetime.utcnow()
+
+    await db.flush()
+    return {"ref": ref, "entity_id": str(entity_uuid) if entity_uuid else None,
+            "outcome": outcome, "dimensions_recorded": len(rows),
+            "candidate_match": candidate}
+
+
+#: Per-delivery batch single-flight. Two coverage batches running at once for
+#: one delivery each read the committed not-covered set, overlap, and write
+#: duplicate generations — observed 2026-10-30 on the October delivery
+#: (~1,007 entities with 2–3 generations minutes apart). A transaction-level
+#: advisory lock serializes batches per intake: the second caller is refused
+#: (never queued) and told to retry. int4 pair: a fixed class key plus
+#: hashtext(intake). Distinct from COVERAGE_TICK_LOCK_KEY, which single-
+#: flights the scheduler TICK across processes; this one covers every caller
+#: of `run_coverage_batch`, manual PM batches included.
+BATCH_LOCK_CLASS_KEY = 20261030
+
+
+async def _try_advisory_batch_lock(db, intake_id) -> bool:
+    return bool((await db.execute(
+        text("SELECT pg_try_advisory_xact_lock(CAST(:k AS int), "
+             "hashtext(CAST(:i AS text)))"),
+        {"k": BATCH_LOCK_CLASS_KEY, "i": str(intake_id)})).scalar())
+
+
 async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_SIZE,
-                             actor: str = "SYSTEM") -> Dict[str, Any]:
+                             actor: str = "SYSTEM",
+                             scope: str = SCOPE_FULL) -> Dict[str, Any]:
     """Process up to `batch_size` not-yet-covered eligible entities of one
     delivery. Commits once at the end of the call (the batch is the unit of
     atomicity, matching `review_cycle.create_review_cycle`'s own batching) and
     returns how many entities remain. Call again until `remaining` is 0 — the
     same "call again until remaining is 0" contract the review cycle uses, so
     a caller (the scheduler tick, or an operator retrying manually) does not
-    need two different conventions."""
+    need two different conventions.
+
+    `scope` selects the candidate set and the per-entity work: SCOPE_FULL is
+    the existing all-source first lookup; SCOPE_SAM_EXTRACT appends only the
+    SAM-extract leg to entities that have evidence but no extract row.
+
+    Batches for one delivery are SERIALIZED by a transaction-level advisory
+    lock (held until this call's own commit): a second concurrent call is
+    refused with `skipped_lock: true` and processes nothing, because two
+    batches reading the committed not-covered set at once overlap and write
+    duplicate generations (observed 2026-10-30)."""
     from app.Tefca.ppef_store import make_local_store
 
+    if scope not in SCOPES:
+        raise ValueError(f"unknown coverage scope {scope!r}; one of {SCOPES}")
+    if scope == SCOPE_SAM_EXTRACT and not sam_extract_screening_enabled():
+        raise SamExtractScreeningDisabled(
+            "ENABLE_SAM_EXTRACT_SCREENING is off; a sam_extract-scope batch "
+            "would record UNAVAILABLE for every entity and cover nothing")
+
     batch_size = max(1, min(int(batch_size or DEFAULT_BATCH_SIZE), MAX_BATCH_SIZE))
+
+    if not await _try_advisory_batch_lock(db, intake_id):
+        # No rollback: the failed try-lock was a plain read, and the caller's
+        # session (a route dependency, the scheduler tick, or a test's
+        # savepoint-wrapped session) owns its own transaction lifecycle.
+        progress = await coverage_progress(db, intake_id, scope=scope)
+        return {
+            "intake_id": str(intake_id), "scope": scope,
+            "skipped_lock": True,
+            "note": ("another coverage batch for this delivery is already "
+                     "running; retry when it finishes"),
+            "processed_this_call": 0, "by_outcome": {}, "outcomes": [],
+            **progress,
+            "complete": progress["remaining"] == 0,
+            "batch_size": batch_size,
+        }
+
+    candidate_sql = (_SAM_EXTRACT_NOT_COVERED_SQL if scope == SCOPE_SAM_EXTRACT
+                     else _ELIGIBLE_NOT_COVERED_SQL)
     rows = (await db.execute(
-        text(_ELIGIBLE_NOT_COVERED_SQL),
+        text(candidate_sql),
         {"intake_id": str(intake_id), "limit": batch_size})).all()
 
     local_store = make_local_store(db)
     outcomes: List[Dict[str, Any]] = []
     for ref, canonical_entity_id in rows:
         try:
-            result = await record_coverage_attempt(
-                db, ref=ref, canonical_entity_id=canonical_entity_id,
-                intake_id=intake_id, actor=actor, local_store=local_store)
+            if scope == SCOPE_SAM_EXTRACT:
+                result = await record_sam_extract_attempt(
+                    db, ref=ref, canonical_entity_id=canonical_entity_id)
+            else:
+                result = await record_coverage_attempt(
+                    db, ref=ref, canonical_entity_id=canonical_entity_id,
+                    intake_id=intake_id, actor=actor, local_store=local_store)
         except Exception as exc:  # noqa: BLE001 - one entity's bug must not lose the batch
             logger.error("automated coverage: unhandled error for %s: %s",
                         ref, type(exc).__name__, exc_info=True)
@@ -304,15 +503,17 @@ async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_S
                       "reason": f"unhandled {type(exc).__name__}"}
         outcomes.append(result)
 
-    await db.commit()
+    await db.commit()  # also releases the advisory xact lock
 
-    progress = await coverage_progress(db, intake_id)
+    progress = await coverage_progress(db, intake_id, scope=scope)
     by_outcome: Dict[str, int] = {}
     for o in outcomes:
         by_outcome[o["outcome"]] = by_outcome.get(o["outcome"], 0) + 1
 
     return {
         "intake_id": str(intake_id),
+        "scope": scope,
+        "skipped_lock": False,
         "processed_this_call": len(outcomes),
         "by_outcome": by_outcome,
         "outcomes": outcomes,
