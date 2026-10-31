@@ -9,7 +9,9 @@ import.
 """
 from __future__ import annotations
 
+import asyncio
 import csv
+import time
 
 import httpx
 import pytest
@@ -37,12 +39,52 @@ def _write_csv(path, header, rows):
     return path
 
 
-async def _run_one_queued_job(db) -> str:
+async def _run_one_queued_job(db, job_id: str) -> str:
+    """Claim and run the job this test just staged -- or, when the live
+    server wins the claim first, wait for the server to finish it.
+
+    `stage_source` COMMITS the enqueued job, and the server under test runs
+    `iqvia_import_scheduler` (a 5-second poller) against the same database,
+    so from that commit on there are two legal claimers -- the documented
+    multi-worker contract (`claim_next_queued` uses FOR UPDATE SKIP LOCKED
+    precisely so concurrent claimers are safe). Observed in CI 2026-10-30
+    (run 41141806371): journey-server.log shows "IQVIA import poller claimed
+    job ..." in the gap between the enqueue commit and this call, and the
+    old sole-claimer assertion here failed on a correctly-behaving system.
+
+    Both arms stay strict: the staged job must exist and be claimed by
+    someone (a None claim with the job still QUEUED is the real defect the
+    old assertion guarded against, and still fails), claimed exactly once,
+    and the caller still requires SUCCEEDED.
+    """
+    import uuid as _uuid
+
     job = await jobs.claim_next_queued(db)
-    assert job is not None, "expected a QUEUED IQVIA import job to claim"
-    await routes.run_import_job(str(job.id))
-    await db.refresh(job)
-    return job.state
+    if job is not None:
+        assert str(job.id) == job_id, (
+            f"claimed {job.id}, not the job this test staged ({job_id})")
+        await routes.run_import_job(str(job.id))
+        await db.refresh(job)
+        return job.state
+
+    # claim returned None: only legal if the server's poller already took
+    # OUR job. Anything else is still an assertion failure.
+    staged = await db.get(um.IqviaImportJob, _uuid.UUID(job_id))
+    assert staged is not None, "expected a QUEUED IQVIA import job to claim"
+    await db.refresh(staged)
+    assert staged.state != um.IqviaImportJob.STATE_QUEUED, (
+        "claim_next_queued returned None while the staged job was still "
+        "QUEUED -- a genuine claim defect, not the poller race")
+    deadline = time.monotonic() + 60
+    while (staged.state not in um.IqviaImportJob.TERMINAL_STATES
+           and time.monotonic() < deadline):
+        await asyncio.sleep(0.5)
+        await db.refresh(staged)
+    assert staged.state in um.IqviaImportJob.TERMINAL_STATES, (
+        f"import job stuck in {staged.state} after the server claimed it")
+    assert staged.attempt_count == 1, (
+        "the staged job must be claimed exactly once")
+    return staged.state
 
 
 async def test_journey_iqvia_live(tmp_path, monkeypatch, db_required):
@@ -81,7 +123,7 @@ async def test_journey_iqvia_live(tmp_path, monkeypatch, db_required):
         result = await routes.stage_source("hco", body, db, user=reviewer_row)
         snapshot_id = result["snapshot_id"]
         print(f"[iqvia] staged snapshot_id={snapshot_id} job_id={result['job_id']}")
-        state = await _run_one_queued_job(db)
+        state = await _run_one_queued_job(db, result["job_id"])
     print(f"[iqvia] import job finished: {state}")
     assert state == um.IqviaImportJob.STATE_SUCCEEDED
 
