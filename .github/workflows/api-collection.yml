@@ -39,6 +39,7 @@ on:
     paths:
       - 'tests/postman/**'
       - 'scripts/seed_integration_fixtures.py'
+      - 'scripts/ci_runtime_acl.sql'
       - '.github/workflows/api-collection.yml'
   workflow_dispatch:
     inputs:

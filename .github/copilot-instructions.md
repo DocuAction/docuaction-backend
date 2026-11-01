@@ -10,13 +10,18 @@ most costly past defects violated; weigh a change against them.
   **viewer**. State-changing or privileged actions (coverage runs, snapshot
   persist, candidate backfill) sit at **program_manager/qalead**.
 - A new `GET /deliveries/{id}/…` route that returns identifiers must be at the
-  reviewer floor and listed in `tests/test_rbac_roles.py`'s exemption set with
-  a one-line justification, mirroring the drill-down routes. Flag any read of
+  reviewer floor and covered by the role matrix in `tests/test_rbac_roles.py`
+  (its `VIEWER_READS` / `WRITE_ENDPOINTS` sets — a delivered-values read must not
+  be in `VIEWER_READS`), mirroring the drill-down routes. Flag any read of
   delivered values gated only at viewer, or any new route with no explicit
   `require_role`.
-- "No self-QA" separation of duties is DB-enforced (migration
-  `20261012_sod_db_enforcement`). Flag code that lets the same identity both
-  submit and approve.
+- "No self-QA" separation of duties: the application layer refuses a self
+  submit/approve, and a DB-level enforcement is specified in migration
+  `20261012_sod_db_enforcement` — which is marked DRAFT and is NOT yet applied
+  to DEV or PROD, and depends on the manual `SOD_DB_OWNERSHIP_PREREQUISITE.sql`.
+  Treat the DB control as PENDING deployment, not an existing runtime invariant;
+  flag any code path that lets the same identity both submit and approve, and do
+  not rely on the DB layer to catch it until its deployment is verified.
 
 ## Transaction isolation
 - A failure in a best-effort side write (issue-ledger finding, audit row,
