@@ -597,7 +597,16 @@ class DeliveryProcessingDataService:
         }
         if intake is None:
             fallback["reason"] = "no intake"
+            # No intake: the extract read is not applicable. `sam_extract` and
+            # `sam_extract_attempted` stay absent, which the template reads as
+            # "say nothing about the extract" (no table, no unavailable notice).
             return fallback
+        # The SAM public-extract read is INDEPENDENT of the coverage read: the
+        # two query different tables, and a coverage-SQL failure must not
+        # suppress the extract outcomes (or their unavailable notice) when the
+        # extract enumeration would answer. So every intake-present return path
+        # below attaches the extract block to whatever coverage result it has —
+        # success or fallback.
         try:
             from app.tefca_registry.rce import verification_coverage as vc
             fn = getattr(vc, "coverage_for_intake")
@@ -605,6 +614,7 @@ class DeliveryProcessingDataService:
             fallback["reason"] = f"verification coverage service unavailable ({type(exc).__name__})"
             self.limit("Verification coverage could not be read (service unavailable); "
                        "every source is reported as Not Run.")
+            await self._attach_sam_extract(fallback, intake)
             return fallback
         try:
             raw = await fn(self.db, intake.id)
@@ -613,28 +623,39 @@ class DeliveryProcessingDataService:
             fallback["reason"] = f"verification coverage query failed ({type(exc).__name__})"
             self.limit("Verification coverage could not be read (query failed); "
                        "every source is reported as Not Run.")
+            await self._attach_sam_extract(fallback, intake)
             return fallback
         shaped = _normalise_coverage(raw)
-        # The SAM public-extract supplementary screen, as its OWN block: its
-        # outcome words (candidate / no_candidate / unavailable / missing)
-        # are deliberately not the generic per-source vocabulary above, which
-        # would render a candidate as "not found". Absent (None) when the
-        # enumeration cannot be read — reported as a limitation, never
-        # silently as zero candidates.
+        await self._attach_sam_extract(shaped, intake)
+        return shaped
+
+    async def _attach_sam_extract(self, block: Dict[str, Any], intake) -> None:
+        """Attach the SAM public-extract supplementary read to a verification
+        block, in place. Independent of the coverage read above: its outcome
+        words (candidate / no_candidate / unavailable / missing) are
+        deliberately not the generic per-source vocabulary, which would render
+        a candidate as "not found".
+
+        `sam_extract_attempted` is always set True here (this is only called
+        for a real intake), so the template can tell "attempted but the read
+        failed" (sam_extract is None) apart from "no intake, not applicable"
+        (the key is absent) — the two cases a bare None cannot distinguish.
+        A failed read is a disclosed limitation, never silently zero.
+        """
+        block["sam_extract_attempted"] = True
         try:
             from app.tefca_registry.rce import sam_extract_enumeration as se
             # Savepoint: a SQL failure here must roll back to this point, not
             # abort the whole report transaction — "reported as a limitation"
             # is only possible if the session can still run the later lanes.
             async with self.db.begin_nested():
-                shaped["sam_extract"] = await se.extract_summary(self.db, intake.id)
+                block["sam_extract"] = await se.extract_summary(self.db, intake.id)
         except Exception as exc:  # noqa: BLE001
             logger.warning("sam-extract enumeration failed: %s", exc)
-            shaped["sam_extract"] = None
+            block["sam_extract"] = None
             self.limit("The SAM public-extract supplementary screen's outcomes "
                        "could not be read; its candidate totals are not stated "
                        "in this report rather than guessed.")
-        return shaped
 
     # "pecos" here is the legacy connector-availability key the B1-B4
     # classifier keys on (NPPES reachability used as an enrolment proxy) --

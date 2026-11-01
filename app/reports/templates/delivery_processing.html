@@ -698,7 +698,7 @@
   preserved append-only and counted separately.
   Edition(s) consulted:{% for ed in extract.editions %} {{ ed.dataset_version_anchor }} (published {{ ed.publication_date }},
   sha256 {{ (ed.extract_sha256 or 'not recorded')[:12] }}, {{ ed.entities|number }} entities){% if not loop.last %};{% endif %}{% endfor %}.</p>
-{% elif verification.available %}
+{% elif verification.get('sam_extract_attempted') %}
 <p><strong>SAM public-extract supplementary screen.</strong> The extract screen&rsquo;s outcomes could not be read when
   this report was generated; its candidate totals are not stated rather than guessed (see Limitations).</p>
 {% endif %}

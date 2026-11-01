@@ -464,6 +464,76 @@ async def test_report_builder_survives_a_failed_enumeration(covered_three):
     assert (await db.execute(text("SELECT 1"))).scalar() == 1
 
 
+async def test_extract_read_is_independent_of_a_coverage_failure(covered_three):
+    """A coverage-service/query failure must NOT suppress the extract read:
+    the two query different tables. For an existing intake the report still
+    attaches the extract block (and flags the attempt) even when coverage
+    itself fell back to Not Run."""
+    from app.reports.data.delivery_processing_data import DeliveryProcessingDataService
+    from app.tefca_registry.rce import models as rce_m
+
+    db, intake_id = covered_three
+    with patch("app.Tefca.sam_extract.SAMExtractConnector.screen",
+               new=AsyncMock(side_effect=[_screen(True), _screen(False), _screen(False)])):
+        await av.run_coverage_batch(db, intake_id, batch_size=100, scope="sam_extract")
+
+    intake = await db.get(rce_m.RceSourceIntake, intake_id)
+    svc = DeliveryProcessingDataService(db, intake_id=str(intake_id))
+
+    # Coverage read blows up; the extract enumeration is healthy.
+    async def _boom(*a, **k):
+        raise RuntimeError("coverage SQL exploded")
+
+    with patch("app.tefca_registry.rce.verification_coverage.coverage_for_intake",
+               new=AsyncMock(side_effect=_boom)):
+        block = await svc._verification(intake)
+
+    assert block["available"] is False              # coverage fell back
+    assert block["sam_extract_attempted"] is True   # extract still attempted
+    assert block["sam_extract"] is not None          # and it answered
+    assert block["sam_extract"]["current_outcomes"]["candidate"] == 1
+    assert (await db.execute(text("SELECT 1"))).scalar() == 1  # session usable
+
+
+async def test_both_reads_failing_flags_the_attempt_and_discloses(covered_three):
+    """Coverage AND the extract read both fail for a real intake: the block
+    records the attempt (so the template shows the unavailable notice) with
+    sam_extract None, and the limitation is disclosed — never silent zero."""
+    from app.reports.data.delivery_processing_data import DeliveryProcessingDataService
+    from app.tefca_registry.rce import models as rce_m
+
+    db, intake_id = covered_three
+    intake = await db.get(rce_m.RceSourceIntake, intake_id)
+    svc = DeliveryProcessingDataService(db, intake_id=str(intake_id))
+
+    async def _boom(*a, **k):
+        raise RuntimeError("down")
+
+    with patch("app.tefca_registry.rce.verification_coverage.coverage_for_intake",
+               new=AsyncMock(side_effect=_boom)), \
+         patch("app.tefca_registry.rce.sam_extract_enumeration.extract_summary",
+               new=AsyncMock(side_effect=_boom)):
+        block = await svc._verification(intake)
+
+    assert block["sam_extract_attempted"] is True
+    assert block["sam_extract"] is None
+    assert any("not stated" in l for l in svc.limitations)
+    assert (await db.execute(text("SELECT 1"))).scalar() == 1
+
+
+async def test_no_intake_says_nothing_about_the_extract():
+    """The no-intake path must not claim an extract read happened: neither
+    the summary key nor the attempt flag is present, so the template shows
+    no table and no unavailable notice (unchanged no-intake behavior)."""
+    from app.reports.data.delivery_processing_data import DeliveryProcessingDataService
+
+    svc = DeliveryProcessingDataService(None, intake_id=None)
+    block = await svc._verification(None)
+    assert block["reason"] == "no intake"
+    assert "sam_extract" not in block
+    assert "sam_extract_attempted" not in block
+
+
 async def test_backfill_is_dry_run_first_and_idempotent(covered_three):
     db, intake_id = covered_three
     with patch("app.Tefca.sam_extract.SAMExtractConnector.screen",
