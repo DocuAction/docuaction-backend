@@ -1,4 +1,4 @@
-name: Backend Tests
+﻿name: Backend Tests
 
 # The one required check this repo did not already have on a pull request.
 # CodeQL, dependency-review, sast and render (pdf-linux) all already run on
@@ -179,6 +179,7 @@ jobs:
             tests/test_exclusion_name_screening_2026_10_04.py \
             tests/test_sam_extract_persistence_db_2026_10_29.py \
             tests/test_cm12_ambiguous_entity_multiple_reviews_2026_10_28.py \
+            tests/test_manual_reconciliation_snapshot_2026_10_31.py \
             -v --tb=short -rs --junitxml=isolation-results.xml
       - name: Fail if any isolation test was skipped for want of a database
         run: |
