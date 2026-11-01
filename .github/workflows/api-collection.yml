@@ -125,27 +125,32 @@ jobs:
             -c "ALTER SCHEMA public OWNER TO docuaction_owner;" \
             -c "GRANT ALL ON SCHEMA public TO docuaction_owner;" \
             -c "GRANT USAGE, CREATE ON SCHEMA public TO docuaction_app;"
-      - name: Migrate to head (Alembic, OWNER role — also grants the app role its runtime DML)
+      - name: Migrate to head (Alembic, OWNER role — also applies the Area-1 grants/revokes)
         env:
           DATABASE_URL: ${{ env.DB_OWNER_URL }}
         run: python -m alembic upgrade head
-      - name: Verify the restricted runtime role is genuinely non-owner (gap 3 prerequisite)
-        run: |
-          # docuaction_app must NOT own tables and must NOT be able to DDL — if it
-          # could, "running under the app role" would prove nothing.
-          OWNS=$(psql -h 127.0.0.1 -U postgres -d itest -tAc "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tableowner='docuaction_app';")
-          echo "tables owned by docuaction_app: $OWNS"
-          if [ "$OWNS" != "0" ]; then echo "::error::docuaction_app owns tables — not a restricted runtime identity"; exit 1; fi
-          if psql -h 127.0.0.1 -U docuaction_app -d itest -v ON_ERROR_STOP=1 -c "CREATE TABLE _should_fail(x int);" 2>/dev/null; then
-            echo "::error::docuaction_app could CREATE TABLE — privileges are too broad"; exit 1
-          fi
-          echo "confirmed: docuaction_app is a non-owner runtime role (no table ownership, no DDL)"
-        env:
-          PGPASSWORD: apitest
-      - name: Seed deterministic synthetic fixtures (OWNER role)
+      - name: Seed deterministic synthetic fixtures (OWNER role, before the ACL lockdown)
         env:
           DATABASE_URL: ${{ env.DB_OWNER_URL }}
         run: python scripts/seed_integration_fixtures.py --out integration-fixtures.json
+      - name: Apply the intended runtime ACL (docuaction_app owns its working set; Area-1 immutable)
+        run: psql -h 127.0.0.1 -U postgres -d itest -v ON_ERROR_STOP=1 -f scripts/ci_runtime_acl.sql
+        env:
+          PGPASSWORD: apitest
+      - name: Verify the restricted runtime identity (gap 3 — real prerequisites, not a blanket grant)
+        run: |
+          q() { psql -h 127.0.0.1 -U postgres -d itest -tAc "$1" | tr -d '[:space:]'; }
+          echo "users owner:            $(q "SELECT tableowner FROM pg_tables WHERE tablename='users'")"
+          echo "rce_source_records own: $(q "SELECT tableowner FROM pg_tables WHERE tablename='rce_source_records'")"
+          [ "$(q "SELECT tableowner FROM pg_tables WHERE tablename='users'")" = "docuaction_app" ] || { echo "::error::users not owned by runtime role"; exit 1; }
+          [ "$(q "SELECT tableowner FROM pg_tables WHERE tablename='rce_source_records'")" = "docuaction_owner" ] || { echo "::error::Area-1 table not owned by owner"; exit 1; }
+          [ "$(q "SELECT has_table_privilege('docuaction_app','rce_source_records','UPDATE')")" = "f" ] || { echo "::error::runtime role has table-wide UPDATE on Area-1"; exit 1; }
+          [ "$(q "SELECT has_column_privilege('docuaction_app','rce_source_records','promotion_status','UPDATE')")" = "t" ] || { echo "::error::runtime role missing the designed promotion-column UPDATE"; exit 1; }
+          [ "$(q "SELECT pg_has_role('docuaction_app','docuaction_owner','MEMBER')")" = "f" ] || { echo "::error::runtime role can act as owner (SET ROLE bypass)"; exit 1; }
+          [ "$(q "SELECT rolsuper FROM pg_roles WHERE rolname='docuaction_app'")" = "f" ] || { echo "::error::runtime role is superuser"; exit 1; }
+          echo "confirmed: runtime role owns its working set, Area-1 stays immutable, no SET ROLE bypass, not superuser"
+        env:
+          PGPASSWORD: apitest
       - name: Start the isolated backend under the RESTRICTED runtime role (127.0.0.1:8010)
         env:
           DATABASE_URL: ${{ env.DB_APP_URL }}
