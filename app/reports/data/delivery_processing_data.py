@@ -623,7 +623,11 @@ class DeliveryProcessingDataService:
         # silently as zero candidates.
         try:
             from app.tefca_registry.rce import sam_extract_enumeration as se
-            shaped["sam_extract"] = await se.extract_summary(self.db, intake.id)
+            # Savepoint: a SQL failure here must roll back to this point, not
+            # abort the whole report transaction — "reported as a limitation"
+            # is only possible if the session can still run the later lanes.
+            async with self.db.begin_nested():
+                shaped["sam_extract"] = await se.extract_summary(self.db, intake.id)
         except Exception as exc:  # noqa: BLE001
             logger.warning("sam-extract enumeration failed: %s", exc)
             shaped["sam_extract"] = None

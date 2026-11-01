@@ -372,6 +372,98 @@ def test_csv_annex_b2_prints_the_enumerations_own_totals():
     assert "not stated rather than guessed" in out2
 
 
+async def test_finding_anchors_to_the_screening_delivery_not_the_latest(rolled_back_db, monkeypatch):
+    """An entity promoted by TWO deliveries (promotion reuses the canonical
+    entity across intakes) must get its candidate finding on the ledger of
+    the delivery whose screen found it — not whichever delivery promoted the
+    entity last. Before the intake-scoped anchoring, _curated_for_entity
+    picked the newest promotion and the finding landed on the wrong
+    delivery: invisible in the screening delivery's findings.csv, and
+    re-countable by every backfill run."""
+    monkeypatch.setenv("ENTITY_RESOLVER_SOURCE", "db")
+    monkeypatch.setenv("ENABLE_SAM_EXTRACT_SCREENING", "true")
+    db = rolled_back_db
+    rows = make_rows(1, arc="9.99.777.73")
+
+    intake_a, _ = await seed_intake(db, rows)
+    await run_quality_and_curation(db, intake_a)
+    await promote_delivery(db, intake_a, actor=SYN)
+    with patch("app.Tefca.evidence_service.EvidenceService.build_evidence",
+               new=AsyncMock(return_value=CLEAN_EVIDENCE)):
+        await av.run_coverage_batch(db, intake_a, batch_size=100)
+
+    # Same OIDs, second delivery, promoted LATER — promotion maps them to
+    # the SAME canonical entity; the file bytes differ (name tweak) so the
+    # intake/job identity is distinct.
+    rows_b = [dict(r, name=r["name"] + " RESUBMITTED") for r in rows]
+    intake_b, _ = await seed_intake(db, rows_b)
+    await run_quality_and_curation(db, intake_b)
+    await promote_delivery(db, intake_b, actor=SYN)
+
+    with patch("app.Tefca.sam_extract.SAMExtractConnector.screen",
+               new=AsyncMock(return_value=_screen(True))):
+        result = await av.run_coverage_batch(db, intake_a, batch_size=100,
+                                             scope="sam_extract")
+    assert result["remaining"] == 0
+
+    a_issues = await _issues(db, intake_a)
+    b_issues = await _issues(db, intake_b)
+    assert len(a_issues) == 1, "the screening delivery carries the finding"
+    assert b_issues == [], "the unrelated later delivery carries nothing"
+    # And the screening delivery's own candidate list sees it.
+    items = (await se.list_candidates(db, intake_a))["items"]
+    assert items and items[0]["ledger_issue_code"] == a_issues[0].issue_code
+
+
+async def test_a_failed_ledger_write_rolls_back_to_its_savepoint(covered_three):
+    """A SQL failure inside the candidate-finding write must abort ONLY that
+    write (savepoint), never the batch transaction: the evidence rows of the
+    whole batch still commit, later entities still process, and the failure
+    is a logged gap — not a lost batch."""
+    db, intake_id = covered_three
+
+    async def _poisoned_writer(db, **kwargs):
+        await db.execute(text("SELECT broken FROM table_that_does_not_exist_xyz"))
+
+    with patch("app.tefca_registry.rce.verification_findings.record_sam_extract_candidate",
+               new=AsyncMock(side_effect=_poisoned_writer)), \
+         patch("app.Tefca.sam_extract.SAMExtractConnector.screen",
+               new=AsyncMock(side_effect=[_screen(True), _screen(False), _screen(False)])):
+        result = await av.run_coverage_batch(db, intake_id, batch_size=100,
+                                             scope="sam_extract")
+    assert result["remaining"] == 0           # the batch finished
+    rows = (await db.execute(text(
+        "SELECT count(*) FROM tefca_dimension_evidence d "
+        "WHERE d.source = 'SAM_EXTRACT_SUPPLEMENTARY'"))).scalar()
+    assert rows == 3                           # every evidence row committed
+    assert await _issues(db, intake_id) == []  # only the finding is missing
+
+
+async def test_report_builder_survives_a_failed_enumeration(covered_three):
+    """The report's degradation contract — 'not stated rather than guessed'
+    — only holds if a SQL failure in the enumeration rolls back to its
+    savepoint: the session must still serve every later lane of the same
+    report build."""
+    from app.reports.data.delivery_processing_data import DeliveryProcessingDataService
+    from app.tefca_registry.rce import models as rce_m
+
+    db, intake_id = covered_three
+    intake = await db.get(rce_m.RceSourceIntake, intake_id)
+    svc = DeliveryProcessingDataService(db, intake_id=str(intake_id))
+
+    async def _poisoned_summary(db_, intake_id_):
+        await db_.execute(text("SELECT broken FROM table_that_does_not_exist_xyz"))
+
+    with patch("app.tefca_registry.rce.sam_extract_enumeration.extract_summary",
+               new=AsyncMock(side_effect=_poisoned_summary)):
+        shaped = await svc._verification(intake)
+
+    assert shaped["sam_extract"] is None
+    assert any("not stated" in l for l in svc.limitations)
+    # The session is NOT poisoned: the next lane's query still runs.
+    assert (await db.execute(text("SELECT 1"))).scalar() == 1
+
+
 async def test_backfill_is_dry_run_first_and_idempotent(covered_three):
     db, intake_id = covered_three
     with patch("app.Tefca.sam_extract.SAMExtractConnector.screen",

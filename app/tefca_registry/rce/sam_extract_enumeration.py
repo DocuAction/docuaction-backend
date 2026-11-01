@@ -132,12 +132,19 @@ _CANDIDATES_SQL = _LATEST_CTE + """,
         LEFT JOIN rce_source_records src ON src.id = rec.source_record_id
         WHERE l.outcome = 'candidate')
     SELECT r.entity_id, r.entity_name, r.npi, r.line_number,
-           r.evidence_row_id, r.created_at, r.generation_timestamp,
-           r.query_timestamp, r.dataset_version_anchor, r.extract_row_count,
+           r.source_record_id, r.evidence_row_id, r.created_at,
+           r.generation_timestamp, r.query_timestamp,
+           r.dataset_version_anchor, r.extract_row_count,
            r.original_values,
+           -- Entity-wide within THIS delivery: a multi-record entity's
+           -- finding may be anchored to a different curated row than the
+           -- representative one, and must still read as "on the worklist".
            (SELECT i.issue_code FROM rce_issues i
-            WHERE i.source_record_id = r.source_record_id
-              AND i.issue_type = 'SAM_EXTRACT_CANDIDATE'
+            WHERE i.issue_type = 'SAM_EXTRACT_CANDIDATE'
+              AND i.source_record_id IN (
+                  SELECT rec2.source_record_id FROM rce_curated_records rec2
+                  WHERE rec2.source_intake_id = CAST(:i AS uuid)
+                    AND rec2.canonical_entity_id::text = r.entity_id)
             ORDER BY i.created_at DESC LIMIT 1) AS ledger_issue_code
     FROM reps r
     WHERE r.rep_rn = 1
@@ -245,6 +252,7 @@ async def list_candidates(db, intake_id, *, limit: int = DEFAULT_PAGE_SIZE,
         "entity_name": r.entity_name,
         "npi": r.npi,
         "line_number": r.line_number,
+        "source_record_id": str(r.source_record_id),
         "evidence_row_id": str(r.evidence_row_id),
         "evidence_created_at": r.created_at.isoformat() if r.created_at else None,
         "generation_timestamp": r.generation_timestamp,
@@ -322,7 +330,9 @@ async def backfill_candidate_issues(db, intake_id, *, dry_run: bool = True,
                 issue = await vf.record_sam_extract_candidate(
                     db, entity_id=_uuid.UUID(item["entity_id"]), npi=item["npi"],
                     org_name=item["entity_name"],
-                    extract={**(item["provenance"] or {})})
+                    extract={**(item["provenance"] or {})},
+                    intake_id=_uuid.UUID(str(intake_id)),
+                    source_record_id=_uuid.UUID(item["source_record_id"]))
                 if issue is not None:
                     planned[-1]["issue_code"] = issue.issue_code
                     written += 1
