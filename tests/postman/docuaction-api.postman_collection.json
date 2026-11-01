@@ -252,7 +252,7 @@
             { "listen": "test", "script": { "exec": [
               "const present = pm.response.code !== 404;",
               "pm.collectionVariables.set('sam_extract_present', present ? 'yes' : 'no');",
-              "const _rc = pm.collectionVariables.get('rc_mode') === 'yes';",
+              "const _rc = pm.variables.get('rc_mode') === 'yes';",
               "pm.test('route is deterministic (200 when present, 404 when the build predates #193)', () => pm.expect([200,404]).to.include(pm.response.code));",
               "if (_rc) { pm.test('REQUIRED on RC build: #193 /sam-extract is present (not 404)', () => { if (!present) throw new Error('RC candidate must expose /sam-extract (route returned 404)'); }); }",
               "else if (!present) { console.log('NOTE: /sam-extract absent — backend predates PR #193; folder 4 reports CONDITIONAL blocked-pending-#193.'); }"
@@ -268,7 +268,7 @@
           },
           "event": [
             { "listen": "test", "script": { "exec": [
-              "if (pm.collectionVariables.get('sam_extract_present') !== 'yes') { const _rc = pm.collectionVariables.get('rc_mode')==='yes'; pm.test((_rc?'REQUIRED on RC build':'CONDITIONAL (baseline)')+': #193 /sam-extract route present', () => { if (_rc) throw new Error('RC candidate must expose #193 /sam-extract (route returned 404)'); }); return; }",
+              "if (pm.collectionVariables.get('sam_extract_present') !== 'yes') { const _rc = pm.variables.get('rc_mode')==='yes'; pm.test((_rc?'REQUIRED on RC build':'CONDITIONAL (baseline)')+': #193 /sam-extract route present', () => { if (_rc) throw new Error('RC candidate must expose #193 /sam-extract (route returned 404)'); }); return; }",
               "pm.test('200', () => pm.response.to.have.status(200));",
               "const b = pm.response.json();",
               "pm.test('reconciles to the eligible population', () => pm.expect(b.reconciles).to.be.true);",
@@ -287,7 +287,7 @@
           },
           "event": [
             { "listen": "test", "script": { "exec": [
-              "if (pm.collectionVariables.get('sam_extract_present') !== 'yes') { const _rc = pm.collectionVariables.get('rc_mode')==='yes'; pm.test((_rc?'REQUIRED on RC build':'CONDITIONAL (baseline)')+': #193 /sam-extract route present', () => { if (_rc) throw new Error('RC candidate must expose #193 /sam-extract (route returned 404)'); }); return; }",
+              "if (pm.collectionVariables.get('sam_extract_present') !== 'yes') { const _rc = pm.variables.get('rc_mode')==='yes'; pm.test((_rc?'REQUIRED on RC build':'CONDITIONAL (baseline)')+': #193 /sam-extract route present', () => { if (_rc) throw new Error('RC candidate must expose #193 /sam-extract (route returned 404)'); }); return; }",
               "pm.test('200', () => pm.response.to.have.status(200));",
               "const b = pm.response.json();",
               "pm.test('at least one candidate', () => pm.expect(b.total).to.be.at.least(1));",
@@ -305,7 +305,7 @@
           },
           "event": [
             { "listen": "test", "script": { "exec": [
-              "if (pm.collectionVariables.get('sam_extract_present') !== 'yes') { const _rc = pm.collectionVariables.get('rc_mode')==='yes'; pm.test((_rc?'REQUIRED on RC build':'CONDITIONAL (baseline)')+': #193 /sam-extract route present', () => { if (_rc) throw new Error('RC candidate must expose #193 /sam-extract (route returned 404)'); }); return; }",
+              "if (pm.collectionVariables.get('sam_extract_present') !== 'yes') { const _rc = pm.variables.get('rc_mode')==='yes'; pm.test((_rc?'REQUIRED on RC build':'CONDITIONAL (baseline)')+': #193 /sam-extract route present', () => { if (_rc) throw new Error('RC candidate must expose #193 /sam-extract (route returned 404)'); }); return; }",
               "pm.test('viewer denied the candidate list (403)', () => pm.response.to.have.status(403));"
             ] } }
           ]
@@ -324,7 +324,7 @@
           },
           "event": [
             { "listen": "test", "script": { "exec": [
-              "if (pm.collectionVariables.get('sam_extract_present') !== 'yes') { const _rc = pm.collectionVariables.get('rc_mode')==='yes'; pm.test((_rc?'REQUIRED on RC build':'CONDITIONAL (baseline)')+': #193 /sam-extract route present', () => { if (_rc) throw new Error('RC candidate must expose #193 /sam-extract (route returned 404)'); }); return; }",
+              "if (pm.collectionVariables.get('sam_extract_present') !== 'yes') { const _rc = pm.variables.get('rc_mode')==='yes'; pm.test((_rc?'REQUIRED on RC build':'CONDITIONAL (baseline)')+': #193 /sam-extract route present', () => { if (_rc) throw new Error('RC candidate must expose #193 /sam-extract (route returned 404)'); }); return; }",
               "pm.test('200', () => pm.response.to.have.status(200));",
               "const b = pm.response.json();",
               "pm.test('dry_run is true', () => pm.expect(b.dry_run).to.be.true);",
@@ -343,7 +343,7 @@
           },
           "event": [
             { "listen": "test", "script": { "exec": [
-              "if (pm.collectionVariables.get('sam_extract_present') !== 'yes') { const _rc = pm.collectionVariables.get('rc_mode')==='yes'; pm.test((_rc?'REQUIRED on RC build':'CONDITIONAL (baseline)')+': #193 /sam-extract route present', () => { if (_rc) throw new Error('RC candidate must expose #193 /sam-extract (route returned 404)'); }); return; }",
+              "if (pm.collectionVariables.get('sam_extract_present') !== 'yes') { const _rc = pm.variables.get('rc_mode')==='yes'; pm.test((_rc?'REQUIRED on RC build':'CONDITIONAL (baseline)')+': #193 /sam-extract route present', () => { if (_rc) throw new Error('RC candidate must expose #193 /sam-extract (route returned 404)'); }); return; }",
               "pm.test('viewer denied the backfill (403)', () => pm.response.to.have.status(403));"
             ] } }
           ]
@@ -365,7 +365,7 @@
             { "listen": "test", "script": { "exec": [
               "const present = pm.response.code !== 404;",
               "pm.collectionVariables.set('snapshot_present', present ? 'yes' : 'no');",
-              "const _rc = pm.collectionVariables.get('rc_mode') === 'yes';",
+              "const _rc = pm.variables.get('rc_mode') === 'yes';",
               "pm.test('deterministic (422 blank reason when present, 404 when build predates #194)', () => pm.expect([422,404]).to.include(pm.response.code));",
               "if (_rc) { pm.test('REQUIRED on RC build: #194 snapshot route is present (not 404)', () => { if (!present) throw new Error('RC candidate must expose #194 snapshot route (route returned 404)'); }); }",
               "if (present) { pm.test('blank reason rejected (422)', () => pm.response.to.have.status(422)); }",
@@ -383,7 +383,7 @@
           },
           "event": [
             { "listen": "test", "script": { "exec": [
-              "if (pm.collectionVariables.get('snapshot_present') !== 'yes') { const _rc = pm.collectionVariables.get('rc_mode')==='yes'; pm.test((_rc?'REQUIRED on RC build':'CONDITIONAL (baseline)')+': #194 snapshot route present', () => { if (_rc) throw new Error('RC candidate must expose #194 snapshot route (route returned 404)'); }); return; }",
+              "if (pm.collectionVariables.get('snapshot_present') !== 'yes') { const _rc = pm.variables.get('rc_mode')==='yes'; pm.test((_rc?'REQUIRED on RC build':'CONDITIONAL (baseline)')+': #194 snapshot route present', () => { if (_rc) throw new Error('RC candidate must expose #194 snapshot route (route returned 404)'); }); return; }",
               "pm.test('viewer denied the snapshot persist (403)', () => pm.response.to.have.status(403));"
             ] } }
           ]
