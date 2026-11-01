@@ -1,30 +1,51 @@
 name: api-collection
 
-# Deterministic API integration tests: a Newman run of the Git-managed Postman
-# collection (tests/postman/) against an ISOLATED backend — disposable
+# Deterministic API integration tests: a Postman CLI run (tests/postman/run.mjs
+# drives the official `postman` binary — no npm dependency tree) of the
+# Git-managed Postman collection against an ISOLATED backend — disposable
 # PostgreSQL, synthetic accounts and one synthetic promoted delivery seeded by
-# scripts/seed_integration_fixtures.py, a real uvicorn bound on 127.0.0.1.
+# scripts/seed_integration_fixtures.py.
 #
-# No external source is called at scale and the October population is never
-# touched. The collection folders tagged (requires #193)/(requires #194)
-# self-report "not on this build" when those routes are absent (this branch is
-# based on main); they assert fully once those PRs land. Core endpoints
-# (health, auth, authorization, reconciliation, reports) are always asserted.
+# Runtime identity (gap 3): migrations and seeding run as the privileged OWNER
+# role (docuaction_owner); the application itself (uvicorn) runs as the
+# RESTRICTED runtime role (docuaction_app), whose DML privileges are granted by
+# the migrations themselves — the same identity the app uses in production. We
+# do NOT blanket-grant to make the harness pass; a missing grant surfaces as a
+# real runtime failure.
+#
+# Modes (gap 4):
+#   baseline            — on the main-based integration branch, the collection
+#                         folders tagged (requires #193)/(requires #194)
+#                         self-report a CONDITIONAL "not on this build" result.
+#   release-candidate   — on the combined ci/rc-candidate-193-194-* branch (or
+#                         workflow_dispatch mode=release-candidate), those
+#                         routes are REQUIRED and a missing capability FAILS.
+#
+# Build identity (gap 2): the exact checked-out SHA and the mode are written to
+# the job summary and a build-identity.json artifact, and passed to the server
+# as GIT_SHA.
 #
 # Security posture: pull_request (never pull_request_target — no untrusted PR
 # code runs with secrets), least-privilege token, pinned actions, and the
 # fixture manifest (which carries synthetic passwords) is NEVER uploaded — only
-# the JUnit report and the server log are.
+# the JUnit report, the server log and the build identity are.
 
 on:
   push:
-    branches: ['ci/github-api-ui-integration-2026-11-01']
+    branches:
+      - 'ci/github-api-ui-integration-2026-11-01'
+      - 'ci/rc-candidate-193-194-2026-11-01'
   pull_request:
     paths:
       - 'tests/postman/**'
       - 'scripts/seed_integration_fixtures.py'
       - '.github/workflows/api-collection.yml'
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'baseline | release-candidate (require #193/#194 routes)'
+        required: false
+        default: 'baseline'
 
 permissions:
   contents: read
@@ -46,22 +67,48 @@ jobs:
       SECRET_KEY: apicollectionapicollectionapicollectionapicollectionapicollection
       ALLOWED_HOSTS: '*'
       ALLOWED_ORIGINS: http://127.0.0.1:8010
-      DATABASE_URL: postgresql+asyncpg://docuaction_owner:x@127.0.0.1:5432/itest
+      # Privileged (migrate + seed) vs restricted runtime (the app) — gap 3.
+      DB_OWNER_URL: postgresql+asyncpg://docuaction_owner:ownerpw@127.0.0.1:5432/itest
+      DB_APP_URL: postgresql+asyncpg://docuaction_app:apppw@127.0.0.1:5432/itest
       DB_MIGRATION_ROLE: docuaction_owner
       DB_APP_ROLE: docuaction_app
       ENABLE_SAM_EXTRACT_SCREENING: 'true'
       ENTITY_RESOLVER_SOURCE: db
       PGPASSWORD: apitest
+      # release-candidate on the combined candidate branch or by dispatch; else baseline.
+      RC_MODE: ${{ (github.ref_name == 'ci/rc-candidate-193-194-2026-11-01' || github.event.inputs.mode == 'release-candidate') && 'release-candidate' || 'baseline' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+      - name: Record build identity (exact SHA + mode)
+        run: |
+          SHA="$(git rev-parse HEAD)"
+          echo "BACKEND_SHA=$SHA" >> "$GITHUB_ENV"
+          {
+            echo "## api-collection build identity"
+            echo ""
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| backend SHA (checked out) | \`$SHA\` |"
+            echo "| ref | \`${{ github.ref_name }}\` |"
+            echo "| mode | \`${RC_MODE}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p artifacts
+          printf '{"component":"api-collection","backend_sha":"%s","ref":"%s","mode":"%s"}\n' \
+            "$SHA" "${{ github.ref_name }}" "$RC_MODE" > artifacts/build-identity.json
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12'
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '20'
+      - name: Install the PDF rendering native stack (WeasyPrint / Pango / Cairo) — gap 5
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libpango-1.0-0 libpangocairo-1.0-0 libpangoft2-1.0-0 \
+            libcairo2 libgdk-pixbuf-2.0-0 libffi-dev libharfbuzz0b fonts-dejavu-core
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
@@ -70,28 +117,46 @@ jobs:
       - name: Create the isolated database and roles (owner / app split, UTC)
         run: |
           psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 \
-            -c "CREATE ROLE docuaction_owner LOGIN PASSWORD 'x';" \
-            -c "CREATE ROLE docuaction_app LOGIN PASSWORD 'x';" \
+            -c "CREATE ROLE docuaction_owner LOGIN PASSWORD 'ownerpw';" \
+            -c "CREATE ROLE docuaction_app LOGIN PASSWORD 'apppw';" \
             -c "CREATE DATABASE itest OWNER docuaction_owner;" \
             -c "ALTER DATABASE itest SET timezone = 'UTC';"
           psql -h 127.0.0.1 -U postgres -d itest -v ON_ERROR_STOP=1 \
             -c "ALTER SCHEMA public OWNER TO docuaction_owner;" \
             -c "GRANT ALL ON SCHEMA public TO docuaction_owner;" \
             -c "GRANT USAGE, CREATE ON SCHEMA public TO docuaction_app;"
-      - name: Migrate to head (Alembic, owner role)
-        run: python -m alembic upgrade head
-      - name: Start the isolated backend (127.0.0.1:8010)
+      - name: Migrate to head (Alembic, OWNER role — also grants the app role its runtime DML)
         env:
-          GIT_SHA: ${{ github.sha }}
+          DATABASE_URL: ${{ env.DB_OWNER_URL }}
+        run: python -m alembic upgrade head
+      - name: Verify the restricted runtime role is genuinely non-owner (gap 3 prerequisite)
+        run: |
+          # docuaction_app must NOT own tables and must NOT be able to DDL — if it
+          # could, "running under the app role" would prove nothing.
+          OWNS=$(psql -h 127.0.0.1 -U postgres -d itest -tAc "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tableowner='docuaction_app';")
+          echo "tables owned by docuaction_app: $OWNS"
+          if [ "$OWNS" != "0" ]; then echo "::error::docuaction_app owns tables — not a restricted runtime identity"; exit 1; fi
+          if psql -h 127.0.0.1 -U docuaction_app -d itest -v ON_ERROR_STOP=1 -c "CREATE TABLE _should_fail(x int);" 2>/dev/null; then
+            echo "::error::docuaction_app could CREATE TABLE — privileges are too broad"; exit 1
+          fi
+          echo "confirmed: docuaction_app is a non-owner runtime role (no table ownership, no DDL)"
+        env:
+          PGPASSWORD: apitest
+      - name: Seed deterministic synthetic fixtures (OWNER role)
+        env:
+          DATABASE_URL: ${{ env.DB_OWNER_URL }}
+        run: python scripts/seed_integration_fixtures.py --out integration-fixtures.json
+      - name: Start the isolated backend under the RESTRICTED runtime role (127.0.0.1:8010)
+        env:
+          DATABASE_URL: ${{ env.DB_APP_URL }}
+          GIT_SHA: ${{ env.BACKEND_SHA }}
         run: |
           nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8010 > api-server.log 2>&1 &
           for i in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:8010/health > /dev/null; then echo "server up"; exit 0; fi
+            if curl -sf http://127.0.0.1:8010/health > /dev/null; then echo "server up (as docuaction_app)"; exit 0; fi
             sleep 1
           done
-          echo "::error::backend did not become healthy within 30s"; cat api-server.log; exit 1
-      - name: Seed deterministic synthetic fixtures
-        run: python scripts/seed_integration_fixtures.py --out integration-fixtures.json
+          echo "::error::backend did not become healthy within 30s under the restricted role"; cat api-server.log; exit 1
       - name: Install the Postman CLI (official installer; no npm tree)
         run: |
           curl -sSL -o- "https://dl-cli.pstmn.io/install/linux64.sh" | sh
@@ -100,17 +165,22 @@ jobs:
         working-directory: tests/postman
         # Local collection file, no Postman API key (results are not synced to
         # Postman cloud). The runner injects synthetic creds + seeded ids and
-        # enforces the local-host guard.
-        run: node run.mjs --manifest ../../integration-fixtures.json --baseUrl http://127.0.0.1:8010 --junit newman-results.xml
+        # enforces the local-host guard. --rc in release-candidate mode requires
+        # the #193/#194 routes (fails if absent).
+        run: |
+          RC=""
+          if [ "$RC_MODE" = "release-candidate" ]; then RC="--rc"; fi
+          node run.mjs --manifest ../../integration-fixtures.json --baseUrl http://127.0.0.1:8010 --junit postman-results.xml $RC
       - name: Stop the backend
         if: always()
         run: pkill -f "uvicorn app.main:app" || true
-      - name: Upload JUnit + server log (never the credential manifest)
+      - name: Upload JUnit + server log + build identity (never the credential manifest)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: api-collection-results-${{ github.sha }}
           path: |
-            tests/postman/newman-results.xml
+            tests/postman/postman-results.xml
             api-server.log
+            artifacts/build-identity.json
           retention-days: 30

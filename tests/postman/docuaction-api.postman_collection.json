@@ -2,7 +2,7 @@
   "info": {
     "name": "DocuAction TEFCA ARC — API integration",
     "_postman_id": "d0c0ac70-17e5-4a00-b0b0-docuaction0001",
-    "description": "Deterministic API integration tests against an ISOLATED backend seeded by scripts/seed_integration_fixtures.py. Postman Collection v2.1.0 — imports into the Postman app and runs under Newman or Postman CLI. Folders tagged (requires #193)/(requires #194) assert fully when those routes are present and otherwise record a clear 'not on this build' result (never a silent skip). Never point this at production; baseUrl must be a local/isolated host.",
+    "description": "Deterministic API integration tests against an ISOLATED backend seeded by scripts/seed_integration_fixtures.py. Postman Collection v2.1.0 — imports into the Postman app and is driven on the command line by the Postman CLI via tests/postman/run.mjs. Two modes: in BASELINE mode the folders tagged (requires #193)/(requires #194) assert fully when those routes are present and otherwise record a clear CONDITIONAL 'not on this build' result (never a silent skip); in RELEASE-CANDIDATE mode (rc_mode=yes, run against the combined #193+#194 candidate revision) those routes are REQUIRED and a missing capability FAILS. Never point this at production; baseUrl must be a local/isolated host.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -23,7 +23,9 @@
     { "key": "qalead_token", "value": "" },
     { "key": "pm_token", "value": "" },
     { "key": "sam_extract_present", "value": "" },
-    { "key": "snapshot_present", "value": "" }
+    { "key": "snapshot_present", "value": "" },
+    { "key": "rc_mode", "value": "no" },
+    { "key": "pdf_available", "value": "" }
   ],
   "item": [
     {
@@ -250,8 +252,10 @@
             { "listen": "test", "script": { "exec": [
               "const present = pm.response.code !== 404;",
               "pm.collectionVariables.set('sam_extract_present', present ? 'yes' : 'no');",
+              "const _rc = pm.collectionVariables.get('rc_mode') === 'yes';",
               "pm.test('route is deterministic (200 when present, 404 when the build predates #193)', () => pm.expect([200,404]).to.include(pm.response.code));",
-              "if (!present) { console.log('NOTE: /sam-extract absent — backend predates PR #193; folder 4 reports blocked-pending-#193.'); }"
+              "if (_rc) { pm.test('REQUIRED on RC build: #193 /sam-extract is present (not 404)', () => { if (!present) throw new Error('RC candidate must expose /sam-extract (route returned 404)'); }); }",
+              "else if (!present) { console.log('NOTE: /sam-extract absent — backend predates PR #193; folder 4 reports CONDITIONAL blocked-pending-#193.'); }"
             ] } }
           ]
         },
@@ -264,7 +268,7 @@
           },
           "event": [
             { "listen": "test", "script": { "exec": [
-              "if (pm.collectionVariables.get('sam_extract_present') !== 'yes') { pm.test('SKIPPED: requires #193 (route returned 404)', () => pm.expect(true).to.be.true); return; }",
+              "if (pm.collectionVariables.get('sam_extract_present') !== 'yes') { const _rc = pm.collectionVariables.get('rc_mode')==='yes'; pm.test((_rc?'REQUIRED on RC build':'CONDITIONAL (baseline)')+': #193 /sam-extract route present', () => { if (_rc) throw new Error('RC candidate must expose #193 /sam-extract (route returned 404)'); }); return; }",
               "pm.test('200', () => pm.response.to.have.status(200));",
               "const b = pm.response.json();",
               "pm.test('reconciles to the eligible population', () => pm.expect(b.reconciles).to.be.true);",
@@ -283,7 +287,7 @@
           },
           "event": [
             { "listen": "test", "script": { "exec": [
-              "if (pm.collectionVariables.get('sam_extract_present') !== 'yes') { pm.test('SKIPPED: requires #193 (route returned 404)', () => pm.expect(true).to.be.true); return; }",
+              "if (pm.collectionVariables.get('sam_extract_present') !== 'yes') { const _rc = pm.collectionVariables.get('rc_mode')==='yes'; pm.test((_rc?'REQUIRED on RC build':'CONDITIONAL (baseline)')+': #193 /sam-extract route present', () => { if (_rc) throw new Error('RC candidate must expose #193 /sam-extract (route returned 404)'); }); return; }",
               "pm.test('200', () => pm.response.to.have.status(200));",
               "const b = pm.response.json();",
               "pm.test('at least one candidate', () => pm.expect(b.total).to.be.at.least(1));",
@@ -301,7 +305,7 @@
           },
           "event": [
             { "listen": "test", "script": { "exec": [
-              "if (pm.collectionVariables.get('sam_extract_present') !== 'yes') { pm.test('SKIPPED: requires #193 (route returned 404)', () => pm.expect(true).to.be.true); return; }",
+              "if (pm.collectionVariables.get('sam_extract_present') !== 'yes') { const _rc = pm.collectionVariables.get('rc_mode')==='yes'; pm.test((_rc?'REQUIRED on RC build':'CONDITIONAL (baseline)')+': #193 /sam-extract route present', () => { if (_rc) throw new Error('RC candidate must expose #193 /sam-extract (route returned 404)'); }); return; }",
               "pm.test('viewer denied the candidate list (403)', () => pm.response.to.have.status(403));"
             ] } }
           ]
@@ -320,7 +324,7 @@
           },
           "event": [
             { "listen": "test", "script": { "exec": [
-              "if (pm.collectionVariables.get('sam_extract_present') !== 'yes') { pm.test('SKIPPED: requires #193 (route returned 404)', () => pm.expect(true).to.be.true); return; }",
+              "if (pm.collectionVariables.get('sam_extract_present') !== 'yes') { const _rc = pm.collectionVariables.get('rc_mode')==='yes'; pm.test((_rc?'REQUIRED on RC build':'CONDITIONAL (baseline)')+': #193 /sam-extract route present', () => { if (_rc) throw new Error('RC candidate must expose #193 /sam-extract (route returned 404)'); }); return; }",
               "pm.test('200', () => pm.response.to.have.status(200));",
               "const b = pm.response.json();",
               "pm.test('dry_run is true', () => pm.expect(b.dry_run).to.be.true);",
@@ -339,7 +343,7 @@
           },
           "event": [
             { "listen": "test", "script": { "exec": [
-              "if (pm.collectionVariables.get('sam_extract_present') !== 'yes') { pm.test('SKIPPED: requires #193 (route returned 404)', () => pm.expect(true).to.be.true); return; }",
+              "if (pm.collectionVariables.get('sam_extract_present') !== 'yes') { const _rc = pm.collectionVariables.get('rc_mode')==='yes'; pm.test((_rc?'REQUIRED on RC build':'CONDITIONAL (baseline)')+': #193 /sam-extract route present', () => { if (_rc) throw new Error('RC candidate must expose #193 /sam-extract (route returned 404)'); }); return; }",
               "pm.test('viewer denied the backfill (403)', () => pm.response.to.have.status(403));"
             ] } }
           ]
@@ -361,9 +365,11 @@
             { "listen": "test", "script": { "exec": [
               "const present = pm.response.code !== 404;",
               "pm.collectionVariables.set('snapshot_present', present ? 'yes' : 'no');",
+              "const _rc = pm.collectionVariables.get('rc_mode') === 'yes';",
               "pm.test('deterministic (422 blank reason when present, 404 when build predates #194)', () => pm.expect([422,404]).to.include(pm.response.code));",
+              "if (_rc) { pm.test('REQUIRED on RC build: #194 snapshot route is present (not 404)', () => { if (!present) throw new Error('RC candidate must expose #194 snapshot route (route returned 404)'); }); }",
               "if (present) { pm.test('blank reason rejected (422)', () => pm.response.to.have.status(422)); }",
-              "else { console.log('NOTE: snapshot route absent — backend predates PR #194; folder 6 reports blocked-pending-#194.'); }"
+              "else if (!_rc) { console.log('NOTE: snapshot route absent — backend predates PR #194; folder 6 reports CONDITIONAL blocked-pending-#194.'); }"
             ] } }
           ]
         },
@@ -377,7 +383,7 @@
           },
           "event": [
             { "listen": "test", "script": { "exec": [
-              "if (pm.collectionVariables.get('snapshot_present') !== 'yes') { pm.test('SKIPPED: requires #194 (route returned 404)', () => pm.expect(true).to.be.true); return; }",
+              "if (pm.collectionVariables.get('snapshot_present') !== 'yes') { const _rc = pm.collectionVariables.get('rc_mode')==='yes'; pm.test((_rc?'REQUIRED on RC build':'CONDITIONAL (baseline)')+': #194 snapshot route present', () => { if (_rc) throw new Error('RC candidate must expose #194 snapshot route (route returned 404)'); }); return; }",
               "pm.test('viewer denied the snapshot persist (403)', () => pm.response.to.have.status(403));"
             ] } }
           ]
@@ -396,7 +402,11 @@
           },
           "event": [
             { "listen": "test", "script": { "exec": [
-              "pm.test('200', () => pm.response.to.have.status(200));"
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const pdf = (pm.response.json() || {}).pdf || {};",
+              "pm.collectionVariables.set('pdf_available', pdf.available ? 'yes' : 'no');",
+              "pm.test('engine health reports PDF availability explicitly', () => pm.expect(pdf).to.have.property('available'));",
+              "console.log('PDF engine available=' + pdf.available + ' reason=' + (pdf.reason||''));"
             ] } }
           ]
         },
@@ -410,6 +420,53 @@
           "event": [
             { "listen": "test", "script": { "exec": [
               "pm.test('reviewer can list reports (200)', () => pm.response.to.have.status(200));"
+            ] } }
+          ]
+        },
+        {
+          "name": "POST /api/reports/generate (CSV) — generic download coverage, always available",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Authorization", "value": "Bearer {{reviewer_token}}" }, { "key": "Content-Type", "value": "application/json" } ],
+            "url": "{{baseUrl}}/api/reports/generate",
+            "body": { "mode": "raw", "raw": "{\"report_type\":\"delivery_processing\",\"format\":\"csv\",\"parameters\":{\"job_id\":\"{{job_id}}\",\"intake_id\":\"{{intake_id}}\"}}" }
+          },
+          "event": [
+            { "listen": "test", "script": { "exec": [
+              "pm.test('CSV report generates (200)', () => pm.response.to.have.status(200));",
+              "const cd = pm.response.headers.get('Content-Disposition') || '';",
+              "pm.test('CSV carries a .csv download filename', () => pm.expect(cd).to.match(/filename=.*\\.csv/i));",
+              "const body = pm.response.text();",
+              "pm.test('CSV is a real report, not an empty stub', () => pm.expect(body).to.match(/DA-ARC|Delivery Processing Report/));",
+              "pm.test('CSV restates the reconciliation', () => pm.expect(body).to.match(/Intake id:|Reconciliation/i));",
+              "pm.test('CSV is NOT a PDF (download coverage is distinct from PDF rendering)', () => pm.expect(body.slice(0,5)).to.not.equal('%PDF-'));"
+            ] } }
+          ]
+        },
+        {
+          "name": "POST /api/reports/generate (PDF) — PDF RENDERING coverage, distinct from download",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Authorization", "value": "Bearer {{reviewer_token}}" }, { "key": "Content-Type", "value": "application/json" } ],
+            "url": "{{baseUrl}}/api/reports/generate",
+            "body": { "mode": "raw", "raw": "{\"report_type\":\"delivery_processing\",\"format\":\"pdf\",\"parameters\":{\"job_id\":\"{{job_id}}\",\"intake_id\":\"{{intake_id}}\"}}" }
+          },
+          "event": [
+            { "listen": "test", "script": { "exec": [
+              "// PDF rendering is a SEPARATE capability from the CSV download. A CSV",
+              "// pass never counts as a PDF pass. If the PDF engine (WeasyPrint +",
+              "// Pango/Cairo) is present this asserts real PDF bytes; if it is absent",
+              "// this records an explicit BLOCKED failure naming the missing stack —",
+              "// never a silent skip and never a green CSV substitution.",
+              "const available = pm.collectionVariables.get('pdf_available') === 'yes';",
+              "if (!available) { pm.test('PDF rendering capability BLOCKED (engine unavailable — install Pango/Cairo; GTK3 on Windows)', () => { throw new Error('PDF engine unavailable: install the native WeasyPrint stack for the PDF job, or report it explicitly blocked'); }); return; }",
+              "pm.test('PDF report generates (200)', () => pm.response.to.have.status(200));",
+              "pm.test('response Content-Type is a PDF', () => pm.expect(pm.response.headers.get('Content-Type')||'').to.match(/pdf/i));",
+              "const cd = pm.response.headers.get('Content-Disposition') || '';",
+              "pm.test('PDF carries a .pdf download filename', () => pm.expect(cd).to.match(/filename=.*\\.pdf/i));",
+              "const bytes = pm.response.stream || Buffer.from(pm.response.text(), 'binary');",
+              "const head = (pm.response.text() || '').slice(0,5);",
+              "pm.test('real PDF magic bytes (%PDF-)', () => pm.expect(head).to.equal('%PDF-'));"
             ] } }
           ]
         }
