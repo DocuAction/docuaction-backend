@@ -1,0 +1,6 @@
+# Never commit: installed deps, run outputs, or the fixtures manifest
+# (the manifest carries synthetic passwords — keep credentials out of git).
+node_modules/
+newman-results.xml
+manifest.json
+*.local.json
