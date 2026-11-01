@@ -1,0 +1,579 @@
+"""SAM public-extract visibility as a DISTINCT source + candidate worklist routing.
+
+The gap under test (found 2026-10-31, after the October catch-up): every
+eligible entity carried a `SAM_EXTRACT_SUPPLEMENTARY` row, and NO deployed
+surface could enumerate them — `verification_coverage._SOURCE_CASE` mapped
+only nppes/pecos/leie/sam (the extract spelling fell to the NULL key),
+`findings.csv` is issue-ledger-based while a candidate hit wrote no ledger
+row, and `in_review` status does not discriminate. The design under test:
+
+* `sam_extract` is a STATE-layer source of its own (`source_states`,
+  `list_not_attempted`): extract rows never count under `sam`, never claim
+  exclusion clearance, and never touch the primary API's availability. The
+  HEADLINE outcome vocabulary (`SOURCES`/drilldown) deliberately does NOT
+  gain the extract — its REVIEW→not_found mapping would label a candidate
+  "not found".
+* `sam_extract_enumeration` is the authoritative per-entity reading: one
+  CURRENT outcome per entity (latest row), historical/duplicate generations
+  counted separately, totals reconciled to the eligible population, edition
+  provenance carried from the row's own `original_values`.
+* A candidate match writes ONE idempotent EXC-001 / SAM_EXTRACT_CANDIDATE
+  ledger finding (HIGH, HUMAN_REQUIRED) — on the analyst worklist and in
+  findings.csv — and the backfill places pre-EXC-001 candidates there under
+  an explicit dry-run-first act. A candidate is never a confirmed exclusion;
+  absence of a candidate is never exclusion clearance; nothing adjudicates.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from sqlalchemy import text
+
+from app.Tefca.connectors import SourceResult
+from app.tefca_registry.rce import automated_verification as av
+from app.tefca_registry.rce import sam_extract_enumeration as se
+from app.tefca_registry.rce import verification_coverage as vc
+from app.tefca_registry.rce import verification_findings as vf
+from app.tefca_registry.rce.promotion import promote_delivery
+from app.tefca_registry.rce.quality_rules import (
+    NON_QUALITY_ISSUE_TYPES, RULE_BY_ID, RULE_SET_VERSION,
+)
+from rce_traceability_support import (  # noqa: F401
+    SYN, make_rows, rolled_back_db, run_quality_and_curation, seed_intake,
+)
+
+@pytest.fixture(autouse=True)
+def _resolve_entities_from_the_registry(monkeypatch):
+    monkeypatch.setenv("ENTITY_RESOLVER_SOURCE", "db")
+
+
+EDITION = {
+    "publication_date": "2026-10-29",
+    "extract_sha256": "faa40b80" + "0" * 56,
+    "source_dataset": "SAM_Exclusions_Public_Extract_V2",
+    "match_methods": ["normalized_business_name"],
+}
+
+
+def _screen(candidate: bool) -> SourceResult:
+    return SourceResult(
+        source_name="SAM_EXTRACT", success=True,
+        data={"candidate_match": candidate, "candidate_count": int(candidate),
+              "candidates": [], **EDITION},
+        api_version="GSA-Public-Extract-V2")
+
+
+def _unavailable() -> SourceResult:
+    return SourceResult(source_name="SAM_EXTRACT", success=False,
+                        error="extract unavailable or refused")
+
+
+# ── pure: vocabulary, rule registry, state mapping ───────────────────────────
+
+def test_exc_001_registered_with_truthful_authority():
+    rule = RULE_BY_ID["EXC-001"]
+    assert rule.default_severity == "HIGH"
+    assert rule.stage == "VERIFICATION"
+    rule_id, severity, authority = NON_QUALITY_ISSUE_TYPES["SAM_EXTRACT_CANDIDATE"]
+    assert (rule_id, severity) == ("EXC-001", "HIGH")
+    # HUMAN_REQUIRED, never auto-applied and never QA-auto: the determination
+    # (confirm / rule out) belongs to an analyst.
+    assert authority == "HUMAN_REQUIRED"
+    assert RULE_SET_VERSION == "1.7.0"
+
+
+def test_state_layer_gains_sam_extract_and_headline_does_not():
+    # State layer: the distinct source exists and is truthfully labelled.
+    assert "sam_extract" in vc.STATE_SOURCE_KEYS
+    assert "not exclusion clearance" in vc.SOURCE_DISPLAY_NAMES["sam_extract"]
+    assert "sam_extract_supplementary" in vc._STATE_SOURCE_CASE
+    # Headline outcome vocabulary: deliberately unchanged. Its documented
+    # REVIEW→not_found mapping would render a CANDIDATE as "not found".
+    assert "sam_extract" not in vc.SOURCES
+    assert "sam_extract_supplementary" not in vc._SOURCE_CASE
+    # And the extract spelling never counts as the primary 'sam' source.
+    assert "sam_extract_supplementary" not in vc.SOURCES["sam"]
+
+
+def test_candidate_values_read_only_review_items():
+    bundle = {"dimensions": [{"dimension": "EXCLUSION_REVOCATION", "evidence": [
+        {"source": "SAM_EXTRACT_SUPPLEMENTARY", "disposition": "REVIEW",
+         "original_values": dict(EDITION)}]}]}
+    assert vf.sam_extract_candidate_values(bundle) == dict(EDITION)
+    for disp in ("PASS", "UNAVAILABLE"):
+        bundle["dimensions"][0]["evidence"][0]["disposition"] = disp
+        assert vf.sam_extract_candidate_values(bundle) is None
+    assert vf.sam_extract_candidate_values({"dimensions": []}) is None
+
+
+# ── database ─────────────────────────────────────────────────────────────────
+
+CLEAN_EVIDENCE = {
+    "dimensions": [
+        {"dimension": "D1_IDENTITY", "disposition": "PASS", "applicability": "APPLICABLE",
+         "evidence": [{"source": "NPPES", "disposition": "PASS"}]},
+    ],
+}
+
+
+@pytest.fixture
+async def covered_three(rolled_back_db, monkeypatch):
+    """Three promoted entities with (mocked) full coverage and no extract row."""
+    monkeypatch.setenv("ENABLE_SAM_EXTRACT_SCREENING", "true")
+    db = rolled_back_db
+    rows = make_rows(3, arc="9.99.777.71")
+    intake_id, _job = await seed_intake(db, rows)
+    await run_quality_and_curation(db, intake_id)
+    await promote_delivery(db, intake_id, actor=SYN)
+    with patch("app.Tefca.evidence_service.EvidenceService.build_evidence",
+               new=AsyncMock(return_value=CLEAN_EVIDENCE)):
+        full = await av.run_coverage_batch(db, intake_id, batch_size=100)
+    assert full["remaining"] == 0
+    return db, intake_id
+
+
+async def _issues(db, intake_id):
+    return (await db.execute(text(
+        "SELECT issue_code, rule_id, issue_type, severity, resolution, description "
+        "FROM rce_issues WHERE source_intake_id = CAST(:i AS uuid) "
+        "AND issue_type = 'SAM_EXTRACT_CANDIDATE' ORDER BY created_at"),
+        {"i": str(intake_id)})).all()
+
+
+async def _curated_oids(db, intake_id):
+    return (await db.execute(text(
+        "SELECT rce_org_oid, canonical_entity_id FROM rce_curated_records "
+        "WHERE source_intake_id = CAST(:i AS uuid) "
+        "AND canonical_entity_id IS NOT NULL ORDER BY canonical_entity_id"),
+        {"i": str(intake_id)})).all()
+
+
+async def test_candidate_writes_one_idempotent_ledger_finding(covered_three):
+    db, intake_id = covered_three
+    with patch("app.Tefca.sam_extract.SAMExtractConnector.screen",
+               new=AsyncMock(side_effect=[_screen(True), _screen(False), _unavailable()])):
+        result = await av.run_coverage_batch(db, intake_id, batch_size=100,
+                                             scope="sam_extract")
+    assert result["remaining"] == 0
+
+    found = await _issues(db, intake_id)
+    assert len(found) == 1
+    issue = found[0]
+    assert (issue.rule_id, issue.severity, issue.resolution) == ("EXC-001", "HIGH", "OPEN")
+    # The finding states candidacy, never a confirmed exclusion.
+    assert "never a confirmed exclusion" in issue.description
+    assert "2026-10-29" in issue.description  # edition provenance travels
+
+    # Re-screening the same entity (a new generation) does not duplicate the
+    # undecided finding.
+    oids = await _curated_oids(db, intake_id)
+    first = oids[0]
+    with patch("app.Tefca.sam_extract.SAMExtractConnector.screen",
+               new=AsyncMock(return_value=_screen(True))):
+        again = await av.record_sam_extract_attempt(
+            db, ref=first.rce_org_oid, canonical_entity_id=first.canonical_entity_id)
+    assert again["candidate_match"] is True
+    assert len(await _issues(db, intake_id)) == 1
+
+
+async def test_enumeration_is_entity_grained_and_reconciles(covered_three):
+    db, intake_id = covered_three
+    with patch("app.Tefca.sam_extract.SAMExtractConnector.screen",
+               new=AsyncMock(side_effect=[_screen(True), _screen(False)])):
+        partial = await av.run_coverage_batch(db, intake_id, batch_size=2,
+                                              scope="sam_extract")
+    assert partial["remaining"] == 1  # third entity deliberately missing
+
+    summary = await se.extract_summary(db, intake_id)
+    assert summary["eligible"] == 3
+    assert summary["entities_with_extract_row"] == 2
+    assert summary["current_outcomes"] == {
+        "candidate": 1, "no_candidate": 1, "unavailable": 0, "other": 0, "missing": 1}
+    assert summary["reconciles"] is True
+    assert summary["evidence_rows"]["duplicate_rows_beyond_latest"] == 0
+    assert summary["editions"][0]["publication_date"] == "2026-10-29"
+
+    # A second generation for the candidate entity: still ONE entity, one
+    # current outcome; the extra row is counted as history, never a new entity.
+    oids = await _curated_oids(db, intake_id)
+    first = oids[0]
+    with patch("app.Tefca.sam_extract.SAMExtractConnector.screen",
+               new=AsyncMock(return_value=_screen(True))):
+        await av.record_sam_extract_attempt(
+            db, ref=first.rce_org_oid, canonical_entity_id=first.canonical_entity_id)
+    summary = await se.extract_summary(db, intake_id)
+    assert summary["current_outcomes"]["candidate"] == 1
+    assert summary["entities_with_extract_row"] == 2
+    assert summary["evidence_rows"]["duplicate_rows_beyond_latest"] == 1
+    assert summary["evidence_rows"]["entities_with_more_than_one_row"] == 1
+
+    candidates = await se.list_candidates(db, intake_id)
+    assert candidates["total"] == 1
+    item = candidates["items"][0]
+    assert item["entity_id"] == str(first.canonical_entity_id)
+    assert item["extract_row_count"] == 2
+    assert item["provenance"]["publication_date"] == "2026-10-29"
+    assert item["provenance"]["extract_sha256"].startswith("faa40b80")
+    assert item["ledger_issue_code"]  # the live path already listed it
+
+
+async def test_state_layer_counts_extract_apart_from_sam_primary(covered_three):
+    db, intake_id = covered_three
+    with patch("app.Tefca.sam_extract.SAMExtractConnector.screen",
+               new=AsyncMock(side_effect=[_screen(True), _screen(False), _screen(False)])):
+        await av.run_coverage_batch(db, intake_id, batch_size=100, scope="sam_extract")
+
+    states = await vc.source_states(db, intake_id, eligible=3)
+    extract = states["sources"]["sam_extract"]
+    assert extract["attempted"] == 3
+    assert extract["potential_match"] == 1          # the candidate
+    assert extract["confirmed_result"] == 2         # the two no-candidate PASSes
+    assert extract["not_attempted"] == 0
+    assert extract["is_exclusion_clearance"] is False
+    assert extract["is_sam_primary_api"] is False
+    # The primary 'sam' source saw no extract row: nothing attempted there.
+    assert states["sources"]["sam"]["attempted"] == 0
+
+    # Headline coverage (SOURCES) is untouched by extract rows.
+    counts = await vc.coverage_counts(db, intake_id)
+    assert counts["sam"]["attempted"] == 0
+    assert "sam_extract" not in counts
+
+    # Missing-coverage identities ride the existing not_attempted listing.
+    not_attempted = await vc.list_not_attempted(db, intake_id, "sam_extract")
+    assert not_attempted["count"] == 0
+
+
+async def test_backfill_write_is_refused_while_the_batch_lock_is_held(covered_three):
+    """A live backfill shares the per-intake advisory lock (same class key)
+    with coverage batches: a concurrent backfill — or a backfill racing a
+    sam_extract batch writing the same findings — would double-insert past
+    the read-then-insert dedup. The slower caller is refused with
+    skipped_lock, never queued, and writes NOTHING (the run_coverage_batch
+    contract). Dry-run stays lock-free: it only reads."""
+    db, intake_id = covered_three
+    with patch("app.Tefca.sam_extract.SAMExtractConnector.screen",
+               new=AsyncMock(side_effect=[_screen(True), _screen(False), _screen(False)])):
+        await av.run_coverage_batch(db, intake_id, batch_size=100, scope="sam_extract")
+    await db.execute(text(
+        "DELETE FROM rce_issues WHERE source_intake_id = CAST(:i AS uuid) "
+        "AND issue_type = 'SAM_EXTRACT_CANDIDATE'"), {"i": str(intake_id)})
+    await db.flush()
+
+    with patch("app.tefca_registry.rce.automated_verification._try_advisory_batch_lock",
+               new=AsyncMock(return_value=False)):
+        refused = await se.backfill_candidate_issues(db, intake_id, dry_run=False)
+        # Dry-run under the same held lock still answers (reads only).
+        plan = await se.backfill_candidate_issues(db, intake_id, dry_run=True)
+    assert refused["skipped_lock"] is True
+    assert refused["written"] == 0 and refused["items"] == []
+    assert len(await _issues(db, intake_id)) == 0
+    assert plan["would_write"] == 1 and plan["dry_run"] is True
+
+
+def _route(path: str, method: str):
+    from app.tefca_registry.rce.delivery_routes import router
+    return next(rt for rt in router.routes
+                if getattr(rt, "path", "") == path and method in getattr(rt, "methods", set()))
+
+
+def _role_floor_of(route) -> str:
+    """The role name captured by the route's require_role dependency."""
+    for dep in route.dependant.dependencies:
+        closure = getattr(dep.call, "__closure__", None) or []
+        for cell in closure:
+            if isinstance(cell.cell_contents, str):
+                return cell.cell_contents
+    raise AssertionError(f"no require_role closure found on {route.path}")
+
+
+def test_route_floors_match_the_evidence_access_conventions():
+    base = "/api/tefca/rce/deliveries/{intake_id}/sam-extract"
+    # Counts + editions only → viewer, like /verification-coverage.
+    assert _role_floor_of(_route(base, "GET")) == "viewer"
+    # Entity names/NPIs (delivered values) → the reviewer evidence floor,
+    # like the per-(source,outcome) drill-down lists.
+    assert _role_floor_of(_route(base + "/candidates", "GET")) == "reviewer"
+    # The ONE write → program_manager, the same explicit-human bar as the
+    # coverage run endpoint whose lock it shares.
+    assert _role_floor_of(_route(base + "/candidates/backfill-issues", "POST")) == "program_manager"
+
+
+async def test_enumeration_is_scoped_to_one_delivery(covered_three, monkeypatch):
+    """A candidate in ANOTHER delivery never leaks into this one's summary,
+    candidate list, or backfill plan — the same single-population rule every
+    delivery-scoped surface in this app holds."""
+    db, intake_id = covered_three
+    with patch("app.Tefca.sam_extract.SAMExtractConnector.screen",
+               new=AsyncMock(side_effect=[_screen(False), _screen(False), _screen(False)])):
+        await av.run_coverage_batch(db, intake_id, batch_size=100, scope="sam_extract")
+
+    # Second, unrelated delivery whose only extract outcome is a CANDIDATE.
+    rows_b = make_rows(1, arc="9.99.777.72")
+    intake_b, _ = await seed_intake(db, rows_b)
+    await run_quality_and_curation(db, intake_b)
+    await promote_delivery(db, intake_b, actor=SYN)
+    with patch("app.Tefca.evidence_service.EvidenceService.build_evidence",
+               new=AsyncMock(return_value=CLEAN_EVIDENCE)):
+        await av.run_coverage_batch(db, intake_b, batch_size=100)
+    with patch("app.Tefca.sam_extract.SAMExtractConnector.screen",
+               new=AsyncMock(return_value=_screen(True))):
+        await av.run_coverage_batch(db, intake_b, batch_size=100, scope="sam_extract")
+
+    summary_a = await se.extract_summary(db, intake_id)
+    assert summary_a["current_outcomes"]["candidate"] == 0   # B's candidate invisible
+    assert summary_a["eligible"] == 3
+    assert (await se.list_candidates(db, intake_id))["total"] == 0
+    summary_b = await se.extract_summary(db, intake_b)
+    assert summary_b["eligible"] == 1
+    assert summary_b["current_outcomes"]["candidate"] == 1
+    items_b = (await se.list_candidates(db, intake_b))["items"]
+    assert [i["entity_name"] for i in items_b] == [rows_b[0]["name"]]
+
+
+def test_csv_annex_b2_prints_the_enumerations_own_totals():
+    """Annex B.2 restates the enumeration's numbers verbatim — same dataset
+    dict the HTML renders from — and discloses absence instead of printing
+    zeros when the enumeration could not be read."""
+    from app.reports.engine.csv_engine import delivery_processing_to_csv
+
+    base = {
+        "delivery": {"intake_id": "i", "job_id": "j"},
+        "build": {}, "dispositions": {"rows": []}, "reconciliation": {},
+        "verification": {
+            "available": True, "state": "Complete", "sources": [],
+            "sam_extract": {
+                "eligible": 25764, "entities_with_extract_row": 25764,
+                "current_outcomes": {"candidate": 25, "no_candidate": 25733,
+                                     "unavailable": 6, "other": 0, "missing": 0},
+                "reconciles": True,
+                "evidence_rows": {"total": 26771,
+                                  "duplicate_rows_beyond_latest": 1007,
+                                  "entities_with_more_than_one_row": 1007},
+                "editions": [{"dataset_version_anchor": "GSA-Public-Extract-V2",
+                              "publication_date": "2026-10-29",
+                              "extract_sha256": "faa40b80aa", "entities": 25764}],
+                "note": "truth language here",
+            },
+        },
+    }
+    out = delivery_processing_to_csv(base, "DA-TEST-001", "2026-10-31T00:00:00Z")
+    assert "Annex B.2" in out
+    row = next(l for l in out.splitlines() if l.startswith("25764,25764,25"))
+    assert row == "25764,25764,25,25733,6,0,0,True"
+    assert "GSA-Public-Extract-V2,2026-10-29,faa40b80aa,25764" in out
+    assert "1007" in out  # duplicate-generation disclosure
+
+    # Attempted but the read failed: the notice appears.
+    base["verification"]["sam_extract"] = None
+    base["verification"]["sam_extract_attempted"] = True
+    out2 = delivery_processing_to_csv(base, "DA-TEST-002", "2026-10-31T00:00:00Z")
+    assert "could not be read" in out2
+    assert "not stated rather than guessed" in out2
+
+    # No intake / never attempted: no false "could not be read" claim.
+    base["verification"]["sam_extract"] = None
+    base["verification"].pop("sam_extract_attempted", None)
+    out3 = delivery_processing_to_csv(base, "DA-TEST-003", "2026-10-31T00:00:00Z")
+    assert "Annex B.2" in out3            # the labelled section still exists
+    assert "could not be read" not in out3  # but no false failure claim
+
+
+async def test_finding_anchors_to_the_screening_delivery_not_the_latest(rolled_back_db, monkeypatch):
+    """An entity promoted by TWO deliveries (promotion reuses the canonical
+    entity across intakes) must get its candidate finding on the ledger of
+    the delivery whose screen found it — not whichever delivery promoted the
+    entity last. Before the intake-scoped anchoring, _curated_for_entity
+    picked the newest promotion and the finding landed on the wrong
+    delivery: invisible in the screening delivery's findings.csv, and
+    re-countable by every backfill run."""
+    monkeypatch.setenv("ENTITY_RESOLVER_SOURCE", "db")
+    monkeypatch.setenv("ENABLE_SAM_EXTRACT_SCREENING", "true")
+    db = rolled_back_db
+    rows = make_rows(1, arc="9.99.777.73")
+
+    intake_a, _ = await seed_intake(db, rows)
+    await run_quality_and_curation(db, intake_a)
+    await promote_delivery(db, intake_a, actor=SYN)
+    with patch("app.Tefca.evidence_service.EvidenceService.build_evidence",
+               new=AsyncMock(return_value=CLEAN_EVIDENCE)):
+        await av.run_coverage_batch(db, intake_a, batch_size=100)
+
+    # Same OIDs, second delivery, promoted LATER — promotion maps them to
+    # the SAME canonical entity; the file bytes differ (name tweak) so the
+    # intake/job identity is distinct.
+    rows_b = [dict(r, name=r["name"] + " RESUBMITTED") for r in rows]
+    intake_b, _ = await seed_intake(db, rows_b)
+    await run_quality_and_curation(db, intake_b)
+    await promote_delivery(db, intake_b, actor=SYN)
+
+    with patch("app.Tefca.sam_extract.SAMExtractConnector.screen",
+               new=AsyncMock(return_value=_screen(True))):
+        result = await av.run_coverage_batch(db, intake_a, batch_size=100,
+                                             scope="sam_extract")
+    assert result["remaining"] == 0
+
+    a_issues = await _issues(db, intake_a)
+    b_issues = await _issues(db, intake_b)
+    assert len(a_issues) == 1, "the screening delivery carries the finding"
+    assert b_issues == [], "the unrelated later delivery carries nothing"
+    # And the screening delivery's own candidate list sees it.
+    items = (await se.list_candidates(db, intake_a))["items"]
+    assert items and items[0]["ledger_issue_code"] == a_issues[0].issue_code
+
+
+async def test_a_failed_ledger_write_rolls_back_to_its_savepoint(covered_three):
+    """A SQL failure inside the candidate-finding write must abort ONLY that
+    write (savepoint), never the batch transaction: the evidence rows of the
+    whole batch still commit, later entities still process, and the failure
+    is a logged gap — not a lost batch."""
+    db, intake_id = covered_three
+
+    async def _poisoned_writer(db, **kwargs):
+        await db.execute(text("SELECT broken FROM table_that_does_not_exist_xyz"))
+
+    with patch("app.tefca_registry.rce.verification_findings.record_sam_extract_candidate",
+               new=AsyncMock(side_effect=_poisoned_writer)), \
+         patch("app.Tefca.sam_extract.SAMExtractConnector.screen",
+               new=AsyncMock(side_effect=[_screen(True), _screen(False), _screen(False)])):
+        result = await av.run_coverage_batch(db, intake_id, batch_size=100,
+                                             scope="sam_extract")
+    assert result["remaining"] == 0           # the batch finished
+    rows = (await db.execute(text(
+        "SELECT count(*) FROM tefca_dimension_evidence d "
+        "WHERE d.source = 'SAM_EXTRACT_SUPPLEMENTARY'"))).scalar()
+    assert rows == 3                           # every evidence row committed
+    assert await _issues(db, intake_id) == []  # only the finding is missing
+
+
+async def test_report_builder_survives_a_failed_enumeration(covered_three):
+    """The report's degradation contract — 'not stated rather than guessed'
+    — only holds if a SQL failure in the enumeration rolls back to its
+    savepoint: the session must still serve every later lane of the same
+    report build."""
+    from app.reports.data.delivery_processing_data import DeliveryProcessingDataService
+    from app.tefca_registry.rce import models as rce_m
+
+    db, intake_id = covered_three
+    intake = await db.get(rce_m.RceSourceIntake, intake_id)
+    svc = DeliveryProcessingDataService(db, intake_id=str(intake_id))
+
+    async def _poisoned_summary(db_, intake_id_):
+        await db_.execute(text("SELECT broken FROM table_that_does_not_exist_xyz"))
+
+    with patch("app.tefca_registry.rce.sam_extract_enumeration.extract_summary",
+               new=AsyncMock(side_effect=_poisoned_summary)):
+        shaped = await svc._verification(intake)
+
+    assert shaped["sam_extract"] is None
+    assert any("not stated" in l for l in svc.limitations)
+    # The session is NOT poisoned: the next lane's query still runs.
+    assert (await db.execute(text("SELECT 1"))).scalar() == 1
+
+
+async def test_extract_read_is_independent_of_a_coverage_failure(covered_three):
+    """A coverage-service/query failure must NOT suppress the extract read:
+    the two query different tables. For an existing intake the report still
+    attaches the extract block (and flags the attempt) even when coverage
+    itself fell back to Not Run."""
+    from app.reports.data.delivery_processing_data import DeliveryProcessingDataService
+    from app.tefca_registry.rce import models as rce_m
+
+    db, intake_id = covered_three
+    with patch("app.Tefca.sam_extract.SAMExtractConnector.screen",
+               new=AsyncMock(side_effect=[_screen(True), _screen(False), _screen(False)])):
+        await av.run_coverage_batch(db, intake_id, batch_size=100, scope="sam_extract")
+
+    intake = await db.get(rce_m.RceSourceIntake, intake_id)
+    svc = DeliveryProcessingDataService(db, intake_id=str(intake_id))
+
+    # Coverage read fails with a REAL SQL error that aborts the PostgreSQL
+    # transaction (not a Python-level RuntimeError) — the case that would
+    # poison the session for the extract read and every later lane unless the
+    # coverage call is itself wrapped in a savepoint.
+    async def _bad_sql(db_, intake_id_):
+        await db_.execute(text("SELECT broken FROM table_that_does_not_exist_xyz"))
+
+    with patch("app.tefca_registry.rce.verification_coverage.coverage_for_intake",
+               new=AsyncMock(side_effect=_bad_sql)):
+        block = await svc._verification(intake)
+
+    assert block["available"] is False              # coverage fell back
+    assert block["sam_extract_attempted"] is True   # extract still attempted
+    assert block["sam_extract"] is not None          # and it answered
+    assert block["sam_extract"]["current_outcomes"]["candidate"] == 1
+    assert (await db.execute(text("SELECT 1"))).scalar() == 1  # session usable
+
+
+async def test_both_reads_failing_flags_the_attempt_and_discloses(covered_three):
+    """Coverage AND the extract read both fail for a real intake: the block
+    records the attempt (so the template shows the unavailable notice) with
+    sam_extract None, and the limitation is disclosed — never silent zero."""
+    from app.reports.data.delivery_processing_data import DeliveryProcessingDataService
+    from app.tefca_registry.rce import models as rce_m
+
+    db, intake_id = covered_three
+    intake = await db.get(rce_m.RceSourceIntake, intake_id)
+    svc = DeliveryProcessingDataService(db, intake_id=str(intake_id))
+
+    async def _boom(*a, **k):
+        raise RuntimeError("down")
+
+    with patch("app.tefca_registry.rce.verification_coverage.coverage_for_intake",
+               new=AsyncMock(side_effect=_boom)), \
+         patch("app.tefca_registry.rce.sam_extract_enumeration.extract_summary",
+               new=AsyncMock(side_effect=_boom)):
+        block = await svc._verification(intake)
+
+    assert block["sam_extract_attempted"] is True
+    assert block["sam_extract"] is None
+    assert any("not stated" in l for l in svc.limitations)
+    assert (await db.execute(text("SELECT 1"))).scalar() == 1
+
+
+async def test_no_intake_says_nothing_about_the_extract():
+    """The no-intake path must not claim an extract read happened: neither
+    the summary key nor the attempt flag is present, so the template shows
+    no table and no unavailable notice (unchanged no-intake behavior)."""
+    from app.reports.data.delivery_processing_data import DeliveryProcessingDataService
+
+    svc = DeliveryProcessingDataService(None, intake_id=None)
+    block = await svc._verification(None)
+    assert block["reason"] == "no intake"
+    assert "sam_extract" not in block
+    assert "sam_extract_attempted" not in block
+
+
+async def test_backfill_is_dry_run_first_and_idempotent(covered_three):
+    db, intake_id = covered_three
+    with patch("app.Tefca.sam_extract.SAMExtractConnector.screen",
+               new=AsyncMock(side_effect=[_screen(True), _screen(False), _screen(True)])):
+        await av.run_coverage_batch(db, intake_id, batch_size=100, scope="sam_extract")
+    # Simulate the pre-EXC-001 world: candidate evidence rows exist, no
+    # ledger finding does (the October delivery's actual state).
+    await db.execute(text(
+        "DELETE FROM rce_issues WHERE source_intake_id = CAST(:i AS uuid) "
+        "AND issue_type = 'SAM_EXTRACT_CANDIDATE'"), {"i": str(intake_id)})
+    await db.flush()
+
+    plan = await se.backfill_candidate_issues(db, intake_id, dry_run=True)
+    assert plan["dry_run"] is True
+    assert plan["candidates"] == 2
+    assert plan["would_write"] == 2
+    assert plan["written"] == 0
+    assert len(await _issues(db, intake_id)) == 0  # a plan writes nothing
+    assert "rce_issues" in plan["write_scope"]
+
+    done = await se.backfill_candidate_issues(db, intake_id, dry_run=False, actor=SYN)
+    assert done["written"] == 2
+    issues = await _issues(db, intake_id)
+    assert len(issues) == 2
+    assert all(i.resolution == "OPEN" for i in issues)
+
+    # Running it again changes nothing it already did.
+    repeat = await se.backfill_candidate_issues(db, intake_id, dry_run=False, actor=SYN)
+    assert repeat["written"] == 0
+    assert repeat["already_on_worklist"] == 2
+    assert len(await _issues(db, intake_id)) == 2

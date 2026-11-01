@@ -674,6 +674,34 @@
   screening leg was recorded are shown as &ldquo;screening leg not recorded&rdquo;; they are not counted as
   exclusion-clear and are not relabelled as registration results. The SAM row in the table above combines all legs.</p>
 {% endif %}{% endfor %}
+{% set extract = verification.get('sam_extract') if verification.get is defined else none %}
+{% if extract %}
+<table class="dp-tight">
+  <caption>SAM public-extract supplementary screen (distinct source; one current outcome per entity)</caption>
+  <thead>
+    <tr><th scope="col">Eligible</th><th scope="col">With extract row</th>
+      <th scope="col">Candidate (analyst determination required)</th>
+      <th scope="col">No candidate (never exclusion clearance)</th>
+      <th scope="col">Unavailable</th><th scope="col">Other</th><th scope="col">Missing</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>{{ extract.eligible|number }}</td><td>{{ extract.entities_with_extract_row|number }}</td>
+      <td>{{ extract.current_outcomes.candidate|number }}</td>
+      <td>{{ extract.current_outcomes.no_candidate|number }}</td>
+      <td>{{ extract.current_outcomes.unavailable|number }}</td>
+      <td>{{ extract.current_outcomes.other|number }}</td>
+      <td>{{ extract.current_outcomes.missing|number }}</td></tr>
+  </tbody>
+</table>
+<p>{{ extract.note }} The current outcome reads each entity&rsquo;s latest extract row;
+  {{ extract.evidence_rows.duplicate_rows_beyond_latest|number }} historical/duplicate row(s) beyond the latest are
+  preserved append-only and counted separately.
+  Edition(s) consulted:{% for ed in extract.editions %} {{ ed.dataset_version_anchor }} (published {{ ed.publication_date }},
+  sha256 {{ (ed.extract_sha256 or 'not recorded')[:12] }}, {{ ed.entities|number }} entities){% if not loop.last %};{% endif %}{% endfor %}.</p>
+{% elif verification.get('sam_extract_attempted') %}
+<p><strong>SAM public-extract supplementary screen.</strong> The extract screen&rsquo;s outcomes could not be read when
+  this report was generated; its candidate totals are not stated rather than guessed (see Limitations).</p>
+{% endif %}
 <p><strong>Failed/error indicator &mdash; reconciliation pending.</strong>
   Each source's Failed column is that source's own count and is not a
   reconciled, mutually exclusive delivery-wide status: an entity failed at one
