@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import (APIRouter, Depends, File, HTTPException, Query, Request,
                      Response, UploadFile)
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -705,6 +705,17 @@ class ManualSnapshotRequest(BaseModel):
     reason: str = Field(..., min_length=10, max_length=2000,
                         description="Required. E.g. 'pin post-backfill state "
                                     "for the next labelled report revision'.")
+
+    @field_validator("reason")
+    @classmethod
+    def _reason_not_blank(cls, v: str) -> str:
+        # min_length counts raw characters, so ten spaces would pass and then
+        # strip to an empty audit reason. Require ten non-whitespace-trimmed
+        # characters of actual intent.
+        if len(v.strip()) < 10:
+            raise ValueError("reason must contain at least 10 non-whitespace "
+                             "characters of intent")
+        return v
 
 
 @router.post("/deliveries/{intake_id}/reconciliation/snapshots",

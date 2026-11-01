@@ -174,3 +174,17 @@ def test_route_registered_at_qalead_with_required_reason():
     assert any(getattr(m, "min_length", None) == 10 for m in meta)
     # And the vocabulary/constraint pair this route finally uses:
     assert "MANUAL" in tm.SNAPSHOT_TRIGGERS
+
+
+def test_whitespace_only_reason_is_rejected():
+    """min_length=10 counts raw chars; ten spaces would strip to an empty
+    audit reason. The validator requires ten non-whitespace characters."""
+    import pydantic
+
+    from app.tefca_registry.rce import routes as r
+
+    with pytest.raises(pydantic.ValidationError):
+        r.ManualSnapshotRequest(reason=" " * 12)
+    # A real reason of adequate length passes and is preserved verbatim.
+    ok = r.ManualSnapshotRequest(reason="pin post-backfill state")
+    assert ok.reason == "pin post-backfill state"
