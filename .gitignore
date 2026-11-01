@@ -68,3 +68,6 @@ docs/evidence/**/isolated_acceptance_evidence.json
 
 # Generated synthetic QA fixture pack (scripts/qa_fixture_pack.py); regenerate, never commit.
 qa-fixtures/out/
+
+# API/UI integration fixture manifest (synthetic credentials — never commit)
+integration-fixtures.json

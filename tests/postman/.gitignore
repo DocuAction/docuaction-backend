@@ -1,0 +1,8 @@
+# Never commit run outputs or the fixtures manifest (the manifest carries
+# synthetic passwords — keep credentials out of git). The runner uses the
+# Postman CLI binary, so there is no node_modules to ignore.
+postman-results.xml
+newman-results.xml
+manifest.json
+*.local.json
+node_modules/
