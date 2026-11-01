@@ -277,6 +277,27 @@ async def backfill_candidate_issues(db, intake_id, *, dry_run: bool = True,
     """
     from app.tefca_registry.rce import verification_findings as vf
 
+    if not dry_run:
+        # Same per-intake advisory lock (and class key) that serializes
+        # coverage batches: a concurrent backfill — or a backfill racing a
+        # live sam_extract batch that is writing the very same findings —
+        # would make both sessions read "no undecided finding yet" and both
+        # insert. The slower caller is refused (never queued), exactly the
+        # run_coverage_batch contract; dry-run stays lock-free (reads only).
+        from app.tefca_registry.rce.automated_verification import (
+            _try_advisory_batch_lock,
+        )
+        if not await _try_advisory_batch_lock(db, intake_id):
+            return {
+                "intake_id": str(intake_id), "dry_run": False,
+                "skipped_lock": True, "candidates": 0,
+                "already_on_worklist": 0, "written": 0, "would_write": None,
+                "items": [],
+                "write_scope": "nothing — another writer holds this "
+                               "delivery's batch lock; retry shortly",
+                "note": _TRUTH_NOTE,
+            }
+
     # Page through ALL candidates (the enumeration is bounded by the
     # delivery's own candidate count, small by construction; the October
     # delivery's is two digits).
@@ -315,6 +336,7 @@ async def backfill_candidate_issues(db, intake_id, *, dry_run: bool = True,
     return {
         "intake_id": str(intake_id),
         "dry_run": bool(dry_run),
+        "skipped_lock": False,
         "candidates": len(planned),
         "already_on_worklist": already,
         "written": written if not dry_run else 0,

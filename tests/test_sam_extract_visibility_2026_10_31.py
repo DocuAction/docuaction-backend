@@ -246,6 +246,132 @@ async def test_state_layer_counts_extract_apart_from_sam_primary(covered_three):
     assert not_attempted["count"] == 0
 
 
+async def test_backfill_write_is_refused_while_the_batch_lock_is_held(covered_three):
+    """A live backfill shares the per-intake advisory lock (same class key)
+    with coverage batches: a concurrent backfill — or a backfill racing a
+    sam_extract batch writing the same findings — would double-insert past
+    the read-then-insert dedup. The slower caller is refused with
+    skipped_lock, never queued, and writes NOTHING (the run_coverage_batch
+    contract). Dry-run stays lock-free: it only reads."""
+    db, intake_id = covered_three
+    with patch("app.Tefca.sam_extract.SAMExtractConnector.screen",
+               new=AsyncMock(side_effect=[_screen(True), _screen(False), _screen(False)])):
+        await av.run_coverage_batch(db, intake_id, batch_size=100, scope="sam_extract")
+    await db.execute(text(
+        "DELETE FROM rce_issues WHERE source_intake_id = CAST(:i AS uuid) "
+        "AND issue_type = 'SAM_EXTRACT_CANDIDATE'"), {"i": str(intake_id)})
+    await db.flush()
+
+    with patch("app.tefca_registry.rce.automated_verification._try_advisory_batch_lock",
+               new=AsyncMock(return_value=False)):
+        refused = await se.backfill_candidate_issues(db, intake_id, dry_run=False)
+        # Dry-run under the same held lock still answers (reads only).
+        plan = await se.backfill_candidate_issues(db, intake_id, dry_run=True)
+    assert refused["skipped_lock"] is True
+    assert refused["written"] == 0 and refused["items"] == []
+    assert len(await _issues(db, intake_id)) == 0
+    assert plan["would_write"] == 1 and plan["dry_run"] is True
+
+
+def _route(path: str, method: str):
+    from app.tefca_registry.rce.delivery_routes import router
+    return next(rt for rt in router.routes
+                if getattr(rt, "path", "") == path and method in getattr(rt, "methods", set()))
+
+
+def _role_floor_of(route) -> str:
+    """The role name captured by the route's require_role dependency."""
+    for dep in route.dependant.dependencies:
+        closure = getattr(dep.call, "__closure__", None) or []
+        for cell in closure:
+            if isinstance(cell.cell_contents, str):
+                return cell.cell_contents
+    raise AssertionError(f"no require_role closure found on {route.path}")
+
+
+def test_route_floors_match_the_evidence_access_conventions():
+    base = "/api/tefca/rce/deliveries/{intake_id}/sam-extract"
+    # Counts + editions only → viewer, like /verification-coverage.
+    assert _role_floor_of(_route(base, "GET")) == "viewer"
+    # Entity names/NPIs (delivered values) → the reviewer evidence floor,
+    # like the per-(source,outcome) drill-down lists.
+    assert _role_floor_of(_route(base + "/candidates", "GET")) == "reviewer"
+    # The ONE write → program_manager, the same explicit-human bar as the
+    # coverage run endpoint whose lock it shares.
+    assert _role_floor_of(_route(base + "/candidates/backfill-issues", "POST")) == "program_manager"
+
+
+async def test_enumeration_is_scoped_to_one_delivery(covered_three, monkeypatch):
+    """A candidate in ANOTHER delivery never leaks into this one's summary,
+    candidate list, or backfill plan — the same single-population rule every
+    delivery-scoped surface in this app holds."""
+    db, intake_id = covered_three
+    with patch("app.Tefca.sam_extract.SAMExtractConnector.screen",
+               new=AsyncMock(side_effect=[_screen(False), _screen(False), _screen(False)])):
+        await av.run_coverage_batch(db, intake_id, batch_size=100, scope="sam_extract")
+
+    # Second, unrelated delivery whose only extract outcome is a CANDIDATE.
+    rows_b = make_rows(1, arc="9.99.777.72")
+    intake_b, _ = await seed_intake(db, rows_b)
+    await run_quality_and_curation(db, intake_b)
+    await promote_delivery(db, intake_b, actor=SYN)
+    with patch("app.Tefca.evidence_service.EvidenceService.build_evidence",
+               new=AsyncMock(return_value=CLEAN_EVIDENCE)):
+        await av.run_coverage_batch(db, intake_b, batch_size=100)
+    with patch("app.Tefca.sam_extract.SAMExtractConnector.screen",
+               new=AsyncMock(return_value=_screen(True))):
+        await av.run_coverage_batch(db, intake_b, batch_size=100, scope="sam_extract")
+
+    summary_a = await se.extract_summary(db, intake_id)
+    assert summary_a["current_outcomes"]["candidate"] == 0   # B's candidate invisible
+    assert summary_a["eligible"] == 3
+    assert (await se.list_candidates(db, intake_id))["total"] == 0
+    summary_b = await se.extract_summary(db, intake_b)
+    assert summary_b["eligible"] == 1
+    assert summary_b["current_outcomes"]["candidate"] == 1
+    items_b = (await se.list_candidates(db, intake_b))["items"]
+    assert [i["entity_name"] for i in items_b] == [rows_b[0]["name"]]
+
+
+def test_csv_annex_b2_prints_the_enumerations_own_totals():
+    """Annex B.2 restates the enumeration's numbers verbatim — same dataset
+    dict the HTML renders from — and discloses absence instead of printing
+    zeros when the enumeration could not be read."""
+    from app.reports.engine.csv_engine import delivery_processing_to_csv
+
+    base = {
+        "delivery": {"intake_id": "i", "job_id": "j"},
+        "build": {}, "dispositions": {"rows": []}, "reconciliation": {},
+        "verification": {
+            "available": True, "state": "Complete", "sources": [],
+            "sam_extract": {
+                "eligible": 25764, "entities_with_extract_row": 25764,
+                "current_outcomes": {"candidate": 25, "no_candidate": 25733,
+                                     "unavailable": 6, "other": 0, "missing": 0},
+                "reconciles": True,
+                "evidence_rows": {"total": 26771,
+                                  "duplicate_rows_beyond_latest": 1007,
+                                  "entities_with_more_than_one_row": 1007},
+                "editions": [{"dataset_version_anchor": "GSA-Public-Extract-V2",
+                              "publication_date": "2026-10-29",
+                              "extract_sha256": "faa40b80aa", "entities": 25764}],
+                "note": "truth language here",
+            },
+        },
+    }
+    out = delivery_processing_to_csv(base, "DA-TEST-001", "2026-10-31T00:00:00Z")
+    assert "Annex B.2" in out
+    row = next(l for l in out.splitlines() if l.startswith("25764,25764,25"))
+    assert row == "25764,25764,25,25733,6,0,0,True"
+    assert "GSA-Public-Extract-V2,2026-10-29,faa40b80aa,25764" in out
+    assert "1007" in out  # duplicate-generation disclosure
+
+    base["verification"]["sam_extract"] = None
+    out2 = delivery_processing_to_csv(base, "DA-TEST-002", "2026-10-31T00:00:00Z")
+    assert "could not be read" in out2
+    assert "not stated rather than guessed" in out2
+
+
 async def test_backfill_is_dry_run_first_and_idempotent(covered_three):
     db, intake_id = covered_three
     with patch("app.Tefca.sam_extract.SAMExtractConnector.screen",
