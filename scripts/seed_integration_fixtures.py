@@ -85,11 +85,20 @@ def _synthetic_delivery_bytes(run_tag: str, n: int) -> bytes:
     qhin = f"9.9.9.9.{run_tag}"
     rows = []
     for i in range(n):
+        # The first row carries a CHECKSUM-INVALID NPI on purpose, so the
+        # delivery has a real data-quality finding (an NPI code) in its
+        # exception ledger — the shape the live-smoke UI spec asserts on.
+        # The rest are valid. The bad NPI is flagged, not fabricated clean.
+        if i == 0:
+            good = _valid_npi(i + uuid.uuid4().int % 800_000_000)
+            npi = good[:-1] + str((int(good[-1]) + 1) % 10)  # wrong check digit
+        else:
+            npi = _valid_npi(i + uuid.uuid4().int % 800_000_000)
         values = {
             "id": f"itest.{run_tag}.{i:04d}",
             "orgManagingOrg": qhin, "sequoiaorgtype": "Participant",
             "organizationNodeType": "initiating-node",
-            "NPI": _valid_npi(i + uuid.uuid4().int % 800_000_000),
+            "NPI": npi,
             "TEFCAID": f"TEFCA-ITEST-{run_tag}-{i:04d}",
             "HCID": f"HCID-ITEST-{run_tag}-{i:04d}", "active": "true",
             "hl7orgrole": "provider",

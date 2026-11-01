@@ -7,13 +7,20 @@ non-local `baseUrl`.
 
 ## Files
 - `docuaction-api.postman_collection.json` — the collection (Postman v2.1.0;
-  imports into the Postman app and runs under Newman or Postman CLI).
+  imports into the Postman app and runs under the Postman CLI).
 - `docuaction-itest.postman_environment.json` — baseUrl + role emails; passwords
   are intentionally empty (credentials never live in git).
-- `run.mjs` — Newman runner; injects passwords + seeded ids from the fixture
-  manifest and enforces the local-host guard.
+- `run.mjs` — dependency-free wrapper around the **Postman CLI** (`postman
+  collection run`); injects passwords + seeded ids from the fixture manifest
+  and enforces the local-host guard. No npm dependency tree.
 - `../../scripts/seed_integration_fixtures.py` — seeds the synthetic state and
   writes the manifest.
+
+## Install the Postman CLI (one-time; no API key needed for local runs)
+- Windows: `powershell -c "iwr https://dl-cli.pstmn.io/install/win64/latest -UseBasicParsing | iex"`
+- Linux/macOS: `curl -o- "https://dl-cli.pstmn.io/install/linux64.sh" | sh`
+A local collection-file run needs no Postman login/API key — results are simply
+not synced to Postman cloud.
 
 ## Local run — Windows PowerShell (exact)
 Assumes a local PostgreSQL with a `docuaction_owner` superuser-capable role
@@ -42,15 +49,14 @@ python scripts\seed_integration_fixtures.py --out integration-fixtures.json
 # 3. Start the backend (new PowerShell window, same env), then wait for health.
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8010
 
-# 4. Run the collection (first window).
+# 4. Run the collection (first window; Postman CLI already installed).
 cd tests\postman
-npm ci
 node run.mjs --manifest ..\..\integration-fixtures.json --baseUrl http://127.0.0.1:8010 --junit newman-results.xml
 ```
 
-**One supported command for the API tests** (steps 2–4 condensed, server already up):
+**One supported command for the API tests** (steps 2–4 condensed, server already up, Postman CLI installed):
 ```powershell
-python scripts\seed_integration_fixtures.py --out integration-fixtures.json; cd tests\postman; npm ci; node run.mjs --manifest ..\..\integration-fixtures.json --baseUrl http://127.0.0.1:8010 --junit newman-results.xml
+python scripts\seed_integration_fixtures.py --out integration-fixtures.json; cd tests\postman; node run.mjs --manifest ..\..\integration-fixtures.json --baseUrl http://127.0.0.1:8010 --junit newman-results.xml
 ```
 
 Note on rate limiting: the backend's tiered limiter is never disabled. A single
@@ -60,9 +66,9 @@ times in quick succession can trip HTTP 429 — wait ~60s for the window to rese
 ## CI
 `.github/workflows/api-collection.yml` runs the whole thing on a disposable
 `postgres:16` service: create DB/roles → `alembic upgrade head` → start uvicorn
-→ seed → `npm ci` → `node run.mjs`. It uploads `newman-results.xml` and the
-server log, never the fixture manifest. No secrets, least-privilege token, no
-`pull_request_target`.
+→ seed → install the Postman CLI → `node run.mjs`. It uploads the JUnit report
+and the server log, never the fixture manifest. No secrets, least-privilege
+token, no `pull_request_target`, no committed npm dependency tree.
 
 ## Import into the Postman app (your workspace)
 1. Postman → **Import** → **Files** → select `docuaction-api.postman_collection.json`.

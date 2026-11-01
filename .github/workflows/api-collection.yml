@@ -92,11 +92,15 @@ jobs:
           echo "::error::backend did not become healthy within 30s"; cat api-server.log; exit 1
       - name: Seed deterministic synthetic fixtures
         run: python scripts/seed_integration_fixtures.py --out integration-fixtures.json
-      - name: Install Newman (pinned)
+      - name: Install the Postman CLI (official installer; no npm tree)
+        run: |
+          curl -sSL -o- "https://dl-cli.pstmn.io/install/linux64.sh" | sh
+          postman --version
+      - name: Run the API collection (Postman CLI -> JUnit)
         working-directory: tests/postman
-        run: npm ci
-      - name: Run the API collection (Newman -> JUnit)
-        working-directory: tests/postman
+        # Local collection file, no Postman API key (results are not synced to
+        # Postman cloud). The runner injects synthetic creds + seeded ids and
+        # enforces the local-host guard.
         run: node run.mjs --manifest ../../integration-fixtures.json --baseUrl http://127.0.0.1:8010 --junit newman-results.xml
       - name: Stop the backend
         if: always()
