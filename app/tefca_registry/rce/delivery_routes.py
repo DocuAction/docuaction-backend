@@ -1738,6 +1738,98 @@ async def verification_coverage_entities_csv_route(
                                        "X-Export-Id": export_id}))
 
 
+# ═══ SAM public-extract supplementary screen (distinct source) ═══════════════
+#
+# The extract screen's own enumeration: `verification_coverage`'s generic
+# outcome vocabulary would label a candidate "not_found" (REVIEW → not_found
+# by that module's documented mapping), so the extract gets its OWN routes
+# with its own truthful words instead of being wedged into the drilldown.
+# Counts are viewer-floor (same as /verification-coverage); the candidate
+# list returns names/NPIs and therefore shares the evidence floor.
+
+
+@router.get("/deliveries/{intake_id}/sam-extract",
+            summary="SAM public-extract supplementary screen: exact per-entity outcomes")
+async def sam_extract_summary_route(
+    intake_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("viewer")),
+):
+    """Viewer: one authoritative CURRENT outcome per eligible entity (latest
+    extract row), historical/duplicate rows counted separately, exact
+    candidate / no-candidate / unavailable / missing counts reconciled to the
+    eligible population, and the extract edition(s) consulted. A candidate is
+    never a confirmed exclusion; a no-candidate is never exclusion clearance;
+    the SAM primary API's availability is reported under 'sam', untouched."""
+    from app.tefca_registry.rce import sam_extract_enumeration as se
+
+    intake = await _intake_or_404(db, intake_id)
+    result = await se.extract_summary(db, intake.id)
+    result["correlation"] = {"request_id": request_context.get("request_id")}
+    return result
+
+
+@router.get("/deliveries/{intake_id}/sam-extract/candidates",
+            summary="The extract CANDIDATE entities (analyst worklist input), paginated")
+async def sam_extract_candidates_route(
+    intake_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role(EVIDENCE_ROLE)),
+):
+    """Reviewer (evidence floor — returns entity names/NPIs): one row per
+    candidate ENTITY with its latest evidence row id, edition provenance
+    (publication date, extract sha256, match methods), duplicate-generation
+    count, and the EXC-001 ledger finding when one exists (`null` marks a
+    candidate written before EXC-001 existed — the backfill's target set).
+    Candidates are potential matches awaiting analyst determination, never
+    confirmed exclusions; nothing here adjudicates."""
+    from app.tefca_registry.rce import sam_extract_enumeration as se
+
+    intake = await _intake_or_404(db, intake_id)
+    result = await se.list_candidates(db, intake.id, limit=limit, offset=offset)
+    result["correlation"] = {"request_id": request_context.get("request_id")}
+    return result
+
+
+@router.post("/deliveries/{intake_id}/sam-extract/candidates/backfill-issues",
+             summary="Place pre-EXC-001 extract candidates on the analyst worklist "
+                     "(dry-run by default)")
+async def sam_extract_backfill_route(
+    intake_id: str,
+    request: Request,
+    dry_run: bool = Query(True, description=(
+        "True (default): report exactly what a write would do — the approval "
+        "artifact — and write nothing. False: write one OPEN EXC-001 finding "
+        "per candidate not already carrying an undecided one.")),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("program_manager")),
+):
+    """PROGRAM MANAGER — an explicit, human-authorized act, same bar as the
+    coverage run endpoint. Idempotent: the writer returns an already-open
+    undecided finding instead of duplicating it, so re-running (or running
+    after the live screen path already wrote some) changes nothing it already
+    did. Writes ONLY `rce_issues` rows; never evidence, dispositions, buckets,
+    entity status or adjudications. The write itself is audited."""
+    from app.tefca_registry.rce import sam_extract_enumeration as se
+
+    intake = await _intake_or_404(db, intake_id)
+    actor = getattr(user, "email", None) or "SYSTEM"
+    result = await se.backfill_candidate_issues(db, intake.id, dry_run=dry_run,
+                                                actor=actor)
+    if not dry_run:
+        await _audit(db, "sam_extract_candidate_backfill", user, request, {
+            "intake_id": str(intake.id),
+            "candidates": result["candidates"],
+            "written": result["written"],
+            "already_on_worklist": result["already_on_worklist"],
+            "correlation_id": request_context.correlation_id(),
+        })
+    result["correlation"] = {"request_id": request_context.get("request_id")}
+    return result
+
+
 async def _analyst_sample_summary(db, intake_id) -> Dict[str, Any]:
     """Calculated vs. actual analyst-review sample size for one delivery,
     read-only (never draws or persists a plan). Distinct from

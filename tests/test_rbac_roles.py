@@ -466,6 +466,14 @@ def test_no_tefca_read_endpoint_sits_above_the_viewer_floor():
         # /dispositions and /exceptions right above it.
         "/api/tefca/rce/deliveries/{intake_id}/verification-coverage/{source}/{outcome}",
         "/api/tefca/rce/deliveries/{intake_id}/verification-coverage/{source}/{outcome}/csv",
+        # ── SAM public-extract candidates (2026-10-31) ── Same principle,
+        # same floor, as the drill-down pair immediately above:
+        # /sam-extract (counts + editions only) stays viewer, but the
+        # candidate LIST returns entity names and NPIs — delivered values —
+        # so it sits at the reviewer/evidence floor like /dispositions,
+        # /exceptions and the per-(source,outcome) lists. Not a new access
+        # decision.
+        "/api/tefca/rce/deliveries/{intake_id}/sam-extract/candidates",
         # ── IQVIA Release 1 application journey (2026-10-02) ──
         # Snapshot status/progress/reconciliation for a staged licensed
         # extract -- reviewer (4), the SAME floor `source_matching.

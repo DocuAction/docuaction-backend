@@ -81,8 +81,11 @@ GENERATOR_VERSION = "1.0.0"
 #: more (curation NON_HOLDING_RULES), so the T-TRTMNT missing-NPI rows are
 #: CLEAN with an open HIGH review finding; a blank/unrecognized purpose with a
 #: blank NPI is NPI_APPLICABILITY_UNRESOLVED (MEDIUM). The pack's rows carry
-#: T-TRTMNT or T-PYMNT, so no row exhibits that third outcome here.
-TARGET_RULE_SET_VERSION = "1.6.0"
+#: T-TRTMNT or T-PYMNT, so no row exhibits that third outcome here. 1.7.0
+#: added only EXC-001, a metadata-only VERIFICATION-stage rule (SAM
+#: public-extract candidate findings): no executed quality rule changed, so
+#: every expectation in this pack is unaffected.
+TARGET_RULE_SET_VERSION = "1.7.0"
 
 #: The locked 41-column ONC/RCE header, verbatim and in delivered order.
 RCE_COLUMNS: Tuple[str, ...] = (

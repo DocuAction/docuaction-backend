@@ -329,6 +329,23 @@ async def record_coverage_attempt(db, *, ref: str, canonical_entity_id,
         except Exception as exc:  # noqa: BLE001 - the issue ledger must not fail coverage
             logger.error("automated coverage: NPI outcome not recorded for %s: %s",
                         entity_uuid, type(exc).__name__, exc_info=True)
+        try:
+            extract_values = vf.sam_extract_candidate_values(evidence)
+            if extract_values is not None:
+                from app.Tefca import rce_fields
+                # Savepoint: a SQL failure inside the ledger write must roll
+                # back to here, not abort the whole batch transaction — the
+                # except below can only "not fail coverage" if the session is
+                # still usable afterwards.
+                async with db.begin_nested():
+                    await vf.record_sam_extract_candidate(
+                        db, entity_id=entity_uuid, npi=rce_fields.rce_npi(entity),
+                        org_name=(rce_fields.rce_value(entity, "name")
+                                  or entity.get("name") or "").strip() or None,
+                        extract=extract_values, intake_id=intake_id)
+        except Exception as exc:  # noqa: BLE001 - the issue ledger must not fail coverage
+            logger.error("automated coverage: SAM-extract candidate not recorded for %s: %s",
+                         entity_uuid, type(exc).__name__, exc_info=True)
 
     if outcome == OUTCOME_REVIEW_REQUIRED and entity_uuid is not None:
         row = await _entity_row_shape(db, entity_uuid)
@@ -342,7 +359,8 @@ async def record_coverage_attempt(db, *, ref: str, canonical_entity_id,
 
 
 async def record_sam_extract_attempt(db, *, ref: str,
-                                     canonical_entity_id) -> Dict[str, Any]:
+                                     canonical_entity_id,
+                                     intake_id=None) -> Dict[str, Any]:
     """Run ONLY the SAM public-extract supplementary screen for one entity and
     append ONLY that source's evidence row. Never calls `build_evidence`, so
     no other source is re-asked and no quota is re-spent. The row is built by
@@ -406,6 +424,17 @@ async def record_sam_extract_attempt(db, *, ref: str,
         if row_shape is not None and row_shape.verification_status != "in_review":
             row_shape.verification_status = "in_review"
             row_shape.updated_at = datetime.utcnow()
+        try:
+            from app.tefca_registry.rce import verification_findings as vf
+            # Savepoint: same reason as in record_coverage_attempt — the
+            # ledger write may fail without aborting the batch transaction.
+            async with db.begin_nested():
+                await vf.record_sam_extract_candidate(
+                    db, entity_id=entity_uuid, npi=npi, org_name=org_name or None,
+                    extract=dict(screen.data or {}), intake_id=intake_id)
+        except Exception as exc:  # noqa: BLE001 - the issue ledger must not fail coverage
+            logger.error("sam-extract coverage: candidate finding not recorded for %s: %s",
+                         entity_uuid, type(exc).__name__, exc_info=True)
 
     await db.flush()
     return {"ref": ref, "entity_id": str(entity_uuid) if entity_uuid else None,
@@ -491,7 +520,8 @@ async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_S
         try:
             if scope == SCOPE_SAM_EXTRACT:
                 result = await record_sam_extract_attempt(
-                    db, ref=ref, canonical_entity_id=canonical_entity_id)
+                    db, ref=ref, canonical_entity_id=canonical_entity_id,
+                    intake_id=intake_id)
             else:
                 result = await record_coverage_attempt(
                     db, ref=ref, canonical_entity_id=canonical_entity_id,
