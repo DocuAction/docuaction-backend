@@ -697,6 +697,95 @@ async def reconciliation(
     }
 
 
+class ManualSnapshotRequest(BaseModel):
+    """Why an operator is pinning a fresh reconciliation now. Stored in the
+    audit row; the snapshot itself records the facts, the reason records the
+    intent."""
+
+    reason: str = Field(..., min_length=10, max_length=2000,
+                        description="Required. E.g. 'pin post-backfill state "
+                                    "for the next labelled report revision'.")
+
+
+@router.post("/deliveries/{intake_id}/reconciliation/snapshots",
+             summary="Recompute reconciliation live and PERSIST it (trigger MANUAL)")
+async def persist_manual_reconciliation_snapshot(
+    intake_id: str,
+    body: ManualSnapshotRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("qalead")),
+):
+    """QA LEAD — the missing MANUAL leg of the snapshot vocabulary.
+
+    `SNAPSHOT_TRIGGERS` has carried "MANUAL" since the vocabulary existed and
+    the table's CHECK constraint accepts it — but no code path ever used it.
+    Snapshots were written only as side-effects (pipeline completion,
+    identifier dispositions, post-promotion findings), so after an evidence
+    backfill or a catch-up batch run the PINNED snapshot could silently
+    predate the current state: delivery-scoped reports (which pin the latest
+    persisted snapshot by design — `report_snapshot.select_snapshot`) kept
+    citing stale front-page reconciliation facts, exactly what happened to
+    DA-ARC-2026-087 (pinned 2026-10-30, generated 2026-10-31).
+
+    This is an explicit, audited operator act, not a page view: it runs the
+    full live reconciliation (158 s measured on the 24,589-record delivery —
+    same cost as `?recompute=true`, same qalead floor) and persists the
+    result through the one existing writer (`reconciliation.persist_snapshot`,
+    append-only, max-sequence+1, hashed, CHECK-constrained). It never edits
+    or supersedes an earlier snapshot, never changes a report already
+    generated, never adjudicates anything — a failing check stays failing in
+    the new snapshot and on every report that pins it.
+    """
+    from app.tefca_registry.rce import delivery_jobs as jobs
+    from app.tefca_registry.rce import reconciliation
+
+    job = await jobs.job_for_intake(db, intake_id)
+    if job is None:
+        raise HTTPException(409, "No delivery job exists for this intake; a "
+                                 "reconciliation snapshot must belong to one.")
+
+    actor = getattr(user, "email", None) or "SYSTEM"
+    result = await reconciliation.reconcile_delivery(db, intake_id)
+    snapshot = await reconciliation.persist_snapshot(
+        db, intake_id, result, job_id=job.id, actor=actor, trigger="MANUAL")
+
+    try:
+        from app.tefca_registry import audit as reg_audit
+
+        actor_id, actor_email = reg_audit.actor_of(user)
+        reg_audit.record(
+            db, "rce_reconciliation_snapshot_manual", actor_id=actor_id,
+            actor_email=actor_email, ip_address=_client_ip(request),
+            metadata={"intake_id": str(intake_id), "job_id": str(job.id),
+                      "snapshot_id": str(snapshot.id),
+                      "sequence": snapshot.sequence,
+                      "passed": bool(snapshot.passed),
+                      "reason": body.reason.strip()})
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001 — the snapshot is already durable;
+        # a failed audit write is reported in logs, never hides the snapshot.
+        logger.warning("manual snapshot audit row failed: %s", type(exc).__name__)
+
+    checks = list(snapshot.checks or [])
+    return {
+        "intake_id": str(intake_id),
+        "snapshot": {
+            "id": str(snapshot.id), "sequence": snapshot.sequence,
+            "trigger": snapshot.trigger, "created_at": snapshot.created_at,
+            "hash": snapshot.hash, "passed": bool(snapshot.passed),
+            "failure_reason": snapshot.failure_reason,
+        },
+        "checks_total": len(checks),
+        "failed_checks": [c for c in checks if not c.get("passed")],
+        "note": ("Persisted append-only with trigger MANUAL; it is now the "
+                 "latest snapshot and the one a NEW delivery-scoped report "
+                 "will pin. Reports already generated keep the snapshot they "
+                 "pinned. A failing check is persisted as failing — pinning "
+                 "is not clearing."),
+    }
+
+
 # ── P0/P1 — profile and field map ────────────────────────────────────────────
 
 @router.get("/field-map", summary="The locked 41-field RCE mapping")
