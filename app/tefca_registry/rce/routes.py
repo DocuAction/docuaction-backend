@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import (APIRouter, Depends, File, HTTPException, Query, Request,
                      Response, UploadFile)
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -694,6 +694,131 @@ async def reconciliation(
                  "equation the snapshot's database CHECK constraint enforces. "
                  "Pass ?recompute=true (qalead or above) to re-derive every "
                  "population live."),
+    }
+
+
+class ManualSnapshotRequest(BaseModel):
+    """Why an operator is pinning a fresh reconciliation now. Stored in the
+    audit row; the snapshot itself records the facts, the reason records the
+    intent."""
+
+    reason: str = Field(..., min_length=10, max_length=2000,
+                        description="Required. E.g. 'pin post-backfill state "
+                                    "for the next labelled report revision'.")
+
+    @field_validator("reason")
+    @classmethod
+    def _reason_not_blank(cls, v: str) -> str:
+        # min_length counts raw characters, so ten spaces would pass and then
+        # strip to an empty audit reason. Require ten non-whitespace-trimmed
+        # characters of actual intent.
+        if len(v.strip()) < 10:
+            raise ValueError("reason must contain at least 10 non-whitespace "
+                             "characters of intent")
+        return v
+
+
+@router.post("/deliveries/{intake_id}/reconciliation/snapshots",
+             summary="Recompute reconciliation live and PERSIST it (trigger MANUAL)")
+async def persist_manual_reconciliation_snapshot(
+    intake_id: str,
+    body: ManualSnapshotRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("qalead")),
+):
+    """QA LEAD — the missing MANUAL leg of the snapshot vocabulary.
+
+    `SNAPSHOT_TRIGGERS` has carried "MANUAL" since the vocabulary existed and
+    the table's CHECK constraint accepts it — but no code path ever used it.
+    Snapshots were written only as side-effects (pipeline completion,
+    identifier dispositions, post-promotion findings), so after an evidence
+    backfill or a catch-up batch run the PINNED snapshot could silently
+    predate the current state: delivery-scoped reports (which pin the latest
+    persisted snapshot by design — `report_snapshot.select_snapshot`) kept
+    citing stale front-page reconciliation facts, exactly what happened to
+    DA-ARC-2026-087 (pinned 2026-10-30, generated 2026-10-31).
+
+    This is an explicit, audited operator act, not a page view: it runs the
+    full live reconciliation (158 s measured on the 24,589-record delivery —
+    same cost as `?recompute=true`, same qalead floor) and persists the
+    result through the one existing writer (`reconciliation.persist_snapshot`,
+    append-only, max-sequence+1, hashed, CHECK-constrained). It never edits
+    or supersedes an earlier snapshot, never changes a report already
+    generated, never adjudicates anything — a failing check stays failing in
+    the new snapshot and on every report that pins it.
+    """
+    from app.tefca_registry.rce import delivery_jobs as jobs
+    from app.tefca_registry.rce import reconciliation
+
+    job = await jobs.job_for_intake(db, intake_id)
+    if job is None:
+        raise HTTPException(409, "No delivery job exists for this intake; a "
+                                 "reconciliation snapshot must belong to one.")
+
+    actor = getattr(user, "email", None) or "SYSTEM"
+    result = await reconciliation.reconcile_delivery(db, intake_id)
+    from sqlalchemy.exc import IntegrityError
+    try:
+        snapshot = await reconciliation.persist_snapshot(
+            db, intake_id, result, job_id=job.id, actor=actor, trigger="MANUAL")
+    except IntegrityError as exc:
+        # Two concurrent persists computed the same max(sequence)+1; the
+        # UNIQUE (job_id, sequence) constraint (uq_rce_snapshot_sequence)
+        # made the slower one lose instead of letting duplicate sequences
+        # exist. The other caller's snapshot IS the current state — refusing
+        # with 409 is correct, retrying automatically is not (the operator
+        # should read what was just pinned before pinning again).
+        await db.rollback()
+        raise HTTPException(
+            409, "A concurrent reconciliation snapshot was persisted for this "
+                 "delivery; read the current snapshot before persisting "
+                 "again.") from exc
+
+    # Read every response fact NOW, while the row is fresh from persist's own
+    # commit+refresh: if the audit commit below fails, the session's ORM
+    # state is expired and a later lazy attribute read would need implicit
+    # async I/O against a dead transaction — the snapshot is durable, and the
+    # response must be buildable without touching the session again.
+    checks = list(snapshot.checks or [])
+    snapshot_view = {
+        "id": str(snapshot.id), "sequence": snapshot.sequence,
+        "trigger": snapshot.trigger, "created_at": snapshot.created_at,
+        "hash": snapshot.hash, "passed": bool(snapshot.passed),
+        "failure_reason": snapshot.failure_reason,
+    }
+    try:
+        from app.tefca_registry import audit as reg_audit
+
+        actor_id, actor_email = reg_audit.actor_of(user)
+        reg_audit.record(
+            db, "rce_reconciliation_snapshot_manual", actor_id=actor_id,
+            actor_email=actor_email, ip_address=_client_ip(request),
+            metadata={"intake_id": str(intake_id), "job_id": str(job.id),
+                      "snapshot_id": snapshot_view["id"],
+                      "sequence": snapshot_view["sequence"],
+                      "passed": snapshot_view["passed"],
+                      "reason": body.reason.strip()})
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001 — the snapshot is already durable;
+        # a failed audit write is reported at ERROR (the audit-availability
+        # bar) and never hides the snapshot. No rollback here: every response
+        # value was read into `snapshot_view` BEFORE this block, so nothing
+        # below touches the session, and the request-scoped session is torn
+        # down by `get_db` — the same log-only posture `_audit_deprecated_use`
+        # already uses for an audit-write failure.
+        logger.error("manual snapshot audit row failed: %s", type(exc).__name__)
+
+    return {
+        "intake_id": str(intake_id),
+        "snapshot": snapshot_view,
+        "checks_total": len(checks),
+        "failed_checks": [c for c in checks if not c.get("passed")],
+        "note": ("Persisted append-only with trigger MANUAL; it is now the "
+                 "latest snapshot and the one a NEW delivery-scoped report "
+                 "will pin. Reports already generated keep the snapshot they "
+                 "pinned. A failing check is persisted as failing — pinning "
+                 "is not clearing."),
     }
 
 
