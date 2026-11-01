@@ -79,7 +79,14 @@ from app.tefca_registry.rce.field_map import (
 #: provenance, the snapshot/assessment/governing/software dates and never a bucket,
 #: a hold, a correction or an approval (see npi_applicability.py; curation exempts
 #: NPI-001 from automatic HELD). Earlier runs keep their stored rule_version and text.
-RULE_SET_VERSION = "1.6.0"
+#: 1.7.0 — EXC-001 (metadata-only, stage VERIFICATION): a SAM public-extract
+#: supplementary screen CANDIDATE match now writes a ledger finding
+#: (SAM_EXTRACT_CANDIDATE, HIGH, HUMAN_REQUIRED) beside the evidence row it
+#: already wrote, so the analyst worklist and findings export see it. The
+#: finding is a candidate requiring determination — NEVER a confirmed
+#: exclusion, and its absence is never exclusion clearance. No executed
+#: quality rule changed; earlier runs keep their stored rule_version and text.
+RULE_SET_VERSION = "1.7.0"
 
 # ── categories ───────────────────────────────────────────────────────────────
 
@@ -92,6 +99,7 @@ CAT_CONTENT = "CON"
 CAT_INTEGRITY = "INT"
 CAT_BUSINESS = "BUS"
 CAT_RECONCILIATION = "REC"
+CAT_EXCLUSION = "EXC"
 
 # ── severities and authorities ───────────────────────────────────────────────
 
@@ -1249,6 +1257,12 @@ NON_QUALITY_RULES: Tuple[Rule, ...] = (
          _not_a_quality_rule, HIGH, stage="PROMOTION"),
     Rule("NPI-009", CAT_NPI, "1.2.0", "NPI verification source unavailable",
          _not_a_quality_rule, INFO, stage="VERIFICATION"),
+    # 1.7.0: candidate match in the GSA public SAM exclusions extract
+    # (supplementary screen). A CANDIDATE awaiting analyst determination —
+    # never a confirmed exclusion; a non-match is never exclusion clearance.
+    Rule("EXC-001", CAT_EXCLUSION, "1.0.0",
+         "SAM public-extract exclusion candidate (supplementary screen)",
+         _not_a_quality_rule, HIGH, stage="VERIFICATION"),
 )
 
 #: Every rule the ledger can name: executed and metadata-only.
@@ -1271,6 +1285,12 @@ NON_QUALITY_ISSUE_TYPES: Dict[str, Tuple[str, str, str]] = {
     "NPI_EXISTING_VALUE_CONFLICT": ("NPI-008", HIGH, HUMAN_REQUIRED),
     "IDENTIFIER_EXISTING_VALUE_CONFLICT": ("NPI-008", HIGH, HUMAN_REQUIRED),
     "NPI_VERIFICATION_UNAVAILABLE": ("NPI-009", INFO, NO_CORRECTION),
+    # 1.7.0: HUMAN_REQUIRED, not QA_REQUIRED — a candidate is an UNCONFIRMED
+    # potential match; the determination (confirm / rule out) is the analyst's,
+    # and nothing may auto-apply it. HIGH because an unresolved potential
+    # exclusion must block clearance the same way an unresolved identifier
+    # conflict does (it joins the existing open-HIGH/CRITICAL gate unchanged).
+    "SAM_EXTRACT_CANDIDATE": ("EXC-001", HIGH, HUMAN_REQUIRED),
     # Added 2026-09-18, pre-merge review Decision 2. Distinct issue_type
     # strings from the pre-promotion identifier-conflict types above, so a
     # query can always tell which regime wrote a given row; QA_REQUIRED for
