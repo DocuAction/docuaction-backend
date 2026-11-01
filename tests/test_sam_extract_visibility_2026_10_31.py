@@ -366,10 +366,19 @@ def test_csv_annex_b2_prints_the_enumerations_own_totals():
     assert "GSA-Public-Extract-V2,2026-10-29,faa40b80aa,25764" in out
     assert "1007" in out  # duplicate-generation disclosure
 
+    # Attempted but the read failed: the notice appears.
     base["verification"]["sam_extract"] = None
+    base["verification"]["sam_extract_attempted"] = True
     out2 = delivery_processing_to_csv(base, "DA-TEST-002", "2026-10-31T00:00:00Z")
     assert "could not be read" in out2
     assert "not stated rather than guessed" in out2
+
+    # No intake / never attempted: no false "could not be read" claim.
+    base["verification"]["sam_extract"] = None
+    base["verification"].pop("sam_extract_attempted", None)
+    out3 = delivery_processing_to_csv(base, "DA-TEST-003", "2026-10-31T00:00:00Z")
+    assert "Annex B.2" in out3            # the labelled section still exists
+    assert "could not be read" not in out3  # but no false failure claim
 
 
 async def test_finding_anchors_to_the_screening_delivery_not_the_latest(rolled_back_db, monkeypatch):

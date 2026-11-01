@@ -96,7 +96,14 @@ _SUMMARY_SQL = _LATEST_CTE + """
            count(*) FILTER (WHERE outcome = 'other') AS other,
            coalesce(sum(extract_row_count), 0) AS total_rows,
            coalesce(sum(extract_row_count), 0) - count(*) AS duplicate_rows,
-           count(*) FILTER (WHERE extract_row_count > 1) AS entities_with_duplicates
+           count(*) FILTER (WHERE extract_row_count > 1) AS entities_with_duplicates,
+           -- `missing` counted INDEPENDENTLY of eligible-minus-with_row: a
+           -- direct anti-join of the population against the latest-row set.
+           -- This makes the `reconciles` check non-tautological — it can now
+           -- detect an entity_id present in extract evidence but not in pop
+           -- (a cast/scoping drift), which the subtraction alone cannot.
+           (SELECT count(*) FROM pop p
+            WHERE p.eid::text NOT IN (SELECT entity_id FROM latest)) AS missing_independent
     FROM latest
 """
 
@@ -195,12 +202,16 @@ async def extract_summary(db, intake_id) -> Dict[str, Any]:
                             {"i": str(intake_id), "src": EXTRACT_SOURCE})).one()
     eligible = int(row.eligible or 0)
     with_row = int(row.entities_with_row or 0)
+    # `missing` is the INDEPENDENT anti-join count (not eligible - with_row),
+    # so the `reconciles` equation below can actually fail if the two ways of
+    # counting disagree.
+    missing_independent = int(row.missing_independent or 0)
     counts = {
         "candidate": int(row.candidate or 0),
         "no_candidate": int(row.no_candidate or 0),
         "unavailable": int(row.unavailable or 0),
         "other": int(row.other or 0),
-        "missing": max(0, eligible - with_row),
+        "missing": missing_independent,
     }
     editions = [{
         "dataset_version_anchor": r.anchor,
@@ -215,7 +226,11 @@ async def extract_summary(db, intake_id) -> Dict[str, Any]:
         "eligible": eligible,
         "entities_with_extract_row": with_row,
         "current_outcomes": counts,
-        "reconciles": eligible == with_row + counts["missing"]
+        # Non-tautological: `missing` is the independent anti-join count, so
+        # this fails if the population/latest-row counts drift apart (e.g. an
+        # evidence entity_id outside `pop`). The second clause confirms every
+        # latest row fell into exactly one outcome bucket.
+        "reconciles": eligible == with_row + missing_independent
                       and with_row == sum(counts[k] for k in
                                           ("candidate", "no_candidate", "unavailable", "other")),
         "evidence_rows": {

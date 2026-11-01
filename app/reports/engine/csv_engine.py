@@ -370,7 +370,8 @@ def delivery_processing_to_csv(dataset: Dict[str, Any], report_id: str,
     # its own words. Deliberately not folded into Annex B's generic outcome
     # vocabulary (which would render a CANDIDATE as "not found") and never a
     # claim about the api.sam.gov primary check in Annex B/B.1.
-    extract = (dataset.get("verification") or {}).get("sam_extract")
+    verification_block = dataset.get("verification") or {}
+    extract = verification_block.get("sam_extract")
     writer.writerow(["## Annex B.2. SAM public-extract supplementary screen (distinct source; "
                      "one current outcome per entity)"])
     if isinstance(extract, dict):
@@ -393,7 +394,10 @@ def delivery_processing_to_csv(dataset: Dict[str, Any], report_id: str,
                 ed.get("dataset_version_anchor"), ed.get("publication_date"),
                 ed.get("extract_sha256"), ed.get("entities")]))
         writer.writerow([extract.get("note") or ""])
-    else:
+    elif verification_block.get("sam_extract_attempted"):
+        # Only after a real intake was read: a no-intake report never
+        # attempted the extract and must not claim the read "could not be
+        # read" (matches the HTML template's sam_extract_attempted gate).
         writer.writerow(["The extract screen's outcomes could not be read when this report was generated; "
                          "its candidate totals are not stated rather than guessed (see Limitations)."])
     writer.writerow([])

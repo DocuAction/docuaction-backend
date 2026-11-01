@@ -593,10 +593,13 @@ async def source_states(db, intake_id, *, eligible: int) -> Dict[str, Any]:
     out["sam_extract"]["is_sam_primary_api"] = False
     out["sam_extract"]["supplements"] = "sam"
     out["sam_extract"]["candidate_note"] = (
-        "potential_match counts entities whose extract row is a CANDIDATE "
-        "match (disposition REVIEW) awaiting analyst determination — never a "
-        "confirmed exclusion. found/pass means no candidate in the extract "
-        "edition consulted, never exclusion clearance.")
+        "potential_match counts entities with a CANDIDATE extract row "
+        "(disposition REVIEW) in ANY generation — this state layer is "
+        "bool_or over all evidence rows, like every other source here, so an "
+        "entity with an older REVIEW row and a newer PASS row still counts "
+        "as potential_match. For the CURRENT outcome per entity (latest row "
+        "only), use GET /sam-extract. A candidate is never a confirmed "
+        "exclusion; found/pass is never exclusion clearance.")
     return {
         "eligible": eligible,
         "sources": out,
