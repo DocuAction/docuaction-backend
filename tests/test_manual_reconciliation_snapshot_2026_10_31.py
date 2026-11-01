@@ -104,6 +104,61 @@ async def test_manual_snapshot_requires_a_job():
             job_id=None, actor=SYN, trigger="MANUAL")
 
 
+async def test_concurrent_persist_loses_cleanly_as_409(delivered):
+    """Two operators persist at once: both compute max(sequence)+1, the
+    UNIQUE (job_id, sequence) constraint makes the slower one lose, and the
+    route answers 409 instead of surfacing a raw IntegrityError or — worse —
+    allowing duplicate sequences. The winner's snapshot is untouched."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+
+    from fastapi import HTTPException
+    from sqlalchemy.exc import IntegrityError
+
+    from app.tefca_registry.rce import routes as r
+
+    # The constraint this safety property rests on actually exists.
+    names = {c.name for c in tm.RceReconciliationSnapshot.__table__.constraints}
+    assert "uq_rce_snapshot_sequence" in names
+
+    db, intake_id, job = delivered
+    body = r.ManualSnapshotRequest(reason="concurrency test: loser must 409")
+    user = SimpleNamespace(email=SYN, id=None)
+    with patch("app.tefca_registry.rce.reconciliation.persist_snapshot",
+               new=AsyncMock(side_effect=IntegrityError("stmt", {}, Exception("dup")))), \
+         patch("app.tefca_registry.rce.reconciliation.reconcile_delivery",
+               new=AsyncMock(return_value={"equation": {}, "checks": [], "passed": True})):
+        with pytest.raises(HTTPException) as exc:
+            await r.persist_manual_reconciliation_snapshot(
+                str(intake_id), body, request=None, db=db, user=user)
+    assert exc.value.status_code == 409
+    assert "concurrent" in str(exc.value.detail).lower()
+
+
+async def test_snapshot_survives_a_failed_audit_write(delivered):
+    """The snapshot is durable the moment persist_snapshot commits; a failed
+    audit row afterwards is logged and reported, never a reason to hide or
+    lose the snapshot (same posture as _try_persist_snapshot's error path)."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from app.tefca_registry.rce import routes as r
+
+    db, intake_id, job = delivered
+    before = len(await _snapshots(db, job.id))
+    body = r.ManualSnapshotRequest(reason="audit-failure path: snapshot must survive")
+    user = SimpleNamespace(email=SYN, id=None)
+    with patch("app.tefca_registry.audit.record",
+               side_effect=RuntimeError("audit store down")):
+        out = await r.persist_manual_reconciliation_snapshot(
+            str(intake_id), body, request=None, db=db, user=user)
+
+    assert out["snapshot"]["trigger"] == "MANUAL"
+    after = await _snapshots(db, job.id)
+    assert len(after) == before + 1
+    assert str(after[-1].id) == out["snapshot"]["id"]  # durable despite the audit failure
+
+
 def test_route_registered_at_qalead_with_required_reason():
     from app.tefca_registry.rce import routes as r
 

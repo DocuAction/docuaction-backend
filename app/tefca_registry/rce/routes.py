@@ -747,8 +747,21 @@ async def persist_manual_reconciliation_snapshot(
 
     actor = getattr(user, "email", None) or "SYSTEM"
     result = await reconciliation.reconcile_delivery(db, intake_id)
-    snapshot = await reconciliation.persist_snapshot(
-        db, intake_id, result, job_id=job.id, actor=actor, trigger="MANUAL")
+    from sqlalchemy.exc import IntegrityError
+    try:
+        snapshot = await reconciliation.persist_snapshot(
+            db, intake_id, result, job_id=job.id, actor=actor, trigger="MANUAL")
+    except IntegrityError:
+        # Two concurrent persists computed the same max(sequence)+1; the
+        # UNIQUE (job_id, sequence) constraint (uq_rce_snapshot_sequence)
+        # made the slower one lose instead of letting duplicate sequences
+        # exist. The other caller's snapshot IS the current state — refusing
+        # with 409 is correct, retrying automatically is not (the operator
+        # should read what was just pinned before pinning again).
+        await db.rollback()
+        raise HTTPException(
+            409, "A concurrent reconciliation snapshot was persisted for this "
+                 "delivery; read the current snapshot before persisting again.")
 
     try:
         from app.tefca_registry import audit as reg_audit
