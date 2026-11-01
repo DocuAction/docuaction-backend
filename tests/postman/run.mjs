@@ -11,9 +11,18 @@
  * as --env-var overrides, so nothing sensitive is committed and no id is
  * guessed. Refuses a non-local baseUrl.
  *
+ * Two modes (gap 4):
+ *   baseline (default)         the #193/#194 folders self-report "not on this
+ *                              build" when those routes are absent — a visible
+ *                              conditional result, never a silent skip.
+ *   --rc / release-candidate   those routes are REQUIRED: a missing capability
+ *                              FAILS the run instead of self-reporting. Point
+ *                              this at the combined #193+#194 candidate
+ *                              revision (see tests/postman/README.md).
+ *
  * Usage (after installing the Postman CLI — see tests/postman/README.md):
  *   node run.mjs --manifest ../../integration-fixtures.json \
- *     --baseUrl http://127.0.0.1:8010 --junit newman-results.xml
+ *     --baseUrl http://127.0.0.1:8010 --junit postman-results.xml [--rc]
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -26,12 +35,16 @@ const arg = (name, dflt) => {
   const i = process.argv.indexOf(`--${name}`);
   return i !== -1 && process.argv[i + 1] ? process.argv[i + 1] : dflt;
 };
+const flag = (name) => process.argv.includes(`--${name}`);
 
 const collection = arg('collection', path.join(here, 'docuaction-api.postman_collection.json'));
 const environment = arg('environment', path.join(here, 'docuaction-itest.postman_environment.json'));
 const manifestPath = arg('manifest', path.join(here, '..', '..', 'integration-fixtures.json'));
 const baseUrl = arg('baseUrl', 'http://127.0.0.1:8010');
-const junit = arg('junit', path.join(here, 'newman-results.xml'));
+const junit = arg('junit', path.join(here, 'postman-results.xml'));
+// Release-candidate mode: require the #193/#194 routes to exist and assert
+// them. --rc on the CLI, or RC_MODE=release-candidate in the environment.
+const rcMode = flag('rc') || /^(1|true|rc|release-candidate)$/i.test(process.env.RC_MODE || '');
 
 const host = new URL(baseUrl).hostname;
 if (!['127.0.0.1', 'localhost', '::1'].includes(host)) {
@@ -43,6 +56,7 @@ const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 const byRole = Object.fromEntries((manifest.accounts || []).map((a) => [a.role, a]));
 const envVars = {
   baseUrl,
+  rc_mode: rcMode ? 'yes' : 'no',
   intake_id: manifest.intake_id || '',
   job_id: manifest.job_id || '',
   candidate_entity_id: manifest.candidate_entity_id || '',
@@ -51,6 +65,8 @@ const envVars = {
   qalead_password: (byRole.qalead || {}).password || '',
   pm_password: (byRole.program_manager || {}).password || '',
 };
+
+console.log(`[run.mjs] mode=${rcMode ? 'RELEASE-CANDIDATE (strict: #193/#194 required)' : 'baseline (conditional folders self-report)'} baseUrl=${baseUrl}`);
 
 const args = ['collection', 'run', collection, '-e', environment,
   '-r', 'cli,junit', '--reporter-junit-export', junit];
