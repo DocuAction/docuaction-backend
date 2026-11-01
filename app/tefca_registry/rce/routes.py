@@ -751,7 +751,7 @@ async def persist_manual_reconciliation_snapshot(
     try:
         snapshot = await reconciliation.persist_snapshot(
             db, intake_id, result, job_id=job.id, actor=actor, trigger="MANUAL")
-    except IntegrityError:
+    except IntegrityError as exc:
         # Two concurrent persists computed the same max(sequence)+1; the
         # UNIQUE (job_id, sequence) constraint (uq_rce_snapshot_sequence)
         # made the slower one lose instead of letting duplicate sequences
@@ -761,8 +761,21 @@ async def persist_manual_reconciliation_snapshot(
         await db.rollback()
         raise HTTPException(
             409, "A concurrent reconciliation snapshot was persisted for this "
-                 "delivery; read the current snapshot before persisting again.")
+                 "delivery; read the current snapshot before persisting "
+                 "again.") from exc
 
+    # Read every response fact NOW, while the row is fresh from persist's own
+    # commit+refresh: if the audit commit below fails, the session's ORM
+    # state is expired and a later lazy attribute read would need implicit
+    # async I/O against a dead transaction — the snapshot is durable, and the
+    # response must be buildable without touching the session again.
+    checks = list(snapshot.checks or [])
+    snapshot_view = {
+        "id": str(snapshot.id), "sequence": snapshot.sequence,
+        "trigger": snapshot.trigger, "created_at": snapshot.created_at,
+        "hash": snapshot.hash, "passed": bool(snapshot.passed),
+        "failure_reason": snapshot.failure_reason,
+    }
     try:
         from app.tefca_registry import audit as reg_audit
 
@@ -771,24 +784,23 @@ async def persist_manual_reconciliation_snapshot(
             db, "rce_reconciliation_snapshot_manual", actor_id=actor_id,
             actor_email=actor_email, ip_address=_client_ip(request),
             metadata={"intake_id": str(intake_id), "job_id": str(job.id),
-                      "snapshot_id": str(snapshot.id),
-                      "sequence": snapshot.sequence,
-                      "passed": bool(snapshot.passed),
+                      "snapshot_id": snapshot_view["id"],
+                      "sequence": snapshot_view["sequence"],
+                      "passed": snapshot_view["passed"],
                       "reason": body.reason.strip()})
         await db.commit()
     except Exception as exc:  # noqa: BLE001 — the snapshot is already durable;
-        # a failed audit write is reported in logs, never hides the snapshot.
-        logger.warning("manual snapshot audit row failed: %s", type(exc).__name__)
+        # a failed audit write is reported at ERROR (the audit-availability
+        # bar) and never hides the snapshot. No rollback here: every response
+        # value was read into `snapshot_view` BEFORE this block, so nothing
+        # below touches the session, and the request-scoped session is torn
+        # down by `get_db` — the same log-only posture `_audit_deprecated_use`
+        # already uses for an audit-write failure.
+        logger.error("manual snapshot audit row failed: %s", type(exc).__name__)
 
-    checks = list(snapshot.checks or [])
     return {
         "intake_id": str(intake_id),
-        "snapshot": {
-            "id": str(snapshot.id), "sequence": snapshot.sequence,
-            "trigger": snapshot.trigger, "created_at": snapshot.created_at,
-            "hash": snapshot.hash, "passed": bool(snapshot.passed),
-            "failure_reason": snapshot.failure_reason,
-        },
+        "snapshot": snapshot_view,
         "checks_total": len(checks),
         "failed_checks": [c for c in checks if not c.get("passed")],
         "note": ("Persisted append-only with trigger MANUAL; it is now the "
