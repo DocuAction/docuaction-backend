@@ -617,7 +617,14 @@ class DeliveryProcessingDataService:
             await self._attach_sam_extract(fallback, intake)
             return fallback
         try:
-            raw = await fn(self.db, intake.id)
+            # Savepoint: a SQL failure inside coverage_for_intake leaves the
+            # PostgreSQL transaction ABORTED, and then the begin_nested() in
+            # _attach_sam_extract below — and every later lane (_analyst, …) —
+            # would raise InFailedSQLTransactionError on the same session.
+            # Rolling back to this savepoint makes the coverage failure a
+            # clean Python exception the extract read can proceed past.
+            async with self.db.begin_nested():
+                raw = await fn(self.db, intake.id)
         except Exception as exc:  # noqa: BLE001
             logger.warning("coverage_for_intake failed: %s", exc)
             fallback["reason"] = f"verification coverage query failed ({type(exc).__name__})"

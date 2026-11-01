@@ -480,12 +480,15 @@ async def test_extract_read_is_independent_of_a_coverage_failure(covered_three):
     intake = await db.get(rce_m.RceSourceIntake, intake_id)
     svc = DeliveryProcessingDataService(db, intake_id=str(intake_id))
 
-    # Coverage read blows up; the extract enumeration is healthy.
-    async def _boom(*a, **k):
-        raise RuntimeError("coverage SQL exploded")
+    # Coverage read fails with a REAL SQL error that aborts the PostgreSQL
+    # transaction (not a Python-level RuntimeError) — the case that would
+    # poison the session for the extract read and every later lane unless the
+    # coverage call is itself wrapped in a savepoint.
+    async def _bad_sql(db_, intake_id_):
+        await db_.execute(text("SELECT broken FROM table_that_does_not_exist_xyz"))
 
     with patch("app.tefca_registry.rce.verification_coverage.coverage_for_intake",
-               new=AsyncMock(side_effect=_boom)):
+               new=AsyncMock(side_effect=_bad_sql)):
         block = await svc._verification(intake)
 
     assert block["available"] is False              # coverage fell back
