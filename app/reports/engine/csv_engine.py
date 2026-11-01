@@ -366,6 +366,38 @@ def delivery_processing_to_csv(dataset: Dict[str, Any], report_id: str,
         break
     writer.writerow([])
 
+    # Annex B.2: the SAM public-extract SUPPLEMENTARY screen — its own source,
+    # its own words. Deliberately not folded into Annex B's generic outcome
+    # vocabulary (which would render a CANDIDATE as "not found") and never a
+    # claim about the api.sam.gov primary check in Annex B/B.1.
+    extract = (dataset.get("verification") or {}).get("sam_extract")
+    writer.writerow(["## Annex B.2. SAM public-extract supplementary screen (distinct source; "
+                     "one current outcome per entity)"])
+    if isinstance(extract, dict):
+        outcomes = extract.get("current_outcomes") or {}
+        rows_info = extract.get("evidence_rows") or {}
+        writer.writerow(["Eligible", "With extract row", "Candidate (analyst determination required)",
+                         "No candidate (not exclusion clearance)", "Unavailable", "Other", "Missing",
+                         "Reconciles to eligible"])
+        writer.writerow(neutralise_row([
+            extract.get("eligible"), extract.get("entities_with_extract_row"),
+            outcomes.get("candidate"), outcomes.get("no_candidate"), outcomes.get("unavailable"),
+            outcomes.get("other"), outcomes.get("missing"), extract.get("reconciles")]))
+        writer.writerow([f"Evidence rows total {rows_info.get('total', 0)}; historical/duplicate rows beyond each "
+                         f"entity's latest {rows_info.get('duplicate_rows_beyond_latest', 0)}; entities with more "
+                         f"than one extract row {rows_info.get('entities_with_more_than_one_row', 0)}. The current "
+                         f"outcome reads each entity's latest row; earlier generations are preserved append-only."])
+        writer.writerow(["Extract edition (dataset anchor)", "Publication date", "Extract SHA-256", "Entities"])
+        for ed in extract.get("editions") or []:
+            writer.writerow(neutralise_row([
+                ed.get("dataset_version_anchor"), ed.get("publication_date"),
+                ed.get("extract_sha256"), ed.get("entities")]))
+        writer.writerow([extract.get("note") or ""])
+    else:
+        writer.writerow(["The extract screen's outcomes could not be read when this report was generated; "
+                         "its candidate totals are not stated rather than guessed (see Limitations)."])
+    writer.writerow([])
+
     analyst = dataset.get("analyst") or {}
     writer.writerow(["## Annex C. Review records (determination and independent QA status)"])
     if analyst.get("available"):

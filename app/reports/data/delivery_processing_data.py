@@ -614,7 +614,23 @@ class DeliveryProcessingDataService:
             self.limit("Verification coverage could not be read (query failed); "
                        "every source is reported as Not Run.")
             return fallback
-        return _normalise_coverage(raw)
+        shaped = _normalise_coverage(raw)
+        # The SAM public-extract supplementary screen, as its OWN block: its
+        # outcome words (candidate / no_candidate / unavailable / missing)
+        # are deliberately not the generic per-source vocabulary above, which
+        # would render a candidate as "not found". Absent (None) when the
+        # enumeration cannot be read — reported as a limitation, never
+        # silently as zero candidates.
+        try:
+            from app.tefca_registry.rce import sam_extract_enumeration as se
+            shaped["sam_extract"] = await se.extract_summary(self.db, intake.id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("sam-extract enumeration failed: %s", exc)
+            shaped["sam_extract"] = None
+            self.limit("The SAM public-extract supplementary screen's outcomes "
+                       "could not be read; its candidate totals are not stated "
+                       "in this report rather than guessed.")
+        return shaped
 
     # "pecos" here is the legacy connector-availability key the B1-B4
     # classifier keys on (NPPES reachability used as an enrolment proxy) --

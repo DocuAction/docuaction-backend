@@ -329,6 +329,18 @@ async def record_coverage_attempt(db, *, ref: str, canonical_entity_id,
         except Exception as exc:  # noqa: BLE001 - the issue ledger must not fail coverage
             logger.error("automated coverage: NPI outcome not recorded for %s: %s",
                         entity_uuid, type(exc).__name__, exc_info=True)
+        try:
+            extract_values = vf.sam_extract_candidate_values(evidence)
+            if extract_values is not None:
+                from app.Tefca import rce_fields
+                await vf.record_sam_extract_candidate(
+                    db, entity_id=entity_uuid, npi=rce_fields.rce_npi(entity),
+                    org_name=(rce_fields.rce_value(entity, "name")
+                              or entity.get("name") or "").strip() or None,
+                    extract=extract_values)
+        except Exception as exc:  # noqa: BLE001 - the issue ledger must not fail coverage
+            logger.error("automated coverage: SAM-extract candidate not recorded for %s: %s",
+                         entity_uuid, type(exc).__name__, exc_info=True)
 
     if outcome == OUTCOME_REVIEW_REQUIRED and entity_uuid is not None:
         row = await _entity_row_shape(db, entity_uuid)
@@ -406,6 +418,14 @@ async def record_sam_extract_attempt(db, *, ref: str,
         if row_shape is not None and row_shape.verification_status != "in_review":
             row_shape.verification_status = "in_review"
             row_shape.updated_at = datetime.utcnow()
+        try:
+            from app.tefca_registry.rce import verification_findings as vf
+            await vf.record_sam_extract_candidate(
+                db, entity_id=entity_uuid, npi=npi, org_name=org_name or None,
+                extract=dict(screen.data or {}))
+        except Exception as exc:  # noqa: BLE001 - the issue ledger must not fail coverage
+            logger.error("sam-extract coverage: candidate finding not recorded for %s: %s",
+                         entity_uuid, type(exc).__name__, exc_info=True)
 
     await db.flush()
     return {"ref": ref, "entity_id": str(entity_uuid) if entity_uuid else None,

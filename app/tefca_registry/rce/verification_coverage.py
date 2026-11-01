@@ -443,7 +443,8 @@ def _tally(verification_rows, dimension_rows) -> Dict[str, Dict[str, set]]:
 # NOT exclusion clearance -- see `screening_legs` for which question each row
 # answered, and "screening leg not recorded" for historical rows.
 # --------------------------------------------------------------------------
-STATE_SOURCE_KEYS = ("nppes", "pecos", "leie", "sam", "cms_enrollment", "cms_revocation")
+STATE_SOURCE_KEYS = ("nppes", "pecos", "leie", "sam", "sam_extract",
+                     "cms_enrollment", "cms_revocation")
 
 #: Truthful display names. `pecos` is the legacy proxy, never "PECOS (CMS)".
 SOURCE_DISPLAY_NAMES: Dict[str, str] = {
@@ -451,6 +452,9 @@ SOURCE_DISPLAY_NAMES: Dict[str, str] = {
     "pecos": "NPPES Registry — Legacy PECOS Proxy (not CMS enrollment)",
     "leie": "OIG LEIE (HHS OIG)",
     "sam": "SAM.gov (GSA) — lookup attempts; not exclusion clearance",
+    "sam_extract": ("SAM.gov Public Exclusions Extract (GSA) — supplementary "
+                    "candidate screen; not exclusion clearance; separate from "
+                    "the SAM.gov primary API"),
     "cms_enrollment": "CMS Public Provider Enrollment (PPEF, PECOS-derived)",
     "cms_revocation": "CMS Revoked Medicare Providers and Suppliers",
 }
@@ -465,7 +469,11 @@ AGGREGATION_RULE = (
     "NPPES-backed proxy and is reported separately; it is never counted as CMS enrollment. "
     "Genuine CMS enrollment evidence is only CMS_PPEF_ENROLLMENT rows ('cms_enrollment'). "
     "SAM attempts are not exclusion clearance; rows stored before the screening leg was "
-    "recorded are 'screening leg not recorded'.")
+    "recorded are 'screening leg not recorded'. The SAM public-extract supplementary "
+    "screen is its own source ('sam_extract'): a found/pass there means 'no candidate in "
+    "the extract edition consulted' — never exclusion clearance — a potential_match is a "
+    "CANDIDATE awaiting an analyst (never a confirmed exclusion), and its counts never "
+    "raise, replace or stand in for the SAM.gov primary API's own availability.")
 
 #: evidence row -> state word. Python twin of `_STATE_ROWS_SQL` (tested for parity).
 _VERIFICATION_STATE = {
@@ -502,6 +510,7 @@ _STATE_SOURCE_CASE = """
           WHEN 'pecos' THEN 'pecos'
           WHEN 'leie' THEN 'leie' WHEN 'oig_leie' THEN 'leie' WHEN 'oig' THEN 'leie' WHEN 'oig-leie' THEN 'leie'
           WHEN 'sam' THEN 'sam' WHEN 'sam_gov' THEN 'sam' WHEN 'sam.gov' THEN 'sam' WHEN 'samgov' THEN 'sam'
+          WHEN 'sam_extract_supplementary' THEN 'sam_extract'
           WHEN 'cms_ppef_enrollment' THEN 'cms_enrollment'
           WHEN 'cms_revocation' THEN 'cms_revocation'
         END"""
@@ -576,6 +585,18 @@ async def source_states(db, intake_id, *, eligible: int) -> Dict[str, Any]:
     out["pecos"]["backing"] = "nppes_proxy"
     out["pecos"]["is_independent_cms_enrollment"] = False
     out["sam"]["is_exclusion_clearance"] = False
+    # The supplementary extract screen is a DISTINCT source: its rows were
+    # previously unmapped here (counted by no key at all). It never claims
+    # exclusion clearance, and it never answers for the primary API — the
+    # `sam` key's own unavailable count is untouched by extract rows.
+    out["sam_extract"]["is_exclusion_clearance"] = False
+    out["sam_extract"]["is_sam_primary_api"] = False
+    out["sam_extract"]["supplements"] = "sam"
+    out["sam_extract"]["candidate_note"] = (
+        "potential_match counts entities whose extract row is a CANDIDATE "
+        "match (disposition REVIEW) awaiting analyst determination — never a "
+        "confirmed exclusion. found/pass means no candidate in the extract "
+        "edition consulted, never exclusion clearance.")
     return {
         "eligible": eligible,
         "sources": out,

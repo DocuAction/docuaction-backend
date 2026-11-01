@@ -288,6 +288,116 @@ async def _mark_identifier_inactive(db, entity_id, npi: str) -> int:
     return len(rows)
 
 
+SAM_EXTRACT_CANDIDATE = "SAM_EXTRACT_CANDIDATE"
+
+
+def sam_extract_candidate_values(evidence: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The extract screen's `original_values` from an assembled evidence
+    bundle, when (and only when) its row is a CANDIDATE (disposition REVIEW).
+
+    Reads the D3 dimension's SAM_EXTRACT_SUPPLEMENTARY item exactly as
+    `sam_extract_evidence_items` writes it. None for a PASS (no candidate),
+    an UNAVAILABLE row, or a bundle without the extract item at all — the
+    same "None means nothing to record" contract `npi_outcome_from_evidence`
+    holds. Never derives a finding from absence: a missing candidate is not
+    clearance and records nothing.
+    """
+    for dimension in evidence.get("dimensions") or []:
+        dim_evidence = dimension.get("evidence")
+        if not isinstance(dim_evidence, list):
+            continue
+        for item in dim_evidence:
+            if not isinstance(item, dict):
+                continue
+            if item.get("source") != "SAM_EXTRACT_SUPPLEMENTARY":
+                continue
+            if item.get("disposition") != "REVIEW":
+                return None
+            values = item.get("original_values")
+            return dict(values) if isinstance(values, dict) else {}
+    return None
+
+
+async def record_sam_extract_candidate(db, *, entity_id, npi: Optional[str],
+                                       org_name: Optional[str] = None,
+                                       extract: Optional[Dict[str, Any]] = None,
+                                       ) -> Optional[m.RceIssue]:
+    """Write the ledger finding for one SAM public-extract CANDIDATE match.
+
+    The evidence row (`SAM_EXTRACT_SUPPLEMENTARY`, disposition REVIEW) is the
+    record of what the screen saw; this row is what puts it on the analyst's
+    worklist — same split as the NPI outcomes above. Idempotent across
+    repeated screens and repeated generations: an undecided EXC-001 finding
+    already open for the same curated record and lookup value is returned
+    as-is, never duplicated (the retry/duplicate-generation guard). After an
+    analyst DECIDES a finding, a LATER candidate hit opens a new one — a new
+    potential match after a determination is new information, same semantics
+    as every other verification finding here.
+
+    Never confirms anything: the finding is a candidate requiring human
+    determination, and its absence is never exclusion clearance. Does not
+    commit; the caller's verification transaction owns the commit.
+    """
+    extract = extract or {}
+    lookup_value = (npi or "").strip() or (org_name or "").strip() or None
+
+    curated = await _curated_for_entity(db, entity_id)
+    if curated is None:
+        logger.info("SAM-extract candidate for entity %s has no delivery ledger; "
+                    "recorded in the evidence row only", entity_id)
+        return None
+
+    rule_id, severity, authority = NON_QUALITY_ISSUE_TYPES[SAM_EXTRACT_CANDIDATE]
+    existing = (await db.execute(
+        select(m.RceIssue).where(
+            m.RceIssue.source_record_id == curated.source_record_id,
+            m.RceIssue.rule_id == rule_id,
+            m.RceIssue.issue_type == SAM_EXTRACT_CANDIDATE,
+            m.RceIssue.original_value == lookup_value,
+            m.RceIssue.resolution.in_(sorted(UNDECIDED_RESOLUTIONS)))
+        .limit(1))).scalar_one_or_none()
+    if existing is not None:
+        return existing
+
+    current_run = await run_selection.current_run(db, curated.source_intake_id)
+    edition = extract.get("publication_date") or "not recorded"
+    sha = (extract.get("extract_sha256") or "")[:12] or "not recorded"
+    methods = ", ".join(extract.get("match_methods") or []) or "npi/normalized_business_name"
+    count = extract.get("candidate_count")
+    issue = m.RceIssue(
+        id=uuid.uuid4(),
+        issue_code=verification_issue_code(),
+        source_intake_id=curated.source_intake_id,
+        source_record_id=curated.source_record_id,
+        run_id=current_run.id if current_run is not None else None,
+        rule_id=rule_id,
+        rule_version=RULE_BY_ID[rule_id].version,
+        issue_type=SAM_EXTRACT_CANDIDATE,
+        severity=severity,
+        field_name="exclusion_screening",
+        original_value=lookup_value,
+        suggested_value=None,
+        suggested_source="SAM_EXTRACT_SUPPLEMENTARY",
+        suggested_confidence=None,
+        correction_authority=authority,
+        description=(
+            f"Potential match in the GSA public SAM exclusions extract "
+            f"(edition {edition}, sha256 {sha}, "
+            f"{count if count is not None else 'unrecorded number of'} candidate "
+            f"row(s), matched by {methods}). A CANDIDATE only — never a "
+            f"confirmed exclusion; an analyst must confirm or rule it out. "
+            f"This supplementary screen does not replace the api.sam.gov "
+            f"primary check, and a non-match is never exclusion clearance."),
+        resolution="OPEN",
+        created_at=datetime.utcnow(),
+    )
+    db.add(issue)
+    await db.flush()
+    logger.info("SAM-extract candidate finding recorded",
+                extra={"entity_id": str(entity_id), "issue_code": issue.issue_code})
+    return issue
+
+
 async def record_from_sources(db, *, entity_id, sources: Dict[str, Any]
                               ) -> Optional[m.RceIssue]:
     """Convenience for `review_service`: read the probed NPPES source dict."""
