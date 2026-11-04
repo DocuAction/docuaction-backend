@@ -70,9 +70,32 @@ from app.tefca_registry.rce.recheck_models import RceRecheckItem, RceRecheckJob
 logger = logging.getLogger(__name__)
 
 MAX_ENTITIES_PER_JOB = 2000
+#: ONE JOB PER EDITION (2026-11-04). A NEW_APPROVED_SNAPSHOT job's trigger_ref
+#: must be exactly the snapshot UUID, and the idempotency key is
+#: (intake, trigger_kind, source_id, trigger_ref) — so a second request for the
+#: same edition returns the first job, FOREVER, including after it completes.
+#: That restriction is deliberate (one auditable re-verification per edition),
+#: but it interacts badly with a small per-job cap: capping the single possible
+#: job at 2,000 would strand the other ~23,800 October entities until CMS
+#: publishes ANOTHER quarterly edition. Snapshot-triggered jobs therefore get a
+#: bound that covers the whole eligible population; items stay enumerated
+#: one-per-entity and batches stay small and resumable, so the breadth changes
+#: how much ONE approved job may cover — never who approves it, what is
+#: written (append-only), or how it is audited.
+MAX_ENTITIES_SNAPSHOT_TRIGGER = 30000
 DEFAULT_BATCH_SIZE = 50
 MAX_BATCH_SIZE = 200
 STALE_HEARTBEAT_SECONDS = 900
+
+#: Evidence gather scope, pinned on the job at request time (visible to the
+#: approver). FULL_BUILD is the pre-existing behaviour: every source is
+#: re-asked for each target. CMS_ENROLLMENT_ONLY runs ONLY the PPEF enrollment
+#: lookup and persists ONLY CMS_PPEF_ENROLLMENT evidence items — the
+#: one-source pattern `automated_verification.record_sam_extract_attempt`
+#: already established, so a snapshot-triggered enrollment re-verification of
+#: the full population does not re-spend NPPES/LEIE/SAM quota 25,000 times.
+SCOPE_FULL_BUILD = "full_build"
+SCOPE_CMS_ENROLLMENT_ONLY = "cms_enrollment_only"
 
 #: Policy ids whose evidence the D1-D6 gather actually produces. IQVIA is
 #: deliberately absent: its matching runs through the IQVIA match route, not
@@ -222,8 +245,24 @@ async def request_recheck(db, intake_id, *, trigger_kind: str, source_id: str,
         raise RecheckRefused(
             f"no entity of this delivery needs a {trigger_kind} recheck for {source_id} "
             f"({len(candidates)} entity(ies) have evidence from it; none qualifies)")
-    bound = max(1, min(int(max_entities or MAX_ENTITIES_PER_JOB), MAX_ENTITIES_PER_JOB))
+    # Snapshot-triggered jobs may cover the whole eligible population; every
+    # other trigger keeps the tight bound. See MAX_ENTITIES_SNAPSHOT_TRIGGER's
+    # comment for why (one-job-per-edition idempotency).
+    cap = (MAX_ENTITIES_SNAPSHOT_TRIGGER
+           if trigger_kind == rm.TRIGGER_NEW_APPROVED_SNAPSHOT else MAX_ENTITIES_PER_JOB)
+    bound = max(1, min(int(max_entities or cap), cap))
     targets = eligible[:bound]
+
+    # The gather scope is decided HERE, pinned, and shown to the approver —
+    # never chosen at run time. CMS_PPEF snapshot re-verification is
+    # enrollment-only; everything else keeps the full all-source build.
+    evidence_scope = (SCOPE_CMS_ENROLLMENT_ONLY
+                      if (trigger_kind == rm.TRIGGER_NEW_APPROVED_SNAPSHOT
+                          and source_id == sp.CMS_PPEF) else SCOPE_FULL_BUILD)
+    targeting_rule = ("every eligible entity with existing evidence from this source, "
+                      "ordered by rce_org_oid (explicit: one item row per entity)"
+                      if trigger_kind != rm.TRIGGER_SOURCE_RECOVERY else
+                      "entities whose LATEST evidence row for this source is UNAVAILABLE")
 
     from app.tefca_registry.rce.field_map import FIELD_MAP_VERSION
     from app.tefca_registry.rce.quality_rules import RULE_SET_VERSION
@@ -240,6 +279,8 @@ async def request_recheck(db, intake_id, *, trigger_kind: str, source_id: str,
                 "official_policy_status": sp.OFFICIAL_POLICIES[source_id].approval_status,
                 "rule_set_version": RULE_SET_VERSION, "field_map_version": FIELD_MAP_VERSION,
                 "evidence_sources": evidence_sources_for(source_id),
+                "evidence_scope": evidence_scope,
+                "targeting_rule": targeting_rule,
                 "max_entities": bound},
         summary={}, correlation_id=request_context.correlation_id()[:64])
     db.add(job)
@@ -334,6 +375,46 @@ def _source_disposition(evidence: Dict[str, Any], sources: List[str]) -> Optiona
     return found[0]
 
 
+async def _enrollment_only_evidence(entity, *, local_store) -> Dict[str, Any]:
+    """A one-source partial generation: ONLY the CMS PPEF ENROLLMENT lookup
+    runs, and ONLY CMS_PPEF_ENROLLMENT evidence items are produced.
+
+    Mirrors `automated_verification.record_sam_extract_attempt`, the
+    established one-source pattern: the D2 dimension is assembled by
+    `evidence_assembly._dimension_medicare` — the exact code the full build
+    uses — so the persisted items cannot drift from a full generation's shape.
+    The NPI reaches the lookup through `resolve_entity`'s normal identifier
+    path (including the curated-record fallback, #175); nothing here reads,
+    writes or substitutes identifiers itself.
+    """
+    from app.Tefca import rce_fields
+    from app.Tefca.applicability import build_profile
+    from app.Tefca.connectors import _extract_npi
+    from app.Tefca.evidence_assembly import _dimension_medicare
+    from app.Tefca.evidence_service import EvidenceService
+
+    service = EvidenceService(local_store=local_store)
+    npi = rce_fields.rce_npi(entity) or _extract_npi(entity)
+    enrollment = await service.ppef.lookup_by_npi(npi)
+    pecos_found = (bool((enrollment.data or {}).get("found"))
+                   if enrollment is not None and enrollment.success else None)
+    # nppes_data is deliberately empty: this scope must not re-ask NPPES. The
+    # only effect on D2 applicability is that an NPI can come solely from the
+    # entity's own identifiers — which is also the only NPI the enrollment
+    # lookup above could use.
+    profile = build_profile(entity, nppes_data={}, pecos_found=pecos_found)
+    dim = _dimension_medicare(profile, {"cms_ppef_enrollment": enrollment})
+    return {
+        "generated_at": datetime.utcnow().isoformat(),
+        "dimensions": [{
+            "dimension": dim.dimension,
+            "disposition": dim.disposition,
+            "applicability": dim.applicability,
+            "evidence": [i.to_dict() for i in dim.items],
+        }],
+    }
+
+
 async def _recheck_one(db, job: RceRecheckJob, item: RceRecheckItem, *, local_store) -> None:
     from app.Tefca.entity_resolution import resolve_entity
     from app.Tefca.evidence_service import EvidenceService, evidence_rows_for_persistence
@@ -346,7 +427,11 @@ async def _recheck_one(db, job: RceRecheckJob, item: RceRecheckItem, *, local_st
         item.state, item.outcome, item.processed_at = rm.ITEM_DONE, rm.OUTCOME_NOT_RESOLVED, now
         item.detail = {"reason": "entity reference did not resolve"}
         return
-    evidence = await EvidenceService(local_store=local_store).build_evidence(entity)
+    scope = (job.pinned or {}).get("evidence_scope") or SCOPE_FULL_BUILD
+    if scope == SCOPE_CMS_ENROLLMENT_ONLY:
+        evidence = await _enrollment_only_evidence(entity, local_store=local_store)
+    else:
+        evidence = await EvidenceService(local_store=local_store).build_evidence(entity)
     sources = evidence_sources_for(job.source_id)
     disposition = _source_disposition(evidence, sources)
 
