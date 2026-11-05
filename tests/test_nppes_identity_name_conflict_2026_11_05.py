@@ -88,6 +88,10 @@ def test_distinct_initials_still_conflict():
     assert _name_similarity("A B Clinic", "C D Clinic") < 0.5
     # dotted initials too: 'A.B.' must NOT collapse like a legal suffix
     assert _name_similarity("A.B. Clinic", "C.D. Clinic") < 0.5
+    # a designator spelling at the START of a name is initials, not a suffix
+    assert _name_similarity("P.C. Synthetic Clinic", "M.D. Synthetic Clinic") < 1.0
+    # ...while the same spelling TRAILING is a legal suffix and collapses
+    assert _name_similarity("Synthetic Acme Clinic P.C.", "Synthetic Acme Clinic PC") == 1.0
     # 1-of-3 shared tokens (0.33) — distinctly below the 0.5 bound
     result = _identity_result("A.B. SYNTHETIC CLINIC", "C.D. SYNTHETIC REHAB")
     item = next(i for i in result.items if i.source == "NPPES")

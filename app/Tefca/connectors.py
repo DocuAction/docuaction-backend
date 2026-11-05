@@ -165,21 +165,23 @@ class RetryableHTTPError(Exception):
 # Small, dependency-free comparators used by the enhanced NPPES and SAM checks
 # to cross-reference a submitted entity against its authoritative registration.
 
-#: Only RECOGNIZED legal suffixes collapse ('L.L.C.' -> 'LLC'); dotted
-#: initials ('A.B. Clinic') are identity and must stay distinct tokens.
-#: Longer forms first so 'P.L.L.C.' is not eaten as 'L.L.C.'.
+#: Only RECOGNIZED legal suffixes collapse ('L.L.C.' -> 'LLC'), and only in
+#: TRAILING position — a designator spelling at the START of a name
+#: ('P.C. Clinic') is initials, i.e. identity, and must stay distinct tokens,
+#: like dotted initials ('A.B. Clinic'). Longer forms first so 'P.L.L.C.'
+#: is not eaten as 'L.L.C.'.
 _DOTTED_SUFFIXES = ("p.l.l.c", "l.l.c", "l.l.p", "l.t.d", "i.n.c",
                     "p.c", "p.a", "m.d", "d.o", "s.c", "l.p", "c.o")
 _DOTTED_ABBREV = re.compile(
-    r"\b(?:" + "|".join(re.escape(s) for s in _DOTTED_SUFFIXES) + r")\.?(?=\W|$)",
+    r"\b(?:" + "|".join(re.escape(s) for s in _DOTTED_SUFFIXES) + r")\.?(?=\W*$)",
     re.IGNORECASE,
 )
 
 
 def _collapse_dotted_abbreviations(name: str) -> str:
-    """'L.L.C.' -> 'LLC', 'P.C.' -> 'PC' — recognized dotted legal suffixes
-    only. Dotted initials are untouched: 'A.B. Clinic' and 'C.D. Clinic' are
-    different organizations and must not normalize toward each other."""
+    """'Clinic L.L.C.' -> 'Clinic LLC' — recognized dotted legal suffixes in
+    trailing position only. Dotted initials and prefix designator spellings
+    are untouched: 'A.B. Clinic' / 'P.C. Clinic' keep their initials."""
     return _DOTTED_ABBREV.sub(lambda m: m.group().replace(".", ""), name)
 
 
