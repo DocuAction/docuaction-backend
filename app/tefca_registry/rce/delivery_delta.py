@@ -515,6 +515,27 @@ async def comparable_baseline_candidates(db, current, *, limit: int = 5) -> List
     return out
 
 
+def _baseline_ineligible_reason(facts: Dict[str, Any]) -> Optional[str]:
+    """Why an intake can never anchor "new entrant", even when comparable.
+
+    These are eligibility facts about the PREDECESSOR alone, deliberately
+    independent of `assess_comparability` (whose synthetic rule only fires when
+    exactly ONE side is synthetic, and whose size rule skips zero counts):
+    - an intake with no records is not a population — absence from it proves
+      nothing, and a header-only file parses as PARSED;
+    - an intake that declares itself a smoke test is test traffic whatever its
+      size or schema (`is_synthetic_intake` matches only "synthetic", and a
+      smoke test within 10x of the delivery passes the size rule).
+    """
+    if not int(facts.get("record_count") or 0):
+        return "no records (a header-only intake is not a population)"
+    hay = " ".join(str(facts.get(k) or "") for k in (
+        "delivery_label", "original_filename", "declared_source")).lower()
+    if any(marker in hay for marker in ("smoke-test", "smoke test", "smoketest")):
+        return "explicitly identified smoke test"
+    return None
+
+
 async def comparable_previous_delivery(db, intake) -> Optional[m.RceSourceIntake]:
     """The most recent earlier delivery that is COMPARABLE to this one.
 
@@ -525,7 +546,9 @@ async def comparable_previous_delivery(db, intake) -> Optional[m.RceSourceIntake
     (and held) in the real September delivery were flagged ACT-001 as
     history-less new entrants. A predecessor that fails `assess_comparability`
     (synthetic on one side only, different declared source, an
-    order-of-magnitude size gap, or a different schema fingerprint) is skipped.
+    order-of-magnitude size gap, or a different schema fingerprint) is skipped,
+    and so is one `_baseline_ineligible_reason` rules out (empty, or an
+    explicitly identified smoke test) even when it would pass comparability.
     Returns None when no comparable earlier delivery exists — a true baseline.
     """
     cur = intake_facts(intake)
@@ -536,6 +559,9 @@ async def comparable_previous_delivery(db, intake) -> Optional[m.RceSourceIntake
         .order_by(m.RceSourceIntake.received_at.desc(), m.RceSourceIntake.id.desc())
         .limit(500))).scalars().all()
     for row in rows:
-        if assess_comparability(cur, intake_facts(row))["status"] == "COMPARABLE":
+        facts = intake_facts(row)
+        if _baseline_ineligible_reason(facts):
+            continue
+        if assess_comparability(cur, facts)["status"] == "COMPARABLE":
             return row
     return None

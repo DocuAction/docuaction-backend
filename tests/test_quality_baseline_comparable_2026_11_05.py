@@ -67,6 +67,44 @@ async def test_smoke_test_between_two_directories_is_not_the_baseline(rolled_bac
     assert ctx["new_entrant_ids"] == {f"{ARC}.77.1"}
 
 
+async def test_empty_and_smoke_labelled_intakes_are_never_the_baseline(rolled_back_db):
+    """Two intakes that PASS assess_comparability must still be skipped:
+    - a header-only PARSED intake (record_count 0 bypasses the size rule — an
+      empty population proves absence of nothing);
+    - an explicitly labelled smoke test within 10x of the delivery with the
+      same schema (the synthetic rule matches only the word "synthetic", and
+      here both sides are synthetic fixtures anyway, so it never fires)."""
+    db = rolled_back_db
+    now = datetime(2001, 11, 5, 12, 0, 0)
+
+    sept_id, _ = await seed_intake(db, make_rows(20), with_job=False)
+    await _set_received(db, sept_id, now - timedelta(days=55))
+
+    # Newer: an 18-row smoke test (comparable size, same schema).
+    smoke_id, _ = await seed_intake(db, make_rows(18, arc=f"{ARC}.66"), with_job=False)
+    smoke = await db.get(m.RceSourceIntake, smoke_id)
+    smoke.delivery_label = "SMOKE-TEST 2001-10-16"
+    smoke.received_at = now - timedelta(days=20)
+    await db.commit()
+
+    # Newest: a header-only intake (zero records, PARSED).
+    empty_id, _ = await seed_intake(db, [], with_job=False)
+    await _set_received(db, empty_id, now - timedelta(days=10))
+
+    oct_id, _ = await seed_intake(db, make_rows(20) + make_rows(1, arc=f"{ARC}.77"),
+                                  with_job=False)
+    await _set_received(db, oct_id, now)
+
+    from app.tefca_registry.rce.delivery_delta import comparable_previous_delivery
+    from app.tefca_registry.rce.quality_engine import _build_dataset_context
+
+    comparable = await comparable_previous_delivery(db, await db.get(m.RceSourceIntake, oct_id))
+    assert str(comparable.id) == str(sept_id)   # not the empty one, not the smoke test
+    ctx = await _build_dataset_context(db, oct_id)
+    assert ctx["previous_intake_id"] == str(sept_id)
+    assert ctx["new_entrant_ids"] == {f"{ARC}.77.1"}
+
+
 async def test_no_comparable_predecessor_means_no_new_entrants(rolled_back_db):
     """A true baseline (only a non-comparable intake exists before it) flags
     nothing: fail-safe, matching the no-predecessor behaviour."""
