@@ -123,6 +123,7 @@ def test_identical_all_stop_word_name_cannot_conflict_with_itself():
 
 
 def test_exact_name_match_is_pass_with_match_recorded():
+    """Case-insensitive exact equality is a MATCH: PASS, no conflict recorded."""
     result = _identity_result("SYNTHETIC URGENT CARE ALPHA", "Synthetic Urgent Care Alpha")
     item = next(i for i in result.items if i.source == "NPPES")
     assert item.disposition == "PASS"
@@ -163,6 +164,7 @@ def test_entity_outcome_routes_review_to_review_required():
     from app.tefca_registry.rce import automated_verification as av
 
     def bundle(*dispositions):
+        """An evidence dict with one applicable dimension per disposition."""
         return {"dimensions": [{"applicability": "APPLICABLE", "disposition": d}
                                for d in dispositions]}
 

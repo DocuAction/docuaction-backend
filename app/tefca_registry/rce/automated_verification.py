@@ -216,11 +216,13 @@ class SamExtractScreeningDisabled(RuntimeError):
 
 
 def sam_extract_screening_enabled() -> bool:
+    """Env-flag gate for SAM-extract screening (see app.Tefca.sam_extract)."""
     from app.Tefca import sam_extract as se
     return os.environ.get(se.ENV_FLAG, "").strip().lower() in ("1", "true", "yes")
 
 
 def automated_coverage_enabled() -> bool:
+    """Env-flag gate for the automated coverage scheduler."""
     return os.environ.get(ENV_FLAG, "").strip().lower() in ("1", "true", "yes", "on")
 
 
@@ -281,6 +283,7 @@ def _classify_entity_outcome(evidence: Dict[str, Any]) -> str:
 
 
 async def _entity_row_shape(db, entity_uuid) -> Optional[Any]:
+    """The registry-entity ORM row for a canonical entity id, or None."""
     from app.tefca_registry import models as reg
 
     return await db.get(reg.TefcaRegEntity, entity_uuid)
@@ -461,6 +464,9 @@ BATCH_LOCK_CLASS_KEY = 20261030
 
 
 async def _try_advisory_batch_lock(db, intake_id) -> bool:
+    """Transaction-scoped Postgres advisory lock per (class key, intake);
+    False when another batch for the same delivery holds it.
+    """
     return bool((await db.execute(
         text("SELECT pg_try_advisory_xact_lock(CAST(:k AS int), "
              "hashtext(CAST(:i AS text)))"),
@@ -667,6 +673,7 @@ def reset_coverage_scheduler_state() -> None:
 
 
 def _env_seconds(name: str, default: int) -> int:
+    """Integer seconds from an env var, with default and [MIN, MAX] clamping."""
     raw = os.environ.get(name, "").strip()
     try:
         value = int(raw) if raw else default
@@ -677,6 +684,7 @@ def _env_seconds(name: str, default: int) -> int:
 
 
 def backoff_base_seconds() -> int:
+    """The configured backoff base (clamped env override or default)."""
     return _env_seconds(ENV_BACKOFF_BASE_SECONDS, DEFAULT_BACKOFF_BASE_SECONDS)
 
 
@@ -697,6 +705,7 @@ def backoff_seconds(consecutive_timeouts: int) -> int:
 
 
 def _iso(epoch: Optional[float]) -> Optional[str]:
+    """Epoch seconds -> UTC ISO-8601 string (seconds precision), or None."""
     if epoch is None:
         return None
     return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat(timespec="seconds")
@@ -919,6 +928,9 @@ _ONE_DELIVERY_NEEDING_COVERAGE_SQL = """
 
 
 def _is_statement_timeout(exc: BaseException) -> bool:
+    """True when the exception (or its .orig) is a Postgres statement-timeout
+    / query-canceled error.
+    """
     for candidate in (exc, getattr(exc, "orig", None)):
         if candidate is None:
             continue

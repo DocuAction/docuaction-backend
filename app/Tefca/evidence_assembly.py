@@ -76,6 +76,7 @@ ONC_FIELDS_NOT_SUPPLIED = (
 
 
 def _identifier(entity: Dict[str, Any], system: str) -> Optional[str]:
+    """The entity's identifier value for one FHIR system, or None."""
     for ident in entity.get("identifier") or []:
         if (ident.get("system") or "") == system:
             return (ident.get("value") or "").strip() or None
@@ -83,11 +84,13 @@ def _identifier(entity: Dict[str, Any], system: str) -> Optional[str]:
 
 
 def _submitted_address(entity: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The entity's first submitted address dict, or None."""
     addresses = entity.get("address") or []
     return addresses[0] if addresses else None
 
 
 def _nppes_location(nppes_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """NPPES's LOCATION address shaped like a FHIR address, or None."""
     for a in nppes_data.get("addresses") or []:
         if (a.get("address_purpose") or "").upper() == "LOCATION":
             return {
@@ -100,6 +103,7 @@ def _nppes_location(nppes_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def _ok(result: Optional[SourceResult]) -> bool:
+    """True for a successful (answered) SourceResult."""
     return bool(result and result.success)
 
 
@@ -213,6 +217,13 @@ def _dimension_identity(
     profile: ApplicabilityProfile,
     sources: Dict[str, SourceResult],
 ) -> DimensionResult:
+    """D1 IDENTITY from NPPES (primary) with PECOS corroboration only.
+    Registry EXISTENCE and organization IDENTITY are kept separate: a
+    found-and-active NPI keeps the evidence ITEM at PASS, while a
+    legal-name no-correspondence (NPPES_IDENTITY_NAME_CONFLICT), a
+    deactivation, or a primary-authority identifier conflict rolls the
+    DIMENSION to REVIEW for an analyst — never an auto-fail.
+    """
     dim = Dimension.D1_IDENTITY.value
     applicability = profile.applicability_of(Dimension.D1_IDENTITY)
     nppes = sources.get("nppes")
@@ -384,6 +395,9 @@ def _dimension_identity(
 
 def _dimension_medicare(profile: ApplicabilityProfile,
                         sources: Dict[str, SourceResult]) -> DimensionResult:
+    """D2 MEDICARE ENROLLMENT from CMS PPEF. A PECOS non-match is a finding
+    to review, never a TEFCA failure; an outage is UNAVAILABLE.
+    """
     dim = Dimension.D2_MEDICARE_ENROLLMENT.value
     applicability = profile.applicability_of(Dimension.D2_MEDICARE_ENROLLMENT)
     pecos = sources.get("cms_ppef_enrollment")
@@ -644,6 +658,11 @@ def _dimension_exclusion(entity: Dict[str, Any], profile: ApplicabilityProfile,
     #                       unperformed screening is UNAVAILABLE, not PASS.
     def _sam_disposition(d: Dict[str, Any], *, by_name: bool
                          ) -> tuple[str, str]:
+        """(disposition, note) for one SAM answer: ambiguous identity or a
+        potential hit is REVIEW; an incomplete exclusion leg is UNAVAILABLE;
+        a clean name-only search is NOT_FOUND (never an exclusion clearance);
+        a clean UEI match is PASS.
+        """
         if d.get("identity_ambiguous"):
             return (Disposition.REVIEW.value,
                     "SAM.gov matched more than one entity by name; identity "
@@ -867,6 +886,10 @@ _ADDRESS_RESULT_TO_DISPOSITION = {
 def _dimension_address(entity: Dict[str, Any], profile: ApplicabilityProfile,
                        sources: Dict[str, SourceResult],
                        website_evidence: Optional[Dict[str, Any]] = None) -> DimensionResult:
+    """D4 ADDRESS: reconcile the submitted address against NPPES/PECOS
+    practice locations and optional website corroboration —
+    compare-never-overwrite.
+    """
     dim = Dimension.D4_ADDRESS.value
     applicability = profile.applicability_of(Dimension.D4_ADDRESS)
     submitted = _submitted_address(entity)
@@ -999,6 +1022,7 @@ def _dimension_tefca(
     conflicts: List[Dict[str, Any]] = []
 
     def facet(name: str, disposition: Disposition, value: Any, note: str) -> None:
+        """Record one TEFCA-alignment facet and mirror it into matches/conflicts."""
         facets[name] = {"disposition": disposition.value, "value": value, "note": note}
         if disposition is Disposition.PASS:
             matches.append({"field": name, "value": value, "result": "PASS"})
