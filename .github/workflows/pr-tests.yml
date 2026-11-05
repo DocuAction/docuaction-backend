@@ -116,6 +116,7 @@ jobs:
         # cover it.
         run: |
           python -m pytest \
+            tests/test_quality_baseline_comparable_2026_11_05.py \
             tests/test_reconciliation_evidence_shape.py \
             tests/test_pecos_retry_plan_endpoint.py \
             tests/test_report_delivery_isolation_p0.py \
