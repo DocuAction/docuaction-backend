@@ -177,20 +177,25 @@ async def test_snapshot_trigger_covers_population_and_other_triggers_stay_bounde
     # One explicit item row per targeted entity.
     assert len(await _target_entity_ids(job["job_id"])) == 3
 
-    # A SOURCE_RECOVERY request asking for the wide bound is clamped back down,
-    # keeps the full build, and keeps its latest-row-UNAVAILABLE targeting rule.
+    # A non-snapshot request asking for the wide bound is clamped back down and
+    # keeps the full build. Trigger validation is stubbed (it has its own tests;
+    # every real non-snapshot trigger refuses under this seeding, which would
+    # silently skip these assertions).
     from app.core.database import async_session_maker
+
+    async def _authority(db, trigger_kind, source_id, trigger_ref):
+        return {"authority": "synthetic", "trigger_ref": trigger_ref}
+
+    monkeypatch.setattr(rechecks, "_validate_trigger", _authority)
     async with async_session_maker() as db:
-        try:
-            recovery = await rechecks.request_recheck(
-                db, intake_id, trigger_kind=rm.TRIGGER_SOURCE_RECOVERY,
-                source_id=sp.SAM_GOV, trigger_ref="INC-SYNTH-BOUND",
-                rationale="synthetic", user=_User("reviewer"), max_entities=30000)
-        except rechecks.RecheckRefused:
-            recovery = None  # nothing UNAVAILABLE in this seeding — bound still provable
-    if recovery is not None:
-        assert recovery["pinned"]["max_entities"] == rechecks.MAX_ENTITIES_PER_JOB
-        assert recovery["pinned"]["evidence_scope"] == rechecks.SCOPE_FULL_BUILD
+        # Not SOURCE_RECOVERY: its latest-row-UNAVAILABLE targeting matches no
+        # seeded entity, and an empty eligible set refuses before the bound.
+        other = await rechecks.request_recheck(
+            db, intake_id, trigger_kind=rm.TRIGGER_APPROVED_MAPPING_CHANGE,
+            source_id=sp.SAM_GOV, trigger_ref="synthetic-mapping-v1",
+            rationale="synthetic", user=_User("reviewer"), max_entities=30000)
+    assert other["pinned"]["max_entities"] == rechecks.MAX_ENTITIES_PER_JOB
+    assert other["pinned"]["evidence_scope"] == rechecks.SCOPE_FULL_BUILD
 
 
 # ── 3. enrollment-only gather: one source asked, one source written ──────────
