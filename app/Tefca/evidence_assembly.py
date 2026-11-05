@@ -46,7 +46,7 @@ from app.Tefca.cms_ppef import (
     NO_ACTIVE_REVOCATION_RECORD_FOUND,
     PPEFComponent,
 )
-from app.Tefca.connectors import SourceResult
+from app.Tefca.connectors import SourceResult, _name_similarity
 from app.Tefca.evidence_dimensions import (
     Applicability,
     Dimension,
@@ -241,13 +241,26 @@ def _dimension_identity(
             or (bool(nppes_data.get("deactivation_date"))
                 and not nppes_data.get("reactivation_date")))
         submitted_name = entity.get("name") or ""
+        legal_name = str(nppes_data.get("legal_name") or "")
         name_match = (
-            bool(submitted_name) and bool(nppes_data.get("legal_name"))
-            and submitted_name.strip().upper() == str(nppes_data["legal_name"]).strip().upper()
+            bool(submitted_name) and bool(legal_name)
+            and submitted_name.strip().upper() == legal_name.strip().upper()
         )
+        # A found-and-active NPI is registry EXISTENCE, not organization
+        # IDENTITY. When the registered legal name does not correspond to the
+        # submitted organization name at all (tolerant token similarity below
+        # the same 0.5 bound the enhanced check_nppes escalates at), the NPI
+        # may belong to a different organization — REVIEW, never auto-fail:
+        # a renamed organization or an unregistered DBA can legitimately
+        # differ, and only an analyst can tell those apart.
+        name_similarity: Optional[float] = None
+        if found and submitted_name and legal_name:
+            name_similarity = _name_similarity(submitted_name, legal_name)
+        name_conflict = (found and not deactivated
+                         and name_similarity is not None and name_similarity < 0.5)
         items.append(EvidenceItem(
             dimension=dim, source="NPPES",
-            disposition=(Disposition.REVIEW.value if deactivated
+            disposition=(Disposition.REVIEW.value if deactivated or name_conflict
                          else Disposition.PASS.value if found
                          else Disposition.NOT_FOUND.value),
             source_record_identifier=nppes_data.get("npi"),
@@ -256,24 +269,37 @@ def _dimension_identity(
             record_count=1 if found else 0,
             fields_evaluated=["npi", "legal_name", "enumeration_type", "taxonomy", "status"],
             field_matches=([{"field": "legal_name", "submitted": submitted_name,
-                             "nppes": nppes_data.get("legal_name"), "result": "MATCH"}]
+                             "nppes": legal_name, "result": "MATCH"}]
                            if name_match else []),
             field_conflicts=([{"field": "legal_name", "submitted": submitted_name,
-                               "nppes": nppes_data.get("legal_name"), "result": "DIFFERS"}]
+                               "nppes": legal_name, "result": "DIFFERS",
+                               "similarity": (round(name_similarity, 3)
+                                              if name_similarity is not None else None)}]
                              if found and submitted_name and not name_match else []),
             original_values={k: nppes_data.get(k) for k in
                              ("npi", "legal_name", "enumeration_type", "taxonomy",
                               "taxonomy_code", "status", "deactivation_date",
                               "reactivation_date")},
             rule_applied=("NPPES_NPI_DEACTIVATED" if deactivated
+                          else "NPPES_IDENTITY_NAME_CONFLICT" if name_conflict
                           else "NPPES_PRIMARY_IDENTITY_AUTHORITY"),
             note=(("NPI deactivated in NPPES"
                    + (f" on {nppes_data.get('deactivation_date')}"
                       if nppes_data.get("deactivation_date") else "") + ".")
-                  if deactivated else None if found else "NPI not present in NPPES."),
+                  if deactivated
+                  else (f"NPPES legal name {legal_name!r} does not correspond to the "
+                        f"submitted organization name {submitted_name!r} "
+                        f"(similarity {name_similarity:.2f}). The NPI may belong to a "
+                        f"different organization; presented for analyst identity review.")
+                  if name_conflict
+                  else None if found else "NPI not present in NPPES."),
         ))
-        nppes_disposition = Disposition.PASS if found and not deactivated else Disposition.REVIEW
+        nppes_disposition = (Disposition.PASS if found and not deactivated and not name_conflict
+                             else Disposition.REVIEW)
         nppes_review_reason = ("NPI is deactivated in NPPES." if deactivated
+                               else "NPPES legal name does not correspond to the submitted "
+                                    "organization name; the NPI may belong to a different "
+                                    "organization." if name_conflict
                                else "NPI was not found in NPPES.")
 
     # Corroboration: PECOS. Explicitly labelled so it can never read as primary.

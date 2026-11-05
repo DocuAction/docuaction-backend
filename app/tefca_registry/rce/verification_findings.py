@@ -167,6 +167,14 @@ def npi_outcome_from_evidence(evidence: Dict[str, Any]) -> Optional[Dict[str, An
                         "status": values.get("status"),
                         "deactivation_date": values.get("deactivation_date"),
                         "npi": values.get("npi")}
+            if item.get("rule_applied") == "NPPES_IDENTITY_NAME_CONFLICT":
+                # Found and active, but the registered legal name does not
+                # correspond to the submitted organization — the dimension is
+                # REVIEW and the conflict lives on the evidence item. There is
+                # no contract-reserved rule id for this outcome yet, so there
+                # is nothing to record in the ledger ("None means nothing to
+                # record") — but it must NEVER fall through to VERIFIED.
+                return None
             return {"outcome": VERIFIED, "detail": "NPI found and active in NPPES.",
                     "npi": values.get("npi")}
     return None
