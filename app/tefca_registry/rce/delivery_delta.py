@@ -581,6 +581,11 @@ _BASELINE_SCAN_BATCH = 500
 
 
 async def _first_eligible(db, cur, cur_id_count, rows):
+    """The first intake of one scan page that qualifies as the baseline.
+
+    Applies, in order: `_baseline_ineligible_reason` (empty / smoke test),
+    `assess_comparability`, and the distinct-usable-ID size rule. Returns the
+    qualifying intake row, or None when the page holds none."""
     for row in rows:
         facts = intake_facts(row)
         if _baseline_ineligible_reason(facts):
