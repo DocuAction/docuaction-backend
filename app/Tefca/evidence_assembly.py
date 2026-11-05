@@ -256,7 +256,9 @@ def _dimension_identity(
         name_similarity: Optional[float] = None
         if found and submitted_name and legal_name:
             name_similarity = _name_similarity(submitted_name, legal_name)
-        name_conflict = (found and not deactivated
+        # Exact equality can never conflict, whatever the token score: a name
+        # made entirely of stop words ("MD") scores 0.0 against itself.
+        name_conflict = (found and not deactivated and not name_match
                          and name_similarity is not None and name_similarity < 0.5)
         items.append(EvidenceItem(
             dimension=dim, source="NPPES",

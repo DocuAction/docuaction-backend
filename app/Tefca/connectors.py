@@ -165,6 +165,10 @@ class RetryableHTTPError(Exception):
 # to cross-reference a submitted entity against its authoritative registration.
 
 def _name_similarity(name1: str, name2: str) -> float:
+    # Punctuation is noise, not identity: "ACME, INC." and "ACME INC" are the
+    # same organization, and tokens must not keep commas/periods attached.
+    name1 = "".join(c if c.isalnum() else " " for c in name1)
+    name2 = "".join(c if c.isalnum() else " " for c in name2)
     words1 = set(name1.lower().split()) - {"inc","llc","ltd","corp","co","the","of","and","&","dba","pllc","pc","pa","md","do"}
     words2 = set(name2.lower().split()) - {"inc","llc","ltd","corp","co","the","of","and","&","dba","pllc","pc","pa","md","do"}
     if not words1 or not words2:
