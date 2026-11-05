@@ -146,8 +146,12 @@ async def _build_dataset_context(db, intake_id) -> Dict[str, Any]:
     # 1.3.0 — the delivery is not the whole namespace. A parent or a
     # delegated authority may be an entity an EARLIER delivery promoted, and
     # "new entrant" is only meaningful against the previous delivery.
+    # 1.8.0 — "previous" must be a COMPARABLE delivery, not merely the latest
+    # earlier intake: a smoke-test or synthetic intake between two directory
+    # snapshots is not the population these ids could have been present in,
+    # and using it flags continuing records as history-less new entrants.
     from app.tefca_registry import models as reg
-    from app.tefca_registry.rce.delivery_delta import previous_delivery
+    from app.tefca_registry.rce.delivery_delta import comparable_previous_delivery
 
     registry_oids = {v for (v,) in (await db.execute(
         select(reg.TefcaEntityIdentifier.identifier_value)
@@ -156,7 +160,7 @@ async def _build_dataset_context(db, intake_id) -> Dict[str, Any]:
     previous = None
     intake = await db.get(m.RceSourceIntake, intake_id)
     if intake is not None:
-        previous = await previous_delivery(db, intake)
+        previous = await comparable_previous_delivery(db, intake)
     if previous is not None:
         previous_ids = {v for (v,) in (await db.execute(
             select(m.RceSourceRecord.source_rce_id)

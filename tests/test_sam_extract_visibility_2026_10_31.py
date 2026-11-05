@@ -81,7 +81,7 @@ def test_exc_001_registered_with_truthful_authority():
     # HUMAN_REQUIRED, never auto-applied and never QA-auto: the determination
     # (confirm / rule out) belongs to an analyst.
     assert authority == "HUMAN_REQUIRED"
-    assert RULE_SET_VERSION == "1.7.0"
+    assert RULE_SET_VERSION == "1.8.0"
 
 
 def test_state_layer_gains_sam_extract_and_headline_does_not():

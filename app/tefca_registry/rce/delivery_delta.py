@@ -513,3 +513,29 @@ async def comparable_baseline_candidates(db, current, *, limit: int = 5) -> List
             if len(out) >= limit:
                 break
     return out
+
+
+async def comparable_previous_delivery(db, intake) -> Optional[m.RceSourceIntake]:
+    """The most recent earlier delivery that is COMPARABLE to this one.
+
+    `previous_delivery` answers "what arrived last"; this answers "what is this
+    delivery a successor OF". The October 2026 quality run showed why the
+    difference matters: the latest earlier intake was a 3-record smoke test, so
+    `new_entrant_ids` was computed against it and 21 records that were present
+    (and held) in the real September delivery were flagged ACT-001 as
+    history-less new entrants. A predecessor that fails `assess_comparability`
+    (synthetic on one side only, different declared source, an
+    order-of-magnitude size gap, or a different schema fingerprint) is skipped.
+    Returns None when no comparable earlier delivery exists — a true baseline.
+    """
+    cur = intake_facts(intake)
+    rows = (await db.execute(
+        select(m.RceSourceIntake)
+        .where(m.RceSourceIntake.received_at < intake.received_at,
+               m.RceSourceIntake.status != "FAILED")
+        .order_by(m.RceSourceIntake.received_at.desc(), m.RceSourceIntake.id.desc())
+        .limit(500))).scalars().all()
+    for row in rows:
+        if assess_comparability(cur, intake_facts(row))["status"] == "COMPARABLE":
+            return row
+    return None
