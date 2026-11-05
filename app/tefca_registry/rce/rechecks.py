@@ -592,7 +592,8 @@ async def run_batch(db, job_id, *, batch_size: Optional[int] = None) -> Dict[str
     items = (await db.execute(
         select(RceRecheckItem)
         .where(RceRecheckItem.job_id == job.id, RceRecheckItem.state == rm.ITEM_PENDING)
-        .order_by(RceRecheckItem.entity_ref).limit(size))).scalars().all()
+        .order_by(RceRecheckItem.entity_ref, RceRecheckItem.entity_id)
+        .limit(size))).scalars().all()
 
     local_store = make_local_store(db)
     for item in items:
@@ -742,7 +743,11 @@ async def list_items(db, job_id, *, limit: int = 100, offset: int = 0) -> Dict[s
         RceRecheckItem.job_id == job.id))).scalar() or 0)
     rows = (await db.execute(
         select(RceRecheckItem).where(RceRecheckItem.job_id == job.id)
-        .order_by(RceRecheckItem.entity_ref).limit(limit).offset(offset))).scalars().all()
+        # entity_ref (rce_org_oid) is not unique; entity_id makes the sort
+        # total within one job so offset pagination can never repeat or skip
+        # a row across a tie at a page boundary.
+        .order_by(RceRecheckItem.entity_ref, RceRecheckItem.entity_id)
+        .limit(limit).offset(offset))).scalars().all()
     return {"job_id": str(job.id), "total": total, "count": len(rows),
             "limit": limit, "offset": offset,
             "items": [{"entity_id": str(r.entity_id), "entity_ref": r.entity_ref,
