@@ -211,7 +211,7 @@ def _actor(user) -> Tuple[Optional[str], str]:
 
 async def request_recheck(db, intake_id, *, trigger_kind: str, source_id: str,
                           trigger_ref: str, rationale: str, user,
-                          max_entities: int = MAX_ENTITIES_PER_JOB,
+                          max_entities: Optional[int] = None,
                           batch_size: int = DEFAULT_BATCH_SIZE) -> Dict[str, Any]:
     """Create a PENDING_APPROVAL recheck job, or return the existing one for
     the same trigger. Looks nothing up."""
@@ -247,10 +247,21 @@ async def request_recheck(db, intake_id, *, trigger_kind: str, source_id: str,
             f"({len(candidates)} entity(ies) have evidence from it; none qualifies)")
     # Snapshot-triggered jobs may cover the whole eligible population; every
     # other trigger keeps the tight bound. See MAX_ENTITIES_SNAPSHOT_TRIGGER's
-    # comment for why (one-job-per-edition idempotency).
+    # comment for why (one-job-per-edition idempotency). An omitted
+    # max_entities means the trigger's own full bound, never a smaller
+    # implicit default.
     cap = (MAX_ENTITIES_SNAPSHOT_TRIGGER
            if trigger_kind == rm.TRIGGER_NEW_APPROVED_SNAPSHOT else MAX_ENTITIES_PER_JOB)
     bound = max(1, min(int(max_entities or cap), cap))
+    if trigger_kind == rm.TRIGGER_NEW_APPROVED_SNAPSHOT and len(eligible) > bound:
+        # One job per edition: a short job would strand the remainder for this
+        # edition forever (a later request returns the existing job). Refuse
+        # rather than silently under-target.
+        raise RecheckRefused(
+            f"{len(eligible)} entities are eligible for this snapshot edition but "
+            f"max_entities={bound} would leave {len(eligible) - bound} of them "
+            f"permanently untargeted (one job per edition). Omit max_entities for "
+            f"full coverage or request at least {len(eligible)}.")
     targets = eligible[:bound]
 
     # The gather scope is decided HERE, pinned, and shown to the approver —
@@ -375,9 +386,76 @@ def _source_disposition(evidence: Dict[str, Any], sources: List[str]) -> Optiona
     return found[0]
 
 
-async def _enrollment_only_evidence(entity, *, local_store) -> Dict[str, Any]:
+async def _enrollment_lookup_from_snapshot(db, snap, npi) -> "SourceResult":
+    """CMS PPEF ENROLLMENT lookup answered FROM THE PINNED SNAPSHOT EDITION.
+
+    The job's trigger authority is a specific completed ingest (a snapshot
+    UUID with a checksum). Answering the lookup from the live CMS data-api
+    would describe whatever edition CMS serves at run time — provenance the
+    snapshot's checksum does not establish. This reads the pinned snapshot's
+    own rows, so the appended evidence cites exactly the edition that
+    authorized the job. Data shape matches PPEFEnrollmentConnector.lookup_by_npi
+    so `_dimension_medicare` consumes it unchanged.
+    """
+    from app.Tefca.cms_ppef import (PPEFComponent, PPEFEnrollmentConnector,
+                                    _shape_enrollment)
+    from app.Tefca.connectors import SourceResult
+    from app.Tefca.models import TEFCAPPEFRecord
+    from app.Tefca.ppef_store import _snapshot_provenance
+    from app.services.npi_validator import npi_rejection_reason
+
+    source = PPEFEnrollmentConnector.SOURCE_NAME
+    anchor = snap.parent_dataset_id or f"ppef-snapshot:{snap.id}"
+    qp = {"npi": npi, "snapshot_id": str(snap.id)}
+    # Same fail-closed gate as the connector (Fix 1): a missing or malformed
+    # NPI is never a clean "found: False".
+    rejection = npi_rejection_reason(npi)
+    if rejection:
+        return SourceResult.unavailable(source, rejection, qp, anchor)
+    rows = (await db.execute(
+        select(TEFCAPPEFRecord)
+        .where(TEFCAPPEFRecord.snapshot_id == snap.id)
+        .where(TEFCAPPEFRecord.component == PPEFComponent.ENROLLMENT.value)
+        .where(TEFCAPPEFRecord.npi == npi))).scalars().all()
+    payloads = [dict(r.payload or {}) for r in rows]
+    records = [_shape_enrollment(p) for p in payloads]
+    provenance = _snapshot_provenance(snap)
+    provenance["row_count"] = len(records)
+    provenance["query_filters"] = {"NPI": npi}
+    data = {
+        "found": bool(records),
+        "npi": npi,
+        "records": records,
+        "record_count": len(records),
+        "enrollment_ids": [r["enrollment_id"] for r in records if r["enrollment_id"]],
+        "pac_ids": sorted({r["pac_id"] for r in records if r["pac_id"]}),
+        "multiple_npi_flag": ("Y" if any(r["multiple_npi_flag"] == "Y" for r in records)
+                              else ("N" if records else None)),
+        "provenance": provenance,
+    }
+    return SourceResult.ok(source, data, qp, anchor, raw_for_hash=payloads)
+
+
+async def _prior_nppes_data(db, entity_id) -> Dict[str, Any]:
+    """The entity's most recent PERSISTED NPPES classification, if NPPES ever
+    answered with a record (PASS, or REVIEW for a deactivated NPI). Reused so
+    the enrollment-only scope keeps the established enumeration type and
+    taxonomy WITHOUT re-asking NPPES; an entity NPPES never answered for gets
+    {} — the same position the full build would be in."""
+    from app.Tefca.models import TEFCADimensionEvidence as DE
+
+    row = (await db.execute(
+        select(DE.original_values)
+        .where(DE.entity_id == str(entity_id), DE.source == "NPPES",
+               DE.disposition.in_(("PASS", "REVIEW")))
+        .order_by(DE.created_at.desc()).limit(1))).scalar_one_or_none()
+    return {k: v for k, v in (row or {}).items() if v is not None}
+
+
+async def _enrollment_only_evidence(entity, *, db, entity_id, snapshot) -> Dict[str, Any]:
     """A one-source partial generation: ONLY the CMS PPEF ENROLLMENT lookup
-    runs, and ONLY CMS_PPEF_ENROLLMENT evidence items are produced.
+    runs — against the job's pinned snapshot edition — and ONLY
+    CMS_PPEF_ENROLLMENT evidence items are produced.
 
     Mirrors `automated_verification.record_sam_extract_attempt`, the
     established one-source pattern: the D2 dimension is assembled by
@@ -391,18 +469,18 @@ async def _enrollment_only_evidence(entity, *, local_store) -> Dict[str, Any]:
     from app.Tefca.applicability import build_profile
     from app.Tefca.connectors import _extract_npi
     from app.Tefca.evidence_assembly import _dimension_medicare
-    from app.Tefca.evidence_service import EvidenceService
 
-    service = EvidenceService(local_store=local_store)
     npi = rce_fields.rce_npi(entity) or _extract_npi(entity)
-    enrollment = await service.ppef.lookup_by_npi(npi)
+    enrollment = await _enrollment_lookup_from_snapshot(db, snapshot, npi)
     pecos_found = (bool((enrollment.data or {}).get("found"))
                    if enrollment is not None and enrollment.success else None)
-    # nppes_data is deliberately empty: this scope must not re-ask NPPES. The
-    # only effect on D2 applicability is that an NPI can come solely from the
-    # entity's own identifiers — which is also the only NPI the enrollment
-    # lookup above could use.
-    profile = build_profile(entity, nppes_data={}, pecos_found=pecos_found)
+    # NPPES is NOT re-asked in this scope. The established classification is
+    # reused from the entity's persisted NPPES evidence so a provider NPPES
+    # already recognised keeps its enumeration type and taxonomy — without it,
+    # a previously classified provider with no enrollment match would degrade
+    # from REVIEW to NOT_APPLICABLE on the D2 dimension.
+    nppes_prior = await _prior_nppes_data(db, entity_id)
+    profile = build_profile(entity, nppes_data=nppes_prior, pecos_found=pecos_found)
     dim = _dimension_medicare(profile, {"cms_ppef_enrollment": enrollment})
     return {
         "generated_at": datetime.utcnow().isoformat(),
@@ -429,7 +507,18 @@ async def _recheck_one(db, job: RceRecheckJob, item: RceRecheckItem, *, local_st
         return
     scope = (job.pinned or {}).get("evidence_scope") or SCOPE_FULL_BUILD
     if scope == SCOPE_CMS_ENROLLMENT_ONLY:
-        evidence = await _enrollment_only_evidence(entity, local_store=local_store)
+        from app.Tefca.models import TEFCAPPEFSnapshot
+        # The trigger authority IS the edition: read it, never the live API.
+        # Validated complete at request time; snapshots are append-only, so a
+        # missing row here is a genuine integrity failure, not a race.
+        snap = await db.get(TEFCAPPEFSnapshot, uuid.UUID(str(job.trigger_ref)))
+        if snap is None:
+            item.state, item.processed_at = rm.ITEM_ERROR, now
+            item.detail = {"error": f"pinned PPEF snapshot {job.trigger_ref} no longer "
+                                    f"resolves; nothing was looked up"}
+            return
+        evidence = await _enrollment_only_evidence(
+            entity, db=db, entity_id=item.entity_id, snapshot=snap)
     else:
         evidence = await EvidenceService(local_store=local_store).build_evidence(entity)
     sources = evidence_sources_for(job.source_id)

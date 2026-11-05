@@ -33,32 +33,6 @@ from app.tefca_registry.rce import rechecks
 pytestmark = pytest.mark.asyncio
 
 
-class _Enrollment:
-    """A switchable fake CMS PPEF enrollment connector with a call log."""
-
-    def __init__(self):
-        self.calls = []
-
-    async def __call__(self, connector_self, npi):
-        from app.Tefca.connectors import SourceResult
-
-        self.calls.append(npi)
-        if not npi:
-            return SourceResult.unavailable(
-                "CMS_PPEF_ENROLLMENT",
-                "no_npi_submitted: entity has no NPI identifier to look up", {"npi": npi})
-        return SourceResult.ok("CMS_PPEF_ENROLLMENT", {
-            "found": True,
-            "records": [{"NPI": npi, "ENRLMT_ID": f"O{npi}", "ORG_NAME": "SYNTHETIC"}],
-            "enrollment_ids": [f"O{npi}"],
-            "pac_ids": [f"P{npi}"],
-            "record_count": 1,
-            "provenance": {"as_of_label": "Q4 2026 (synthetic)",
-                           "dataset_version_anchor": "synthetic-q4-anchor",
-                           "query_timestamp": datetime.utcnow().isoformat()},
-        }, {"npi": npi})
-
-
 async def _seeded(monkeypatch, n=3):
     """Promoted delivery, verified with every connector synthetic."""
     from app.core.database import async_session_maker
@@ -97,12 +71,49 @@ async def _completed_ppef_snapshot():
 async def _request_snapshot_recheck(intake_id, user, snapshot_id, **over):
     from app.core.database import async_session_maker
 
+    # max_entities is deliberately OMITTED: an omitted bound must mean the
+    # trigger's own full scope, never an implicit 2,000 (CodeRabbit PR #197).
     kw = dict(trigger_kind=rm.TRIGGER_NEW_APPROVED_SNAPSHOT, source_id=sp.CMS_PPEF,
               trigger_ref=str(snapshot_id), rationale="synthetic Q4 re-verification",
-              user=user, max_entities=30000)
+              user=user)
     kw.update(over)
     async with async_session_maker() as db:
         return await rechecks.request_recheck(db, intake_id, **kw)
+
+
+async def _seed_ppef_enrollment_rows(snapshot_id, npis):
+    """Rows INSIDE the pinned snapshot edition — the only place the
+    enrollment-only recheck is allowed to answer from."""
+    from app.Tefca.models import TEFCAPPEFRecord
+    from app.core.database import async_session_maker
+
+    async with async_session_maker() as db:
+        for npi in npis:
+            db.add(TEFCAPPEFRecord(
+                snapshot_id=snapshot_id, component="ENROLLMENT",
+                enrollment_id=f"O{npi}", npi=npi,
+                payload={"NPI": npi, "ENRLMT_ID": f"O{npi}",
+                         "PECOS_ASCT_CNTL_ID": f"P{npi}",
+                         "MULTIPLE_NPI_FLAG": "N",
+                         "ORG_NAME": "SYNTHETIC-TRACE SAM-E2E Org"}))
+        await db.commit()
+
+
+async def _target_npis(job_id):
+    from app.Tefca import rce_fields
+    from app.Tefca.entity_resolution import resolve_entity
+    from app.core.database import async_session_maker
+    from app.tefca_registry.rce.recheck_models import RceRecheckItem
+
+    async with async_session_maker() as db:
+        refs = [r for (r,) in (await db.execute(
+            select(RceRecheckItem.entity_ref)
+            .where(RceRecheckItem.job_id == uuid.UUID(job_id)))).all()]
+        npis = []
+        for ref in refs:
+            entity = await resolve_entity(db, ref)
+            npis.append(rce_fields.rce_npi(entity))
+        return npis
 
 
 async def _evidence_counts(entity_ids):
@@ -196,14 +207,20 @@ async def test_enrollment_only_gather_is_append_only_and_single_source(
     before = await _evidence_counts(entity_ids)
     fake_sam.calls = 0
 
-    # Switch the enrollment connector to a healthy synthetic AFTER seeding.
+    # The pinned edition holds the answers; the live data-api is a tripwire.
+    # A snapshot-triggered job whose evidence came from the live API would
+    # describe an edition its checksum never established (CodeRabbit PR #197).
+    await _seed_ppef_enrollment_rows(snapshot_id, await _target_npis(job_id))
+
     from app.Tefca import cms_ppef
-    fake_enrollment = _Enrollment()
+    live_api_calls = []
 
-    async def lookup(self, npi):
-        return await fake_enrollment(self, npi)
+    async def live_api_tripwire(self, npi):
+        live_api_calls.append(npi)
+        raise AssertionError("snapshot recheck consulted the live CMS data-api")
 
-    monkeypatch.setattr(cms_ppef.PPEFEnrollmentConnector, "lookup_by_npi", lookup)
+    monkeypatch.setattr(cms_ppef.PPEFEnrollmentConnector, "lookup_by_npi",
+                        live_api_tripwire)
 
     from app.core.database import async_session_maker
     async with async_session_maker() as db:
@@ -226,7 +243,17 @@ async def test_enrollment_only_gather_is_append_only_and_single_source(
         if source != "CMS_PPEF_ENROLLMENT":
             assert after.get(source, 0) == count, source
     assert fake_sam.calls == 0                 # SAM was never re-asked
-    assert len(fake_enrollment.calls) == 3     # one enrollment lookup per entity
+    assert live_api_calls == []                # the live data-api was never consulted
+
+    # Each appended row cites the PINNED snapshot edition — one per entity.
+    from app.Tefca.models import TEFCADimensionEvidence as DE
+    async with async_session_maker() as db:
+        (pinned_rows,) = (await db.execute(
+            select(func.count()).select_from(DE)
+            .where(DE.entity_id.in_([str(e) for e in entity_ids]),
+                   DE.source == "CMS_PPEF_ENROLLMENT",
+                   DE.query_identifier == f"snapshot:{snapshot_id}"))).one()
+    assert pinned_rows == 3
 
     # Outcomes recorded per item, dispositions from the one-source dimension.
     from app.tefca_registry.rce.recheck_models import RceRecheckItem
@@ -252,6 +279,72 @@ async def test_requester_still_cannot_approve_their_own_snapshot_recheck(
     async with async_session_maker() as db:
         with pytest.raises(rechecks.RecheckRefused):
             await rechecks.approve_recheck(db, uuid.UUID(job["job_id"]), user=maker)
+
+# ── 5. omitted bound = full scope; a stranding request is refused ─────────────
+
+async def test_snapshot_request_refuses_a_bound_that_strands_the_edition(
+        db_required, monkeypatch):
+    intake_id, _ = await _seeded(monkeypatch)
+    snapshot_id = await _completed_ppef_snapshot()
+
+    # One job per edition: a short explicit bound would strand the remainder
+    # for this edition forever, so the request is refused BEFORE a job exists.
+    with pytest.raises(rechecks.RecheckRefused, match="permanently untargeted"):
+        await _request_snapshot_recheck(intake_id, _User("reviewer"), snapshot_id,
+                                        max_entities=2)
+    # The refusal consumed nothing: a full-scope request for the SAME edition
+    # still creates the job, covering every eligible entity.
+    job = await _request_snapshot_recheck(intake_id, _User("reviewer"), snapshot_id)
+    assert job["already_exists"] is False
+    assert job["target_count"] == 3 and job["untargeted_remaining"] == 0
+
+
+# ── 6. established NPPES classification is reused, never re-asked ─────────────
+
+async def test_enrollment_only_scope_keeps_established_nppes_classification(
+        db_required, monkeypatch):
+    """A provider NPPES already recognised (persisted PASS evidence) must keep
+    its D2 REQUIRED applicability in the enrollment-only scope: no enrollment
+    match → REVIEW for an analyst, never NOT_APPLICABLE. And NPPES itself is
+    never re-asked."""
+    from app.Tefca.connectors import NPPESConnector
+    from app.Tefca.models import TEFCADimensionEvidence, TEFCAPPEFSnapshot
+    from app.core.database import async_session_maker
+
+    npi = sam._valid_npi(424242)
+    entity_id = uuid.uuid4()
+    async with async_session_maker() as db:
+        db.add(TEFCADimensionEvidence(
+            entity_id=str(entity_id), evidence_dimension="IDENTITY",
+            dimension_disposition="PASS", dimension_applicability="REQUIRED",
+            source="NPPES", disposition="PASS",
+            original_values={"npi": npi, "legal_name": "SYNTHETIC PRIOR DR",
+                             "enumeration_type": "NPI-1", "taxonomy": None,
+                             "taxonomy_code": None, "status": "A"},
+            generation_timestamp=datetime.utcnow().isoformat()))
+        await db.commit()
+    snapshot_id = await _completed_ppef_snapshot()   # holds NO rows for this NPI
+
+    async def nppes_tripwire(self, _npi):
+        raise AssertionError("enrollment-only scope re-asked NPPES")
+
+    monkeypatch.setattr(NPPESConnector, "lookup_by_npi", nppes_tripwire)
+
+    entity = {"name": "SYNTHETIC PRIOR DR",
+              "identifier": [{"system": "http://hl7.org/fhir/sid/us-npi",
+                              "value": npi}]}
+    async with async_session_maker() as db:
+        snap = await db.get(TEFCAPPEFSnapshot, snapshot_id)
+        evidence = await rechecks._enrollment_only_evidence(
+            entity, db=db, entity_id=entity_id, snapshot=snap)
+
+    (dim,) = evidence["dimensions"]
+    # NPI-1 = individual provider → Medicare relevance LIKELY → D2 REQUIRED.
+    # No enrolment in the pinned edition → analyst REVIEW. With the prior
+    # NPPES classification dropped, this would degrade to NOT_APPLICABLE.
+    assert dim["applicability"] == "REQUIRED"
+    assert dim["disposition"] == "REVIEW"
+
 
 # Population-wide jobs must not silently stop at the old 2,000-item CSV cap.
 @pytest.mark.parametrize("total", [0, 1, 2000, 2001, 4001, 25764])
