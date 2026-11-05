@@ -301,13 +301,19 @@ def test_logs_carry_no_entity_identifier_account_email_or_value(client, seeded, 
 # -- submitted NPI values: reviewer level and above only ------------------------------
 
 def _value_leaked(text: str) -> bool:
-    """BAD_LEN_NPI ("12345") as a standalone value, never as a substring of a
-    hex identifier. The response carries run-random sha256s and uuids (TAG is
-    random, so intake hashes differ every run), and five hex-valid digits
-    appear inside one of them often enough to fail every sub-reviewer
-    parametrization at once — observed 2026-11-05 on CI."""
+    """BAD_LEN_NPI ("12345") anywhere EXCEPT inside a long hex identifier.
+
+    The response carries run-random sha256s and uuids (TAG is random, so
+    intake hashes differ every run), and five hex-valid digits appear inside
+    one of them often enough to fail every sub-reviewer parametrization at
+    once — observed 2026-11-05 on CI. Only a match wholly inside a token of
+    31+ hex/hyphen characters (a uuid is 32 hex / 36 with hyphens, a sha256
+    is 64) is excluded; "NPI=12345failed" still counts as a leak."""
     import re
-    return re.search(r"(?<![0-9a-fA-F])12345(?![0-9a-fA-F])", text) is not None
+    id_spans = [m.span() for m in re.finditer(r"[0-9a-fA-F][0-9a-fA-F-]{30,}", text)]
+    return any(
+        not any(a <= m.start() and m.end() <= b for a, b in id_spans)
+        for m in re.finditer("12345", text))
 
 
 @pytest.mark.parametrize("role", ROLES)

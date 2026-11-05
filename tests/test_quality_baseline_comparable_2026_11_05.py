@@ -25,6 +25,7 @@ pytestmark = pytest.mark.asyncio
 
 
 async def _set_received(db, intake_id, when):
+    """Place one seeded intake at a chosen point of the received_at timeline."""
     intake = await db.get(m.RceSourceIntake, intake_id)
     intake.received_at = when
     await db.commit()
