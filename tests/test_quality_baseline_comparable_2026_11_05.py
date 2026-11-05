@@ -95,6 +95,15 @@ async def test_empty_and_smoke_labelled_intakes_are_never_the_baseline(rolled_ba
     blank_id, _ = await seed_intake(db, blank_rows, with_job=False)
     await _set_received(db, blank_id, now - timedelta(days=15))
 
+    # Newer still: 19 data lines of which only ONE carries a usable id — a
+    # degenerate identity population (1 vs the delivery's 21 is >= the 10x
+    # rule), even though the line counts look comparable.
+    sparse_rows = make_rows(19, arc=f"{ARC}.44")
+    for r in sparse_rows[1:]:
+        r["id"] = ""
+    sparse_id, _ = await seed_intake(db, sparse_rows, with_job=False)
+    await _set_received(db, sparse_id, now - timedelta(days=12))
+
     # Newest: a header-only intake (zero records, PARSED).
     empty_id, _ = await seed_intake(db, [], with_job=False)
     await _set_received(db, empty_id, now - timedelta(days=10))
@@ -107,7 +116,8 @@ async def test_empty_and_smoke_labelled_intakes_are_never_the_baseline(rolled_ba
     from app.tefca_registry.rce.quality_engine import _build_dataset_context
 
     comparable = await comparable_previous_delivery(db, await db.get(m.RceSourceIntake, oct_id))
-    # not the empty one, not the blank-id one, not the smoke test
+    # not the empty one, not the blank-id one, not the sparse-id one,
+    # not the smoke test
     assert str(comparable.id) == str(sept_id)
     ctx = await _build_dataset_context(db, oct_id)
     assert ctx["previous_intake_id"] == str(sept_id)

@@ -552,6 +552,7 @@ async def comparable_previous_delivery(db, intake) -> Optional[m.RceSourceIntake
     Returns None when no comparable earlier delivery exists — a true baseline.
     """
     cur = intake_facts(intake)
+    cur_id_count = await _usable_id_count(db, intake.id)
     rows = (await db.execute(
         select(m.RceSourceIntake)
         .where(m.RceSourceIntake.received_at < intake.received_at,
@@ -564,16 +565,28 @@ async def comparable_previous_delivery(db, intake) -> Optional[m.RceSourceIntake
             continue
         if assess_comparability(cur, facts)["status"] != "COMPARABLE":
             continue
-        # record_count counts data lines, not identities: an intake whose rows
-        # all carry a blank `id` has no population to be absent from, and it
-        # must not displace an older valid directory as the baseline.
-        has_usable_id = (await db.execute(
-            select(m.RceSourceRecord.id)
-            .where(m.RceSourceRecord.source_intake_id == row.id,
-                   m.RceSourceRecord.source_rce_id.isnot(None),
-                   m.RceSourceRecord.source_rce_id != "")
-            .limit(1))).scalar_one_or_none()
-        if has_usable_id is None:
+        # record_count counts data lines, not identities: intake preserves
+        # rows with a blank `id`, so a parsed predecessor can carry anything
+        # from zero usable IDs upward. "Absent from the predecessor" only
+        # means something when the predecessor's IDENTITY population is of the
+        # delivery's own order of magnitude — the same SIZE_RATIO_LIMIT rule
+        # assess_comparability applies to line counts, applied to usable IDs.
+        prev_id_count = await _usable_id_count(db, row.id)
+        if prev_id_count == 0:
+            continue
+        if (cur_id_count > 0
+                and max(cur_id_count, prev_id_count)
+                >= SIZE_RATIO_LIMIT * min(cur_id_count, prev_id_count)):
             continue
         return row
     return None
+
+
+async def _usable_id_count(db, intake_id) -> int:
+    """How many rows of one intake carry a non-blank stable id."""
+    from sqlalchemy import func
+    return int((await db.execute(
+        select(func.count()).select_from(m.RceSourceRecord)
+        .where(m.RceSourceRecord.source_intake_id == intake_id,
+               m.RceSourceRecord.source_rce_id.isnot(None),
+               m.RceSourceRecord.source_rce_id != ""))).scalar() or 0)
