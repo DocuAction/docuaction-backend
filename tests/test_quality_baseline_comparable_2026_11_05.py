@@ -132,6 +132,33 @@ async def test_empty_and_smoke_labelled_intakes_are_never_the_baseline(rolled_ba
     assert ctx["new_entrant_ids"] == {f"{ARC}.77.1"}
 
 
+async def test_baseline_search_pages_past_a_batch_of_ineligible_intakes(
+        rolled_back_db, monkeypatch):
+    """Intake history is append-only: more skipped newer intakes than one scan
+    batch must not hide an older valid directory (the batch is a page size,
+    never a search bound). Exercised by shrinking the batch to 2 and seeding
+    5 ineligible newer intakes."""
+    from app.tefca_registry.rce import delivery_delta as dd
+
+    db = rolled_back_db
+    now = datetime(2001, 11, 5, 12, 0, 0)
+
+    sept_id, _ = await seed_intake(db, make_rows(20), with_job=False)
+    await _set_received(db, sept_id, now - timedelta(days=55))
+
+    for i in range(5):  # five newer header-only intakes, all ineligible
+        empty_id, _ = await seed_intake(db, [], with_job=False)
+        await _set_received(db, empty_id, now - timedelta(days=30 - i))
+
+    oct_id, _ = await seed_intake(db, make_rows(20), with_job=False)
+    await _set_received(db, oct_id, now)
+
+    monkeypatch.setattr(dd, "_BASELINE_SCAN_BATCH", 2)
+    comparable = await dd.comparable_previous_delivery(
+        db, await db.get(m.RceSourceIntake, oct_id))
+    assert comparable is not None and str(comparable.id) == str(sept_id)
+
+
 async def test_no_comparable_predecessor_means_no_new_entrants(rolled_back_db):
     """A true baseline (only a non-comparable intake exists before it) flags
     nothing: fail-safe, matching the no-predecessor behaviour."""

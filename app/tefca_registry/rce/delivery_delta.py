@@ -49,7 +49,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, tuple_
 
 from app.tefca_registry.rce import models as m
 from app.tefca_registry.rce.field_map import RCE_FIELDS
@@ -553,12 +553,34 @@ async def comparable_previous_delivery(db, intake) -> Optional[m.RceSourceIntake
     """
     cur = intake_facts(intake)
     cur_id_count = await _usable_id_count(db, intake.id)
-    rows = (await db.execute(
-        select(m.RceSourceIntake)
-        .where(m.RceSourceIntake.received_at < intake.received_at,
-               m.RceSourceIntake.status != "FAILED")
-        .order_by(m.RceSourceIntake.received_at.desc(), m.RceSourceIntake.id.desc())
-        .limit(500))).scalars().all()
+    last: Optional[m.RceSourceIntake] = None
+    while True:
+        q = (select(m.RceSourceIntake)
+             .where(m.RceSourceIntake.received_at < intake.received_at,
+                    m.RceSourceIntake.status != "FAILED"))
+        if last is not None:
+            # Keyset page: intake history is append-only, and a burst of newer
+            # ineligible intakes must never hide an older valid directory
+            # behind a fixed scan cap.
+            q = q.where(tuple_(m.RceSourceIntake.received_at, m.RceSourceIntake.id)
+                        < tuple_(last.received_at, last.id))
+        rows = (await db.execute(
+            q.order_by(m.RceSourceIntake.received_at.desc(),
+                       m.RceSourceIntake.id.desc())
+            .limit(_BASELINE_SCAN_BATCH))).scalars().all()
+        if not rows:
+            return None
+        candidate = await _first_eligible(db, cur, cur_id_count, rows)
+        if candidate is not None:
+            return candidate
+        last = rows[-1]
+
+
+#: Page size for the baseline scan — a scan bound, never a search bound.
+_BASELINE_SCAN_BATCH = 500
+
+
+async def _first_eligible(db, cur, cur_id_count, rows):
     for row in rows:
         facts = intake_facts(row)
         if _baseline_ineligible_reason(facts):
