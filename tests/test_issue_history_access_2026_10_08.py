@@ -319,6 +319,7 @@ def _value_leaked(text: str) -> bool:
 @pytest.mark.parametrize("role", ROLES)
 def test_submitted_npi_values_follow_the_reviewer_level_in_both_directions(
         client, seeded, conf, role):
+    """Sub-reviewer roles never see submitted values; reviewer+ always do."""
     r = get(client, OID_B, role)
     assert r.status_code == 200
     states = {d["npi"]["state"] for d in r.json()["deliveries"]}
@@ -328,6 +329,7 @@ def test_submitted_npi_values_follow_the_reviewer_level_in_both_directions(
 
 
 def test_nothing_that_is_not_a_response_carries_a_submitted_value(client, seeded, conf, caplog):
+    """Logs and the audit trail never carry the submitted value itself."""
     caplog.set_level(logging.DEBUG)
     for role in ("viewer", "reviewer", "admin"):
         get(client, OID_B, role)

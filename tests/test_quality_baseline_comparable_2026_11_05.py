@@ -32,6 +32,8 @@ async def _set_received(db, intake_id, when):
 
 
 async def test_smoke_test_between_two_directories_is_not_the_baseline(rolled_back_db):
+    """The October 2026 defect in miniature: the latest earlier intake is a
+    tiny smoke test; the baseline must be the older comparable directory."""
     db = rolled_back_db
     # Far past, like test_september_snapshot: the shared test database may hold
     # committed intakes from other suites; nothing earlier than 2001 exists.
