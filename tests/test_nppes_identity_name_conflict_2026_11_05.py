@@ -80,6 +80,18 @@ def test_dotted_legal_suffix_is_not_a_conflict():
     assert item.rule_applied == "NPPES_PRIMARY_IDENTITY_AUTHORITY"
 
 
+def test_distinct_initials_still_conflict():
+    """Single-letter INITIALS are identity and must be preserved: only dotted
+    abbreviation runs ('L.L.C.', 'P.C.') collapse, never bare initials —
+    otherwise 'A B Clinic' and 'C D Clinic' would score a perfect match."""
+    from app.Tefca.connectors import _name_similarity
+    assert _name_similarity("A B Clinic", "C D Clinic") < 0.5
+    result = _identity_result("A B C SYNTHETIC CLINIC", "D E F SYNTHETIC CLINIC")
+    item = next(i for i in result.items if i.source == "NPPES")
+    assert item.disposition == "REVIEW"
+    assert item.rule_applied == "NPPES_IDENTITY_NAME_CONFLICT"
+
+
 def test_identical_all_stop_word_name_cannot_conflict_with_itself():
     """A name made entirely of stop words ('MD') scores 0.0 against itself in
     the token measure; exact equality must win and stay PASS/MATCH."""

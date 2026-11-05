@@ -26,6 +26,7 @@ not be fixed by retrying.
 
 import os
 import json
+import re
 import hashlib
 import logging
 import asyncio
@@ -164,17 +165,26 @@ class RetryableHTTPError(Exception):
 # Small, dependency-free comparators used by the enhanced NPPES and SAM checks
 # to cross-reference a submitted entity against its authoritative registration.
 
+_DOTTED_ABBREV = re.compile(r"\b(?:[A-Za-z]\.){2,}")
+
+
+def _collapse_dotted_abbreviations(name: str) -> str:
+    """'L.L.C.' -> 'LLC', 'P.C.' -> 'PC': a run of dotted single letters is one
+    abbreviation, not separate initials. A lone initial ('A.') is untouched —
+    initials distinguish organizations ('A B Clinic' vs 'C D Clinic')."""
+    return _DOTTED_ABBREV.sub(lambda m: m.group().replace(".", ""), name)
+
+
 def _name_similarity(name1: str, name2: str) -> float:
-    # Punctuation is noise, not identity: "ACME, INC." and "ACME INC" are the
-    # same organization, and tokens must not keep commas/periods attached.
-    # Single-character fragments are dropped after normalization — a dotted
-    # suffix ("L.L.C.", "P.C.") shatters into letters that carry no identity
-    # and must not dilute the score.
-    name1 = "".join(c if c.isalnum() else " " for c in name1)
-    name2 = "".join(c if c.isalnum() else " " for c in name2)
+    # Dotted abbreviations are collapsed FIRST ("L.L.C." == "LLC"), then
+    # remaining punctuation is noise, not identity: "ACME, INC." and
+    # "ACME INC" are the same organization. Single-letter tokens are kept —
+    # they are initials, and initials distinguish organizations.
+    name1 = "".join(c if c.isalnum() else " " for c in _collapse_dotted_abbreviations(name1))
+    name2 = "".join(c if c.isalnum() else " " for c in _collapse_dotted_abbreviations(name2))
     stop = {"inc","llc","ltd","corp","co","the","of","and","&","dba","pllc","pc","pa","md","do"}
-    words1 = {w for w in name1.lower().split() if len(w) > 1} - stop
-    words2 = {w for w in name2.lower().split() if len(w) > 1} - stop
+    words1 = set(name1.lower().split()) - stop
+    words2 = set(name2.lower().split()) - stop
     if not words1 or not words2:
         return 0.0
     return len(words1 & words2) / max(len(words1), len(words2))
