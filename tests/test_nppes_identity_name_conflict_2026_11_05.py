@@ -32,12 +32,17 @@ def _identity_result(submitted_name, legal_name, *, status="ACTIVE", **extra):
     return _dimension_identity(entity, profile, {"nppes": nppes})
 
 
-def test_wrong_organization_npi_is_review_not_pass():
-    """The defect in miniature: an active NPI registered to an unrelated org."""
+def test_wrong_organization_npi_rolls_the_dimension_to_review():
+    """The defect in miniature: an active NPI registered to an unrelated org.
+
+    The ITEM stays PASS — existence IS verified, and the per-item disposition
+    feeds the coverage dashboard (a found NPI must never count as not_found)
+    and the bucket classifier's state translation (no methodology change).
+    The DIMENSION is the analyst surface and must be REVIEW."""
     result = _identity_result("SYNTHETIC URGENT CARE ALPHA",
                               "SYNTHETIC NURSING OPERATIONS BETA LLC")
     item = next(i for i in result.items if i.source == "NPPES")
-    assert item.disposition == "REVIEW"
+    assert item.disposition == "PASS"
     assert item.rule_applied == "NPPES_IDENTITY_NAME_CONFLICT"
     assert "different organization" in (item.note or "")
     assert item.field_conflicts and item.field_conflicts[0]["result"] == "DIFFERS"
@@ -45,6 +50,11 @@ def test_wrong_organization_npi_is_review_not_pass():
     assert result.disposition == "REVIEW"
     assert result.requires_analyst is True
     assert "may belong to a different organization" in result.rationale
+    # both per-item consumers stay unchanged by design:
+    from app.tefca_registry.rce.arc_pipeline import evidence_item_state
+    assert evidence_item_state(item.dimension, item.disposition) == "verified"
+    from app.tefca_registry.rce.verification_coverage import _DIMENSION_DISPOSITION
+    assert _DIMENSION_DISPOSITION[item.disposition] == "verified"
 
 
 def test_benign_name_variant_stays_pass():
@@ -97,8 +107,8 @@ def test_distinct_initials_still_conflict():
     # 1-of-3 shared tokens (0.33) — distinctly below the 0.5 bound
     result = _identity_result("A.B. SYNTHETIC CLINIC", "C.D. SYNTHETIC REHAB")
     item = next(i for i in result.items if i.source == "NPPES")
-    assert item.disposition == "REVIEW"
     assert item.rule_applied == "NPPES_IDENTITY_NAME_CONFLICT"
+    assert result.disposition == "REVIEW"
 
 
 def test_identical_all_stop_word_name_cannot_conflict_with_itself():

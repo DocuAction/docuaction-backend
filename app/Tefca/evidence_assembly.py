@@ -252,9 +252,15 @@ def _dimension_identity(
         # IDENTITY. When the registered legal name does not correspond to the
         # submitted organization name at all (tolerant token similarity below
         # the same 0.5 bound the enhanced check_nppes escalates at), the NPI
-        # may belong to a different organization — REVIEW, never auto-fail:
-        # a renamed organization or an unregistered DBA can legitimately
-        # differ, and only an analyst can tell those apart.
+        # may belong to a different organization. The ITEM disposition stays
+        # PASS — existence IS verified, and both downstream consumers of the
+        # per-item disposition must stay truthful: `verification_coverage`
+        # would count a found NPI as not_found, and the bucket classifier's
+        # `_DISPOSITION_TO_STATE` would feed rules a changed state (a
+        # methodology decision nobody took). The DIMENSION rolls to REVIEW
+        # below (requires_analyst), which is the analyst surface — and never
+        # an auto-fail: a renamed organization or an unregistered DBA can
+        # legitimately differ, and only an analyst can tell those apart.
         name_similarity: Optional[float] = None
         if found and submitted_name and legal_name:
             name_similarity = _name_similarity(submitted_name, legal_name)
@@ -264,7 +270,7 @@ def _dimension_identity(
                          and name_similarity is not None and name_similarity < 0.5)
         items.append(EvidenceItem(
             dimension=dim, source="NPPES",
-            disposition=(Disposition.REVIEW.value if deactivated or name_conflict
+            disposition=(Disposition.REVIEW.value if deactivated
                          else Disposition.PASS.value if found
                          else Disposition.NOT_FOUND.value),
             source_record_identifier=nppes_data.get("npi"),
