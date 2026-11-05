@@ -476,3 +476,7 @@ async def test_item_pagination_is_stable_across_an_entity_ref_tie(
             offset += 1
             assert offset <= page["total"], "pagination ran past total"
     assert len(seen) == 3 and len(set(seen)) == 3  # no repeat, no skip
+    # Order-sensitive: canonical lowercase UUID strings sort identically to
+    # PostgreSQL's bytewise uuid order, so this fails if the entity_id
+    # tiebreaker is ever removed from list_items.
+    assert seen == sorted(seen)
