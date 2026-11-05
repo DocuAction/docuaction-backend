@@ -86,7 +86,10 @@ def test_distinct_initials_still_conflict():
     otherwise 'A B Clinic' and 'C D Clinic' would score a perfect match."""
     from app.Tefca.connectors import _name_similarity
     assert _name_similarity("A B Clinic", "C D Clinic") < 0.5
-    result = _identity_result("A B C SYNTHETIC CLINIC", "D E F SYNTHETIC CLINIC")
+    # dotted initials too: 'A.B.' must NOT collapse like a legal suffix
+    assert _name_similarity("A.B. Clinic", "C.D. Clinic") < 0.5
+    # 1-of-3 shared tokens (0.33) — distinctly below the 0.5 bound
+    result = _identity_result("A.B. SYNTHETIC CLINIC", "C.D. SYNTHETIC REHAB")
     item = next(i for i in result.items if i.source == "NPPES")
     assert item.disposition == "REVIEW"
     assert item.rule_applied == "NPPES_IDENTITY_NAME_CONFLICT"
