@@ -562,6 +562,18 @@ async def comparable_previous_delivery(db, intake) -> Optional[m.RceSourceIntake
         facts = intake_facts(row)
         if _baseline_ineligible_reason(facts):
             continue
-        if assess_comparability(cur, facts)["status"] == "COMPARABLE":
-            return row
+        if assess_comparability(cur, facts)["status"] != "COMPARABLE":
+            continue
+        # record_count counts data lines, not identities: an intake whose rows
+        # all carry a blank `id` has no population to be absent from, and it
+        # must not displace an older valid directory as the baseline.
+        has_usable_id = (await db.execute(
+            select(m.RceSourceRecord.id)
+            .where(m.RceSourceRecord.source_intake_id == row.id,
+                   m.RceSourceRecord.source_rce_id.isnot(None),
+                   m.RceSourceRecord.source_rce_id != "")
+            .limit(1))).scalar_one_or_none()
+        if has_usable_id is None:
+            continue
+        return row
     return None

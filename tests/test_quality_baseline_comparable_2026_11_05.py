@@ -87,6 +87,14 @@ async def test_empty_and_smoke_labelled_intakes_are_never_the_baseline(rolled_ba
     smoke.received_at = now - timedelta(days=20)
     await db.commit()
 
+    # Newer still: 18 data lines whose ids are ALL blank — record_count is
+    # positive, but there is no identity population to be absent from.
+    blank_rows = make_rows(18, arc=f"{ARC}.55")
+    for r in blank_rows:
+        r["id"] = ""
+    blank_id, _ = await seed_intake(db, blank_rows, with_job=False)
+    await _set_received(db, blank_id, now - timedelta(days=15))
+
     # Newest: a header-only intake (zero records, PARSED).
     empty_id, _ = await seed_intake(db, [], with_job=False)
     await _set_received(db, empty_id, now - timedelta(days=10))
@@ -99,7 +107,8 @@ async def test_empty_and_smoke_labelled_intakes_are_never_the_baseline(rolled_ba
     from app.tefca_registry.rce.quality_engine import _build_dataset_context
 
     comparable = await comparable_previous_delivery(db, await db.get(m.RceSourceIntake, oct_id))
-    assert str(comparable.id) == str(sept_id)   # not the empty one, not the smoke test
+    # not the empty one, not the blank-id one, not the smoke test
+    assert str(comparable.id) == str(sept_id)
     ctx = await _build_dataset_context(db, oct_id)
     assert ctx["previous_intake_id"] == str(sept_id)
     assert ctx["new_entrant_ids"] == {f"{ARC}.77.1"}
