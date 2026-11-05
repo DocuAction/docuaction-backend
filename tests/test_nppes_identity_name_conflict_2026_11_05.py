@@ -92,6 +92,8 @@ def test_distinct_initials_still_conflict():
     assert _name_similarity("P.C. Synthetic Clinic", "M.D. Synthetic Clinic") < 1.0
     # ...while the same spelling TRAILING is a legal suffix and collapses
     assert _name_similarity("Synthetic Acme Clinic P.C.", "Synthetic Acme Clinic PC") == 1.0
+    # an apostrophe INSIDE a word is formatting, not identity
+    assert _name_similarity("O'Synthetic Clinic", "OSynthetic Clinic") == 1.0
     # 1-of-3 shared tokens (0.33) — distinctly below the 0.5 bound
     result = _identity_result("A.B. SYNTHETIC CLINIC", "C.D. SYNTHETIC REHAB")
     item = next(i for i in result.items if i.source == "NPPES")

@@ -185,13 +185,19 @@ def _collapse_dotted_abbreviations(name: str) -> str:
     return _DOTTED_ABBREV.sub(lambda m: m.group().replace(".", ""), name)
 
 
+_INNER_APOSTROPHE = re.compile(r"(?<=[A-Za-z])['’](?=[A-Za-z])")
+
+
 def _name_similarity(name1: str, name2: str) -> float:
-    # Dotted abbreviations are collapsed FIRST ("L.L.C." == "LLC"), then
-    # remaining punctuation is noise, not identity: "ACME, INC." and
-    # "ACME INC" are the same organization. Single-letter tokens are kept —
-    # they are initials, and initials distinguish organizations.
-    name1 = "".join(c if c.isalnum() else " " for c in _collapse_dotted_abbreviations(name1))
-    name2 = "".join(c if c.isalnum() else " " for c in _collapse_dotted_abbreviations(name2))
+    # Dotted abbreviations are collapsed FIRST ("L.L.C." == "LLC"), then an
+    # apostrophe INSIDE a word is removed rather than split ("O'Neill" ==
+    # "ONeill"), then remaining punctuation is noise, not identity:
+    # "ACME, INC." and "ACME INC" are the same organization. Single-letter
+    # tokens are kept — initials distinguish organizations.
+    name1 = _INNER_APOSTROPHE.sub("", _collapse_dotted_abbreviations(name1))
+    name2 = _INNER_APOSTROPHE.sub("", _collapse_dotted_abbreviations(name2))
+    name1 = "".join(c if c.isalnum() else " " for c in name1)
+    name2 = "".join(c if c.isalnum() else " " for c in name2)
     stop = {"inc","llc","ltd","corp","co","the","of","and","&","dba","pllc","pc","pa","md","do"}
     words1 = set(name1.lower().split()) - stop
     words2 = set(name2.lower().split()) - stop
