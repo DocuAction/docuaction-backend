@@ -231,3 +231,42 @@ async def test_an_entity_with_no_prior_signal_verifies_normally(db_required, mon
     assert await _entity_status(first["entity_id"]) == "verified"
     second = (await _cycle(monkeypatch, refs, intake_id, excluded=False))["outcomes"][0]
     assert await _entity_status(second["entity_id"]) == "verified"
+
+
+async def test_identity_name_conflict_withholds_tier1_auto_completion(db_required, monkeypatch):
+    """2026-11-05 (PR #199 round 9): an NPPES identity NAME CONFLICT keeps the
+    evidence ITEM at PASS (coverage counts and classifier states stay truthful
+    about registry existence), so otherwise B1-eligible evidence still selects
+    B1 - but the D1 dimension is REVIEW with requires_analyst, and the same
+    withhold contract as prior_risk must stop Tier-1 auto-completion: the
+    bucket stays B1 (the rules engine is still the sole classifier), the
+    entity stays in_review, the tier is not 1, and the record says why."""
+    from app.Tefca.connectors import NPPESConnector, SourceResult
+
+    intake_id, refs = await _seed_one(monkeypatch)
+
+    # Overwrite the clean-NPPES patch: found and ACTIVE, but registered to an
+    # organization with no correspondence to the seeded submitted name.
+    async def conflicted_nppes(self, npi):
+        return SourceResult.ok("NPPES", {
+            "found": True, "legal_name": "UNRELATED NURSING OPERATIONS DELTA LLC",
+            "enumeration_type": "NPI-2", "status": "A", "addresses": [],
+        }, {"npi": npi})
+    monkeypatch.setattr(NPPESConnector, "lookup_by_npi", conflicted_nppes)
+
+    out = (await _cycle(monkeypatch, refs, intake_id, excluded=False))["outcomes"][0]
+    # The rules engine's own answer is recorded as given...
+    assert out["bucket"] == "B1"
+    # ...but a person must look: no Tier-1 auto-completion, no verified status.
+    assert out["tier"] >= 2
+    assert await _entity_status(out["entity_id"]) == "in_review"
+
+    rec = await _record(out["review_id"])
+    assert rec.verification_results["analyst_review_dimensions"] == ["IDENTITY"]
+    assert "Tier-1 auto-completion withheld" in rec.classification_rationale
+    d1 = next(d for d in rec.verification_results["dimensions"]
+              if d["dimension"] == "IDENTITY")
+    assert d1["disposition"] == "REVIEW" and d1["requires_analyst"] is True
+    nppes_item = next(i for i in d1["evidence"] if i["source"] == "NPPES")
+    assert nppes_item["disposition"] == "PASS"  # existence stays truthful
+    assert nppes_item["rule_applied"] == "NPPES_IDENTITY_NAME_CONFLICT"
