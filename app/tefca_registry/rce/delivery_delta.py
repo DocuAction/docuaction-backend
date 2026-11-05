@@ -583,10 +583,14 @@ async def comparable_previous_delivery(db, intake) -> Optional[m.RceSourceIntake
 
 
 async def _usable_id_count(db, intake_id) -> int:
-    """How many rows of one intake carry a non-blank stable id."""
+    """How many DISTINCT non-blank stable ids one intake carries.
+
+    Distinct, not rows: `_build_dataset_context` compares ID *sets*, and intake
+    preserves duplicate ids, so a predecessor repeating a handful of ids across
+    many rows must size as that handful."""
     from sqlalchemy import func
     return int((await db.execute(
-        select(func.count()).select_from(m.RceSourceRecord)
+        select(func.count(func.distinct(m.RceSourceRecord.source_rce_id)))
         .where(m.RceSourceRecord.source_intake_id == intake_id,
                m.RceSourceRecord.source_rce_id.isnot(None),
                m.RceSourceRecord.source_rce_id != ""))).scalar() or 0)

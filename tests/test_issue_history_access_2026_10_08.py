@@ -292,12 +292,23 @@ def test_logs_carry_no_entity_identifier_account_email_or_value(client, seeded, 
     conf(enabled=False)
     get(client, OID_B, "admin")
     blob = "\n".join(f"{r.getMessage()} {r.args}" for r in caplog.records)
-    for secret in (OID_B, OID_R, email, "12345", ONC, SYN):
+    for secret in (OID_B, OID_R, email, ONC, SYN):
         assert secret not in blob, secret
+    assert not _value_leaked(blob), "BAD_LEN_NPI in logs"
     assert h_email
 
 
 # -- submitted NPI values: reviewer level and above only ------------------------------
+
+def _value_leaked(text: str) -> bool:
+    """BAD_LEN_NPI ("12345") as a standalone value, never as a substring of a
+    hex identifier. The response carries run-random sha256s and uuids (TAG is
+    random, so intake hashes differ every run), and five hex-valid digits
+    appear inside one of them often enough to fail every sub-reviewer
+    parametrization at once — observed 2026-11-05 on CI."""
+    import re
+    return re.search(r"(?<![0-9a-fA-F])12345(?![0-9a-fA-F])", text) is not None
+
 
 @pytest.mark.parametrize("role", ROLES)
 def test_submitted_npi_values_follow_the_reviewer_level_in_both_directions(
@@ -306,7 +317,7 @@ def test_submitted_npi_values_follow_the_reviewer_level_in_both_directions(
     assert r.status_code == 200
     states = {d["npi"]["state"] for d in r.json()["deliveries"]}
     assert states <= {"PRESENT", "MISSING", "INVALID", "NOT_AVAILABLE"} and states
-    seen = '"submitted_value"' in r.text or "12345" in r.text
+    seen = '"submitted_value"' in r.text or _value_leaked(r.text)
     assert seen == (role in REVIEWER_AND_ABOVE), role
 
 
@@ -317,7 +328,7 @@ def test_nothing_that_is_not_a_response_carries_a_submitted_value(client, seeded
     get(client, OID_R, "viewer")
     get(client, OID_B, "nobody")
     assert caplog.records
-    assert not any("12345" in f"{r.getMessage()} {r.args}" for r in caplog.records)
+    assert not any(_value_leaked(f"{r.getMessage()} {r.args}") for r in caplog.records)
     # the audit trail stores structure only
     from sqlalchemy import text
 
@@ -330,4 +341,4 @@ def test_nothing_that_is_not_a_response_carries_a_submitted_value(client, seeded
                 "where action='issue_history_read' and metadata->>'oid' like :l"),
                 {"l": f"A6-%-{TAG}"})).all()
 
-    assert not any("12345" in r[0] for r in run(rows()))
+    assert not any(_value_leaked(r[0]) for r in run(rows()))

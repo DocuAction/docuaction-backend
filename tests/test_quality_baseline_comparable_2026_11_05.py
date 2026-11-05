@@ -104,6 +104,14 @@ async def test_empty_and_smoke_labelled_intakes_are_never_the_baseline(rolled_ba
     sparse_id, _ = await seed_intake(db, sparse_rows, with_job=False)
     await _set_received(db, sparse_id, now - timedelta(days=12))
 
+    # Newer still: 19 data lines that all repeat ONE id — the DISTINCT usable
+    # population is 1, however many rows carry it.
+    dup_rows = make_rows(19, arc=f"{ARC}.33")
+    for r in dup_rows:
+        r["id"] = f"{ARC}.33.1"
+    dup_id, _ = await seed_intake(db, dup_rows, with_job=False)
+    await _set_received(db, dup_id, now - timedelta(days=11))
+
     # Newest: a header-only intake (zero records, PARSED).
     empty_id, _ = await seed_intake(db, [], with_job=False)
     await _set_received(db, empty_id, now - timedelta(days=10))
@@ -117,7 +125,7 @@ async def test_empty_and_smoke_labelled_intakes_are_never_the_baseline(rolled_ba
 
     comparable = await comparable_previous_delivery(db, await db.get(m.RceSourceIntake, oct_id))
     # not the empty one, not the blank-id one, not the sparse-id one,
-    # not the smoke test
+    # not the duplicate-id one, not the smoke test
     assert str(comparable.id) == str(sept_id)
     ctx = await _build_dataset_context(db, oct_id)
     assert ctx["previous_intake_id"] == str(sept_id)
