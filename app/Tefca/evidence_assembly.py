@@ -240,8 +240,10 @@ def _dimension_identity(
             str(nppes_data.get("status") or "").upper() in ("DEACTIVATED", "D")
             or (bool(nppes_data.get("deactivation_date"))
                 and not nppes_data.get("reactivation_date")))
-        submitted_name = entity.get("name") or ""
-        legal_name = str(nppes_data.get("legal_name") or "")
+        # Stripped at read: a whitespace-only name is a MISSING name, and a
+        # missing name is never a basis for an identity conflict.
+        submitted_name = (entity.get("name") or "").strip()
+        legal_name = str(nppes_data.get("legal_name") or "").strip()
         name_match = (
             bool(submitted_name) and bool(legal_name)
             and submitted_name.strip().upper() == legal_name.strip().upper()

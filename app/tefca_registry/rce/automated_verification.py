@@ -263,6 +263,12 @@ def _classify_entity_outcome(evidence: Dict[str, Any]) -> str:
         return OUTCOME_UNAVAILABLE
     if any(d in ("FAIL", "CONFLICT") for d in dispositions):
         return OUTCOME_VERIFIED_WITH_DIFFERENCES
+    if any(d == "REVIEW" for d in dispositions):
+        # A dimension explicitly asking for an analyst (deactivated NPI,
+        # NPPES identity name conflict) must reach in_review even when some
+        # other dimension is NOT_FOUND — the NOT_FOUND branches below would
+        # otherwise swallow it into VERIFIED_WITH_DIFFERENCES.
+        return OUTCOME_REVIEW_REQUIRED
     if all(d == "NOT_FOUND" for d in dispositions):
         return OUTCOME_NOT_FOUND
     if any(d == "NOT_FOUND" for d in dispositions):

@@ -167,10 +167,14 @@ class RetryableHTTPError(Exception):
 def _name_similarity(name1: str, name2: str) -> float:
     # Punctuation is noise, not identity: "ACME, INC." and "ACME INC" are the
     # same organization, and tokens must not keep commas/periods attached.
+    # Single-character fragments are dropped after normalization — a dotted
+    # suffix ("L.L.C.", "P.C.") shatters into letters that carry no identity
+    # and must not dilute the score.
     name1 = "".join(c if c.isalnum() else " " for c in name1)
     name2 = "".join(c if c.isalnum() else " " for c in name2)
-    words1 = set(name1.lower().split()) - {"inc","llc","ltd","corp","co","the","of","and","&","dba","pllc","pc","pa","md","do"}
-    words2 = set(name2.lower().split()) - {"inc","llc","ltd","corp","co","the","of","and","&","dba","pllc","pc","pa","md","do"}
+    stop = {"inc","llc","ltd","corp","co","the","of","and","&","dba","pllc","pc","pa","md","do"}
+    words1 = {w for w in name1.lower().split() if len(w) > 1} - stop
+    words2 = {w for w in name2.lower().split() if len(w) > 1} - stop
     if not words1 or not words2:
         return 0.0
     return len(words1 & words2) / max(len(words1), len(words2))

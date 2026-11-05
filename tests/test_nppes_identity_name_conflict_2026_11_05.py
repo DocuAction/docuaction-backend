@@ -70,6 +70,16 @@ def test_punctuation_only_difference_is_not_a_conflict():
     assert item.rule_applied == "NPPES_PRIMARY_IDENTITY_AUTHORITY"
 
 
+def test_dotted_legal_suffix_is_not_a_conflict():
+    """'… L.L.C.' shatters into single letters under punctuation
+    normalization; those fragments carry no identity and must not dilute
+    the score below the conflict bound."""
+    result = _identity_result("SYNTHETIC ACME CLINIC L.L.C.", "SYNTHETIC ACME CLINIC LLC")
+    item = next(i for i in result.items if i.source == "NPPES")
+    assert item.disposition == "PASS"
+    assert item.rule_applied == "NPPES_PRIMARY_IDENTITY_AUTHORITY"
+
+
 def test_identical_all_stop_word_name_cannot_conflict_with_itself():
     """A name made entirely of stop words ('MD') scores 0.0 against itself in
     the token measure; exact equality must win and stay PASS/MATCH."""
@@ -105,11 +115,33 @@ def test_missing_either_name_cannot_conflict():
     """No submitted name, or no registered legal name, is no basis for an
     identity conflict - existence alone then carries the disposition."""
     for submitted, legal in (("", "SYNTHETIC NURSING OPERATIONS BETA LLC"),
-                             ("SYNTHETIC URGENT CARE ALPHA", "")):
+                             ("SYNTHETIC URGENT CARE ALPHA", ""),
+                             ("   ", "SYNTHETIC NURSING OPERATIONS BETA LLC"),
+                             ("SYNTHETIC URGENT CARE ALPHA", "   ")):
         result = _identity_result(submitted, legal)
         item = next(i for i in result.items if i.source == "NPPES")
         assert item.disposition == "PASS"
         assert item.rule_applied == "NPPES_PRIMARY_IDENTITY_AUTHORITY"
+
+
+def test_entity_outcome_routes_review_to_review_required():
+    """A dimension that explicitly asks for an analyst (REVIEW) must reach
+    REVIEW_REQUIRED even when another applicable dimension is NOT_FOUND -
+    previously the NOT_FOUND mix swallowed it into VERIFIED_WITH_DIFFERENCES
+    and the entity never got verification_status in_review."""
+    from app.tefca_registry.rce import automated_verification as av
+
+    def bundle(*dispositions):
+        return {"dimensions": [{"applicability": "APPLICABLE", "disposition": d}
+                               for d in dispositions]}
+
+    assert av._classify_entity_outcome(bundle("REVIEW", "NOT_FOUND")) == av.OUTCOME_REVIEW_REQUIRED
+    assert av._classify_entity_outcome(bundle("REVIEW", "PASS")) == av.OUTCOME_REVIEW_REQUIRED
+    # the established ordering is preserved around it
+    assert av._classify_entity_outcome(bundle("CONFLICT", "REVIEW")) == av.OUTCOME_VERIFIED_WITH_DIFFERENCES
+    assert av._classify_entity_outcome(bundle("NOT_FOUND", "PASS")) == av.OUTCOME_VERIFIED_WITH_DIFFERENCES
+    assert av._classify_entity_outcome(bundle("PASS", "CORROBORATED")) == av.OUTCOME_VERIFIED
+    assert av._classify_entity_outcome(bundle("NOT_FOUND", "NOT_FOUND")) == av.OUTCOME_NOT_FOUND
 
 
 def test_name_conflict_is_never_derived_as_verified():
