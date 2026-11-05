@@ -643,18 +643,30 @@ async def list_items(db, job_id, *, limit: int = 100, offset: int = 0) -> Dict[s
 
 
 async def items_csv(db, job_id) -> str:
-    data = await list_items(db, job_id, limit=MAX_ENTITIES_PER_JOB, offset=0)
+    """Export every targeted item, including population-wide snapshot jobs."""
     from app.reports.engine.csv_engine import neutralise_row
 
     out = io.StringIO()
     w = csv.writer(out, lineterminator="\r\n")
     w.writerow(["job_id", "entity_id", "entity_ref", "state", "prior_disposition",
                 "new_disposition", "outcome", "processed_at"])
-    for i in data["items"]:
-        # entity_ref is a delivered identifier: neutralised like every other
-        # exported cell, so it cannot be read as a spreadsheet formula.
-        w.writerow(neutralise_row([
-            data["job_id"], i["entity_id"], i["entity_ref"], i["state"],
-            i["prior_disposition"] or "", i["new_disposition"] or "",
-            i["outcome"] or "", i["processed_at"] or ""]))
+    offset = 0
+    while True:
+        data = await list_items(
+            db, job_id, limit=MAX_ENTITIES_PER_JOB, offset=offset)
+        items = data["items"]
+        if not items:
+            if offset < data["total"]:
+                raise RecheckRefused(
+                    "recheck item export is incomplete; retry the download")
+            break
+        for i in items:
+            # Delivered identifiers must remain inert when opened in Excel.
+            w.writerow(neutralise_row([
+                data["job_id"], i["entity_id"], i["entity_ref"], i["state"],
+                i["prior_disposition"] or "", i["new_disposition"] or "",
+                i["outcome"] or "", i["processed_at"] or ""]))
+        offset += len(items)
+        if offset >= data["total"]:
+            break
     return out.getvalue()

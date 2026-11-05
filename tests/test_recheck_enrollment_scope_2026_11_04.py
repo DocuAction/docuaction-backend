@@ -252,3 +252,60 @@ async def test_requester_still_cannot_approve_their_own_snapshot_recheck(
     async with async_session_maker() as db:
         with pytest.raises(rechecks.RecheckRefused):
             await rechecks.approve_recheck(db, uuid.UUID(job["job_id"]), user=maker)
+
+# Population-wide jobs must not silently stop at the old 2,000-item CSV cap.
+@pytest.mark.parametrize("total", [0, 1, 2000, 2001, 4001, 25764])
+async def test_items_csv_exports_every_page_and_neutralises_identifiers(
+        monkeypatch, total):
+    import csv
+    import io
+
+    calls = []
+
+    async def page(db, job_id, *, limit=100, offset=0):
+        assert job_id == "synthetic-export"
+        calls.append((limit, offset))
+        return {
+            "job_id": job_id, "total": total,
+            "items": [
+                {"entity_id": str(i), "entity_ref": "=2+2" if i == total - 1 else f"oid-{i}",
+                 "state": "DONE", "prior_disposition": None,
+                 "new_disposition": "PASS", "outcome": "ANSWERED_NO_SIGNAL",
+                 "processed_at": None}
+                for i in range(offset, min(offset + limit, total))
+            ],
+        }
+
+    monkeypatch.setattr(rechecks, "list_items", page)
+    result = await rechecks.items_csv(None, "synthetic-export")
+    rows = list(csv.reader(io.StringIO(result)))
+    assert rows[0] == ["job_id", "entity_id", "entity_ref", "state",
+                       "prior_disposition", "new_disposition", "outcome", "processed_at"]
+    assert len(rows) == total + 1
+    assert [row[1] for row in rows[1:]] == [str(i) for i in range(total)]
+    assert calls == [
+        (rechecks.MAX_ENTITIES_PER_JOB, offset)
+        for offset in (range(0, total, rechecks.MAX_ENTITIES_PER_JOB) if total else [0])
+    ]
+    if total:
+        assert rows[-1][2] == "'=2+2"
+        assert rows[-1][4] == "" and rows[-1][7] == ""
+
+
+async def test_items_csv_refuses_a_truncated_page(monkeypatch):
+    calls = []
+
+    async def page(db, job_id, *, limit=100, offset=0):
+        calls.append(offset)
+        return {
+            "job_id": job_id, "total": 2,
+            "items": ([{"entity_id": "first", "entity_ref": "oid-first",
+                       "state": "DONE", "prior_disposition": None,
+                       "new_disposition": None, "outcome": None, "processed_at": None}]
+                      if offset == 0 else []),
+        }
+
+    monkeypatch.setattr(rechecks, "list_items", page)
+    with pytest.raises(rechecks.RecheckRefused, match="export is incomplete"):
+        await rechecks.items_csv(None, "synthetic-export")
+    assert calls == [0, 1]
