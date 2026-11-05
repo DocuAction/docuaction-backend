@@ -299,6 +299,61 @@ async def test_snapshot_request_refuses_a_bound_that_strands_the_edition(
     assert job["target_count"] == 3 and job["untargeted_remaining"] == 0
 
 
+# ── 5b. only an ENROLLMENT component snapshot can trigger the scope ───────────
+
+async def test_non_enrollment_component_snapshot_is_refused(db_required, monkeypatch):
+    """A PRACTICE_LOCATION snapshot id would pin cms_enrollment_only, match no
+    rows, and append FALSE not-found evidence — the request must be refused
+    before any job exists."""
+    from app.Tefca.models import TEFCAPPEFSnapshot
+    from app.core.database import async_session_maker
+
+    intake_id, _ = await _seeded(monkeypatch)
+    snap = TEFCAPPEFSnapshot(
+        id=uuid.uuid4(), component="PRACTICE_LOCATION",
+        cms_title="Address Sub-File Q4 2026 (synthetic)",
+        file_name="PPEF_Practice_Location_Extract_2026.09.29.csv",
+        resource_version="2026.09.29", as_of_label="Q4 2026",
+        sha256="e" * 64, ingest_status="complete", ingested_by="pytest")
+    async with async_session_maker() as db:
+        db.add(snap)
+        await db.commit()
+    with pytest.raises(rechecks.RecheckRefused, match="ENROLLMENT component"):
+        await _request_snapshot_recheck(intake_id, _User("reviewer"), snap.id)
+
+
+# ── 5c. the source-unavailable breaker does not trip on local-snapshot reads ──
+
+async def test_breaker_exempts_enrollment_only_scope(db_required, monkeypatch):
+    """In the enrollment-only scope every lookup reads the pinned LOCAL
+    snapshot; a batch of per-entity NPI rejections (unavailable results) must
+    complete the job, never stop it as STOPPED_SOURCE_UNAVAILABLE."""
+    from app.core.database import async_session_maker
+
+    intake_id, _ = await _seeded(monkeypatch)
+    snapshot_id = await _completed_ppef_snapshot()
+    job = await _request_snapshot_recheck(intake_id, _User("reviewer"), snapshot_id)
+    job_id = uuid.UUID(job["job_id"])
+
+    # Make every entity's NPI unobtainable → every lookup is rejected
+    # fail-closed → every item outcome is STILL_UNAVAILABLE.
+    from app.Tefca import rce_fields
+    monkeypatch.setattr(rce_fields, "rce_npi", lambda entity: None)
+    from app.Tefca import connectors
+    monkeypatch.setattr(connectors, "_extract_npi", lambda entity: "")
+
+    async with async_session_maker() as db:
+        await rechecks.approve_recheck(db, job_id, user=_User("qalead"))
+    async with async_session_maker() as db:
+        await rechecks.claim(db, job_id)
+    async with async_session_maker() as db:
+        done = await rechecks.run_batch(db, job_id, batch_size=200)
+
+    assert done["complete"] is True
+    assert done["state"] == rm.STATE_SUCCEEDED          # NOT stopped-source-unavailable
+    assert done["summary"]["by_outcome"].get(rm.OUTCOME_STILL_UNAVAILABLE, 0) == 3
+
+
 # ── 6. established NPPES classification is reused, never re-asked ─────────────
 
 async def test_enrollment_only_scope_keeps_established_nppes_classification(

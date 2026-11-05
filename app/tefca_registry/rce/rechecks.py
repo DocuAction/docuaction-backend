@@ -56,9 +56,12 @@ import io
 import logging
 import uuid
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import func, select, text
+
+if TYPE_CHECKING:  # annotation-only: the runtime import stays function-local
+    from app.Tefca.connectors import SourceResult
 
 from app.Tefca import source_policy as sp
 from app.core import request_context
@@ -270,6 +273,14 @@ async def request_recheck(db, intake_id, *, trigger_kind: str, source_id: str,
     evidence_scope = (SCOPE_CMS_ENROLLMENT_ONLY
                       if (trigger_kind == rm.TRIGGER_NEW_APPROVED_SNAPSHOT
                           and source_id == sp.CMS_PPEF) else SCOPE_FULL_BUILD)
+    if (evidence_scope == SCOPE_CMS_ENROLLMENT_ONLY
+            and authority.get("component") != "ENROLLMENT"):
+        # Each PPEF component file is its own snapshot row. An enrollment-only
+        # job answered from, say, a PRACTICE_LOCATION snapshot would match no
+        # rows and append FALSE not-found evidence — refuse before a job exists.
+        raise RecheckRefused(
+            f"snapshot {trigger_ref!r} is a {authority.get('component')!r} component "
+            f"file; an enrollment-only recheck needs the ENROLLMENT component snapshot")
     targeting_rule = ("every eligible entity with existing evidence from this source, "
                       "ordered by rce_org_oid (explicit: one item row per entity)"
                       if trigger_kind != rm.TRIGGER_SOURCE_RECOVERY else
@@ -601,8 +612,13 @@ async def run_batch(db, job_id, *, batch_size: Optional[int] = None) -> Dict[str
                            "verification pass; no entity was marked verified."}
 
     # Circuit breaker: a whole batch still unavailable means the source has
-    # not recovered. Stop rather than spend the rest of the quota.
-    all_down = bool(items) and all(i.outcome == rm.OUTCOME_STILL_UNAVAILABLE for i in items)
+    # not recovered. Stop rather than spend the rest of the quota. The
+    # enrollment-only scope reads the pinned LOCAL snapshot — there is no live
+    # source whose recovery a stop could await (its unavailable items are
+    # per-entity NPI rejections), so that scope is exempt.
+    scope = (job.pinned or {}).get("evidence_scope") or SCOPE_FULL_BUILD
+    all_down = (scope != SCOPE_CMS_ENROLLMENT_ONLY and bool(items)
+                and all(i.outcome == rm.OUTCOME_STILL_UNAVAILABLE for i in items))
     if all_down and pending:
         job.state = rm.STATE_STOPPED_SOURCE_UNAVAILABLE
         job.error_reason = (f"every entity in a batch of {len(items)} was still "
