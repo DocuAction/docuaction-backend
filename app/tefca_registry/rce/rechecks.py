@@ -198,6 +198,13 @@ async def _validate_trigger(db, trigger_kind: str, source_id: str, trigger_ref: 
             raise RecheckRefused(
                 f"CMS PPEF snapshot {trigger_ref} is {snap.ingest_status!r}, not a "
                 f"completed, schema-validated ingest; a partial snapshot triggers nothing")
+        if snap.rows_truncated:
+            # ingest_status == "complete" with a row cap applied: an absent NPI in a
+            # truncated edition proves nothing, and one-job-per-edition would block a
+            # corrective job for the same snapshot.
+            raise RecheckRefused(
+                f"CMS PPEF snapshot {trigger_ref} is truncated (a row cap was applied "
+                f"at ingest); an enrollment recheck needs the complete snapshot")
         return {"authority": "completed, schema-validated CMS PPEF ingest "
                              "(ppef_ingest.validate_schema); PPEF has no separate human "
                              "approval step",

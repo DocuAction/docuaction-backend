@@ -322,6 +322,34 @@ async def test_non_enrollment_component_snapshot_is_refused(db_required, monkeyp
         await _request_snapshot_recheck(intake_id, _User("reviewer"), snap.id)
 
 
+# ── 5b2. a truncated snapshot never triggers the scope ─────────────────────────
+
+async def test_truncated_snapshot_is_refused(db_required, monkeypatch):
+    """ingest_status == "complete" with rows_truncated=True means a row cap was
+    applied: an absent NPI proves nothing, and one-job-per-edition would block a
+    corrective job — the request must be refused before any job exists."""
+    from app.Tefca.models import TEFCAPPEFSnapshot
+    from app.core.database import async_session_maker
+
+    intake_id, _ = await _seeded(monkeypatch)
+    snap = TEFCAPPEFSnapshot(
+        id=uuid.uuid4(), component="ENROLLMENT",
+        cms_title="Enrollment Q4 2026 (synthetic, capped)",
+        file_name="PPEF_Enrollment_Extract_2026.09.29.csv",
+        resource_version="2026.09.29", as_of_label="Q4 2026",
+        sha256="d" * 64, ingest_status="complete", rows_truncated=True,
+        ingested_by="pytest")
+    async with async_session_maker() as db:
+        db.add(snap)
+        await db.commit()
+    with pytest.raises(rechecks.RecheckRefused, match="truncated"):
+        await _request_snapshot_recheck(intake_id, _User("reviewer"), snap.id)
+    # the refused edition is not consumed: a complete snapshot still triggers
+    snapshot_id = await _completed_ppef_snapshot()
+    job = await _request_snapshot_recheck(intake_id, _User("reviewer"), snapshot_id)
+    assert job["already_exists"] is False
+
+
 # ── 5c. the source-unavailable breaker does not trip on local-snapshot reads ──
 
 async def test_breaker_exempts_enrollment_only_scope(db_required, monkeypatch):
