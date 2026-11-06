@@ -181,6 +181,7 @@ jobs:
             tests/test_cm12_ambiguous_entity_multiple_reviews_2026_10_28.py \
             tests/test_sam_extract_visibility_2026_10_31.py \
             tests/test_manual_reconciliation_snapshot_2026_10_31.py \
+            tests/test_recheck_enrollment_scope_2026_11_04.py \
             -v --tb=short -rs --junitxml=isolation-results.xml
       - name: Fail if any isolation test was skipped for want of a database
         run: |
