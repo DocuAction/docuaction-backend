@@ -164,6 +164,12 @@ async def test_ensure_rules_v4_retires_v3_idempotently(db_required):
                 reg.ReviewRule.is_active.is_(True)))).scalars().all()
             assert {r.rule_code for r in v4_active} == {
                 s["rule_code"] for s in SEED_RULES_V4}
+            # a fresh DB-backed load serves the activated set, RULE-006 included
+            loaded = await BucketClassifier().load_rules(db)
+            assert "RULE-006" in {r["rule_code"] for r in loaded}
+            # ...and the signal it references is a registered classifier signal
+            from app.core.evidence_vocabulary import CLASSIFIER_SIGNAL_REGISTRY
+            assert "active_treatment_missing_required_npi" in CLASSIFIER_SIGNAL_REGISTRY
         finally:
             # The shared test database serves OTHER suites in this session:
             # leaving v4 active would silently change their classifications.

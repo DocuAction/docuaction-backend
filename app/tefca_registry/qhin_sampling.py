@@ -324,7 +324,10 @@ async def finalize_plan(db, intake_id, *, review_type: str = "quarterly",
             use_fpc=False,
             random_seed=None,       # nothing random happened
             strata_distribution=dict(per_stratum),
-            stratum_sizing={q: {"population": n, "sample": n}
+            # Same keys as CochranSampler's sizing, so every consumer of
+            # per-stratum sizing reads both plan kinds identically.
+            stratum_sizing={q: {"population_size": n, "sample_size": n,
+                                "census": True}
                             for q, n in per_stratum.items()},
             strata_config={"stratify_by": "managed_by_qhin",
                            "plan_key": key,

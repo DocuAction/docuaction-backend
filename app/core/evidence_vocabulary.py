@@ -518,6 +518,32 @@ CLASSIFIER_SIGNAL_REGISTRY: Dict[str, SignalEntry] = {
              "set is a methodology question, not a wiring one — which is why the "
              "signal is declared unavailable rather than synthesised.",
     ),
+    "active_treatment_missing_required_npi": SignalEntry(
+        # PRODUCIBLE and SETTLED: computed on every classification from the
+        # SUBMITTED values alone (active normalizes to '1', exact T-TRTMNT
+        # token per npi_applicability.assign_case case 1, NPI missing,
+        # BR-NPI-TRTMNT-001 in force). The payload is a dict whose `status`
+        # is True and which preserves the raw submitted values verbatim.
+        production_state=PRODUCIBLE,
+        value_domain=SETTLED,
+        # The CONSEQUENCE is the open question: RULE-006 (B4) exists only in
+        # the PROPOSED SEED_RULES_V4, which no automatic chain activates —
+        # one audited admin action (review-rules/activate-v4) takes the
+        # methodology decision. Until then the signal is computed and inert.
+        consequence_state=METHODOLOGY_PENDING,
+        producers=(
+            Producer(PATH_RCE,
+                     "app/tefca_registry/rce/arc_pipeline.py "
+                     "(verify_and_classify, RULE-006 signal block)",
+                     ("true",)),
+        ),
+        unused_reason="Consumed only by RULE-006 in the PROPOSED rule set v4, "
+                      "which no automatic chain activates; until the audited "
+                      "activate-v4 action is taken under the methodology "
+                      "decision, the signal is computed and deliberately inert.",
+        note="A candidate NPI from supplemental evidence never suppresses the "
+             "signal: the submission requirement is about the DELIVERED value.",
+    ),
 }
 
 

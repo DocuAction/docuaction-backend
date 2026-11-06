@@ -733,7 +733,8 @@ async def ensure_rules_v3(session, effective: Optional[date] = None) -> int:
     return len(SEED_RULES_V3)
 
 
-async def ensure_rules_v4(session, effective: Optional[date] = None) -> int:
+async def ensure_rules_v4(session, effective: Optional[date] = None,
+                          *, commit: bool = True) -> int:
     """Retire version 3 rules and activate version 4 (RULE-006, the active-
     Treatment missing-required-NPI B4 — see `_v4_rules()`'s docstring).
 
@@ -769,7 +770,12 @@ async def ensure_rules_v4(session, effective: Optional[date] = None) -> int:
             priority=spec["priority"], conditions=spec["conditions"],
             description=spec["description"], version=4,
             effective_date=eff, is_active=True))
-    await session.commit()
+    # `commit=False` lets the activation route commit the rule change TOGETHER
+    # with its audit event — an activation with no audit row defeats the gate.
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
     logger.info("Retired %d v3 rules; activated %d v4 rules",
                 len(v3), len(SEED_RULES_V4))
     return len(SEED_RULES_V4)

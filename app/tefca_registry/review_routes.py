@@ -178,7 +178,9 @@ async def activate_rules_v4(req: ActivateRulesV4, request: Request,
     if req.confirm != "ACTIVATE-RULESET-V4":
         raise HTTPException(400, "confirm must be exactly ACTIVATE-RULESET-V4")
     actor_id, actor_email = reg_audit.actor_of(user)
-    added = await ensure_rules_v4(db)
+    # commit=False: the rule change and its audit event become durable in ONE
+    # commit below — an activation can never exist without its audit row.
+    added = await ensure_rules_v4(db, commit=False)
     reg_audit.record(
         db, "review_rules_v4_activation", None, actor_id=actor_id,
         actor_email=actor_email,
