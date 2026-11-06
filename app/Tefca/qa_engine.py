@@ -23,6 +23,7 @@ from statemachine import StateMachine, State
 # Shared SLA bands, so this endpoint and the ARC dashboard cannot disagree about
 # what "overdue" or "at risk" means. Pure functions, no DB, no import cycle.
 from app.tefca_registry import sla as _sla
+from app.services.npi_validator import is_valid_npi as _is_valid_npi
 
 logger = logging.getLogger("docuaction.tefca.qa")
 
@@ -118,30 +119,19 @@ def _schema_valid(source_name: str, data: Optional[dict]) -> bool:
 
 
 # ─── Intake validation ───────────────────────────────────────────────────────
-
-def _npi_check_digit(first9: str) -> int:
-    s = "80840" + first9  # CMS NPI Luhn prefix
-    total = 0
-    for i, ch in enumerate(reversed(s)):
-        d = int(ch)
-        if i % 2 == 0:
-            d *= 2
-            if d > 9:
-                d -= 9
-        total += d
-    return (10 - (total % 10)) % 10
-
+# Delegates to app.services.npi_validator — the one shared NPI validator in
+# this codebase (see that module's own docstring). This class used to carry
+# its own second implementation, which disagreed with the shared one on
+# whether a 10-digit, Luhn-valid NPI starting with a digit other than 1 or 2
+# is valid (this class said no; the shared module, until this change, said
+# yes). Fixed by removing the duplicate rather than reconciling two copies —
+# see 2026-10-21 engineering closeout for the full before/after.
 
 class IntakeValidator:
     """Gate 1 — verify a submission before any connector is called."""
 
     def validate_npi(self, npi: str) -> bool:
-        if not npi or not str(npi).isdigit() or len(str(npi)) != 10:
-            return False
-        npi = str(npi)
-        if npi[0] not in ("1", "2"):
-            return False
-        return _npi_check_digit(npi[:9]) == int(npi[9])
+        return _is_valid_npi(npi)
 
     def validate_required_fields(self, review) -> List[str]:
         missing = []
