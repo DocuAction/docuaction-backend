@@ -221,6 +221,15 @@ class ReviewCycleRequest(BaseModel):
     batch: int = Field(
         200, ge=1, le=1000,
         description="Members verified per call. Repeat until remaining is 0.")
+    full_population: bool = Field(
+        False,
+        description="Enumerate EVERY eligible record instead of drawing a "
+                    "statistical sample (selection algorithm "
+                    "FULL_POPULATION_ENUMERATION; its own frozen plan, never a "
+                    "relabelled sample). A sample never implies coverage of "
+                    "undrawn records; use this when the methodology requires "
+                    "classifying the whole population. Same gates, batching "
+                    "and audit; expect population-many verification calls.")
 
 
 @router.post("/deliveries/{intake_id}/review-cycle",
@@ -251,7 +260,8 @@ async def create_review_cycle_route(
             proportion=body.proportion, use_fpc=body.use_fpc,
             include_held=body.include_held, seed=body.random_seed,
             sample_name=body.sample_name, batch=body.batch,
-            ip_address=_client_ip(request))
+            ip_address=_client_ip(request),
+            full_population=body.full_population)
     except CycleRefused as exc:
         raise HTTPException(409, str(exc))
 

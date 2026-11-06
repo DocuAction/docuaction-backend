@@ -320,6 +320,54 @@ def _v3_rules() -> List[dict]:
 SEED_RULES_V3: List[dict] = _v3_rules()
 
 
+def _v4_rules() -> List[dict]:
+    """Version 4: adds RULE-006 — active + exact T-TRTMNT purpose + NPI
+    requirement in force + missing SUBMITTED NPI -> B4.
+
+    PROPOSED, NOT AUTO-ACTIVATED. Unlike v2/v3, `ensure_rules_v4` is NEVER
+    called by the pipeline's rule loader or any route-side ensure chain:
+    activating a rule that assigns B4 to ~700 October records is a
+    methodology decision (owner + independent QA), not a deploy side effect.
+    Activation is one explicit, audited admin action
+    (POST /api/tefca/arc/review-rules/activate-v4 with the confirm literal).
+
+    Priority 6: after RULE-005 (priority 5 — exclusions/debarment stay the
+    leading disqualifier), before every B1/B2/B3 rule, so an active
+    Treatment record with a missing required NPI can never pass as B1.
+    The signal (`active_treatment_missing_required_npi`) is computed from
+    SUBMITTED values only (npi_applicability.assign_case, case 1; exact
+    T-TRTMNT token; T-TREAT is case 3 and never fires it); an NPI available
+    only through supplemental evidence does not satisfy the submission
+    requirement and never suppresses the signal. Being HELD plays no part:
+    holds are promotion dispositions, not classifier inputs.
+    """
+    import copy
+    rules = copy.deepcopy(SEED_RULES_V3)
+    rules.append({
+        "rule_code": "RULE-006",
+        "name": "B4 Active Treatment Missing Required NPI",
+        "bucket": "B4",
+        "priority": 6,
+        "description": (
+            "Active record (active=1) claiming the exact T-TRTMNT exchange "
+            "purpose, with the NPI requirement in force (BR-NPI-TRTMNT-001; "
+            "Treatment XP SOP v2.0 §7/§8) and no SUBMITTED NPI. The submitted "
+            "value is preserved verbatim in the signal payload; an NPI found "
+            "only through supplemental evidence (vetting exports, registry "
+            "candidates) does not satisfy the submission requirement and is "
+            "presented to the analyst, never substituted."),
+        "conditions": {
+            "all_of": [
+                {"field": "active_treatment_missing_required_npi", "status": True},
+            ],
+        },
+    })
+    return rules
+
+
+SEED_RULES_V4: List[dict] = _v4_rules()
+
+
 class BucketClassifier:
     """Evaluates verification results against the active rule set.
 
@@ -683,3 +731,45 @@ async def ensure_rules_v3(session, effective: Optional[date] = None) -> int:
     logger.info("Retired %d v2 rules; activated %d v3 rules",
                 len(v2), len(SEED_RULES_V3))
     return len(SEED_RULES_V3)
+
+
+async def ensure_rules_v4(session, effective: Optional[date] = None) -> int:
+    """Retire version 3 rules and activate version 4 (RULE-006, the active-
+    Treatment missing-required-NPI B4 — see `_v4_rules()`'s docstring).
+
+    DELIBERATELY NOT in any automatic ensure chain. v2/v3 activate on first
+    use because they corrected the wiring of ALREADY-APPROVED rules; v4 adds
+    a NEW classification rule, and a new rule's activation is a methodology
+    decision taken by a person. The only caller is the explicit, audited,
+    admin-gated activation route. Idempotent: returns 0 if any version-4 row
+    already exists. v3 rows are RETIRED, never deleted, same audit reasoning
+    as `ensure_rules_v2`/`ensure_rules_v3` — and because `ensure_rules_v3`
+    checks row EXISTENCE (not activity), the pipeline's auto-ensure chain
+    can never re-activate v3 after this runs.
+    """
+    from sqlalchemy import func as sqlfunc, select
+    from app.tefca_registry import models as reg
+
+    eff = effective or date.today()
+    already = int((await session.execute(
+        select(sqlfunc.count()).select_from(reg.ReviewRule)
+        .where(reg.ReviewRule.version == 4))).scalar() or 0)
+    if already:
+        return 0
+
+    v3 = (await session.execute(
+        select(reg.ReviewRule).where(reg.ReviewRule.version == 3))).scalars().all()
+    for row in v3:
+        row.is_active = False
+        row.retired_date = eff
+
+    for spec in SEED_RULES_V4:
+        session.add(reg.ReviewRule(
+            rule_code=spec["rule_code"], name=spec["name"], bucket=spec["bucket"],
+            priority=spec["priority"], conditions=spec["conditions"],
+            description=spec["description"], version=4,
+            effective_date=eff, is_active=True))
+    await session.commit()
+    logger.info("Retired %d v3 rules; activated %d v4 rules",
+                len(v3), len(SEED_RULES_V4))
+    return len(SEED_RULES_V4)

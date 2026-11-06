@@ -151,6 +151,48 @@ async def list_rules(include_retired: bool = Query(False),
     return {"total": len(rows), "rules": [_rule_dict(r) for r in rows]}
 
 
+class ActivateRulesV4(BaseModel):
+    """Explicit confirmation body for the one-time v4 activation."""
+    confirm: str = Field(description="Must be exactly ACTIVATE-RULESET-V4")
+    rationale: str = Field(min_length=1, max_length=2000,
+                           description="Who approved the methodology change, and when")
+
+
+@router.post("/review-rules/activate-v4",
+             dependencies=[Depends(require_role("admin"))])
+async def activate_rules_v4(req: ActivateRulesV4, request: Request,
+                            db: AsyncSession = Depends(get_db),
+                            user=Depends(require_role("admin"))):
+    """Activate SEED_RULES_V4 (adds RULE-006: active + exact T-TRTMNT + NPI
+    requirement in force + missing SUBMITTED NPI -> B4).
+
+    THE methodology gate, deliberately manual: v4 is NEVER activated by any
+    automatic ensure chain (see `_v4_rules`'s docstring) — deploying the code
+    changes no classification until an admin calls this once, with the
+    approval rationale, which is audited. Idempotent: a second call reports
+    already-active and changes nothing. Existing classifications are never
+    re-interpreted; only runs AFTER activation evaluate RULE-006.
+    """
+    from app.tefca_registry.bucket_classifier import ensure_rules_v4
+
+    if req.confirm != "ACTIVATE-RULESET-V4":
+        raise HTTPException(400, "confirm must be exactly ACTIVATE-RULESET-V4")
+    actor_id, actor_email = reg_audit.actor_of(user)
+    added = await ensure_rules_v4(db)
+    reg_audit.record(
+        db, "review_rules_v4_activation", None, actor_id=actor_id,
+        actor_email=actor_email,
+        ip_address=(request.client.host if request.client else None),
+        metadata={"rules_activated": added,
+                  "already_active": added == 0,
+                  "rationale": req.rationale})
+    await db.commit()
+    return {"rules_activated": added, "already_active": added == 0,
+            "note": ("Rule set v4 is now the active classification rule set"
+                     if added else
+                     "Rule set v4 was already active; nothing changed.")}
+
+
 @router.get("/review-rules/history", dependencies=[Depends(require_role("viewer"))])
 async def rules_history(db: AsyncSession = Depends(get_db)):
     """Every version ever, current and retired. There is no DELETE — a rule that

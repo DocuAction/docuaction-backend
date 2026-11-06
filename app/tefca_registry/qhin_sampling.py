@@ -263,12 +263,20 @@ async def finalize_plan(db, intake_id, *, review_type: str = "quarterly",
                         seed: Optional[int] = None,
                         actor: Optional[str] = None,
                         actor_id: Optional[uuid.UUID] = None,
-                        sample_name: Optional[str] = None) -> Dict[str, Any]:
+                        sample_name: Optional[str] = None,
+                        full_population: bool = False) -> Dict[str, Any]:
     """Draw and FREEZE one official per-QHIN sample. Idempotent.
 
     Asking twice for the same plan returns the plan already drawn — it never
     redraws. That is the whole point of an official sample: the selection has to
     be the same tomorrow as it was when it was made.
+
+    `full_population=True` enumerates EVERY eligible unit instead of drawing a
+    statistical sample (selection algorithm FULL_POPULATION_ENUMERATION;
+    sample_size == population_size). A sample never implies coverage of the
+    records it did not draw — full-population classification must say so
+    honestly, as its own plan with its own key, never by relabelling a sample.
+    Eligibility, stratification, freezing, idempotence and audit are identical.
     """
     intake = await db.get(m.RceSourceIntake, intake_id)
     if intake is None:
@@ -277,6 +285,10 @@ async def finalize_plan(db, intake_id, *, review_type: str = "quarterly",
     key = plan_key(intake_id, review_type, confidence=confidence,
                    margin=margin, proportion=proportion, use_fpc=use_fpc,
                    include_held=include_held)
+    if full_population:
+        # Its own namespace: a full enumeration must never collide with (or
+        # silently reuse) a statistical plan drawn with the same parameters.
+        key = f"{key}|full_population"
 
     # One finaliser at a time per plan. Transaction-scoped, so a crash cannot
     # strand it. Without this two concurrent callers could both find no plan and
@@ -296,25 +308,56 @@ async def finalize_plan(db, intake_id, *, review_type: str = "quarterly",
             f"Delivery {intake_id} has no eligible population to sample under "
             f"the stated parameters; refusing to create an empty plan.")
 
-    # The statistics are the engine's. This module only says what to sample.
-    result = CochranSampler().draw_per_stratum(
-        eligible, stratum_of=lambda unit: unit["qhin"], seed=seed,
-        confidence=confidence, margin=margin, proportion=proportion,
-        use_fpc=use_fpc,
-        strata_config={"stratify_by": "managed_by_qhin",
-                       "plan_key": key,
-                       "plan_source": PLAN_SOURCE,
-                       "population_version": POPULATION_VERSION,
-                       "selection_algorithm": SELECTION_ALGORITHM,
-                       "source_intake_id": str(intake_id),
-                       "include_held": include_held,
-                       "unresolved_units": len(unresolved),
-                       "excluded_review_required": len(excluded)})
+    if full_population:
+        # No draw: the selection IS the eligible population, per stratum.
+        from types import SimpleNamespace
+        per_stratum: Dict[str, int] = {}
+        for unit in eligible:
+            per_stratum[unit["qhin"]] = per_stratum.get(unit["qhin"], 0) + 1
+        result = SimpleNamespace(
+            selected=list(eligible),
+            population_size=len(eligible),
+            sample_size=len(eligible),
+            confidence_level=1.0,   # an enumeration, not an estimate
+            margin_of_error=0.0,
+            proportion=proportion,
+            use_fpc=False,
+            random_seed=None,       # nothing random happened
+            strata_distribution=dict(per_stratum),
+            stratum_sizing={q: {"population": n, "sample": n}
+                            for q, n in per_stratum.items()},
+            strata_config={"stratify_by": "managed_by_qhin",
+                           "plan_key": key,
+                           "plan_source": PLAN_SOURCE,
+                           "population_version": POPULATION_VERSION,
+                           "selection_algorithm": "FULL_POPULATION_ENUMERATION",
+                           "source_intake_id": str(intake_id),
+                           "include_held": include_held,
+                           "full_population": True,
+                           "unresolved_units": len(unresolved),
+                           "excluded_review_required": len(excluded)})
+    else:
+        # The statistics are the engine's. This module only says what to sample.
+        result = CochranSampler().draw_per_stratum(
+            eligible, stratum_of=lambda unit: unit["qhin"], seed=seed,
+            confidence=confidence, margin=margin, proportion=proportion,
+            use_fpc=use_fpc,
+            strata_config={"stratify_by": "managed_by_qhin",
+                           "plan_key": key,
+                           "plan_source": PLAN_SOURCE,
+                           "population_version": POPULATION_VERSION,
+                           "selection_algorithm": SELECTION_ALGORITHM,
+                           "source_intake_id": str(intake_id),
+                           "include_held": include_held,
+                           "unresolved_units": len(unresolved),
+                           "excluded_review_required": len(excluded)})
 
     sample = reg.ReviewSample(
         id=uuid.uuid4(),
-        sample_name=sample_name or f"{PLAN_SOURCE} {review_type} "
-                                   f"{date.today().isoformat()}",
+        sample_name=sample_name or (
+            f"{PLAN_SOURCE} {review_type} "
+            f"{'FULL POPULATION ' if full_population else ''}"
+            f"{date.today().isoformat()}"),
         review_type=review_type,
         population_size=result.population_size,
         sample_size=result.sample_size,

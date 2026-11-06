@@ -311,3 +311,54 @@ def describe(assignment: CaseAssignment, assessment: ApplicabilityAssessment) ->
             f"assessed={assessment.assessment_date.isoformat()}; "
             f"governing date={assessment.governing_requirement_date.isoformat()}; "
             f"deadline={assessment.deadline_applicability}; rule={assessment.rule_version}")
+
+
+# ── proposed classifier signal (SEED_RULES_V4 / RULE-006) ─────────────────────
+
+def active_treatment_missing_required_npi(
+    purposes_raw: Optional[str],
+    npi_raw: Optional[str],
+    active_raw: Optional[str],
+    *,
+    assessment_date: date,
+    requirement_effective: date,
+) -> Optional[dict]:
+    """The RULE-006 classifier signal, or None when it does not apply.
+
+    Fires only when ALL of: the record's active flag normalizes to "1"; the
+    parsed purpose list contains the EXACT token T-TRTMNT (assign_case case 1
+    semantics — T-TREAT is case 3 and never matches, nor do casing or
+    substring variants); the submitted NPI is missing; and the NPI
+    requirement (BR-NPI-TRTMNT-001 / Treatment XP SOP v2.0 §7) is in force
+    on `assessment_date`. PURE: reads the delivered values only, never a
+    supplemental source — an NPI available only through supplemental
+    evidence (vetting exports, NPPES candidates) does NOT satisfy the
+    submission requirement and is an analyst-side fact, so it cannot and
+    does not suppress this signal. Original submitted values are preserved
+    verbatim in the returned payload for the classification rationale.
+    """
+    from app.tefca_registry.rce.field_map import normalize_active
+
+    if assessment_date < requirement_effective:
+        return None
+    if normalize_active(active_raw) != "1":
+        return None
+    assignment = assign_case(purposes_raw, npi_raw)
+    if assignment.case != 1:   # exact T-TRTMNT present AND NPI missing
+        return None
+    return {
+        "status": True,
+        "case": assignment.case,
+        "case_label": assignment.label,
+        "raw_purposes": assignment.raw_purposes,
+        "raw_npi": assignment.raw_npi,
+        "raw_active": (active_raw or ""),
+        "purpose_tokens": list(assignment.tokens),
+        "requirement": "BR-NPI-TRTMNT-001 (Treatment XP SOP v2.0 §7/§8)",
+        "requirement_effective": requirement_effective.isoformat(),
+        "assessment_date": assessment_date.isoformat(),
+        "note": ("Submitted NPI missing on an active record claiming the exact "
+                 "T-TRTMNT exchange purpose while the requirement is in force. "
+                 "A candidate NPI from supplemental evidence does not satisfy "
+                 "the submission requirement; it remains analyst-side evidence."),
+    }

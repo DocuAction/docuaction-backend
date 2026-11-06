@@ -99,6 +99,7 @@ async def create_review_cycle(
     seed: Optional[int] = None, sample_name: Optional[str] = None,
     batch: int = DEFAULT_BATCH,
     ip_address: Optional[str] = None,
+    full_population: bool = False,
 ) -> Dict[str, Any]:
     """Gate → draw (or reuse) the plan → verify unlinked members → link.
 
@@ -141,7 +142,8 @@ async def create_review_cycle(
                 db, intake_id, review_type=review_type, confidence=confidence,
                 margin=margin, proportion=proportion, use_fpc=use_fpc,
                 include_held=include_held, seed=seed, actor=actor_email,
-                actor_id=actor_id, sample_name=sample_name)
+                actor_id=actor_id, sample_name=sample_name,
+                full_population=full_population)
         except SamplingRefused as exc:
             await db.rollback()
             raise CycleRefused(str(exc))
