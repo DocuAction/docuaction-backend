@@ -257,3 +257,41 @@ def test_matching_capability_reports_advisory_sub_capability():
     assert hco["supported"] is True
     assert hco["advisory_comparison"]["supported"] is False
     assert hco["advisory_comparison"]["code"] == "USE_MATCH_ROUTE"
+
+
+@pytest.mark.parametrize("source", ["affiliation", "hcp"])
+async def test_all_distinct_addresses_are_compared_beyond_fifty(
+        rolled_back_db, tmp_path, source):
+    """A later matching address must not disappear behind a fifty-row cap."""
+    db = rolled_back_db
+    eid = await seed_entity(db, oid=f"{SYN}-all-addresses",
+                            name=f"{SYN} Address Coverage", npi=NPI_REGISTERED)
+    rows = []
+    for i in range(51):
+        city, state, zipcode = (
+            ("Testville", "MA", "02101") if i == 50
+            else (f"Elsewhere {i}", "TX", f"{75000 + i:05d}"))
+        if source == "affiliation":
+            rows.append([f"{SYN}-P{i}", f"{SYN}-all-O", "A1", "",
+                         NPI_REGISTERED, "", "", "1 Synthetic Way",
+                         city, state, zipcode])
+        else:
+            rows.append([f"{SYN}-all-P", f"A{i}", NPI_REGISTERED,
+                         "Jo", "Synthetic", "1 Synthetic Way",
+                         city, state, zipcode])
+    header = AFFIL_HEADER if source == "affiliation" else HCP_HEADER
+    file_path = _write(tmp_path / f"{source}_51.csv", header, rows)
+    importer = (ii.import_affiliation_csv if source == "affiliation"
+                else ii.import_hcp_csv)
+    summary = await importer(db, file_path=file_path,
+                             label=f"{SYN}-all-{source}", created_by=SYN)
+    assert summary.completed and summary.rows_rejected == 0
+    before = await _no_match_rows(db)
+    out = await advc.advisory_comparison_batch(
+        db, snapshot_id=summary.snapshot_id, entity_ids=[eid],
+        diagnostic_allow_pending=True)
+    address = out["results"][0]["address"]
+    assert address["outcome"] == advc.ADDRESS_CONSISTENT
+    assert address["agreeing"] == 1
+    assert address["iqvia_addresses"] == 51
+    assert await _no_match_rows(db) == before

@@ -57,7 +57,6 @@ AFFIL_FLAG = "ENABLE_IQVIA_AFFILIATION_CONSUMPTION"
 ADDR_FLAG = "ENABLE_IQVIA_ADDRESS_CONSUMPTION"
 
 MAX_BATCH = 200                 # entities per call; the caller pages
-MAX_ADDRESS_ROWS = 50           # distinct IQVIA addresses examined per entity
 
 # ── presence outcomes (per entity) ───────────────────────────────────────────
 SUPPORTS = "SUPPORTS"           # IQVIA rows corroborate the organisation's presence
@@ -207,6 +206,8 @@ def _entity_address(entity: reg.TefcaRegEntity) -> Dict[str, Any]:
 async def _affiliation_org_addresses(db, root_id, hco_keys: Sequence[str]
                                      ) -> List[Dict[str, Any]]:
     """Distinct organisation address descriptors of the matched HCO rows
+    Read every distinct descriptor: a partial address set cannot establish
+    ADDRESS_DIFFERS or truthful agreeing/total counts.
     (AFFILIATION_ORG_DESCRIPTORS projection: ADDR_LN_1_TXT / CITY_NM / ST_CD /
     ZIP5_CD live in the payload)."""
     obs = sm.IqviaAffiliationObservation
@@ -215,7 +216,7 @@ async def _affiliation_org_addresses(db, root_id, hco_keys: Sequence[str]
         obs.payload["ZIP5_CD"].astext).where(
         obs.source_snapshot_id == root_id,
         obs.hco_record_key.in_(list(hco_keys))).distinct()
-        .limit(MAX_ADDRESS_ROWS))).all()
+        )).all()
     return [{"city": c, "state": s, "zip": z} for c, s, z in rows]
 
 
@@ -259,7 +260,7 @@ async def compare_hcp_address_entity(db, *, root_id, entity: reg.TefcaRegEntity,
             obs.payload["CITY_NM"].astext, obs.payload["ST_CD"].astext,
             obs.payload["ZIP5_CD"].astext).where(
             obs.source_snapshot_id == root_id, obs.npi.in_(valid)).distinct()
-            .limit(MAX_ADDRESS_ROWS))).all()
+            )).all()
         rows = [{"city": c, "state": s, "zip": z} for c, s, z in got]
     presence = {"outcome": SUPPORTS if rows else NO_IQVIA_DATA,
                 "hco_keys": [], "notes": [] if valid else ["NO_USABLE_IDENTIFIER"]}
