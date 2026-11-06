@@ -26,6 +26,8 @@ from datetime import date
 
 import pytest
 
+from rce_traceability_support import rolled_back_db  # noqa: F401
+
 from app.tefca_registry.bucket_classifier import (
     BucketClassifier, SEED_RULES_V3, SEED_RULES_V4)
 from app.tefca_registry.rce.npi_applicability import (
@@ -196,49 +198,42 @@ def test_both_v4_signals_are_registered_classifier_signals():
 # ── activation (database): explicit, idempotent, never resurrects v3 ─────────
 
 @pytest.mark.asyncio
-async def test_ensure_rules_v4_retires_v3_idempotently(db_required):
+async def test_ensure_rules_v4_retires_v3_idempotently(rolled_back_db):
+    """Activation is isolated by an outer transaction, including helper commits."""
     from sqlalchemy import delete, select
 
-    from app.core.database import async_session_maker
     from app.tefca_registry import models as reg
     from app.tefca_registry.bucket_classifier import (
         ensure_rules_v3, ensure_rules_v4, ensure_rules_v2, ensure_seed_rules)
 
-    async with async_session_maker() as db:
-        try:
-            await ensure_seed_rules(db)
-            await ensure_rules_v2(db)
-            await ensure_rules_v3(db)
+    db = rolled_back_db
+    # Start from a deterministic rule set INSIDE the fixture's outer transaction.
+    # All original rows/fields (including v2 and pre-existing v4) are restored
+    # by its rollback even if activation or a database assertion fails.
+    await db.execute(delete(reg.ReviewRule))
+    await ensure_seed_rules(db)
+    await ensure_rules_v2(db)
+    await ensure_rules_v3(db)
 
-            added = await ensure_rules_v4(db)
-            assert added == len(SEED_RULES_V4)
-            # idempotent
-            assert await ensure_rules_v4(db) == 0
-            # the automatic chain cannot resurrect v3: existence, not activity
-            assert await ensure_rules_v3(db) == 0
-            v3_rows = (await db.execute(select(reg.ReviewRule).where(
-                reg.ReviewRule.version == 3))).scalars().all()
-            assert v3_rows and all(not r.is_active for r in v3_rows)
-            v4_active = (await db.execute(select(reg.ReviewRule).where(
-                reg.ReviewRule.version == 4,
-                reg.ReviewRule.is_active.is_(True)))).scalars().all()
-            assert {r.rule_code for r in v4_active} == {
-                s["rule_code"] for s in SEED_RULES_V4}
-            assert {"RULE-006", "RULE-007"} <= {r.rule_code for r in v4_active}
-            # a fresh DB-backed load serves the activated set, both rules in
-            loaded = await BucketClassifier().load_rules(db)
-            assert {"RULE-006", "RULE-007"} <= {r["rule_code"] for r in loaded}
-        finally:
-            # The shared test database serves OTHER suites in this session:
-            # leaving v4 active would silently change their classifications.
-            # Restore the pre-test state (v4 gone, v3 active again).
-            await db.execute(delete(reg.ReviewRule).where(reg.ReviewRule.version == 4))
-            v3_rows = (await db.execute(select(reg.ReviewRule).where(
-                reg.ReviewRule.version == 3))).scalars().all()
-            for r in v3_rows:
-                r.is_active = True
-                r.retired_date = None
-            await db.commit()
+    added = await ensure_rules_v4(db)
+    assert added == len(SEED_RULES_V4)
+    # idempotent
+    assert await ensure_rules_v4(db) == 0
+    # the automatic chain cannot resurrect v3: existence, not activity
+    assert await ensure_rules_v3(db) == 0
+    v3_rows = (await db.execute(select(reg.ReviewRule).where(
+        reg.ReviewRule.version == 3))).scalars().all()
+    assert v3_rows and all(not r.is_active for r in v3_rows)
+    v4_active = (await db.execute(select(reg.ReviewRule).where(
+        reg.ReviewRule.version == 4,
+        reg.ReviewRule.is_active.is_(True)))).scalars().all()
+    assert {r.rule_code for r in v4_active} == {
+        s["rule_code"] for s in SEED_RULES_V4}
+    assert {"RULE-006", "RULE-007"} <= {r.rule_code for r in v4_active}
+    # a fresh DB-backed load serves the activated set, both rules in
+    loaded = await BucketClassifier().load_rules(db)
+    assert {"RULE-006", "RULE-007"} <= {r["rule_code"] for r in loaded}
+
 
 
 # ── full-population plan (database): enumeration, not a relabelled sample ────
