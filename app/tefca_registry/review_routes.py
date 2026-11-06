@@ -164,7 +164,11 @@ async def activate_rules_v4(req: ActivateRulesV4, request: Request,
                             db: AsyncSession = Depends(get_db),
                             user=Depends(require_role("admin"))):
     """Activate SEED_RULES_V4 (adds RULE-006: active + exact T-TRTMNT + NPI
-    requirement in force + missing SUBMITTED NPI -> B4).
+    requirement in force + missing SUBMITTED NPI + §7 initiating
+    applicability established by the delivered organizationNodeType -> B4;
+    and RULE-007: the same record shape with the direction NOT documented ->
+    B3 explicit applicability review — unknown applicability is never
+    confirmed non-compliance and never a silent clean pass).
 
     THE methodology gate, deliberately manual: v4 is NEVER activated by any
     automatic ensure chain (see `_v4_rules`'s docstring) — deploying the code

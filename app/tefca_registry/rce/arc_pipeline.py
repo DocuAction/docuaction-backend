@@ -705,10 +705,28 @@ async def verify_and_classify(
                 _rce_fields.rce_value(entity, "NPI"),
                 _rce_fields.rce_value(entity, "active"),
                 assessment_date=date.today(),
-                requirement_effective=BR_NPI_TRTMNT_EFFECTIVE)
+                requirement_effective=BR_NPI_TRTMNT_EFFECTIVE,
+                org_node_type=_rce_fields.rce_value(entity, "organizationNodeType"))
             if _b4_signal is not None:
-                verification_results.setdefault("fields", {})[
-                    "active_treatment_missing_required_npi"] = _b4_signal
+                _fields = verification_results.setdefault("fields", {})
+                _fields["active_treatment_missing_required_npi"] = _b4_signal
+                # Unknown §7 applicability is NEVER confirmed non-compliance:
+                # it is its own signal, consumed by RULE-007 (B3 explicit
+                # applicability review) so the record can neither classify B4
+                # nor fall through to a clean-source B1.
+                if _b4_signal.get("applicability_review"):
+                    _fields["treatment_npi_applicability_unresolved"] = {
+                        "status": True,
+                        "initiating_requirement": _b4_signal["initiating_requirement"],
+                        "exchange_direction": _b4_signal["exchange_direction"],
+                        "raw_org_node_type": _b4_signal["raw_org_node_type"],
+                        "raw_purposes": _b4_signal["raw_purposes"],
+                        "raw_npi": _b4_signal["raw_npi"],
+                        "raw_active": _b4_signal["raw_active"],
+                        "requirement": _b4_signal["requirement"],
+                        "assessment_date": _b4_signal["assessment_date"],
+                        "note": _b4_signal["note"],
+                    }
             classification = classifier.classify(verification_results, rules=rules)
 
             # NPPES outcome to the delivery's issue ledger (NPI-005/006/009). One

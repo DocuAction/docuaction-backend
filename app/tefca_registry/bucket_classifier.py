@@ -321,25 +321,39 @@ SEED_RULES_V3: List[dict] = _v3_rules()
 
 
 def _v4_rules() -> List[dict]:
-    """Version 4: adds RULE-006 — active + exact T-TRTMNT purpose + NPI
-    requirement in force + missing SUBMITTED NPI -> B4.
+    """Version 4: adds RULE-006 (B4) and RULE-007 (B3 applicability review).
+
+    RULE-006 — active + exact T-TRTMNT purpose + NPI requirement in force +
+    missing SUBMITTED NPI + §7 INITIATING APPLICABILITY ESTABLISHED by the
+    delivered `organizationNodeType` -> B4. The signal's `status` is True
+    only when applicability is established, so unknown applicability can
+    never classify as confirmed non-compliance.
+
+    RULE-007 — the same record shape with the exchange direction NOT
+    documented in the delivery -> B3 "Treatment NPI applicability review",
+    an EXPLICIT review classification. Without it a direction-unknown
+    case-1 record with otherwise clean sources would fall through to
+    RULE-001 (priority 10) and classify B1 — a silent pass on an undecided
+    §7 question. Priority 7 sits between RULE-006 and the B1 rules so that
+    can never happen.
 
     PROPOSED, NOT AUTO-ACTIVATED. Unlike v2/v3, `ensure_rules_v4` is NEVER
     called by the pipeline's rule loader or any route-side ensure chain:
-    activating a rule that assigns B4 to ~700 October records is a
-    methodology decision (owner + independent QA), not a deploy side effect.
+    activating rules that classify ~700 October records is a methodology
+    decision (owner + independent QA), not a deploy side effect.
     Activation is one explicit, audited admin action
     (POST /api/tefca/arc/review-rules/activate-v4 with the confirm literal).
 
     Priority 6: after RULE-005 (priority 5 — exclusions/debarment stay the
-    leading disqualifier), before every B1/B2/B3 rule, so an active
-    Treatment record with a missing required NPI can never pass as B1.
+    leading disqualifier), before every B1/B2/B3 rule.
     The signal (`active_treatment_missing_required_npi`) is computed from
     SUBMITTED values only (npi_applicability.assign_case, case 1; exact
-    T-TRTMNT token; T-TREAT is case 3 and never fires it); an NPI available
-    only through supplemental evidence does not satisfy the submission
-    requirement and never suppresses the signal. Being HELD plays no part:
-    holds are promotion dispositions, not classifier inputs.
+    T-TRTMNT token; T-TREAT is case 3 and never fires it; direction from
+    `organizationNodeType` only — nothing inferred from a blank role, a
+    Participant label or `initiatoronly`); an NPI available only through
+    supplemental evidence does not satisfy the submission requirement and
+    never suppresses the signal. Being HELD plays no part: holds are
+    promotion dispositions, not classifier inputs.
     """
     import copy
     rules = copy.deepcopy(SEED_RULES_V3)
@@ -350,7 +364,10 @@ def _v4_rules() -> List[dict]:
         "priority": 6,
         "description": (
             "Active record (active=1) claiming the exact T-TRTMNT exchange "
-            "purpose, with the NPI requirement in force (BR-NPI-TRTMNT-001; "
+            "purpose, operating a delivered initiating Principal Node "
+            "(organizationNodeType = initiating-node; §7 applicability "
+            "established, never assumed), with the NPI requirement in force "
+            "(BR-NPI-TRTMNT-001; "
             "Treatment XP SOP v2.0 §7/§8) and no SUBMITTED NPI. The submitted "
             "value is preserved verbatim in the signal payload; an NPI found "
             "only through supplemental evidence (vetting exports, registry "
@@ -359,6 +376,27 @@ def _v4_rules() -> List[dict]:
         "conditions": {
             "all_of": [
                 {"field": "active_treatment_missing_required_npi", "status": True},
+            ],
+        },
+    })
+    rules.append({
+        "rule_code": "RULE-007",
+        "name": "B3 Treatment NPI Applicability Review",
+        "bucket": "B3",
+        "priority": 7,
+        "description": (
+            "Active record claiming the exact T-TRTMNT exchange purpose with "
+            "the submitted NPI missing and the requirement in force, but the "
+            "exchange direction NOT documented in the delivery "
+            "(organizationNodeType establishes no initiating Principal Node). "
+            "Whether the §7 obligation applies is unresolved: explicit "
+            "analyst applicability review. Unknown applicability is never "
+            "confirmed non-compliance (B4) and never a silent clean pass "
+            "(B1). Original submitted values are preserved verbatim in the "
+            "signal payload."),
+        "conditions": {
+            "all_of": [
+                {"field": "treatment_npi_applicability_unresolved", "status": True},
             ],
         },
     })

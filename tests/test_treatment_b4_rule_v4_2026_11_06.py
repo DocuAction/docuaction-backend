@@ -1,13 +1,20 @@
-"""SEED_RULES_V4 / RULE-006: active + exact T-TRTMNT + NPI requirement in
-force + missing SUBMITTED NPI -> B4 — proposed, never auto-activated.
+"""SEED_RULES_V4 / RULE-006 + RULE-007: active + exact T-TRTMNT + NPI
+requirement in force + missing SUBMITTED NPI -> B4 ONLY when the §7
+initiating applicability is established by the delivered
+organizationNodeType; unknown applicability -> B3 explicit review
+(RULE-007), never B4 and never a clean-source B1. Proposed, never
+auto-activated.
 
-Three layers, separately:
+Four layers, separately:
   * the SIGNAL (pure): computed from submitted values only, raws preserved,
     T-TREAT and token variants never fire it, supplemental-evidence NPIs
     cannot suppress it (the helper never sees them, by design);
-  * the RULE (pure classifier): fires only under the v4 rule set — the same
-    input under v3 still classifies B1, proving merge/deploy activates
-    nothing;
+  * APPLICABILITY (pure, inside the signal): `status` True requires
+    direction `initiating-node`; blank/passthrough/absent node type is
+    `initiating_requirement = "unresolved"` with `applicability_review`;
+  * the RULES (pure classifier): RULE-006/RULE-007 fire only under the v4
+    rule set — the same input under v3 still classifies B1, proving
+    merge/deploy activates nothing;
   * ACTIVATION (database): ensure_rules_v4 retires v3 idempotently, and the
     pipeline's automatic ensure chain cannot resurrect v3 afterwards.
 
@@ -29,30 +36,50 @@ IN_FORCE = date(2026, 11, 6)        # >= BR_NPI_TRTMNT_EFFECTIVE (2026-10-25)
 BEFORE = date(2026, 10, 1)
 
 
-def _signal(purposes, npi="", active="1", when=IN_FORCE):
+def _signal(purposes, npi="", active="1", when=IN_FORCE, node_type=None):
     """The RULE-006 signal for one synthetic record."""
     return active_treatment_missing_required_npi(
         purposes, npi, active,
-        assessment_date=when, requirement_effective=BR_NPI_TRTMNT_EFFECTIVE)
+        assessment_date=when, requirement_effective=BR_NPI_TRTMNT_EFFECTIVE,
+        org_node_type=node_type)
 
 
 # ── the signal ────────────────────────────────────────────────────────────────
 
-def test_signal_fires_on_active_exact_trtmnt_missing_npi():
-    sig = _signal("T-TRTMNT")
+def test_signal_b4_eligible_only_with_initiating_direction():
+    sig = _signal("T-TRTMNT", node_type="initiating-node")
     assert sig is not None and sig["status"] is True
     assert sig["case"] == 1
+    assert sig["initiating_requirement"] == "applies"
+    assert sig["exchange_direction"] == "initiating"
+    assert sig["applicability_review"] is False
     # original submitted values preserved verbatim
     assert sig["raw_purposes"] == "T-TRTMNT"
     assert sig["raw_npi"] == ""
     assert sig["raw_active"] == "1"
+    assert sig["raw_org_node_type"] == "initiating-node"
     assert "supplemental" in sig["note"].lower()
+
+
+def test_unknown_direction_is_review_never_confirmed():
+    """A blank node type, a passthrough node, or no node type at all leaves
+    the §7 applicability UNRESOLVED: status False (never B4-eligible) with an
+    explicit applicability_review flag. Unknown is not confirmed."""
+    for node_type in (None, "", "   ", "passthrough-node", "no-node", "OTHER"):
+        sig = _signal("T-TRTMNT", node_type=node_type)
+        assert sig is not None, node_type
+        assert sig["status"] is False, node_type
+        assert sig["initiating_requirement"] == "unresolved", node_type
+        assert sig["applicability_review"] is True, node_type
+        assert sig["raw_org_node_type"] == (node_type or "")
+        # raws still preserved for the analyst
+        assert sig["raw_purposes"] == "T-TRTMNT"
 
 
 def test_signal_fires_on_any_combination_containing_trtmnt():
     for purposes in ("T-PH-ECR,T-TRTMNT", "T-TRTMNT,T-PYMNT",
                      "T-TREAT,T-TRTMNT", "T-PYMNT, T-TRTMNT ,T-PH-ECR"):
-        sig = _signal(purposes)
+        sig = _signal(purposes, node_type="initiating-node")
         assert sig is not None and sig["status"] is True, purposes
         assert sig["raw_purposes"] == purposes  # untouched
 
@@ -62,27 +89,29 @@ def test_t_treat_and_token_variants_never_fire():
     substring/case variants of the exact token."""
     for purposes in ("T-TREAT", "T-TREAT,T-PYMNT", "t-trtmnt", "T-TRTMNTX",
                      "XT-TRTMNT", "TRTMNT", ""):
-        assert _signal(purposes) is None, purposes
+        assert _signal(purposes, node_type="initiating-node") is None, purposes
 
 
 def test_inactive_or_unsupported_active_never_fires():
-    assert _signal("T-TRTMNT", active="0") is None
-    assert _signal("T-TRTMNT", active="") is None
-    assert _signal("T-TRTMNT", active="yes-ish") is None  # UNSUPPORTED:<value>
+    assert _signal("T-TRTMNT", active="0", node_type="initiating-node") is None
+    assert _signal("T-TRTMNT", active="", node_type="initiating-node") is None
+    assert _signal("T-TRTMNT", active="yes-ish",
+                   node_type="initiating-node") is None  # UNSUPPORTED:<value>
 
 
 def test_supplied_npi_never_fires():
-    assert _signal("T-TRTMNT", npi="1234567893") is None
+    assert _signal("T-TRTMNT", npi="1234567893",
+                   node_type="initiating-node") is None
     # even a malformed supplied value is case 2 (validity is NPI-002/003/004's
     # question, not this rule's)
-    assert _signal("T-TRTMNT", npi="12345") is None
+    assert _signal("T-TRTMNT", npi="12345", node_type="initiating-node") is None
 
 
 def test_requirement_not_yet_in_force_never_fires():
-    assert _signal("T-TRTMNT", when=BEFORE) is None
+    assert _signal("T-TRTMNT", when=BEFORE, node_type="initiating-node") is None
 
 
-# ── the rule, against the two rule sets ──────────────────────────────────────
+# ── the rules, against the two rule sets ──────────────────────────────────────
 
 _CLEAN_SOURCES = {
     "sources": {
@@ -93,29 +122,53 @@ _CLEAN_SOURCES = {
 }
 
 
-def _results(with_signal: bool) -> dict:
+def _results(with_signal: bool, node_type="initiating-node") -> dict:
     results = {k: ({sk: dict(sv) for sk, sv in v.items()}
                    if isinstance(v, dict) else v)
                for k, v in _CLEAN_SOURCES.items()}
     if with_signal:
-        results["fields"] = {
-            "active_treatment_missing_required_npi": _signal("T-TRTMNT")}
+        sig = _signal("T-TRTMNT", node_type=node_type)
+        fields = {"active_treatment_missing_required_npi": sig}
+        if sig.get("applicability_review"):
+            # mirror of arc_pipeline's companion-signal wiring
+            fields["treatment_npi_applicability_unresolved"] = {
+                "status": True,
+                "initiating_requirement": sig["initiating_requirement"],
+                "exchange_direction": sig["exchange_direction"],
+                "raw_org_node_type": sig["raw_org_node_type"],
+            }
+        results["fields"] = fields
     return results
 
 
-def test_v4_classifies_b4_via_rule_006():
+def test_v4_classifies_b4_via_rule_006_when_initiating():
     out = BucketClassifier().classify(_results(True), rules=SEED_RULES_V4)
     assert out.bucket == "B4"
     assert out.rule_code == "RULE-006"
     assert "active_treatment_missing_required_npi" in " ".join(out.matched_conditions)
 
 
+def test_v4_unknown_direction_is_explicit_b3_review_not_b4_not_b1():
+    """THE applicability guard: direction-unknown case-1 record with clean
+    sources classifies B3 via RULE-007 — explicitly reviewed, never B4
+    (unknown is not confirmed) and never RULE-001's B1 (clean sources do not
+    resolve an undecided §7 question)."""
+    for node_type in (None, "", "passthrough-node"):
+        out = BucketClassifier().classify(_results(True, node_type=node_type),
+                                          rules=SEED_RULES_V4)
+        assert out.bucket == "B3", node_type
+        assert out.rule_code == "RULE-007", node_type
+
+
 def test_same_input_under_v3_still_classifies_b1():
     """Merging/deploying the code is NOT activation: until ensure_rules_v4
-    runs, the active rule set has no RULE-006 and nothing changes."""
-    out = BucketClassifier().classify(_results(True), rules=SEED_RULES_V3)
-    assert out.bucket == "B1"
-    assert out.rule_code != "RULE-006"
+    runs, the active rule set has no RULE-006/007 and nothing changes —
+    for the initiating shape and the unknown-direction shape alike."""
+    for node_type in ("initiating-node", None):
+        out = BucketClassifier().classify(_results(True, node_type=node_type),
+                                          rules=SEED_RULES_V3)
+        assert out.bucket == "B1", node_type
+        assert out.rule_code not in ("RULE-006", "RULE-007"), node_type
 
 
 def test_v4_without_the_signal_matches_v3_behavior():
@@ -125,12 +178,19 @@ def test_v4_without_the_signal_matches_v3_behavior():
 
 
 def test_exclusion_disqualifier_still_leads():
-    """RULE-005 (priority 5) stays ahead of RULE-006 (priority 6): a debarment
-    is the leading B4 reason, not the missing NPI."""
-    results = _results(True)
-    results["sources"]["oig_leie"] = {"status": "excluded"}
-    out = BucketClassifier().classify(results, rules=SEED_RULES_V4)
-    assert out.bucket == "B4" and out.rule_code == "RULE-005"
+    """RULE-005 (priority 5) stays ahead of RULE-006 (priority 6) and
+    RULE-007 (priority 7): a debarment is the leading B4 reason."""
+    for node_type in ("initiating-node", None):
+        results = _results(True, node_type=node_type)
+        results["sources"]["oig_leie"] = {"status": "excluded"}
+        out = BucketClassifier().classify(results, rules=SEED_RULES_V4)
+        assert out.bucket == "B4" and out.rule_code == "RULE-005", node_type
+
+
+def test_both_v4_signals_are_registered_classifier_signals():
+    from app.core.evidence_vocabulary import CLASSIFIER_SIGNAL_REGISTRY
+    assert "active_treatment_missing_required_npi" in CLASSIFIER_SIGNAL_REGISTRY
+    assert "treatment_npi_applicability_unresolved" in CLASSIFIER_SIGNAL_REGISTRY
 
 
 # ── activation (database): explicit, idempotent, never resurrects v3 ─────────
@@ -164,12 +224,10 @@ async def test_ensure_rules_v4_retires_v3_idempotently(db_required):
                 reg.ReviewRule.is_active.is_(True)))).scalars().all()
             assert {r.rule_code for r in v4_active} == {
                 s["rule_code"] for s in SEED_RULES_V4}
-            # a fresh DB-backed load serves the activated set, RULE-006 included
+            assert {"RULE-006", "RULE-007"} <= {r.rule_code for r in v4_active}
+            # a fresh DB-backed load serves the activated set, both rules in
             loaded = await BucketClassifier().load_rules(db)
-            assert "RULE-006" in {r["rule_code"] for r in loaded}
-            # ...and the signal it references is a registered classifier signal
-            from app.core.evidence_vocabulary import CLASSIFIER_SIGNAL_REGISTRY
-            assert "active_treatment_missing_required_npi" in CLASSIFIER_SIGNAL_REGISTRY
+            assert {"RULE-006", "RULE-007"} <= {r["rule_code"] for r in loaded}
         finally:
             # The shared test database serves OTHER suites in this session:
             # leaving v4 active would silently change their classifications.
