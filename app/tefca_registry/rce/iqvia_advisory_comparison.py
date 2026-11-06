@@ -44,7 +44,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from app.tefca_registry import models as reg
 from app.tefca_registry.rce import snapshot_models as sm
@@ -89,11 +89,13 @@ def normalize_zip5(value: Any) -> Optional[str]:
 
 
 def normalize_state(value: Any) -> Optional[str]:
+    """Normalize a two-letter state code; return None for unusable input."""
     v = ("" if value is None else str(value)).strip().upper()
     return v if len(v) == 2 and v.isalpha() else None
 
 
 def normalize_city(value: Any) -> Optional[str]:
+    """Normalize city punctuation, casing and whitespace for advisory comparison."""
     v = ("" if value is None else str(value)).strip().lower()
     v = _WS.sub(" ", _NON_ALNUM.sub(" ", v)).strip()
     return v or None
@@ -185,20 +187,31 @@ async def _eligible_snapshot(db, snapshot_id, *, source_system: str,
     return snap, root.id
 
 
-async def _entity_identifiers(db, entity_id) -> Dict[str, List[str]]:
+async def _entity_identifiers_batch(db, entity_ids: Sequence) -> Dict[Any, Dict[str, List[str]]]:
+    """Load current NPI/CCN identifiers for a batch with one query.
+
+    NULL status retains the registry's legacy-active meaning. Retired,
+    superseded and other non-active identifiers never influence comparison.
+    """
+    ids = list(entity_ids)
+    out = {eid: {"npi": [], "ccn": []} for eid in ids}
+    if not ids:
+        return out
+    ident = reg.TefcaEntityIdentifier
     rows = (await db.execute(select(
-        reg.TefcaEntityIdentifier.identifier_type,
-        reg.TefcaEntityIdentifier.identifier_value).where(
-        reg.TefcaEntityIdentifier.entity_id == entity_id,
-        reg.TefcaEntityIdentifier.identifier_type.in_(("npi", "ccn"))))).all()
-    out: Dict[str, List[str]] = {"npi": [], "ccn": []}
-    for t, v in rows:
-        if v:
-            out[t].append(v)
+        ident.entity_id, ident.identifier_type, ident.identifier_value).where(
+        ident.entity_id.in_(ids),
+        ident.identifier_type.in_(("npi", "ccn")),
+        or_(ident.identifier_status == "active",
+            ident.identifier_status.is_(None))))).all()
+    for eid, kind, value in rows:
+        if value:
+            out[eid][kind].append(value)
     return out
 
 
 def _entity_address(entity: reg.TefcaRegEntity) -> Dict[str, Any]:
+    """Return the registry address without changing its submitted components."""
     return {"address": entity.address, "city": entity.city,
             "state": entity.state, "zip": entity.zip}
 
@@ -296,6 +309,7 @@ async def advisory_comparison_batch(db, *, snapshot_id, entity_ids: Sequence,
     entities = (await db.execute(select(reg.TefcaRegEntity).where(
         reg.TefcaRegEntity.id.in_(ids)))).scalars().all()
     by_id = {e.id: e for e in entities}
+    identifiers = await _entity_identifiers_batch(db, list(by_id))
 
     results: List[Dict[str, Any]] = []
     counts: Dict[str, int] = {}
@@ -306,7 +320,7 @@ async def advisory_comparison_batch(db, *, snapshot_id, entity_ids: Sequence,
             results.append({"entity_id": str(eid), "error": "NO_SUCH_ENTITY"})
             counts["NO_SUCH_ENTITY"] = counts.get("NO_SUCH_ENTITY", 0) + 1
             continue
-        idents = await _entity_identifiers(db, entity.id)
+        idents = identifiers[entity.id]
         if snap.source_system == sm.SOURCE_IQVIA_AFFILIATION:
             row = await compare_affiliation_entity(
                 db, root_id=root_id, entity=entity,

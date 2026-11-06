@@ -295,3 +295,71 @@ async def test_all_distinct_addresses_are_compared_beyond_fifty(
     assert address["agreeing"] == 1
     assert address["iqvia_addresses"] == 51
     assert await _no_match_rows(db) == before
+
+
+async def test_retired_identifiers_are_ignored_and_null_status_remains_current(
+        rolled_back_db, tmp_path):
+    """Old identifiers cannot create false affiliations or CCN conflicts."""
+    from sqlalchemy import update
+    from app.tefca_registry import models as reg
+
+    db = rolled_back_db
+    eid = await seed_entity(db, oid=f"{SYN}-identifier-status",
+                            name=f"{SYN} Current Identity", npi=NPI_REGISTERED)
+    file_path = _write(tmp_path / "identifier_status.csv", AFFIL_HEADER, [
+        [f"{SYN}-current-P", f"{SYN}-current-O", "A1", "",
+         NPI_REGISTERED, "111111", "", "1 Synthetic Way", "Testville", "MA", "02101"],
+        [f"{SYN}-retired-P", f"{SYN}-retired-O", "A1", "",
+         NPI_VALID_OTHER, "222222", "", "9 Far Rd", "Elsewhere", "TX", "99999"],
+    ])
+    staged = await ii.import_affiliation_csv(
+        db, file_path=file_path, label=f"{SYN}-identifier-status", created_by=SYN)
+    db.add(reg.TefcaEntityIdentifier(
+        entity_id=eid, identifier_type="npi", identifier_value=NPI_VALID_OTHER,
+        identifier_status="superseded"))
+    old_ccn = reg.TefcaEntityIdentifier(
+        entity_id=eid, identifier_type="ccn", identifier_value="222222",
+        identifier_status="retired")
+    db.add(old_ccn)
+    await db.flush()
+    await db.execute(update(reg.TefcaEntityIdentifier).where(
+        reg.TefcaEntityIdentifier.entity_id == eid,
+        reg.TefcaEntityIdentifier.identifier_value == NPI_REGISTERED
+    ).values(identifier_status=None))
+
+    async def compare():
+        return await advc.advisory_comparison_batch(
+            db, snapshot_id=staged.snapshot_id, entity_ids=[eid],
+            diagnostic_allow_pending=True)
+
+    current = (await compare())["results"][0]["presence"]
+    assert current["outcome"] == advc.SUPPORTS
+    assert current["hco_keys"] == [f"{SYN}-current-O"]
+    assert current["notes"] == []
+    old_ccn.identifier_status = "active"
+    await db.flush()
+    conflict = (await compare())["results"][0]["presence"]
+    assert conflict["outcome"] == advc.DIFFERS
+    assert "ORG_NPI_AND_ORG_CCN_IDENTIFY_DIFFERENT_ORGANISATIONS" in conflict["notes"]
+
+
+async def test_identifier_batch_reads_once_and_keeps_empty_entities(
+        rolled_back_db):
+    """The loader handles a multi-entity page using one database execute."""
+    db = rolled_back_db
+    eid = await seed_entity(db, oid=f"{SYN}-bulk-identifiers",
+                            name=f"{SYN} Bulk Identity", npi=NPI_REGISTERED)
+    ghost = uuid.uuid4()
+
+    class CountedDB:
+        calls = 0
+
+        async def execute(self, statement):
+            self.calls += 1
+            return await db.execute(statement)
+
+    counted = CountedDB()
+    result = await advc._entity_identifiers_batch(counted, [eid, ghost])
+    assert counted.calls == 1
+    assert result[eid]["npi"] == [NPI_REGISTERED]
+    assert result[ghost] == {"npi": [], "ccn": []}

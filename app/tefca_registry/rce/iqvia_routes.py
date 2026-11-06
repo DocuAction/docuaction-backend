@@ -1,4 +1,4 @@
-﻿"""IQVIA Release-1 application journey: select source -> stage -> validate ->
+"""IQVIA Release-1 application journey: select source -> stage -> validate ->
 reconcile/match -> review -> publish.
 
 Wraps `iqvia_import.py`/`iqvia_match.py`/`source_matching.py` with an HTTP
@@ -196,7 +196,7 @@ async def _register_and_enqueue(
     import ever gets started.
 
     `file_path` is CLIENT-SUPPLIED on the stage route (reviewer role, not
-    admin â€” see `stage_source`): resolved and confined to the configured
+    admin — see `stage_source`): resolved and confined to the configured
     IQVIA drop directory or the server's own chunked-upload temp directory,
     never opened outside either (CodeQL py/path-injection)."""
     path = safe_existing_path(file_path, settings.IQVIA_IMPORT_DIR, _UPLOAD_DIR)
@@ -691,7 +691,7 @@ async def snapshot_status(
 
 
 def _matching_capability(source_system: str, snapshot=None) -> Dict[str, Any]:
-    """`supported` keeps its original meaning â€” may THE REGISTRY-WRITING
+    """`supported` keeps its original meaning — may THE REGISTRY-WRITING
     /match route run for this source (HCO only). The `advisory_comparison`
     sub-dict is the separate, read-only capability added 2026-11-06: it is
     keyed on the ACTUAL snapshot (approved + has rows) and the consumption
@@ -715,6 +715,7 @@ def _matching_capability(source_system: str, snapshot=None) -> Dict[str, Any]:
 
 
 def _advisory_comparison_capability(source_system: str, snapshot) -> Dict[str, Any]:
+    """Report advisory readiness from source flags and snapshot eligibility."""
     from app.tefca_registry.rce import iqvia_advisory_comparison as advc
 
     flag = {sm.SOURCE_IQVIA_AFFILIATION: advc.AFFIL_FLAG,
@@ -746,7 +747,7 @@ _HCP_UNAVAILABLE_REASON = (
     "matching will not silently return zero results.")
 _AFFIL_UNAVAILABLE_REASON = (
     "Registry match-writing (/match) is HCO-only. Affiliation data is consumed "
-    "through the read-only advisory-comparison route â€” see the "
+    "through the read-only advisory-comparison route — see the "
     "advisory_comparison capability; it requires an APPROVED snapshot and the "
     "consumption flag, and it never writes a match or verifies an entity.")
 
