@@ -84,8 +84,12 @@ GENERATOR_VERSION = "1.0.0"
 #: T-TRTMNT or T-PYMNT, so no row exhibits that third outcome here. 1.7.0
 #: added only EXC-001, a metadata-only VERIFICATION-stage rule (SAM
 #: public-extract candidate findings): no executed quality rule changed, so
-#: every expectation in this pack is unaffected.
-TARGET_RULE_SET_VERSION = "1.7.0"
+#: every expectation in this pack is unaffected. 1.8.0 (ACT-001 1.4.0)
+#: changed only WHICH earlier delivery supplies the new-entrant baseline
+#: (a comparable one, never a smoke test); this pack is a single standalone
+#: delivery with no predecessor, so new_entrant_ids is empty either way and
+#: every expectation is again unaffected.
+TARGET_RULE_SET_VERSION = "1.8.0"
 
 #: The locked 41-column ONC/RCE header, verbatim and in delivered order.
 RCE_COLUMNS: Tuple[str, ...] = (
