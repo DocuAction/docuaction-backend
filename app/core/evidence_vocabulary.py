@@ -518,6 +518,64 @@ CLASSIFIER_SIGNAL_REGISTRY: Dict[str, SignalEntry] = {
              "set is a methodology question, not a wiring one — which is why the "
              "signal is declared unavailable rather than synthesised.",
     ),
+    "active_treatment_missing_required_npi": SignalEntry(
+        # PRODUCIBLE and SETTLED: computed on every classification from the
+        # SUBMITTED values alone (active normalizes to '1', exact T-TRTMNT
+        # token per npi_applicability.assign_case case 1, NPI missing,
+        # BR-NPI-TRTMNT-001 in force, direction from organizationNodeType
+        # only). The payload is a dict that preserves the raw submitted
+        # values verbatim; its `status` is True ONLY when the §7 initiating
+        # applicability is ESTABLISHED by the delivered organizationNodeType
+        # — unknown applicability is status False with
+        # `applicability_review: True` (see the companion signal below), so
+        # it can never classify as confirmed non-compliance.
+        production_state=PRODUCIBLE,
+        value_domain=SETTLED,
+        # The CONSEQUENCE is the open question: RULE-006 (B4) exists only in
+        # the PROPOSED SEED_RULES_V4, which no automatic chain activates —
+        # one audited admin action (review-rules/activate-v4) takes the
+        # methodology decision. Until then the signal is computed and inert.
+        consequence_state=METHODOLOGY_PENDING,
+        producers=(
+            Producer(PATH_RCE,
+                     "app/tefca_registry/rce/arc_pipeline.py "
+                     "(verify_and_classify, RULE-006 signal block)",
+                     ("true", "false")),
+        ),
+        unused_reason="Consumed only by RULE-006 in the PROPOSED rule set v4, "
+                      "which no automatic chain activates; until the audited "
+                      "activate-v4 action is taken under the methodology "
+                      "decision, the signal is computed and deliberately inert.",
+        note="A candidate NPI from supplemental evidence never suppresses the "
+             "signal: the submission requirement is about the DELIVERED value.",
+    ),
+    "treatment_npi_applicability_unresolved": SignalEntry(
+        # PRODUCIBLE and SETTLED: emitted beside the RULE-006 signal when a
+        # case-1 record's exchange direction is NOT documented in the
+        # delivery (organizationNodeType establishes no initiating Principal
+        # Node), so whether the §7 obligation applies is UNRESOLVED. The
+        # payload preserves the raw submitted values and the raw node type.
+        production_state=PRODUCIBLE,
+        value_domain=SETTLED,
+        # Consumed only by RULE-007 (B3 "Treatment NPI Applicability
+        # Review") in the PROPOSED rule set v4 — explicit analyst review,
+        # never B4 (unknown is not confirmed) and never a clean-source B1
+        # fall-through. Inert until the audited activate-v4 action.
+        consequence_state=METHODOLOGY_PENDING,
+        producers=(
+            Producer(PATH_RCE,
+                     "app/tefca_registry/rce/arc_pipeline.py "
+                     "(verify_and_classify, RULE-006 signal block)",
+                     ("true",)),
+        ),
+        unused_reason="Consumed only by RULE-007 in the PROPOSED rule set v4, "
+                      "which no automatic chain activates; until the audited "
+                      "activate-v4 action is taken under the methodology "
+                      "decision, the signal is computed and deliberately inert.",
+        note="Unresolved §7 applicability is an explicit review status, not a "
+             "default: nothing is inferred from a blank role, a Participant "
+             "label or `initiatoronly` (free-text OTHER on 5 records).",
+    ),
 }
 
 
