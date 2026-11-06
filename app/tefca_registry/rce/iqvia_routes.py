@@ -474,7 +474,7 @@ def _snapshot_summary(snapshot: sm.SourceSnapshot,
         "import_status": metadata.get("import_status"),
         "import_error": metadata.get("import_error"),
         "stored_counters": _stored_counters(metadata),
-        "matching": _matching_capability(snapshot.source_system),
+        "matching": _matching_capability(snapshot.source_system, snapshot),
         "affiliation_lookup": {
             "flag": "ENABLE_IQVIA_AFFILIATION_CONSUMPTION",
             "enabled": bool(getattr(settings, "ENABLE_IQVIA_AFFILIATION_CONSUMPTION", False)),
@@ -681,7 +681,7 @@ async def snapshot_status(
     # The journey's matching capability for THIS source, stated up front so
     # the UI distinguishes "supported" from "unavailable because the
     # relationship data is absent" before anyone clicks Match.
-    out["matching"] = _matching_capability(snapshot.source_system)
+    out["matching"] = _matching_capability(snapshot.source_system, snapshot)
     # Reference-snapshot preflight as recorded at import (2026-10-04): gate,
     # findings, held checks, the bound of what was checked, and whether it
     # was enforced or shadow-only. None for a snapshot imported before it
@@ -690,17 +690,54 @@ async def snapshot_status(
     return out
 
 
-def _matching_capability(source_system: str) -> Dict[str, Any]:
+def _matching_capability(source_system: str, snapshot=None) -> Dict[str, Any]:
+    """`supported` keeps its original meaning — may THE REGISTRY-WRITING
+    /match route run for this source (HCO only). The `advisory_comparison`
+    sub-dict is the separate, read-only capability added 2026-11-06: it is
+    keyed on the ACTUAL snapshot (approved + has rows) and the consumption
+    flags, never statically on the source system, so the UI distinguishes
+    "the consumer exists but this snapshot is not approved" from "no
+    consumer exists"."""
+    out: Dict[str, Any]
     if source_system == sm.SOURCE_IQVIA_HCO:
-        return {"supported": True, "reason": None, "code": None}
-    if source_system == sm.SOURCE_IQVIA_HCP:
-        return {"supported": False, "code": "AFFILIATION_DATA_UNAVAILABLE",
-                "reason": _HCP_UNAVAILABLE_REASON}
-    if source_system == sm.SOURCE_IQVIA_AFFILIATION:
-        return {"supported": False, "code": "AFFILIATION_DATA_UNAVAILABLE",
-                "reason": _AFFIL_UNAVAILABLE_REASON}
-    return {"supported": False, "code": "NOT_MATCHABLE",
-            "reason": f"{source_system} is not matchable by this route"}
+        out = {"supported": True, "reason": None, "code": None}
+    elif source_system == sm.SOURCE_IQVIA_HCP:
+        out = {"supported": False, "code": "AFFILIATION_DATA_UNAVAILABLE",
+               "reason": _HCP_UNAVAILABLE_REASON}
+    elif source_system == sm.SOURCE_IQVIA_AFFILIATION:
+        out = {"supported": False, "code": "AFFILIATION_DATA_UNAVAILABLE",
+               "reason": _AFFIL_UNAVAILABLE_REASON}
+    else:
+        out = {"supported": False, "code": "NOT_MATCHABLE",
+               "reason": f"{source_system} is not matchable by this route"}
+    out["advisory_comparison"] = _advisory_comparison_capability(source_system, snapshot)
+    return out
+
+
+def _advisory_comparison_capability(source_system: str, snapshot) -> Dict[str, Any]:
+    """Report advisory readiness from source flags and snapshot eligibility."""
+    from app.tefca_registry.rce import iqvia_advisory_comparison as advc
+
+    flag = {sm.SOURCE_IQVIA_AFFILIATION: advc.AFFIL_FLAG,
+            sm.SOURCE_IQVIA_HCP: advc.ADDR_FLAG}.get(source_system)
+    if flag is None:
+        return {"supported": False,
+                "code": ("USE_MATCH_ROUTE" if source_system == sm.SOURCE_IQVIA_HCO
+                         else "NOT_COMPARABLE"),
+                "note": ("HCO snapshots are matched by the /match route."
+                         if source_system == sm.SOURCE_IQVIA_HCO else None)}
+    sources_on = bool(getattr(settings, "ENABLE_IQVIA_SOURCES", False))
+    flag_on = bool(getattr(settings, flag, False))
+    approved = snapshot is not None and snapshot.status in sm.SNAPSHOT_EFFECTIVE
+    has_rows = snapshot is not None and bool(snapshot.record_count)
+    return {"supported": True,  # the consumer exists in this build
+            "route": "/snapshots/{snapshot_id}/advisory-comparison",
+            "flag": flag, "flag_enabled": flag_on,
+            "sources_enabled": sources_on,
+            "snapshot_approved": approved, "snapshot_has_rows": has_rows,
+            "executable_now": sources_on and flag_on and approved and has_rows,
+            "note": ("Read-only advisory presence/address comparison; never a "
+                     "verification source, never a classification input.")}
 
 
 _HCP_UNAVAILABLE_REASON = (
@@ -709,8 +746,10 @@ _HCP_UNAVAILABLE_REASON = (
     "HOSP_AFFIL_* fields are unpopulated). This is a data-completeness fact, not a bug -- "
     "matching will not silently return zero results.")
 _AFFIL_UNAVAILABLE_REASON = (
-    "No affiliation snapshot has ever been approved with real data as of this pass; "
-    "matching against it is not yet meaningful.")
+    "Registry match-writing (/match) is HCO-only. Affiliation data is consumed "
+    "through the read-only advisory-comparison route — see the "
+    "advisory_comparison capability; it requires an APPROVED snapshot and the "
+    "consumption flag, and it never writes a match or verifies an entity.")
 
 
 @router.post("/snapshots/{snapshot_id}/approve",
@@ -798,7 +837,7 @@ async def match_snapshot(
     snapshot = await db.get(sm.SourceSnapshot, snapshot_id)
     if snapshot is None:
         raise HTTPException(404, f"no snapshot {snapshot_id}")
-    capability = _matching_capability(snapshot.source_system)
+    capability = _matching_capability(snapshot.source_system, snapshot)
     if not capability["supported"]:
         # A refusal for absent relationship data is an auditable, blocked
         # act -- recorded as such, distinct from an error and from a run that
@@ -824,6 +863,67 @@ async def match_snapshot(
                  resource_type="iqvia_snapshot", resource_id=snapshot_id,
                  details={k: v for k, v in result.items() if k != "details"})
     return result
+
+
+class AdvisoryComparisonRequest(BaseModel):
+    entity_ids: list[uuid.UUID] = Field(
+        min_length=1, max_length=200,
+        description="Registry entity ids to compare (one page; the caller pages)")
+
+
+@router.post("/snapshots/{snapshot_id}/advisory-comparison",
+            summary="Read-only advisory presence/address comparison "
+                    "(AFFILIATION or HCP snapshot; never a verification)")
+async def advisory_comparison(
+    snapshot_id: uuid.UUID, body: AdvisoryComparisonRequest,
+    db: AsyncSession = Depends(get_db), user=Depends(require_role("reviewer")),
+):
+    """The AFFIL/ADDR comparison consumers (iqvia_advisory_comparison.py).
+    Requires ENABLE_IQVIA_SOURCES, the per-source consumption flag, and an
+    APPROVED snapshot. Writes nothing; every outcome is advisory
+    (AUTOMATED_CANDIDATE_NOT_CONFIRMED, requires_analyst_review). Audit
+    details carry OUTCOME COUNTS only, never licensed row content."""
+    from app.tefca_registry.rce import iqvia_advisory_comparison as advc
+    from app.tefca_registry.rce.iqvia_affiliation_consumer import SnapshotNotEligible
+
+    _require_licensed_access(user)
+    snapshot = await db.get(sm.SourceSnapshot, snapshot_id)
+    if snapshot is None:
+        raise HTTPException(404, f"no snapshot {snapshot_id}")
+    flag = {sm.SOURCE_IQVIA_AFFILIATION: advc.AFFIL_FLAG,
+            sm.SOURCE_IQVIA_HCP: advc.ADDR_FLAG}.get(snapshot.source_system)
+    if flag is None:
+        raise HTTPException(422, detail={
+            "error": f"{snapshot.source_system} is not served by advisory "
+                     "comparison (HCO uses /match)",
+            "code": "NOT_COMPARABLE"})
+    if not (getattr(settings, "ENABLE_IQVIA_SOURCES", False)
+            and getattr(settings, flag, False)):
+        await _audit(db, user, action="IQVIA_ADVISORY_COMPARISON", outcome="blocked",
+                     resource_type="iqvia_snapshot", resource_id=snapshot_id,
+                     details={"code": "CONSUMPTION_DISABLED", "flag": flag,
+                              "source_system": snapshot.source_system})
+        raise HTTPException(409, detail={
+            "error": f"consumption is disabled ({flag} and ENABLE_IQVIA_SOURCES "
+                     "must both be enabled)",
+            "code": "CONSUMPTION_DISABLED", "flag": flag})
+    try:
+        out = await advc.advisory_comparison_batch(
+            db, snapshot_id=snapshot_id, entity_ids=body.entity_ids)
+    except SnapshotNotEligible as exc:
+        await _audit(db, user, action="IQVIA_ADVISORY_COMPARISON", outcome="blocked",
+                     resource_type="iqvia_snapshot", resource_id=snapshot_id,
+                     details={"code": "SNAPSHOT_NOT_APPROVED", "reason": str(exc)})
+        raise HTTPException(409, detail={"error": str(exc),
+                                         "code": "SNAPSHOT_NOT_APPROVED"})
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    await _audit(db, user, action="IQVIA_ADVISORY_COMPARISON", outcome="success",
+                 resource_type="iqvia_snapshot", resource_id=snapshot_id,
+                 details={"source_system": snapshot.source_system,
+                          "entities_requested": out["entities_requested"],
+                          "summary": out["summary"]})
+    return out
 
 
 async def _ensure_durable_original(db, job) -> None:

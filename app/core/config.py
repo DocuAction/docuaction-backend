@@ -99,6 +99,12 @@ class Settings(BaseSettings):
     # ENABLE_IQVIA_SOURCES and an APPROVED snapshot. Not a policy activation.
     ENABLE_IQVIA_AFFILIATION_CONSUMPTION: bool = False
 
+    # IQVIA HCP_ADDR consumption (the advisory practitioner-address comparison,
+    # iqvia_advisory_comparison.py). Same model as the affiliation flag: default
+    # off, advisory only, never a verification source; also needs
+    # ENABLE_IQVIA_SOURCES and an APPROVED snapshot. Not a policy activation.
+    ENABLE_IQVIA_ADDRESS_CONSUMPTION: bool = False
+
     # Preflight ENFORCEMENT (not the engine itself, which always exists and
     # is always reachable via the admin dry-run route regardless of this
     # flag). Default False: zero behavior change for any official delivery
