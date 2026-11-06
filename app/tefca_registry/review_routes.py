@@ -184,7 +184,7 @@ async def activate_rules_v4(req: ActivateRulesV4, request: Request,
     reg_audit.record(
         db, "review_rules_v4_activation", None, actor_id=actor_id,
         actor_email=actor_email,
-        ip_address=(request.client.host if request.client else None),
+        ip_address=get_client_ip(request),
         metadata={"rules_activated": added,
                   "already_active": added == 0,
                   "rationale": req.rationale})
