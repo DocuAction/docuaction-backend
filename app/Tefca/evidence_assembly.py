@@ -46,7 +46,7 @@ from app.Tefca.cms_ppef import (
     NO_ACTIVE_REVOCATION_RECORD_FOUND,
     PPEFComponent,
 )
-from app.Tefca.connectors import SourceResult
+from app.Tefca.connectors import SourceResult, _name_similarity
 from app.Tefca.evidence_dimensions import (
     Applicability,
     Dimension,
@@ -76,6 +76,7 @@ ONC_FIELDS_NOT_SUPPLIED = (
 
 
 def _identifier(entity: Dict[str, Any], system: str) -> Optional[str]:
+    """The entity's identifier value for one FHIR system, or None."""
     for ident in entity.get("identifier") or []:
         if (ident.get("system") or "") == system:
             return (ident.get("value") or "").strip() or None
@@ -83,11 +84,13 @@ def _identifier(entity: Dict[str, Any], system: str) -> Optional[str]:
 
 
 def _submitted_address(entity: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The entity's first submitted address dict, or None."""
     addresses = entity.get("address") or []
     return addresses[0] if addresses else None
 
 
 def _nppes_location(nppes_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """NPPES's LOCATION address shaped like a FHIR address, or None."""
     for a in nppes_data.get("addresses") or []:
         if (a.get("address_purpose") or "").upper() == "LOCATION":
             return {
@@ -100,6 +103,7 @@ def _nppes_location(nppes_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def _ok(result: Optional[SourceResult]) -> bool:
+    """True for a successful (answered) SourceResult."""
     return bool(result and result.success)
 
 
@@ -213,6 +217,13 @@ def _dimension_identity(
     profile: ApplicabilityProfile,
     sources: Dict[str, SourceResult],
 ) -> DimensionResult:
+    """D1 IDENTITY from NPPES (primary) with PECOS corroboration only.
+    Registry EXISTENCE and organization IDENTITY are kept separate: a
+    found-and-active NPI keeps the evidence ITEM at PASS, while a
+    legal-name no-correspondence (NPPES_IDENTITY_NAME_CONFLICT), a
+    deactivation, or a primary-authority identifier conflict rolls the
+    DIMENSION to REVIEW for an analyst — never an auto-fail.
+    """
     dim = Dimension.D1_IDENTITY.value
     applicability = profile.applicability_of(Dimension.D1_IDENTITY)
     nppes = sources.get("nppes")
@@ -240,11 +251,34 @@ def _dimension_identity(
             str(nppes_data.get("status") or "").upper() in ("DEACTIVATED", "D")
             or (bool(nppes_data.get("deactivation_date"))
                 and not nppes_data.get("reactivation_date")))
-        submitted_name = entity.get("name") or ""
+        # Stripped at read: a whitespace-only name is a MISSING name, and a
+        # missing name is never a basis for an identity conflict.
+        submitted_name = (entity.get("name") or "").strip()
+        legal_name = str(nppes_data.get("legal_name") or "").strip()
         name_match = (
-            bool(submitted_name) and bool(nppes_data.get("legal_name"))
-            and submitted_name.strip().upper() == str(nppes_data["legal_name"]).strip().upper()
+            bool(submitted_name) and bool(legal_name)
+            and submitted_name.strip().upper() == legal_name.strip().upper()
         )
+        # A found-and-active NPI is registry EXISTENCE, not organization
+        # IDENTITY. When the registered legal name does not correspond to the
+        # submitted organization name at all (tolerant token similarity below
+        # the same 0.5 bound the enhanced check_nppes escalates at), the NPI
+        # may belong to a different organization. The ITEM disposition stays
+        # PASS — existence IS verified, and both downstream consumers of the
+        # per-item disposition must stay truthful: `verification_coverage`
+        # would count a found NPI as not_found, and the bucket classifier's
+        # `_DISPOSITION_TO_STATE` would feed rules a changed state (a
+        # methodology decision nobody took). The DIMENSION rolls to REVIEW
+        # below (requires_analyst), which is the analyst surface — and never
+        # an auto-fail: a renamed organization or an unregistered DBA can
+        # legitimately differ, and only an analyst can tell those apart.
+        name_similarity: Optional[float] = None
+        if found and submitted_name and legal_name:
+            name_similarity = _name_similarity(submitted_name, legal_name)
+        # Exact equality can never conflict, whatever the token score: a name
+        # made entirely of stop words ("MD") scores 0.0 against itself.
+        name_conflict = (found and not deactivated and not name_match
+                         and name_similarity is not None and name_similarity < 0.5)
         items.append(EvidenceItem(
             dimension=dim, source="NPPES",
             disposition=(Disposition.REVIEW.value if deactivated
@@ -256,24 +290,37 @@ def _dimension_identity(
             record_count=1 if found else 0,
             fields_evaluated=["npi", "legal_name", "enumeration_type", "taxonomy", "status"],
             field_matches=([{"field": "legal_name", "submitted": submitted_name,
-                             "nppes": nppes_data.get("legal_name"), "result": "MATCH"}]
+                             "nppes": legal_name, "result": "MATCH"}]
                            if name_match else []),
             field_conflicts=([{"field": "legal_name", "submitted": submitted_name,
-                               "nppes": nppes_data.get("legal_name"), "result": "DIFFERS"}]
+                               "nppes": legal_name, "result": "DIFFERS",
+                               "similarity": (round(name_similarity, 3)
+                                              if name_similarity is not None else None)}]
                              if found and submitted_name and not name_match else []),
             original_values={k: nppes_data.get(k) for k in
                              ("npi", "legal_name", "enumeration_type", "taxonomy",
                               "taxonomy_code", "status", "deactivation_date",
                               "reactivation_date")},
             rule_applied=("NPPES_NPI_DEACTIVATED" if deactivated
+                          else "NPPES_IDENTITY_NAME_CONFLICT" if name_conflict
                           else "NPPES_PRIMARY_IDENTITY_AUTHORITY"),
             note=(("NPI deactivated in NPPES"
                    + (f" on {nppes_data.get('deactivation_date')}"
                       if nppes_data.get("deactivation_date") else "") + ".")
-                  if deactivated else None if found else "NPI not present in NPPES."),
+                  if deactivated
+                  else (f"NPPES legal name {legal_name!r} does not correspond to the "
+                        f"submitted organization name {submitted_name!r} "
+                        f"(similarity {name_similarity:.2f}). The NPI may belong to a "
+                        f"different organization; presented for analyst identity review.")
+                  if name_conflict
+                  else None if found else "NPI not present in NPPES."),
         ))
-        nppes_disposition = Disposition.PASS if found and not deactivated else Disposition.REVIEW
+        nppes_disposition = (Disposition.PASS if found and not deactivated and not name_conflict
+                             else Disposition.REVIEW)
         nppes_review_reason = ("NPI is deactivated in NPPES." if deactivated
+                               else "NPPES legal name does not correspond to the submitted "
+                                    "organization name; the NPI may belong to a different "
+                                    "organization." if name_conflict
                                else "NPI was not found in NPPES.")
 
     # Corroboration: PECOS. Explicitly labelled so it can never read as primary.
@@ -348,6 +395,9 @@ def _dimension_identity(
 
 def _dimension_medicare(profile: ApplicabilityProfile,
                         sources: Dict[str, SourceResult]) -> DimensionResult:
+    """D2 MEDICARE ENROLLMENT from CMS PPEF. A PECOS non-match is a finding
+    to review, never a TEFCA failure; an outage is UNAVAILABLE.
+    """
     dim = Dimension.D2_MEDICARE_ENROLLMENT.value
     applicability = profile.applicability_of(Dimension.D2_MEDICARE_ENROLLMENT)
     pecos = sources.get("cms_ppef_enrollment")
@@ -608,6 +658,11 @@ def _dimension_exclusion(entity: Dict[str, Any], profile: ApplicabilityProfile,
     #                       unperformed screening is UNAVAILABLE, not PASS.
     def _sam_disposition(d: Dict[str, Any], *, by_name: bool
                          ) -> tuple[str, str]:
+        """(disposition, note) for one SAM answer: ambiguous identity or a
+        potential hit is REVIEW; an incomplete exclusion leg is UNAVAILABLE;
+        a clean name-only search is NOT_FOUND (never an exclusion clearance);
+        a clean UEI match is PASS.
+        """
         if d.get("identity_ambiguous"):
             return (Disposition.REVIEW.value,
                     "SAM.gov matched more than one entity by name; identity "
@@ -831,6 +886,10 @@ _ADDRESS_RESULT_TO_DISPOSITION = {
 def _dimension_address(entity: Dict[str, Any], profile: ApplicabilityProfile,
                        sources: Dict[str, SourceResult],
                        website_evidence: Optional[Dict[str, Any]] = None) -> DimensionResult:
+    """D4 ADDRESS: reconcile the submitted address against NPPES/PECOS
+    practice locations and optional website corroboration —
+    compare-never-overwrite.
+    """
     dim = Dimension.D4_ADDRESS.value
     applicability = profile.applicability_of(Dimension.D4_ADDRESS)
     submitted = _submitted_address(entity)
@@ -963,6 +1022,7 @@ def _dimension_tefca(
     conflicts: List[Dict[str, Any]] = []
 
     def facet(name: str, disposition: Disposition, value: Any, note: str) -> None:
+        """Record one TEFCA-alignment facet and mirror it into matches/conflicts."""
         facets[name] = {"disposition": disposition.value, "value": value, "note": note}
         if disposition is Disposition.PASS:
             matches.append({"field": name, "value": value, "result": "PASS"})

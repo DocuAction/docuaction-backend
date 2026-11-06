@@ -725,7 +725,25 @@ async def verify_and_classify(
                 gaps = _prior_risk.exclusion_screening_gaps(verification_results)
                 if gaps:
                     claim = _prior_risk.verification_claim("B1", gaps, prior_risk)
-            withhold_verified = bool(prior_risk) or bool(claim and claim["enforced"])
+            # An NPPES identity NAME CONFLICT (the registered legal name does
+            # not correspond to the submitted organization) keeps its evidence
+            # ITEM at PASS so the classifier input and the coverage counts stay
+            # truthful about registry existence — which means the rules engine
+            # can still select B1. It must not be Tier-1 auto-completed: same
+            # contract as prior_risk — the BUCKET is untouched (no
+            # rule/methodology change); only the tier and verification_status
+            # say a person must look. Scoped to THIS rule deliberately:
+            # dimension-level REVIEW also fires for pre-existing causes (e.g.
+            # unresolved PECOS corroboration) whose Tier-1 handling is a
+            # standing methodology decision this fix does not take.
+            analyst_dimensions = sorted({
+                d.get("dimension") or "?"
+                for d in evidence.get("dimensions", [])
+                for i in (d.get("evidence") or [])
+                if isinstance(i, dict)
+                and i.get("rule_applied") == "NPPES_IDENTITY_NAME_CONFLICT"})
+            withhold_verified = (bool(prior_risk) or bool(claim and claim["enforced"])
+                                 or bool(analyst_dimensions))
 
             review_id = await _allocate_review_id(db)
             tier = BUCKET_TO_TIER.get(classification.bucket, 3)
@@ -757,6 +775,12 @@ async def verify_and_classify(
 
             if prior_risk:
                 rationale = (rationale or "") + _prior_risk.rationale_suffix(prior_risk)
+            if analyst_dimensions and classification.bucket == "B1":
+                rationale = ((rationale or "")
+                             + " Tier-1 auto-completion withheld: dimension(s) "
+                             + ", ".join(analyst_dimensions)
+                             + " carry an NPPES identity name conflict requiring "
+                               "analyst review; the bucket itself is unchanged.")
 
             db.add(reg.ReviewRecord(
                 id=uuid.uuid4(),
@@ -767,6 +791,10 @@ async def verify_and_classify(
                     # the snapshot shape of every other record is unchanged.
                     **({"prior_risk_not_cleared": prior_risk} if prior_risk else {}),
                     **({"verification_claim": claim} if claim else {}),
+                    # Present ONLY when a dimension demanded analyst review —
+                    # same shape-preserving contract as prior_risk above.
+                    **({"analyst_review_dimensions": analyst_dimensions}
+                       if analyst_dimensions else {}),
                     # A SNAPSHOT, not a pointer. The report issued from this review
                     # must keep saying what it said after the entity is re-verified.
                     "dimensions": evidence.get("dimensions", []),

@@ -26,6 +26,7 @@ not be fixed by retrying.
 
 import os
 import json
+import re
 import hashlib
 import logging
 import asyncio
@@ -164,15 +165,53 @@ class RetryableHTTPError(Exception):
 # Small, dependency-free comparators used by the enhanced NPPES and SAM checks
 # to cross-reference a submitted entity against its authoritative registration.
 
+#: Only RECOGNIZED legal suffixes collapse ('L.L.C.' -> 'LLC'), and only in
+#: TRAILING position — a designator spelling at the START of a name
+#: ('P.C. Clinic') is initials, i.e. identity, and must stay distinct tokens,
+#: like dotted initials ('A.B. Clinic'). Longer forms first so 'P.L.L.C.'
+#: is not eaten as 'L.L.C.'.
+_DOTTED_SUFFIXES = ("p.l.l.c", "l.l.c", "l.l.p", "l.t.d", "i.n.c",
+                    "p.c", "p.a", "m.d", "d.o", "s.c", "l.p", "c.o")
+_DOTTED_ABBREV = re.compile(
+    r"\b(?:" + "|".join(re.escape(s) for s in _DOTTED_SUFFIXES) + r")\.?(?=\W*$)",
+    re.IGNORECASE,
+)
+
+
+def _collapse_dotted_abbreviations(name: str) -> str:
+    """'Clinic L.L.C.' -> 'Clinic LLC' — recognized dotted legal suffixes in
+    trailing position only. Dotted initials and prefix designator spellings
+    are untouched: 'A.B. Clinic' / 'P.C. Clinic' keep their initials."""
+    return _DOTTED_ABBREV.sub(lambda m: m.group().replace(".", ""), name)
+
+
+_INNER_APOSTROPHE = re.compile(r"(?<=[A-Za-z])['’](?=[A-Za-z])")
+
+
 def _name_similarity(name1: str, name2: str) -> float:
-    words1 = set(name1.lower().split()) - {"inc","llc","ltd","corp","co","the","of","and","&","dba","pllc","pc","pa","md","do"}
-    words2 = set(name2.lower().split()) - {"inc","llc","ltd","corp","co","the","of","and","&","dba","pllc","pc","pa","md","do"}
+    """Token-overlap similarity of two organization names in [0, 1], after
+    normalization (stop-word corporate designators removed; single-letter
+    initials kept — they are identity)."""
+    # Dotted abbreviations are collapsed FIRST ("L.L.C." == "LLC"), then an
+    # apostrophe INSIDE a word is removed rather than split ("O'Neill" ==
+    # "ONeill"), then remaining punctuation is noise, not identity:
+    # "ACME, INC." and "ACME INC" are the same organization. Single-letter
+    # tokens are kept — initials distinguish organizations.
+    name1 = _INNER_APOSTROPHE.sub("", _collapse_dotted_abbreviations(name1))
+    name2 = _INNER_APOSTROPHE.sub("", _collapse_dotted_abbreviations(name2))
+    name1 = "".join(c if c.isalnum() else " " for c in name1)
+    name2 = "".join(c if c.isalnum() else " " for c in name2)
+    stop = {"inc","llc","ltd","corp","co","the","of","and","&","dba","pllc","pc","pa","md","do"}
+    words1 = set(name1.lower().split()) - stop
+    words2 = set(name2.lower().split()) - stop
     if not words1 or not words2:
         return 0.0
     return len(words1 & words2) / max(len(words1), len(words2))
 
 
 def _compare_addresses(submitted: dict, registered: dict) -> dict:
+    """State or city disagreement is a 'major' discrepancy, a ZIP-only one is
+    'minor'; agreement (or nothing comparable) is match=True."""
     result = {"match": False, "level": None, "details": []}
     sub_state = (submitted.get("state") or "").upper().strip()
     reg_state = (registered.get("state") or "").upper().strip()
@@ -243,6 +282,8 @@ class SourceResult:
         api_version: Optional[str] = None,
         raw_for_hash: Any = None,
     ) -> "SourceResult":
+        """Successful lookup: payload in `data`; `raw_for_hash`, when given,
+        feeds the response hash so it reflects the upstream body."""
         return cls(
             source_name=source_name,
             success=True,
@@ -364,6 +405,7 @@ class _TokenBucket:
     """
 
     def __init__(self, rate_per_second: float):
+        """One token bucket: `rate` tokens/second with burst capacity >= 1."""
         self.rate = max(rate_per_second, 0.001)
         self.capacity = max(self.rate, 1.0)
         self._tokens = self.capacity
@@ -371,6 +413,8 @@ class _TokenBucket:
         self._lock = asyncio.Lock()
 
     async def acquire(self) -> None:
+        """Take one token, sleeping just long enough when the bucket is empty
+        (serialised by a lock so waiters queue fairly)."""
         async with self._lock:
             loop = asyncio.get_running_loop()
             now = loop.time()
@@ -392,6 +436,8 @@ _RATE_LIMITERS: Dict[str, _TokenBucket] = {}
 
 
 def _rate_limiter_for(source: str) -> _TokenBucket:
+    """The per-source token bucket, created on first use from
+    `TEFCA_RATE_LIMIT_<SOURCE>_RPS` (falling back to the per-source default)."""
     bucket = _RATE_LIMITERS.get(source)
     if bucket is None:
         env_key = f"TEFCA_RATE_LIMIT_{source}_RPS"
@@ -515,6 +561,10 @@ class NPPESConnector:
         }
 
     async def lookup_by_npi(self, npi: str) -> SourceResult:
+        """NPPES v2.1 lookup by NPI. found=False is an affirmative registry answer;
+        a malformed/missing NPI or a structural upstream fault is UNAVAILABLE
+        (fail-closed), never NOT_FOUND.
+        """
         qp = {"npi": npi}
         # Centralised gate (Luhn + 10-digit, 45 CFR 162.406): an NPI that is
         # missing or fails validation is never sent to NPPES. Fail-closed —
@@ -591,6 +641,7 @@ class NPPESConnector:
             return SourceResult.unavailable("NPPES", str(e), qp, self.API_VERSION)
 
     async def probe(self) -> bool:
+        """Health probe: one bounded test lookup; True on HTTP 200."""
         try:
             resp = await _get_with_retry(
                 f"{self.BASE_URL}/",
@@ -627,6 +678,7 @@ _LEIE_LOAD_LOCK: Optional[asyncio.Lock] = None
 
 
 def _leie_cache_fresh(now: float) -> bool:
+    """True while the in-process LEIE index holds rows younger than the TTL."""
     return (_LEIE_CACHE["row_count"] > 0
             and (now - _LEIE_CACHE["loaded_at"]) < _LEIE_TTL_SECONDS)
 
@@ -672,6 +724,10 @@ def leie_schema_problem(fieldnames) -> Optional[str]:
 
 
 async def _load_leie_csv() -> bool:
+    """Download, schema-check and index the OIG LEIE CSV into the module cache.
+    False (fail-closed; any prior good index left untouched) on an HTTP,
+    schema or row-shape fault.
+    """
     import time as _time
     import csv as _csv
     import io as _io
@@ -794,10 +850,14 @@ class OIGLEIEConnector:
 
     @staticmethod
     def _reinstated(rec: dict) -> bool:
+        """True when the exclusion row carries a real reinstatement date."""
         rd = (rec.get("reinstatement_date") or "").strip()
         return rd not in ("", "00000000", "0")
 
     def _build(self, matches: list, qp: dict) -> SourceResult:
+        """Shape LEIE matches into the result dict: active vs historical
+        exclusions, headline fields, and which CSV edition was searched.
+        """
         active = [m for m in matches if not self._reinstated(m)]
         historical = [m for m in matches if self._reinstated(m)]
         data = {
@@ -820,6 +880,10 @@ class OIGLEIEConnector:
         return SourceResult.ok("OIG_LEIE", data, qp, self.API_VERSION, raw_for_hash={"matches": len(matches)})
 
     async def lookup_by_npi(self, npi: str) -> SourceResult:
+        """Exclusion screen by NPI against the indexed LEIE CSV. A malformed or
+        missing NPI, or an unloadable CSV, is UNAVAILABLE (fail-closed) —
+        never a clean screen.
+        """
         qp = {"npi": npi}
         # Centralised gate (same defect class as NPPES/PECOS/CMS PPEF/CMS
         # Revocation, found on inspection per the follow-up request): a
@@ -841,6 +905,10 @@ class OIGLEIEConnector:
         return self._build(matches, qp)
 
     async def lookup_by_name(self, last: str, first: str = "", org: str = "") -> SourceResult:
+        """Exclusion screen by person (last/first) or organization name; org
+        screening adds normalized-name candidates to exact ones and records
+        the match methods used.
+        """
         qp = {"last": last, "first": first, "org": org}
         if not await _ensure_leie_loaded():
             return SourceResult.unavailable("OIG_LEIE", "exclusions CSV unavailable", qp, self.API_VERSION)
@@ -864,6 +932,7 @@ class OIGLEIEConnector:
         return self._build(matches, qp)
 
     async def probe(self) -> bool:
+        """Health probe: HEAD the published CSV; True on HTTP 200."""
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(HEALTH_TIMEOUT_SECONDS)) as client:
                 resp = await client.head(_LEIE_CSV_URL, headers=HTTP_HEADERS)
@@ -975,6 +1044,9 @@ class SAMGovConnector:
     API_VERSION = "v3+v4"
 
     def __init__(self):
+        """Reads SAM_GOV_API_KEY at instantiation (not import) so a late-loaded
+        key is honored; see the 2026-08-07 routing correction below.
+        """
         # Read the key at INSTANTIATION, not at class-definition/import time,
         # so a key loaded after import (e.g. via .env) is honored.
         #
@@ -1269,6 +1341,9 @@ class SAMGovConnector:
         return SourceResult.ok("SAM_GOV", data, qp, self.API_VERSION)
 
     async def lookup_by_npi(self, npi: str) -> SourceResult:
+        """Always UNAVAILABLE: this connector never queries the live SAM API by
+        NPI (fail-closed); the offline public extract is the NPI path.
+        """
         # This connector does not send an NPI to the live SAM.gov API. GSA's v4
         # Exclusions spec documents an `npi` parameter, but live operation is
         # unverified (api.sam.gov not routing), so this fails closed. The public
@@ -1279,6 +1354,7 @@ class SAMGovConnector:
         )
 
     async def probe(self) -> bool:
+        """Health probe: one bounded registration query; False without a key."""
         if not self.api_key:
             return False
         try:
@@ -1314,6 +1390,9 @@ class PECOSConnector:
     API_VERSION = "2.1"
 
     async def lookup_by_npi(self, npi: str) -> SourceResult:
+        """Enrollment-identity lookup via the NPPES proxy (PECOS_BACKING).
+        payment_suspension is always None — never a fabricated clean value.
+        """
         qp = {"npi": npi}
         # Same centralised gate as NPPESConnector — this connector queries the
         # identical upstream, so a malformed NPI must be refused identically.
@@ -1377,6 +1456,7 @@ class PECOSConnector:
             return SourceResult.unavailable("PECOS", str(e), qp, self.API_VERSION)
 
     async def probe(self) -> bool:
+        """Health probe of the NPPES proxy host; True on HTTP 200."""
         try:
             resp = await _get_with_retry(
                 self.BASE_URL, params={"version": self.API_VERSION, "number": "1234567893"},
@@ -1485,12 +1565,15 @@ class RCEDirectoryConnector:
     API_VERSION = "R4"
 
     def __init__(self):
+        """Live FHIR mode requires RCE_DIRECTORY_API_KEY; without it, mock data serves."""
         self.api_key = os.getenv("RCE_DIRECTORY_API_KEY", "")
 
     def _is_live(self) -> bool:
+        """True when a directory API key is configured (live FHIR mode)."""
         return bool(self.api_key)
 
     def _auth_headers(self) -> Dict[str, str]:
+        """Bearer-token FHIR request headers for the live directory."""
         return {
             **HTTP_HEADERS,
             "Authorization": f"Bearer {self.api_key}",
@@ -1503,6 +1586,9 @@ class RCEDirectoryConnector:
         qhin_name: Optional[str] = None,
         limit: int = 500,
     ) -> SourceResult:
+        """List directory organizations (live FHIR bundle, or filtered mock data
+        when no key is configured), labelled with data_source LIVE/MOCK.
+        """
         qp = {"entity_type": entity_type, "qhin_name": qhin_name, "limit": limit}
         if not self._is_live():
             from .mock_data import ALL_MOCK_ENTITIES
@@ -1538,6 +1624,9 @@ class RCEDirectoryConnector:
             return SourceResult.unavailable("RCE_DIRECTORY", str(e), qp, self.API_VERSION)
 
     async def get_organization_by_id(self, rce_id: str) -> SourceResult:
+        """One directory organization by its RCE id (live or mock), labelled
+        with its data_source.
+        """
         qp = {"rce_id": rce_id}
         if not self._is_live():
             from .mock_data import ALL_MOCK_ENTITIES
@@ -1565,6 +1654,9 @@ class RCEDirectoryConnector:
             return SourceResult.unavailable("RCE_DIRECTORY", str(e), qp, self.API_VERSION)
 
     async def lookup_by_npi(self, npi: str) -> SourceResult:
+        """Directory search by NPI identifier (live mode only; UNAVAILABLE
+        without a key).
+        """
         qp = {"npi": npi}
         if not self._is_live():
             return SourceResult.unavailable(
@@ -1590,6 +1682,7 @@ class RCEDirectoryConnector:
             return SourceResult.unavailable("RCE_DIRECTORY", str(e), qp, self.API_VERSION)
 
     async def probe(self) -> bool:
+        """Health probe of the live FHIR metadata endpoint; False in mock mode."""
         if not self._is_live():
             return False
         try:
@@ -1611,9 +1704,13 @@ class IQVIAOneKeyConnector:
     API_VERSION = "v1"
 
     def __init__(self):
+        """Requires IQVIA_ONEKEY_API_KEY (pending federal-contract ODC)."""
         self.api_key = os.getenv("IQVIA_ONEKEY_API_KEY", "")
 
     async def lookup_by_npi(self, npi: str) -> SourceResult:
+        """Practitioner-hierarchy lookup by NPI; UNAVAILABLE until the key is
+        provisioned.
+        """
         qp = {"npi": npi}
         if not self.api_key:
             return SourceResult.unavailable(
@@ -1638,12 +1735,14 @@ class IQVIAOneKeyConnector:
             return SourceResult.unavailable("IQVIA_ONEKEY", str(e), qp, self.API_VERSION)
 
     async def probe(self) -> bool:
+        """Always False: IQVIA OneKey exposes no public health endpoint."""
         return False if not self.api_key else False  # no public health endpoint
 
 
 # ─── helpers ─────────────────────────────────────────────────────────────────
 
 def _entity_type_of(entity: dict) -> str:
+    """First FHIR type-coding code on the entity, or ''."""
     for t in entity.get("type", []) or []:
         for coding in t.get("coding", []) or []:
             return coding.get("code", "")
@@ -1651,6 +1750,7 @@ def _entity_type_of(entity: dict) -> str:
 
 
 def _extract_npi(entity: dict) -> str:
+    """The entity's NPI from its FHIR identifier list (us-npi system), or ''."""
     for ident in entity.get("identifier", []) or []:
         if ident.get("system") == "http://hl7.org/fhir/sid/us-npi":
             return ident.get("value", "")
@@ -1678,6 +1778,7 @@ class SourceConnectorManager:
     REQUIRED_SOURCES = ("nppes", "leie_npi", "sam_entity", "sam_exclusion", "pecos")
 
     def __init__(self):
+        """Instantiate the six connectors once; attribute names are API surface."""
         self.nppes = NPPESConnector()
         self.leie = OIGLEIEConnector()
         self.sam = SAMGovConnector()
@@ -1817,6 +1918,7 @@ _check_manager_singleton = None
 
 
 def _check_manager() -> "SourceConnectorManager":
+    """Process-wide SourceConnectorManager singleton for the check_* helpers."""
     global _check_manager_singleton
     if _check_manager_singleton is None:
         _check_manager_singleton = SourceConnectorManager()
@@ -1854,6 +1956,9 @@ async def _log_connector_check(connector_name: str, status: str, response_ms: in
 
 
 async def _timed_connector_check(coro, connector_name: str) -> SourceResult:
+    """Run one connector call under the 10s bound, log availability + latency
+    to tefca_connector_logs, and convert any exception into UNAVAILABLE.
+    """
     import time as _time
     t0 = _time.monotonic()
     try:
@@ -2016,6 +2121,7 @@ async def check_nppes(name: str = "", npi: str = "", address: Optional[dict] = N
 
 
 async def check_pecos(npi: str) -> SourceResult:
+    """Timed/logged PECOS (NPPES-proxy) enrollment check by NPI."""
     return await _timed_connector_check(_check_manager().pecos.lookup_by_npi(npi), "PECOS")
 
 
@@ -2033,6 +2139,7 @@ async def check_sam(uei: str = "", address: Optional[dict] = None) -> SourceResu
 
 
 async def check_leie(name: str = "", npi: str = "") -> SourceResult:
+    """Timed/logged OIG LEIE exclusion screen — by NPI when given, else by name."""
     mgr = _check_manager()
     coro = mgr.leie.lookup_by_npi(npi) if npi else mgr.leie.lookup_by_name(last=name)
     return await _timed_connector_check(coro, "OIG_LEIE")

@@ -167,6 +167,14 @@ def npi_outcome_from_evidence(evidence: Dict[str, Any]) -> Optional[Dict[str, An
                         "status": values.get("status"),
                         "deactivation_date": values.get("deactivation_date"),
                         "npi": values.get("npi")}
+            if item.get("rule_applied") == "NPPES_IDENTITY_NAME_CONFLICT":
+                # Found and active, but the registered legal name does not
+                # correspond to the submitted organization — the dimension is
+                # REVIEW and the conflict lives on the evidence item. There is
+                # no contract-reserved rule id for this outcome yet, so there
+                # is nothing to record in the ledger ("None means nothing to
+                # record") — but it must NEVER fall through to VERIFIED.
+                return None
             return {"outcome": VERIFIED, "detail": "NPI found and active in NPPES.",
                     "npi": values.get("npi")}
     return None
@@ -175,6 +183,9 @@ def npi_outcome_from_evidence(evidence: Dict[str, Any]) -> Optional[Dict[str, An
 # ── recording ────────────────────────────────────────────────────────────────
 
 async def _curated_for_entity(db, entity_id):
+    """Latest curated record that promoted this entity (by promotion, then
+    creation time), or None.
+    """
     return (await db.execute(
         select(m.RceCuratedRecord).where(
             m.RceCuratedRecord.canonical_entity_id == entity_id)
@@ -275,6 +286,9 @@ async def record_npi_outcome(db, *, entity_id, npi: Optional[str], outcome: str,
 
 
 async def _mark_identifier_inactive(db, entity_id, npi: str) -> int:
+    """Set the entity's matching ACTIVE NPI identifier rows to the
+    inactive-pending-review status; returns how many changed. Never deletes.
+    """
     rows = (await db.execute(
         select(reg.TefcaEntityIdentifier).where(
             reg.TefcaEntityIdentifier.entity_id == entity_id,
