@@ -823,10 +823,23 @@ async def approve(
            "supersedes_snapshot_id": str(snapshot_id)}
 
 
+class MatchRequest(BaseModel):
+    """Optional bounds for one matching run. Omitting the body keeps the
+    previous contract (match everything), now evaluated in bounded pages."""
+    limit: Optional[int] = Field(
+        None, ge=1, le=500_000,
+        description="Stop after considering this many observations (resume later; "
+                    "already-matched rows are skipped on the next run)")
+    page_size: int = Field(
+        im.DEFAULT_PAGE_SIZE, ge=1, le=5_000,
+        description="Observations evaluated per transaction")
+
+
 @router.post("/snapshots/{snapshot_id}/match",
             summary="Run matching against the registry for an APPROVED HCO snapshot")
 async def match_snapshot(
-    snapshot_id: uuid.UUID, db: AsyncSession = Depends(get_db),
+    snapshot_id: uuid.UUID, body: Optional[MatchRequest] = None,
+    db: AsyncSession = Depends(get_db),
     user=Depends(require_role("reviewer")),
 ):
     """HCO only. HCP and AFFILIATION are refused outright, explicitly, with
@@ -851,8 +864,20 @@ async def match_snapshot(
         raise HTTPException(409, detail={"error": capability["reason"],
                                          "code": capability["code"]})
     try:
-        summary = await im.match_hco_snapshot(db, snapshot_id=snapshot_id,
-                                              actor=getattr(user, "email", None) or "UNKNOWN")
+        summary = await im.match_hco_snapshot(
+            db, snapshot_id=snapshot_id,
+            actor=getattr(user, "email", None) or "UNKNOWN",
+            limit=body.limit if body else None,
+            page_size=body.page_size if body else im.DEFAULT_PAGE_SIZE)
+    except im.MatchInProgressError as exc:
+        # A concurrent run holds the snapshot's advisory lock. Refusing here is
+        # what keeps repeated client retries from multiplying full-table scans
+        # (the 2026-11-06 memory incident) -- the running match is unaffected.
+        await db.rollback()
+        await _audit(db, user, action="IQVIA_SNAPSHOT_MATCH", outcome="blocked",
+                     resource_type="iqvia_snapshot", resource_id=snapshot_id,
+                     details={"code": "MATCH_IN_PROGRESS", "reason": str(exc)})
+        raise HTTPException(409, detail={"error": str(exc), "code": "MATCH_IN_PROGRESS"})
     except ValueError as exc:
         await _audit(db, user, action="IQVIA_SNAPSHOT_MATCH", outcome="rejected",
                      resource_type="iqvia_snapshot", resource_id=snapshot_id,
