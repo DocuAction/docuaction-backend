@@ -42,7 +42,8 @@ class TestCanonicalLoaderSemantics:
         db = rolled_back_db
         via_pipeline = await _rule_set(db)
         via_canonical = await BucketClassifier().load_rules(db)
-        key = lambda rs: [(r["rule_code"], r["version"], r["priority"]) for r in rs]
+        def key(rs):
+            return [(r["rule_code"], r["version"], r["priority"]) for r in rs]
         assert key(via_pipeline) == key(via_canonical)
         assert len(via_pipeline) >= 5  # the seeded v3 set
 
