@@ -63,6 +63,8 @@ class MatchRunSummary:
     candidates_written: int = 0   # entity_source_match rows, CANDIDATE status
     exceptions_written: int = 0   # entity_source_match rows, EXCEPTION status
     unmatchable_no_identifier: int = 0  # no NPI and no CCN -- nothing to evaluate
+    newly_evaluated: int = 0            # observations evaluated this run (skips excluded);
+                                        # `limit` counts THESE, so a limited rerun resumes
     pages: int = 0                      # transactions committed (one per page)
     details_truncated: bool = False     # True when details stopped at MAX_DETAILS
     zero_candidate_unwritten: int = 0   # EXCEPTION/CANDIDATE with no entity to
@@ -131,7 +133,12 @@ async def match_hco_snapshot(
     `pg_try_advisory_xact_lock` on this snapshot's key; a concurrent run raises
     `MatchInProgressError` instead of scanning the same rows twice. The
     decisions written per observation are byte-identical to the unpaged
-    implementation this replaces."""
+    implementation this replaces.
+
+    `limit` counts NEWLY EVALUATED observations, never already-matched skips --
+    otherwise a repeated limited run would spend its whole budget re-walking
+    the rows it already matched and never advance (CodeRabbit round-1 finding
+    on this change, verified and fixed with the resume test)."""
     snapshot = await db.get(sm.SourceSnapshot, snapshot_id)
     if snapshot is None:
         raise ValueError(f"no snapshot {snapshot_id}")
@@ -149,10 +156,8 @@ async def match_hco_snapshot(
     last_key: Optional[str] = None
 
     while True:
-        if limit is not None and summary.observations_considered >= limit:
+        if limit is not None and summary.newly_evaluated >= limit:
             break
-        page_limit = page_size if limit is None else min(
-            page_size, limit - summary.observations_considered)
 
         # The guard and the page's writes share ONE transaction: the advisory
         # xact lock is taken first, so two concurrent runs never evaluate the
@@ -169,7 +174,7 @@ async def match_hco_snapshot(
         q = (select(sm.IqviaHcoObservation)
              .where(sm.IqviaHcoObservation.source_snapshot_id == observation_snapshot_id)
              .order_by(sm.IqviaHcoObservation.source_record_key)
-             .limit(page_limit))
+             .limit(page_size))
         if last_key is not None:
             q = q.where(sm.IqviaHcoObservation.source_record_key > last_key)
         observations = (await db.execute(q)).scalars().all()
@@ -188,10 +193,13 @@ async def match_hco_snapshot(
                 sm.EntitySourceMatch.source_record_key.in_(page_keys)))).scalars().all())
 
         for obs in observations:
+            if limit is not None and summary.newly_evaluated >= limit:
+                break
             summary.observations_considered += 1
             if obs.source_record_key in already:
                 summary.already_matched_skipped += 1
                 continue
+            summary.newly_evaluated += 1
 
             if obs.npi:
                 registry_entities = await _entities_with_identifier(db, "npi", obs.npi)

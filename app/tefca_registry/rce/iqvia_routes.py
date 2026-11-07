@@ -828,8 +828,8 @@ class MatchRequest(BaseModel):
     previous contract (match everything), now evaluated in bounded pages."""
     limit: Optional[int] = Field(
         None, ge=1, le=500_000,
-        description="Stop after considering this many observations (resume later; "
-                    "already-matched rows are skipped on the next run)")
+        description="Stop after evaluating this many not-yet-matched observations; "
+                    "a later run advances past already-matched rows and continues")
     page_size: int = Field(
         im.DEFAULT_PAGE_SIZE, ge=1, le=5_000,
         description="Observations evaluated per transaction")
@@ -873,7 +873,7 @@ async def match_snapshot(
         # A concurrent run holds the snapshot's advisory lock. Refusing here is
         # what keeps repeated client retries from multiplying full-table scans
         # (the 2026-11-06 memory incident) -- the running match is unaffected.
-        await db.rollback()
+        await db.commit()  # nothing written; ends the guard transaction without expiring `user`
         await _audit(db, user, action="IQVIA_SNAPSHOT_MATCH", outcome="blocked",
                      resource_type="iqvia_snapshot", resource_id=snapshot_id,
                      details={"code": "MATCH_IN_PROGRESS", "reason": str(exc)})

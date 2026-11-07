@@ -75,13 +75,22 @@ class TestBoundedMatching:
         first = await im.match_hco_snapshot(db, snapshot_id=approved.id, actor=SYN,
                                             nppes_type_lookup=_nppes_type2,
                                             limit=1, page_size=1)
-        assert first.observations_considered == 1
+        assert first.newly_evaluated == 1
         assert first.auto_approved == 1
+        # A REPEATED limited run must advance past the already-matched row and
+        # evaluate the next one - `limit` counts newly evaluated observations,
+        # never skips (CodeRabbit round-1 Major on this change, fixed).
         second = await im.match_hco_snapshot(db, snapshot_id=approved.id, actor=SYN,
-                                             nppes_type_lookup=_nppes_type2, page_size=1)
+                                             nppes_type_lookup=_nppes_type2,
+                                             limit=1, page_size=1)
         assert second.already_matched_skipped == 1
+        assert second.newly_evaluated == 1
         assert second.auto_approved == 0
         assert second.unmatchable_no_identifier == 1
+        third = await im.match_hco_snapshot(db, snapshot_id=approved.id, actor=SYN,
+                                            nppes_type_lookup=_nppes_type2, page_size=1)
+        assert third.already_matched_skipped == 1  # only the written row skips
+        assert third.newly_evaluated == 1          # the no-identifier row re-evaluates
         written = (await db.execute(select(sm.EntitySourceMatch).where(
             sm.EntitySourceMatch.source_snapshot_id == approved.id))).scalars().all()
         assert len(written) == 1  # never duplicated across the resumed runs
