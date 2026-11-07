@@ -391,11 +391,17 @@ async def finalize_plan(db, intake_id, *, review_type: str = "quarterly",
         metadata={"sample_id": str(sample.id), "plan_key": key,
                   "source_intake_id": str(intake_id),
                   "review_type": review_type,
-                  "confidence_level": confidence, "margin_of_error": margin,
+                  # From the PLAN, not the caller's arguments: a full-population
+                  # plan is an enumeration (confidence 1.0, margin 0.0,
+                  # FULL_POPULATION_ENUMERATION) and must be audited as one --
+                  # auditing it under the Cochran label with the caller's
+                  # confidence/margin described a draw that never happened.
+                  "confidence_level": result.confidence_level,
+                  "margin_of_error": result.margin_of_error,
                   "population_size": result.population_size,
                   "sample_size": result.sample_size,
                   "qhin_strata": len(result.strata_distribution),
-                  "selection_algorithm": SELECTION_ALGORITHM,
+                  "selection_algorithm": result.strata_config["selection_algorithm"],
                   "random_seed": result.random_seed,
                   "unresolved_units": len(unresolved),
                   "excluded_review_required": len(excluded)})
