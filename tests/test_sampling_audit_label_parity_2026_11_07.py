@@ -5,15 +5,16 @@ Defect at PR #200 head aa21de5f: a FULL_POPULATION plan's audit event recorded
 `selection_algorithm = cochran_fpc_per_qhin/1.0.0` and the caller's
 confidence/margin arguments - describing a statistical draw that never
 happened. The audit now takes algorithm, confidence and margin from the plan
-itself, for both plan kinds. Synthetic data; committed rows cleaned up, same
-pattern as test_treatment_b4_rule_v4_2026_11_06.
+itself, for both plan kinds.
+
+Synthetic data. The plans and their audit rows are created in a single
+rollback-only transaction (finalize_plan only flushes), so the shared test
+database keeps no residue - no committed plans, no orphaned audit rows.
 """
 from __future__ import annotations
 
-import uuid as _uuid
-
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import select
 
 pytestmark = pytest.mark.regression
 
@@ -28,7 +29,6 @@ async def test_audit_event_matches_plan_metadata_for_both_plan_kinds(db_required
 
     monkeypatch.setenv("ENTITY_RESOLVER_SOURCE", "db")
     intake_id = await sam._seed_promoted_delivery(n=4)
-    created: list = []
 
     async def _audit_for(db, sample_id):
         rows = (await db.execute(
@@ -42,8 +42,6 @@ async def test_audit_event_matches_plan_metadata_for_both_plan_kinds(db_required
         try:
             full = await finalize_plan(db, intake_id, full_population=True,
                                        actor="pytest-audit-parity")
-            await db.commit()
-            created.append(_uuid.UUID(full["sample_id"]))
             payload = await _audit_for(db, full["sample_id"])
             # The plan is an enumeration; the audit must say so.
             assert payload["selection_algorithm"] == "FULL_POPULATION_ENUMERATION"
@@ -54,16 +52,11 @@ async def test_audit_event_matches_plan_metadata_for_both_plan_kinds(db_required
 
             statistical = await finalize_plan(db, intake_id,
                                               actor="pytest-audit-parity")
-            await db.commit()
-            created.append(_uuid.UUID(statistical["sample_id"]))
             spayload = await _audit_for(db, statistical["sample_id"])
             # The statistical plan keeps its own (unchanged) labels.
             assert spayload["selection_algorithm"] == SELECTION_ALGORITHM
             assert spayload["confidence_level"] == statistical["confidence_level"]
             assert spayload["margin_of_error"] == statistical["margin_of_error"]
         finally:
-            await db.execute(delete(reg.SampleEntity)
-                             .where(reg.SampleEntity.sample_id.in_(created)))
-            await db.execute(delete(reg.ReviewSample)
-                             .where(reg.ReviewSample.id.in_(created)))
-            await db.commit()
+            # Rollback-only: nothing this test created is ever committed.
+            await db.rollback()
