@@ -417,8 +417,18 @@ async def _allocate_review_id(db, year: Optional[int] = None) -> str:
 
 
 async def _rule_set(db) -> List[Dict[str, Any]]:
-    """Active B1-B4 rules, seeded if the table is empty."""
-    from app.tefca_registry.bucket_classifier import (ensure_rules_v2, ensure_rules_v3,
+    """Active B1-B4 rules, seeded if the table is empty, then loaded through
+    the canonical `BucketClassifier.load_rules` semantics.
+
+    This path previously selected `is_active` rows directly, skipping three
+    guards the canonical loader applies: the effective/retired-date filter,
+    newest-version-per-rule_code selection, and the CHECK-4 vocabulary
+    assertion (a rule row referencing a signal nothing produces must raise,
+    not silently never fire). A rule row that the manual review path would
+    reject could therefore still be evaluated here. One loader, one
+    semantics, for every production entry point."""
+    from app.tefca_registry.bucket_classifier import (BucketClassifier,
+                                                       ensure_rules_v2, ensure_rules_v3,
                                                        ensure_seed_rules)
 
     count = int((await db.execute(
@@ -439,13 +449,7 @@ async def _rule_set(db) -> List[Dict[str, Any]]:
             await ensure_rules_v2(db)
             await ensure_rules_v3(db)
         await db.commit()
-    rows = (await db.execute(
-        select(reg.ReviewRule).where(reg.ReviewRule.is_active.is_(True)))).scalars().all()
-    return [{
-        "rule_code": r.rule_code, "name": r.name, "bucket": r.bucket,
-        "priority": r.priority, "conditions": r.conditions,
-        "description": r.description, "version": r.version,
-    } for r in rows]
+    return await BucketClassifier().load_rules(db)
 
 
 def _entity_npi(entity) -> Optional[str]:
