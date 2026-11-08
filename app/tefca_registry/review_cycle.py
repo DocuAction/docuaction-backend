@@ -87,6 +87,24 @@ def _proposed_verify_skip_held() -> bool:
     return (os.getenv(PROPOSED_VERIFY_SKIP_HELD_ENV) or "").strip().lower() in (
         "1", "true", "yes", "on")
 
+
+async def _held_entity_ids(db, intake_id, entity_ids) -> set:
+    """Entity ids among `entity_ids` whose curated record in THIS delivery is
+    CURRENTLY HELD — the D-15 skip set. Reads the live `record_status`, so a
+    promoted-then-re-HELD record (post-promotion verification rewrote the
+    disposition after the plan was drawn) is caught exactly like an original
+    hold. Factored out so the proposed semantics are testable against the
+    database directly."""
+    from sqlalchemy import select as _select
+    if not entity_ids:
+        return set()
+    return set((await db.execute(
+        _select(m.RceCuratedRecord.canonical_entity_id)
+        .where(m.RceCuratedRecord.source_intake_id == intake_id,
+               m.RceCuratedRecord.canonical_entity_id.in_(list(entity_ids)),
+               m.RceCuratedRecord.record_status == "HELD")
+    )).scalars().all())
+
 logger = logging.getLogger(__name__)
 
 #: The queue_source stamped on every review case created from an official
@@ -217,13 +235,8 @@ async def create_review_cycle(
             # recorded D-15 decision.
             skipped_held: List[str] = []
             if _proposed_verify_skip_held():
-                held_ids = set((await db.execute(
-                    select(m.RceCuratedRecord.canonical_entity_id)
-                    .where(m.RceCuratedRecord.source_intake_id == intake_id,
-                           m.RceCuratedRecord.canonical_entity_id.in_(
-                               list(refs.keys())),
-                           m.RceCuratedRecord.record_status == "HELD")
-                )).scalars().all())
+                held_ids = await _held_entity_ids(db, intake_id,
+                                                  list(refs.keys()))
                 if held_ids:
                     skipped_held = sorted(str(e) for e in held_ids)
                     refs = {eid: ref for eid, ref in refs.items()

@@ -45,6 +45,7 @@ from app.tefca_registry.review_cycle import (
     PROPOSED_VERIFY_SKIP_HELD_ENV,
     _proposed_verify_skip_held,
 )
+from rce_traceability_support import rolled_back_db  # noqa: F401 — DB fixture
 
 APP_DIR = pathlib.Path(__file__).resolve().parents[1] / "app"
 
@@ -302,3 +303,33 @@ def test_d15_flag_default_off(monkeypatch):
     assert _proposed_verify_skip_held() is False
     monkeypatch.setenv(PROPOSED_VERIFY_SKIP_HELD_ENV, "1")
     assert _proposed_verify_skip_held() is True
+
+
+# ── 7. D-15 HELD / re-HELD skip set — database semantics ─────────────────────
+
+@pytest.mark.asyncio
+async def test_d15_held_entity_ids_reads_live_record_status(rolled_back_db):
+    """The skip set reads the CURRENT record_status: a promoted record is not
+    in it; the same record re-HELD afterwards is; releasing is not simulated
+    (holds are never released here)."""
+    from test_post_promotion_verification import _promoted
+    from app.tefca_registry.review_cycle import _held_entity_ids
+
+    db = rolled_back_db
+    rows, intake_id, job, curated, promo = await _promoted(db, "D15")
+    entity_id = curated.canonical_entity_id
+    assert curated.record_status in ("CLEAN", "CORRECTED")
+
+    held = await _held_entity_ids(db, intake_id, [entity_id])
+    assert held == set(), "a promoted, non-held record must not be skipped"
+
+    # Re-HELD after promotion (what post-promotion verification can do).
+    curated.record_status = "HELD"
+    await db.flush()
+    held = await _held_entity_ids(db, intake_id, [entity_id])
+    assert held == {entity_id}, "a re-HELD record must be in the skip set"
+
+    # Scoped to the delivery and to the asked-about ids.
+    assert await _held_entity_ids(db, intake_id, []) == set()
+    import uuid as _uuid
+    assert await _held_entity_ids(db, _uuid.uuid4(), [entity_id]) == set()
