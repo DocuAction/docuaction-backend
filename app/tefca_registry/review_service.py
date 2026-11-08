@@ -736,6 +736,20 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
     # (2026-10-02; see bucket_classifier._v3_rules's docstring). Purely
     # additive over v2, same no-op-when-silent guarantee. Idempotent.
     await ensure_rules_v3(db)
+
+    # Release-prerequisite controls (2026-11-08), BEFORE the first staged
+    # write (the verification_started audit row): mark this transaction
+    # in-flight + refuse while the transition barrier is on, then refuse if
+    # the EX-3 producer flag disagrees with the effective rule configuration.
+    # The rules checked here come from the SAME module classifier (cache
+    # included) that `classify_with_db` below will use, so the guard's view
+    # and classification's view can never diverge — a stale cache after an
+    # activation produces a refusal, never a wrong bucket.
+    from app.tefca_registry.processing_controls import (
+        assert_exclusion_configuration_consistent, enter_processing)
+    await enter_processing(db)
+    assert_exclusion_configuration_consistent(await _classifier.load_rules(db))
+
     actor_id, actor_email = reg_audit.actor_of(user)
 
     reg_audit.record(db, reg_audit.VERIFICATION_STARTED, entity.id,

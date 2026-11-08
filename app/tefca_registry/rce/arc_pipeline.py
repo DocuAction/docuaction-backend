@@ -765,6 +765,17 @@ async def verify_and_classify(
     from app.tefca_registry.bucket_classifier import BucketClassifier
 
     rules = await _rule_set(db)
+
+    # Release-prerequisite controls (2026-11-08), BEFORE any classification
+    # write: mark this transaction in-flight + refuse while the transition
+    # barrier is on, then refuse if the EX-3 producer flag disagrees with the
+    # effective rule configuration this very call is about to classify with.
+    # Refusal is the only action — no bucket is ever silently rerouted.
+    from app.tefca_registry.processing_controls import (
+        assert_exclusion_configuration_consistent, enter_processing)
+    await enter_processing(db)
+    assert_exclusion_configuration_consistent(rules)
+
     classifier = BucketClassifier()
 
     # M-1..M-4 executable policy (Gate C data): with no active policy rows —

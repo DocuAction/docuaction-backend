@@ -199,6 +199,121 @@ async def activate_rules_v4(req: ActivateRulesV4, request: Request,
                      "Rule set v4 was already active; nothing changed.")}
 
 
+# ── release-transition controls (2026-11-08) ─────────────────────────────────
+
+class SetProcessingBarrier(BaseModel):
+    """Explicit confirmation body for a barrier transition."""
+    state: str = Field(description="on | off")
+    confirm: str = Field(description="Must be exactly PROCESSING-BARRIER-ON "
+                                     "or PROCESSING-BARRIER-OFF, matching state")
+    reason: str = Field(min_length=1, max_length=2000,
+                        description="Why the barrier is being set/lifted "
+                                    "(e.g. the release transition step)")
+
+
+@router.post("/processing-barrier",
+             dependencies=[Depends(require_role("admin"))])
+async def set_processing_barrier(req: SetProcessingBarrier, request: Request,
+                                 db: AsyncSession = Depends(get_db),
+                                 user=Depends(require_role("admin"))):
+    """Set or lift the release-transition processing barrier.
+
+    While ON, every supported classification entry point (bulk
+    `verify_and_classify`, manual `run_review`, `create_review_cycle`) refuses
+    new processing BEFORE any write. The transition and its reason are
+    recorded as a governance audit event in the same commit. The returned
+    status includes the VERIFIED drain check — see
+    `processing_controls.barrier_status`; "on" alone does not claim the
+    system is drained."""
+    from app.tefca_registry.processing_controls import barrier_status, set_barrier
+
+    state = (req.state or "").strip().lower()
+    if state not in ("on", "off"):
+        raise HTTPException(400, "state must be exactly 'on' or 'off'")
+    if req.confirm != f"PROCESSING-BARRIER-{state.upper()}":
+        raise HTTPException(
+            400, f"confirm must be exactly PROCESSING-BARRIER-{state.upper()}")
+    actor_id, actor_email = reg_audit.actor_of(user)
+    await set_barrier(db, on=(state == "on"), actor_id=actor_id,
+                      actor_email=actor_email,
+                      ip_address=get_client_ip(request), reason=req.reason)
+    await db.commit()
+    return await barrier_status(db)
+
+
+@router.get("/processing-barrier",
+            dependencies=[Depends(require_role("admin"))])
+async def get_processing_barrier(db: AsyncSession = Depends(get_db)):
+    """Barrier state with the verified drain check (read-only)."""
+    from app.tefca_registry.processing_controls import barrier_status
+
+    return await barrier_status(db)
+
+
+@router.get("/classification-config",
+            dependencies=[Depends(require_role("admin"))])
+async def classification_config(db: AsyncSession = Depends(get_db)):
+    """Read back the EFFECTIVE classification configuration from THIS worker:
+    effective rules (the classifier's own filter), the EX-3 producer flag, the
+    consistency verdict and the barrier state. Read-only; works while the
+    barrier is on — it is the release sequence's step-5 readback."""
+    from app.tefca_registry.processing_controls import effective_configuration
+
+    return await effective_configuration(db)
+
+
+class ClassificationPreview(BaseModel):
+    """One synthetic input for a NON-PERSISTING classification check.
+
+    Give either `evidence` ({"dimensions": [...]} — runs the REAL
+    dimension/disposition translator, flag included, exactly as the bulk path
+    does) or `results` (direct classifier input: {"sources": ..., "fields":
+    ...}). Synthetic data only."""
+    evidence: Optional[dict] = None
+    results: Optional[dict] = None
+
+
+@router.post("/classification-preview",
+             dependencies=[Depends(require_role("admin"))])
+async def classification_preview(req: ClassificationPreview,
+                                 db: AsyncSession = Depends(get_db),
+                                 user=Depends(require_role("admin"))):
+    """Classify ONE synthetic input through the real application logic —
+    the real translator (when `evidence` is given) and the real effective
+    rule set — WITHOUT persisting anything: no ReviewRecord, no evidence row,
+    no audit row, no review id. This is the release sequence's step-6
+    non-persisting check vehicle, so it works while the barrier is on and
+    REPORTS the EX-3 consistency verdict instead of refusing: during
+    transition verification the operator needs to see what the configuration
+    does. The application classification paths themselves refuse on mismatch
+    (`processing_controls.assert_exclusion_configuration_consistent`)."""
+    from app.tefca_registry.bucket_classifier import BucketClassifier
+    from app.tefca_registry.processing_controls import effective_configuration
+    from app.tefca_registry.rce.arc_pipeline import dimensions_to_verification_results
+
+    if (req.evidence is None) == (req.results is None):
+        raise HTTPException(400, "Give exactly one of 'evidence' or 'results'.")
+    results = (dimensions_to_verification_results(req.evidence)
+               if req.evidence is not None else req.results)
+
+    config = await effective_configuration(db)
+    loader = BucketClassifier()                 # fresh: no cached rules
+    rules = await loader.load_rules(db)
+    outcome = loader.classify(results, rules=rules)
+    return {
+        "persisted": False,
+        "note": "Non-persisting preview: nothing was written and no review "
+                "id was allocated.",
+        "classification": {
+            "bucket": outcome.bucket, "rule_code": outcome.rule_code,
+            "rule_version": outcome.rule_version, "rule_name": outcome.rule_name,
+            "rationale": outcome.rationale,
+        },
+        "classifier_input": results,
+        "configuration": config,
+    }
+
+
 @router.get("/review-rules/history", dependencies=[Depends(require_role("viewer"))])
 async def rules_history(db: AsyncSession = Depends(get_db)):
     """Every version ever, current and retired. There is no DELETE — a rule that

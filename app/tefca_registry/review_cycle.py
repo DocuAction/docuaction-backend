@@ -170,6 +170,17 @@ async def create_review_cycle(
     if intake is None:
         raise CycleRefused(f"No delivery {intake_id}")
 
+    # Release-prerequisite barrier check (2026-11-08) at the CYCLE's own top,
+    # before the pre-verification member-status writes this function commits
+    # (plan finalization, HELD skips). `verify_and_classify` re-checks per
+    # batch transaction — this early check only makes the refusal land before
+    # any cycle bookkeeping is written. The commits below end this
+    # transaction (releasing the shared in-flight lock), which is fine: the
+    # drain guarantee protects classification writes, and those happen inside
+    # verify_and_classify's own guarded transaction.
+    from app.tefca_registry.processing_controls import enter_processing
+    await enter_processing(db)
+
     actor_id, actor_email = reg_audit.actor_of(user)
     batch = max(1, min(int(batch or DEFAULT_BATCH), MAX_BATCH))
 

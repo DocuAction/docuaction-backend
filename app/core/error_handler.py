@@ -196,6 +196,35 @@ def register_exception_handlers(app):
             headers=getattr(exc, "headers", None) or None,
         )
 
+    # Release-prerequisite controls (2026-11-08): both refusals are
+    # deliberate, operator-actionable states, so they surface as 409s with
+    # named codes and their full message — not masked 500s.
+    from app.tefca_registry.processing_controls import (
+        ExclusionConfigurationMismatch, ProcessingBarrierActive)
+
+    @app.exception_handler(ExclusionConfigurationMismatch)
+    async def exclusion_config_mismatch_handler(
+            request: Request, exc: ExclusionConfigurationMismatch):
+        """EX-3 flag/rule-component mismatch -> 409 with the full refusal
+        message (operator-actionable, not an internal error)."""
+        request_id = _resolve_request_id(None)
+        logger.error("EX-3 configuration mismatch refused classification | "
+                     "request_id=%s | path=%s", request_id, request.url.path)
+        return create_error_response(
+            status_code=409, error=str(exc),
+            code="EXCLUSION_CONFIG_MISMATCH", request_id=request_id)
+
+    @app.exception_handler(ProcessingBarrierActive)
+    async def processing_barrier_handler(
+            request: Request, exc: ProcessingBarrierActive):
+        """Release-transition barrier refusal -> 409 with the full message."""
+        request_id = _resolve_request_id(None)
+        logger.warning("Processing barrier refused new processing | "
+                       "request_id=%s | path=%s", request_id, request.url.path)
+        return create_error_response(
+            status_code=409, error=str(exc),
+            code="PROCESSING_BARRIER_ACTIVE", request_id=request_id)
+
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
         request_id = _resolve_request_id(None)
