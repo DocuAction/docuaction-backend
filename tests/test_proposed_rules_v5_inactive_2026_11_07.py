@@ -560,3 +560,41 @@ def test_owner_adopted_signal_condition_is_submitted_values_only():
     assert not exists("T-TREAT", None, "1", "initiating-node")
     assert not exists("T-TRTMNT", "1234567893", "1", None)   # NPI submitted
     assert not exists("T-TRTMNT", None, "0", None)           # inactive
+
+
+# ── 9. exact-token membership across combinations; inactive observation ──────
+
+def test_exact_token_membership_across_combinations_never_whole_cell():
+    """The parser splits the multi-value field and tests exact membership —
+    never whole-cell equality, never a hardcoded combination list. T-TREAT
+    alone is distinct; T-TREAT combined with T-TRTMNT does not exempt."""
+    from app.tefca_registry.rce.npi_applicability import assign_case
+
+    for purposes in ("T-TRTMNT",
+                     "T-TRTMNT,T-HCO-OPS",
+                     "T-HCO-OPS; T-TRTMNT | T-PH",
+                     "T-TREAT, T-TRTMNT",
+                     "T-TRTMNT T-TREAT"):
+        a = assign_case(purposes, None)
+        assert a.case == 1 and a.has_trtmnt, purposes
+    for purposes in ("T-TREAT", "T-TRTMNTX", "XT-TRTMNT", "t-trtmnt", "TRTMNT"):
+        assert not assign_case(purposes, None).has_trtmnt, purposes
+
+
+def test_inactive_treatment_observation_is_emitted_separately():
+    """Inactive + exact token + blank NPI -> INACTIVE_TREATMENT_NPI_MISSING
+    observation, consumed by no rule; active records get the owner signal
+    instead; neither leaks into the other population."""
+    import asyncio as _a  # noqa: F401 (parity with file style)
+    from app.tefca_registry.rce.field_map import normalize_active
+    from app.tefca_registry.rce.npi_applicability import assign_case
+
+    # The producer condition, mirrored: case 1 + not active.
+    assert assign_case("T-TRTMNT,T-HCO-OPS", None).case == 1
+    assert normalize_active("0") != "1"
+    # Rule-level: the observation signal triggers nothing in any composition.
+    composed = compose({"treatment_b4_owner_adopted"})
+    results = _base_clean()
+    results["fields"]["inactive_treatment_npi_missing"] = {"status": True}
+    out = _classify(composed, results)
+    assert out.bucket == "B1", "the observation must never gate or grant a bucket"

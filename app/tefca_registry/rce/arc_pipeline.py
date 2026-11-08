@@ -836,13 +836,34 @@ async def verify_and_classify(
             from app.Tefca import rce_fields as _rce_fields
             from app.tefca_registry.rce import npi_applicability as _npa
             from app.tefca_registry.rce.quality_rules import BR_NPI_TRTMNT_EFFECTIVE
+            _raw_purposes = _rce_fields.rce_value(entity, "purposesofuse")
+            _raw_npi = _rce_fields.rce_value(entity, "NPI")
+            _raw_active = _rce_fields.rce_value(entity, "active")
             _b4_signal = _npa.active_treatment_missing_required_npi(
-                _rce_fields.rce_value(entity, "purposesofuse"),
-                _rce_fields.rce_value(entity, "NPI"),
-                _rce_fields.rce_value(entity, "active"),
+                _raw_purposes, _raw_npi, _raw_active,
                 assessment_date=date.today(),
                 requirement_effective=BR_NPI_TRTMNT_EFFECTIVE,
                 org_node_type=_rce_fields.rce_value(entity, "organizationNodeType"))
+            # INACTIVE records with the same token condition get an OBSERVATION
+            # (owner instruction 2026-11-08), never a bucket signal: exact
+            # T-TRTMNT token membership in any combination (assign_case parses
+            # the multi-value field; T-TREAT alone never matches, T-TREAT
+            # combined with T-TRTMNT never exempts) + blank submitted NPI +
+            # active flag NOT '1'. Raw values preserved verbatim. No rule
+            # consumes this signal; it exists for reporting and analyst view.
+            if _b4_signal is None:
+                from app.tefca_registry.rce.field_map import normalize_active
+                _assign = _npa.assign_case(_raw_purposes, _raw_npi)
+                if _assign.case == 1 and normalize_active(_raw_active) != "1":
+                    verification_results.setdefault("fields", {})[
+                        "inactive_treatment_npi_missing"] = {
+                        "status": True,
+                        "reason_code": "INACTIVE_TREATMENT_NPI_MISSING",
+                        "raw_purposes": _assign.raw_purposes,
+                        "raw_npi": _assign.raw_npi,
+                        "raw_active": (_raw_active or ""),
+                        "purpose_tokens": list(_assign.tokens),
+                    }
             # D-02 PROPOSED bulk-path producer (default OFF): structural NPI
             # signal computed from the SUBMITTED value. Never overwrites a
             # signal another producer already set.

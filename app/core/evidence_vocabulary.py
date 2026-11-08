@@ -596,6 +596,28 @@ CLASSIFIER_SIGNAL_REGISTRY: Dict[str, SignalEntry] = {
         note="Owner-adopted policy condition; node type is preserved as "
              "information, never a gate.",
     ),
+    "inactive_treatment_npi_missing": SignalEntry(
+        # OBSERVATION ONLY (owner instruction 2026-11-08): an INACTIVE record
+        # (active flag not '1') carrying the exact T-TRTMNT token in any
+        # purpose combination with a blank submitted NPI. Kept strictly apart
+        # from the active population: no rule consumes it, it never gates or
+        # grants a bucket, and inactive records are reported separately.
+        production_state=PRODUCIBLE,
+        value_domain=SETTLED,
+        consequence_state=METHODOLOGY_PENDING,
+        producers=(
+            Producer(PATH_RCE,
+                     "app/tefca_registry/rce/arc_pipeline.py "
+                     "(verify_and_classify, RULE-006 signal block)",
+                     ("true",)),
+        ),
+        unused_reason="Observation for reporting/analyst view per the owner's "
+                      "2026-11-08 instruction; deliberately consumed by no "
+                      "rule — inactive records are reported separately, never "
+                      "bucketed by this signal.",
+        note="Inactive-record observation; reason code "
+             "INACTIVE_TREATMENT_NPI_MISSING.",
+    ),
     "treatment_npi_applicability_unresolved": SignalEntry(
         # PRODUCIBLE and SETTLED: emitted beside the RULE-006 signal when a
         # case-1 record's exchange direction is NOT documented in the
