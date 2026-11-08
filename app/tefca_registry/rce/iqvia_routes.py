@@ -642,6 +642,8 @@ async def snapshot_status(
     snapshot_id: uuid.UUID, db: AsyncSession = Depends(get_db),
     user=Depends(require_role("reviewer")),
 ):
+    """One snapshot's status, import progress/job state and reconciliation
+    gates, for licensed reviewer roles."""
     _require_licensed_access(user)
     snapshot = await db.get(sm.SourceSnapshot, snapshot_id)
     if snapshot is None:

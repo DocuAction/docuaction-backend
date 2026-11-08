@@ -73,6 +73,7 @@ def _unavailable() -> SourceResult:
 # ── pure: vocabulary, rule registry, state mapping ───────────────────────────
 
 def test_exc_001_registered_with_truthful_authority():
+    """EXC-001 is registered with truthful authority metadata."""
     rule = RULE_BY_ID["EXC-001"]
     assert rule.default_severity == "HIGH"
     assert rule.stage == "VERIFICATION"

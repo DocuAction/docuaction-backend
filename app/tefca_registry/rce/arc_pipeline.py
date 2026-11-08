@@ -376,6 +376,8 @@ def proposed_structural_npi_signal(npi_raw: Optional[str]) -> Optional[dict]:
 
 
 def _proposed_name_major_below() -> Optional[float]:
+    """D-05 band from the env flag: a float in [0, 1], else None with an error
+    log (proposed grading stays OFF; invalid values are never guessed)."""
     import os
     raw = (os.getenv(PROPOSED_NAME_MAJOR_BELOW_ENV) or "").strip()
     if not raw:

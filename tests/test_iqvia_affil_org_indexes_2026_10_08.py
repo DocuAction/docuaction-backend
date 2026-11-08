@@ -140,6 +140,9 @@ async def _explain_emitted_statements(sync_url: str):
 
 @pytest.mark.usefixtures("db_required")
 def test_org_indexes_exist_are_partial_owned_and_used(throwaway_db):
+    """The revision builds both partial indexes (valid, owned by the table
+    owner, predicate present), round-trips downgrade/upgrade, re-runs
+    idempotently, and the real lookup's plans use them."""
     from sqlalchemy import text
 
     url, eng = throwaway_db

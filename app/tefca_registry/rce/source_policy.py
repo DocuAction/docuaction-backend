@@ -100,6 +100,9 @@ async def load_active_policies(session) -> List[Dict[str, Any]]:
 
 
 def _applies(policy: Dict[str, Any], record_facts: Dict[str, Any]) -> bool:
+    """Does this policy row apply to the record? Advisory never blocks;
+    requires_npi is honored; a conditional policy with NO stated
+    applicability applies nowhere (M-policy is never decided by omission)."""
     if policy["role"] == "advisory":
         return False
     applicability = policy.get("applicability") or {}

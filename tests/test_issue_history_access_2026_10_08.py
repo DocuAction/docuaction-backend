@@ -281,6 +281,8 @@ def test_hidden_and_unknown_answer_identically_for_every_role(client, seeded, co
 # -- logs -------------------------------------------------------------------------------
 
 def test_logs_carry_no_entity_identifier_account_email_or_value(client, seeded, conf, caplog):
+    """Access logs carry no entity identifier, account, email or identifier
+    value."""
     caplog.set_level(logging.DEBUG)
     h_email = headers_for("viewer")
     from support_delivery_api import user_for
@@ -343,6 +345,7 @@ def test_nothing_that_is_not_a_response_carries_a_submitted_value(client, seeded
     from app.core.database import async_session_maker
 
     async def rows():
+        """The stored issue_history_read audit metadata for this test's oids."""
         async with async_session_maker() as db:
             return (await db.execute(text(
                 "select metadata::text from tefca_reg_audit_log "

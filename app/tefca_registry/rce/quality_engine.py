@@ -245,6 +245,8 @@ PROPOSED_ASSESSMENT_AS_OF_ENV = "RCE_PROPOSED_ASSESSMENT_AS_OF"
 
 
 def _proposed_assessment_as_of() -> Optional[date]:
+    """D-12 assessment date from the env flag: a past-or-today ISO date (UTC),
+    else None with an error log and unchanged behavior."""
     import os
     raw = (os.getenv(PROPOSED_ASSESSMENT_AS_OF_ENV) or "").strip()
     if not raw:

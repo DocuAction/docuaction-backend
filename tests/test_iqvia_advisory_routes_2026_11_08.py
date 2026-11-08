@@ -74,6 +74,8 @@ async def db(db_required):
 
 class _User:
     def __init__(self, role, email=None):
+        """A minimal user object with the given role and a role-specific
+        synthetic email."""
         self.role = role
         self.email = email or f"iqvia-advroute-test-{role}@synthetic-test.docuaction.invalid"
         self.id = None
@@ -84,6 +86,8 @@ class TestAdvisoryComparisonRoute:
 
     @staticmethod
     def _snapshot(db, source_system, *, status="PENDING"):
+        """A synthetic snapshot row (APPROVED status carries the approval
+        triple), registered for cleanup."""
         import hashlib
         from datetime import datetime, timezone
 
@@ -106,6 +110,7 @@ class TestAdvisoryComparisonRoute:
 
     @staticmethod
     def _body():
+        """A minimal request body naming one random entity id."""
         from app.tefca_registry.rce.iqvia_routes import AdvisoryComparisonRequest
         return AdvisoryComparisonRequest(entity_ids=[uuid.uuid4()])
 
@@ -124,6 +129,7 @@ class TestAdvisoryComparisonRoute:
 
     @pytest.mark.asyncio
     async def test_master_flag_off_is_403_not_configured(self, db, monkeypatch):
+        """Master flag off -> 403 with availability=not_configured."""
         from app.tefca_registry.rce import iqvia_routes as routes
         monkeypatch.setattr(self.settings, "ENABLE_IQVIA_SOURCES", False, raising=False)
         snap = self._snapshot(db, "IQVIA_AFFILIATION"); await db.flush()
@@ -140,6 +146,8 @@ class TestAdvisoryComparisonRoute:
     ])
     async def test_per_source_flag_off_is_409_with_blocked_audit(
             self, db, monkeypatch, source_system, flag):
+        """Per-source flag off -> 409 CONSUMPTION_DISABLED with a blocked
+        audit row naming the source."""
         from app.tefca_registry.rce import iqvia_routes as routes
         monkeypatch.setattr(self.settings, "ENABLE_IQVIA_SOURCES", True, raising=False)
         monkeypatch.setattr(self.settings, flag, False, raising=False)
@@ -161,6 +169,8 @@ class TestAdvisoryComparisonRoute:
     ])
     async def test_unapproved_snapshot_is_409_with_blocked_audit(
             self, db, monkeypatch, source_system, flag):
+        """PENDING snapshot -> 409 SNAPSHOT_NOT_APPROVED with a blocked audit
+        row."""
         from app.tefca_registry.rce import iqvia_routes as routes
         monkeypatch.setattr(self.settings, "ENABLE_IQVIA_SOURCES", True, raising=False)
         monkeypatch.setattr(self.settings, flag, True, raising=False)
@@ -176,6 +186,7 @@ class TestAdvisoryComparisonRoute:
 
     @pytest.mark.asyncio
     async def test_hco_snapshot_is_422_not_comparable(self, db, monkeypatch):
+        """An HCO snapshot is 422 NOT_COMPARABLE on this route."""
         from app.tefca_registry.rce import iqvia_routes as routes
         monkeypatch.setattr(self.settings, "ENABLE_IQVIA_SOURCES", True, raising=False)
         snap = self._snapshot(db, "IQVIA_HCO", status="APPROVED"); await db.flush()
@@ -192,6 +203,8 @@ class TestAdvisoryComparisonRoute:
     ])
     async def test_success_audits_outcome_counts_without_licensed_content(
             self, db, monkeypatch, source_system, flag):
+        """A successful comparison audits outcome counts and carries NO
+        licensed row content."""
         import json as _json
 
         from app.tefca_registry import models as reg

@@ -43,16 +43,22 @@ TABLE = "rce_source_policies"
 
 
 def _offline() -> bool:
+    """True when alembic runs in --sql (offline) mode, where live inspection
+    is impossible."""
     return op.get_context().as_sql
 
 
 def _has_table() -> bool:
+    """Guard for the managed-convergence fixture database, where the table may
+    already exist."""
     if _offline():
         return False
     return sa.inspect(op.get_bind()).has_table(TABLE)
 
 
 def _role() -> str:
+    """The runtime role granted SELECT: DB_APP_ROLE, else the current user
+    (offline: a placeholder)."""
     role = os.getenv("DB_APP_ROLE", "").strip()
     if _offline():
         return role or "docuaction"
@@ -62,6 +68,9 @@ def _role() -> str:
 
 
 def upgrade() -> None:
+    """Create the read-only rce_source_policies table (guarded) and grant
+    SELECT to the runtime role. Ships empty: no policy is active until Gate
+    C inserts one."""
     if not _has_table():
         op.create_table(
             TABLE,
@@ -87,4 +96,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Drop rce_source_policies. NOTE: in a multi-revision downgrade crossing
+    20261009's autocommit block, this drop COMMITS before older guards can
+    refuse — see test_traceability_migration's partial-downgrade finding."""
     op.drop_table(TABLE)

@@ -51,6 +51,7 @@ PROVENANCE_COLUMNS = (
 
 
 def _migration_module(path=None, name="run_lifecycle_grant"):
+    """Load a migration file as a module, bypassing the package path."""
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(name, path or MIGRATION)

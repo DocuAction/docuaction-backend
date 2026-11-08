@@ -63,6 +63,8 @@ _POSSIBLE_MATCH = [{"source": "sam_gov", "status": "possible_match"},
 
 
 def _add_none_of(rule: dict, items: List[dict]) -> None:
+    """Append `items` to the rule's none_of guards, skipping clauses already
+    present (order-insensitive comparison)."""
     existing = [tuple(sorted(c.items())) for c in rule["conditions"].get("none_of", [])
                 if isinstance(c, dict)]
     for c in items:

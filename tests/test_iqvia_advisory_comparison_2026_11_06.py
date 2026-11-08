@@ -28,6 +28,8 @@ NPI_THIRD = "1043566623"   # Luhn-valid synthetic (same constant the org-lookup 
 # ── pure: normalization ───────────────────────────────────────────────────────
 
 def test_zip_normalization_restores_lost_leading_zeros_and_trims_plus4():
+    """ZIP normalization restores lost leading zeros and trims ZIP+4 to five
+    digits."""
     assert advc.normalize_zip5("02101-1234") == "02101"
     assert advc.normalize_zip5("2101") == "02101"       # spreadsheet-trimmed zero
     assert advc.normalize_zip5("021011234") == "02101"  # ZIP+4 unhyphenated
@@ -38,6 +40,7 @@ def test_zip_normalization_restores_lost_leading_zeros_and_trims_plus4():
 
 
 def test_state_and_city_normalization():
+    """State and city normalization used by the address comparison."""
     assert advc.normalize_state(" ma ") == "MA"
     assert advc.normalize_state("Mass") is None
     assert advc.normalize_state("1A") is None
@@ -51,16 +54,19 @@ ENT = {"address": "1 Synthetic Way", "city": "Testville", "state": "MA", "zip": 
 
 
 def test_address_no_iqvia_rows_is_not_compared():
+    """No IQVIA rows for the entity -> NOT_COMPARED, never DIFFERS."""
     out = advc.address_outcome(ENT, [])
     assert out["outcome"] == advc.NOT_COMPARED and out["reason"] == "NO_IQVIA_ROWS"
 
 
 def test_address_rows_with_blank_fields_is_no_address_data():
+    """Rows present but every address field blank -> NO_ADDRESS_DATA."""
     out = advc.address_outcome(ENT, [{"city": "", "state": None, "zip": ""}])
     assert out["outcome"] == advc.NO_ADDRESS_DATA
 
 
 def test_address_unusable_delivered_address_is_not_compared_not_differs():
+    """An unusable delivered address -> NOT_COMPARED, never DIFFERS."""
     out = advc.address_outcome({"city": None, "state": None, "zip": None},
                                [{"city": "Testville", "state": "MA", "zip": "02101"}])
     assert out["outcome"] == advc.NOT_COMPARED
@@ -68,6 +74,7 @@ def test_address_unusable_delivered_address_is_not_compared_not_differs():
 
 
 def test_address_zip_match_is_consistent_with_counts():
+    """A ZIP agreement outcome is consistent with the agreeing/total counts."""
     rows = [{"city": "Elsewhere", "state": "TX", "zip": "02101"},
             {"city": "Nowhere", "state": "AK", "zip": "99999"}]
     out = advc.address_outcome(ENT, rows)
@@ -76,11 +83,13 @@ def test_address_zip_match_is_consistent_with_counts():
 
 
 def test_address_city_state_match_without_zip_is_consistent():
+    """City/state agreement without a usable ZIP still counts as agreement."""
     out = advc.address_outcome(ENT, [{"city": "TESTVILLE", "state": "ma", "zip": "77777"}])
     assert out["outcome"] == advc.ADDRESS_CONSISTENT
 
 
 def test_address_rows_none_agreeing_is_differs():
+    """Comparable rows with none agreeing -> DIFFERS."""
     out = advc.address_outcome(ENT, [{"city": "Elsewhere", "state": "TX", "zip": "99999"}])
     assert out["outcome"] == advc.ADDRESS_DIFFERS and out["agreeing"] == 0
 
@@ -88,6 +97,8 @@ def test_address_rows_none_agreeing_is_differs():
 # ── pure: presence decision table ─────────────────────────────────────────────
 
 def test_presence_outcomes():
+    """Presence-axis outcomes per identifier evidence (SUPPORTS / DIFFERS /
+    NOT_COMPARED)."""
     assert advc.presence_outcome([], [])["outcome"] == advc.NO_IQVIA_DATA
     assert advc.presence_outcome(["K1"], [])["outcome"] == advc.SUPPORTS
     conflict = advc.presence_outcome(["K1"], ["K2"])
@@ -110,6 +121,7 @@ HCP_HEADER = ["HCP_HCE_ID", "ADDR_ID", "NPI", "FRST_NM", "LAST_NM",
 
 
 def _write(path, header, rows):
+    """Write a CSV with CRLF line endings, as the real import expects."""
     with open(path, "w", encoding="utf-8", newline="") as fh:
         w = csv.writer(fh, lineterminator="\r\n")
         w.writerow(header)
@@ -118,6 +130,7 @@ def _write(path, header, rows):
 
 
 async def _stage_affil(db, tmp_path):
+    """Import a tiny synthetic affiliation CSV; returns its snapshot id."""
     rows = [
         # O1: NPI_REGISTERED, address agrees with seed_entity's defaults (zip 02101)
         [f"{SYN}-P1", f"{SYN}-O1", "A1", "", NPI_REGISTERED, "", "", "1 Any St", "Testville", "MA", "02101"],
@@ -133,12 +146,15 @@ async def _stage_affil(db, tmp_path):
 
 
 async def _no_match_rows(db) -> int:
+    """Count persisted EntitySourceMatch rows (advisory comparison must write
+    none)."""
     return (await db.execute(
         select(func.count()).select_from(smod.EntitySourceMatch))).scalar_one()
 
 
 class TestAffiliationBatch:
     async def test_pending_snapshot_refused_without_diagnostic_switch(self, rolled_back_db, tmp_path):
+        """A PENDING snapshot is refused unless the diagnostic switch is set."""
         db = rolled_back_db
         eid = await seed_entity(db, oid=f"{SYN}-E1", name=f"{SYN} Org", npi=NPI_REGISTERED)
         sid = await _stage_affil(db, tmp_path)
@@ -146,6 +162,7 @@ class TestAffiliationBatch:
             await advc.advisory_comparison_batch(db, snapshot_id=sid, entity_ids=[eid])
 
     async def test_batch_outcomes_are_per_entity_and_read_only(self, rolled_back_db, tmp_path):
+        """Batch comparison returns per-entity outcomes and persists nothing."""
         db = rolled_back_db
         e_match = await seed_entity(db, oid=f"{SYN}-E1", name=f"{SYN} Match", npi=NPI_REGISTERED)
         e_diff = await seed_entity(db, oid=f"{SYN}-E2", name=f"{SYN} Diff", npi=NPI_VALID_OTHER)
@@ -176,6 +193,8 @@ class TestAffiliationBatch:
         assert await _no_match_rows(db) == before
 
     async def test_unknown_entity_is_reported_not_skipped(self, rolled_back_db, tmp_path):
+        """An unknown entity id is reported in the results, never silently
+        dropped."""
         db = rolled_back_db
         sid = await _stage_affil(db, tmp_path)
         ghost = uuid.uuid4()
@@ -185,6 +204,7 @@ class TestAffiliationBatch:
         assert out["summary"]["presence"]["NO_SUCH_ENTITY"] == 1
 
     async def test_batch_cap_and_empty_input_are_refused(self, rolled_back_db, tmp_path):
+        """Empty input and over-cap batches are refused."""
         db = rolled_back_db
         sid = await _stage_affil(db, tmp_path)
         with pytest.raises(ValueError):
@@ -195,6 +215,8 @@ class TestAffiliationBatch:
                 entity_ids=[uuid.uuid4() for _ in range(advc.MAX_BATCH + 1)])
 
     async def test_hco_snapshot_is_not_served_by_this_consumer(self, rolled_back_db, tmp_path):
+        """HCO snapshots belong to the /match route, not the advisory
+        consumer."""
         db = rolled_back_db
         f = _write(tmp_path / "hco.csv",
                    ["HCO_HCE_ID", "ORG_NPI", "ORG_CCN_ID", "BUS_NM", "ZIP5_CD"],
@@ -208,6 +230,7 @@ class TestAffiliationBatch:
 
 class TestHcpAddressBatch:
     async def test_practitioner_address_outcomes(self, rolled_back_db, tmp_path):
+        """Practitioner (HCP/ADDR) address-comparison outcomes."""
         db = rolled_back_db
         e_match = await seed_entity(db, oid=f"{SYN}-E1", name=f"{SYN} P-Match", npi=NPI_REGISTERED)
         e_absent = await seed_entity(db, oid=f"{SYN}-E2", name=f"{SYN} P-Absent", npi=NPI_THIRD)
@@ -236,6 +259,7 @@ class TestHcpAddressBatch:
 # ── capability wiring (pure; no HTTP) ─────────────────────────────────────────
 
 def test_matching_capability_reports_advisory_sub_capability():
+    """The capability dict reports the advisory_comparison sub-capability."""
     from types import SimpleNamespace
 
     from app.tefca_registry.rce import snapshot_models as sm
@@ -328,6 +352,7 @@ async def test_retired_identifiers_are_ignored_and_null_status_remains_current(
     ).values(identifier_status=None))
 
     async def compare():
+        """Run the advisory batch for the one seeded entity."""
         return await advc.advisory_comparison_batch(
             db, snapshot_id=staged.snapshot_id, entity_ids=[eid],
             diagnostic_allow_pending=True)
@@ -355,6 +380,7 @@ async def test_identifier_batch_reads_once_and_keeps_empty_entities(
         calls = 0
 
         async def execute(self, statement):
+            """Count executes while delegating to the real session."""
             self.calls += 1
             return await db.execute(statement)
 

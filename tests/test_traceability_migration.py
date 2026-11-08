@@ -136,6 +136,9 @@ def _expect_error(fn, *needles):
 
 @pytest.mark.usefixtures("db_required")
 def test_traceability_migration_end_to_end(throwaway_db):
+    """End to end on a throwaway DB: empty -> head, clean downgrade while
+    evidence is empty, refusal once it is not, the exact grant matrix, the
+    current-dispositions view, and the equation CHECK."""
     import sqlalchemy as sa
     from sqlalchemy import text
 

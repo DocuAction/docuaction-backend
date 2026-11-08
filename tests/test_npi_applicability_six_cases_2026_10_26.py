@@ -305,6 +305,8 @@ def test_the_four_dates_are_distinct_fields_with_the_sop_values():
 
 
 def test_engine_reads_snapshot_date_only_from_authoritative_metadata_never_receipt_date():
+    """The engine takes the snapshot date only from authoritative metadata,
+    never the receipt date."""
     import inspect
     from types import SimpleNamespace
     from datetime import datetime

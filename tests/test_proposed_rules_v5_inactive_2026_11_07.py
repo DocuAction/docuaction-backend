@@ -59,15 +59,18 @@ GUARD_COMPONENTS = {"structural_npi_handling", "mandatory_source_guards",
 
 
 def _by_code(rules):
+    """Index composed rules by rule_code."""
     return {r["rule_code"]: r for r in rules}
 
 
 def _classify(rules, results):
+    """Classify one synthetic results dict under the composed rule list."""
     return BucketClassifier(
         rules=[{**r, "version": 99} for r in rules]).classify(results)
 
 
 def _base_clean():
+    """A results dict that classifies B1 under the baseline."""
     return {"sources": {"nppes": "verified", "oig_leie": "clear",
                         "pecos": "verified"}, "fields": {}}
 
@@ -75,10 +78,13 @@ def _base_clean():
 # ── 1. composition is exactly the documented deltas ──────────────────────────
 
 def test_compose_empty_selection_is_the_deployed_baseline():
+    """compose(set()) returns exactly the deployed baseline rules."""
     assert compose(set()) == SEED_RULES_V3
 
 
 def test_guard_components_only_append_none_of_guards():
+    """Guard components only append none_of guards; buckets and priorities
+    stay."""
     v3 = _by_code(SEED_RULES_V3)
     composed = _by_code(compose(GUARD_COMPONENTS))
     assert set(composed) == set(v3)
@@ -93,6 +99,7 @@ def test_guard_components_only_append_none_of_guards():
 
 
 def test_treatment_review_b3_maps_rule006_to_b3_with_candidate_name():
+    """treatment_review_b3 maps RULE-006 to B3 with the B4-candidate name."""
     composed = _by_code(compose({"treatment_review_b3"}))
     assert composed["RULE-006"]["bucket"] == "B3"
     assert "B4 candidate" in composed["RULE-006"]["name"]
@@ -100,6 +107,8 @@ def test_treatment_review_b3_maps_rule006_to_b3_with_candidate_name():
 
 
 def test_treatment_b4_requires_its_dependency_and_upgrades_the_bucket():
+    """treatment_b4 requires treatment_review_b3 and upgrades the bucket to
+    B4."""
     with pytest.raises(ActivationRefused):
         compose({"treatment_b4"})
     composed = _by_code(compose({"treatment_review_b3", "treatment_b4"}))
@@ -107,6 +116,8 @@ def test_treatment_b4_requires_its_dependency_and_upgrades_the_bucket():
 
 
 def test_exclusion_candidate_component_rewires_pending_to_b3():
+    """exclusion_candidate_b3 rewires pending candidates to B3 and guards
+    B1/B2."""
     composed = _by_code(compose({"exclusion_candidate_b3"}))
     # The v3 PENDING not_found disqualifiers are gone from RULE-005...
     pending = [c for c in composed["RULE-005"]["conditions"]["any_of"]
@@ -123,6 +134,7 @@ def test_exclusion_candidate_component_rewires_pending_to_b3():
 
 
 def test_unknown_component_is_refused():
+    """An unknown component name is refused."""
     with pytest.raises(ActivationRefused):
         compose({"no_such_component"})
 
@@ -145,6 +157,8 @@ def test_nothing_in_app_calls_the_activation_mechanism():
 @pytest.mark.asyncio
 async def test_activation_refuses_arbitrary_strings_and_unrecorded_refs(
         rolled_back_db):
+    """Arbitrary nonempty strings and unrecorded refs are refused as
+    approvals."""
     db = rolled_back_db
     with pytest.raises(ActivationRefused, match="not a governance-record id"):
         await activate_rule_configuration(
@@ -157,6 +171,7 @@ async def test_activation_refuses_arbitrary_strings_and_unrecorded_refs(
 @pytest.mark.asyncio
 async def test_activation_validates_the_governance_record_names_the_component(
         rolled_back_db):
+    """The governance record must itself name the component it approves."""
     from app.tefca_registry import models as reg
     db = rolled_back_db
     row = reg.TefcaRegAuditLog(
@@ -175,6 +190,8 @@ async def test_activation_validates_the_governance_record_names_the_component(
 @pytest.mark.asyncio
 async def test_activation_with_validated_approvals_activates_one_lineage(
         rolled_back_db):
+    """Validated approvals activate one new version lineage, audited
+    atomically."""
     from sqlalchemy import select
     from app.tefca_registry import models as reg
     db = rolled_back_db
@@ -201,6 +218,7 @@ async def test_activation_with_validated_approvals_activates_one_lineage(
 # ── 3. proposed rule behavior, measured on the composed sets ─────────────────
 
 def test_d03_failed_mandatory_source_blocks_partial_pass():
+    """D-03: a failed mandatory source blocks a partial pass."""
     results = {"sources": {"nppes": "verified", "oig_leie": "clear",
                            "pecos": "failed"}, "fields": {}}
     assert _classify(SEED_RULES_V3, results).bucket == "B1"
@@ -209,6 +227,7 @@ def test_d03_failed_mandatory_source_blocks_partial_pass():
 
 
 def test_d04_material_conflicts_demote_b1_and_b2():
+    """D-04 guards demote B1/B2 on material identifier conflicts."""
     guards = compose({"material_conflict_guards"})
     results = _base_clean()
     results["fields"]["name_mismatch"] = {"severity": "major"}
@@ -223,6 +242,7 @@ def test_d04_material_conflicts_demote_b1_and_b2():
 
 
 def test_d02_invalid_npi_is_b4_and_guarded():
+    """D-02: a structurally invalid NPI is B4 and guards B1/B2."""
     results = _base_clean()
     results["fields"]["npi_validation"] = {"status": "invalid"}
     assert _classify(SEED_RULES_V3, results).bucket == "B4"
@@ -230,6 +250,8 @@ def test_d02_invalid_npi_is_b4_and_guarded():
 
 
 def test_ex3_candidate_is_b3_pending_and_confirmed_stays_b4():
+    """EX-3 B: pending candidates are B3 EXCLUSION_POSSIBLE_MATCH_PENDING;
+    confirmed applicable exclusions stay B4."""
     composed = compose({"exclusion_candidate_b3"})
     candidate = {"sources": {"nppes": "verified", "oig_leie": "clear",
                              "pecos": "verified",
@@ -293,6 +315,7 @@ def test_guard_components_equal_v3_when_no_proposed_signal_is_present(
 
 
 def test_name_major_guard_is_disclosed_not_hidden():
+    """The name-severity guard is disclosed in the rule, not hidden in code."""
     from app.core.vocabulary_contract import READY, condition_readiness
     rows = [r for r in condition_readiness(compose({"material_conflict_guards"}))
             if r.signal == "name_mismatch" and r.expected_value == "major"]
@@ -302,6 +325,7 @@ def test_name_major_guard_is_disclosed_not_hidden():
 # ── 4. proposed producers, flag-gated, default OFF ───────────────────────────
 
 def test_exclusion_state_translator_is_flag_gated(monkeypatch):
+    """The possible_match state translator is gated by its env flag."""
     monkeypatch.delenv(PROPOSED_EXCLUSION_STATES_ENV, raising=False)
     assert evidence_item_state(EXCLUSION_DIMENSION, "REVIEW") == "not_found"
     assert evidence_item_state(EXCLUSION_DIMENSION, "NOT_FOUND") == "clear"
@@ -314,6 +338,7 @@ def test_exclusion_state_translator_is_flag_gated(monkeypatch):
 
 
 def _identity_evidence(similarity):
+    """Synthetic identity evidence rows for the name-severity cases."""
     return {"dimensions": [{
         "dimension": "IDENTITY", "disposition": "REVIEW",
         "applicability": "APPLICABLE",
@@ -327,12 +352,14 @@ def _identity_evidence(similarity):
 
 
 def test_d05_default_severity_stays_hardcoded_minor(monkeypatch):
+    """D-05 default: severity grading stays the hardcoded minor behavior."""
     monkeypatch.delenv(PROPOSED_NAME_MAJOR_BELOW_ENV, raising=False)
     out = dimensions_to_verification_results(_identity_evidence(0.12))
     assert out["fields"]["name_mismatch"] == {"severity": "minor"}
 
 
 def test_d05_band_from_env_grades_major_below(monkeypatch):
+    """D-05: a valid band from the env grades major below the threshold."""
     monkeypatch.setenv(PROPOSED_NAME_MAJOR_BELOW_ENV, "0.5")
     assert dimensions_to_verification_results(
         _identity_evidence(0.32))["fields"]["name_mismatch"] == {"severity": "major"}
@@ -344,12 +371,14 @@ def test_d05_band_from_env_grades_major_below(monkeypatch):
 
 @pytest.mark.parametrize("bad", ["abc", "-0.1", "1.5", ""])
 def test_d05_invalid_band_means_grading_stays_off(monkeypatch, bad):
+    """An invalid D-05 band means proposed grading stays off."""
     monkeypatch.setenv(PROPOSED_NAME_MAJOR_BELOW_ENV, bad)
     out = dimensions_to_verification_results(_identity_evidence(0.01))
     assert out["fields"]["name_mismatch"] == {"severity": "minor"}
 
 
 def test_d02_default_structural_npi_stays_flagged(monkeypatch):
+    """D-02 default: a comma-separated NPI cell stays flagged, not split."""
     monkeypatch.delenv(PROPOSED_NPI_INVALID_SPLIT_ENV, raising=False)
     out = dimensions_to_verification_results(
         {"dimensions": [], "data_quality_flags": ["NPI_CHECK_DIGIT_FAILED"]})
@@ -357,6 +386,7 @@ def test_d02_default_structural_npi_stays_flagged(monkeypatch):
 
 
 def test_d02_split_emits_invalid_for_structurally_impossible(monkeypatch):
+    """D-02 split: structurally impossible values emit invalid (NP-1)."""
     monkeypatch.setenv(PROPOSED_NPI_INVALID_SPLIT_ENV, "1")
     out = dimensions_to_verification_results(
         {"dimensions": [], "data_quality_flags": ["NPI_CHECK_DIGIT_FAILED"]})
@@ -364,6 +394,7 @@ def test_d02_split_emits_invalid_for_structurally_impossible(monkeypatch):
 
 
 def test_structural_npi_signal_separates_np1_from_np3():
+    """The structural signal separates NP-1 (invalid) from NP-3 (multi-value)."""
     f = proposed_structural_npi_signal
     assert f(None) is None and f("") is None and f("   ") is None
     multi = f("1780787176, 1770559767")
@@ -378,6 +409,7 @@ def test_structural_npi_signal_separates_np1_from_np3():
 
 
 def test_structural_npi_signal_agrees_with_the_quality_engine_validator():
+    """The structural signal agrees with the quality engine's NPI validator."""
     from app.services.npi_validator import validate_npi
     for value in ("1234567893", "1234567890", "1780787176"):
         ok, _ = validate_npi(value)
@@ -385,11 +417,13 @@ def test_structural_npi_signal_agrees_with_the_quality_engine_validator():
 
 
 def test_treatment_reason_codes_are_mutually_exclusive_and_producer_emitted():
+    """Treatment reason codes are mutually exclusive and producer-emitted."""
     from app.tefca_registry.rce.npi_applicability import (
         active_treatment_missing_required_npi as sig)
     from app.tefca_registry.rce.quality_rules import BR_NPI_TRTMNT_EFFECTIVE
 
     def run(node_type):
+        """The producer call with everything fixed except the node type."""
         return sig("T-TRTMNT", None, "1",
                    assessment_date=date(2026, 11, 7),
                    requirement_effective=BR_NPI_TRTMNT_EFFECTIVE,
@@ -408,6 +442,7 @@ def test_treatment_reason_codes_are_mutually_exclusive_and_producer_emitted():
 # ── 5. D-12 pinned assessment date — reader semantics ────────────────────────
 
 def test_d12_env_reader_accepts_only_a_past_or_today_iso_date(monkeypatch):
+    """The D-12 env reader accepts only a past-or-today ISO date (UTC)."""
     monkeypatch.delenv(PROPOSED_ASSESSMENT_AS_OF_ENV, raising=False)
     assert _proposed_assessment_as_of() is None
     monkeypatch.setenv(PROPOSED_ASSESSMENT_AS_OF_ENV, "2026-10-14")
@@ -422,6 +457,7 @@ def test_d12_env_reader_accepts_only_a_past_or_today_iso_date(monkeypatch):
 # ── 6. D-15 verify-skip-HELD ─────────────────────────────────────────────────
 
 def test_d15_flag_default_off(monkeypatch):
+    """D-15 flag defaults OFF: held members are not skipped by default."""
     monkeypatch.delenv(PROPOSED_VERIFY_SKIP_HELD_ENV, raising=False)
     assert _proposed_verify_skip_held() is False
     monkeypatch.setenv(PROPOSED_VERIFY_SKIP_HELD_ENV, "1")
@@ -430,6 +466,7 @@ def test_d15_flag_default_off(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_d15_held_entity_ids_reads_live_record_status(rolled_back_db):
+    """_held_entity_ids reads the LIVE record status, not a cached one."""
     from test_post_promotion_verification import _promoted
     from app.tefca_registry.review_cycle import _held_entity_ids
 
@@ -448,6 +485,7 @@ async def test_d15_held_entity_ids_reads_live_record_status(rolled_back_db):
 # ── 7. M-1..M-4 policy hook — inactive by data ───────────────────────────────
 
 def test_policy_hook_is_a_noop_without_policies():
+    """The policy hook is a no-op when no policy rows are active."""
     assert sp.apply_source_policy("B1", "RULE-001", {}, {}, []) == (
         "B1", "RULE-001", None, None)
     assert sp.apply_source_policy(
@@ -457,6 +495,8 @@ def test_policy_hook_is_a_noop_without_policies():
 
 
 def test_policy_mandatory_incomplete_blocks_b1_with_named_reason():
+    """An applicable mandatory source left incomplete blocks B1 with
+    SOURCE_NOT_COMPLETED_<SRC>."""
     pol = [{"id": "p-1", "version": 7, "source": "oig_leie",
             "role": "mandatory", "applicability": {}}]
     for state in ("not_checked", "unavailable", "failed", None):
@@ -471,6 +511,7 @@ def test_policy_mandatory_incomplete_blocks_b1_with_named_reason():
 
 
 def test_policy_answered_adverse_is_never_relabelled_incomplete():
+    """An answered adverse state is never relabelled as incomplete."""
     pol = [{"source": "pecos", "role": "mandatory", "applicability": {}}]
     b, r, reason, matched = sp.apply_source_policy(
         "B2", "RULE-003", {"pecos": "not_found"}, {}, pol)
@@ -478,6 +519,8 @@ def test_policy_answered_adverse_is_never_relabelled_incomplete():
 
 
 def test_policy_pending_candidate_gets_the_specific_review_reason():
+    """A pending candidate gets EXCLUSION_POSSIBLE_MATCH_PENDING, not a
+    generic reason."""
     pol = [{"source": "sam_gov", "role": "mandatory", "applicability": {}}]
     b, r, reason, matched = sp.apply_source_policy(
         "B1", "RULE-001", {"sam_gov": "possible_match"}, {}, pol)
@@ -486,6 +529,8 @@ def test_policy_pending_candidate_gets_the_specific_review_reason():
 
 
 def test_policy_conditional_and_advisory_roles():
+    """Conditional-without-applicability applies nowhere; advisory never
+    blocks."""
     cond = [{"source": "nppes", "role": "conditional",
              "applicability": {"requires_npi": True}}]
     b, _, reason, _m = sp.apply_source_policy(
@@ -508,6 +553,8 @@ def test_policy_conditional_and_advisory_roles():
 
 @pytest.mark.asyncio
 async def test_policy_storage_ships_empty_and_inactive(rolled_back_db):
+    """The policy table ships empty; PROPOSED_POLICY_M1 is data, not an active
+    row."""
     from app.tefca_registry.rce import models as m
     db = rolled_back_db
     assert await sp.load_active_policies(db) == []
@@ -534,6 +581,7 @@ def test_owner_adopted_component_is_a_new_version_of_rule006_itself():
 
 
 def test_owner_adopted_component_classifies_b4_without_node_type_gate():
+    """The owner-adopted component classifies B4 with no node-type gate."""
     composed = compose({"treatment_b4_owner_adopted"})
     results = _base_clean()
     results["fields"]["treatment_owner_adopted_missing_npi"] = {"status": True}
@@ -550,6 +598,7 @@ def test_owner_adopted_component_classifies_b4_without_node_type_gate():
 
 
 def test_owner_adopted_conflicts_with_config_a_components():
+    """The owner-adopted component conflicts with both CONFIG-A components."""
     with pytest.raises(ActivationRefused, match="incompatible"):
         compose({"treatment_b4_owner_adopted", "treatment_review_b3"})
     with pytest.raises(ActivationRefused, match="incompatible"):
@@ -567,6 +616,7 @@ def test_owner_adopted_signal_condition_is_submitted_values_only():
     from app.tefca_registry.rce.quality_rules import BR_NPI_TRTMNT_EFFECTIVE
 
     def exists(purposes, npi, active, node):
+        """Whether the treatment signal exists for the given inputs."""
         return sig(purposes, npi, active, assessment_date=date(2026, 11, 8),
                    requirement_effective=BR_NPI_TRTMNT_EFFECTIVE,
                    org_node_type=node) is not None
@@ -630,6 +680,7 @@ async def test_activation_refuses_empty_selection_and_future_effective(
     db = rolled_back_db
 
     async def _state():
+        """Snapshot of rule rows + audit count, for byte-identical comparison."""
         rules = (await db.execute(
             select(reg.ReviewRule.id, reg.ReviewRule.is_active,
                    reg.ReviewRule.retired_date)
@@ -659,6 +710,8 @@ async def test_activation_refuses_empty_selection_and_future_effective(
 
 
 def test_policy_determination_cites_its_own_code_never_default_unmatched():
+    """A policy determination cites SOURCE-POLICY-M4 and the actual policy
+    row, never DEFAULT-UNMATCHED."""
     assert sp.SOURCE_POLICY_RULE_CODE == "SOURCE-POLICY-M4"
     # The reserved code must never collide with a review_rules code.
     from app.tefca_registry.rule_configuration import COMPONENTS, compose
@@ -682,6 +735,7 @@ async def test_d15_skipped_members_leave_the_selectable_set(rolled_back_db):
         confidence_level=0.95, margin_of_error=0.05, proportion=0.5,
         strata_config={"synthetic_test": True}))
     def _entity(eid):
+        """A synthetic registry entity row for the sample."""
         return reg.TefcaRegEntity(
             id=eid, name=f"SYNTHETIC-D15-{eid}", display_name="SYNTHETIC-D15",
             entity_level="participant", entity_type="healthcare_provider",

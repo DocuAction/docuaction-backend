@@ -54,6 +54,8 @@ class RunLifecycleTargetError(RuntimeError):
 
 
 def _offline() -> bool:
+    """True when alembic runs in --sql (offline) mode, where live inspection
+    is impossible."""
     return op.get_context().as_sql
 
 
@@ -69,6 +71,7 @@ def _has_column(table: str, column: str) -> bool:
 
 
 def _owner_of(table: str):
+    """The owning role of `table`, from pg_tables."""
     return op.get_bind().execute(
         sa.text("select tableowner from pg_tables where schemaname='public' "
                 "and tablename=:t"), {"t": table}).scalar()
@@ -90,6 +93,9 @@ def _role() -> str:
 
 
 def upgrade() -> None:
+    """Add rce_verification_runs.assessment_metadata (guarded: the convergence
+    fixture DB already has it) and grant column-level UPDATE to the runtime
+    role."""
     if not _has_column(TABLE, "assessment_metadata"):
         op.add_column(TABLE,
                       sa.Column("assessment_metadata", JSONB(), nullable=True))
@@ -100,4 +106,5 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # Dropping the column removes its column-level grant with it.
+    """Drop the column; its column-level grant goes with it."""
     op.drop_column(TABLE, "assessment_metadata")

@@ -512,6 +512,10 @@ async def _enrollment_only_evidence(entity, *, db, entity_id, snapshot) -> Dict[
 
 
 async def _recheck_one(db, job: RceRecheckJob, item: RceRecheckItem, *, local_store) -> None:
+    """Re-verify one item under the job's PINNED evidence scope: resolve the
+    entity, gather (enrollment-only answers from the pinned PPEF edition;
+    full scope rebuilds all sources), append new evidence rows and record
+    the item outcome. Prior evidence is never edited."""
     from app.Tefca.entity_resolution import resolve_entity
     from app.Tefca.evidence_service import EvidenceService, evidence_rows_for_persistence
     from app.Tefca.models import TEFCADimensionEvidence

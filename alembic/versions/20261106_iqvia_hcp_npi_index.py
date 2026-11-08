@@ -53,6 +53,8 @@ INVALID_INDEX_SQL = (
 
 
 def _verify_built() -> None:
+    """Fail the upgrade (revision unrecorded) if the concurrent build left the
+    index missing or INVALID."""
     bind = op.get_bind()
     row = bind.exec_driver_sql(
         "SELECT i.indisvalid FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid "
@@ -64,6 +66,8 @@ def _verify_built() -> None:
 
 
 def _drop_invalid_leftover() -> None:
+    """Drop an INVALID leftover index from an interrupted CONCURRENTLY build
+    so the rebuild starts clean."""
     op.execute(f"""
         DO $$
         DECLARE r record;
@@ -81,6 +85,9 @@ def _drop_invalid_leftover() -> None:
 
 
 def upgrade() -> None:
+    """Build the partial (source_snapshot_id, npi) index CONCURRENTLY inside
+    an autocommit block, repairing any INVALID leftover first, then verify
+    it built valid."""
     with context.get_context().autocommit_block():
         _drop_invalid_leftover()
         op.execute(
@@ -91,5 +98,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Drop the index CONCURRENTLY (autocommit block; cannot run inside a
+    transaction)."""
     with context.get_context().autocommit_block():
         op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {NAME}")
