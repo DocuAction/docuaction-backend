@@ -204,6 +204,52 @@ def test_consumer_detection_is_behavioral_not_historical():
     assert exclusion_states_consumer_active(None) is False
 
 
+# ── 2b. live possible_match vs persisted evidence (review finding) ───────────
+
+class _FakeEvidenceRow:
+    def __init__(self, disposition):
+        """A minimal persisted tefca_dimension_evidence stand-in."""
+        self.disposition = disposition
+        self.normalized_values = None
+        self.generation_timestamp = "2026-11-01T00:00:00Z"
+        self.id = uuid.uuid4()
+        self.review_id = None
+        self.rule_applied = None
+        self.query_identifier = "org=SYNTHETIC"
+
+
+def test_live_possible_match_is_answered_and_survives_persisted_clear(monkeypatch):
+    """Review finding 2026-11-08 (CONFIRMED and fixed): with the EX-3 flag on,
+    a LIVE name-screen candidate hit is `possible_match`; an OLDER persisted
+    clean screen (NOT_FOUND -> "clear") must NOT overwrite it — the worse
+    state wins, exactly as for the flag-off `not_found` reading."""
+    from app.tefca_registry.review_service import apply_persisted_exclusion_evidence
+
+    monkeypatch.setenv(PROPOSED_EXCLUSION_STATES_ENV, "1")
+    sources = {"oig_leie": {"status": "possible_match", "potential_hit": True}}
+    used = apply_persisted_exclusion_evidence(
+        sources, {"OIG_LEIE": _FakeEvidenceRow("NOT_FOUND")})   # -> "clear"
+    assert sources["oig_leie"]["status"] == "possible_match"
+    assert used == []                      # nothing superseded the live hit
+    assert "persisted_evidence_seen" in sources["oig_leie"]
+
+    # A persisted WORSE state still wins over a live clean answer.
+    sources = {"oig_leie": {"status": "clear"}}
+    apply_persisted_exclusion_evidence(
+        sources, {"OIG_LEIE": _FakeEvidenceRow("REVIEW")})      # -> possible_match
+    assert sources["oig_leie"]["status"] == "possible_match"
+
+
+def test_coverage_note_counts_a_candidate_hit_as_checked_never_verified():
+    """A possible_match source is an ANSWERED screen: checked, not verified."""
+    from app.tefca_registry.review_service import IMPLEMENTED_SOURCES, coverage_note
+
+    source = sorted(IMPLEMENTED_SOURCES)[0]
+    note = coverage_note({source: {"status": "possible_match"}})
+    assert note["sources_checked"] == 1
+    assert note["sources_verified"] == 0
+
+
 # ── 3. refusal on the actual paths, BEFORE any write commits ─────────────────
 
 async def _review_rows(db) -> int:

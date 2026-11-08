@@ -375,7 +375,15 @@ def apply_persisted_exclusion_evidence(sources: Dict[str, dict],
             "normalized_values": getattr(row, "normalized_values", None)})
         live = sources.get(key) or {}
         live_status = live.get("status")
-        live_answered = live_status in ("excluded", "clear", VERIFIED, NOT_FOUND)
+        # "possible_match" IS an answered live state (review finding
+        # 2026-11-08): under the EX-3 flag `_leie_org_name_screen` emits it
+        # for a live candidate hit, and without it here an OLDER persisted
+        # "clear" row (precedence 6) replaced the live candidate (precedence
+        # 3) — the worse-state-wins contract inverted, B1 reachable with an
+        # un-adjudicated live hit. With the flag off the same hit is
+        # not_found, which was always protected.
+        live_answered = live_status in ("excluded", "clear", VERIFIED,
+                                        NOT_FOUND, "possible_match")
         if live_answered and _precedence(live_status) <= _precedence(state):
             # The live probe already said something at least as bad. Keep it;
             # note that the persisted row was seen and not needed.
@@ -461,8 +469,11 @@ def coverage_note(sources: Dict[str, dict]) -> dict:
     impl = {k: v for k, v in sources.items() if k in IMPLEMENTED_SOURCES}
     unimplemented = sorted(k for k in sources if k not in IMPLEMENTED_SOURCES)
 
+    # "possible_match" is an ANSWERED screen pending adjudication: checked,
+    # never verified (same reading as BucketClassifier.evidence_summary).
     checked = [k for k, v in impl.items()
-               if v.get("status") in (VERIFIED, NOT_FOUND, "clear", "excluded")]
+               if v.get("status") in (VERIFIED, NOT_FOUND, "clear", "excluded",
+                                      "possible_match")]
     unavailable = [k for k, v in impl.items() if v.get("status") == UNAVAILABLE]
     not_checked = [k for k, v in impl.items() if v.get("status") == NOT_CHECKED]
     failed = [k for k, v in impl.items() if v.get("status") == FAILED]

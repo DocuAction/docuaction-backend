@@ -123,12 +123,20 @@ async def _held_entity_ids(db, intake_id, entity_ids) -> set:
     from sqlalchemy import select as _select
     if not entity_ids:
         return set()
-    return set((await db.execute(
-        _select(m.RceCuratedRecord.canonical_entity_id)
-        .where(m.RceCuratedRecord.source_intake_id == intake_id,
-               m.RceCuratedRecord.canonical_entity_id.in_(list(entity_ids)),
-               m.RceCuratedRecord.record_status == "HELD")
-    )).scalars().all())
+    # Chunked IN list (review finding 2026-11-08): with full_population the
+    # sample is the whole delivery, and asyncpg caps one statement at 32,767
+    # bind parameters — a single IN over a very large delivery would fail the
+    # cycle before any member is verified, on every retry.
+    ids = list(entity_ids)
+    held: set = set()
+    for i in range(0, len(ids), 5000):
+        held.update((await db.execute(
+            _select(m.RceCuratedRecord.canonical_entity_id)
+            .where(m.RceCuratedRecord.source_intake_id == intake_id,
+                   m.RceCuratedRecord.canonical_entity_id.in_(ids[i:i + 5000]),
+                   m.RceCuratedRecord.record_status == "HELD")
+        )).scalars().all())
+    return held
 
 logger = logging.getLogger(__name__)
 
