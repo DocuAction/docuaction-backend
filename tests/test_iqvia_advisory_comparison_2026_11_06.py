@@ -363,3 +363,31 @@ async def test_identifier_batch_reads_once_and_keeps_empty_entities(
     assert counted.calls == 1
     assert result[eid]["npi"] == [NPI_REGISTERED]
     assert result[ghost] == {"npi": [], "ccn": []}
+
+
+def test_address_usable_but_not_comparable_rows_are_not_compared():
+    """Review finding 2026-11-08: a row with address data on a DIFFERENT axis
+    than the delivered record (city/state only vs delivered ZIP-only, or
+    ZIP-only vs delivered city/state-only) proves nothing either way — it is
+    NOT_COMPARED/NO_COMPARABLE_FIELDS, never ADDRESS_DIFFERS."""
+    # Delivered has only a ZIP; IQVIA rows carry only city/state.
+    out = advc.address_outcome(
+        {"zip": "02114", "city": None, "state": None},
+        [{"city": "Testville", "state": "MA", "zip": ""}])
+    assert out["outcome"] == advc.NOT_COMPARED
+    assert out["reason"] == "NO_COMPARABLE_FIELDS"
+    # Mixed: one non-comparable row plus one comparable disagreeing row —
+    # only the comparable row counts, and the existing differs semantics hold.
+    out = advc.address_outcome(
+        {"zip": "02114", "city": None, "state": None},
+        [{"city": "Testville", "state": "MA", "zip": ""},
+         {"city": "", "state": "", "zip": "99999"}])
+    assert out["outcome"] == advc.ADDRESS_DIFFERS
+    assert out["iqvia_addresses"] == 1 and out["agreeing"] == 0
+    # And a comparable agreeing row still wins exactly as before.
+    out = advc.address_outcome(
+        {"zip": "02114", "city": None, "state": None},
+        [{"city": "Testville", "state": "MA", "zip": ""},
+         {"city": "", "state": "", "zip": "02114"}])
+    assert out["outcome"] == advc.ADDRESS_CONSISTENT
+    assert out["iqvia_addresses"] == 1 and out["agreeing"] == 1

@@ -83,9 +83,34 @@ PROPOSED_VERIFY_SKIP_HELD_ENV = "RCE_PROPOSED_VERIFY_SKIP_HELD"
 
 
 def _proposed_verify_skip_held() -> bool:
+    """True when the D-15 proposed HELD/re-HELD verification skip is enabled
+    via PROPOSED_VERIFY_SKIP_HELD_ENV (default OFF; gated on the recorded
+    decision). Read fresh each call so tests can set it without reimport."""
     import os
     return (os.getenv(PROPOSED_VERIFY_SKIP_HELD_ENV) or "").strip().lower() in (
         "1", "true", "yes", "on")
+
+
+#: Member status for a D-15 skip. A member in this status stays UNLINKED
+#: (review_id is None — no review case was invented for it) but is no longer
+#: selectable, so repeated cycle calls converge; the sample row itself is the
+#: durable record of why.
+SKIPPED_HELD_STATUS = "skipped_held"
+
+
+async def _unlinked_members(db, sample_id):
+    """The sample members still needing verification: review_id unset AND not
+    marked `skipped_held` (D-15). Deterministic order. Factored out so the
+    selection semantics are directly testable."""
+    from sqlalchemy import func as safunc, select as saselect
+    return (await db.execute(
+        saselect(reg.SampleEntity)
+        .where(reg.SampleEntity.sample_id == sample_id,
+               reg.SampleEntity.review_id.is_(None),
+               safunc.coalesce(reg.SampleEntity.review_status, "")
+               != SKIPPED_HELD_STATUS)
+        .order_by(reg.SampleEntity.stratum, reg.SampleEntity.entity_id)
+    )).scalars().all()
 
 
 async def _held_entity_ids(db, intake_id, entity_ids) -> set:
@@ -209,42 +234,59 @@ async def create_review_cycle(
             await db.commit()
         review_cycle_id = cycle.id
 
-        unlinked = (await db.execute(
-            select(reg.SampleEntity)
-            .where(reg.SampleEntity.sample_id == sample_id,
-                   reg.SampleEntity.review_id.is_(None))
-            .order_by(reg.SampleEntity.stratum, reg.SampleEntity.entity_id)
-        )).scalars().all()
+        unlinked = await _unlinked_members(db, sample_id)
         total_unlinked = len(unlinked)
+
+        # D-15 PROPOSED, INACTIVE by default: a record whose curated row is
+        # currently HELD — including promoted-then-re-HELD after the plan was
+        # drawn — is a processing state, not a classifiable member. When the
+        # flag is on, held members are resolved over the WHOLE unlinked set
+        # BEFORE the batch slice, marked `skipped_held` so they are never
+        # re-selected, and removed from `remaining` so repeated calls still
+        # converge (review finding 2026-11-08: the earlier in-batch filter
+        # left them unlinked and selectable forever, so `remaining` could
+        # never reach 0 and a batch of held-first members stalled the cycle).
+        # The ids are recorded in the summary AND the audit trail. Default-off
+        # keeps today's behavior byte-identical. May only be enabled under
+        # the recorded D-15 decision; no hold is released.
+        skipped_held: List[str] = []
+        if _proposed_verify_skip_held() and unlinked:
+            held_ids = await _held_entity_ids(
+                db, intake_id, [member.entity_id for member in unlinked])
+            if held_ids:
+                skipped_held = sorted(str(e) for e in held_ids)
+                for member in unlinked:
+                    if member.entity_id in held_ids:
+                        member.review_status = SKIPPED_HELD_STATUS
+                await db.commit()
+                unlinked = [member for member in unlinked
+                            if member.entity_id not in held_ids]
+                total_unlinked = len(unlinked)
+                logger.info(
+                    "review cycle %s: %d member(s) skipped — curated record "
+                    "currently HELD (VERIFY_SKIPPED_HELD)",
+                    intake_id, len(skipped_held))
+                reg_audit.record(
+                    db, "review_cycle_members_skipped_held", None,
+                    actor_id=actor_id, actor_email=actor_email,
+                    ip_address=ip_address,
+                    metadata={"source_intake_id": str(intake_id),
+                              "sample_id": str(sample_id),
+                              "reason": "VERIFY_SKIPPED_HELD",
+                              "skipped_held": skipped_held})
+                await db.commit()
+
         this_call = unlinked[:batch]
 
         verified: Dict[str, Any] = {"requested": 0, "verified": 0,
                                     "unresolved": [], "bucket_counts": {}}
+        if skipped_held:
+            verified["skipped_held"] = skipped_held
+            verified["skipped_held_reason"] = "VERIFY_SKIPPED_HELD"
         linked = 0
         if this_call:
             refs = await _refs_for(db, intake_id,
                                    [member.entity_id for member in this_call])
-
-            # D-15 PROPOSED, INACTIVE by default: a record whose curated row is
-            # currently HELD — including promoted-then-re-HELD after the plan
-            # was drawn — is a processing state, not a classifiable member.
-            # When the flag is on it is SKIPPED with a recorded reason, never
-            # silently dropped: the summary and the audit row both carry the
-            # skipped ids, so coverage can account for them. Default-off keeps
-            # today's behavior byte-identical. May only be enabled under the
-            # recorded D-15 decision.
-            skipped_held: List[str] = []
-            if _proposed_verify_skip_held():
-                held_ids = await _held_entity_ids(db, intake_id,
-                                                  list(refs.keys()))
-                if held_ids:
-                    skipped_held = sorted(str(e) for e in held_ids)
-                    refs = {eid: ref for eid, ref in refs.items()
-                            if eid not in held_ids}
-                    logger.info(
-                        "review cycle %s: %d member(s) skipped — curated "
-                        "record currently HELD (VERIFY_SKIPPED_HELD)",
-                        intake_id, len(skipped_held))
 
             member_by_entity = {member.entity_id: member for member in this_call}
             ref_to_entity = {ref: eid for eid, ref in refs.items()}
@@ -252,9 +294,6 @@ async def create_review_cycle(
             result = await verify_and_classify(
                 db, list(refs.values()), intake_id=intake_id,
                 actor=actor_email or "SYSTEM")
-            if skipped_held:
-                result["skipped_held"] = skipped_held
-                result["skipped_held_reason"] = "VERIFY_SKIPPED_HELD"
             verified = {k: result.get(k) for k in
                         ("requested", "verified", "unresolved", "bucket_counts")}
             if skipped_held:
@@ -294,7 +333,8 @@ async def create_review_cycle(
                           "requested": verified.get("requested"),
                           "verified": verified.get("verified"),
                           "linked": linked,
-                          "unresolved": len(verified.get("unresolved") or [])})
+                          "unresolved": len(verified.get("unresolved") or []),
+                          "skipped_held": skipped_held})
             await db.commit()
 
         if not plan.get("already_finalized"):

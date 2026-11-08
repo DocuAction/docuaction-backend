@@ -255,7 +255,9 @@ def _proposed_assessment_as_of() -> Optional[date]:
         logger.error("%s=%r is not an ISO date; assessment date stays the run "
                      "start", PROPOSED_ASSESSMENT_AS_OF_ENV, raw)
         return None
-    if value > date.today():
+    # UTC, deliberately: the run rows and gates are UTC-based, and a
+    # server-local date could accept tomorrow's UTC date near midnight.
+    if value > datetime.utcnow().date():
         logger.error("%s=%s is in the future; a run cannot be assessed as of a "
                      "date that has not happened. Assessment date stays the run "
                      "start", PROPOSED_ASSESSMENT_AS_OF_ENV, value.isoformat())
@@ -299,7 +301,7 @@ async def run_quality_engine(
     # parameter wins over the env override, both inactive by default). An
     # explicit future date is a caller error and is refused rather than logged
     # away; the env path validates and logs inside its own reader.
-    if assessment_as_of is not None and assessment_as_of > date.today():
+    if assessment_as_of is not None and assessment_as_of > datetime.utcnow().date():
         raise ValueError(
             f"assessment_as_of={assessment_as_of.isoformat()} is in the future; "
             f"a run cannot be assessed as of a date that has not happened.")

@@ -448,7 +448,8 @@ async def test_d15_held_entity_ids_reads_live_record_status(rolled_back_db):
 # ── 7. M-1..M-4 policy hook — inactive by data ───────────────────────────────
 
 def test_policy_hook_is_a_noop_without_policies():
-    assert sp.apply_source_policy("B1", "RULE-001", {}, {}, []) == ("B1", "RULE-001", None)
+    assert sp.apply_source_policy("B1", "RULE-001", {}, {}, []) == (
+        "B1", "RULE-001", None, None)
     assert sp.apply_source_policy(
         "B4", "RULE-005", {"sam_gov": "not_checked"},
         {}, [{"source": "sam_gov", "role": "mandatory", "applicability": {}}]
@@ -456,46 +457,50 @@ def test_policy_hook_is_a_noop_without_policies():
 
 
 def test_policy_mandatory_incomplete_blocks_b1_with_named_reason():
-    pol = [{"source": "oig_leie", "role": "mandatory", "applicability": {}}]
+    pol = [{"id": "p-1", "version": 7, "source": "oig_leie",
+            "role": "mandatory", "applicability": {}}]
     for state in ("not_checked", "unavailable", "failed", None):
         sources = {"oig_leie": state} if state else {}
-        b, r, reason = sp.apply_source_policy("B1", "RULE-001", sources, {}, pol)
+        b, r, reason, matched = sp.apply_source_policy(
+            "B1", "RULE-001", sources, {}, pol)
         assert (b, reason) == ("B3", "SOURCE_NOT_COMPLETED_OIG_LEIE"), state
-    b, r, reason = sp.apply_source_policy(
+        assert matched["version"] == 7, "the ACTUAL policy row is cited"
+    b, r, reason, matched = sp.apply_source_policy(
         "B1", "RULE-001", {"oig_leie": "clear"}, {}, pol)
-    assert (b, reason) == ("B1", None)
+    assert (b, reason, matched) == ("B1", None, None)
 
 
 def test_policy_answered_adverse_is_never_relabelled_incomplete():
     pol = [{"source": "pecos", "role": "mandatory", "applicability": {}}]
-    b, r, reason = sp.apply_source_policy(
+    b, r, reason, matched = sp.apply_source_policy(
         "B2", "RULE-003", {"pecos": "not_found"}, {}, pol)
     assert reason is None and b == "B2"  # the FINDING is the rules' business
 
 
 def test_policy_pending_candidate_gets_the_specific_review_reason():
     pol = [{"source": "sam_gov", "role": "mandatory", "applicability": {}}]
-    b, r, reason = sp.apply_source_policy(
+    b, r, reason, matched = sp.apply_source_policy(
         "B1", "RULE-001", {"sam_gov": "possible_match"}, {}, pol)
     assert (b, reason) == ("B3", "EXCLUSION_POSSIBLE_MATCH_PENDING")
+    assert matched is not None
 
 
 def test_policy_conditional_and_advisory_roles():
     cond = [{"source": "nppes", "role": "conditional",
              "applicability": {"requires_npi": True}}]
-    b, _, reason = sp.apply_source_policy(
+    b, _, reason, _m = sp.apply_source_policy(
         "B1", "RULE-001", {}, {"has_submitted_npi": False}, cond)
     assert reason is None, "conditional outside applicability never blocks"
-    b, _, reason = sp.apply_source_policy(
+    b, _, reason, _m = sp.apply_source_policy(
         "B1", "RULE-001", {}, {"has_submitted_npi": True}, cond)
     assert reason == "SOURCE_NOT_COMPLETED_NPPES"
     # A conditional policy with NO stated facts applies nowhere (no default).
-    b, _, reason = sp.apply_source_policy(
+    b, _, reason, _m = sp.apply_source_policy(
         "B1", "RULE-001", {}, {"has_submitted_npi": True},
         [{"source": "nppes", "role": "conditional", "applicability": {}}])
     assert reason is None
     # Advisory never blocks.
-    b, _, reason = sp.apply_source_policy(
+    b, _, reason, _m = sp.apply_source_policy(
         "B1", "RULE-001", {}, {},
         [{"source": "iqvia", "role": "advisory", "applicability": {}}])
     assert reason is None
@@ -610,3 +615,112 @@ def test_inactive_treatment_observation_is_emitted_separately():
     results["fields"]["inactive_treatment_npi_missing"] = {"status": True}
     out = _classify(composed, results)
     assert out.bucket == "B1", "the observation must never gate or grant a bucket"
+
+
+# ── 10. 2026-11-08 review findings — regression pins ─────────────────────────
+
+@pytest.mark.asyncio
+async def test_activation_refuses_empty_selection_and_future_effective(
+        rolled_back_db):
+    """Both refusals must fire BEFORE any rule or audit write: the active rule
+    rows and the audit trail are byte-identical after a refused call."""
+    from datetime import datetime as _dt
+    from sqlalchemy import func as safunc, select
+    from app.tefca_registry import models as reg
+    db = rolled_back_db
+
+    async def _state():
+        rules = (await db.execute(
+            select(reg.ReviewRule.id, reg.ReviewRule.is_active,
+                   reg.ReviewRule.retired_date)
+            .order_by(reg.ReviewRule.id))).all()
+        audits = int((await db.execute(
+            select(safunc.count()).select_from(reg.TefcaRegAuditLog))).scalar() or 0)
+        return rules, audits
+
+    before = await _state()
+    with pytest.raises(ActivationRefused, match="empty selection"):
+        await activate_rule_configuration(db, {})
+    assert await _state() == before, "a refusal must change nothing"
+
+    row = reg.TefcaRegAuditLog(
+        id=uuid.uuid4(), action=APPROVAL_EVENT_TYPE,
+        actor_email="owner@example.test",
+        metadata_={"components": ["mandatory_source_guards"],
+                   "synthetic_test_record": True})
+    db.add(row)
+    await db.flush()
+    before = await _state()
+    with pytest.raises(ActivationRefused, match="future"):
+        await activate_rule_configuration(
+            db, {"mandatory_source_guards": str(row.id)},
+            effective=_dt.utcnow().date() + timedelta(days=1))
+    assert await _state() == before,         "a future-date refusal must retire nothing and audit nothing"
+
+
+def test_policy_determination_cites_its_own_code_never_default_unmatched():
+    assert sp.SOURCE_POLICY_RULE_CODE == "SOURCE-POLICY-M4"
+    # The reserved code must never collide with a review_rules code.
+    from app.tefca_registry.rule_configuration import COMPONENTS, compose
+    all_codes = {r["rule_code"] for r in compose(
+        set(COMPONENTS) - {"treatment_review_b3", "treatment_b4"})}
+    assert sp.SOURCE_POLICY_RULE_CODE not in all_codes
+
+
+@pytest.mark.asyncio
+async def test_d15_skipped_members_leave_the_selectable_set(rolled_back_db):
+    """Review Major (2026-11-08): a skipped-held member must stop being
+    selectable (else `remaining` never reaches 0 and a held-first batch
+    stalls), while staying UNLINKED (no review case invented for it)."""
+    from app.tefca_registry import models as reg
+    from app.tefca_registry.review_cycle import (SKIPPED_HELD_STATUS,
+                                                 _unlinked_members)
+    db = rolled_back_db
+    sample_id = uuid.uuid4()
+    db.add(reg.ReviewSample(
+        id=sample_id, review_type="QHIN", population_size=2, sample_size=2,
+        confidence_level=0.95, margin_of_error=0.05, proportion=0.5,
+        strata_config={"synthetic_test": True}))
+    def _entity(eid):
+        return reg.TefcaRegEntity(
+            id=eid, name=f"SYNTHETIC-D15-{eid}", display_name="SYNTHETIC-D15",
+            entity_level="participant", entity_type="healthcare_provider",
+            operational_status="active", verification_status="not_verified",
+            current_version=1, is_active=True)
+
+    a, b = uuid.uuid4(), uuid.uuid4()
+    for eid in (a, b):
+        db.add(_entity(eid))
+    await db.flush()
+    for eid in (a, b):
+        db.add(reg.SampleEntity(id=uuid.uuid4(), sample_id=sample_id,
+                                entity_id=eid, stratum="S1"))
+    await db.flush()
+
+    members = await _unlinked_members(db, sample_id)
+    assert {m.entity_id for m in members} == {a, b}
+
+    held = next(m for m in members if m.entity_id == a)
+    held.review_status = SKIPPED_HELD_STATUS
+    await db.flush()
+
+    members = await _unlinked_members(db, sample_id)
+    assert {m.entity_id for m in members} == {b}, \
+        "a skipped_held member must not be re-selected"
+    assert held.review_id is None, "skipped means UNLINKED, never a fake case"
+
+    # HELD > batch: add three more skipped_held members - whatever the batch
+    # size, the selectable set is exactly the one live member, so a
+    # held-majority sample can never stall the cycle.
+    extra = [uuid.uuid4() for _ in range(3)]
+    for eid in extra:
+        db.add(_entity(eid))
+    await db.flush()
+    for eid in extra:
+        db.add(reg.SampleEntity(id=uuid.uuid4(), sample_id=sample_id,
+                                entity_id=eid, stratum="S0",
+                                review_status=SKIPPED_HELD_STATUS))
+    await db.flush()
+    members = await _unlinked_members(db, sample_id)
+    assert {m.entity_id for m in members} == {b}
+    assert len(members[:2]) == 1  # any batch slice sees only live members

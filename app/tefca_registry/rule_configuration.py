@@ -341,11 +341,24 @@ async def activate_rule_configuration(session, approvals: Dict[str, str],
     from app.tefca_registry import audit as reg_audit
     from app.tefca_registry import models as reg
 
+    if not approvals:
+        raise ActivationRefused(
+            "empty selection: activating zero components would retire every "
+            "active rule row and re-issue the baseline as a new version with "
+            "no recorded approval — refuse rather than churn the lineage.")
     rules = compose(set(approvals))          # validates selection + deps
     for name, ref in approvals.items():
         await _validate_approval(session, name, ref)
 
-    eff = effective or date.today()
+    from datetime import datetime as _dt
+    today_utc = _dt.utcnow().date()
+    eff = effective or today_utc
+    if eff > today_utc:
+        raise ActivationRefused(
+            f"effective={eff.isoformat()} is in the future (UTC): prior rows "
+            f"would be retired NOW while the new rows only take effect later, "
+            f"leaving the loader with no active applicable rule set in "
+            f"between.")
     current_max = int((await session.execute(
         select(sqlfunc.coalesce(sqlfunc.max(reg.ReviewRule.version), 0))
     )).scalar() or 0)

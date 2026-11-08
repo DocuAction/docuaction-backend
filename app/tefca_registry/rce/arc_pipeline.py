@@ -192,6 +192,9 @@ EXCLUSION_POSSIBLE_MATCH_STATE = "possible_match"
 
 
 def _proposed_exclusion_states_on() -> bool:
+    """True when the EX-3/D-16 proposed possible_match state is enabled via
+    PROPOSED_EXCLUSION_STATES_ENV (default OFF; gated on the recorded
+    decision). Read fresh each call so tests can set it without reimport."""
     import os
     return (os.getenv(PROPOSED_EXCLUSION_STATES_ENV) or "").strip().lower() in (
         "1", "true", "yes", "on")
@@ -315,6 +318,9 @@ PROPOSED_NAME_MAJOR_BELOW_ENV = "RCE_PROPOSED_NAME_MAJOR_BELOW"
 
 
 def _proposed_npi_invalid_split_on() -> bool:
+    """True when the D-02/D6 proposed invalid/flagged split is enabled via
+    PROPOSED_NPI_INVALID_SPLIT_ENV (default OFF; gated on the recorded
+    decision). Read fresh each call so tests can set it without reimport."""
     import os
     return (os.getenv(PROPOSED_NPI_INVALID_SPLIT_ENV) or "").strip().lower() in (
         "1", "true", "yes", "on")
@@ -920,7 +926,8 @@ async def verify_and_classify(
             # acceptable ANSWER prevents B1/B2 (answered adverse findings are
             # left to the rules). No active policy rows -> never runs.
             if active_source_policies:
-                _pb, _pr, _policy_reason = _source_policy.apply_source_policy(
+                (_pb, _pr, _policy_reason,
+                 _matched_policy) = _source_policy.apply_source_policy(
                     classification.bucket, classification.rule_code,
                     verification_results.get("sources") or {},
                     {"has_submitted_npi": bool(_entity_npi(entity))},
@@ -928,13 +935,27 @@ async def verify_and_classify(
                 if _policy_reason:
                     from app.tefca_registry.bucket_classifier import (
                         ClassificationResult as _CR)
+                    # Provenance: the determination came from the M-4 source
+                    # policy, not from "no rule matched" — it cites the
+                    # reserved code and the policy table, never the
+                    # DEFAULT-UNMATCHED path (review finding 2026-11-08).
                     classification = _CR(
-                        bucket=_pb, rule_code=None, rule_version=None,
+                        bucket=_pb,
+                        rule_code=_source_policy.SOURCE_POLICY_RULE_CODE,
+                        # The ACTUAL policy row version - the versioned
+                        # provenance is the rce_source_policies row, cited by
+                        # id and references below, never a placeholder.
+                        rule_version=_matched_policy.get("version"),
                         rule_name="Mandatory-source policy (M-4)",
                         rationale=(f"Mandatory-source policy: {_policy_reason}. "
                                    f"An applicable mandatory check without an "
-                                   f"acceptable answer cannot classify "
-                                   f"B1/B2 (M-4)."),
+                                   f"acceptable answer cannot classify B1/B2 "
+                                   f"(M-4). Policy row "
+                                   f"{_matched_policy.get('id')} v"
+                                   f"{_matched_policy.get('version')} - "
+                                   f"{_matched_policy.get('policy_reference')}; "
+                                   f"approval "
+                                   f"{_matched_policy.get('approval_reference')}."),
                         matched_conditions=[_policy_reason],
                         evidence_summary=classification.evidence_summary,
                         evaluated_rules=classification.evaluated_rules

@@ -65,6 +65,14 @@ PROPOSED_POLICY_M1 = (
                          "1da7efe); D-11 Part 2"},
 )
 
+#: Reserved provenance code for a policy-driven determination. NOT a
+#: review_rules row: the versioned provenance it cites is the ACTIVE
+#: rce_source_policies row (policy_reference + approval_reference), and the
+#: rationale names the specific SOURCE_NOT_COMPLETED_* / pending reason. Kept
+#: distinct from DEFAULT-UNMATCHED, which means "the rule set does not
+#: describe this input".
+SOURCE_POLICY_RULE_CODE = "SOURCE-POLICY-M4"
+
 ACCEPTABLE_STATES = frozenset({"verified", "clear"})
 INCOMPLETE_STATES = frozenset({"not_checked", "unavailable", "failed"})
 PENDING_REVIEW_STATES = frozenset({"possible_match"})
@@ -83,7 +91,8 @@ async def load_active_policies(session) -> List[Dict[str, Any]]:
         cur = best.get(r.source)
         if cur is None or (r.version or 0) > (cur.version or 0):
             best[r.source] = r
-    return [{"source": r.source, "role": r.role,
+    return [{"id": str(r.id), "version": r.version,
+             "source": r.source, "role": r.role,
              "applicability": r.applicability or {},
              "policy_reference": r.policy_reference,
              "approval_reference": str(r.approval_reference)}
@@ -108,11 +117,15 @@ def apply_source_policy(bucket: str, rule_code: Optional[str],
                         sources: Dict[str, Any],
                         record_facts: Dict[str, Any],
                         policies: List[Dict[str, Any]],
-                        ) -> Tuple[str, Optional[str], Optional[str]]:
-    """(bucket, rule_code, policy_reason). Pure; unchanged when `policies` is
-    empty or the bucket is not B1/B2."""
+                        ) -> Tuple[str, Optional[str], Optional[str],
+                                   Optional[Dict[str, Any]]]:
+    """(bucket, rule_code, policy_reason, matched_policy). Pure; unchanged -
+    with matched_policy None - when `policies` is empty or the bucket is not
+    B1/B2. `matched_policy` is the ACTUAL policy row dict (id, version,
+    policy_reference, approval_reference) so the stored determination cites
+    its real versioned provenance, never a hardcoded placeholder."""
     if not policies or bucket not in ("B1", "B2"):
-        return bucket, rule_code, None
+        return bucket, rule_code, None, None
     for policy in policies:
         if not _applies(policy, record_facts):
             continue
@@ -121,9 +134,10 @@ def apply_source_policy(bucket: str, rule_code: Optional[str],
         if state in ACCEPTABLE_STATES:
             continue
         if state in PENDING_REVIEW_STATES:
-            return "B3", None, "EXCLUSION_POSSIBLE_MATCH_PENDING"
+            return "B3", None, "EXCLUSION_POSSIBLE_MATCH_PENDING", policy
         if state is None or state in INCOMPLETE_STATES:
-            return "B3", None, f"SOURCE_NOT_COMPLETED_{policy['source'].upper()}"
+            return ("B3", None,
+                    f"SOURCE_NOT_COMPLETED_{policy['source'].upper()}", policy)
         # Answered adverse (not_found / deactivated / excluded / anything
         # else the rules know): a finding, owned by the rule conditions.
-    return bucket, rule_code, None
+    return bucket, rule_code, None, None

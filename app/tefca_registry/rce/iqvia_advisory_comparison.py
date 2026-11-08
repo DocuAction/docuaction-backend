@@ -128,8 +128,24 @@ def address_outcome(entity_addr: Dict[str, Any],
     if e_zip is None and (e_state is None or e_city is None):
         return {"outcome": NOT_COMPARED, "reason": "DELIVERED_ADDRESS_UNUSABLE",
                 "iqvia_addresses": len(usable), "agreeing": 0}
+    # COMPARABLE, not merely usable (review finding 2026-11-08): a row is in
+    # the comparison only when it shares at least one comparable axis with the
+    # delivered address — a ZIP when the delivered record has one, or a
+    # complete city+state pair when the delivered record has both. A row with
+    # address data on a DIFFERENT axis (e.g. city/state only while the
+    # delivered record carries only a ZIP) proves nothing either way and must
+    # not be counted as "differs". Same axes, same normalizations, same
+    # agreement test as before — no new matching methodology.
+    comparable = [a for a in usable
+                  if (e_zip is not None and normalize_zip5(a.get("zip")))
+                  or (e_state is not None and e_city is not None
+                      and normalize_state(a.get("state"))
+                      and normalize_city(a.get("city")))]
+    if not comparable:
+        return {"outcome": NOT_COMPARED, "reason": "NO_COMPARABLE_FIELDS",
+                "iqvia_addresses": len(usable), "agreeing": 0}
     agreeing = 0
-    for a in usable:
+    for a in comparable:
         zip_match = e_zip is not None and normalize_zip5(a.get("zip")) == e_zip
         city_state_match = (e_state is not None and e_city is not None
                             and normalize_state(a.get("state")) == e_state
@@ -137,7 +153,8 @@ def address_outcome(entity_addr: Dict[str, Any],
         if zip_match or city_state_match:
             agreeing += 1
     return {"outcome": ADDRESS_CONSISTENT if agreeing else ADDRESS_DIFFERS,
-            "reason": None, "iqvia_addresses": len(usable), "agreeing": agreeing}
+            "reason": None, "iqvia_addresses": len(comparable),
+            "agreeing": agreeing}
 
 
 def presence_outcome(by_npi: Sequence[str], by_ccn: Sequence[str]) -> Dict[str, Any]:

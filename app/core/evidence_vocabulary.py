@@ -577,7 +577,7 @@ CLASSIFIER_SIGNAL_REGISTRY: Dict[str, SignalEntry] = {
         # direction logic); payload preserves raw values and the raw node
         # type as information, never as a gate. Supplemental NPPES/IQVIA/
         # vetting NPIs never fill the blank or suppress it. Consumed only by
-        # RULE-009 in the INACTIVE component `treatment_b4_owner_adopted` —
+        # the owner-adopted VERSION of RULE-006 in the INACTIVE component —
         # labelled the owner's adopted policy, not proof that every record
         # independently establishes an SOP breach.
         production_state=PRODUCIBLE,
@@ -589,8 +589,8 @@ CLASSIFIER_SIGNAL_REGISTRY: Dict[str, SignalEntry] = {
                      "(verify_and_classify, RULE-006 signal block)",
                      ("true",)),
         ),
-        unused_reason="Consumed only by RULE-009 in the INACTIVE component "
-                      "treatment_b4_owner_adopted; computed and inert until "
+        unused_reason="Consumed only by the owner-adopted RULE-006 version in the "
+                      "INACTIVE component treatment_b4_owner_adopted; computed and inert until "
                       "that component is activated under its recorded "
                       "approval.",
         note="Owner-adopted policy condition; node type is preserved as "
