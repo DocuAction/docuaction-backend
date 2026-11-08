@@ -643,6 +643,10 @@ class TestAdvisoryComparisonRoute:
             approved_at=(datetime.now(timezone.utc) if status == "APPROVED" else None),
             approved_role=("qalead" if status == "APPROVED" else None))
         db.add(snap)
+        # The route's audit commit makes these rows durable — register them
+        # with the file's existing cleanup so nothing leaks into the shared DB
+        # (review finding 2026-11-08).
+        _created_snapshot_ids.append(snap.id)
         return snap
 
     @staticmethod

@@ -350,8 +350,8 @@ async def activate_rule_configuration(session, approvals: Dict[str, str],
     for name, ref in approvals.items():
         await _validate_approval(session, name, ref)
 
-    from datetime import datetime as _dt
-    today_utc = _dt.utcnow().date()
+    from datetime import datetime as _dt, timezone as _tz
+    today_utc = _dt.now(_tz.utc).date()
     eff = effective or today_utc
     if eff > today_utc:
         raise ActivationRefused(

@@ -187,6 +187,13 @@ EXCLUSION_CLEAN_SCREEN_STATE = "clear"
 #: translator (bulk path here; persisted evidence on the manual path) change
 #: together; the manual LIVE probe's own literals ("excluded" for a CONFIRMED
 #: exclusion, "clear" for a clean screen) are untouched.
+#: GOVERNANCE COUPLING (review note 2026-11-08): this flag belongs to the
+#: `exclusion_candidate_b3` component and must only be set in the SAME
+#: activation act (the activation audit lists it under flag_envs_covered).
+#: Fail-safe if mis-set alone: candidates emit possible_match, which no v3
+#: rule consumes, so they route to RULE-004/B3-default — explicit review,
+#: never a pass and never a silent exclusion; the specific adjudication
+#: reason only appears once RULE-008 is active.
 PROPOSED_EXCLUSION_STATES_ENV = "RCE_PROPOSED_EXCLUSION_STATES"
 EXCLUSION_POSSIBLE_MATCH_STATE = "possible_match"
 
