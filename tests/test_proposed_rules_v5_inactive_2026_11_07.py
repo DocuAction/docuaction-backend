@@ -1,5 +1,9 @@
-"""The 2026-11-07 PROPOSED configuration (rule set v4 + flag-gated producers)
+"""The 2026-11-07 PROPOSED configuration (rule set v5 + flag-gated producers)
 is implemented, previewable — and INACTIVE.
+
+v5 STACKS ON v4: v4 (this PR's base branch, #200) adds RULE-006/007; v5
+derives from it and adds only the D-02/D-03/D-04 guards, so the two proposals
+share one lineage and can never define two different "version 4" rows.
 
 Decision pack 2026-11-07: D-02 (flagged vs confirmed-invalid NPI), D-03
 (FAILED is an answer, not an outage), D-04 (material conflict demotes B1/B2),
@@ -24,8 +28,9 @@ import pytest
 from app.tefca_registry.bucket_classifier import (
     SEED_RULES_V3,
     SEED_RULES_V4,
+    SEED_RULES_V5,
     BucketClassifier,
-    ensure_rules_v4,
+    ensure_rules_v5,
 )
 from app.tefca_registry.rce.arc_pipeline import (
     PROPOSED_NAME_MAJOR_BELOW_ENV,
@@ -54,18 +59,18 @@ def _classify(rules, results):
 
 # ── 1. the v4 delta is exactly the documented delta ──────────────────────────
 
-def test_v4_delta_is_only_the_documented_guards():
-    v3, v4 = _by_code(SEED_RULES_V3), _by_code(SEED_RULES_V4)
-    assert set(v3) == set(v4)
+def test_v5_delta_is_only_the_documented_guards():
+    v4, v5 = _by_code(SEED_RULES_V4), _by_code(SEED_RULES_V5)
+    assert set(v4) == set(v5)
 
-    # RULE-004 and RULE-005 are untouched.
-    for code in ("RULE-004", "RULE-005"):
-        assert v3[code]["conditions"] == v4[code]["conditions"]
+    # RULE-004, RULE-005 and v4's own RULE-006/007 are untouched.
+    for code in ("RULE-004", "RULE-005", "RULE-006", "RULE-007"):
+        assert v4[code]["conditions"] == v5[code]["conditions"]
 
     def added_none_of(code):
-        old = v3[code]["conditions"].get("none_of", [])
-        new = v4[code]["conditions"].get("none_of", [])
-        assert new[: len(old)] == old, f"{code}: v4 must only APPEND guards"
+        old = v4[code]["conditions"].get("none_of", [])
+        new = v5[code]["conditions"].get("none_of", [])
+        assert new[: len(old)] == old, f"{code}: v5 must only APPEND guards"
         return [c for c in new if c not in old]
 
     material = [
@@ -80,33 +85,35 @@ def test_v4_delta_is_only_the_documented_guards():
     ]
     assert added_none_of("RULE-003") == material
 
-    # Positive clauses are untouched everywhere: v4 can only EXCLUDE, never
-    # newly match something v3 would not have matched.
-    for code in v3:
+    # Positive clauses are untouched everywhere: v5 can only EXCLUDE, never
+    # newly match something v4 would not have matched.
+    for code in v4:
         for clause in ("all_of", "any_of", "any_unavailable"):
-            assert (v3[code]["conditions"].get(clause)
-                    == v4[code]["conditions"].get(clause)), (code, clause)
+            assert (v4[code]["conditions"].get(clause)
+                    == v5[code]["conditions"].get(clause)), (code, clause)
 
 
-# ── 2. nothing activates v4 ──────────────────────────────────────────────────
+# ── 2. nothing activates v5 ──────────────────────────────────────────────────
 
-def test_nothing_in_app_calls_ensure_rules_v4():
-    """`ensure_rules_v4` must be invoked by NO application code path — running
-    it is the governed activation step itself (Gate B/C)."""
+def test_nothing_in_app_calls_ensure_rules_v5():
+    """`ensure_rules_v5` must be invoked by NO application code path — running
+    it is the governed activation step itself (Gate B/C). (v4 deliberately HAS
+    one caller: the audited, confirm-literal admin activation route — that is
+    #200's reviewed design and is out of scope here.)"""
     offenders = []
     for py in APP_DIR.rglob("*.py"):
         text = py.read_text(encoding="utf-8", errors="replace")
-        if "ensure_rules_v4(" in text and py.name != "bucket_classifier.py":
+        if "ensure_rules_v5(" in text and py.name != "bucket_classifier.py":
             offenders.append(str(py))
-    assert not offenders, f"ensure_rules_v4 must stay uncalled: {offenders}"
+    assert not offenders, f"ensure_rules_v5 must stay uncalled: {offenders}"
 
 
 @pytest.mark.asyncio
-async def test_ensure_rules_v4_refuses_without_activation_record():
+async def test_ensure_rules_v5_refuses_without_activation_record():
     with pytest.raises(PermissionError):
-        await ensure_rules_v4(None)
+        await ensure_rules_v5(None)
     with pytest.raises(PermissionError):
-        await ensure_rules_v4(None, activation_record="   ")
+        await ensure_rules_v5(None, activation_record="   ")
 
 
 # ── 3. proposed rule behavior, measured ──────────────────────────────────────
@@ -122,7 +129,7 @@ def test_d03_failed_mandatory_source_blocks_partial_pass():
     results = {"sources": {"nppes": "verified", "oig_leie": "clear",
                            "pecos": "failed"}, "fields": {}}
     assert _classify(SEED_RULES_V3, results).bucket == "B1"
-    out = _classify(SEED_RULES_V4, results)
+    out = _classify(SEED_RULES_V5, results)
     assert out.bucket == "B3"
     assert out.rule_code is None  # honest default, not a silent pass
 
@@ -131,7 +138,7 @@ def test_d04_major_name_conflict_demotes_b1():
     results = _base_clean()
     results["fields"]["name_mismatch"] = {"severity": "major"}
     assert _classify(SEED_RULES_V3, results).bucket == "B1"
-    assert _classify(SEED_RULES_V4, results).bucket == "B3"
+    assert _classify(SEED_RULES_V5, results).bucket == "B3"
 
 
 def test_d04_major_address_conflict_cannot_pass_as_b1_or_b2():
@@ -143,17 +150,17 @@ def test_d04_major_address_conflict_cannot_pass_as_b1_or_b2():
                "fields": {"name_mismatch": {"severity": "minor"},
                           "address_mismatch": {"severity": "major"}}}
     assert _classify(SEED_RULES_V3, results).bucket == "B1"
-    assert _classify(SEED_RULES_V4, results).bucket == "B3"
+    assert _classify(SEED_RULES_V5, results).bucket == "B3"
 
 
 def test_d02_invalid_npi_is_b4_under_both_rule_sets():
-    """RULE-005 has carried the confirmed-invalid clause since v1; v4 adds only
+    """RULE-005 has carried the confirmed-invalid clause since v1; v5 adds only
     defense-in-depth guards. The change that makes it REACHABLE is the
     producer split (tested below), not a rule change."""
     results = _base_clean()
     results["fields"]["npi_validation"] = {"status": "invalid"}
     assert _classify(SEED_RULES_V3, results).bucket == "B4"
-    assert _classify(SEED_RULES_V4, results).bucket == "B4"
+    assert _classify(SEED_RULES_V5, results).bucket == "B4"
 
 
 EQUIVALENCE_BATTERY = [
@@ -191,20 +198,23 @@ EQUIVALENCE_BATTERY = [
 
 @pytest.mark.parametrize("desc,results", EQUIVALENCE_BATTERY,
                          ids=[d for d, _ in EQUIVALENCE_BATTERY])
-def test_v4_equals_v3_when_no_proposed_signal_is_present(desc, results):
+def test_v5_equals_v3_when_no_proposed_signal_is_present(desc, results):
+    """v5 includes v4's RULE-006/007, but those are gated on treatment signals
+    absent from every battery input — so the deployed v3 baseline must be
+    reproduced exactly. This is the flags-off equivalence check."""
     v3 = _classify(SEED_RULES_V3, results)
-    v4 = _classify(SEED_RULES_V4, results)
-    assert (v3.bucket, v3.rule_code) == (v4.bucket, v4.rule_code), desc
+    v5 = _classify(SEED_RULES_V5, results)
+    assert (v3.bucket, v3.rule_code) == (v5.bucket, v5.rule_code), desc
 
 
-def test_v4_name_major_guard_is_disclosed_not_hidden():
+def test_v5_name_major_guard_is_disclosed_not_hidden():
     """Until D-05 supplies a grading band, `name_mismatch == major` is
     value-unreachable on the active producer — and `condition_readiness` must
-    SAY so for the v4 rows rather than reporting them ready."""
+    SAY so for the v5 rows rather than reporting them ready."""
     from app.core.vocabulary_contract import READY, condition_readiness
-    rows = [r for r in condition_readiness(SEED_RULES_V4)
+    rows = [r for r in condition_readiness(SEED_RULES_V5)
             if r.signal == "name_mismatch" and r.expected_value == "major"]
-    assert rows, "the v4 guard must be visible to readiness reporting"
+    assert rows, "the v5 guard must be visible to readiness reporting"
     assert all(r.status != READY for r in rows)
 
 
@@ -263,7 +273,7 @@ def test_d02_split_emits_invalid_for_structurally_impossible(monkeypatch):
     # ...which is exactly what makes RULE-005's v1 clause reachable:
     results = _base_clean()
     results["fields"].update(out["fields"])
-    assert _classify(SEED_RULES_V4, results).bucket == "B4"
+    assert _classify(SEED_RULES_V5, results).bucket == "B4"
 
 
 # ── 5. D-12 pinned assessment date — reader semantics ────────────────────────

@@ -321,21 +321,113 @@ SEED_RULES_V3: List[dict] = _v3_rules()
 
 
 def _v4_rules() -> List[dict]:
-    """Version 4 — PROPOSED, INACTIVE. The 2026-11-07 decision-pack guards
+    """Version 4: adds RULE-006 (B4) and RULE-007 (B3 applicability review).
+
+    RULE-006 — active + exact T-TRTMNT purpose + NPI requirement in force +
+    missing SUBMITTED NPI + §7 INITIATING APPLICABILITY ESTABLISHED by the
+    delivered `organizationNodeType` -> B4. The signal's `status` is True
+    only when applicability is established, so unknown applicability can
+    never classify as confirmed non-compliance.
+
+    RULE-007 — the same record shape with the exchange direction NOT
+    documented in the delivery -> B3 "Treatment NPI applicability review",
+    an EXPLICIT review classification. Without it a direction-unknown
+    case-1 record with otherwise clean sources would fall through to
+    RULE-001 (priority 10) and classify B1 — a silent pass on an undecided
+    §7 question. Priority 7 sits between RULE-006 and the B1 rules so that
+    can never happen.
+
+    PROPOSED, NOT AUTO-ACTIVATED. Unlike v2/v3, `ensure_rules_v4` is NEVER
+    called by the pipeline's rule loader or any route-side ensure chain:
+    activating rules that classify ~700 October records is a methodology
+    decision (owner + independent QA), not a deploy side effect.
+    Activation is one explicit, audited admin action
+    (POST /api/tefca/arc/review-rules/activate-v4 with the confirm literal).
+
+    Priority 6: after RULE-005 (priority 5 — exclusions/debarment stay the
+    leading disqualifier), before every B1/B2/B3 rule.
+    The signal (`active_treatment_missing_required_npi`) is computed from
+    SUBMITTED values only (npi_applicability.assign_case, case 1; exact
+    T-TRTMNT token; T-TREAT is case 3 and never fires it; direction from
+    `organizationNodeType` only — nothing inferred from a blank role, a
+    Participant label or `initiatoronly`); an NPI available only through
+    supplemental evidence does not satisfy the submission requirement and
+    never suppresses the signal. Being HELD plays no part: holds are
+    promotion dispositions, not classifier inputs.
+    """
+    import copy
+    rules = copy.deepcopy(SEED_RULES_V3)
+    rules.append({
+        "rule_code": "RULE-006",
+        "name": "B4 Active Treatment Missing Required NPI",
+        "bucket": "B4",
+        "priority": 6,
+        "description": (
+            "Active record (active=1) claiming the exact T-TRTMNT exchange "
+            "purpose, operating a delivered initiating Principal Node "
+            "(organizationNodeType = initiating-node; §7 applicability "
+            "established, never assumed), with the NPI requirement in force "
+            "(BR-NPI-TRTMNT-001; "
+            "Treatment XP SOP v2.0 §7/§8) and no SUBMITTED NPI. The submitted "
+            "value is preserved verbatim in the signal payload; an NPI found "
+            "only through supplemental evidence (vetting exports, registry "
+            "candidates) does not satisfy the submission requirement and is "
+            "presented to the analyst, never substituted."),
+        "conditions": {
+            "all_of": [
+                {"field": "active_treatment_missing_required_npi", "status": True},
+            ],
+        },
+    })
+    rules.append({
+        "rule_code": "RULE-007",
+        "name": "B3 Treatment NPI Applicability Review",
+        "bucket": "B3",
+        "priority": 7,
+        "description": (
+            "Active record claiming the exact T-TRTMNT exchange purpose with "
+            "the submitted NPI missing and the requirement in force, but the "
+            "exchange direction NOT documented in the delivery "
+            "(organizationNodeType establishes no initiating Principal Node). "
+            "Whether the §7 obligation applies is unresolved: explicit "
+            "analyst applicability review. Unknown applicability is never "
+            "confirmed non-compliance (B4) and never a silent clean pass "
+            "(B1). Original submitted values are preserved verbatim in the "
+            "signal payload."),
+        "conditions": {
+            "all_of": [
+                {"field": "treatment_npi_applicability_unresolved", "status": True},
+            ],
+        },
+    })
+    return rules
+
+
+SEED_RULES_V4: List[dict] = _v4_rules()
+
+
+def _v5_rules() -> List[dict]:
+    """Version 5 — PROPOSED, INACTIVE. The 2026-11-07 decision-pack guards
     (D-02/D-03/D-04 there; methodology package D4/D5/D6 here), expressed as
     rule rows so the owner can review the exact behavior before any approval.
 
-    NOTHING ACTIVATES THIS AT STARTUP OR ON DEPLOY. `ensure_rules_v4` exists,
-    is called by no startup path, and refuses to run twice — activation is a
-    separate, recorded, governed step (Gate B/C), exactly as v2/v3 were. Until
-    then the active rule set is whatever the database holds today, unchanged.
+    STACKED ON v4 (RULE-006/007, itself proposed and unactivated): deriving
+    from SEED_RULES_V4 keeps exactly one lineage — v5 = treatment rules + the
+    guards below — so the two proposals can never define two different
+    "version 4" rows (the #200/#205 collision this numbering resolves).
 
-    Derived from SEED_RULES_V3 so the delta below is the entire change:
+    NOTHING ACTIVATES THIS AT STARTUP OR ON DEPLOY. `ensure_rules_v5` exists,
+    is called by no application path (v4 at least has its audited admin
+    activation route; v5 has none yet), and REFUSES to run without a recorded
+    activation identifier. Until then the active rule set is whatever the
+    database holds today, unchanged.
+
+    Derived from SEED_RULES_V4 so the delta below is the entire change:
 
       D-03 (methodology D4 — required source unavailable vs FAILED):
         RULE-002's partial pass treats `any_unavailable` hits — which include
         FAILED via NO_SIGNAL_STATES — as "the source told us nothing". A FAILED
-        check is not an outage: the check RAN and did not succeed. v4 adds
+        check is not an outage: the check RAN and did not succeed. v5 adds
         `none_of pecos/sam_gov == failed` so a FAILED mandatory source blocks
         the B1 partial pass instead of being swallowed by it. (The partial-pass
         basis is already recorded: matched_conditions lists every
@@ -343,7 +435,7 @@ def _v4_rules() -> List[dict]:
 
       D-04 (material conflict must demote B1/B2):
         First-match priority lets RULE-001/002 (B1) and RULE-003 (B2) fire
-        before any conflict signal is consulted. v4 adds
+        before any conflict signal is consulted. v5 adds
         `none_of name_mismatch==major / address_mismatch==major` to all three,
         so a material identity/address conflict routes to RULE-004/B3 review
         instead of passing. `address_mismatch: major` is produced today;
@@ -357,9 +449,9 @@ def _v4_rules() -> List[dict]:
         RCE path since v1 (the producer emits only "flagged"). The producer
         split is proposed in arc_pipeline behind PROPOSED_NPI_INVALID_SPLIT_ENV
         (invalid = structurally impossible: malformed or check-digit-failed).
-        v4 adds defense-in-depth `none_of npi_validation == invalid` to
+        v5 adds defense-in-depth `none_of npi_validation == invalid` to
         RULE-001/002/003, matching the v2/v3 pattern of not relying on
-        evaluation order alone. RULE-005 itself is unchanged.
+        evaluation order alone. RULE-005, RULE-006 and RULE-007 are unchanged.
     """
     import copy
 
@@ -382,7 +474,7 @@ def _v4_rules() -> List[dict]:
                 cond.setdefault(clause, []).append(c)
 
     out = []
-    for spec in copy.deepcopy(SEED_RULES_V3):
+    for spec in copy.deepcopy(SEED_RULES_V4):
         code = spec["rule_code"]
         cond = spec["conditions"]
         if code in ("RULE-001", "RULE-002", "RULE-003"):
@@ -393,7 +485,7 @@ def _v4_rules() -> List[dict]:
     return out
 
 
-SEED_RULES_V4: List[dict] = _v4_rules()
+SEED_RULES_V5: List[dict] = _v5_rules()
 
 
 class BucketClassifier:
@@ -762,30 +854,22 @@ async def ensure_rules_v3(session, effective: Optional[date] = None) -> int:
 
 
 async def ensure_rules_v4(session, effective: Optional[date] = None,
-                          *, activation_record: Optional[str] = None) -> int:
-    """Retire version 3 rules and activate version 4 (the 2026-11-07 proposed
-    guards — see `_v4_rules()`'s docstring).
+                          *, commit: bool = True) -> int:
+    """Retire version 3 rules and activate version 4 (RULE-006, the active-
+    Treatment missing-required-NPI B4 — see `_v4_rules()`'s docstring).
 
-    CALLED BY NOTHING. No startup path, scheduler, migration or route invokes
-    this. Running it is the governed activation step itself and requires the
-    recorded methodology approval (decision pack D-02/D-03/D-04) and release
-    authorization (Gate B/C) — which is why, unlike v2/v3, it REFUSES to run
-    without `activation_record`: the identifier of the recorded approval
-    (e.g. a decision-register entry or signed change record). Engineering
-    cannot and must not supply that identifier on its own authority.
-
-    Idempotent: returns 0 if any version-4 row already exists. v3 rows are
-    RETIRED, never deleted, same reasoning as `ensure_rules_v2`.
+    DELIBERATELY NOT in any automatic ensure chain. v2/v3 activate on first
+    use because they corrected the wiring of ALREADY-APPROVED rules; v4 adds
+    a NEW classification rule, and a new rule's activation is a methodology
+    decision taken by a person. The only caller is the explicit, audited,
+    admin-gated activation route. Idempotent: returns 0 if any version-4 row
+    already exists. v3 rows are RETIRED, never deleted, same audit reasoning
+    as `ensure_rules_v2`/`ensure_rules_v3` — and because `ensure_rules_v3`
+    checks row EXISTENCE (not activity), the pipeline's auto-ensure chain
+    can never re-activate v3 after this runs.
     """
     from sqlalchemy import func as sqlfunc, select
     from app.tefca_registry import models as reg
-
-    if not (activation_record or "").strip():
-        raise PermissionError(
-            "ensure_rules_v4 refused: rule-set v4 is a PROPOSAL. Activation "
-            "requires the recorded methodology approval for D-02/D-03/D-04 — "
-            "pass its identifier as activation_record. Elapsed time, CI "
-            "success or review silence are not approvals.")
 
     eff = effective or date.today()
     already = int((await session.execute(
@@ -804,10 +888,74 @@ async def ensure_rules_v4(session, effective: Optional[date] = None,
         session.add(reg.ReviewRule(
             rule_code=spec["rule_code"], name=spec["name"], bucket=spec["bucket"],
             priority=spec["priority"], conditions=spec["conditions"],
-            description=(f"{spec['description']} [v4 activation record: "
-                         f"{activation_record.strip()}]"),
-            version=4, effective_date=eff, is_active=True))
-    await session.commit()
-    logger.info("Retired %d v3 rules; activated %d v4 rules under record %s",
-                len(v3), len(SEED_RULES_V4), activation_record.strip())
+            description=spec["description"], version=4,
+            effective_date=eff, is_active=True))
+    # `commit=False` lets the activation route commit the rule change TOGETHER
+    # with its audit event — an activation with no audit row defeats the gate.
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
+    logger.info("Retired %d v3 rules; activated %d v4 rules",
+                len(v3), len(SEED_RULES_V4))
     return len(SEED_RULES_V4)
+
+
+async def ensure_rules_v5(session, effective: Optional[date] = None,
+                          *, activation_record: Optional[str] = None) -> int:
+    """Retire version 3/4 rules and activate version 5 (the 2026-11-07
+    proposed guards stacked on the treatment rules — see `_v5_rules()`).
+
+    CALLED BY NOTHING. No startup path, scheduler, migration or route invokes
+    this (unlike v4, which has its own audited admin activation route for the
+    RULE-006/007 decision). Running it is the governed activation step itself
+    and requires the recorded methodology approval (decision pack
+    D-02/D-03/D-04) and release authorization (Gate B/C) — which is why it
+    REFUSES to run without `activation_record`: the identifier of the
+    recorded approval (e.g. a decision-register entry or signed change
+    record). Engineering cannot and must not supply that identifier on its
+    own authority.
+
+    Retires BOTH v3 and v4 rows (whichever exist): v5 derives from v4, so a
+    direct v3 -> v5 activation also carries RULE-006/007 — stated here so the
+    activation decision covers both proposals explicitly, never implicitly.
+    Idempotent: returns 0 if any version-5 row already exists. Prior rows are
+    RETIRED, never deleted, same reasoning as `ensure_rules_v2`.
+    """
+    from sqlalchemy import func as sqlfunc, select
+    from app.tefca_registry import models as reg
+
+    if not (activation_record or "").strip():
+        raise PermissionError(
+            "ensure_rules_v5 refused: rule-set v5 is a PROPOSAL. Activation "
+            "requires the recorded methodology approval for D-02/D-03/D-04 "
+            "(and, because v5 contains RULE-006/007, the D-01 treatment "
+            "decision) — pass its identifier as activation_record. Elapsed "
+            "time, CI success or review silence are not approvals.")
+
+    eff = effective or date.today()
+    already = int((await session.execute(
+        select(sqlfunc.count()).select_from(reg.ReviewRule)
+        .where(reg.ReviewRule.version == 5))).scalar() or 0)
+    if already:
+        return 0
+
+    prior = (await session.execute(
+        select(reg.ReviewRule).where(reg.ReviewRule.version.in_((3, 4)),
+                                     reg.ReviewRule.is_active.is_(True))
+    )).scalars().all()
+    for row in prior:
+        row.is_active = False
+        row.retired_date = eff
+
+    for spec in SEED_RULES_V5:
+        session.add(reg.ReviewRule(
+            rule_code=spec["rule_code"], name=spec["name"], bucket=spec["bucket"],
+            priority=spec["priority"], conditions=spec["conditions"],
+            description=(f"{spec['description']} [v5 activation record: "
+                         f"{activation_record.strip()}]"),
+            version=5, effective_date=eff, is_active=True))
+    await session.commit()
+    logger.info("Retired %d v3/v4 rules; activated %d v5 rules under record %s",
+                len(prior), len(SEED_RULES_V5), activation_record.strip())
+    return len(SEED_RULES_V5)

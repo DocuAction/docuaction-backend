@@ -144,6 +144,8 @@ jobs:
             tests/test_release1_foundation.py \
             tests/test_contract_progress_reports.py \
             tests/test_sam_e2e_delivery_path.py \
+            tests/test_prior_risk_not_cleared_2026_10_04.py \
+            tests/test_treatment_b4_rule_v4_2026_11_06.py \
             tests/test_sam_manual_review_asymmetry.py \
             tests/test_npi_evidence_to_finding_workflow.py \
             tests/test_qhin_sampling_operational.py \

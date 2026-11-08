@@ -83,6 +83,33 @@ REVIEW_REQUIRED_REASON = ("unresolved blocking post-promotion finding "
                           "sample draws until resolved through the analyst/QA "
                           "workflow. Record, findings and history unchanged.")
 
+#: D-08 PROPOSED, INACTIVE by default. `verification_status == "in_review"` is
+#: an OVERLOADED value: `post_promotion_verification.record_finding` sets it
+#: for a blocking finding, but `arc_pipeline` ALSO writes it for every
+#: classification bucket other than B1 — so the status-based exclusion below
+#: keeps every B2/B3/B4-classified entity out of every new draw, not only the
+#: ones carrying an unresolved BLOCKING finding (the same overload
+#: `has_unresolved_blocking_finding`'s docstring records for the QA gate).
+#: When this env var is set truthy, eligibility excludes ONLY entities with an
+#: unresolved finding whose type is in the already-enumerated
+#: `BLOCKING_OUTCOMES` taxonomy (NPI_DEACTIVATED / INVALID_ACTIVE_IDENTIFIER /
+#: MATERIAL_IDENTIFIER_CONFLICT) — read from `rce_issues`, the table the
+#: resolve path itself maintains. Default OFF keeps today's broader exclusion
+#: byte-identical. May only be enabled under the recorded D-08 decision; the
+#: taxonomy is the one the approved blocking rule already names — no new
+#: reason vocabulary is invented here.
+PROPOSED_SAMPLING_BLOCKING_ONLY_ENV = "RCE_PROPOSED_SAMPLING_BLOCKING_ONLY"
+REVIEW_REQUIRED_REASON_BLOCKING_ONLY = (
+    "unresolved BLOCKING post-promotion finding (enumerated taxonomy, read "
+    "from rce_issues); excluded from new sample draws until resolved through "
+    "the analyst/QA workflow. Record, findings and history unchanged.")
+
+
+def _proposed_blocking_only() -> bool:
+    import os
+    return (os.getenv(PROPOSED_SAMPLING_BLOCKING_ONLY_ENV) or "").strip().lower() in (
+        "1", "true", "yes", "on")
+
 
 def plan_key(intake_id: Any, review_type: str, *, confidence: float,
              margin: float, proportion: float, use_fpc: bool,
@@ -157,13 +184,41 @@ async def resolve_qhin_strata(db, intake_id, *, include_held: bool = False
     # Reported as UNRESOLVED with a reason, never filtered away silently: the
     # entity stays in the ledger, the queue, reconciliation and the reports.
     from app.tefca_registry.rce.post_promotion_verification import (
-        REVIEW_REQUIRED_STATUS)
+        BLOCKING_OUTCOMES, REVIEW_REQUIRED_STATUS)
 
-    review_required = {
-        row[0] for row in (await db.execute(
-            select(reg.TefcaRegEntity.id).where(
-                reg.TefcaRegEntity.id.in_(promoted),
-                reg.TefcaRegEntity.verification_status == REVIEW_REQUIRED_STATUS))).all()}
+    blocking_only = _proposed_blocking_only()
+    if blocking_only:
+        # D-08 proposed semantics: only an unresolved finding of an enumerated
+        # BLOCKING type excludes — read from rce_issues (the table the resolve
+        # path maintains), never from the overloaded status flag.
+        #
+        # ENTITY-LEVEL, DELIBERATELY NOT INTAKE-SCOPED (review finding,
+        # 2026-11-08): `record_finding` attaches an issue to the entity's
+        # LATEST curated record, which may belong to a NEWER delivery than the
+        # one this plan is drawn on. Scoping this join to THIS intake's curated
+        # rows would miss that finding and freeze a blocked entity as eligible.
+        # The question is "does this ENTITY carry an unresolved blocking
+        # finding" — the same per-entity semantics
+        # `has_unresolved_blocking_finding` answers for the QA gate — so the
+        # issue join ranges over EVERY curated record of each promoted entity,
+        # whatever delivery the finding row landed on. The frame itself stays
+        # scoped to this delivery via `promoted`.
+        from app.tefca_registry.rce import curation as _curation
+        review_required = {
+            row[0] for row in (await db.execute(
+                select(m.RceCuratedRecord.canonical_entity_id).where(
+                    m.RceCuratedRecord.canonical_entity_id.in_(promoted),
+                    m.RceCuratedRecord.source_record_id.in_(
+                        select(m.RceIssue.source_record_id).where(
+                            m.RceIssue.issue_type.in_(sorted(BLOCKING_OUTCOMES)),
+                            m.RceIssue.resolution.in_(
+                                sorted(_curation.UNDECIDED_RESOLUTIONS))))))).all()}
+    else:
+        review_required = {
+            row[0] for row in (await db.execute(
+                select(reg.TefcaRegEntity.id).where(
+                    reg.TefcaRegEntity.id.in_(promoted),
+                    reg.TefcaRegEntity.verification_status == REVIEW_REQUIRED_STATUS))).all()}
 
     eligible: List[Dict[str, Any]] = []
     unresolved: List[Dict[str, Any]] = []
@@ -190,7 +245,9 @@ async def resolve_qhin_strata(db, intake_id, *, include_held: bool = False
         if entity_id in review_required:
             unresolved.append({**unit, "qhin": str(parents[0]),
                                "exclusion": EXCLUSION_REVIEW_REQUIRED,
-                               "reason": REVIEW_REQUIRED_REASON})
+                               "reason": (REVIEW_REQUIRED_REASON_BLOCKING_ONLY
+                                          if blocking_only
+                                          else REVIEW_REQUIRED_REASON)})
             continue
         eligible.append({**unit, "qhin": str(parents[0])})
     return eligible, unresolved
@@ -263,12 +320,20 @@ async def finalize_plan(db, intake_id, *, review_type: str = "quarterly",
                         seed: Optional[int] = None,
                         actor: Optional[str] = None,
                         actor_id: Optional[uuid.UUID] = None,
-                        sample_name: Optional[str] = None) -> Dict[str, Any]:
+                        sample_name: Optional[str] = None,
+                        full_population: bool = False) -> Dict[str, Any]:
     """Draw and FREEZE one official per-QHIN sample. Idempotent.
 
     Asking twice for the same plan returns the plan already drawn — it never
     redraws. That is the whole point of an official sample: the selection has to
     be the same tomorrow as it was when it was made.
+
+    `full_population=True` enumerates EVERY eligible unit instead of drawing a
+    statistical sample (selection algorithm FULL_POPULATION_ENUMERATION;
+    sample_size == population_size). A sample never implies coverage of the
+    records it did not draw — full-population classification must say so
+    honestly, as its own plan with its own key, never by relabelling a sample.
+    Eligibility, stratification, freezing, idempotence and audit are identical.
     """
     intake = await db.get(m.RceSourceIntake, intake_id)
     if intake is None:
@@ -277,6 +342,10 @@ async def finalize_plan(db, intake_id, *, review_type: str = "quarterly",
     key = plan_key(intake_id, review_type, confidence=confidence,
                    margin=margin, proportion=proportion, use_fpc=use_fpc,
                    include_held=include_held)
+    if full_population:
+        # Its own namespace: a full enumeration must never collide with (or
+        # silently reuse) a statistical plan drawn with the same parameters.
+        key = f"{key}|full_population"
 
     # One finaliser at a time per plan. Transaction-scoped, so a crash cannot
     # strand it. Without this two concurrent callers could both find no plan and
@@ -296,25 +365,59 @@ async def finalize_plan(db, intake_id, *, review_type: str = "quarterly",
             f"Delivery {intake_id} has no eligible population to sample under "
             f"the stated parameters; refusing to create an empty plan.")
 
-    # The statistics are the engine's. This module only says what to sample.
-    result = CochranSampler().draw_per_stratum(
-        eligible, stratum_of=lambda unit: unit["qhin"], seed=seed,
-        confidence=confidence, margin=margin, proportion=proportion,
-        use_fpc=use_fpc,
-        strata_config={"stratify_by": "managed_by_qhin",
-                       "plan_key": key,
-                       "plan_source": PLAN_SOURCE,
-                       "population_version": POPULATION_VERSION,
-                       "selection_algorithm": SELECTION_ALGORITHM,
-                       "source_intake_id": str(intake_id),
-                       "include_held": include_held,
-                       "unresolved_units": len(unresolved),
-                       "excluded_review_required": len(excluded)})
+    if full_population:
+        # No draw: the selection IS the eligible population, per stratum.
+        from types import SimpleNamespace
+        per_stratum: Dict[str, int] = {}
+        for unit in eligible:
+            per_stratum[unit["qhin"]] = per_stratum.get(unit["qhin"], 0) + 1
+        result = SimpleNamespace(
+            selected=list(eligible),
+            population_size=len(eligible),
+            sample_size=len(eligible),
+            confidence_level=1.0,   # an enumeration, not an estimate
+            margin_of_error=0.0,
+            proportion=proportion,
+            use_fpc=False,
+            random_seed=None,       # nothing random happened
+            strata_distribution=dict(per_stratum),
+            # Same keys as CochranSampler's sizing, so every consumer of
+            # per-stratum sizing reads both plan kinds identically.
+            stratum_sizing={q: {"population_size": n, "sample_size": n,
+                                "census": True}
+                            for q, n in per_stratum.items()},
+            strata_config={"stratify_by": "managed_by_qhin",
+                           "plan_key": key,
+                           "plan_source": PLAN_SOURCE,
+                           "population_version": POPULATION_VERSION,
+                           "selection_algorithm": "FULL_POPULATION_ENUMERATION",
+                           "source_intake_id": str(intake_id),
+                           "include_held": include_held,
+                           "full_population": True,
+                           "unresolved_units": len(unresolved),
+                           "excluded_review_required": len(excluded)})
+    else:
+        # The statistics are the engine's. This module only says what to sample.
+        result = CochranSampler().draw_per_stratum(
+            eligible, stratum_of=lambda unit: unit["qhin"], seed=seed,
+            confidence=confidence, margin=margin, proportion=proportion,
+            use_fpc=use_fpc,
+            strata_config={"stratify_by": "managed_by_qhin",
+                           "plan_key": key,
+                           "plan_source": PLAN_SOURCE,
+                           "population_version": POPULATION_VERSION,
+                           "selection_algorithm": SELECTION_ALGORITHM,
+                           "source_intake_id": str(intake_id),
+                           "include_held": include_held,
+                           "unresolved_units": len(unresolved),
+                           "excluded_review_required": len(excluded)})
 
     sample = reg.ReviewSample(
         id=uuid.uuid4(),
-        sample_name=sample_name or f"{PLAN_SOURCE} {review_type} "
-                                   f"{date.today().isoformat()}",
+        sample_name=sample_name or (
+            f"{PLAN_SOURCE} {review_type} "
+            f"{'FULL POPULATION ' if full_population else ''}"
+            f"{date.today().isoformat()}"),
         review_type=review_type,
         population_size=result.population_size,
         sample_size=result.sample_size,
