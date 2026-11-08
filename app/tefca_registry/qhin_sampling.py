@@ -191,12 +191,23 @@ async def resolve_qhin_strata(db, intake_id, *, include_held: bool = False
         # D-08 proposed semantics: only an unresolved finding of an enumerated
         # BLOCKING type excludes — read from rce_issues (the table the resolve
         # path maintains), never from the overloaded status flag.
+        #
+        # ENTITY-LEVEL, DELIBERATELY NOT INTAKE-SCOPED (review finding,
+        # 2026-11-08): `record_finding` attaches an issue to the entity's
+        # LATEST curated record, which may belong to a NEWER delivery than the
+        # one this plan is drawn on. Scoping this join to THIS intake's curated
+        # rows would miss that finding and freeze a blocked entity as eligible.
+        # The question is "does this ENTITY carry an unresolved blocking
+        # finding" — the same per-entity semantics
+        # `has_unresolved_blocking_finding` answers for the QA gate — so the
+        # issue join ranges over EVERY curated record of each promoted entity,
+        # whatever delivery the finding row landed on. The frame itself stays
+        # scoped to this delivery via `promoted`.
         from app.tefca_registry.rce import curation as _curation
         review_required = {
             row[0] for row in (await db.execute(
                 select(m.RceCuratedRecord.canonical_entity_id).where(
-                    m.RceCuratedRecord.source_intake_id == intake_id,
-                    m.RceCuratedRecord.canonical_entity_id.isnot(None),
+                    m.RceCuratedRecord.canonical_entity_id.in_(promoted),
                     m.RceCuratedRecord.source_record_id.in_(
                         select(m.RceIssue.source_record_id).where(
                             m.RceIssue.issue_type.in_(sorted(BLOCKING_OUTCOMES)),
