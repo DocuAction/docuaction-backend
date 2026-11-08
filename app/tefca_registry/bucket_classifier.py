@@ -320,6 +320,82 @@ def _v3_rules() -> List[dict]:
 SEED_RULES_V3: List[dict] = _v3_rules()
 
 
+def _v4_rules() -> List[dict]:
+    """Version 4 — PROPOSED, INACTIVE. The 2026-11-07 decision-pack guards
+    (D-02/D-03/D-04 there; methodology package D4/D5/D6 here), expressed as
+    rule rows so the owner can review the exact behavior before any approval.
+
+    NOTHING ACTIVATES THIS AT STARTUP OR ON DEPLOY. `ensure_rules_v4` exists,
+    is called by no startup path, and refuses to run twice — activation is a
+    separate, recorded, governed step (Gate B/C), exactly as v2/v3 were. Until
+    then the active rule set is whatever the database holds today, unchanged.
+
+    Derived from SEED_RULES_V3 so the delta below is the entire change:
+
+      D-03 (methodology D4 — required source unavailable vs FAILED):
+        RULE-002's partial pass treats `any_unavailable` hits — which include
+        FAILED via NO_SIGNAL_STATES — as "the source told us nothing". A FAILED
+        check is not an outage: the check RAN and did not succeed. v4 adds
+        `none_of pecos/sam_gov == failed` so a FAILED mandatory source blocks
+        the B1 partial pass instead of being swallowed by it. (The partial-pass
+        basis is already recorded: matched_conditions lists every
+        "<source> did not answer".)
+
+      D-04 (material conflict must demote B1/B2):
+        First-match priority lets RULE-001/002 (B1) and RULE-003 (B2) fire
+        before any conflict signal is consulted. v4 adds
+        `none_of name_mismatch==major / address_mismatch==major` to all three,
+        so a material identity/address conflict routes to RULE-004/B3 review
+        instead of passing. `address_mismatch: major` is produced today;
+        `name_mismatch: major` is produced only under the D-05 proposed
+        grading (see arc_pipeline PROPOSED_NAME_MAJOR_BELOW_ENV) — until that
+        methodology decision lands, the name guard is disclosed as
+        value-unreachable by `condition_readiness`, never hidden.
+
+      D-02 (methodology D6 — flagged vs confirmed-invalid NPI):
+        RULE-005's `npi_validation == invalid` clause has been dead on the
+        RCE path since v1 (the producer emits only "flagged"). The producer
+        split is proposed in arc_pipeline behind PROPOSED_NPI_INVALID_SPLIT_ENV
+        (invalid = structurally impossible: malformed or check-digit-failed).
+        v4 adds defense-in-depth `none_of npi_validation == invalid` to
+        RULE-001/002/003, matching the v2/v3 pattern of not relying on
+        evaluation order alone. RULE-005 itself is unchanged.
+    """
+    import copy
+
+    MATERIAL_CONFLICTS = [
+        {"field": "name_mismatch", "severity": "major"},
+        {"field": "address_mismatch", "severity": "major"},
+        {"field": "npi_validation", "status": "invalid"},
+    ]
+    MANDATORY_FAILED = [{"source": "pecos", "status": "failed"},
+                        {"source": "sam_gov", "status": "failed"}]
+
+    def _add(cond: dict, clause: str, items: List[dict]) -> None:
+        existing = [(c.get("source"), c.get("field"), c.get("status"),
+                     c.get("severity")) for c in cond.get(clause, [])
+                    if isinstance(c, dict)]
+        for c in items:
+            key = (c.get("source"), c.get("field"), c.get("status"),
+                   c.get("severity"))
+            if key not in existing:
+                cond.setdefault(clause, []).append(c)
+
+    out = []
+    for spec in copy.deepcopy(SEED_RULES_V3):
+        code = spec["rule_code"]
+        cond = spec["conditions"]
+        if code in ("RULE-001", "RULE-002", "RULE-003"):
+            _add(cond, "none_of", MATERIAL_CONFLICTS)
+        if code == "RULE-002":
+            _add(cond, "none_of", MANDATORY_FAILED)
+        out.append(spec)
+    return out
+
+
+SEED_RULES_V4: List[dict] = _v4_rules()
+
+
 class BucketClassifier:
     """Evaluates verification results against the active rule set.
 
@@ -683,3 +759,55 @@ async def ensure_rules_v3(session, effective: Optional[date] = None) -> int:
     logger.info("Retired %d v2 rules; activated %d v3 rules",
                 len(v2), len(SEED_RULES_V3))
     return len(SEED_RULES_V3)
+
+
+async def ensure_rules_v4(session, effective: Optional[date] = None,
+                          *, activation_record: Optional[str] = None) -> int:
+    """Retire version 3 rules and activate version 4 (the 2026-11-07 proposed
+    guards — see `_v4_rules()`'s docstring).
+
+    CALLED BY NOTHING. No startup path, scheduler, migration or route invokes
+    this. Running it is the governed activation step itself and requires the
+    recorded methodology approval (decision pack D-02/D-03/D-04) and release
+    authorization (Gate B/C) — which is why, unlike v2/v3, it REFUSES to run
+    without `activation_record`: the identifier of the recorded approval
+    (e.g. a decision-register entry or signed change record). Engineering
+    cannot and must not supply that identifier on its own authority.
+
+    Idempotent: returns 0 if any version-4 row already exists. v3 rows are
+    RETIRED, never deleted, same reasoning as `ensure_rules_v2`.
+    """
+    from sqlalchemy import func as sqlfunc, select
+    from app.tefca_registry import models as reg
+
+    if not (activation_record or "").strip():
+        raise PermissionError(
+            "ensure_rules_v4 refused: rule-set v4 is a PROPOSAL. Activation "
+            "requires the recorded methodology approval for D-02/D-03/D-04 — "
+            "pass its identifier as activation_record. Elapsed time, CI "
+            "success or review silence are not approvals.")
+
+    eff = effective or date.today()
+    already = int((await session.execute(
+        select(sqlfunc.count()).select_from(reg.ReviewRule)
+        .where(reg.ReviewRule.version == 4))).scalar() or 0)
+    if already:
+        return 0
+
+    v3 = (await session.execute(
+        select(reg.ReviewRule).where(reg.ReviewRule.version == 3))).scalars().all()
+    for row in v3:
+        row.is_active = False
+        row.retired_date = eff
+
+    for spec in SEED_RULES_V4:
+        session.add(reg.ReviewRule(
+            rule_code=spec["rule_code"], name=spec["name"], bucket=spec["bucket"],
+            priority=spec["priority"], conditions=spec["conditions"],
+            description=(f"{spec['description']} [v4 activation record: "
+                         f"{activation_record.strip()}]"),
+            version=4, effective_date=eff, is_active=True))
+    await session.commit()
+    logger.info("Retired %d v3 rules; activated %d v4 rules under record %s",
+                len(v3), len(SEED_RULES_V4), activation_record.strip())
+    return len(SEED_RULES_V4)

@@ -74,6 +74,19 @@ from app.tefca_registry import audit as reg_audit
 from app.tefca_registry import models as reg
 from app.tefca_registry.rce import models as m
 
+#: D-15 PROPOSED, INACTIVE by default: when set truthy, review-cycle
+#: verification SKIPS members whose curated record is currently HELD
+#: (including promoted-then-re-HELD), recording VERIFY_SKIPPED_HELD per member.
+#: HELD is a processing state, never a bucket. May only be set under the
+#: recorded D-15 decision.
+PROPOSED_VERIFY_SKIP_HELD_ENV = "RCE_PROPOSED_VERIFY_SKIP_HELD"
+
+
+def _proposed_verify_skip_held() -> bool:
+    import os
+    return (os.getenv(PROPOSED_VERIFY_SKIP_HELD_ENV) or "").strip().lower() in (
+        "1", "true", "yes", "on")
+
 logger = logging.getLogger(__name__)
 
 #: The queue_source stamped on every review case created from an official
@@ -191,14 +204,47 @@ async def create_review_cycle(
         if this_call:
             refs = await _refs_for(db, intake_id,
                                    [member.entity_id for member in this_call])
+
+            # D-15 PROPOSED, INACTIVE by default: a record whose curated row is
+            # currently HELD — including promoted-then-re-HELD after the plan
+            # was drawn — is a processing state, not a classifiable member.
+            # When the flag is on it is SKIPPED with a recorded reason, never
+            # silently dropped: the summary and the audit row both carry the
+            # skipped ids, so coverage can account for them. Default-off keeps
+            # today's behavior byte-identical. May only be enabled under the
+            # recorded D-15 decision.
+            skipped_held: List[str] = []
+            if _proposed_verify_skip_held():
+                held_ids = set((await db.execute(
+                    select(m.RceCuratedRecord.canonical_entity_id)
+                    .where(m.RceCuratedRecord.source_intake_id == intake_id,
+                           m.RceCuratedRecord.canonical_entity_id.in_(
+                               list(refs.keys())),
+                           m.RceCuratedRecord.record_status == "HELD")
+                )).scalars().all())
+                if held_ids:
+                    skipped_held = sorted(str(e) for e in held_ids)
+                    refs = {eid: ref for eid, ref in refs.items()
+                            if eid not in held_ids}
+                    logger.info(
+                        "review cycle %s: %d member(s) skipped — curated "
+                        "record currently HELD (VERIFY_SKIPPED_HELD)",
+                        intake_id, len(skipped_held))
+
             member_by_entity = {member.entity_id: member for member in this_call}
             ref_to_entity = {ref: eid for eid, ref in refs.items()}
 
             result = await verify_and_classify(
                 db, list(refs.values()), intake_id=intake_id,
                 actor=actor_email or "SYSTEM")
+            if skipped_held:
+                result["skipped_held"] = skipped_held
+                result["skipped_held_reason"] = "VERIFY_SKIPPED_HELD"
             verified = {k: result.get(k) for k in
                         ("requested", "verified", "unresolved", "bucket_counts")}
+            if skipped_held:
+                verified["skipped_held"] = skipped_held
+                verified["skipped_held_reason"] = "VERIFY_SKIPPED_HELD"
 
             # verify_and_classify has committed its ReviewRecords. Link them.
             for outcome in result.get("outcomes", []):

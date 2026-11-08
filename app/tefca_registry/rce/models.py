@@ -208,6 +208,13 @@ class RceIngestionRun(Base):
     executed_by = Column(Text, nullable=False, server_default=text("'SYSTEM'"))
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
+    #: D-12 — what date this run assessed AS OF, where that date came from
+    #: (run_start | pinned_param | pinned_env), and which date-gated rule bases
+    #: were active (BR-NPI-TRTMNT basis; six-case logic). Written on every run
+    #: so a historical result is explainable without re-deriving the gates.
+    #: Nullable: rows from before the column exist unannotated, honestly.
+    assessment_metadata = Column(JSONB)
+
     __table_args__ = (
         Index("idx_rce_run_intake_started", "source_intake_id", "started_at"),
         Index("idx_rce_run_status", "run_status"),

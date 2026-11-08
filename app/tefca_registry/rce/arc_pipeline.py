@@ -266,6 +266,50 @@ EMITTED_FIELD_SIGNALS: Dict[str, str] = {
     if any(p.path == _PATH_RCE for p in entry.producers)
 }
 
+# ── PROPOSED producer behaviors (2026-11-07 decision pack) — INACTIVE ─────────
+#
+# Both default OFF and change nothing until the named env var is set, which is
+# itself gated on the recorded methodology decision. They exist so the owner
+# can preview the exact proposed behavior (Gate A) without any active change.
+#
+#: D-02 (methodology D6): when set truthy, a structurally impossible NPI
+#: (NPI_MALFORMED / NPI_CHECK_DIGIT_FAILED — both structural by definition)
+#: emits `npi_validation == "invalid"` instead of "flagged", making RULE-005's
+#: confirmed-invalid clause reachable on this path. "flagged" remains the
+#: vocabulary for valid-form-but-suspect identifiers.
+PROPOSED_NPI_INVALID_SPLIT_ENV = "RCE_PROPOSED_NPI_INVALID_SPLIT"
+
+#: D-05 (methodology D5): when set to a float in [0,1], a legal-name conflict
+#: whose NPPES similarity is BELOW the value emits severity "major" instead of
+#: the hardcoded "minor". NO default band exists here — the threshold is a
+#: methodology number and must come from the recorded D-05 decision, never
+#: from engineering. Unset or unparseable → behavior unchanged.
+PROPOSED_NAME_MAJOR_BELOW_ENV = "RCE_PROPOSED_NAME_MAJOR_BELOW"
+
+
+def _proposed_npi_invalid_split_on() -> bool:
+    import os
+    return (os.getenv(PROPOSED_NPI_INVALID_SPLIT_ENV) or "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _proposed_name_major_below() -> Optional[float]:
+    import os
+    raw = (os.getenv(PROPOSED_NAME_MAJOR_BELOW_ENV) or "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.error("%s=%r is not a float; D-05 proposed grading stays OFF",
+                     PROPOSED_NAME_MAJOR_BELOW_ENV, raw)
+        return None
+    if not (0.0 <= value <= 1.0):
+        logger.error("%s=%r is outside [0,1]; D-05 proposed grading stays OFF",
+                     PROPOSED_NAME_MAJOR_BELOW_ENV, raw)
+        return None
+    return value
+
 
 def dimensions_to_verification_results(evidence: Dict[str, Any]) -> Dict[str, Any]:
     """Translate assembled D1-D6 evidence into the classifier's input shape.
@@ -349,12 +393,30 @@ def dimensions_to_verification_results(evidence: Dict[str, Any]) -> Dict[str, An
             # docs/methodology_decision_package.md (Decision D5).
             conflicts = [c for i in dimension.get("evidence", [])
                          for c in (i.get("field_conflicts") or [])]
-            if any((c.get("field") or "") == IDENTITY_NAME_FIELD for c in conflicts):
-                fields["name_mismatch"] = {"severity": "minor"}
+            name_conflicts = [c for c in conflicts
+                              if (c.get("field") or "") == IDENTITY_NAME_FIELD]
+            if name_conflicts:
+                severity = "minor"
+                # D-05 PROPOSED grading — inactive unless the methodology
+                # decision supplies the band via env (see
+                # PROPOSED_NAME_MAJOR_BELOW_ENV). The evidence item already
+                # carries the rounded similarity; a conflict with no recorded
+                # similarity is never upgraded on a missing number.
+                major_below = _proposed_name_major_below()
+                if major_below is not None:
+                    sims = [c.get("similarity") for c in name_conflicts
+                            if isinstance(c.get("similarity"), (int, float))]
+                    if sims and min(sims) < major_below:
+                        severity = "major"
+                fields["name_mismatch"] = {"severity": severity}
 
     quality = evidence.get("data_quality_flags") or []
     if "NPI_MALFORMED" in quality or "NPI_CHECK_DIGIT_FAILED" in quality:
-        fields["npi_validation"] = {"status": "flagged"}
+        # D-02 PROPOSED split — inactive by default. Structurally impossible
+        # (malformed / check-digit-failed) is "invalid"; "flagged" stays the
+        # valid-form-but-suspect vocabulary.
+        fields["npi_validation"] = {
+            "status": "invalid" if _proposed_npi_invalid_split_on() else "flagged"}
 
     return {"sources": sources, "fields": fields, "dimensions": dimension_view}
 

@@ -439,9 +439,14 @@ CLASSIFIER_SIGNAL_REGISTRY: Dict[str, SignalEntry] = {
                      ("minor",)),
         ),
         blocking_decision="D5",
-        note="Producible and consumed by RULE-003. Only 'minor' is ever emitted: "
-             "the severity is a hardcoded constant because the grading scale "
-             "(NAME_EXACT .. NAME_AMBIGUOUS) is unapproved. D5.",
+        note="Producible and consumed by RULE-003. Only 'minor' is emitted on "
+             "the ACTIVE system: the severity is a hardcoded constant because "
+             "the grading scale (NAME_EXACT .. NAME_AMBIGUOUS) is unapproved. "
+             "A PROPOSED, default-off grading exists behind arc_pipeline "
+             "PROPOSED_NAME_MAJOR_BELOW_ENV (no built-in band; the number must "
+             "come from the recorded D5 decision). This entry records ACTIVE "
+             "emission only; update it in the same governed step that enables "
+             "the flag. D5.",
     ),
     "npi_validation": SignalEntry(
         # PRODUCIBLE — and this is the correction that matters. Two producers
@@ -464,7 +469,12 @@ CLASSIFIER_SIGNAL_REGISTRY: Dict[str, SignalEntry] = {
              "NPI_MALFORMED / NPI_CHECK_DIGIT_FAILED, and the registry path emits "
              "'valid'/'invalid' from validate_npi(). The two vocabularies have "
              "never met, and what either means for B1-B4 is D6. No INVALID -> B4 "
-             "or FLAGGED -> bucket mapping is defined here.",
+             "or FLAGGED -> bucket mapping is defined here. A PROPOSED, "
+             "default-off split exists behind arc_pipeline "
+             "PROPOSED_NPI_INVALID_SPLIT_ENV (structurally impossible -> "
+             "'invalid'); this entry records ACTIVE emission only; update it in "
+             "the same governed step that enables the flag under the recorded "
+             "D6 decision.",
     ),
     "taxonomy_mismatch": SignalEntry(
         production_state=DECLARED_UNAVAILABLE,

@@ -1,0 +1,294 @@
+"""The 2026-11-07 PROPOSED configuration (rule set v4 + flag-gated producers)
+is implemented, previewable — and INACTIVE.
+
+Decision pack 2026-11-07: D-02 (flagged vs confirmed-invalid NPI), D-03
+(FAILED is an answer, not an outage), D-04 (material conflict demotes B1/B2),
+D-05 (name severity grading), D-12 (pinned assessment-as-of), D-15 (verify
+skips HELD). Methodology package equivalents: D6, D4, D5.
+
+Every test here protects one of two claims:
+  1. DEFAULT-OFF: with no flag set and no v4 activation, behavior is
+     byte-identical to today.
+  2. PROPOSED BEHAVIOR: under the inactive configuration, each decision's
+     recommended wording does exactly what it says — so the owner can approve
+     the measured behavior, not a description of it.
+"""
+
+from __future__ import annotations
+
+import pathlib
+from datetime import date, timedelta
+
+import pytest
+
+from app.tefca_registry.bucket_classifier import (
+    SEED_RULES_V3,
+    SEED_RULES_V4,
+    BucketClassifier,
+    ensure_rules_v4,
+)
+from app.tefca_registry.rce.arc_pipeline import (
+    PROPOSED_NAME_MAJOR_BELOW_ENV,
+    PROPOSED_NPI_INVALID_SPLIT_ENV,
+    dimensions_to_verification_results,
+)
+from app.tefca_registry.rce.quality_engine import (
+    PROPOSED_ASSESSMENT_AS_OF_ENV,
+    _proposed_assessment_as_of,
+)
+from app.tefca_registry.review_cycle import (
+    PROPOSED_VERIFY_SKIP_HELD_ENV,
+    _proposed_verify_skip_held,
+)
+
+APP_DIR = pathlib.Path(__file__).resolve().parents[1] / "app"
+
+
+def _by_code(rules):
+    return {r["rule_code"]: r for r in rules}
+
+
+def _classify(rules, results):
+    return BucketClassifier(rules=[{**r, "version": 99} for r in rules]).classify(results)
+
+
+# ── 1. the v4 delta is exactly the documented delta ──────────────────────────
+
+def test_v4_delta_is_only_the_documented_guards():
+    v3, v4 = _by_code(SEED_RULES_V3), _by_code(SEED_RULES_V4)
+    assert set(v3) == set(v4)
+
+    # RULE-004 and RULE-005 are untouched.
+    for code in ("RULE-004", "RULE-005"):
+        assert v3[code]["conditions"] == v4[code]["conditions"]
+
+    def added_none_of(code):
+        old = v3[code]["conditions"].get("none_of", [])
+        new = v4[code]["conditions"].get("none_of", [])
+        assert new[: len(old)] == old, f"{code}: v4 must only APPEND guards"
+        return [c for c in new if c not in old]
+
+    material = [
+        {"field": "name_mismatch", "severity": "major"},
+        {"field": "address_mismatch", "severity": "major"},
+        {"field": "npi_validation", "status": "invalid"},
+    ]
+    assert added_none_of("RULE-001") == material
+    assert added_none_of("RULE-002") == material + [
+        {"source": "pecos", "status": "failed"},
+        {"source": "sam_gov", "status": "failed"},
+    ]
+    assert added_none_of("RULE-003") == material
+
+    # Positive clauses are untouched everywhere: v4 can only EXCLUDE, never
+    # newly match something v3 would not have matched.
+    for code in v3:
+        for clause in ("all_of", "any_of", "any_unavailable"):
+            assert (v3[code]["conditions"].get(clause)
+                    == v4[code]["conditions"].get(clause)), (code, clause)
+
+
+# ── 2. nothing activates v4 ──────────────────────────────────────────────────
+
+def test_nothing_in_app_calls_ensure_rules_v4():
+    """`ensure_rules_v4` must be invoked by NO application code path — running
+    it is the governed activation step itself (Gate B/C)."""
+    offenders = []
+    for py in APP_DIR.rglob("*.py"):
+        text = py.read_text(encoding="utf-8", errors="replace")
+        if "ensure_rules_v4(" in text and py.name != "bucket_classifier.py":
+            offenders.append(str(py))
+    assert not offenders, f"ensure_rules_v4 must stay uncalled: {offenders}"
+
+
+@pytest.mark.asyncio
+async def test_ensure_rules_v4_refuses_without_activation_record():
+    with pytest.raises(PermissionError):
+        await ensure_rules_v4(None)
+    with pytest.raises(PermissionError):
+        await ensure_rules_v4(None, activation_record="   ")
+
+
+# ── 3. proposed rule behavior, measured ──────────────────────────────────────
+
+def _base_clean():
+    return {"sources": {"nppes": "verified", "oig_leie": "clear",
+                        "pecos": "verified"}, "fields": {}}
+
+
+def test_d03_failed_mandatory_source_blocks_partial_pass():
+    """v3: a FAILED PECOS still partial-passes B1 (FAILED counts as 'did not
+    answer'). v4: the same input routes to B3 review."""
+    results = {"sources": {"nppes": "verified", "oig_leie": "clear",
+                           "pecos": "failed"}, "fields": {}}
+    assert _classify(SEED_RULES_V3, results).bucket == "B1"
+    out = _classify(SEED_RULES_V4, results)
+    assert out.bucket == "B3"
+    assert out.rule_code is None  # honest default, not a silent pass
+
+
+def test_d04_major_name_conflict_demotes_b1():
+    results = _base_clean()
+    results["fields"]["name_mismatch"] = {"severity": "major"}
+    assert _classify(SEED_RULES_V3, results).bucket == "B1"
+    assert _classify(SEED_RULES_V4, results).bucket == "B3"
+
+
+def test_d04_major_address_conflict_cannot_pass_as_b1_or_b2():
+    """A minor name variance plus a MAJOR address conflict passes as B1 under
+    v3 — RULE-001's first-match priority never consults the conflict signals
+    at all (the precise D-04 defect). v4 routes it to review."""
+    results = {"sources": {"nppes": "verified", "oig_leie": "clear",
+                           "pecos": "verified"},
+               "fields": {"name_mismatch": {"severity": "minor"},
+                          "address_mismatch": {"severity": "major"}}}
+    assert _classify(SEED_RULES_V3, results).bucket == "B1"
+    assert _classify(SEED_RULES_V4, results).bucket == "B3"
+
+
+def test_d02_invalid_npi_is_b4_under_both_rule_sets():
+    """RULE-005 has carried the confirmed-invalid clause since v1; v4 adds only
+    defense-in-depth guards. The change that makes it REACHABLE is the
+    producer split (tested below), not a rule change."""
+    results = _base_clean()
+    results["fields"]["npi_validation"] = {"status": "invalid"}
+    assert _classify(SEED_RULES_V3, results).bucket == "B4"
+    assert _classify(SEED_RULES_V4, results).bucket == "B4"
+
+
+EQUIVALENCE_BATTERY = [
+    # (description, results) — no proposed signal present, so v3 == v4.
+    ("all clean", _base_clean()),
+    ("partial pass: pecos not_checked",
+     {"sources": {"nppes": "verified", "oig_leie": "clear",
+                  "pecos": "not_checked"}, "fields": {}}),
+    ("partial pass: pecos unavailable",
+     {"sources": {"nppes": "verified", "oig_leie": "clear",
+                  "pecos": "unavailable"}, "fields": {}}),
+    ("minor name variance",
+     {"sources": {"nppes": "verified", "oig_leie": "clear",
+                  "pecos": "verified"},
+      "fields": {"name_mismatch": {"severity": "minor"}}}),
+    ("minor address variance",
+     {"sources": {"nppes": "verified", "oig_leie": "clear",
+                  "pecos": "verified"},
+      "fields": {"address_mismatch": {"severity": "minor"}}}),
+    ("LEIE excluded",
+     {"sources": {"nppes": "verified", "oig_leie": "excluded",
+                  "pecos": "verified"}, "fields": {}}),
+    ("pending exclusion review (not_found)",
+     {"sources": {"nppes": "verified", "oig_leie": "clear",
+                  "sam_gov": "not_found"}, "fields": {}}),
+    ("NPPES not found",
+     {"sources": {"nppes": "not_found", "oig_leie": "clear"}, "fields": {}}),
+    ("flagged NPI",
+     {"sources": {"nppes": "verified", "oig_leie": "clear",
+                  "pecos": "verified"},
+      "fields": {"npi_validation": {"status": "flagged"}}}),
+    ("nothing checked", {"sources": {}, "fields": {}}),
+]
+
+
+@pytest.mark.parametrize("desc,results", EQUIVALENCE_BATTERY,
+                         ids=[d for d, _ in EQUIVALENCE_BATTERY])
+def test_v4_equals_v3_when_no_proposed_signal_is_present(desc, results):
+    v3 = _classify(SEED_RULES_V3, results)
+    v4 = _classify(SEED_RULES_V4, results)
+    assert (v3.bucket, v3.rule_code) == (v4.bucket, v4.rule_code), desc
+
+
+def test_v4_name_major_guard_is_disclosed_not_hidden():
+    """Until D-05 supplies a grading band, `name_mismatch == major` is
+    value-unreachable on the active producer — and `condition_readiness` must
+    SAY so for the v4 rows rather than reporting them ready."""
+    from app.core.vocabulary_contract import READY, condition_readiness
+    rows = [r for r in condition_readiness(SEED_RULES_V4)
+            if r.signal == "name_mismatch" and r.expected_value == "major"]
+    assert rows, "the v4 guard must be visible to readiness reporting"
+    assert all(r.status != READY for r in rows)
+
+
+# ── 4. proposed producers, flag-gated, default OFF ───────────────────────────
+
+def _identity_evidence(similarity):
+    return {"dimensions": [{
+        "dimension": "IDENTITY", "disposition": "REVIEW", "applicability": "APPLICABLE",
+        "evidence": [{
+            "source": "NPPES", "disposition": "PASS",
+            "field_conflicts": [{"field": "legal_name", "submitted": "A",
+                                 "nppes": "B", "result": "DIFFERS",
+                                 "similarity": similarity}],
+        }],
+    }]}
+
+
+def test_d05_default_severity_stays_hardcoded_minor(monkeypatch):
+    monkeypatch.delenv(PROPOSED_NAME_MAJOR_BELOW_ENV, raising=False)
+    out = dimensions_to_verification_results(_identity_evidence(0.12))
+    assert out["fields"]["name_mismatch"] == {"severity": "minor"}
+
+
+def test_d05_band_from_env_grades_major_below_and_minor_at_or_above(monkeypatch):
+    monkeypatch.setenv(PROPOSED_NAME_MAJOR_BELOW_ENV, "0.5")
+    assert dimensions_to_verification_results(
+        _identity_evidence(0.32))["fields"]["name_mismatch"] == {"severity": "major"}
+    assert dimensions_to_verification_results(
+        _identity_evidence(0.5))["fields"]["name_mismatch"] == {"severity": "minor"}
+    # A conflict with no recorded similarity is never upgraded on a missing number.
+    assert dimensions_to_verification_results(
+        _identity_evidence(None))["fields"]["name_mismatch"] == {"severity": "minor"}
+
+
+@pytest.mark.parametrize("bad", ["abc", "-0.1", "1.5", ""])
+def test_d05_invalid_band_means_grading_stays_off(monkeypatch, bad):
+    monkeypatch.setenv(PROPOSED_NAME_MAJOR_BELOW_ENV, bad)
+    out = dimensions_to_verification_results(_identity_evidence(0.01))
+    assert out["fields"]["name_mismatch"] == {"severity": "minor"}
+
+
+def _structural_npi_evidence():
+    return {"dimensions": [], "data_quality_flags": ["NPI_CHECK_DIGIT_FAILED"]}
+
+
+def test_d02_default_structural_npi_stays_flagged(monkeypatch):
+    monkeypatch.delenv(PROPOSED_NPI_INVALID_SPLIT_ENV, raising=False)
+    out = dimensions_to_verification_results(_structural_npi_evidence())
+    assert out["fields"]["npi_validation"] == {"status": "flagged"}
+
+
+def test_d02_split_emits_invalid_for_structurally_impossible(monkeypatch):
+    monkeypatch.setenv(PROPOSED_NPI_INVALID_SPLIT_ENV, "1")
+    out = dimensions_to_verification_results(_structural_npi_evidence())
+    assert out["fields"]["npi_validation"] == {"status": "invalid"}
+    # ...which is exactly what makes RULE-005's v1 clause reachable:
+    results = _base_clean()
+    results["fields"].update(out["fields"])
+    assert _classify(SEED_RULES_V4, results).bucket == "B4"
+
+
+# ── 5. D-12 pinned assessment date — reader semantics ────────────────────────
+
+def test_d12_env_reader_accepts_only_a_past_or_today_iso_date(monkeypatch):
+    monkeypatch.delenv(PROPOSED_ASSESSMENT_AS_OF_ENV, raising=False)
+    assert _proposed_assessment_as_of() is None
+
+    monkeypatch.setenv(PROPOSED_ASSESSMENT_AS_OF_ENV, "2026-10-14")
+    assert _proposed_assessment_as_of() == date(2026, 10, 14)
+
+    monkeypatch.setenv(PROPOSED_ASSESSMENT_AS_OF_ENV, "not-a-date")
+    assert _proposed_assessment_as_of() is None
+
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    monkeypatch.setenv(PROPOSED_ASSESSMENT_AS_OF_ENV, tomorrow)
+    assert _proposed_assessment_as_of() is None
+
+
+# ── 6. D-15 verify-skip-HELD — flag semantics ────────────────────────────────
+
+def test_d15_flag_default_off(monkeypatch):
+    monkeypatch.delenv(PROPOSED_VERIFY_SKIP_HELD_ENV, raising=False)
+    assert _proposed_verify_skip_held() is False
+    monkeypatch.setenv(PROPOSED_VERIFY_SKIP_HELD_ENV, "0")
+    assert _proposed_verify_skip_held() is False
+    monkeypatch.setenv(PROPOSED_VERIFY_SKIP_HELD_ENV, "1")
+    assert _proposed_verify_skip_held() is True
