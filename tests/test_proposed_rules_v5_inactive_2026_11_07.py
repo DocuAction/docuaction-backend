@@ -724,3 +724,26 @@ async def test_d15_skipped_members_leave_the_selectable_set(rolled_back_db):
     members = await _unlinked_members(db, sample_id)
     assert {m.entity_id for m in members} == {b}
     assert len(members[:2]) == 1  # any batch slice sees only live members
+
+
+def test_loader_and_activation_share_the_utc_date_convention():
+    """Review finding 2026-11-08 (round 3): activate_rule_configuration stamps
+    effective/retired dates with the UTC date, so BucketClassifier.load_rules
+    must FILTER with the UTC date too. With a local-date filter, a worker whose
+    local date trails UTC would watch a governed activation retire the old rows
+    (is_active=False, immediate) while the new rows' UTC effective date is
+    still "tomorrow" locally -- no applicable rules until local midnight.
+    Source-shape pin (the behavior needs a movable clock to prove end-to-end;
+    deployed containers run in UTC, where the two calls are identical).
+    """
+    import inspect
+
+    from app.tefca_registry.bucket_classifier import BucketClassifier
+    from app.tefca_registry.rule_configuration import activate_rule_configuration
+
+    loader_src = inspect.getsource(BucketClassifier.load_rules)
+    assert "date.today()" not in loader_src, (
+        "load_rules must not filter by the LOCAL date while activation stamps "
+        "the UTC date")
+    assert ".now(_tz.utc).date()" in loader_src
+    assert ".now(_tz.utc).date()" in inspect.getsource(activate_rule_configuration)

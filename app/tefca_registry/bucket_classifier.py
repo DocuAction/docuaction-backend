@@ -460,7 +460,17 @@ class BucketClassifier:
             select(reg.ReviewRule).where(reg.ReviewRule.is_active.is_(True))
         )).scalars().all()
 
-        today = date.today()
+        # UTC, matching activate_rule_configuration's effective/retired-date
+        # stamps (review finding 2026-11-08): with a local-date filter here, a
+        # worker whose local date trails UTC would see a governed activation
+        # retire the old rows (is_active=False, immediate) while the new rows'
+        # UTC effective date is still "tomorrow" locally — no applicable rules
+        # until local midnight (B3-default window). One date convention ends
+        # that gap. Deployed containers run in UTC, where the two calls were
+        # already identical; the seed producers' own local-date defaults are
+        # deliberately untouched.
+        from datetime import datetime as _dt, timezone as _tz
+        today = _dt.now(_tz.utc).date()
         best: Dict[str, Any] = {}
         for r in rows:
             if r.retired_date and r.retired_date <= today:
