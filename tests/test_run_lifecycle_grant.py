@@ -36,6 +36,12 @@ pytestmark = pytest.mark.regression
 
 MIGRATION = (pathlib.Path(__file__).resolve().parents[1]
              / "alembic" / "versions" / "20260830_run_lifecycle_grant.py")
+#: D-12 (2026-11-07) added one more lifecycle column with its own
+#: column-scoped grant, same fail-closed pattern. The exact-match test below
+#: ranges over the UNION of both migrations' granted columns, so an ungrated
+#: mutation (or an unused grant) still fails.
+MIGRATION_D12 = (pathlib.Path(__file__).resolve().parents[1]
+                 / "alembic" / "versions" / "20261107_run_assessment_meta.py")
 
 #: Columns that must remain unwritable after INSERT.
 PROVENANCE_COLUMNS = (
@@ -44,10 +50,10 @@ PROVENANCE_COLUMNS = (
 )
 
 
-def _migration_module():
+def _migration_module(path=None, name="run_lifecycle_grant"):
     import importlib.util
 
-    spec = importlib.util.spec_from_file_location("run_lifecycle_grant", MIGRATION)
+    spec = importlib.util.spec_from_file_location(name, path or MIGRATION)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -73,7 +79,8 @@ def test_grant_covers_exactly_the_columns_the_code_mutates():
                         and target.value.id == "run"):
                     mutated.add(target.attr)
 
-    granted = set(_migration_module().LIFECYCLE_COLUMNS)
+    granted = set(_migration_module().LIFECYCLE_COLUMNS) | set(
+        _migration_module(MIGRATION_D12, "run_assessment_meta").GRANTED_COLUMNS)
     assert mutated == granted, (
         f"quality engine mutates {sorted(mutated)} but the migration grants "
         f"{sorted(granted)} — they must match exactly")
@@ -81,7 +88,8 @@ def test_grant_covers_exactly_the_columns_the_code_mutates():
 
 def test_no_provenance_column_is_granted():
     """What a run WAS must not be rewritable by the run itself."""
-    granted = set(_migration_module().LIFECYCLE_COLUMNS)
+    granted = set(_migration_module().LIFECYCLE_COLUMNS) | set(
+        _migration_module(MIGRATION_D12, "run_assessment_meta").GRANTED_COLUMNS)
     overlap = granted & set(PROVENANCE_COLUMNS)
     assert not overlap, f"provenance columns granted UPDATE: {sorted(overlap)}"
 
