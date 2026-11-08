@@ -25,7 +25,10 @@ import uuid
 import pytest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-HEAD = "20261009_iqvia_affil_org_indexes"
+HEAD = "20261009_iqvia_affil_org_indexes"   # the revision under test; upgrades below target IT, not the chain head,
+                                            # so this file stays valid as the chain grows (2026-11-08 fix: the
+                                            # previous 'upgrade head' calls replayed every later revision and the
+                                            # version assert broke on each new migration)
 PARENT = "20261008_record_check_results"
 MIG_DB = "mig_a8_idx"
 OWNER, APP = "docuaction_owner", "docuaction_app"
@@ -142,7 +145,7 @@ def test_org_indexes_exist_are_partial_owned_and_used(throwaway_db):
     url, eng = throwaway_db
     _alembic(url, "upgrade", PARENT)
     assert _index_rows(eng) == {}, "indexes must not exist before this revision"
-    _alembic(url, "upgrade", "head")
+    _alembic(url, "upgrade", HEAD)
     with eng.connect() as c:
         assert c.execute(text("select version_num from alembic_version")).scalars().all() == [HEAD]
 
@@ -157,12 +160,12 @@ def test_org_indexes_exist_are_partial_owned_and_used(throwaway_db):
     # round trip: downgrade drops both, upgrade rebuilds both
     _alembic(url, "downgrade", PARENT)
     assert _index_rows(eng) == {}
-    _alembic(url, "upgrade", "head")
+    _alembic(url, "upgrade", HEAD)
     assert set(_index_rows(eng)) == {NPI_IDX, CCN_IDX}
     # idempotent: re-running the revision over existing indexes is a no-op, never an error
     with eng.begin() as c:
         c.execute(text("update alembic_version set version_num = :p"), {"p": PARENT})
-    _alembic(url, "upgrade", "head")
+    _alembic(url, "upgrade", HEAD)
     assert all(r[2] for r in _index_rows(eng).values())
 
     # synthetic data: 60k rows; one organisation carries the looked-up identifiers
@@ -221,7 +224,7 @@ def test_interrupted_build_leaves_an_invalid_index_that_is_detected_and_repaired
         assert _index_rows(eng)[NPI_IDX][2] is False
 
         # IF NOT EXISTS alone would skip this name and leave the broken index in place; the upgrade must not.
-        _alembic(url, "upgrade", "head")
+        _alembic(url, "upgrade", HEAD)
         rows = _index_rows(eng)
         assert set(rows) == {NPI_IDX, CCN_IDX}
         for name, key in ((NPI_IDX, "ORG_NPI"), (CCN_IDX, "ORG_CCN_ID")):
