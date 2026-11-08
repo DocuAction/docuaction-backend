@@ -187,13 +187,20 @@ EXCLUSION_CLEAN_SCREEN_STATE = "clear"
 #: translator (bulk path here; persisted evidence on the manual path) change
 #: together; the manual LIVE probe's own literals ("excluded" for a CONFIRMED
 #: exclusion, "clear" for a clean screen) are untouched.
-#: GOVERNANCE COUPLING (review note 2026-11-08): this flag belongs to the
-#: `exclusion_candidate_b3` component and must only be set in the SAME
+#: GOVERNANCE COUPLING (review note 2026-11-08; behavior VERIFIED against the
+#: real classifier at the 2026-11-08 release checkpoint): this flag belongs
+#: to the `exclusion_candidate_b3` component and must only be set in the SAME
 #: activation act (the activation audit lists it under flag_envs_covered).
-#: Fail-safe if mis-set alone: candidates emit possible_match, which no v3
-#: rule consumes, so they route to RULE-004/B3-default — explicit review,
-#: never a pass and never a silent exclusion; the specific adjudication
-#: reason only appears once RULE-008 is active.
+#: That coupling is MANDATORY, not defense-in-depth: if this flag is mis-set
+#: ALONE under the v3 baseline, a LEIE candidate still routes to B3-default
+#: (B1/B2 require oig_leie clear), but a SAM candidate with otherwise-clean
+#: sources classifies B1 via RULE-001 — the baseline has no positive sam_gov
+#: requirement and possible_match trips none of its none_of guards. An
+#: earlier note here claimed candidates always route to B3-default; that was
+#: wrong for SAM. The reverse mis-set (component active, flag off) IS safe:
+#: candidates collapse to not_found, which the baseline guards catch
+#: (B3-default). Follow-up tracked: add a baseline none_of possible_match
+#: guard to the B1/B2 rules (a behavior change needing its own review round).
 PROPOSED_EXCLUSION_STATES_ENV = "RCE_PROPOSED_EXCLUSION_STATES"
 EXCLUSION_POSSIBLE_MATCH_STATE = "possible_match"
 
