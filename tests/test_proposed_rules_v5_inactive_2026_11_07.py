@@ -738,12 +738,17 @@ def test_loader_and_activation_share_the_utc_date_convention():
     """
     import inspect
 
+    from app.tefca_registry import bucket_classifier
     from app.tefca_registry.bucket_classifier import BucketClassifier
     from app.tefca_registry.rule_configuration import activate_rule_configuration
 
     loader_src = inspect.getsource(BucketClassifier.load_rules)
-    assert "date.today()" not in loader_src, (
-        "load_rules must not filter by the LOCAL date while activation stamps "
-        "the UTC date")
     assert ".now(_tz.utc).date()" in loader_src
     assert ".now(_tz.utc).date()" in inspect.getsource(activate_rule_configuration)
+    # Round 4 widened the pin to the SEED producers (a UTC-ahead host's
+    # local-date default would stamp tomorrow's UTC date, hiding the fresh
+    # seed from the loader until UTC midnight): no local-date call may
+    # remain anywhere in the module.
+    assert "date.today()" not in inspect.getsource(bucket_classifier), (
+        "bucket_classifier must use one date convention — UTC — in the "
+        "loader filter AND every seed default, matching activation's stamps")

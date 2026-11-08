@@ -736,7 +736,12 @@ async def ensure_rules_v2(session, effective: Optional[date] = None) -> int:
     from sqlalchemy import func as sqlfunc, select
     from app.tefca_registry import models as reg
 
-    eff = effective or date.today()
+    # UTC, matching load_rules' filter and activation's stamps (review
+    # finding 2026-11-08 round 4): a local-date default on a UTC-ahead host
+    # would stamp tomorrow's UTC date, leaving the seeded rules invisible to
+    # the loader until UTC midnight. Explicit effective args are preserved.
+    from datetime import datetime as _dt, timezone as _tz
+    eff = effective or _dt.now(_tz.utc).date()
     already = int((await session.execute(
         select(sqlfunc.count()).select_from(reg.ReviewRule)
         .where(reg.ReviewRule.version == 2))).scalar() or 0)
@@ -771,7 +776,12 @@ async def ensure_rules_v3(session, effective: Optional[date] = None) -> int:
     from sqlalchemy import func as sqlfunc, select
     from app.tefca_registry import models as reg
 
-    eff = effective or date.today()
+    # UTC, matching load_rules' filter and activation's stamps (review
+    # finding 2026-11-08 round 4): a local-date default on a UTC-ahead host
+    # would stamp tomorrow's UTC date, leaving the seeded rules invisible to
+    # the loader until UTC midnight. Explicit effective args are preserved.
+    from datetime import datetime as _dt, timezone as _tz
+    eff = effective or _dt.now(_tz.utc).date()
     already = int((await session.execute(
         select(sqlfunc.count()).select_from(reg.ReviewRule)
         .where(reg.ReviewRule.version == 3))).scalar() or 0)
@@ -814,7 +824,12 @@ async def ensure_rules_v4(session, effective: Optional[date] = None,
     from sqlalchemy import func as sqlfunc, select
     from app.tefca_registry import models as reg
 
-    eff = effective or date.today()
+    # UTC, matching load_rules' filter and activation's stamps (review
+    # finding 2026-11-08 round 4): a local-date default on a UTC-ahead host
+    # would stamp tomorrow's UTC date, leaving the seeded rules invisible to
+    # the loader until UTC midnight. Explicit effective args are preserved.
+    from datetime import datetime as _dt, timezone as _tz
+    eff = effective or _dt.now(_tz.utc).date()
     already = int((await session.execute(
         select(sqlfunc.count()).select_from(reg.ReviewRule)
         .where(reg.ReviewRule.version == 4))).scalar() or 0)
