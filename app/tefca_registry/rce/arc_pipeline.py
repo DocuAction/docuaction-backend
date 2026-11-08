@@ -293,6 +293,48 @@ def _proposed_npi_invalid_split_on() -> bool:
         "1", "true", "yes", "on")
 
 
+def proposed_structural_npi_signal(npi_raw: Optional[str]) -> Optional[dict]:
+    """D-02 PROPOSED producer for the bulk path — PURE, and gated by the same
+    PROPOSED_NPI_INVALID_SPLIT_ENV flag at the call site (default OFF).
+
+    WHY IT EXISTS: `rce_fields.quality_flags` never emits NPI_MALFORMED /
+    NPI_CHECK_DIGIT_FAILED, so on the bulk path `evidence["data_quality_flags"]`
+    cannot carry them and the flags-based `npi_validation` producer above never
+    fires — a third dead link in the D-02 chain (rule clause, producer value,
+    and now path wiring). This function computes the signal from the SUBMITTED
+    NPI directly, using the same staged semantics as the quality engine
+    (NPI-002/003/004) and the same canonical validator, so the two layers
+    cannot disagree.
+
+    MATRIX NP-1 vs NP-3 SEPARATION, exactly: a comma-separated cell holds
+    MULTIPLE values — the FIELD is malformed while each contained NPI may be
+    individually valid, so it is "flagged" (valid-form-suspect vocabulary,
+    NPI_MULTIPLE_VALUES route), never "invalid". A single token that fails
+    length, charset or the CMS 80840 check digit is structurally impossible —
+    "invalid". A valid single NPI, or a blank, emits nothing.
+    The submitted value is preserved verbatim in the payload; nothing is ever
+    repaired or substituted.
+    """
+    value = (npi_raw or "").strip()
+    if not value:
+        return None
+    if "," in value:
+        return {"status": "flagged", "basis": "MULTIPLE_NPI_IN_ONE_FIELD",
+                "raw_npi": npi_raw}
+    if len(value) != 10 or not value.isdigit():
+        return {"status": "invalid", "basis": "NPI_STRUCTURALLY_INVALID",
+                "raw_npi": npi_raw}
+    try:
+        from app.services.npi_validator import validate_npi
+        ok, _message = validate_npi(value)
+    except Exception:  # noqa: BLE001 — validator unavailable is not a finding
+        return None
+    if ok:
+        return None
+    return {"status": "invalid", "basis": "NPI_CHECKSUM_INVALID",
+            "raw_npi": npi_raw}
+
+
 def _proposed_name_major_below() -> Optional[float]:
     import os
     raw = (os.getenv(PROPOSED_NAME_MAJOR_BELOW_ENV) or "").strip()
@@ -769,6 +811,15 @@ async def verify_and_classify(
                 assessment_date=date.today(),
                 requirement_effective=BR_NPI_TRTMNT_EFFECTIVE,
                 org_node_type=_rce_fields.rce_value(entity, "organizationNodeType"))
+            # D-02 PROPOSED bulk-path producer (default OFF): structural NPI
+            # signal computed from the SUBMITTED value. Never overwrites a
+            # signal another producer already set.
+            if _proposed_npi_invalid_split_on():
+                _npi_sig = proposed_structural_npi_signal(
+                    _rce_fields.rce_value(entity, "NPI"))
+                if _npi_sig is not None:
+                    verification_results.setdefault("fields", {}).setdefault(
+                        "npi_validation", _npi_sig)
             if _b4_signal is not None:
                 _fields = verification_results.setdefault("fields", {})
                 _fields["active_treatment_missing_required_npi"] = _b4_signal
@@ -781,6 +832,7 @@ async def verify_and_classify(
                         "status": True,
                         "initiating_requirement": _b4_signal["initiating_requirement"],
                         "exchange_direction": _b4_signal["exchange_direction"],
+                        "reason_code": _b4_signal["reason_code"],
                         "raw_org_node_type": _b4_signal["raw_org_node_type"],
                         "raw_purposes": _b4_signal["raw_purposes"],
                         "raw_npi": _b4_signal["raw_npi"],

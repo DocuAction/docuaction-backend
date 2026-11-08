@@ -333,3 +333,60 @@ async def test_d15_held_entity_ids_reads_live_record_status(rolled_back_db):
     assert await _held_entity_ids(db, intake_id, []) == set()
     import uuid as _uuid
     assert await _held_entity_ids(db, _uuid.uuid4(), [entity_id]) == set()
+
+
+# ── 8. D-02 bulk-path structural producer (pure; flag-gated at call site) ────
+
+def test_structural_npi_signal_separates_np1_from_np3():
+    from app.tefca_registry.rce.arc_pipeline import proposed_structural_npi_signal as f
+
+    assert f(None) is None and f("") is None and f("   ") is None
+    # NP-3: a multi-value CELL is flagged, never invalid — each contained NPI
+    # may be individually valid and splitting would be an identity decision.
+    multi = f("1780787176, 1770559767")
+    assert multi == {"status": "flagged", "basis": "MULTIPLE_NPI_IN_ONE_FIELD",
+                     "raw_npi": "1780787176, 1770559767"}
+    # NP-1: structurally impossible single values are invalid.
+    assert f("123")["status"] == "invalid"
+    assert f("12345678ab")["status"] == "invalid"
+    bad_luhn = f("1234567890")
+    assert bad_luhn == {"status": "invalid", "basis": "NPI_CHECKSUM_INVALID",
+                        "raw_npi": "1234567890"}
+    # A valid NPI emits nothing (1234567893 is the canonical valid test NPI).
+    assert f("1234567893") is None
+
+
+def test_structural_npi_signal_agrees_with_the_quality_engine_validator():
+    """Same canonical validator as NPI-003 — the two layers cannot disagree."""
+    from app.services.npi_validator import validate_npi
+    from app.tefca_registry.rce.arc_pipeline import proposed_structural_npi_signal as f
+
+    for value in ("1234567893", "1234567890", "1780787176"):
+        ok, _ = validate_npi(value)
+        sig = f(value)
+        assert (sig is None) == ok, value
+
+
+# ── 9. Treatment reason codes are emitted by the producer, not a report ──────
+
+def test_treatment_reason_codes_are_mutually_exclusive_and_producer_emitted():
+    from datetime import date
+    from app.tefca_registry.rce.npi_applicability import (
+        active_treatment_missing_required_npi as sig)
+    from app.tefca_registry.rce.quality_rules import BR_NPI_TRTMNT_EFFECTIVE
+
+    def run(node_type):
+        return sig("T-TRTMNT", None, "1",
+                   assessment_date=date(2026, 11, 7),
+                   requirement_effective=BR_NPI_TRTMNT_EFFECTIVE,
+                   org_node_type=node_type)
+
+    assert run("initiating-node")["reason_code"] == "TREATMENT_NPI_MISSING_B4_CANDIDATE"
+    assert run(None)["reason_code"] == "TREATMENT_APPLICABILITY_PRESUMED_NPI_MISSING"
+    assert run("")["reason_code"] == "TREATMENT_APPLICABILITY_PRESUMED_NPI_MISSING"
+    assert run("no-node")["reason_code"] == "TREATMENT_NODE_TYPE_REVIEW"
+    assert run("passthrough-node")["reason_code"] == "TREATMENT_NODE_TYPE_REVIEW"
+    # Out of scope entirely: no signal, no code.
+    assert sig("T-TREAT", None, "1", assessment_date=date(2026, 11, 7),
+               requirement_effective=BR_NPI_TRTMNT_EFFECTIVE,
+               org_node_type="initiating-node") is None

@@ -385,11 +385,29 @@ def active_treatment_missing_required_npi(
                 "obligation applies is UNRESOLVED: explicit applicability "
                 "review required — never confirmed non-compliance (B4) and "
                 "never a silent pass (B1).")
+    # Reason codes are EMITTED BY THIS PRODUCER (matrix TR-1/TR-2/TR-3), so a
+    # report can only ever repeat what the classifier input actually carried —
+    # never invent its own. Mutually exclusive by construction: initiating
+    # (TR-1) / blank node type (TR-2, applicability presumed per the owner's
+    # recorded direction) / a delivered but non-initiating node type (TR-3,
+    # passthrough-node or no-node — triggers examination, never automatic
+    # exclusion). A responding-only direction has its own code and is
+    # unreachable from delivered fields today (nothing maps to RESPONDING).
+    if requirement == APPLIES:
+        reason_code = "TREATMENT_NPI_MISSING_B4_CANDIDATE"
+    elif requirement == DOES_NOT_APPLY:
+        reason_code = "TREATMENT_DIRECTION_RESPONDING_NOT_APPLICABLE"
+    elif not (org_node_type or "").strip():
+        reason_code = "TREATMENT_APPLICABILITY_PRESUMED_NPI_MISSING"
+    else:
+        reason_code = "TREATMENT_NODE_TYPE_REVIEW"
+
     return {
         # True ONLY when the §7 initiating applicability is established.
         "status": requirement == APPLIES,
         "initiating_requirement": requirement,
         "exchange_direction": direction,
+        "reason_code": reason_code,
         "applicability_review": requirement == UNRESOLVED,
         "case": assignment.case,
         "case_label": assignment.label,
