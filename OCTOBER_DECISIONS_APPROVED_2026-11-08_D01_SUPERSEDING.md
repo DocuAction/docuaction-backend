@@ -1,15 +1,23 @@
 # D-01 superseding decision — owner-adopted Treatment classification policy
 
 Record ID: OCTOBER-OWNER-APPROVAL-2026-11-08-02 (supersedes the D-01 row of
-OCTOBER-OWNER-APPROVAL-2026-11-07-01 ONLY; every other row of that record
-stands).
-Decision date: 2026-11-08.
-Approver: Imran Siddiqui, identifying himself in the conversation as owner and
-COR.
-Recorded by: Claude Code, from the owner's direct instruction ("OWNER
-CORRECTION — SUPERSEDES D-01 CONFIG A ONLY", 2026-11-08). This records the
-owner's stated authority and instruction; it is not independent verification
-of a contractual appointment.
+OCTOBER-OWNER-APPROVAL-2026-11-07-01 ONLY; every other row of that record —
+including M-1, whose reference remains commit 1da7efe — stands).
+Decision received: 2026-11-07, ~23:5x EST (America/New_York; UTC−05:00) =
+2026-11-08 ~04:5x UTC, in the running Claude Code session; register entry
+written 2026-11-08 ~00:1x EST (05:1x UTC) and amended with this provenance
+2026-11-08 ~01:0x EST.
+Approver: Imran Siddiqui, President & CEO, Alliance Global Tech Inc. —
+OWNER DIRECTION, stated in the conversation.
+Separate documentary COR concurrence: NOT ATTACHED.
+Independent QA approval: NOT RECORDED.
+Recorded by: Claude Code, from the owner's direct pasted instruction ("OWNER
+CORRECTION — SUPERSEDES D-01 CONFIG A ONLY", then the Step 2C addendum
+confirming it). This records the owner's stated authority and instruction;
+it is not independent verification of a contractual appointment.
+Superseded entry (preserved, linked): OCTOBER_DECISIONS_APPROVED_2026-11-07.md
+(OCTOBER-OWNER-APPROVAL-2026-11-07-01, commit 1da7efe) — its D-01 CONFIG A
+row is history; no earlier entry is overwritten.
 
 ## Superseding D-01 direction (owner's adopted classification policy)
 
@@ -35,7 +43,9 @@ superseded, not overwritten.
 
 ## Implementation (inactive)
 
-Component `treatment_b4_owner_adopted` (RULE-009, priority 6, consuming the
+Component `treatment_b4_owner_adopted` (a NEW VERSION of RULE-006 itself,
+priority 6 — the historical initiating-gated RULE-006 definition is retained
+as the prior version and RULE-007 is left unselected — consuming the
 producer-emitted signal `treatment_owner_adopted_missing_npi`), declared
 mutually exclusive with the CONFIG-A components `treatment_review_b3` /
 `treatment_b4` — one treatment regime at a time, enforced by

@@ -517,12 +517,24 @@ async def test_policy_storage_ships_empty_and_inactive(rolled_back_db):
 
 # ── 8. D-01 SUPERSEDING (2026-11-08): owner-adopted Treatment policy ─────────
 
+def test_owner_adopted_component_is_a_new_version_of_rule006_itself():
+    """The superseding rule keeps rule_code RULE-006 (versioned-rules design:
+    the historical initiating-gated definition survives as the prior version)
+    and RULE-007 is left unselected — no independent coverage remains for its
+    unresolved-applicability condition under the owner rule."""
+    composed = compose({"treatment_b4_owner_adopted"})
+    codes = [r["rule_code"] for r in composed]
+    assert codes.count("RULE-006") == 1
+    assert "RULE-007" not in codes and "RULE-009" not in codes
+
+
 def test_owner_adopted_component_classifies_b4_without_node_type_gate():
     composed = compose({"treatment_b4_owner_adopted"})
     results = _base_clean()
     results["fields"]["treatment_owner_adopted_missing_npi"] = {"status": True}
     out = _classify(composed, results)
-    assert (out.bucket, out.rule_code) == ("B4", "RULE-009")
+    assert (out.bucket, out.rule_code) == ("B4", "RULE-006")
+    assert "owner-adopted" in out.rule_name
     # Higher-priority approved conditions still win (RULE-005 at priority 5).
     results["sources"]["oig_leie"] = "excluded"
     out = _classify(composed, results)

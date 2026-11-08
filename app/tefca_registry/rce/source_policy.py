@@ -30,6 +30,41 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+#: M-1 RECORDED OWNER DECISION (2026-11-07/08, preserved reference: commit
+#: 1da7efe): attributable SAM exclusion screening is REQUIRED for B1 within
+#: the adopted applicability policy. This is the canonical PROPOSED policy
+#: DATA — documented here, seeded NOWHERE; activating it is the Gate-C act of
+#: inserting+activating the row with its governance approval reference.
+#: Applicability is stated explicitly (all records; the exclusion question
+#: applies to every delivered entity). Conditional sources whose
+#: applicability facts are UNDEFINED are deliberately absent — an undefined
+#: applicability is disclosed, never defaulted to mandatory.
+#:
+#: HISTORY, not rewritten: bucket_classifier._v2_rules documented "SAM is
+#: added as a DISQUALIFIER, never as a requirement" — correct for the 2026-10
+#: context (no SAM answer channel existed; requiring it would have
+#: reclassified the registry on an outage). The owner's M-1 decision
+#: SUPERSEDES that stance going forward, now that attributable extract
+#: screening exists; the v2 docstring stays as written because historical
+#: behavior is not rewritten.
+#:
+#: SAM outcome vocabulary kept distinct end-to-end:
+#:   SCREENED_NO_CANDIDATE            -> classifier "clear"
+#:   POSSIBLE_MATCH (pending)         -> "not_found" today; "possible_match"
+#:                                       under the EX-3 component's flag —
+#:                                       its OWN review reason, never a false
+#:                                       SOURCE_NOT_COMPLETED label
+#:   CONFIRMED_APPLICABLE_EXCLUSION   -> "excluded"/"debarred" (approved B4)
+#:   NOT_SCREENED / UNAVAILABLE / FAILED -> incomplete ->
+#:                                       SOURCE_NOT_COMPLETED_SAM_GOV
+PROPOSED_POLICY_M1 = (
+    {"source": "sam_gov", "role": "mandatory",
+     "applicability": {},   # explicit: applies to every delivered record
+     "policy_reference": "M-1 owner decision "
+                         "(OCTOBER_DECISIONS_APPROVED_2026-11-07.md, commit "
+                         "1da7efe); D-11 Part 2"},
+)
+
 ACCEPTABLE_STATES = frozenset({"verified", "clear"})
 INCOMPLETE_STATES = frozenset({"not_checked", "unavailable", "failed"})
 PENDING_REVIEW_STATES = frozenset({"possible_match"})

@@ -102,10 +102,21 @@ def _delta_treatment_b4_owner_adopted(rules: List[dict]) -> List[dict]:
     policy, not proof of an independently established SOP breach per record.
     Higher-priority approved conditions (RULE-005, priority 5) still win;
     HELD records are excluded upstream (D-15) and are never force-counted.
-    Conflicts with the CONFIG-A components: one treatment regime at a time."""
+    Conflicts with the CONFIG-A components: one treatment regime at a time.
+
+    THE RULE IS A NEW VERSION OF RULE-006 ITSELF (owner addendum, 2026-11-08:
+    "RULE-006 must cover every active record whose purposesofuse contains
+    exact T-TRTMNT and whose submitted NPI is blank"): rule_code stays
+    RULE-006 so the versioned-rules design does what it exists for — the
+    historical initiating-gated definition survives as the prior version
+    (code: SEED_RULES_V4/_delta_treatment_review_b3; any activated rows are
+    retired, never deleted). RULE-007 is NOT selected by this component: the
+    owner rule at priority 6 covers every case-1 active record, leaving
+    RULE-007's unresolved-applicability condition no independent coverage;
+    its historical definition is retained, unselected."""
     out = copy.deepcopy(rules)
     out.append({
-        "rule_code": "RULE-009",
+        "rule_code": "RULE-006",
         "name": "B4 Treatment Missing Required NPI (owner-adopted policy)",
         "bucket": "B4",
         "priority": 6,
