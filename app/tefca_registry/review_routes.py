@@ -238,7 +238,13 @@ async def set_processing_barrier(req: SetProcessingBarrier, request: Request,
                       actor_email=actor_email,
                       ip_address=get_client_ip(request), reason=req.reason)
     await db.commit()
-    return await barrier_status(db)
+    status = await barrier_status(db)
+    # End the probe transaction NOW: barrier_status's drain check takes the
+    # EXCLUSIVE advisory xact lock when it succeeds, and holding it for the
+    # rest of the request would briefly block classification transactions'
+    # shared acquires. Rollback is safe — nothing after the commit writes.
+    await db.rollback()
+    return status
 
 
 @router.get("/processing-barrier",
@@ -247,7 +253,11 @@ async def get_processing_barrier(db: AsyncSession = Depends(get_db)):
     """Barrier state with the verified drain check (read-only)."""
     from app.tefca_registry.processing_controls import barrier_status
 
-    return await barrier_status(db)
+    status = await barrier_status(db)
+    # Release the drain probe's exclusive advisory xact lock immediately
+    # (see set_processing_barrier). Read-only route; rollback discards nothing.
+    await db.rollback()
+    return status
 
 
 @router.get("/classification-config",
@@ -259,7 +269,11 @@ async def classification_config(db: AsyncSession = Depends(get_db)):
     barrier is on — it is the release sequence's step-5 readback."""
     from app.tefca_registry.processing_controls import effective_configuration
 
-    return await effective_configuration(db)
+    config = await effective_configuration(db)
+    # The embedded barrier status takes the drain-probe lock; release it
+    # immediately (see set_processing_barrier). Read-only route.
+    await db.rollback()
+    return config
 
 
 class ClassificationPreview(BaseModel):
@@ -297,6 +311,9 @@ async def classification_preview(req: ClassificationPreview,
                if req.evidence is not None else req.results)
 
     config = await effective_configuration(db)
+    # Release the embedded drain-probe lock before classifying (a new
+    # transaction begins on the next read). Read-only route.
+    await db.rollback()
     loader = BucketClassifier()                 # fresh: no cached rules
     rules = await loader.load_rules(db)
     outcome = loader.classify(results, rules=rules)
