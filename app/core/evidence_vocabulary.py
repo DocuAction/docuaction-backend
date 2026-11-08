@@ -567,6 +567,35 @@ CLASSIFIER_SIGNAL_REGISTRY: Dict[str, SignalEntry] = {
         note="A candidate NPI from supplemental evidence never suppresses the "
              "signal: the submission requirement is about the DELIVERED value.",
     ),
+    "treatment_owner_adopted_missing_npi": SignalEntry(
+        # OWNER-ADOPTED CLASSIFICATION POLICY (superseding D-01 record,
+        # 2026-11-08; CONFIG A preserved as history at commit 1da7efe):
+        # IS_ACTIVE=1 AND exact T-TRTMNT token in any purpose combination AND
+        # submitted NPI blank -> B4 candidate condition, with NO node-type
+        # gate. Emitted beside the signal above whenever that condition holds
+        # (the condition is exactly "the gated signal exists", minus its
+        # direction logic); payload preserves raw values and the raw node
+        # type as information, never as a gate. Supplemental NPPES/IQVIA/
+        # vetting NPIs never fill the blank or suppress it. Consumed only by
+        # RULE-009 in the INACTIVE component `treatment_b4_owner_adopted` —
+        # labelled the owner's adopted policy, not proof that every record
+        # independently establishes an SOP breach.
+        production_state=PRODUCIBLE,
+        value_domain=SETTLED,
+        consequence_state=METHODOLOGY_PENDING,
+        producers=(
+            Producer(PATH_RCE,
+                     "app/tefca_registry/rce/arc_pipeline.py "
+                     "(verify_and_classify, RULE-006 signal block)",
+                     ("true",)),
+        ),
+        unused_reason="Consumed only by RULE-009 in the INACTIVE component "
+                      "treatment_b4_owner_adopted; computed and inert until "
+                      "that component is activated under its recorded "
+                      "approval.",
+        note="Owner-adopted policy condition; node type is preserved as "
+             "information, never a gate.",
+    ),
     "treatment_npi_applicability_unresolved": SignalEntry(
         # PRODUCIBLE and SETTLED: emitted beside the RULE-006 signal when a
         # case-1 record's exchange direction is NOT documented in the

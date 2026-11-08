@@ -513,3 +513,50 @@ async def test_policy_storage_ships_empty_and_inactive(rolled_back_db):
     await db.flush()
     assert await sp.load_active_policies(db) == [], \
         "an inactive row must never be enforced"
+
+
+# ── 8. D-01 SUPERSEDING (2026-11-08): owner-adopted Treatment policy ─────────
+
+def test_owner_adopted_component_classifies_b4_without_node_type_gate():
+    composed = compose({"treatment_b4_owner_adopted"})
+    results = _base_clean()
+    results["fields"]["treatment_owner_adopted_missing_npi"] = {"status": True}
+    out = _classify(composed, results)
+    assert (out.bucket, out.rule_code) == ("B4", "RULE-009")
+    # Higher-priority approved conditions still win (RULE-005 at priority 5).
+    results["sources"]["oig_leie"] = "excluded"
+    out = _classify(composed, results)
+    assert (out.bucket, out.rule_code) == ("B4", "RULE-005")
+    # Without the owner condition, nothing new fires.
+    clean = _base_clean()
+    assert _classify(composed, clean).bucket == "B1"
+
+
+def test_owner_adopted_conflicts_with_config_a_components():
+    with pytest.raises(ActivationRefused, match="incompatible"):
+        compose({"treatment_b4_owner_adopted", "treatment_review_b3"})
+    with pytest.raises(ActivationRefused, match="incompatible"):
+        compose({"treatment_b4_owner_adopted", "treatment_review_b3",
+                 "treatment_b4"})
+
+
+def test_owner_adopted_signal_condition_is_submitted_values_only():
+    """The producer condition is exactly the gated signal's existence: active
+    + exact T-TRTMNT token (any combination) + blank SUBMITTED NPI + the
+    requirement in force — node type irrelevant, T-TREAT never matches,
+    inactive records never match."""
+    from app.tefca_registry.rce.npi_applicability import (
+        active_treatment_missing_required_npi as sig)
+    from app.tefca_registry.rce.quality_rules import BR_NPI_TRTMNT_EFFECTIVE
+
+    def exists(purposes, npi, active, node):
+        return sig(purposes, npi, active, assessment_date=date(2026, 11, 8),
+                   requirement_effective=BR_NPI_TRTMNT_EFFECTIVE,
+                   org_node_type=node) is not None
+
+    assert exists("T-TRTMNT", None, "1", None)
+    assert exists("T-TRTMNT,T-HCO-OPS", "", "1", "passthrough-node")
+    assert exists("T-TRTMNT", None, "1", "initiating-node")
+    assert not exists("T-TREAT", None, "1", "initiating-node")
+    assert not exists("T-TRTMNT", "1234567893", "1", None)   # NPI submitted
+    assert not exists("T-TRTMNT", None, "0", None)           # inactive

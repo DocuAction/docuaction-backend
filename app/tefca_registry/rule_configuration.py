@@ -94,6 +94,38 @@ def _delta_treatment_b4(rules: List[dict]) -> List[dict]:
     return out
 
 
+def _delta_treatment_b4_owner_adopted(rules: List[dict]) -> List[dict]:
+    """OWNER-ADOPTED classification policy (superseding D-01 record,
+    2026-11-08; the CONFIG A approval is preserved as history at commit
+    1da7efe): active + exact T-TRTMNT token in any combination + blank
+    SUBMITTED NPI -> B4, with NO node-type gate. Labelled the owner's adopted
+    policy, not proof of an independently established SOP breach per record.
+    Higher-priority approved conditions (RULE-005, priority 5) still win;
+    HELD records are excluded upstream (D-15) and are never force-counted.
+    Conflicts with the CONFIG-A components: one treatment regime at a time."""
+    out = copy.deepcopy(rules)
+    out.append({
+        "rule_code": "RULE-009",
+        "name": "B4 Treatment Missing Required NPI (owner-adopted policy)",
+        "bucket": "B4",
+        "priority": 6,
+        "description": (
+            "Owner-adopted classification policy (superseding D-01, "
+            "2026-11-08): an active record claiming the exact T-TRTMNT "
+            "exchange purpose in any purpose combination with no SUBMITTED "
+            "NPI classifies B4. organizationNodeType is preserved as "
+            "information and does not gate this rule. A supplemental NPI "
+            "(NPPES, IQVIA, vetting) never fills the submitted blank and "
+            "never suppresses the condition. This records the owner's "
+            "adopted policy, not an independently established SOP breach "
+            "per record."),
+        "conditions": {"all_of": [
+            {"field": "treatment_owner_adopted_missing_npi", "status": True},
+        ]},
+    })
+    return out
+
+
 def _delta_structural_npi_handling(rules: List[dict]) -> List[dict]:
     """D-02 rule side: defense-in-depth guards so a confirmed-invalid NPI can
     never pass B1/B2 by rule order alone. The producer half is the
@@ -174,18 +206,28 @@ class Component:
     description: str
     apply: Optional[Callable[[List[dict]], List[dict]]] = None
     depends_on: Tuple[str, ...] = ()
+    #: Components that cannot be active together (e.g. two treatment regimes).
+    conflicts_with: Tuple[str, ...] = ()
     #: Env flags this component's approval covers (execution switches; set
     #: only after the component is activated with its recorded approval).
     flag_envs: Tuple[str, ...] = ()
 
 
 COMPONENTS: Dict[str, Component] = {c.name: c for c in (
-    Component("treatment_review_b3", ("D-01",),
+    Component("treatment_review_b3", ("D-01 CONFIG A (superseded 2026-11-08; preserved as history)",),
               "RULE-007 B3 applicability review + RULE-006 as B3/B4-candidate",
-              apply=_delta_treatment_review_b3),
-    Component("treatment_b4", ("D-01",),
+              apply=_delta_treatment_review_b3,
+              conflicts_with=("treatment_b4_owner_adopted",)),
+    Component("treatment_b4", ("D-01 CONFIG A (superseded 2026-11-08; preserved as history)",),
               "RULE-006 upgraded to B4 (confirmed Treatment non-compliance)",
-              apply=_delta_treatment_b4, depends_on=("treatment_review_b3",)),
+              apply=_delta_treatment_b4, depends_on=("treatment_review_b3",),
+              conflicts_with=("treatment_b4_owner_adopted",)),
+    Component("treatment_b4_owner_adopted",
+              ("D-01 SUPERSEDING 2026-11-08 (owner-adopted policy)",),
+              "active + exact T-TRTMNT (any combination) + blank submitted "
+              "NPI -> B4; no node-type gate; RULE-009",
+              apply=_delta_treatment_b4_owner_adopted,
+              conflicts_with=("treatment_review_b3", "treatment_b4")),
     Component("structural_npi_handling", ("D-02", "D6"),
               "invalid/flagged split: producer flag + B1/B2 invalid guards",
               apply=_delta_structural_npi_handling,
@@ -208,9 +250,10 @@ COMPONENTS: Dict[str, Component] = {c.name: c for c in (
 )}
 
 #: Canonical application order (deterministic composition).
-_ORDER = ("treatment_review_b3", "treatment_b4", "structural_npi_handling",
-          "mandatory_source_guards", "material_conflict_guards",
-          "name_severity_configuration", "exclusion_candidate_b3")
+_ORDER = ("treatment_review_b3", "treatment_b4", "treatment_b4_owner_adopted",
+          "structural_npi_handling", "mandatory_source_guards",
+          "material_conflict_guards", "name_severity_configuration",
+          "exclusion_candidate_b3")
 assert set(_ORDER) == set(COMPONENTS)
 
 
@@ -227,6 +270,14 @@ def compose(selection) -> List[dict]:
     if missing:
         raise ActivationRefused(
             f"selection is missing required dependencies: {missing}")
+    conflicts = sorted({tuple(sorted((n, c))) for n in selection
+                        for c in COMPONENTS[n].conflicts_with
+                        if c in selection})
+    if conflicts:
+        raise ActivationRefused(
+            f"selection contains incompatible components: {conflicts} — one "
+            f"treatment regime at a time; the superseding owner-adopted "
+            f"policy replaces CONFIG A, it does not stack on it.")
     rules = copy.deepcopy(SEED_RULES_V3)
     for name in _ORDER:
         if name in selection and COMPONENTS[name].apply is not None:

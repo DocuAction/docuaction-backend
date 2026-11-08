@@ -113,6 +113,11 @@ AREA1_OWNER_TABLES = {
     "rce_record_check_results",
     # 20261014_iqvia_advisory_assess: append-only (trigger + SELECT/INSERT grant); owner-owned
     "iqvia_advisory_assessment",
+    # 20261108_source_policy: versioned mandatory-source policy (M-1..M-4),
+    # ships EMPTY and inactive; the app holds SELECT only (the runtime never
+    # writes policy — rows are owner-side governed acts). Created by the chain
+    # AS the owner role and kept there.
+    "rce_source_policies",
 }
 
 
@@ -600,6 +605,8 @@ MANAGED_CHAIN_CREATES = {
     "rce_record_check_results",
     # 20261014_iqvia_advisory_assess: append-only (trigger + SELECT/INSERT grant); owner-owned
     "iqvia_advisory_assessment",
+    # 20261108_source_policy: SELECT-only for the app; owner-owned; ships empty.
+    "rce_source_policies",
 }
 # Tables the 20260917 revision declares FOREIGN KEYS to that docuaction_app owns
 # in PROD and that no pending revision ALTERs (so they are not re-owned). CREATE

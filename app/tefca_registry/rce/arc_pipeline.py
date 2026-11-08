@@ -855,6 +855,26 @@ async def verify_and_classify(
             if _b4_signal is not None:
                 _fields = verification_results.setdefault("fields", {})
                 _fields["active_treatment_missing_required_npi"] = _b4_signal
+                # OWNER-ADOPTED policy condition (superseding D-01 record,
+                # 2026-11-08): the signal's very existence IS the owner's
+                # condition (active + exact T-TRTMNT + blank submitted NPI +
+                # requirement in force) — node type is information, not a
+                # gate. Consumed only by RULE-009 in the INACTIVE component
+                # treatment_b4_owner_adopted.
+                _fields["treatment_owner_adopted_missing_npi"] = {
+                    "status": True,
+                    "reason_code": "TREATMENT_NPI_MISSING_OWNER_ADOPTED",
+                    "raw_purposes": _b4_signal["raw_purposes"],
+                    "raw_npi": _b4_signal["raw_npi"],
+                    "raw_active": _b4_signal["raw_active"],
+                    "raw_org_node_type": _b4_signal["raw_org_node_type"],
+                    "requirement": _b4_signal["requirement"],
+                    "assessment_date": _b4_signal["assessment_date"],
+                    "note": ("Owner-adopted classification policy; not proof "
+                             "that this record independently establishes an "
+                             "SOP breach. A supplemental NPI never fills the "
+                             "submitted blank or suppresses this condition."),
+                }
                 # Unknown §7 applicability is NEVER confirmed non-compliance:
                 # it is its own signal, consumed by RULE-007 (B3 explicit
                 # applicability review) so the record can neither classify B4
