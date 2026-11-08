@@ -248,3 +248,47 @@ def test_the_exclusion_touches_no_sizing_strata_seed_or_selection_code():
     assert "REVIEW_REQUIRED" not in inspect.getsource(sampling_engine)
     src = inspect.getsource(q.finalize_plan)
     assert "CochranSampler().draw_per_stratum(" in src and "seed=seed" in src
+
+
+# ── D-08 PROPOSED narrow semantics (flag-gated, default OFF) ─────────────────
+
+@pytest.mark.asyncio
+async def test_d08_blocking_only_flag_narrows_exclusion_to_enumerated_findings(
+        rolled_back_db, monkeypatch):
+    """`in_review` is overloaded: arc_pipeline writes it for every non-B1
+    bucket, independent of any finding. Default (flag off): the status-based
+    exclusion stands, byte-identical. Flag on (D-08 proposal): only an
+    unresolved finding of an enumerated BLOCKING type excludes — an entity
+    whose status says in_review but which carries no such finding is back in
+    the frame, and a genuine blocking finding still excludes."""
+    db = rolled_back_db
+    intake_id, job, curated, entity_id = await _with_qhin(db, "D08")
+
+    # Overload the status WITHOUT any finding — what arc_pipeline does for
+    # every B2/B3/B4 classification.
+    entity = await db.get(reg.TefcaRegEntity, entity_id)
+    entity.verification_status = ppv.REVIEW_REQUIRED_STATUS
+    await db.flush()
+
+    # Default: excluded on status alone (current behavior, unchanged).
+    monkeypatch.delenv(qs.PROPOSED_SAMPLING_BLOCKING_ONLY_ENV, raising=False)
+    eligible, unresolved = await qs.resolve_qhin_strata(db, intake_id)
+    assert entity_id not in {u["entity_id"] for u in eligible}
+    meta = next(u for u in unresolved if u["entity_id"] == entity_id)
+    assert meta["exclusion"] == qs.EXCLUSION_REVIEW_REQUIRED
+    assert "verification_status=in_review" in meta["reason"]
+
+    # Flag on: no unresolved BLOCKING finding exists, so the entity is in the
+    # frame again.
+    monkeypatch.setenv(qs.PROPOSED_SAMPLING_BLOCKING_ONLY_ENV, "1")
+    eligible, unresolved = await qs.resolve_qhin_strata(db, intake_id)
+    assert entity_id in {u["entity_id"] for u in eligible}
+
+    # A genuine enumerated blocking finding excludes under the flag too, with
+    # the narrow-semantics reason text.
+    await _block(db, entity_id)
+    eligible, unresolved = await qs.resolve_qhin_strata(db, intake_id)
+    assert entity_id not in {u["entity_id"] for u in eligible}
+    meta = next(u for u in unresolved if u["entity_id"] == entity_id)
+    assert meta["exclusion"] == qs.EXCLUSION_REVIEW_REQUIRED
+    assert "rce_issues" in meta["reason"]

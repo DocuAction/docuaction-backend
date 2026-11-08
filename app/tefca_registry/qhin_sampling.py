@@ -83,6 +83,33 @@ REVIEW_REQUIRED_REASON = ("unresolved blocking post-promotion finding "
                           "sample draws until resolved through the analyst/QA "
                           "workflow. Record, findings and history unchanged.")
 
+#: D-08 PROPOSED, INACTIVE by default. `verification_status == "in_review"` is
+#: an OVERLOADED value: `post_promotion_verification.record_finding` sets it
+#: for a blocking finding, but `arc_pipeline` ALSO writes it for every
+#: classification bucket other than B1 — so the status-based exclusion below
+#: keeps every B2/B3/B4-classified entity out of every new draw, not only the
+#: ones carrying an unresolved BLOCKING finding (the same overload
+#: `has_unresolved_blocking_finding`'s docstring records for the QA gate).
+#: When this env var is set truthy, eligibility excludes ONLY entities with an
+#: unresolved finding whose type is in the already-enumerated
+#: `BLOCKING_OUTCOMES` taxonomy (NPI_DEACTIVATED / INVALID_ACTIVE_IDENTIFIER /
+#: MATERIAL_IDENTIFIER_CONFLICT) — read from `rce_issues`, the table the
+#: resolve path itself maintains. Default OFF keeps today's broader exclusion
+#: byte-identical. May only be enabled under the recorded D-08 decision; the
+#: taxonomy is the one the approved blocking rule already names — no new
+#: reason vocabulary is invented here.
+PROPOSED_SAMPLING_BLOCKING_ONLY_ENV = "RCE_PROPOSED_SAMPLING_BLOCKING_ONLY"
+REVIEW_REQUIRED_REASON_BLOCKING_ONLY = (
+    "unresolved BLOCKING post-promotion finding (enumerated taxonomy, read "
+    "from rce_issues); excluded from new sample draws until resolved through "
+    "the analyst/QA workflow. Record, findings and history unchanged.")
+
+
+def _proposed_blocking_only() -> bool:
+    import os
+    return (os.getenv(PROPOSED_SAMPLING_BLOCKING_ONLY_ENV) or "").strip().lower() in (
+        "1", "true", "yes", "on")
+
 
 def plan_key(intake_id: Any, review_type: str, *, confidence: float,
              margin: float, proportion: float, use_fpc: bool,
@@ -157,13 +184,30 @@ async def resolve_qhin_strata(db, intake_id, *, include_held: bool = False
     # Reported as UNRESOLVED with a reason, never filtered away silently: the
     # entity stays in the ledger, the queue, reconciliation and the reports.
     from app.tefca_registry.rce.post_promotion_verification import (
-        REVIEW_REQUIRED_STATUS)
+        BLOCKING_OUTCOMES, REVIEW_REQUIRED_STATUS)
 
-    review_required = {
-        row[0] for row in (await db.execute(
-            select(reg.TefcaRegEntity.id).where(
-                reg.TefcaRegEntity.id.in_(promoted),
-                reg.TefcaRegEntity.verification_status == REVIEW_REQUIRED_STATUS))).all()}
+    blocking_only = _proposed_blocking_only()
+    if blocking_only:
+        # D-08 proposed semantics: only an unresolved finding of an enumerated
+        # BLOCKING type excludes — read from rce_issues (the table the resolve
+        # path maintains), never from the overloaded status flag.
+        from app.tefca_registry.rce import curation as _curation
+        review_required = {
+            row[0] for row in (await db.execute(
+                select(m.RceCuratedRecord.canonical_entity_id).where(
+                    m.RceCuratedRecord.source_intake_id == intake_id,
+                    m.RceCuratedRecord.canonical_entity_id.isnot(None),
+                    m.RceCuratedRecord.source_record_id.in_(
+                        select(m.RceIssue.source_record_id).where(
+                            m.RceIssue.issue_type.in_(sorted(BLOCKING_OUTCOMES)),
+                            m.RceIssue.resolution.in_(
+                                sorted(_curation.UNDECIDED_RESOLUTIONS))))))).all()}
+    else:
+        review_required = {
+            row[0] for row in (await db.execute(
+                select(reg.TefcaRegEntity.id).where(
+                    reg.TefcaRegEntity.id.in_(promoted),
+                    reg.TefcaRegEntity.verification_status == REVIEW_REQUIRED_STATUS))).all()}
 
     eligible: List[Dict[str, Any]] = []
     unresolved: List[Dict[str, Any]] = []
@@ -190,7 +234,9 @@ async def resolve_qhin_strata(db, intake_id, *, include_held: bool = False
         if entity_id in review_required:
             unresolved.append({**unit, "qhin": str(parents[0]),
                                "exclusion": EXCLUSION_REVIEW_REQUIRED,
-                               "reason": REVIEW_REQUIRED_REASON})
+                               "reason": (REVIEW_REQUIRED_REASON_BLOCKING_ONLY
+                                          if blocking_only
+                                          else REVIEW_REQUIRED_REASON)})
             continue
         eligible.append({**unit, "qhin": str(parents[0])})
     return eligible, unresolved
