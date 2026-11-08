@@ -406,86 +406,14 @@ def _v4_rules() -> List[dict]:
 SEED_RULES_V4: List[dict] = _v4_rules()
 
 
-def _v5_rules() -> List[dict]:
-    """Version 5 — PROPOSED, INACTIVE. The 2026-11-07 decision-pack guards
-    (D-02/D-03/D-04 there; methodology package D4/D5/D6 here), expressed as
-    rule rows so the owner can review the exact behavior before any approval.
-
-    STACKED ON v4 (RULE-006/007, itself proposed and unactivated): deriving
-    from SEED_RULES_V4 keeps exactly one lineage — v5 = treatment rules + the
-    guards below — so the two proposals can never define two different
-    "version 4" rows (the #200/#205 collision this numbering resolves).
-
-    NOTHING ACTIVATES THIS AT STARTUP OR ON DEPLOY. `ensure_rules_v5` exists,
-    is called by no application path (v4 at least has its audited admin
-    activation route; v5 has none yet), and REFUSES to run without a recorded
-    activation identifier. Until then the active rule set is whatever the
-    database holds today, unchanged.
-
-    Derived from SEED_RULES_V4 so the delta below is the entire change:
-
-      D-03 (methodology D4 — required source unavailable vs FAILED):
-        RULE-002's partial pass treats `any_unavailable` hits — which include
-        FAILED via NO_SIGNAL_STATES — as "the source told us nothing". A FAILED
-        check is not an outage: the check RAN and did not succeed. v5 adds
-        `none_of pecos/sam_gov == failed` so a FAILED mandatory source blocks
-        the B1 partial pass instead of being swallowed by it. (The partial-pass
-        basis is already recorded: matched_conditions lists every
-        "<source> did not answer".)
-
-      D-04 (material conflict must demote B1/B2):
-        First-match priority lets RULE-001/002 (B1) and RULE-003 (B2) fire
-        before any conflict signal is consulted. v5 adds
-        `none_of name_mismatch==major / address_mismatch==major` to all three,
-        so a material identity/address conflict routes to RULE-004/B3 review
-        instead of passing. `address_mismatch: major` is produced today;
-        `name_mismatch: major` is produced only under the D-05 proposed
-        grading (see arc_pipeline PROPOSED_NAME_MAJOR_BELOW_ENV) — until that
-        methodology decision lands, the name guard is disclosed as
-        value-unreachable by `condition_readiness`, never hidden.
-
-      D-02 (methodology D6 — flagged vs confirmed-invalid NPI):
-        RULE-005's `npi_validation == invalid` clause has been dead on the
-        RCE path since v1 (the producer emits only "flagged"). The producer
-        split is proposed in arc_pipeline behind PROPOSED_NPI_INVALID_SPLIT_ENV
-        (invalid = structurally impossible: malformed or check-digit-failed).
-        v5 adds defense-in-depth `none_of npi_validation == invalid` to
-        RULE-001/002/003, matching the v2/v3 pattern of not relying on
-        evaluation order alone. RULE-005, RULE-006 and RULE-007 are unchanged.
-    """
-    import copy
-
-    MATERIAL_CONFLICTS = [
-        {"field": "name_mismatch", "severity": "major"},
-        {"field": "address_mismatch", "severity": "major"},
-        {"field": "npi_validation", "status": "invalid"},
-    ]
-    MANDATORY_FAILED = [{"source": "pecos", "status": "failed"},
-                        {"source": "sam_gov", "status": "failed"}]
-
-    def _add(cond: dict, clause: str, items: List[dict]) -> None:
-        existing = [(c.get("source"), c.get("field"), c.get("status"),
-                     c.get("severity")) for c in cond.get(clause, [])
-                    if isinstance(c, dict)]
-        for c in items:
-            key = (c.get("source"), c.get("field"), c.get("status"),
-                   c.get("severity"))
-            if key not in existing:
-                cond.setdefault(clause, []).append(c)
-
-    out = []
-    for spec in copy.deepcopy(SEED_RULES_V4):
-        code = spec["rule_code"]
-        cond = spec["conditions"]
-        if code in ("RULE-001", "RULE-002", "RULE-003"):
-            _add(cond, "none_of", MATERIAL_CONFLICTS)
-        if code == "RULE-002":
-            _add(cond, "none_of", MANDATORY_FAILED)
-        out.append(spec)
-    return out
-
-
-SEED_RULES_V5: List[dict] = _v5_rules()
+#: The composable successor to the monolithic v5 draft (2026-11-08): the
+#: proposed guards and the exclusion-candidate correction now live as NAMED
+#: COMPONENTS in `app.tefca_registry.rule_configuration` (compose /
+#: activate_rule_configuration), each tied to its own decision and recorded
+#: approval, so the owner can activate exactly what was approved. The former
+#: `_v5_rules`/`SEED_RULES_V5`/`ensure_rules_v5` are superseded by that one
+#: mechanism; `ensure_rules_v4` below and its audited admin route remain the
+#: reviewed treatment-pair special case.
 
 
 class BucketClassifier:
@@ -738,11 +666,16 @@ class BucketClassifier:
         counts = {s: 0 for s in VERIFICATION_STATES}
         counts["clear"] = 0
         counts["excluded"] = 0
+        # PROPOSED exclusion-candidate state (EX-3/D-16, flag-gated producer):
+        # an ANSWERED screen pending adjudication — counted as checked below.
+        counts["possible_match"] = 0
         for _name, raw in sources.items():
             state = raw if isinstance(raw, str) else (raw or {}).get("status")
             if state in counts:
                 counts[state] += 1
-        checked = sum(counts[s] for s in (VERIFIED, NOT_FOUND)) + counts["clear"] + counts["excluded"]
+        checked = (sum(counts[s] for s in (VERIFIED, NOT_FOUND))
+                   + counts["clear"] + counts["excluded"]
+                   + counts["possible_match"])
         return {
             "sources_total": len(sources),
             "sources_checked": checked,
@@ -899,63 +832,3 @@ async def ensure_rules_v4(session, effective: Optional[date] = None,
     logger.info("Retired %d v3 rules; activated %d v4 rules",
                 len(v3), len(SEED_RULES_V4))
     return len(SEED_RULES_V4)
-
-
-async def ensure_rules_v5(session, effective: Optional[date] = None,
-                          *, activation_record: Optional[str] = None) -> int:
-    """Retire version 3/4 rules and activate version 5 (the 2026-11-07
-    proposed guards stacked on the treatment rules — see `_v5_rules()`).
-
-    CALLED BY NOTHING. No startup path, scheduler, migration or route invokes
-    this (unlike v4, which has its own audited admin activation route for the
-    RULE-006/007 decision). Running it is the governed activation step itself
-    and requires the recorded methodology approval (decision pack
-    D-02/D-03/D-04) and release authorization (Gate B/C) — which is why it
-    REFUSES to run without `activation_record`: the identifier of the
-    recorded approval (e.g. a decision-register entry or signed change
-    record). Engineering cannot and must not supply that identifier on its
-    own authority.
-
-    Retires BOTH v3 and v4 rows (whichever exist): v5 derives from v4, so a
-    direct v3 -> v5 activation also carries RULE-006/007 — stated here so the
-    activation decision covers both proposals explicitly, never implicitly.
-    Idempotent: returns 0 if any version-5 row already exists. Prior rows are
-    RETIRED, never deleted, same reasoning as `ensure_rules_v2`.
-    """
-    from sqlalchemy import func as sqlfunc, select
-    from app.tefca_registry import models as reg
-
-    if not (activation_record or "").strip():
-        raise PermissionError(
-            "ensure_rules_v5 refused: rule-set v5 is a PROPOSAL. Activation "
-            "requires the recorded methodology approval for D-02/D-03/D-04 "
-            "(and, because v5 contains RULE-006/007, the D-01 treatment "
-            "decision) — pass its identifier as activation_record. Elapsed "
-            "time, CI success or review silence are not approvals.")
-
-    eff = effective or date.today()
-    already = int((await session.execute(
-        select(sqlfunc.count()).select_from(reg.ReviewRule)
-        .where(reg.ReviewRule.version == 5))).scalar() or 0)
-    if already:
-        return 0
-
-    prior = (await session.execute(
-        select(reg.ReviewRule).where(reg.ReviewRule.version.in_((3, 4)),
-                                     reg.ReviewRule.is_active.is_(True))
-    )).scalars().all()
-    for row in prior:
-        row.is_active = False
-        row.retired_date = eff
-
-    for spec in SEED_RULES_V5:
-        session.add(reg.ReviewRule(
-            rule_code=spec["rule_code"], name=spec["name"], bucket=spec["bucket"],
-            priority=spec["priority"], conditions=spec["conditions"],
-            description=(f"{spec['description']} [v5 activation record: "
-                         f"{activation_record.strip()}]"),
-            version=5, effective_date=eff, is_active=True))
-    await session.commit()
-    logger.info("Retired %d v3/v4 rules; activated %d v5 rules under record %s",
-                len(prior), len(SEED_RULES_V5), activation_record.strip())
-    return len(SEED_RULES_V5)

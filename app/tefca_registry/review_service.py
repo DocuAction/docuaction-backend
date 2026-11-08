@@ -311,8 +311,12 @@ PERSISTED_EVIDENCE_SOURCES = {"SAM_GOV": "sam_gov", "OIG_LEIE": "oig_leie",
                               "CMS_REVOCATION": "cms_revocation"}
 #: Worst first. "excluded"/"clear" are the manual path's own literals for the
 #: exclusion list; the five canonical states sit between them.
-_PERSISTED_PRECEDENCE = {"excluded": 0, FAILED: 1, NOT_FOUND: 2, UNAVAILABLE: 3,
-                         NOT_CHECKED: 4, VERIFIED: 5, "clear": 5}
+#: "possible_match" (PROPOSED exclusion-candidate state, EX-3/D-16, emitted by
+#: the shared translator only under its flag) ranks between a hard finding and
+#: an outage: worse than unavailable, better than a disqualifying not_found.
+_PERSISTED_PRECEDENCE = {"excluded": 0, FAILED: 1, NOT_FOUND: 2,
+                         "possible_match": 3, UNAVAILABLE: 4,
+                         NOT_CHECKED: 5, VERIFIED: 6, "clear": 6}
 
 
 def _precedence(status: Optional[str]) -> int:

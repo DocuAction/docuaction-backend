@@ -277,6 +277,14 @@ VOCABULARY_REGISTRY: Dict[Tuple[Layer, str], TermEntry] = {
     (L4, "unavailable"): _t(CC, "Source did not answer.",
                             since_version="pre-1.0", defined_at="bucket_classifier.py:40"),
     (L4, "failed"): _t(CC, "Source lookup failed.", defined_at="bucket_classifier.py:41"),
+    (L4, "possible_match"): _t(
+        PR, "PROPOSED (EX-3/D-16, inactive): an exclusion-dimension candidate "
+            "pending analyst adjudication — distinct from not_found (a finding) "
+            "and from clear (a clean screen). Emitted by the shared translator "
+            "ONLY under arc_pipeline PROPOSED_EXCLUSION_STATES_ENV (default "
+            "OFF); consumed by the exclusion_candidate_b3 rule delta. Until "
+            "activation, candidates keep collapsing to not_found.",
+        defined_at="arc_pipeline.py:EXCLUSION_POSSIBLE_MATCH_STATE"),
 
     # ── Layer 5 — RESERVED. Owned by B2 (QA gate); NOT implemented in E1 ─────
     #

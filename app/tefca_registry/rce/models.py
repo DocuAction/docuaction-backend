@@ -532,6 +532,41 @@ RCE_TABLE_ORDER = [
 # registers them on the same Base.
 import app.tefca_registry.rce.traceability_models  # noqa: E402,F401
 
+
+class RceSourcePolicy(Base):
+    """D-11 / M-1..M-4 — versioned, executable mandatory-source policy.
+
+    INACTIVE BY DATA: no row is ever seeded active; with no active rows the
+    classification path behaves byte-identically to today (the enforcement
+    hook no-ops — see rce/source_policy.py). A policy row states one source's
+    ROLE for B1/B2 eligibility (mandatory | conditional | advisory), its
+    applicability facts (e.g. {"requires_npi": true}), the versioned policy
+    text it implements, and the governance approval record that authorized it.
+    Activation and edits are owner-side governed acts (Gate C); the runtime
+    role only ever SELECTs this table.
+    """
+
+    __tablename__ = "rce_source_policies"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    version = Column(Integer, nullable=False)
+    source = Column(String(32), nullable=False)       # classifier source key
+    role = Column(String(16), nullable=False)
+    #: Facts deciding WHERE the requirement applies; empty = all records.
+    applicability = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    policy_reference = Column(Text, nullable=False)
+    #: tefca_reg_audit_log id of the methodology_approval_recorded row.
+    approval_reference = Column(UUID(as_uuid=True), nullable=False)
+    is_active = Column(Boolean, nullable=False, server_default=text("false"))
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint("role IN ('mandatory','conditional','advisory')",
+                        name="ck_rce_source_policy_role"),
+        Index("idx_rce_source_policy_active", "is_active", "source"),
+    )
+
+
 # Preflight + shadow-reassessment evidence tables (2026-10-03). Same reason as
 # the traceability import above: registered on the shared Base wherever the
 # RCE models are imported (app, Alembic env, create_all).

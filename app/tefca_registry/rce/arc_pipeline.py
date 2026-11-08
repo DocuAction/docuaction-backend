@@ -173,6 +173,29 @@ _DISPOSITION_TO_STATE = {
 EXCLUSION_DIMENSION = "EXCLUSION_REVOCATION"
 EXCLUSION_CLEAN_SCREEN_STATE = "clear"
 
+#: D-16/EX-3 PROPOSED, INACTIVE by default: a distinct classifier state for an
+#: exclusion-dimension CANDIDATE pending adjudication. Today a potential hit
+#: (producer disposition REVIEW — evidence_assembly `_sam_disposition`
+#: "Potential debarment match", LEIE "Potential exclusion match") collapses
+#: through `_DISPOSITION_TO_STATE` into "not_found", the same literal
+#: RULE-005 v3 lists as a B4 disqualifier — so a PENDING candidate classifies
+#: as confirmed non-compliance. The matrix (EX-3) routes a candidate to B3
+#: until an analyst confirms identity and scope. When this env var is set
+#: truthy (only under the recorded EX-3/D-16 decision), the shared translator
+#: emits "possible_match" for exclusion-dimension REVIEW instead; the
+#: `exclusion_candidate_b3` rule delta consumes it. Both callers of this
+#: translator (bulk path here; persisted evidence on the manual path) change
+#: together; the manual LIVE probe's own literals ("excluded" for a CONFIRMED
+#: exclusion, "clear" for a clean screen) are untouched.
+PROPOSED_EXCLUSION_STATES_ENV = "RCE_PROPOSED_EXCLUSION_STATES"
+EXCLUSION_POSSIBLE_MATCH_STATE = "possible_match"
+
+
+def _proposed_exclusion_states_on() -> bool:
+    import os
+    return (os.getenv(PROPOSED_EXCLUSION_STATES_ENV) or "").strip().lower() in (
+        "1", "true", "yes", "on")
+
 
 def evidence_item_state(dimension: Optional[str], disposition: Optional[str]) -> str:
     """Classifier state for one persisted/assembled evidence item. The single
@@ -181,6 +204,9 @@ def evidence_item_state(dimension: Optional[str], disposition: Optional[str]) ->
     evidence on the manual path)."""
     if dimension == EXCLUSION_DIMENSION and disposition == "NOT_FOUND":
         return EXCLUSION_CLEAN_SCREEN_STATE
+    if (dimension == EXCLUSION_DIMENSION and disposition == "REVIEW"
+            and _proposed_exclusion_states_on()):
+        return EXCLUSION_POSSIBLE_MATCH_STATE
     return _DISPOSITION_TO_STATE.get(disposition, "not_checked")
 
 
@@ -218,7 +244,8 @@ def item_state(dimension: Optional[str], item: Dict[str, Any]) -> str:
 #: The worst disposition wins when a source appears in several of the dimensions
 #: below, so a source that failed somewhere is not reported verified because it
 #: also passed elsewhere. "clear" ranks with "verified" (least bad).
-_STATE_PRECEDENCE = ("failed", "not_found", "unavailable", "not_checked", "verified",
+_STATE_PRECEDENCE = ("failed", "not_found", EXCLUSION_POSSIBLE_MATCH_STATE,
+                     "unavailable", "not_checked", "verified",
                      EXCLUSION_CLEAN_SCREEN_STATE)
 
 #: Dimensions whose evidence items set a SOURCE state.
@@ -718,6 +745,11 @@ async def verify_and_classify(
     rules = await _rule_set(db)
     classifier = BucketClassifier()
 
+    # M-1..M-4 executable policy (Gate C data): with no active policy rows —
+    # the shipped state — this list is empty and the hook below never runs.
+    from app.tefca_registry.rce import source_policy as _source_policy
+    active_source_policies = await _source_policy.load_active_policies(db)
+
     outcomes: List[Dict[str, Any]] = []
     buckets: Dict[str, int] = {}
     tiers: Dict[int, int] = {}
@@ -842,6 +874,31 @@ async def verify_and_classify(
                         "note": _b4_signal["note"],
                     }
             classification = classifier.classify(verification_results, rules=rules)
+
+            # M-4 enforcement: an APPLICABLE mandatory check without an
+            # acceptable ANSWER prevents B1/B2 (answered adverse findings are
+            # left to the rules). No active policy rows -> never runs.
+            if active_source_policies:
+                _pb, _pr, _policy_reason = _source_policy.apply_source_policy(
+                    classification.bucket, classification.rule_code,
+                    verification_results.get("sources") or {},
+                    {"has_submitted_npi": bool(_entity_npi(entity))},
+                    active_source_policies)
+                if _policy_reason:
+                    from app.tefca_registry.bucket_classifier import (
+                        ClassificationResult as _CR)
+                    classification = _CR(
+                        bucket=_pb, rule_code=None, rule_version=None,
+                        rule_name="Mandatory-source policy (M-4)",
+                        rationale=(f"Mandatory-source policy: {_policy_reason}. "
+                                   f"An applicable mandatory check without an "
+                                   f"acceptable answer cannot classify "
+                                   f"B1/B2 (M-4)."),
+                        matched_conditions=[_policy_reason],
+                        evidence_summary=classification.evidence_summary,
+                        evaluated_rules=classification.evaluated_rules
+                        + ["source_policy(M-4)"],
+                    )
 
             # NPPES outcome to the delivery's issue ledger (NPI-005/006/009). One
             # open issue per outcome per record; a repeat cycle adds nothing.
