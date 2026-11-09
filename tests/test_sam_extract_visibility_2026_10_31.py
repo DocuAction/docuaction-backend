@@ -73,6 +73,7 @@ def _unavailable() -> SourceResult:
 # ── pure: vocabulary, rule registry, state mapping ───────────────────────────
 
 def test_exc_001_registered_with_truthful_authority():
+    """EXC-001 is registered with truthful authority metadata."""
     rule = RULE_BY_ID["EXC-001"]
     assert rule.default_severity == "HIGH"
     assert rule.stage == "VERIFICATION"
@@ -81,7 +82,7 @@ def test_exc_001_registered_with_truthful_authority():
     # HUMAN_REQUIRED, never auto-applied and never QA-auto: the determination
     # (confirm / rule out) belongs to an analyst.
     assert authority == "HUMAN_REQUIRED"
-    assert RULE_SET_VERSION == "1.7.0"
+    assert RULE_SET_VERSION == "1.8.0"
 
 
 def test_state_layer_gains_sam_extract_and_headline_does_not():

@@ -406,6 +406,16 @@ def _v4_rules() -> List[dict]:
 SEED_RULES_V4: List[dict] = _v4_rules()
 
 
+#: The composable successor to the monolithic v5 draft (2026-11-08): the
+#: proposed guards and the exclusion-candidate correction now live as NAMED
+#: COMPONENTS in `app.tefca_registry.rule_configuration` (compose /
+#: activate_rule_configuration), each tied to its own decision and recorded
+#: approval, so the owner can activate exactly what was approved. The former
+#: `_v5_rules`/`SEED_RULES_V5`/`ensure_rules_v5` are superseded by that one
+#: mechanism; `ensure_rules_v4` below and its audited admin route remain the
+#: reviewed treatment-pair special case.
+
+
 class BucketClassifier:
     """Evaluates verification results against the active rule set.
 
@@ -450,7 +460,17 @@ class BucketClassifier:
             select(reg.ReviewRule).where(reg.ReviewRule.is_active.is_(True))
         )).scalars().all()
 
-        today = date.today()
+        # UTC, matching activate_rule_configuration's effective/retired-date
+        # stamps (review finding 2026-11-08): with a local-date filter here, a
+        # worker whose local date trails UTC would see a governed activation
+        # retire the old rows (is_active=False, immediate) while the new rows'
+        # UTC effective date is still "tomorrow" locally — no applicable rules
+        # until local midnight (B3-default window). One date convention ends
+        # that gap. Deployed containers run in UTC, where the two calls were
+        # already identical; the seed producers' own local-date defaults are
+        # deliberately untouched.
+        from datetime import datetime as _dt, timezone as _tz
+        today = _dt.now(_tz.utc).date()
         best: Dict[str, Any] = {}
         for r in rows:
             if r.retired_date and r.retired_date <= today:
@@ -656,11 +676,16 @@ class BucketClassifier:
         counts = {s: 0 for s in VERIFICATION_STATES}
         counts["clear"] = 0
         counts["excluded"] = 0
+        # PROPOSED exclusion-candidate state (EX-3/D-16, flag-gated producer):
+        # an ANSWERED screen pending adjudication — counted as checked below.
+        counts["possible_match"] = 0
         for _name, raw in sources.items():
             state = raw if isinstance(raw, str) else (raw or {}).get("status")
             if state in counts:
                 counts[state] += 1
-        checked = sum(counts[s] for s in (VERIFIED, NOT_FOUND)) + counts["clear"] + counts["excluded"]
+        checked = (sum(counts[s] for s in (VERIFIED, NOT_FOUND))
+                   + counts["clear"] + counts["excluded"]
+                   + counts["possible_match"])
         return {
             "sources_total": len(sources),
             "sources_checked": checked,
@@ -711,7 +736,12 @@ async def ensure_rules_v2(session, effective: Optional[date] = None) -> int:
     from sqlalchemy import func as sqlfunc, select
     from app.tefca_registry import models as reg
 
-    eff = effective or date.today()
+    # UTC, matching load_rules' filter and activation's stamps (review
+    # finding 2026-11-08 round 4): a local-date default on a UTC-ahead host
+    # would stamp tomorrow's UTC date, leaving the seeded rules invisible to
+    # the loader until UTC midnight. Explicit effective args are preserved.
+    from datetime import datetime as _dt, timezone as _tz
+    eff = effective or _dt.now(_tz.utc).date()
     already = int((await session.execute(
         select(sqlfunc.count()).select_from(reg.ReviewRule)
         .where(reg.ReviewRule.version == 2))).scalar() or 0)
@@ -746,7 +776,12 @@ async def ensure_rules_v3(session, effective: Optional[date] = None) -> int:
     from sqlalchemy import func as sqlfunc, select
     from app.tefca_registry import models as reg
 
-    eff = effective or date.today()
+    # UTC, matching load_rules' filter and activation's stamps (review
+    # finding 2026-11-08 round 4): a local-date default on a UTC-ahead host
+    # would stamp tomorrow's UTC date, leaving the seeded rules invisible to
+    # the loader until UTC midnight. Explicit effective args are preserved.
+    from datetime import datetime as _dt, timezone as _tz
+    eff = effective or _dt.now(_tz.utc).date()
     already = int((await session.execute(
         select(sqlfunc.count()).select_from(reg.ReviewRule)
         .where(reg.ReviewRule.version == 3))).scalar() or 0)
@@ -789,7 +824,12 @@ async def ensure_rules_v4(session, effective: Optional[date] = None,
     from sqlalchemy import func as sqlfunc, select
     from app.tefca_registry import models as reg
 
-    eff = effective or date.today()
+    # UTC, matching load_rules' filter and activation's stamps (review
+    # finding 2026-11-08 round 4): a local-date default on a UTC-ahead host
+    # would stamp tomorrow's UTC date, leaving the seeded rules invisible to
+    # the loader until UTC midnight. Explicit effective args are preserved.
+    from datetime import datetime as _dt, timezone as _tz
+    eff = effective or _dt.now(_tz.utc).date()
     already = int((await session.execute(
         select(sqlfunc.count()).select_from(reg.ReviewRule)
         .where(reg.ReviewRule.version == 4))).scalar() or 0)

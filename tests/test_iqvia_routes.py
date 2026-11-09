@@ -612,3 +612,12 @@ class TestSnapshotStatusOverHttp:
         status = await routes.snapshot_status(uuid.UUID(snapshot_id), db, user=_User("reviewer"))
         assert status["reference_preflight"] is None
         assert status["reconciliation"]["reference_preflight_gate"] is None
+
+
+# The advisory_comparison route-level tests (review finding 2026-11-08) live
+# in tests/test_iqvia_advisory_routes_2026_11_08.py — a self-contained file
+# wired into the isolation-postgres CI job. They were moved out of this file
+# because this file is wired into no CI job and its older classes carry 21
+# pre-existing local failures (ENABLE_IQVIA_SOURCES is a settings FIELD in
+# app/core/config.py, which shadows the monkeypatch.setenv mechanism used
+# here — tracked as its own follow-up change).

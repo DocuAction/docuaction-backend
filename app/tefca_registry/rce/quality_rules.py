@@ -86,7 +86,15 @@ from app.tefca_registry.rce.field_map import (
 #: finding is a candidate requiring determination — NEVER a confirmed
 #: exclusion, and its absence is never exclusion clearance. No executed
 #: quality rule changed; earlier runs keep their stored rule_version and text.
-RULE_SET_VERSION = "1.7.0"
+#: 1.8.0 — ACT-001's comparison population (quality_engine new_entrant_ids) is
+#: now the most recent COMPARABLE earlier delivery
+#: (delivery_delta.comparable_previous_delivery), never a smoke-test or
+#: synthetic intake that merely arrived last. October 2026: the 3-record
+#: smoke-test predecessor flagged 21 records as inactive new entrants that
+#: were present (and held) in the real September delivery. The rule predicate
+#: is unchanged; its input population is corrected (ACT-001 1.3.0 → 1.4.0).
+#: Earlier runs keep their stored rule_version and text.
+RULE_SET_VERSION = "1.8.0"
 
 # ── categories ───────────────────────────────────────────────────────────────
 
@@ -351,6 +359,12 @@ def assessment_date(ctx: RecordContext) -> date:
         return raw
     if isinstance(raw, str) and raw.strip():
         return date.fromisoformat(raw.strip()[:10])
+    # Near-unreachable in production (the engine always sets the date), but a
+    # silent wall-clock fallback is exactly what D-12 exists to make visible.
+    import logging
+    logging.getLogger(__name__).warning(
+        "RecordContext.dataset carries no assessment_date; falling back to "
+        "date.today() — this run's date-gated rule bases depend on wall clock.")
     return date.today()
 
 
@@ -1239,7 +1253,7 @@ RULES: Tuple[Rule, ...] = (
          "Delegated-authority reference is an OID", _doa_001, MEDIUM),
     Rule("DOA-002", CAT_DOA, "1.3.0",
          "Delegated-authority reference resolves in the TEFCA namespace", _doa_002, MEDIUM),
-    Rule("ACT-001", CAT_ACTIVITY, "1.3.0",
+    Rule("ACT-001", CAT_ACTIVITY, "1.4.0",
          "Inactive new entrant confirmed by an analyst", _act_001, HIGH),
 )
 

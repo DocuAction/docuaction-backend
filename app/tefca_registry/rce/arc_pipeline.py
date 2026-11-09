@@ -173,6 +173,46 @@ _DISPOSITION_TO_STATE = {
 EXCLUSION_DIMENSION = "EXCLUSION_REVOCATION"
 EXCLUSION_CLEAN_SCREEN_STATE = "clear"
 
+#: D-16/EX-3 PROPOSED, INACTIVE by default: a distinct classifier state for an
+#: exclusion-dimension CANDIDATE pending adjudication. Today a potential hit
+#: (producer disposition REVIEW — evidence_assembly `_sam_disposition`
+#: "Potential debarment match", LEIE "Potential exclusion match") collapses
+#: through `_DISPOSITION_TO_STATE` into "not_found", the same literal
+#: RULE-005 v3 lists as a B4 disqualifier — so a PENDING candidate classifies
+#: as confirmed non-compliance. The matrix (EX-3) routes a candidate to B3
+#: until an analyst confirms identity and scope. When this env var is set
+#: truthy (only under the recorded EX-3/D-16 decision), the shared translator
+#: emits "possible_match" for exclusion-dimension REVIEW instead; the
+#: `exclusion_candidate_b3` rule delta consumes it. Both callers of this
+#: translator (bulk path here; persisted evidence on the manual path) change
+#: together; the manual LIVE probe's own literals ("excluded" for a CONFIRMED
+#: exclusion, "clear" for a clean screen) are untouched.
+#: GOVERNANCE COUPLING (review note 2026-11-08; behavior VERIFIED against the
+#: real classifier at the 2026-11-08 release checkpoint): this flag belongs
+#: to the `exclusion_candidate_b3` component and must only be set in the SAME
+#: activation act (the activation audit lists it under flag_envs_covered).
+#: That coupling is MANDATORY, not defense-in-depth: if this flag is mis-set
+#: ALONE under the v3 baseline, a LEIE candidate still routes to B3-default
+#: (B1/B2 require oig_leie clear), but a SAM candidate with otherwise-clean
+#: sources classifies B1 via RULE-001 — the baseline has no positive sam_gov
+#: requirement and possible_match trips none of its none_of guards. An
+#: earlier note here claimed candidates always route to B3-default; that was
+#: wrong for SAM. The reverse mis-set (component active, flag off) IS safe:
+#: candidates collapse to not_found, which the baseline guards catch
+#: (B3-default). Follow-up tracked: add a baseline none_of possible_match
+#: guard to the B1/B2 rules (a behavior change needing its own review round).
+PROPOSED_EXCLUSION_STATES_ENV = "RCE_PROPOSED_EXCLUSION_STATES"
+EXCLUSION_POSSIBLE_MATCH_STATE = "possible_match"
+
+
+def _proposed_exclusion_states_on() -> bool:
+    """True when the EX-3/D-16 proposed possible_match state is enabled via
+    PROPOSED_EXCLUSION_STATES_ENV (default OFF; gated on the recorded
+    decision). Read fresh each call so tests can set it without reimport."""
+    import os
+    return (os.getenv(PROPOSED_EXCLUSION_STATES_ENV) or "").strip().lower() in (
+        "1", "true", "yes", "on")
+
 
 def evidence_item_state(dimension: Optional[str], disposition: Optional[str]) -> str:
     """Classifier state for one persisted/assembled evidence item. The single
@@ -181,6 +221,9 @@ def evidence_item_state(dimension: Optional[str], disposition: Optional[str]) ->
     evidence on the manual path)."""
     if dimension == EXCLUSION_DIMENSION and disposition == "NOT_FOUND":
         return EXCLUSION_CLEAN_SCREEN_STATE
+    if (dimension == EXCLUSION_DIMENSION and disposition == "REVIEW"
+            and _proposed_exclusion_states_on()):
+        return EXCLUSION_POSSIBLE_MATCH_STATE
     return _DISPOSITION_TO_STATE.get(disposition, "not_checked")
 
 
@@ -218,7 +261,8 @@ def item_state(dimension: Optional[str], item: Dict[str, Any]) -> str:
 #: The worst disposition wins when a source appears in several of the dimensions
 #: below, so a source that failed somewhere is not reported verified because it
 #: also passed elsewhere. "clear" ranks with "verified" (least bad).
-_STATE_PRECEDENCE = ("failed", "not_found", "unavailable", "not_checked", "verified",
+_STATE_PRECEDENCE = ("failed", "not_found", EXCLUSION_POSSIBLE_MATCH_STATE,
+                     "unavailable", "not_checked", "verified",
                      EXCLUSION_CLEAN_SCREEN_STATE)
 
 #: Dimensions whose evidence items set a SOURCE state.
@@ -265,6 +309,97 @@ EMITTED_FIELD_SIGNALS: Dict[str, str] = {
     for name, entry in _SIGNAL_REGISTRY.items()
     if any(p.path == _PATH_RCE for p in entry.producers)
 }
+
+# ── PROPOSED producer behaviors (2026-11-07 decision pack) — INACTIVE ─────────
+#
+# Both default OFF and change nothing until the named env var is set, which is
+# itself gated on the recorded methodology decision. They exist so the owner
+# can preview the exact proposed behavior (Gate A) without any active change.
+#
+#: D-02 (methodology D6): when set truthy, a structurally impossible NPI
+#: (NPI_MALFORMED / NPI_CHECK_DIGIT_FAILED — both structural by definition)
+#: emits `npi_validation == "invalid"` instead of "flagged", making RULE-005's
+#: confirmed-invalid clause reachable on this path. "flagged" remains the
+#: vocabulary for valid-form-but-suspect identifiers.
+PROPOSED_NPI_INVALID_SPLIT_ENV = "RCE_PROPOSED_NPI_INVALID_SPLIT"
+
+#: D-05 (methodology D5): when set to a float in [0,1], a legal-name conflict
+#: whose NPPES similarity is BELOW the value emits severity "major" instead of
+#: the hardcoded "minor". NO default band exists here — the threshold is a
+#: methodology number and must come from the recorded D-05 decision, never
+#: from engineering. Unset or unparseable → behavior unchanged.
+PROPOSED_NAME_MAJOR_BELOW_ENV = "RCE_PROPOSED_NAME_MAJOR_BELOW"
+
+
+def _proposed_npi_invalid_split_on() -> bool:
+    """True when the D-02/D6 proposed invalid/flagged split is enabled via
+    PROPOSED_NPI_INVALID_SPLIT_ENV (default OFF; gated on the recorded
+    decision). Read fresh each call so tests can set it without reimport."""
+    import os
+    return (os.getenv(PROPOSED_NPI_INVALID_SPLIT_ENV) or "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def proposed_structural_npi_signal(npi_raw: Optional[str]) -> Optional[dict]:
+    """D-02 PROPOSED producer for the bulk path — PURE, and gated by the same
+    PROPOSED_NPI_INVALID_SPLIT_ENV flag at the call site (default OFF).
+
+    WHY IT EXISTS: `rce_fields.quality_flags` never emits NPI_MALFORMED /
+    NPI_CHECK_DIGIT_FAILED, so on the bulk path `evidence["data_quality_flags"]`
+    cannot carry them and the flags-based `npi_validation` producer above never
+    fires — a third dead link in the D-02 chain (rule clause, producer value,
+    and now path wiring). This function computes the signal from the SUBMITTED
+    NPI directly, using the same staged semantics as the quality engine
+    (NPI-002/003/004) and the same canonical validator, so the two layers
+    cannot disagree.
+
+    MATRIX NP-1 vs NP-3 SEPARATION, exactly: a comma-separated cell holds
+    MULTIPLE values — the FIELD is malformed while each contained NPI may be
+    individually valid, so it is "flagged" (valid-form-suspect vocabulary,
+    NPI_MULTIPLE_VALUES route), never "invalid". A single token that fails
+    length, charset or the CMS 80840 check digit is structurally impossible —
+    "invalid". A valid single NPI, or a blank, emits nothing.
+    The submitted value is preserved verbatim in the payload; nothing is ever
+    repaired or substituted.
+    """
+    value = (npi_raw or "").strip()
+    if not value:
+        return None
+    if "," in value:
+        return {"status": "flagged", "basis": "MULTIPLE_NPI_IN_ONE_FIELD",
+                "raw_npi": npi_raw}
+    if len(value) != 10 or not value.isdigit():
+        return {"status": "invalid", "basis": "NPI_STRUCTURALLY_INVALID",
+                "raw_npi": npi_raw}
+    try:
+        from app.services.npi_validator import validate_npi
+        ok, _message = validate_npi(value)
+    except Exception:  # noqa: BLE001 — validator unavailable is not a finding
+        return None
+    if ok:
+        return None
+    return {"status": "invalid", "basis": "NPI_CHECKSUM_INVALID",
+            "raw_npi": npi_raw}
+
+
+def _proposed_name_major_below() -> Optional[float]:
+    """D-05 band from the env flag: a float in [0, 1], else None with an error
+    log (proposed grading stays OFF; invalid values are never guessed)."""
+    import os
+    raw = (os.getenv(PROPOSED_NAME_MAJOR_BELOW_ENV) or "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.error("%s=%r is not a float; D-05 proposed grading stays OFF",
+                     PROPOSED_NAME_MAJOR_BELOW_ENV, raw)
+        return None
+    if not (0.0 <= value <= 1.0):
+        logger.error("%s=%r is outside [0,1]; D-05 proposed grading stays OFF",
+                     PROPOSED_NAME_MAJOR_BELOW_ENV, raw)
+        return None
+    return value
 
 
 def dimensions_to_verification_results(evidence: Dict[str, Any]) -> Dict[str, Any]:
@@ -349,12 +484,30 @@ def dimensions_to_verification_results(evidence: Dict[str, Any]) -> Dict[str, An
             # docs/methodology_decision_package.md (Decision D5).
             conflicts = [c for i in dimension.get("evidence", [])
                          for c in (i.get("field_conflicts") or [])]
-            if any((c.get("field") or "") == IDENTITY_NAME_FIELD for c in conflicts):
-                fields["name_mismatch"] = {"severity": "minor"}
+            name_conflicts = [c for c in conflicts
+                              if (c.get("field") or "") == IDENTITY_NAME_FIELD]
+            if name_conflicts:
+                severity = "minor"
+                # D-05 PROPOSED grading — inactive unless the methodology
+                # decision supplies the band via env (see
+                # PROPOSED_NAME_MAJOR_BELOW_ENV). The evidence item already
+                # carries the rounded similarity; a conflict with no recorded
+                # similarity is never upgraded on a missing number.
+                major_below = _proposed_name_major_below()
+                if major_below is not None:
+                    sims = [c.get("similarity") for c in name_conflicts
+                            if isinstance(c.get("similarity"), (int, float))]
+                    if sims and min(sims) < major_below:
+                        severity = "major"
+                fields["name_mismatch"] = {"severity": severity}
 
     quality = evidence.get("data_quality_flags") or []
     if "NPI_MALFORMED" in quality or "NPI_CHECK_DIGIT_FAILED" in quality:
-        fields["npi_validation"] = {"status": "flagged"}
+        # D-02 PROPOSED split — inactive by default. Structurally impossible
+        # (malformed / check-digit-failed) is "invalid"; "flagged" stays the
+        # valid-form-but-suspect vocabulary.
+        fields["npi_validation"] = {
+            "status": "invalid" if _proposed_npi_invalid_split_on() else "flagged"}
 
     return {"sources": sources, "fields": fields, "dimensions": dimension_view}
 
@@ -612,7 +765,23 @@ async def verify_and_classify(
     from app.tefca_registry.bucket_classifier import BucketClassifier
 
     rules = await _rule_set(db)
+
+    # Release-prerequisite controls (2026-11-08), BEFORE any classification
+    # write: mark this transaction in-flight + refuse while the transition
+    # barrier is on, then refuse if the EX-3 producer flag disagrees with the
+    # effective rule configuration this very call is about to classify with.
+    # Refusal is the only action — no bucket is ever silently rerouted.
+    from app.tefca_registry.processing_controls import (
+        assert_exclusion_configuration_consistent, enter_processing)
+    await enter_processing(db)
+    assert_exclusion_configuration_consistent(rules)
+
     classifier = BucketClassifier()
+
+    # M-1..M-4 executable policy (Gate C data): with no active policy rows —
+    # the shipped state — this list is empty and the hook below never runs.
+    from app.tefca_registry.rce import source_policy as _source_policy
+    active_source_policies = await _source_policy.load_active_policies(db)
 
     outcomes: List[Dict[str, Any]] = []
     buckets: Dict[str, int] = {}
@@ -700,16 +869,66 @@ async def verify_and_classify(
             from app.Tefca import rce_fields as _rce_fields
             from app.tefca_registry.rce import npi_applicability as _npa
             from app.tefca_registry.rce.quality_rules import BR_NPI_TRTMNT_EFFECTIVE
+            _raw_purposes = _rce_fields.rce_value(entity, "purposesofuse")
+            _raw_npi = _rce_fields.rce_value(entity, "NPI")
+            _raw_active = _rce_fields.rce_value(entity, "active")
             _b4_signal = _npa.active_treatment_missing_required_npi(
-                _rce_fields.rce_value(entity, "purposesofuse"),
-                _rce_fields.rce_value(entity, "NPI"),
-                _rce_fields.rce_value(entity, "active"),
+                _raw_purposes, _raw_npi, _raw_active,
                 assessment_date=date.today(),
                 requirement_effective=BR_NPI_TRTMNT_EFFECTIVE,
                 org_node_type=_rce_fields.rce_value(entity, "organizationNodeType"))
+            # INACTIVE records with the same token condition get an OBSERVATION
+            # (owner instruction 2026-11-08), never a bucket signal: exact
+            # T-TRTMNT token membership in any combination (assign_case parses
+            # the multi-value field; T-TREAT alone never matches, T-TREAT
+            # combined with T-TRTMNT never exempts) + blank submitted NPI +
+            # active flag NOT '1'. Raw values preserved verbatim. No rule
+            # consumes this signal; it exists for reporting and analyst view.
+            if _b4_signal is None:
+                from app.tefca_registry.rce.field_map import normalize_active
+                _assign = _npa.assign_case(_raw_purposes, _raw_npi)
+                if _assign.case == 1 and normalize_active(_raw_active) != "1":
+                    verification_results.setdefault("fields", {})[
+                        "inactive_treatment_npi_missing"] = {
+                        "status": True,
+                        "reason_code": "INACTIVE_TREATMENT_NPI_MISSING",
+                        "raw_purposes": _assign.raw_purposes,
+                        "raw_npi": _assign.raw_npi,
+                        "raw_active": (_raw_active or ""),
+                        "purpose_tokens": list(_assign.tokens),
+                    }
+            # D-02 PROPOSED bulk-path producer (default OFF): structural NPI
+            # signal computed from the SUBMITTED value. Never overwrites a
+            # signal another producer already set.
+            if _proposed_npi_invalid_split_on():
+                _npi_sig = proposed_structural_npi_signal(
+                    _rce_fields.rce_value(entity, "NPI"))
+                if _npi_sig is not None:
+                    verification_results.setdefault("fields", {}).setdefault(
+                        "npi_validation", _npi_sig)
             if _b4_signal is not None:
                 _fields = verification_results.setdefault("fields", {})
                 _fields["active_treatment_missing_required_npi"] = _b4_signal
+                # OWNER-ADOPTED policy condition (superseding D-01 record,
+                # 2026-11-08): the signal's very existence IS the owner's
+                # condition (active + exact T-TRTMNT + blank submitted NPI +
+                # requirement in force) — node type is information, not a
+                # gate. Consumed only by RULE-009 in the INACTIVE component
+                # treatment_b4_owner_adopted.
+                _fields["treatment_owner_adopted_missing_npi"] = {
+                    "status": True,
+                    "reason_code": "TREATMENT_NPI_MISSING_OWNER_ADOPTED",
+                    "raw_purposes": _b4_signal["raw_purposes"],
+                    "raw_npi": _b4_signal["raw_npi"],
+                    "raw_active": _b4_signal["raw_active"],
+                    "raw_org_node_type": _b4_signal["raw_org_node_type"],
+                    "requirement": _b4_signal["requirement"],
+                    "assessment_date": _b4_signal["assessment_date"],
+                    "note": ("Owner-adopted classification policy; not proof "
+                             "that this record independently establishes an "
+                             "SOP breach. A supplemental NPI never fills the "
+                             "submitted blank or suppresses this condition."),
+                }
                 # Unknown §7 applicability is NEVER confirmed non-compliance:
                 # it is its own signal, consumed by RULE-007 (B3 explicit
                 # applicability review) so the record can neither classify B4
@@ -719,6 +938,7 @@ async def verify_and_classify(
                         "status": True,
                         "initiating_requirement": _b4_signal["initiating_requirement"],
                         "exchange_direction": _b4_signal["exchange_direction"],
+                        "reason_code": _b4_signal["reason_code"],
                         "raw_org_node_type": _b4_signal["raw_org_node_type"],
                         "raw_purposes": _b4_signal["raw_purposes"],
                         "raw_npi": _b4_signal["raw_npi"],
@@ -728,6 +948,46 @@ async def verify_and_classify(
                         "note": _b4_signal["note"],
                     }
             classification = classifier.classify(verification_results, rules=rules)
+
+            # M-4 enforcement: an APPLICABLE mandatory check without an
+            # acceptable ANSWER prevents B1/B2 (answered adverse findings are
+            # left to the rules). No active policy rows -> never runs.
+            if active_source_policies:
+                (_pb, _pr, _policy_reason,
+                 _matched_policy) = _source_policy.apply_source_policy(
+                    classification.bucket, classification.rule_code,
+                    verification_results.get("sources") or {},
+                    {"has_submitted_npi": bool(_entity_npi(entity))},
+                    active_source_policies)
+                if _policy_reason:
+                    from app.tefca_registry.bucket_classifier import (
+                        ClassificationResult as _CR)
+                    # Provenance: the determination came from the M-4 source
+                    # policy, not from "no rule matched" — it cites the
+                    # reserved code and the policy table, never the
+                    # DEFAULT-UNMATCHED path (review finding 2026-11-08).
+                    classification = _CR(
+                        bucket=_pb,
+                        rule_code=_source_policy.SOURCE_POLICY_RULE_CODE,
+                        # The ACTUAL policy row version - the versioned
+                        # provenance is the rce_source_policies row, cited by
+                        # id and references below, never a placeholder.
+                        rule_version=_matched_policy.get("version"),
+                        rule_name="Mandatory-source policy (M-4)",
+                        rationale=(f"Mandatory-source policy: {_policy_reason}. "
+                                   f"An applicable mandatory check without an "
+                                   f"acceptable answer cannot classify B1/B2 "
+                                   f"(M-4). Policy row "
+                                   f"{_matched_policy.get('id')} v"
+                                   f"{_matched_policy.get('version')} - "
+                                   f"{_matched_policy.get('policy_reference')}; "
+                                   f"approval "
+                                   f"{_matched_policy.get('approval_reference')}."),
+                        matched_conditions=[_policy_reason],
+                        evidence_summary=classification.evidence_summary,
+                        evaluated_rules=classification.evaluated_rules
+                        + ["source_policy(M-4)"],
+                    )
 
             # NPPES outcome to the delivery's issue ledger (NPI-005/006/009). One
             # open issue per outcome per record; a repeat cycle adds nothing.

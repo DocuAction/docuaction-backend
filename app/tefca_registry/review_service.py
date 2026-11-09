@@ -311,8 +311,12 @@ PERSISTED_EVIDENCE_SOURCES = {"SAM_GOV": "sam_gov", "OIG_LEIE": "oig_leie",
                               "CMS_REVOCATION": "cms_revocation"}
 #: Worst first. "excluded"/"clear" are the manual path's own literals for the
 #: exclusion list; the five canonical states sit between them.
-_PERSISTED_PRECEDENCE = {"excluded": 0, FAILED: 1, NOT_FOUND: 2, UNAVAILABLE: 3,
-                         NOT_CHECKED: 4, VERIFIED: 5, "clear": 5}
+#: "possible_match" (PROPOSED exclusion-candidate state, EX-3/D-16, emitted by
+#: the shared translator only under its flag) ranks between a hard finding and
+#: an outage: worse than unavailable, better than a disqualifying not_found.
+_PERSISTED_PRECEDENCE = {"excluded": 0, FAILED: 1, NOT_FOUND: 2,
+                         "possible_match": 3, UNAVAILABLE: 4,
+                         NOT_CHECKED: 5, VERIFIED: 6, "clear": 6}
 
 
 def _precedence(status: Optional[str]) -> int:
@@ -371,7 +375,15 @@ def apply_persisted_exclusion_evidence(sources: Dict[str, dict],
             "normalized_values": getattr(row, "normalized_values", None)})
         live = sources.get(key) or {}
         live_status = live.get("status")
-        live_answered = live_status in ("excluded", "clear", VERIFIED, NOT_FOUND)
+        # "possible_match" IS an answered live state (review finding
+        # 2026-11-08): under the EX-3 flag `_leie_org_name_screen` emits it
+        # for a live candidate hit, and without it here an OLDER persisted
+        # "clear" row (precedence 6) replaced the live candidate (precedence
+        # 3) — the worse-state-wins contract inverted, B1 reachable with an
+        # un-adjudicated live hit. With the flag off the same hit is
+        # not_found, which was always protected.
+        live_answered = live_status in ("excluded", "clear", VERIFIED,
+                                        NOT_FOUND, "possible_match")
         if live_answered and _precedence(live_status) <= _precedence(state):
             # The live probe already said something at least as bad. Keep it;
             # note that the persisted row was seen and not needed.
@@ -457,8 +469,11 @@ def coverage_note(sources: Dict[str, dict]) -> dict:
     impl = {k: v for k, v in sources.items() if k in IMPLEMENTED_SOURCES}
     unimplemented = sorted(k for k in sources if k not in IMPLEMENTED_SOURCES)
 
+    # "possible_match" is an ANSWERED screen pending adjudication: checked,
+    # never verified (same reading as BucketClassifier.evidence_summary).
     checked = [k for k, v in impl.items()
-               if v.get("status") in (VERIFIED, NOT_FOUND, "clear", "excluded")]
+               if v.get("status") in (VERIFIED, NOT_FOUND, "clear", "excluded",
+                                      "possible_match")]
     unavailable = [k for k, v in impl.items() if v.get("status") == UNAVAILABLE]
     not_checked = [k for k, v in impl.items() if v.get("status") == NOT_CHECKED]
     failed = [k for k, v in impl.items() if v.get("status") == FAILED]
@@ -732,6 +747,20 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
     # (2026-10-02; see bucket_classifier._v3_rules's docstring). Purely
     # additive over v2, same no-op-when-silent guarantee. Idempotent.
     await ensure_rules_v3(db)
+
+    # Release-prerequisite controls (2026-11-08), BEFORE the first staged
+    # write (the verification_started audit row): mark this transaction
+    # in-flight + refuse while the transition barrier is on, then refuse if
+    # the EX-3 producer flag disagrees with the effective rule configuration.
+    # The rules checked here come from the SAME module classifier (cache
+    # included) that `classify_with_db` below will use, so the guard's view
+    # and classification's view can never diverge — a stale cache after an
+    # activation produces a refusal, never a wrong bucket.
+    from app.tefca_registry.processing_controls import (
+        assert_exclusion_configuration_consistent, enter_processing)
+    await enter_processing(db)
+    assert_exclusion_configuration_consistent(await _classifier.load_rules(db))
+
     actor_id, actor_email = reg_audit.actor_of(user)
 
     reg_audit.record(db, reg_audit.VERIFICATION_STARTED, entity.id,

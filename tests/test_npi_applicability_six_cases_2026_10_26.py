@@ -305,6 +305,8 @@ def test_the_four_dates_are_distinct_fields_with_the_sop_values():
 
 
 def test_engine_reads_snapshot_date_only_from_authoritative_metadata_never_receipt_date():
+    """The engine takes the snapshot date only from authoritative metadata,
+    never the receipt date."""
     import inspect
     from types import SimpleNamespace
     from datetime import datetime
@@ -312,7 +314,10 @@ def test_engine_reads_snapshot_date_only_from_authoritative_metadata_never_recei
     src = inspect.getsource(quality_engine)
     assert 'dataset["snapshot_date"] = snapshot_date_from_metadata(intake)' in src
     assert "received_at.date()" not in src, "the stated receipt date is not a population date"
-    assert 'dataset["assessment_date"] = run.started_at.date()' in src
+    # D-12 (2026-11-07): the DEFAULT is still the run start; a pinned date
+    # exists only behind the explicit parameter / proposed env override.
+    assert 'dataset["assessment_date"] = pinned or run.started_at.date()' in src
+    assert "_proposed_assessment_as_of()" in src
     # received later than the snapshot, no metadata → unresolved (None); with metadata → the recorded date
     later = SimpleNamespace(received_at=datetime(2026, 9, 24), created_at=datetime(2026, 9, 24), source_metadata={})
     assert quality_engine.snapshot_date_from_metadata(later) is None

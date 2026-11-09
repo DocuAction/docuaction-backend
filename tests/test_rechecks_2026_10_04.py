@@ -441,3 +441,42 @@ async def test_a_recheck_in_which_no_entity_resolved_is_a_failure_not_a_success(
     assert done["summary"]["by_outcome"] == {rm.OUTCOME_NOT_RESOLVED: 2}
     after = await _snapshot(entity_ids)
     assert set(after["sam_rows"].values()) == {"UNAVAILABLE"}  # nothing appended, nothing cleared
+
+
+async def test_item_pagination_is_stable_across_an_entity_ref_tie(
+        db_required, monkeypatch):
+    """entity_ref (rce_org_oid) is not unique; only (job_id, entity_id) is.
+    Offset pagination sorted on entity_ref alone has undefined order inside a
+    tie, so a page boundary there can repeat one row and skip another while the
+    total still reconciles. The sort must be total: (entity_ref, entity_id)."""
+    from app.core.database import async_session_maker
+    from app.tefca_registry.rce.recheck_models import RceRecheckItem
+
+    intake_id, _, _ = await _delivery_verified_during_an_outage(monkeypatch, n=1)
+    job = await _request(intake_id, _User("reviewer"))
+    jid = uuid.UUID(job["job_id"])
+
+    async with async_session_maker() as db:
+        existing = (await rechecks.list_items(db, jid))["items"]
+        tie_ref = existing[0]["entity_ref"]
+        for _ in range(2):  # two more items sharing the same entity_ref
+            db.add(RceRecheckItem(
+                id=uuid.uuid4(), job_id=jid, entity_id=uuid.uuid4(),
+                entity_ref=tie_ref, state=rm.ITEM_PENDING, detail={}))
+        await db.commit()
+
+    seen = []
+    async with async_session_maker() as db:
+        offset = 0
+        while True:
+            page = await rechecks.list_items(db, jid, limit=1, offset=offset)
+            if not page["items"]:
+                break
+            seen.extend(i["entity_id"] for i in page["items"])
+            offset += 1
+            assert offset <= page["total"], "pagination ran past total"
+    assert len(seen) == 3 and len(set(seen)) == 3  # no repeat, no skip
+    # Order-sensitive: canonical lowercase UUID strings sort identically to
+    # PostgreSQL's bytewise uuid order, so this fails if the entity_id
+    # tiebreaker is ever removed from list_items.
+    assert seen == sorted(seen)

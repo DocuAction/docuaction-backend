@@ -146,8 +146,12 @@ async def _build_dataset_context(db, intake_id) -> Dict[str, Any]:
     # 1.3.0 — the delivery is not the whole namespace. A parent or a
     # delegated authority may be an entity an EARLIER delivery promoted, and
     # "new entrant" is only meaningful against the previous delivery.
+    # 1.8.0 — "previous" must be a COMPARABLE delivery, not merely the latest
+    # earlier intake: a smoke-test or synthetic intake between two directory
+    # snapshots is not the population these ids could have been present in,
+    # and using it flags continuing records as history-less new entrants.
     from app.tefca_registry import models as reg
-    from app.tefca_registry.rce.delivery_delta import previous_delivery
+    from app.tefca_registry.rce.delivery_delta import comparable_previous_delivery
 
     registry_oids = {v for (v,) in (await db.execute(
         select(reg.TefcaEntityIdentifier.identifier_value)
@@ -156,7 +160,7 @@ async def _build_dataset_context(db, intake_id) -> Dict[str, Any]:
     previous = None
     intake = await db.get(m.RceSourceIntake, intake_id)
     if intake is not None:
-        previous = await previous_delivery(db, intake)
+        previous = await comparable_previous_delivery(db, intake)
     if previous is not None:
         previous_ids = {v for (v,) in (await db.execute(
             select(m.RceSourceRecord.source_rce_id)
@@ -233,11 +237,42 @@ def _dataset_level_findings(intake) -> List[Finding]:
     return findings
 
 
+#: D-12 PROPOSED, INACTIVE by default: pin the assessment-as-of date for a
+#: quality run so re-assessing identical pinned inputs is reproducible by
+#: construction. May only be set under the recorded D-12 decision. Unset,
+#: unparseable or in the future → ignored with an error log, behavior unchanged.
+PROPOSED_ASSESSMENT_AS_OF_ENV = "RCE_PROPOSED_ASSESSMENT_AS_OF"
+
+
+def _proposed_assessment_as_of() -> Optional[date]:
+    """D-12 assessment date from the env flag: a past-or-today ISO date (UTC),
+    else None with an error log and unchanged behavior."""
+    import os
+    raw = (os.getenv(PROPOSED_ASSESSMENT_AS_OF_ENV) or "").strip()
+    if not raw:
+        return None
+    try:
+        value = date.fromisoformat(raw)
+    except ValueError:
+        logger.error("%s=%r is not an ISO date; assessment date stays the run "
+                     "start", PROPOSED_ASSESSMENT_AS_OF_ENV, raw)
+        return None
+    # UTC, deliberately: the run rows and gates are UTC-based, and a
+    # server-local date could accept tomorrow's UTC date near midnight.
+    if value > datetime.now(timezone.utc).date():
+        logger.error("%s=%s is in the future; a run cannot be assessed as of a "
+                     "date that has not happened. Assessment date stays the run "
+                     "start", PROPOSED_ASSESSMENT_AS_OF_ENV, value.isoformat())
+        return None
+    return value
+
+
 async def run_quality_engine(
     db,
     intake_id,
     *,
     executed_by: str = "SYSTEM",
+    assessment_as_of: Optional[date] = None,
 ) -> Dict[str, Any]:
     """Evaluate every rule against every record of a delivery.
 
@@ -263,8 +298,32 @@ async def run_quality_engine(
 
     dataset = await _build_dataset_context(db, intake.id)
     # Effective-dated rules (BR-NPI-TRTMNT-001) read the run's own date, so a
-    # re-run of an old delivery is assessed as of today and says so.
-    dataset["assessment_date"] = run.started_at.date()
+    # re-run of an old delivery is assessed as of today and says so — UNLESS a
+    # pinned assessment-as-of date was supplied (D-12 proposal; explicit
+    # parameter wins over the env override, both inactive by default). An
+    # explicit future date is a caller error and is refused rather than logged
+    # away; the env path validates and logs inside its own reader.
+    if (assessment_as_of is not None
+            and assessment_as_of > datetime.now(timezone.utc).date()):
+        raise ValueError(
+            f"assessment_as_of={assessment_as_of.isoformat()} is in the future; "
+            f"a run cannot be assessed as of a date that has not happened.")
+    pinned = assessment_as_of or _proposed_assessment_as_of()
+    dataset["assessment_date"] = pinned or run.started_at.date()
+
+    # D-12: record what date this run assessed as of, where it came from, and
+    # which date-gated rule bases were active — on every run, so historical
+    # results stay explainable without re-deriving the gates.
+    from app.tefca_registry.rce.quality_rules import (BR_NPI_TRTMNT_EFFECTIVE,
+                                                      NPI_CASES_EFFECTIVE)
+    _assessed = dataset["assessment_date"]
+    run.assessment_metadata = {
+        "assessment_date": _assessed.isoformat(),
+        "source": ("pinned_param" if assessment_as_of is not None
+                   else "pinned_env" if pinned is not None else "run_start"),
+        "br_npi_trtmnt_basis_active": _assessed >= BR_NPI_TRTMNT_EFFECTIVE,
+        "six_case_logic_active": _assessed >= NPI_CASES_EFFECTIVE,
+    }
     # The population (snapshot) date comes ONLY from authoritative, auditable delivery metadata
     # (source_metadata.snapshot_date, recorded by an authorised operator with its basis; see
     # delivery_routes snapshot-date). `received_at` is the registrant-stated RECEIPT date and

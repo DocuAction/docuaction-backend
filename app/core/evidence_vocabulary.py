@@ -277,6 +277,14 @@ VOCABULARY_REGISTRY: Dict[Tuple[Layer, str], TermEntry] = {
     (L4, "unavailable"): _t(CC, "Source did not answer.",
                             since_version="pre-1.0", defined_at="bucket_classifier.py:40"),
     (L4, "failed"): _t(CC, "Source lookup failed.", defined_at="bucket_classifier.py:41"),
+    (L4, "possible_match"): _t(
+        PR, "PROPOSED (EX-3/D-16, inactive): an exclusion-dimension candidate "
+            "pending analyst adjudication — distinct from not_found (a finding) "
+            "and from clear (a clean screen). Emitted by the shared translator "
+            "ONLY under arc_pipeline PROPOSED_EXCLUSION_STATES_ENV (default "
+            "OFF); consumed by the exclusion_candidate_b3 rule delta. Until "
+            "activation, candidates keep collapsing to not_found.",
+        defined_at="arc_pipeline.py:EXCLUSION_POSSIBLE_MATCH_STATE"),
 
     # ── Layer 5 — RESERVED. Owned by B2 (QA gate); NOT implemented in E1 ─────
     #
@@ -439,9 +447,14 @@ CLASSIFIER_SIGNAL_REGISTRY: Dict[str, SignalEntry] = {
                      ("minor",)),
         ),
         blocking_decision="D5",
-        note="Producible and consumed by RULE-003. Only 'minor' is ever emitted: "
-             "the severity is a hardcoded constant because the grading scale "
-             "(NAME_EXACT .. NAME_AMBIGUOUS) is unapproved. D5.",
+        note="Producible and consumed by RULE-003. Only 'minor' is emitted on "
+             "the ACTIVE system: the severity is a hardcoded constant because "
+             "the grading scale (NAME_EXACT .. NAME_AMBIGUOUS) is unapproved. "
+             "A PROPOSED, default-off grading exists behind arc_pipeline "
+             "PROPOSED_NAME_MAJOR_BELOW_ENV (no built-in band; the number must "
+             "come from the recorded D5 decision). This entry records ACTIVE "
+             "emission only; update it in the same governed step that enables "
+             "the flag. D5.",
     ),
     "npi_validation": SignalEntry(
         # PRODUCIBLE — and this is the correction that matters. Two producers
@@ -464,7 +477,12 @@ CLASSIFIER_SIGNAL_REGISTRY: Dict[str, SignalEntry] = {
              "NPI_MALFORMED / NPI_CHECK_DIGIT_FAILED, and the registry path emits "
              "'valid'/'invalid' from validate_npi(). The two vocabularies have "
              "never met, and what either means for B1-B4 is D6. No INVALID -> B4 "
-             "or FLAGGED -> bucket mapping is defined here.",
+             "or FLAGGED -> bucket mapping is defined here. A PROPOSED, "
+             "default-off split exists behind arc_pipeline "
+             "PROPOSED_NPI_INVALID_SPLIT_ENV (structurally impossible -> "
+             "'invalid'); this entry records ACTIVE emission only; update it in "
+             "the same governed step that enables the flag under the recorded "
+             "D6 decision.",
     ),
     "taxonomy_mismatch": SignalEntry(
         production_state=DECLARED_UNAVAILABLE,
@@ -548,6 +566,57 @@ CLASSIFIER_SIGNAL_REGISTRY: Dict[str, SignalEntry] = {
                       "decision, the signal is computed and deliberately inert.",
         note="A candidate NPI from supplemental evidence never suppresses the "
              "signal: the submission requirement is about the DELIVERED value.",
+    ),
+    "treatment_owner_adopted_missing_npi": SignalEntry(
+        # OWNER-ADOPTED CLASSIFICATION POLICY (superseding D-01 record,
+        # 2026-11-08; CONFIG A preserved as history at commit 1da7efe):
+        # IS_ACTIVE=1 AND exact T-TRTMNT token in any purpose combination AND
+        # submitted NPI blank -> B4 candidate condition, with NO node-type
+        # gate. Emitted beside the signal above whenever that condition holds
+        # (the condition is exactly "the gated signal exists", minus its
+        # direction logic); payload preserves raw values and the raw node
+        # type as information, never as a gate. Supplemental NPPES/IQVIA/
+        # vetting NPIs never fill the blank or suppress it. Consumed only by
+        # the owner-adopted VERSION of RULE-006 in the INACTIVE component —
+        # labelled the owner's adopted policy, not proof that every record
+        # independently establishes an SOP breach.
+        production_state=PRODUCIBLE,
+        value_domain=SETTLED,
+        consequence_state=METHODOLOGY_PENDING,
+        producers=(
+            Producer(PATH_RCE,
+                     "app/tefca_registry/rce/arc_pipeline.py "
+                     "(verify_and_classify, RULE-006 signal block)",
+                     ("true",)),
+        ),
+        unused_reason="Consumed only by the owner-adopted RULE-006 version in the "
+                      "INACTIVE component treatment_b4_owner_adopted; computed and inert until "
+                      "that component is activated under its recorded "
+                      "approval.",
+        note="Owner-adopted policy condition; node type is preserved as "
+             "information, never a gate.",
+    ),
+    "inactive_treatment_npi_missing": SignalEntry(
+        # OBSERVATION ONLY (owner instruction 2026-11-08): an INACTIVE record
+        # (active flag not '1') carrying the exact T-TRTMNT token in any
+        # purpose combination with a blank submitted NPI. Kept strictly apart
+        # from the active population: no rule consumes it, it never gates or
+        # grants a bucket, and inactive records are reported separately.
+        production_state=PRODUCIBLE,
+        value_domain=SETTLED,
+        consequence_state=METHODOLOGY_PENDING,
+        producers=(
+            Producer(PATH_RCE,
+                     "app/tefca_registry/rce/arc_pipeline.py "
+                     "(verify_and_classify, RULE-006 signal block)",
+                     ("true",)),
+        ),
+        unused_reason="Observation for reporting/analyst view per the owner's "
+                      "2026-11-08 instruction; deliberately consumed by no "
+                      "rule — inactive records are reported separately, never "
+                      "bucketed by this signal.",
+        note="Inactive-record observation; reason code "
+             "INACTIVE_TREATMENT_NPI_MISSING.",
     ),
     "treatment_npi_applicability_unresolved": SignalEntry(
         # PRODUCIBLE and SETTLED: emitted beside the RULE-006 signal when a

@@ -225,7 +225,12 @@ class RecheckRequest(BaseModel):
     source_id: str
     trigger_ref: str = Field(..., max_length=255)
     rationale: str
-    max_entities: int = Field(default=2000, ge=1, le=2000)
+    # Omitted means "the trigger's own full bound": MAX_ENTITIES_SNAPSHOT_TRIGGER
+    # for a snapshot-edition job, MAX_ENTITIES_PER_JOB (2,000) for every other
+    # trigger. A snapshot job must not silently inherit the 2,000 default — the
+    # one-job-per-edition idempotency would strand every untargeted entity for
+    # that edition; the module refuses a snapshot request that would do so.
+    max_entities: Optional[int] = Field(default=None, ge=1, le=30000)
     batch_size: int = Field(default=50, ge=1, le=200)
 
 

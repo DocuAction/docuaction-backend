@@ -15,7 +15,7 @@
 
 on:
   pull_request:
-    branches: [main, 'feat/reporting-architecture-2026-10-01']
+    branches: [main, 'feat/reporting-architecture-2026-10-01', 'feat/treatment-b4-rule-and-full-population-2026-11-06']
   push:
     branches: [main]
 
@@ -116,6 +116,7 @@ jobs:
         # cover it.
         run: |
           python -m pytest \
+            tests/test_quality_baseline_comparable_2026_11_05.py \
             tests/test_reconciliation_evidence_shape.py \
             tests/test_pecos_retry_plan_endpoint.py \
             tests/test_report_delivery_isolation_p0.py \
@@ -149,6 +150,9 @@ jobs:
             tests/test_npi_evidence_to_finding_workflow.py \
             tests/test_qhin_sampling_operational.py \
             tests/test_sampling_eligibility_review_required.py \
+            tests/test_proposed_rules_v5_inactive_2026_11_07.py \
+            tests/test_iqvia_advisory_routes_2026_11_08.py \
+            tests/test_ex3_consistency_guard_2026_11_08.py \
             tests/test_sampling_audit_label_parity_2026_11_07.py \
             tests/test_report_generation_reads_only_persisted_evidence.py \
             tests/test_report_csv_registered_bytes_2026_10_18.py \
@@ -157,6 +161,7 @@ jobs:
             tests/test_preflight_runtime_privilege_2026_10_07.py \
             tests/test_iqvia_affiliation_real_layout_2026_10_06.py \
             tests/test_iqvia_affiliation_org_lookup.py \
+            tests/test_iqvia_advisory_comparison_2026_11_06.py \
             tests/test_iqvia_affil_org_indexes_2026_10_08.py \
             tests/test_iqvia_snapshot_list_2026_10_12.py \
             tests/test_iqvia_assessment_delivery_linkage_2026_10_14.py \
@@ -184,6 +189,7 @@ jobs:
             tests/test_cm12_ambiguous_entity_multiple_reviews_2026_10_28.py \
             tests/test_sam_extract_visibility_2026_10_31.py \
             tests/test_manual_reconciliation_snapshot_2026_10_31.py \
+            tests/test_recheck_enrollment_scope_2026_11_04.py \
             -v --tb=short -rs --junitxml=isolation-results.xml
       - name: Fail if any isolation test was skipped for want of a database
         run: |

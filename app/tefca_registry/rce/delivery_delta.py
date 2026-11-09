@@ -49,7 +49,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, tuple_
 
 from app.tefca_registry.rce import models as m
 from app.tefca_registry.rce.field_map import RCE_FIELDS
@@ -513,3 +513,111 @@ async def comparable_baseline_candidates(db, current, *, limit: int = 5) -> List
             if len(out) >= limit:
                 break
     return out
+
+
+def _baseline_ineligible_reason(facts: Dict[str, Any]) -> Optional[str]:
+    """Why an intake can never anchor "new entrant", even when comparable.
+
+    These are eligibility facts about the PREDECESSOR alone, deliberately
+    independent of `assess_comparability` (whose synthetic rule only fires when
+    exactly ONE side is synthetic, and whose size rule skips zero counts):
+    - an intake with no records is not a population — absence from it proves
+      nothing, and a header-only file parses as PARSED;
+    - an intake that declares itself a smoke test is test traffic whatever its
+      size or schema (`is_synthetic_intake` matches only "synthetic", and a
+      smoke test within 10x of the delivery passes the size rule).
+    """
+    if not int(facts.get("record_count") or 0):
+        return "no records (a header-only intake is not a population)"
+    hay = " ".join(str(facts.get(k) or "") for k in (
+        "delivery_label", "original_filename", "declared_source")).lower()
+    if any(marker in hay for marker in ("smoke-test", "smoke test", "smoketest")):
+        return "explicitly identified smoke test"
+    return None
+
+
+async def comparable_previous_delivery(db, intake) -> Optional[m.RceSourceIntake]:
+    """The most recent earlier delivery that is COMPARABLE to this one.
+
+    `previous_delivery` answers "what arrived last"; this answers "what is this
+    delivery a successor OF". The October 2026 quality run showed why the
+    difference matters: the latest earlier intake was a 3-record smoke test, so
+    `new_entrant_ids` was computed against it and 21 records that were present
+    (and held) in the real September delivery were flagged ACT-001 as
+    history-less new entrants. A predecessor that fails `assess_comparability`
+    (synthetic on one side only, different declared source, an
+    order-of-magnitude size gap, or a different schema fingerprint) is skipped,
+    and so is one `_baseline_ineligible_reason` rules out (empty, or an
+    explicitly identified smoke test) even when it would pass comparability.
+    Returns None when no comparable earlier delivery exists — a true baseline.
+    """
+    cur = intake_facts(intake)
+    cur_id_count = await _usable_id_count(db, intake.id)
+    last: Optional[m.RceSourceIntake] = None
+    while True:
+        q = (select(m.RceSourceIntake)
+             .where(m.RceSourceIntake.received_at < intake.received_at,
+                    m.RceSourceIntake.status != "FAILED"))
+        if last is not None:
+            # Keyset page: intake history is append-only, and a burst of newer
+            # ineligible intakes must never hide an older valid directory
+            # behind a fixed scan cap.
+            q = q.where(tuple_(m.RceSourceIntake.received_at, m.RceSourceIntake.id)
+                        < tuple_(last.received_at, last.id))
+        rows = (await db.execute(
+            q.order_by(m.RceSourceIntake.received_at.desc(),
+                       m.RceSourceIntake.id.desc())
+            .limit(_BASELINE_SCAN_BATCH))).scalars().all()
+        if not rows:
+            return None
+        candidate = await _first_eligible(db, cur, cur_id_count, rows)
+        if candidate is not None:
+            return candidate
+        last = rows[-1]
+
+
+#: Page size for the baseline scan — a scan bound, never a search bound.
+_BASELINE_SCAN_BATCH = 500
+
+
+async def _first_eligible(db, cur, cur_id_count, rows):
+    """The first intake of one scan page that qualifies as the baseline.
+
+    Applies, in order: `_baseline_ineligible_reason` (empty / smoke test),
+    `assess_comparability`, and the distinct-usable-ID size rule. Returns the
+    qualifying intake row, or None when the page holds none."""
+    for row in rows:
+        facts = intake_facts(row)
+        if _baseline_ineligible_reason(facts):
+            continue
+        if assess_comparability(cur, facts)["status"] != "COMPARABLE":
+            continue
+        # record_count counts data lines, not identities: intake preserves
+        # rows with a blank `id`, so a parsed predecessor can carry anything
+        # from zero usable IDs upward. "Absent from the predecessor" only
+        # means something when the predecessor's IDENTITY population is of the
+        # delivery's own order of magnitude — the same SIZE_RATIO_LIMIT rule
+        # assess_comparability applies to line counts, applied to usable IDs.
+        prev_id_count = await _usable_id_count(db, row.id)
+        if prev_id_count == 0:
+            continue
+        if (cur_id_count > 0
+                and max(cur_id_count, prev_id_count)
+                >= SIZE_RATIO_LIMIT * min(cur_id_count, prev_id_count)):
+            continue
+        return row
+    return None
+
+
+async def _usable_id_count(db, intake_id) -> int:
+    """How many DISTINCT non-blank stable ids one intake carries.
+
+    Distinct, not rows: `_build_dataset_context` compares ID *sets*, and intake
+    preserves duplicate ids, so a predecessor repeating a handful of ids across
+    many rows must size as that handful."""
+    from sqlalchemy import func
+    return int((await db.execute(
+        select(func.count(func.distinct(m.RceSourceRecord.source_rce_id)))
+        .where(m.RceSourceRecord.source_intake_id == intake_id,
+               m.RceSourceRecord.source_rce_id.isnot(None),
+               m.RceSourceRecord.source_rce_id != ""))).scalar() or 0)
