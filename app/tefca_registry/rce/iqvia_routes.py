@@ -904,6 +904,18 @@ class AdvisoryComparisonRequest(BaseModel):
     entity_ids: list[uuid.UUID] = Field(
         min_length=1, max_length=200,
         description="Registry entity ids to compare (one page; the caller pages)")
+    #: D-10 retention: default OFF is exactly the pre-existing behaviour (the
+    #: route writes nothing). ON retains one attributable outcome row per
+    #: entity in iqvia_advisory_comparison_outcome (append-only, advisory).
+    persist: bool = Field(
+        default=False,
+        description="Retain per-entity advisory outcomes in the append-only "
+                    "retention table (advisory stays advisory; default off)")
+    run_id: str | None = Field(
+        default=None, min_length=1, max_length=64,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+        description="Required when persist=true: one id per population run; "
+                    "(snapshot, entity, run_id) is the idempotence key")
 
 
 @router.post("/snapshots/{snapshot_id}/advisory-comparison",
@@ -953,11 +965,42 @@ async def advisory_comparison(
                                          "code": "SNAPSHOT_NOT_APPROVED"})
     except ValueError as exc:
         raise HTTPException(422, str(exc))
+    if body.persist:
+        # D-10 retention (opt-in): retain one attributable advisory outcome row
+        # per entity. The comparison itself is unchanged; a failure to persist
+        # refuses loudly rather than silently returning response-only results.
+        from app.tefca_registry.rce import iqvia_advisory_retention as ret
+
+        if not body.run_id:
+            raise HTTPException(422, detail={
+                "error": "run_id is required when persist is true",
+                "code": "RUN_ID_REQUIRED"})
+        store = await ret.store_state(db)
+        if store != "READABLE":
+            await _audit(db, user, action="IQVIA_ADVISORY_COMPARISON", outcome="blocked",
+                         resource_type="iqvia_snapshot", resource_id=snapshot_id,
+                         details={"code": "RETENTION_STORE_NOT_APPLIED", "store": store})
+            raise HTTPException(409, detail={
+                "error": "the advisory outcome retention table is not available "
+                         f"in this environment (store state: {store})",
+                "code": "RETENTION_STORE_NOT_APPLIED"})
+        out["persistence"] = await ret.persist_comparison_outcomes(
+            db, run_id=body.run_id, comparison=out,
+            created_by=getattr(user, "email", None) or "UNKNOWN")
+        # Commit the retained rows EXPLICITLY (review finding on the merge
+        # head, verified): _audit is deliberately best-effort and rolls back
+        # on its own failure -- without this commit, a failed audit write
+        # would silently discard the outcome rows while the response still
+        # reported them persisted. After this commit the audit can only
+        # affect itself.
+        await db.commit()
     await _audit(db, user, action="IQVIA_ADVISORY_COMPARISON", outcome="success",
                  resource_type="iqvia_snapshot", resource_id=snapshot_id,
                  details={"source_system": snapshot.source_system,
                           "entities_requested": out["entities_requested"],
-                          "summary": out["summary"]})
+                          "summary": out["summary"],
+                          **({"persistence": out["persistence"]}
+                             if body.persist else {})})
     return out
 
 

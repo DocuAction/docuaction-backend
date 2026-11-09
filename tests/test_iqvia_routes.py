@@ -93,6 +93,21 @@ async def db(db_required):
     _created_upload_ids.clear()
 
 
+def _iqvia_sources(monkeypatch, on: bool) -> None:
+    """Set the IQVIA programme flag the way the gate actually reads it.
+
+    ENABLE_IQVIA_SOURCES is a DECLARED settings field (app/core/config.py),
+    so `licensed_source_enabled()`'s `getattr(settings, ...)` never falls
+    through to os.environ once the process has started -- a bare
+    monkeypatch.setenv is shadowed by the field and every route call 403s.
+    Patch the settings attribute itself (the same mechanism
+    test_iqvia_advisory_routes_2026_11_08.py already uses); monkeypatch
+    restores the field at teardown.
+    """
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "ENABLE_IQVIA_SOURCES", on, raising=False)
+
+
 class _User:
     def __init__(self, role, email=None):
         # Role-specific by default so a maker/checker check (the registrant
@@ -127,7 +142,7 @@ async def _run_one_queued_job(db) -> str:
 
 async def _stage_and_complete(db, tmp_path, monkeypatch, *, n=3):
     """Stage, then run the durable job exactly as the scheduler would."""
-    monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+    _iqvia_sources(monkeypatch, True)
     f = write_csv(tmp_path / "hco.csv", HCO_HEADER, [
         [f"{SYN}-ROUTE-HCO-{i}", "", "", f"{SYN} Route Org {i}", "02101"] for i in range(n)
     ])
@@ -142,7 +157,10 @@ async def _stage_and_complete(db, tmp_path, monkeypatch, *, n=3):
 
 class TestAccessGating:
     async def test_flag_off_is_refused(self, db, tmp_path, monkeypatch):
-        monkeypatch.delenv("ENABLE_IQVIA_SOURCES", raising=False)
+        # delenv is not enough: the declared settings field was read at process
+        # start, so if the environment had the flag on, settings would keep it
+        # on. Disable the field itself (review finding, PR #206 round 1).
+        _iqvia_sources(monkeypatch, False)
         f = write_csv(tmp_path / "x.csv", HCO_HEADER, [[f"{SYN}-X", "", "", "X", "02101"]])
         body = routes.StageRequest(file_path=str(f), label="x")
         with pytest.raises(HTTPException) as exc:
@@ -150,7 +168,7 @@ class TestAccessGating:
         assert exc.value.status_code == 403
 
     async def test_below_reviewer_floor_is_refused(self, db, tmp_path, monkeypatch):
-        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        _iqvia_sources(monkeypatch, True)
         f = write_csv(tmp_path / "x.csv", HCO_HEADER, [[f"{SYN}-X", "", "", "X", "02101"]])
         body = routes.StageRequest(file_path=str(f), label="x")
         with pytest.raises(HTTPException) as exc:
@@ -158,7 +176,7 @@ class TestAccessGating:
         assert exc.value.status_code == 403
 
     async def test_unknown_source_is_422(self, db, tmp_path, monkeypatch):
-        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        _iqvia_sources(monkeypatch, True)
         f = write_csv(tmp_path / "x.csv", HCO_HEADER, [[f"{SYN}-X", "", "", "X", "02101"]])
         body = routes.StageRequest(file_path=str(f), label="x")
         with pytest.raises(HTTPException) as exc:
@@ -166,7 +184,7 @@ class TestAccessGating:
         assert exc.value.status_code == 422
 
     async def test_missing_file_is_422(self, db, monkeypatch):
-        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        _iqvia_sources(monkeypatch, True)
         body = routes.StageRequest(file_path="C:/does/not/exist.csv", label="x")
         with pytest.raises(HTTPException) as exc:
             await routes.stage_source("hco", body, db, user=_User("reviewer"))
@@ -185,7 +203,7 @@ class TestStageStatusApprove:
         assert status["job"]["state"] == um.IqviaImportJob.STATE_SUCCEEDED
 
     async def test_approve_refused_before_import_completes(self, db, monkeypatch):
-        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        _iqvia_sources(monkeypatch, True)
         from app.tefca_registry.rce import source_matching as sx
         snapshot = await sx.register_snapshot(
             db=db, source_system=sm.SOURCE_IQVIA_HCO, label=f"{SYN}-incomplete",
@@ -213,12 +231,12 @@ class TestMatchRoute:
         snapshot_id = await _stage_and_complete(db, tmp_path, monkeypatch, n=2)
         body = routes.ApproveRequest(approval_ref=f"{SYN}-ref")
         approved = await routes.approve(uuid.UUID(snapshot_id), body, db, user=_User("qalead"))
-        result = await routes.match_snapshot(uuid.UUID(approved["snapshot_id"]), db,
+        result = await routes.match_snapshot(uuid.UUID(approved["snapshot_id"]), db=db,
                                              user=_User("reviewer"))
         assert result["observations_considered"] == 2
 
     async def test_match_hcp_explicitly_refused_as_unavailable(self, db, monkeypatch):
-        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        _iqvia_sources(monkeypatch, True)
         from app.tefca_registry.rce import source_matching as sx
         snapshot = await sx.register_snapshot(
             db=db, source_system=sm.SOURCE_IQVIA_HCP, label=f"{SYN}-hcp",
@@ -227,13 +245,13 @@ class TestMatchRoute:
                 __import__("datetime").timezone.utc), created_by=SYN)
         _created_snapshot_ids.append(snapshot.id)
         with pytest.raises(HTTPException) as exc:
-            await routes.match_snapshot(snapshot.id, db, user=_User("reviewer"))
+            await routes.match_snapshot(snapshot.id, db=db, user=_User("reviewer"))
         assert exc.value.status_code == 409
         assert exc.value.detail["code"] == "AFFILIATION_DATA_UNAVAILABLE"
 
     async def test_match_affiliation_explicitly_refused_as_unavailable(
             self, db, monkeypatch):
-        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        _iqvia_sources(monkeypatch, True)
         from app.tefca_registry.rce import source_matching as sx
         snapshot = await sx.register_snapshot(
             db=db, source_system=sm.SOURCE_IQVIA_AFFILIATION, label=f"{SYN}-affil",
@@ -242,7 +260,7 @@ class TestMatchRoute:
                 __import__("datetime").timezone.utc), created_by=SYN)
         _created_snapshot_ids.append(snapshot.id)
         with pytest.raises(HTTPException) as exc:
-            await routes.match_snapshot(snapshot.id, db, user=_User("reviewer"))
+            await routes.match_snapshot(snapshot.id, db=db, user=_User("reviewer"))
         assert exc.value.status_code == 409
         assert exc.value.detail["code"] == "AFFILIATION_DATA_UNAVAILABLE"
 
@@ -264,7 +282,7 @@ class TestChunkedUpload:
 
     async def test_full_upload_then_complete_stages_the_file(
             self, db, tmp_path, monkeypatch):
-        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        _iqvia_sources(monkeypatch, True)
         content = write_csv(tmp_path / "source.csv", HCO_HEADER, [
             [f"{SYN}-UP-HCO-{i}", "", "", f"{SYN} Upload Org {i}", "02101"] for i in range(5)
         ]).read_bytes()
@@ -302,7 +320,7 @@ class TestChunkedUpload:
         assert final_status["import_summary"]["rows_staged"] == 5
 
     async def test_retrying_a_chunk_overwrites_not_duplicates(self, db, monkeypatch):
-        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        _iqvia_sources(monkeypatch, True)
         payload = b"A" * 10 + b"B" * 10
         start = await routes.start_upload(
             routes.StartUploadRequest(source="hco", label=f"{SYN}-retry-chunk",
@@ -322,7 +340,7 @@ class TestChunkedUpload:
         assert received == {0, 1}
 
     async def test_complete_refused_while_chunks_missing(self, db, monkeypatch):
-        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        _iqvia_sources(monkeypatch, True)
         start = await routes.start_upload(
             routes.StartUploadRequest(source="hco", label=f"{SYN}-incomplete-chunks",
                                       total_size=100, chunk_size=10),
@@ -336,7 +354,7 @@ class TestChunkedUpload:
         assert exc.value.detail["code"] == "UPLOAD_INCOMPLETE"
 
     async def test_unknown_upload_id_is_404_everywhere(self, db, monkeypatch):
-        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        _iqvia_sources(monkeypatch, True)
         bogus = uuid.uuid4()
         with pytest.raises(HTTPException) as exc:
             await routes.upload_status(bogus, db, user=_User("reviewer"))
@@ -361,7 +379,7 @@ class TestMakerCheckerAndDuplicates:
     snapshot."""
 
     async def test_registrant_cannot_approve_own_snapshot(self, db, tmp_path, monkeypatch):
-        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        _iqvia_sources(monkeypatch, True)
         f = write_csv(tmp_path / "hco.csv", HCO_HEADER, [
             [f"{SYN}-MC-{i}", "", "", f"{SYN} MC Org {i}", "02101"] for i in range(2)])
         # The maker holds qalead -- role alone must not be enough.
@@ -407,7 +425,7 @@ class TestMakerCheckerAndDuplicates:
 
     async def test_identical_bytes_are_refused_as_duplicate_not_500(
             self, db, tmp_path, monkeypatch):
-        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        _iqvia_sources(monkeypatch, True)
         f = write_csv(tmp_path / "dup.csv", HCO_HEADER, [
             [f"{SYN}-DUP-{i}", "", "", f"{SYN} Dup Org {i}", "02101"] for i in range(2)])
         reviewer = _User("reviewer")
@@ -444,7 +462,7 @@ class TestMakerCheckerAndDuplicates:
             self, db, tmp_path, monkeypatch):
         """Two separate upload sessions carrying identical bytes: the second
         `/complete` is a DUPLICATE_SNAPSHOT 409, not a second snapshot."""
-        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        _iqvia_sources(monkeypatch, True)
         content = write_csv(tmp_path / "c.csv", HCO_HEADER, [
             [f"{SYN}-CDUP-{i}", "", "", f"{SYN} CDup {i}", "02101"] for i in range(2)]).read_bytes()
         reviewer = _User("reviewer")
@@ -473,7 +491,7 @@ class TestAuditTrailAndCapability:
     async def test_journey_acts_are_audited_with_actor_role_and_request_id(
             self, db, tmp_path, monkeypatch):
         from app.core import request_context
-        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        _iqvia_sources(monkeypatch, True)
         content = write_csv(tmp_path / "a.csv", HCO_HEADER, [
             [f"{SYN}-AUD-{i}", "", "", f"{SYN} Aud {i}", "02101"] for i in range(2)]).read_bytes()
         reviewer = _User("reviewer")
@@ -492,7 +510,7 @@ class TestAuditTrailAndCapability:
                 snapshot_id, routes.ApproveRequest(approval_ref=f"{SYN}-r"), db, user=_User("qalead"))
             approved_id = uuid.UUID(approved["snapshot_id"])
             _created_snapshot_ids.append(approved_id)
-            await routes.match_snapshot(approved_id, db, user=reviewer)
+            await routes.match_snapshot(approved_id, db=db, user=reviewer)
 
         upload_rows = await _audit_rows(db, uid)
         assert [(a, o) for a, o, _ in upload_rows] == [("IQVIA_UPLOAD_STARTED", "success")]
@@ -509,7 +527,7 @@ class TestAuditTrailAndCapability:
 
     async def test_hcp_match_refusal_is_audited_as_blocked_and_status_says_unsupported(
             self, db, monkeypatch):
-        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        _iqvia_sources(monkeypatch, True)
         from app.tefca_registry.rce import source_matching as sx
         snapshot = await sx.register_snapshot(
             db=db, source_system=sm.SOURCE_IQVIA_HCP, label=f"{SYN}-hcp-cap",
@@ -521,7 +539,7 @@ class TestAuditTrailAndCapability:
         assert status["matching"]["supported"] is False
         assert status["matching"]["code"] == "AFFILIATION_DATA_UNAVAILABLE"
         with pytest.raises(HTTPException) as exc:
-            await routes.match_snapshot(snapshot.id, db, user=_User("reviewer"))
+            await routes.match_snapshot(snapshot.id, db=db, user=_User("reviewer"))
         assert exc.value.detail["code"] == "AFFILIATION_DATA_UNAVAILABLE"
         rows = await _audit_rows(db, snapshot.id)
         assert [(a, o) for a, o, _ in rows] == [("IQVIA_SNAPSHOT_MATCH", "blocked")]
@@ -530,7 +548,14 @@ class TestAuditTrailAndCapability:
     async def test_hco_status_says_matching_supported(self, db, tmp_path, monkeypatch):
         snapshot_id = await _stage_and_complete(db, tmp_path, monkeypatch, n=1)
         status = await routes.snapshot_status(uuid.UUID(snapshot_id), db, user=_User("reviewer"))
-        assert status["matching"] == {"supported": True, "reason": None, "code": None}
+        # Core capability unchanged since 2026-10-03; the advisory_comparison
+        # sub-capability was added 2026-11-06 (HCO is matched, not advisory-
+        # compared, so for HCO it reports USE_MATCH_ROUTE).
+        matching = dict(status["matching"])
+        advisory = matching.pop("advisory_comparison")
+        assert matching == {"supported": True, "reason": None, "code": None}
+        assert advisory["supported"] is False
+        assert advisory["code"] == "USE_MATCH_ROUTE"
 
 
 class TestSnapshotStatusOverHttp:
@@ -591,7 +616,7 @@ class TestSnapshotStatusOverHttp:
         import support_delivery_api as api
 
         snapshot_id = await _stage_and_complete(db, tmp_path, monkeypatch, n=2)
-        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "false")
+        _iqvia_sources(monkeypatch, False)
         reviewer = await api._ensure_user("reviewer")
         headers = {"Authorization": "Bearer " + api.create_access_token(
             {"sub": reviewer["id"], "role": "reviewer"}, is_admin=False)}
@@ -616,8 +641,8 @@ class TestSnapshotStatusOverHttp:
 
 # The advisory_comparison route-level tests (review finding 2026-11-08) live
 # in tests/test_iqvia_advisory_routes_2026_11_08.py — a self-contained file
-# wired into the isolation-postgres CI job. They were moved out of this file
-# because this file is wired into no CI job and its older classes carry 21
-# pre-existing local failures (ENABLE_IQVIA_SOURCES is a settings FIELD in
-# app/core/config.py, which shadows the monkeypatch.setenv mechanism used
-# here — tracked as its own follow-up change).
+# wired into the isolation-postgres CI job. They were moved out while this
+# file still carried the settings-shadowing failures. That gap is RESOLVED
+# (2026-11-08, the IQVIA-lane prerequisite): every flag set here goes through
+# `_iqvia_sources`, which patches the declared settings field the gate reads,
+# and this file is now wired into the isolation-postgres CI job itself.

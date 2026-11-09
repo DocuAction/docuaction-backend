@@ -95,7 +95,12 @@ async def test_journey_iqvia_live(tmp_path, monkeypatch, db_required):
     await sam._ensure_journey_users()
     import uuid as _uuid
 
-    monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+    # ENABLE_IQVIA_SOURCES is a declared settings field (app/core/config.py),
+    # so a bare setenv is shadowed once the process has started; patch the
+    # attribute the gate reads. The journey CI job also sets the env var at
+    # process start, where the field picks it up -- this works in both.
+    from app.core.config import settings as _settings
+    monkeypatch.setattr(_settings, "ENABLE_IQVIA_SOURCES", True, raising=False)
 
     # ---- stage + run the import job directly (DB-level, same reliable
     # pattern as the proven test_iqvia_routes.py helper). Content must be
