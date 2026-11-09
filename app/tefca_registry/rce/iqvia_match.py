@@ -190,6 +190,13 @@ async def match_hco_snapshot(
     bind = db.bind
     run_guard_engine = bind.engine if isinstance(bind, AsyncConnection) else bind
     guard = await run_guard_engine.connect()
+    # AUTOCOMMIT (round-4 review finding): SQLAlchemy autobegins a transaction
+    # on the first execute (the lock call), and the guard connection would
+    # then sit idle-in-transaction for the whole multi-minute run -- an
+    # idle_in_transaction_session_timeout would kill it (releasing the lock
+    # mid-run), and it would pin the vacuum horizon. Advisory session locks
+    # need no transaction at all.
+    guard = await guard.execution_options(isolation_level="AUTOCOMMIT")
     got = False
     try:
         got = (await guard.execute(
@@ -291,9 +298,20 @@ async def match_hco_snapshot(
     finally:
         try:
             if got:
-                await guard.execute(
-                    text("select pg_advisory_unlock(hashtextextended(:k, 0))"),
-                    {"k": lock_key})
+                # A session advisory lock SURVIVES the pool's reset-on-return
+                # rollback (round-4 review finding): if the unlock raises or
+                # reports false, returning this connection to the pool would
+                # leave the lock held on a live pooled connection and block
+                # every later run. invalidate() closes the real DBAPI
+                # connection, so the server itself releases the lock.
+                released = False
+                try:
+                    released = bool((await guard.execute(
+                        text("select pg_advisory_unlock(hashtextextended(:k, 0))"),
+                        {"k": lock_key})).scalar())
+                finally:
+                    if not released:
+                        await guard.invalidate()
         finally:
             await guard.close()
 
