@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
 from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.tefca_registry import models as reg
 from app.tefca_registry.rce import snapshot_models as sm
@@ -137,11 +138,13 @@ async def match_hco_snapshot(
     Paged, not loaded whole: observations are read in `page_size` keyset pages
     (ordered by `source_record_key`, unique per snapshot) and each page is one
     transaction, so memory stays bounded regardless of snapshot size and a
-    crash loses at most one page of writes. Each page's transaction first takes
-    `pg_try_advisory_xact_lock` on this snapshot's key; a concurrent run raises
-    `MatchInProgressError` instead of scanning the same rows twice. The
-    decisions written per observation are byte-identical to the unpaged
-    implementation this replaces.
+    crash loses at most one page of writes. The whole run holds a
+    SESSION-level advisory lock on this snapshot's key (a dedicated
+    connection, released in `finally`); a concurrent run raises
+    `MatchInProgressError` up front, never mid-run, so a run that has
+    committed pages always returns its summary and resume cursor
+    (round-3 review finding). The decisions written per observation are
+    byte-identical to the unpaged implementation this replaces.
 
     `limit` counts NEWLY EVALUATED observations, never already-matched skips --
     otherwise a repeated limited run would spend its whole budget re-walking
@@ -172,108 +175,127 @@ async def match_hco_snapshot(
     lock_key = f"iqvia-hco-match:{snapshot_id}"
     last_key: Optional[str] = after_key
 
-    while True:
-        if limit is not None and summary.newly_evaluated >= limit:
-            break
-
-        # The guard and the page's writes share ONE transaction: the advisory
-        # xact lock is taken first, so two concurrent runs never evaluate the
-        # same interval, and the page-scoped skip-set read below is consistent
-        # with the writes it guards. The lock releases with the page's commit
-        # and is re-taken for the next page.
-        got = (await db.execute(
-            text("select pg_try_advisory_xact_lock(hashtextextended(:k, 0))"),
+    # Run-level guard (round-3 review finding, verified): the advisory lock
+    # is SESSION-level, on a DEDICATED connection, and held for the whole
+    # run -- a concurrent request is refused up front and can never
+    # interleave between page commits. Interleaving both re-evaluated
+    # no-match-row observations and could raise MatchInProgressError in a
+    # run that had already committed pages, so the route answered 409
+    # without the summary and the resume cursor was lost. Per-page
+    # transactions (and their bounded memory) are unchanged. The lock is
+    # released in `finally` BEFORE the connection returns to the pool -- a
+    # pooled connection would otherwise carry the session lock out with
+    # it; if the process dies instead, the server releases the lock when
+    # the connection does.
+    bind = db.bind
+    run_guard_engine = bind.engine if isinstance(bind, AsyncConnection) else bind
+    guard = await run_guard_engine.connect()
+    got = False
+    try:
+        got = (await guard.execute(
+            text("select pg_try_advisory_lock(hashtextextended(:k, 0))"),
             {"k": lock_key})).scalar()
         if not got:
             raise MatchInProgressError(
                 f"another matching run currently holds the lock for snapshot {snapshot_id}")
 
-        q = (select(sm.IqviaHcoObservation)
-             .where(sm.IqviaHcoObservation.source_snapshot_id == observation_snapshot_id)
-             .order_by(sm.IqviaHcoObservation.source_record_key)
-             .limit(page_size))
-        if last_key is not None:
-            q = q.where(sm.IqviaHcoObservation.source_record_key > last_key)
-        observations = (await db.execute(q)).scalars().all()
-        if not observations:
-            # Nothing was written in this transaction; end it so the advisory
-            # lock releases now rather than at session teardown. Commit, not
-            # rollback: rollback would expire every object loaded on this
-            # session, breaking callers that still hold ORM instances.
-            await db.commit()
-            break
-
-        page_keys = [o.source_record_key for o in observations]
-        already = set((await db.execute(
-            select(sm.EntitySourceMatch.source_record_key).where(
-                sm.EntitySourceMatch.source_snapshot_id == snapshot_id,
-                sm.EntitySourceMatch.source_record_key.in_(page_keys)))).scalars().all())
-
-        for obs in observations:
+        while True:
             if limit is not None and summary.newly_evaluated >= limit:
                 break
-            summary.observations_considered += 1
-            # The resume cursor advances over every row this run fully
-            # processes -- matched skips, no-identifier and zero-candidate
-            # rows included -- NOT over rows a mid-page limit break left
-            # unprocessed. Without it, rows that write no match row are
-            # re-evaluated by every later run and can starve a limited run.
-            summary.next_after_key = obs.source_record_key
-            if obs.source_record_key in already:
-                summary.already_matched_skipped += 1
-                continue
-            summary.newly_evaluated += 1
 
-            if obs.npi:
-                registry_entities = await _entities_with_identifier(db, "npi", obs.npi)
-                nppes_evidence = None
-                if nppes_type_lookup is not None:
-                    nppes_evidence = await _maybe_await(nppes_type_lookup(obs.npi))
-                decision = evaluate_npi_match(
-                    source_npi=obs.npi, nppes_evidence=nppes_evidence,
-                    registry_entities_with_npi=registry_entities,
-                    source_record_key=obs.source_record_key)
-            elif obs.ccn:
-                registry_entities = await _entities_with_identifier(db, "ccn", obs.ccn)
-                decision = evaluate_ccn_candidate(
-                    source_ccn=obs.ccn, source_record_key=obs.source_record_key,
-                    registry_entities_with_ccn=registry_entities)
-            else:
-                summary.unmatchable_no_identifier += 1
-                continue
+            q = (select(sm.IqviaHcoObservation)
+                 .where(sm.IqviaHcoObservation.source_snapshot_id == observation_snapshot_id)
+                 .order_by(sm.IqviaHcoObservation.source_record_key)
+                 .limit(page_size))
+            if last_key is not None:
+                q = q.where(sm.IqviaHcoObservation.source_record_key > last_key)
+            observations = (await db.execute(q)).scalars().all()
+            if not observations:
+                # Nothing was written in this transaction; end it cleanly. Commit,
+                # not rollback: rollback would expire every object loaded on this
+                # session, breaking callers that still hold ORM instances.
+                await db.commit()
+                break
 
-            candidate_ids = (
-                [decision["entity_id"]] if decision["status"] == sm.MATCH_AUTO_APPROVED
-                else list(decision.get("candidates") or []))
+            page_keys = [o.source_record_key for o in observations]
+            already = set((await db.execute(
+                select(sm.EntitySourceMatch.source_record_key).where(
+                    sm.EntitySourceMatch.source_snapshot_id == snapshot_id,
+                    sm.EntitySourceMatch.source_record_key.in_(page_keys)))).scalars().all())
 
-            if not candidate_ids:
-                # Nothing to attach the row to -- `entity_source_match.entity_id`
-                # is NOT NULL, so there is nowhere to persist "zero candidates"
-                # as a row. Counted, not silently dropped; the observation row
-                # itself stays in `iqvia_hco_observation`, visible for an
-                # analyst's own search/lookup outside this automatic pass.
-                summary.zero_candidate_unwritten += 1
+            for obs in observations:
+                if limit is not None and summary.newly_evaluated >= limit:
+                    break
+                summary.observations_considered += 1
+                # The resume cursor advances over every row this run fully
+                # processes -- matched skips, no-identifier and zero-candidate
+                # rows included -- NOT over rows a mid-page limit break left
+                # unprocessed. Without it, rows that write no match row are
+                # re-evaluated by every later run and can starve a limited run.
+                summary.next_after_key = obs.source_record_key
+                if obs.source_record_key in already:
+                    summary.already_matched_skipped += 1
+                    continue
+                summary.newly_evaluated += 1
+
+                if obs.npi:
+                    registry_entities = await _entities_with_identifier(db, "npi", obs.npi)
+                    nppes_evidence = None
+                    if nppes_type_lookup is not None:
+                        nppes_evidence = await _maybe_await(nppes_type_lookup(obs.npi))
+                    decision = evaluate_npi_match(
+                        source_npi=obs.npi, nppes_evidence=nppes_evidence,
+                        registry_entities_with_npi=registry_entities,
+                        source_record_key=obs.source_record_key)
+                elif obs.ccn:
+                    registry_entities = await _entities_with_identifier(db, "ccn", obs.ccn)
+                    decision = evaluate_ccn_candidate(
+                        source_ccn=obs.ccn, source_record_key=obs.source_record_key,
+                        registry_entities_with_ccn=registry_entities)
+                else:
+                    summary.unmatchable_no_identifier += 1
+                    continue
+
+                candidate_ids = (
+                    [decision["entity_id"]] if decision["status"] == sm.MATCH_AUTO_APPROVED
+                    else list(decision.get("candidates") or []))
+
+                if not candidate_ids:
+                    # Nothing to attach the row to -- `entity_source_match.entity_id`
+                    # is NOT NULL, so there is nowhere to persist "zero candidates"
+                    # as a row. Counted, not silently dropped; the observation row
+                    # itself stays in `iqvia_hco_observation`, visible for an
+                    # analyst's own search/lookup outside this automatic pass.
+                    summary.zero_candidate_unwritten += 1
+                    _detail(summary, {"source_record_key": obs.source_record_key,
+                                      "status": decision["status"], "candidates": 0})
+                    continue
+
+                for entity_id in candidate_ids:
+                    await record_match(db, entity_id=entity_id, source_system=sm.SOURCE_IQVIA_HCO,
+                                       snapshot_id=snapshot_id, decision=decision,
+                                       proposed_by=actor, commit=False)
+
+                if decision["status"] == sm.MATCH_AUTO_APPROVED:
+                    summary.auto_approved += 1
+                elif decision["status"] == sm.MATCH_EXCEPTION:
+                    summary.exceptions_written += len(candidate_ids)
+                else:
+                    summary.candidates_written += len(candidate_ids)
                 _detail(summary, {"source_record_key": obs.source_record_key,
-                                  "status": decision["status"], "candidates": 0})
-                continue
+                                  "status": decision["status"], "candidates": len(candidate_ids)})
 
-            for entity_id in candidate_ids:
-                await record_match(db, entity_id=entity_id, source_system=sm.SOURCE_IQVIA_HCO,
-                                   snapshot_id=snapshot_id, decision=decision,
-                                   proposed_by=actor, commit=False)
-
-            if decision["status"] == sm.MATCH_AUTO_APPROVED:
-                summary.auto_approved += 1
-            elif decision["status"] == sm.MATCH_EXCEPTION:
-                summary.exceptions_written += len(candidate_ids)
-            else:
-                summary.candidates_written += len(candidate_ids)
-            _detail(summary, {"source_record_key": obs.source_record_key,
-                              "status": decision["status"], "candidates": len(candidate_ids)})
-
-        last_key = page_keys[-1]
-        summary.pages += 1
-        await db.commit()
+            last_key = page_keys[-1]
+            summary.pages += 1
+            await db.commit()
+    finally:
+        try:
+            if got:
+                await guard.execute(
+                    text("select pg_advisory_unlock(hashtextextended(:k, 0))"),
+                    {"k": lock_key})
+        finally:
+            await guard.close()
 
     return summary
 

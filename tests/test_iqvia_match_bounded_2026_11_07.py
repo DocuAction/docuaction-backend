@@ -117,7 +117,10 @@ class TestBoundedMatching:
     async def test_concurrent_run_is_refused_not_stacked(self, rolled_back_db, tmp_path):
         """While another connection holds the snapshot's advisory lock, a
         match attempt raises MatchInProgressError instead of starting a
-        second full scan."""
+        second full scan. (The run now takes a SESSION-level lock up front
+        on a dedicated connection — same lock space, so this xact-lock
+        holder still contends — and a refusal can only happen BEFORE any
+        page commits, never mid-run; round-3 review finding.)"""
         db = rolled_back_db
         rows = [[f"{SYN}-LOCK-1", "", "", f"{SYN} Lock Nothing", "02101"]]
         approved = await _approved_snapshot(db, tmp_path, rows, "lock")
