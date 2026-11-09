@@ -15,7 +15,7 @@
 
 on:
   pull_request:
-    branches: [main, 'feat/reporting-architecture-2026-10-01', 'feat/treatment-b4-rule-and-full-population-2026-11-06', 'feat/proposed-rules-v4-inactive-2026-11-07']
+    branches: [main, 'feat/reporting-architecture-2026-10-01', 'feat/treatment-b4-rule-and-full-population-2026-11-06', 'feat/proposed-rules-v4-inactive-2026-11-07', 'test/iqvia-settings-shadowing-fix-2026-11-08']
   push:
     branches: [main]
 
@@ -163,6 +163,7 @@ jobs:
             tests/test_iqvia_affiliation_real_layout_2026_10_06.py \
             tests/test_iqvia_affiliation_org_lookup.py \
             tests/test_iqvia_advisory_comparison_2026_11_06.py \
+            tests/test_iqvia_advisory_retention_2026_11_08.py \
             tests/test_iqvia_affil_org_indexes_2026_10_08.py \
             tests/test_iqvia_snapshot_list_2026_10_12.py \
             tests/test_iqvia_assessment_delivery_linkage_2026_10_14.py \
