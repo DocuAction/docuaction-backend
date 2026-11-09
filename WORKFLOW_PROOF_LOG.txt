@@ -1,33 +1,33 @@
-=== Combined workflow proof, 2026-10-03 ===
-[1] seeded + promoted intake cdea3184-abee-42fc-83d3-7d326da2c1b0, n=3
-[2] preflight run 82887de6-f511-463e-a37d-795694b96fff: {'run_id': '82887de6-f511-463e-a37d-795694b96fff', 'intake_id': 'cdea3184-abee-42fc-83d3-7d326da2c1b0', 'status': 'COMPLETE', 'classification_gate': 'CLEAR_WITH_FINDINGS', 'field_map_version': '1.0.0', 'rule_set_version': '1.8.0', 'preflight_version': '1.0.0', 'records_evaluated': 3, 'findings_count': 10, 'normalizations_count': 3, 'summary': {'by_category': {'MISSING_CONTEXT': 4, 'IDENTIFIER': 6}, 'by_code': {'PART_OF_RESOLVED_IN_REGISTRY': 3, 'PF-OID-001': 3, 'PF-HCID-001': 3, 'PF-CTX-000': 1}, 'by_applicability': {'applies': 9, 'unresolved': 1}, 'by_execution': {'done': 9, 'insufficient': 1}, 'by_disposition': {'informational': 4, 'open': 6}, 'normalizations_by_method': {'FORMAT_NORMALIZATION': 3}, 'records_with_findings': 3, 'records_in_delivery': 3, 'every_record_evaluated': True, 'reused_rules': ['CON-003', 'ID-001', 'ID-002', 'ID-003', 'ID-005', 'INT-001', 'INT-002', 'NPI-002', 'NPI-003', 'NPI-004', 'REQ-001', 'REQ-002', 'REQ-003', 'SCH-001', 'SCH-003'], 'originals_modified': False}, 'started_at': '2026-11-07T09:17:38.403266+00:00', 'completed_at': '2026-11-07T09:17:38.436859+00:00', 'actor': 'workflow-proof', 'correlation_id': 'd502a5bf-0b63-4b62-8ae1-acf9874f5c6b', 'build_sha': 'unknown', 'error': None, 'dimensions_note': 'applicability, execution, evidence and disposition are recorded separately on every finding and are never collapsed into one status.'}
-[3] classified 3 entities: [('7e015f21-3dda-46a9-8a6c-ff1a34293ee6', 'B2', 2), ('a1ac5d6c-c03a-43b8-b21a-4ca4b6726f62', 'B2', 2), ('b4436fae-c0d4-4081-9f47-ea3ab6c0c533', 'B2', 2)]
+=== Combined workflow proof (scenario 2026-10-03), run 2026-11-08 ===
+[1] seeded + promoted intake 69c1672a-2186-4641-91bc-d24b8135ae1e, n=3
+[2] preflight run 090a777d-cec8-4387-a5a1-3bd8a87ea80b: {'run_id': '090a777d-cec8-4387-a5a1-3bd8a87ea80b', 'intake_id': '69c1672a-2186-4641-91bc-d24b8135ae1e', 'status': 'COMPLETE', 'classification_gate': 'CLEAR_WITH_FINDINGS', 'field_map_version': '1.0.0', 'rule_set_version': '1.8.0', 'preflight_version': '1.0.0', 'records_evaluated': 3, 'findings_count': 10, 'normalizations_count': 3, 'summary': {'by_category': {'MISSING_CONTEXT': 4, 'IDENTIFIER': 6}, 'by_code': {'PART_OF_RESOLVED_IN_REGISTRY': 3, 'PF-OID-001': 3, 'PF-HCID-001': 3, 'PF-CTX-000': 1}, 'by_applicability': {'applies': 9, 'unresolved': 1}, 'by_execution': {'done': 9, 'insufficient': 1}, 'by_disposition': {'informational': 4, 'open': 6}, 'normalizations_by_method': {'FORMAT_NORMALIZATION': 3}, 'records_with_findings': 3, 'records_in_delivery': 3, 'every_record_evaluated': True, 'reused_rules': ['CON-003', 'ID-001', 'ID-002', 'ID-003', 'ID-005', 'INT-001', 'INT-002', 'NPI-002', 'NPI-003', 'NPI-004', 'REQ-001', 'REQ-002', 'REQ-003', 'SCH-001', 'SCH-003'], 'originals_modified': False}, 'started_at': '2026-11-08T06:41:32.422033+00:00', 'completed_at': '2026-11-08T06:41:32.482051+00:00', 'actor': 'workflow-proof', 'correlation_id': '2fd112fc-f9e1-4657-a2e8-5c1ac9389e34', 'build_sha': 'unknown', 'error': None, 'dimensions_note': 'applicability, execution, evidence and disposition are recorded separately on every finding and are never collapsed into one status.'}
+[3] classified 3 entities: [('f0cc59bd-bfd6-4f3d-97b7-ccb189b9c1b1', 'B2', 2), ('dd4cc9c2-901d-4aa3-9fbb-17e966024d6f', 'B2', 2), ('c514e720-87a2-4c9f-a0c3-94302c2bc24b', 'B2', 2)]
 [3b] bucket reached: B2 (not forced to B1 -- see [3c])
-[3c] review_id for analyst/QA = REV-2026-000021, bucket=B2. FIXED 2026-10-03 (fix/qa-approval-non-b1-eligibility-2026-10-03, merged into this combined worktree): QA_APPROVE used to refuse unconditionally for any non-B1 bucket, because arc_pipeline.py's bucket-driven TefcaRegEntity.verification_status='in_review' write was indistinguishable from a genuine post_promotion_verification.record_finding. qa_gate.py now queries for an actual unresolved blocking rce_issues row directly -- step 4 below proves the eligible non-B1 completion for real, through the same application code a real route calls.
-[4a] analyst determination recorded: d504bdbb-68e9-4551-a312-621abd766cca
-[4b] SAME-PERSON QA correctly REFUSED: segregation of duties: wf-analyst@synthetic-test.docuaction.invalid made the determination on REV-2026-000021 and may not QA it.
-[4c] DIFFERENT-PERSON QA approved: 0aa66535-c94a-4a69-89d2-7452ad4c95b6
-[4d] review REV-2026-000021 reportable=True, entity.verification_status=verified
-[5] report generated: id=DA-ARC-2026-002, html_bytes=183266, csv_bytes=2540
-[5b] Figure 1 'B2 Minor or Administrative' count in the generated CSV: 9
+[3c] review_id for analyst/QA = REV-2026-000075, bucket=B2. FIXED 2026-10-03 (fix/qa-approval-non-b1-eligibility-2026-10-03, merged into this combined worktree): QA_APPROVE used to refuse unconditionally for any non-B1 bucket, because arc_pipeline.py's bucket-driven TefcaRegEntity.verification_status='in_review' write was indistinguishable from a genuine post_promotion_verification.record_finding. qa_gate.py now queries for an actual unresolved blocking rce_issues row directly -- step 4 below proves the eligible non-B1 completion for real, through the same application code a real route calls.
+[4a] analyst determination recorded: 5860add2-dd82-4a4e-a8ef-94ac7eb8c435
+[4b] SAME-PERSON QA correctly REFUSED: segregation of duties: wf-analyst@synthetic-test.docuaction.invalid made the determination on REV-2026-000075 and may not QA it.
+[4c] DIFFERENT-PERSON QA approved: 75297ddd-a109-481e-84c2-112417e293d3
+[4d] review REV-2026-000075 reportable=True, entity.verification_status=verified
+[5] report generated: id=DA-ARC-2026-006, html_bytes=199605, csv_bytes=3949
+[5b] Figure 1 'B2 Minor or Administrative' count in the generated CSV: 49
 [6] IQVIA matching capability -- HCO: {'supported': True, 'reason': None, 'code': None, 'advisory_comparison': {'supported': False, 'code': 'USE_MATCH_ROUTE', 'note': 'HCO snapshots are matched by the /match route.'}}; HCP: {'supported': False, 'code': 'AFFILIATION_DATA_UNAVAILABLE', 'reason': "HCP-to-organisation matching is not available: the delivered data carries no usable HCP<->HCO affiliation link (dedicated AFFIL extract absent; HCP_ADDR's own HOSP_AFFIL_* fields are unpopulated). This is a data-completeness fact, not a bug -- matching will not silently return zero results.", 'advisory_comparison': {'supported': True, 'route': '/snapshots/{snapshot_id}/advisory-comparison', 'flag': 'ENABLE_IQVIA_ADDRESS_CONSUMPTION', 'flag_enabled': False, 'sources_enabled': False, 'snapshot_approved': False, 'snapshot_has_rows': False, 'executable_now': False, 'note': 'Read-only advisory presence/address comparison; never a verification source, never a classification input.'}}; AFFILIATION: {'supported': False, 'code': 'AFFILIATION_DATA_UNAVAILABLE', 'reason': 'Registry match-writing (/match) is HCO-only. Affiliation data is consumed through the read-only advisory-comparison route — see the advisory_comparison capability; it requires an APPROVED snapshot and the consumption flag, and it never writes a match or verifies an entity.', 'advisory_comparison': {'supported': True, 'route': '/snapshots/{snapshot_id}/advisory-comparison', 'flag': 'ENABLE_IQVIA_AFFILIATION_CONSUMPTION', 'flag_enabled': False, 'sources_enabled': False, 'snapshot_approved': False, 'snapshot_has_rows': False, 'executable_now': False, 'note': 'Read-only advisory presence/address comparison; never a verification source, never a classification input.'}}
-[7] seeded SECOND delivery for shadow comparison: 7a11929c-6506-4155-ae5b-0f39fc62afa0
-[7x] second delivery classified: [('a48c28a8-4d7f-4627-b580-77427434316b', 'B2'), ('fd912373-9fca-4a64-b6b3-733591275759', 'B2'), ('918d29b7-163c-4604-908e-e6cff7ffc33e', 'B2')]
-[7c] shadow comparison built: 519e65cc-9094-4339-8846-24d9a134f162, baseline_rule_version=3, package_hash=1ce5e9f361b0...
+[7] seeded SECOND delivery for shadow comparison: fd0a08c6-d131-43eb-ae33-c6bf68cf9645
+[7x] second delivery classified: [('993239c8-f62a-4ad4-b050-22f3e501630a', 'B2'), ('0626ac3c-40d2-4f13-994a-e8257397f543', 'B2'), ('095f776c-7827-4f7b-9813-50db0d7c6884', 'B2')]
+[7c] shadow comparison built: 7b6394c6-f022-4768-adec-65a62fe55b02, baseline_rule_version=3, package_hash=494f1e5fb68f...
 [7d] deltas by kind (of 3): CHANGED=2, UNCHANGED=1
-     entity=918d29b7-163c-4604-908e-e6cff7ffc33e baseline=B2/RULE-003 candidate=B3/RULE-006 kind=CHANGED direction=STRICTER
-     entity=fd912373-9fca-4a64-b6b3-733591275759 baseline=B2/RULE-003 candidate=B3/RULE-006 kind=CHANGED direction=STRICTER
-     entity=a48c28a8-4d7f-4627-b580-77427434316b baseline=B2/RULE-003 candidate=B2/RULE-003 kind=UNCHANGED direction=NEUTRAL
+     entity=0626ac3c-40d2-4f13-994a-e8257397f543 baseline=B2/RULE-003 candidate=B3/RULE-006 kind=CHANGED direction=STRICTER
+     entity=095f776c-7827-4f7b-9813-50db0d7c6884 baseline=B2/RULE-003 candidate=B3/RULE-006 kind=CHANGED direction=STRICTER
+     entity=993239c8-f62a-4ad4-b050-22f3e501630a baseline=B2/RULE-003 candidate=B2/RULE-003 kind=UNCHANGED direction=NEUTRAL
 [7e] official records after comparison: [('B2', 3), ('B2', 3), ('B2', 3)] (must equal step [7x] outcome)
-[8a] analyst approval recorded on 519e65cc-9094-4339-8846-24d9a134f162
-[8b] SAME-PERSON shadow QA correctly REFUSED: segregation of duties: wf-shadow-analyst@synthetic-test.docuaction.invalid made the ANALYST approval on comparison 519e65cc-9094-4339-8846-24d9a134f162 and may not give the INDEPENDENT_QA approval. Analyst and independent QA must be different people.
-[8c] DIFFERENT-PERSON shadow QA approved on 519e65cc-9094-4339-8846-24d9a134f162
-[9a] second comparison built for staleness test: 54ff5e7b-d197-4be3-8cc1-890db7dcb7da
-[9b] mutated official ReviewRecord REV-2026-000024: B2 -> B3 (simulating a later re-run)
+[8a] analyst approval recorded on 7b6394c6-f022-4768-adec-65a62fe55b02
+[8b] SAME-PERSON shadow QA correctly REFUSED: segregation of duties: wf-shadow-analyst@synthetic-test.docuaction.invalid made the ANALYST approval on comparison 7b6394c6-f022-4768-adec-65a62fe55b02 and may not give the INDEPENDENT_QA approval. Analyst and independent QA must be different people.
+[8c] DIFFERENT-PERSON shadow QA approved on 7b6394c6-f022-4768-adec-65a62fe55b02
+[9a] second comparison built for staleness test: 374f4225-0c22-4de5-9f82-51d7493489e9
+[9b] mutated official ReviewRecord REV-2026-000078: B2 -> B3 (simulating a later re-run)
 [9c] STALE-BASELINE approval correctly REFUSED: stale baseline: an official review record pinned by this comparison has changed since the package was built; rebuild the comparison
-[9d] restored REV-2026-000024 to B2
-[10a] comparison db93e346-d96f-4f74-9ba9-d120caedda4b fully approved, mode='local_test'
-[10b] first publish: already_published=False, successors=['REV-2026-000027', 'REV-2026-000028']
-[10c] second (retry) publish: already_published=True, successors=['REV-2026-000027', 'REV-2026-000028']
+[9d] restored REV-2026-000078 to B2
+[10a] comparison 0e8f95ef-41d9-4d62-92ea-d952030df590 fully approved, mode='local_test'
+[10b] first publish: already_published=False, successors=['REV-2026-000081', 'REV-2026-000082']
+[10c] second (retry) publish: already_published=True, successors=['REV-2026-000081', 'REV-2026-000082']
 [10d] official records: delivery1=3, delivery2=3 (unchanged counts throughout)
 === ALL STEPS COMPLETED ===

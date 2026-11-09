@@ -359,6 +359,12 @@ def assessment_date(ctx: RecordContext) -> date:
         return raw
     if isinstance(raw, str) and raw.strip():
         return date.fromisoformat(raw.strip()[:10])
+    # Near-unreachable in production (the engine always sets the date), but a
+    # silent wall-clock fallback is exactly what D-12 exists to make visible.
+    import logging
+    logging.getLogger(__name__).warning(
+        "RecordContext.dataset carries no assessment_date; falling back to "
+        "date.today() — this run's date-gated rule bases depend on wall clock.")
     return date.today()
 
 

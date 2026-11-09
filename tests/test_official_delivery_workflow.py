@@ -741,9 +741,25 @@ class TestReviewCycleGate:
 
         audited = []
 
+        class _NoRows:
+            """Result stub for the processing-barrier preamble (2026-11-08):
+            the advisory-lock statement ignores its result and the barrier
+            lookup finds no `processing_barrier_set` row — barrier off."""
+            def scalar(self):
+                return None
+
+            def scalars(self):
+                return self
+
+            def first(self):
+                return None
+
         class Db:
             async def get(self, model, key):
                 return object()  # an intake exists
+
+            async def execute(self, *a, **k):
+                return _NoRows()
 
             async def commit(self):
                 pass

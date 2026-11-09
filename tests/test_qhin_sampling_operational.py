@@ -374,10 +374,13 @@ def test_a_caller_cannot_supply_selected_ids_or_qhin_assignment():
                       "qhin_assignment", "strata_override", "population"):
         assert forbidden not in params, (
             f"{forbidden!r} would let a caller choose the sample")
-    # Only methodology parameters and identity are accepted.
+    # Only methodology parameters and identity are accepted. `full_population`
+    # is a methodology MODE (enumerate every eligible unit), not a selection
+    # vector: it can only ever widen the selection to ALL, never choose
+    # specific records, so cherry-picking stays impossible.
     assert params == {"db", "intake_id", "review_type", "confidence", "margin",
                       "proportion", "use_fpc", "include_held", "seed",
-                      "actor", "actor_id", "sample_name"}
+                      "actor", "actor_id", "sample_name", "full_population"}
 
 
 async def test_a_post_finalization_seed_cannot_change_the_membership(

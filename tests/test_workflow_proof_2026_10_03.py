@@ -102,8 +102,10 @@ def _local_v4_candidate() -> list[dict]:
 
 
 async def test_combined_workflow_proof(monkeypatch, db_required):
+    """Combined workflow proof scenario; regenerates WORKFLOW_PROOF_LOG.txt."""
     LOG.write_text("", encoding="utf-8")
-    _log("=== Combined workflow proof, 2026-10-03 ===")
+    _log("=== Combined workflow proof (scenario 2026-10-03), run "
+        + __import__("datetime").datetime.utcnow().date().isoformat() + " ===")
     monkeypatch.setenv("ENTITY_RESOLVER_SOURCE", "db")
 
     from app.core.database import async_session_maker

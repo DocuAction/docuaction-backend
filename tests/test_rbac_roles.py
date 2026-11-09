@@ -418,6 +418,29 @@ def test_no_tefca_read_endpoint_sits_above_the_viewer_floor():
         # /api/tefca/arc/reviews/{review_id}/history is viewer, and returns the
         # full chain including superseded events.
         "/api/tefca/arc/qa-queue",
+        # Release-transition processing barrier — admin (8). An OPERATIONAL
+        # release-control surface, not entity data: it returns only the
+        # barrier state, the reason, WHO set it (a staff email address — the
+        # same LOGIN-013 category the /api/tefca/audit-trail exception turns
+        # on) and the verified drain check. That drain check briefly acquires
+        # the EXCLUSIVE advisory lock every classification transaction holds
+        # in shared mode — a (bounded) interference vector on live
+        # processing, which is the /api/tefca/qa/sweep precedent: modelled as
+        # a GET, but operationally more than a dashboard read. The barrier's
+        # effect is fully visible to every role anyway: a blocked request
+        # receives 409 PROCESSING_BARRIER_ACTIVE with a plain-language body.
+        "/api/tefca/arc/processing-barrier",
+        # Classification-configuration readback — admin (8). The release
+        # sequence's step-5 readback: effective rules (which a viewer can
+        # already read via /api/tefca/arc/review-rules), the EX-3 producer
+        # flag's raw environment value, the flag/component consistency
+        # verdict and the barrier status above (same staff-email and
+        # drain-probe considerations). Raw runtime environment configuration
+        # is infrastructure state, not entity data — the
+        # /api/tefca/rce/iqvia/staging-capacity precedent: the gate is about
+        # who may inspect release configuration, not about hiding data a
+        # reviewer needs.
+        "/api/tefca/arc/classification-config",
         # Development-only diagnostic — reviewer (4). This route does not exist
         # in production: app/Tefca/routes.py registers demo_router inside
         # `if settings.is_development:`, and production runs
