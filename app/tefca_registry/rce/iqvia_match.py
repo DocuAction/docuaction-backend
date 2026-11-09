@@ -71,6 +71,13 @@ class MatchRunSummary:
                                          # attach to; entity_id is NOT NULL on
                                          # EntitySourceMatch, so these are
                                          # counted here, not written as a row
+    next_after_key: Optional[str] = None  # last source_record_key this run
+                                          # fully processed; pass it back as
+                                          # `after_key` to resume WITHOUT
+                                          # re-reading earlier rows (rows that
+                                          # write no match row would otherwise
+                                          # consume every later limited run's
+                                          # budget -- round-2 review finding)
     details: List[Dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> Dict[str, Any]:
@@ -120,6 +127,7 @@ async def match_hco_snapshot(
     nppes_type_lookup: Optional[NppesTypeLookup] = None,
     limit: Optional[int] = None,
     page_size: int = DEFAULT_PAGE_SIZE,
+    after_key: Optional[str] = None,
 ) -> MatchRunSummary:
     """Evaluate every not-yet-matched `iqvia_hco_observation` row under one
     APPROVED HCO snapshot. Idempotent to call again: rows already matched
@@ -138,7 +146,16 @@ async def match_hco_snapshot(
     `limit` counts NEWLY EVALUATED observations, never already-matched skips --
     otherwise a repeated limited run would spend its whole budget re-walking
     the rows it already matched and never advance (CodeRabbit round-1 finding
-    on this change, verified and fixed with the resume test)."""
+    on this change, verified and fixed with the resume test).
+
+    `after_key` is the resume cursor (round-2 finding, verified): rows that
+    write no match row (no identifier, or zero candidates) are legitimately
+    re-evaluated by a fresh full run, but they count against `limit`, so
+    enough of them early in key order would starve every later limited run
+    and each repeated run re-reads all earlier pages regardless. A caller
+    doing bounded installments passes the previous summary's
+    `next_after_key` back as `after_key` and continues where it stopped;
+    omitting it keeps the fresh-full-run contract unchanged."""
     snapshot = await db.get(sm.SourceSnapshot, snapshot_id)
     if snapshot is None:
         raise ValueError(f"no snapshot {snapshot_id}")
@@ -153,7 +170,7 @@ async def match_hco_snapshot(
     summary = MatchRunSummary(snapshot_id=snapshot_id)
     observation_snapshot_id = await _observation_root_snapshot_id(db, snapshot)
     lock_key = f"iqvia-hco-match:{snapshot_id}"
-    last_key: Optional[str] = None
+    last_key: Optional[str] = after_key
 
     while True:
         if limit is not None and summary.newly_evaluated >= limit:
@@ -196,6 +213,12 @@ async def match_hco_snapshot(
             if limit is not None and summary.newly_evaluated >= limit:
                 break
             summary.observations_considered += 1
+            # The resume cursor advances over every row this run fully
+            # processes -- matched skips, no-identifier and zero-candidate
+            # rows included -- NOT over rows a mid-page limit break left
+            # unprocessed. Without it, rows that write no match row are
+            # re-evaluated by every later run and can starve a limited run.
+            summary.next_after_key = obs.source_record_key
             if obs.source_record_key in already:
                 summary.already_matched_skipped += 1
                 continue

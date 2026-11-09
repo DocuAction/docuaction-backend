@@ -145,3 +145,63 @@ class TestBoundedMatching:
         summary = await im.match_hco_snapshot(db, snapshot_id=sid, actor=SYN)
         assert summary.observations_considered == 1
         assert summary.unmatchable_no_identifier == 1
+
+    async def test_after_key_cursor_resumes_past_rows_that_write_no_match_row(
+            self, rolled_back_db, tmp_path):
+        """Round-2 review finding, verified: rows that write no match row
+        (no identifier, zero candidates) are re-evaluated by every fresh run
+        and count against `limit`, so enough of them early in key order starve
+        every later limited run. The `after_key`/`next_after_key` cursor is
+        the fix: installments continue where the last one stopped. Also pins
+        the mid-page semantics -- the cursor is the last PROCESSED key, not
+        the page's last key."""
+        db = rolled_back_db
+        await seed_entity(db, oid=f"{SYN}.CURSOR.1", name=f"{SYN} Cursor Target",
+                          npi=NPI_REGISTERED)
+        # keyset order: the two no-identifier rows sort BEFORE the matchable one
+        rows = [[f"{SYN}-CU-AA1", "", "", f"{SYN} Cursor Nothing 1", "02101"],
+                [f"{SYN}-CU-AA2", "", "", f"{SYN} Cursor Nothing 2", "02101"],
+                [f"{SYN}-CU-ZZ", NPI_REGISTERED, "", f"{SYN} Cursor Target", "02101"]]
+        approved = await _approved_snapshot(db, tmp_path, rows, "cursor")
+
+        # One page of 3, limit 2: the limit breaks MID-PAGE after the two
+        # no-identifier rows; the cursor must point at the second of them,
+        # never at the page's last key (which would silently skip ZZ).
+        first = await im.match_hco_snapshot(db, snapshot_id=approved.id, actor=SYN,
+                                            nppes_type_lookup=_nppes_type2,
+                                            limit=2, page_size=3)
+        assert first.newly_evaluated == 2
+        assert first.auto_approved == 0
+        assert first.next_after_key == f"{SYN}-CU-AA2"
+
+        # STARVATION, demonstrated: the same limited call WITHOUT the cursor
+        # burns its whole budget on the same two rows again, forever.
+        starved = await im.match_hco_snapshot(db, snapshot_id=approved.id, actor=SYN,
+                                              nppes_type_lookup=_nppes_type2,
+                                              limit=2, page_size=3)
+        assert starved.newly_evaluated == 2
+        assert starved.auto_approved == 0
+        assert starved.next_after_key == f"{SYN}-CU-AA2"
+
+        # The cursor resumes strictly after the stall point and reaches ZZ.
+        resumed = await im.match_hco_snapshot(db, snapshot_id=approved.id, actor=SYN,
+                                              nppes_type_lookup=_nppes_type2,
+                                              limit=2, page_size=3,
+                                              after_key=first.next_after_key)
+        assert resumed.observations_considered == 1
+        assert resumed.newly_evaluated == 1
+        assert resumed.auto_approved == 1
+        assert resumed.next_after_key == f"{SYN}-CU-ZZ"
+        written = (await db.execute(select(sm.EntitySourceMatch).where(
+            sm.EntitySourceMatch.source_snapshot_id == approved.id))).scalars().all()
+        assert len(written) == 1
+
+        # Fresh-full-run contract unchanged: no cursor, no limit -- the match
+        # row skips, the no-identifier rows legitimately re-evaluate.
+        full = await im.match_hco_snapshot(db, snapshot_id=approved.id, actor=SYN,
+                                           nppes_type_lookup=_nppes_type2)
+        assert full.already_matched_skipped == 1
+        assert full.unmatchable_no_identifier == 2
+        written = (await db.execute(select(sm.EntitySourceMatch).where(
+            sm.EntitySourceMatch.source_snapshot_id == approved.id))).scalars().all()
+        assert len(written) == 1  # still exactly one -- never duplicated

@@ -833,6 +833,13 @@ class MatchRequest(BaseModel):
     page_size: int = Field(
         im.DEFAULT_PAGE_SIZE, ge=1, le=5_000,
         description="Observations evaluated per transaction")
+    after_key: Optional[str] = Field(
+        None, min_length=1, max_length=256,
+        description="Resume cursor: the previous run's `next_after_key`. "
+                    "Scanning restarts strictly after this source_record_key, "
+                    "so bounded installments never re-read earlier rows and "
+                    "rows that write no match row cannot exhaust a later "
+                    "run's limit. Omit for a fresh full run.")
 
 
 @router.post("/snapshots/{snapshot_id}/match",
@@ -868,7 +875,8 @@ async def match_snapshot(
             db, snapshot_id=snapshot_id,
             actor=getattr(user, "email", None) or "UNKNOWN",
             limit=body.limit if body else None,
-            page_size=body.page_size if body else im.DEFAULT_PAGE_SIZE)
+            page_size=body.page_size if body else im.DEFAULT_PAGE_SIZE,
+            after_key=body.after_key if body else None)
     except im.MatchInProgressError as exc:
         # A concurrent run holds the snapshot's advisory lock. Refusing here is
         # what keeps repeated client retries from multiplying full-table scans
