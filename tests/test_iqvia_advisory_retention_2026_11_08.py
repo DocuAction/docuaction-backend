@@ -52,13 +52,18 @@ async def _stage_affil(db, tmp_path):
     return summary.snapshot_id
 
 
-async def _outcome_rows(db):
-    return (await db.execute(select(ret.IqviaAdvisoryComparisonOutcome))).scalars().all()
+async def _outcome_rows(db, sid):
+    # Scoped to THIS test's snapshot (review finding on the merge head): a
+    # migrated database may already hold retained outcomes from other work;
+    # rolled_back_db undoes this test's writes, it does not hide existing rows.
+    return (await db.execute(select(ret.IqviaAdvisoryComparisonOutcome).where(
+        ret.IqviaAdvisoryComparisonOutcome.source_snapshot_id == sid))).scalars().all()
 
 
-async def _outcome_count(db) -> int:
+async def _outcome_count(db, sid) -> int:
     return (await db.execute(select(func.count()).select_from(
-        ret.IqviaAdvisoryComparisonOutcome))).scalar_one()
+        ret.IqviaAdvisoryComparisonOutcome).where(
+        ret.IqviaAdvisoryComparisonOutcome.source_snapshot_id == sid))).scalar_one()
 
 
 async def _compare(db, sid, entity_ids):
@@ -81,13 +86,13 @@ async def test_comparison_alone_writes_no_retention_row(rolled_back_db, tmp_path
     db = rolled_back_db
     eid = await seed_entity(db, oid=f"{SYN}-R1", name=f"{SYN} Ret", npi=NPI_REGISTERED)
     sid = await _stage_affil(db, tmp_path)
-    before_outcomes = await _outcome_count(db)
+    before_outcomes = await _outcome_count(db, sid)
     before_matches = (await db.execute(select(func.count()).select_from(
         smod.EntitySourceMatch))).scalar_one()
     out = await _compare(db, sid, [eid])
     assert out["results"][0]["presence"]["outcome"] == advc.SUPPORTS
     assert "persistence" not in out
-    assert await _outcome_count(db) == before_outcomes      # retention untouched
+    assert await _outcome_count(db, sid) == before_outcomes      # retention untouched
     assert (await db.execute(select(func.count()).select_from(
         smod.EntitySourceMatch))).scalar_one() == before_matches
 
@@ -105,7 +110,7 @@ async def test_persist_writes_one_attributable_row_per_entity(rolled_back_db, tm
         db, run_id="RUN-2026-11-08-A", comparison=out, created_by="tester@example.test")
     assert summary == {"run_id": "RUN-2026-11-08-A", "persisted": 2,
                        "already_persisted": 0, "skipped_errors": 1}
-    rows = {r.entity_id: r for r in await _outcome_rows(db)}
+    rows = {r.entity_id: r for r in await _outcome_rows(db, sid)}
     assert set(rows) == {e1, e2}
     r1 = rows[e1]
     assert r1.run_id == "RUN-2026-11-08-A"
@@ -137,11 +142,11 @@ async def test_persist_is_idempotent_per_run_and_separable_per_run(rolled_back_d
         db, run_id="RUN-IDEM", comparison=out, created_by=SYN)
     assert again == {"run_id": "RUN-IDEM", "persisted": 0,
                      "already_persisted": 1, "skipped_errors": 0}
-    assert await _outcome_count(db) == 1                     # no duplicate row
+    assert await _outcome_count(db, sid) == 1                     # no duplicate row
     other = await ret.persist_comparison_outcomes(
         db, run_id="RUN-IDEM-2", comparison=out, created_by=SYN)
     assert other["persisted"] == 1                           # a new run is a new fact
-    assert await _outcome_count(db) == 2
+    assert await _outcome_count(db, sid) == 2
 
 
 # ── append-only and advisory-boundary constraints ─────────────────────────────

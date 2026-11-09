@@ -954,6 +954,13 @@ async def advisory_comparison(
         out["persistence"] = await ret.persist_comparison_outcomes(
             db, run_id=body.run_id, comparison=out,
             created_by=getattr(user, "email", None) or "UNKNOWN")
+        # Commit the retained rows EXPLICITLY (review finding on the merge
+        # head, verified): _audit is deliberately best-effort and rolls back
+        # on its own failure -- without this commit, a failed audit write
+        # would silently discard the outcome rows while the response still
+        # reported them persisted. After this commit the audit can only
+        # affect itself.
+        await db.commit()
     await _audit(db, user, action="IQVIA_ADVISORY_COMPARISON", outcome="success",
                  resource_type="iqvia_snapshot", resource_id=snapshot_id,
                  details={"source_system": snapshot.source_system,
