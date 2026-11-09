@@ -27,7 +27,11 @@ DECLARE
   -- are skipped when a build predates them.
   retained text[] := ARRAY[
     'rce_source_records','rce_source_intakes','rce_ingestion_runs',
-    'rce_rule_execution_history','review_decision_events','iqvia_advisory_assessment'];
+    'rce_rule_execution_history','review_decision_events','iqvia_advisory_assessment',
+    -- 20261108_iqvia_advisory_outcome (D-10): append-only trigger + app
+    -- SELECT/INSERT only -- owner must own it or the constrained role could
+    -- disable its own trigger (same contract as iqvia_advisory_assessment).
+    'iqvia_advisory_comparison_outcome'];
   r record;
   owning_tbl text;
 BEGIN
