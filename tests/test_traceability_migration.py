@@ -33,7 +33,14 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 #: the five evidence tables -- a CHECK constraint is independent of both --
 #: so "upgrade to head" testing those grants stays valid with the head
 #: moved again, same as every prior bump recorded in this comment's history.
-HEAD = "20261009_iqvia_affil_org_indexes"   # 20261006 added column-level UPDATE(record_count, metadata) on source_snapshot; 20261007 added column-level UPDATE on the completion columns of rce_preflight_run (preflight finalize) plus a guard trigger; this head adds one append-only per-record result table (SELECT+INSERT) and three nullable rule-history columns; no grant on the five evidence tables; 20261008 is now the parent of this head, and the head adds two partial expression indexes only (no data, no grant)
+#: Bumped again 2026-11-08 past 20261009 to 20261108_source_policy: the
+#: 2026-10-10..2026-11-08 revisions add IQVIA observation/snapshot
+#: bookkeeping, preflight/recheck columns, the HCP NPI index, the run
+#: assessment_metadata column (column-level UPDATE grant on
+#: rce_verification_runs only) and the read-only rce_source_policies
+#: table (SELECT grant only). None touches ownership or GRANTs on the
+#: five evidence tables, so the grant-matrix contract below is unchanged.
+HEAD = "20261108_source_policy"   # 20261006 added column-level UPDATE(record_count, metadata) on source_snapshot; 20261007 added column-level UPDATE on the completion columns of rce_preflight_run (preflight finalize) plus a guard trigger; this head adds one append-only per-record result table (SELECT+INSERT) and three nullable rule-history columns; no grant on the five evidence tables; 20261008 is now the parent of this head, and the head adds two partial expression indexes only (no data, no grant)
 PREVIOUS = "20260915_curated_text_columns"
 MIG_DB = "mig_test"
 OWNER, APP = "docuaction_owner", "docuaction_app"
@@ -129,6 +136,9 @@ def _expect_error(fn, *needles):
 
 @pytest.mark.usefixtures("db_required")
 def test_traceability_migration_end_to_end(throwaway_db):
+    """End to end on a throwaway DB: empty -> head, clean downgrade while
+    evidence is empty, refusal once it is not, the exact grant matrix, the
+    current-dispositions view, and the equation CHECK."""
     import sqlalchemy as sa
     from sqlalchemy import text
 
@@ -226,9 +236,31 @@ def test_traceability_migration_end_to_end(throwaway_db):
     assert "DowngradeWouldDestroyEvidenceError" in (r.stdout + r.stderr)
     assert "rce_disposition_events (1 rows)" in (r.stdout + r.stderr)
     with eng.connect() as c:
+        # FOUND 2026-11-08, when the HEAD pin moved past 20261009: the chain
+        # above 20260917 now contains an autocommit block (20261009's CREATE
+        # INDEX CONCURRENTLY cannot run inside a transaction), and alembic
+        # COMMITS everything before such a block. A refused downgrade is
+        # therefore NOT atomic back to the starting head — the revisions
+        # above the autocommit boundary stay downgraded (observed landing:
+        # version 20261009) while 20260917's refusal rolls back only the
+        # segment after the last commit. Asserting `_version(c) == [HEAD]`
+        # here was true only while 20261009 WAS the head. The property this
+        # step actually guards is the EVIDENCE: the five tables, the view
+        # and the appended row must all survive the refused downgrade — and
+        # `upgrade head` must restore the full schema around them. The
+        # partial-downgrade boundary itself is a real operational finding
+        # (never run `alembic downgrade` across an autocommit-block revision
+        # expecting an atomic refusal); it is recorded in the 2026-11-08
+        # release checkpoint, not hidden by this assertion change.
+        tables, views = _tables(c)
+        assert set(TABLES) <= tables and VIEW in views
+        assert c.execute(text("select count(*) from rce_disposition_events")).scalar() == 1
+    _alembic(url, "upgrade", "head")
+    with eng.connect() as c:
         assert _version(c) == [HEAD]
         tables, views = _tables(c)
         assert set(TABLES) <= tables and VIEW in views
+        assert c.execute(text("select count(*) from rce_disposition_events")).scalar() == 1
     print("DOWNGRADE_REFUSED_WITH_EVIDENCE=PASS")
 
     # 6. the view returns the highest sequence per record

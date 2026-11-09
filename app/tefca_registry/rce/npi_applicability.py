@@ -311,3 +311,113 @@ def describe(assignment: CaseAssignment, assessment: ApplicabilityAssessment) ->
             f"assessed={assessment.assessment_date.isoformat()}; "
             f"governing date={assessment.governing_requirement_date.isoformat()}; "
             f"deadline={assessment.deadline_applicability}; rule={assessment.rule_version}")
+
+
+# ── proposed classifier signal (SEED_RULES_V4 / RULE-006) ─────────────────────
+
+def active_treatment_missing_required_npi(
+    purposes_raw: Optional[str],
+    npi_raw: Optional[str],
+    active_raw: Optional[str],
+    *,
+    assessment_date: date,
+    requirement_effective: date,
+    org_node_type: Optional[str] = None,
+) -> Optional[dict]:
+    """The RULE-006 classifier signal, or None when the rule is out of scope.
+
+    In scope only when ALL of: the record's active flag normalizes to "1";
+    the parsed purpose list contains the EXACT token T-TRTMNT (assign_case
+    case 1 semantics — T-TREAT is case 3 and never matches, nor do casing or
+    substring variants); the submitted NPI is missing; and the NPI
+    requirement (BR-NPI-TRTMNT-001 / Treatment XP SOP v2.0 §7) is in force
+    on `assessment_date`.
+
+    APPLICABILITY IS PART OF THE SIGNAL, not assumed: §7(a) binds a
+    Participant/Subparticipant operating a Principal Node that INITIATES
+    Queries. `status` is True (B4-eligible) ONLY when the delivered
+    `organizationNodeType` establishes initiating direction
+    (`exchange_direction_from_record`). Unknown direction — a blank node
+    type, a passthrough node, or a caller that supplied no node type — is
+    `initiating_requirement = "unresolved"` with `status: False` and
+    `applicability_review: True`: unknown applicability is NEVER treated as
+    confirmed, and the record is routed to explicit analyst review
+    (RULE-007), never to B4 and never silently to B1. An explicitly
+    responding-only direction is `does_not_apply` (outside §7).
+
+    PURE: reads the delivered values only, never a supplemental source — an
+    NPI available only through supplemental evidence (vetting exports, NPPES
+    candidates) does NOT satisfy the submission requirement and is an
+    analyst-side fact, so it cannot and does not suppress this signal.
+    Original submitted values are preserved verbatim in the returned payload
+    for the classification rationale.
+    """
+    from app.tefca_registry.rce.field_map import normalize_active
+
+    if assessment_date < requirement_effective:
+        return None
+    if normalize_active(active_raw) != "1":
+        return None
+    assignment = assign_case(purposes_raw, npi_raw)
+    if assignment.case != 1:   # exact T-TRTMNT present AND NPI missing
+        return None
+
+    direction = exchange_direction_from_record(org_node_type)
+    if direction == INITIATING:
+        requirement = APPLIES
+        note = ("Submitted NPI missing on an active record claiming the exact "
+                "T-TRTMNT exchange purpose, with the §7 initiating obligation "
+                "established by the delivered organizationNodeType and the "
+                "requirement in force. A candidate NPI from supplemental "
+                "evidence does not satisfy the submission requirement; it "
+                "remains analyst-side evidence.")
+    elif direction == RESPONDING:
+        requirement = DOES_NOT_APPLY
+        note = ("§7 binds initiating Principal Nodes; the delivered direction "
+                "is responding-only, so this Treatment rule does not apply. "
+                "Other checks are unaffected.")
+    else:
+        requirement = UNRESOLVED
+        note = ("Submitted NPI missing on an active record claiming the exact "
+                "T-TRTMNT exchange purpose, but the exchange direction is not "
+                "documented in the delivery (organizationNodeType does not "
+                "establish an initiating Principal Node). Whether the §7 "
+                "obligation applies is UNRESOLVED: explicit applicability "
+                "review required — never confirmed non-compliance (B4) and "
+                "never a silent pass (B1).")
+    # Reason codes are EMITTED BY THIS PRODUCER (matrix TR-1/TR-2/TR-3), so a
+    # report can only ever repeat what the classifier input actually carried —
+    # never invent its own. Mutually exclusive by construction: initiating
+    # (TR-1) / blank node type (TR-2, applicability presumed per the owner's
+    # recorded direction) / a delivered but non-initiating node type (TR-3,
+    # passthrough-node or no-node — triggers examination, never automatic
+    # exclusion). A responding-only direction has its own code and is
+    # unreachable from delivered fields today (nothing maps to RESPONDING).
+    if requirement == APPLIES:
+        reason_code = "TREATMENT_NPI_MISSING_B4_CANDIDATE"
+    elif requirement == DOES_NOT_APPLY:
+        reason_code = "TREATMENT_DIRECTION_RESPONDING_NOT_APPLICABLE"
+    elif not (org_node_type or "").strip():
+        reason_code = "TREATMENT_APPLICABILITY_PRESUMED_NPI_MISSING"
+    else:
+        reason_code = "TREATMENT_NODE_TYPE_REVIEW"
+
+    return {
+        # True ONLY when the §7 initiating applicability is established.
+        "status": requirement == APPLIES,
+        "initiating_requirement": requirement,
+        "exchange_direction": direction,
+        "reason_code": reason_code,
+        "applicability_review": requirement == UNRESOLVED,
+        "case": assignment.case,
+        "case_label": assignment.label,
+        "raw_purposes": assignment.raw_purposes,
+        "raw_npi": assignment.raw_npi,
+        "raw_active": (active_raw or ""),
+        "raw_org_node_type": (org_node_type or ""),
+        "purpose_tokens": list(assignment.tokens),
+        "requirement": "BR-NPI-TRTMNT-001 (Treatment XP SOP v2.0 §7/§8)",
+        "requirement_effective": requirement_effective.isoformat(),
+        "assessment_date": assessment_date.isoformat(),
+        "note": note,
+    }

@@ -53,6 +53,7 @@ async def _seeded(monkeypatch, n=3):
 
 
 async def _completed_ppef_snapshot():
+    """A completed synthetic PPEF ENROLLMENT snapshot; returns its id."""
     from app.Tefca.models import TEFCAPPEFSnapshot
     from app.core.database import async_session_maker
 
@@ -69,6 +70,8 @@ async def _completed_ppef_snapshot():
 
 
 async def _request_snapshot_recheck(intake_id, user, snapshot_id, **over):
+    """Request a snapshot-triggered recheck (max_entities deliberately
+    omitted: full trigger scope)."""
     from app.core.database import async_session_maker
 
     # max_entities is deliberately OMITTED: an omitted bound must mean the
@@ -100,6 +103,7 @@ async def _seed_ppef_enrollment_rows(snapshot_id, npis):
 
 
 async def _target_npis(job_id):
+    """NPIs of the job's target entities, via the real resolver."""
     from app.Tefca import rce_fields
     from app.Tefca.entity_resolution import resolve_entity
     from app.core.database import async_session_maker
@@ -117,6 +121,7 @@ async def _target_npis(job_id):
 
 
 async def _evidence_counts(entity_ids):
+    """Evidence-row counts per source for the given entities."""
     from app.Tefca.models import TEFCADimensionEvidence as DE
     from app.core.database import async_session_maker
 
@@ -129,6 +134,7 @@ async def _evidence_counts(entity_ids):
 
 
 async def _target_entity_ids(job_id):
+    """Entity ids targeted by the job."""
     from app.core.database import async_session_maker
     from app.tefca_registry.rce.recheck_models import RceRecheckItem
 
@@ -141,6 +147,8 @@ async def _target_entity_ids(job_id):
 # ── 1. one job per edition, explained and pinned ─────────────────────────────
 
 async def test_one_job_per_edition_restriction(db_required, monkeypatch):
+    """One job per snapshot edition: a repeat request returns the existing
+    job."""
     intake_id, _ = await _seeded(monkeypatch)
     snapshot_id = await _completed_ppef_snapshot()
     maker = _User("reviewer")
@@ -164,6 +172,8 @@ async def test_one_job_per_edition_restriction(db_required, monkeypatch):
 
 async def test_snapshot_trigger_covers_population_and_other_triggers_stay_bounded(
         db_required, monkeypatch):
+    """The snapshot trigger covers the whole population; other triggers keep
+    the per-job bound."""
     intake_id, _ = await _seeded(monkeypatch)
     snapshot_id = await _completed_ppef_snapshot()
 
@@ -184,6 +194,8 @@ async def test_snapshot_trigger_covers_population_and_other_triggers_stay_bounde
     from app.core.database import async_session_maker
 
     async def _authority(db, trigger_kind, source_id, trigger_ref):
+        """Synthetic trigger authority, bypassing edition validation for this
+        bounded case."""
         return {"authority": "synthetic", "trigger_ref": trigger_ref}
 
     monkeypatch.setattr(rechecks, "_validate_trigger", _authority)
@@ -202,6 +214,8 @@ async def test_snapshot_trigger_covers_population_and_other_triggers_stay_bounde
 
 async def test_enrollment_only_gather_is_append_only_and_single_source(
         db_required, monkeypatch):
+    """Enrollment-only gather answers from the pinned edition, appends
+    evidence, asks one source."""
     intake_id, fake_sam = await _seeded(monkeypatch)
     snapshot_id = await _completed_ppef_snapshot()
     maker, qa = _User("reviewer"), _User("qalead")
@@ -221,6 +235,7 @@ async def test_enrollment_only_gather_is_append_only_and_single_source(
     live_api_calls = []
 
     async def live_api_tripwire(self, npi):
+        """Fail the test if the live CMS data-api is consulted."""
         live_api_calls.append(npi)
         raise AssertionError("snapshot recheck consulted the live CMS data-api")
 
@@ -275,6 +290,7 @@ async def test_enrollment_only_gather_is_append_only_and_single_source(
 
 async def test_requester_still_cannot_approve_their_own_snapshot_recheck(
         db_required, monkeypatch):
+    """The requester still cannot approve their own snapshot recheck."""
     intake_id, _ = await _seeded(monkeypatch)
     snapshot_id = await _completed_ppef_snapshot()
     maker = _User("qalead")       # even a QA-lead maker is refused as checker
@@ -289,6 +305,7 @@ async def test_requester_still_cannot_approve_their_own_snapshot_recheck(
 
 async def test_snapshot_request_refuses_a_bound_that_strands_the_edition(
         db_required, monkeypatch):
+    """A bound that would strand part of the edition is refused."""
     intake_id, _ = await _seeded(monkeypatch)
     snapshot_id = await _completed_ppef_snapshot()
 
@@ -414,6 +431,7 @@ async def test_enrollment_only_scope_keeps_established_nppes_classification(
     snapshot_id = await _completed_ppef_snapshot()   # holds NO rows for this NPI
 
     async def nppes_tripwire(self, _npi):
+        """Fail the test if enrollment-only scope re-asks NPPES."""
         raise AssertionError("enrollment-only scope re-asked NPPES")
 
     monkeypatch.setattr(NPPESConnector, "lookup_by_npi", nppes_tripwire)
@@ -438,12 +456,15 @@ async def test_enrollment_only_scope_keeps_established_nppes_classification(
 @pytest.mark.parametrize("total", [0, 1, 2000, 2001, 4001, 25764])
 async def test_items_csv_exports_every_page_and_neutralises_identifiers(
         monkeypatch, total):
+    """items_csv pages through the whole job and neutralises formula-like
+    identifiers."""
     import csv
     import io
 
     calls = []
 
     async def page(db, job_id, *, limit=100, offset=0):
+        """A synthetic list_items page of `total` rows."""
         assert job_id == "synthetic-export"
         calls.append((limit, offset))
         return {
@@ -474,9 +495,13 @@ async def test_items_csv_exports_every_page_and_neutralises_identifiers(
 
 
 async def test_items_csv_refuses_a_truncated_page(monkeypatch):
+    """A page that under-delivers its declared total is refused, not exported
+    short."""
     calls = []
 
     async def page(db, job_id, *, limit=100, offset=0):
+        """A page that under-delivers: rows only at offset 0 of a declared
+        total of 2."""
         calls.append(offset)
         return {
             "job_id": job_id, "total": 2,

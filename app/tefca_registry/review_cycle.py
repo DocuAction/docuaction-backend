@@ -74,6 +74,70 @@ from app.tefca_registry import audit as reg_audit
 from app.tefca_registry import models as reg
 from app.tefca_registry.rce import models as m
 
+#: D-15 PROPOSED, INACTIVE by default: when set truthy, review-cycle
+#: verification SKIPS members whose curated record is currently HELD
+#: (including promoted-then-re-HELD), recording VERIFY_SKIPPED_HELD per member.
+#: HELD is a processing state, never a bucket. May only be set under the
+#: recorded D-15 decision.
+PROPOSED_VERIFY_SKIP_HELD_ENV = "RCE_PROPOSED_VERIFY_SKIP_HELD"
+
+
+def _proposed_verify_skip_held() -> bool:
+    """True when the D-15 proposed HELD/re-HELD verification skip is enabled
+    via PROPOSED_VERIFY_SKIP_HELD_ENV (default OFF; gated on the recorded
+    decision). Read fresh each call so tests can set it without reimport."""
+    import os
+    return (os.getenv(PROPOSED_VERIFY_SKIP_HELD_ENV) or "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+#: Member status for a D-15 skip. A member in this status stays UNLINKED
+#: (review_id is None — no review case was invented for it) but is no longer
+#: selectable, so repeated cycle calls converge; the sample row itself is the
+#: durable record of why.
+SKIPPED_HELD_STATUS = "skipped_held"
+
+
+async def _unlinked_members(db, sample_id):
+    """The sample members still needing verification: review_id unset AND not
+    marked `skipped_held` (D-15). Deterministic order. Factored out so the
+    selection semantics are directly testable."""
+    from sqlalchemy import func as safunc, select as saselect
+    return (await db.execute(
+        saselect(reg.SampleEntity)
+        .where(reg.SampleEntity.sample_id == sample_id,
+               reg.SampleEntity.review_id.is_(None),
+               safunc.coalesce(reg.SampleEntity.review_status, "")
+               != SKIPPED_HELD_STATUS)
+        .order_by(reg.SampleEntity.stratum, reg.SampleEntity.entity_id)
+    )).scalars().all()
+
+
+async def _held_entity_ids(db, intake_id, entity_ids) -> set:
+    """Entity ids among `entity_ids` whose curated record in THIS delivery is
+    CURRENTLY HELD — the D-15 skip set. Reads the live `record_status`, so a
+    promoted-then-re-HELD record (post-promotion verification rewrote the
+    disposition after the plan was drawn) is caught exactly like an original
+    hold. Factored out so the proposed semantics are testable against the
+    database directly."""
+    from sqlalchemy import select as _select
+    if not entity_ids:
+        return set()
+    # Chunked IN list (review finding 2026-11-08): with full_population the
+    # sample is the whole delivery, and asyncpg caps one statement at 32,767
+    # bind parameters — a single IN over a very large delivery would fail the
+    # cycle before any member is verified, on every retry.
+    ids = list(entity_ids)
+    held: set = set()
+    for i in range(0, len(ids), 5000):
+        held.update((await db.execute(
+            _select(m.RceCuratedRecord.canonical_entity_id)
+            .where(m.RceCuratedRecord.source_intake_id == intake_id,
+                   m.RceCuratedRecord.canonical_entity_id.in_(ids[i:i + 5000]),
+                   m.RceCuratedRecord.record_status == "HELD")
+        )).scalars().all())
+    return held
+
 logger = logging.getLogger(__name__)
 
 #: The queue_source stamped on every review case created from an official
@@ -99,6 +163,7 @@ async def create_review_cycle(
     seed: Optional[int] = None, sample_name: Optional[str] = None,
     batch: int = DEFAULT_BATCH,
     ip_address: Optional[str] = None,
+    full_population: bool = False,
 ) -> Dict[str, Any]:
     """Gate → draw (or reuse) the plan → verify unlinked members → link.
 
@@ -112,6 +177,17 @@ async def create_review_cycle(
     intake = await db.get(m.RceSourceIntake, intake_id)
     if intake is None:
         raise CycleRefused(f"No delivery {intake_id}")
+
+    # Release-prerequisite barrier check (2026-11-08) at the CYCLE's own top,
+    # before the pre-verification member-status writes this function commits
+    # (plan finalization, HELD skips). `verify_and_classify` re-checks per
+    # batch transaction — this early check only makes the refusal land before
+    # any cycle bookkeeping is written. The commits below end this
+    # transaction (releasing the shared in-flight lock), which is fine: the
+    # drain guarantee protects classification writes, and those happen inside
+    # verify_and_classify's own guarded transaction.
+    from app.tefca_registry.processing_controls import enter_processing
+    await enter_processing(db)
 
     actor_id, actor_email = reg_audit.actor_of(user)
     batch = max(1, min(int(batch or DEFAULT_BATCH), MAX_BATCH))
@@ -141,7 +217,8 @@ async def create_review_cycle(
                 db, intake_id, review_type=review_type, confidence=confidence,
                 margin=margin, proportion=proportion, use_fpc=use_fpc,
                 include_held=include_held, seed=seed, actor=actor_email,
-                actor_id=actor_id, sample_name=sample_name)
+                actor_id=actor_id, sample_name=sample_name,
+                full_population=full_population)
         except SamplingRefused as exc:
             await db.rollback()
             raise CycleRefused(str(exc))
@@ -176,21 +253,60 @@ async def create_review_cycle(
             await db.commit()
         review_cycle_id = cycle.id
 
-        unlinked = (await db.execute(
-            select(reg.SampleEntity)
-            .where(reg.SampleEntity.sample_id == sample_id,
-                   reg.SampleEntity.review_id.is_(None))
-            .order_by(reg.SampleEntity.stratum, reg.SampleEntity.entity_id)
-        )).scalars().all()
+        unlinked = await _unlinked_members(db, sample_id)
         total_unlinked = len(unlinked)
+
+        # D-15 PROPOSED, INACTIVE by default: a record whose curated row is
+        # currently HELD — including promoted-then-re-HELD after the plan was
+        # drawn — is a processing state, not a classifiable member. When the
+        # flag is on, held members are resolved over the WHOLE unlinked set
+        # BEFORE the batch slice, marked `skipped_held` so they are never
+        # re-selected, and removed from `remaining` so repeated calls still
+        # converge (review finding 2026-11-08: the earlier in-batch filter
+        # left them unlinked and selectable forever, so `remaining` could
+        # never reach 0 and a batch of held-first members stalled the cycle).
+        # The ids are recorded in the summary AND the audit trail. Default-off
+        # keeps today's behavior byte-identical. May only be enabled under
+        # the recorded D-15 decision; no hold is released.
+        skipped_held: List[str] = []
+        if _proposed_verify_skip_held() and unlinked:
+            held_ids = await _held_entity_ids(
+                db, intake_id, [member.entity_id for member in unlinked])
+            if held_ids:
+                skipped_held = sorted(str(e) for e in held_ids)
+                for member in unlinked:
+                    if member.entity_id in held_ids:
+                        member.review_status = SKIPPED_HELD_STATUS
+                await db.commit()
+                unlinked = [member for member in unlinked
+                            if member.entity_id not in held_ids]
+                total_unlinked = len(unlinked)
+                logger.info(
+                    "review cycle %s: %d member(s) skipped — curated record "
+                    "currently HELD (VERIFY_SKIPPED_HELD)",
+                    intake_id, len(skipped_held))
+                reg_audit.record(
+                    db, "review_cycle_members_skipped_held", None,
+                    actor_id=actor_id, actor_email=actor_email,
+                    ip_address=ip_address,
+                    metadata={"source_intake_id": str(intake_id),
+                              "sample_id": str(sample_id),
+                              "reason": "VERIFY_SKIPPED_HELD",
+                              "skipped_held": skipped_held})
+                await db.commit()
+
         this_call = unlinked[:batch]
 
         verified: Dict[str, Any] = {"requested": 0, "verified": 0,
                                     "unresolved": [], "bucket_counts": {}}
+        if skipped_held:
+            verified["skipped_held"] = skipped_held
+            verified["skipped_held_reason"] = "VERIFY_SKIPPED_HELD"
         linked = 0
         if this_call:
             refs = await _refs_for(db, intake_id,
                                    [member.entity_id for member in this_call])
+
             member_by_entity = {member.entity_id: member for member in this_call}
             ref_to_entity = {ref: eid for eid, ref in refs.items()}
 
@@ -199,6 +315,9 @@ async def create_review_cycle(
                 actor=actor_email or "SYSTEM")
             verified = {k: result.get(k) for k in
                         ("requested", "verified", "unresolved", "bucket_counts")}
+            if skipped_held:
+                verified["skipped_held"] = skipped_held
+                verified["skipped_held_reason"] = "VERIFY_SKIPPED_HELD"
 
             # verify_and_classify has committed its ReviewRecords. Link them.
             for outcome in result.get("outcomes", []):
@@ -233,7 +352,8 @@ async def create_review_cycle(
                           "requested": verified.get("requested"),
                           "verified": verified.get("verified"),
                           "linked": linked,
-                          "unresolved": len(verified.get("unresolved") or [])})
+                          "unresolved": len(verified.get("unresolved") or []),
+                          "skipped_held": skipped_held})
             await db.commit()
 
         if not plan.get("already_finalized"):

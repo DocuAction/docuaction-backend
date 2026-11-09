@@ -320,6 +320,102 @@ def _v3_rules() -> List[dict]:
 SEED_RULES_V3: List[dict] = _v3_rules()
 
 
+def _v4_rules() -> List[dict]:
+    """Version 4: adds RULE-006 (B4) and RULE-007 (B3 applicability review).
+
+    RULE-006 — active + exact T-TRTMNT purpose + NPI requirement in force +
+    missing SUBMITTED NPI + §7 INITIATING APPLICABILITY ESTABLISHED by the
+    delivered `organizationNodeType` -> B4. The signal's `status` is True
+    only when applicability is established, so unknown applicability can
+    never classify as confirmed non-compliance.
+
+    RULE-007 — the same record shape with the exchange direction NOT
+    documented in the delivery -> B3 "Treatment NPI applicability review",
+    an EXPLICIT review classification. Without it a direction-unknown
+    case-1 record with otherwise clean sources would fall through to
+    RULE-001 (priority 10) and classify B1 — a silent pass on an undecided
+    §7 question. Priority 7 sits between RULE-006 and the B1 rules so that
+    can never happen.
+
+    PROPOSED, NOT AUTO-ACTIVATED. Unlike v2/v3, `ensure_rules_v4` is NEVER
+    called by the pipeline's rule loader or any route-side ensure chain:
+    activating rules that classify ~700 October records is a methodology
+    decision (owner + independent QA), not a deploy side effect.
+    Activation is one explicit, audited admin action
+    (POST /api/tefca/arc/review-rules/activate-v4 with the confirm literal).
+
+    Priority 6: after RULE-005 (priority 5 — exclusions/debarment stay the
+    leading disqualifier), before every B1/B2/B3 rule.
+    The signal (`active_treatment_missing_required_npi`) is computed from
+    SUBMITTED values only (npi_applicability.assign_case, case 1; exact
+    T-TRTMNT token; T-TREAT is case 3 and never fires it; direction from
+    `organizationNodeType` only — nothing inferred from a blank role, a
+    Participant label or `initiatoronly`); an NPI available only through
+    supplemental evidence does not satisfy the submission requirement and
+    never suppresses the signal. Being HELD plays no part: holds are
+    promotion dispositions, not classifier inputs.
+    """
+    import copy
+    rules = copy.deepcopy(SEED_RULES_V3)
+    rules.append({
+        "rule_code": "RULE-006",
+        "name": "B4 Active Treatment Missing Required NPI",
+        "bucket": "B4",
+        "priority": 6,
+        "description": (
+            "Active record (active=1) claiming the exact T-TRTMNT exchange "
+            "purpose, operating a delivered initiating Principal Node "
+            "(organizationNodeType = initiating-node; §7 applicability "
+            "established, never assumed), with the NPI requirement in force "
+            "(BR-NPI-TRTMNT-001; "
+            "Treatment XP SOP v2.0 §7/§8) and no SUBMITTED NPI. The submitted "
+            "value is preserved verbatim in the signal payload; an NPI found "
+            "only through supplemental evidence (vetting exports, registry "
+            "candidates) does not satisfy the submission requirement and is "
+            "presented to the analyst, never substituted."),
+        "conditions": {
+            "all_of": [
+                {"field": "active_treatment_missing_required_npi", "status": True},
+            ],
+        },
+    })
+    rules.append({
+        "rule_code": "RULE-007",
+        "name": "B3 Treatment NPI Applicability Review",
+        "bucket": "B3",
+        "priority": 7,
+        "description": (
+            "Active record claiming the exact T-TRTMNT exchange purpose with "
+            "the submitted NPI missing and the requirement in force, but the "
+            "exchange direction NOT documented in the delivery "
+            "(organizationNodeType establishes no initiating Principal Node). "
+            "Whether the §7 obligation applies is unresolved: explicit "
+            "analyst applicability review. Unknown applicability is never "
+            "confirmed non-compliance (B4) and never a silent clean pass "
+            "(B1). Original submitted values are preserved verbatim in the "
+            "signal payload."),
+        "conditions": {
+            "all_of": [
+                {"field": "treatment_npi_applicability_unresolved", "status": True},
+            ],
+        },
+    })
+    return rules
+
+
+SEED_RULES_V4: List[dict] = _v4_rules()
+
+
+#: The composable successor to the monolithic v5 draft (2026-11-08): the
+#: proposed guards and the exclusion-candidate correction now live as NAMED
+#: COMPONENTS in `app.tefca_registry.rule_configuration` (compose /
+#: activate_rule_configuration), each tied to its own decision and recorded
+#: approval, so the owner can activate exactly what was approved. The former
+#: `_v5_rules`/`SEED_RULES_V5`/`ensure_rules_v5` are superseded by that one
+#: mechanism; `ensure_rules_v4` below and its audited admin route remain the
+#: reviewed treatment-pair special case.
+
+
 class BucketClassifier:
     """Evaluates verification results against the active rule set.
 
@@ -364,7 +460,17 @@ class BucketClassifier:
             select(reg.ReviewRule).where(reg.ReviewRule.is_active.is_(True))
         )).scalars().all()
 
-        today = date.today()
+        # UTC, matching activate_rule_configuration's effective/retired-date
+        # stamps (review finding 2026-11-08): with a local-date filter here, a
+        # worker whose local date trails UTC would see a governed activation
+        # retire the old rows (is_active=False, immediate) while the new rows'
+        # UTC effective date is still "tomorrow" locally — no applicable rules
+        # until local midnight (B3-default window). One date convention ends
+        # that gap. Deployed containers run in UTC, where the two calls were
+        # already identical; the seed producers' own local-date defaults are
+        # deliberately untouched.
+        from datetime import datetime as _dt, timezone as _tz
+        today = _dt.now(_tz.utc).date()
         best: Dict[str, Any] = {}
         for r in rows:
             if r.retired_date and r.retired_date <= today:
@@ -570,11 +676,16 @@ class BucketClassifier:
         counts = {s: 0 for s in VERIFICATION_STATES}
         counts["clear"] = 0
         counts["excluded"] = 0
+        # PROPOSED exclusion-candidate state (EX-3/D-16, flag-gated producer):
+        # an ANSWERED screen pending adjudication — counted as checked below.
+        counts["possible_match"] = 0
         for _name, raw in sources.items():
             state = raw if isinstance(raw, str) else (raw or {}).get("status")
             if state in counts:
                 counts[state] += 1
-        checked = sum(counts[s] for s in (VERIFIED, NOT_FOUND)) + counts["clear"] + counts["excluded"]
+        checked = (sum(counts[s] for s in (VERIFIED, NOT_FOUND))
+                   + counts["clear"] + counts["excluded"]
+                   + counts["possible_match"])
         return {
             "sources_total": len(sources),
             "sources_checked": checked,
@@ -625,7 +736,12 @@ async def ensure_rules_v2(session, effective: Optional[date] = None) -> int:
     from sqlalchemy import func as sqlfunc, select
     from app.tefca_registry import models as reg
 
-    eff = effective or date.today()
+    # UTC, matching load_rules' filter and activation's stamps (review
+    # finding 2026-11-08 round 4): a local-date default on a UTC-ahead host
+    # would stamp tomorrow's UTC date, leaving the seeded rules invisible to
+    # the loader until UTC midnight. Explicit effective args are preserved.
+    from datetime import datetime as _dt, timezone as _tz
+    eff = effective or _dt.now(_tz.utc).date()
     already = int((await session.execute(
         select(sqlfunc.count()).select_from(reg.ReviewRule)
         .where(reg.ReviewRule.version == 2))).scalar() or 0)
@@ -660,7 +776,12 @@ async def ensure_rules_v3(session, effective: Optional[date] = None) -> int:
     from sqlalchemy import func as sqlfunc, select
     from app.tefca_registry import models as reg
 
-    eff = effective or date.today()
+    # UTC, matching load_rules' filter and activation's stamps (review
+    # finding 2026-11-08 round 4): a local-date default on a UTC-ahead host
+    # would stamp tomorrow's UTC date, leaving the seeded rules invisible to
+    # the loader until UTC midnight. Explicit effective args are preserved.
+    from datetime import datetime as _dt, timezone as _tz
+    eff = effective or _dt.now(_tz.utc).date()
     already = int((await session.execute(
         select(sqlfunc.count()).select_from(reg.ReviewRule)
         .where(reg.ReviewRule.version == 3))).scalar() or 0)
@@ -683,3 +804,56 @@ async def ensure_rules_v3(session, effective: Optional[date] = None) -> int:
     logger.info("Retired %d v2 rules; activated %d v3 rules",
                 len(v2), len(SEED_RULES_V3))
     return len(SEED_RULES_V3)
+
+
+async def ensure_rules_v4(session, effective: Optional[date] = None,
+                          *, commit: bool = True) -> int:
+    """Retire version 3 rules and activate version 4 (RULE-006, the active-
+    Treatment missing-required-NPI B4 — see `_v4_rules()`'s docstring).
+
+    DELIBERATELY NOT in any automatic ensure chain. v2/v3 activate on first
+    use because they corrected the wiring of ALREADY-APPROVED rules; v4 adds
+    a NEW classification rule, and a new rule's activation is a methodology
+    decision taken by a person. The only caller is the explicit, audited,
+    admin-gated activation route. Idempotent: returns 0 if any version-4 row
+    already exists. v3 rows are RETIRED, never deleted, same audit reasoning
+    as `ensure_rules_v2`/`ensure_rules_v3` — and because `ensure_rules_v3`
+    checks row EXISTENCE (not activity), the pipeline's auto-ensure chain
+    can never re-activate v3 after this runs.
+    """
+    from sqlalchemy import func as sqlfunc, select
+    from app.tefca_registry import models as reg
+
+    # UTC, matching load_rules' filter and activation's stamps (review
+    # finding 2026-11-08 round 4): a local-date default on a UTC-ahead host
+    # would stamp tomorrow's UTC date, leaving the seeded rules invisible to
+    # the loader until UTC midnight. Explicit effective args are preserved.
+    from datetime import datetime as _dt, timezone as _tz
+    eff = effective or _dt.now(_tz.utc).date()
+    already = int((await session.execute(
+        select(sqlfunc.count()).select_from(reg.ReviewRule)
+        .where(reg.ReviewRule.version == 4))).scalar() or 0)
+    if already:
+        return 0
+
+    v3 = (await session.execute(
+        select(reg.ReviewRule).where(reg.ReviewRule.version == 3))).scalars().all()
+    for row in v3:
+        row.is_active = False
+        row.retired_date = eff
+
+    for spec in SEED_RULES_V4:
+        session.add(reg.ReviewRule(
+            rule_code=spec["rule_code"], name=spec["name"], bucket=spec["bucket"],
+            priority=spec["priority"], conditions=spec["conditions"],
+            description=spec["description"], version=4,
+            effective_date=eff, is_active=True))
+    # `commit=False` lets the activation route commit the rule change TOGETHER
+    # with its audit event — an activation with no audit row defeats the gate.
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
+    logger.info("Retired %d v3 rules; activated %d v4 rules",
+                len(v3), len(SEED_RULES_V4))
+    return len(SEED_RULES_V4)

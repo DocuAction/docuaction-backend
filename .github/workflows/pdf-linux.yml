@@ -30,7 +30,7 @@ on:
       - 'requirements.txt'
       - '.github/workflows/pdf-linux.yml'
   pull_request:
-    branches: [main, 'feat/reporting-architecture-2026-10-01']
+    branches: [main, 'feat/reporting-architecture-2026-10-01', 'feat/treatment-b4-rule-and-full-population-2026-11-06']
   workflow_dispatch:
 
 # Least-privilege default; no job in this workflow writes to the repo or
