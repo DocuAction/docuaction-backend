@@ -81,6 +81,21 @@ async def db(db_required):
     _created_upload_ids.clear()
 
 
+def _iqvia_sources(monkeypatch, on: bool) -> None:
+    """Set the IQVIA programme flag the way the gate actually reads it.
+
+    ENABLE_IQVIA_SOURCES is a DECLARED settings field (app/core/config.py),
+    so `licensed_source_enabled()`'s `getattr(settings, ...)` never falls
+    through to os.environ once the process has started -- a bare
+    monkeypatch.setenv is shadowed by the field and every route call 403s.
+    Patch the settings attribute itself (the same mechanism
+    test_iqvia_advisory_routes_2026_11_08.py already uses); monkeypatch
+    restores the field at teardown.
+    """
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "ENABLE_IQVIA_SOURCES", on, raising=False)
+
+
 class _User:
     def __init__(self, role, email=None):
         self.role = role
@@ -110,7 +125,7 @@ class TestUploadStateSurvivesANewSession:
             self, db, monkeypatch):
         from app.core.database import async_session_maker
 
-        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        _iqvia_sources(monkeypatch, True)
         payload = b"A" * 10 + b"B" * 10 + b"C" * 10
         start = await routes.start_upload(
             routes.StartUploadRequest(source="hco", label=f"{SYN}-restart-resume",
@@ -153,7 +168,7 @@ class TestWorkerDeathIsABoundedRetryNotADuplicate:
 
     async def test_crash_then_resume_stages_each_row_exactly_once_and_blocks_approval(
             self, db, tmp_path, monkeypatch):
-        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        _iqvia_sources(monkeypatch, True)
         n = 6
         f = write_csv(tmp_path / "hco.csv", HCO_HEADER, [
             [f"{SYN}-CRASH-HCO-{i}", "", "", f"{SYN} Crash Org {i}", "02101"]
@@ -249,7 +264,7 @@ class TestBoundedRetries:
 
     async def test_exhausting_max_attempts_ends_in_failed_not_infinite_retry(
             self, db, tmp_path, monkeypatch):
-        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        _iqvia_sources(monkeypatch, True)
         f = write_csv(tmp_path / "hco.csv", HCO_HEADER,
                      [[f"{SYN}-ALWAYSFAIL-HCO-0", "", "", f"{SYN} Org", "02101"]])
 
@@ -291,7 +306,7 @@ class TestConcurrentClaimIsSafe:
     async def test_two_concurrent_claimers_only_one_wins(self, db, tmp_path, monkeypatch):
         from app.core.database import async_session_maker
 
-        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        _iqvia_sources(monkeypatch, True)
         f = write_csv(tmp_path / "hco.csv", HCO_HEADER,
                      [[f"{SYN}-RACE-HCO-0", "", "", f"{SYN} Org", "02101"]])
         body = routes.StageRequest(file_path=str(f), label=f"{SYN}-race")
@@ -312,7 +327,7 @@ class TestConcurrentClaimIsSafe:
 
 class TestReaperRequeuesOrFails:
     async def test_reaper_requeues_a_job_with_attempts_remaining(self, db, tmp_path, monkeypatch):
-        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        _iqvia_sources(monkeypatch, True)
         f = write_csv(tmp_path / "hco.csv", HCO_HEADER,
                      [[f"{SYN}-REAP-HCO-0", "", "", f"{SYN} Org", "02101"]])
         body = routes.StageRequest(file_path=str(f), label=f"{SYN}-reap-requeue")
@@ -332,7 +347,7 @@ class TestReaperRequeuesOrFails:
             "be requeued, not failed outright")
 
     async def test_reaper_fails_a_job_that_has_exhausted_attempts(self, db, tmp_path, monkeypatch):
-        monkeypatch.setenv("ENABLE_IQVIA_SOURCES", "true")
+        _iqvia_sources(monkeypatch, True)
         f = write_csv(tmp_path / "hco.csv", HCO_HEADER,
                      [[f"{SYN}-REAP2-HCO-0", "", "", f"{SYN} Org", "02101"]])
         body = routes.StageRequest(file_path=str(f), label=f"{SYN}-reap-fail")
