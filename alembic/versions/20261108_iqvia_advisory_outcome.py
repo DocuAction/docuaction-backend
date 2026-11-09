@@ -37,7 +37,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql as pg
 
 revision = "20261108_iqvia_advisory_outcome"
-down_revision = "20261106_iqvia_hcp_npi_index"
+down_revision = "20261108_source_policy"  # re-parented at integration: the worktree base predated the release stack (its head was 20261106); stacking without this would give alembic two heads
 branch_labels = None
 depends_on = None
 
