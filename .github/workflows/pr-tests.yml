@@ -149,12 +149,14 @@ jobs:
             tests/test_sam_manual_review_asymmetry.py \
             tests/test_npi_evidence_to_finding_workflow.py \
             tests/test_qhin_sampling_operational.py \
+            tests/test_rce_rule_loader_canonical_2026_11_07.py \
             tests/test_sampling_eligibility_review_required.py \
             tests/test_proposed_rules_v5_inactive_2026_11_07.py \
             tests/test_iqvia_advisory_routes_2026_11_08.py \
             tests/test_iqvia_routes.py \
             tests/test_iqvia_import_durability.py \
             tests/test_ex3_consistency_guard_2026_11_08.py \
+            tests/test_sampling_audit_label_parity_2026_11_07.py \
             tests/test_report_generation_reads_only_persisted_evidence.py \
             tests/test_report_csv_registered_bytes_2026_10_18.py \
             tests/test_iqvia_import_runtime_privilege_2026_10_06.py \
@@ -164,6 +166,7 @@ jobs:
             tests/test_iqvia_affiliation_org_lookup.py \
             tests/test_iqvia_advisory_comparison_2026_11_06.py \
             tests/test_iqvia_advisory_retention_2026_11_08.py \
+            tests/test_iqvia_match_bounded_2026_11_07.py \
             tests/test_iqvia_affil_org_indexes_2026_10_08.py \
             tests/test_iqvia_snapshot_list_2026_10_12.py \
             tests/test_iqvia_assessment_delivery_linkage_2026_10_14.py \

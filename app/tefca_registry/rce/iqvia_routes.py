@@ -825,10 +825,30 @@ async def approve(
            "supersedes_snapshot_id": str(snapshot_id)}
 
 
+class MatchRequest(BaseModel):
+    """Optional bounds for one matching run. Omitting the body keeps the
+    previous contract (match everything), now evaluated in bounded pages."""
+    limit: Optional[int] = Field(
+        None, ge=1, le=500_000,
+        description="Stop after evaluating this many not-yet-matched observations; "
+                    "a later run advances past already-matched rows and continues")
+    page_size: int = Field(
+        im.DEFAULT_PAGE_SIZE, ge=1, le=5_000,
+        description="Observations evaluated per transaction")
+    after_key: Optional[str] = Field(
+        None, min_length=1, max_length=256,
+        description="Resume cursor: the previous run's `next_after_key`. "
+                    "Scanning restarts strictly after this source_record_key, "
+                    "so bounded installments never re-read earlier rows and "
+                    "rows that write no match row cannot exhaust a later "
+                    "run's limit. Omit for a fresh full run.")
+
+
 @router.post("/snapshots/{snapshot_id}/match",
             summary="Run matching against the registry for an APPROVED HCO snapshot")
 async def match_snapshot(
-    snapshot_id: uuid.UUID, db: AsyncSession = Depends(get_db),
+    snapshot_id: uuid.UUID, body: Optional[MatchRequest] = None,
+    db: AsyncSession = Depends(get_db),
     user=Depends(require_role("reviewer")),
 ):
     """HCO only. HCP and AFFILIATION are refused outright, explicitly, with
@@ -853,8 +873,21 @@ async def match_snapshot(
         raise HTTPException(409, detail={"error": capability["reason"],
                                          "code": capability["code"]})
     try:
-        summary = await im.match_hco_snapshot(db, snapshot_id=snapshot_id,
-                                              actor=getattr(user, "email", None) or "UNKNOWN")
+        summary = await im.match_hco_snapshot(
+            db, snapshot_id=snapshot_id,
+            actor=getattr(user, "email", None) or "UNKNOWN",
+            limit=body.limit if body else None,
+            page_size=body.page_size if body else im.DEFAULT_PAGE_SIZE,
+            after_key=body.after_key if body else None)
+    except im.MatchInProgressError as exc:
+        # A concurrent run holds the snapshot's advisory lock. Refusing here is
+        # what keeps repeated client retries from multiplying full-table scans
+        # (the 2026-11-06 memory incident) -- the running match is unaffected.
+        await db.commit()  # nothing written; ends the guard transaction without expiring `user`
+        await _audit(db, user, action="IQVIA_SNAPSHOT_MATCH", outcome="blocked",
+                     resource_type="iqvia_snapshot", resource_id=snapshot_id,
+                     details={"code": "MATCH_IN_PROGRESS", "reason": str(exc)})
+        raise HTTPException(409, detail={"error": str(exc), "code": "MATCH_IN_PROGRESS"})
     except ValueError as exc:
         await _audit(db, user, action="IQVIA_SNAPSHOT_MATCH", outcome="rejected",
                      resource_type="iqvia_snapshot", resource_id=snapshot_id,
