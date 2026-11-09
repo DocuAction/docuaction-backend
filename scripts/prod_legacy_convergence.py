@@ -113,6 +113,11 @@ AREA1_OWNER_TABLES = {
     "rce_record_check_results",
     # 20261014_iqvia_advisory_assess: append-only (trigger + SELECT/INSERT grant); owner-owned
     "iqvia_advisory_assessment",
+    # 20261108_iqvia_advisory_outcome: D-10 retained advisory comparison
+    # outcomes -- same discipline as iqvia_advisory_assessment (append-only
+    # trigger + app SELECT/INSERT only). OWNER-OWNED, never re-owned to the
+    # app at FINALIZE: a table owner could bypass its own append-only trigger.
+    "iqvia_advisory_comparison_outcome",
     # 20261108_source_policy: versioned mandatory-source policy (M-1..M-4),
     # ships EMPTY and inactive; the app holds SELECT only (the runtime never
     # writes policy — rows are owner-side governed acts). Created by the chain
@@ -605,6 +610,10 @@ MANAGED_CHAIN_CREATES = {
     "rce_record_check_results",
     # 20261014_iqvia_advisory_assess: append-only (trigger + SELECT/INSERT grant); owner-owned
     "iqvia_advisory_assessment",
+    # 20261108_iqvia_advisory_outcome -- append-only (trigger + SELECT/INSERT);
+    # owner-owned, so it is in AREA1_OWNER_TABLES and is NOT moved to
+    # docuaction_app at FINALIZE (an owning app could bypass the trigger).
+    "iqvia_advisory_comparison_outcome",
     # 20261108_source_policy: SELECT-only for the app; owner-owned; ships empty.
     "rce_source_policies",
 }

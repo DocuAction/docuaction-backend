@@ -231,7 +231,7 @@ class TestMatchRoute:
         snapshot_id = await _stage_and_complete(db, tmp_path, monkeypatch, n=2)
         body = routes.ApproveRequest(approval_ref=f"{SYN}-ref")
         approved = await routes.approve(uuid.UUID(snapshot_id), body, db, user=_User("qalead"))
-        result = await routes.match_snapshot(uuid.UUID(approved["snapshot_id"]), db,
+        result = await routes.match_snapshot(uuid.UUID(approved["snapshot_id"]), db=db,
                                              user=_User("reviewer"))
         assert result["observations_considered"] == 2
 
@@ -245,7 +245,7 @@ class TestMatchRoute:
                 __import__("datetime").timezone.utc), created_by=SYN)
         _created_snapshot_ids.append(snapshot.id)
         with pytest.raises(HTTPException) as exc:
-            await routes.match_snapshot(snapshot.id, db, user=_User("reviewer"))
+            await routes.match_snapshot(snapshot.id, db=db, user=_User("reviewer"))
         assert exc.value.status_code == 409
         assert exc.value.detail["code"] == "AFFILIATION_DATA_UNAVAILABLE"
 
@@ -260,7 +260,7 @@ class TestMatchRoute:
                 __import__("datetime").timezone.utc), created_by=SYN)
         _created_snapshot_ids.append(snapshot.id)
         with pytest.raises(HTTPException) as exc:
-            await routes.match_snapshot(snapshot.id, db, user=_User("reviewer"))
+            await routes.match_snapshot(snapshot.id, db=db, user=_User("reviewer"))
         assert exc.value.status_code == 409
         assert exc.value.detail["code"] == "AFFILIATION_DATA_UNAVAILABLE"
 
@@ -510,7 +510,7 @@ class TestAuditTrailAndCapability:
                 snapshot_id, routes.ApproveRequest(approval_ref=f"{SYN}-r"), db, user=_User("qalead"))
             approved_id = uuid.UUID(approved["snapshot_id"])
             _created_snapshot_ids.append(approved_id)
-            await routes.match_snapshot(approved_id, db, user=reviewer)
+            await routes.match_snapshot(approved_id, db=db, user=reviewer)
 
         upload_rows = await _audit_rows(db, uid)
         assert [(a, o) for a, o, _ in upload_rows] == [("IQVIA_UPLOAD_STARTED", "success")]
@@ -539,7 +539,7 @@ class TestAuditTrailAndCapability:
         assert status["matching"]["supported"] is False
         assert status["matching"]["code"] == "AFFILIATION_DATA_UNAVAILABLE"
         with pytest.raises(HTTPException) as exc:
-            await routes.match_snapshot(snapshot.id, db, user=_User("reviewer"))
+            await routes.match_snapshot(snapshot.id, db=db, user=_User("reviewer"))
         assert exc.value.detail["code"] == "AFFILIATION_DATA_UNAVAILABLE"
         rows = await _audit_rows(db, snapshot.id)
         assert [(a, o) for a, o, _ in rows] == [("IQVIA_SNAPSHOT_MATCH", "blocked")]
