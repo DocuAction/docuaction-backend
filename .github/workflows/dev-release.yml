@@ -251,7 +251,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           # zizmor template-injection: ${{ }} spliced directly into run script
           # source text, not just read as a string. Passed through env: instead.
-          HANDSHAKE_ISSUE: ${{ inputs.handshake_issue }}
+          # Fall back to baseline_handshake_issue (2026-11-09, run 42557843308):
+          # a no-migration dispatch legitimately leaves handshake_issue empty,
+          # and this step then waited its full bounded window WITHOUT ever
+          # posting the runner IP anywhere -- the operator had no IP to allow,
+          # so the verify job could only time out and fail the release.
+          HANDSHAKE_ISSUE: ${{ inputs.handshake_issue || inputs.baseline_handshake_issue }}
           GH_REPOSITORY: ${{ github.repository }}
           GH_RUN_ID: ${{ github.run_id }}
         run: |
