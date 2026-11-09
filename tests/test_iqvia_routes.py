@@ -157,7 +157,10 @@ async def _stage_and_complete(db, tmp_path, monkeypatch, *, n=3):
 
 class TestAccessGating:
     async def test_flag_off_is_refused(self, db, tmp_path, monkeypatch):
-        monkeypatch.delenv("ENABLE_IQVIA_SOURCES", raising=False)
+        # delenv is not enough: the declared settings field was read at process
+        # start, so if the environment had the flag on, settings would keep it
+        # on. Disable the field itself (review finding, PR #206 round 1).
+        _iqvia_sources(monkeypatch, False)
         f = write_csv(tmp_path / "x.csv", HCO_HEADER, [[f"{SYN}-X", "", "", "X", "02101"]])
         body = routes.StageRequest(file_path=str(f), label="x")
         with pytest.raises(HTTPException) as exc:
