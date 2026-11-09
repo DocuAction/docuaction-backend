@@ -596,6 +596,34 @@ CLASSIFIER_SIGNAL_REGISTRY: Dict[str, SignalEntry] = {
         note="Owner-adopted policy condition; node type is preserved as "
              "information, never a gate.",
     ),
+    "treatment_onc_scope_missing_npi": SignalEntry(
+        # ONC UPDATED TREATMENT SCOPE (relayed 2026-11-09; supersedes the
+        # owner-adopted any-combination condition above, which is preserved
+        # as history): IS_ACTIVE=1 AND the exact T-TRTMNT token as the SOLE
+        # purpose (combined-purpose values out of scope; T-TREAT never a
+        # substitute) AND participation level (sequoiaorgtype) Participant or
+        # Sub-Participant AND submitted NPI blank. NO node-type input at all.
+        # Out-of-scope records are evaluated by the remaining applicable
+        # rules, never auto-routed. Supplemental manual-QA/NPPES/IQVIA NPIs
+        # never fill the blank or suppress it. Consumed only by the ONC-scope
+        # VERSION of RULE-006 in the INACTIVE component treatment_b4_onc_scope.
+        production_state=PRODUCIBLE,
+        value_domain=SETTLED,
+        consequence_state=METHODOLOGY_PENDING,
+        producers=(
+            Producer(PATH_RCE,
+                     "app/tefca_registry/rce/arc_pipeline.py "
+                     "(verify_and_classify, ONC-scope signal block)",
+                     ("true",)),
+        ),
+        unused_reason="Consumed only by the ONC-scope RULE-006 version in the "
+                      "INACTIVE component treatment_b4_onc_scope; computed "
+                      "and inert until that component is activated under its "
+                      "recorded approval.",
+        note="ONC updated scope: sole-purpose T-TRTMNT + Participant/"
+             "Sub-Participant + active + blank submitted NPI; reason code "
+             "TREATMENT_SOLE_PURPOSE_NPI_MISSING_ONC_SCOPE.",
+    ),
     "inactive_treatment_npi_missing": SignalEntry(
         # OBSERVATION ONLY (owner instruction 2026-11-08): an INACTIVE record
         # (active flag not '1') carrying the exact T-TRTMNT token in any

@@ -715,8 +715,14 @@ def test_policy_determination_cites_its_own_code_never_default_unmatched():
     assert sp.SOURCE_POLICY_RULE_CODE == "SOURCE-POLICY-M4"
     # The reserved code must never collide with a review_rules code.
     from app.tefca_registry.rule_configuration import COMPONENTS, compose
+    # One treatment regime at a time: compose with the current (ONC-scope)
+    # regime and check the superseded regimes' codes separately — RULE-006/007
+    # codes are identical across regimes, so no code escapes the check.
     all_codes = {r["rule_code"] for r in compose(
-        set(COMPONENTS) - {"treatment_review_b3", "treatment_b4"})}
+        set(COMPONENTS) - {"treatment_review_b3", "treatment_b4",
+                           "treatment_b4_owner_adopted"})}
+    all_codes |= {r["rule_code"] for r in compose(
+        {"treatment_review_b3", "treatment_b4"})}
     assert sp.SOURCE_POLICY_RULE_CODE not in all_codes
 
 
