@@ -15,7 +15,7 @@
 
 on:
   pull_request:
-    branches: [main, 'feat/reporting-architecture-2026-10-01', 'feat/treatment-b4-rule-and-full-population-2026-11-06']
+    branches: [main, 'feat/reporting-architecture-2026-10-01', 'feat/treatment-b4-rule-and-full-population-2026-11-06', 'feat/proposed-rules-v4-inactive-2026-11-07']
   push:
     branches: [main]
 
