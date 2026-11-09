@@ -60,7 +60,8 @@ EXEMPT: dict[str, str] = {
         "test_human_review_workflow.py",
         "test_identifier_conflict.py",
         "test_iqvia_import.py",
-        "test_iqvia_routes.py",
+        # test_iqvia_routes.py removed 2026-11-08: wired into isolation-postgres
+        # (settings-shadowing fix, PR #206).
         "test_onc_review_workbook.py",
         "test_post_promotion_verification.py",
         "test_preflight_enforcement_2026_10_04.py",
