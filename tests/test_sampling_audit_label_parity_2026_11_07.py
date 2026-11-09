@@ -13,6 +13,8 @@ database keeps no residue - no committed plans, no orphaned audit rows.
 """
 from __future__ import annotations
 
+import os
+
 import pytest
 from sqlalchemy import select
 
@@ -28,7 +30,18 @@ async def test_audit_event_matches_plan_metadata_for_both_plan_kinds(db_required
     from app.tefca_registry.qhin_sampling import SELECTION_ALGORITHM, finalize_plan
 
     monkeypatch.setenv("ENTITY_RESOLVER_SOURCE", "db")
-    intake_id = await sam._seed_promoted_delivery(n=4)
+    try:
+        intake_id = await sam._seed_promoted_delivery(n=4)
+    except pytest.skip.Exception as exc:
+        # The seeding helper downgrades a documented local environment quirk
+        # to a skip. In CI that would silently skip BOTH parity assertions
+        # while the isolation job still passes (it rejects only
+        # database-unreachable skips) -- there, the regression must fail
+        # loudly instead (review finding, PR #204 round 2). Outside CI the
+        # skip behavior is preserved unchanged.
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            pytest.fail(f"Delivery seeding skipped in CI: {exc}")
+        raise
 
     async def _audit_for(db, sample_id):
         rows = (await db.execute(
