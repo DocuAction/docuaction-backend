@@ -106,7 +106,11 @@ TRACEABILITY = ["rce_delivery_stage_events", "rce_disposition_events", "rce_reco
 AREA1_FINAL = AREA1_PRESENT + ["rce_delivery_jobs"] + TRACEABILITY + [
     # 20261108_source_policy: owner-owned policy storage, app SELECT only,
     # ships empty/inactive — deliberately added to the owner inventory.
-    "rce_source_policies"]
+    "rce_source_policies",
+    # 20261108_iqvia_advisory_outcome: D-10 retained advisory outcomes —
+    # append-only trigger + app SELECT/INSERT only, owner-owned like
+    # iqvia_advisory_assessment (an owning app could bypass its own trigger).
+    "iqvia_advisory_comparison_outcome"]
 ENTRA_ADMIN = "entra_admin"
 CK = "ck_review_record_has_subject"
 
