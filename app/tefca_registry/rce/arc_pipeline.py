@@ -866,41 +866,31 @@ async def verify_and_classify(
                     db.add(TEFCADimensionEvidence(**row))
 
             verification_results = dimensions_to_verification_results(evidence)
-            # RULE-006 signal (SEED_RULES_V4): computed from SUBMITTED values
-            # only, and ALWAYS computed — it is inert until the v4 rule set is
-            # explicitly activated (ensure_rules_v4 is never auto-called), so
-            # merging/deploying this code changes no classification by itself.
+            # Treatment FIELD signals — ONE shared producer for both
+            # classification paths (review finding 2026-11-10, PR #210): the
+            # v4/owner-adopted/ONC-scope signals, the RULE-007 applicability
+            # signal and the inactive observation are all produced by
+            # npi_applicability.treatment_field_signals, from DELIVERED
+            # values only, and the single-record path (review_service)
+            # consumes the same function over the Area-1 source record. All
+            # ALWAYS computed and ALWAYS inert until a consuming rule
+            # component is explicitly activated — merging/deploying this code
+            # changes no classification by itself. The assessment date is the
+            # UTC date (the codebase's run rows and D-12 gates are UTC-based;
+            # a server-local date diverges near midnight).
+            from datetime import datetime as _dt, timezone as _tz
             from app.Tefca import rce_fields as _rce_fields
             from app.tefca_registry.rce import npi_applicability as _npa
             from app.tefca_registry.rce.quality_rules import BR_NPI_TRTMNT_EFFECTIVE
-            _raw_purposes = _rce_fields.rce_value(entity, "purposesofuse")
-            _raw_npi = _rce_fields.rce_value(entity, "NPI")
-            _raw_active = _rce_fields.rce_value(entity, "active")
-            _b4_signal = _npa.active_treatment_missing_required_npi(
-                _raw_purposes, _raw_npi, _raw_active,
-                assessment_date=date.today(),
-                requirement_effective=BR_NPI_TRTMNT_EFFECTIVE,
-                org_node_type=_rce_fields.rce_value(entity, "organizationNodeType"))
-            # INACTIVE records with the same token condition get an OBSERVATION
-            # (owner instruction 2026-11-08), never a bucket signal: exact
-            # T-TRTMNT token membership in any combination (assign_case parses
-            # the multi-value field; T-TREAT alone never matches, T-TREAT
-            # combined with T-TRTMNT never exempts) + blank submitted NPI +
-            # active flag NOT '1'. Raw values preserved verbatim. No rule
-            # consumes this signal; it exists for reporting and analyst view.
-            if _b4_signal is None:
-                from app.tefca_registry.rce.field_map import normalize_active
-                _assign = _npa.assign_case(_raw_purposes, _raw_npi)
-                if _assign.case == 1 and normalize_active(_raw_active) != "1":
-                    verification_results.setdefault("fields", {})[
-                        "inactive_treatment_npi_missing"] = {
-                        "status": True,
-                        "reason_code": "INACTIVE_TREATMENT_NPI_MISSING",
-                        "raw_purposes": _assign.raw_purposes,
-                        "raw_npi": _assign.raw_npi,
-                        "raw_active": (_raw_active or ""),
-                        "purpose_tokens": list(_assign.tokens),
-                    }
+            verification_results.setdefault("fields", {}).update(
+                _npa.treatment_field_signals(
+                    _rce_fields.rce_value(entity, "purposesofuse"),
+                    _rce_fields.rce_value(entity, "NPI"),
+                    _rce_fields.rce_value(entity, "active"),
+                    _rce_fields.rce_value(entity, "sequoiaorgtype"),
+                    _rce_fields.rce_value(entity, "organizationNodeType"),
+                    assessment_date=_dt.now(_tz.utc).date(),
+                    requirement_effective=BR_NPI_TRTMNT_EFFECTIVE))
             # D-02 PROPOSED bulk-path producer (default OFF): structural NPI
             # signal computed from the SUBMITTED value. Never overwrites a
             # signal another producer already set.
@@ -910,63 +900,6 @@ async def verify_and_classify(
                 if _npi_sig is not None:
                     verification_results.setdefault("fields", {}).setdefault(
                         "npi_validation", _npi_sig)
-            if _b4_signal is not None:
-                _fields = verification_results.setdefault("fields", {})
-                _fields["active_treatment_missing_required_npi"] = _b4_signal
-                # OWNER-ADOPTED policy condition (superseding D-01 record,
-                # 2026-11-08): the signal's very existence IS the owner's
-                # condition (active + exact T-TRTMNT + blank submitted NPI +
-                # requirement in force) — node type is information, not a
-                # gate. Consumed only by the owner-adopted VERSION of RULE-006
-                # in the INACTIVE component treatment_b4_owner_adopted.
-                _fields["treatment_owner_adopted_missing_npi"] = {
-                    "status": True,
-                    "reason_code": "TREATMENT_NPI_MISSING_OWNER_ADOPTED",
-                    "raw_purposes": _b4_signal["raw_purposes"],
-                    "raw_npi": _b4_signal["raw_npi"],
-                    "raw_active": _b4_signal["raw_active"],
-                    "raw_org_node_type": _b4_signal["raw_org_node_type"],
-                    "requirement": _b4_signal["requirement"],
-                    "assessment_date": _b4_signal["assessment_date"],
-                    "note": ("Owner-adopted classification policy; not proof "
-                             "that this record independently establishes an "
-                             "SOP breach. A supplemental NPI never fills the "
-                             "submitted blank or suppresses this condition."),
-                }
-                # Unknown §7 applicability is NEVER confirmed non-compliance:
-                # it is its own signal, consumed by RULE-007 (B3 explicit
-                # applicability review) so the record can neither classify B4
-                # nor fall through to a clean-source B1.
-                if _b4_signal.get("applicability_review"):
-                    _fields["treatment_npi_applicability_unresolved"] = {
-                        "status": True,
-                        "initiating_requirement": _b4_signal["initiating_requirement"],
-                        "exchange_direction": _b4_signal["exchange_direction"],
-                        "reason_code": _b4_signal["reason_code"],
-                        "raw_org_node_type": _b4_signal["raw_org_node_type"],
-                        "raw_purposes": _b4_signal["raw_purposes"],
-                        "raw_npi": _b4_signal["raw_npi"],
-                        "raw_active": _b4_signal["raw_active"],
-                        "requirement": _b4_signal["requirement"],
-                        "assessment_date": _b4_signal["assessment_date"],
-                        "note": _b4_signal["note"],
-                    }
-            # ONC UPDATED TREATMENT SCOPE (relayed 2026-11-09): sole-purpose
-            # exact T-TRTMNT + Participant/Sub-Participant + active + blank
-            # SUBMITTED NPI. Computed unconditionally from delivered values
-            # (its own pure function; no node-type input) and ALWAYS inert
-            # until the component `treatment_b4_onc_scope` is explicitly
-            # activated — merging/deploying this code changes no
-            # classification by itself. Supplemental NPIs (manual QA, NPPES,
-            # IQVIA) never fill the submitted blank and never suppress it.
-            _onc_sig = _npa.treatment_onc_scope_missing_npi(
-                _raw_purposes, _raw_npi, _raw_active,
-                _rce_fields.rce_value(entity, "sequoiaorgtype"),
-                assessment_date=date.today(),
-                requirement_effective=BR_NPI_TRTMNT_EFFECTIVE)
-            if _onc_sig is not None:
-                verification_results.setdefault("fields", {})[
-                    "treatment_onc_scope_missing_npi"] = _onc_sig
             classification = classifier.classify(verification_results, rules=rules)
 
             # M-4 enforcement: an APPLICABLE mandatory check without an

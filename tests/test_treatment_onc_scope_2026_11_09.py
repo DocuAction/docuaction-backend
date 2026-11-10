@@ -106,51 +106,143 @@ def test_normalize_participation_never_maps_garbled_values():
         assert normalize_participation_level(garbled) is None, garbled
 
 
-def test_single_record_path_produces_the_same_signal_as_the_bulk_path():
-    """Path parity (review finding 2026-11-10): review_service must produce
-    the ONC-scope signal from the entity's preserved raw attributes exactly
-    as arc_pipeline produces it from delivered values."""
-    from types import SimpleNamespace
-    from app.tefca_registry.review_service import _treatment_onc_scope_signal
+def test_shared_producer_bulk_and_single_record_parity():
+    """Path parity (review findings 2026-11-10, PR #210): ONE shared producer
+    feeds both paths, over DELIVERED values. The single-record path reads the
+    Area-1 source record's parsed cells; these cases pin the two breaks the
+    review found."""
+    from app.tefca_registry.rce.npi_applicability import (
+        treatment_field_signals, treatment_signals_from_parsed)
 
-    ent = SimpleNamespace(
-        rce_attributes={"purposesofuse_raw": "T-TRTMNT", "active_raw": "1"},
-        entity_level="sub_participant")
-    sig = _treatment_onc_scope_signal(ent, None)
-    assert sig is not None and sig["status"] is True
-    assert sig["reason_code"] == "TREATMENT_SOLE_PURPOSE_NPI_MISSING_ONC_SCOPE"
-    # Registered submitted NPI present -> out of scope.
-    assert _treatment_onc_scope_signal(ent, "1234567893") is None
-    # Combined purposes -> out of scope.
-    ent2 = SimpleNamespace(
-        rce_attributes={"purposesofuse_raw": "T-PH-ECR,T-TRTMNT", "active_raw": "1"},
-        entity_level="participant")
-    assert _treatment_onc_scope_signal(ent2, None) is None
-    # Inactive / missing raw attributes -> out of scope, never an error.
-    ent3 = SimpleNamespace(rce_attributes=None, entity_level="participant")
-    assert _treatment_onc_scope_signal(ent3, None) is None
+    def parsed(purposes, npi, active="1", seq="Participant", node=""):
+        return {"purposesofuse": purposes, "NPI": npi, "active": active,
+                "sequoiaorgtype": seq, "organizationNodeType": node}
+
+    # In-scope sole-purpose record: ONC + owner + v4 signals, all present.
+    f = treatment_signals_from_parsed(
+        parsed("T-TRTMNT", "", seq="Subparticipant"),
+        assessment_date=ASSESS, requirement_effective=BR_NPI_TRTMNT_EFFECTIVE)
+    assert set(f) >= {"treatment_onc_scope_missing_npi",
+                      "treatment_owner_adopted_missing_npi",
+                      "active_treatment_missing_required_npi",
+                      "treatment_npi_applicability_unresolved"}
+    # Review break 1: a GARBLED delivered sequoiaorgtype is out of ONC scope
+    # (the curated entity_level would have defaulted it to 'participant').
+    f = treatment_signals_from_parsed(
+        parsed("T-TRTMNT", "", seq=""),
+        assessment_date=ASSESS, requirement_effective=BR_NPI_TRTMNT_EFFECTIVE)
+    assert "treatment_onc_scope_missing_npi" not in f
+    assert "treatment_owner_adopted_missing_npi" in f  # owner regime: no level gate
+    # Review break 2: a delivered but Luhn-INVALID NPI is a SUPPLIED NPI
+    # (promotion withholds its identifier row, but the delivered cell is the
+    # fact) — no missing-NPI signal of any regime.
+    f = treatment_signals_from_parsed(
+        parsed("T-TRTMNT", "1234567890"),
+        assessment_date=ASSESS, requirement_effective=BR_NPI_TRTMNT_EFFECTIVE)
+    assert not any(k.startswith("treatment_") or k.startswith("active_")
+                   for k in f), f
+    # Combined purposes, active: owner + v4 fire, ONC does not.
+    f = treatment_signals_from_parsed(
+        parsed("T-PH-ECR,T-TRTMNT", ""),
+        assessment_date=ASSESS, requirement_effective=BR_NPI_TRTMNT_EFFECTIVE)
+    assert "treatment_onc_scope_missing_npi" not in f
+    assert "treatment_owner_adopted_missing_npi" in f
+    # Inactive sole-purpose: observation only, nothing bucket-bearing.
+    f = treatment_signals_from_parsed(
+        parsed("T-TRTMNT", "", active="0"),
+        assessment_date=ASSESS, requirement_effective=BR_NPI_TRTMNT_EFFECTIVE)
+    assert set(f) == {"inactive_treatment_npi_missing"}
+    # Equivalence of the two entry points over identical delivered values.
+    a = treatment_field_signals("T-TRTMNT", "", "1", "Participant", "",
+                                assessment_date=ASSESS,
+                                requirement_effective=BR_NPI_TRTMNT_EFFECTIVE)
+    b = treatment_signals_from_parsed(
+        parsed("T-TRTMNT", ""),
+        assessment_date=ASSESS, requirement_effective=BR_NPI_TRTMNT_EFFECTIVE)
+    assert a == b
+
+
+@pytest.mark.asyncio
+async def test_single_record_wrapper_reads_the_source_record_and_fails_closed():
+    """review_service._treatment_field_signals: Area-1 parsed values in, the
+    shared producer's fields out; a promoted entity whose source record is
+    missing is a REFUSAL, never a silent clean classification; a pre-RCE
+    entity (no source_record_id) has no Treatment-lane evidence at all."""
+    import uuid as _uuid
+    from types import SimpleNamespace
+    from app.tefca_registry.review_service import _treatment_field_signals
+
+    class _FakeDB:
+        def __init__(self, row): self._row = row
+        async def get(self, model, pk): return self._row
+
+    row = SimpleNamespace(parsed={"purposesofuse": "T-TRTMNT", "NPI": "",
+                                  "active": "1", "sequoiaorgtype": "Participant",
+                                  "organizationNodeType": ""})
+    ent = SimpleNamespace(id=_uuid.uuid4(), source_record_id=_uuid.uuid4())
+    fields = await _treatment_field_signals(_FakeDB(row), ent)
+    assert "treatment_onc_scope_missing_npi" in fields
+    assert fields["treatment_onc_scope_missing_npi"]["status"] is True
+    # Missing source record -> loud refusal (fail-closed, review finding).
+    with pytest.raises(RuntimeError, match="refusing to classify"):
+        await _treatment_field_signals(_FakeDB(None), ent)
+    # Pre-RCE entity -> no delivered purposes -> no treatment-lane fields.
+    assert await _treatment_field_signals(
+        _FakeDB(None), SimpleNamespace(id=_uuid.uuid4(),
+                                       source_record_id=None)) == {}
 
 
 def test_regime_group_refuses_two_versions_even_without_pairwise_conflicts():
-    """Structural exclusion (review finding 2026-11-10): a hypothetical new
-    treatment regime that FORGETS its pairwise conflicts_with is still
-    refused by the regime group, while CONFIG A's declared dependency stack
-    (treatment_review_b3 + treatment_b4) stays composable."""
+    """Structural exclusion (review findings 2026-11-10): with the pairwise
+    conflicts_with blanked on BOTH regimes, the regime group alone refuses
+    the pair — matched on the regime-specific message, so the old pairwise
+    check cannot be what passes this test. CONFIG A's declared dependency
+    stack stays composable, including transitively."""
     import dataclasses
     from app.tefca_registry import rule_configuration as rc
 
-    forgot = dataclasses.replace(
-        rc.COMPONENTS["treatment_b4_onc_scope"], conflicts_with=())
-    original = rc.COMPONENTS["treatment_b4_onc_scope"]
-    rc.COMPONENTS["treatment_b4_onc_scope"] = forgot
+    originals = {n: rc.COMPONENTS[n]
+                 for n in ("treatment_b4_onc_scope", "treatment_b4_owner_adopted")}
+    for n, c in originals.items():
+        rc.COMPONENTS[n] = dataclasses.replace(c, conflicts_with=())
     try:
-        with pytest.raises(ActivationRefused, match="incompatible"):
+        with pytest.raises(ActivationRefused, match="regime group"):
             rc.compose({"treatment_b4_onc_scope", "treatment_b4_owner_adopted"})
     finally:
-        rc.COMPONENTS["treatment_b4_onc_scope"] = original
+        rc.COMPONENTS.update(originals)
     # The declared CONFIG-A stack is one version, not two.
     rules = compose({"treatment_review_b3", "treatment_b4"})
     assert any(r["rule_code"] == "RULE-006" and r["bucket"] == "B4" for r in rules)
+
+
+def test_regime_group_allows_transitive_dependency_chains():
+    """A 3-component dependency chain in one regime is ONE version (review
+    finding 2026-11-10: direct-edge stacking would deadlock the regime guard
+    against the dependency validator)."""
+    import dataclasses
+    from app.tefca_registry import rule_configuration as rc
+
+    base = rc.COMPONENTS["treatment_review_b3"]
+    chain = {
+        "zz_a": dataclasses.replace(base, name="zz_a", depends_on=(),
+                                    conflicts_with=(), regime="zz_test", apply=None),
+        "zz_b": dataclasses.replace(base, name="zz_b", depends_on=("zz_a",),
+                                    conflicts_with=(), regime="zz_test", apply=None),
+        "zz_c": dataclasses.replace(base, name="zz_c", depends_on=("zz_b",),
+                                    conflicts_with=(), regime="zz_test", apply=None),
+        "zz_x": dataclasses.replace(base, name="zz_x", depends_on=(),
+                                    conflicts_with=(), regime="zz_test", apply=None),
+    }
+    rc.COMPONENTS.update(chain)
+    try:
+        # Full chain: allowed (A<-B<-C is one version).
+        rc.compose({"zz_a", "zz_b", "zz_c"})
+        # An unrelated component in the same regime: refused.
+        with pytest.raises(ActivationRefused, match="regime group"):
+            rc.compose({"zz_a", "zz_b", "zz_c", "zz_x"})
+    finally:
+        for n in chain:
+            del rc.COMPONENTS[n]
 
 
 def test_inactive_records_are_out_of_scope():
