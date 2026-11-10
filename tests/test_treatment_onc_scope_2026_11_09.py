@@ -90,9 +90,67 @@ def test_normalize_participation_level_vocabulary():
     assert normalize_participation_level("Participant") == "participant"
     assert normalize_participation_level("Sub-Participant") == "sub_participant"
     assert normalize_participation_level("Subparticipant") == "sub_participant"
+    assert normalize_participation_level("sub_participant") == "sub_participant"
     assert normalize_participation_level("QHIN") is None
     assert normalize_participation_level("") is None
     assert normalize_participation_level(None) is None
+
+
+def test_normalize_participation_never_maps_garbled_values():
+    """Whole-string membership only (review finding 2026-11-10): a
+    strip-anywhere normalizer would launder arbitrary garbled values into the
+    vocabulary. These must all stay out of scope."""
+    for garbled in ("p-a-r-t_i c i p a n t", "sub--participant", "-participant",
+                    "participant_", "subparticipantx", "sub participantt",
+                    "su b participant"):
+        assert normalize_participation_level(garbled) is None, garbled
+
+
+def test_single_record_path_produces_the_same_signal_as_the_bulk_path():
+    """Path parity (review finding 2026-11-10): review_service must produce
+    the ONC-scope signal from the entity's preserved raw attributes exactly
+    as arc_pipeline produces it from delivered values."""
+    from types import SimpleNamespace
+    from app.tefca_registry.review_service import _treatment_onc_scope_signal
+
+    ent = SimpleNamespace(
+        rce_attributes={"purposesofuse_raw": "T-TRTMNT", "active_raw": "1"},
+        entity_level="sub_participant")
+    sig = _treatment_onc_scope_signal(ent, None)
+    assert sig is not None and sig["status"] is True
+    assert sig["reason_code"] == "TREATMENT_SOLE_PURPOSE_NPI_MISSING_ONC_SCOPE"
+    # Registered submitted NPI present -> out of scope.
+    assert _treatment_onc_scope_signal(ent, "1234567893") is None
+    # Combined purposes -> out of scope.
+    ent2 = SimpleNamespace(
+        rce_attributes={"purposesofuse_raw": "T-PH-ECR,T-TRTMNT", "active_raw": "1"},
+        entity_level="participant")
+    assert _treatment_onc_scope_signal(ent2, None) is None
+    # Inactive / missing raw attributes -> out of scope, never an error.
+    ent3 = SimpleNamespace(rce_attributes=None, entity_level="participant")
+    assert _treatment_onc_scope_signal(ent3, None) is None
+
+
+def test_regime_group_refuses_two_versions_even_without_pairwise_conflicts():
+    """Structural exclusion (review finding 2026-11-10): a hypothetical new
+    treatment regime that FORGETS its pairwise conflicts_with is still
+    refused by the regime group, while CONFIG A's declared dependency stack
+    (treatment_review_b3 + treatment_b4) stays composable."""
+    import dataclasses
+    from app.tefca_registry import rule_configuration as rc
+
+    forgot = dataclasses.replace(
+        rc.COMPONENTS["treatment_b4_onc_scope"], conflicts_with=())
+    original = rc.COMPONENTS["treatment_b4_onc_scope"]
+    rc.COMPONENTS["treatment_b4_onc_scope"] = forgot
+    try:
+        with pytest.raises(ActivationRefused, match="incompatible"):
+            rc.compose({"treatment_b4_onc_scope", "treatment_b4_owner_adopted"})
+    finally:
+        rc.COMPONENTS["treatment_b4_onc_scope"] = original
+    # The declared CONFIG-A stack is one version, not two.
+    rules = compose({"treatment_review_b3", "treatment_b4"})
+    assert any(r["rule_code"] == "RULE-006" and r["bucket"] == "B4" for r in rules)
 
 
 def test_inactive_records_are_out_of_scope():

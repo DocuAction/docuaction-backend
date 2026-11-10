@@ -7,8 +7,10 @@ Official basis for the requirement and its date: Treatment XP SOP v2.0 (RCE, 7.1
 SOP effective 2026-08-03), §7 "RCE Directory Service Requirements for Treatment XP Codes"
 and §8 "Compliance Dates" (§7 compliance date 2026-09-03, applicability QHINs).
 
-PURE. This module reads two delivered values (the `purposesofuse` list and the `NPI`), plus
-dates and provenance the caller already holds, and returns data. It never writes, never
+PURE. This module reads delivered values only — the `purposesofuse` list and the `NPI` for
+the six-case assignment, plus (for the ONC-scope producer added 2026-11-09) the delivered
+`active` flag and `sequoiaorgtype` participation level — together with dates and provenance
+the caller already holds, and returns data. It never writes, never
 looks anything up, never decides a bucket (B1–B4), never holds a record (HELD), never
 corrects a value and never approves anything. Those are separate controls, deliberately.
 
@@ -323,20 +325,36 @@ def describe(assignment: CaseAssignment, assessment: ApplicabilityAssessment) ->
 PARTICIPATION_PARTICIPANT = "participant"
 PARTICIPATION_SUB_PARTICIPANT = "sub_participant"
 
+#: ENUMERATED accepted written forms — whole-string matches after casefold and
+#: whitespace collapse, NEVER character-stripping (review finding 2026-11-10:
+#: a strip-anywhere normalizer mapped arbitrary garbled values into the
+#: vocabulary). The delivered vocabulary is exactly Participant |
+#: Subparticipant (rce_fields.SEQUOIA_ORG_TYPES, the authority); the extra
+#: forms cover ONC's own written spelling ("Sub-Participant") and the
+#: registry's stored entity_level projection ("sub_participant"), nothing
+#: else. This is DELIBERATELY not tefca_class_of (app/Tefca/applicability.py):
+#: that classifier reads the delivered field with a FHIR-coding fallback for
+#: hierarchy logic, while this producer reads DELIVERED/PRESERVED values only
+#: (methodology purity — no fallback source may widen a classification scope).
+_PARTICIPATION_FORMS = {
+    "participant": PARTICIPATION_PARTICIPANT,
+    "subparticipant": PARTICIPATION_SUB_PARTICIPANT,
+    "sub-participant": PARTICIPATION_SUB_PARTICIPANT,
+    "sub_participant": PARTICIPATION_SUB_PARTICIPANT,
+    "sub participant": PARTICIPATION_SUB_PARTICIPANT,
+}
+
 
 def normalize_participation_level(raw: Optional[str]) -> Optional[str]:
     """"participant" / "sub_participant", or None for blank or out-of-vocabulary.
 
-    A blank or unrecognized participation level is a fact about the delivery,
-    never silently coerced into a level: callers must treat None as
-    out-of-scope for any participation-gated rule."""
-    text = "".join(ch for ch in (raw or "").strip().casefold()
-                   if ch not in " -_")
-    if text == "participant":
-        return PARTICIPATION_PARTICIPANT
-    if text == "subparticipant":
-        return PARTICIPATION_SUB_PARTICIPANT
-    return None
+    Whole-string membership in the enumerated accepted forms only (casefolded,
+    internal whitespace collapsed). A blank, garbled, or out-of-vocabulary
+    participation level is a fact about the delivery, never coerced into a
+    level: callers must treat None as out-of-scope for any
+    participation-gated rule."""
+    text = " ".join((raw or "").strip().casefold().split())
+    return _PARTICIPATION_FORMS.get(text)
 
 
 # ── ONC updated Treatment scope (relayed 2026-11-09) ─────────────────────────

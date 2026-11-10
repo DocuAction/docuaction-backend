@@ -540,6 +540,28 @@ def detect_source_conflict(sources: Dict[str, dict]) -> bool:
     return False
 
 
+def _treatment_onc_scope_signal(entity, npi):
+    """The ONC-scope Treatment signal for ONE registry entity, from its own
+    PRESERVED raw attributes (`rce_attributes.purposesofuse_raw`/`active_raw`
+    — the delivered cells, untouched) and the `entity_level` authority column
+    (mapped 1:1 from the delivered sequoiaorgtype). `npi` is the registered
+    submitted-NPI identifier value: a blank submitted NPI has no identifier
+    row (supplemental NPIs never fill the blank), so None IS the
+    submitted-blank fact. Mirrors arc_pipeline's bulk-path producer so the
+    two classification paths cannot disagree on the same record (path-parity
+    review finding, 2026-11-10). Inert until treatment_b4_onc_scope is
+    activated."""
+    from datetime import date as _date
+    from app.tefca_registry.rce import npi_applicability as _npa
+    from app.tefca_registry.rce.quality_rules import BR_NPI_TRTMNT_EFFECTIVE
+    attrs = entity.rce_attributes or {}
+    return _npa.treatment_onc_scope_missing_npi(
+        attrs.get("purposesofuse_raw"), npi, attrs.get("active_raw"),
+        entity.entity_level,
+        assessment_date=_date.today(),
+        requirement_effective=BR_NPI_TRTMNT_EFFECTIVE)
+
+
 def _derived_fields(sources: Dict[str, dict], npi_flagged: bool) -> dict:
     """Signals the rules reference but the connectors do not emit directly."""
     nppes = (sources.get("nppes") or {}).get("status")
@@ -803,6 +825,25 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
                # Provenance of every source state taken from persisted evidence
                # rather than a live probe — part of the review snapshot.
                "persisted_evidence": persisted_used}
+
+    # Treatment ONC-scope signal — PATH PARITY with the bulk pipeline
+    # (review finding 2026-11-10): arc_pipeline.verify_and_classify computes
+    # treatment_onc_scope_missing_npi from delivered values, so this
+    # single-record path must produce the same signal from the entity's own
+    # PRESERVED raw attributes (rce_attributes.purposesofuse_raw/active_raw —
+    # the delivered cells, untouched) and the entity_level authority column
+    # (mapped 1:1 from the delivered sequoiaorgtype), or the two paths would
+    # disagree on the same record once the component is activated. `npi` here
+    # is the registered submitted-NPI identifier: a blank submitted NPI has no
+    # identifier row (supplemental NPIs never fill the blank), so None is the
+    # submitted-blank fact. Inert until treatment_b4_onc_scope is activated.
+    try:
+        _onc_sig = _treatment_onc_scope_signal(entity, npi)
+        if _onc_sig is not None:
+            results["fields"]["treatment_onc_scope_missing_npi"] = _onc_sig
+    except Exception as exc:  # noqa: BLE001 — a signal producer must not sink a review
+        logger.error("Treatment ONC-scope signal not produced for %s: %s",
+                     entity.id, type(exc).__name__, exc_info=True)
     # Policy status beside the sources (2026-10-04). Not read by the
     # classifier (`classify_with_db` reads sources/fields only).
     from app.Tefca import source_policy as _source_policy
