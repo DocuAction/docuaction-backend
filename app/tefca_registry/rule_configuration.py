@@ -363,8 +363,20 @@ def compose(selection) -> List[dict]:
     # A declared dependency stack inside a regime (CONFIG A's
     # treatment_review_b3 + treatment_b4, where the latter depends_on the
     # former) is one version, not two, and stays composable.
+    def _dep_closure(name: str) -> set:
+        """Transitive depends_on closure (review finding 2026-11-10: a
+        3-component dependency chain is one version too — direct edges alone
+        would deadlock the regime guard against the dependency validator)."""
+        out, stack = set(), [name]
+        while stack:
+            for dep in COMPONENTS[stack.pop()].depends_on:
+                if dep not in out:
+                    out.add(dep)
+                    stack.append(dep)
+        return out
+
     def _stacked(a: str, b: str) -> bool:
-        return (a in COMPONENTS[b].depends_on) or (b in COMPONENTS[a].depends_on)
+        return (a in _dep_closure(b)) or (b in _dep_closure(a))
 
     by_regime: Dict[str, List[str]] = {}
     for n in selection:

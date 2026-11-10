@@ -428,6 +428,119 @@ def treatment_onc_scope_missing_npi(
     }
 
 
+# ── ONE shared treatment-signal producer for BOTH classification paths ───────
+
+def treatment_field_signals(
+    purposes_raw: Optional[str],
+    npi_raw: Optional[str],
+    active_raw: Optional[str],
+    participation_raw: Optional[str],
+    org_node_type: Optional[str],
+    *,
+    assessment_date: date,
+    requirement_effective: date,
+) -> dict:
+    """Every treatment-lane FIELD signal, produced once, for both paths.
+
+    Review finding (2026-11-10, PR #210): the bulk pipeline and the
+    single-record review built these signals separately, so each new regime
+    reintroduced path divergence. This is now the single producer; the bulk
+    path (arc_pipeline.verify_and_classify) and the single-record path
+    (review_service.run_review) both call it with DELIVERED values only —
+    the single-record path reads them from the entity's immutable Area-1
+    source record (`rce_source_records.parsed`), never from curated
+    projections, defaulted columns, or identifier rows (which deliberately
+    omit malformed and delivery-shared NPIs).
+
+    Returns a dict of field-signal payloads (possibly empty). Payloads are
+    the exact shapes the bulk path has always emitted. Every signal remains
+    inert until its consuming rule component is activated.
+    """
+    from app.tefca_registry.rce.field_map import normalize_active
+
+    fields: dict = {}
+    b4_signal = active_treatment_missing_required_npi(
+        purposes_raw, npi_raw, active_raw,
+        assessment_date=assessment_date,
+        requirement_effective=requirement_effective,
+        org_node_type=org_node_type)
+    if b4_signal is None:
+        # INACTIVE records with the same token condition get an OBSERVATION
+        # (owner instruction 2026-11-08), never a bucket signal. No rule
+        # consumes it; it exists for reporting and analyst view.
+        assignment = assign_case(purposes_raw, npi_raw)
+        if assignment.case == 1 and normalize_active(active_raw) != "1":
+            fields["inactive_treatment_npi_missing"] = {
+                "status": True,
+                "reason_code": "INACTIVE_TREATMENT_NPI_MISSING",
+                "raw_purposes": assignment.raw_purposes,
+                "raw_npi": assignment.raw_npi,
+                "raw_active": (active_raw or ""),
+                "purpose_tokens": list(assignment.tokens),
+            }
+    else:
+        fields["active_treatment_missing_required_npi"] = b4_signal
+        # OWNER-ADOPTED policy condition (superseding D-01 record,
+        # 2026-11-08): the signal's very existence IS the owner's condition —
+        # node type is information, not a gate. Consumed only by the
+        # owner-adopted VERSION of RULE-006 in the INACTIVE component
+        # treatment_b4_owner_adopted.
+        fields["treatment_owner_adopted_missing_npi"] = {
+            "status": True,
+            "reason_code": "TREATMENT_NPI_MISSING_OWNER_ADOPTED",
+            "raw_purposes": b4_signal["raw_purposes"],
+            "raw_npi": b4_signal["raw_npi"],
+            "raw_active": b4_signal["raw_active"],
+            "raw_org_node_type": b4_signal["raw_org_node_type"],
+            "requirement": b4_signal["requirement"],
+            "assessment_date": b4_signal["assessment_date"],
+            "note": ("Owner-adopted classification policy; not proof "
+                     "that this record independently establishes an "
+                     "SOP breach. A supplemental NPI never fills the "
+                     "submitted blank or suppresses this condition."),
+        }
+        # Unknown §7 applicability is NEVER confirmed non-compliance: its own
+        # signal, consumed by RULE-007 (B3 explicit applicability review).
+        if b4_signal.get("applicability_review"):
+            fields["treatment_npi_applicability_unresolved"] = {
+                "status": True,
+                "initiating_requirement": b4_signal["initiating_requirement"],
+                "exchange_direction": b4_signal["exchange_direction"],
+                "reason_code": b4_signal["reason_code"],
+                "raw_org_node_type": b4_signal["raw_org_node_type"],
+                "raw_purposes": b4_signal["raw_purposes"],
+                "raw_npi": b4_signal["raw_npi"],
+                "raw_active": b4_signal["raw_active"],
+                "requirement": b4_signal["requirement"],
+                "assessment_date": b4_signal["assessment_date"],
+                "note": b4_signal["note"],
+            }
+    onc_signal = treatment_onc_scope_missing_npi(
+        purposes_raw, npi_raw, active_raw, participation_raw,
+        assessment_date=assessment_date,
+        requirement_effective=requirement_effective)
+    if onc_signal is not None:
+        fields["treatment_onc_scope_missing_npi"] = onc_signal
+    return fields
+
+
+def treatment_signals_from_parsed(parsed: dict, *, assessment_date: date,
+                                  requirement_effective: date) -> dict:
+    """`treatment_field_signals` over one Area-1 source record's `parsed`
+    dict (the delivered cells, keyed by the delivered header names). This is
+    the single-record path's input: the immutable delivered values, present
+    for EVERY promoted record regardless of curation version — never the
+    curated entity_level (which defaults blank/garbled sequoiaorgtype to
+    'participant') and never the identifier table (which deliberately omits
+    malformed and delivery-shared NPIs)."""
+    p = parsed or {}
+    return treatment_field_signals(
+        p.get("purposesofuse"), p.get("NPI"), p.get("active"),
+        p.get("sequoiaorgtype"), p.get("organizationNodeType"),
+        assessment_date=assessment_date,
+        requirement_effective=requirement_effective)
+
+
 # ── proposed classifier signal (SEED_RULES_V4 / RULE-006) ─────────────────────
 
 def active_treatment_missing_required_npi(
