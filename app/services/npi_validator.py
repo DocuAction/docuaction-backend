@@ -14,6 +14,21 @@ THE ALGORITHM (45 CFR 162.406, CMS NPI Check Digit Calculation)
 
     The prefix is the part people get wrong. Running Luhn over the bare 10 digits
     validates roughly one NPI in ten by accident, which looks like it works.
+
+FIRST DIGIT (NPPES numbering range, not an individual/organization indicator)
+    NPPES has only ever issued NPIs beginning with 1 or 2 — this is a numbering-
+    range constraint from the ISO 7812 issuer scheme CMS was allocated, the same
+    kind of fact as a credit card's leading digit identifying its network, not
+    the cardholder. It is NOT how NPPES records whether an NPI belongs to an
+    individual (Type 1) or an organization (Type 2) — that is the separate
+    `enumeration_type` field in the NPPES registry (confirmed empirically this
+    engagement: every real NPI observed across two independent populations,
+    154,692 IQVIA organization NPIs and 24,589 September delivery NPIs, began
+    with "1" — including the organization-only IQVIA set — which would be
+    impossible if the first digit marked individual vs. organization). Checked
+    here purely as a format constraint: a 10-digit, Luhn-valid string starting
+    with any digit other than 1 or 2 was never issued by NPPES and cannot be a
+    real NPI, regardless of what its checksum says.
 """
 
 from __future__ import annotations
@@ -70,6 +85,9 @@ def validate_npi(npi: str) -> tuple[bool, str]:
         if not (value.isascii() and value.isdigit()):
             return False, f"NPI must contain digits only (got {len(value)} characters)"
         return False, f"NPI must be exactly 10 digits (got {len(value)})"
+
+    if value[0] not in ("1", "2"):
+        return False, f"NPI must begin with 1 or 2 per the NPPES numbering range (got {value[0]})"
 
     if _luhn_total(CMS_PREFIX + value) % 10 != 0:
         # Masked, not the full value — this message reaches logs and
