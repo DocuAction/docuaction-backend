@@ -139,6 +139,49 @@ def _delta_treatment_b4_owner_adopted(rules: List[dict]) -> List[dict]:
     return out
 
 
+def _delta_treatment_b4_onc_scope(rules: List[dict]) -> List[dict]:
+    """ONC UPDATED TREATMENT SCOPE (relayed 2026-11-09): a NEW VERSION of
+    RULE-006 itself, superseding the owner-adopted any-combination definition
+    (which survives as the prior version; activated rows are retired, never
+    deleted). All conditions must hold IN THE PRODUCER (the rule consumes the
+    single producer-emitted signal, so the rule can never widen the scope):
+
+      - Purpose_of_Use contains the exact token T-TRTMNT as its SOLE purpose
+        (combined-purpose values such as "T-PH-ECR,T-TRTMNT" are out of scope;
+        T-TREAT is never a substitute);
+      - participation level (sequoiaorgtype) is Participant or Sub-Participant;
+      - the record is Active;
+      - the ORIGINAL SUBMITTED NPI is blank.
+
+    No initiating-node requirement. A record outside this scope is NOT routed
+    anywhere by this component: it is evaluated against the remaining
+    applicable rules exactly as any other record (never auto-B3). Higher-
+    priority approved conditions (RULE-005, priority 5) still win; HELD
+    records are excluded upstream (D-15). Supplemental NPIs (manual QA,
+    NPPES, IQVIA) remain separate evidence and never fill the submitted
+    blank. One treatment regime at a time (conflicts enforced)."""
+    out = copy.deepcopy(rules)
+    out.append({
+        "rule_code": "RULE-006",
+        "name": "B4 Treatment Missing Required NPI (ONC updated scope)",
+        "bucket": "B4",
+        "priority": 6,
+        "description": (
+            "ONC updated Treatment scope (relayed 2026-11-09): an Active "
+            "Participant/Sub-Participant record asserting the exact T-TRTMNT "
+            "exchange purpose as its SOLE purpose with no SUBMITTED NPI "
+            "classifies B4. Combined-purpose records are out of this rule's "
+            "scope and are evaluated by the remaining applicable rules. "
+            "organizationNodeType does not gate this rule. A supplemental "
+            "NPI (manual QA, NPPES, IQVIA) never fills the submitted blank "
+            "and never suppresses the condition."),
+        "conditions": {"all_of": [
+            {"field": "treatment_onc_scope_missing_npi", "status": True},
+        ]},
+    })
+    return out
+
+
 def _delta_structural_npi_handling(rules: List[dict]) -> List[dict]:
     """D-02 rule side: defense-in-depth guards so a confirmed-invalid NPI can
     never pass B1/B2 by rule order alone. The producer half is the
@@ -230,17 +273,31 @@ COMPONENTS: Dict[str, Component] = {c.name: c for c in (
     Component("treatment_review_b3", ("D-01 CONFIG A (superseded 2026-11-08; preserved as history)",),
               "RULE-007 B3 applicability review + RULE-006 as B3/B4-candidate",
               apply=_delta_treatment_review_b3,
-              conflicts_with=("treatment_b4_owner_adopted",)),
+              conflicts_with=("treatment_b4_owner_adopted",
+                              "treatment_b4_onc_scope")),
     Component("treatment_b4", ("D-01 CONFIG A (superseded 2026-11-08; preserved as history)",),
               "RULE-006 upgraded to B4 (confirmed Treatment non-compliance)",
               apply=_delta_treatment_b4, depends_on=("treatment_review_b3",),
-              conflicts_with=("treatment_b4_owner_adopted",)),
+              conflicts_with=("treatment_b4_owner_adopted",
+                              "treatment_b4_onc_scope")),
     Component("treatment_b4_owner_adopted",
-              ("D-01 SUPERSEDING 2026-11-08 (owner-adopted policy)",),
+              ("D-01 SUPERSEDING 2026-11-08 (owner-adopted policy; "
+               "superseded in turn by the ONC updated scope, 2026-11-09 — "
+               "preserved as history)",),
               "active + exact T-TRTMNT (any combination) + blank submitted "
               "NPI -> B4; no node-type gate; RULE-009",
               apply=_delta_treatment_b4_owner_adopted,
-              conflicts_with=("treatment_review_b3", "treatment_b4")),
+              conflicts_with=("treatment_review_b3", "treatment_b4",
+                              "treatment_b4_onc_scope")),
+    Component("treatment_b4_onc_scope",
+              ("ONC updated Treatment scope (relayed 2026-11-09); "
+               "D-01 lineage",),
+              "active + SOLE-purpose exact T-TRTMNT + Participant/"
+              "Sub-Participant + blank submitted NPI -> B4; no node-type "
+              "gate; out-of-scope records evaluated by the remaining rules",
+              apply=_delta_treatment_b4_onc_scope,
+              conflicts_with=("treatment_review_b3", "treatment_b4",
+                              "treatment_b4_owner_adopted")),
     Component("structural_npi_handling", ("D-02", "D6"),
               "invalid/flagged split: producer flag + B1/B2 invalid guards",
               apply=_delta_structural_npi_handling,
@@ -264,6 +321,7 @@ COMPONENTS: Dict[str, Component] = {c.name: c for c in (
 
 #: Canonical application order (deterministic composition).
 _ORDER = ("treatment_review_b3", "treatment_b4", "treatment_b4_owner_adopted",
+          "treatment_b4_onc_scope",
           "structural_npi_handling", "mandatory_source_guards",
           "material_conflict_guards", "name_severity_configuration",
           "exclusion_candidate_b3")

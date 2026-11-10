@@ -951,6 +951,22 @@ async def verify_and_classify(
                         "assessment_date": _b4_signal["assessment_date"],
                         "note": _b4_signal["note"],
                     }
+            # ONC UPDATED TREATMENT SCOPE (relayed 2026-11-09): sole-purpose
+            # exact T-TRTMNT + Participant/Sub-Participant + active + blank
+            # SUBMITTED NPI. Computed unconditionally from delivered values
+            # (its own pure function; no node-type input) and ALWAYS inert
+            # until the component `treatment_b4_onc_scope` is explicitly
+            # activated — merging/deploying this code changes no
+            # classification by itself. Supplemental NPIs (manual QA, NPPES,
+            # IQVIA) never fill the submitted blank and never suppress it.
+            _onc_sig = _npa.treatment_onc_scope_missing_npi(
+                _raw_purposes, _raw_npi, _raw_active,
+                _rce_fields.rce_value(entity, "sequoiaorgtype"),
+                assessment_date=date.today(),
+                requirement_effective=BR_NPI_TRTMNT_EFFECTIVE)
+            if _onc_sig is not None:
+                verification_results.setdefault("fields", {})[
+                    "treatment_onc_scope_missing_npi"] = _onc_sig
             classification = classifier.classify(verification_results, rules=rules)
 
             # M-4 enforcement: an APPLICABLE mandatory check without an

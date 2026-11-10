@@ -313,6 +313,103 @@ def describe(assignment: CaseAssignment, assessment: ApplicabilityAssessment) ->
             f"deadline={assessment.deadline_applicability}; rule={assessment.rule_version}")
 
 
+# ── participation level (sequoiaorgtype) ─────────────────────────────────────
+
+#: Delivered vocabulary of `sequoiaorgtype` (program-office STATED values:
+#: "Participant" | "Subparticipant"). ONC's updated Treatment scope
+#: (relayed 2026-11-09) restricts the rule to these two levels; the
+#: normalizer tolerates case/space/hyphen/underscore form ("Sub-Participant",
+#: "sub_participant") but NEVER maps any other value into the vocabulary.
+PARTICIPATION_PARTICIPANT = "participant"
+PARTICIPATION_SUB_PARTICIPANT = "sub_participant"
+
+
+def normalize_participation_level(raw: Optional[str]) -> Optional[str]:
+    """"participant" / "sub_participant", or None for blank or out-of-vocabulary.
+
+    A blank or unrecognized participation level is a fact about the delivery,
+    never silently coerced into a level: callers must treat None as
+    out-of-scope for any participation-gated rule."""
+    text = "".join(ch for ch in (raw or "").strip().casefold()
+                   if ch not in " -_")
+    if text == "participant":
+        return PARTICIPATION_PARTICIPANT
+    if text == "subparticipant":
+        return PARTICIPATION_SUB_PARTICIPANT
+    return None
+
+
+# ── ONC updated Treatment scope (relayed 2026-11-09) ─────────────────────────
+
+def treatment_onc_scope_missing_npi(
+    purposes_raw: Optional[str],
+    npi_raw: Optional[str],
+    active_raw: Optional[str],
+    participation_raw: Optional[str],
+    *,
+    assessment_date: date,
+    requirement_effective: date,
+) -> Optional[dict]:
+    """The ONC-updated-scope Treatment missing-NPI signal, or None when out of
+    scope. A NEW VERSION of the RULE-006 condition (the owner-adopted
+    any-combination definition survives as the prior version; this one
+    supersedes it on activation, never silently).
+
+    In scope only when ALL of (ONC updated scope, relayed 2026-11-09):
+      1. the parsed purpose list contains the exact token T-TRTMNT as its
+         SOLE purpose — a combined-purpose value such as "T-PH-ECR,T-TRTMNT"
+         is OUT of this rule's scope (it is not exempted; it is evaluated by
+         the remaining applicable rules), and T-TREAT is never a substitute;
+      2. the participation level (`sequoiaorgtype`) normalizes to
+         Participant or Sub-Participant — blank or out-of-vocabulary levels
+         are out of scope, never presumed;
+      3. the record is Active (the active flag normalizes to "1");
+      4. the ORIGINAL SUBMITTED NPI is blank;
+      5. the NPI requirement is in force on `assessment_date`.
+
+    There is deliberately NO initiating-node requirement: organizationNodeType
+    is not read by this function at all.
+
+    PURE: reads delivered values only. A supplemental NPI found by manual QA,
+    NPPES or IQVIA is separate analyst-side evidence — it never fills the
+    submitted blank and never suppresses this signal.
+    """
+    from app.tefca_registry.rce.field_map import normalize_active
+
+    if assessment_date < requirement_effective:
+        return None
+    if normalize_active(active_raw) != "1":
+        return None
+    assignment = assign_case(purposes_raw, npi_raw)
+    # Sole purpose: exactly one parsed token, and it is T-TRTMNT.
+    if not (assignment.tokens == (TOKEN_TRTMNT,) and not assignment.npi_supplied):
+        return None
+    participation = normalize_participation_level(participation_raw)
+    if participation is None:
+        return None
+
+    return {
+        "status": True,
+        "reason_code": "TREATMENT_SOLE_PURPOSE_NPI_MISSING_ONC_SCOPE",
+        "scope_basis": "ONC updated Treatment scope (relayed 2026-11-09)",
+        "participation_level": participation,
+        "raw_participation_level": (participation_raw or ""),
+        "raw_purposes": assignment.raw_purposes,
+        "raw_npi": assignment.raw_npi,
+        "raw_active": (active_raw or ""),
+        "purpose_tokens": list(assignment.tokens),
+        "requirement": "BR-NPI-TRTMNT-001 (Treatment XP SOP v2.0 §7/§8)",
+        "requirement_effective": requirement_effective.isoformat(),
+        "assessment_date": assessment_date.isoformat(),
+        "note": ("Active Participant/Sub-Participant record asserting the "
+                 "exact T-TRTMNT exchange purpose as its sole purpose with a "
+                 "blank submitted NPI (ONC updated scope). A supplemental NPI "
+                 "from manual QA, NPPES or IQVIA remains separate evidence "
+                 "and never fills the submitted blank. No initiating-node "
+                 "requirement applies."),
+    }
+
+
 # ── proposed classifier signal (SEED_RULES_V4 / RULE-006) ─────────────────────
 
 def active_treatment_missing_required_npi(
