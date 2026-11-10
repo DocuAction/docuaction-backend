@@ -917,8 +917,8 @@ async def verify_and_classify(
                 # 2026-11-08): the signal's very existence IS the owner's
                 # condition (active + exact T-TRTMNT + blank submitted NPI +
                 # requirement in force) — node type is information, not a
-                # gate. Consumed only by RULE-009 in the INACTIVE component
-                # treatment_b4_owner_adopted.
+                # gate. Consumed only by the owner-adopted VERSION of RULE-006
+                # in the INACTIVE component treatment_b4_owner_adopted.
                 _fields["treatment_owner_adopted_missing_npi"] = {
                     "status": True,
                     "reason_code": "TREATMENT_NPI_MISSING_OWNER_ADOPTED",

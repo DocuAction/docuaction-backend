@@ -264,6 +264,11 @@ class Component:
     depends_on: Tuple[str, ...] = ()
     #: Components that cannot be active together (e.g. two treatment regimes).
     conflicts_with: Tuple[str, ...] = ()
+    #: Exclusion group: at most ONE component per regime may be selected
+    #: (enforced structurally in compose(), review finding 2026-11-10 — the
+    #: pairwise conflicts_with tuples are kept as documentation, but a regime
+    #: that forgets a pair can no longer compose two rule versions together).
+    regime: Optional[str] = None
     #: Env flags this component's approval covers (execution switches; set
     #: only after the component is activated with its recorded approval).
     flag_envs: Tuple[str, ...] = ()
@@ -274,21 +279,24 @@ COMPONENTS: Dict[str, Component] = {c.name: c for c in (
               "RULE-007 B3 applicability review + RULE-006 as B3/B4-candidate",
               apply=_delta_treatment_review_b3,
               conflicts_with=("treatment_b4_owner_adopted",
-                              "treatment_b4_onc_scope")),
+                              "treatment_b4_onc_scope"),
+              regime="treatment"),
     Component("treatment_b4", ("D-01 CONFIG A (superseded 2026-11-08; preserved as history)",),
               "RULE-006 upgraded to B4 (confirmed Treatment non-compliance)",
               apply=_delta_treatment_b4, depends_on=("treatment_review_b3",),
               conflicts_with=("treatment_b4_owner_adopted",
-                              "treatment_b4_onc_scope")),
+                              "treatment_b4_onc_scope"),
+              regime="treatment"),
     Component("treatment_b4_owner_adopted",
               ("D-01 SUPERSEDING 2026-11-08 (owner-adopted policy; "
                "superseded in turn by the ONC updated scope, 2026-11-09 — "
                "preserved as history)",),
               "active + exact T-TRTMNT (any combination) + blank submitted "
-              "NPI -> B4; no node-type gate; RULE-009",
+              "NPI -> B4; no node-type gate; a new VERSION of RULE-006",
               apply=_delta_treatment_b4_owner_adopted,
               conflicts_with=("treatment_review_b3", "treatment_b4",
-                              "treatment_b4_onc_scope")),
+                              "treatment_b4_onc_scope"),
+              regime="treatment"),
     Component("treatment_b4_onc_scope",
               ("ONC updated Treatment scope (relayed 2026-11-09); "
                "D-01 lineage",),
@@ -297,7 +305,8 @@ COMPONENTS: Dict[str, Component] = {c.name: c for c in (
               "gate; out-of-scope records evaluated by the remaining rules",
               apply=_delta_treatment_b4_onc_scope,
               conflicts_with=("treatment_review_b3", "treatment_b4",
-                              "treatment_b4_owner_adopted")),
+                              "treatment_b4_owner_adopted"),
+              regime="treatment"),
     Component("structural_npi_handling", ("D-02", "D6"),
               "invalid/flagged split: producer flag + B1/B2 invalid guards",
               apply=_delta_structural_npi_handling,
@@ -347,8 +356,31 @@ def compose(selection) -> List[dict]:
     if conflicts:
         raise ActivationRefused(
             f"selection contains incompatible components: {conflicts} — one "
-            f"treatment regime at a time; the superseding owner-adopted "
-            f"policy replaces CONFIG A, it does not stack on it.")
+            f"treatment regime at a time; a superseding policy replaces the "
+            f"prior regime, it does not stack on it.")
+    # Structural regime exclusion: at most ONE rule version per exclusion
+    # group, independent of the pairwise conflicts_with documentation above.
+    # A declared dependency stack inside a regime (CONFIG A's
+    # treatment_review_b3 + treatment_b4, where the latter depends_on the
+    # former) is one version, not two, and stays composable.
+    def _stacked(a: str, b: str) -> bool:
+        return (a in COMPONENTS[b].depends_on) or (b in COMPONENTS[a].depends_on)
+
+    by_regime: Dict[str, List[str]] = {}
+    for n in selection:
+        r = COMPONENTS[n].regime
+        if r is not None:
+            by_regime.setdefault(r, []).append(n)
+    over = {}
+    for r, ns in by_regime.items():
+        ns = sorted(ns)
+        if any(not _stacked(x, y) for i, x in enumerate(ns) for y in ns[i + 1:]):
+            over[r] = ns
+    if over:
+        raise ActivationRefused(
+            f"selection contains incompatible components: {over} — at most "
+            f"one rule version per regime group may be active at a time "
+            f"(dependency stacks within a regime are one version).")
     rules = copy.deepcopy(SEED_RULES_V3)
     for name in _ORDER:
         if name in selection and COMPONENTS[name].apply is not None:

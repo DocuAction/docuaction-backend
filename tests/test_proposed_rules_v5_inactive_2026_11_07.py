@@ -449,8 +449,12 @@ def test_d12_env_reader_accepts_only_a_past_or_today_iso_date(monkeypatch):
     assert _proposed_assessment_as_of() == date(2026, 10, 14)
     monkeypatch.setenv(PROPOSED_ASSESSMENT_AS_OF_ENV, "not-a-date")
     assert _proposed_assessment_as_of() is None
+    # Tomorrow in UTC, matching the reader's own clock: local date.today()
+    # is a different day in the local-evening/UTC-next-day window, which made
+    # this assertion flake (observed 2026-11-09 ~19:40 local / 00:40Z).
+    from datetime import datetime as _dt, timezone as _tz
     monkeypatch.setenv(PROPOSED_ASSESSMENT_AS_OF_ENV,
-                       (date.today() + timedelta(days=1)).isoformat())
+                       (_dt.now(_tz.utc).date() + timedelta(days=1)).isoformat())
     assert _proposed_assessment_as_of() is None
 
 
@@ -715,14 +719,19 @@ def test_policy_determination_cites_its_own_code_never_default_unmatched():
     assert sp.SOURCE_POLICY_RULE_CODE == "SOURCE-POLICY-M4"
     # The reserved code must never collide with a review_rules code.
     from app.tefca_registry.rule_configuration import COMPONENTS, compose
-    # One treatment regime at a time: compose with the current (ONC-scope)
-    # regime and check the superseded regimes' codes separately — RULE-006/007
-    # codes are identical across regimes, so no code escapes the check.
-    all_codes = {r["rule_code"] for r in compose(
-        set(COMPONENTS) - {"treatment_review_b3", "treatment_b4",
-                           "treatment_b4_owner_adopted"})}
-    all_codes |= {r["rule_code"] for r in compose(
-        {"treatment_review_b3", "treatment_b4"})}
+    # One treatment regime at a time, so EVERY regime is composed explicitly
+    # (review finding 2026-11-10: relying on the regimes sharing codes was an
+    # unchecked comment-level invariant). No regime's rule code may collide
+    # with the reserved policy code.
+    treatment = {n for n, c in COMPONENTS.items() if c.regime == "treatment"}
+    non_treatment = set(COMPONENTS) - treatment
+    regimes = [{"treatment_review_b3", "treatment_b4"},
+               {"treatment_b4_owner_adopted"},
+               {"treatment_b4_onc_scope"}]
+    assert set().union(*regimes) == treatment, "a treatment regime escaped this check"
+    all_codes = set()
+    for regime in regimes:
+        all_codes |= {r["rule_code"] for r in compose(non_treatment | regime)}
     assert sp.SOURCE_POLICY_RULE_CODE not in all_codes
 
 
