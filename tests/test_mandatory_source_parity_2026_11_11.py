@@ -272,3 +272,21 @@ async def test_single_record_path_passes_submitted_npi_fact_to_applicability(mon
     assert no_npi["classification"]["bucket"] == "B1"   # not applicable, no NPI
     with_npi = await rs.run_review(_FakeDB(npi="1234567893"), _entity())
     assert with_npi["classification"]["bucket"] == "B3"
+
+
+# -- unknown states fail closed (review condition, 2026-11-11) ---------------
+
+@pytest.mark.parametrize("raw", ["error", "skipped", "UNAVAILABLE", " Not_Checked ",
+                                 ["verified"], 7, {"status": "weird"}, {"status": None}, {}])
+def test_unclassified_or_variant_state_of_a_mandatory_source_fails_closed(raw):
+    b, _r, reason, _m = sp.apply_source_policy(
+        "B1", "RULE-001", {"sam_gov": raw}, {"has_submitted_npi": True}, [_policy()])
+    assert b == "B3" and reason == "SOURCE_NOT_COMPLETED_SAM_GOV"
+
+
+@pytest.mark.parametrize("raw", ["not_found", "excluded", "Debarred", "deactivated",
+                                 "verified", " CLEAR ", {"status": "Verified"}])
+def test_known_adverse_and_acceptable_states_are_unchanged(raw):
+    b, _r, reason, _m = sp.apply_source_policy(
+        "B1", "RULE-001", {"sam_gov": raw}, {"has_submitted_npi": True}, [_policy()])
+    assert b == "B1" and reason is None

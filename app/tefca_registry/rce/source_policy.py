@@ -76,6 +76,27 @@ SOURCE_POLICY_RULE_CODE = "SOURCE-POLICY-M4"
 ACCEPTABLE_STATES = frozenset({"verified", "clear"})
 INCOMPLETE_STATES = frozenset({"not_checked", "unavailable", "failed"})
 PENDING_REVIEW_STATES = frozenset({"possible_match"})
+#: Answered adverse outcomes: a finding owned by the rule conditions, not an
+#: incomplete check. ANY state outside the three sets above and this one
+#: (a casing variant is normalised first; a new connector status, a typo, a
+#: non-string value) is treated as INCOMPLETE - an applicable mandatory source
+#: fails closed on a state nobody has classified.
+ADVERSE_STATES = frozenset({"not_found", "excluded", "debarred", "deactivated"})
+
+
+def _state_of(raw: Any) -> Optional[str]:
+    """Normalised source state, or None when absent. A value that is neither a
+    string nor a dict carrying a string `status` yields a sentinel that matches
+    no known set, so it is incomplete rather than silently a finding."""
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, dict):
+        raw = raw.get("status")
+        if raw is None or raw == "":
+            return None
+    if not isinstance(raw, str):
+        return "__unrecognised__"
+    return raw.strip().lower() or None
 
 
 async def load_active_policies(session) -> List[Dict[str, Any]]:
@@ -132,17 +153,18 @@ def apply_source_policy(bucket: str, rule_code: Optional[str],
     for policy in policies:
         if not _applies(policy, record_facts):
             continue
-        raw = sources.get(policy["source"])
-        state = raw if isinstance(raw, str) else (raw or {}).get("status") if raw else None
+        state = _state_of(sources.get(policy["source"]))
         if state in ACCEPTABLE_STATES:
             continue
         if state in PENDING_REVIEW_STATES:
             return "B3", None, "EXCLUSION_POSSIBLE_MATCH_PENDING", policy
-        if state is None or state in INCOMPLETE_STATES:
-            return ("B3", None,
-                    f"SOURCE_NOT_COMPLETED_{policy['source'].upper()}", policy)
-        # Answered adverse (not_found / deactivated / excluded / anything
-        # else the rules know): a finding, owned by the rule conditions.
+        if state in ADVERSE_STATES:
+            # Answered adverse: a finding, owned by the rule conditions.
+            continue
+        # None, a known incomplete state, or a state nobody has classified:
+        # fail closed (an unknown mandatory-source answer is not a clean one).
+        return ("B3", None,
+                f"SOURCE_NOT_COMPLETED_{policy['source'].upper()}", policy)
     return bucket, rule_code, None, None
 
 
