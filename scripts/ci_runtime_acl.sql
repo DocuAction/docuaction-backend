@@ -31,7 +31,10 @@ DECLARE
     -- 20261108_iqvia_advisory_outcome (D-10): append-only trigger + app
     -- SELECT/INSERT only -- owner must own it or the constrained role could
     -- disable its own trigger (same contract as iqvia_advisory_assessment).
-    'iqvia_advisory_comparison_outcome'];
+    'iqvia_advisory_comparison_outcome',
+    -- 20261112_rce_record_comments: append-only trigger + app SELECT/INSERT only
+    -- -- owner must own it or the runtime role could drop its own trigger.
+    'rce_record_comments'];
   r record;
   owning_tbl text;
 BEGIN
