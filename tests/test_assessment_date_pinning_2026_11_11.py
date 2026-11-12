@@ -221,3 +221,28 @@ def test_single_path_no_longer_reads_the_wall_clock_for_treatment():
     from app.tefca_registry import review_service as rs
     src = inspect.getsource(rs._treatment_signals_and_assessment)
     assert "now(" not in src and "resolve_assessment_date" in src
+
+
+# -- producers refuse a missing assessment date (no wall-clock default) ------
+
+@pytest.mark.parametrize("bad", [None, "2026-11-08", 20261108])
+def test_every_treatment_producer_refuses_a_missing_or_non_date(bad):
+    from app.tefca_registry.rce import npi_applicability as npa
+    eff = date(2026, 9, 3)
+    with pytest.raises(npa.AssessmentDateRequired):
+        npa.treatment_field_signals("T-TRTMNT", "", "1", "Participant", None,
+                                    assessment_date=bad, requirement_effective=eff)
+    with pytest.raises(npa.AssessmentDateRequired):
+        npa.treatment_signals_from_parsed({"purposesofuse": "T-TRTMNT"},
+                                          assessment_date=bad, requirement_effective=eff)
+    with pytest.raises(npa.AssessmentDateRequired):
+        npa.active_treatment_missing_required_npi("T-TRTMNT", "", "1",
+                                                  assessment_date=bad, requirement_effective=eff)
+
+
+def test_a_real_date_still_works():
+    from app.tefca_registry.rce import npi_applicability as npa
+    out = npa.treatment_field_signals("T-TRTMNT", "", "1", "Participant", None,
+                                      assessment_date=OCT_ASSESSMENT,
+                                      requirement_effective=date(2026, 9, 3))
+    assert isinstance(out, dict)
