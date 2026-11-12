@@ -746,6 +746,56 @@ async def _gather_all_evidence(entity_refs: List[str],
     return await asyncio.gather(*(_bounded(ref) for ref in entity_refs))
 
 
+#: Lineage outcomes of `_source_anchor`. Only ANCHORED sets
+#: ReviewRecord.source_record_id; every other outcome leaves it NULL and is
+#: counted in the run's `lineage` summary - never guessed.
+LINEAGE_ANCHORED = "anchored"
+LINEAGE_AMBIGUOUS = "ambiguous"              # >1 curated row of this delivery carries the reference
+LINEAGE_ENTITY_MISMATCH = "entity_mismatch"  # the curated row links a DIFFERENT entity
+LINEAGE_NO_DELIVERY_RECORD = "no_delivery_record"  # no delivery named, or no such record in it
+
+
+async def _source_anchors(db, intake_id, refs: List[str]) -> Dict[str, List[Any]]:
+    """reference -> the curated rows of THIS delivery that carry it.
+
+    The reference is the delivered business identifier (`rce_org_oid`) the
+    pipeline resolved the entity from. Scoped to ONE intake: an entity promoted
+    by several deliveries is never used to pick a record. Read-only."""
+    if intake_id is None or not refs:
+        return {}
+    from sqlalchemy import select
+    from app.tefca_registry.rce import models as _m
+    rows = (await db.execute(
+        select(_m.RceCuratedRecord.rce_org_oid, _m.RceCuratedRecord.source_record_id,
+               _m.RceCuratedRecord.canonical_entity_id)
+        .where(_m.RceCuratedRecord.source_intake_id == intake_id,
+               _m.RceCuratedRecord.rce_org_oid.in_(sorted(set(refs)))))).all()
+    out: Dict[str, List[Any]] = {}
+    for oid, source_record_id, canonical in rows:
+        out.setdefault(oid, []).append((source_record_id, canonical))
+    return out
+
+
+def _source_anchor(anchors: Dict[str, List[Any]], ref: str, entity_uuid):
+    """(source_record_id or None, LINEAGE_* outcome) for one resolved reference.
+
+    ANCHORED only when exactly ONE curated row of the named delivery carries the
+    reference AND it links the very entity that was resolved. Two rows
+    (duplicate delivered ids), a different linked entity, or no delivery
+    context all leave the review unanchored - an unanchored review is explicit
+    and incomplete, a wrongly anchored one would silently attach another record's
+    result."""
+    matches = anchors.get(ref) or []
+    if not matches:
+        return None, LINEAGE_NO_DELIVERY_RECORD
+    if len(matches) > 1:
+        return None, LINEAGE_AMBIGUOUS
+    source_record_id, canonical = matches[0]
+    if entity_uuid is None or canonical is None or str(canonical) != str(entity_uuid):
+        return None, LINEAGE_ENTITY_MISMATCH
+    return source_record_id, LINEAGE_ANCHORED
+
+
 async def verify_and_classify(
     db,
     entity_refs: List[str],
@@ -779,6 +829,17 @@ async def verify_and_classify(
     from app.tefca_registry.rce.assessment_context import resolve_assessment_date
     _assessment = await resolve_assessment_date(
         db, intake_id, run_id=assessment_run_id)
+    # Source-record lineage (review_records.source_record_id): the delivered record
+    # a review is ABOUT, taken from THIS delivery's curated rows only. No intake
+    # given => no anchor (an entity can be shared by several deliveries, so the
+    # entity alone never identifies a record).
+    _intake_uuid = None
+    if intake_id is not None:
+        import uuid as _uuidlib
+        _intake_uuid = (intake_id if isinstance(intake_id, _uuidlib.UUID)
+                        else _uuidlib.UUID(str(intake_id)))
+    lineage = {LINEAGE_ANCHORED: 0, LINEAGE_AMBIGUOUS: 0,
+               LINEAGE_ENTITY_MISMATCH: 0, LINEAGE_NO_DELIVERY_RECORD: 0}
 
     # Release-prerequisite controls (2026-11-08), BEFORE any classification
     # write: mark this transaction in-flight + refuse while the transition
@@ -849,6 +910,8 @@ async def verify_and_classify(
 
         _dbg_t0 = _dbgtime.perf_counter()
         gathered = await _gather_all_evidence(chunk_refs, timing_log=_dbg_path)
+        _anchors = await _source_anchors(
+            db, _intake_uuid, [g["ref"] for g in gathered if g["entity"] is not None])
         _dbg_gather_s = _dbgtime.perf_counter() - _dbg_t0
         if _dbg_path:
             with open(_dbg_path, "a", encoding="utf-8") as _f:
@@ -867,6 +930,8 @@ async def verify_and_classify(
 
             evidence = g["evidence"]
             entity_uuid = entity.get("_registry_entity_id")
+            source_record_id, _lineage = _source_anchor(_anchors, ref, entity_uuid)
+            lineage[_lineage] += 1
 
             if persist_evidence:
                 rows = evidence_rows_for_persistence(
@@ -1047,6 +1112,9 @@ async def verify_and_classify(
                     "source_policy": evidence.get("source_policy"),
                     "classifier_input": verification_results,
                 },
+                # The delivered record this review is about (NULL unless the
+                # delivery's own curated row identifies it unambiguously).
+                source_record_id=source_record_id,
                 classification_bucket=classification.bucket,
                 classification_rule=rule_code,
                 classification_rule_version=rule_version,
@@ -1079,6 +1147,8 @@ async def verify_and_classify(
                 "entity_id": str(entity_uuid) if entity_uuid else None,
                 "name": entity.get("name"),
                 "review_id": review_id,
+                "source_record_id": str(source_record_id) if source_record_id else None,
+                "lineage": _lineage,
                 "bucket": classification.bucket,
                 "rule_code": rule_code,
                 "rule_version": rule_version,
@@ -1122,6 +1192,7 @@ async def verify_and_classify(
         "tier_counts": {str(k): v for k, v in sorted(tiers.items())},
         "rule_set_size": len(rules),
         "outcomes": outcomes,
+        "lineage": lineage,
         "separation_note": (
             "Verification result (D1-D6), ARC determination (B1-B4) and review "
             "tier (T1-T3) are stored separately and are not collapsed. A B1 "

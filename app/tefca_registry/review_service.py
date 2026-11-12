@@ -780,12 +780,53 @@ async def _compare_addresses(entity, sources: Dict[str, dict]) -> dict:
     return payload
 
 
+async def _validated_source_record(db, entity, source_record_id):
+    """The delivered record a single-entity review is ABOUT, or None.
+
+    Only an EXPLICIT id from a caller that knows the delivery context is used,
+    and only after it is confirmed to be linked to THIS entity through its
+    curated record. It is never taken from `entity.source_record_id` (an entity
+    can be promoted by several deliveries; that column names whichever record
+    created it) and never guessed. A record that is not this entity's, or is
+    unknown, is a refusal - a review wrongly anchored to another delivery's
+    record would silently attach one delivery's result to another."""
+    if source_record_id is None:
+        return None
+    import uuid as _uuidlib
+    from sqlalchemy import select
+    from app.tefca_registry.rce import models as rce_m
+    try:
+        sid = (source_record_id if isinstance(source_record_id, _uuidlib.UUID)
+               else _uuidlib.UUID(str(source_record_id)))
+    except (ValueError, TypeError):
+        raise ValueError(f"source_record_id {source_record_id!r} is not a UUID")
+    row = (await db.execute(
+        select(rce_m.RceCuratedRecord.canonical_entity_id)
+        .where(rce_m.RceCuratedRecord.source_record_id == sid))).first()
+    if row is None:
+        raise ValueError(f"source record {sid} has no curated record, so its link "
+                         f"to entity {entity.id} cannot be confirmed")
+    if row[0] is None or str(row[0]) != str(entity.id):
+        raise ValueError(
+            f"source record {sid} is not linked to entity {entity.id}; refusing "
+            f"to attach this review to another delivery's record")
+    return sid
+
+
 async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
-                     sample_id=None, trigger: str = "manual") -> dict:
-    """Verify, classify, persist a ReviewRecord, return the response envelope."""
+                     sample_id=None, trigger: str = "manual",
+                     source_record_id=None) -> dict:
+    """Verify, classify, persist a ReviewRecord, return the response envelope.
+
+    `source_record_id` (optional, validated) anchors the review to the delivered
+    record it is about. The entity-only entry points (priority review, entity
+    verify) pass none: their reviews are entity-level and stay UNANCHORED, which
+    the reporting loader states explicitly instead of attaching them."""
     from app.services.npi_validator import validate_npi
     from sqlalchemy import select
     from app.tefca_registry.review_routes import generate_review_id
+
+    source_record_id = await _validated_source_record(db, entity, source_record_id)
 
     await ensure_seed_rules(db)
     # v2 wires SAM.gov into classification. Every SAM condition fires only
@@ -937,6 +978,7 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
 
     db.add(reg.ReviewRecord(
         review_id=review_id, entity_id=entity.id, sample_id=sample_id,
+        source_record_id=source_record_id,     # None unless explicitly, validly given
         verification_results=results,          # snapshot, not a live pointer
         classification_bucket=classification.bucket,
         classification_rule=rule_code,
@@ -973,6 +1015,7 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
     return {
         "entity_id": str(entity.id),
         "review_id": review_id,
+        "source_record_id": str(source_record_id) if source_record_id else None,
         "verification": sources,
         "classification": {
             **classification.as_dict(),
