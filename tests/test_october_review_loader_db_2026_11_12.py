@@ -241,7 +241,7 @@ async def test_evidence_and_reviews_after_the_cutoff_are_never_read(rolled_back_
     await _review(db, rec, ent, "REV-9925-000001", "B1", T_AFTER_CUTOFF)
     await _evidence(db, ent, "NPPES", "IDENTITY", "PASS", T_AFTER_CUTOFF)
     f = (await _load(db, intake_id))["facts"][0]
-    assert f["bucket"] is None and "no review record at or before the cutoff" in f["bucket_basis"]
+    assert f["bucket"] is None and ld.NO_ANCHORED_REVIEW in f["bucket_basis"]
     assert f["nppes"] == ld.NO_EVIDENCE
 
 

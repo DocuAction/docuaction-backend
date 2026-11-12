@@ -37,6 +37,16 @@ ASSESSMENT RUN AND EVIDENCE CUTOFF
     is REQUIRED and explicit: nothing newer than it is read. No completed run, or
     no cutoff, is a refusal.
 
+REVIEW LINEAGE (review_records.source_record_id)
+    New reviews carry the delivered record they are ABOUT: the bulk writer takes it
+    from the NAMED delivery's own curated row (exactly one, linking the resolved
+    entity), the single-record writer only from an explicit, validated id. Reviews
+    created before that, and entity-only reviews (priority review, entity verify),
+    carry NO anchor. They are never attached - not by entity, not by guesswork -
+    and never rewritten: a record whose only reviews are unanchored stays
+    unclassified and says so (`unanchored entity reviews`), so the gap is explicit
+    and the dataset INCOMPLETE rather than silently filled.
+
 PERSISTED CLASSIFICATION ONLY
     A bucket is `review_records.classification_bucket` of the selected review
     and nothing else. No analyst `reclassified_to`, no spreadsheet analysis. A
@@ -81,9 +91,14 @@ EVIDENCE_SOURCES = {
     "leie": ("OIG_LEIE", "EXCLUSION_REVOCATION"),
     "sam": ("SAM_GOV", "EXCLUSION_REVOCATION"),
 }
-NOT_PROMOTED = ("Not established: the record was not promoted to an entity, so "
-                "no verification evidence exists for it")
-NO_EVIDENCE = "Not established: no evidence row at or before the cutoff"
+NOT_PROMOTED = ("Not established by this loader: the record has no linked entity, "
+                "so no entity-linked verification evidence is available to it "
+                "here. This does not show that no source screening occurred "
+                "elsewhere")
+NO_EVIDENCE = ("Not established by this loader: no evidence row for the linked "
+               "entity at or before the cutoff exists in the evidence store it "
+               "reads. This does not show the source was never checked elsewhere")
+NO_ANCHORED_REVIEW = "no review anchored to this source record at or before the cutoff"
 
 
 class LoaderRefused(ValueError):
@@ -224,6 +239,7 @@ async def load_record_facts(
     stats = {"held": 0, "rejected": 0, "no_curated_row": 0, "not_promoted": 0,
              "classified": 0, "no_review": 0, "review_without_bucket": 0,
              "records_with_multiple_reviews": 0, "evidence_rows_used": 0,
+             "records_with_unanchored_entity_reviews": 0,
              "with_supplemental_npi": 0}
     last_line = -1
     while True:
@@ -260,6 +276,18 @@ async def load_record_facts(
 
         entity_of = {sid: str(c.canonical_entity_id) for sid, c in curated.items()
                      if c.canonical_entity_id is not None}
+        # Historical / entity-level reviews that name the linked entity but NO
+        # source record. Counted for disclosure only - never attached.
+        unanchored: Dict[str, int] = {}
+        if entity_of:
+            for ent_id, n_unanchored in (await db.execute(
+                    select(reg.ReviewRecord.entity_id, func.count())
+                    .where(reg.ReviewRecord.entity_id.in_(
+                               [uuid.UUID(e) for e in sorted(set(entity_of.values()))]),
+                           reg.ReviewRecord.source_record_id.is_(None),
+                           reg.ReviewRecord.created_at <= cutoff)
+                    .group_by(reg.ReviewRecord.entity_id))).all():
+                unanchored[str(ent_id)] = int(n_unanchored)
         evidence: Dict[tuple, Any] = {}
         if entity_of:
             conds = []
@@ -297,7 +325,14 @@ async def load_record_facts(
             bucket, basis, reasons = None, "", ""
             if rev is None:
                 stats["no_review"] += 1
-                basis = "no review record at or before the cutoff"
+                basis = NO_ANCHORED_REVIEW
+                n_unanchored = unanchored.get(ent or "", 0)
+                if n_unanchored:
+                    stats["records_with_unanchored_entity_reviews"] += 1
+                    basis += (f"; {n_unanchored} historical review(s) of the linked "
+                              f"entity carry no source-record anchor and were NOT "
+                              f"attached (they cannot be mapped to this delivery's "
+                              f"record), so the record stays unclassified")
             elif rev.classification_bucket in BUCKETS:
                 bucket = rev.classification_bucket
                 stats["classified"] += 1
@@ -423,6 +458,10 @@ async def load_record_facts(
             "review_id are separate and labelled in Evidence Reference.",
             "QHIN Number is the delivered orgManagingOrg value verbatim; its "
             "equivalence to the owner's QHIN Number column is UNVERIFIED.",
+            "Reviews are attached only through review_records.source_record_id. "
+            "Reviews created before that anchor existed, and entity-only reviews, "
+            "carry none: they are not attached, not inferred from a shared entity "
+            "and not rewritten - the record stays unclassified and says so.",
             "Bucket is the persisted classification_bucket only; no analyst "
             "reclassification and no spreadsheet analysis is substituted.",
             "Annotations and comments are caller-supplied inputs from retained "
