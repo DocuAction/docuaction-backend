@@ -37,6 +37,7 @@ import csv
 import hashlib
 import io
 import re
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -60,10 +61,15 @@ PURPOSE_REDIRECT = {
 IDENTITY_REVIEW = "review_id"
 IDENTITY_INTAKE = "intake_id"
 IDENTITY_SOURCE = "source_rce_id"
+#: AGT_Record_ID = rce_source_records.id (the immutable Area-1 source record).
+#: A row naming it MUST also name intake_id: the source record is validated
+#: against that delivery (see `IdentityValidator`). `source_rce_id`, if also
+#: present, is only a CROSS-CHECK and stays a separate identifier.
+IDENTITY_AGT = "agt_record_id"
 #: Content columns this release understands. Anything else is preserved as "unmapped" and ignored.
 CONTENT_COLUMNS = ("analyst_note", "proposed_correction_field", "proposed_correction_value",
                    "assign_to_email", "requested_state")
-KNOWN_COLUMNS = (IDENTITY_REVIEW, IDENTITY_INTAKE, IDENTITY_SOURCE) + CONTENT_COLUMNS
+KNOWN_COLUMNS = (IDENTITY_REVIEW, IDENTITY_INTAKE, IDENTITY_SOURCE, IDENTITY_AGT) + CONTENT_COLUMNS
 
 #: Values a spreadsheet may REQUEST but can never apply.
 WORKFLOW_VALUES = {"released", "release", "approved", "approve", "qa_approved", "b1", "b2", "b3", "b4",
@@ -250,6 +256,11 @@ def _load_xlsx(name: str, data: bytes, sha: str, worksheet: Optional[str]) -> Lo
 #: matching review ids (0, 1 or several). The route supplies a database-backed
 #: implementation; tests supply a dict.
 Resolver = Callable[[Dict[str, str]], Awaitable[List[str]]]
+#: Identity validator contract (AGT mode only): given the identity of ONE row,
+#: return {"problem": str|None, "source_record": {...}|None}. A problem rejects the
+#: row with that exact reason (e.g. the record belongs to another delivery).
+#: With no validator supplied an AGT row is rejected - it is never trusted.
+IdentityValidator = Callable[[Dict[str, str]], Awaitable[Dict[str, Any]]]
 
 
 def idempotency_key(file_sha256: str, purpose: str, mapping_version: str = MAPPING_VERSION) -> str:
@@ -260,9 +271,11 @@ def validate_header(headers: Sequence[str]) -> Dict[str, Any]:
     hs = set(headers)
     has_review = IDENTITY_REVIEW in hs
     has_delivery = IDENTITY_INTAKE in hs and IDENTITY_SOURCE in hs
+    has_agt = IDENTITY_INTAKE in hs and IDENTITY_AGT in hs
     missing: List[str] = []
-    if not (has_review or has_delivery):
-        missing.append(f"{IDENTITY_REVIEW} (or both {IDENTITY_INTAKE} and {IDENTITY_SOURCE})")
+    if not (has_review or has_delivery or has_agt):
+        missing.append(f"{IDENTITY_REVIEW} (or both {IDENTITY_INTAKE} and {IDENTITY_SOURCE}, "
+                       f"or both {IDENTITY_INTAKE} and {IDENTITY_AGT})")
     content = [c for c in CONTENT_COLUMNS if c in hs]
     if not content:
         missing.append("at least one of: " + ", ".join(CONTENT_COLUMNS))
@@ -272,7 +285,7 @@ def validate_header(headers: Sequence[str]) -> Dict[str, Any]:
 
 
 def _row_identity(row: Dict[str, str]) -> Tuple[str, Dict[str, str], Optional[str]]:
-    """(mode, identity, problem). mode ∈ review_id | delivery | none."""
+    """(mode, identity, problem). mode ∈ review_id | agt | delivery | none."""
     rid = (row.get(IDENTITY_REVIEW) or "").strip()
     if rid:
         if not _REVIEW_RE.match(rid):
@@ -280,16 +293,33 @@ def _row_identity(row: Dict[str, str]) -> Tuple[str, Dict[str, str], Optional[st
         return "review_id", {IDENTITY_REVIEW: rid}, None
     intake = (row.get(IDENTITY_INTAKE) or "").strip()
     src = (row.get(IDENTITY_SOURCE) or "").strip()
+    agt = (row.get(IDENTITY_AGT) or "").strip()
+    if agt:
+        if not intake:
+            return "agt", {IDENTITY_AGT: agt}, (
+                f"{IDENTITY_AGT} requires {IDENTITY_INTAKE}: the source record is "
+                f"validated against the delivery it must belong to")
+        for label, val in ((IDENTITY_AGT, agt), (IDENTITY_INTAKE, intake)):
+            try:
+                uuid.UUID(val)
+            except (ValueError, TypeError):
+                return "agt", {IDENTITY_AGT: agt, IDENTITY_INTAKE: intake}, f"{label} {val!r} is not a UUID"
+        ident = {IDENTITY_INTAKE: intake, IDENTITY_AGT: agt}
+        if src:
+            ident[IDENTITY_SOURCE] = src          # cross-check only; kept separate
+        return "agt", ident, None
     if intake and src:
         return "delivery", {IDENTITY_INTAKE: intake, IDENTITY_SOURCE: src}, None
     return "none", {}, "no identity: supply review_id, or both intake_id and source_rce_id"
 
 
-async def preview_rows(rows: Sequence[Dict[str, str]], resolve: Resolver) -> Dict[str, Any]:
+async def preview_rows(rows: Sequence[Dict[str, str]], resolve: Resolver,
+                       validate_identity: Optional[IdentityValidator] = None) -> Dict[str, Any]:
     """One disposition per row; the four dispositions always sum to the rows read."""
     out: List[Dict[str, Any]] = []
     counts = {d: 0 for d in DISPOSITIONS}
     seen_targets: Dict[str, int] = {}
+    seen_agt: Dict[str, int] = {}
     for n, row in enumerate(rows, start=1):
         mode, identity, problem = _row_identity(row)
         item: Dict[str, Any] = {"row": n, "identity_mode": mode, "identity": identity, "matched_review_ids": [],
@@ -300,6 +330,30 @@ async def preview_rows(rows: Sequence[Dict[str, str]], resolve: Resolver) -> Dic
             counts[DISP_REJECTED] += 1
             out.append(item)
             continue
+        if mode == "agt":
+            problem = None
+            if validate_identity is None:
+                problem = (f"{IDENTITY_AGT} cannot be validated here (no source-record "
+                           f"validator supplied); the row is not trusted")
+            else:
+                info = await validate_identity(identity) or {}
+                item["source_record"] = info.get("source_record")
+                problem = info.get("problem")
+            if not problem and identity[IDENTITY_AGT].lower() in seen_agt:
+                item["disposition"] = DISP_NEEDS_REVIEW
+                item["reasons"].append(
+                    f"duplicate {IDENTITY_AGT} (first at row {seen_agt[identity[IDENTITY_AGT].lower()]}); "
+                    f"a repeated record is never applied twice")
+                counts[DISP_NEEDS_REVIEW] += 1
+                out.append(item)
+                continue
+            if problem:
+                item["disposition"] = DISP_REJECTED
+                item["reasons"].append(problem)
+                counts[DISP_REJECTED] += 1
+                out.append(item)
+                continue
+            seen_agt[identity[IDENTITY_AGT].lower()] = n
         matches = list(await resolve(identity))
         item["matched_review_ids"] = matches
         changes = {c: row[c].strip() for c in CONTENT_COLUMNS if (row.get(c) or "").strip()}
@@ -312,7 +366,20 @@ async def preview_rows(rows: Sequence[Dict[str, str]], resolve: Resolver) -> Dic
             item["reasons"].append("assign_to_email is not an email address")
         item["changes"] = changes
         item["requested_workflow_values"] = requested
-        if len(matches) == 0:
+        if len(matches) == 0 and mode == "agt" and item.get("source_record") \
+                and not requested and "assign_to_email" not in changes:
+            # A validated source record with no review case yet (typically HELD or
+            # unpromoted). There is nothing to apply to: any note stays STAGED,
+            # never stored, never a determination or QA action.
+            sr = item["source_record"]
+            item["disposition"] = DISP_UNCHANGED
+            item["reasons"].append(
+                f"source record {sr.get('agt_record_id')} validated against the delivery "
+                f"(curated status {sr.get('curated_status') or 'none'}"
+                f"{', HELD' if sr.get('held') else ''}); it has no review case, so nothing "
+                f"is applied" + ("; the note/correction is STAGED only - comment storage is an "
+                                 "open owner decision" if changes else ""))
+        elif len(matches) == 0:
             item["disposition"] = DISP_REJECTED
             item["reasons"].append("no existing case matches this identity")
         elif len(matches) > 1:
@@ -343,7 +410,8 @@ async def preview_rows(rows: Sequence[Dict[str, str]], resolve: Resolver) -> Dic
 
 
 async def build_preview(filename: str, data: bytes, *, purpose: str, worksheet: Optional[str],
-                        resolve: Resolver, uploaded_by: str) -> Dict[str, Any]:
+                        resolve: Resolver, uploaded_by: str,
+                        validate_identity: Optional[IdentityValidator] = None) -> Dict[str, Any]:
     if purpose not in PURPOSES:
         raise SpreadsheetRefused(f"purpose must be one of {', '.join(PURPOSES)}")
     if purpose != PURPOSE_CASE_UPDATES:
@@ -365,7 +433,7 @@ async def build_preview(filename: str, data: bytes, *, purpose: str, worksheet: 
         result["preview"] = {"rows_read": len(table.rows), "counts": {d: 0 for d in DISPOSITIONS}, "rows": [], "reconciles": True,
                              "blocked": "header validation failed; no row was staged"}
         return result
-    result["preview"] = await preview_rows(table.rows, resolve)
+    result["preview"] = await preview_rows(table.rows, resolve, validate_identity)
     result["apply"] = describe_apply(result["preview"])
     return result
 
