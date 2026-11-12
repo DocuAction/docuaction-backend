@@ -15,9 +15,22 @@ SEMANTICS (M-4, as proposed — the policy rows decide WHICH sources):
       - possible_match (pending candidate)            -> B3 with the specific
         review reason EXCLUSION_POSSIBLE_MATCH_PENDING (defense in depth —
         RULE-008 normally routes it first);
-      - an ANSWERED ADVERSE outcome (not_found, deactivated, excluded) is a
-        FINDING, never relabelled SOURCE_NOT_COMPLETED: it is left to the
-        approved rule conditions and their precedence.
+      - an ANSWERED ADVERSE outcome (ADVERSE_STATES: not_found, excluded,
+        debarred, deactivated) is a FINDING, never relabelled
+        SOURCE_NOT_COMPLETED: it is left to the approved rule conditions and
+        their precedence;
+      - ANY OTHER state FAILS CLOSED (2026-11-11, reviewed as its own change):
+        a state outside the acceptable / incomplete / pending / adverse sets -
+        a new connector status, a typo, a non-string value, a dict without a
+        usable `status` - routes to B3 SOURCE_NOT_COMPLETED_<SOURCE>. Before
+        this, such a state was silently treated as an answered adverse finding
+        and B1/B2 stood, i.e. an UNKNOWN mandatory-source answer passed as if
+        it were a known one. State strings are normalised (strip + lower-case)
+        before comparison, so "Verified" and " CLEAR " are acceptable and
+        "UNAVAILABLE" is incomplete. Every state the code emits today is in
+        one of the four sets (guarded by a test); this only changes behaviour
+        for a state nobody has classified, and only for an applicable
+        mandatory source under an ACTIVE policy row.
   * conditional role: applies only where its applicability facts match
     (e.g. {"requires_npi": true}); a conditional check outside its
     applicability is NOT_APPLICABLE and never blocks.

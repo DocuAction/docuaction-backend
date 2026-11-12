@@ -290,3 +290,80 @@ def test_known_adverse_and_acceptable_states_are_unchanged(raw):
     b, _r, reason, _m = sp.apply_source_policy(
         "B1", "RULE-001", {"sam_gov": raw}, {"has_submitted_npi": True}, [_policy()])
     assert b == "B1" and reason is None
+
+
+# -- review of the fail-closed change (separate review pass, 2026-11-11) ------
+
+#: expected M-4 outcome per supported state for an APPLICABLE mandatory source:
+#: (bucket, reason). B1/B2 only are ever reconsidered.
+_STATE_MATRIX = {
+    "verified": ("B1", None), "clear": ("B1", None),
+    "possible_match": ("B3", "EXCLUSION_POSSIBLE_MATCH_PENDING"),
+    "not_checked": ("B3", "SOURCE_NOT_COMPLETED_SAM_GOV"),
+    "unavailable": ("B3", "SOURCE_NOT_COMPLETED_SAM_GOV"),
+    "failed": ("B3", "SOURCE_NOT_COMPLETED_SAM_GOV"),
+    "not_found": ("B1", None), "excluded": ("B1", None),
+    "debarred": ("B1", None), "deactivated": ("B1", None),
+}
+
+
+@pytest.mark.parametrize("bucket", ["B1", "B2"])
+@pytest.mark.parametrize("state", sorted(_STATE_MATRIX))
+def test_every_supported_state_has_its_documented_outcome(state, bucket):
+    want_bucket, want_reason = _STATE_MATRIX[state]
+    for shape in (state, {"status": state}):          # str and dict forms
+        b, _r, reason, matched = sp.apply_source_policy(
+            bucket, "RULE-X", {"sam_gov": shape}, {"has_submitted_npi": True},
+            [_policy()])
+        assert reason == want_reason
+        assert b == (want_bucket if want_reason else bucket)
+        assert (matched is not None) == (want_reason is not None)
+
+
+def test_every_state_the_code_emits_is_classified_not_unrecognised():
+    """Drift guard: a connector/translator that starts emitting a new state
+    must be classified here deliberately - it would otherwise fail closed."""
+    from app.tefca_registry.rce import arc_pipeline as ap
+    from app.tefca_registry import review_service as rs
+    emitted = (set(ap._DISPOSITION_TO_STATE.values())
+               | {ap.EXCLUSION_CLEAN_SCREEN_STATE, ap.EXCLUSION_POSSIBLE_MATCH_STATE}
+               | set(rs._PERSISTED_PRECEDENCE)        # incl. the manual "excluded"
+               | {rs.VERIFIED, rs.NOT_FOUND, rs.NOT_CHECKED, rs.UNAVAILABLE, rs.FAILED})
+    known = (sp.ACCEPTABLE_STATES | sp.INCOMPLETE_STATES
+             | sp.PENDING_REVIEW_STATES | sp.ADVERSE_STATES)
+    assert emitted <= known, sorted(emitted - known)
+    assert emitted <= set(_STATE_MATRIX)               # and the matrix covers them
+
+
+@pytest.mark.parametrize("bucket", ["B3", "B4"])
+def test_unknown_state_never_touches_b3_b4(bucket):
+    c = _cls(bucket)
+    out, matched = sp.enforce_on_classification(
+        c, {"sam_gov": "mystery"}, {"has_submitted_npi": True}, [_policy()])
+    assert out is c and matched is None
+
+
+def test_adverse_on_one_policy_does_not_hide_an_incomplete_second_policy():
+    pols = [_policy("sam_gov"), _policy("oig_leie")]
+    b, _r, reason, matched = sp.apply_source_policy(
+        "B1", "R", {"sam_gov": "excluded", "oig_leie": "unavailable"},
+        {"has_submitted_npi": True}, pols)
+    assert (b, reason) == ("B3", "SOURCE_NOT_COMPLETED_OIG_LEIE")
+    assert matched["source"] == "oig_leie"
+
+
+def test_no_active_policy_means_unknown_state_changes_nothing():
+    c = _cls("B1")
+    out, matched = sp.enforce_on_classification(
+        c, {"sam_gov": "mystery"}, {"has_submitted_npi": True}, [])
+    assert out is c and matched is None
+
+
+async def test_single_record_path_fails_closed_on_an_unclassified_state(monkeypatch):
+    rs = _wire_run_review(
+        monkeypatch, [_policy()],
+        {"nppes": {"status": "verified"}, "sam_gov": {"status": "Mystery"}})
+    out = await rs.run_review(_FakeDB(), _entity())
+    cl = out["classification"]
+    assert cl["bucket"] == "B3" and cl["rule_code"] == "SOURCE-POLICY-M4"
+    assert "SOURCE_NOT_COMPLETED_SAM_GOV" in cl["rationale"]
