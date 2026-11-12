@@ -53,6 +53,15 @@ PERSISTED CLASSIFICATION ONLY
     non-HELD record without a usable one gets NO bucket and the dataset reports
     itself INCOMPLETE. HELD is reporting-only (counted once in B4 by the dataset).
 
+STORED COMMENTS (rce_record_comments, when the migration has been applied)
+    The CURRENT (not superseded) comment of each kind is read for the record, VERBATIM,
+    with its source file/hash/sheet/column: QA_ORIGINAL -> "QA Comments (verbatim)",
+    QA_IZAAN -> "QA Comments - Izaan (verbatim)", REPORT_CLARIFICATION -> "Report
+    Clarifications". The kinds are never merged. They are commentary only: they feed no
+    bucket, status or basis. If the table does not exist yet the loader says so in
+    `meta.comment_store` and carries no stored comments - it never fails or invents.
+    Comments of another delivery cannot appear (scoped to the intake AND the records).
+
 ANNOTATIONS AND COMMENTS ARE INPUTS, NOT DATABASE FACTS
     `annotations` (supplemental NPI, proposed address, provisional/Q1 notes,
     cause-specific PECOS limitation, report clarifications) and `comments`
@@ -72,7 +81,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, exists, func, or_, select, text
 
 LOADER_VERSION = "1.0.0"
 BATCH_SIZE = 2000
@@ -202,10 +211,21 @@ async def _intake(db, intake_uuid):
     return intake
 
 
+async def _comment_store_exists(db) -> bool:
+    return (await db.execute(
+        text("SELECT to_regclass('public.rce_record_comments')"))).scalar() is not None
+
+
+def _src(c: Any) -> Dict[str, Any]:
+    return {"file": c.source_file_name, "sha256": c.source_file_sha256,
+            "sheet": c.source_sheet, "column": c.source_column}
+
+
 async def load_record_facts(
         db, *, intake_id: Any, evidence_cutoff: Any, run_id: Any = None,
         annotations: Optional[Mapping[str, Mapping[str, Any]]] = None,
         comments: Optional[Mapping[str, Mapping[str, Any]]] = None,
+        include_stored_comments: bool = True,
         batch_size: int = BATCH_SIZE) -> Dict[str, Any]:
     """Return {"facts": [...], "meta": {...}, "assessment_date": "YYYY-MM-DD"}."""
     from app.Tefca.models import TEFCADimensionEvidence as E
@@ -229,6 +249,10 @@ async def load_record_facts(
 
     annotations = dict(annotations or {})
     comments = dict(comments or {})
+    store_applied = bool(include_stored_comments) and await _comment_store_exists(db)
+    if store_applied:
+        from app.tefca_registry.rce.record_comment_models import RceRecordComment as C
+        successor = C.__table__.alias("successor")
     for agt, ann in annotations.items():
         extra = set(ann) - ANNOTATION_KEYS
         if extra:
@@ -240,6 +264,9 @@ async def load_record_facts(
              "classified": 0, "no_review": 0, "review_without_bucket": 0,
              "records_with_multiple_reviews": 0, "evidence_rows_used": 0,
              "records_with_unanchored_entity_reviews": 0,
+             "stored_comments": {"QA_ORIGINAL": 0, "QA_IZAAN": 0, "REPORT_CLARIFICATION": 0},
+             "records_with_multiple_current_comments_of_one_kind": 0,
+             "caller_comments_overriding_stored": 0,
              "with_supplemental_npi": 0}
     last_line = -1
     while True:
@@ -274,6 +301,17 @@ async def load_record_facts(
             .group_by(reg.ReviewRecord.source_record_id)
             .having(func.count() > 1))).all())
 
+        stored_comments: Dict[Any, Dict[str, Any]] = {}
+        if store_applied:
+            for row in (await db.execute(
+                    select(C).where(C.source_intake_id == intake_uuid,
+                                    C.source_record_id.in_(ids),
+                                    ~exists().where(successor.c.supersedes_comment_id == C.id))
+                    .order_by(C.imported_at, C.id))).scalars().all():
+                slot = stored_comments.setdefault(row.source_record_id, {})
+                if row.comment_kind in slot:
+                    stats["records_with_multiple_current_comments_of_one_kind"] += 1
+                slot[row.comment_kind] = row          # newest current wins; counted above
         entity_of = {sid: str(c.canonical_entity_id) for sid, c in curated.items()
                      if c.canonical_entity_id is not None}
         # Historical / entity-level reviews that name the linked entity but NO
@@ -415,12 +453,30 @@ async def load_record_facts(
                     f"cutoff={cutoff.isoformat()}"]),
             }
             fact.update(_entity_type_link(nppes_row, submitted))
+            held_comments = stored_comments.get(rec.id) or {}
+            for kind, text_key, src_key in (
+                    ("QA_ORIGINAL", "qa_comments", "qa_comments_source"),
+                    ("QA_IZAAN", "qa_comments_izaan", "qa_comments_izaan_source"),
+                    ("REPORT_CLARIFICATION", "report_clarifications", None)):
+                row = held_comments.get(kind)
+                if row is None:
+                    continue
+                stats["stored_comments"][kind] += 1
+                if text_key == "report_clarifications" and fact.get("report_clarifications"):
+                    continue                           # an explicit annotation wins
+                fact[text_key] = row.comment_text      # VERBATIM
+                if src_key:
+                    fact[src_key] = _src(row)
             orig = cm.get("original") or {}
             izaan = cm.get("izaan") or {}
             if orig.get("text"):
+                if "qa_comments" in fact:
+                    stats["caller_comments_overriding_stored"] += 1
                 fact["qa_comments"] = orig["text"]
                 fact["qa_comments_source"] = orig.get("source")
             if izaan.get("text"):
+                if "qa_comments_izaan" in fact:
+                    stats["caller_comments_overriding_stored"] += 1
                 fact["qa_comments_izaan"] = izaan["text"]
                 fact["qa_comments_izaan_source"] = izaan.get("source")
             if agt in seen:                                   # cannot happen
@@ -450,6 +506,8 @@ async def load_record_facts(
         "assessment_date": assessment.value.isoformat(),
         "assessment_date_source": assessment.source,
         "evidence_cutoff": cutoff.isoformat(),
+        "comment_store": ("applied" if store_applied else
+                          "not_applied" if include_stored_comments else "not_requested"),
         "stats": stats,
         "rejected_annotation_ids": rejected_annotations,
         "rejected_comment_ids": rejected_comments,
@@ -464,8 +522,9 @@ async def load_record_facts(
             "and not rewritten - the record stays unclassified and says so.",
             "Bucket is the persisted classification_bucket only; no analyst "
             "reclassification and no spreadsheet analysis is substituted.",
-            "Annotations and comments are caller-supplied inputs from retained "
-            "files; the comment store is an open owner decision.",
+            "Stored comments (rce_record_comments) are read verbatim by kind when the "
+            "store exists; caller-supplied annotations/comments are inputs from retained "
+            "files. Comments are commentary only and decide nothing.",
             "No persisted USPS validation exists; USPS reads Not checked-unavailable."],
     }
     return {"facts": facts, "meta": meta,

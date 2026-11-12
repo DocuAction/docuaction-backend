@@ -249,8 +249,8 @@ async def test_runner_refusal_is_a_controlled_failure_that_registers_nothing(rol
 
 
 async def test_unattributed_comment_text_can_never_reach_an_artifact(rolled_back_db, monkeypatch):
-    """The export path supplies no comment text at all (comment storage is an open
-    owner decision): both comment columns are empty in every row."""
+    """When NO comment is stored for the delivery, both comment columns are empty in
+    every row: the export never fabricates or borrows comment text."""
     db = rolled_back_db
     intake_id, _, _ = await _seed(db, arc="9.99.777.69")
     rec = _Recorder()
@@ -288,3 +288,33 @@ async def test_scheduler_dispatches_record_review_jobs_to_their_own_runner(monke
         seen.clear()
         await export_scheduler._poll_tick()
         assert seen == [want], (kind, seen)
+
+
+async def test_stored_comments_reach_the_registered_artifact_in_separate_verbatim_columns(
+        rolled_back_db, monkeypatch):
+    from app.tefca_registry.rce import record_comments as rcm
+    db = rolled_back_db
+    intake_id, run, recs = await _seed(db, arc="9.99.777.70")
+    src = {"file_name": "c.xlsx", "file_sha256": "ab" * 32, "sheet": "S", "column": "QA Comments", "row": 2}
+
+    def e(rec, kind, body, **o):
+        d = {"source_record_id": str(rec.id), "comment_kind": kind, "comment_text": body, "source": src,
+             "expected": {"source_line": rec.line_number, "hcid": rec.hcid, "tefca_id": rec.tefcaid}}
+        d.update(o)
+        return d
+    orig_text, izaan_text = "  original,  with \"quotes\"\nand a newline ", "izaan wording"
+    await rcm.import_comments(db, intake_id=intake_id, actor="q@x.invalid", entries=[
+        e(recs[1], "QA_ORIGINAL", orig_text),
+        e(recs[1], "QA_IZAAN", izaan_text, author_attribution="Izaan", attribution_basis="owner designation"),
+        e(recs[2], "QA_ORIGINAL", "held record comment")])        # recs[2] is HELD in this fixture
+    rec = _Recorder()
+    _, _, state = await _queue_and_run(db, monkeypatch, intake_id, "csv", rec)
+    assert state == ReportExportJob.STATE_SUCCEEDED
+    rows = list(csv.reader(io.StringIO(rec.calls[0]["content"].decode("utf-8-sig"))))[2:]
+    o = ds_mod.RECORD_COLUMNS.index(ds_mod.ORIGINAL_COMMENTS_COLUMN)
+    i = ds_mod.RECORD_COLUMNS.index(ds_mod.IZAAN_COMMENTS_COLUMN)
+    b = ds_mod.RECORD_COLUMNS.index("Bucket")
+    by = {r[1]: r for r in rows}
+    assert by[str(recs[1].id)][o] == orig_text and by[str(recs[1].id)][i] == izaan_text
+    assert by[str(recs[2].id)][o] == "held record comment" and by[str(recs[2].id)][b] == "B4"
+    assert by[str(recs[3].id)][o] == "" == by[str(recs[3].id)][i]

@@ -10,7 +10,7 @@ from __future__ import annotations
 import csv
 import io
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -557,3 +557,125 @@ async def test_analyst_reclassification_is_never_a_persisted_classification(roll
     assert facts[1]["bucket"] == "B3"        # the classifier's decision, not the analyst's B1
     assert facts[2]["bucket"] is None        # reclassified_to alone gives no bucket
     assert "carries no classification" in facts[2]["bucket_basis"]
+
+
+# ── 14. stored comments (rce_record_comments) flow into the three separate columns ──
+
+from app.tefca_registry.rce import record_comments as _rc      # noqa: E402
+
+_CSHA = "ef" * 32
+
+
+def _centry(rec, kind="QA_ORIGINAL", body="c", **over):
+    e = {"source_record_id": str(rec.id), "comment_kind": kind, "comment_text": body,
+         "expected": {"source_line": rec.line_number, "hcid": rec.hcid, "tefca_id": rec.tefcaid},
+         "source": {"file_name": "comments.xlsx", "file_sha256": _CSHA, "sheet": "S",
+                    "column": "QA Comments", "row": rec.line_number}}
+    if kind == "QA_IZAAN":
+        e["author_attribution"] = "Izaan"
+        e["attribution_basis"] = "owner designation of the source file"
+    e.update(over)
+    return e
+
+
+async def test_stored_comments_reach_the_three_separate_columns_verbatim_and_decide_nothing(rolled_back_db):
+    db = rolled_back_db
+    intake_id, _ = await seed_intake(db, make_rows(3, arc="9.99.779.50"), with_job=False)
+    await _run(db, intake_id)
+    recs = await _records(db, intake_id)
+    await _curate(db, intake_id, recs[2], "HELD", reason="blocker")           # HELD, unpromoted
+    orig = "  Original \r\nwording,  \"quoted\" — é =x  "
+    izaan = "Izaan wording\twith tab "
+    clar = "Generated clarification  text"
+    out = await _rc.import_comments(db, intake_id=intake_id, actor="qalead@x.invalid", entries=[
+        _centry(recs[1], "QA_ORIGINAL", orig), _centry(recs[1], "QA_IZAAN", izaan),
+        _centry(recs[1], "REPORT_CLARIFICATION", clar), _centry(recs[2], "QA_ORIGINAL", "held rec comment")])
+    assert out["counts"]["inserted"] == 4
+    loaded = await _load(db, intake_id)
+    assert loaded["meta"]["comment_store"] == "applied"
+    assert loaded["meta"]["stats"]["stored_comments"] == {
+        "QA_ORIGINAL": 2, "QA_IZAAN": 1, "REPORT_CLARIFICATION": 1}
+    dataset = await ld.load_dataset(db, intake_id=intake_id, evidence_cutoff=_cutoff_now(), report_id="R")
+    by = {r[0]: r for r in dataset["sheets"]["Records"]["rows"]}
+    r1, r2, r3 = (by[str(recs[i].line_number)] for i in (1, 2, 3))
+    assert _col(r1, ds_mod.ORIGINAL_COMMENTS_COLUMN) == orig                  # verbatim, not stripped
+    assert _col(r1, ds_mod.IZAAN_COMMENTS_COLUMN) == izaan
+    assert _col(r1, "Report Clarifications") == clar
+    assert orig not in _col(r1, ds_mod.IZAAN_COMMENTS_COLUMN)                  # kinds never merged
+    assert _col(r2, ds_mod.ORIGINAL_COMMENTS_COLUMN) == "held rec comment"      # HELD takes a comment
+    assert _col(r2, "Bucket") == "B4" and _col(r2, "Status") == "HELD"          # ... and stays HELD in B4
+    assert _col(r3, ds_mod.ORIGINAL_COMMENTS_COLUMN) == "" == _col(r3, ds_mod.IZAAN_COMMENTS_COLUMN)
+    assert _col(r1, "Bucket") == ds_mod.NOT_CLASSIFIED                         # a comment is not a classification
+    cs = dataset["summary"]["comment_sources"]
+    assert cs["izaan"] and "comments.xlsx" in cs["izaan"][0] and _CSHA in cs["izaan"][0]
+
+
+def _cutoff_now():
+    return datetime.utcnow() + timedelta(days=1)
+
+
+async def test_only_the_current_version_is_reported_and_other_deliveries_never_leak(rolled_back_db):
+    db = rolled_back_db
+    rows = make_rows(1, arc="9.99.779.51")
+    a_id, _ = await seed_intake(db, rows, with_job=False)
+    b_id, _ = await seed_intake(db, rows, with_job=False)               # same business ids
+    await _run(db, a_id)
+    ra, rb = await _records(db, a_id), await _records(db, b_id)
+    await _rc.import_comments(db, intake_id=a_id, actor="q@x.invalid",
+                              entries=[_centry(ra[1], "QA_ORIGINAL", "v1")])
+    await _rc.import_comments(db, intake_id=a_id, actor="q@x.invalid",
+                              entries=[_centry(ra[1], "QA_ORIGINAL", "v2", amend=True)])
+    await _rc.import_comments(db, intake_id=b_id, actor="q@x.invalid",
+                              entries=[_centry(rb[1], "QA_ORIGINAL", "other delivery")])
+    out_a = await _load(db, a_id)
+    fa = _by_line(out_a)[1]
+    assert fa["qa_comments"] == "v2" and fa["qa_comments_source"]["file"] == "comments.xlsx"
+    assert "other delivery" not in str(fa)
+    # the superseded v1 is history, not a second CURRENT comment
+    assert out_a["meta"]["stats"]["records_with_multiple_current_comments_of_one_kind"] == 0
+    assert out_a["meta"]["stats"]["stored_comments"]["QA_ORIGINAL"] == 1
+
+
+async def test_a_missing_comment_store_is_reported_not_fatal(rolled_back_db, monkeypatch):
+    db = rolled_back_db
+    intake_id, _ = await seed_intake(db, make_rows(1, arc="9.99.779.52"), with_job=False)
+    await _run(db, intake_id)
+
+    async def absent(_db):
+        return False
+
+    monkeypatch.setattr(ld, "_comment_store_exists", absent)
+    out = await _load(db, intake_id)
+    assert out["meta"]["comment_store"] == "not_applied"
+    assert "qa_comments" not in out["facts"][0] and "qa_comments_izaan" not in out["facts"][0]
+    off = await ld.load_record_facts(db, intake_id=intake_id, evidence_cutoff=_cutoff_now(),
+                                     include_stored_comments=False)
+    assert off["meta"]["comment_store"] == "not_requested"
+
+
+async def test_caller_supplied_comments_override_stored_ones_and_are_counted(rolled_back_db):
+    db = rolled_back_db
+    intake_id, _ = await seed_intake(db, make_rows(1, arc="9.99.779.53"), with_job=False)
+    await _run(db, intake_id)
+    rec = (await _records(db, intake_id))[1]
+    await _rc.import_comments(db, intake_id=intake_id, actor="q@x.invalid",
+                              entries=[_centry(rec, "QA_ORIGINAL", "stored")])
+    out = await _load(db, intake_id, comments={str(rec.id): {"original": {"text": "supplied",
+                                                                            "source": "file; sha"}}})
+    assert out["facts"][0]["qa_comments"] == "supplied"
+    assert out["meta"]["stats"]["caller_comments_overriding_stored"] == 1
+
+
+async def test_an_explicit_annotation_wins_over_a_stored_clarification(rolled_back_db):
+    db = rolled_back_db
+    intake_id, _ = await seed_intake(db, make_rows(2, arc="9.99.779.54"), with_job=False)
+    await _run(db, intake_id)
+    recs = await _records(db, intake_id)
+    await _rc.import_comments(db, intake_id=intake_id, actor="q@x.invalid", entries=[
+        _centry(recs[1], "REPORT_CLARIFICATION", "stored clarification 1"),
+        _centry(recs[2], "REPORT_CLARIFICATION", "stored clarification 2")])
+    out = await _load(db, intake_id, annotations={
+        str(recs[1].id): {"report_clarifications": "explicit annotation"}})
+    f = _by_line(out)
+    assert f[1]["report_clarifications"] == "explicit annotation"       # the explicit input wins
+    assert f[2]["report_clarifications"] == "stored clarification 2"    # otherwise the stored one
