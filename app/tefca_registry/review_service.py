@@ -550,21 +550,32 @@ async def _treatment_field_signals(db, entity) -> dict:
     when non-blank), and never the identifier table (which deliberately
     omits malformed and delivery-shared NPIs, so a missing identifier row is
     NOT a submitted-blank fact). The assessment date is the UTC date,
-    matching the codebase's run rows and D-12 gates. Signals stay inert
-    until their consuming rule component is activated.
+    matching the codebase's run rows and D-12 gates (that is the labelled
+    FALLBACK only: when the source record's intake has a completed run, the
+    assessment date is that run's recorded date - see
+    rce/assessment_context.py). Signals stay inert until their consuming rule
+    component is activated.
 
     A promoted entity with no readable source record is a refusal, never a
     silent clean classification: this raises, and run_review fails loudly —
     classification inputs are never silently dropped."""
-    from datetime import datetime as _dt, timezone as _tz
+    signals, _assessment = await _treatment_signals_and_assessment(db, entity)
+    return signals
+
+
+async def _treatment_signals_and_assessment(db, entity):
+    """(signals, assessment_as_of dict or None). The date is validated against
+    the source record's OWN intake, so a review of an October record is
+    assessed as of the October run's date, never an unrelated run's."""
     from app.tefca_registry.rce import models as rce_m
     from app.tefca_registry.rce import npi_applicability as _npa
+    from app.tefca_registry.rce.assessment_context import resolve_assessment_date
     from app.tefca_registry.rce.quality_rules import BR_NPI_TRTMNT_EFFECTIVE
     if entity.source_record_id is None:
         # Entities that predate RCE deliveries carry no delivered purposes at
         # all: there is no Treatment-lane evidence to produce, which is a
         # fact, not a dropped input.
-        return {}
+        return {}, None
     row = await db.get(rce_m.RceSourceRecord, entity.source_record_id)
     if row is None:
         raise RuntimeError(
@@ -572,9 +583,10 @@ async def _treatment_field_signals(db, entity) -> dict:
             f"{entity.source_record_id}, which does not exist — refusing to "
             f"classify without its delivered values (a wrong bucket is worse "
             f"than a failed review).")
-    return _npa.treatment_signals_from_parsed(
-        row.parsed, assessment_date=_dt.now(_tz.utc).date(),
-        requirement_effective=BR_NPI_TRTMNT_EFFECTIVE)
+    assessment = await resolve_assessment_date(db, row.source_intake_id)
+    return (_npa.treatment_signals_from_parsed(
+        row.parsed, assessment_date=assessment.value,
+        requirement_effective=BR_NPI_TRTMNT_EFFECTIVE), assessment.as_dict())
 
 
 def _derived_fields(sources: Dict[str, dict], npi_flagged: bool) -> dict:
@@ -848,7 +860,10 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
     # these are classification INPUTS, and the codebase's norm is a refusal,
     # never a wrong bucket — a producer failure must fail the review loudly
     # rather than silently classify without a B4-eligible condition.
-    results["fields"].update(await _treatment_field_signals(db, entity))
+    _signals, _assessment = await _treatment_signals_and_assessment(db, entity)
+    results["fields"].update(_signals)
+    if _assessment is not None:
+        results["assessment_as_of"] = _assessment
     # Policy status beside the sources (2026-10-04). Not read by the
     # classifier (`classify_with_db` reads sources/fields only).
     from app.Tefca import source_policy as _source_policy

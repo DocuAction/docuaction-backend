@@ -753,6 +753,7 @@ async def verify_and_classify(
     intake_id=None,
     actor: str = "SYSTEM",
     persist_evidence: bool = True,
+    assessment_run_id=None,
 ) -> Dict[str, Any]:
     """Run D1-D6 → B1-B4 → tier routing for a list of entity references.
 
@@ -769,6 +770,15 @@ async def verify_and_classify(
     from app.tefca_registry.bucket_classifier import BucketClassifier
 
     rules = await _rule_set(db)
+
+    # The Treatment assessment date comes from THIS delivery's own run
+    # (assessment_metadata, D-12), validated against the intake - never the
+    # wall clock and never an unrelated run. Resolved once per call, before
+    # any write. No intake / no completed run falls back to today's UTC date
+    # and the fallback is labelled in `assessment_as_of` below.
+    from app.tefca_registry.rce.assessment_context import resolve_assessment_date
+    _assessment = await resolve_assessment_date(
+        db, intake_id, run_id=assessment_run_id)
 
     # Release-prerequisite controls (2026-11-08), BEFORE any classification
     # write: mark this transaction in-flight + refuse while the transition
@@ -877,8 +887,9 @@ async def verify_and_classify(
             # component is explicitly activated — merging/deploying this code
             # changes no classification by itself. The assessment date is the
             # UTC date (the codebase's run rows and D-12 gates are UTC-based;
-            # a server-local date diverges near midnight).
-            from datetime import datetime as _dt, timezone as _tz
+            # a server-local date diverges near midnight). SUPERSEDED for
+            # delivery runs: `_assessment` (above) is the intake's own run
+            # date; UTC today is only the labelled fallback.
             from app.Tefca import rce_fields as _rce_fields
             from app.tefca_registry.rce import npi_applicability as _npa
             from app.tefca_registry.rce.quality_rules import BR_NPI_TRTMNT_EFFECTIVE
@@ -889,7 +900,7 @@ async def verify_and_classify(
                     _rce_fields.rce_value(entity, "active"),
                     _rce_fields.rce_value(entity, "sequoiaorgtype"),
                     _rce_fields.rce_value(entity, "organizationNodeType"),
-                    assessment_date=_dt.now(_tz.utc).date(),
+                    assessment_date=_assessment.value,
                     requirement_effective=BR_NPI_TRTMNT_EFFECTIVE))
             # D-02 PROPOSED bulk-path producer (default OFF): structural NPI
             # signal computed from the SUBMITTED value. Never overwrites a
@@ -1025,6 +1036,10 @@ async def verify_and_classify(
                     "data_quality_flags": evidence.get("data_quality_flags", []),
                     "generation_timestamp": evidence.get("generated_at"),
                     "resolution_source": entity.get("_resolution_source"),
+                    # Which date the date-gated Treatment signals were
+                    # assessed as of, and which run supplied it (or that it
+                    # is the labelled UTC-today fallback).
+                    "assessment_as_of": _assessment.as_dict(),
                     # Official (POLICY_UNAPPROVED / freshness UNKNOWN) and
                     # inactive proposed policy views for the sources used,
                     # against the same pinned timestamps. Beside the
