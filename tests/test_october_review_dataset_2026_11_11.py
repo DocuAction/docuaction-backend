@@ -278,3 +278,14 @@ def test_excel_csv_and_html_reconcile_cell_for_cell_including_incomplete_banner(
         assert r[1] in page
     # the three renderings agree on counts
     assert len(lines[2:]) == len(got) == len(want) == 4
+
+
+def test_findings_not_included_is_stated_never_shown_as_zero():
+    ds = d.build_dataset(_facts(), report_id="R", findings_count=None)
+    assert ds["summary"]["field_findings"] is None
+    rows = dict(ds["sheets"]["Summary"]["rows"])
+    assert rows["Field findings (separate; not in bucket totals)"] == d.FINDINGS_NOT_INCLUDED
+    first = d.to_csv(ds).decode("utf-8-sig").splitlines()[0]
+    assert "not included in this export" in first and "counted separately: 0" not in first
+    zero = d.build_dataset(_facts(), report_id="R", findings_count=0)
+    assert zero["summary"]["field_findings"] == 0      # a real zero is still a zero

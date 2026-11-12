@@ -55,6 +55,7 @@ NOT_CLASSIFIED = "NOT CLASSIFIED"
 NOT_AT_RECORD_GRAIN = ("Not established at record grain; see the separate "
                        "field-findings report")
 NOT_ESTABLISHED = "Not established from retained evidence."
+FINDINGS_NOT_INCLUDED = "Not included in this export (separate report)"
 IZAAN_COMMENTS_COLUMN = "QA Comments - Izaan (verbatim)"
 ORIGINAL_COMMENTS_COLUMN = "QA Comments (verbatim)"
 DRAFT_BANNER = ("CURRENT REVIEW / DRAFT / NOT FINAL - INDEPENDENT QA PENDING. "
@@ -178,10 +179,12 @@ def build_record_row(fact: Dict[str, Any]) -> List[str]:
 
 
 def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
-                  findings_count: int = 0, assessment_date: str = "",
+                  findings_count: Optional[int] = 0, assessment_date: str = "",
                   classification: str = "DRAFT",
                   load_meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    if int(findings_count) < 0:
+    # None = the separate field-findings report is NOT part of this export; it
+    # is then stated as such, never shown as a misleading 0.
+    if findings_count is not None and int(findings_count) < 0:
         raise DatasetRefused("findings_count cannot be negative")
     facts = list(facts)
     ids = [_s(f.get("agt_record_id")) for f in facts]
@@ -223,7 +226,8 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
                 comment_sources[kind].append(lab)
     summary = {
         "unique_records": len(rows), "buckets": counts,
-        "held_inside_b4": held, "held_without_recorded_reason": held_no_reason, "field_findings": int(findings_count),
+        "held_inside_b4": held, "held_without_recorded_reason": held_no_reason,
+        "field_findings": None if findings_count is None else int(findings_count),
         "findings_counted_in_buckets": False,
         "assessment_date": assessment_date,
         "complete": not incomplete,
@@ -238,7 +242,8 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
                         "no bucket assigned)", str(len(unclassified))],
                        ["Dataset complete", "No" if incomplete else "Yes"],
                        ["Field findings (separate; not in bucket totals)",
-                        str(int(findings_count))],
+                        FINDINGS_NOT_INCLUDED if findings_count is None
+                        else str(int(findings_count))],
                        ["Assessment date (D-12)", assessment_date]])
     sheets: Dict[str, Any] = {
         "Summary": {"columns": ["Measure", "Value"], "rows": summary_rows,
@@ -275,7 +280,9 @@ def to_csv(dataset: Dict[str, Any]) -> bytes:
         f"{b} {dataset['summary']['buckets'][b]}" for b in BUCKETS)
         + f" = {dataset['summary']['unique_records']} "
         f"({dataset['summary']['held_inside_b4']} HELD inside B4). "
-        f"Field findings counted separately: {dataset['summary']['field_findings']}. "
+        "Field findings counted separately: "
+        + (FINDINGS_NOT_INCLUDED.lower() if dataset['summary']['field_findings'] is None
+           else str(dataset['summary']['field_findings'])) + ". "
         "Skip this first line on import."])
     rec = dataset["sheets"]["Records"]
     w.writerow(rec["columns"])
