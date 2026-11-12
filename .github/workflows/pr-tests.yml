@@ -199,6 +199,7 @@ jobs:
             tests/test_october_review_export_db_2026_11_12.py \
             tests/test_case_update_import_agt_2026_11_12.py \
             tests/test_review_lineage_writers_db_2026_11_12.py \
+            tests/test_record_comments_db_2026_11_12.py \
             -v --tb=short -rs --junitxml=isolation-results.xml
       - name: Fail if any isolation test was skipped for want of a database
         run: |
