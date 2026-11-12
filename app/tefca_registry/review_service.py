@@ -563,20 +563,30 @@ async def _treatment_field_signals(db, entity) -> dict:
     return signals
 
 
-async def _treatment_signals_and_assessment(db, entity):
+async def _treatment_signals_and_assessment(db, entity, selected=None):
     """(signals, assessment_as_of dict or None). The date is validated against
     the source record's OWN intake, so a review of an October record is
-    assessed as of the October run's date, never an unrelated run's."""
+    assessed as of the October run's date, never an unrelated run's.
+
+    `selected` is the VALIDATED record an explicit record review is about. When
+    given it is the ONLY source of the delivered Treatment fields and of the
+    intake/run that pins the date - `entity.source_record_id` (whichever record
+    first created a shared entity) is not consulted, so reviewing delivery B's
+    record is never classified on delivery A's purposes, NPI or assessment date.
+    Without it (entity-only reviews) behaviour is unchanged."""
     from app.tefca_registry.rce import models as rce_m
     from app.tefca_registry.rce import npi_applicability as _npa
     from app.tefca_registry.rce.assessment_context import resolve_assessment_date
     from app.tefca_registry.rce.quality_rules import BR_NPI_TRTMNT_EFFECTIVE
-    if entity.source_record_id is None:
+    if selected is not None:
+        row = selected
+    elif entity.source_record_id is None:
         # Entities that predate RCE deliveries carry no delivered purposes at
         # all: there is no Treatment-lane evidence to produce, which is a
         # fact, not a dropped input.
         return {}, None
-    row = await db.get(rce_m.RceSourceRecord, entity.source_record_id)
+    else:
+        row = await db.get(rce_m.RceSourceRecord, entity.source_record_id)
     if row is None:
         raise RuntimeError(
             f"entity {entity.id} names source record "
@@ -781,7 +791,8 @@ async def _compare_addresses(entity, sources: Dict[str, dict]) -> dict:
 
 
 async def _validated_source_record(db, entity, source_record_id):
-    """The delivered record a single-entity review is ABOUT, or None.
+    """The delivered RECORD (an RceSourceRecord row) a single-entity review is
+    ABOUT, or None.
 
     Only an EXPLICIT id from a caller that knows the delivery context is used,
     and only after it is confirmed to be linked to THIS entity through its
@@ -810,7 +821,10 @@ async def _validated_source_record(db, entity, source_record_id):
         raise ValueError(
             f"source record {sid} is not linked to entity {entity.id}; refusing "
             f"to attach this review to another delivery's record")
-    return sid
+    record = await db.get(rce_m.RceSourceRecord, sid)
+    if record is None:                       # the curated row names a record that is gone
+        raise ValueError(f"source record {sid} does not exist")
+    return record
 
 
 async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
@@ -826,7 +840,8 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
     from sqlalchemy import select
     from app.tefca_registry.review_routes import generate_review_id
 
-    source_record_id = await _validated_source_record(db, entity, source_record_id)
+    selected = await _validated_source_record(db, entity, source_record_id)
+    source_record_id = selected.id if selected is not None else None
 
     await ensure_seed_rules(db)
     # v2 wires SAM.gov into classification. Every SAM condition fires only
@@ -886,7 +901,17 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
             reg.TefcaEntityIdentifier.entity_id == entity.id,
             reg.TefcaEntityIdentifier.identifier_type == "npi").limit(1))
     ).scalar_one_or_none()
-    npi_flagged = bool(npi) and not validate_npi(npi)[0]
+    # The NPI behind the applicability fact and NPI validation. For an explicit
+    # record review this is the SELECTED record's delivered NPI (blank stays
+    # blank): the entity's registered identifier belongs to the entity and may
+    # differ between deliveries (or be omitted as malformed/shared).
+    if selected is not None:
+        _delivered = (selected.parsed or {}).get("NPI") \
+            if "NPI" in (selected.parsed or {}) else selected.npi
+        record_npi = (str(_delivered).strip() if _delivered is not None else "") or None
+    else:
+        record_npi = npi
+    npi_flagged = bool(record_npi) and not validate_npi(record_npi)[0]
 
     results = {"sources": sources, "fields": _derived_fields(sources, npi_flagged),
                "confidence_score": None,
@@ -901,10 +926,21 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
     # these are classification INPUTS, and the codebase's norm is a refusal,
     # never a wrong bucket — a producer failure must fail the review loudly
     # rather than silently classify without a B4-eligible condition.
-    _signals, _assessment = await _treatment_signals_and_assessment(db, entity)
+    _signals, _assessment = await _treatment_signals_and_assessment(db, entity, selected)
     results["fields"].update(_signals)
     if _assessment is not None:
         results["assessment_as_of"] = _assessment
+    if selected is not None:
+        # Provenance of the record-specific inputs. The source PROBES above are
+        # still keyed by the entity's registered identifier (not this record's
+        # delivered NPI) - stated, not hidden.
+        results["record_context"] = {
+            "source_record_id": str(selected.id),
+            "source_intake_id": str(selected.source_intake_id),
+            "source_line": selected.line_number,
+            "treatment_fields_from": "selected record's delivered values",
+            "submitted_npi_basis": "selected record's delivered NPI",
+            "source_probes_keyed_by": "entity registered identifier"}
     # Policy status beside the sources (2026-10-04). Not read by the
     # classifier (`classify_with_db` reads sources/fields only).
     from app.Tefca import source_policy as _source_policy
@@ -953,7 +989,7 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
     _active_policies = await _rce_source_policy.load_active_policies(db)
     classification, _matched_policy = (
         _rce_source_policy.enforce_on_classification(
-            classification, sources, {"has_submitted_npi": bool(npi)},
+            classification, sources, {"has_submitted_npi": bool(record_npi)},
             _active_policies))
 
     # The rule set and version path are unchanged; only the rationale text

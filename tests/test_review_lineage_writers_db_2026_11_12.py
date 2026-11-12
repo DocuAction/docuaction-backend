@@ -370,3 +370,183 @@ async def test_single_record_writer_refuses_a_record_that_is_not_the_entitys_and
     with pytest.raises(ValueError, match="no curated record"):
         await rs.run_review(db, ent1, source_record_id=uuid.uuid4())
     assert await count() == n0                  # refused BEFORE any write
+
+
+# ── explicit record review: the SELECTED record supplies its own context ─────
+#
+# Two deliveries promote ONE entity. The entity's `source_record_id` column names
+# delivery A's record (whichever created it). Reviewing delivery B's record must
+# be classified on B's purposes, submitted NPI and pinned assessment date - never
+# on A's - and the stored review must say so.
+
+def _onc_rules():
+    from app.tefca_registry.rule_configuration import compose
+    return [{**r, "version": 99} for r in compose({"treatment_b4_onc_scope"})]
+
+
+def _use_onc_rule_set(monkeypatch):
+    """The REAL BucketClassifier over the REAL composed ONC-scope rule set (no
+    activation is written; the rule set is passed in instead of read from DB)."""
+    from app.tefca_registry.bucket_classifier import BucketClassifier
+    rules = _onc_rules()
+
+    async def classify(_session, results):
+        return BucketClassifier(rules=rules).classify(results)
+
+    async def load_rules(_session):
+        return rules
+
+    monkeypatch.setattr(rs._classifier, "classify_with_db", classify)
+    monkeypatch.setattr(rs._classifier, "load_rules", load_rules)
+
+
+async def _deliveries_sharing_one_entity(db, arc, specs):
+    """specs: [(name, row_overrides, assessment_date)] - one delivery each, ONE
+    shared entity. Returns (entity_row, {name: {"intake","record","run"}})."""
+    base = make_rows(1, arc=arc)[0]
+    ent = await _entity(db, "ctx")
+    out = {}
+    for name, over, date_str in specs:
+        row = {**base, **over}
+        intake_id, _ = await seed_intake(db, [row], with_job=False)
+        run = m.RceIngestionRun(
+            id=uuid.uuid4(), source_intake_id=intake_id, rule_set_version="test",
+            rule_config_hash="0" * 64, started_at=T_RUN_START, completed_at=T_RUN_DONE,
+            run_status="COMPLETE",
+            assessment_metadata={"assessment_date": date_str, "source": "pinned_param"})
+        db.add(run)
+        await db.flush()
+        rec = (await _records(db, intake_id))[1]
+        await _curate(db, intake_id, rec, ent)
+        out[name] = {"intake": intake_id, "record": rec, "run": run}
+    ent_row = await db.get(reg.TefcaRegEntity, ent)
+    first = next(iter(out.values()))
+    ent_row.source_record_id = first["record"].id          # the entity column names the FIRST delivery
+    await db.flush()
+    return ent_row, out
+
+
+async def _stored(db, review_id):
+    return (await db.execute(select(reg.ReviewRecord).where(
+        reg.ReviewRecord.review_id == review_id))).scalars().one()
+
+
+def _signal(vr):
+    return (vr["fields"].get("treatment_onc_scope_missing_npi") or {}).get("status")
+
+
+async def test_explicit_record_review_uses_the_selected_records_signals_date_and_classification(
+        rolled_back_db, monkeypatch):
+    db = rolled_back_db
+    _patch_single_edges(monkeypatch)
+    _use_onc_rule_set(monkeypatch)
+    ent, d = await _deliveries_sharing_one_entity(db, "9.99.777.98", [
+        # A: sole T-TRTMNT, Active, Participant, BLANK submitted NPI, pinned 2026-11-08
+        ("A", {"purposesofuse": "T-TRTMNT", "NPI": ""}, "2026-11-08"),
+        # B: combined purposes AND a submitted NPI, pinned a different date
+        ("B", {"purposesofuse": "T-PH-ECR,T-TRTMNT", "NPI": "1234567893"}, "2026-12-15"),
+    ])
+    assert ent.source_record_id == d["A"]["record"].id          # the trap: entity column -> A
+
+    # classify B FIRST, then A: B must not be read as A's record (nor A as B's)
+    res_b = await rs.run_review(db, ent, source_record_id=d["B"]["record"].id)
+    res_a = await rs.run_review(db, ent, source_record_id=d["A"]["record"].id)
+
+    vr_b = (await _stored(db, res_b["review_id"])).verification_results
+    vr_a = (await _stored(db, res_a["review_id"])).verification_results
+
+    # A: in ONC scope -> signal True -> B4 under RULE-006, A's own run/date/intake
+    assert _signal(vr_a) is True
+    assert res_a["classification"]["bucket"] == "B4"
+    assert res_a["classification"]["rule_code"] == "RULE-006"
+    assert vr_a["assessment_as_of"]["assessment_date"] == "2026-11-08"
+    assert vr_a["assessment_as_of"]["run_id"] == str(d["A"]["run"].id)
+    assert vr_a["assessment_as_of"]["intake_id"] == str(d["A"]["intake"])
+    assert vr_a["fields"]["npi_validation"] == "valid"
+    assert vr_a["record_context"]["source_record_id"] == str(d["A"]["record"].id)
+    assert vr_a["record_context"]["source_intake_id"] == str(d["A"]["intake"])
+
+    # B: combined purposes + an NPI -> out of scope -> NOT B4, B's own run/date/intake
+    assert not _signal(vr_b)
+    assert res_b["classification"]["bucket"] != "B4"
+    assert res_b["classification"]["rule_code"] != "RULE-006"
+    assert vr_b["assessment_as_of"]["assessment_date"] == "2026-12-15"
+    assert vr_b["assessment_as_of"]["run_id"] == str(d["B"]["run"].id)
+    assert vr_b["assessment_as_of"]["intake_id"] == str(d["B"]["intake"])
+    assert vr_b["record_context"]["source_record_id"] == str(d["B"]["record"].id)
+
+    # and the loader shows each delivery its OWN classification
+    fa = _by_line(await _load(db, d["A"]["intake"]))[1]
+    fb = _by_line(await _load(db, d["B"]["intake"]))[1]
+    assert fa["bucket"] == "B4" and fb["bucket"] not in (None, "B4")
+    assert f"review={res_a['review_id']}" in fa["evidence_reference"]
+    assert f"review={res_b['review_id']}" in fb["evidence_reference"]
+
+
+async def test_pinned_assessment_date_alone_changes_the_selected_records_outcome(
+        rolled_back_db, monkeypatch):
+    """Identical delivered Treatment fields in two deliveries; only the pinned
+    date differs (one before BR-NPI-TRTMNT-001 took effect, 2026-10-25)."""
+    db = rolled_back_db
+    _patch_single_edges(monkeypatch)
+    _use_onc_rule_set(monkeypatch)
+    same = {"purposesofuse": "T-TRTMNT", "NPI": ""}
+    ent, d = await _deliveries_sharing_one_entity(db, "9.99.777.99", [
+        ("after", same, "2026-11-08"), ("before", same, "2026-10-14")])
+    res_before = await rs.run_review(db, ent, source_record_id=d["before"]["record"].id)
+    res_after = await rs.run_review(db, ent, source_record_id=d["after"]["record"].id)
+    vr_before = (await _stored(db, res_before["review_id"])).verification_results
+    vr_after = (await _stored(db, res_after["review_id"])).verification_results
+    assert vr_before["assessment_as_of"]["assessment_date"] == "2026-10-14"
+    assert vr_after["assessment_as_of"]["assessment_date"] == "2026-11-08"
+    assert not _signal(vr_before) and res_before["classification"]["bucket"] != "B4"
+    assert _signal(vr_after) is True and res_after["classification"]["bucket"] == "B4"
+
+
+async def test_policy_applicability_and_npi_validation_use_the_selected_records_delivered_npi(
+        rolled_back_db, monkeypatch):
+    """The entity has NO registered NPI identifier. A conditional mandatory policy
+    that applies only when a submitted NPI exists must apply to the record that
+    HAS one and not to the one that does not; a malformed delivered NPI is
+    'invalid' for its own record only."""
+    from app.tefca_registry.rce import source_policy as sp
+    db = rolled_back_db
+    _patch_single_edges(monkeypatch)
+    pol = {"id": "11111111-1111-1111-1111-111111111111", "version": 4, "source": "sam_gov",
+           "role": "conditional", "applicability": {"requires_npi": True},
+           "policy_reference": "test policy",
+           "approval_reference": "22222222-2222-2222-2222-222222222222"}
+
+    async def policies(_db):
+        return [pol]
+
+    monkeypatch.setattr(sp, "load_active_policies", policies)
+    ent, d = await _deliveries_sharing_one_entity(db, "9.99.778.00", [
+        ("blank", {"purposesofuse": "T-PYMNT", "NPI": ""}, "2026-11-08"),
+        ("has", {"purposesofuse": "T-PYMNT", "NPI": "1234567893"}, "2026-11-08"),
+        ("bad", {"purposesofuse": "T-PYMNT", "NPI": "1234567890"}, "2026-11-08")])
+    res = {k: await rs.run_review(db, ent, source_record_id=v["record"].id) for k, v in d.items()}
+    assert res["blank"]["classification"]["rule_code"] != "SOURCE-POLICY-M4"   # not applicable
+    assert res["has"]["classification"]["rule_code"] == "SOURCE-POLICY-M4"     # applicable, sam_gov unanswered
+    assert "SOURCE_NOT_COMPLETED_SAM_GOV" in res["has"]["classification"]["rationale"]
+    vr = {k: (await _stored(db, r["review_id"])).verification_results for k, r in res.items()}
+    assert vr["blank"]["fields"]["npi_validation"] == "valid"      # nothing to validate
+    assert vr["has"]["fields"]["npi_validation"] == "valid"
+    assert vr["bad"]["fields"]["npi_validation"] == "invalid"      # its OWN delivered NPI
+
+
+async def test_entity_only_review_behaviour_is_unchanged(rolled_back_db, monkeypatch):
+    """No explicit record: still unanchored, still the legacy entity-column
+    behaviour, and no record_context block (existing snapshots keep their shape)."""
+    db = rolled_back_db
+    _patch_single_edges(monkeypatch)
+    _use_onc_rule_set(monkeypatch)
+    ent, d = await _deliveries_sharing_one_entity(db, "9.99.778.01", [
+        ("A", {"purposesofuse": "T-TRTMNT", "NPI": ""}, "2026-11-08")])
+    res = await rs.run_review(db, ent)
+    assert res["source_record_id"] is None
+    stored = await _stored(db, res["review_id"])
+    assert stored.source_record_id is None
+    assert "record_context" not in stored.verification_results
+    assert stored.verification_results["assessment_as_of"]["run_id"] == str(d["A"]["run"].id)
+    assert _signal(stored.verification_results) is True            # legacy: from the entity's column
