@@ -268,7 +268,11 @@ async def test_held_and_unpromoted_records_take_comments_without_any_review_row(
     assert out["counts"]["inserted"] == 3
     after = await _counts(db, intake_id)
     assert after == before                                              # no review, no bucket, still HELD
-    assert before["reviews"] == 0 and before["bucketed"] == 0 and ("HELD", 1) in before["curated"]
+    # scoped to THIS delivery's records (the table-wide counts above also hold, but other
+    # tests may legitimately have committed reviews to the same database)
+    mine = (await db.execute(select(func.count()).select_from(reg.ReviewRecord).where(
+        reg.ReviewRecord.source_record_id.in_([r.id for r in recs.values()])))).scalar()
+    assert mine == 0 and ("HELD", 1) in before["curated"]
 
 
 async def test_duplicates_in_a_batch_and_on_resend_are_already_present(rolled_back_db):
