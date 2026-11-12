@@ -104,3 +104,17 @@ def test_one_dataset_three_renderings_agree():
 def test_csv_neutralises_formula_cells():
     ds = d.build_dataset([_f(1, organization="=cmd()")], report_id="R")
     assert "'=cmd()" in d.to_csv(ds).decode("utf-8-sig")
+
+
+def test_held_with_padded_status_still_counts_once_in_b4():
+    ds = d.build_dataset([_f(1, None, status=" held ", held_reason="x")], report_id="R")
+    assert ds["summary"]["buckets"]["B4"] == 1 and ds["summary"]["held_inside_b4"] == 1
+
+
+def test_held_without_reason_is_surfaced_and_negative_findings_refused():
+    ds = d.build_dataset([_f(1, None, status="HELD")], report_id="R")
+    assert ds["summary"]["held_without_recorded_reason"] == 1
+    with pytest.raises(d.DatasetRefused):
+        d.build_dataset([_f(1)], report_id="R", findings_count=-1)
+    with pytest.raises(d.DatasetRefused):
+        d.build_record_row(_f(1, pecos="Lost-Identifier/Outage Family"))

@@ -10,9 +10,9 @@ RULES IT ENFORCES (and the records that carry them)
       reporting methodology). The record keeps Status = HELD and its exact
       blocking reason; nothing is released or relabelled. The deployed
       classifier still excludes HELD upstream - this is REPORTING only.
-    * Totals are RECOUNTED from the rows. They are never forced to match any
-      spreadsheet: if the buckets do not add up to the unique record count the
-      build refuses rather than adjusting a number.
+    * Totals are RECOUNTED from the rows and never forced to match any
+      spreadsheet or expected figure; the caller compares them to its own
+      expectation (the internal sum check is only a guard).
     * Duplicate AGT_Record_IDs are refused, not silently merged.
     * Field findings (e.g. 1,336) are counted separately and never added to a
       bucket total.
@@ -69,7 +69,7 @@ class DatasetRefused(ValueError):
 
 def reporting_bucket(bucket: Optional[str], status: Optional[str]) -> str:
     """HELD -> B4 (once). Otherwise the record's own classified bucket."""
-    if (status or "").upper() == STATUS_HELD:
+    if (status or "").strip().upper() == STATUS_HELD:
         return "B4"
     if bucket not in BUCKETS:
         raise DatasetRefused(
@@ -92,11 +92,11 @@ def _basis(fact: Dict[str, Any], status: str) -> str:
 
 
 def build_record_row(fact: Dict[str, Any]) -> List[str]:
-    status = _s(fact.get("status"))
+    status = _s(fact.get("status")).strip()
     bucket = reporting_bucket(fact.get("bucket"), status)
     pecos = _s(fact.get("pecos"))
     for phrase in PROHIBITED_PECOS_PHRASES:
-        if phrase in pecos:
+        if phrase in pecos.lower():
             raise DatasetRefused(
                 f"PECOS text for {fact.get('agt_record_id')} uses retired "
                 f"blanket wording {phrase!r}; supply the cause-specific text")
@@ -126,6 +126,8 @@ def build_record_row(fact: Dict[str, Any]) -> List[str]:
 def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
                   findings_count: int = 0, assessment_date: str = "",
                   classification: str = "DRAFT") -> Dict[str, Any]:
+    if int(findings_count) < 0:
+        raise DatasetRefused("findings_count cannot be negative")
     facts = list(facts)
     ids = [_s(f.get("agt_record_id")) for f in facts]
     if any(not i for i in ids):
@@ -137,15 +139,18 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
     b_idx, s_idx = RECORD_COLUMNS.index("Bucket"), RECORD_COLUMNS.index("Status")
     counts = {b: 0 for b in BUCKETS}
     held = 0
+    held_no_reason = 0
     for r in rows:
         counts[r[b_idx]] += 1
         if r[s_idx].upper() == STATUS_HELD:
             held += 1
+            if "reason not recorded" in r[b_idx + 2]:
+                held_no_reason += 1
     if sum(counts.values()) != len(rows):          # cannot happen; guard anyway
         raise DatasetRefused("bucket counts do not sum to the record count")
     summary = {
         "unique_records": len(rows), "buckets": counts,
-        "held_inside_b4": held, "field_findings": int(findings_count),
+        "held_inside_b4": held, "held_without_recorded_reason": held_no_reason, "field_findings": int(findings_count),
         "findings_counted_in_buckets": False,
         "assessment_date": assessment_date,
     }
