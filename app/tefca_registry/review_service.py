@@ -883,6 +883,23 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
         results["address_match"] = {"method": "skipped", "reason": str(e)[:200]}
 
     classification = await _classifier.classify_with_db(db, results)
+
+    # M-4 mandatory-source enforcement - PARITY with the bulk path. The SAME
+    # function (rce.source_policy.enforce_on_classification, NOT
+    # app.Tefca.source_policy) and the SAME active policy rows decide, so a
+    # record cannot reach B1/B2 here with an applicable mandatory source
+    # missing when the bulk path would send it to B3. No active policy row
+    # (the shipped state) -> no-op. NOTE for any future PECOS designation: this
+    # path's "pecos" key is the legacy NPPES-proxy connector, not CMS PPEF
+    # enrollment - see PECOS_UI_LABEL; that designation must be reconciled
+    # before a pecos policy row is activated.
+    from app.tefca_registry.rce import source_policy as _rce_source_policy
+    _active_policies = await _rce_source_policy.load_active_policies(db)
+    classification, _matched_policy = (
+        _rce_source_policy.enforce_on_classification(
+            classification, sources, {"has_submitted_npi": bool(npi)},
+            _active_policies))
+
     # The rule set and version path are unchanged; only the rationale text
     # gains the evidence provenance, so a reviewer can see how old the
     # SAM/LEIE evidence behind this determination is.

@@ -905,42 +905,17 @@ async def verify_and_classify(
             # M-4 enforcement: an APPLICABLE mandatory check without an
             # acceptable ANSWER prevents B1/B2 (answered adverse findings are
             # left to the rules). No active policy rows -> never runs.
-            if active_source_policies:
-                (_pb, _pr, _policy_reason,
-                 _matched_policy) = _source_policy.apply_source_policy(
-                    classification.bucket, classification.rule_code,
+            # Provenance: the determination came from the M-4 source policy,
+            # not from "no rule matched" - it cites the reserved code and the
+            # policy table, never DEFAULT-UNMATCHED (review finding
+            # 2026-11-08). The SAME function also serves the single-record
+            # path (review_service.run_review), so the two cannot diverge.
+            classification, _matched_policy = (
+                _source_policy.enforce_on_classification(
+                    classification,
                     verification_results.get("sources") or {},
                     {"has_submitted_npi": bool(_entity_npi(entity))},
-                    active_source_policies)
-                if _policy_reason:
-                    from app.tefca_registry.bucket_classifier import (
-                        ClassificationResult as _CR)
-                    # Provenance: the determination came from the M-4 source
-                    # policy, not from "no rule matched" — it cites the
-                    # reserved code and the policy table, never the
-                    # DEFAULT-UNMATCHED path (review finding 2026-11-08).
-                    classification = _CR(
-                        bucket=_pb,
-                        rule_code=_source_policy.SOURCE_POLICY_RULE_CODE,
-                        # The ACTUAL policy row version - the versioned
-                        # provenance is the rce_source_policies row, cited by
-                        # id and references below, never a placeholder.
-                        rule_version=_matched_policy.get("version"),
-                        rule_name="Mandatory-source policy (M-4)",
-                        rationale=(f"Mandatory-source policy: {_policy_reason}. "
-                                   f"An applicable mandatory check without an "
-                                   f"acceptable answer cannot classify B1/B2 "
-                                   f"(M-4). Policy row "
-                                   f"{_matched_policy.get('id')} v"
-                                   f"{_matched_policy.get('version')} - "
-                                   f"{_matched_policy.get('policy_reference')}; "
-                                   f"approval "
-                                   f"{_matched_policy.get('approval_reference')}."),
-                        matched_conditions=[_policy_reason],
-                        evidence_summary=classification.evidence_summary,
-                        evaluated_rules=classification.evaluated_rules
-                        + ["source_policy(M-4)"],
-                    )
+                    active_source_policies))
 
             # NPPES outcome to the delivery's issue ledger (NPI-005/006/009). One
             # open issue per outcome per record; a repeat cycle adds nothing.

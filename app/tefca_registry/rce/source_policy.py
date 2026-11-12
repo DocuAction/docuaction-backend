@@ -144,3 +144,59 @@ def apply_source_policy(bucket: str, rule_code: Optional[str],
         # Answered adverse (not_found / deactivated / excluded / anything
         # else the rules know): a finding, owned by the rule conditions.
     return bucket, rule_code, None, None
+
+
+def enforce_on_classification(classification: Any,
+                              sources: Dict[str, Any],
+                              record_facts: Dict[str, Any],
+                              policies: List[Dict[str, Any]],
+                              ) -> Tuple[Any, Optional[Dict[str, Any]]]:
+    """THE one enforcement entry point for BOTH classification paths (the
+    bulk `arc_pipeline.verify_and_classify` and the single-record
+    `review_service.run_review`): (classification, matched_policy).
+
+    With no active policy row, or when no applicable mandatory source blocks,
+    the SAME classification object is returned untouched and `matched_policy`
+    is None. When a policy blocks a B1/B2 outcome, a new ClassificationResult
+    is returned that cites the reserved code `SOURCE-POLICY-M4`, the ACTUAL
+    policy row version, and the row id / policy_reference / approval_reference
+    - the specific reason (SOURCE_NOT_COMPLETED_<SOURCE> or
+    EXCLUSION_POSSIBLE_MATCH_PENDING) is never collapsed into a generic one.
+
+    This is `app.tefca_registry.rce.source_policy`; it is NOT
+    `app.Tefca.source_policy`, which supplies registry/freshness metadata and
+    decides nothing. It adds no designation: which sources are mandatory is
+    only ever what the active `rce_source_policies` rows say.
+
+    The rationale text is byte-for-byte what the bulk path wrote before this
+    function existed (extracted, not rewritten), so historical determinations
+    and their reports are unchanged."""
+    if not policies:
+        return classification, None
+    (bucket, _rule, reason, matched) = apply_source_policy(
+        classification.bucket, classification.rule_code,
+        sources or {}, record_facts, policies)
+    if not reason:
+        return classification, None
+    from app.tefca_registry.bucket_classifier import ClassificationResult
+    return ClassificationResult(
+        bucket=bucket,
+        rule_code=SOURCE_POLICY_RULE_CODE,
+        # The ACTUAL policy row version - the versioned provenance is the
+        # rce_source_policies row, cited by id and references below, never a
+        # placeholder.
+        rule_version=matched.get("version"),
+        rule_name="Mandatory-source policy (M-4)",
+        rationale=(f"Mandatory-source policy: {reason}. "
+                   f"An applicable mandatory check without an "
+                   f"acceptable answer cannot classify B1/B2 "
+                   f"(M-4). Policy row "
+                   f"{matched.get('id')} v"
+                   f"{matched.get('version')} - "
+                   f"{matched.get('policy_reference')}; "
+                   f"approval "
+                   f"{matched.get('approval_reference')}."),
+        matched_conditions=[reason],
+        evidence_summary=classification.evidence_summary,
+        evaluated_rules=classification.evaluated_rules + ["source_policy(M-4)"],
+    ), matched
