@@ -830,6 +830,9 @@ class TestReportAPI:
             "/api/reports/{report_id}/artifacts/backfill",
             # Step #17 — the controlled Excel export
             "/api/reports/exports/onc-review-workbook",
+            # 2026-11-12 — the record-level review export (qalead; delivery,
+            # evidence cutoff and format explicit; DRAFT; same job table)
+            "/api/reports/exports/record-review",
             # Step #17C — its background job
             "/api/reports/exports/jobs/{job_id}",
             # 2026-10-01 — report generation as a durable background job,

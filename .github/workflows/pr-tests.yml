@@ -195,6 +195,9 @@ jobs:
             tests/test_sam_extract_visibility_2026_10_31.py \
             tests/test_manual_reconciliation_snapshot_2026_10_31.py \
             tests/test_recheck_enrollment_scope_2026_11_04.py \
+            tests/test_october_review_loader_db_2026_11_12.py \
+            tests/test_october_review_export_db_2026_11_12.py \
+            tests/test_case_update_import_agt_2026_11_12.py \
             -v --tb=short -rs --junitxml=isolation-results.xml
       - name: Fail if any isolation test was skipped for want of a database
         run: |
