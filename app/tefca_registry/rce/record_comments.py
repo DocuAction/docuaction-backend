@@ -49,6 +49,9 @@ from app.tefca_registry.rce.record_comment_models import (COMMENT_KINDS, KIND_QA
 SERVICE_VERSION = "1.0.0"
 MAX_BATCH = 500
 MAX_PAGE = 500
+#: A comment longer than this is REJECTED (never truncated). The longest real October
+#: comment is under 1,000 characters; this is ~20x that.
+MAX_COMMENT_CHARS = 20_000
 
 INSERTED, AMENDED, ALREADY_PRESENT = "inserted", "amended", "already_present"
 NEEDS_REVIEW, REJECTED = "needs_review", "rejected"
@@ -130,6 +133,9 @@ def _validate_entry(entry: Dict[str, Any], rec: Optional[Any], intake_uuid: uuid
         return {"problem": "comment_text is empty (blank comments are not stored)"}
     if "\x00" in body:
         return {"problem": "comment_text contains a NUL character; refusing to alter it"}
+    if len(body) > MAX_COMMENT_CHARS:
+        return {"problem": (f"comment_text is {len(body)} characters, over the {MAX_COMMENT_CHARS} "
+                            f"limit; it is rejected, never truncated")}
     out["text"] = body                       # VERBATIM
     agt = _uuid(entry.get("source_record_id"))
     if agt is None:
@@ -288,7 +294,16 @@ async def import_comments(db, *, intake_id: Any, entries: List[Dict[str, Any]], 
                 db.add(row)
                 await db.flush()
         except IntegrityError:
-            done(i, ALREADY_PRESENT, "a concurrent import wrote the same comment", None)
+            clash = (await db.execute(
+                select(RceRecordComment.id).where(RceRecordComment.idempotency_key == row.idempotency_key)
+            )).scalar()
+            if clash is not None:
+                done(i, ALREADY_PRESENT, "a concurrent import wrote the same comment", clash)
+            else:
+                done(i, NEEDS_REVIEW,
+                     "a concurrent change conflicts with this entry (the comment was amended or "
+                     "inserted by someone else meanwhile); re-read the record and retry - nothing "
+                     "was written", None)
             continue
         by_text[(rid, kind, thash)] = new_id
         current[(rid, kind)] = (new_id, thash)

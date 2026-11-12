@@ -900,6 +900,16 @@ def _audited_comment_role():
     return require_role_audited(COMMENT_IMPORT_ROLE, resource_type="record_comments")
 
 
+def _comment_actor(user) -> str:
+    """The AUTHENTICATED importer, stored verbatim as `imported_by`. Never a placeholder:
+    if neither an email nor a user id is available the call is refused."""
+    who = (getattr(user, "email", None) or "").strip() or str(getattr(user, "id", None) or "").strip()
+    if not who:
+        raise HTTPException(409, "the authenticated importing actor could not be determined; "
+                                 "nothing was written")
+    return who
+
+
 async def _comment_call(coro):
     from app.tefca_registry.rce import record_comments as rcm
     try:
@@ -921,7 +931,7 @@ async def preview_record_comments(
     from app.tefca_registry import audit as reg_audit
     from app.tefca_registry.rce import record_comments as rcm
 
-    actor = getattr(user, "email", None) or "unknown"
+    actor = _comment_actor(user)
     result = await _comment_call(rcm.import_comments(
         db, intake_id=intake_id, entries=body.entries, actor=actor,
         batch_id=body.batch_id, dry_run=True))
@@ -949,7 +959,7 @@ async def import_record_comments(
 
     if not body.confirm:
         raise HTTPException(409, "confirm=true is required to write; preview first")
-    actor = getattr(user, "email", None) or "unknown"
+    actor = _comment_actor(user)
     result = await _comment_call(rcm.import_comments(
         db, intake_id=intake_id, entries=body.entries, actor=actor,
         batch_id=body.batch_id, dry_run=False))

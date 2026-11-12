@@ -539,3 +539,50 @@ async def test_routes_translate_refusals_to_409(rolled_back_db):
         await rce_routes.read_record_comments("not-a-uuid", source_record_id=None, kind=None,
                                               current_only=True, limit=10, after=None, db=db, user=USER)
     assert exc.value.status_code == 409
+
+
+# ── review findings fixed 2026-11-12 ─────────────────────────────────────────
+
+def test_an_oversized_comment_is_rejected_never_truncated():
+    rec = _rec()
+    ok = _val({"comment_text": "x" * rc.MAX_COMMENT_CHARS}, rec)
+    assert "problem" not in ok and len(ok["text"]) == rc.MAX_COMMENT_CHARS
+    big = _val({"comment_text": "x" * (rc.MAX_COMMENT_CHARS + 1)}, rec)
+    assert "over the" in big["problem"] and "never truncated" in big["problem"]
+
+
+async def test_a_conflicting_concurrent_write_is_needs_review_not_already_present(rolled_back_db, monkeypatch):
+    db = rolled_back_db
+    intake_id, recs = await _seed(db, arc="9.99.779.30")
+    real_flush = db.flush
+    state = {"n": 0}
+
+    async def conflicting_flush(*a, **k):
+        state["n"] += 1
+        raise IntegrityError("INSERT", {}, Exception("uq_rce_record_comment_successor"))
+
+    monkeypatch.setattr(db, "flush", conflicting_flush)
+    out = await _import(db, intake_id, [_entry(recs[1], body="raced")])
+    monkeypatch.setattr(db, "flush", real_flush)
+    assert state["n"] == 1
+    assert out["counts"]["needs_review"] == 1 and out["counts"]["already_present"] == 0
+    assert "concurrent change conflicts" in out["results"][0]["reason"]
+    assert (await db.execute(select(func.count()).select_from(RceRecordComment))).scalar() == 0
+
+
+async def test_the_importing_actor_is_the_authenticated_user_never_a_placeholder(rolled_back_db):
+    db = rolled_back_db
+    intake_id, recs = await _seed(db, arc="9.99.779.31")
+    req = rce_routes.RecordCommentImportRequest(entries=[_entry(recs[1])], confirm=True)
+    anonymous = SimpleNamespace(email=None, id=None)
+    with pytest.raises(HTTPException) as exc:
+        await rce_routes.import_record_comments(str(intake_id), req, db=db, user=anonymous)
+    assert exc.value.status_code == 409 and "actor could not be determined" in exc.value.detail
+    with pytest.raises(HTTPException):
+        await rce_routes.preview_record_comments(str(intake_id), req, db=db, user=anonymous)
+    assert (await db.execute(select(func.count()).select_from(RceRecordComment))).scalar() == 0
+    by_id = SimpleNamespace(email="  ", id=uuid.UUID(int=7))                   # blank email -> user id
+    res = await rce_routes.import_record_comments(str(intake_id), req, db=db, user=by_id)
+    assert res["counts"]["inserted"] == 1
+    stored = (await rc.list_comments(db, intake_id=intake_id))["comments"][0]
+    assert stored["imported_by"] == str(uuid.UUID(int=7)) and stored["imported_by"] != "unknown"
