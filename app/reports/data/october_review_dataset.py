@@ -90,19 +90,23 @@ PDF_COLUMNS = ["Source_Line", "AGT_Record_ID", "QHIN Number", "Organization",
 #: classification, source results and reasons apart. Widths are percentages of
 #: the landscape page; they sum to 100.
 PDF_COLUMN_GROUPS = [
-    ("Record identity", [("Source_Line", 4.0), ("AGT_Record_ID", 8.5), ("QHIN Number", 5.5),
-                         ("Organization", 8.5), ("Submitted NPI (original, verbatim)", 6.6)]),
+    ("Record identity", [("Source_Line", 5.4), ("AGT_Record_ID", 8.0), ("QHIN Number", 5.4),
+                         ("Organization", 8.3), ("Submitted NPI (original, verbatim)", 7.0)]),
     ("Classification / processing status", [("Bucket", 7.8), ("Status", 6.0), ("Flag", 8.2)]),
     ("Source results (verbatim; see notes)", [("NPPES", 7.1), ("PECOS/CMS Enrollment", 7.5),
                                               ("OIG LEIE", 7.1), ("SAM.gov Exclusions", 7.1),
                                               ("USPS Address Check", 7.1)]),
-    ("Reasons", [("Reasons", 9.0)]),
+    ("Reasons", [("Reasons", 8.0)]),
 ]
 #: 2026-11-13, widths re-cut against the PRODUCTION engine's face (DejaVu Sans in
 #: the container; wider than the Arial a development host substitutes). With the
 #: earlier widths WeasyPrint broke a 10-digit NPI as "12345678/93", "PROVISIONAL"
 #: as "PROVISI/ONAL", "unavailable" as "unavailabl/e" and "NOT CLASSIFIED" inside
 #: the word. Each of those now fits its column on one line (side padding 2 pt).
+#: Second cut, same day: the headings "Source_Line" and "Submitted NPI ..." still
+#: broke inside a word ("Sourc/e_", "Submitte/d"); their columns are widened and
+#: the width taken from AGT_Record_ID, QHIN Number, Organization and Reasons, each
+#: of which still holds its own heading and longest ordinary word.
 #: Second PDF table: the long free-text columns, one row per record that has any of
 #: them. Original QA comments, the second reviewer's comments and the generated
 #: clarifications stay in SEPARATE columns and are rendered verbatim (pre-wrap).

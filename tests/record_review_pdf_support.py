@@ -335,6 +335,7 @@ def reconstruct(pages, per_page_words, widths: List[float], id_col: int,
     records: Dict[str, List[List[Dict[str, Any]]]] = {}
     order: List[str] = []
     headers: List[Tuple[int, List[str]]] = []
+    header_words: List[Tuple[int, List[List[str]]]] = []
     outside: List[Tuple[int, str]] = []
     header_below_data: List[int] = []
     continued: List[Tuple[int, Optional[str]]] = []
@@ -359,6 +360,7 @@ def reconstruct(pages, per_page_words, widths: List[float], id_col: int,
             if ci is not None:
                 head_cols[ci].append(w)
         headers.append((pno, [_flow(c) for c in head_cols]))
+        header_words.append((pno, [[w["text"] for line in _lines(c) for w in line] for c in head_cols]))
         if head and data and max(w["top"] for w in head) > min(w["top"] for w in data):
             header_below_data.append(pno)
         # row starts: an id in the identity column
@@ -396,7 +398,8 @@ def reconstruct(pages, per_page_words, widths: List[float], id_col: int,
             cols.append(text)
         rebuilt[key] = cols
     return {"rows": [rebuilt[k] for k in order if k is not None],
-            "orphan": rebuilt.get(None), "headers": headers, "outside": outside,
+            "orphan": rebuilt.get(None), "headers": headers, "header_words": header_words,
+            "outside": outside,
             "header_below_data": header_below_data, "continued": continued}
 
 
@@ -439,6 +442,35 @@ def expected_detail(dataset) -> List[List[str]]:
             continue
         out.append([squash(r[col[c]]) for c, _w in d.PDF_DETAIL_COLUMNS])
     return out
+
+
+def heading_breaks_inside_a_word(label: str, words: List[str]) -> List[str]:
+    """Where a column heading was wrapped INSIDE a word. `words` are the heading's
+    words as read back (one per line fragment), ending with this label's own; a
+    line may end only where the label has a space, or after "_", "-" or "/".
+    Returns the offending fragments ([] when every break is at a word boundary)."""
+    target = squash(label)
+    allowed, n = set(), 0
+    for i, ch in enumerate(label):
+        if ch.isspace():
+            continue
+        n += 1
+        nxt = label[i + 1] if i + 1 < len(label) else " "
+        if nxt.isspace() or ch in "_-/":
+            allowed.add(n)
+    tail: List[str] = []
+    for w in reversed(words):                 # this label's words are the last ones in the band
+        if sum(len(x) for x in tail) >= len(target):
+            break
+        tail.insert(0, w)
+    if "".join(tail) != target:
+        return [f"heading reads {''.join(tail)!r}, expected {target!r}"]
+    bad, pos = [], 0
+    for w in tail:
+        pos += len(w)
+        if pos not in allowed:
+            bad.append(w)
+    return bad
 
 
 def stacked_words(words, tol=0.6, min_area=2.0):

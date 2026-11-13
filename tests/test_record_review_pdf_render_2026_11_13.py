@@ -142,6 +142,30 @@ def test_column_headings_repeat_above_the_rows_on_every_page_of_both_tables(rend
             f"{which} table: data above the column headings on pages {table['header_below_data']}")
 
 
+def test_no_column_heading_is_wrapped_inside_a_word(rendered):
+    """Every heading of both tables, on every page: a line of the heading may end at
+    a space or after "_", "-" or "/", never inside a word ("Sourc/e_Line",
+    "Submitte/d NPI" before the widths were re-cut)."""
+    for which, labels in (("main", MAIN_LABELS), ("detail", DETAIL_LABELS)):
+        assert rendered[which]["header_words"], f"{which} table not found in the PDF"
+        for page, columns in rendered[which]["header_words"]:
+            for label, words in zip(labels, columns):
+                broken = s.heading_breaks_inside_a_word(label, words)
+                assert not broken, f"{which} table, page {page}: heading {label!r} is broken at {broken}"
+
+
+def test_the_heading_check_tells_a_word_boundary_from_a_break_inside_a_word():
+    check = s.heading_breaks_inside_a_word
+    assert check("Source_Line", ["Source_", "Line"]) == []
+    assert check("Source_Line", ["Sourc", "e_", "Line"]) == ["Sourc"]
+    label = "Submitted NPI (original, verbatim)"
+    assert check(label, ["Record", "identity", "Submitted", "NPI", "(original,", "verbatim)"]) == []
+    assert check(label, ["Submitte", "d", "NPI", "(original", ",", "verbati", "m)"]) == ["Submitte", "(original", "verbati"]
+    assert check("PECOS/CMS Enrollment", ["PECOS/", "CMS", "Enrollment"]) == []
+    assert check("Proposed Corrected Address (AI-Assisted)", ["Proposed", "Corrected", "Address", "(AI-", "Assisted)"]) == []
+    assert check("Reasons", ["Reason"]) != []
+
+
 def test_classification_cells_are_set_like_the_other_data_cells(rendered):
     """The Flag text ("PROVISIONAL B2") is data, not a heading: same weight and no
     larger than the cells beside it."""
