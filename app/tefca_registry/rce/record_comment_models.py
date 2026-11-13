@@ -24,7 +24,7 @@ ANCHOR
 APPEND-ONLY
     UPDATE and DELETE are rejected by trigger (independent of roles). A change to
     a comment is a NEW row whose `supersedes_comment_id` names the version it
-    amends; the chain is linear (at most one successor) and stays on the same
+    amends; the chain is linear (one root per record+kind, at most one successor per row) and stays on the same
     record and kind. "Current" is read by excluding superseded rows - nothing is
     ever overwritten.
 
@@ -99,6 +99,9 @@ class RceRecordComment(Base):
         UniqueConstraint("idempotency_key", name="uq_rce_record_comment_idem"),
         Index("uq_rce_record_comment_successor", "supersedes_comment_id", unique=True,
               postgresql_where=text("supersedes_comment_id IS NOT NULL")),
+        # One ROOT per record+kind: closes the concurrent-first-import gap (see the migration).
+        Index("uq_rce_record_comment_root", "source_record_id", "comment_kind", unique=True,
+              postgresql_where=text("supersedes_comment_id IS NULL")),
         Index("ix_rce_record_comment_record", "source_intake_id", "source_record_id",
               "comment_kind", "imported_at"),
         Index("ix_rce_record_comment_batch", "import_batch_id"),

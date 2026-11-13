@@ -7,6 +7,7 @@ the migration chain has created the table. Fixture rows are synthetic.
 from __future__ import annotations
 
 import ast
+import asyncio
 import inspect
 import os
 import uuid
@@ -17,6 +18,8 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from app.tefca_registry import models as reg
 from app.tefca_registry.rce import models as m
@@ -590,3 +593,153 @@ async def test_the_importing_actor_is_the_authenticated_user_never_a_placeholder
     assert res["counts"]["inserted"] == 1
     stored = (await rc.list_comments(db, intake_id=intake_id))["comments"][0]
     assert stored["imported_by"] == str(uuid.UUID(int=7)) and stored["imported_by"] != "unknown"
+
+
+# ── REAL two-session concurrency (committed data, two connections) ───────────
+#
+# The monkeypatched-flush test above only proves the HANDLER for an IntegrityError.
+# These tests prove the DATABASE produces it: two real sessions that both read "no
+# comment yet" and then insert, with the first transaction still open so the second
+# genuinely waits on the first's uncommitted row.
+
+@pytest.fixture
+async def committed_env(db_required):
+    """Two-session environment on committed synthetic rows, removed afterwards.
+
+    Cleanup uses session_replication_role=replica (superuser) because the table is
+    append-only by trigger - exactly the property under test - so the rows cannot
+    be deleted the normal way. The database is a disposable test database."""
+    from app.core.database import _normalize_url
+    engine = create_async_engine(_normalize_url(os.environ["DATABASE_URL"]), poolclass=NullPool)
+    async with AsyncSession(engine, expire_on_commit=False) as seed_db:
+        intake_id, _ = await seed_intake(
+            seed_db, make_rows(3, arc=f"9.99.779.{40 + uuid.uuid4().int % 50}"), with_job=False)
+        await seed_db.commit()
+        recs = await _records(seed_db, intake_id)
+    try:
+        yield engine, intake_id, recs
+    finally:
+        async with engine.begin() as conn:
+            await conn.execute(text("SET LOCAL session_replication_role = replica"))
+            await conn.execute(text("DELETE FROM rce_record_comments WHERE source_intake_id = :i"),
+                               {"i": intake_id})
+            await conn.execute(text("DELETE FROM rce_source_records WHERE source_intake_id = :i"),
+                               {"i": intake_id})
+            await conn.execute(text("DELETE FROM rce_source_intakes WHERE id = :i"),
+                               {"i": intake_id})
+        await engine.dispose()
+
+
+async def _wait_until_blocked(engine, *, timeout=15.0):
+    """Block until some backend is waiting on another transaction's lock."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    async with engine.connect() as probe:
+        while asyncio.get_running_loop().time() < deadline:
+            n = (await probe.execute(text(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() "
+                "AND wait_event_type = 'Lock'"))).scalar()
+            if n:
+                return
+            await asyncio.sleep(0.05)
+    raise AssertionError("the second import never blocked on the first: the race was not exercised")
+
+
+async def _race(engine, intake_id, first_entries, second_entries):
+    """First session imports and stays OPEN; second imports concurrently (so it read the
+    same pre-state); the first then commits. Returns (first_result, second_result)."""
+    async with AsyncSession(engine, expire_on_commit=False) as a, \
+            AsyncSession(engine, expire_on_commit=False) as b:
+        first = await _import(a, intake_id, first_entries)
+        second_task = asyncio.create_task(_import(b, intake_id, second_entries))
+        await _wait_until_blocked(engine)
+        await a.commit()
+        second = await asyncio.wait_for(second_task, timeout=30)
+        await b.commit()
+    return first, second
+
+
+async def _stored(engine, intake_id, rid):
+    async with AsyncSession(engine) as db:
+        return (await db.execute(
+            select(RceRecordComment.comment_text, RceRecordComment.supersedes_comment_id)
+            .where(RceRecordComment.source_intake_id == intake_id,
+                   RceRecordComment.source_record_id == rid)
+            .order_by(RceRecordComment.imported_at))).all()
+
+
+async def test_simultaneous_first_imports_with_different_text_keep_one_root(committed_env):
+    engine, intake_id, recs = committed_env
+    rec = recs[1]
+    first, second = await _race(engine, intake_id,
+                                [_entry(rec, body="first writer")], [_entry(rec, body="second writer")])
+    assert first["results"][0]["status"] == "inserted"
+    assert second["results"][0]["status"] == "needs_review", second
+    assert second["results"][0]["comment_id"] is None and second["counts"]["inserted"] == 0
+    rows = await _stored(engine, intake_id, rec.id)
+    assert rows == [("first writer", None)], "exactly one root; the loser's text must not be stored or overwrite"
+
+
+async def test_simultaneous_first_imports_of_the_same_text_are_idempotent(committed_env):
+    engine, intake_id, recs = committed_env
+    rec = recs[1]
+    first, second = await _race(engine, intake_id,
+                                [_entry(rec, body="same text")], [_entry(rec, body="same text")])
+    assert first["results"][0]["status"] == "inserted"
+    assert second["results"][0]["status"] == "already_present", second
+    assert await _stored(engine, intake_id, rec.id) == [("same text", None)]
+
+
+async def test_simultaneous_amendments_of_one_current_comment_keep_a_single_chain(committed_env):
+    engine, intake_id, recs = committed_env
+    rec = recs[1]
+    async with AsyncSession(engine, expire_on_commit=False) as db:
+        await _import(db, intake_id, [_entry(rec, body="v1")])
+        await db.commit()
+    first, second = await _race(
+        engine, intake_id, [_entry(rec, body="v2-a", amend=True)], [_entry(rec, body="v2-b", amend=True)])
+    assert first["results"][0]["status"] == "amended"
+    assert second["results"][0]["status"] == "needs_review", second
+    rows = await _stored(engine, intake_id, rec.id)
+    assert [r[0] for r in rows] == ["v1", "v2-a"] and rows[0][1] is None and rows[1][1] is not None
+
+
+async def test_other_records_and_kinds_are_not_blocked_by_the_root_rule(committed_env):
+    engine, intake_id, recs = committed_env
+    async with AsyncSession(engine, expire_on_commit=False) as db:
+        out = await _import(db, intake_id, [
+            _entry(recs[2], body="a"), _entry(recs[1], body="b"),
+            _entry(recs[1], "QA_IZAAN", body="c"), _entry(recs[1], "REPORT_CLARIFICATION", body="d")])
+        await db.commit()
+    assert out["counts"]["inserted"] == 4
+
+
+async def test_the_database_itself_refuses_a_second_root(committed_env):
+    """Bypass the service entirely: a raw second root for the same record+kind is a
+    unique violation, so the guarantee does not depend on application code."""
+    engine, intake_id, recs = committed_env
+    rec = recs[1]
+    async with AsyncSession(engine, expire_on_commit=False) as db:
+        await _import(db, intake_id, [_entry(rec, body="root")])
+        await db.commit()
+    async with AsyncSession(engine, expire_on_commit=False) as db:
+        db.add(RceRecordComment(
+            id=uuid.uuid4(), source_intake_id=intake_id, source_record_id=rec.id,
+            comment_kind="QA_ORIGINAL", comment_text="rival root", text_sha256=rc.text_sha256("rival root"),
+            source_file_name="x", source_file_sha256=SHA, identity_check={}, imported_by=ACTOR,
+            import_batch_id=uuid.uuid4(), idempotency_key=rc.idempotency_key(rec.id, "QA_ORIGINAL", "z" * 64)))
+        with pytest.raises(IntegrityError, match="uq_rce_record_comment_root"):
+            await db.flush()
+        await db.rollback()
+
+
+async def test_model_and_migration_define_the_same_root_index(rolled_back_db):
+    """The migrated table (CI runs alembic to head) carries the index the model declares."""
+    db = rolled_back_db
+    defn = (await db.execute(text(
+        "SELECT indexdef FROM pg_indexes WHERE indexname = 'uq_rce_record_comment_root'"))).scalar()
+    assert defn is not None, "migration is missing uq_rce_record_comment_root"
+    low = defn.lower()
+    assert "unique" in low and "(source_record_id, comment_kind)" in low
+    assert "where (supersedes_comment_id is null)" in low
+    model_idx = {i.name: i for i in RceRecordComment.__table__.indexes}["uq_rce_record_comment_root"]
+    assert model_idx.unique and [c.name for c in model_idx.columns] == ["source_record_id", "comment_kind"]

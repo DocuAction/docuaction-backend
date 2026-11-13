@@ -27,7 +27,7 @@ WHAT IT ADDS
   trigger makes the table append-only independent of database roles.
 
 SAFETY
-  Additive only: one table, two functions, two triggers, three indexes, and GRANT
+  Additive only: one table, two functions, two triggers, four indexes, and GRANT
   SELECT, INSERT to DB_APP_ROLE (owner-owned like the other append-only evidence
   tables; the app never owns it, never UPDATEs, never DELETEs). No existing object
   is altered; the classifier, QA gate, issue ledger and hold logic never read it.
@@ -105,6 +105,14 @@ def upgrade() -> None:
     )
     op.create_index("uq_rce_record_comment_successor", TABLE, ["supersedes_comment_id"],
                     unique=True, postgresql_where=sa.text("supersedes_comment_id IS NOT NULL"))
+    # ONE ROOT per (record, kind). The successor index alone bounds each node to one
+    # child but does not stop two concurrent first imports from each inserting a
+    # different ROOT (both saw "no existing comment"). With exactly one root and at
+    # most one successor per node, the set of rows for a record+kind is one linear
+    # chain. The loser of a race gets a unique violation, which the service reports
+    # as needs_review (different text) or already_present (same text).
+    op.create_index("uq_rce_record_comment_root", TABLE, ["source_record_id", "comment_kind"],
+                    unique=True, postgresql_where=sa.text("supersedes_comment_id IS NULL"))
     op.create_index("ix_rce_record_comment_record", TABLE,
                     ["source_intake_id", "source_record_id", "comment_kind", "imported_at"])
     op.create_index("ix_rce_record_comment_batch", TABLE, ["import_batch_id"])
