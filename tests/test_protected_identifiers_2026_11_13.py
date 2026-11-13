@@ -183,3 +183,76 @@ class TestTheTefcaAiGatewayRefuses:
         """The guard must not stop the governed use it protects."""
         assert await gateway.call(self.CLEAN) is not None
         assert gateway.sent == [self.CLEAN]
+
+
+# ── review findings on #219 (CodeRabbit, 2026-11-13) ─────────────────────────
+# Every value below is BARE (no hyphen in EIN position) unless the case is about
+# a written format, so the unlabelled NN-NNNNNNN rule cannot hide a label miss.
+
+SERIALIZED = [
+    '{"EIN": "000000001"}',
+    "{'ein': '000000001'}",
+    '{"ORG_TAX_ID": "000000001", "BUS_NM": "SYNTHETIC ORG"}',
+    "ORG_TAX_ID: 000000001",
+    "ORG_TAX_ID=000000001",
+    "org_tax_id\t000000001",
+    "orgTaxId: 000000001",
+    '<taxId>000000001</taxId>',
+    "hco.tin = 000000001",
+    "FED_TAX_ID|000000001",
+    "TAXPAYER_IDENTIFICATION_NUMBER: 000000001",
+    "provider_ein => 000000001",
+    '"fein":"000000001"',
+    "IRS_NUMBER 000000001",
+    "tax id value 000000001",
+]
+ITIN_WRITTEN = [
+    "ITIN: 900-00-0001",
+    '{"itin": "900-00-0001"}',
+    "TIN 900-00-0001",
+    "taxpayer id 900-00-0001",
+]
+NOT_LABELS = [
+    "routing 000000001", "PROTEIN: 000000001", "protein 000000001",
+    "taxonomy 207Q00000X", "TAXONOMY_CD: 000000001", "listing 000000001",
+    "destination: 000000001", "continent 000000001", "record 000000001",
+    "tax_status: 000000001", "NPI: 1234567893", "ZIP: 021011234",
+    "phone 617-555-0100", "SSN-shaped but unlabelled 900-00-0001",
+    "retain 000000001", "certain: 000000001", "margin=000000001",
+]
+
+
+class TestSerializedLabels:
+    @pytest.mark.parametrize("text", SERIALIZED + ITIN_WRITTEN)
+    def test_a_labelled_value_is_found_whatever_the_serialization(self, text):
+        assert "labelled_tax_identifier" in pi.find_in_text(text), text
+
+    @pytest.mark.parametrize("text", SERIALIZED + ITIN_WRITTEN)
+    def test_and_is_redacted_with_no_digit_of_the_value_left(self, text):
+        out = pi.redact_text(text)
+        assert pi.REDACTED in out, out
+        assert "000000001" not in out and "900-00-0001" not in out, out
+        assert pi.find_in_text(out) == [], out
+
+    @pytest.mark.parametrize("text", NOT_LABELS)
+    def test_words_that_only_contain_a_label_are_not_labels(self, text):
+        assert pi.find_in_text(text) == [], text
+        assert pi.redact_text(text) == text
+
+    def test_the_label_is_kept_so_a_reader_knows_what_was_withheld(self):
+        assert pi.redact_text("ORG_TAX_ID: 000000001") == f"ORG_TAX_ID: {pi.REDACTED}"
+
+    def test_redact_mapping_covers_a_serialized_record_inside_a_string_value(self):
+        out = pi.redact_mapping({"note": 'raw row {"ORG_TAX_ID": "000000001"}'})
+        assert "000000001" not in out["note"]
+
+
+class TestTheGatewayRefusesSerializedAndItinForms(TestTheTefcaAiGatewayRefuses):
+    @pytest.mark.parametrize("text", SERIALIZED + ITIN_WRITTEN)
+    async def test_not_dispatched(self, gateway, text):
+        prompt = f"Compare SYNTHETIC ORG using this record: {text}"
+        assert await gateway.call(prompt) is None
+        assert (await gateway.call_dual(prompt)).primary is None
+        assert await gateway._call_provider(gateway.primary_provider, prompt,
+                                            "standard", "entity_match", 0.0) is None
+        assert gateway.sent == []

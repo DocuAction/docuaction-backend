@@ -66,13 +66,26 @@ _ID_SUFFIXES = frozenset({"id", "ids", "identifier", "identification", "ident",
 _CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 _SPLIT = re.compile(r"[^A-Za-z0-9]+")
 
-#: `EIN: 12-3456789`, `tax id 123456789`, `FEIN#12-3456789` ...
-_LABELLED = re.compile(
-    r"\b(?:f?ein|tin|itin|tax(?:payer)?[\s_\-]*(?:id(?:entif(?:ier|ication))?"
-    r"|number|num|nbr|no)\b\.?(?:[\s_\-]*(?:number|num|nbr|no)\b\.?)?"
-    r"|employer[\s_\-]*identification[\s_\-]*(?:number|num|nbr|no)\b\.?)"
-    r"\s*(?:is|=|:|#)?\s*\d{2}[\s\-]?\d{7}\b",
-    re.IGNORECASE)
+#: A tax-identifier LABEL inside running or serialized text. It may follow a
+#: separator (`ORG_TAX_ID`, `"EIN"`, `hco.tin`) or a lower-case letter in
+#: camelCase (`orgTaxId`), and must not run on into another word (`routing`,
+#: `protein`, `taxonomy` are not labels).
+_LABEL = (
+    r"(?:(?<![A-Za-z])|(?-i:(?<=[a-z])(?=[A-Z])))"
+    r"(?:f?ein|i?tin"
+    r"|tax[\s_\-]*payer(?:[\s_\-]*(?:id(?:entif(?:ier|ication))?|number|num|nbr|no))*"
+    r"|tax[\s_\-]*(?:id(?:entif(?:ier|ication))?|number|num|nbr|no)"
+    r"(?:[\s_\-]*(?:number|num|nbr|no))?"
+    r"|employer[\s_\-]*identification(?:[\s_\-]*(?:number|num|nbr|no))?"
+    r"|irs[\s_\-]*(?:id|number|num|nbr|no))"
+    r"(?![A-Za-z])")
+#: What may stand between a label and its value: punctuation of any
+#: serialization (quotes, colon, equals, brackets, spaces) and a joining word.
+_GAP = r"(?:[^A-Za-z0-9\n]|\b(?:is|no|number|num|value|val)\b){0,16}"
+#: Nine digits as an EIN (NN-NNNNNNN, NN NNNNNNN, NNNNNNNNN) or in the
+#: three-two-four grouping an ITIN is written in.
+_VALUE = r"(?:\d{2}[-\s]?\d{7}|\d{3}-\d{2}-\d{4})(?![\d\-])"
+_LABELLED = re.compile(f"({_LABEL}{_GAP})({_VALUE})", re.IGNORECASE)
 #: The written EIN shape with no label.
 _EIN_SHAPE = re.compile(r"(?<![\d\-])\d{2}-\d{7}(?![\d\-])")
 
@@ -149,7 +162,8 @@ def redact_text(text: str) -> str:
     """`text` with labelled and EIN-shaped values replaced by `REDACTED`."""
     if not isinstance(text, str) or not text:
         return text
-    return _EIN_SHAPE.sub(REDACTED, _LABELLED.sub(REDACTED, text))
+    # The label stays (it says what was withheld); only the value is replaced.
+    return _EIN_SHAPE.sub(REDACTED, _LABELLED.sub(lambda m: m.group(1) + REDACTED, text))
 
 
 def assert_safe_for_ai(text: Any, *, where: str = "ai") -> None:
