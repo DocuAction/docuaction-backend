@@ -479,6 +479,10 @@ async def _section_usps(db, source, curated):
         "differences": list(result.corrections or []),
         "method": result.method,
         "error": result.error,
+        # Why there is no USPS answer, when there is none (credentials rejected,
+        # rate limited, not entitled, ...). A deployment or source fact - never a
+        # finding about the address, and never a USPS validation.
+        "failure_kind": getattr(result, "failure_kind", None),
         "retrieved_at": datetime.utcnow().isoformat(),
         "provenance": {"source": "USPS_ADDRESSES_API_V3",
                        "platform": "apis.usps.com (OAuth 2.0 client credentials)",
