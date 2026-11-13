@@ -322,3 +322,68 @@ class TestOpeningTheHubChangesNothing:
         assert writes == [], writes
         await db.refresh(job)
         assert (job.state, job.stage, job.attempt_count, job.heartbeat_at) == before
+
+
+# -- review findings on #220 (CodeRabbit, 2026-11-13) --
+
+@pytest.mark.regression
+class TestAFailedOptionalReadCostsOnlyItself:
+    async def test_a_status_query_that_fails_in_the_database_leaves_the_rows_usable(
+            self, seeded, monkeypatch):
+        """Before: the fallback rolled the whole session back, which expired the
+        job rows; serialising them then raised instead of returning the list."""
+        from sqlalchemy import text
+        from app.tefca_registry.rce import delivery_jobs
+
+        db, _intake, job = seeded
+        _licensed(monkeypatch, True)
+
+        async def broken(db_, rows):
+            await db_.execute(text("SELECT 1 / 0"))        # a real database error
+
+        monkeypatch.setattr(delivery_jobs, "status_for_jobs", broken)
+        out = await _overview(db, "reviewer", job_id=str(job.id))
+        item = next(i for i in out["deliveries"]["items"] if i["job_id"] == str(job.id))
+        assert item["status_available"] is False and item["processing_outcome"] is None
+        assert item["state"] == "RUNNING" and item["sha256"]
+        states = _states(out["readiness"])
+        assert states["exceptions"] == hub.UNKNOWN and states["human_review"] == hub.UNKNOWN
+        assert states["original_preserved"] == hub.MET            # later reads still worked
+        assert out["iqvia"]["availability"] == "available"
+
+    async def test_a_report_link_read_that_fails_is_unknown_and_nothing_else_is_lost(
+            self, seeded, monkeypatch):
+        from sqlalchemy import text
+        from app.reports.data import delivery_report_links
+
+        db, _intake, job = seeded
+
+        async def broken(db_, job_id):
+            await db_.execute(text("SELECT 1 / 0"))
+
+        monkeypatch.setattr(delivery_report_links, "links_for_job", broken)
+        readiness = (await _overview(db, "viewer", job_id=str(job.id)))["readiness"]
+        assert _states(readiness)["report_generated"] == hub.UNKNOWN
+        assert _states(readiness)["release"] == hub.UNVERIFIED
+        assert readiness["job_id"] == str(job.id)
+
+    async def test_a_stored_driver_error_is_masked_in_the_outcome_detail_too(
+            self, seeded, monkeypatch):
+        """`to_dict()` masks `error_reason`; the derived outcome embeds the raw
+        reason, so the hub masks its copy as well - for every role."""
+        from app.core.logging_config import sanitize_stored_error
+
+        db, _intake, job = seeded
+        raw = ("PROMOTION: (sqlalchemy.dialects.postgresql.asyncpg.Error) <class "
+               "'asyncpg.exceptions.UniqueViolationError'>: duplicate key\n[SQL: INSERT INTO "
+               "tefca_entities (name) VALUES ($1)]\n[parameters: ('SYNTHETIC SECRET VALUE 4711',)]")
+        assert "4711" not in sanitize_stored_error(raw), "fixture must be something the sanitizer masks"
+        job.state = RceDeliveryJob.STATE_FAILED
+        job.active_marker = None
+        job.failed_at = datetime.utcnow()
+        job.error_reason = raw
+        await db.commit()
+        for role in ("viewer", "reviewer", "admin"):
+            text_out = json.dumps(await _overview(db, role, job_id=str(job.id)), default=str)
+            assert "SYNTHETIC SECRET VALUE 4711" not in text_out, role
+            assert "[parameters" not in text_out, role

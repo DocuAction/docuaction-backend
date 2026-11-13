@@ -188,6 +188,10 @@ class TestWhereItMustStop:
         session = await jobs.get_upload_session(db, upload_id)
         os.remove(session.temp_path)
         job = await jobs.claim_next_queued(db)
+        # The queue is shared: an older QUEUED job left by an interrupted run would be
+        # claimed instead, and every assertion below would describe the wrong job.
+        assert job is not None and job.snapshot_id == snapshot_id, (
+            "claimed a job that is not this test's; clear leftover QUEUED import jobs")
         await routes.run_import_job(str(job.id))
         db.expire_all()
         await db.refresh(job)

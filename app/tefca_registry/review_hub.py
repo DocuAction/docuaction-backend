@@ -103,6 +103,33 @@ def _item(key: str, label: str, state: str, detail: str, *, as_of=None,
             "as_of": _iso(as_of), "basis": basis}
 
 
+async def _guarded(db, what: str, read):
+    """(ok, value) for one optional read, isolated in a SAVEPOINT.
+
+    A failed read must not cost the rest of the overview. Rolling the whole
+    session back would expire every row already loaded (the job rows this
+    module goes on to serialise), and touching an expired attribute outside an
+    awaited call raises instead of answering. Rolling back to a savepoint
+    undoes only the failed statement and leaves loaded rows usable.
+    """
+    try:
+        async with db.begin_nested():
+            return True, await read()
+    except Exception as exc:  # noqa: BLE001 - reported as unavailable, never raised
+        logger.info("hub: %s unavailable: %s", what, type(exc).__name__)
+        return False, None
+
+
+def _safe_status(status):
+    """The derived status with stored driver text masked, as `to_dict()` does
+    for `error_reason`. The derivation embeds the job's raw failure reason in
+    the outcome detail; a row written before PR #85 may hold a driver's
+    rendering of a statement and its parameters."""
+    from app.core.logging_config import sanitize_stored_error_tree
+
+    return sanitize_stored_error_tree(status) if status is not None else None
+
+
 # ── capabilities ─────────────────────────────────────────────────────────────
 
 def capability_floors() -> List[Dict[str, Any]]:
@@ -204,14 +231,9 @@ async def _deliveries(db, limit: int):
     rows = list(await jobs.list_jobs(db, limit=limit, state=None, offset=0))
     derived: List[Optional[Dict[str, Any]]] = [None] * len(rows)
     if rows:
-        try:
-            derived = list(await jobs.status_for_jobs(db, rows))
-        except Exception as exc:  # noqa: BLE001 - a status failure must not empty the list
-            logger.info("hub: delivery status unavailable: %s", type(exc).__name__)
-            try:
-                await db.rollback()
-            except Exception:  # noqa: BLE001
-                pass
+        ok, value = await _guarded(db, "delivery status", lambda: jobs.status_for_jobs(db, rows))
+        if ok:
+            derived = [_safe_status(v) for v in value]
     items = []
     for row, status in zip(rows, derived):
         d = row.to_dict()
@@ -245,19 +267,16 @@ async def _iqvia(db, user) -> Dict[str, Any]:
     if not decision["allowed"]:
         return {"availability": decision["availability"], "status": None,
                 "page": "/tefca-arc/iqvia"}
-    try:
+    async def read():
         total, page = await iqvia_routes._fetch_snapshot_page(
             db, limit=iqvia_routes._SNAPSHOT_LIST_MAX_LIMIT, offset=0,
             source_system=None, include_successors=False)
-        status = iqvia_routes.derive_iqvia_source_status(
+        return iqvia_routes.derive_iqvia_source_status(
             page, total=total,
             consumption_enabled=bool(getattr(settings, "ENABLE_IQVIA_AFFILIATION_CONSUMPTION", False)))
-    except Exception as exc:  # noqa: BLE001
-        logger.info("hub: IQVIA inventory unavailable: %s", type(exc).__name__)
-        try:
-            await db.rollback()
-        except Exception:  # noqa: BLE001
-            pass
+
+    ok, status = await _guarded(db, "IQVIA inventory", read)
+    if not ok:
         return {"availability": "unavailable", "status": None, "page": "/tefca-arc/iqvia"}
     return {"availability": "available", "status": status, "page": "/tefca-arc/iqvia"}
 
@@ -300,15 +319,10 @@ async def _readiness(db, job, status: Optional[Dict[str, Any]]) -> Dict[str, Any
                            f"Job state {state!r} is not one this panel recognises.",
                            basis="delivery job row"))
 
-    snapshot = None
-    try:
-        snapshot = await reconciliation.latest_snapshot(db, job.id)
-    except Exception as exc:  # noqa: BLE001
-        logger.info("hub: reconciliation snapshot unavailable: %s", type(exc).__name__)
-        try:
-            await db.rollback()
-        except Exception:  # noqa: BLE001
-            pass
+    job_pk = job.id
+    ok, snapshot = await _guarded(db, "reconciliation snapshot",
+                                  lambda: reconciliation.latest_snapshot(db, job_pk))
+    if not ok:
         items.append(_item("reconciliation", "Record reconciliation", UNKNOWN,
                            "The stored reconciliation snapshot could not be read.",
                            basis="reconciliation snapshot"))
@@ -363,16 +377,10 @@ async def _readiness(db, job, status: Optional[Dict[str, Any]]) -> Dict[str, Any
                            f"{': ' + str(review['detail']) if review.get('detail') else ''}",
                            basis="status model"))
 
-    try:
-        from app.reports.data.delivery_report_links import links_for_job
+    from app.reports.data.delivery_report_links import links_for_job
 
-        links = await links_for_job(db, job.id)
-    except Exception as exc:  # noqa: BLE001
-        logger.info("hub: report links unavailable: %s", type(exc).__name__)
-        try:
-            await db.rollback()
-        except Exception:  # noqa: BLE001
-            pass
+    ok, links = await _guarded(db, "report links", lambda: links_for_job(db, job_pk))
+    if not ok:
         items.append(_item("report_generated", "Report generated", UNKNOWN,
                            "The report links for this delivery could not be read.",
                            basis="verified report links"))
@@ -441,10 +449,9 @@ async def overview(
             selected = await jobs.get_job(db, wanted)
             if selected is None:
                 raise HTTPException(404, f"No delivery job {job_id}")
-            try:
-                selected_status = (await jobs.status_for_jobs(db, [selected]))[0]
-            except Exception:  # noqa: BLE001
-                selected_status = None
+            ok, value = await _guarded(db, "delivery status",
+                                       lambda: jobs.status_for_jobs(db, [selected]))
+            selected_status = _safe_status(value[0]) if ok and value else None
     elif rows:
         selected, selected_status = rows[0], derived[0]
 
