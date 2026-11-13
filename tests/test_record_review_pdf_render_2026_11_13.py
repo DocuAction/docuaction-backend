@@ -471,3 +471,19 @@ def test_the_checker_reads_a_missing_word_a_moved_comment_and_whitespace_as_what
     text, markers = s.marked_text("X", 500)
     assert len(set(markers)) == len(markers) and all(text.count(m) == 1 for m in markers)
     assert text.startswith(markers[0]) and text.endswith(markers[-1])
+
+
+def test_the_detail_heading_its_explanation_and_the_first_record_are_on_one_page(rendered):
+    """Real render. The heading, the whole explanatory paragraph and the start of
+    the table it describes are on the same page (before: the paragraph was split
+    after its second line in the 14-record file)."""
+    start, end = s.squash("Addresses and commentary (verbatim)"), s.squash("NOT an accepted correction.")
+    hits = []
+    for number, page in enumerate(rendered["pages"], start=1):
+        text = s.squash(" ".join(w["text"] for w in page["words"]))
+        if start in text:
+            hits.append((number, end in text, s.squash("Record detail (") in text))
+    assert len(hits) == 1, hits
+    number, whole_paragraph, table_starts = hits[0]
+    assert whole_paragraph, f"page {number}: the explanation continues on another page"
+    assert table_starts, f"page {number}: the table the explanation describes starts on another page"

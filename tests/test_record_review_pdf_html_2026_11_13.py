@@ -244,3 +244,18 @@ def test_a_continuation_row_is_merged_only_into_the_record_it_names():
     # Free text with brackets is never excused: reordered markers are a difference.
     assert not note_number_displaced("[WHY-2]b[WHY-1]a", "[WHY-1]a[WHY-2]b")
     assert not note_number_displaced("Notestablished[2]extra", "Notestablished[2]extra")
+
+
+def test_a_section_heading_and_its_explanation_are_not_separated_by_a_page_break():
+    """Presentation only (found reading the rendered pages, base file pp. 4-5):
+    the "Addresses and commentary" heading and two lines of its explanation sat
+    at the foot of one page and the rest on the next. The rules that keep them
+    together are in the stylesheet the PDF is rendered from."""
+    page = _page([_f(1)])
+    css = page[page.index("<style>"):page.index("</style>")]
+    h2 = re.search(r"\bh2\s*\{[^}]*\}", css).group()
+    note = re.search(r"\bp\.note\s*\{[^}]*\}", css).group()
+    assert "break-after: avoid" in h2
+    assert "break-inside: avoid" in note and "break-after: avoid" in note
+    # the explanation is a p.note directly after the section heading
+    assert re.search(r"<h2>Addresses and commentary \(verbatim\)</h2>\s*<p class='note'>", page)

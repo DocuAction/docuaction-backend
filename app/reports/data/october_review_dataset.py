@@ -359,7 +359,12 @@ PDF_CSS = """
 html { font-family: Helvetica, Arial, "Liberation Sans", sans-serif; color: #1b1b1b; }
 body { font-size: 8pt; line-height: 1.25; margin: 0; }
 h1 { font-size: 15pt; margin: 0 0 4pt 0; string-set: doc-title content(); }
-h2 { font-size: 11pt; margin: 12pt 0 4pt 0; border-bottom: 1.5pt solid #1b1b1b; padding-bottom: 2pt; }
+h2 { font-size: 11pt; margin: 12pt 0 4pt 0; border-bottom: 1.5pt solid #1b1b1b; padding-bottom: 2pt;
+     break-after: avoid; page-break-after: avoid; }
+/* A section's explanatory paragraph is read as one statement: it is not split across
+   pages, and it stays with the heading above it and the table it describes. */
+p.note { break-inside: avoid; page-break-inside: avoid; break-after: avoid; page-break-after: avoid; }
+caption { break-after: avoid; page-break-after: avoid; }
 p { margin: 0 0 5pt 0; }
 p.classification { font-size: 9pt; font-weight: 700; margin: 0 0 6pt 0; }
 .banner { border: 1.5pt solid #b50909; color: #b50909; background: #fff5f5; padding: 4pt 6pt;
