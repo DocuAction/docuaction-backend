@@ -202,7 +202,7 @@ jobs:
             tests/test_record_comments_db_2026_11_12.py \
             tests/test_record_review_package_script_2026_11_12.py \
             -v --tb=short -rs --junitxml=isolation-results.xml
-      - name: Fail on any skip that is not explicitly permitted
+      - name: Fail if any isolation test skip is not explicitly permitted
         # Replaces a case-sensitive `grep 'No database reachable'` that let
         # lowercase "no database reachable ..." / "no sandbox database ..." skips pass.
         # Every skip fails unless its test id is in PERMITTED_SKIPS (scripts/ci_skip_guard.py);
