@@ -642,6 +642,17 @@ async def reconciliation(
     from app.tefca_registry.rce import repository as repo
     from app.tefca_registry.rce.reconciliation import reconcile_delivery
 
+    # ORDER MATTERS. The qalead requirement for `recompute=true` is decided
+    # first, from the caller alone - before the id is parsed or the delivery
+    # looked up - exactly where it stood before the 2026-11-13 id checks were
+    # added. A caller who may not recompute gets the same 403 for an existing,
+    # an unknown and a malformed id, so the answer says nothing about which
+    # deliveries exist.
+    if recompute and not role_at_least(user, "qalead"):
+        raise HTTPException(
+            403, "Live reconciliation recomputation requires the qalead role; "
+                 "the persisted snapshot is served without this flag.")
+
     # The address of a delivery that does not exist is a 404, as it is on
     # GET /deliveries/{id}. Without this, `reconcile_delivery` raised
     # ValueError("No intake ...") and the caller got a 500 (found 2026-11-13).
@@ -650,10 +661,6 @@ async def reconciliation(
         raise HTTPException(404, f"No delivery {intake_id}")
 
     if recompute:
-        if not role_at_least(user, "qalead"):
-            raise HTTPException(
-                403, "Live reconciliation recomputation requires the qalead role; "
-                     "the persisted snapshot is served without this flag.")
         result = await reconcile_delivery(db, intake_id)
         result["source"] = "live_recompute"
         return result

@@ -148,7 +148,7 @@ async def test_the_id_check_does_not_come_before_authorization(rolled_back_db):
         assert (await client.get("/api/admin/users/not-a-uuid/activity",
                                  headers=contributor)).status_code == 403     # admin only
         assert (await client.get(f"/api/tefca/rce/deliveries/{UNKNOWN}/reconciliation?recompute=true",
-                                 headers=viewer)).status_code == 404          # nothing to recompute
+                                 headers=viewer)).status_code == 403          # qalead gate first (see below)
 
 
 # ── D2: reconciliation of a delivery that does not exist ──────────────────────
@@ -165,6 +165,57 @@ async def test_reconciliation_of_an_unknown_delivery_is_404_and_a_real_one_still
                               "request_id": missing.json()["request_id"]}
     assert real.status_code == 200, real.text[:300]
     assert real.json()["intake_id"] == str(intake_id) and "passed" in real.json()
+
+
+# ── recompute=true: the qalead requirement answers BEFORE anything about the id ──
+
+RECOMPUTE_403 = ("Live reconciliation recomputation requires the qalead role; "
+                 "the persisted snapshot is served without this flag.")
+
+
+@pytest.mark.parametrize("role", ["viewer", "reviewer"])
+async def test_recompute_below_qalead_is_403_whatever_the_id_is(rolled_back_db, role):
+    """A caller who may not recompute gets the same 403 for an existing, an unknown
+    and a malformed id. Answering 404 first would tell them which deliveries exist
+    (and, before this change, was how the id check slipped in front of the gate)."""
+    db = rolled_back_db
+    headers = await _headers(db, role)
+    intake_id, _job = await seed_intake(db, make_rows(2, arc="9.99.782.3"), with_job=False)
+    async with _client(db) as client:
+        for label, value in (("existing", str(intake_id)), ("unknown", UNKNOWN), ("malformed", "not-a-uuid")):
+            r = await client.get(f"/api/tefca/rce/deliveries/{value}/reconciliation?recompute=true", headers=headers)
+            assert r.status_code == 403, (role, label, r.status_code, r.text[:200])
+            assert r.json()["error"] == RECOMPUTE_403, (role, label, r.json())
+        # the ordinary read is unchanged for the same caller
+        assert (await client.get(f"/api/tefca/rce/deliveries/{intake_id}/reconciliation",
+                                 headers=headers)).status_code == 200
+        assert (await client.get(f"/api/tefca/rce/deliveries/{UNKNOWN}/reconciliation",
+                                 headers=headers)).status_code == 404
+        assert (await client.get("/api/tefca/rce/deliveries/not-a-uuid/reconciliation",
+                                 headers=headers)).status_code == 404
+
+
+@pytest.mark.parametrize("role", ["qalead", "program_manager"])
+async def test_recompute_at_or_above_qalead_recomputes_or_says_not_found(rolled_back_db, role):
+    db = rolled_back_db
+    headers = await _headers(db, role)
+    intake_id, _job = await seed_intake(db, make_rows(2, arc="9.99.782.4"), with_job=False)
+    async with _client(db) as client:
+        live = await client.get(f"/api/tefca/rce/deliveries/{intake_id}/reconciliation?recompute=true", headers=headers)
+        unknown = await client.get(f"/api/tefca/rce/deliveries/{UNKNOWN}/reconciliation?recompute=true", headers=headers)
+        malformed = await client.get("/api/tefca/rce/deliveries/not-a-uuid/reconciliation?recompute=true", headers=headers)
+    assert live.status_code == 200, live.text[:300]
+    assert live.json()["source"] == "live_recompute" and live.json()["intake_id"] == str(intake_id)
+    assert unknown.status_code == 404 and unknown.json()["error"] == f"No delivery {UNKNOWN}"
+    assert malformed.status_code == 404 and malformed.json()["error"] == "No delivery not-a-uuid"
+
+
+async def test_recompute_without_a_session_is_refused_before_anything_else(rolled_back_db):
+    db = rolled_back_db
+    async with _client(db) as client:
+        for value in (UNKNOWN, "not-a-uuid"):
+            r = await client.get(f"/api/tefca/rce/deliveries/{value}/reconciliation?recompute=true")
+            assert r.status_code in (401, 403) and r.json().get("error") != RECOMPUTE_403
 
 
 # ── D3: numeric query parameters ──────────────────────────────────────────────
