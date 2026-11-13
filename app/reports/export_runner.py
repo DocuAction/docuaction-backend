@@ -40,6 +40,15 @@ PHASE_BUILDING = "Building workbook"
 PHASE_REGISTERING = "Registering artifact"
 PHASE_READY = "Ready"
 
+#: Record-review export format -> the content type its artifact is REGISTERED
+#: under. One table, used by the runner (to register) and by the status route
+#: (to build the download link): the two must agree or the link is a 404.
+RECORD_REVIEW_CONTENT_TYPES = {
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "csv": "text/csv",
+    "pdf": "application/pdf",
+}
+
 
 class _Heartbeat:
     """Writes a heartbeat while a long step runs, on its own session.
@@ -259,10 +268,11 @@ async def run_record_review_export_job(db, job) -> str:
     job_id = job.id
     params = dict(job.request_parameters or {})
     fmt = params.get("format")
+    assert RECORD_REVIEW_CONTENT_TYPES["xlsx"] == XLSX_CONTENT_TYPE
     renderers = {
-        "xlsx": (lambda d: render_workbook(d), XLSX_CONTENT_TYPE),
-        "csv": (lambda d: ds.to_csv(d), "text/csv"),
-        "pdf": (lambda d: ds.to_pdf(d), "application/pdf"),
+        "xlsx": (lambda d: render_workbook(d), RECORD_REVIEW_CONTENT_TYPES["xlsx"]),
+        "csv": (lambda d: ds.to_csv(d), RECORD_REVIEW_CONTENT_TYPES["csv"]),
+        "pdf": (lambda d: ds.to_pdf(d), RECORD_REVIEW_CONTENT_TYPES["pdf"]),
     }
     try:
         if fmt not in renderers:

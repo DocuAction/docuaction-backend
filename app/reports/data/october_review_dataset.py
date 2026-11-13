@@ -78,10 +78,38 @@ RECORD_COLUMNS = [
     "Report Clarifications", "Evidence Reference",
 ]
 TEXT_COLUMNS = list(range(len(RECORD_COLUMNS)))   # identifiers stay text
-#: Compact subset for the PDF; the full column set is in the Excel/CSV.
+#: Compact subset for the PDF's main table; the full column set is in the Excel/CSV.
+#: 2026-11-13: Submitted NPI and Flag added (the PDF showed a bucket without the
+#: identifier it was decided on, and no HELD / PROVISIONAL flag).
 PDF_COLUMNS = ["Source_Line", "AGT_Record_ID", "QHIN Number", "Organization",
-               "Bucket", "Status", "NPPES", "PECOS/CMS Enrollment", "OIG LEIE",
+               "Submitted NPI (original, verbatim)", "Bucket", "Status", "Flag",
+               "NPPES", "PECOS/CMS Enrollment", "OIG LEIE",
                "SAM.gov Exclusions", "USPS Address Check", "Reasons"]
+#: The PDF's main-table columns, grouped so a reader can tell processing status,
+#: classification, source results and reasons apart. Widths are percentages of
+#: the landscape page; they sum to 100.
+PDF_COLUMN_GROUPS = [
+    ("Record identity", [("Source_Line", 4.0), ("AGT_Record_ID", 8.5), ("QHIN Number", 5.5),
+                         ("Organization", 8.5), ("Submitted NPI (original, verbatim)", 6.0)]),
+    ("Classification / processing status", [("Bucket", 7.0), ("Status", 6.0), ("Flag", 7.0)]),
+    ("Source results (verbatim; see notes)", [("NPPES", 7.8), ("PECOS/CMS Enrollment", 7.8),
+                                              ("OIG LEIE", 7.8), ("SAM.gov Exclusions", 7.8),
+                                              ("USPS Address Check", 6.8)]),
+    ("Reasons", [("Reasons", 9.5)]),
+]
+#: Second PDF table: the long free-text columns, one row per record that has any of
+#: them. Original QA comments, the second reviewer's comments and the generated
+#: clarifications stay in SEPARATE columns and are rendered verbatim (pre-wrap).
+PDF_DETAIL_COLUMNS = [("AGT_Record_ID", 11.0), ("Submitted Address", 13.0),
+                      ("Proposed Corrected Address (AI-Assisted)", 13.0),
+                      (ORIGINAL_COMMENTS_COLUMN, 21.0), (IZAAN_COMMENTS_COLUMN, 21.0),
+                      ("Report Clarifications", 21.0)]
+#: Loader placeholder sentences ("Not established by this loader: ...") are long and
+#: identical across the four source columns; in the PDF they are shown once, in a
+#: numbered note under the table, and the cell carries the note number. The
+#: Excel/CSV keep the sentence in every cell. Only text with this exact prefix is
+#: folded; a real source result is never shortened.
+PDF_NOTE_PREFIX = "Not established by this loader:"
 
 
 class DatasetRefused(ValueError):
@@ -291,25 +319,180 @@ def to_csv(dataset: Dict[str, Any]) -> bytes:
     return to_bytes(buf.getvalue())
 
 
+PDF_CSS = """
+@page { size: Letter landscape; margin: 0.55in 0.45in 0.6in 0.45in;
+  @top-center { content: string(doc-title); font: 7.5pt sans-serif; color: #555; }
+  @bottom-center { content: "Page " counter(page) " of " counter(pages);
+                   font: 7.5pt sans-serif; color: #555; }
+  @bottom-left { content: "DRAFT / NOT FINAL / INDEPENDENT QA PENDING";
+                 font: 7.5pt sans-serif; color: #b50909; }
+}
+html { font-family: Helvetica, Arial, "Liberation Sans", sans-serif; color: #1b1b1b; }
+body { font-size: 8pt; line-height: 1.25; margin: 0; }
+h1 { font-size: 15pt; margin: 0 0 4pt 0; string-set: doc-title content(); }
+h2 { font-size: 11pt; margin: 12pt 0 4pt 0; border-bottom: 1.5pt solid #1b1b1b; padding-bottom: 2pt; }
+p { margin: 0 0 5pt 0; }
+.classification { font-size: 9pt; font-weight: 700; margin: 0 0 6pt 0; }
+.banner { border: 1.5pt solid #b50909; color: #b50909; background: #fff5f5; padding: 4pt 6pt;
+          font-weight: 700; margin: 0 0 8pt 0; }
+.synthetic { border: 2pt dashed #b50909; color: #b50909; padding: 4pt 6pt; font-weight: 700;
+             font-size: 10pt; text-align: center; margin: 0 0 8pt 0; }
+.note { color: #444; font-size: 7.5pt; }
+table { border-collapse: collapse; width: 100%; table-layout: fixed; margin: 0 0 8pt 0;
+        break-inside: auto; page-break-inside: auto; }
+caption { text-align: left; font-weight: 700; font-size: 8.5pt; padding: 0 0 3pt 0; }
+thead { display: table-header-group; }
+tr { break-inside: avoid; page-break-inside: avoid; }
+th, td { border: 0.5pt solid #8d8d8d; padding: 2.5pt 3pt; text-align: left; vertical-align: top;
+         overflow-wrap: anywhere; word-break: break-word; hyphens: manual; }
+th { background: #e8ecf1; font-weight: 700; font-size: 7.5pt; overflow-wrap: break-word; word-break: normal; }
+th.group { background: #c9d2dd; text-align: center; font-size: 7.5pt; letter-spacing: 0.2pt; }
+th.group-identity { background: #dfe6ee; }
+th.group-classification { background: #e2ddd2; }
+th.group-source { background: #d9e6dc; }
+th.group-reasons { background: #e9e2d6; }
+td.identity { background: #f6f8fa; }
+td.classification { background: #faf8f4; }
+td.source { background: #f4f9f5; }
+td.mono { font-family: "DejaVu Sans Mono", Consolas, "Courier New", monospace; font-size: 7pt; }
+td.num { text-align: right; }
+td.verbatim { white-space: pre-wrap; font-size: 7.5pt; }
+.summary { width: 55%; }
+.summary td:last-child { width: 35%; }
+.chip { display: inline-block; max-width: 100%; border: 0.75pt solid #555; border-radius: 2pt;
+        padding: 0 2pt; font-weight: 700; font-size: 7pt; overflow-wrap: break-word; word-break: normal; }
+.chip-B1 { background: #e3f3e6; border-color: #2e7d32; } .chip-B2 { background: #fff3d6; border-color: #b26a00; }
+.chip-B3 { background: #ececec; border-color: #555; }    .chip-B4 { background: #fde2e1; border-color: #b50909; }
+.chip-HELD { background: #fde2e1; border-color: #b50909; }
+.chip-NOTCLASSIFIED { background: #fff3d6; border-color: #b26a00; }
+ol.notes { margin: 0 0 8pt 0; padding-left: 14pt; font-size: 7.5pt; color: #333; }
+ol.notes li { margin: 0 0 2pt 0; }
+"""
+
+
+def _th(name: str) -> str:
+    """Header text with a soft break opportunity after each underscore, so
+    "Source_Line" wraps as "Source_ / Line" instead of mid-word (the text itself
+    is unchanged; <wbr> carries no characters)."""
+    return html.escape(name).replace("_", "_<wbr>")
+
+
+def _chip(value: str) -> str:
+    key = "".join(ch for ch in value.upper() if ch.isalnum())
+    cls = f" chip-{key}" if key in ("B1", "B2", "B3", "B4", "HELD", "NOTCLASSIFIED") else ""
+    return f'<span class="chip{cls}">{html.escape(value)}</span>' if value else ""
+
+
 def to_html(dataset: Dict[str, Any]) -> str:
+    """Self-contained HTML for the PDF rendering of THIS dataset. Presentation only:
+    every value comes from `dataset["sheets"]`; nothing is recomputed here."""
     e = html.escape
-    cols = PDF_COLUMNS
     rec = dataset["sheets"]["Records"]
-    idx = [rec["columns"].index(c) for c in cols]
-    srows = "".join(f"<tr><td>{e(a)}</td><td>{e(b)}</td></tr>"
+    columns = rec["columns"]
+    col = {c: columns.index(c) for c in columns}
+    classification = _s(dataset.get("classification")).strip()
+    synthetic = "SYNTHETIC" in classification.upper()
+    title = f"{dataset['report_id']} - record review ({classification or 'DRAFT'})"
+
+    # -- summary -------------------------------------------------------------
+    srows = "".join(f"<tr><th scope='row'>{e(a)}</th><td class='num'>{e(b)}</td></tr>"
                     for a, b in dataset["sheets"]["Summary"]["rows"])
-    head = "".join(f"<th>{e(c)}</th>" for c in cols)
-    body = "".join("<tr>" + "".join(f"<td>{e(r[i])}</td>" for i in idx) + "</tr>"
-                   for r in rec["rows"])
+
+    # -- main records table: grouped headers, fixed widths, placeholder notes ---
+    group_cls = {"Record identity": "identity", "Classification / processing status": "classification",
+                 "Source results (verbatim; see notes)": "source", "Reasons": "reasons"}
+    colgroup = "".join(f"<col style='width:{w}%'>" for _g, cs in PDF_COLUMN_GROUPS for _c, w in cs)
+    group_row = "".join(f"<th class='group group-{group_cls[g]}' colspan='{len(cs)}' scope='colgroup'>{e(g)}</th>"
+                        for g, cs in PDF_COLUMN_GROUPS)
+    head_row = "".join(f"<th scope='col'>{_th(c)}</th>" for _g, cs in PDF_COLUMN_GROUPS for c, _w in cs)
+    notes: List[str] = []                      # verbatim placeholder sentences, numbered once
+
+    def source_cell(text: str) -> str:
+        if text.startswith(PDF_NOTE_PREFIX):
+            if text not in notes:
+                notes.append(text)
+            return f"Not established <sup>[{notes.index(text) + 1}]</sup>"
+        return e(text)
+
+    body_rows = []
+    for r in rec["rows"]:
+        cells = []
+        for g, cs in PDF_COLUMN_GROUPS:
+            gcls = group_cls[g]
+            for c, _w in cs:
+                v = r[col[c]]
+                if c == "Source_Line":
+                    cells.append(f"<td class='{gcls} num'>{e(v)}</td>")
+                elif c in ("AGT_Record_ID", "QHIN Number", "Submitted NPI (original, verbatim)"):
+                    cells.append(f"<td class='{gcls} mono'>{e(v)}</td>")
+                elif c in ("Bucket", "Status"):
+                    cells.append(f"<td class='{gcls}'>{_chip(v)}</td>")
+                elif gcls == "source":
+                    cells.append(f"<td class='{gcls}'>{source_cell(v)}</td>")
+                else:
+                    cells.append(f"<td class='{gcls}'>{e(v)}</td>")
+        body_rows.append("<tr>" + "".join(cells) + "</tr>")
+    notes_html = ("<ol class='notes'>" + "".join(f"<li>{e(n)}</li>" for n in notes) + "</ol>"
+                  if notes else "")
+
+    # -- detail table: addresses and the three separate, verbatim comment columns --
+    detail_idx = [col[c] for c, _w in PDF_DETAIL_COLUMNS]
+    detail_rows = []
+    for r in rec["rows"]:
+        if not any(r[i] for i in detail_idx[1:]):
+            continue
+        cells = [f"<td class='mono'>{e(r[detail_idx[0]])}<br><span class='note'>line {e(r[col['Source_Line']])}"
+                 f" &middot; {e(r[col['Bucket']])} / {e(r[col['Status']])}</span></td>"]
+        cells += [f"<td class='verbatim'>{e(r[i])}</td>" for i in detail_idx[1:]]
+        detail_rows.append("<tr>" + "".join(cells) + "</tr>")
+    detail_colgroup = "".join(f"<col style='width:{w}%'>" for _c, w in PDF_DETAIL_COLUMNS)
+    detail_head = "".join(f"<th scope='col'>{_th(c)}</th>" for c, _w in PDF_DETAIL_COLUMNS)
+    detail_html = (
+        f"<h2>Addresses and commentary (verbatim)</h2>"
+        f"<p class='note'>Only records with an address correction or any comment are listed. "
+        f"Original QA comments, the second reviewer's comments and generated report "
+        f"clarifications are separate columns, reproduced verbatim (whitespace preserved). "
+        f"Comments are commentary, not determinations, resolutions or QA approvals; a proposed "
+        f"address is AI-assisted and NOT an accepted correction.</p>"
+        f"<table><caption>Record detail ({len(detail_rows)} of {len(rec['rows'])} records)</caption>"
+        f"<colgroup>{detail_colgroup}</colgroup><thead><tr>{detail_head}</tr></thead>"
+        f"<tbody>{''.join(detail_rows)}</tbody></table>"
+        if detail_rows else
+        "<h2>Addresses and commentary (verbatim)</h2><p class='note'>No record in this dataset "
+        "carries an address correction or a comment.</p>")
+
+    # -- unclassified list (the summary refers to it; it must be in the PDF too) --
+    uncls_html = ""
+    if "Unclassified" in dataset["sheets"]:
+        u = dataset["sheets"]["Unclassified"]
+        urows = "".join("<tr>" + "".join(f"<td class='mono'>{e(v)}</td>" for v in row) + "</tr>"
+                        for row in u["rows"])
+        uncls_html = (f"<h2>Unclassified records ({len(u['rows'])})</h2>"
+                      f"<p class='note'>No usable persisted classification; no bucket was assigned. "
+                      f"These records are counted in the total but in no bucket.</p>"
+                      f"<table style='width:60%'><thead><tr>"
+                      + "".join(f"<th scope='col'>{e(c)}</th>" for c in u["columns"])
+                      + f"</tr></thead><tbody>{urows}</tbody></table>")
+
+    synthetic_html = ("<p class='synthetic'>SYNTHETIC TEST DATA - not a delivered Government record; "
+                      "produced for layout verification only</p>" if synthetic else "")
     return (f"<!doctype html><html lang='en'><head><meta charset='utf-8'>"
-            f"<title>{e(dataset['report_id'])} - record review (DRAFT)</title>"
-            f"<style>@page{{size:landscape}}body{{font:9pt sans-serif}}"
-            f"td,th{{border:1px solid #ccc;padding:2px;text-align:left}}"
-            f"</style></head><body><h1>Record review - DRAFT</h1>"
-            f"<p>{e(dataset['banner'])}</p><h2>Summary</h2><table><tr><th>Measure</th>"
-            f"<th>Value</th></tr>{srows}</table><h2>Records</h2>"
-            f"<p>Compact view; the full column set is in the Excel/CSV from the "
-            f"same dataset.</p><table><tr>{head}</tr>{body}</table></body></html>")
+            f"<title>{e(title)}</title><style>{PDF_CSS}</style></head><body>"
+            f"<h1>Record review - {e(classification or 'DRAFT')}</h1>"
+            f"<p class='classification'>Report {e(dataset['report_id'])} &middot; dataset "
+            f"{e(DATASET_VERSION)} &middot; assessment date {e(_s(dataset['summary'].get('assessment_date')))}"
+            f"</p>{synthetic_html}<p class='banner'>{e(dataset['banner'])}</p>"
+            f"<h2>Summary</h2><table class='summary'><thead><tr><th scope='col'>Measure</th>"
+            f"<th scope='col'>Value</th></tr></thead><tbody>{srows}</tbody></table>"
+            f"<p class='note'>HELD records are counted once, inside B4, with their status and "
+            f"reasons retained. Field findings are a separate grain and are not in these totals.</p>"
+            f"<h2>Records ({len(rec['rows'])})</h2>"
+            f"<p class='note'>Compact view; the full column set is in the Excel/CSV from the "
+            f"same dataset. Source-result cells are the loader's recorded text; a numbered note "
+            f"stands for a placeholder sentence that is reproduced once below the table.</p>"
+            f"<table><colgroup>{colgroup}</colgroup><thead><tr>{group_row}</tr><tr>{head_row}</tr>"
+            f"</thead><tbody>{''.join(body_rows)}</tbody></table>{notes_html}"
+            f"{detail_html}{uncls_html}</body></html>")
 
 
 def to_pdf(dataset: Dict[str, Any]) -> bytes:
