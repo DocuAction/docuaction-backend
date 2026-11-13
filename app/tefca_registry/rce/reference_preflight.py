@@ -35,6 +35,18 @@ bound is stated in every result (`rows_sampled`, `tail_checked`).
     REF-SCH-009  wrong delimiter (header is one field)            BLOCKED
     REF-SCH-010  UTF-8 byte-order mark                            INFORMATIONAL
     REF-SCH-011  column not in the documented layout              INFORMATIONAL
+    REF-SCH-012  header present but no data record                BLOCKED
+
+1.1.0 (2026-11-13) - three gaps reproduced with synthetic files:
+  * a header-only extract was CLEAR, i.e. exactly the approvable EMPTY snapshot
+    this module exists to prevent (REF-SCH-005 caught only a file with no
+    header). Now REF-SCH-012, BLOCKED.
+  * a VALID extract whose final record carries a quoted line break was BLOCKED
+    as truncated (REF-SCH-008): the last PHYSICAL line was parsed on its own.
+    The final record is now read by the CSV reader, as a record.
+  * `bound` said "first 1000 records" whatever was read. Records are read from
+    the first 64 KiB only, so on wide rows far fewer are sampled (290 of 3,000
+    in the reproduction). `bound` now states what was actually read.
 
 No positional fallback, no renaming, no coercion. The original bytes are
 only read. One technical finding per fault, with the affected scope, never
@@ -52,7 +64,7 @@ from app.core.upload_security import open_no_follow
 from app.tefca_registry.rce import preflight_shadow_models as pm
 from app.tefca_registry.rce import snapshot_models as sm
 
-REFERENCE_PREFLIGHT_VERSION = "1.0.0"
+REFERENCE_PREFLIGHT_VERSION = "1.1.0"
 SAMPLE_ROWS = 1000
 _TAIL_BYTES = 64 * 1024
 
@@ -79,6 +91,40 @@ REFERENCE_SCHEMAS: Dict[str, Dict[str, Any]] = {
                      "TITL_TYP_ID": "contact-affiliation title classification"},
     },
 }
+
+
+def _final_record(tail_text: str, whole_file: bool, expected_fields: int) -> List[str]:
+    """The last record of the file, read as a CSV RECORD (a quoted field may
+    span lines). `tail_text` is the whole file, or its last 64 KiB - which
+    starts at an arbitrary byte, possibly inside a record or a quoted field.
+    For a tail, the reader is started at each of the first line starts in turn
+    and the alignment under which the most records have the header's field
+    count is the one believed; the final record is judged under it."""
+    # strict=True: a quoted field still open at end of data is an error, not a
+    # field - that is a file cut INSIDE a quoted value, and it must read as
+    # truncated rather than as a complete record.
+    if whole_file:
+        try:
+            rows = [r for r in csv.reader(io.StringIO(tail_text, newline=""), strict=True) if r]
+        except csv.Error:
+            return []
+        return rows[-1] if rows else []
+    best_rows: List[List[str]] = []
+    best_score = -1
+    offset = 0
+    for _ in range(40):
+        cut = tail_text.find("\n", offset)
+        if cut < 0:
+            break
+        offset = cut + 1
+        try:
+            rows = [r for r in csv.reader(io.StringIO(tail_text[offset:], newline=""), strict=True) if r]
+        except csv.Error:
+            continue
+        score = sum(1 for r in rows if len(r) == expected_fields)
+        if score > best_score:
+            best_rows, best_score = rows, score
+    return best_rows[-1] if best_rows else []
 
 
 class ReferencePreflightBlocked(RuntimeError):
@@ -120,8 +166,8 @@ def preflight_reference_file(path, source_system: str) -> Dict[str, Any]:
         "preflight_version": REFERENCE_PREFLIGHT_VERSION, "source_system": source_system,
         "schema_version": schema["schema_version"], "rows_sampled": 0,
         "tail_checked": False, "held_checks": [], "originals_modified": False,
-        "bound": (f"header in full, first {SAMPLE_ROWS} records, final record; "
-                  f"not a full-file scan"),
+        "bound": (f"header in full; records within the first {_TAIL_BYTES // 1024} KiB "
+                  f"(at most {SAMPLE_ROWS}); final record; not a full-file scan"),
     }
 
     def done() -> Dict[str, Any]:
@@ -228,6 +274,17 @@ def preflight_reference_file(path, source_system: str) -> Dict[str, Any]:
         if len(row) != len(header) and bad is None:
             bad = {"line": line_no, "fields": len(row), "expected": len(header)}
     out["rows_sampled"] = sampled
+    # What was actually read, not what could have been (see 1.1.0 above).
+    out["bound"] = (f"header in full; the first {sampled} record(s) - those within the "
+                    f"first {_TAIL_BYTES // 1024} KiB, at most {SAMPLE_ROWS}; final record; "
+                    f"not a full-file scan")
+    if sampled == 0 and not tail:
+        findings.append(_finding(
+            "REF-SCH-012", "The file has a header row and no data record. Nothing would "
+            "be staged, and the snapshot would reconcile as an empty set against which "
+            "every record 'does not match'; an empty reference extract is blocked as ONE "
+            "technical issue instead.", disposition=pm.DISP_BLOCKED, field_name="__record__",
+            evidence={"data_records": 0, "size_bytes": size}))
     if bad:
         findings.append(_finding(
             "REF-SCH-007", f"The record at line {bad['line']} has {bad['fields']} "
@@ -245,7 +302,7 @@ def preflight_reference_file(path, source_system: str) -> Dict[str, Any]:
     tail_lines = [ln for ln in tail_text.splitlines() if ln.strip()]
     ends_with_newline = tail_bytes.endswith((b"\n", b"\r"))
     if tail_lines and (tail or len(rows) > 1):
-        last = next(csv.reader(io.StringIO(tail_lines[-1])), [])
+        last = _final_record(tail_text, whole_file=not tail, expected_fields=len(header))
         if len(last) != len(header) and not (len(tail_lines) == 1 and not tail):
             findings.append(_finding(
                 "REF-SCH-008", f"The final record has {len(last)} field(s); the header "
