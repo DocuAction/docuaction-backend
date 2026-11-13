@@ -1,0 +1,100 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit review configuration for docuaction-backend.
+#
+# SCOPE OF THIS FILE: only the settings below are set here. `inheritance: true`
+# keeps every other value from the organisation / UI configuration, so this
+# file narrows nothing it does not name.
+#
+# CodeRabbit reads this file from the branch UNDER REVIEW. A pull request is
+# covered only once its own head branch contains this file.
+#
+# This file configures a review assistant. It approves nothing: automatic
+# approval is off, and a CodeRabbit review is not the independent human QA the
+# project requires before a merge.
+inheritance: true
+
+reviews:
+  auto_approvals:
+    enabled: false
+
+  auto_review:
+    enabled: true
+    # Work here is opened as a draft and stays a draft until a human review.
+    drafts: true
+    # Stacked pull requests: the default branch is always reviewed; a non-default
+    # base must be listed. Add a line when a new stack is opened and remove it
+    # when its base merges.
+    base_branches:
+      - "^feat/mandatory-source-parity-assessment-date-2026-11-11$"
+
+  path_instructions:
+    - path: "app/{Tefca,tefca_registry}/**"
+      instructions: |
+        TEFCA ARC classification, evidence and record lineage. The controlling
+        documents are docs/TEFCA_Verification_Methodology_INTERNAL.md,
+        docs/deliverables/COR_Decision_Register.md and the dated, versioned
+        decision records at the repository root (OCTOBER_DECISIONS_APPROVED_*.md);
+        a later record supersedes only the rows it names. Read the scope of a
+        rule from the newest applicable record and from the rule-set version in
+        code. Do not assume a particular Treatment scope, and flag code, tests
+        or text that present a proposed or unapproved rule as deployed.
+        Check:
+        - Authorization is enforced in the route or job, at the documented role
+          floor, and one delivery's records, jobs, uploads and downloads cannot
+          be read or changed through another delivery's or another user's id.
+        - Area 1 source records stay immutable: no update or delete path, record
+          identity is stable across reruns, and the original bytes and sha256
+          are preserved.
+        - A run's assessment date and rule-set / policy versions are pinned when
+          the run starts and are never re-derived from "now" on a later read.
+        - Analyst comments and dispositions are append-only, and every stored
+          source observation carries its provenance (source, snapshot, time).
+        - SOURCE_UNAVAILABLE is never turned into a match, a no-match or a pass.
+        - EIN / TIN / FEIN values are never placed in a prompt, tool call,
+          embedding, AI request, log line or telemetry attribute, and are not
+          added to ordinary screens or exports (see app/Tefca/identifier_boundary.py
+          and docs/AI_GOVERNANCE.md).
+
+    - path: "app/reports/**"
+      instructions: |
+        Contract reports and exports. Check:
+        - Every count reconciles to the persisted evidence for the same
+          delivery and run, and the row grain matches CSV_ROW_GRAINS.md.
+        - A change to a template, stylesheet or dataset is proven by a test
+          that renders a real PDF with WeasyPrint (the jobs of
+          .github/workflows/pdf-linux.yml, e.g. `render`), not only by a test
+          that replaces the renderer.
+        - Long rows, repeated table headings and page breaks keep the record
+          identifier visible on every page.
+        - Download routes enforce the same role floor and delivery scope as the
+          data they serve, and a draft is never labelled final or released.
+        - No EIN / TIN / FEIN value appears in a report or export.
+
+    - path: "alembic/versions/**"
+      instructions: |
+        Database migrations. Follow docs/deployment/ALEMBIC_MIGRATION.md and
+        docs/SOD_DB_ENFORCEMENT_MIGRATION_NOTES.md. Check:
+        - Exactly one head; `down_revision` is the current head of the base.
+        - New objects are owned by the migration owner role, and the runtime
+          application role (DB_APP_ROLE) receives only the grants it needs; no
+          grant weakens Area 1 immutability or an append-only table.
+        - Append-only and maker/checker rules are enforced in the database
+          (constraints or triggers), not only in application code.
+        - The upgrade is safe on a populated database: no table rewrite or long
+          lock without a stated reason, no historical row silently rewritten.
+        - Column lengths fit the values the application writes.
+
+    - path: "tests/**"
+      instructions: |
+        Tests. Check:
+        - Data is synthetic. No real provider record, credential, or EIN / TIN /
+          FEIN value appears in a fixture, snapshot or expected string.
+        - A test asserts the behaviour a user or reviewer would observe; flag a
+          test that replaces the function it claims to cover or that can pass
+          without the code under test running.
+        - Authorization tests cover the role below the floor, a different
+          user's or delivery's id, and an unknown id.
+        - A database-backed test file is listed in the isolation list of
+          .github/workflows/pr-tests.yml; otherwise it silently never runs in CI.
+        - A skip must fail in CI where the dependency is expected to exist.
