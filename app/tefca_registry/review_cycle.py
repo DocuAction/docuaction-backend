@@ -66,9 +66,12 @@ from __future__ import annotations
 
 import logging
 import uuid
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.tefca_registry import audit as reg_audit
 from app.tefca_registry import models as reg
@@ -155,7 +158,50 @@ class CycleRefused(RuntimeError):
     """The cycle could not be created, and the reason is stated."""
 
 
+@asynccontextmanager
+async def _cycle_session(db):
+    """Keep one physical connection for the session-scoped delivery lock.
+
+    A normal engine-bound AsyncSession returns its connection to the pool on
+    commit. Unlocking through that session can therefore use a DIFFERENT
+    backend, leaving the original lock held in the pool. This operation already
+    owns its commits; finish the caller's current unit of work before borrowing
+    one connection for the entire cycle. Externally bound sessions (including
+    rolled-back test transactions) already retain their connection.
+    """
+    bind = getattr(db, "bind", None)
+    if not isinstance(bind, AsyncEngine):
+        yield db
+        return
+    await db.commit()
+    async with bind.connect() as connection:
+        async with AsyncSession(bind=connection, expire_on_commit=False) as pinned:
+            yield pinned
+
+
 async def create_review_cycle(
+    db, intake_id, *, user,
+    review_type: str = "quarterly",
+    confidence: float = 0.95, margin: float = 0.05, proportion: float = 0.5,
+    use_fpc: bool = True, include_held: bool = False,
+    seed: Optional[int] = None, sample_name: Optional[str] = None,
+    batch: int = DEFAULT_BATCH,
+    ip_address: Optional[str] = None,
+    full_population: bool = False,
+) -> Dict[str, Any]:
+    # Capture the authenticated actor before commit could expire an ORM user.
+    actor_id, actor_email = reg_audit.actor_of(user)
+    actor = SimpleNamespace(id=actor_id, email=actor_email)
+    async with _cycle_session(db) as pinned:
+        return await _create_review_cycle(
+            pinned, intake_id, user=actor, review_type=review_type,
+            confidence=confidence, margin=margin, proportion=proportion,
+            use_fpc=use_fpc, include_held=include_held, seed=seed,
+            sample_name=sample_name, batch=batch, ip_address=ip_address,
+            full_population=full_population)
+
+
+async def _create_review_cycle(
     db, intake_id, *, user,
     review_type: str = "quarterly",
     confidence: float = 0.95, margin: float = 0.05, proportion: float = 0.5,
@@ -314,7 +360,8 @@ async def create_review_cycle(
                 db, list(refs.values()), intake_id=intake_id,
                 actor=actor_email or "SYSTEM")
             verified = {k: result.get(k) for k in
-                        ("requested", "verified", "unresolved", "bucket_counts")}
+                        ("requested", "verified", "unresolved", "bucket_counts",
+                         "resolver_source", "configuration_warnings", "execution_status")}
             if skipped_held:
                 verified["skipped_held"] = skipped_held
                 verified["skipped_held_reason"] = "VERIFY_SKIPPED_HELD"
@@ -369,6 +416,9 @@ async def create_review_cycle(
             await db.commit()
     finally:
         try:
+            # A failed statement must be rolled back before unlocking; otherwise
+            # the failed transaction rejects the unlock and the pool retains it.
+            await db.rollback()
             await db.execute(text("select pg_advisory_unlock(hashtext(:k))"),
                              {"k": lock_key})
             await db.commit()

@@ -15,7 +15,7 @@
 
 on:
   pull_request:
-    branches: [main, 'feat/reporting-architecture-2026-10-01', 'feat/treatment-b4-rule-and-full-population-2026-11-06', 'feat/proposed-rules-v4-inactive-2026-11-07', 'test/iqvia-settings-shadowing-fix-2026-11-08']
+    branches: [main, 'feat/mandatory-source-parity-assessment-date-2026-11-11', 'feat/reporting-architecture-2026-10-01', 'feat/treatment-b4-rule-and-full-population-2026-11-06', 'feat/proposed-rules-v4-inactive-2026-11-07', 'test/iqvia-settings-shadowing-fix-2026-11-08']
   push:
     branches: [main]
 
@@ -199,6 +199,7 @@ jobs:
             tests/test_october_review_export_db_2026_11_12.py \
             tests/test_case_update_import_agt_2026_11_12.py \
             tests/test_review_lineage_writers_db_2026_11_12.py \
+            tests/test_review_verification_gaps_2026_11_13.py \
             tests/test_record_comments_db_2026_11_12.py \
             tests/test_record_review_package_script_2026_11_12.py \
             -v --tb=short -rs --junitxml=isolation-results.xml

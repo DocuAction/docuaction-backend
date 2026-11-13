@@ -42,7 +42,7 @@ import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import func, select, text
+from sqlalchemy import String, cast, func, select, text
 from sqlalchemy.exc import IntegrityError
 
 logger = logging.getLogger(__name__)
@@ -452,10 +452,11 @@ async def job_for_intake(db, intake_id):
 # REVIEW COUNT MAPPING (documented here because status_model is pure and does
 # not know the tables):
 #
-#   population   review_records tied to the delivery: rows whose entity_id is a
-#                canonical entity of the intake's curated records, OR whose
-#                verification_results->>'source_intake_id' names the intake
-#                (DQ bridge cases, including pre-promotion cases with no entity)
+#   population   review_records anchored to an immutable source record of this
+#                intake; otherwise a legacy source_intake_id stamp (DQ bridge
+#                cases, including pre-promotion cases with no entity). An
+#                anchored record wins over a conflicting stamp. A shared entity
+#                is never used to attach a case to a delivery.
 #   open         reviewer_resolution IS NULL and assigned_to_user_id IS NULL
 #   claimed      reviewer_resolution IS NULL and assigned_to_user_id IS NOT NULL
 #   determined   reviewer_resolution IS NOT NULL (an analyst has decided)
@@ -481,12 +482,13 @@ async def _review_counts(db, intake_id) -> Dict[str, int]:
     # Cases created AGAINST this delivery only (QA-039): an entity the
     # delivery contains may carry cases from other deliveries or queues, and
     # those are not this delivery's review work.
-    scope = (reg.ReviewRecord.verification_results["source_intake_id"].astext
-             == str(intake_id))
+    scope = _review_intake_expression() == str(intake_id)
     rows = (await db.execute(
         select(reg.ReviewRecord.review_id, reg.ReviewRecord.assigned_to_user_id,
                reg.ReviewRecord.reviewer_resolution, reg.ReviewRecord.reportable_at,
                reg.ReviewRecord.verification_results["queue_source"].astext)
+        .outerjoin(m.RceSourceRecord,
+                   reg.ReviewRecord.source_record_id == m.RceSourceRecord.id)
         .where(scope))).all()
 
     counts = {"open": 0, "claimed": 0, "determined": 0, "qa_pending": 0,
@@ -907,21 +909,38 @@ def _empty_review_counts() -> Dict[str, Any]:
             "open_breakdown": {}}
 
 
+def _review_intake_expression():
+    """Delivery identity from the immutable record, then an explicit legacy stamp.
+
+    Used only with an outer join on the source record's primary key, so one
+    review cannot fan out. No entity-level association or historical backfill.
+    """
+    from app.tefca_registry import models as reg
+    from app.tefca_registry.rce import models as m
+
+    return func.coalesce(
+        cast(m.RceSourceRecord.source_intake_id, String),
+        reg.ReviewRecord.verification_results["source_intake_id"].astext)
+
+
 async def _review_counts_by_intake(db, intake_ids) -> Dict[Any, Dict[str, Any]]:
     """`_review_counts` for several intakes: the delivery's own cases (stamped
-    `source_intake_id`) in one read, the latest QA action of every determined
+    by source record or legacy `source_intake_id`) in one read, the latest QA action of every determined
     case in a second, then the same bucketing per intake."""
     from app.tefca_registry import models as reg
+    from app.tefca_registry.rce import models as m
 
     out: Dict[Any, Dict[str, Any]] = {}
     if not intake_ids:
         return out
     by_text = {str(i): i for i in intake_ids}
-    stamp = reg.ReviewRecord.verification_results["source_intake_id"].astext
+    stamp = _review_intake_expression()
     rows = (await db.execute(
         select(stamp, reg.ReviewRecord.review_id, reg.ReviewRecord.assigned_to_user_id,
                reg.ReviewRecord.reviewer_resolution, reg.ReviewRecord.reportable_at,
                reg.ReviewRecord.verification_results["queue_source"].astext)
+        .outerjoin(m.RceSourceRecord,
+                   reg.ReviewRecord.source_record_id == m.RceSourceRecord.id)
         .where(stamp.in_(list(by_text))))).all()
     for intake_id in intake_ids:
         out[intake_id] = _empty_review_counts()

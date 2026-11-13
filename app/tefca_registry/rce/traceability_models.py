@@ -142,6 +142,8 @@ class RceDeliveryStageEvent(Base):
         duration = None
         if self.completed_at and self.started_at:
             duration = int((self.completed_at - self.started_at).total_seconds() * 1000)
+        from app.core.logging_config import sanitize_stored_error, sanitize_stored_error_tree
+
         return {
             "id": str(self.id), "job_id": str(self.job_id),
             "intake_id": str(self.intake_id) if self.intake_id else None,
@@ -153,8 +155,8 @@ class RceDeliveryStageEvent(Base):
             "warning_count": self.warning_count, "held_count": self.held_count,
             "rejected_count": self.rejected_count,
             "failure_class": self.failure_class,
-            "failure_reason": self.failure_reason,
-            "detail": self.detail or {},
+            "failure_reason": sanitize_stored_error(self.failure_reason),
+            "detail": sanitize_stored_error_tree(self.detail or {}),
             "correlation_id": self.correlation_id, "worker_id": self.worker_id,
             "build_sha": self.build_sha,
         }
