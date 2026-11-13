@@ -90,7 +90,7 @@ def _usps() -> Dict[str, Any]:
     # must not make this instance look unhealthy.
     try:
         from app.tefca_registry.usps_client import get_usps_client
-        return get_usps_client().health()
+        return get_usps_client().health(include_auth_detail=True)   # admin-only route
     except Exception as exc:  # noqa: BLE001
         return {"status": "unavailable", "error_class": type(exc).__name__}
 

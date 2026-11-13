@@ -77,6 +77,27 @@ TOKEN_REFRESH_MARGIN_S = 60.0
 
 DEFAULT_TIMEOUT_S = float(os.getenv("USPS_TIMEOUT_S", "10"))
 
+# AUTHORIZATION FAILURES ARE NOT RETRIED (2026-11-13).
+# When the token endpoint rejects the configured Consumer Key / Secret it will
+# reject them again on the next call: only a configuration change fixes it.
+# Before this, every address check asked for a token again (until the circuit
+# breaker opened, and again after each cooldown). Now a rejection is remembered
+# for this long and calls inside the window fail at once, with no network call
+# and a result that says credentials were rejected. A restart (which is what a
+# settings change causes) or `reset_usps_client()` clears it immediately.
+AUTH_FAILURE_HOLD_S = 900.0
+
+#: Why an address check has no USPS answer. Carried on the result so a caller
+#: can tell a deployment fact from an outage - none of these is a finding
+#: about the address, and none of them is ever reported as method "usps_api".
+FAILURE_NOT_CONFIGURED = "not_configured"
+FAILURE_CREDENTIALS_REJECTED = "credentials_rejected"   # token endpoint: 401 invalid_client
+FAILURE_NOT_ENTITLED = "not_entitled"                   # address endpoint: 403
+FAILURE_RATE_LIMITED = "rate_limited"                   # 429 after the bounded retries
+FAILURE_INVALID_REQUEST = "invalid_request"             # 400 / 404: USPS could not use the input
+FAILURE_CIRCUIT_OPEN = "circuit_open"
+FAILURE_UPSTREAM = "upstream_error"                     # 5xx, bad body, network, timeout
+
 
 # ── Models (REFINEMENT 8) ────────────────────────────────────────────────────
 
@@ -100,6 +121,8 @@ class USPSAddressResult(BaseModel):
     is_deliverable: bool = False
     corrections: List[str] = Field(default_factory=list)
     error: Optional[str] = None
+    #: One of the FAILURE_* values when `available` is False; None otherwise.
+    failure_kind: Optional[str] = None
     latency_ms: Optional[float] = None
 
 
@@ -238,6 +261,13 @@ class CircuitBreaker:
         logger.info("USPS circuit breaker half-open — probing with one request")
         return True
 
+    def release_probe(self) -> None:
+        """Give the half-open probe slot back without a verdict. For a probe
+        that never reached the address endpoint (the token request was refused):
+        it says nothing about USPS's health, but leaving the slot taken would
+        make `allows_request` refuse every later call until restart."""
+        self._half_open = False
+
     def record_success(self) -> None:
         was_open = self.opened_at is not None
         self.consecutive_failures = 0
@@ -327,6 +357,10 @@ class USPSClient:
         self._token_expires_at: float = 0.0
         self._token_lock = asyncio.Lock()
         self._auth_failed = False
+        #: What USPS said when it rejected the credentials (its error code and
+        #: description - never the credentials), and until when not to ask again.
+        self._auth_error: Optional[Dict[str, Any]] = None
+        self._auth_hold_until: float = 0.0
 
         # Injectable so tests exercise the backoff schedule without sleeping
         # through it. Retry timing is behaviour worth testing; 7 real seconds of
@@ -358,9 +392,13 @@ class USPSClient:
         """
         if self._token_valid():
             return self._token
+        if self._auth_on_hold():           # known-bad credentials: do not ask again yet
+            return None
         async with self._token_lock:
             if self._token_valid():        # another waiter refreshed it
                 return self._token
+            if self._auth_on_hold():       # another waiter was just rejected
+                return None
             started = time.perf_counter()
             request_id = uuid.uuid4().hex[:12]
             try:
@@ -381,11 +419,21 @@ class USPSClient:
                 # 401 here means the credentials themselves are wrong. That is a
                 # configuration fault, not a transient one, and it is worth
                 # surfacing on /health rather than burying in a retry count.
-                if resp.status_code == 401:
+                usps_error, usps_description = self._oauth_error(resp)
+                if resp.status_code == 401 or usps_error == "invalid_client":
                     self._auth_failed = True
+                    self._auth_error = {
+                        "http_status": resp.status_code,
+                        "usps_error": usps_error,
+                        "usps_description": usps_description,
+                        "endpoint": OAUTH_ENDPOINT,
+                        "environment": self.environment,
+                    }
+                    self._auth_hold_until = self._clock() + AUTH_FAILURE_HOLD_S
                 _safe_log(logging.WARNING, "USPS token rejected",
                           request_id=request_id, endpoint=OAUTH_ENDPOINT,
                           http_status=resp.status_code,
+                          usps_error=usps_error, usps_description=usps_description,
                           latency_ms=round(latency_ms, 1))
                 return None
 
@@ -407,10 +455,49 @@ class USPSClient:
             self._token_expires_at = self._clock() + max(
                 0.0, expires_in - TOKEN_REFRESH_MARGIN_S)
             self._auth_failed = False
+            self._auth_error = None
+            self._auth_hold_until = 0.0
             _safe_log(logging.INFO, "USPS token acquired",
                       request_id=request_id, endpoint=OAUTH_ENDPOINT,
                       http_status=200, latency_ms=round(latency_ms, 1))
             return self._token
+
+    def _auth_on_hold(self) -> bool:
+        return self._auth_failed and self._clock() < self._auth_hold_until
+
+    def _oauth_error(self, resp: httpx.Response):
+        """USPS's own (error, description) from a rejected token request, or
+        (None, None). RFC 6749 error bodies name the failure and do not echo the
+        credentials - but the text is upstream's, so the configured key and
+        secret are removed from it anyway, control characters are dropped, and
+        it is cut short."""
+        try:
+            body = resp.json()
+        except Exception:  # noqa: BLE001
+            return None, None
+        if not isinstance(body, dict):
+            return None, None
+        error = body.get("error")
+        description = body.get("error_description")
+        def clean(value, limit):
+            if not value:
+                return None
+            text = str(value)
+            for secret in (self.client_secret, self.client_id):
+                if secret:
+                    text = text.replace(secret, "[redacted]")
+            return "".join(ch for ch in text if ch.isprintable())[:limit]
+
+        return clean(error, 60), clean(description, 200)
+
+    def _credentials_rejected(self) -> USPSAddressResult:
+        detail = (self._auth_error or {}).get("usps_error") or "authentication failed"
+        return USPSAddressResult(
+            available=False, method="usps_error",
+            failure_kind=FAILURE_CREDENTIALS_REJECTED,
+            error=(f"USPS rejected this deployment's credentials ({detail}). No address "
+                   f"check was made; this is a configuration fact, not a finding about "
+                   f"the address."))
 
     # ── Request execution (REFINEMENTS 3 + 4) ────────────────────────────────
 
@@ -480,12 +567,20 @@ class USPSClient:
             self.metrics.record_fallback()
             return USPSAddressResult(
                 available=False, method="usps_not_configured",
+                failure_kind=FAILURE_NOT_CONFIGURED,
                 error="USPS_CLIENT_ID / USPS_CLIENT_SECRET not set")
 
         if not (street or "").strip():
             self.metrics.record_fallback()
             return USPSAddressResult(available=False, method="usps_error",
+                                     failure_kind=FAILURE_INVALID_REQUEST,
                                      error="empty street address")
+
+        # Known-bad credentials: say so at once. No network call, and no circuit
+        # failure either - the breaker measures USPS's health, not our settings.
+        if self._auth_on_hold():
+            self.metrics.record_fallback()
+            return self._credentials_rejected()
 
         # REFINEMENT 6 — refuse before spending a timeout, not after.
         if not self.circuit.allows_request():
@@ -493,6 +588,7 @@ class USPSClient:
             _safe_log(logging.INFO, "USPS circuit breaker open — falling back",
                       endpoint=ADDRESS_ENDPOINT, city=city, state=state)
             return USPSAddressResult(available=False, method="usps_error",
+                                     failure_kind=FAILURE_CIRCUIT_OPEN,
                                      error="circuit breaker open")
 
         request_id = uuid.uuid4().hex[:12]
@@ -511,13 +607,22 @@ class USPSClient:
         latency_ms = (time.perf_counter() - started) * 1000
 
         if resp is None:
+            if self._auth_on_hold():       # the token request itself was just rejected
+                self.circuit.release_probe()   # if this was the half-open probe, free the slot
+                self.metrics.record_error()
+                self.metrics.record_fallback()
+                return self._credentials_rejected().model_copy(
+                    update={"latency_ms": round(latency_ms, 2)})
             return self._fail(request_id, latency_ms, city, state,
                               "request could not be completed", None)
 
         if resp.status_code != 200:
+            kind = {401: FAILURE_CREDENTIALS_REJECTED, 403: FAILURE_NOT_ENTITLED,
+                    429: FAILURE_RATE_LIMITED, 400: FAILURE_INVALID_REQUEST,
+                    404: FAILURE_INVALID_REQUEST}.get(resp.status_code, FAILURE_UPSTREAM)
             return self._fail(request_id, latency_ms, city, state,
                               f"USPS returned HTTP {resp.status_code}",
-                              resp.status_code)
+                              resp.status_code, kind=kind)
 
         try:
             payload = resp.json()
@@ -540,7 +645,8 @@ class USPSClient:
         return result
 
     def _fail(self, request_id: str, latency_ms: float, city: str, state: str,
-              error: str, http_status: Optional[int]) -> USPSAddressResult:
+              error: str, http_status: Optional[int],
+              kind: str = FAILURE_UPSTREAM) -> USPSAddressResult:
         self.circuit.record_failure()
         self.metrics.record_error()
         self.metrics.record_fallback()
@@ -549,6 +655,7 @@ class USPSClient:
                   http_status=http_status, latency_ms=round(latency_ms, 1),
                   city=city, state=state, error=error)
         return USPSAddressResult(available=False, method="usps_error",
+                                 failure_kind=kind,
                                  error=error, latency_ms=round(latency_ms, 2))
 
     @staticmethod
@@ -599,7 +706,7 @@ class USPSClient:
     def metrics_snapshot(self) -> Dict[str, Any]:
         return self.metrics.snapshot(self.circuit.status)
 
-    def health(self) -> Dict[str, Any]:
+    def health(self, *, include_auth_detail: bool = False) -> Dict[str, Any]:
         """State-only. /health is a liveness probe and must not make a network
         call — reporting "Operational" here means configured with the circuit
         closed, not that USPS answered just now. The metrics in the same payload
@@ -612,13 +719,27 @@ class USPSClient:
             status = "Circuit breaker open"
         else:
             status = "Operational"
-        return {
+        out = {
             "status": status,
             "configured": self.configured,
             "environment": self.environment,
             "circuit_breaker": self.circuit.status,
             "metrics": self.metrics_snapshot(),
         }
+        if include_auth_detail and self._auth_failed and self._auth_error:
+            # USPS's own words for WHY, so an operator does not have to guess
+            # between a wrong key, an inactive app and an unapproved one. Never
+            # the credentials themselves. OPT-IN: only the administrator health
+            # route asks for it. The default payload is copied into each delivery
+            # job's stored readiness, which the viewer role can read, and gets
+            # the status line only.
+            out["auth_error"] = dict(self._auth_error)
+            out["auth_retry_in_s"] = max(0, int(self._auth_hold_until - self._clock()))
+            out["action_required"] = (
+                "USPS rejected the configured Consumer Key / Consumer Secret. Check that "
+                "USPS_CLIENT_ID and USPS_CLIENT_SECRET are the key and secret of one "
+                "active, approved app on developers.usps.com, then restart the service.")
+        return out
 
 
 # ── Process-wide singleton ───────────────────────────────────────────────────
