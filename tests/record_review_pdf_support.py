@@ -331,7 +331,9 @@ def reconstruct(pages, per_page_words, widths: List[float], id_col: int,
     was seen on the way (header text per page and column, words outside their
     column, continuation pages)."""
     if is_row_start is None:                # the fixtures' ids; a delivery's ids are UUIDs (UUID_START)
-        is_row_start = lambda text: text.startswith(ID_PREFIX)
+        # A long id may wrap right after an early hyphen ("SYN-" / "AGT-0017-..."), so the first
+        # fragment is the prefix or a leading piece of it; later fragments are neither.
+        is_row_start = lambda text: text.startswith(ID_PREFIX) or (len(text) >= 4 and ID_PREFIX.startswith(text))
     records: Dict[str, List[List[Dict[str, Any]]]] = {}
     order: List[str] = []
     headers: List[Tuple[int, List[str]]] = []
