@@ -224,6 +224,9 @@ MIN_READABLE_PT = 6.5
 #: different size put their glyph tops within a couple of points of each other.
 #: The previous row's last line is at least a line-height (9 pt) higher.
 ROW_TOP_TOLERANCE_PT = 3.5
+#: First line of a UUID in the identity column: it wraps after a hyphen, and only
+#: its first group is eight hex digits followed by one.
+UUID_START = re.compile(r"[0-9a-f]{8}-").match
 
 
 def read_pdf(pdf: bytes) -> List[Dict[str, Any]]:
@@ -322,10 +325,13 @@ def table_words(pages) -> Dict[str, List[List[Dict[str, Any]]]]:
     return out
 
 
-def reconstruct(pages, per_page_words, widths: List[float], id_col: int) -> Dict[str, Any]:
+def reconstruct(pages, per_page_words, widths: List[float], id_col: int,
+                is_row_start=None) -> Dict[str, Any]:
     """Rebuild a table from its words: {record id: [column text, ...]} plus what
     was seen on the way (header text per page and column, words outside their
     column, continuation pages)."""
+    if is_row_start is None:                # the fixtures' ids; a delivery's ids are UUIDs (UUID_START)
+        is_row_start = lambda text: text.startswith(ID_PREFIX)
     records: Dict[str, List[List[Dict[str, Any]]]] = {}
     order: List[str] = []
     headers: List[Tuple[int, List[str]]] = []
@@ -357,7 +363,7 @@ def reconstruct(pages, per_page_words, widths: List[float], id_col: int) -> Dict
             header_below_data.append(pno)
         # row starts: an id in the identity column
         starts = sorted((w["top"], w["text"]) for w in data
-                        if col_of(w) == id_col and w["text"].startswith(ID_PREFIX))
+                        if col_of(w) == id_col and is_row_start(w["text"]))
         first_start = starts[0][0] if starts else float("inf")
         if any(w["top"] < first_start - ROW_TOP_TOLERANCE_PT for w in data):
             continued.append((pno, current))

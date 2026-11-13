@@ -304,7 +304,9 @@ async def test_pdf_download_is_the_real_weasyprint_pdf_of_the_seeded_delivery(ro
     _assert_rows_are_the_seeded_delivery(rows, recs, "A")
     pages = s.read_pdf(resp.content)
     tables = s.table_words(pages)
-    detail = s.reconstruct(pages, tables["detail"], [w for _c, w in ds_mod.PDF_DETAIL_COLUMNS], 0)
+    detail = s.reconstruct(pages, tables["detail"], [w for _c, w in ds_mod.PDF_DETAIL_COLUMNS], 0,
+                           is_row_start=s.UUID_START)
+    assert not detail["continued"] and not detail["outside"]
     labels = [c for c, _w in ds_mod.PDF_DETAIL_COLUMNS]
     by = {}
     for row in detail["rows"]:
