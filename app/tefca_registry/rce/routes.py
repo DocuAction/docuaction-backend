@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.path_ids import known_uuid
 from app.core.security import require_role
 
 logger = logging.getLogger(__name__)
@@ -175,6 +176,7 @@ async def get_delivery(
 ):
     from app.tefca_registry.rce import repository as repo
 
+    intake_id = known_uuid(intake_id, "delivery")
     intake = await repo.get_intake(db, intake_id)
     if intake is None:
         raise HTTPException(404, f"No delivery {intake_id}")
@@ -213,6 +215,7 @@ async def list_records(
 ):
     from app.tefca_registry.rce import repository as repo
 
+    intake_id = known_uuid(intake_id, "delivery")
     rows = await repo.list_source_records(
         db, intake_id, limit=limit, offset=offset,
         parse_status=parse_status, promotion_status=promotion_status)
@@ -253,6 +256,7 @@ async def verify_integrity(
     """
     from app.tefca_registry.rce import repository as repo
 
+    intake_id = known_uuid(intake_id, "delivery")
     hashes = await repo.verify_record_hashes(db, intake_id)
     stored = await repo.verify_stored_file(db, intake_id)
     immutability = await repo.verify_immutable(db)
@@ -297,6 +301,7 @@ async def list_runs(
     from sqlalchemy import select
     from app.tefca_registry.rce import models as m
 
+    intake_id = known_uuid(intake_id, "delivery")
     runs = (await db.execute(
         select(m.RceIngestionRun)
         .where(m.RceIngestionRun.source_intake_id == intake_id)
@@ -352,6 +357,8 @@ async def list_issues(
     from app.tefca_registry.rce import models as m
     from app.tefca_registry.rce.quality_engine import issue_summary
     from app.tefca_registry.rce.run_selection import current_run, issues_filter
+
+    intake_id = known_uuid(intake_id, "delivery")
 
     # DEFAULT IS THE CURRENT RUN. A delivery may be quality-run more than once,
     # and each run writes a full set of issues; returning the union by default
@@ -450,6 +457,7 @@ async def list_curated(
     from sqlalchemy import select
     from app.tefca_registry.rce import models as m
 
+    intake_id = known_uuid(intake_id, "delivery")
     stmt = select(m.RceCuratedRecord).where(
         m.RceCuratedRecord.source_intake_id == intake_id)
     if record_status:
@@ -484,6 +492,7 @@ async def lineage(
     from sqlalchemy import select
     from app.tefca_registry.rce import models as m
 
+    curated_id = known_uuid(curated_id, "curated record")
     curated = await db.get(m.RceCuratedRecord, curated_id)
     if curated is None:
         raise HTTPException(404, f"No curated record {curated_id}")
@@ -630,7 +639,15 @@ async def reconciliation(
 
     from app.core.security import role_at_least
     from app.tefca_registry.rce import traceability_models as _tm
+    from app.tefca_registry.rce import repository as repo
     from app.tefca_registry.rce.reconciliation import reconcile_delivery
+
+    # The address of a delivery that does not exist is a 404, as it is on
+    # GET /deliveries/{id}. Without this, `reconcile_delivery` raised
+    # ValueError("No intake ...") and the caller got a 500 (found 2026-11-13).
+    intake_id = known_uuid(intake_id, "delivery")
+    if await repo.get_intake(db, intake_id) is None:
+        raise HTTPException(404, f"No delivery {intake_id}")
 
     if recompute:
         if not role_at_least(user, "qalead"):
