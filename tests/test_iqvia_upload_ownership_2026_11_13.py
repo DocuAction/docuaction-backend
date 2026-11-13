@@ -248,3 +248,99 @@ class TestChunkLengthIsBounded:
         await routes.upload_chunk(upload_id, 1, _FakeRequest(b"B" * 3), db, user=owner)
         session = await jobs.get_upload_session(db, upload_id)
         assert Path(session.temp_path).read_bytes() == payload
+
+
+# ── review finding on #218 (CodeRabbit, 2026-11-13): chunk write vs completion ──
+
+class _RacingRequest:
+    """A chunk whose body is still arriving when something else happens: the
+    callback runs after the route has made its first open-check and before the
+    last part of the body is delivered."""
+
+    def __init__(self, body: bytes, meanwhile):
+        self._body, self._meanwhile = body, meanwhile
+        self.headers = {"content-length": str(len(body))}
+
+    async def stream(self):
+        half = len(self._body) // 2
+        yield self._body[:half]
+        await self._meanwhile()
+        yield self._body[half:]
+
+
+class TestAChunkCannotLandAfterCompletion:
+    async def test_a_retry_still_arriving_when_the_upload_completes_writes_nothing(
+            self, db, tmp_path, monkeypatch):
+        """Before: the open-check ran before the body was awaited and the write
+        after it, unlocked. A retry with different bytes that overlapped a
+        completion changed the file after its sha256 was registered."""
+        import hashlib
+
+        from app.core.database import async_session_maker
+
+        content = write_csv(tmp_path / "race.csv", HCO_HEADER, [
+            [f"{SYN}-RACE-HCO-{i}-{uuid.uuid4().hex[:6]}", "", "", f"{SYN} Org {i}", "02101"]
+            for i in range(3)]).read_bytes()
+        upload_id = await _start(db, monkeypatch, payload=content, chunk_size=len(content))
+        owner = _User("reviewer", OWNER)
+        await routes.upload_chunk(upload_id, 0, _FakeRequest(content), db, user=owner)
+        completed = {}
+
+        async def complete_in_another_request():
+            async with async_session_maker() as other:
+                completed.update(await routes.complete_upload(upload_id, other, user=owner))
+
+        different = bytes((b + 1) % 256 for b in content)
+        with pytest.raises(HTTPException) as exc:
+            await routes.upload_chunk(
+                upload_id, 0, _RacingRequest(different, complete_in_another_request), db,
+                user=owner)
+        _created_snapshot_ids.append(uuid.UUID(completed["snapshot_id"]))
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == "UPLOAD_CLOSED"
+
+        db.expire_all()
+        session = await jobs.get_upload_session(db, upload_id)
+        on_disk = Path(session.temp_path).read_bytes()
+        assert on_disk == content, "the staged bytes are the bytes that were completed"
+        from app.tefca_registry.rce import snapshot_models as sm
+        snapshot = await db.get(sm.SourceSnapshot, uuid.UUID(completed["snapshot_id"]))
+        assert snapshot.sha256 == hashlib.sha256(on_disk).hexdigest(), (
+            "the registered hash still describes the file")
+
+    async def test_the_upload_is_closed_to_writes_before_it_is_hashed(
+            self, db, tmp_path, monkeypatch):
+        """Completion marks the session COMPLETE (committed) before registering
+        the snapshot, so even a registration that then fails leaves no window."""
+        content = write_csv(tmp_path / "order.csv", HCO_HEADER, [
+            [f"{SYN}-ORDER-HCO-{uuid.uuid4().hex[:6]}", "", "", f"{SYN} Org", "02101"]
+        ]).read_bytes()
+        upload_id = await _start(db, monkeypatch, payload=content, chunk_size=len(content))
+        owner = _User("reviewer", OWNER)
+        await routes.upload_chunk(upload_id, 0, _FakeRequest(content), db, user=owner)
+        seen = {}
+        real = routes._register_and_enqueue
+
+        async def spy(db_, **kw):
+            from app.core.database import async_session_maker
+            async with async_session_maker() as other:   # what another request would see
+                row = await other.get(um.IqviaUploadSession, upload_id)
+                seen["status_at_hash_time"] = row.status
+            return await real(db_, **kw)
+
+        from app.tefca_registry.rce import iqvia_upload_models as um
+        monkeypatch.setattr(routes, "_register_and_enqueue", spy)
+        done = await routes.complete_upload(upload_id, db, user=owner)
+        _created_snapshot_ids.append(uuid.UUID(done["snapshot_id"]))
+        assert seen["status_at_hash_time"] == um.IqviaUploadSession.STATUS_COMPLETE
+
+    async def test_an_incomplete_complete_attempt_leaves_the_upload_open(self, db, monkeypatch):
+        """The lock is released and nothing is closed when completion is refused."""
+        upload_id = await _start(db, monkeypatch)
+        owner = _User("reviewer", OWNER)
+        await routes.upload_chunk(upload_id, 0, _FakeRequest(b"A" * 10), db, user=owner)
+        with pytest.raises(HTTPException) as exc:
+            await routes.complete_upload(upload_id, db, user=owner)
+        assert exc.value.detail["code"] == "UPLOAD_INCOMPLETE"
+        result = await routes.upload_chunk(upload_id, 1, _FakeRequest(b"B" * 10), db, user=owner)
+        assert result["missing_chunks"] == 0

@@ -391,6 +391,19 @@ async def upload_chunk(upload_id: uuid.UUID, index: int, request: Request,
     if not (0 <= index < session.total_chunks):
         raise HTTPException(422, f"chunk index out of range 0..{session.total_chunks-1}")
     chunk_bytes = await _read_chunk(request, _expected_chunk_length(session, index))
+    # The body read above can take as long as the client likes, and the check
+    # before it was made on an unlocked row. Re-check under the same row lock
+    # completion takes, and write while holding it: a chunk that was still
+    # arriving when the upload was completed must not change the staged bytes.
+    session = await jobs.lock_upload_session(db, upload_id)
+    if (session is None or session.snapshot_id is not None
+            or session.status != um.IqviaUploadSession.STATUS_UPLOADING):
+        closed_status = getattr(session, "status", None)   # read BEFORE the rollback expires the row
+        await db.rollback()
+        raise HTTPException(409, detail={
+            "error": "this upload was closed while the chunk was being sent; "
+                     "its bytes can no longer be changed",
+            "code": "UPLOAD_CLOSED", "status": closed_status})
     offset = index * session.chunk_size
     with open(session.temp_path, "r+b") as fh:
         fh.seek(offset)
@@ -462,18 +475,33 @@ async def complete_upload(upload_id: uuid.UUID, db: AsyncSession = Depends(get_d
                 "job_id": str(job.id) if job else None,
                 "job_state": job.state if job else None,
                 "already_completed": True}
+    # Take the lock a chunk write takes, then decide. Everything from here to
+    # `close_upload_to_writes` happens with no chunk able to land.
+    session = await jobs.lock_upload_session(db, upload_id)
+    if session is None:
+        await db.rollback()
+        raise HTTPException(404, f"no upload {upload_id}")
+    if session.snapshot_id is not None:
+        # A concurrent complete won the lock first: same answer as a repeat.
+        await db.rollback()
+        return await complete_upload(upload_id, db, user)
     received = await jobs.received_chunk_indices(db, upload_id)
     missing = sorted(set(range(session.total_chunks)) - received)
     if missing:
+        await db.rollback()
         raise HTTPException(409, detail={
             "error": f"{len(missing)} chunk(s) still missing; cannot complete",
             "code": "UPLOAD_INCOMPLETE", "missing_chunk_indices": missing[:200]})
     actual_size = Path(session.temp_path).stat().st_size
     if actual_size != session.total_size:
+        await db.rollback()
         raise HTTPException(409, detail={
             "error": f"assembled file is {actual_size} bytes, declared total_size was "
                      f"{session.total_size} -- refusing to stage a size mismatch",
             "code": "UPLOAD_SIZE_MISMATCH"})
+    # Closed to writes BEFORE the file is hashed: the sha256 registered below is
+    # then the hash of bytes nothing can change any more.
+    await jobs.close_upload_to_writes(db, upload_id)
     result = await _register_and_enqueue(
         db, source=session.source, file_path=session.temp_path, label=session.label,
         created_by=session.created_by, upload_id=upload_id)
