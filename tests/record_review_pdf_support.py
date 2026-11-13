@@ -454,3 +454,19 @@ def first_difference(got: str, want: str) -> str:
     n = next((i for i, (a, b) in enumerate(zip(got, want)) if a != b), min(len(got), len(want)))
     return (f"lengths got={len(got)} want={len(want)}; first difference at {n}: "
             f"got ...{got[max(0, n - 30):n + 40]!r} want ...{want[max(0, n - 30):n + 40]!r}")
+
+CONTINUED = "(continued,part"            # squashed text of a continuation row's identity cell
+
+
+def merge_continuations(rows: List[List[str]], id_col: int) -> List[List[str]]:
+    """Continuation rows (identity cell reads "<id> (continued, part k of n)")
+    folded back into the record they continue, column by column, in order."""
+    out: List[List[str]] = []
+    for row in rows:
+        if CONTINUED in row[id_col] and out:
+            for ci, text in enumerate(row):
+                if ci != id_col:
+                    out[-1][ci] += text
+        else:
+            out.append(list(row))
+    return out

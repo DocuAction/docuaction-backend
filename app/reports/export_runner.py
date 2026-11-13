@@ -50,6 +50,20 @@ RECORD_REVIEW_CONTENT_TYPES = {
 }
 
 
+def record_review_template_version(dataset_version: str, loader_version: str) -> str:
+    """The `template_version` a record-review artifact is registered under.
+
+    `report_artifacts.template_version` is varchar(32). The label first written
+    here ("record-review dataset 1.0.0 / loader 1.0.0", 41 characters) did not
+    fit, so `finalize_artifact` raised on INSERT and EVERY record-review export
+    job ended FAILED with nothing registered - unseen because the tests replaced
+    `finalize_artifact` with a recorder (found 2026-11-13 by the first test that
+    used the real registry). Same two facts, short form: "record-review 1.0.0/1.0.0".
+    The job row's `generator_version` keeps the long form; that column is wider.
+    """
+    return f"record-review {dataset_version}/{loader_version}"
+
+
 class _Heartbeat:
     """Writes a heartbeat while a long step runs, on its own session.
 
@@ -303,8 +317,8 @@ async def run_record_review_export_job(db, job) -> str:
             content=content, content_type=content_type,
             review_cycle_id=str(job.source_intake_id),
             generated_by=job.requested_by,
-            template_version=(f"record-review dataset {ds.DATASET_VERSION} / "
-                              f"loader {loader.LOADER_VERSION}"),
+            template_version=record_review_template_version(
+                ds.DATASET_VERSION, loader.LOADER_VERSION),
             source_artifact_sha256=meta.get("intake_sha256"),
             report_data_hash=data_hash,
             data_classification=job.classification,

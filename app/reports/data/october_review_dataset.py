@@ -43,6 +43,7 @@ from __future__ import annotations
 import csv
 import html
 import io
+import re
 from typing import Any, Dict, Iterable, List, Optional
 
 DATASET_VERSION = "1.0.0"
@@ -90,13 +91,18 @@ PDF_COLUMNS = ["Source_Line", "AGT_Record_ID", "QHIN Number", "Organization",
 #: the landscape page; they sum to 100.
 PDF_COLUMN_GROUPS = [
     ("Record identity", [("Source_Line", 4.0), ("AGT_Record_ID", 8.5), ("QHIN Number", 5.5),
-                         ("Organization", 8.5), ("Submitted NPI (original, verbatim)", 6.0)]),
-    ("Classification / processing status", [("Bucket", 7.0), ("Status", 6.0), ("Flag", 7.0)]),
-    ("Source results (verbatim; see notes)", [("NPPES", 7.8), ("PECOS/CMS Enrollment", 7.8),
-                                              ("OIG LEIE", 7.8), ("SAM.gov Exclusions", 7.8),
-                                              ("USPS Address Check", 6.8)]),
-    ("Reasons", [("Reasons", 9.5)]),
+                         ("Organization", 8.5), ("Submitted NPI (original, verbatim)", 6.6)]),
+    ("Classification / processing status", [("Bucket", 7.8), ("Status", 6.0), ("Flag", 8.2)]),
+    ("Source results (verbatim; see notes)", [("NPPES", 7.1), ("PECOS/CMS Enrollment", 7.5),
+                                              ("OIG LEIE", 7.1), ("SAM.gov Exclusions", 7.1),
+                                              ("USPS Address Check", 7.1)]),
+    ("Reasons", [("Reasons", 9.0)]),
 ]
+#: 2026-11-13, widths re-cut against the PRODUCTION engine's face (DejaVu Sans in
+#: the container; wider than the Arial a development host substitutes). With the
+#: earlier widths WeasyPrint broke a 10-digit NPI as "12345678/93", "PROVISIONAL"
+#: as "PROVISI/ONAL", "unavailable" as "unavailabl/e" and "NOT CLASSIFIED" inside
+#: the word. Each of those now fits its column on one line (side padding 2 pt).
 #: Second PDF table: the long free-text columns, one row per record that has any of
 #: them. Original QA comments, the second reviewer's comments and the generated
 #: clarifications stay in SEPARATE columns and are rendered verbatim (pre-wrap).
@@ -110,6 +116,25 @@ PDF_DETAIL_COLUMNS = [("AGT_Record_ID", 11.0), ("Submitted Address", 13.0),
 #: Excel/CSV keep the sentence in every cell. Only text with this exact prefix is
 #: folded; a real source result is never shortened.
 PDF_NOTE_PREFIX = "Not established by this loader:"
+#: ROWS TALLER THAN A PAGE (2026-11-13). A table row cannot be kept together when
+#: its text is longer than a page, and a row the engine splits by itself leaves
+#: pages of text with no AGT_Record_ID on them - once printed, a page of comment
+#: cannot be attributed to a record. So a long cell is cut HERE into consecutive
+#: slices, one per "continuation" row, and every continuation row names its
+#: record again ("<id> (continued, part k of n)"). The slices are exact,
+#: back-to-back pieces of the dataset's string - concatenated they ARE the string;
+#: nothing is trimmed, dropped or re-flowed - and each is small enough that its
+#: row fits on a page, so the engine's keep-together rule holds for every row.
+#: The size is an ESTIMATE in lines (the engine, not this module, knows the
+#: glyph widths): the content box of a landscape Letter page is 727 pt wide, a
+#: character is taken as 0.62 em, and the budgets below leave a margin under the
+#: ~47 lines a page holds. The detail table uses half a page per slice so two
+#: slices share a page instead of each taking one.
+PDF_CONTENT_WIDTH_PT = (11.0 - 2 * 0.45) * 72
+PDF_CHAR_ADVANCE_EM = 0.62
+PDF_CELL_INSET_PT = 7.0                 # left + right padding and the border
+PDF_MAIN_FONT_PT, PDF_MAIN_MAX_LINES = 8.0, 40
+PDF_DETAIL_FONT_PT, PDF_DETAIL_MAX_LINES = 7.5, 24
 
 
 class DatasetRefused(ValueError):
@@ -332,7 +357,7 @@ body { font-size: 8pt; line-height: 1.25; margin: 0; }
 h1 { font-size: 15pt; margin: 0 0 4pt 0; string-set: doc-title content(); }
 h2 { font-size: 11pt; margin: 12pt 0 4pt 0; border-bottom: 1.5pt solid #1b1b1b; padding-bottom: 2pt; }
 p { margin: 0 0 5pt 0; }
-.classification { font-size: 9pt; font-weight: 700; margin: 0 0 6pt 0; }
+p.classification { font-size: 9pt; font-weight: 700; margin: 0 0 6pt 0; }
 .banner { border: 1.5pt solid #b50909; color: #b50909; background: #fff5f5; padding: 4pt 6pt;
           font-weight: 700; margin: 0 0 8pt 0; }
 .synthetic { border: 2pt dashed #b50909; color: #b50909; padding: 4pt 6pt; font-weight: 700;
@@ -343,7 +368,7 @@ table { border-collapse: collapse; width: 100%; table-layout: fixed; margin: 0 0
 caption { text-align: left; font-weight: 700; font-size: 8.5pt; padding: 0 0 3pt 0; }
 thead { display: table-header-group; }
 tr { break-inside: avoid; page-break-inside: avoid; }
-th, td { border: 0.5pt solid #8d8d8d; padding: 2.5pt 3pt; text-align: left; vertical-align: top;
+th, td { border: 0.5pt solid #8d8d8d; padding: 2.5pt 2pt; text-align: left; vertical-align: top;
          overflow-wrap: anywhere; word-break: break-word; hyphens: manual; }
 th { background: #e8ecf1; font-weight: 700; font-size: 7.5pt; overflow-wrap: break-word; word-break: normal; }
 th.group { background: #c9d2dd; text-align: center; font-size: 7.5pt; letter-spacing: 0.2pt; }
@@ -383,6 +408,56 @@ def _chip(value: str) -> str:
     return f'<span class="chip{cls}">{html.escape(value)}</span>' if value else ""
 
 
+def _chars_per_line(width_pct: float, font_pt: float) -> int:
+    inner = PDF_CONTENT_WIDTH_PT * width_pct / 100.0 - PDF_CELL_INSET_PT
+    return max(4, int(inner / (font_pt * PDF_CHAR_ADVANCE_EM)))
+
+
+_TOKEN = re.compile(r"\n|[^\S\n]+|\S+")
+
+
+def split_for_rows(text: str, chars_per_line: int, max_lines: int) -> List[str]:
+    """`text` as consecutive slices, each estimated at no more than `max_lines`
+    wrapped lines of `chars_per_line`. "".join(result) == text, always: a slice
+    boundary is a position in the string, never an edit to it. Cuts fall before
+    a word (whitespace stays with the slice it ends), or inside a single run
+    longer than a whole slice. A newline counts as a line break (the detail
+    cells preserve them; elsewhere this only over-estimates)."""
+    if not text:
+        return [""]
+    capacity = chars_per_line * max_lines
+    slices: List[str] = []
+    start = lines = col = 0
+    for match in _TOKEN.finditer(text):
+        token, pos = match.group(), match.start()
+        if token == "\n":
+            lines, col = lines + 1, 0
+            continue
+        if token.isspace():
+            col += len(token)
+            continue
+        while len(token) > capacity:                 # one unbroken run longer than a slice
+            if pos > start:
+                slices.append(text[start:pos])
+            slices.append(text[pos:pos + capacity])
+            start = pos = pos + capacity
+            token, lines, col = token[capacity:], 0, 0
+        if col and col + len(token) > chars_per_line:
+            lines, col = lines + 1, 0
+        need = lines + 1 + (len(token) - 1) // chars_per_line
+        if need > max_lines and pos > start:
+            slices.append(text[start:pos])
+            start, lines, col = pos, 0, 0
+        lines += (len(token) - 1) // chars_per_line
+        col = (col + len(token)) % chars_per_line if len(token) > chars_per_line else col + len(token)
+    slices.append(text[start:])
+    return slices
+
+
+def _row_parts(cells: List[Optional[List[str]]]) -> int:
+    return max([len(c) for c in cells if c is not None] or [1])
+
+
 def to_html(dataset: Dict[str, Any]) -> str:
     """Self-contained HTML for the PDF rendering of THIS dataset. Presentation only:
     every value comes from `dataset["sheets"]`; nothing is recomputed here."""
@@ -414,52 +489,90 @@ def to_html(dataset: Dict[str, Any]) -> str:
             return f"Not established <sup>[{notes.index(text) + 1}]</sup>"
         return e(text)
 
+    def continued(record_id: str, part: int, parts: int) -> str:
+        return (f"{e(record_id)}<br><span class='note'>(continued, part {part} of {parts})</span>")
+
+    flat_columns = [(g, c) for g, cs in PDF_COLUMN_GROUPS for c, _w in cs]
     body_rows = []
     for r in rec["rows"]:
         cells = []
+        # Per column: the slices of a free-text cell, or None for a cell that is never split.
+        long_cells: List[Optional[List[str]]] = []
         for g, cs in PDF_COLUMN_GROUPS:
             gcls = group_cls[g]
-            for c, _w in cs:
+            for c, w in cs:
                 v = r[col[c]]
+                slices: Optional[List[str]] = None
                 if c == "Source_Line":
                     cells.append(f"<td class='{gcls} num'>{e(v)}</td>")
                 elif c in ("AGT_Record_ID", "QHIN Number", "Submitted NPI (original, verbatim)"):
                     cells.append(f"<td class='{gcls} mono'>{e(v)}</td>")
                 elif c in ("Bucket", "Status"):
                     cells.append(f"<td class='{gcls}'>{_chip(v)}</td>")
-                elif gcls == "source":
+                elif gcls == "source" and v.startswith(PDF_NOTE_PREFIX):
                     cells.append(f"<td class='{gcls}'>{source_cell(v)}</td>")
                 else:
-                    cells.append(f"<td class='{gcls}'>{e(v)}</td>")
+                    slices = split_for_rows(v, _chars_per_line(w, PDF_MAIN_FONT_PT), PDF_MAIN_MAX_LINES)
+                    cells.append(f"<td class='{gcls}'>{e(slices[0])}</td>")
+                long_cells.append(slices)
+        parts = _row_parts(long_cells)
         body_rows.append("<tr>" + "".join(cells) + "</tr>")
+        for part in range(1, parts):              # only for a record whose text outgrows a page
+            more = []
+            for (g, c), slices in zip(flat_columns, long_cells):
+                gcls = group_cls[g]
+                if c == "AGT_Record_ID":
+                    more.append(f"<td class='{gcls} mono'>{continued(r[col[c]], part + 1, parts)}</td>")
+                else:
+                    text = slices[part] if slices is not None and part < len(slices) else ""
+                    more.append(f"<td class='{gcls}'>{e(text)}</td>")
+            body_rows.append("<tr class='continuation'>" + "".join(more) + "</tr>")
     notes_html = ("<ol class='notes'>" + "".join(f"<li>{e(n)}</li>" for n in notes) + "</ol>"
                   if notes else "")
 
     # -- detail table: addresses and the three separate, verbatim comment columns --
     detail_idx = [col[c] for c, _w in PDF_DETAIL_COLUMNS]
     detail_rows = []
+    detail_records = 0
     for r in rec["rows"]:
         if not any(r[i] for i in detail_idx[1:]):
             continue
+        columns_slices = [split_for_rows(r[i], _chars_per_line(w, PDF_DETAIL_FONT_PT), PDF_DETAIL_MAX_LINES)
+                          for i, (_c, w) in zip(detail_idx[1:], PDF_DETAIL_COLUMNS[1:])]
+        parts = _row_parts(columns_slices)
+        part_note = f" &middot; part 1 of {parts}" if parts > 1 else ""
         cells = [f"<td class='mono'>{e(r[detail_idx[0]])}<br><span class='note'>line {e(r[col['Source_Line']])}"
-                 f" &middot; {e(r[col['Bucket']])} / {e(r[col['Status']])}</span></td>"]
-        cells += [f"<td class='verbatim'>{e(r[i])}</td>" for i in detail_idx[1:]]
+                 f" &middot; {e(r[col['Bucket']])} / {e(r[col['Status']])}{part_note}</span></td>"]
+        cells += [f"<td class='verbatim'>{e(slices[0])}</td>" for slices in columns_slices]
         detail_rows.append("<tr>" + "".join(cells) + "</tr>")
+        detail_records += 1
+        for part in range(1, parts):
+            more = [f"<td class='mono'>{continued(r[detail_idx[0]], part + 1, parts)}</td>"]
+            more += [f"<td class='verbatim'>{e(slices[part] if part < len(slices) else '')}</td>"
+                     for slices in columns_slices]
+            detail_rows.append("<tr class='continuation'>" + "".join(more) + "</tr>")
     detail_colgroup = "".join(f"<col style='width:{w}%'>" for _c, w in PDF_DETAIL_COLUMNS)
     detail_head = "".join(f"<th scope='col'>{_th(c)}</th>" for c, _w in PDF_DETAIL_COLUMNS)
+    # The sentence below states the inclusion rule the loop above applies: ANY of
+    # the five detail fields non-empty - so a record with only a submitted address
+    # IS listed (it used to say "an address correction or any comment").
     detail_html = (
         f"<h2>Addresses and commentary (verbatim)</h2>"
-        f"<p class='note'>Only records with an address correction or any comment are listed. "
-        f"Original QA comments, the second reviewer's comments and generated report "
+        f"<p class='note'>A record is listed here when it has a submitted address, a proposed "
+        f"corrected address, or any comment or clarification; a record with none of these is "
+        f"not listed. Original QA comments, the second reviewer's comments and generated report "
         f"clarifications are separate columns, reproduced verbatim (whitespace preserved). "
-        f"Comments are commentary, not determinations, resolutions or QA approvals; a proposed "
-        f"address is AI-assisted and NOT an accepted correction.</p>"
-        f"<table><caption>Record detail ({len(detail_rows)} of {len(rec['rows'])} records)</caption>"
+        f"Text too long for one page continues in the rows that follow, each naming its record "
+        f"again as &ldquo;(continued, part k of n)&rdquo;; the parts read in order are the "
+        f"complete text. Comments are commentary, not determinations, resolutions or QA "
+        f"approvals; a proposed address is AI-assisted and NOT an accepted correction.</p>"
+        f"<table><caption>Record detail ({detail_records} of {len(rec['rows'])} records)</caption>"
         f"<colgroup>{detail_colgroup}</colgroup><thead><tr>{detail_head}</tr></thead>"
         f"<tbody>{''.join(detail_rows)}</tbody></table>"
         if detail_rows else
         "<h2>Addresses and commentary (verbatim)</h2><p class='note'>No record in this dataset "
-        "carries an address correction or a comment.</p>")
+        "carries a submitted address, a proposed corrected address, a comment or a "
+        "clarification.</p>")
 
     # -- unclassified list (the summary refers to it; it must be in the PDF too) --
     uncls_html = ""

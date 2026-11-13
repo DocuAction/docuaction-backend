@@ -433,3 +433,13 @@ async def test_a_failed_job_offers_no_download_link(rolled_back_db, store, monke
         status = (await client.get(r.json()["status_url"], headers=headers)).json()
     assert status["state"] == ReportExportJob.STATE_FAILED and "download" not in status
     assert not [p for p in store.rglob("*") if p.is_file()], "a failed job left bytes in the store"
+
+def test_the_registered_template_version_fits_the_registry_column():
+    """The label that broke registration: 41 characters into varchar(32)."""
+    from app.reports.data import october_review_loader as loader
+    from app.reports.data.artifact_registry import ReportArtifact
+    from app.reports.export_runner import record_review_template_version
+
+    label = record_review_template_version(ds_mod.DATASET_VERSION, loader.LOADER_VERSION)
+    assert len(label) <= ReportArtifact.__table__.c.template_version.type.length
+    assert ds_mod.DATASET_VERSION in label and loader.LOADER_VERSION in label

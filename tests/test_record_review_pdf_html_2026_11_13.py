@@ -99,7 +99,8 @@ def test_detail_table_lists_only_records_with_something_to_show():
     detail = page.split("Addresses and commentary (verbatim)")[1]
     assert "agt-2" in detail and "agt-1" not in detail and "(1 of 2 records)" in detail
     none = _page([_f(1, submitted_address="")])
-    assert "No record in this dataset carries an address correction or a comment" in none
+    assert ("No record in this dataset carries a submitted address, a proposed corrected address, "
+            "a comment or a clarification") in none
 
 
 def test_draft_marking_synthetic_marking_and_unclassified_list():

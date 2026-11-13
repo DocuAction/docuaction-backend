@@ -43,7 +43,6 @@ MAIN_WIDTHS = [w for _g, cs in d.PDF_COLUMN_GROUPS for _c, w in cs]
 MAIN_LABELS = [c for _g, cs in d.PDF_COLUMN_GROUPS for c, _w in cs]
 DETAIL_WIDTHS = [w for _c, w in d.PDF_DETAIL_COLUMNS]
 DETAIL_LABELS = [c for c, _w in d.PDF_DETAIL_COLUMNS]
-CONTINUED = "(continued,part"            # squashed text of a continuation row's identity cell
 
 
 # ── rendered by WeasyPrint ────────────────────────────────────────────────────
@@ -96,18 +95,7 @@ def _render_once(name):
             "detail": s.reconstruct(pages, tables["detail"], DETAIL_WIDTHS, 0)}
 
 
-def _merged(rows, id_col):
-    """Continuation rows (identity cell reads "<id> (continued, part k of n)")
-    folded back into the record they continue, column by column."""
-    out = []
-    for row in rows:
-        if CONTINUED in row[id_col] and out:
-            for ci, text in enumerate(row):
-                if ci != id_col:
-                    out[-1][ci] += text
-        else:
-            out.append(list(row))
-    return out
+_merged = s.merge_continuations
 
 
 def test_every_page_carries_the_draft_marking_and_its_own_page_number(rendered):
@@ -201,6 +189,31 @@ def test_every_marker_of_the_long_comments_is_in_its_own_column_once_and_in_orde
             if other_label != label:
                 assert markers[0][:-5] not in other, f"{label} text found in the {other_label} column"
     assert len(s.LONG_ORIGINAL) >= 20_000 and len(s.LONG_ORIGINAL_MARKERS) > 100
+
+
+def test_short_identifiers_and_status_words_are_not_broken_across_lines(rendered):
+    """A 10-digit NPI, PROVISIONAL, NOT CLASSIFIED, "established" and "unavailable"
+    each fit their column: read back, each is ONE word, once per row that has it.
+    (Text longer than its column - an OID, a UUID - still wraps; that is not this.)"""
+    rows = rendered["dataset"]["sheets"]["Records"]["rows"]
+    col = {c: i for i, c in enumerate(d.RECORD_COLUMNS)}
+    tables = s.table_words(rendered["pages"])
+    words = [w["text"] for page in tables["main"] for w in page]
+
+    def count(predicate):
+        return sum(1 for w in words if predicate(w))
+
+    npi = sum(1 for r in rows if r[col["Submitted NPI (original, verbatim)"]] == "1234567893")
+    assert count(lambda w: w == "1234567893") == npi, "a 10-digit NPI is broken across lines"
+    flagged = sum(1 for r in rows if "PROVISIONAL" in r[col["Flag"]])
+    assert count(lambda w: w == "PROVISIONAL") == flagged, "PROVISIONAL is broken across lines"
+    unclassified = sum(1 for r in rows if r[col["Bucket"]] == d.NOT_CLASSIFIED)
+    assert count(lambda w: w == "CLASSIFIED") == unclassified, "NOT CLASSIFIED is broken inside the word"
+    usps = sum(1 for r in rows if r[col["USPS Address Check"]] == d.USPS_UNAVAILABLE)
+    assert count(lambda w: w.endswith("unavailable")) == usps, "unavailable is broken across lines"
+    folded = sum(1 for r in rows for c in ("NPPES", "PECOS/CMS Enrollment", "OIG LEIE", "SAM.gov Exclusions")
+                 if r[col[c]].startswith(d.PDF_NOTE_PREFIX))
+    assert count(lambda w: w == "established") == folded, "established is broken across lines"
 
 
 def test_a_row_longer_than_a_page_names_its_record_on_every_page_it_reaches(rendered):
@@ -371,6 +384,46 @@ def test_detail_section_says_which_records_it_lists_and_the_rule_matches_what_is
     assert "Only records with an address correction or any comment" not in note
     empty = d.to_html(s.build([s._fact(2, submitted_address="")]))
     assert "carries a submitted address" in empty.split("Addresses and commentary (verbatim)")[1]
+
+
+def test_long_text_is_cut_into_exact_consecutive_slices_and_nothing_else():
+    import random
+
+    rng = random.Random(20261113)
+    alphabet = "ab c\n\t  XYZ0123456789-_/&<>\u00e9"
+    for trial in range(1500):
+        text = "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 700)))
+        if trial % 7 == 0:
+            text += "Q" * rng.randint(1, 2500)                   # one run longer than a whole slice
+        per_line, lines = rng.randint(4, 40), rng.randint(1, 30)
+        slices = d.split_for_rows(text, per_line, lines)
+        assert "".join(slices) == text
+        assert all(slices) or text == ""
+    assert d.split_for_rows("", 30, 24) == [""]
+    assert d.split_for_rows("short text", 30, 24) == ["short text"]
+    whole = d.split_for_rows(s.LONG_ORIGINAL, 31, 24)
+    assert len(whole) > 20 and "".join(whole) == s.LONG_ORIGINAL
+    assert all(not piece[0].isspace() for piece in whole)        # a slice starts on a word, never mid-gap
+
+
+def test_a_long_record_continues_in_rows_that_each_name_the_record_and_part():
+    page = d.to_html(s.build(s.adversarial_facts()))
+    detail = next(t for t in _html_tables(page) if t and t[0][1][:1] == ["AGT_Record_ID"])
+    mine = [(cls, cells) for cls, cells in detail[1:] if cells[0].startswith(s.ID_LONG)]
+    parts = len(mine)
+    assert parts > 20 and mine[0][0] == "" and f"part 1 of {parts}" in mine[0][1][0]
+    for k, (cls, cells) in enumerate(mine[1:], start=2):
+        assert cls == "continuation"
+        assert cells[0] == f"{s.ID_LONG}\n(continued, part {k} of {parts})"
+    original = DETAIL_LABELS.index(d.ORIGINAL_COMMENTS_COLUMN)
+    assert "".join(cells[original] for _cls, cells in mine) == s.LONG_ORIGINAL
+    # an ordinary record is one row and says nothing about parts
+    short = [(cls, cells) for cls, cells in detail[1:] if cells[0].startswith(f"{s.ID_PREFIX}0001")]
+    assert len(short) == 1 and "part" not in short[0][1][0]
+    main = next(t for t in _html_tables(page) if len(t) > 1 and t[1][1][:2] == ["Source_Line", "AGT_Record_ID"])
+    reasons = [(cls, cells) for cls, cells in main[2:] if cells[1].startswith(s.ID_LONG_REASONS)]
+    assert len(reasons) > 1 and all(cls == "continuation" for cls, _c in reasons[1:])
+    assert "".join(cells[-1] for _cls, cells in reasons) == s.LONG_REASONS
 
 
 def test_held_is_counted_once_inside_b4_and_findings_stay_a_separate_grain():
