@@ -256,3 +256,106 @@ class TestTheGatewayRefusesSerializedAndItinForms(TestTheTefcaAiGatewayRefuses):
         assert await gateway._call_provider(gateway.primary_provider, prompt,
                                             "standard", "entity_match", 0.0) is None
         assert gateway.sent == []
+
+
+# ── the whole path: a record with tax identifiers -> the prompt that would be sent ──
+
+PROTECTED_VALUES = ("00-0000005", "000000006", "000000007", "000000008", "00-0000009")
+
+
+def _record(name, address):
+    """A record as the verification step holds it, PLUS every protected field a
+    delivery or a reference file could carry. None of the extras is on an
+    allowlist; the test is that none of them travels."""
+    return {"name": name, "address": address, "npi": "1234567893",
+            "entity_type": "organization", "state": "MA", "tefcaid": "T-SYN-1",
+            "ein": PROTECTED_VALUES[0], "tin": PROTECTED_VALUES[1],
+            "ORG_TAX_ID": PROTECTED_VALUES[2], "tax_id": PROTECTED_VALUES[3],
+            "payload": {"ORG_TAX_ID": PROTECTED_VALUES[2], "FEIN": PROTECTED_VALUES[4]},
+            "raw_line": f"x|y|{PROTECTED_VALUES[1]}|z"}
+
+
+class TestARecordsProtectedFieldsNeverReachThePrompt:
+    """The one AI path the Review Hub's screens can reach: verification ->
+    EntityResolver.resolve_with_orchestrator -> orchestrator -> gateway. The orchestrator is
+    real; only the network transport is replaced, by a recorder."""
+
+    @pytest.fixture
+    def path(self, monkeypatch):
+        from app.tefca_registry.entity_resolver import EntityResolver
+        from test_tefca_ai_control_plane import _StubGateway, _orchestrator, _response
+
+        monkeypatch.setenv("AI_ENTITY_RESOLUTION", "advisory")
+        gateway = _StubGateway(_response())
+        return EntityResolver(), _orchestrator(gateway=gateway), gateway
+
+    async def _run(self, path, a, b):
+        resolver, orchestrator, gateway = path
+        result = await resolver.resolve_with_orchestrator(a, b, orchestrator=orchestrator)
+        return result, gateway
+
+    async def test_only_allowlisted_fields_are_in_the_prompt_and_its_context(self, path, caplog):
+        import json
+        import logging
+
+        a = _record("SYNTHETIC ALPHA REGIONAL HEALTH", "1 Synthetic Way, Testville, MA 02101")
+        b = _record("SYNTHETIC ALPHA REGNL HLTH SYSTEM", "900 Other Road, Elsewhere, MA 02199")
+        b.pop("npi")                     # no shared identifier, so the deterministic steps
+        b.pop("tefcaid")                 # disagree and the AI step is the one consulted
+        with caplog.at_level(logging.DEBUG):
+            _result, gateway = await self._run(path, a, b)
+        assert gateway.calls, ("the AI step was not reached, so this run proves nothing "
+                               "about what it would send")
+        for _kind, prompt, context in gateway.calls:
+            sent = prompt + json.dumps(context, default=str)
+            for value in PROTECTED_VALUES:
+                assert value not in sent, value
+            for key in ("ORG_TAX_ID", "FEIN", "raw_line", "payload", '"ein"', '"tin"', "tax_id"):
+                assert key not in sent, key
+            assert set(context.get("fields_sent") or []) <= {"name", "address", "npi", "entity_type"}
+            assert pi.find_in_text(sent) == []
+        for value in PROTECTED_VALUES:
+            assert value not in caplog.text, value
+
+    async def test_the_legacy_direct_client_cannot_be_built(self):
+        """The pre-control-plane transport: no client is ever constructed, and
+        the class refuses to call a provider even if one is."""
+        from app.tefca_registry import ai_client
+
+        assert ai_client.build_ai_client() is None
+        with pytest.raises(NotImplementedError):
+            ai_client.AnthropicClient().complete(model="m", system="s", prompt="p")
+
+    async def test_ai_off_means_no_prompt_is_built_at_all(self, path, monkeypatch):
+        from app.tefca_registry.entity_resolver import EntityResolver
+
+        monkeypatch.delenv("AI_ENTITY_RESOLUTION", raising=False)
+        _resolver, orchestrator, gateway = path
+        a = _record("SYNTHETIC ALPHA REGIONAL HEALTH", "1 Synthetic Way, Testville, MA 02101")
+        b = _record("SYNTHETIC ALPHA REGNL HLTH SYSTEM", "900 Other Road, Elsewhere, MA 02199")
+        b.pop("npi")                     # no shared identifier, so the deterministic steps
+        b.pop("tefcaid")                 # disagree and the AI step is the one consulted
+        await EntityResolver().resolve_with_orchestrator(a, b, orchestrator=orchestrator)
+        assert gateway.calls == []
+
+
+class TestNoOtherAiTransportInTheReviewModules:
+    """A static inventory, so a new direct provider call in the modules behind
+    the Review Hub fails a test instead of passing unnoticed."""
+
+    def test_only_the_gateway_names_a_provider_endpoint_or_sdk(self):
+        import pathlib
+        import re
+
+        root = pathlib.Path(__file__).resolve().parents[1] / "app"
+        scanned = [root / "tefca_registry", root / "Tefca", root / "reports"]
+        pattern = re.compile(r"^\s*(?:import|from)\s+(?:anthropic|openai)\b"
+                             r"|api\.anthropic\.com|api\.openai\.com", re.M)
+        allowed = {"tefca_registry/ai/gateway.py"}
+        found = set()
+        for base in scanned:
+            for path in base.rglob("*.py"):
+                if pattern.search(path.read_text(encoding="utf-8", errors="replace")):
+                    found.add(path.relative_to(root).as_posix())
+        assert found <= allowed, sorted(found - allowed)
+        assert "tefca_registry/ai/gateway.py" in found
