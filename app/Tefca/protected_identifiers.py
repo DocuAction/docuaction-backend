@@ -83,7 +83,7 @@ _LABEL = (
     r"(?:"
     + rf"(?:tax{_SEP}payer|tax|irs){_SEP}{_SUFFIX}(?:{_SEP}{_SUFFIX})?"
     + rf"|employer{_SEP}identification(?:{_SEP}{_SUFFIX})?"
-    + rf"|{_SINGLE}"
+    + rf"|{_SINGLE}(?:{_SEP}{_SUFFIX})?"
     + r")(?![A-Za-z])")
 #: What may stand between a label and its value: punctuation of any
 #: serialization (quotes, colon, equals, brackets, spaces) and a joining word.

@@ -408,3 +408,21 @@ class TestTheGatewayRefusesEveryProtectedSpelling(TestTheTefcaAiGatewayRefuses):
         assert await gateway.call(prompt) is None
         assert (await gateway.call_dual(prompt)).primary is None
         assert gateway.sent == []
+
+
+class TestASingleTokenFollowedByAnIdentifierWord:
+    """Second follow-up on #219: `PROVIDER_EIN_ID` is a protected name, and the
+    text rule did not accept an identifier word after a single-token label."""
+
+    @pytest.mark.parametrize("name", ["PROVIDER_EIN_ID", "EIN_NUMBER", "TIN_NBR", "FEIN_CD",
+                                      "orgEinId", "ITIN_NO", "TAXPAYER_ID", "taxid_number"])
+    def test_found_redacted_and_consistent_with_the_field_rule(self, name):
+        assert pi.is_protected_field(name), name
+        for text in (f"{name}: 000000001", f'{{"{name}": "000000001"}}'):
+            assert "labelled_tax_identifier" in pi.find_in_text(text), text
+            assert "000000001" not in pi.redact_text(text), text
+
+    @pytest.mark.parametrize("text", ["protein_id: 000000001", "routing_number: 000000001",
+                                      "margin_no: 000000001", "retain_id=000000001"])
+    def test_words_ending_in_a_label_still_do_not_match(self, text):
+        assert pi.find_in_text(text) == [], text
