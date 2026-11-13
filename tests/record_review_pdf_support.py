@@ -500,13 +500,51 @@ CONTINUED = "(continued,part"            # squashed text of a continuation row's
 
 def merge_continuations(rows: List[List[str]], id_col: int) -> List[List[str]]:
     """Continuation rows (identity cell reads "<id> (continued, part k of n)")
-    folded back into the record they continue, column by column, in order."""
+    folded back into the record they continue, column by column, in order.
+
+    A continuation is folded only into the record it NAMES, and only as the
+    next part in sequence. A row that names another record, arrives with no
+    record before it, or skips or repeats a part number is a rendering defect,
+    and raises instead of being merged: merging it would hide exactly the
+    mislabelled or misplaced row these checks exist to find."""
     out: List[List[str]] = []
+    parts_seen = 1
     for row in rows:
-        if CONTINUED in row[id_col] and out:
-            for ci, text in enumerate(row):
-                if ci != id_col:
-                    out[-1][ci] += text
-        else:
+        if CONTINUED not in row[id_col]:
             out.append(list(row))
+            parts_seen = 1
+            continue
+        named, _, tail = row[id_col].partition(CONTINUED)
+        if not out:
+            raise AssertionError(f"continuation row for {named!r} has no record before it")
+        if not named or not out[-1][id_col].startswith(named):
+            raise AssertionError(
+                f"continuation row names {named!r} but follows record {out[-1][id_col][:60]!r}")
+        part = re.match(r"(\d+)of(\d+)\)", tail)
+        if not part or int(part.group(1)) != parts_seen + 1 or int(part.group(1)) > int(part.group(2)):
+            raise AssertionError(
+                f"continuation of {named!r} reads {CONTINUED + tail!r}; expected part {parts_seen + 1}")
+        parts_seen += 1
+        for ci, text in enumerate(row):
+            if ci != id_col:
+                out[-1][ci] += text
     return out
+
+
+#: The squashed text the renderer emits for a placeholder source cell:
+#: "Not established <sup>[n]</sup>" (october_review_dataset.to_html.source_cell).
+NOTE_CELL = re.compile(r"Notestablished\[(\d+)\]")
+
+
+def note_number_displaced(got: str, want: str) -> bool:
+    """True when `want` is a placeholder cell ("Not established [n]") and `got`
+    is that same cell with ONLY its note number read out of place - text
+    extraction may report a superscript before or inside its line. Nothing else
+    may differ: the words must be exactly "Notestablished" once "[n]" is taken
+    out, and "[n]" must be there exactly once. Any other cell is compared
+    exactly by the caller."""
+    m = NOTE_CELL.fullmatch(want)
+    if not m:
+        return False
+    marker = f"[{m.group(1)}]"
+    return got.count(marker) == 1 and got.replace(marker, "", 1) == "Notestablished"

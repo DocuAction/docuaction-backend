@@ -181,9 +181,8 @@ def test_main_table_shows_every_record_and_field_of_the_dataset(rendered):
     assert [r[1] for r in got] == [r[1] for r in want], "records missing, repeated or out of order"
     for g, w in zip(got, want):
         for label, gc, wc in zip(MAIN_LABELS, g, w):
-            if "[" in wc and gc != wc:          # a superscript note number may read before its line
-                assert sorted(gc) == sorted(wc), (w[1], label, gc, wc)
-                continue
+            if gc != wc and s.note_number_displaced(gc, wc):
+                continue                         # only a placeholder cell's own "[n]" may move
             assert gc == wc, f"{w[1]} / {label}: {s.first_difference(gc, wc)}"
 
 

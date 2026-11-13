@@ -426,7 +426,8 @@ def split_for_rows(text: str, chars_per_line: int, max_lines: int) -> List[str]:
     boundary is a position in the string, never an edit to it. Cuts fall before
     a word (whitespace stays with the slice it ends), or inside a single run
     longer than a whole slice. A newline counts as a line break (the detail
-    cells preserve them; elsewhere this only over-estimates)."""
+    cells preserve them; elsewhere this only over-estimates), and a run of
+    newlines is cut after the one that fills the slice."""
     if not text:
         return [""]
     capacity = chars_per_line * max_lines
@@ -436,6 +437,9 @@ def split_for_rows(text: str, chars_per_line: int, max_lines: int) -> List[str]:
         token, pos = match.group(), match.start()
         if token == "\n":
             lines, col = lines + 1, 0
+            if lines >= max_lines:                   # the slice is full: cut after this newline
+                slices.append(text[start:pos + 1])
+                start, lines = pos + 1, 0
             continue
         if token.isspace():
             col += len(token)
@@ -453,8 +457,11 @@ def split_for_rows(text: str, chars_per_line: int, max_lines: int) -> List[str]:
             slices.append(text[start:pos])
             start, lines, col = pos, 0, 0
         lines += (len(token) - 1) // chars_per_line
-        col = (col + len(token)) % chars_per_line if len(token) > chars_per_line else col + len(token)
-    slices.append(text[start:])
+        # A run that wraps ends on a line holding 1..chars_per_line characters: a
+        # run of an exact multiple leaves its last line FULL, not empty.
+        col = (len(token) - 1) % chars_per_line + 1 if len(token) > chars_per_line else col + len(token)
+    if start < len(text) or not slices:
+        slices.append(text[start:])
     return slices
 
 

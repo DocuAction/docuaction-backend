@@ -135,3 +135,112 @@ def test_html_is_escaped_everywhere_it_shows_data():
                      qa_comments_source=SRC, nppes="<u>")])
     assert "<b>x</b>" not in page and "<script>" not in page and "<i>c</i>" not in page and "<u>" not in page
     assert "&lt;b&gt;x&lt;/b&gt; &amp; y" in page
+
+
+# ── review findings on #213 (CodeRabbit, 2026-11-13) ─────────────────────────
+
+def _lines_needed(piece: str, per_line: int) -> int:
+    """An independent count of the lines `piece` occupies: greedy word wrap, a
+    newline ends a line, a word longer than a line is broken across lines.
+    Written separately from split_for_rows so the two cannot share a mistake.
+    A newline that ENDS the piece does not open another line: nothing follows
+    it in that cell."""
+    lines, col = 1, 0
+    body = piece[:-1] if piece.endswith("\n") else piece
+    for token in re.findall(r"\n|[^\S\n]+|\S+", body):
+        if token == "\n":
+            lines, col = lines + 1, 0
+        elif token.isspace():
+            col += len(token)
+        else:
+            if col and col + len(token) > per_line:
+                lines, col = lines + 1, 0
+            while len(token) > per_line:
+                token, lines = token[per_line:], lines + 1
+            col += len(token)
+    return lines
+
+
+def test_a_run_of_newlines_cannot_put_more_lines_in_a_slice_than_the_budget():
+    """Before: 100 consecutive newlines stayed in ONE slice, and the detail cell
+    (white-space: pre-wrap) rendered all of them in one row."""
+    text = "start" + "\n" * 100 + "end"
+    slices = d.split_for_rows(text, 31, 24)
+    assert "".join(slices) == text
+    assert max(piece.count("\n") for piece in slices) <= 24
+    assert all(_lines_needed(piece, 31) <= 24 for piece in slices)
+    assert len(slices) == 5                       # 24 + 24 + 24 + 24 newlines, then 4 and "end"
+
+
+def test_text_that_ends_with_the_newline_that_fills_a_slice_adds_no_empty_slice():
+    text = "a\n" * 24
+    slices = d.split_for_rows(text, 31, 24)
+    assert "".join(slices) == text and all(slices) and len(slices) == 1
+
+
+def test_a_run_of_an_exact_multiple_of_the_line_width_leaves_its_last_line_full():
+    """Before: after a 20-character run at 10 per line the column was reset to 0,
+    so the next word was counted on the same line and the slice ran to 3 lines
+    against a budget of 2."""
+    slices = d.split_for_rows("B" * 20 + " a", 10, 2)
+    assert "".join(slices) == "B" * 20 + " a"
+    assert slices == ["B" * 20 + " ", "a"]
+    assert all(_lines_needed(piece, 10) <= 2 for piece in slices)
+    # 30 characters at 10 per line fill exactly 3 lines; the next word starts a 4th.
+    assert d.split_for_rows("C" * 30 + " d", 10, 4) == ["C" * 30 + " d"]
+    assert d.split_for_rows("C" * 30 + " d", 10, 3) == ["C" * 30 + " ", "d"]
+
+
+def test_no_slice_needs_more_lines_than_the_budget_by_an_independent_count():
+    import random
+
+    rng = random.Random(2026111301)
+    alphabet = "ab c\n  XYZ0123456789-_/"
+    for _trial in range(3000):
+        per_line, budget = rng.randint(4, 40), rng.randint(1, 30)
+        words = []
+        for _ in range(rng.randint(0, 120)):
+            kind = rng.random()
+            if kind < 0.15:
+                words.append("W" * (per_line * rng.randint(1, 3)))     # exact multiples
+            elif kind < 0.25:
+                words.append("\n" * rng.randint(1, 40))                # newline runs
+            else:
+                words.append("".join(rng.choice(alphabet) for _ in range(rng.randint(1, 12))))
+        text = " ".join(words)
+        slices = d.split_for_rows(text, per_line, budget)
+        assert "".join(slices) == text
+        for piece in slices:
+            assert _lines_needed(piece, per_line) <= budget, (per_line, budget, piece[:80])
+
+
+def test_a_continuation_row_is_merged_only_into_the_record_it_names():
+    from record_review_pdf_support import merge_continuations, note_number_displaced
+
+    rows = [["1", "A", "a1"], ["", "A(continued,part2of3)", "a2"],
+            ["", "A(continued,part3of3)", "a3"], ["2", "B", "b1"]]
+    assert merge_continuations(rows, 1) == [["1", "A", "a1a2a3"], ["2", "B", "b1"]]
+    # detail table: the record's own identity cell carries more than the id
+    assert merge_continuations([["Aline2·B1/CLEAN·part1of2", "x"], ["A(continued,part2of2)", "y"]], 0) \
+        == [["Aline2·B1/CLEAN·part1of2", "xy"]]
+
+    with pytest.raises(AssertionError, match="names 'B'"):       # mislabelled: B's row under A
+        merge_continuations([["1", "A", "a1"], ["", "B(continued,part2of2)", "b2"]], 1)
+    with pytest.raises(AssertionError, match="no record before it"):
+        merge_continuations([["", "A(continued,part2of2)", "a2"]], 1)
+    with pytest.raises(AssertionError, match="expected part 2"):  # a part is missing
+        merge_continuations([["1", "A", "a1"], ["", "A(continued,part3of3)", "a3"]], 1)
+    with pytest.raises(AssertionError, match="expected part 3"):  # a part is repeated
+        merge_continuations([["1", "A", "a1"], ["", "A(continued,part2of3)", "a2"],
+                             ["", "A(continued,part2of3)", "a2"]], 1)
+
+    # Only a placeholder cell's own note number may be read out of place.
+    assert note_number_displaced("[2]Notestablished", "Notestablished[2]")
+    assert note_number_displaced("Not[2]established", "Notestablished[2]")
+    assert not note_number_displaced("[3]Notestablished", "Notestablished[2]")       # another note
+    assert not note_number_displaced("Notestablished", "Notestablished[2]")          # number lost
+    assert not note_number_displaced("[2][2]Notestablished", "Notestablished[2]")
+    assert not note_number_displaced("establishedNot[2]", "Notestablished[2]")       # words reordered
+    # Free text with brackets is never excused: reordered markers are a difference.
+    assert not note_number_displaced("[WHY-2]b[WHY-1]a", "[WHY-1]a[WHY-2]b")
+    assert not note_number_displaced("Notestablished[2]extra", "Notestablished[2]extra")
