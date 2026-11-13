@@ -62,8 +62,9 @@ reviews:
         - Every count reconciles to the persisted evidence for the same
           delivery and run, and the row grain matches CSV_ROW_GRAINS.md.
         - A change to a template, stylesheet or dataset is proven by a test
-          that renders a real PDF with WeasyPrint (the `record-review-export`
-          and `render` CI jobs), not only by a test that replaces the renderer.
+          that renders a real PDF with WeasyPrint (the jobs of
+          .github/workflows/pdf-linux.yml, e.g. `render`), not only by a test
+          that replaces the renderer.
         - Long rows, repeated table headings and page breaks keep the record
           identifier visible on every page.
         - Download routes enforce the same role floor and delivery scope as the
