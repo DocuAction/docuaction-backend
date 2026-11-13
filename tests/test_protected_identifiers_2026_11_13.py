@@ -359,3 +359,52 @@ class TestNoOtherAiTransportInTheReviewModules:
                     found.add(path.relative_to(root).as_posix())
         assert found <= allowed, sorted(found - allowed)
         assert "tefca_registry/ai/gateway.py" in found
+
+
+# -- follow-up review finding on #219: one vocabulary for names AND for text --
+
+def _every_protected_spelling():
+    """Every name the field rule accepts, built from its own word lists."""
+    names = set(pi._SINGLE_TOKENS)
+    for head in ("tax", "taxpayer", "irs"):
+        for suffix in pi._ID_SUFFIXES:
+            names.add(f"{head}_{suffix}")
+    names.add("employer_identification")
+    names.add("employer_identification_number")
+    return sorted(names)
+
+
+class TestNamesAndTextUseOneVocabulary:
+    def test_tax_code_with_a_bare_value_is_found_redacted_and_refused(self):
+        text = '{"TAX_CODE": "000000001"}'
+        assert pi.is_protected_field("TAX_CODE")
+        assert "labelled_tax_identifier" in pi.find_in_text(text)
+        assert "000000001" not in pi.redact_text(text)
+        with pytest.raises(pi.ProtectedIdentifierEgressRefused):
+            pi.assert_safe_for_ai(text)
+
+    @pytest.mark.parametrize("name", _every_protected_spelling())
+    def test_every_name_the_field_rule_protects_also_labels_a_value_in_text(self, name):
+        assert pi.is_protected_field(name), name
+        for form in (name, name.upper(), f"ORG_{name.upper()}", name.replace("_", " "),
+                     name.replace("_", "")):
+            for text in (f'{{"{form}": "000000001"}}', f"{form}: 000000001", f"{form}=000000001"):
+                assert pi.find_in_text(text), text
+                assert "000000001" not in pi.redact_text(text), text
+
+    @pytest.mark.parametrize("text", [
+        "taxonomy_code: 000000001", "TAXONOMY_CD=000000001", "tax_status: 000000001",
+        "syntax_code: 000000001", "airs_number: 000000001", "zip_code: 021011234",
+        "postal code 000000001", "status_cd: 000000001",
+    ])
+    def test_near_misses_still_do_not_match(self, text):
+        assert pi.find_in_text(text) == [], text
+
+
+class TestTheGatewayRefusesEveryProtectedSpelling(TestTheTefcaAiGatewayRefuses):
+    @pytest.mark.parametrize("name", ["TAX_CODE", "TAX_CD", "IRS_CODE", "TAXPAYER_NR", "tax ident"])
+    async def test_not_dispatched(self, gateway, name):
+        prompt = f'Compare SYNTHETIC ORG using {{"{name}": "000000001"}}'
+        assert await gateway.call(prompt) is None
+        assert (await gateway.call_dual(prompt)).primary is None
+        assert gateway.sent == []

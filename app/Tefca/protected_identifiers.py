@@ -70,15 +70,21 @@ _SPLIT = re.compile(r"[^A-Za-z0-9]+")
 #: separator (`ORG_TAX_ID`, `"EIN"`, `hco.tin`) or a lower-case letter in
 #: camelCase (`orgTaxId`), and must not run on into another word (`routing`,
 #: `protein`, `taxonomy` are not labels).
+#:
+#: BUILT FROM THE SAME WORD LISTS AS `is_protected_field`. The two used to be
+#: written separately, and a spelling the field rule accepted (`TAX_CODE`) was
+#: not a label in text. Whatever names a protected column now also labels a
+#: value in text; a test compares the two for every combination.
+_SEP = r"[\s_\-]*"
+_SUFFIX = "(?:" + "|".join(sorted((re.escape(x) for x in _ID_SUFFIXES), key=len, reverse=True)) + ")"
+_SINGLE = "(?:" + "|".join(sorted((re.escape(x) for x in _SINGLE_TOKENS), key=len, reverse=True)) + ")"
 _LABEL = (
     r"(?:(?<![A-Za-z])|(?-i:(?<=[a-z])(?=[A-Z])))"
-    r"(?:f?ein|i?tin"
-    r"|tax[\s_\-]*payer(?:[\s_\-]*(?:id(?:entif(?:ier|ication))?|number|num|nbr|no))*"
-    r"|tax[\s_\-]*(?:id(?:entif(?:ier|ication))?|number|num|nbr|no)"
-    r"(?:[\s_\-]*(?:number|num|nbr|no))?"
-    r"|employer[\s_\-]*identification(?:[\s_\-]*(?:number|num|nbr|no))?"
-    r"|irs[\s_\-]*(?:id|number|num|nbr|no))"
-    r"(?![A-Za-z])")
+    r"(?:"
+    + rf"(?:tax{_SEP}payer|tax|irs){_SEP}{_SUFFIX}(?:{_SEP}{_SUFFIX})?"
+    + rf"|employer{_SEP}identification(?:{_SEP}{_SUFFIX})?"
+    + rf"|{_SINGLE}"
+    + r")(?![A-Za-z])")
 #: What may stand between a label and its value: punctuation of any
 #: serialization (quotes, colon, equals, brackets, spaces) and a joining word.
 _GAP = r"(?:[^A-Za-z0-9\n]|\b(?:is|no|number|num|value|val)\b){0,16}"
