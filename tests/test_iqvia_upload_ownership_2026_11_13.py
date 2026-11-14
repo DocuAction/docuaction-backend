@@ -344,3 +344,73 @@ class TestAChunkCannotLandAfterCompletion:
         assert exc.value.detail["code"] == "UPLOAD_INCOMPLETE"
         result = await routes.upload_chunk(upload_id, 1, _FakeRequest(b"B" * 10), db, user=owner)
         assert result["missing_chunks"] == 0
+
+
+class TestADuplicateRefusedAtCompletionStaysClosed:
+    """Reviewer question on #218, 2026-11-13: when `/complete` is refused because
+    the same bytes are already registered (DUPLICATE_SNAPSHOT), the refusal comes
+    AFTER the upload was closed to writes, so the upload does not reopen.
+
+    This pins that behavior; it does not change it. It follows from the rule the
+    route already states - bytes must not change once an upload is closed - and
+    from the order the race fix needs (close, then hash, then register). An
+    upload whose bytes are a registered snapshot's bytes has nothing left to
+    send: the answer names the existing snapshot, and different content is a
+    new upload."""
+
+    async def test_it_accepts_no_chunk_and_every_repeat_gets_the_same_refusal(
+            self, db, tmp_path, monkeypatch):
+        from sqlalchemy import func
+
+        from app.tefca_registry.rce import snapshot_models as sm
+        from app.tefca_registry.rce import iqvia_upload_models as um
+
+        content = write_csv(tmp_path / "s.csv", HCO_HEADER, [
+            [f"{SYN}-DUP-HCO-{i}-{uuid.uuid4().hex[:6]}", "", "", f"{SYN} Org {i}", "02101"]
+            for i in range(2)]).read_bytes()
+        owner = _User("reviewer", OWNER)
+        first_id = await _start(db, monkeypatch, payload=content, chunk_size=len(content),
+                                label="dup-a")
+        await routes.upload_chunk(first_id, 0, _FakeRequest(content), db, user=owner)
+        first = await routes.complete_upload(first_id, db, user=owner)
+        _created_snapshot_ids.append(uuid.UUID(first["snapshot_id"]))
+
+        second_id = await _start(db, monkeypatch, payload=content, chunk_size=len(content),
+                                 label="dup-b")
+        await routes.upload_chunk(second_id, 0, _FakeRequest(content), db, user=owner)
+        with pytest.raises(HTTPException) as exc:
+            await routes.complete_upload(second_id, db, user=owner)
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == "DUPLICATE_SNAPSHOT"
+        assert exc.value.detail["existing_snapshot_id"] == first["snapshot_id"]
+
+        # Closed, with no snapshot of its own.
+        await db.rollback()
+        session = await jobs.get_upload_session(db, second_id)
+        await db.refresh(session)
+        assert session.status == um.IqviaUploadSession.STATUS_COMPLETE
+        assert session.snapshot_id is None
+        temp_path = session.temp_path
+        before = Path(temp_path).read_bytes()
+
+        # It cannot take a chunk again - not even the creator's, not even other bytes.
+        with pytest.raises(HTTPException) as exc:
+            await routes.upload_chunk(second_id, 0, _FakeRequest(b"X" * len(content)), db,
+                                      user=owner)
+        assert exc.value.status_code == 409 and exc.value.detail["code"] == "UPLOAD_CLOSED"
+        assert Path(temp_path).read_bytes() == before == content
+
+        # A repeated complete is the same refusal, never a second snapshot.
+        with pytest.raises(HTTPException) as exc:
+            await routes.complete_upload(second_id, db, user=owner)
+        assert exc.value.detail["code"] == "DUPLICATE_SNAPSHOT"
+        assert exc.value.detail["existing_snapshot_id"] == first["snapshot_id"]
+        await db.rollback()
+        import hashlib
+        registered = (await db.execute(select(func.count()).select_from(sm.SourceSnapshot).where(
+            sm.SourceSnapshot.sha256 == hashlib.sha256(content).hexdigest()))).scalar_one()
+        assert registered == 1
+
+        # The creator still reads its state; nothing says it was staged.
+        status = await routes.upload_status(second_id, db, user=owner)
+        assert status["status"] == um.IqviaUploadSession.STATUS_COMPLETE
