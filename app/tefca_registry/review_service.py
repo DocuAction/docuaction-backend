@@ -125,6 +125,36 @@ def evidence_query_name(source: str, query_identifier) -> Optional[str]:
     return value
 
 
+def evidence_query_npi(query_identifier) -> Optional[str]:
+    """The NPI a persisted evidence row was queried by, or None. The bulk path
+    stores it as "npi=<value>" (evidence_assembly); older rows store the bare
+    value. Any other key ("uei=", "org=", ...) is not an NPI."""
+    value = str(query_identifier or "").strip()
+    if value.casefold().startswith("npi="):
+        return value[4:].strip() or None
+    if not value or "=" in value:
+        return None
+    return value
+
+
+def persisted_evidence_is_for_record(source: str, query_identifier, *, submitted_npi: str,
+                                     record_identity: str, names_usable: bool) -> bool:
+    """Is this persisted evidence row keyed by an identifier THIS record carries?
+
+    NPI evidence: the record's own submitted NPI, exactly, bare or with the
+    bulk path's "npi=" prefix. NAME evidence: the source's own name prefix
+    parsed explicitly and compared under `record_name_identity`, and only when
+    names are usable for this record. Evidence keyed by anything the record
+    does not carry (a UEI, another name, another NPI) is not this record's."""
+    submitted = str(submitted_npi or "").strip()
+    queried_npi = evidence_query_npi(query_identifier)
+    if submitted and queried_npi and queried_npi.casefold() == submitted.casefold():
+        return True
+    queried_name = evidence_query_name(source, query_identifier)
+    return bool(names_usable and queried_name and record_identity
+                and record_name_identity(queried_name) == record_identity)
+
+
 def _name_screen_refused() -> dict:
     return {"status": NOT_CHECKED, "matched_by": None,
             "label": SOURCE_LABELS.get("oig_leie"),
@@ -996,12 +1026,9 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
                 name_identity is None or name_identity["established"])
 
             def _is_this_records(source, row) -> bool:
-                query = str(row.query_identifier or "").strip()
-                if submitted and query.casefold() == submitted.casefold():
-                    return True
-                queried_name = evidence_query_name(source, query)
-                return bool(names_usable and queried_name
-                            and record_name_identity(queried_name) == record_identity)
+                return persisted_evidence_is_for_record(
+                    source, row.query_identifier, submitted_npi=submitted,
+                    record_identity=record_identity, names_usable=names_usable)
 
             persisted_rows = {source: row for source, row in persisted_rows.items()
                               if _is_this_records(source, row)}

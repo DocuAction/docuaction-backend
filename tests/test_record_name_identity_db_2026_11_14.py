@@ -76,6 +76,42 @@ def test_the_name_prefix_is_parsed_explicitly_per_source(stored, source, expecte
     assert rs.evidence_query_name(source, stored) == expected
 
 
+# ── which persisted evidence belongs to a selected record ───────────────────
+
+SYNTHETIC_NPI = "1234567893"      # synthetic, Luhn-valid test value
+
+
+@pytest.mark.parametrize("query,expected", [
+    (f"npi={SYNTHETIC_NPI}", True),        # as the bulk path stores it
+    (f"NPI={SYNTHETIC_NPI}", True),
+    (SYNTHETIC_NPI, True),                 # as older rows store it
+    ("npi=1111111112", False),             # another NPI
+    ("uei=SYNTHETICUEI1", False),          # the record carries no UEI
+    (f"org={SYNTHETIC_NPI}", False),       # a name key holding digits is not an NPI
+    ("", False),
+])
+def test_npi_keyed_evidence_is_this_records_only_for_its_own_submitted_npi(query, expected):
+    """Model-review finding 2026-11-14: the bulk path writes "npi=<value>", and
+    the record filter compared the bare value, so a record's own NPI evidence
+    was dropped and the source stayed NOT_CHECKED."""
+    for source in ("OIG_LEIE", "SAM_GOV", "CMS_REVOCATION"):
+        assert rs.persisted_evidence_is_for_record(
+            source, query, submitted_npi=SYNTHETIC_NPI, record_identity="",
+            names_usable=False) is expected
+
+
+def test_an_npi_less_record_never_claims_npi_keyed_evidence():
+    assert not rs.persisted_evidence_is_for_record(
+        "OIG_LEIE", f"npi={SYNTHETIC_NPI}", submitted_npi="",
+        record_identity="synthetic org", names_usable=True)
+    assert rs.persisted_evidence_is_for_record(
+        "OIG_LEIE", "org=Synthetic  ORG", submitted_npi="",
+        record_identity=rs.record_name_identity("synthetic org"), names_usable=True)
+    assert not rs.persisted_evidence_is_for_record(
+        "OIG_LEIE", "org=Synthetic  ORG", submitted_npi="",
+        record_identity=rs.record_name_identity("synthetic org"), names_usable=False)
+
+
 # ── database: the single-record writer ──────────────────────────────────────
 
 async def _npi_less_record(db, arc, *, entity_name=None):
