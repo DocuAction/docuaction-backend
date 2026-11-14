@@ -307,6 +307,11 @@ _CONTRACT_CASES = [
     # b. suffix removed, DETAIL payload would remain
     ("UniqueViolationError", "DETAIL: Key (email)=(SYNTHETIC_SECRET) already exists "
                              "[SQL: INSERT INTO x VALUES ($1)]"),
+    # b. the same payload with NO retained class (review request, 2026-11-14)
+    (None, "DETAIL: Key (email)=(SYNTHETIC_SECRET) already exists "
+           "[SQL: INSERT INTO x VALUES ($1)]"),
+    (None, "DETAIL: Key (email)=(SYNTHETIC_SECRET) already exists "
+           "[parameters: ('SYNTHETIC_SECRET',)]"),
     # c. a later class marker must not move the cut
     ("UniqueViolationError", _TWO_MARKERS),
     (None, _TWO_MARKERS),
