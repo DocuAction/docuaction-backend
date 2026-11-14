@@ -173,7 +173,7 @@ def test_both_comment_sources_are_verbatim_separate_and_attributed():
 
 def test_comment_is_never_a_bucket_status_or_basis():
     f = _f(1, "B3", qa_comments="APPROVED - QA OK, release",
-           qa_comments_izaan="B1", qa_comments_izaan_source="f.xlsx; sheet=S1")
+           qa_comments_izaan="B1", qa_comments_izaan_source={"file": "f.xlsx", "sha256": "ab" * 32, "sheet": "S1", "column": "F"})
     row = d.build_record_row(f)
     assert _col(row, "Bucket") == "B3"
     assert _col(row, "Status") == "ACTIVE"
@@ -251,7 +251,7 @@ def test_complete_dataset_has_no_unclassified_sheet_and_says_complete():
 def test_excel_csv_and_html_reconcile_cell_for_cell_including_incomplete_banner():
     import openpyxl
     facts = [_f(1, "B1", qa_comments="orig one",
-                qa_comments_izaan="iz one", qa_comments_izaan_source="f.xlsx; sheet=S"),
+                qa_comments_izaan="iz one", qa_comments_izaan_source={"file": "f.xlsx", "sha256": "ab" * 32, "sheet": "S", "column": "F"}),
              _f(2, None), _f(3, None, status="HELD", held_reason="blk"),
              _f(4, "B2", provisional=True, recommendation="Check", evidence_reference="rec=a4")]
     ds = d.build_dataset(facts, report_id="R", findings_count=7)
@@ -289,3 +289,10 @@ def test_findings_not_included_is_stated_never_shown_as_zero():
     assert "not included in this export" in first and "counted separately: 0" not in first
     zero = d.build_dataset(_facts(), report_id="R", findings_count=0)
     assert zero["summary"]["field_findings"] == 0      # a real zero is still a zero
+
+
+@pytest.mark.parametrize("source", ["f.xlsx; sheet=S1", {"file": "f.xlsx", "sheet": "S1"},
+    {"file": "f.xlsx", "sheet": "S1", "column": "F", "sha256": "bad"}])
+def test_partial_or_unverifiable_izaan_provenance_is_refused(source):
+    with pytest.raises(d.DatasetRefused, match="attributable source"):
+        d.build_record_row(_f(1, qa_comments_izaan="verbatim", qa_comments_izaan_source=source))

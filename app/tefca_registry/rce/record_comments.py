@@ -26,7 +26,9 @@ STATUSES (each entry gets exactly one; they reconcile to the entries sent)
 BOUNDED AND RESUMABLE
     At most MAX_BATCH entries per call. Re-sending a batch (or its tail) is safe:
     duplicates are `already_present`; the unique key also makes a concurrent
-    double-send safe. `dry_run=True` classifies without writing anything.
+    double-send safe. The default batch identity is derived from its ordered
+    payload. Reuse an explicit batch_id unchanged on retry. To deliberately revert
+    to historical text, supply the current supersedes_comment_id and a new batch. `dry_run=True` classifies without writing anything.
 
 Until the 20261112_rce_record_comments migration is applied through the governed
 release path, every call refuses with COMMENT_STORE_NOT_APPLIED.
@@ -34,6 +36,7 @@ release path, every call refuses with COMMENT_STORE_NOT_APPLIED.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import uuid
 from datetime import datetime
@@ -150,7 +153,9 @@ def _validate_entry(entry: Dict[str, Any], rec: Optional[Any], intake_uuid: uuid
         return {"problem": (f"source record {agt} belongs to delivery "
                             f"{rec.source_intake_id}, not {intake_uuid}; refusing to attach "
                             f"a comment to another delivery's record")}
-    expected = entry.get("expected") or {}
+    expected = entry.get("expected", {})
+    if not isinstance(expected, dict):
+        return {"problem": "expected must be an object"}
     missing = [k for k in REQUIRED_CROSSCHECKS if k not in expected]
     if missing:
         return {"problem": ("identity cross-check incomplete: supply " +
@@ -170,7 +175,9 @@ def _validate_entry(entry: Dict[str, Any], rec: Optional[Any], intake_uuid: uuid
     if bad:
         return {"problem": f"identity cross-check failed for the stored record: {bad}"}
     out["identity_check"] = {"validated": True, **actual}
-    src = entry.get("source") or {}
+    src = entry.get("source", {})
+    if not isinstance(src, dict):
+        return {"problem": "source must be an object"}
     name = _norm_str(src.get("file_name"))
     sha = _norm_str(src.get("file_sha256"))
     if not name or not _HEX64.match(sha):
@@ -192,7 +199,14 @@ def _validate_entry(entry: Dict[str, Any], rec: Optional[Any], intake_uuid: uuid
     if problem:
         return {"problem": problem}
     out["authored_at"] = authored
-    out["amend"] = bool(entry.get("amend"))
+    amendment = entry.get("amend", False)
+    if not isinstance(amendment, bool):
+        return {"problem": "amend must be a boolean; only true requests an amendment"}
+    out["amend"] = amendment
+    predecessor = entry.get("supersedes_comment_id")
+    if predecessor is not None and _uuid(predecessor) is None:
+        return {"problem": "supersedes_comment_id must be a UUID"}
+    out["expected_predecessor"] = _uuid(predecessor) if predecessor is not None else None
     return out
 
 
@@ -215,7 +229,12 @@ async def import_comments(db, *, intake_id: Any, entries: List[Dict[str, Any]], 
             f"the file in batches (re-sending a batch is safe)")
     if not _norm_str(actor):
         raise CommentRefused("the importing actor is required (it is stored verbatim)")
-    batch_uuid = _uuid(batch_id) if batch_id else uuid.uuid4()
+    # Replays carry the same batch identity. A caller can supply a fresh UUID
+    # for a genuinely new amendment operation (including a deliberate revert).
+    canonical = json.dumps(entries, sort_keys=True, ensure_ascii=False, default=str,
+                           separators=(",", ":"))
+    batch_uuid = (_uuid(batch_id) if batch_id else uuid.uuid5(
+        uuid.NAMESPACE_URL, f"rce-record-comments-v2|{intake_uuid}|{text_sha256(canonical)}"))
     if batch_uuid is None:
         raise CommentRefused(f"batch_id {batch_id!r} is not a UUID")
 
@@ -237,6 +256,10 @@ async def import_comments(db, *, intake_id: Any, entries: List[Dict[str, Any]], 
         if cid not in superseded:
             current[(rid, kind)] = (cid, thash)
 
+    replayed = {row.idempotency_key: row for row in (await db.execute(
+        select(RceRecordComment).where(RceRecordComment.import_batch_id == batch_uuid)
+    )).scalars().all()}
+
     results: List[Dict[str, Any]] = []
     counts = {s: 0 for s in STATUSES}
 
@@ -255,13 +278,27 @@ async def import_comments(db, *, intake_id: Any, entries: List[Dict[str, Any]], 
             done(i, REJECTED, v["problem"])
             continue
         rid, kind, thash = v["record_id"], v["kind"], text_sha256(v["text"])
+        entry_key = text_sha256(f"rce-comment-entry-v2|{intake_uuid}|{batch_uuid}|{i}")
+        replay = replayed.get(entry_key)
+        if replay is not None:
+            if (replay.source_record_id, replay.comment_kind, replay.text_sha256) != (rid, kind, thash):
+                done(i, REJECTED, "batch entry identity was reused with different content", replay.id)
+            else:
+                done(i, ALREADY_PRESENT, "this batch entry was already imported", replay.id)
+            continue
         prior = by_text.get((rid, kind, thash))
         cur = current.get((rid, kind))
         # The same verbatim text is "already present" when it IS the current version,
         # when nothing is current, or when no amendment was asked for. Reverting to an
-        # EARLIER text (A -> B -> A) is a legitimate amendment and falls through.
-        if prior is not None and (cur is None or prior == cur[0] or not v["amend"]):
+        # EARLIER text (A -> B -> A) requires the current predecessor explicitly;
+        # otherwise an amendment-batch replay could reactivate old text.
+        if prior is not None and (cur is None or cur[1] == thash or not v["amend"]
+                                  or v["expected_predecessor"] is None):
             done(i, ALREADY_PRESENT, "the same verbatim comment already exists", prior)
+            continue
+        if v["expected_predecessor"] is not None and (
+                cur is None or v["expected_predecessor"] != cur[0]):
+            done(i, NEEDS_REVIEW, "the expected predecessor is no longer current; re-read before amending")
             continue
         supersedes = None
         if cur is not None:
@@ -287,7 +324,7 @@ async def import_comments(db, *, intake_id: Any, entries: List[Dict[str, Any]], 
             attribution_basis=v["attribution_basis"], authored_at=v["authored_at"],
             identity_check=v["identity_check"], imported_by=_norm_str(actor),
             import_batch_id=batch_uuid,
-            idempotency_key=idempotency_key(rid, kind, thash, supersedes),
+            idempotency_key=entry_key,
             supersedes_comment_id=supersedes)
         try:
             async with db.begin_nested():
@@ -295,15 +332,24 @@ async def import_comments(db, *, intake_id: Any, entries: List[Dict[str, Any]], 
                 await db.flush()
         except IntegrityError:
             clash = (await db.execute(
-                select(RceRecordComment.id).where(RceRecordComment.idempotency_key == row.idempotency_key)
+                select(RceRecordComment).where(RceRecordComment.idempotency_key == row.idempotency_key)
             )).scalar()
             if clash is not None:
-                done(i, ALREADY_PRESENT, "a concurrent import wrote the same comment", clash)
+                if (clash.source_record_id, clash.comment_kind, clash.text_sha256) == (rid, kind, thash):
+                    done(i, ALREADY_PRESENT, "a concurrent import wrote the same comment", clash.id)
+                else:
+                    done(i, REJECTED, "batch entry identity was reused with different content", clash.id)
             else:
-                done(i, NEEDS_REVIEW,
-                     "a concurrent change conflicts with this entry (the comment was amended or "
-                     "inserted by someone else meanwhile); re-read the record and retry - nothing "
-                     "was written", None)
+                same = (await db.execute(select(RceRecordComment.id).where(
+                    RceRecordComment.source_record_id == rid,
+                    RceRecordComment.comment_kind == kind,
+                    RceRecordComment.text_sha256 == thash,
+                    RceRecordComment.supersedes_comment_id == supersedes))).scalar()
+                if same is not None:
+                    done(i, ALREADY_PRESENT, "a concurrent import wrote the same version", same)
+                else:
+                    done(i, NEEDS_REVIEW,
+                         "a concurrent change conflicts with this entry; re-read before retrying", None)
             continue
         by_text[(rid, kind, thash)] = new_id
         current[(rid, kind)] = (new_id, thash)

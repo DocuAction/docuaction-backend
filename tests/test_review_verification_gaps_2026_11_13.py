@@ -204,3 +204,27 @@ def test_a_withheld_marker_inside_a_driver_payload_does_not_make_it_safe():
     from app.core.logging_config import sanitize_stored_error
     raw = "SYNTHETIC_SECRET (message withheld from evidence; appended by source)"
     assert "SYNTHETIC_SECRET" not in sanitize_stored_error(raw, failure_class="UniqueViolationError")
+
+
+@pytest.mark.parametrize("suffix", [" [parameters: ('SYNTHETIC_SECRET',)]", " [SQL: INSERT INTO x VALUES ('SYNTHETIC_SECRET')]"])
+async def test_partial_suffix_removal_cannot_expose_the_driver_message(rolled_back_db, suffix):
+    from rce_traceability_support import seed_intake, make_rows
+    from app.core.logging_config import sanitize_stored_error
+    db = rolled_back_db
+    intake, job = await seed_intake(db, make_rows(1, arc="9.99.777.989"))
+    reason = "DETAIL: Key (email)=(SYNTHETIC_SECRET) already exists" + suffix
+    from app.tefca_registry.rce import stage_events
+    event = await stage_events.record_instant(db, job.id, "CURATION", status="FAILED",
+        intake_id=intake, failure_reason=reason)
+    event.failure_class = "UniqueViolationError"
+    await db.flush()
+    serialized = event.to_dict()["failure_reason"]
+    assert "SYNTHETIC_SECRET" not in serialized
+    assert sanitize_stored_error(serialized, failure_class="UniqueViolationError") == serialized
+    assert event.failure_reason == reason
+
+
+def test_controlled_domain_reason_remains_readable_after_parameter_suffix_removal():
+    from app.core.logging_config import sanitize_stored_error
+    reason = "CURATION: ValueError: missing documented field"
+    assert sanitize_stored_error(reason + " [parameters: ('SYNTHETIC_SECRET',)]", failure_class="ValueError") == reason

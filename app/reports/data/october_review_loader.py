@@ -306,7 +306,9 @@ async def load_record_facts(
             for row in (await db.execute(
                     select(C).where(C.source_intake_id == intake_uuid,
                                     C.source_record_id.in_(ids),
-                                    ~exists().where(successor.c.supersedes_comment_id == C.id))
+                                    C.imported_at <= cutoff.replace(tzinfo=timezone.utc),
+                                    ~exists().where(successor.c.supersedes_comment_id == C.id,
+                                                    successor.c.imported_at <= cutoff.replace(tzinfo=timezone.utc)))
                     .order_by(C.imported_at, C.id))).scalars().all():
                 slot = stored_comments.setdefault(row.source_record_id, {})
                 if row.comment_kind in slot:

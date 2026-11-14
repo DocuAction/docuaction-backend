@@ -259,3 +259,50 @@ async def test_the_script_refuses_instead_of_guessing(rolled_back_db, monkeypatc
     assert (nonempty / "keep.txt").read_text() == "earlier output"                # preserved
     assert pkg.main(["--intake", "x", "--cutoff", "y", "--out", str(tmp_path / "e"),
                      "--baseline", "B9=1"]) == 2
+
+
+@pytest.mark.parametrize("formats,baseline", [("", None), (" , ", None), ("pdf", "TOTAL=4")])
+async def test_empty_formats_or_uncheckable_pdf_baseline_refuse_before_loading(tmp_path, formats, baseline):
+    out = tmp_path / "not-created"
+    args = SimpleNamespace(intake="not-a-real-intake", cutoff="2099-01-01", out=str(out),
+        run_id=None, formats=formats, baseline=baseline, classification="DRAFT")
+    assert await pkg.build(args) == 2
+    assert not out.exists()
+
+
+async def test_renderer_failure_preserves_other_formats_and_the_manifest(rolled_back_db, monkeypatch, tmp_path):
+    from app.reports.data import october_review_dataset as ds
+    from app.reports.engine import pdf_engine
+    import app.core.database as database
+    intake, _ = await _seed(rolled_back_db, "9.99.779.95")
+    monkeypatch.setattr(database, "async_session_maker", lambda: _Ctx(rolled_back_db))
+    monkeypatch.setattr(pdf_engine, "pdf_available", lambda: True)
+    def fail(_dataset):
+        raise RuntimeError("synthetic-record-text-must-not-leak")
+    monkeypatch.setattr(ds, "to_pdf", fail)
+    out = tmp_path / "partial"
+    args = SimpleNamespace(intake=str(intake), cutoff="2099-01-01T00:00:00", out=str(out),
+        run_id=None, formats="xlsx,pdf,csv", baseline=None, classification="DRAFT")
+    assert await pkg.build(args) == 3
+    man = json.loads(next(out.glob("*.MANIFEST.json")).read_text())
+    assert {f["format"] for f in man["files"]} == {"xlsx", "csv"}
+    assert man["formats_skipped"] == {"pdf": "Rendering failed: RuntimeError"}
+    assert "synthetic-record-text-must-not-leak" not in str(man)
+    assert man["self_check_failures"] == []
+
+
+async def test_formula_looking_comment_is_reopened_using_csv_neutralization(rolled_back_db, monkeypatch, tmp_path):
+    import app.core.database as database
+    intake, recs = await _seed(rolled_back_db, "9.99.779.96")
+    rec = recs[1]
+    await rcm.import_comments(rolled_back_db, intake_id=intake, actor="q@x.invalid", entries=[{
+        "source_record_id": str(rec.id), "comment_kind": "QA_ORIGINAL", "comment_text": "=SUM(1,2)", "amend": True,
+        "expected": {"source_line": rec.line_number, "hcid": rec.hcid, "tefca_id": rec.tefcaid},
+        "source": {"file_name": "src.xlsx", "file_sha256": "ab" * 32, "sheet": "S", "column": "C"}}])
+    monkeypatch.setattr(database, "async_session_maker", lambda: _Ctx(rolled_back_db))
+    out = tmp_path / "safe"
+    args = SimpleNamespace(intake=str(intake), cutoff="2099-01-01T00:00:00", out=str(out),
+        run_id=None, formats="xlsx,csv", baseline=None, classification="DRAFT")
+    assert await pkg.build(args) == 0
+    man = json.loads(next(out.glob("*.MANIFEST.json")).read_text())
+    assert man["self_check_failures"] == []

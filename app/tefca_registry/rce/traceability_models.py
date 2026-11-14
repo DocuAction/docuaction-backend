@@ -69,13 +69,14 @@ ACTOR_TYPES = ("SYSTEM", "HUMAN")
 
 CURRENT_DISPOSITIONS_VIEW = "rce_current_dispositions"
 
-#: Tables that ONLY Alembic 20260917_delivery_traceability may create. Startup
+#: Tables that ONLY their governed Alembic migrations may create (delivery
+#: traceability and 20261112_rce_record_comments). Startup
 #: `create_all` excludes them: a table the runtime role created would be owned
 #: by the runtime role, and "append-only by grant" would be void.
 MIGRATION_OWNED_TABLES = (
     "rce_delivery_stage_events", "rce_disposition_events",
     "rce_reconciliation_snapshots", "tefca_identifier_decision_events",
-    "rce_delivery_report_links",
+    "rce_delivery_report_links", "rce_record_comments",
 )
 
 

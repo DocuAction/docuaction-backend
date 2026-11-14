@@ -168,7 +168,7 @@ def sanitize_stored_error(value: Any, *, failure_class: str | None = None) -> An
         withheld = bool(rest.strip(" :\n\t"))
     if withheld:
         text = text.rstrip() + _ERROR_WITHHELD
-    if failure_class and text == value:
+    if failure_class and match is None:
         # Old stage writers stored str(exc), but also retained its class.
         # Unformatted historical messages are not safe merely because they
         # lack SQLAlchemy markers. Preserve only the controlled domain-error

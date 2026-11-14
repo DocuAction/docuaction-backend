@@ -172,10 +172,13 @@ async def build(args) -> int:
 
     formats = [f.strip() for f in args.formats.split(",") if f.strip()]
     bad = [f for f in formats if f not in FORMATS]
-    if bad:
+    if bad or not formats:
         print(f"unsupported format(s) {bad}; expected {list(FORMATS)}", file=sys.stderr)
         return 2
     baseline = parse_baseline(args.baseline)
+    if baseline and not any(f in formats for f in ("csv", "xlsx")):
+        print("baseline comparison requires csv or xlsx", file=sys.stderr)
+        return 2
     out_dir = os.path.abspath(args.out)
     if os.path.exists(out_dir) and os.listdir(out_dir):
         print(f"refusing: {out_dir} exists and is not empty (earlier outputs are preserved)", file=sys.stderr)
@@ -195,15 +198,20 @@ async def build(args) -> int:
     rendered: Dict[str, bytes] = {}
     skipped: Dict[str, str] = {}
     for fmt in formats:
-        if fmt == "xlsx":
-            rendered[fmt] = render_workbook(dataset)
-        elif fmt == "csv":
-            rendered[fmt] = ds.to_csv(dataset)
-        elif fmt == "pdf":
-            if not pdf_available():
-                skipped["pdf"] = f"PDF engine unavailable on this host: {unavailable_reason()}"
-                continue
-            rendered[fmt] = ds.to_pdf(dataset)
+        try:
+            if fmt == "xlsx":
+                rendered[fmt] = render_workbook(dataset)
+            elif fmt == "csv":
+                rendered[fmt] = ds.to_csv(dataset)
+            elif fmt == "pdf":
+                if not pdf_available():
+                    skipped["pdf"] = f"PDF engine unavailable on this host: {unavailable_reason()}"
+                    continue
+                rendered[fmt] = ds.to_pdf(dataset)
+        except Exception as exc:
+            # Keep independently successful formats and write the manifest.
+            # Exception class only: a renderer may echo record content.
+            skipped[fmt] = f"Rendering failed: {type(exc).__name__}"
 
     expected = dataset["sheets"]["Records"]
     files: List[Dict[str, Any]] = []
@@ -224,7 +232,10 @@ async def build(args) -> int:
             saved_counts[fmt] = recount_rows(got["rows"], got["columns"])
             if got["columns"] != expected["columns"]:
                 failures.append(f"{fmt}: column headers differ from the dataset")
-            if got["rows"] != expected["rows"]:
+            from app.reports.engine.csv_engine import neutralise_row
+            expected_rows = ([neutralise_row(r) for r in expected["rows"]]
+                             if fmt == "csv" else expected["rows"])
+            if got["rows"] != expected_rows:
                 failures.append(f"{fmt}: saved rows differ from the dataset rows")
             entry["recount"] = saved_counts[fmt]
         else:

@@ -24,7 +24,7 @@ import uuid
 from datetime import datetime, timedelta
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from app.reports.data import october_review_loader as ld
 from app.tefca_registry import models as reg
@@ -426,6 +426,15 @@ async def _deliveries_sharing_one_entity(db, arc, specs):
     return ent_row, out
 
 
+async def _set_probe_npi(db, entity, value):
+    await db.execute(delete(reg.TefcaEntityIdentifier).where(
+        reg.TefcaEntityIdentifier.entity_id == entity.id,
+        reg.TefcaEntityIdentifier.identifier_type == "npi"))
+    if value:
+        db.add(reg.TefcaEntityIdentifier(entity_id=entity.id, identifier_type="npi", identifier_value=value))
+    await db.flush()
+
+
 async def _stored(db, review_id):
     return (await db.execute(select(reg.ReviewRecord).where(
         reg.ReviewRecord.review_id == review_id))).scalars().one()
@@ -449,7 +458,9 @@ async def test_explicit_record_review_uses_the_selected_records_signals_date_and
     assert ent.source_record_id == d["A"]["record"].id          # the trap: entity column -> A
 
     # classify B FIRST, then A: B must not be read as A's record (nor A as B's)
+    await _set_probe_npi(db, ent, "1234567893")
     res_b = await rs.run_review(db, ent, source_record_id=d["B"]["record"].id)
+    await _set_probe_npi(db, ent, "")
     res_a = await rs.run_review(db, ent, source_record_id=d["A"]["record"].id)
 
     vr_b = (await _stored(db, res_b["review_id"])).verification_results
@@ -525,7 +536,10 @@ async def test_policy_applicability_and_npi_validation_use_the_selected_records_
         ("blank", {"purposesofuse": "T-PYMNT", "NPI": ""}, "2026-11-08"),
         ("has", {"purposesofuse": "T-PYMNT", "NPI": "1234567893"}, "2026-11-08"),
         ("bad", {"purposesofuse": "T-PYMNT", "NPI": "1234567890"}, "2026-11-08")])
-    res = {k: await rs.run_review(db, ent, source_record_id=v["record"].id) for k, v in d.items()}
+    res = {}
+    for k, v in d.items():
+        await _set_probe_npi(db, ent, v["record"].npi or "")
+        res[k] = await rs.run_review(db, ent, source_record_id=v["record"].id)
     assert res["blank"]["classification"]["rule_code"] != "SOURCE-POLICY-M4"   # not applicable
     assert res["has"]["classification"]["rule_code"] == "SOURCE-POLICY-M4"     # applicable, sam_gov unanswered
     assert "SOURCE_NOT_COMPLETED_SAM_GOV" in res["has"]["classification"]["rationale"]
@@ -550,3 +564,59 @@ async def test_entity_only_review_behaviour_is_unchanged(rolled_back_db, monkeyp
     assert "record_context" not in stored.verification_results
     assert stored.verification_results["assessment_as_of"]["run_id"] == str(d["A"]["run"].id)
     assert _signal(stored.verification_results) is True            # legacy: from the entity's column
+
+
+async def test_explicit_record_refuses_another_identifier_before_probes_or_writes(rolled_back_db, monkeypatch):
+    db = rolled_back_db
+    ent, deliveries = await _deliveries_sharing_one_entity(db, "9.99.778.09", [
+        ("A", {"NPI": "1234567893"}, "2026-11-08"),
+        ("B", {"NPI": "1234567890"}, "2026-11-08")])
+    await _set_probe_npi(db, ent, "1234567893")
+    async def forbidden(*args, **kwargs):
+        pytest.fail("identifier mismatch reached source probes")
+    monkeypatch.setattr(rs, "probe_sources", forbidden)
+    before = (await db.execute(select(func.count()).select_from(reg.ReviewRecord))).scalar_one()
+    with pytest.raises(ValueError, match="submitted NPI does not match"):
+        await rs.run_review(db, ent, source_record_id=deliveries["B"]["record"].id)
+    assert (await db.execute(select(func.count()).select_from(reg.ReviewRecord))).scalar_one() == before
+
+
+async def test_bulk_treatment_inputs_come_from_the_anchored_record(rolled_back_db, monkeypatch):
+    db = rolled_back_db
+    ent, d = await _deliveries_sharing_one_entity(db, "9.99.778.10", [
+        ("active", {"purposesofuse": "T-TRTMNT", "NPI": "", "active": "true"}, "2026-11-08"),
+        ("inactive", {"purposesofuse": "T-PYMNT", "NPI": "", "active": "false"}, "2026-11-08")])
+    ref = d["active"]["record"].source_rce_id
+    _patch_bulk_gather(monkeypatch, {ref: ent.id})
+    results = {}
+    for key in ("active", "inactive"):
+        out = await ap.verify_and_classify(db, [ref], intake_id=d[key]["intake"])
+        results[key] = (await _stored(db, out["outcomes"][0]["review_id"])).verification_results["classifier_input"]
+    from app.tefca_registry.rce.npi_applicability import treatment_signals_from_parsed
+    from app.tefca_registry.rce.quality_rules import BR_NPI_TRTMNT_EFFECTIVE
+    from datetime import date
+    for key in results:
+        expected = treatment_signals_from_parsed(d[key]["record"].parsed,
+            assessment_date=date(2026,11,8), requirement_effective=BR_NPI_TRTMNT_EFFECTIVE)
+        assert all(results[key]["fields"][k] == v for k, v in expected.items())
+    assert results["active"]["fields"] != results["inactive"]["fields"]
+
+
+async def test_bulk_refuses_source_evidence_for_a_different_npi(rolled_back_db, monkeypatch):
+    db = rolled_back_db
+    ent, d = await _deliveries_sharing_one_entity(db, "9.99.778.11", [
+        ("record", {"NPI": "1234567893"}, "2026-11-08")])
+    ref = d["record"]["record"].source_rce_id
+    _patch_bulk_gather(monkeypatch, {ref: ent.id})
+    original = ap._gather_all_evidence
+    async def wrong_identifier(refs, timing_log=None):
+        items = await original(refs, timing_log=timing_log)
+        for item in items:
+            item["entity"]["identifier"] = [{"system": "http://hl7.org/fhir/sid/us-npi", "value": "1234567890"}]
+        return items
+    monkeypatch.setattr(ap, "_gather_all_evidence", wrong_identifier)
+    before = (await db.execute(select(func.count()).select_from(reg.ReviewRecord))).scalar_one()
+    result = await ap.verify_and_classify(db, [ref], intake_id=d["record"]["intake"])
+    assert result["unresolved"] == [ref] and result["processed"] == 0
+    assert result["resolution_failures"] and result["outcomes"] == []
+    assert (await db.execute(select(func.count()).select_from(reg.ReviewRecord))).scalar_one() == before
