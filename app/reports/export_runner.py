@@ -40,6 +40,29 @@ PHASE_BUILDING = "Building workbook"
 PHASE_REGISTERING = "Registering artifact"
 PHASE_READY = "Ready"
 
+#: Record-review export format -> the content type its artifact is REGISTERED
+#: under. One table, used by the runner (to register) and by the status route
+#: (to build the download link): the two must agree or the link is a 404.
+RECORD_REVIEW_CONTENT_TYPES = {
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "csv": "text/csv",
+    "pdf": "application/pdf",
+}
+
+
+def record_review_template_version(dataset_version: str, loader_version: str) -> str:
+    """The `template_version` a record-review artifact is registered under.
+
+    `report_artifacts.template_version` is varchar(32). The label first written
+    here ("record-review dataset 1.0.0 / loader 1.0.0", 41 characters) did not
+    fit, so `finalize_artifact` raised on INSERT and EVERY record-review export
+    job ended FAILED with nothing registered - unseen because the tests replaced
+    `finalize_artifact` with a recorder (found 2026-11-13 by the first test that
+    used the real registry). Same two facts, short form: "record-review 1.0.0/1.0.0".
+    The job row's `generator_version` keeps the long form; that column is wider.
+    """
+    return f"record-review {dataset_version}/{loader_version}"
+
 
 class _Heartbeat:
     """Writes a heartbeat while a long step runs, on its own session.
@@ -259,10 +282,11 @@ async def run_record_review_export_job(db, job) -> str:
     job_id = job.id
     params = dict(job.request_parameters or {})
     fmt = params.get("format")
+    assert RECORD_REVIEW_CONTENT_TYPES["xlsx"] == XLSX_CONTENT_TYPE
     renderers = {
-        "xlsx": (lambda d: render_workbook(d), XLSX_CONTENT_TYPE),
-        "csv": (lambda d: ds.to_csv(d), "text/csv"),
-        "pdf": (lambda d: ds.to_pdf(d), "application/pdf"),
+        "xlsx": (lambda d: render_workbook(d), RECORD_REVIEW_CONTENT_TYPES["xlsx"]),
+        "csv": (lambda d: ds.to_csv(d), RECORD_REVIEW_CONTENT_TYPES["csv"]),
+        "pdf": (lambda d: ds.to_pdf(d), RECORD_REVIEW_CONTENT_TYPES["pdf"]),
     }
     try:
         if fmt not in renderers:
@@ -293,8 +317,8 @@ async def run_record_review_export_job(db, job) -> str:
             content=content, content_type=content_type,
             review_cycle_id=str(job.source_intake_id),
             generated_by=job.requested_by,
-            template_version=(f"record-review dataset {ds.DATASET_VERSION} / "
-                              f"loader {loader.LOADER_VERSION}"),
+            template_version=record_review_template_version(
+                ds.DATASET_VERSION, loader.LOADER_VERSION),
             source_artifact_sha256=meta.get("intake_sha256"),
             report_data_hash=data_hash,
             data_classification=job.classification,

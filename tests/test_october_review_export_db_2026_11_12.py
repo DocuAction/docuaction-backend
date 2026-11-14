@@ -318,3 +318,28 @@ async def test_stored_comments_reach_the_registered_artifact_in_separate_verbati
     assert by[str(recs[1].id)][o] == orig_text and by[str(recs[1].id)][i] == izaan_text
     assert by[str(recs[2].id)][o] == "held record comment" and by[str(recs[2].id)][b] == "B4"
     assert by[str(recs[3].id)][o] == "" == by[str(recs[3].id)][i]
+
+
+# ── 2026-11-13: the status route's download link names the REGISTERED content type ──
+
+@pytest.mark.parametrize("fmt,content_type", [("csv", "text/csv"), ("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")])
+async def test_status_download_link_carries_the_formats_own_content_type(rolled_back_db, monkeypatch, fmt, content_type):
+    """Before the fix every succeeded export job linked with the workbook's xlsx
+    content type, so a record-review CSV/PDF job's link resolved to
+    ARTIFACT_NOT_REGISTERED (the download route looks up by report_id + content_type)."""
+    db = rolled_back_db
+    intake_id, _, _ = await _seed(db, arc=f"9.99.777.{70 if fmt == 'csv' else 71}")
+    rec = _Recorder()
+    _, job, state = await _queue_and_run(db, monkeypatch, intake_id, fmt, rec)
+    assert state == ReportExportJob.STATE_SUCCEEDED
+    assert rec.calls[0]["content_type"] == content_type          # what was registered
+    payload = await report_routes.export_job_status(str(job.id), db=db, user=QA)
+    assert payload["download"] == (f"/api/reports/artifacts/{job.report_id}/download"
+                                   f"?content_type={content_type}")
+
+
+def test_runner_and_status_route_share_one_content_type_table():
+    from app.reports.export_runner import RECORD_REVIEW_CONTENT_TYPES
+    from app.reports.engine.xlsx_engine import XLSX_CONTENT_TYPE
+    assert set(RECORD_REVIEW_CONTENT_TYPES) == {"xlsx", "csv", "pdf"}
+    assert RECORD_REVIEW_CONTENT_TYPES["xlsx"] == XLSX_CONTENT_TYPE == report_routes.XLSX_CONTENT_TYPE_LITERAL
