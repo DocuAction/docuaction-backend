@@ -296,3 +296,57 @@ def test_findings_not_included_is_stated_never_shown_as_zero():
 def test_partial_or_unverifiable_izaan_provenance_is_refused(source):
     with pytest.raises(d.DatasetRefused, match="attributable source"):
         d.build_record_row(_f(1, qa_comments_izaan="verbatim", qa_comments_izaan_source=source))
+
+
+# -- W3 (2026-11-14): one provenance contract for import and report ----------
+# A comment ALREADY STORED without its source sheet/column stays exportable,
+# verbatim, marked on that comment only and counted as a limitation. A comment
+# that is NOT from the store (caller-supplied) is still refused.
+
+_STORED_GAP = {"file": "legacy.xlsx", "sha256": "ab" * 32, "sheet": None,
+               "column": None, "stored_comment_id": "11111111-1111-1111-1111-111111111111"}
+
+
+def test_a_stored_comment_without_sheet_or_column_does_not_fail_the_delivery():
+    verbatim = "  Izaan: legacy — text,\twith tab  "
+    facts = [_f(1, qa_comments_izaan=verbatim, qa_comments_izaan_source=dict(_STORED_GAP)),
+             _f(2, qa_comments_izaan="complete",
+                qa_comments_izaan_source={"file": "f.xlsx", "sha256": "cd" * 32,
+                                          "sheet": "S1", "column": "F",
+                                          "stored_comment_id": "22222222-2222-2222-2222-222222222222"}),
+             _f(3)]
+    ds = d.build_dataset(facts, report_id="R")
+    rows = {r[1]: r for r in ds["sheets"]["Records"]["rows"]}
+    assert _col(rows["agt-1"], d.IZAAN_COMMENTS_COLUMN) == verbatim      # byte-identical
+    assert d.PROVENANCE_INCOMPLETE in _col(rows["agt-1"], "Flag")
+    assert "sheet" in _col(rows["agt-1"], "Flag") and "column" in _col(rows["agt-1"], "Flag")
+    for other in ("agt-2", "agt-3"):                                     # that comment only
+        assert d.PROVENANCE_INCOMPLETE not in _col(rows[other], "Flag")
+    s = ds["summary"]
+    assert s["comments_with_incomplete_provenance"] == {"original": 0, "izaan": 1, "total": 1}
+    assert any("1 stored comment" in x for x in s["limitations"])
+    assert "incomplete source provenance" in ds["banner"]
+    assert dict(ds["sheets"]["Summary"]["rows"])[d.PROVENANCE_SUMMARY_ROW] == "1"
+    assert d.PROVENANCE_INCOMPLETE in d.to_csv(ds).decode("utf-8-sig")
+
+
+def test_a_stored_original_comment_with_a_gap_is_marked_too():
+    f = _f(1, qa_comments="orig", qa_comments_source={**_STORED_GAP, "sheet": "S1"})
+    ds = d.build_dataset([f], report_id="R")
+    row = ds["sheets"]["Records"]["rows"][0]
+    assert _col(row, d.ORIGINAL_COMMENTS_COLUMN) == "orig"
+    assert d.PROVENANCE_INCOMPLETE in _col(row, "Flag") and "column" in _col(row, "Flag")
+    assert ds["summary"]["comments_with_incomplete_provenance"]["original"] == 1
+
+
+def test_a_complete_dataset_reports_zero_and_adds_no_marker():
+    ds = d.build_dataset(_facts(), report_id="R")
+    assert ds["summary"]["comments_with_incomplete_provenance"]["total"] == 0
+    assert ds["summary"]["limitations"] == []
+    assert "incomplete source provenance" not in ds["banner"]
+
+
+def test_a_caller_supplied_comment_with_a_gap_is_still_refused():
+    src = {"file": "f.xlsx", "sha256": "ab" * 32, "sheet": None, "column": None}
+    with pytest.raises(d.DatasetRefused, match="attributable source"):
+        d.build_dataset([_f(1, qa_comments_izaan="x", qa_comments_izaan_source=src)], report_id="R")

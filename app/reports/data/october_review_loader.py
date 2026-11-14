@@ -83,6 +83,8 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 from sqlalchemy import and_, exists, func, or_, select, text
 
+from app.reports.data.october_review_dataset import STORED_COMMENT_KEY
+
 LOADER_VERSION = "1.0.0"
 BATCH_SIZE = 2000
 BUCKETS = ("B1", "B2", "B3", "B4")
@@ -217,8 +219,20 @@ async def _comment_store_exists(db) -> bool:
 
 
 def _src(c: Any) -> Dict[str, Any]:
+    # `stored_comment_id` is set ONLY here, from a row of the append-only store.
+    # The dataset uses it to tell an already-accepted comment (exported with a
+    # provenance-incomplete marker when sheet/column are absent) from
+    # caller-supplied text (refused). Caller-supplied sources have it removed.
     return {"file": c.source_file_name, "sha256": c.source_file_sha256,
-            "sheet": c.source_sheet, "column": c.source_column}
+            "sheet": c.source_sheet, "column": c.source_column,
+            STORED_COMMENT_KEY: str(c.id)}
+
+
+def _caller_source(src: Any) -> Any:
+    """A caller-supplied source can never claim to be a stored comment."""
+    if isinstance(src, dict) and STORED_COMMENT_KEY in src:
+        return {k: v for k, v in src.items() if k != STORED_COMMENT_KEY}
+    return src
 
 
 async def load_record_facts(
@@ -475,12 +489,12 @@ async def load_record_facts(
                 if "qa_comments" in fact:
                     stats["caller_comments_overriding_stored"] += 1
                 fact["qa_comments"] = orig["text"]
-                fact["qa_comments_source"] = orig.get("source")
+                fact["qa_comments_source"] = _caller_source(orig.get("source"))
             if izaan.get("text"):
                 if "qa_comments_izaan" in fact:
                     stats["caller_comments_overriding_stored"] += 1
                 fact["qa_comments_izaan"] = izaan["text"]
-                fact["qa_comments_izaan_source"] = izaan.get("source")
+                fact["qa_comments_izaan_source"] = _caller_source(izaan.get("source"))
             if agt in seen:                                   # cannot happen
                 raise LoaderRefused(f"duplicate AGT_Record_ID {agt} produced by the joins")
             seen.add(agt)

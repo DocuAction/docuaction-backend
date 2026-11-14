@@ -702,3 +702,52 @@ async def test_comment_versions_are_selected_at_the_requested_cutoff(rolled_back
     assert "qa_comments" not in await at(between - timedelta(microseconds=1))
     assert (await at(between))["qa_comments"] == "original wording"
     assert (await at(newer.imported_at))["qa_comments"] == "later wording"
+
+
+# ── W3 (2026-11-14): a comment stored before sheet/column became mandatory ──
+
+async def test_a_stored_comment_without_sheet_or_column_is_exported_marked_and_counted(rolled_back_db):
+    """The import now refuses such a comment; one already in the append-only store
+    is evidence. It is exported verbatim, marked on that comment only, counted as a
+    limitation, and it does not fail the delivery dataset."""
+    from app.tefca_registry.rce.record_comment_models import RceRecordComment
+    db = rolled_back_db
+    intake_id, _ = await seed_intake(db, make_rows(3, arc="9.99.779.62"), with_job=False)
+    await _run(db, intake_id)
+    recs = await _records(db, intake_id)
+    legacy = "  Izaan legacy — wording,\twith tab  "
+    db.add(RceRecordComment(                       # as accepted before 2026-11-14
+        source_intake_id=intake_id, source_record_id=recs[1].id, comment_kind="QA_IZAAN",
+        comment_text=legacy, text_sha256=_rc.text_sha256(legacy),
+        source_file_name="legacy.xlsx", source_file_sha256=_CSHA,
+        source_sheet=None, source_column=None, source_row=None,
+        author_attribution="Izaan", attribution_basis="owner designation of the source file",
+        identity_check={"validated": True}, imported_by="qalead@x.invalid",
+        import_batch_id=uuid.uuid4(), idempotency_key="1f" * 32))
+    await db.flush()
+    await _rc.import_comments(db, intake_id=intake_id, actor="qalead@x.invalid",
+                              entries=[_centry(recs[2], "QA_IZAAN", "complete")])
+    dataset = await ld.load_dataset(db, intake_id=intake_id, evidence_cutoff=_cutoff_now(), report_id="R")
+    by = {r[0]: r for r in dataset["sheets"]["Records"]["rows"]}
+    r1, r2, r3 = (by[str(recs[i].line_number)] for i in (1, 2, 3))
+    assert _col(r1, ds_mod.IZAAN_COMMENTS_COLUMN) == legacy                  # byte-identical
+    assert ds_mod.PROVENANCE_INCOMPLETE in _col(r1, "Flag")
+    assert _col(r2, ds_mod.IZAAN_COMMENTS_COLUMN) == "complete"
+    assert ds_mod.PROVENANCE_INCOMPLETE not in _col(r2, "Flag")
+    assert ds_mod.PROVENANCE_INCOMPLETE not in _col(r3, "Flag")
+    assert dataset["summary"]["comments_with_incomplete_provenance"]["total"] == 1
+    assert dataset["summary"]["limitations"]
+    stored = (await db.execute(select(RceRecordComment.comment_text).where(
+        RceRecordComment.source_record_id == recs[1].id))).scalar()
+    assert stored == legacy                                                  # row untouched
+
+
+async def test_a_caller_cannot_claim_stored_status_to_bypass_the_provenance_check(rolled_back_db):
+    db = rolled_back_db
+    intake_id, _ = await seed_intake(db, make_rows(1, arc="9.99.779.63"), with_job=False)
+    await _run(db, intake_id)
+    recs = await _records(db, intake_id)
+    src = {"file": "x.xlsx", "sha256": "ab" * 32, "stored_comment_id": str(uuid.uuid4())}
+    with pytest.raises(ds_mod.DatasetRefused, match="attributable source"):
+        await ld.load_dataset(db, intake_id=intake_id, evidence_cutoff=_cutoff_now(), report_id="R",
+                              comments={str(recs[1].id): {"izaan": {"text": "x", "source": src}}})

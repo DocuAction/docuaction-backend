@@ -143,6 +143,47 @@ def _comment_source_label(src: Any, *, strict: bool = False) -> str:
     return "; ".join(f"{k}={src[k]}" for k in fields)
 
 
+#: Set by the loader ONLY for a row read from the append-only comment store.
+STORED_COMMENT_KEY = "stored_comment_id"
+PROVENANCE_INCOMPLETE = "COMMENT PROVENANCE INCOMPLETE"
+PROVENANCE_SUMMARY_ROW = ("Stored comments with incomplete source provenance "
+                          "(marked in Flag; text verbatim)")
+_PROVENANCE_FIELDS = ("file", "sha256", "sheet", "column")
+
+
+def _stored_provenance_gap(src: Any) -> Optional[List[str]]:
+    """Missing provenance fields of an ALREADY-STORED comment, else None.
+
+    None means "not a stored comment" (the strict rule applies to it). A list -
+    possibly empty - names what a stored comment lacks. A comment accepted into
+    the store before sheet/column became mandatory at intake (2026-11-14) is
+    evidence: it is exported verbatim and marked, never dropped, and it never
+    fails the delivery.
+    """
+    if not isinstance(src, dict) or not src.get(STORED_COMMENT_KEY):
+        return None
+    import re
+    missing = [k for k in _PROVENANCE_FIELDS
+               if not (isinstance(src.get(k), str) and src[k].strip())]
+    if "sha256" not in missing and not re.fullmatch(r"[0-9a-fA-F]{64}", src["sha256"].strip()):
+        missing.append("sha256")
+    return missing
+
+
+def _provenance_marks(fact: Dict[str, Any]) -> List[tuple]:
+    """(kind, column name, missing fields) for each stored comment with a gap."""
+    marks = []
+    for kind, column, text_key, src_key in (
+            ("original", ORIGINAL_COMMENTS_COLUMN, "qa_comments", "qa_comments_source"),
+            ("izaan", IZAAN_COMMENTS_COLUMN, "qa_comments_izaan", "qa_comments_izaan_source")):
+        if not _s(fact.get(text_key)):
+            continue
+        gap = _stored_provenance_gap(fact.get(src_key))
+        if gap:
+            marks.append((kind, column, gap))
+    return marks
+
+
 def build_record_row(fact: Dict[str, Any]) -> List[str]:
     status = _s(fact.get("status")).strip()
     bucket = reporting_bucket(fact.get("bucket"), status)
@@ -154,7 +195,8 @@ def build_record_row(fact: Dict[str, Any]) -> List[str]:
                 f"blanket wording {phrase!r}; supply the cause-specific text")
     # The second comment column is populated ONLY from an attributable source.
     izaan = _s(fact.get("qa_comments_izaan"))
-    if izaan and not _comment_source_label(fact.get("qa_comments_izaan_source"), strict=True):
+    if (izaan and not _comment_source_label(fact.get("qa_comments_izaan_source"), strict=True)
+            and _stored_provenance_gap(fact.get("qa_comments_izaan_source")) is None):
         raise DatasetRefused(
             f"{IZAAN_COMMENTS_COLUMN} text for {fact.get('agt_record_id')} has "
             f"no attributable source (file + sha256 + sheet + column); refusing to "
@@ -162,6 +204,10 @@ def build_record_row(fact: Dict[str, Any]) -> List[str]:
     flag = _s(fact.get("flag"))
     if fact.get("provisional") and "PROVISIONAL" not in flag.upper():
         flag = (flag + "; " if flag else "") + "PROVISIONAL B2"
+    # The marker goes in Flag, never in the comment cell: the text stays verbatim.
+    for _kind, column, gap in _provenance_marks(fact):
+        flag = ((flag + "; " if flag else "") + f"{PROVENANCE_INCOMPLETE}: {column} "
+                f"(source {', '.join(gap)} not recorded)")
     return [
         _s(fact.get("source_line")), _s(fact.get("agt_record_id")),
         _s(fact.get("qhin_number")), _s(fact.get("hcid")),
@@ -222,11 +268,30 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
         banner += (f" DATASET INCOMPLETE: {len(unclassified)} record(s) have no "
                    "usable persisted classification; no bucket was assigned to "
                    "them (listed on the Unclassified sheet).")
+    gaps = {"original": 0, "izaan": 0}
+    for f in facts:
+        for kind, _column, _gap in _provenance_marks(f):
+            gaps[kind] += 1
+    gaps["total"] = gaps["original"] + gaps["izaan"]
+    limitations: List[str] = []
+    if gaps["total"]:
+        limitations.append(
+            f"{gaps['total']} stored comment(s) have incomplete source provenance "
+            f"(source sheet and/or column not recorded when the comment was accepted; "
+            f"original: {gaps['original']}, Izaan: {gaps['izaan']}). Each is exported "
+            f"verbatim and marked \"{PROVENANCE_INCOMPLETE}\" in the Flag column of its "
+            f"record; the comment text was not altered.")
+        banner += " LIMITATION: " + limitations[0]
     comment_sources: Dict[str, List[str]] = {"original": [], "izaan": []}
     for f in facts:
         for kind, key in (("original", "qa_comments_source"),
                           ("izaan", "qa_comments_izaan_source")):
             lab = _comment_source_label(f.get(key), strict=key == "qa_comments_izaan_source")
+            gap = _stored_provenance_gap(f.get(key))
+            if not lab and gap:          # attribute what IS recorded; name what is not
+                lab = "; ".join(
+                    f"{k}=" + ("(not recorded)" if k in gap else str(f[key][k]))
+                    for k in _PROVENANCE_FIELDS)
             if lab and lab not in comment_sources[kind]:
                 comment_sources[kind].append(lab)
     summary = {
@@ -239,6 +304,8 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
         "unclassified_non_held_count": len(unclassified),
         "unclassified_non_held_ids": [u[0] for u in unclassified],
         "comment_sources": comment_sources,
+        "comments_with_incomplete_provenance": gaps,
+        "limitations": limitations,
     }
     summary_rows = ([[b, str(counts[b])] for b in BUCKETS]
                     + [["Total (unique records)", str(len(rows))],
@@ -249,7 +316,8 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
                        ["Field findings (separate; not in bucket totals)",
                         FINDINGS_NOT_INCLUDED if findings_count is None
                         else str(int(findings_count))],
-                       ["Assessment date (D-12)", assessment_date]])
+                       ["Assessment date (D-12)", assessment_date]]
+                    + ([[PROVENANCE_SUMMARY_ROW, str(gaps["total"])]] if gaps["total"] else []))
     sheets: Dict[str, Any] = {
         "Summary": {"columns": ["Measure", "Value"], "rows": summary_rows,
                     "note": banner},
