@@ -2256,7 +2256,17 @@ async def export_job_status(
 
     payload = job.to_dict()
     if job.state == job.STATE_SUCCEEDED and job.report_id:
+        # The link must name the content type the artifact was REGISTERED under:
+        # the download route looks the artifact up by (report_id, content_type),
+        # so a record-review CSV/PDF job linked with the workbook's type was a
+        # dead link (ARTIFACT_NOT_REGISTERED). Found 2026-11-13.
+        from app.reports.data.export_jobs import RECORD_REVIEW_EXPORT_TYPE_PREFIX
+        from app.reports.export_runner import RECORD_REVIEW_CONTENT_TYPES
+        content_type = XLSX_CONTENT_TYPE_LITERAL
+        if (job.export_type or "").startswith(RECORD_REVIEW_EXPORT_TYPE_PREFIX):
+            fmt = (job.request_parameters or {}).get("format")
+            content_type = RECORD_REVIEW_CONTENT_TYPES.get(fmt, content_type)
         payload["download"] = (
             f"/api/reports/artifacts/{job.report_id}/download"
-            f"?content_type={XLSX_CONTENT_TYPE_LITERAL}")
+            f"?content_type={content_type}")
     return payload

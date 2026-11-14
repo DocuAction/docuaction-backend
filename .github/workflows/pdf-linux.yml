@@ -29,8 +29,10 @@ on:
       - 'Dockerfile'
       - 'requirements.txt'
       - '.github/workflows/pdf-linux.yml'
+      - 'tests/test_record_review_*'
+      - 'tests/record_review_pdf_support.py'
   pull_request:
-    branches: [main, 'feat/reporting-architecture-2026-10-01', 'feat/treatment-b4-rule-and-full-population-2026-11-06']
+    branches: [main, 'feat/reporting-architecture-2026-10-01', 'feat/treatment-b4-rule-and-full-population-2026-11-06', 'feat/mandatory-source-parity-assessment-date-2026-11-11']
   workflow_dispatch:
 
 # Least-privilege default; no job in this workflow writes to the repo or
@@ -179,3 +181,124 @@ jobs:
                "accessible PDF, not proof of one. No Section 508 conformance is"\
                "claimed from this job. Manual 508 review and per-deliverable HHS"\
                "checklists remain outstanding (D9)."
+
+  # 2026-11-13: the record-review export (Excel / CSV / PDF), rendered and
+  # downloaded for real.
+  #
+  # Runs in the Dockerfile's own base image (python:3.12-slim) with the
+  # Dockerfile's own apt list and the pinned requirements.txt, so the PDF is
+  # paginated by the WeasyPrint/Pango/fonts the deployed container has - a
+  # hosted runner carries extra fonts the image does not. ffmpeg is the one
+  # Dockerfile package left out: it takes no part in rendering.
+  #
+  # RECORD_REVIEW_REQUIRE_REAL_RENDER=1 turns "WeasyPrint is not available"
+  # from a skip into a failure, and the skip guard fails the job on any other
+  # skip: green here means the real-render tests RAN. The rendered PDFs are
+  # uploaded even when a test fails, so a layout failure can be looked at.
+  #
+  # Synthetic data only. The PostgreSQL service is disposable (never DEV, never
+  # PROD); the database-backed tests roll back everything they write.
+  record-review-export:
+    runs-on: ubuntu-latest
+    container: python:3.12-slim
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: isolationtest
+          POSTGRES_DB: postgres
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      SECRET_KEY: isolationtestisolationtestisolationtestisolationtestisolationtest
+      ALLOWED_HOSTS: '*'
+      DATABASE_URL: postgresql+asyncpg://postgres:isolationtest@postgres:5432/test
+      DB_MIGRATION_ROLE: docuaction_owner
+      DB_APP_ROLE: docuaction_app
+      RECORD_REVIEW_REQUIRE_REAL_RENDER: '1'
+      RECORD_REVIEW_PDF_OUT: record-review-out
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # Mirrors the Dockerfile (minus ffmpeg). Keep the two in step.
+      - name: Install WeasyPrint native stack (the Dockerfile's list)
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            libpango-1.0-0 \
+            libpangoft2-1.0-0 \
+            libcairo2 \
+            libgdk-pixbuf-2.0-0 \
+            libffi8 \
+            shared-mime-info \
+            fonts-dejavu-core
+
+      - name: Install Python dependencies (pinned)
+        run: |
+          pip install --no-cache-dir -r requirements.txt
+          pip install pytest pytest-asyncio httpx
+
+      - name: Record the rendering environment
+        run: |
+          mkdir -p record-review-out
+          {
+            echo "commit: ${GITHUB_SHA}"
+            echo "image: python:3.12-slim"; cat /etc/os-release | grep PRETTY_NAME
+            python --version
+            pip freeze | grep -i -E '^(weasyprint|pydyf|tinycss2|cssselect2|fonttools|pyphen|tinyhtml5|pypdf|pikepdf|pdfplumber|pdfminer|openpyxl)'
+            dpkg-query -W libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libharfbuzz0b libfontconfig1 fonts-dejavu-core
+          } | tee record-review-out/environment.txt
+          python -c "from app.reports.engine.pdf_engine import engine_info, pdf_available; i = engine_info(); print(i); assert pdf_available(), i.get('reason')"
+
+      - name: Create the disposable database and roles (owner / app split, UTC)
+        run: |
+          python - <<'PY'
+          import asyncio, asyncpg
+          BASE = "postgresql://postgres:isolationtest@postgres:5432/"
+          async def run(db, statements):
+              conn = await asyncpg.connect(BASE + db)
+              try:
+                  for statement in statements:
+                      await conn.execute(statement)
+              finally:
+                  await conn.close()
+          asyncio.run(run("postgres", [
+              "CREATE ROLE docuaction_owner LOGIN PASSWORD 'x'",
+              "CREATE ROLE docuaction_app LOGIN PASSWORD 'x'",
+              "CREATE DATABASE test OWNER docuaction_owner",
+              "ALTER DATABASE test SET timezone = 'UTC'"]))
+          asyncio.run(run("test", [
+              "ALTER SCHEMA public OWNER TO docuaction_owner",
+              "GRANT ALL ON SCHEMA public TO docuaction_owner",
+              "GRANT USAGE, CREATE ON SCHEMA public TO docuaction_app"]))
+          PY
+
+      - name: Migrate to head (Alembic)
+        run: python -m alembic upgrade head
+
+      - name: Record-review render, preservation and download-path tests
+        run: |
+          python -m pytest \
+            tests/test_record_review_pdf_render_2026_11_13.py \
+            tests/test_record_review_download_path_db_2026_11_13.py \
+            tests/test_record_review_pdf_html_2026_11_13.py \
+            tests/test_october_review_export_db_2026_11_12.py \
+            tests/test_october_review_dataset_2026_11_11.py \
+            -v --tb=short -rs --junitxml=record-review-results.xml
+
+      - name: Fail if any test was skipped
+        if: always()
+        run: python scripts/ci_skip_guard.py record-review-results.xml
+
+      - name: Upload the rendered PDFs, engine facts and results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: record-review-export-${{ github.sha }}
+          path: |
+            record-review-out/
+            record-review-results.xml
+          if-no-files-found: warn
+          retention-days: 14
