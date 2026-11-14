@@ -49,6 +49,7 @@ class FakeClock:
 
 
 def _client(handler, **kw) -> USPSClient:
+    kw.setdefault("environment", "production")     # never the machine's USPS_ENV
     client = USPSClient(client_id=CLIENT_ID, client_secret=SECRET,
                         transport=httpx.MockTransport(handler), **kw)
     client.slept = []
@@ -273,3 +274,97 @@ def test_delivery_readiness_and_the_admin_route_ask_for_different_detail():
     assert "health(include_auth_detail=True)" in inspect.getsource(admin_health._usps)
     runner = inspect.getsource(delivery_runner)
     assert "get_usps_client().health()" in runner and "include_auth_detail" not in runner
+
+
+# -- first CodeRabbit review of #215 (2026-11-14) ------------------------------
+
+def test_the_rejection_is_classified_on_usps_own_code_not_on_the_scrubbed_text():
+    """Before: the error code was scrubbed of the configured key BEFORE it was
+    compared. With client_id "client", `invalid_client` became
+    `invalid_[redacted]`, the comparison failed, no hold was recorded, and every
+    later check asked for a token again and counted against the breaker."""
+    calls = {"token": 0}
+
+    def handler(request):
+        if request.url.path == uc.OAUTH_ENDPOINT:
+            calls["token"] += 1
+            return httpx.Response(400, json=INVALID_CLIENT)      # 400, so only the code can classify it
+        return httpx.Response(200, json=ADDRESS_OK)
+
+    client = USPSClient(client_id="client", client_secret=SECRET, environment="production",
+                        transport=httpx.MockTransport(handler), clock=FakeClock())
+    first = asyncio.run(client.standardize("123 Main St", city="Springfield", state="VA"))
+    assert first.failure_kind == uc.FAILURE_CREDENTIALS_REJECTED
+    for _ in range(5):
+        again = asyncio.run(client.standardize("123 Main St", city="Springfield", state="VA"))
+        assert again.failure_kind == uc.FAILURE_CREDENTIALS_REJECTED
+    assert calls["token"] == 1, "a rejected credential was asked for again"
+    assert client.circuit.status == uc.CircuitBreaker.CLOSED
+    health = client.health(include_auth_detail=True)
+    assert health["status"] == "Authentication failed"
+    # What is SHOWN is still scrubbed of the configured key.
+    assert health["auth_error"]["usps_error"] == "invalid_[redacted]"
+    assert SECRET not in repr(health)
+
+
+@pytest.mark.parametrize("split", [
+    "\n", "\r", "\r\n", "\t", "\x00", "\x07", "\x1b", "\x7f",       # control characters
+    "​", "‍", "﻿", " ", "­",               # zero-width / format / separators
+    " ", "  \n  ", " ",                                       # white space
+])
+def test_a_credential_echoed_with_a_character_inserted_in_it_is_still_scrubbed(split, caplog):
+    """Before: the credential was replaced first and control characters were
+    dropped afterwards, so `client-<newline>secret-...` did not match the
+    replacement and then BECAME the complete secret once the newline was
+    dropped. It was stored in the auth detail and written to the log."""
+    broken_secret = SECRET[:7] + split + SECRET[7:]
+    broken_id = CLIENT_ID[:9] + split + CLIENT_ID[9:]
+    body = {"error": "invalid_client",
+            "error_description": f"client {broken_id} with secret {broken_secret} is not approved"}
+    client = _client(lambda request: httpx.Response(401, json=body))
+    with caplog.at_level(logging.DEBUG):
+        result = _check(client)
+    health = client.health(include_auth_detail=True)
+    description = health["auth_error"]["usps_description"]
+    for text in (repr(health), repr(result), caplog.text, description):
+        assert SECRET not in text and CLIENT_ID not in text
+        squeezed = "".join(ch for ch in text if ch.isalnum() or ch == "-")
+        assert SECRET not in squeezed and CLIENT_ID not in squeezed, split
+    assert description.count("[redacted]") == 2 and description.endswith("is not approved")
+
+
+@pytest.mark.parametrize("echo", [
+    SECRET.upper(),                                                # another case
+    SECRET.replace("-", "%2D"),                                    # percent-encoded
+    SECRET.replace("-", "%2d").replace("x", "%78"),
+])
+def test_a_credential_echoed_in_another_case_or_percent_encoded_is_scrubbed(echo, caplog):
+    body = {"error": "invalid_client", "error_description": f"secret {echo} is not approved"}
+    client = _client(lambda request: httpx.Response(401, json=body))
+    with caplog.at_level(logging.DEBUG):
+        _check(client)
+    health = client.health(include_auth_detail=True)
+    from urllib.parse import unquote
+    for text in (repr(health), caplog.text):
+        assert SECRET.lower() not in unquote(text).lower()
+    assert "[redacted]" in health["auth_error"]["usps_description"]
+
+
+def test_an_ordinary_description_is_shown_unchanged():
+    client = _client(lambda request: httpx.Response(401, json=INVALID_CLIENT))
+    _check(client)
+    detail = client.health(include_auth_detail=True)["auth_error"]
+    assert detail["usps_error"] == "invalid_client"
+    assert detail["usps_description"] == INVALID_CLIENT["error_description"]
+
+
+def test_the_test_client_does_not_read_the_machines_usps_env(monkeypatch):
+    """`_client` pins the environment: a developer machine that sets the
+    documented USPS_ENV=testing must not change what these tests assert."""
+    monkeypatch.setenv("USPS_ENV", "testing")
+    client = _client(lambda request: httpx.Response(401, json=INVALID_CLIENT))
+    assert client.environment == "production"
+    _check(client)
+    assert client.health(include_auth_detail=True)["auth_error"]["environment"] == "production"
+    explicit = _client(lambda request: httpx.Response(401, json=INVALID_CLIENT), environment="testing")
+    assert explicit.environment == "testing"

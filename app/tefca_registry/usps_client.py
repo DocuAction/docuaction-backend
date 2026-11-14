@@ -313,6 +313,52 @@ def _safe_log(level: int, message: str, **fields: Any) -> None:
                " ".join(f"{k}={v}" for k, v in safe.items() if v is not None))
 
 
+def _significant(text: str):
+    """(characters, their positions in `text`) with everything that cannot be
+    part of a credential's identity left out: white space and every
+    non-printable character (control, format, zero-width, line separators)."""
+    chars, positions = [], []
+    for index, ch in enumerate(text):
+        if ch.isspace() or not ch.isprintable():
+            continue
+        lowered = ch.lower()
+        chars.append(lowered if len(lowered) == 1 else ch)
+        positions.append(index)
+    return "".join(chars), positions
+
+
+def _scrub_credentials(text: str, secrets) -> str:
+    """`text` with every echo of a configured credential replaced.
+
+    The comparison ignores what an upstream message can put INSIDE an echoed
+    value without changing it for a reader: white space, control and
+    zero-width characters, and letter case. Replacing the exact string first
+    and dropping control characters afterwards missed `client-<newline>secret`
+    and then rebuilt the complete secret when the newline was dropped (review
+    finding 2026-11-14). A percent-encoded echo is decoded first. The whole
+    span is replaced, including the characters inserted in it."""
+    from urllib.parse import unquote
+
+    wanted = [_significant(s)[0] for s in secrets if s]
+    wanted = sorted({w for w in wanted if w}, key=len, reverse=True)
+    if not wanted:
+        return text
+    decoded = unquote(text)
+    if decoded != text and any(w in _significant(decoded)[0] for w in wanted):
+        text = decoded
+    for needle in wanted:
+        while True:
+            flat, positions = _significant(text)
+            at = flat.find(needle)
+            if at < 0:
+                break
+            start, end = positions[at], positions[at + len(needle) - 1] + 1
+            text = text[:start] + "[redacted]" + text[end:]
+            if needle in "[redacted]":           # a credential that is a piece of the marker
+                break
+    return text
+
+
 # ── Client ───────────────────────────────────────────────────────────────────
 
 class USPSClient:
@@ -419,8 +465,8 @@ class USPSClient:
                 # 401 here means the credentials themselves are wrong. That is a
                 # configuration fault, not a transient one, and it is worth
                 # surfacing on /health rather than burying in a retry count.
-                usps_error, usps_description = self._oauth_error(resp)
-                if resp.status_code == 401 or usps_error == "invalid_client":
+                usps_code, usps_error, usps_description = self._oauth_error(resp)
+                if resp.status_code == 401 or usps_code == "invalid_client":
                     self._auth_failed = True
                     self._auth_error = {
                         "http_status": resp.status_code,
@@ -479,16 +525,21 @@ class USPSClient:
             return None, None
         error = body.get("error")
         description = body.get("error_description")
+        secrets = (self.client_secret, self.client_id)
+
         def clean(value, limit):
             if not value:
                 return None
-            text = str(value)
-            for secret in (self.client_secret, self.client_id):
-                if secret:
-                    text = text.replace(secret, "[redacted]")
+            text = _scrub_credentials(str(value), secrets)
             return "".join(ch for ch in text if ch.isprintable())[:limit]
 
-        return clean(error, 60), clean(description, 200)
+        # The CODE is compared as USPS sent it; only what is shown is scrubbed.
+        # Scrubbing first turned `invalid_client` into `invalid_[redacted]` for a
+        # key that happens to be a word of the code, and the rejection was then
+        # not recognised (review finding 2026-11-14). The code is never stored
+        # or logged from here - callers keep the two scrubbed values.
+        code = error.strip().lower() if isinstance(error, str) else None
+        return code, clean(error, 60), clean(description, 200)
 
     def _credentials_rejected(self) -> USPSAddressResult:
         detail = (self._auth_error or {}).get("usps_error") or "authentication failed"
