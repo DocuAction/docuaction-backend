@@ -117,7 +117,7 @@ def test_valid_entry_normalises_without_touching_the_text():
     ({"expected": {"source_line": 7, "hcid": "urn:oid:1.2", "tefca_id": "T-9"}}, "cross-check failed"),
     ({"source": {"file_name": "", "file_sha256": SHA}}, "source.file_name"),
     ({"source": {"file_name": "f", "file_sha256": "short"}}, "64-hex"),
-    ({"source": {"file_name": "f", "file_sha256": SHA, "row": "x"}}, "not an integer"),
+    ({"source": {"file_name": "f", "file_sha256": SHA, "sheet": "S", "column": "C", "row": "x"}}, "not an integer"),
     ({"authored_at": "2026-11-01T10:00:00"}, "no timezone"),
     ({"authored_at": "not a date"}, "not an ISO datetime"),
     ({"intake_id": str(uuid.uuid4())}, "names intake"),
@@ -784,3 +784,27 @@ async def test_reused_batch_entry_with_changed_content_is_rejected(rolled_back_d
     out = await _import(db, intake, [_entry(recs[1], body="B", amend=True)], batch_id=batch)
     assert out["counts"]["rejected"] == 1
     assert (await rc.list_comments(db, intake_id=intake))["comments"][0]["comment_text"] == "A"
+
+
+# ── W3 (2026-11-14): source sheet and column are required at intake ─────────
+
+@pytest.mark.parametrize("kind", ["QA_ORIGINAL", "QA_IZAAN", "REPORT_CLARIFICATION"])
+@pytest.mark.parametrize("gap", [{"sheet": None}, {"column": None}, {"sheet": "  "},
+                                 {"column": ""}, {"sheet": 3}, {"drop": "sheet"}, {"drop": "column"}])
+async def test_a_new_comment_without_source_sheet_or_column_is_rejected_at_intake(
+        rolled_back_db, kind, gap):
+    db = rolled_back_db
+    intake_id, recs = await _seed(db, arc="9.99.779.61")
+    entry = _entry(recs[1], kind)
+    if "drop" in gap:
+        entry["source"].pop(gap["drop"])
+    else:
+        entry["source"].update(gap)
+    out = await _import(db, intake_id, [entry, _entry(recs[2], kind, "complete provenance")])
+    first, second = out["results"][0], out["results"][1]
+    assert first["status"] == rc.REJECTED
+    assert "source.sheet" in first["reason"] and "source.column" in first["reason"]
+    assert second["status"] == rc.INSERTED                    # the batch is not poisoned
+    stored = (await db.execute(select(func.count()).select_from(RceRecordComment).where(
+        RceRecordComment.source_intake_id == intake_id))).scalar()
+    assert stored == 1
