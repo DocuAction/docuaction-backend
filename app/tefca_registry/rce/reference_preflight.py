@@ -75,6 +75,20 @@ bound is stated in every result (`rows_sampled`, `tail_checked`).
     could not read it either) and REF-SCH-008 says that a field is too long,
     not that the file is truncated. The process-wide limit is not changed.
 
+1.1.0, third pass (2026-11-14) - the reader and the importer, case by case
+(tests/test_reference_preflight_parser_agreement_2026_11_14.py):
+  * a field beyond the csv reader's limit inside the SAMPLE made this function
+    raise. It is now the same REF-SCH-008 the whole-file read gives.
+  * every record is read, so every record's field count is now checked
+    against the header, not only the sampled records and the final one. Still
+    ONE REF-SCH-007: a count and the first few line numbers, never a row.
+  * the whole-file read decoded with replacement characters while the
+    importer decodes strictly, so invalid UTF-8 beyond the first 64 KiB was
+    CLEAR here and failed there. It is decoded strictly now and reported as
+    REF-SCH-006 with the byte offset.
+  * NOT changed, pinned by a test: text after a closing quote ("ab"c) is
+    blocked by this strict reader and read by the importer's non-strict one.
+
 No positional fallback, no renaming, no coercion. The original bytes are
 only read. One technical finding per fault, with the affected scope, never
 one compliance finding per row.
@@ -125,6 +139,9 @@ REFERENCE_SCHEMAS: Dict[str, Dict[str, Any]] = {
 READER_ENDS_IN_QUOTES = "ends_inside_quoted_field"
 READER_FIELD_TOO_LONG = "field_longer_than_reader_limit"
 READER_NOT_WELL_FORMED = "not_well_formed_csv"
+READER_NOT_UTF8 = "not_valid_utf8"
+#: How many offending line numbers a field-count finding lists (never rows).
+_WRONG_COUNT_LINES = 5
 
 
 def _reader_error(exc: csv.Error) -> str:
@@ -136,7 +153,27 @@ def _reader_error(exc: csv.Error) -> str:
     return READER_NOT_WELL_FORMED
 
 
-def _read_as_records(path) -> Dict[str, Any]:
+def _first_invalid_utf8_offset(path) -> int:
+    """Byte offset in the file of the first byte that is not valid UTF-8.
+    Streaming; called only after a strict decode of the file has failed."""
+    import codecs
+
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="strict")
+    consumed = 0
+    with open_no_follow(path, "rb") as raw:
+        while True:
+            chunk = raw.read(1024 * 1024)
+            pending = len(decoder.getstate()[0])
+            try:
+                decoder.decode(chunk, final=not chunk)
+            except UnicodeDecodeError as exc:
+                return consumed - pending + exc.start
+            if not chunk:
+                return consumed
+            consumed += len(chunk)
+
+
+def _read_as_records(path, expected_fields: int = 0) -> Dict[str, Any]:
     """The whole file read as CSV records, strictly, to its end.
 
     Streaming: one record is held at a time. `records` counts non-empty records
@@ -144,20 +181,52 @@ def _read_as_records(path) -> Dict[str, Any]:
     CSV the read stops: `error` says why and `line` where the reader was.
     strict=True: a quoted field still open at end of data is an error, not a
     field - that is a file cut INSIDE a quoted value. The csv field limit is
-    whatever the process has (the importer's reader has the same)."""
+    whatever the process has (the importer's reader has the same). The bytes
+    are decoded strictly as UTF-8, as the importer decodes them; a byte that is
+    not UTF-8 stops the read (`byte_offset` says where).
+
+    With `expected_fields`, every data record's field count is compared with
+    it in the same pass. The FINAL record is left out of that count: it is
+    judged separately, as the final record. `wrong_count` is how many records
+    differ; `wrong_first` holds the line and field count of the first few -
+    never a record's content."""
     records, last = 0, []
+    wrong_count, wrong_first = 0, []
+    held = None                              # the newest record's (line, fields) if it differs
+
+    def commit() -> None:
+        nonlocal wrong_count
+        if held is not None:
+            wrong_count += 1
+            if len(wrong_first) < _WRONG_COUNT_LINES:
+                wrong_first.append({"line": held[0], "fields": held[1]})
+
+    def result(error=None, line=None, byte_offset=None) -> Dict[str, Any]:
+        return {"records": records, "last": last, "error": error, "line": line,
+                "byte_offset": byte_offset, "wrong_count": wrong_count,
+                "wrong_first": wrong_first}
+
     with open_no_follow(path, "rb") as raw:
-        with io.TextIOWrapper(raw, encoding="utf-8-sig", errors="replace", newline="") as text:
+        with io.TextIOWrapper(raw, encoding="utf-8-sig", errors="strict", newline="") as text:
             reader = csv.reader(text, strict=True)
             try:
                 for row in reader:
-                    if row:
-                        records += 1
-                        last = row
+                    if not row:
+                        continue
+                    commit()                 # the previous record was not the final one
+                    held = None
+                    records += 1
+                    last = row
+                    if expected_fields and records > 1 and len(row) != expected_fields:
+                        held = (reader.line_num, len(row))
             except csv.Error as exc:
-                return {"records": records, "last": last, "error": _reader_error(exc),
-                        "line": reader.line_num}
-    return {"records": records, "last": last, "error": None, "line": None}
+                commit()                     # the read stopped: nothing here is "the final record"
+                return result(_reader_error(exc), reader.line_num)
+            except UnicodeDecodeError:
+                commit()
+                return result(READER_NOT_UTF8, reader.line_num,
+                              _first_invalid_utf8_offset(path))
+    return result()
 
 
 class ReferencePreflightBlocked(RuntimeError):
@@ -176,6 +245,26 @@ def _finding(code: str, description: str, *, disposition: str, evidence: Dict[st
     return {"category": "SCHEMA", "code": code, "field_name": field_name,
             "applicability": applicability, "execution": execution,
             "disposition": disposition, "evidence": evidence, "description": description}
+
+
+def _unreadable_finding(reader_error: str, line: int, evidence: Dict[str, Any]) -> Dict[str, Any]:
+    """REF-SCH-008 for a read the csv reader could not continue. Used by the
+    sample (when the header row itself cannot be read) and by the whole-file
+    read, so the two say the same thing about the same fault."""
+    evidence = {**evidence, "reader_error": reader_error, "reader_line": line}
+    if reader_error == READER_FIELD_TOO_LONG:
+        limit = csv.field_size_limit()
+        evidence["reader_field_limit"] = limit
+        return _finding(
+            "REF-SCH-008", f"A field is longer than the CSV reader's limit of {limit} "
+            f"characters (near line {line}). The importer reads with the same "
+            "limit and cannot read this file as records past that point; it is blocked "
+            "here, as ONE technical issue, rather than failing part-way through an import.",
+            disposition=pm.DISP_BLOCKED, field_name="__record__", evidence=evidence)
+    return _finding(
+        "REF-SCH-008", f"The file is not well-formed CSV near line {line}. Record "
+        "boundaries cannot be established, so the final record cannot be confirmed "
+        "complete.", disposition=pm.DISP_BLOCKED, field_name="__record__", evidence=evidence)
 
 
 def _gate(findings: List[Dict[str, Any]]) -> str:
@@ -243,7 +332,22 @@ def preflight_reference_file(path, source_system: str) -> Dict[str, Any]:
             evidence={"byte_offset": exc.start, "expected": "utf-8"}))
         return done()
 
-    rows = list(csv.reader(io.StringIO(head_text, newline="")))
+    # The sample is read with the process's csv field limit, like every other
+    # read here. A field beyond it stops the sample; that is a property of the
+    # file, reported below - never an exception out of this function.
+    rows: List[List[str]] = []
+    sample_reader = csv.reader(io.StringIO(head_text, newline=""))
+    try:
+        for sample_row in sample_reader:
+            rows.append(sample_row)
+    except csv.Error as exc:
+        if not rows:                         # the header row itself could not be read
+            out["header"] = []
+            findings.append(_unreadable_finding(
+                _reader_error(exc), sample_reader.line_num,
+                {"final_record_fields": 0, "expected": 0,
+                 "ends_with_newline": last_byte in (b"\n", b"\r")}))
+            return done()
     header = [h.strip() for h in (rows[0] if rows else [])]
     out["header"] = header
     if len(header) == 1 and any(d in header[0] for d in ("|", "\t", ";")):
@@ -309,13 +413,17 @@ def preflight_reference_file(path, source_system: str) -> Dict[str, Any]:
     out["rows_sampled"] = sampled
     # The whole file, as records. This is the ONLY thing the final record is
     # judged from: no tail window, no alignment guess, no quote counting.
-    read = _read_as_records(path)
+    read = _read_as_records(path, expected_fields=len(header))
     out["records_read"] = read["records"]
     # What was actually read, not what could have been (see 1.1.0 above).
-    out["bound"] = (f"header in full; field counts checked for the first {sampled} record(s) "
-                    f"- those within the first {_TAIL_BYTES // 1024} KiB, at most {SAMPLE_ROWS} "
-                    f"- and for the final record; the whole file was read as CSV records "
-                    f"(strict) to establish the final record")
+    out["bound"] = (f"header in full; the first {sampled} record(s) - those within the first "
+                    f"{_TAIL_BYTES // 1024} KiB, at most {SAMPLE_ROWS} - were sampled; the "
+                    f"whole file was read as CSV records (strict, decoded as UTF-8)"
+                    + (f" up to line {read['line']}, where the read stopped; every record's "
+                       f"field count up to there was checked against the header"
+                       if read["error"] else
+                       ": every record's field count was checked against the header and "
+                       "the final record established"))
     # Whether ANY data record exists is a separate question from how many were
     # sampled: the sample window can hold only blank lines. A file that cannot
     # be read to its end is not "empty"; the final-record check reports it.
@@ -327,12 +435,32 @@ def preflight_reference_file(path, source_system: str) -> Dict[str, Any]:
             "every record 'does not match'; an empty reference extract is blocked as ONE "
             "technical issue instead.", disposition=pm.DISP_BLOCKED, field_name="__record__",
             evidence={"data_records": 0, "size_bytes": size}))
+    # Field counts: the sampled records, and every other record of the whole
+    # read except the final one (judged below). ONE finding, whatever the count.
+    if bad is None and read["wrong_first"]:
+        first = read["wrong_first"][0]
+        bad = {"line": first["line"], "fields": first["fields"], "expected": len(header)}
     if bad:
+        wrong = max(read["wrong_count"], 1)
+        bad["records_with_wrong_field_count"] = wrong
+        bad["first_lines"] = [w["line"] for w in read["wrong_first"]] or [bad["line"]]
         findings.append(_finding(
             "REF-SCH-007", f"The record at line {bad['line']} has {bad['fields']} "
-            f"field(s); the header has {bad['expected']}. Record boundaries cannot be "
+            f"field(s); the header has {bad['expected']}"
+            + (f" ({wrong} records differ from the header)" if wrong > 1 else "")
+            + ". Record boundaries cannot be "
             "trusted, so values are not read by position.", disposition=pm.DISP_BLOCKED,
             field_name="__record__", evidence=bad))
+    if read["error"] == READER_NOT_UTF8:
+        findings.append(_finding(
+            "REF-SCH-006", f"The file is not valid UTF-8 at byte offset "
+            f"{read['byte_offset']}. Values are not re-decoded or guessed, and the "
+            "importer decodes the file strictly and would stop there; the extract must "
+            "be re-delivered or its encoding confirmed.", disposition=pm.DISP_BLOCKED,
+            field_name="__encoding__",
+            evidence={"byte_offset": read["byte_offset"], "expected": "utf-8"}))
+        out["tail_checked"] = True
+        return done()                      # the encoding finding says what is wrong
 
     # The final record of the file.
     out["tail_checked"] = True
@@ -347,14 +475,7 @@ def preflight_reference_file(path, source_system: str) -> Dict[str, Any]:
     partial = ("a partial reference snapshot would answer 'not present' for every "
                "record in the missing part.")
     if read["error"] == READER_FIELD_TOO_LONG:
-        limit = csv.field_size_limit()
-        evidence["reader_field_limit"] = limit
-        findings.append(_finding(
-            "REF-SCH-008", f"A field is longer than the CSV reader's limit of {limit} "
-            f"characters (near line {read['line']}). The importer reads with the same "
-            "limit and cannot read this file as records past that point; it is blocked "
-            "here, as ONE technical issue, rather than failing part-way through an import.",
-            disposition=pm.DISP_BLOCKED, field_name="__record__", evidence=evidence))
+        findings.append(_unreadable_finding(read["error"], read["line"], evidence))
     elif read["error"] == READER_ENDS_IN_QUOTES:
         findings.append(_finding(
             "REF-SCH-008", "The file ends inside a quoted value: a quoted field is opened "
