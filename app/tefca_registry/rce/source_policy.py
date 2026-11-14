@@ -15,9 +15,22 @@ SEMANTICS (M-4, as proposed — the policy rows decide WHICH sources):
       - possible_match (pending candidate)            -> B3 with the specific
         review reason EXCLUSION_POSSIBLE_MATCH_PENDING (defense in depth —
         RULE-008 normally routes it first);
-      - an ANSWERED ADVERSE outcome (not_found, deactivated, excluded) is a
-        FINDING, never relabelled SOURCE_NOT_COMPLETED: it is left to the
-        approved rule conditions and their precedence.
+      - an ANSWERED ADVERSE outcome (ADVERSE_STATES: not_found, excluded,
+        debarred, deactivated) is a FINDING, never relabelled
+        SOURCE_NOT_COMPLETED: it is left to the approved rule conditions and
+        their precedence;
+      - ANY OTHER state FAILS CLOSED (2026-11-11, reviewed as its own change):
+        a state outside the acceptable / incomplete / pending / adverse sets -
+        a new connector status, a typo, a non-string value, a dict without a
+        usable `status` - routes to B3 SOURCE_NOT_COMPLETED_<SOURCE>. Before
+        this, such a state was silently treated as an answered adverse finding
+        and B1/B2 stood, i.e. an UNKNOWN mandatory-source answer passed as if
+        it were a known one. State strings are normalised (strip + lower-case)
+        before comparison, so "Verified" and " CLEAR " are acceptable and
+        "UNAVAILABLE" is incomplete. Every state the code emits today is in
+        one of the four sets (guarded by a test); this only changes behaviour
+        for a state nobody has classified, and only for an applicable
+        mandatory source under an ACTIVE policy row.
   * conditional role: applies only where its applicability facts match
     (e.g. {"requires_npi": true}); a conditional check outside its
     applicability is NOT_APPLICABLE and never blocks.
@@ -76,6 +89,27 @@ SOURCE_POLICY_RULE_CODE = "SOURCE-POLICY-M4"
 ACCEPTABLE_STATES = frozenset({"verified", "clear"})
 INCOMPLETE_STATES = frozenset({"not_checked", "unavailable", "failed"})
 PENDING_REVIEW_STATES = frozenset({"possible_match"})
+#: Answered adverse outcomes: a finding owned by the rule conditions, not an
+#: incomplete check. ANY state outside the three sets above and this one
+#: (a casing variant is normalised first; a new connector status, a typo, a
+#: non-string value) is treated as INCOMPLETE - an applicable mandatory source
+#: fails closed on a state nobody has classified.
+ADVERSE_STATES = frozenset({"not_found", "excluded", "debarred", "deactivated"})
+
+
+def _state_of(raw: Any) -> Optional[str]:
+    """Normalised source state, or None when absent. A value that is neither a
+    string nor a dict carrying a string `status` yields a sentinel that matches
+    no known set, so it is incomplete rather than silently a finding."""
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, dict):
+        raw = raw.get("status")
+        if raw is None or raw == "":
+            return None
+    if not isinstance(raw, str):
+        return "__unrecognised__"
+    return raw.strip().lower() or None
 
 
 async def load_active_policies(session) -> List[Dict[str, Any]]:
@@ -132,15 +166,72 @@ def apply_source_policy(bucket: str, rule_code: Optional[str],
     for policy in policies:
         if not _applies(policy, record_facts):
             continue
-        raw = sources.get(policy["source"])
-        state = raw if isinstance(raw, str) else (raw or {}).get("status") if raw else None
+        state = _state_of(sources.get(policy["source"]))
         if state in ACCEPTABLE_STATES:
             continue
         if state in PENDING_REVIEW_STATES:
             return "B3", None, "EXCLUSION_POSSIBLE_MATCH_PENDING", policy
-        if state is None or state in INCOMPLETE_STATES:
-            return ("B3", None,
-                    f"SOURCE_NOT_COMPLETED_{policy['source'].upper()}", policy)
-        # Answered adverse (not_found / deactivated / excluded / anything
-        # else the rules know): a finding, owned by the rule conditions.
+        if state in ADVERSE_STATES:
+            # Answered adverse: a finding, owned by the rule conditions.
+            continue
+        # None, a known incomplete state, or a state nobody has classified:
+        # fail closed (an unknown mandatory-source answer is not a clean one).
+        return ("B3", None,
+                f"SOURCE_NOT_COMPLETED_{policy['source'].upper()}", policy)
     return bucket, rule_code, None, None
+
+
+def enforce_on_classification(classification: Any,
+                              sources: Dict[str, Any],
+                              record_facts: Dict[str, Any],
+                              policies: List[Dict[str, Any]],
+                              ) -> Tuple[Any, Optional[Dict[str, Any]]]:
+    """THE one enforcement entry point for BOTH classification paths (the
+    bulk `arc_pipeline.verify_and_classify` and the single-record
+    `review_service.run_review`): (classification, matched_policy).
+
+    With no active policy row, or when no applicable mandatory source blocks,
+    the SAME classification object is returned untouched and `matched_policy`
+    is None. When a policy blocks a B1/B2 outcome, a new ClassificationResult
+    is returned that cites the reserved code `SOURCE-POLICY-M4`, the ACTUAL
+    policy row version, and the row id / policy_reference / approval_reference
+    - the specific reason (SOURCE_NOT_COMPLETED_<SOURCE> or
+    EXCLUSION_POSSIBLE_MATCH_PENDING) is never collapsed into a generic one.
+
+    This is `app.tefca_registry.rce.source_policy`; it is NOT
+    `app.Tefca.source_policy`, which supplies registry/freshness metadata and
+    decides nothing. It adds no designation: which sources are mandatory is
+    only ever what the active `rce_source_policies` rows say.
+
+    The rationale text is byte-for-byte what the bulk path wrote before this
+    function existed (extracted, not rewritten), so historical determinations
+    and their reports are unchanged."""
+    if not policies:
+        return classification, None
+    (bucket, _rule, reason, matched) = apply_source_policy(
+        classification.bucket, classification.rule_code,
+        sources or {}, record_facts, policies)
+    if not reason:
+        return classification, None
+    from app.tefca_registry.bucket_classifier import ClassificationResult
+    return ClassificationResult(
+        bucket=bucket,
+        rule_code=SOURCE_POLICY_RULE_CODE,
+        # The ACTUAL policy row version - the versioned provenance is the
+        # rce_source_policies row, cited by id and references below, never a
+        # placeholder.
+        rule_version=matched.get("version"),
+        rule_name="Mandatory-source policy (M-4)",
+        rationale=(f"Mandatory-source policy: {reason}. "
+                   f"An applicable mandatory check without an "
+                   f"acceptable answer cannot classify B1/B2 "
+                   f"(M-4). Policy row "
+                   f"{matched.get('id')} v"
+                   f"{matched.get('version')} - "
+                   f"{matched.get('policy_reference')}; "
+                   f"approval "
+                   f"{matched.get('approval_reference')}."),
+        matched_conditions=[reason],
+        evidence_summary=classification.evidence_summary,
+        evaluated_rules=classification.evaluated_rules + ["source_policy(M-4)"],
+    ), matched

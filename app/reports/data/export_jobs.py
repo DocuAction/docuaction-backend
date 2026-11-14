@@ -88,6 +88,12 @@ def job_identity(*, intake_id, workbook_version: str, engine_version: str,
 #: e.g. "onc_review_workbook") without a second "kind" column.
 REPORT_GENERATION_EXPORT_TYPE_PREFIX = "report:"
 
+#: Prefix on `export_type` for a record-level review export (the shared
+#: october_review_dataset rendered as xlsx / csv / pdf): "record_review:xlsx".
+#: A third job kind in the same table, dispatched on this prefix so the certified
+#: ONC workbook runner is not touched.
+RECORD_REVIEW_EXPORT_TYPE_PREFIX = "record_review:"
+
 
 def report_generation_identity(*, report_type: str, format: str,
                                parameters: Dict[str, Any],

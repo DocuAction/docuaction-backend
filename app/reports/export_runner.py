@@ -227,3 +227,95 @@ async def run_report_generation_job(db, job) -> str:
         rendered_sha256=chosen.get("rendered_sha256") or "",
         size_bytes=int(chosen.get("size_bytes") or 0))
     return ReportExportJob.STATE_SUCCEEDED
+
+
+async def run_record_review_export_job(db, job) -> str:
+    """Take a RUNNING record-review export job to SUCCEEDED or FAILED.
+
+    Sibling to `run_export_job` (the certified ONC workbook runner is not
+    touched). Loads the selected delivery with `october_review_loader`, builds the
+    shared `october_review_dataset`, renders the requested format FROM THAT ONE
+    DATASET, and registers the bytes through `finalize_artifact` like every other
+    artifact (stored, hashed, versioned; downloaded through the verified path).
+
+    The dataset may be INCOMPLETE (records with no usable persisted
+    classification). That is not a failure: the artifact is produced, labelled
+    INCOMPLETE on every sheet/line, and lists the affected ids. A refusal by the
+    loader or dataset (no completed run, bad cutoff, unattributed comment text)
+    is a controlled FAILED outcome whose reason is safe to show.
+    """
+    import hashlib
+    import json
+
+    from starlette.concurrency import run_in_threadpool
+
+    from app.reports.data import export_jobs
+    from app.reports.data import october_review_dataset as ds
+    from app.reports.data import october_review_loader as loader
+    from app.reports.data.artifact_registry import finalize_artifact
+    from app.reports.data.export_job_model import ReportExportJob
+    from app.reports.engine.xlsx_engine import XLSX_CONTENT_TYPE, render_workbook
+
+    job_id = job.id
+    params = dict(job.request_parameters or {})
+    fmt = params.get("format")
+    renderers = {
+        "xlsx": (lambda d: render_workbook(d), XLSX_CONTENT_TYPE),
+        "csv": (lambda d: ds.to_csv(d), "text/csv"),
+        "pdf": (lambda d: ds.to_pdf(d), "application/pdf"),
+    }
+    try:
+        if fmt not in renderers:
+            raise loader.LoaderRefused(
+                f"unsupported format {fmt!r}; expected one of {sorted(renderers)}")
+        await export_jobs.heartbeat(db, job_id, phase=PHASE_PREPARING)
+        report_id = f"RECORD-REVIEW-{str(job_id)[:8].upper()}"
+        dataset = await loader.load_dataset(
+            db, intake_id=job.source_intake_id,
+            evidence_cutoff=params.get("evidence_cutoff"),
+            run_id=params.get("run_id"), report_id=report_id,
+            findings_count=None, classification=job.classification)
+
+        await export_jobs.heartbeat(db, job_id, phase=PHASE_BUILDING)
+        render, content_type = renderers[fmt]
+        async with _Heartbeat(job_id, export_jobs.HEARTBEAT_INTERVAL_SECONDS):
+            content = await run_in_threadpool(render, dataset)
+
+        await export_jobs.heartbeat(db, job_id, phase=PHASE_REGISTERING)
+        meta = dataset["load_meta"]
+        data_hash = hashlib.sha256(json.dumps(
+            {"records": dataset["sheets"]["Records"]["rows"],
+             "summary": dataset["summary"]},
+            sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        artifact = await finalize_artifact(
+            db, report_id=report_id, report_type=job.export_type,
+            content=content, content_type=content_type,
+            review_cycle_id=str(job.source_intake_id),
+            generated_by=job.requested_by,
+            template_version=(f"record-review dataset {ds.DATASET_VERSION} / "
+                              f"loader {loader.LOADER_VERSION}"),
+            source_artifact_sha256=meta.get("intake_sha256"),
+            report_data_hash=data_hash,
+            data_classification=job.classification,
+            contains_reportable_findings=False)
+        await db.commit()
+    except (loader.LoaderRefused, ds.DatasetRefused) as exc:
+        await export_jobs.finish_failed(db, job_id, str(exc))
+        return ReportExportJob.STATE_FAILED
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("record-review export job %s failed", job_id)
+        await export_jobs.finish_failed(
+            db, job_id,
+            f"The record review could not be produced ({type(exc).__name__}). "
+            f"Nothing was registered. Administrator diagnostics are in the "
+            f"application log against job {job_id}.")
+        return ReportExportJob.STATE_FAILED
+
+    await export_jobs.finish_succeeded(
+        db, job_id, report_id=report_id,
+        artifact_id=str(artifact["artifact_id"]),
+        artifact_version=int(artifact["artifact_version"]),
+        rendered_sha256=artifact["rendered_sha256"],
+        size_bytes=int(artifact["size_bytes"] or 0))
+    return ReportExportJob.STATE_SUCCEEDED

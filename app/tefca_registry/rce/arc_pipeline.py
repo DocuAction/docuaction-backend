@@ -746,6 +746,56 @@ async def _gather_all_evidence(entity_refs: List[str],
     return await asyncio.gather(*(_bounded(ref) for ref in entity_refs))
 
 
+#: Lineage outcomes of `_source_anchor`. Only ANCHORED sets
+#: ReviewRecord.source_record_id; every other outcome leaves it NULL and is
+#: counted in the run's `lineage` summary - never guessed.
+LINEAGE_ANCHORED = "anchored"
+LINEAGE_AMBIGUOUS = "ambiguous"              # >1 curated row of this delivery carries the reference
+LINEAGE_ENTITY_MISMATCH = "entity_mismatch"  # the curated row links a DIFFERENT entity
+LINEAGE_NO_DELIVERY_RECORD = "no_delivery_record"  # no delivery named, or no such record in it
+
+
+async def _source_anchors(db, intake_id, refs: List[str]) -> Dict[str, List[Any]]:
+    """reference -> the curated rows of THIS delivery that carry it.
+
+    The reference is the delivered business identifier (`rce_org_oid`) the
+    pipeline resolved the entity from. Scoped to ONE intake: an entity promoted
+    by several deliveries is never used to pick a record. Read-only."""
+    if intake_id is None or not refs:
+        return {}
+    from sqlalchemy import select
+    from app.tefca_registry.rce import models as _m
+    rows = (await db.execute(
+        select(_m.RceCuratedRecord.rce_org_oid, _m.RceCuratedRecord.source_record_id,
+               _m.RceCuratedRecord.canonical_entity_id)
+        .where(_m.RceCuratedRecord.source_intake_id == intake_id,
+               _m.RceCuratedRecord.rce_org_oid.in_(sorted(set(refs)))))).all()
+    out: Dict[str, List[Any]] = {}
+    for oid, source_record_id, canonical in rows:
+        out.setdefault(oid, []).append((source_record_id, canonical))
+    return out
+
+
+def _source_anchor(anchors: Dict[str, List[Any]], ref: str, entity_uuid):
+    """(source_record_id or None, LINEAGE_* outcome) for one resolved reference.
+
+    ANCHORED only when exactly ONE curated row of the named delivery carries the
+    reference AND it links the very entity that was resolved. Two rows
+    (duplicate delivered ids), a different linked entity, or no delivery
+    context all leave the review unanchored - an unanchored review is explicit
+    and incomplete, a wrongly anchored one would silently attach another record's
+    result."""
+    matches = anchors.get(ref) or []
+    if not matches:
+        return None, LINEAGE_NO_DELIVERY_RECORD
+    if len(matches) > 1:
+        return None, LINEAGE_AMBIGUOUS
+    source_record_id, canonical = matches[0]
+    if entity_uuid is None or canonical is None or str(canonical) != str(entity_uuid):
+        return None, LINEAGE_ENTITY_MISMATCH
+    return source_record_id, LINEAGE_ANCHORED
+
+
 async def verify_and_classify(
     db,
     entity_refs: List[str],
@@ -753,6 +803,7 @@ async def verify_and_classify(
     intake_id=None,
     actor: str = "SYSTEM",
     persist_evidence: bool = True,
+    assessment_run_id=None,
 ) -> Dict[str, Any]:
     """Run D1-D6 → B1-B4 → tier routing for a list of entity references.
 
@@ -769,6 +820,26 @@ async def verify_and_classify(
     from app.tefca_registry.bucket_classifier import BucketClassifier
 
     rules = await _rule_set(db)
+
+    # The Treatment assessment date comes from THIS delivery's own run
+    # (assessment_metadata, D-12), validated against the intake - never the
+    # wall clock and never an unrelated run. Resolved once per call, before
+    # any write. No intake / no completed run falls back to today's UTC date
+    # and the fallback is labelled in `assessment_as_of` below.
+    from app.tefca_registry.rce.assessment_context import resolve_assessment_date
+    _assessment = await resolve_assessment_date(
+        db, intake_id, run_id=assessment_run_id)
+    # Source-record lineage (review_records.source_record_id): the delivered record
+    # a review is ABOUT, taken from THIS delivery's curated rows only. No intake
+    # given => no anchor (an entity can be shared by several deliveries, so the
+    # entity alone never identifies a record).
+    _intake_uuid = None
+    if intake_id is not None:
+        import uuid as _uuidlib
+        _intake_uuid = (intake_id if isinstance(intake_id, _uuidlib.UUID)
+                        else _uuidlib.UUID(str(intake_id)))
+    lineage = {LINEAGE_ANCHORED: 0, LINEAGE_AMBIGUOUS: 0,
+               LINEAGE_ENTITY_MISMATCH: 0, LINEAGE_NO_DELIVERY_RECORD: 0}
 
     # Release-prerequisite controls (2026-11-08), BEFORE any classification
     # write: mark this transaction in-flight + refuse while the transition
@@ -791,6 +862,7 @@ async def verify_and_classify(
     buckets: Dict[str, int] = {}
     tiers: Dict[int, int] = {}
     unresolved: List[str] = []
+    resolution_failures: List[Dict[str, str]] = []
 
     # Held for the whole batch — see `_lock_review_id_allocation`. Acquired
     # even when entity_refs is empty or every ref is unresolved, which costs
@@ -839,6 +911,8 @@ async def verify_and_classify(
 
         _dbg_t0 = _dbgtime.perf_counter()
         gathered = await _gather_all_evidence(chunk_refs, timing_log=_dbg_path)
+        _anchors = await _source_anchors(
+            db, _intake_uuid, [g["ref"] for g in gathered if g["entity"] is not None])
         _dbg_gather_s = _dbgtime.perf_counter() - _dbg_t0
         if _dbg_path:
             with open(_dbg_path, "a", encoding="utf-8") as _f:
@@ -857,6 +931,18 @@ async def verify_and_classify(
 
             evidence = g["evidence"]
             entity_uuid = entity.get("_registry_entity_id")
+            source_record_id, _lineage = _source_anchor(_anchors, ref, entity_uuid)
+            lineage[_lineage] += 1
+            selected = await db.get(m.RceSourceRecord, source_record_id) if source_record_id else None
+            delivered = selected.parsed or {} if selected is not None else None
+            submitted_npi = ((str(delivered.get("NPI", selected.npi) or "").strip())
+                             if selected is not None else (_entity_npi(entity) or ""))
+            registered_npi = _entity_npi(entity)
+            if selected is not None and (registered_npi or "") != submitted_npi:
+                unresolved.append(ref)
+                resolution_failures.append({"entity_ref": ref,
+                    "reason": "submitted NPI differs from the identifier used by source probes; no record classification written"})
+                continue
 
             if persist_evidence:
                 rows = evidence_rows_for_persistence(
@@ -877,26 +963,30 @@ async def verify_and_classify(
             # component is explicitly activated — merging/deploying this code
             # changes no classification by itself. The assessment date is the
             # UTC date (the codebase's run rows and D-12 gates are UTC-based;
-            # a server-local date diverges near midnight).
-            from datetime import datetime as _dt, timezone as _tz
+            # a server-local date diverges near midnight). SUPERSEDED for
+            # delivery runs: `_assessment` (above) is the intake's own run
+            # date; UTC today is only the labelled fallback.
             from app.Tefca import rce_fields as _rce_fields
             from app.tefca_registry.rce import npi_applicability as _npa
             from app.tefca_registry.rce.quality_rules import BR_NPI_TRTMNT_EFFECTIVE
-            verification_results.setdefault("fields", {}).update(
-                _npa.treatment_field_signals(
+            treatment_signals = (
+                _npa.treatment_signals_from_parsed(
+                    delivered, assessment_date=_assessment.value,
+                    requirement_effective=BR_NPI_TRTMNT_EFFECTIVE)
+                if selected is not None else _npa.treatment_field_signals(
                     _rce_fields.rce_value(entity, "purposesofuse"),
                     _rce_fields.rce_value(entity, "NPI"),
                     _rce_fields.rce_value(entity, "active"),
                     _rce_fields.rce_value(entity, "sequoiaorgtype"),
                     _rce_fields.rce_value(entity, "organizationNodeType"),
-                    assessment_date=_dt.now(_tz.utc).date(),
+                    assessment_date=_assessment.value,
                     requirement_effective=BR_NPI_TRTMNT_EFFECTIVE))
+            verification_results.setdefault("fields", {}).update(treatment_signals)
             # D-02 PROPOSED bulk-path producer (default OFF): structural NPI
             # signal computed from the SUBMITTED value. Never overwrites a
             # signal another producer already set.
             if _proposed_npi_invalid_split_on():
-                _npi_sig = proposed_structural_npi_signal(
-                    _rce_fields.rce_value(entity, "NPI"))
+                _npi_sig = proposed_structural_npi_signal(submitted_npi)
                 if _npi_sig is not None:
                     verification_results.setdefault("fields", {}).setdefault(
                         "npi_validation", _npi_sig)
@@ -905,42 +995,17 @@ async def verify_and_classify(
             # M-4 enforcement: an APPLICABLE mandatory check without an
             # acceptable ANSWER prevents B1/B2 (answered adverse findings are
             # left to the rules). No active policy rows -> never runs.
-            if active_source_policies:
-                (_pb, _pr, _policy_reason,
-                 _matched_policy) = _source_policy.apply_source_policy(
-                    classification.bucket, classification.rule_code,
+            # Provenance: the determination came from the M-4 source policy,
+            # not from "no rule matched" - it cites the reserved code and the
+            # policy table, never DEFAULT-UNMATCHED (review finding
+            # 2026-11-08). The SAME function also serves the single-record
+            # path (review_service.run_review), so the two cannot diverge.
+            classification, _matched_policy = (
+                _source_policy.enforce_on_classification(
+                    classification,
                     verification_results.get("sources") or {},
-                    {"has_submitted_npi": bool(_entity_npi(entity))},
-                    active_source_policies)
-                if _policy_reason:
-                    from app.tefca_registry.bucket_classifier import (
-                        ClassificationResult as _CR)
-                    # Provenance: the determination came from the M-4 source
-                    # policy, not from "no rule matched" — it cites the
-                    # reserved code and the policy table, never the
-                    # DEFAULT-UNMATCHED path (review finding 2026-11-08).
-                    classification = _CR(
-                        bucket=_pb,
-                        rule_code=_source_policy.SOURCE_POLICY_RULE_CODE,
-                        # The ACTUAL policy row version - the versioned
-                        # provenance is the rce_source_policies row, cited by
-                        # id and references below, never a placeholder.
-                        rule_version=_matched_policy.get("version"),
-                        rule_name="Mandatory-source policy (M-4)",
-                        rationale=(f"Mandatory-source policy: {_policy_reason}. "
-                                   f"An applicable mandatory check without an "
-                                   f"acceptable answer cannot classify B1/B2 "
-                                   f"(M-4). Policy row "
-                                   f"{_matched_policy.get('id')} v"
-                                   f"{_matched_policy.get('version')} - "
-                                   f"{_matched_policy.get('policy_reference')}; "
-                                   f"approval "
-                                   f"{_matched_policy.get('approval_reference')}."),
-                        matched_conditions=[_policy_reason],
-                        evidence_summary=classification.evidence_summary,
-                        evaluated_rules=classification.evaluated_rules
-                        + ["source_policy(M-4)"],
-                    )
+                    {"has_submitted_npi": bool(submitted_npi)},
+                    active_source_policies))
 
             # NPPES outcome to the delivery's issue ledger (NPI-005/006/009). One
             # open issue per outcome per record; a repeat cycle adds nothing.
@@ -1050,6 +1115,10 @@ async def verify_and_classify(
                     "data_quality_flags": evidence.get("data_quality_flags", []),
                     "generation_timestamp": evidence.get("generated_at"),
                     "resolution_source": entity.get("_resolution_source"),
+                    # Which date the date-gated Treatment signals were
+                    # assessed as of, and which run supplied it (or that it
+                    # is the labelled UTC-today fallback).
+                    "assessment_as_of": _assessment.as_dict(),
                     # Official (POLICY_UNAPPROVED / freshness UNKNOWN) and
                     # inactive proposed policy views for the sources used,
                     # against the same pinned timestamps. Beside the
@@ -1057,6 +1126,9 @@ async def verify_and_classify(
                     "source_policy": evidence.get("source_policy"),
                     "classifier_input": verification_results,
                 },
+                # The delivered record this review is about (NULL unless the
+                # delivery's own curated row identifies it unambiguously).
+                source_record_id=source_record_id,
                 classification_bucket=classification.bucket,
                 classification_rule=rule_code,
                 classification_rule_version=rule_version,
@@ -1089,6 +1161,8 @@ async def verify_and_classify(
                 "entity_id": str(entity_uuid) if entity_uuid else None,
                 "name": entity.get("name"),
                 "review_id": review_id,
+                "source_record_id": str(source_record_id) if source_record_id else None,
+                "lineage": _lineage,
                 "bucket": classification.bucket,
                 "rule_code": rule_code,
                 "rule_version": rule_version,
@@ -1128,10 +1202,12 @@ async def verify_and_classify(
             if o["verification_completeness"]["overall_status"]
             == "verified_checks_incomplete"),
         "unresolved": unresolved,
+        "resolution_failures": resolution_failures,
         "bucket_counts": buckets,
         "tier_counts": {str(k): v for k, v in sorted(tiers.items())},
         "rule_set_size": len(rules),
         "outcomes": outcomes,
+        "lineage": lineage,
         "separation_note": (
             "Verification result (D1-D6), ARC determination (B1-B4) and review "
             "tier (T1-T3) are stored separately and are not collapsed. A B1 "

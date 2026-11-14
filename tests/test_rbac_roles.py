@@ -497,6 +497,17 @@ def test_no_tefca_read_endpoint_sits_above_the_viewer_floor():
         # /exceptions and the per-(source,outcome) lists. Not a new access
         # decision.
         "/api/tefca/rce/deliveries/{intake_id}/sam-extract/candidates",
+        # ── Record comments (2026-11-12) ── Same floor, same principle, as the
+        # per-record reads above: the list returns reviewer-authored QA
+        # commentary about named records, with the second reviewer's attribution
+        # and the importing staff member's email (`imported_by`) - the same
+        # staff-identity category the /api/tefca/audit-trail and
+        # /api/tefca/arc/qa-queue exceptions turn on (LOGIN-013: a viewer sees no
+        # PII anywhere). A viewer keeps every read that carries no such content;
+        # the comment WRITE path is qalead (audited 403). A new access decision
+        # for reviewers is not made here: reviewer is already the floor for
+        # delivered values on this router. Flagged on the PR for confirmation.
+        "/api/tefca/rce/deliveries/{intake_id}/comments",
         # ── IQVIA Release 1 application journey (2026-10-02) ──
         # Snapshot status/progress/reconciliation for a staged licensed
         # extract -- reviewer (4), the SAME floor `source_matching.

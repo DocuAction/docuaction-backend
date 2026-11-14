@@ -2083,6 +2083,116 @@ async def export_onc_review_workbook(
     }
 
 
+class RecordReviewExportRequest(BaseModel):
+    """A record-level review export of ONE explicitly named delivery.
+
+    Nothing here defaults to "the latest": the delivery, the evidence cutoff and
+    the format are all named by the caller. The assessment run is the delivery's
+    own current completed run unless one of ITS runs is named.
+    """
+    intake_id: str = Field(description="The delivery to report on (required).")
+    evidence_cutoff: str = Field(
+        description="ISO datetime. Evidence and review outcomes created after it "
+                    "are never read (required).")
+    format: str = Field(description="xlsx | csv | pdf - all render ONE dataset.")
+    run_id: Optional[str] = Field(
+        default=None,
+        description="A completed assessment run OF THIS DELIVERY. Omit for the "
+                    "delivery's own current completed run.")
+
+
+RECORD_REVIEW_FORMATS = ("xlsx", "csv", "pdf")
+
+
+@router.post("/exports/record-review",
+             summary="Queue the record-level review export (Excel / CSV / PDF)")
+async def export_record_review(
+    request: RecordReviewExportRequest,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("qalead")),
+):
+    """Queue one record-level review export; the bytes come from the verified
+    artifact download exactly like the ONC workbook.
+
+    `qalead`, for the same reason as the workbook: a file that leaves carries no
+    RBAC. Everything the loader would refuse is refused HERE, before a job is
+    queued - an unknown delivery, a bad cutoff, a run that is not this
+    delivery's, a delivery with no completed assessment run - so a request that
+    can never succeed does not become a failed job. The export is DRAFT: it may
+    be INCOMPLETE (records with no persisted classification are listed, never
+    given a bucket), and it carries no QA approval.
+    """
+    from app.reports.data import october_review_dataset as ds
+    from app.reports.data import october_review_loader as loader
+    from app.reports.data.export_audit import (ACTION_REQUESTED, ACTION_REUSED,
+                                               record_export_event)
+    from app.reports.data.export_jobs import (RECORD_REVIEW_EXPORT_TYPE_PREFIX,
+                                              ExportJobConflict, active_job,
+                                              job_identity, request_job)
+    from app.tefca_registry.rce.assessment_context import resolve_assessment_date
+
+    if request.format not in RECORD_REVIEW_FORMATS:
+        raise HTTPException(422, f"format must be one of {list(RECORD_REVIEW_FORMATS)}")
+    generated_by = getattr(user, "email", None) or "SYSTEM"
+    try:
+        intake_uuid = loader._uuid(request.intake_id, "intake_id")
+        cutoff = loader._cutoff(request.evidence_cutoff)
+        intake = await loader._intake(db, intake_uuid)
+        assessment = await resolve_assessment_date(db, intake_uuid, run_id=request.run_id)
+        if not assessment.from_run:
+            raise loader.LoaderRefused(
+                "the delivery has no completed assessment run, so there is no "
+                "assessment date to report as of")
+    except loader.LoaderRefused as exc:
+        raise HTTPException(409, str(exc))
+    except ValueError as exc:                       # run of another delivery, etc.
+        raise HTTPException(409, str(exc))
+
+    classification = await _export_classification(db)
+    export_type = f"{RECORD_REVIEW_EXPORT_TYPE_PREFIX}{request.format}"
+    identity = job_identity(
+        intake_id=str(intake_uuid),
+        workbook_version=f"dataset {ds.DATASET_VERSION} / loader {loader.LOADER_VERSION}",
+        engine_version=(f"{request.format}|run={assessment.run_id}|"
+                        f"cutoff={cutoff.isoformat()}"),
+        classification=classification, export_type=export_type)
+    before = await active_job(db, identity)
+    try:
+        job = await request_job(
+            db, identity=identity, export_type=export_type,
+            intake_id=str(intake_uuid), classification=classification,
+            generator_version=(f"record-review dataset {ds.DATASET_VERSION} / "
+                               f"loader {loader.LOADER_VERSION}"),
+            requested_by=generated_by,
+            request_parameters={"format": request.format,
+                                "evidence_cutoff": cutoff.isoformat(),
+                                "run_id": assessment.run_id})
+    except ExportJobConflict as exc:
+        raise HTTPException(409, str(exc))
+    reused = before is not None and str(before.id) == str(job.id)
+    await record_export_event(
+        db, action=ACTION_REUSED if reused else ACTION_REQUESTED,
+        actor=generated_by, job_id=str(job.id),
+        detail=("A record-review export for this delivery, run, cutoff and "
+                "format was already in flight; the existing job was returned."
+                if reused else "A record-review export was requested."),
+        extra={"delivery": intake.delivery_label, "intake_id": str(intake_uuid),
+               "classification": classification, "format": request.format,
+               "assessment_run_id": assessment.run_id,
+               "evidence_cutoff": cutoff.isoformat()})
+    return {
+        **job.to_dict(),
+        "reused_existing_job": reused,
+        "delivery": intake.delivery_label,
+        "format": request.format,
+        "assessment_run_id": assessment.run_id,
+        "assessment_date": assessment.value.isoformat(),
+        "evidence_cutoff": cutoff.isoformat(),
+        "status": "DRAFT / NOT FINAL / INDEPENDENT QA PENDING",
+        "status_url": f"/api/reports/exports/jobs/{job.id}",
+    }
+
+
 def _workbook_preview(dataset, render) -> Response:
     """Ten rows a sheet, returned directly and registered nowhere.
 

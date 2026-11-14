@@ -870,3 +870,121 @@ async def _audit_deprecated_use(db, user, request, filename) -> None:
         await db.commit()
     except Exception as exc:  # noqa: BLE001
         logger.warning("could not audit deprecated sync upload use: %s", type(exc).__name__)
+
+
+# ── Record comments (append-only, NON-DECISION) ──────────────────────────────
+#
+# Owner-selected storage model (2026-11-12): rce_record_comments. These routes
+# store and read commentary anchored to an immutable source record. They are NOT
+# a determination, resolution or approval path and never touch one: a comment
+# closes no finding, accepts no supplemental NPI, changes no bucket, releases no
+# hold and is not QA approval. Import is `qalead` (QA content that leaves the
+# building, like the workbook export) with an audited 403; readback is `reviewer`
+# (the floor for delivered values). Every operation is bound to the NAMED
+# delivery. Until the 20261112_rce_record_comments migration is applied through the
+# governed DEV release path, these answer 409 COMMENT_STORE_NOT_APPLIED.
+
+COMMENT_IMPORT_ROLE = "qalead"
+COMMENT_READ_ROLE = "reviewer"
+
+
+class RecordCommentImportRequest(BaseModel):
+    entries: List[Dict[str, Any]] = Field(
+        description="Up to 500 comment entries. See record_comments._validate_entry.")
+    batch_id: Optional[str] = Field(default=None, description="Optional UUID to resume a batch.")
+    confirm: bool = Field(default=False, description="Must be true to write (apply only).")
+
+
+def _audited_comment_role():
+    from app.core.security import require_role_audited
+    return require_role_audited(COMMENT_IMPORT_ROLE, resource_type="record_comments")
+
+
+def _comment_actor(user) -> str:
+    """The AUTHENTICATED importer, stored verbatim as `imported_by`. Never a placeholder:
+    if neither an email nor a user id is available the call is refused."""
+    who = (getattr(user, "email", None) or "").strip() or str(getattr(user, "id", None) or "").strip()
+    if not who:
+        raise HTTPException(409, "the authenticated importing actor could not be determined; "
+                                 "nothing was written")
+    return who
+
+
+async def _comment_call(coro):
+    from app.tefca_registry.rce import record_comments as rcm
+    try:
+        return await coro
+    except rcm.CommentStoreNotApplied as exc:
+        raise HTTPException(409, str(exc))
+    except rcm.CommentRefused as exc:
+        raise HTTPException(409, str(exc))
+
+
+@router.post("/deliveries/{intake_id}/comments/preview",
+             summary="Classify a batch of record comments without writing anything")
+async def preview_record_comments(
+    intake_id: str,
+    body: RecordCommentImportRequest,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(_audited_comment_role()),
+):
+    from app.tefca_registry import audit as reg_audit
+    from app.tefca_registry.rce import record_comments as rcm
+
+    actor = _comment_actor(user)
+    result = await _comment_call(rcm.import_comments(
+        db, intake_id=intake_id, entries=body.entries, actor=actor,
+        batch_id=body.batch_id, dry_run=True))
+    actor_id, actor_email = reg_audit.actor_of(user)
+    reg_audit.record(db, "record_comments_previewed", None, actor_id=actor_id,
+                     actor_email=actor_email,
+                     metadata={"intake_id": intake_id, "batch_id": result["batch_id"],
+                               "counts": result["counts"], "written": False})
+    await db.commit()
+    return result
+
+
+@router.post("/deliveries/{intake_id}/comments/import",
+             summary="Append a bounded, resumable batch of record comments")
+async def import_record_comments(
+    intake_id: str,
+    body: RecordCommentImportRequest,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(_audited_comment_role()),
+):
+    """Writes ONLY to rce_record_comments (plus one audit row of counts - never the
+    text). Re-sending a batch is safe: duplicates report already_present."""
+    from app.tefca_registry import audit as reg_audit
+    from app.tefca_registry.rce import record_comments as rcm
+
+    if not body.confirm:
+        raise HTTPException(409, "confirm=true is required to write; preview first")
+    actor = _comment_actor(user)
+    result = await _comment_call(rcm.import_comments(
+        db, intake_id=intake_id, entries=body.entries, actor=actor,
+        batch_id=body.batch_id, dry_run=False))
+    actor_id, actor_email = reg_audit.actor_of(user)
+    reg_audit.record(db, "record_comments_imported", None, actor_id=actor_id,
+                     actor_email=actor_email,
+                     metadata={"intake_id": intake_id, "batch_id": result["batch_id"],
+                               "counts": result["counts"], "written": True})
+    await db.commit()
+    return result
+
+
+@router.get("/deliveries/{intake_id}/comments",
+            summary="Read record comments back, verbatim, with provenance")
+async def read_record_comments(
+    intake_id: str,
+    source_record_id: Optional[str] = Query(None),
+    kind: Optional[str] = Query(None),
+    current_only: bool = Query(True, description="False returns every version."),
+    limit: int = Query(200, ge=1, le=500),
+    after: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role(COMMENT_READ_ROLE)),
+):
+    from app.tefca_registry.rce import record_comments as rcm
+    return await _comment_call(rcm.list_comments(
+        db, intake_id=intake_id, source_record_id=source_record_id, kind=kind,
+        current_only=current_only, limit=limit, after=after))
