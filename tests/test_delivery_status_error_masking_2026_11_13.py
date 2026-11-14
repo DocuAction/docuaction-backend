@@ -26,9 +26,11 @@ from app.tefca_registry.rce.delivery_job_model import RceDeliveryJob
 from rce_traceability_support import make_rows, rolled_back_db, seed_intake  # noqa: F401
 
 SECRET = "SYNTHETIC SECRET VALUE 4711"
+DRIVER_SECRET = "SYNTHETIC DRIVER MESSAGE 9257"
 RAW = ("PROMOTION: (sqlalchemy.dialects.postgresql.asyncpg.Error) <class "
-       "'asyncpg.exceptions.UniqueViolationError'>: duplicate key\n[SQL: INSERT INTO "
+       f"'asyncpg.exceptions.UniqueViolationError'>: duplicate key {DRIVER_SECRET}\n[SQL: INSERT INTO "
        f"tefca_entities (name) VALUES ($1)]\n[parameters: ('{SECRET}',)]")
+DRIVER_ONLY = ("<class 'asyncpg.exceptions.UniqueViolationError'>: " + DRIVER_SECRET)
 CONTROLLED = "PARSING: ValueError: header row is missing 3 documented columns"
 
 
@@ -41,6 +43,7 @@ class _User:
 
 def test_the_fixture_is_something_the_sanitizer_masks():
     assert SECRET in RAW and SECRET not in sanitize_stored_error(RAW)
+    assert DRIVER_SECRET in RAW and DRIVER_SECRET not in sanitize_stored_error(RAW)
     assert sanitize_stored_error(CONTROLLED) == CONTROLLED
 
 
@@ -49,6 +52,7 @@ class TestTheDerivationMasksWhatItEmbeds:
         out = status_model.processing_outcome(job_state="FAILED", job_stage="PROMOTION",
                                               error_reason=RAW, snapshot=None)
         text = json.dumps(out)
+        assert DRIVER_SECRET not in text
         assert SECRET not in text and "[parameters" not in text and "[SQL" not in text
         assert out["value"] == status_model.OUTCOME_FAILED and "PROMOTION" in out["detail"]
 
@@ -74,6 +78,7 @@ class TestTheDerivationMasksWhatItEmbeds:
 
         out = dash._status(_Job(), None)
         assert out["state"] == "FAILED" and SECRET not in json.dumps(out)
+        assert DRIVER_SECRET not in json.dumps(out)
 
 
 @pytest.fixture
@@ -99,6 +104,7 @@ class TestTheRoutesThatReturnIt:
         mine = [i for i in out["items"] if i["job_id"] == str(job.id)]
         assert mine and mine[0]["processing_outcome"]["value"] == status_model.OUTCOME_FAILED
         text = json.dumps(out, default=str)
+        assert DRIVER_SECRET not in text
         assert SECRET not in text and "[parameters" not in text, role
 
     @pytest.mark.parametrize("role", ["viewer", "reviewer", "admin"])
@@ -128,3 +134,14 @@ class TestTheRoutesThatReturnIt:
         body = detail.body.decode() if hasattr(detail, "body") else json.dumps(detail, default=str)
         assert str(job.id) in body, "the detail answered for this job"
         assert SECRET not in body and "[parameters" not in body, role
+
+
+@pytest.mark.parametrize("payload", [RAW, DRIVER_ONLY])
+def test_driver_message_is_masked_independently_of_sql_parameter_stripping(payload):
+    derived = status_model.processing_outcome(job_state="FAILED", job_stage="PROMOTION",
+        error_reason=payload, snapshot=None)
+    job = type("Job", (), {"state": "FAILED", "stage": "PROMOTION", "error_reason": payload})()
+    dashboard = dash._status(job, None)
+    for result in (derived, dashboard):
+        assert DRIVER_SECRET not in json.dumps(result)
+        assert SECRET not in json.dumps(result)
