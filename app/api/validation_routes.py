@@ -48,9 +48,53 @@ class ValidationItem(Base):
 
 # Auto-create table on first use
 _table_created = False
+#: Set once the queue table has been SEEN to exist where this process may not
+#: create it. Only a positive answer is remembered: an absent table is looked
+#: for again, so the queue starts working as soon as the migration is applied.
+_table_present = False
+
+
+def _queue_not_applied() -> HTTPException:
+    return HTTPException(409, detail={
+        "code": "VALIDATION_QUEUE_NOT_APPLIED",
+        "error": ("the validation queue table has not been created in this "
+                  "environment; it must be applied by an authorized migration. "
+                  "This application does not create tables while serving "
+                  "requests here.")})
+
 
 async def _ensure_table():
-    global _table_created
+    """Make sure the queue table exists, or refuse.
+
+    Where startup may mutate the schema (development, test, local) the table is
+    created on first use, as before. Where it may not
+    (`schema_guard.schema_mutation_allowed()` is False: production, or a
+    deployed host whose environment is unset) NOTHING is created: a request must
+    never be able to do what a restart is forbidden to do, because the role that
+    creates a table owns it. There the table is only looked for, and a request
+    that needs it is refused with 409 VALIDATION_QUEUE_NOT_APPLIED when it is
+    absent (review finding 2026-11-14)."""
+    global _table_created, _table_present
+    from app.core.schema_guard import schema_mutation_allowed
+
+    if not schema_mutation_allowed():
+        if _table_present:
+            return
+        from sqlalchemy import text as _text
+
+        from app.core.database import _get_engine
+        try:
+            async with _get_engine().connect() as conn:
+                found = (await conn.execute(
+                    _text("select to_regclass(:name)"),
+                    {"name": ValidationItem.__tablename__})).scalar()
+        except Exception as ex:  # noqa: BLE001 - unreadable is not "present"
+            logger.warning("Validation queue table check failed: %s", type(ex).__name__)
+            found = None
+        if found is None:
+            raise _queue_not_applied()
+        _table_present = True
+        return
     if not _table_created:
         try:
             real_engine = engine.__class__.__mro__  # Check if proxy
@@ -89,7 +133,14 @@ async def auto_queue_output(
     content_preview: str = "",
 ):
     """Automatically queue an output for validation if criteria met."""
-    await _ensure_table()
+    try:
+        await _ensure_table()
+    except HTTPException:
+        # Called from inside other routes: a queue that has not been applied
+        # here must not fail the request that produced the output. Nothing is
+        # queued, nothing is created, and it is logged.
+        logger.warning("Validation queue not applied in this environment; output not queued")
+        return None
 
     should_queue = False
     risk_level = "low"
