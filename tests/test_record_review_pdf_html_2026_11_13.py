@@ -351,3 +351,57 @@ def test_an_oversized_submitted_identifier_continues_in_monospace_rows(field, la
 def test_an_ordinary_npi_stays_in_one_row():
     rows = _main_rows(_page([_f(1)]))
     assert len(rows) == 1 and rows[0][4] == ("identity mono", "1234567893")
+
+
+# -- review finding on #213 (CodeRabbit, 2026-11-14): a long whitespace run ----
+
+def _lines_with_wrapping_gaps(piece: str, per_line: int) -> int:
+    """Like `_lines_needed`, but a run of spaces or tabs is NOT assumed to hang
+    at the end of its line: every character of it takes columns (a tab takes
+    8) and wraps like text. Written separately from split_for_rows. This is
+    the most lines the piece can take whichever way an engine lays out
+    preserved white space."""
+    lines, col = 1, 0
+    body = piece[:-1] if piece.endswith("\n") else piece
+    for token in re.findall(r"\n|[^\S\n]+|\S+", body):
+        if token == "\n":
+            lines, col = lines + 1, 0
+        elif token.isspace():
+            for ch in token:
+                width = 8 if ch == "\t" else 1
+                if col + width > per_line:
+                    lines, col = lines + 1, 0
+                col += width
+        else:
+            if col and col + len(token) > per_line:
+                lines, col = lines + 1, 0
+            while len(token) > per_line:
+                token, lines = token[per_line:], lines + 1
+            col += len(token)
+    return lines
+
+
+@pytest.mark.parametrize("text", [
+    "a" + "\t" * 1000 + "b",
+    "a" + " " * 5000 + "b",
+    "start " + "\t \t" * 700 + "end",
+    "\t" * 300,
+    "word " * 50 + "\t" * 400 + "word " * 50,
+])
+def test_a_long_whitespace_run_is_cut_like_any_other_long_run(text):
+    """Before: a run of spaces or tabs only moved the column counter. It was never
+    counted as wrapping and never cut, so one "a", 1,000 tabs and one "b" stayed
+    in ONE slice whatever its rendered height."""
+    slices = d.split_for_rows(text, 31, 24)
+    assert "".join(slices) == text
+    assert len(slices) > 1
+    worst = [(_lines_with_wrapping_gaps(piece, 31), len(piece)) for piece in slices]
+    assert all(lines <= 24 for lines, _ in worst), worst
+
+
+def test_ordinary_spacing_is_split_exactly_as_before():
+    text = ("lorem ipsum dolor sit amet " * 200).strip()
+    slices = d.split_for_rows(text, 31, 24)
+    assert "".join(slices) == text
+    assert all(_lines_needed(piece, 31) <= 24 for piece in slices)
+    assert all(not piece[0].isspace() for piece in slices), "cuts still fall before a word"

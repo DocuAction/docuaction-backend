@@ -85,6 +85,9 @@ UNBROKEN_NPI = "NPI:1234567893;ALT:0000000000;REF:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123
 #: Carriage returns (alone and as CRLF) and tab runs; every line and cell is marked.
 CR_AND_TABS = ("crline-first\rcrline-second\r\ncrline-third" + "\r" * 60 + "crline-after-sixty-breaks "
                + "".join(f"tab{n:03d}\t" for n in range(400)) + "crline-end")
+#: Unbroken runs of tabs and of spaces between marked words.
+WHITESPACE_RUNS = ("wsrun-before-tabs" + "\t" * 1000 + "wsrun-after-tabs wsrun-before-spaces"
+                   + " " * 3000 + "wsrun-after-spaces")
 #: Not an identifier: 1,500 characters of submitted text in the NPI field.
 OVERSIZED_NPI = "".join(f"N{n:04d}" for n in range(300))
 UNBROKEN_QHIN ="2.16.840.1.113883.4.391.1000.99999999.88888888.77777777.66666666"
@@ -161,7 +164,7 @@ ADDRESS_ONLY_IDS = [f"{ID_PREFIX}{i:04d}" for i in range(18, 24)]
 
 
 def adversarial_facts() -> List[Dict[str, Any]]:
-    """66 distinct synthetic records: the 14 above plus every case the PDF has to
+    """67 distinct synthetic records: the 14 above plus every case the PDF has to
     survive. Valid input throughout - nothing here is malformed data."""
     f = base14_facts()
     f.append(_fact(15, "B4", qa_comments=LONG_ORIGINAL, qa_comments_source=SRC,
@@ -208,6 +211,9 @@ def adversarial_facts() -> List[Dict[str, Any]]:
     # continue in rows of its own rather than fill one narrow cell).
     f.append(_fact(65, "B2", qa_comments=CR_AND_TABS, qa_comments_source=SRC))
     f.append(_fact(66, "B3", submitted_npi=OVERSIZED_NPI))
+    # Review finding 2026-11-14: one unbroken run of 1,000 tabs, and one of 3,000
+    # spaces, between marked words (a whitespace run used to be uncuttable).
+    f.append(_fact(67, "B2", qa_comments=WHITESPACE_RUNS, qa_comments_source=SRC))
     return f
 
 
