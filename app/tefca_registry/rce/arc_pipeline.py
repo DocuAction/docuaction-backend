@@ -1189,8 +1189,16 @@ async def verify_and_classify(
 
     await db.commit()
 
+    from app.Tefca.entity_resolution import resolver_configuration_warnings, resolver_source
+
     return {
         "requested": len(entity_refs),
+        "resolver_source": resolver_source(),
+        "configuration_warnings": resolver_configuration_warnings(),
+        "execution_status": (
+            "NO_RECORDS_REQUESTED" if not entity_refs
+            else "NO_CASES_CREATED" if not outcomes
+            else "PARTIAL" if unresolved else "COMPLETED"),
         # LEGACY NAME, kept for existing consumers: this is the number of
         # entities the pipeline PROCESSED (every bucket, B4 included). It was
         # never a count of verified entities. Use the three counts below.

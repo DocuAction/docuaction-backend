@@ -5,6 +5,7 @@ engine, database and service (rolled-back transactions, synthetic data only).
 from __future__ import annotations
 
 import json
+import uuid
 
 import pytest
 
@@ -149,15 +150,49 @@ async def test_identifiers_and_run_are_reported_for_every_delivery(rolled_back_d
         assert all(l["rule_version"] for l in e["lanes"] if l["check"]["outcome"] != "NOT_AVAILABLE")
 
 
+_METADATA_UUID_KEYS = {
+    "delivery_id", "intake_id", "job_id", "job_ids", "run_id", "run_ids", "issue_id",
+    "from_delivery_id", "to_delivery_id", "earlier_occurrence", "comparable_pass",
+    "compared_with_delivery_id", "identical_content_of", "identical_content_also",
+}
+
+
+def _assert_no_raw_npi(value, key=None):
+    """Check record content without treating digits in a metadata UUID as an NPI."""
+    if isinstance(value, dict):
+        for child_key, child in value.items():
+            _assert_no_raw_npi(child, child_key)
+    elif isinstance(value, list):
+        for child in value:
+            _assert_no_raw_npi(child, key)
+    elif isinstance(value, str):
+        if key in _METADATA_UUID_KEYS:
+            try:
+                uuid.UUID(value)
+                return
+            except ValueError:
+                pass
+        for secret in (BAD_LEN_NPI, GOOD_NPI, GOOD_NPI_2):
+            assert secret not in value, (key, secret)
+
+
+def test_metadata_uuid_digits_are_allowed_but_record_values_and_embedded_text_are_not():
+    identifier = "1e608a1e-3801-4343-a1ba-3f4123453e05"  # exact CI false positive
+    _assert_no_raw_npi({"runs": {"selected": {"run_id": identifier}}, "job_ids": [identifier]})
+    for leak in ({"note": identifier}, {"run_id": "not-a-uuid: " + BAD_LEN_NPI},
+                 {"npi": BAD_LEN_NPI}, {"note": "supplied NPI " + GOOD_NPI},
+                 {"nested": [{"detail": GOOD_NPI_2}]}):
+        with pytest.raises(AssertionError):
+            _assert_no_raw_npi(leak)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("case", ["A", "B", "C", "D", "E"])
 async def test_metadata_only_history_carries_states_but_never_a_value(rolled_back_db, case):
     await SEEDERS[case](rolled_back_db)
     key = "D1" if case == "D" else case
     resp = await hist(rolled_back_db, case, key)
-    blob = json.dumps(resp)
-    for secret in (BAD_LEN_NPI, GOOD_NPI, GOOD_NPI_2):
-        assert secret not in blob, (case, secret)
+    _assert_no_raw_npi(resp)
     assert core.forbidden_keys_present(resp) == []
     assert all(e["npi"]["state"] for e in resp["deliveries"])
     rev = await hist(rolled_back_db, case, key, reviewer=True)
