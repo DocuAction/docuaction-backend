@@ -329,5 +329,12 @@ async def test_sampling_validation_refuses_a_margin_the_formula_cannot_use(rolle
         assert recorder.calls == []
         ok = await client.get("/api/tefca/qa/sampling-validation?margin=1e-150", headers=headers)
         assert ok.status_code == 200
-    assert recorder.calls == [(94231, 0.95, 1e-150)]
+        # A non-positive population never reaches the division (cochran_n answers
+        # 0 for it), so it is not refused for its margin: behaviour as before.
+        for population in ("0", "-5"):
+            kept = await client.get(
+                f"/api/tefca/qa/sampling-validation?population={population}&margin=1e-200",
+                headers=headers)
+            assert kept.status_code == 200, (population, kept.status_code, kept.text[:200])
+    assert recorder.calls == [(94231, 0.95, 1e-150), (0, 0.95, 1e-200), (-5, 0.95, 1e-200)]
     assert math.isfinite(0.25 / (1e-150 * 1e-150))

@@ -3136,7 +3136,7 @@ async def qa_sampling_validation(
     from fastapi.exceptions import RequestValidationError
 
     try:
-        usable = math.isfinite(margin) and qa_engine.cochran_n(max(population, 1), confidence, margin) >= 0
+        usable = math.isfinite(margin) and qa_engine.cochran_n(population, confidence, margin) >= 0
     except (ZeroDivisionError, ValueError, OverflowError):
         usable = False
     if not usable:
