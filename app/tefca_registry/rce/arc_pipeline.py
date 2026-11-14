@@ -862,6 +862,7 @@ async def verify_and_classify(
     buckets: Dict[str, int] = {}
     tiers: Dict[int, int] = {}
     unresolved: List[str] = []
+    resolution_failures: List[Dict[str, str]] = []
 
     # Held for the whole batch — see `_lock_review_id_allocation`. Acquired
     # even when entity_refs is empty or every ref is unresolved, which costs
@@ -932,6 +933,16 @@ async def verify_and_classify(
             entity_uuid = entity.get("_registry_entity_id")
             source_record_id, _lineage = _source_anchor(_anchors, ref, entity_uuid)
             lineage[_lineage] += 1
+            selected = await db.get(m.RceSourceRecord, source_record_id) if source_record_id else None
+            delivered = selected.parsed or {} if selected is not None else None
+            submitted_npi = ((str(delivered.get("NPI", selected.npi) or "").strip())
+                             if selected is not None else (_entity_npi(entity) or ""))
+            registered_npi = _entity_npi(entity)
+            if selected is not None and (registered_npi or "") != submitted_npi:
+                unresolved.append(ref)
+                resolution_failures.append({"entity_ref": ref,
+                    "reason": "submitted NPI differs from the identifier used by source probes; no record classification written"})
+                continue
 
             if persist_evidence:
                 rows = evidence_rows_for_persistence(
@@ -958,8 +969,11 @@ async def verify_and_classify(
             from app.Tefca import rce_fields as _rce_fields
             from app.tefca_registry.rce import npi_applicability as _npa
             from app.tefca_registry.rce.quality_rules import BR_NPI_TRTMNT_EFFECTIVE
-            verification_results.setdefault("fields", {}).update(
-                _npa.treatment_field_signals(
+            treatment_signals = (
+                _npa.treatment_signals_from_parsed(
+                    delivered, assessment_date=_assessment.value,
+                    requirement_effective=BR_NPI_TRTMNT_EFFECTIVE)
+                if selected is not None else _npa.treatment_field_signals(
                     _rce_fields.rce_value(entity, "purposesofuse"),
                     _rce_fields.rce_value(entity, "NPI"),
                     _rce_fields.rce_value(entity, "active"),
@@ -967,12 +981,12 @@ async def verify_and_classify(
                     _rce_fields.rce_value(entity, "organizationNodeType"),
                     assessment_date=_assessment.value,
                     requirement_effective=BR_NPI_TRTMNT_EFFECTIVE))
+            verification_results.setdefault("fields", {}).update(treatment_signals)
             # D-02 PROPOSED bulk-path producer (default OFF): structural NPI
             # signal computed from the SUBMITTED value. Never overwrites a
             # signal another producer already set.
             if _proposed_npi_invalid_split_on():
-                _npi_sig = proposed_structural_npi_signal(
-                    _rce_fields.rce_value(entity, "NPI"))
+                _npi_sig = proposed_structural_npi_signal(submitted_npi)
                 if _npi_sig is not None:
                     verification_results.setdefault("fields", {}).setdefault(
                         "npi_validation", _npi_sig)
@@ -990,7 +1004,7 @@ async def verify_and_classify(
                 _source_policy.enforce_on_classification(
                     classification,
                     verification_results.get("sources") or {},
-                    {"has_submitted_npi": bool(_entity_npi(entity))},
+                    {"has_submitted_npi": bool(submitted_npi)},
                     active_source_policies))
 
             # NPPES outcome to the delivery's issue ledger (NPI-005/006/009). One
@@ -1188,6 +1202,7 @@ async def verify_and_classify(
             if o["verification_completeness"]["overall_status"]
             == "verified_checks_incomplete"),
         "unresolved": unresolved,
+        "resolution_failures": resolution_failures,
         "bucket_counts": buckets,
         "tier_counts": {str(k): v for k, v in sorted(tiers.items())},
         "rule_set_size": len(rules),

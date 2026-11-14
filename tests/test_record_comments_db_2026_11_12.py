@@ -314,7 +314,8 @@ async def test_amendment_is_explicit_append_only_and_revertible(rolled_back_db):
     allv = (await rc.list_comments(db, intake_id=intake_id, current_only=False))["comments"]
     assert [c["comment_text"] for c in allv] == ["first wording", "second wording"]   # history kept
     # reverting to the earlier text is an amendment too (not "already present")
-    v3 = await _import(db, intake_id, [_entry(r, body="first wording", amend=True)])
+    v3 = await _import(db, intake_id, [_entry(r, body="first wording", amend=True,
+        supersedes_comment_id=v2["results"][0]["comment_id"])])
     assert v3["counts"]["amended"] == 1
     cur3 = (await rc.list_comments(db, intake_id=intake_id))["comments"]
     assert [c["comment_text"] for c in cur3] == ["first wording"]
@@ -630,31 +631,39 @@ async def committed_env(db_required):
         await engine.dispose()
 
 
-async def _wait_until_blocked(engine, *, timeout=15.0):
-    """Block until some backend is waiting on another transaction's lock."""
+async def _wait_until_blocked(engine, *, blocker_pid, waiter_pid, timeout=15.0):
+    """Observe THIS waiter blocked by THIS importer, with a fresh stats snapshot."""
     deadline = asyncio.get_running_loop().time() + timeout
     async with engine.connect() as probe:
         while asyncio.get_running_loop().time() < deadline:
-            n = (await probe.execute(text(
-                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() "
-                "AND wait_event_type = 'Lock'"))).scalar()
-            if n:
+            await probe.execute(text("SELECT pg_stat_clear_snapshot()"))
+            blocked = (await probe.execute(text(
+                "SELECT :blocker = ANY(pg_blocking_pids(pid)) FROM pg_stat_activity "
+                "WHERE pid = :waiter AND wait_event_type = 'Lock'"),
+                {"blocker": blocker_pid, "waiter": waiter_pid})).scalar()
+            if blocked:
                 return
             await asyncio.sleep(0.05)
     raise AssertionError("the second import never blocked on the first: the race was not exercised")
 
 
 async def _race(engine, intake_id, first_entries, second_entries):
-    """First session imports and stays OPEN; second imports concurrently (so it read the
-    same pre-state); the first then commits. Returns (first_result, second_result)."""
+    """Keep A uncommitted until B is observed blocked specifically on A."""
     async with AsyncSession(engine, expire_on_commit=False) as a, \
             AsyncSession(engine, expire_on_commit=False) as b:
+        a_pid = (await a.execute(text("SELECT pg_backend_pid()"))).scalar_one()
+        b_pid = (await b.execute(text("SELECT pg_backend_pid()"))).scalar_one()
         first = await _import(a, intake_id, first_entries)
         second_task = asyncio.create_task(_import(b, intake_id, second_entries))
-        await _wait_until_blocked(engine)
-        await a.commit()
-        second = await asyncio.wait_for(second_task, timeout=30)
-        await b.commit()
+        try:
+            await _wait_until_blocked(engine, blocker_pid=a_pid, waiter_pid=b_pid)
+            await a.commit()
+            second = await asyncio.wait_for(second_task, timeout=30)
+            await b.commit()
+        finally:
+            if not second_task.done():
+                second_task.cancel()
+                await asyncio.gather(second_task, return_exceptions=True)
     return first, second
 
 
@@ -743,3 +752,35 @@ async def test_model_and_migration_define_the_same_root_index(rolled_back_db):
     assert "where (supersedes_comment_id is null)" in low
     model_idx = {i.name: i for i in RceRecordComment.__table__.indexes}["uq_rce_record_comment_root"]
     assert model_idx.unique and [c.name for c in model_idx.columns] == ["source_record_id", "comment_kind"]
+
+
+@pytest.mark.parametrize("over,needle", [({"expected": []}, "expected must be an object"),
+    ({"source": "file.xlsx"}, "source must be an object"),
+    ({"amend": "false"}, "amend must be a boolean"), ({"amend": 1}, "amend must be a boolean")])
+def test_invalid_comment_object_types_are_refused(over, needle):
+    assert needle in _val(over)["problem"]
+
+
+@pytest.mark.parametrize("duplicate_first", [False, True])
+async def test_replaying_an_amendment_batch_never_extends_the_chain(rolled_back_db, duplicate_first):
+    db = rolled_back_db
+    intake, recs = await _seed(db, arc="9.99.779.98")
+    a = _entry(recs[1], body="A", amend=True)
+    entries = [a, a, _entry(recs[1], body="B", amend=True)] if duplicate_first else [a, _entry(recs[1], body="B", amend=True)]
+    first = await _import(db, intake, entries)
+    again = await _import(db, intake, entries)
+    assert first["counts"]["inserted"] == 1 and first["counts"]["amended"] == 1
+    assert again["counts"]["already_present"] == len(entries)
+    history = (await rc.list_comments(db, intake_id=intake, current_only=False))["comments"]
+    assert [r["comment_text"] for r in history] == ["A", "B"]
+    assert (await rc.list_comments(db, intake_id=intake))["comments"][0]["comment_text"] == "B"
+
+
+async def test_reused_batch_entry_with_changed_content_is_rejected(rolled_back_db):
+    db = rolled_back_db
+    intake, recs = await _seed(db, arc="9.99.779.99")
+    batch = str(uuid.uuid4())
+    await _import(db, intake, [_entry(recs[1], body="A")], batch_id=batch)
+    out = await _import(db, intake, [_entry(recs[1], body="B", amend=True)], batch_id=batch)
+    assert out["counts"]["rejected"] == 1
+    assert (await rc.list_comments(db, intake_id=intake))["comments"][0]["comment_text"] == "A"

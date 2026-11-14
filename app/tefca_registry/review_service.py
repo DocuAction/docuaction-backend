@@ -842,6 +842,15 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
 
     selected = await _validated_source_record(db, entity, source_record_id)
     source_record_id = selected.id if selected is not None else None
+    if selected is not None:
+        registered = set((await db.execute(select(reg.TefcaEntityIdentifier.identifier_value).where(
+            reg.TefcaEntityIdentifier.entity_id == entity.id,
+            reg.TefcaEntityIdentifier.identifier_type == "npi"))).scalars().all())
+        submitted = str((selected.parsed or {}).get("NPI", selected.npi) or "").strip()
+        if registered != ({submitted} if submitted else set()):
+            raise ValueError("selected record's submitted NPI does not match the registered "
+                             "source-probe identifier; refusing a record-specific classification "
+                             "using another identifier's evidence")
 
     await ensure_seed_rules(db)
     # v2 wires SAM.gov into classification. Every SAM condition fires only
@@ -881,6 +890,13 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
     persisted_used: List[dict] = []
     try:
         persisted_rows = await latest_persisted_exclusion_evidence(db, entity.id)
+        if selected is not None:
+            # An entity may have historical evidence for an older identifier.
+            # Reuse only an explicit query identifier carried by THIS record.
+            allowed = {str(v).strip().casefold() for v in
+                       (submitted, (selected.parsed or {}).get("name")) if str(v or "").strip()}
+            persisted_rows = {source: row for source, row in persisted_rows.items()
+                              if str(row.query_identifier or "").strip().casefold() in allowed}
         persisted_used = apply_persisted_exclusion_evidence(sources, persisted_rows)
     except Exception as exc:  # noqa: BLE001 — evidence read must not sink the review
         logger.error("Persisted exclusion evidence not consumed for %s: %s",

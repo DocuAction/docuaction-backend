@@ -287,7 +287,8 @@ def validate_header(headers: Sequence[str]) -> Dict[str, Any]:
 def _row_identity(row: Dict[str, str]) -> Tuple[str, Dict[str, str], Optional[str]]:
     """(mode, identity, problem). mode ∈ review_id | agt | delivery | none."""
     rid = (row.get(IDENTITY_REVIEW) or "").strip()
-    if rid:
+    agt = (row.get(IDENTITY_AGT) or "").strip()
+    if rid and not agt:
         if not _REVIEW_RE.match(rid):
             return "review_id", {IDENTITY_REVIEW: rid}, f"review_id {rid!r} is not of the form REV-YYYY-NNNNNN"
         return "review_id", {IDENTITY_REVIEW: rid}, None
@@ -305,6 +306,10 @@ def _row_identity(row: Dict[str, str]) -> Tuple[str, Dict[str, str], Optional[st
             except (ValueError, TypeError):
                 return "agt", {IDENTITY_AGT: agt, IDENTITY_INTAKE: intake}, f"{label} {val!r} is not a UUID"
         ident = {IDENTITY_INTAKE: intake, IDENTITY_AGT: agt}
+        if rid:
+            if not _REVIEW_RE.match(rid):
+                return "agt", ident, f"review_id {rid!r} is not of the form REV-YYYY-NNNNNN"
+            ident[IDENTITY_REVIEW] = rid
         if src:
             ident[IDENTITY_SOURCE] = src          # cross-check only; kept separate
         return "agt", ident, None
@@ -355,6 +360,15 @@ async def preview_rows(rows: Sequence[Dict[str, str]], resolve: Resolver,
                 continue
             seen_agt[identity[IDENTITY_AGT].lower()] = n
         matches = list(await resolve(identity))
+        if mode == "agt" and identity.get(IDENTITY_REVIEW):
+            wanted = identity[IDENTITY_REVIEW]
+            if wanted not in matches:
+                item["disposition"] = DISP_REJECTED
+                item["reasons"].append("review_id does not identify the validated AGT source record")
+                counts[DISP_REJECTED] += 1
+                out.append(item)
+                continue
+            matches = [wanted]
         item["matched_review_ids"] = matches
         changes = {c: row[c].strip() for c in CONTENT_COLUMNS if (row.get(c) or "").strip()}
         requested = {}

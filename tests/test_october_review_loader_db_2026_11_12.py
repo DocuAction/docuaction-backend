@@ -591,7 +591,7 @@ async def test_stored_comments_reach_the_three_separate_columns_verbatim_and_dec
         _centry(recs[1], "QA_ORIGINAL", orig), _centry(recs[1], "QA_IZAAN", izaan),
         _centry(recs[1], "REPORT_CLARIFICATION", clar), _centry(recs[2], "QA_ORIGINAL", "held rec comment")])
     assert out["counts"]["inserted"] == 4
-    loaded = await _load(db, intake_id)
+    loaded = await ld.load_record_facts(db, intake_id=intake_id, evidence_cutoff=_cutoff_now())
     assert loaded["meta"]["comment_store"] == "applied"
     assert loaded["meta"]["stats"]["stored_comments"] == {
         "QA_ORIGINAL": 2, "QA_IZAAN": 1, "REPORT_CLARIFICATION": 1}
@@ -627,7 +627,7 @@ async def test_only_the_current_version_is_reported_and_other_deliveries_never_l
                               entries=[_centry(ra[1], "QA_ORIGINAL", "v2", amend=True)])
     await _rc.import_comments(db, intake_id=b_id, actor="q@x.invalid",
                               entries=[_centry(rb[1], "QA_ORIGINAL", "other delivery")])
-    out_a = await _load(db, a_id)
+    out_a = await ld.load_record_facts(db, intake_id=a_id, evidence_cutoff=_cutoff_now())
     fa = _by_line(out_a)[1]
     assert fa["qa_comments"] == "v2" and fa["qa_comments_source"]["file"] == "comments.xlsx"
     assert "other delivery" not in str(fa)
@@ -660,7 +660,7 @@ async def test_caller_supplied_comments_override_stored_ones_and_are_counted(rol
     rec = (await _records(db, intake_id))[1]
     await _rc.import_comments(db, intake_id=intake_id, actor="q@x.invalid",
                               entries=[_centry(rec, "QA_ORIGINAL", "stored")])
-    out = await _load(db, intake_id, comments={str(rec.id): {"original": {"text": "supplied",
+    out = await _load(db, intake_id, evidence_cutoff=_cutoff_now(), comments={str(rec.id): {"original": {"text": "supplied",
                                                                             "source": "file; sha"}}})
     assert out["facts"][0]["qa_comments"] == "supplied"
     assert out["meta"]["stats"]["caller_comments_overriding_stored"] == 1
@@ -674,8 +674,31 @@ async def test_an_explicit_annotation_wins_over_a_stored_clarification(rolled_ba
     await _rc.import_comments(db, intake_id=intake_id, actor="q@x.invalid", entries=[
         _centry(recs[1], "REPORT_CLARIFICATION", "stored clarification 1"),
         _centry(recs[2], "REPORT_CLARIFICATION", "stored clarification 2")])
-    out = await _load(db, intake_id, annotations={
+    out = await _load(db, intake_id, evidence_cutoff=_cutoff_now(), annotations={
         str(recs[1].id): {"report_clarifications": "explicit annotation"}})
     f = _by_line(out)
     assert f[1]["report_clarifications"] == "explicit annotation"       # the explicit input wins
     assert f[2]["report_clarifications"] == "stored clarification 2"    # otherwise the stored one
+
+
+async def test_comment_versions_are_selected_at_the_requested_cutoff(rolled_back_db):
+    from app.tefca_registry.rce.record_comment_models import RceRecordComment
+    from datetime import timezone
+    db = rolled_back_db
+    intake, _ = await seed_intake(db, make_rows(1, arc="9.99.779.97"), with_job=False)
+    await _run(db, intake)
+    rec = (await _records(db, intake))[1]
+    first = await _rc.import_comments(db, intake_id=intake, actor="q@x.invalid",
+        entries=[_centry(rec, "QA_ORIGINAL", "original wording")])
+    row = await db.get(RceRecordComment, uuid.UUID(first["results"][0]["comment_id"]))
+    between = row.imported_at
+    # Real stored timestamps, no updates to append-only history.
+    second = await _rc.import_comments(db, intake_id=intake, actor="q@x.invalid",
+        entries=[_centry(rec, "QA_ORIGINAL", "later wording", amend=True)])
+    newer = await db.get(RceRecordComment, uuid.UUID(second["results"][0]["comment_id"]))
+    assert newer.imported_at > between
+    async def at(cutoff):
+        return _by_line(await ld.load_record_facts(db, intake_id=intake, evidence_cutoff=cutoff))[1]
+    assert "qa_comments" not in await at(between - timedelta(microseconds=1))
+    assert (await at(between))["qa_comments"] == "original wording"
+    assert (await at(newer.imported_at))["qa_comments"] == "later wording"
