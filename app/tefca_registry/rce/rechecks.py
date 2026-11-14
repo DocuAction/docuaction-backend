@@ -54,6 +54,7 @@ import csv
 import hashlib
 import io
 import logging
+import re
 import uuid
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
@@ -710,6 +711,28 @@ def item_error_text(exc: BaseException) -> str:
     return safe_exception_text(exc, 500)
 
 
+_LEADING_CLASS = re.compile(r"^([A-Za-z_][A-Za-z_0-9]*): ")
+
+
+def _masked_item_detail(detail: Dict[str, Any]) -> Dict[str, Any]:
+    """An item's stored detail as a caller may read it.
+
+    The old writer stored "{ClassName}: {message}" under `error`, with no stage
+    in front, for ANY class - "gaierror", "_RetryableProviderError", "error".
+    The leading identifier is therefore taken as the class and handed to the
+    contract as `failure_class`: a listed domain class keeps its message, any
+    other keeps its name only. A controlled sentence this module writes
+    ("pinned PPEF snapshot ... no longer resolves") has no such lead-in and is
+    returned as it is."""
+    shown = sanitize_stored_error_tree(detail)
+    stored = detail.get("error") if isinstance(detail, dict) else None
+    if isinstance(stored, str):
+        lead = _LEADING_CLASS.match(stored)
+        if lead:
+            shown["error"] = sanitize_stored_error(stored, failure_class=lead.group(1))
+    return shown
+
+
 def item_dto(item: RceRecheckItem) -> Dict[str, Any]:
     """One targeted entity as a caller receives it. `detail` is masked on read
     (rows written before the writer was fixed still hold a raw message); the
@@ -720,7 +743,7 @@ def item_dto(item: RceRecheckItem) -> Dict[str, Any]:
             "prior_evidence_id": str(item.prior_evidence_id)
             if item.prior_evidence_id else None,
             "processed_at": item.processed_at.isoformat() if item.processed_at else None,
-            "detail": sanitize_stored_error_tree(item.detail or {})}
+            "detail": _masked_item_detail(item.detail or {})}
 
 
 def job_dto(job: RceRecheckJob) -> Dict[str, Any]:

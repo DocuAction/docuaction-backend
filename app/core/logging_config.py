@@ -264,9 +264,18 @@ def sanitize_stored_error(value: Any, *, failure_class: str | None = None) -> An
     return value
 
 
-#: A bare code as a writer stores it under an error key: an exception class
-#: name ("TimeoutError") or a controlled token ("worker_stopped_without_reporting").
-_ERROR_CODE = re.compile(r"[A-Za-z_][A-Za-z_0-9.\-]{0,127}")
+#: A bare code as a writer stores it under an error key. NOT any identifier: a
+#: delivered value can be one token too (review finding 2026-11-14). A code is
+#: an exception class NAME - a listed domain class, or a CamelCase word with one
+#: of the endings Python and the drivers give their exception classes - or one
+#: of the tokens this application writes itself.
+_EXCEPTION_NAME = re.compile(r"[A-Z][A-Za-z0-9]{0,120}(?:Error|Exception|Timeout|Warning)")
+_TRUSTED_ERROR_TOKENS = frozenset({"worker_stopped_without_reporting"})
+
+
+def _is_trusted_error_code(value: str) -> bool:
+    return (value in CONTROLLED_FAILURE_CLASSES or value in _TRUSTED_ERROR_TOKENS
+            or _EXCEPTION_NAME.fullmatch(value) is not None)
 #: The withheld form for ANY class, as `safe_exception_text` and this module write it.
 _ANY_WITHHELD = re.compile(
     r"(?:[A-Z][A-Z_]*(?: did not complete)?: )?[A-Za-z_][A-Za-z_0-9]{0,127} "
@@ -290,7 +299,8 @@ def _sanitize_error_value(value: str) -> str:
 
       * the withheld form ("Class (message withheld ...)");
       * a controlled class in front of its message ("ValueError: ...");
-      * a bare code ("TimeoutError", "worker_stopped_without_reporting").
+      * a bare code: an exception class name ("TimeoutError") or a token this
+        application writes ("worker_stopped_without_reporting").
 
     Anything else is withheld whole. A legacy DOMAIN message stored without its
     class is withheld too; the job's own `error_reason` still carries it.
@@ -298,7 +308,7 @@ def _sanitize_error_value(value: str) -> str:
     masked = sanitize_stored_error(value)
     if masked != value:
         return masked
-    if _ANY_WITHHELD.fullmatch(value) or _ERROR_CODE.fullmatch(value):
+    if _ANY_WITHHELD.fullmatch(value) or _is_trusted_error_code(value):
         return value
     lead = _CLASS_LEAD_IN.match(value)
     if lead and (lead.group("cls") or lead.group("bare")) in CONTROLLED_FAILURE_CLASSES:

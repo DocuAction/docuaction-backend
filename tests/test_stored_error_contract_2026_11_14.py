@@ -385,3 +385,85 @@ class TestTheRecheckPath:
         kept = RceRecheckItem(job_id=job.id, entity_id=uuid.uuid4(), entity_ref="SYNTHETIC-2",
                               state="ERROR", detail={"error": sentence})
         assert rechecks.item_dto(kept)["detail"]["error"] == sentence
+
+
+# ── 2026-11-14, third pass (review of f396b4c) ───────────────────────────────
+
+def test_the_dashboard_stage_checklist_masks_per_stage_errors_too():
+    """`delivery_dashboard._stages` read the raw `stage_detail` and copied its
+    values into a viewer-readable response, beside the masked `to_dict()`."""
+    reason = BARE_UNDER_ERROR_KEY[0]
+    stored = {"PROMOTION": {"error": reason, "completed": False},
+              "QUALITY": {"completed": True, "records": 2}}
+    job = type("Job", (), {"state": "FAILED", "stage": "PROMOTION", "error_reason": reason,
+                           "stage_detail": stored})()
+    before = json.dumps(stored, sort_keys=True)
+    out = dash._stages(job, None, {})
+    assert SECRET not in json.dumps(out, default=str), out
+    assert out["PROMOTION"]["state"] == "FAILED" and "withheld" in out["PROMOTION"]["error"]
+    assert out["QUALITY"]["state"] == "COMPLETE" and out["QUALITY"]["records"] == 2
+    assert json.dumps(stored, sort_keys=True) == before
+
+
+@pytest.mark.parametrize("token", [
+    SECRET,                              # one identifier-shaped token is not a code
+    "SYNTHETICORGANISATIONNAME",
+    "synthetic_delivered_value",
+    "1234567893x",
+    "Synthetic.Value-With.Dots",
+])
+def test_a_single_token_under_an_error_key_is_not_trusted_as_a_code(token):
+    out = sanitize_stored_error_tree({"PROMOTION": {"error": token}}, strict_error_keys=True)
+    assert token not in json.dumps(out), out
+
+
+@pytest.mark.parametrize("code", [
+    "TimeoutError", "ConnectTimeout", "CancelledError", "KeyError", "IntakeError",
+    "NotADelimitedFile", "LineCountMismatch", "RuntimeException",
+    "worker_stopped_without_reporting",
+])
+def test_an_exception_class_name_or_a_known_token_under_an_error_key_is_a_code(code):
+    stored = {"readiness": {"usps": {"status": "unknown", "error": code}}}
+    assert sanitize_stored_error_tree(stored, strict_error_keys=True) == stored
+
+
+class TestLegacyRecheckItemErrors:
+    """The old recheck writer stored "{ClassName}: {message}" with no stage in
+    front. A class name that is not CamelCase ("gaierror", "_Private", "error")
+    was not recognised by the general rule and its message was returned."""
+
+    @pytest.mark.parametrize("stored", [
+        f"gaierror: {SECRET}",
+        f"_RetryableProviderError: upstream said {SECRET}",
+        f"error: [Errno 111] {SECRET}",
+        f"OSError: {SECRET}",
+        f"timeout: {SECRET}",
+    ])
+    def test_any_leading_class_name_loses_its_message(self, stored):
+        import uuid
+
+        from app.tefca_registry.rce import rechecks
+        from app.tefca_registry.rce.recheck_models import RceRecheckItem
+
+        item = RceRecheckItem(job_id=uuid.uuid4(), entity_id=uuid.uuid4(),
+                              entity_ref="SYNTHETIC-3", state="ERROR", detail={"error": stored})
+        shown = rechecks.item_dto(item)["detail"]["error"]
+        assert SECRET not in shown and shown.startswith(stored.split(":")[0]), shown
+        assert item.detail == {"error": stored}
+
+    @pytest.mark.parametrize("stored", [
+        "ValueError: no NPI on record",
+        "LookupError: entity not found",
+        "pinned PPEF snapshot 2026-10 no longer exists; nothing was looked up",
+        "RuntimeError (message withheld from evidence; see the server log for correlation id abc)",
+    ])
+    def test_controlled_messages_on_that_path_stay_readable(self, stored):
+        import uuid
+
+        from app.tefca_registry.rce import rechecks
+        from app.tefca_registry.rce.recheck_models import RceRecheckItem
+
+        item = RceRecheckItem(job_id=uuid.uuid4(), entity_id=uuid.uuid4(),
+                              entity_ref="SYNTHETIC-4", state="ERROR",
+                              detail={"error": stored, "note": "kept"})
+        assert rechecks.item_dto(item)["detail"] == {"error": stored, "note": "kept"}
