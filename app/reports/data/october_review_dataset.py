@@ -59,6 +59,7 @@ NOT_ESTABLISHED = "Not established from retained evidence."
 FINDINGS_NOT_INCLUDED = "Not included in this export (separate report)"
 IZAAN_COMMENTS_COLUMN = "QA Comments - Izaan (verbatim)"
 ORIGINAL_COMMENTS_COLUMN = "QA Comments (verbatim)"
+CLARIFICATIONS_COLUMN = "Report Clarifications"
 DRAFT_BANNER = ("CURRENT REVIEW / DRAFT / NOT FINAL - INDEPENDENT QA PENDING. "
                 "Automated checks are not QA approval.")
 #: Wording removed by the 2026-11-11 report corrections; refused in PECOS cells.
@@ -215,16 +216,32 @@ def _comment_source_label(src: Any, *, strict: bool = False) -> str:
     return "; ".join(f"{k}={src[k]}" for k in fields)
 
 
-#: Set by the loader ONLY for a row read from the append-only comment store.
+#: Carried in a comment's source for traceability: the id of the row it was read
+#: from. It is NOT what makes a comment "stored" - a fact dict is data, and any
+#: caller can put a key in it. Stored status is the loader's own statement,
+#: passed to `build_dataset` separately (`stored_comments`), and a source is
+#: believed only when that statement names the same comment id for the same
+#: record and kind (review finding 2026-11-14).
 STORED_COMMENT_KEY = "stored_comment_id"
+#: (kind, column, text key, source key) for the three comment kinds.
+_COMMENT_KINDS = (
+    ("original", ORIGINAL_COMMENTS_COLUMN, "qa_comments", "qa_comments_source"),
+    ("izaan", IZAAN_COMMENTS_COLUMN, "qa_comments_izaan", "qa_comments_izaan_source"),
+    ("clarification", CLARIFICATIONS_COLUMN, "report_clarifications",
+     "report_clarifications_source"),
+)
 PROVENANCE_INCOMPLETE = "COMMENT PROVENANCE INCOMPLETE"
 PROVENANCE_SUMMARY_ROW = ("Stored comments with incomplete source provenance "
                           "(marked in Flag; text verbatim)")
 _PROVENANCE_FIELDS = ("file", "sha256", "sheet", "column")
 
 
-def _stored_provenance_gap(src: Any) -> Optional[List[str]]:
+def _stored_provenance_gap(src: Any, stored_id: Any = None) -> Optional[List[str]]:
     """Missing provenance fields of an ALREADY-STORED comment, else None.
+
+    `stored_id` is the comment id the LOADER recorded for this record and kind.
+    Without it, or when the source names a different comment, this is not a
+    stored comment whatever the source dict claims.
 
     None means "not a stored comment" (the strict rule applies to it). A list -
     possibly empty - names what a stored comment lacks. A comment accepted into
@@ -232,7 +249,9 @@ def _stored_provenance_gap(src: Any) -> Optional[List[str]]:
     evidence: it is exported verbatim and marked, never dropped, and it never
     fails the delivery.
     """
-    if not isinstance(src, dict) or not src.get(STORED_COMMENT_KEY):
+    if not isinstance(src, dict) or not src.get(STORED_COMMENT_KEY) or not stored_id:
+        return None
+    if str(src[STORED_COMMENT_KEY]) != str(stored_id):
         return None
     import re
     missing = [k for k in _PROVENANCE_FIELDS
@@ -242,21 +261,27 @@ def _stored_provenance_gap(src: Any) -> Optional[List[str]]:
     return missing
 
 
-def _provenance_marks(fact: Dict[str, Any]) -> List[tuple]:
-    """(kind, column name, missing fields) for each stored comment with a gap."""
+def _provenance_marks(fact: Dict[str, Any],
+                      stored: Optional[Dict[str, Any]] = None) -> List[tuple]:
+    """(kind, column name, missing fields) for each stored comment with a gap.
+
+    `stored` is the loader's entry for THIS record: {kind: comment id}. A
+    clarification written for the report (an annotation) has no source and no
+    entry: it is not an import and is never marked."""
+    stored = stored or {}
     marks = []
-    for kind, column, text_key, src_key in (
-            ("original", ORIGINAL_COMMENTS_COLUMN, "qa_comments", "qa_comments_source"),
-            ("izaan", IZAAN_COMMENTS_COLUMN, "qa_comments_izaan", "qa_comments_izaan_source")):
+    for kind, column, text_key, src_key in _COMMENT_KINDS:
         if not _s(fact.get(text_key)):
             continue
-        gap = _stored_provenance_gap(fact.get(src_key))
+        gap = _stored_provenance_gap(fact.get(src_key), stored.get(kind))
         if gap:
             marks.append((kind, column, gap))
     return marks
 
 
-def build_record_row(fact: Dict[str, Any]) -> List[str]:
+def build_record_row(fact: Dict[str, Any],
+                     stored: Optional[Dict[str, Any]] = None) -> List[str]:
+    stored = stored or {}
     status = _s(fact.get("status")).strip()
     bucket = reporting_bucket(fact.get("bucket"), status)
     pecos = _s(fact.get("pecos"))
@@ -268,7 +293,8 @@ def build_record_row(fact: Dict[str, Any]) -> List[str]:
     # The second comment column is populated ONLY from an attributable source.
     izaan = _s(fact.get("qa_comments_izaan"))
     if (izaan and not _comment_source_label(fact.get("qa_comments_izaan_source"), strict=True)
-            and _stored_provenance_gap(fact.get("qa_comments_izaan_source")) is None):
+            and _stored_provenance_gap(fact.get("qa_comments_izaan_source"),
+                                       stored.get("izaan")) is None):
         raise DatasetRefused(
             f"{IZAAN_COMMENTS_COLUMN} text for {fact.get('agt_record_id')} has "
             f"no attributable source (file + sha256 + sheet + column); refusing to "
@@ -277,7 +303,7 @@ def build_record_row(fact: Dict[str, Any]) -> List[str]:
     if fact.get("provisional") and "PROVISIONAL" not in flag.upper():
         flag = (flag + "; " if flag else "") + "PROVISIONAL B2"
     # The marker goes in Flag, never in the comment cell: the text stays verbatim.
-    for _kind, column, gap in _provenance_marks(fact):
+    for _kind, column, gap in _provenance_marks(fact, stored):
         flag = ((flag + "; " if flag else "") + f"{PROVENANCE_INCOMPLETE}: {column} "
                 f"(source {', '.join(gap)} not recorded)")
     return [
@@ -304,7 +330,15 @@ def build_record_row(fact: Dict[str, Any]) -> List[str]:
 def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
                   findings_count: Optional[int] = 0, assessment_date: str = "",
                   classification: str = "DRAFT",
-                  load_meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                  load_meta: Optional[Dict[str, Any]] = None,
+                  stored_comments: Optional[Dict[str, Dict[str, Any]]] = None,
+                  ) -> Dict[str, Any]:
+    # `stored_comments` is the loader's statement of which comments it read from
+    # the append-only store: {AGT_Record_ID: {kind: comment id}}. Only those are
+    # exported under the stored-comment rule (verbatim, marked when their source
+    # is incomplete). Anything else is caller-supplied text and is held to the
+    # full provenance rule, whatever its source dict says about itself.
+    stored_comments = stored_comments or {}
     # None = the separate field-findings report is NOT part of this export; it
     # is then stated as such, never shown as a misleading 0.
     if findings_count is not None and int(findings_count) < 0:
@@ -316,7 +350,7 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
     if len(set(ids)) != len(ids):
         raise DatasetRefused("duplicate AGT_Record_ID in input; refusing to merge")
     facts.sort(key=lambda f: (int(f["source_line"]) if str(f.get("source_line", "")).isdigit() else 0, f["agt_record_id"]))
-    rows = [build_record_row(f) for f in facts]
+    rows = [build_record_row(f, stored_comments.get(f["agt_record_id"])) for f in facts]
     b_idx, s_idx = RECORD_COLUMNS.index("Bucket"), RECORD_COLUMNS.index("Status")
     id_idx, ln_idx = RECORD_COLUMNS.index("AGT_Record_ID"), RECORD_COLUMNS.index("Source_Line")
     counts = {b: 0 for b in BUCKETS}
@@ -340,17 +374,18 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
         banner += (f" DATASET INCOMPLETE: {len(unclassified)} record(s) have no "
                    "usable persisted classification; no bucket was assigned to "
                    "them (listed on the Unclassified sheet).")
-    gaps = {"original": 0, "izaan": 0}
+    gaps = {"original": 0, "izaan": 0, "clarification": 0}
     for f in facts:
-        for kind, _column, _gap in _provenance_marks(f):
+        for kind, _column, _gap in _provenance_marks(f, stored_comments.get(f["agt_record_id"])):
             gaps[kind] += 1
-    gaps["total"] = gaps["original"] + gaps["izaan"]
+    gaps["total"] = gaps["original"] + gaps["izaan"] + gaps["clarification"]
     limitations: List[str] = []
     if gaps["total"]:
         limitations.append(
             f"{gaps['total']} stored comment(s) have incomplete source provenance "
             f"(source sheet and/or column not recorded when the comment was accepted; "
-            f"original: {gaps['original']}, Izaan: {gaps['izaan']}). Each is exported "
+            f"original: {gaps['original']}, Izaan: {gaps['izaan']}, "
+            f"clarification: {gaps['clarification']}). Each is exported "
             f"verbatim and marked \"{PROVENANCE_INCOMPLETE}\" in the Flag column of its "
             f"record; the comment text was not altered.")
         banner += " LIMITATION: " + limitations[0]
@@ -359,7 +394,8 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
         for kind, key in (("original", "qa_comments_source"),
                           ("izaan", "qa_comments_izaan_source")):
             lab = _comment_source_label(f.get(key), strict=key == "qa_comments_izaan_source")
-            gap = _stored_provenance_gap(f.get(key))
+            gap = _stored_provenance_gap(
+                f.get(key), (stored_comments.get(f["agt_record_id"]) or {}).get(kind))
             if not lab and gap:          # attribute what IS recorded; name what is not
                 lab = "; ".join(
                     f"{k}=" + ("(not recorded)" if k in gap else str(f[key][k]))

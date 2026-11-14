@@ -751,3 +751,101 @@ async def test_a_caller_cannot_claim_stored_status_to_bypass_the_provenance_chec
     with pytest.raises(ds_mod.DatasetRefused, match="attributable source"):
         await ld.load_dataset(db, intake_id=intake_id, evidence_cutoff=_cutoff_now(), report_id="R",
                               comments={str(recs[1].id): {"izaan": {"text": "x", "source": src}}})
+
+
+# -- 2026-11-14, round 3: stored clarifications, and stored status as the loader's own statement --
+
+def _legacy_comment(intake_id, rec, kind, body, key):
+    from app.tefca_registry.rce.record_comment_models import RceRecordComment
+    extra = ({"author_attribution": "Izaan",
+              "attribution_basis": "owner designation of the source file"}
+             if kind == "QA_IZAAN" else {})
+    return RceRecordComment(                       # as accepted before 2026-11-14
+        source_intake_id=intake_id, source_record_id=rec.id, comment_kind=kind,
+        comment_text=body, text_sha256=_rc.text_sha256(body),
+        source_file_name="legacy.xlsx", source_file_sha256=_CSHA,
+        source_sheet=None, source_column=None, source_row=None,
+        identity_check={"validated": True}, imported_by="qalead@x.invalid",
+        import_batch_id=uuid.uuid4(), idempotency_key=key * 32, **extra)
+
+
+async def test_a_stored_clarification_without_sheet_or_column_is_marked_and_counted(rolled_back_db):
+    """Before: a stored REPORT_CLARIFICATION carried no source into the dataset, so
+    one accepted without sheet/column was exported with no marker and no count."""
+    from app.tefca_registry.rce.record_comment_models import RceRecordComment
+    db = rolled_back_db
+    intake_id, _ = await seed_intake(db, make_rows(3, arc="9.99.779.64"), with_job=False)
+    await _run(db, intake_id)
+    recs = await _records(db, intake_id)
+    legacy = "  clarification — café,\r\nsecond line\twith tab  "
+    db.add(_legacy_comment(intake_id, recs[1], "REPORT_CLARIFICATION", legacy, "2a"))
+    await db.flush()
+    await _rc.import_comments(db, intake_id=intake_id, actor="qalead@x.invalid",
+                              entries=[_centry(recs[2], "REPORT_CLARIFICATION", "complete")])
+    dataset = await ld.load_dataset(db, intake_id=intake_id, evidence_cutoff=_cutoff_now(), report_id="R")
+    by = {r[0]: r for r in dataset["sheets"]["Records"]["rows"]}
+    r1, r2, r3 = (by[str(recs[i].line_number)] for i in (1, 2, 3))
+    assert _col(r1, ds_mod.CLARIFICATIONS_COLUMN) == legacy                   # byte-identical
+    assert ds_mod.PROVENANCE_INCOMPLETE in _col(r1, "Flag")
+    assert ds_mod.CLARIFICATIONS_COLUMN in _col(r1, "Flag")
+    assert _col(r2, ds_mod.CLARIFICATIONS_COLUMN) == "complete"
+    assert ds_mod.PROVENANCE_INCOMPLETE not in _col(r2, "Flag")
+    assert ds_mod.PROVENANCE_INCOMPLETE not in _col(r3, "Flag")
+    gaps = dataset["summary"]["comments_with_incomplete_provenance"]
+    assert gaps == {"original": 0, "izaan": 0, "clarification": 1, "total": 1}
+    assert dataset["summary"]["limitations"]
+    stored = (await db.execute(select(RceRecordComment.comment_text).where(
+        RceRecordComment.source_record_id == recs[1].id))).scalar()
+    assert stored == legacy                                                   # row untouched
+
+
+async def test_a_clarification_written_for_this_report_is_not_an_import_and_is_not_marked(rolled_back_db):
+    """An explicit annotation wins over the stored clarification and is not a
+    stored comment: nothing is marked or counted for it."""
+    db = rolled_back_db
+    intake_id, _ = await seed_intake(db, make_rows(1, arc="9.99.779.65"), with_job=False)
+    await _run(db, intake_id)
+    recs = await _records(db, intake_id)
+    db.add(_legacy_comment(intake_id, recs[1], "REPORT_CLARIFICATION", "stored legacy", "2b"))
+    await db.flush()
+    dataset = await ld.load_dataset(
+        db, intake_id=intake_id, evidence_cutoff=_cutoff_now(), report_id="R",
+        annotations={str(recs[1].id): {"report_clarifications": "written for this report"}})
+    row = dataset["sheets"]["Records"]["rows"][0]
+    assert _col(row, ds_mod.CLARIFICATIONS_COLUMN) == "written for this report"
+    assert ds_mod.PROVENANCE_INCOMPLETE not in _col(row, "Flag")
+    assert dataset["summary"]["comments_with_incomplete_provenance"]["total"] == 0
+
+
+async def test_loaded_facts_alone_do_not_carry_stored_status_into_build_dataset(rolled_back_db):
+    """The loader states which comments it read from the store in a result of its
+    own (`stored_comments`). The facts by themselves - including the
+    `stored_comment_id` each source carries for traceability - are not enough."""
+    db = rolled_back_db
+    intake_id, _ = await seed_intake(db, make_rows(2, arc="9.99.779.66"), with_job=False)
+    await _run(db, intake_id)
+    recs = await _records(db, intake_id)
+    db.add(_legacy_comment(intake_id, recs[1], "QA_IZAAN", "legacy izaan", "2c"))
+    await db.flush()
+    loaded = await ld.load_record_facts(db, intake_id=intake_id, evidence_cutoff=_cutoff_now())
+    assert loaded["stored_comments"][str(recs[1].id)].keys() == {"izaan"}
+    assert str(recs[2].id) not in loaded["stored_comments"]
+    with pytest.raises(ds_mod.DatasetRefused, match="attributable source"):
+        ds_mod.build_dataset(loaded["facts"], report_id="R")
+    ok = ds_mod.build_dataset(loaded["facts"], report_id="R",
+                              stored_comments=loaded["stored_comments"])
+    assert ok["summary"]["comments_with_incomplete_provenance"]["izaan"] == 1
+
+
+async def test_a_caller_comment_that_replaces_a_stored_one_loses_its_stored_status(rolled_back_db):
+    db = rolled_back_db
+    intake_id, _ = await seed_intake(db, make_rows(1, arc="9.99.779.67"), with_job=False)
+    await _run(db, intake_id)
+    recs = await _records(db, intake_id)
+    legacy = _legacy_comment(intake_id, recs[1], "QA_IZAAN", "legacy izaan", "2d")
+    db.add(legacy)
+    await db.flush()
+    src = {"file": "x.xlsx", "sha256": "ab" * 32, "stored_comment_id": str(legacy.id)}
+    with pytest.raises(ds_mod.DatasetRefused, match="attributable source"):
+        await ld.load_dataset(db, intake_id=intake_id, evidence_cutoff=_cutoff_now(), report_id="R",
+                              comments={str(recs[1].id): {"izaan": {"text": "x", "source": src}}})

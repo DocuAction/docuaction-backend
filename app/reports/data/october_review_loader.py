@@ -219,13 +219,18 @@ async def _comment_store_exists(db) -> bool:
 
 
 def _src(c: Any) -> Dict[str, Any]:
-    # `stored_comment_id` is set ONLY here, from a row of the append-only store.
-    # The dataset uses it to tell an already-accepted comment (exported with a
-    # provenance-incomplete marker when sheet/column are absent) from
-    # caller-supplied text (refused). Caller-supplied sources have it removed.
+    # `stored_comment_id` is carried for traceability. It does not by itself make
+    # the dataset treat the comment as stored: the loader also records the id in
+    # its own `stored_comments` result, and the dataset believes a source only
+    # when the two agree. Caller-supplied sources have the key removed.
     return {"file": c.source_file_name, "sha256": c.source_file_sha256,
             "sheet": c.source_sheet, "column": c.source_column,
             STORED_COMMENT_KEY: str(c.id)}
+
+
+#: Store kind -> the dataset's name for it.
+_STORED_KIND = {"QA_ORIGINAL": "original", "QA_IZAAN": "izaan",
+                "REPORT_CLARIFICATION": "clarification"}
 
 
 def _caller_source(src: Any) -> Any:
@@ -273,6 +278,8 @@ async def load_record_facts(
             raise LoaderRefused(f"annotation for {agt} has unknown key(s) {sorted(extra)}")
 
     facts: List[Dict[str, Any]] = []
+    # AGT_Record_ID -> {kind: comment id}: which comment texts came from the store.
+    stored_registry: Dict[str, Dict[str, str]] = {}
     seen: set = set()
     stats = {"held": 0, "rejected": 0, "no_curated_row": 0, "not_promoted": 0,
              "classified": 0, "no_review": 0, "review_without_bucket": 0,
@@ -473,7 +480,8 @@ async def load_record_facts(
             for kind, text_key, src_key in (
                     ("QA_ORIGINAL", "qa_comments", "qa_comments_source"),
                     ("QA_IZAAN", "qa_comments_izaan", "qa_comments_izaan_source"),
-                    ("REPORT_CLARIFICATION", "report_clarifications", None)):
+                    ("REPORT_CLARIFICATION", "report_clarifications",
+                     "report_clarifications_source")):
                 row = held_comments.get(kind)
                 if row is None:
                     continue
@@ -481,18 +489,21 @@ async def load_record_facts(
                 if text_key == "report_clarifications" and fact.get("report_clarifications"):
                     continue                           # an explicit annotation wins
                 fact[text_key] = row.comment_text      # VERBATIM
-                if src_key:
-                    fact[src_key] = _src(row)
+                fact[src_key] = _src(row)
+                # The loader's own statement that THIS text came from the store.
+                stored_registry.setdefault(agt, {})[_STORED_KIND[kind]] = str(row.id)
             orig = cm.get("original") or {}
             izaan = cm.get("izaan") or {}
             if orig.get("text"):
                 if "qa_comments" in fact:
                     stats["caller_comments_overriding_stored"] += 1
+                stored_registry.get(agt, {}).pop("original", None)
                 fact["qa_comments"] = orig["text"]
                 fact["qa_comments_source"] = _caller_source(orig.get("source"))
             if izaan.get("text"):
                 if "qa_comments_izaan" in fact:
                     stats["caller_comments_overriding_stored"] += 1
+                stored_registry.get(agt, {}).pop("izaan", None)
                 fact["qa_comments_izaan"] = izaan["text"]
                 fact["qa_comments_izaan_source"] = _caller_source(izaan.get("source"))
             if agt in seen:                                   # cannot happen
@@ -544,7 +555,8 @@ async def load_record_facts(
             "No persisted USPS validation exists; USPS reads Not checked-unavailable."],
     }
     return {"facts": facts, "meta": meta,
-            "assessment_date": assessment.value.isoformat()}
+            "assessment_date": assessment.value.isoformat(),
+            "stored_comments": {k: v for k, v in stored_registry.items() if v}}
 
 
 async def load_dataset(
@@ -560,4 +572,4 @@ async def load_dataset(
     return ds.build_dataset(
         loaded["facts"], report_id=report_id, findings_count=findings_count,
         assessment_date=loaded["assessment_date"], classification=classification,
-        load_meta=loaded["meta"])
+        load_meta=loaded["meta"], stored_comments=loaded["stored_comments"])
