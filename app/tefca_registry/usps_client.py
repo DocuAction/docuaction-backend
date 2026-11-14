@@ -336,7 +336,15 @@ def _scrub_credentials(text: str, secrets) -> str:
     and dropping control characters afterwards missed `client-<newline>secret`
     and then rebuilt the complete secret when the newline was dropped (review
     finding 2026-11-14). A percent-encoded echo is decoded first. The whole
-    span is replaced, including the characters inserted in it."""
+    span is replaced, including the characters inserted in it.
+
+    EVERY echo is replaced, in one pass over the text as received: all
+    occurrences of every credential are located first (overlapping ones too),
+    the spans are merged, and the result is assembled once. Nothing that was
+    inserted is scanned again, so a credential that happens to be a piece of
+    the marker can neither stop the pass early (the earlier loop did, and left
+    the second echo of `redact` in place) nor keep it going. The marker is
+    chosen so that it does not itself spell a configured credential."""
     from urllib.parse import unquote
 
     wanted = [_significant(s)[0] for s in secrets if s]
@@ -346,17 +354,58 @@ def _scrub_credentials(text: str, secrets) -> str:
     decoded = unquote(text)
     if decoded != text and any(w in _significant(decoded)[0] for w in wanted):
         text = decoded
+
+    flat, positions = _significant(text)
+    spans = []                                   # [start, end) in `text`
     for needle in wanted:
-        while True:
-            flat, positions = _significant(text)
-            at = flat.find(needle)
-            if at < 0:
-                break
-            start, end = positions[at], positions[at + len(needle) - 1] + 1
-            text = text[:start] + "[redacted]" + text[end:]
-            if needle in "[redacted]":           # a credential that is a piece of the marker
-                break
-    return text
+        at = flat.find(needle)
+        while at >= 0:
+            spans.append((positions[at], positions[at + len(needle) - 1] + 1))
+            at = flat.find(needle, at + 1)       # +1: overlapping echoes are found too
+    if not spans:
+        return text
+    spans.sort()
+    merged = [list(spans[0])]
+    for start, end in spans[1:]:
+        if start <= merged[-1][1]:               # overlapping or touching: one span
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+
+    def assembled(marker: str) -> str:
+        pieces, cursor = [], 0
+        for start, end in merged:
+            pieces.append(text[cursor:start])
+            pieces.append(marker)
+            cursor = end
+        pieces.append(text[cursor:])
+        return "".join(pieces)
+
+    def spells_one(candidate: str) -> bool:
+        squeezed = _significant(candidate)[0]
+        return any(w in squeezed for w in wanted)
+
+    # The first marker with which the RESULT spells no credential - neither the
+    # marker by itself nor the marker together with the text beside it.
+    for marker in _REDACTION_MARKERS:
+        result = assembled(marker)
+        if not spells_one(result):
+            return result
+    # No marker works: the spans are removed outright. What stood on either side
+    # of one can then touch and spell a credential again, so repeat; the text
+    # only gets shorter, so this ends.
+    result = assembled("")
+    while spells_one(result):
+        shorter = _scrub_credentials(result, secrets)
+        if len(shorter) >= len(result):
+            break
+        result = shorter
+    return result
+
+
+#: What stands in for a removed credential, first one that does not itself
+#: contain a configured credential. Purely a display choice.
+_REDACTION_MARKERS = ("[redacted]", "[removed]", "[withheld]", "[***]", "***", "#")
 
 
 # ── Client ───────────────────────────────────────────────────────────────────
@@ -512,17 +561,20 @@ class USPSClient:
         return self._auth_failed and self._clock() < self._auth_hold_until
 
     def _oauth_error(self, resp: httpx.Response):
-        """USPS's own (error, description) from a rejected token request, or
-        (None, None). RFC 6749 error bodies name the failure and do not echo the
-        credentials - but the text is upstream's, so the configured key and
-        secret are removed from it anyway, control characters are dropped, and
-        it is cut short."""
+        """(code, error, description) from a rejected token request: USPS's own
+        error code for classification, and its error and description as they
+        may be shown. ALWAYS three values - (None, None, None) when the body is
+        not JSON or not a JSON object; returning two there made the caller's
+        unpacking raise (review finding 2026-11-14). RFC 6749 error bodies name
+        the failure and do not echo the credentials - but the text is
+        upstream's, so the configured key and secret are removed from it
+        anyway, control characters are dropped, and it is cut short."""
         try:
             body = resp.json()
         except Exception:  # noqa: BLE001
-            return None, None
+            return None, None, None
         if not isinstance(body, dict):
-            return None, None
+            return None, None, None
         error = body.get("error")
         description = body.get("error_description")
         secrets = (self.client_secret, self.client_id)

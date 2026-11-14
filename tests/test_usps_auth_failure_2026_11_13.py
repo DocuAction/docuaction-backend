@@ -368,3 +368,132 @@ def test_the_test_client_does_not_read_the_machines_usps_env(monkeypatch):
     assert client.health(include_auth_detail=True)["auth_error"]["environment"] == "production"
     explicit = _client(lambda request: httpx.Response(401, json=INVALID_CLIENT), environment="testing")
     assert explicit.environment == "testing"
+
+
+# -- second CodeRabbit round on #215 (2026-11-14) ------------------------------
+
+_NOT_AN_ERROR_OBJECT = [
+    b"<html>Service Unavailable</html>",        # not JSON at all
+    b"",                                        # empty body
+    b"[\"invalid_client\"]",                    # JSON, but a list
+    b"\"invalid_client\"",                      # JSON, but a string
+    b"42",                                      # JSON, but a number
+    b"null",
+]
+
+
+@pytest.mark.parametrize("body", _NOT_AN_ERROR_OBJECT)
+@pytest.mark.parametrize("status", [400, 401, 500])
+def test_a_token_refusal_whose_body_is_not_an_error_object_is_an_unavailable_result(status, body):
+    """Before (introduced by the previous fix, 30b563d): `_oauth_error` returned
+    two values on the not-JSON and not-an-object paths while `_get_token` unpacked
+    three, so these responses raised ValueError into the caller instead of
+    producing an unavailable result - and a 401 recorded no hold."""
+    calls = {"token": 0, "address": 0}
+
+    def handler(request):
+        if request.url.path == uc.OAUTH_ENDPOINT:
+            calls["token"] += 1
+            return httpx.Response(status, content=body,
+                                  headers={"content-type": "application/json"})
+        calls["address"] += 1
+        return httpx.Response(200, json=ADDRESS_OK)
+
+    client = _client(handler, clock=FakeClock())
+    first = _check(client)                                  # must not raise
+    assert first.available is False and first.method == "usps_error"
+    assert first.standardized_street is None and calls["address"] == 0
+    again = _check(client)
+    assert again.available is False
+    health = client.health(include_auth_detail=True)
+    if status == 401:
+        # A 401 is a rejected credential whatever its body says: held, asked once.
+        assert first.failure_kind == uc.FAILURE_CREDENTIALS_REJECTED
+        assert again.failure_kind == uc.FAILURE_CREDENTIALS_REJECTED
+        assert calls["token"] == 1, "a rejected credential was asked for again"
+        assert health["status"] == "Authentication failed"
+        assert health["auth_error"]["http_status"] == 401
+        assert health["auth_error"]["usps_error"] is None
+        assert health["auth_error"]["usps_description"] is None
+        assert "authentication failed" in first.error
+    else:
+        # Not a credential verdict: no hold is recorded, the next check asks again.
+        assert first.failure_kind != uc.FAILURE_CREDENTIALS_REJECTED
+        assert calls["token"] == 2
+        assert health["status"] != "Authentication failed"
+    assert SECRET not in repr(health) and CLIENT_ID not in repr(health)
+
+
+def test_oauth_error_answers_three_values_on_every_path():
+    client = _client(lambda request: httpx.Response(200, json=ADDRESS_OK))
+    for response in (httpx.Response(401, content=b"not json"),
+                     httpx.Response(401, json=["a", "list"]),
+                     httpx.Response(401, json="a string"),
+                     httpx.Response(401, json=7),
+                     httpx.Response(401, json={}),
+                     httpx.Response(401, json={"error": 5, "error_description": ["x"]}),
+                     httpx.Response(401, json=INVALID_CLIENT)):
+        answer = client._oauth_error(response)
+        assert isinstance(answer, tuple) and len(answer) == 3, response.content
+
+
+def _squeezed(text: str) -> str:
+    return "".join(ch for ch in text if not ch.isspace() and ch.isprintable()).lower()
+
+
+@pytest.mark.parametrize("secret,text,gone", [
+    # the reviewer's case: the credential is a piece of the old marker text
+    ("redact", "re\ndact and re\ndact", "redact"),
+    ("redact", "redact redact re\tdact REDACT", "redact"),
+    ("redacted", "redacted and re dacted", "redacted"),
+    ("[redacted]", "x [redacted] y [reda\ncted] z", "[redacted]"),
+    ("ed", "ed and e\nd and ed", "ed"),
+    # overlapping and adjacent echoes
+    ("aa", "aaaa a\na aaa", "aa"),
+    ("abab", "ababab and ab\nabab", "abab"),
+    ("key-1", "key-1key-1 key-1\nkey-1", "key-1"),
+    # the marker TOGETHER with the text beside it must not spell the credential
+    ("]q", "]q q", "]q"),
+    ("d]x", "re d]x d]x x", "d]x"),
+])
+def test_every_echo_is_replaced_not_only_the_first(secret, text, gone):
+    """Before: after the first replacement the loop stopped whenever the
+    credential was contained in the marker text, so `re<newline>dact and
+    re<newline>dact` with the secret `redact` kept its second echo."""
+    out = uc._scrub_credentials(text, (secret,))
+    assert gone not in _squeezed(out), out
+    assert uc._scrub_credentials(out, (secret,)) == out, "scrubbing is stable"
+
+
+def test_the_marker_never_contains_a_configured_credential():
+    for secret in ("redact", "redacted", "[redacted]", "ed", "re", "[", "removed", "*"):
+        out = uc._scrub_credentials(f"00 {secret} 99", (secret,))
+        assert _squeezed(secret) not in _squeezed(out), (secret, out)
+        assert out.startswith("00 ") and out.endswith(" 99") and len(out) > 6, (secret, out)
+    # With an ordinary credential the marker is the usual one.
+    assert uc._scrub_credentials(f"secret {SECRET} here", (SECRET,)) == "secret [redacted] here"
+
+
+def test_both_credentials_echoed_in_one_text_more_than_once_are_all_replaced(caplog):
+    body = {"error": "invalid_client",
+            "error_description": (f"key {CLIENT_ID} secret {SECRET} again {CLIENT_ID[:5]}\n{CLIENT_ID[5:]} "
+                                  f"and {SECRET[:3]}\t{SECRET[3:]} and {SECRET.upper()}{CLIENT_ID} end")}
+    client = _client(lambda request: httpx.Response(401, json=body))
+    with caplog.at_level(logging.DEBUG):
+        result = _check(client)
+    health = client.health(include_auth_detail=True)
+    for text in (repr(health), repr(result), caplog.text):
+        assert SECRET.lower() not in _squeezed(text) and CLIENT_ID.lower() not in _squeezed(text)
+    description = health["auth_error"]["usps_description"]
+    assert description.startswith("key [redacted] secret [redacted] again [redacted] and [redacted] and")
+    assert description.endswith(" end") and len(description) <= 200
+
+
+def test_scrubbing_a_long_text_of_repeated_echoes_finishes_quickly():
+    import time as _time
+
+    text = ("re\ndact " * 20000) + "tail"
+    started = _time.perf_counter()
+    out = uc._scrub_credentials(text, ("redact",))
+    assert _time.perf_counter() - started < 5.0
+    assert "redact" not in _squeezed(out) and out.endswith("tail")
