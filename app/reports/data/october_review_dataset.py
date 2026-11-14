@@ -474,7 +474,22 @@ def split_for_rows(text: str, chars_per_line: int, max_lines: int) -> List[str]:
                 start, lines = match.end(), 0
             continue
         if kind == "gap":
-            col += len(token) + (PDF_TAB_COLUMNS - 1) * token.count("\t")
+            width = len(token) + (PDF_TAB_COLUMNS - 1) * token.count("\t")
+            if width <= chars_per_line:              # ordinary spacing: ends its line, as before
+                col += width
+                continue
+            # A run of spaces or tabs wider than a whole line. Whether an
+            # engine hangs it at the line end or wraps it is not assumed: it is
+            # counted as wrapping, one character at a time, and cut when the
+            # slice is full - like any other run too long for a slice.
+            for offset, ch in enumerate(token):
+                step = PDF_TAB_COLUMNS if ch == "\t" else 1
+                if col + step > chars_per_line:
+                    lines, col = lines + 1, 0
+                    if lines >= max_lines and pos + offset > start:
+                        slices.append(text[start:pos + offset])
+                        start, lines = pos + offset, 0
+                col += step
             continue
         while len(token) > capacity:                 # one unbroken run longer than a slice
             if pos > start:
