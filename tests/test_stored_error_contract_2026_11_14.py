@@ -605,3 +605,25 @@ def test_every_per_stage_error_the_runner_writes_carries_the_mark():
     for at in writes:
         window = source[at:at + 260]
         assert "error_writer" in window and "ERROR_WRITER" in window, window[:120]
+
+
+def test_an_error_value_copied_into_an_event_takes_its_mark_with_it():
+    """Review finding on 0c9f8dc: the reconciliation event copied
+    `snapshot_error` out of the stage detail without `snapshot_error_writer`, so
+    the event serializer (strict) withheld a controlled reason. Source check:
+    every place the runner COPIES an error value copies its mark beside it."""
+    import inspect
+    import re as _re
+
+    from app.tefca_registry.rce import delivery_runner
+
+    source = inspect.getsource(delivery_runner)
+    copies = list(_re.finditer(r'"((?:snapshot_)?error)": \w+\.get\("\1"\)', source))
+    assert len(copies) >= 2, [m.group(0) for m in copies]
+    for match in copies:
+        window = source[match.start():match.start() + 320]
+        assert f'"{match.group(1)}_writer"' in window, match.group(0)
+
+    copied = {"passed": False, "snapshot_error": "ValueError: totals do not close",
+              "snapshot_error_writer": lc.SAFE_ERROR_WRITER}
+    assert sanitize_stored_error_tree(copied, strict_error_keys=True) == copied
