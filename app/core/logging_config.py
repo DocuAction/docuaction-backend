@@ -283,12 +283,18 @@ _ANY_WITHHELD = re.compile(
     r"(?: for correlation id [A-Za-z0-9_.:\-]{1,64})?\)")
 
 
+#: The value a writer stores beside an error value, under "<key>_writer", to
+#: say the value came from `safe_exception_text`. Only server code writes
+#: `stage_detail` and stage-event `detail`; no request body reaches them.
+SAFE_ERROR_WRITER = "safe_exception_text/1"
+
+
 def _is_error_key(key: Any) -> bool:
     name = str(key).lower()
     return name == "error" or name.endswith("_error")
 
 
-def _sanitize_error_value(value: str) -> str:
+def _sanitize_error_value(value: str, *, safe_writer: bool = False) -> str:
     """A string stored under an error key (`stage_detail[stage]["error"]`,
     `snapshot_error`, a stage event's `detail["error"]`).
 
@@ -302,30 +308,40 @@ def _sanitize_error_value(value: str) -> str:
         application writes ("worker_stopped_without_reporting").
 
     Anything else is withheld. A message with a class name in front keeps the
-    name and loses the message, for every class: under an error key there is
-    no stored class to check the name against. A domain message is still shown
-    where its class has provenance - the job's `error_reason` (the class there
-    was always written from `type(exc).__name__`) and a stage event's
-    `failure_reason` (which has `failure_class` beside it).
+    name and loses the message, for every class, UNLESS the mark of its writer
+    is stored beside it ("<key>_writer" == SAFE_ERROR_WRITER, which the
+    delivery runner writes with every per-stage error since 2026-11-14). Rows
+    written before that carry no mark: their per-stage message is withheld,
+    and the domain message is still shown where its class has provenance - the
+    job's `error_reason` (the class there was always written from
+    `type(exc).__name__`) and a stage event's `failure_reason` (which has
+    `failure_class` beside it).
     """
     masked = sanitize_stored_error(value)
     if masked != value:
         return masked
+    if safe_writer:
+        # Marked by its writer as `safe_exception_text` output: that function
+        # keeps a message only for a domain exception, and the class in front
+        # was written from the exception itself. The general rule above has
+        # been applied; nothing more is withheld.
+        return value
     if _ANY_WITHHELD.fullmatch(value) or _is_trusted_error_code(value):
         return value
     lead = _CLASS_LEAD_IN.match(value)
     if lead:
-        # A class name in FRONT of the message is not provenance here: nothing
-        # stored beside this value says which exception was raised, and a legacy
-        # str(exc) can itself begin "ValueError: ...". The name is kept; the
-        # message is withheld for every class, listed or not.
+        # A class name in FRONT of the message is not provenance by itself: a
+        # legacy str(exc) can begin "ValueError: ...". Without the mark of its
+        # writer beside the value the name is kept and the message is withheld,
+        # for every class, listed or not.
         return ((lead.group("stage") or "") + (lead.group("cls") or lead.group("bare"))
                 + _ERROR_WITHHELD)
     return _ERROR_WITHHELD.strip()
 
 
 def sanitize_stored_error_tree(value: Any, *, strict_error_keys: bool = False,
-                               _under_error_key: bool = False) -> Any:
+                               _under_error_key: bool = False,
+                               _safe_writer: bool = False) -> Any:
     """`sanitize_stored_error` applied to every string in a nested structure.
     Dicts and lists are copied; nothing is mutated.
 
@@ -337,14 +353,15 @@ def sanitize_stored_error_tree(value: Any, *, strict_error_keys: bool = False,
     if isinstance(value, dict):
         return {k: sanitize_stored_error_tree(
                     v, strict_error_keys=strict_error_keys,
-                    _under_error_key=strict_error_keys and _is_error_key(k))
+                    _under_error_key=strict_error_keys and _is_error_key(k),
+                    _safe_writer=value.get(f"{k}_writer") == SAFE_ERROR_WRITER)
                 for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [sanitize_stored_error_tree(v, strict_error_keys=strict_error_keys,
                                            _under_error_key=_under_error_key)
                 for v in value]
     if _under_error_key and isinstance(value, str) and value:
-        return _sanitize_error_value(value)
+        return _sanitize_error_value(value, safe_writer=_safe_writer)
     return sanitize_stored_error(value)
 
 

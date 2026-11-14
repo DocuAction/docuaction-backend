@@ -542,3 +542,66 @@ async def test_a_persisted_job_is_masked_through_every_response_and_not_rewritte
         select(RceDeliveryJob).where(RceDeliveryJob.id == job.id)
         .execution_options(populate_existing=True))).scalar_one()
     assert reloaded.stage_detail == stored, "the stored evidence row is unchanged"
+
+
+# ── 2026-11-14, fifth pass: the writer's mark is the provenance ──────────────
+#
+# Withholding every class-prefixed message under an error key (fourth pass)
+# also hid what the CURRENT runner writes on purpose - the true reason of a
+# domain refusal, e.g. "SnapshotRefused: ... not 1:1" on the MATCHING event,
+# which an existing test requires. The runner now stores, beside every
+# per-stage error it writes, the mark of the function that produced it. A
+# message is shown only where that mark is present.
+
+def test_a_marked_per_stage_error_keeps_its_domain_message():
+    from app.tefca_registry.rce import stage_events
+
+    assert stage_events.ERROR_WRITER == lc.SAFE_ERROR_WRITER
+    marked = {"MATCHING": {"snapshot": {
+        "completed": False, "error": "SnapshotRefused: identifiers are not 1:1",
+        "error_writer": lc.SAFE_ERROR_WRITER}},
+        "RECONCILIATION": {"snapshot_error": "ValueError: totals do not close",
+                           "snapshot_error_writer": lc.SAFE_ERROR_WRITER}}
+    assert sanitize_stored_error_tree(marked, strict_error_keys=True) == marked
+
+
+@pytest.mark.parametrize("mark", [None, "", "safe_exception_text/0", "something else", 1, True])
+def test_without_the_exact_mark_the_message_is_withheld(mark):
+    stored = {"PROMOTION": {"error": f"ValueError: {SECRET}", "error_writer": mark}}
+    shown = sanitize_stored_error_tree(stored, strict_error_keys=True)["PROMOTION"]["error"]
+    assert SECRET not in shown and shown.startswith("ValueError") and "withheld" in shown
+
+
+def test_the_mark_does_not_switch_the_general_rule_off():
+    """Marked or not, driver text is still masked by the contract itself."""
+    stored = {"PROMOTION": {
+        "error": f"PROMOTION: (sqlalchemy.exc.Error) <class 'asyncpg.X'>: {SECRET} [SQL: x]",
+        "error_writer": lc.SAFE_ERROR_WRITER}}
+    assert SECRET not in json.dumps(sanitize_stored_error_tree(stored, strict_error_keys=True))
+
+
+def test_a_mark_vouches_only_for_its_own_key():
+    stored = {"RECONCILIATION": {"error": f"ValueError: {SECRET}",
+                                 "snapshot_error": "ValueError: totals do not close",
+                                 "snapshot_error_writer": lc.SAFE_ERROR_WRITER}}
+    shown = sanitize_stored_error_tree(stored, strict_error_keys=True)["RECONCILIATION"]
+    assert SECRET not in shown["error"]
+    assert shown["snapshot_error"] == "ValueError: totals do not close"
+
+
+def test_every_per_stage_error_the_runner_writes_carries_the_mark():
+    """Source check: wherever the runner stores `safe_failure_text` under an
+    error key, the mark is stored beside it. A writer added later without the
+    mark is caught here (its message would be withheld on read)."""
+    import inspect
+    import re as _re
+
+    from app.tefca_registry.rce import delivery_runner
+
+    source = inspect.getsource(delivery_runner)
+    writes = [m.start() for m in _re.finditer(
+        r'"(?:snapshot_)?error"\]? ?[:=] ?stage_events\.safe_failure_text\(', source)]
+    assert len(writes) >= 6, len(writes)
+    for at in writes:
+        window = source[at:at + 260]
+        assert "error_writer" in window and "ERROR_WRITER" in window, window[:120]
