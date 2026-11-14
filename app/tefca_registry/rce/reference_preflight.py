@@ -53,18 +53,27 @@ bound is stated in every result (`rows_sampled`, `tail_checked`).
     tail cannot know whether it starts inside a quoted field, so a file cut
     inside a quoted value opened before the tail was CLEAR (a later line of
     the open field read as a complete record), and a valid long quoted field
-    at the start of the tail was BLOCKED. The record boundary is now
-    ESTABLISHED: the quote characters in front of the tail are counted (one
-    sequential read of the bytes, no parsing), which says whether the tail
-    starts inside a quoted field; records then start after a CR, LF or CRLF
-    that is outside quotes. Where that placement and the tail do not agree -
-    e.g. a literal quote inside an unquoted field makes the count odd - the
-    file is read as records to its end instead of believing either guess.
+    at the start of the tail was BLOCKED. (The first fix counted the quote
+    characters in front of the tail; see the second review below.)
   * only LF was a record boundary; a CR-only file was BLOCKED as truncated.
   * a header, blank lines beyond the sample window, then data was BLOCKED as
     empty; and a LARGE file of a header and blank lines only was CLEAR.
     Whether a data record exists is now decided separately from how many
     records were sampled.
+
+1.1.0, second review (2026-11-14):
+  * quote PARITY is not CSV field state. A literal quote in an unquoted field
+    and the opening quote of a final, never-closed field make the count in
+    front of the tail even, and a later line of the open field was accepted
+    as the final record - CLEAR for a file a strict parse rejects. No tail
+    heuristic remains: the final record is established ONLY by reading the
+    whole file as CSV records (strict, streaming, one record held at a
+    time). The gate's verdict on the final record is, by construction, a
+    strict whole-file parse's.
+  * the read uses the csv module's field limit as it stands - the limit the
+    importer's own reader has. A field beyond it is BLOCKED (the importer
+    could not read it either) and REF-SCH-008 says that a field is too long,
+    not that the file is truncated. The process-wide limit is not changed.
 
 No positional fallback, no renaming, no coercion. The original bytes are
 only read. One technical finding per fault, with the affected scope, never
@@ -76,7 +85,7 @@ import csv
 import io
 import os
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from app.core.upload_security import open_no_follow
 from app.tefca_registry.rce import preflight_shadow_models as pm
@@ -111,98 +120,44 @@ REFERENCE_SCHEMAS: Dict[str, Dict[str, Any]] = {
 }
 
 
-_CHUNK = 1024 * 1024
-_RECORD_END = re.compile(rb"\r\n|\r|\n")
+#: Why a strict read of the file stopped, in this module's own words (the csv
+#: module's message is classified, never passed on).
+READER_ENDS_IN_QUOTES = "ends_inside_quoted_field"
+READER_FIELD_TOO_LONG = "field_longer_than_reader_limit"
+READER_NOT_WELL_FORMED = "not_well_formed_csv"
 
 
-def _parse_strict(text: str) -> Optional[List[List[str]]]:
-    """Non-empty records of `text`, or None when it is not complete CSV.
+def _reader_error(exc: csv.Error) -> str:
+    message = str(exc)
+    if "field larger than field limit" in message:
+        return READER_FIELD_TOO_LONG
+    if "unexpected end of data" in message:
+        return READER_ENDS_IN_QUOTES
+    return READER_NOT_WELL_FORMED
+
+
+def _read_as_records(path) -> Dict[str, Any]:
+    """The whole file read as CSV records, strictly, to its end.
+
+    Streaming: one record is held at a time. `records` counts non-empty records
+    (the header is one); `last` is the final one. When the file is not complete
+    CSV the read stops: `error` says why and `line` where the reader was.
     strict=True: a quoted field still open at end of data is an error, not a
-    field - that is a file cut INSIDE a quoted value."""
-    try:
-        return [r for r in csv.reader(io.StringIO(text, newline=""), strict=True) if r]
-    except csv.Error:
-        return None
-
-
-def _quotes_before(path, end: int) -> int:
-    """How many quote characters lie in the first `end` bytes. A sequential
-    read of the bytes; nothing is decoded or parsed. (0x22 never occurs inside
-    a multi-byte UTF-8 sequence.)"""
-    count, left = 0, end
-    with open_no_follow(path, "rb") as fh:
-        while left > 0:
-            chunk = fh.read(min(_CHUNK, left))
-            if not chunk:
-                break
-            count += chunk.count(b'"')
-            left -= len(chunk)
-    return count
-
-
-def _record_starts(data: bytes, in_quotes: bool):
-    """Offsets in `data` at which a record starts - just after a CR, LF or CRLF
-    that is OUTSIDE a quoted field - given whether `data` begins inside one;
-    and whether it ENDS inside one. Quote state is tracked by parity, which is
-    exact for quoted fields (an escaped quote is two characters)."""
-    starts: List[int] = []
-    pos = 0
-    parts = data.split(b'"')
-    for index, part in enumerate(parts):
-        if not in_quotes:
-            starts.extend(pos + m.end() for m in _RECORD_END.finditer(part))
-        pos += len(part) + 1
-        if index < len(parts) - 1:
-            in_quotes = not in_quotes
-    return starts, in_quotes
-
-
-def _final_record_from_tail(tail: bytes, in_quotes: bool, expected_fields: int) -> Optional[List[str]]:
-    """The final record, read from the first ESTABLISHED record start in the
-    tail - or None when this placement does not hold together: the data ends
-    inside a quoted field, no record starts in the tail, the text from that
-    start is not complete CSV, or a record there does not have the header's
-    field count. None is never a verdict; the caller then reads the file."""
-    starts, open_at_end = _record_starts(tail, in_quotes)
-    if open_at_end or not starts:
-        return None
-    rows = _parse_strict(tail[starts[0]:].decode("utf-8", errors="replace"))
-    if not rows or any(len(r) != expected_fields for r in rows):
-        return None
-    return rows[-1]
-
-
-def _records_of(path):
-    """Every non-empty record of the file, read as CSV to the end (strict)."""
+    field - that is a file cut INSIDE a quoted value. The csv field limit is
+    whatever the process has (the importer's reader has the same)."""
+    records, last = 0, []
     with open_no_follow(path, "rb") as raw:
         with io.TextIOWrapper(raw, encoding="utf-8-sig", errors="replace", newline="") as text:
-            for row in csv.reader(text, strict=True):
-                if row:
-                    yield row
-
-
-def _final_record_full_read(path) -> List[str]:
-    """The final record by reading the whole file as records. [] when the file
-    is not complete CSV (cut inside a quoted value, or a field beyond the CSV
-    reader's size limit)."""
-    last: List[str] = []
-    try:
-        for row in _records_of(path):
-            last = row
-    except csv.Error:
-        return []
-    return last
-
-
-def _has_data_record_full_read(path) -> bool:
-    """Is there any record after the header? Stops at the first one."""
-    try:
-        for index, _row in enumerate(_records_of(path)):
-            if index >= 1:
-                return True
-    except csv.Error:
-        return True          # unreadable is not "empty"; the final-record check reports it
-    return False
+            reader = csv.reader(text, strict=True)
+            try:
+                for row in reader:
+                    if row:
+                        records += 1
+                        last = row
+            except csv.Error as exc:
+                return {"records": records, "last": last, "error": _reader_error(exc),
+                        "line": reader.line_num}
+    return {"records": records, "last": last, "error": None, "line": None}
 
 
 class ReferencePreflightBlocked(RuntimeError):
@@ -256,10 +211,10 @@ def preflight_reference_file(path, source_system: str) -> Dict[str, Any]:
     size = os.path.getsize(path)
     with open_no_follow(path, "rb") as fh:
         head = fh.read(_TAIL_BYTES)
-        tail = b""
-        if size > len(head):
-            fh.seek(max(0, size - _TAIL_BYTES))
-            tail = fh.read()
+        last_byte = b""
+        if size:
+            fh.seek(size - 1)
+            last_byte = fh.read(1)
     if not head.strip():
         findings.append(_finding(
             "REF-SCH-005", "The file is empty: there is no header row. Nothing can be "
@@ -352,19 +307,19 @@ def preflight_reference_file(path, source_system: str) -> Dict[str, Any]:
         if len(row) != len(header) and bad is None:
             bad = {"line": line_no, "fields": len(row), "expected": len(header)}
     out["rows_sampled"] = sampled
+    # The whole file, as records. This is the ONLY thing the final record is
+    # judged from: no tail window, no alignment guess, no quote counting.
+    read = _read_as_records(path)
+    out["records_read"] = read["records"]
     # What was actually read, not what could have been (see 1.1.0 above).
-    out["bound"] = (f"header in full; the first {sampled} record(s) - those within the "
-                    f"first {_TAIL_BYTES // 1024} KiB, at most {SAMPLE_ROWS}; final record; "
-                    f"not a full-file scan")
+    out["bound"] = (f"header in full; field counts checked for the first {sampled} record(s) "
+                    f"- those within the first {_TAIL_BYTES // 1024} KiB, at most {SAMPLE_ROWS} "
+                    f"- and for the final record; the whole file was read as CSV records "
+                    f"(strict) to establish the final record")
     # Whether ANY data record exists is a separate question from how many were
-    # sampled: the sample window can hold only blank lines. A small file was
-    # parsed whole; a large one is asked directly (stops at the first record).
-    if sampled:
-        has_data = True
-    elif not tail:
-        has_data = any(row for row in rows[1:])
-    else:
-        has_data = _has_data_record_full_read(path)
+    # sampled: the sample window can hold only blank lines. A file that cannot
+    # be read to its end is not "empty"; the final-record check reports it.
+    has_data = bool(sampled) or read["records"] > 1 or read["error"] is not None
     if not has_data:
         findings.append(_finding(
             "REF-SCH-012", "The file has a header row and no data record. Nothing would "
@@ -379,41 +334,46 @@ def preflight_reference_file(path, source_system: str) -> Dict[str, Any]:
             "trusted, so values are not read by position.", disposition=pm.DISP_BLOCKED,
             field_name="__record__", evidence=bad))
 
-    # Truncation: the final record of the file.
-    tail_bytes = tail or head
+    # The final record of the file.
     out["tail_checked"] = True
-    ends_with_newline = tail_bytes.endswith((b"\n", b"\r"))
+    ends_with_newline = last_byte in (b"\n", b"\r")
     if not has_data:
         return done()                      # REF-SCH-012 already says what is wrong
-    if not tail:
-        # The whole file is in hand: read it as records.
-        whole = _parse_strict(tail_bytes.decode("utf-8", errors="replace"))
-        last = whole[-1] if whole else []
-        only_the_header = whole is not None and len(whole) <= 1
-    else:
-        only_the_header = False
-        tail_offset = size - len(tail)
-        in_quotes = _quotes_before(path, tail_offset) % 2 == 1
-        placed = _final_record_from_tail(tail, in_quotes, len(header))
-        if placed is not None:
-            last = placed
-            out["bound"] += ("; final record placed by quote characters counted over the "
-                             "whole file (bytes read, not parsed)")
-        else:
-            # The placement and the tail disagree. Neither is believed.
-            last = _final_record_full_read(path)
-            out["bound"] = out["bound"].replace(
-                "not a full-file scan",
-                "final record established by a full read: the file was read as records "
-                "to the end because the tail alone could not place it")
-    if len(last) != len(header) and not only_the_header:
+    last = [] if read["error"] else read["last"]
+    evidence = {"final_record_fields": len(last), "expected": len(header),
+                "ends_with_newline": ends_with_newline}
+    if read["error"]:
+        evidence.update({"reader_error": read["error"], "reader_line": read["line"]})
+    partial = ("a partial reference snapshot would answer 'not present' for every "
+               "record in the missing part.")
+    if read["error"] == READER_FIELD_TOO_LONG:
+        limit = csv.field_size_limit()
+        evidence["reader_field_limit"] = limit
+        findings.append(_finding(
+            "REF-SCH-008", f"A field is longer than the CSV reader's limit of {limit} "
+            f"characters (near line {read['line']}). The importer reads with the same "
+            "limit and cannot read this file as records past that point; it is blocked "
+            "here, as ONE technical issue, rather than failing part-way through an import.",
+            disposition=pm.DISP_BLOCKED, field_name="__record__", evidence=evidence))
+    elif read["error"] == READER_ENDS_IN_QUOTES:
+        findings.append(_finding(
+            "REF-SCH-008", "The file ends inside a quoted value: a quoted field is opened "
+            "and never closed, so the final record is not complete. The file appears "
+            "truncated" + ("" if ends_with_newline else " (no terminating newline)")
+            + "; " + partial, disposition=pm.DISP_BLOCKED, field_name="__record__",
+            evidence=evidence))
+    elif read["error"]:
+        findings.append(_finding(
+            "REF-SCH-008", f"The file is not well-formed CSV near line {read['line']} "
+            "(text follows a closing quote before the next delimiter, or similar). Record "
+            "boundaries after that point cannot be established, so the final record "
+            "cannot be confirmed complete.", disposition=pm.DISP_BLOCKED,
+            field_name="__record__", evidence=evidence))
+    elif len(last) != len(header):
         findings.append(_finding(
             "REF-SCH-008", f"The final record has {len(last)} field(s); the header "
             f"has {len(header)}. The file appears truncated"
             + ("" if ends_with_newline else " (no terminating newline)")
-            + "; a partial reference snapshot would answer 'not present' for every "
-            "record in the missing part.", disposition=pm.DISP_BLOCKED,
-            field_name="__record__",
-            evidence={"final_record_fields": len(last), "expected": len(header),
-                      "ends_with_newline": ends_with_newline}))
+            + "; " + partial, disposition=pm.DISP_BLOCKED,
+            field_name="__record__", evidence=evidence))
     return done()

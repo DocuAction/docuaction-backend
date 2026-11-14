@@ -116,13 +116,12 @@ def test_the_same_text_with_its_closing_quote_is_clear(tmp_path):
     'S6666666,1234567893,123456,SYNTHETIC,5" x 3" x 1"\n',                # three of them
 ], ids=["one-quote", "three-quotes"])
 def test_a_literal_quote_in_an_unquoted_field_does_not_block_a_valid_file(tmp_path, stray):
-    """A quote inside an UNQUOTED field is data to the CSV reader. It makes the
-    quote count odd, so the fast placement of the final record disagrees with
-    the tail; the file is then read as records, end to end, and is valid."""
+    """A quote inside an UNQUOTED field is data to the CSV reader: the file is
+    valid CSV, and it is read as records, end to end."""
     text = HEADER + "\n" + _row(1) + stray + "".join(_row(i, "x" * 40) for i in range(2, 4000))
     result = _run(tmp_path, "stray_quote.csv", text)
     assert "REF-SCH-008" not in _codes(result) and result["gate"] == pm.GATE_CLEAR, result["findings"]
-    assert "read as records to the end" in result["bound"]
+    assert "whole file was read as CSV records" in result["bound"]
 
 
 def test_a_valid_final_record_larger_than_the_tail_window_is_read_not_guessed(tmp_path):
@@ -131,7 +130,7 @@ def test_a_valid_final_record_larger_than_the_tail_window_is_read_not_guessed(tm
     text = _prefix() + 'S7777777,1234567893,123456,SYNTHETIC,"' + "line\n" * 20_000 + '"\n'
     result = _run(tmp_path, "huge_final.csv", text)
     assert "REF-SCH-008" not in _codes(result) and result["gate"] == pm.GATE_CLEAR, result["findings"]
-    assert "read as records to the end" in result["bound"]
+    assert "whole file was read as CSV records" in result["bound"]
 
 
 def test_a_cut_file_whose_tail_alone_looks_complete_is_blocked_whichever_ending(tmp_path):
@@ -140,15 +139,6 @@ def test_a_cut_file_whose_tail_alone_looks_complete_is_blocked_whichever_ending(
                 + "x" * 70_000 + ending + "a,b,c,d,e" + ending)
         result = _run(tmp_path, "open_quote_cr.csv", text)
         assert result["gate"] == pm.GATE_BLOCKED and "REF-SCH-008" in _codes(result), ending
-
-
-def test_the_bound_states_how_the_final_record_was_placed(tmp_path):
-    result = _run(tmp_path, "plain_large.csv", _prefix())
-    assert result["gate"] == pm.GATE_CLEAR
-    assert "quote characters counted over the whole file" in result["bound"]
-    assert "read as records to the end" not in result["bound"]
-    small = _run(tmp_path, "plain_small.csv", HEADER + "\n" + _row(1))
-    assert "quote characters counted" not in small["bound"]      # the whole file was parsed
 
 
 # -- 4. existence of a data record is not the sampled count --------------------
@@ -169,3 +159,126 @@ def test_a_record_between_two_large_runs_of_blank_lines_is_found(tmp_path):
     text = HEADER + "\n" + "\n" * 70_000 + _row(1) + "\n" * 70_000
     result = _run(tmp_path, "blanks_record_blanks.csv", text)
     assert "REF-SCH-012" not in _codes(result) and result["gate"] == pm.GATE_CLEAR, result["findings"]
+
+
+# -- round 2 (review of fc31299, 2026-11-14): quote parity is not CSV field state --
+
+import csv  # noqa: E402
+import io  # noqa: E402
+import random  # noqa: E402
+
+
+def _strict_last_record(text: str):
+    """What a strict CSV read of the WHOLE text says: its last non-empty record,
+    or None when the text is not complete CSV. Written here, apart from the
+    module under test, as the reference the gate has to agree with."""
+    try:
+        rows = [r for r in csv.reader(io.StringIO(text, newline=""), strict=True) if r]
+    except csv.Error:
+        return None
+    return rows[-1] if rows else []
+
+
+def test_an_even_quote_count_does_not_hide_an_unterminated_final_field(tmp_path):
+    """The reviewer's file. A literal quote in an earlier UNQUOTED field plus the
+    opening quote of the final, never-closed field make the number of quotes in
+    front of the tail EVEN, so parity said the tail starts outside a quoted
+    field and `a,b,c,d,e` was accepted as a complete final record."""
+    text = ("HCO_HCE_ID,ORG_NPI,ORG_CCN_ID,col4,col5\n"
+            + '1,2,3,4,5" PIPE\n'
+            + "1,2,3,4,5\n" * 7000
+            + '1,2,3,4,"' + "x" * 70_000 + "\na,b,c,d,e\n")
+    assert _strict_last_record(text) is None, "a strict parse rejects this file"
+    result = _run(tmp_path, "even_quotes_open_field.csv", text)
+    assert result["gate"] == pm.GATE_BLOCKED and "REF-SCH-008" in _codes(result), result["findings"]
+    finding = next(f for f in result["findings"] if f["code"] == "REF-SCH-008")
+    assert "quoted" in finding["description"], finding["description"]
+    assert finding["evidence"]["reader_error"] == "ends_inside_quoted_field"
+
+
+@pytest.mark.parametrize("stray_quotes", [1, 2, 3, 4])
+@pytest.mark.parametrize("closed", [True, False], ids=["closed", "cut"])
+def test_any_number_of_stray_quotes_before_an_open_or_closed_final_field(tmp_path, stray_quotes, closed):
+    stray = "1,2,3,4," + 'q" ' * stray_quotes + "end\n"
+    text = ("HCO_HCE_ID,ORG_NPI,ORG_CCN_ID,col4,col5\n" + stray + "1,2,3,4,5\n" * 7000
+            + '1,2,3,4,"' + "x" * 70_000 + "\na,b,c,d,e\n" + ('"\n' if closed else ""))
+    result = _run(tmp_path, "stray_then_field.csv", text)
+    expected_clear = _strict_last_record(text) is not None
+    assert expected_clear is closed
+    assert ("REF-SCH-008" not in _codes(result)) is expected_clear, (stray_quotes, closed, result["findings"])
+
+
+def test_the_gate_agrees_with_a_strict_parse_on_random_files(tmp_path):
+    """Differential: for random files over the tail window, built from quoted and
+    unquoted fields, doubled quotes, literal quotes in unquoted fields, embedded
+    line breaks and all three record endings, then cut at a random point or left
+    whole, the final-record verdict is exactly a strict whole-file parse's."""
+    rng = random.Random(20261114)
+    pieces = ['plain', 'two words', '"quoted"', '"with, comma"', '"doubled "" quote"',
+              '"line\nbreak"', '"cr\rbreak"', '"crlf\r\nbreak"', 'stray" quote', '5" x 3"',
+              '', '""', '"' + "x" * 300 + '"']
+    disagreements = []
+    for case in range(60):
+        ending = rng.choice(["\n", "\r\n", "\r"])
+        body = ["A,B,C,D,E"]
+        size = 0
+        while size < 90_000:
+            row = ",".join(rng.choice(pieces) for _ in range(5))
+            body.append(row)
+            size += len(row) + 2
+        text = ending.join(body) + ending
+        if rng.random() < 0.6:                       # cut somewhere in the last part
+            text = text[:len(text) - rng.randint(1, 400)]
+        if rng.random() < 0.3:                       # or end on an opened, never closed field
+            text += 'a,b,c,d,"open' + ending + "a,b,c,d,e" + ending
+        path = tmp_path / f"diff_{case}.csv"
+        path.write_bytes(text.encode("utf-8"))
+        result = rp.preflight_reference_file(path, HCO)
+        last = _strict_last_record(text)
+        want_block = last is None or len(last) != 5
+        got_block = "REF-SCH-008" in _codes(result)
+        if want_block != got_block:
+            disagreements.append((case, repr(ending), want_block, got_block))
+    assert not disagreements, disagreements
+
+
+def test_a_field_beyond_the_readers_limit_is_blocked_for_what_it_is(tmp_path):
+    """The importer reads with the csv module's field limit as it stands
+    (csv.field_size_limit(), 131,072 by default) and fails on a longer field. The
+    gate reads with the same limit, blocks the same file, and says a field is too
+    long - not that the file is truncated."""
+    limit = csv.field_size_limit()
+    text = _prefix() + 'S7777777,1234567893,123456,SYNTHETIC,"' + "x" * (limit + 10) + '"\n' + _row(9001)
+    with pytest.raises(csv.Error):                   # what the importer's reader does with it
+        list(csv.DictReader(io.StringIO(text, newline="")))
+    result = _run(tmp_path, "long_field.csv", text)
+    assert result["gate"] == pm.GATE_BLOCKED and "REF-SCH-008" in _codes(result)
+    finding = next(f for f in result["findings"] if f["code"] == "REF-SCH-008")
+    assert finding["evidence"]["reader_error"] == "field_longer_than_reader_limit"
+    assert finding["evidence"]["reader_field_limit"] == limit
+    assert "longer than" in finding["description"] and "truncated" not in finding["description"]
+    assert csv.field_size_limit() == limit, "the process-wide limit is not changed"
+
+
+def test_a_field_just_inside_the_readers_limit_is_read(tmp_path):
+    limit = csv.field_size_limit()
+    text = _prefix() + 'S7777777,1234567893,123456,SYNTHETIC,"' + "x" * (limit - 10) + '"\n' + _row(9001)
+    result = _run(tmp_path, "long_ok_field.csv", text)
+    assert "REF-SCH-008" not in _codes(result) and result["gate"] == pm.GATE_CLEAR, result["findings"]
+
+
+def test_a_large_files_bound_says_the_whole_file_was_read_as_records(tmp_path):
+    result = _run(tmp_path, "plain_large.csv", _prefix())
+    assert result["gate"] == pm.GATE_CLEAR
+    assert "whole file was read as CSV records" in result["bound"]
+    assert "not a full-file scan" not in result["bound"]
+    assert "quote characters counted" not in result["bound"]
+    assert result["records_read"] == 4000 + 1          # header + 4,000 records
+    small = _run(tmp_path, "plain_small.csv", HEADER + "\n" + _row(1))
+    assert "whole file was read as CSV records" in small["bound"]
+    assert small["records_read"] == 2
+
+
+def test_no_quote_parity_shortcut_remains():
+    for name in ("_quotes_before", "_record_starts", "_final_record_from_tail"):
+        assert not hasattr(rp, name), name

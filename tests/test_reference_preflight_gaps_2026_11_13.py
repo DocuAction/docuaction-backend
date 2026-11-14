@@ -100,7 +100,12 @@ def test_the_stated_bound_is_what_was_actually_read(tmp_path):
     sampled = result["rows_sampled"]
     assert 0 < sampled < 1000, sampled                            # 64 KiB of ~230-byte rows
     assert f"the first {sampled} record(s)" in result["bound"] and "64 KiB" in result["bound"]
-    assert "first 1000 records" not in result["bound"] and "not a full-file scan" in result["bound"]
+    assert "first 1000 records" not in result["bound"]
+    # 2026-11-14, second review of #216: the final record is established by a
+    # strict read of the whole file, so the bound no longer says "not a full-file
+    # scan"; it says what is checked for field count and what was read.
+    assert "not a full-file scan" not in result["bound"]
+    assert "whole file was read as CSV records" in result["bound"]
     narrow = HEADERS[sm.SOURCE_IQVIA_HCO] + "\n" + "".join(f"S{i:07d},1,2,3,4\n" for i in range(5000))
     result = rp.preflight_reference_file(_write(tmp_path / "narrow.csv", narrow), sm.SOURCE_IQVIA_HCO)
     assert result["rows_sampled"] == rp.SAMPLE_ROWS and "the first 1000 record(s)" in result["bound"]
