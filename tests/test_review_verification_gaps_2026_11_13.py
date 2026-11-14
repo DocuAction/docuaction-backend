@@ -345,6 +345,7 @@ async def test_stored_error_contract_through_stage_to_dict_and_timeline(
     assert sanitize_stored_error(one["failure_reason"], failure_class=failure_class)         == one["failure_reason"]
     await db.refresh(event)
     assert event.failure_reason == reason
+    assert event.detail == stored_detail, "the stored detail is unchanged too"
 
 
 @pytest.mark.parametrize("failure_class,reason", [
