@@ -298,12 +298,15 @@ def _sanitize_error_value(value: str) -> str:
     application produces is shown:
 
       * the withheld form ("Class (message withheld ...)");
-      * a controlled class in front of its message ("ValueError: ...");
       * a bare code: an exception class name ("TimeoutError") or a token this
         application writes ("worker_stopped_without_reporting").
 
-    Anything else is withheld whole. A legacy DOMAIN message stored without its
-    class is withheld too; the job's own `error_reason` still carries it.
+    Anything else is withheld. A message with a class name in front keeps the
+    name and loses the message, for every class: under an error key there is
+    no stored class to check the name against. A domain message is still shown
+    where its class has provenance - the job's `error_reason` (the class there
+    was always written from `type(exc).__name__`) and a stage event's
+    `failure_reason` (which has `failure_class` beside it).
     """
     masked = sanitize_stored_error(value)
     if masked != value:
@@ -311,8 +314,13 @@ def _sanitize_error_value(value: str) -> str:
     if _ANY_WITHHELD.fullmatch(value) or _is_trusted_error_code(value):
         return value
     lead = _CLASS_LEAD_IN.match(value)
-    if lead and (lead.group("cls") or lead.group("bare")) in CONTROLLED_FAILURE_CLASSES:
-        return value
+    if lead:
+        # A class name in FRONT of the message is not provenance here: nothing
+        # stored beside this value says which exception was raised, and a legacy
+        # str(exc) can itself begin "ValueError: ...". The name is kept; the
+        # message is withheld for every class, listed or not.
+        return ((lead.group("stage") or "") + (lead.group("cls") or lead.group("bare"))
+                + _ERROR_WITHHELD)
     return _ERROR_WITHHELD.strip()
 
 
