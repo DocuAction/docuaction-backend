@@ -158,6 +158,15 @@ class CycleRefused(RuntimeError):
     """The cycle could not be created, and the reason is stated."""
 
 
+def _empty_verification_summary():
+    from app.Tefca.entity_resolution import resolver_configuration_warnings, resolver_source
+
+    return {"requested": 0, "verified": 0, "unresolved": [], "bucket_counts": {},
+            "resolver_source": resolver_source(),
+            "configuration_warnings": resolver_configuration_warnings(),
+            "execution_status": "NO_RECORDS_REQUESTED"}
+
+
 @asynccontextmanager
 async def _cycle_session(db):
     """Keep one physical connection for the session-scoped delivery lock.
@@ -343,8 +352,7 @@ async def _create_review_cycle(
 
         this_call = unlinked[:batch]
 
-        verified: Dict[str, Any] = {"requested": 0, "verified": 0,
-                                    "unresolved": [], "bucket_counts": {}}
+        verified: Dict[str, Any] = _empty_verification_summary()
         if skipped_held:
             verified["skipped_held"] = skipped_held
             verified["skipped_held_reason"] = "VERIFY_SKIPPED_HELD"

@@ -76,6 +76,10 @@ async def test_real_bulk_writer_cases_count_only_for_their_anchored_delivery(
     assert single == batch[a]
     assert single["total"] == 2 and single["qa_approved"] == 1 and single["open"] == 1
     assert batch[b]["total"] == 0  # The entities are SHARED with delivery B.
+    from app.tefca_registry.rce import delivery_routes
+    fallback = await delivery_routes._review_counts(db, a)
+    assert fallback["open_work_items"] == 1 and fallback["qa_approved"] == 1
+    assert (await delivery_routes._review_counts(db, b))["qa_approved"] == 0
 
 
 @pytest.mark.asyncio
@@ -92,6 +96,42 @@ async def test_record_anchor_takes_precedence_over_a_conflicting_legacy_stamp(
     await db.flush()
     counts = await jobs._review_counts_by_intake(db, [a, b])
     assert counts[a]["total"] == 1 and counts[b]["total"] == 0
+    from app.tefca_registry.rce import delivery_routes
+    assert (await delivery_routes._review_counts(db, a))["open_work_items"] == 1
+    assert (await delivery_routes._review_counts(db, b))["open_work_items"] == 0
+
+
+def test_empty_cycle_summary_still_discloses_fixture_configuration(monkeypatch):
+    from app.tefca_registry.review_cycle import _empty_verification_summary
+    monkeypatch.delenv(er.ENV_VAR, raising=False)
+    result = _empty_verification_summary()
+    assert result["execution_status"] == "NO_RECORDS_REQUESTED"
+    assert result["resolver_source"] == "mock" and result["configuration_warnings"]
+
+
+@pytest.mark.parametrize("reason", [
+    'duplicate key value violates constraint DETAIL: Key (email)=(SYNTHETIC_SECRET) already exists',
+    'invalid input syntax for type uuid: "SYNTHETIC_SECRET"',
+])
+@pytest.mark.asyncio
+async def test_timeline_masks_bare_legacy_driver_text_without_rewriting_it(rolled_back_db, reason):
+    from app.tefca_registry.rce import stage_events
+    from rce_traceability_support import seed_intake, make_rows
+    db = rolled_back_db
+    intake, job = await seed_intake(db, make_rows(1))
+    event = await stage_events.record_instant(db, job.id, "PROMOTION", status="FAILED",
+                                            intake_id=intake, failure_reason=reason)
+    event.failure_class = "UniqueViolationError"
+    await db.flush()
+    timeline = await stage_events.timeline(db, job.id)
+    assert "SYNTHETIC_SECRET" not in json.dumps(timeline, default=str)
+    assert event.failure_reason == reason
+
+
+def test_controlled_domain_failure_remains_readable():
+    from app.core.logging_config import sanitize_stored_error
+    reason = "CURATION: ValueError: missing documented field"
+    assert sanitize_stored_error(reason, failure_class="ValueError") == reason
 
 
 @pytest.mark.asyncio
@@ -158,3 +198,9 @@ async def test_cycle_lock_connection_survives_commit_and_pool_churn(db_required)
                     await pinned.commit()
     finally:
         await engine.dispose()
+
+
+def test_a_withheld_marker_inside_a_driver_payload_does_not_make_it_safe():
+    from app.core.logging_config import sanitize_stored_error
+    raw = "SYNTHETIC_SECRET (message withheld from evidence; appended by source)"
+    assert "SYNTHETIC_SECRET" not in sanitize_stored_error(raw, failure_class="UniqueViolationError")

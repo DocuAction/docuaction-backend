@@ -144,7 +144,7 @@ _DRIVER_CLASS = re.compile(r"(<class '[\w.]+'>)")
 _DIALECT_CLASS = re.compile(r"(\((?:sqlalchemy|asyncpg|psycopg2?|psycopg)[\w.]*\))")
 
 
-def sanitize_stored_error(value: Any) -> Any:
+def sanitize_stored_error(value: Any, *, failure_class: str | None = None) -> Any:
     """Mask driver payloads in an error string persisted before PR #85.
 
     Pure, idempotent, and a no-op on the controlled strings this application
@@ -168,6 +168,25 @@ def sanitize_stored_error(value: Any) -> Any:
         withheld = bool(rest.strip(" :\n\t"))
     if withheld:
         text = text.rstrip() + _ERROR_WITHHELD
+    if failure_class and text == value:
+        # Old stage writers stored str(exc), but also retained its class.
+        # Unformatted historical messages are not safe merely because they
+        # lack SQLAlchemy markers. Preserve only the controlled domain-error
+        # vocabulary and the explicit withheld-message format of our writer.
+        controlled = (
+            "ValueError", "LookupError", "KeyError", "IndexError",
+            "IntakeError", "LineCountMismatch", "NotADelimitedFile",
+            "CorrectionRefused", "ReconciliationFailure", "SnapshotRefused",
+            "ApprovalRefused", "DeliveryJobConflict",
+        )
+        prefix = re.match(r"^(?:[A-Z_]+: )?([A-Za-z_][A-Za-z_0-9]*):", text)
+        already_withheld = re.fullmatch(
+            rf"{re.escape(failure_class)} \(message withheld from evidence; see the server log"
+            r"(?: for correlation id [A-Za-z0-9_.:-]{1,64})?\)", text) is not None
+        if not already_withheld and not (prefix and prefix.group(1) in controlled
+                                          and prefix.group(1) == failure_class):
+            name = failure_class if re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]{0,127}", failure_class) else "Error"
+            return name + _ERROR_WITHHELD
     return text if text != value else value
 
 
