@@ -157,7 +157,7 @@ class RceDeliveryStageEvent(Base):
             "rejected_count": self.rejected_count,
             "failure_class": self.failure_class,
             "failure_reason": sanitize_stored_error(self.failure_reason, failure_class=self.failure_class),
-            "detail": sanitize_stored_error_tree(self.detail or {}),
+            "detail": sanitize_stored_error_tree(self.detail or {}, strict_error_keys=True),
             "correlation_id": self.correlation_id, "worker_id": self.worker_id,
             "build_sha": self.build_sha,
         }
