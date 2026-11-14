@@ -372,6 +372,7 @@ async def _run_after_area1(db, job, detail: Dict[str, Any], intake_id,
                          detail={"passed": passed,
                                  "snapshot_id": recon.get("snapshot_id"),
                                  "snapshot_error": recon.get("snapshot_error"),
+                                 "snapshot_error_writer": recon.get("snapshot_error_writer"),
                                  "failed_checks": [c["check"] for c in
                                                    (full.get("failed_checks") or [])][:20],
                                  "equation": eq})
