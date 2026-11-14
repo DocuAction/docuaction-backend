@@ -56,8 +56,12 @@ async def _ensure_table():
             real_engine = engine.__class__.__mro__  # Check if proxy
             from app.core.database import _get_engine
             e = _get_engine()
+            # Never plain `create_all`: it would let the runtime role create
+            # (and own) the migration-owned append-only evidence tables,
+            # including rce_record_comments, before their governed migration.
+            from app.core.schema_guard import create_all_except_migration_owned
             async with e.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
+                await conn.run_sync(create_all_except_migration_owned, Base.metadata)
             _table_created = True
         except Exception as ex:
             logger.warning(f"Table creation: {ex}")
