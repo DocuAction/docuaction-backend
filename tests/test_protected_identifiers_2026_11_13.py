@@ -426,3 +426,48 @@ class TestASingleTokenFollowedByAnIdentifierWord:
                                       "margin_no: 000000001", "retain_id=000000001"])
     def test_words_ending_in_a_label_still_do_not_match(self, text):
         assert pi.find_in_text(text) == [], text
+
+
+class TestTheSeparatorRunInsideALabelIsBounded:
+    """Review item W8 (2026-11-14). The run of separators inside a label
+    (`TAX___ID`, `tax - payer   id`) was `[\s_\-]*`: unbounded. It is now at most
+    `LABEL_SEPARATOR_MAX` characters and is matched without backtracking.
+
+    THE STATED LIMIT: a label whose words are more than that many separators
+    apart is not read as a label, so a bare value after it is not found by the
+    label rule (the written NN-NNNNNNN shape is still found by its own rule)."""
+
+    def test_the_bound_is_what_the_pattern_uses(self):
+        assert pi.LABEL_SEPARATOR_MAX == 64
+        assert "*" not in pi._SEP and "{0,64}" in pi._SEP
+
+    @pytest.mark.parametrize("sep", ["_", " ", "-", " _-"])
+    def test_a_label_at_the_bound_is_still_found_and_redacted(self, sep):
+        run = (sep * pi.LABEL_SEPARATOR_MAX)[:pi.LABEL_SEPARATOR_MAX]
+        text = f"tax{run}id: {SYN_EIN_BARE}"
+        assert pi.find_in_text(text) == ["labelled_tax_identifier"]
+        assert SYN_EIN_BARE not in pi.redact_text(text)
+
+    def test_one_past_the_bound_is_the_documented_limit(self):
+        run = "_" * (pi.LABEL_SEPARATOR_MAX + 1)
+        assert pi.find_in_text(f"tax{run}id: {SYN_EIN_BARE}") == []          # the limit, stated
+        assert pi.find_in_text(f"tax{run}id: {SYN_EIN}") == ["ein_shaped_value"]   # shape rule unaffected
+
+    def test_long_separator_input_finishes_well_inside_a_fixed_budget(self):
+        import time
+
+        hostile = [
+            "tax" + "_" * 200_000,
+            ("tax" + " -_" * 20_000) * 3,
+            "employer" + " " * 200_000 + "x",
+            ("tax" + "_" * 70) * 3_000,
+            "tax" + "-" * 100_000 + "id" + "-" * 100_000,
+            ("tax_id" + "_" * 70 + "x ") * 3_000,
+            "-" * 400_000,
+        ]
+        started = time.perf_counter()
+        for text in hostile:
+            assert pi.find_in_text(text) == []
+            assert pi.redact_text(text) == text
+        seconds = time.perf_counter() - started
+        assert seconds < 5.0, f"{seconds:.2f}s for {sum(map(len, hostile)):,} characters"
