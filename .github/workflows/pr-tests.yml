@@ -153,7 +153,11 @@ jobs:
             tests/test_sampling_eligibility_review_required.py \
             tests/test_proposed_rules_v5_inactive_2026_11_07.py \
             tests/test_iqvia_advisory_routes_2026_11_08.py \
+            tests/test_delivery_status_error_masking_2026_11_13.py \
             tests/test_iqvia_routes.py \
+            tests/test_iqvia_upload_ownership_2026_11_13.py \
+            tests/test_review_hub_2026_11_13.py \
+            tests/test_review_hub_workflow_2026_11_13.py \
             tests/test_iqvia_import_durability.py \
             tests/test_ex3_consistency_guard_2026_11_08.py \
             tests/test_sampling_audit_label_parity_2026_11_07.py \

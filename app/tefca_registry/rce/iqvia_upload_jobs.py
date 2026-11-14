@@ -45,6 +45,31 @@ async def get_upload_session(db, upload_id) -> Optional[IqviaUploadSession]:
     return await db.get(IqviaUploadSession, upload_id)
 
 
+async def lock_upload_session(db, upload_id) -> Optional[IqviaUploadSession]:
+    """The session row, locked FOR UPDATE and re-read from the database.
+
+    Writing a chunk and completing an upload both take this lock before they
+    look at `status` / `snapshot_id`, so the two cannot interleave: a chunk
+    whose body was still arriving when the upload was completed sees the closed
+    state and writes nothing. The lock is released by the caller's next commit
+    or rollback. `populate_existing` matters: without it the session's cached
+    copy of the row would be returned and the re-check would test stale state.
+    """
+    return (await db.execute(
+        select(IqviaUploadSession).where(IqviaUploadSession.id == upload_id)
+        .with_for_update().execution_options(populate_existing=True))).scalar_one_or_none()
+
+
+async def close_upload_to_writes(db, upload_id) -> None:
+    """UPLOADING -> COMPLETE ("all chunks received, not yet staged"), committed.
+    Called with the row lock held; the commit releases it. From here no chunk
+    can be written, so the hash taken next is the hash of the bytes staged."""
+    session = await db.get(IqviaUploadSession, upload_id)
+    if session is not None and session.status == IqviaUploadSession.STATUS_UPLOADING:
+        session.status = IqviaUploadSession.STATUS_COMPLETE
+    await db.commit()
+
+
 async def record_chunk_received(db, *, upload_id, chunk_index: int) -> None:
     """Idempotent: retrying the same chunk index is a no-op here (the bytes
     themselves are overwritten at their file offset regardless; this table
