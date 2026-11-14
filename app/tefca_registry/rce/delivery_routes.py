@@ -468,9 +468,9 @@ async def _unresolved_findings(db, intake_id) -> int:
 async def _review_counts(db, intake_id) -> Dict[str, int]:
     """Where the humans are, from review_records tied to the delivery.
 
-    A case is tied to the delivery either through the DQ bridge stamp
-    (`verification_results.source_intake_id`) or through a promoted entity of
-    the delivery (review-cycle cases). QA in progress is not derivable from the
+    A case is tied through its immutable source record first, then an explicit
+    legacy delivery stamp. Shared entities never identify a delivery.
+    QA in progress is not derivable from the
     record alone and is reported as zero here; lane P's `status_for_job` reads
     the QA gate events for it.
     """
@@ -491,7 +491,8 @@ async def _review_counts(db, intake_id) -> Dict[str, int]:
                              AS qa_pending,
           count(*) FILTER (WHERE reportable_at IS NOT NULL) AS qa_approved
         FROM review_records r
-        WHERE r.verification_results->>'source_intake_id' = :i
+        LEFT JOIN rce_source_records s ON s.id = r.source_record_id
+        WHERE coalesce(s.source_intake_id::text, r.verification_results->>'source_intake_id') = :i
         GROUP BY 1"""),
         {"i": str(intake_id)})).all()
     out = {"open_work_items": 0, "claimed_work_items": 0, "qa_pending": 0,
