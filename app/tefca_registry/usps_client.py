@@ -392,15 +392,12 @@ def _scrub_credentials(text: str, secrets) -> str:
         if not spells_one(result):
             return result
     # No marker works: the spans are removed outright. What stood on either side
-    # of one can then touch and spell a credential again, so repeat; the text
-    # only gets shorter, so this ends.
+    # of one can then touch and spell a credential again; if it does, nothing of
+    # this text is safe to show and it is withheld whole (fail closed - the
+    # earlier repeat-until-shorter loop could give up and return the credential;
+    # review finding 2026-11-14).
     result = assembled("")
-    while spells_one(result):
-        shorter = _scrub_credentials(result, secrets)
-        if len(shorter) >= len(result):
-            break
-        result = shorter
-    return result
+    return "" if spells_one(result) else result
 
 
 #: What stands in for a removed credential, first one that does not itself

@@ -497,3 +497,18 @@ def test_scrubbing_a_long_text_of_repeated_echoes_finishes_quickly():
     out = uc._scrub_credentials(text, ("redact",))
     assert _time.perf_counter() - started < 5.0
     assert "redact" not in _squeezed(out) and out.endswith("tail")
+
+
+@pytest.mark.parametrize("text,secrets", [
+    ("]#*", ("#", "]*")),                 # removing one credential joins its neighbours into another
+    ("a]#*b", ("#", "]*")),
+    ("xx]##*yy", ("#", "]*")),
+])
+def test_when_no_marker_is_safe_the_description_is_withheld_whole(text, secrets):
+    """Review finding 2026-11-14: with no usable marker the spans were removed,
+    the neighbours joined into a configured credential, and the fallback
+    returned that credential. It now fails closed: nothing is returned."""
+    out = uc._scrub_credentials(text, secrets)
+    squeezed = "".join(ch for ch in out if not ch.isspace())
+    assert all(secret not in squeezed for secret in secrets), out
+    assert out == ""
