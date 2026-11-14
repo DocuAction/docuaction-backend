@@ -26,6 +26,7 @@ import json
 from datetime import datetime
 
 import pytest
+from sqlalchemy import select
 
 from app.core import logging_config as lc
 from app.core.logging_config import sanitize_stored_error, sanitize_stored_error_tree
@@ -286,8 +287,6 @@ BARE_UNDER_ERROR_KEY = [
     f"connection to {SECRET} refused",
 ]
 WRITER_SHAPES_UNDER_ERROR_KEY = [
-    "ValueError: declared delimiter not found",
-    "IntakeError: file is empty",
     "RuntimeError (message withheld from evidence; see the server log for correlation id abc)",
     "UniqueViolationError (message withheld from evidence; see the server log)",
     "TimeoutError",                       # a bare class name, as connector readiness writes it
@@ -467,3 +466,79 @@ class TestLegacyRecheckItemErrors:
                               entity_ref="SYNTHETIC-4", state="ERROR",
                               detail={"error": stored, "note": "kept"})
         assert rechecks.item_dto(item)["detail"] == {"error": stored, "note": "kept"}
+
+
+# ── 2026-11-14, fourth pass (review of cfdfba3) ──────────────────────────────
+#
+# Under an error key nothing stored beside the text says which exception was
+# raised. A legacy `str(exc)` can itself begin "ValueError: ...", so a class
+# name in FRONT of the message is not provenance there. The message is
+# withheld for every class; the class name, the withheld form and bare codes
+# are what remains. The job's `error_reason` (whose class always came from
+# `type(exc).__name__`) and a stage event's `failure_reason` (which has
+# `failure_class` beside it) still carry a domain message.
+
+PREFIXED_UNDER_ERROR_KEY = [
+    f"ValueError: {SECRET}",
+    f"IntakeError: row 3 holds {SECRET}",
+    f"PROMOTION: ValueError: {SECRET}",
+    f"KeyError: '{SECRET}'",
+]
+
+
+@pytest.mark.parametrize("reason", PREFIXED_UNDER_ERROR_KEY)
+def test_a_class_name_in_front_is_not_provenance_under_an_error_key(reason):
+    out = sanitize_stored_error_tree({"PROMOTION": {"error": reason}}, strict_error_keys=True)
+    shown = out["PROMOTION"]["error"]
+    assert SECRET not in shown and "withheld" in shown, shown
+    assert sanitize_stored_error_tree(out, strict_error_keys=True) == out
+    # The same text as a job's error_reason keeps its message: there the class
+    # in front was written from type(exc).__name__ by every runner.
+    if not reason.startswith("KeyError"):
+        assert sanitize_stored_error(reason) == reason
+
+
+@pytest.fixture
+async def stored_failed_job(rolled_back_db):  # noqa: F811
+    """A persisted FAILED job whose stage_detail holds legacy per-stage errors."""
+    db = rolled_back_db
+    intake_id, job = await seed_intake(db, make_rows(2))
+    stored = {"PROMOTION": {"error": f"ValueError: {SECRET}", "completed": False},
+              "CURATION": {"error": f"invalid input syntax for type uuid: \"{SECRET}\""},
+              "QUALITY": {"completed": True, "records": 2},
+              "RECONCILIATION": {"snapshot_error": SECRET}}
+    job.state = RceDeliveryJob.STATE_FAILED
+    job.active_marker = None
+    job.failed_at = datetime.utcnow()
+    job.error_reason = "PROMOTION did not complete: ValueError: declared delimiter not found"
+    job.stage_detail = stored
+    await db.commit()
+    jobs.reset_list_status_cache()
+    return db, intake_id, job, json.loads(json.dumps(stored))
+
+
+@pytest.mark.regression
+@pytest.mark.parametrize("role", ["viewer", "admin"])
+async def test_a_persisted_job_is_masked_through_every_response_and_not_rewritten(
+        stored_failed_job, role):
+    from app.tefca_registry.rce.delivery_dashboard import delivery_dashboard
+
+    db, intake_id, job, stored = stored_failed_job
+    one = await routes.get_delivery_job(str(job.id), db=db, user=_User(role))
+    assert SECRET not in json.dumps(one, default=str)
+    listing = await routes.list_delivery_jobs(limit=50, offset=0, state="FAILED", db=db,
+                                              user=_User(role))
+    assert str(job.id) in {i["job_id"] for i in listing["items"]}
+    assert SECRET not in json.dumps(listing, default=str)
+    assert SECRET not in json.dumps(await jobs.status_for_job(db, job), default=str)
+
+    # The FULL dashboard response, not only the stage checklist.
+    dashboard = await delivery_dashboard(db, intake_id)
+    text = json.dumps(dashboard, default=str)
+    assert SECRET not in text, text[:400]
+    assert "declared delimiter not found" in text, "the job's own reason is still shown"
+
+    reloaded = (await db.execute(
+        select(RceDeliveryJob).where(RceDeliveryJob.id == job.id)
+        .execution_options(populate_existing=True))).scalar_one()
+    assert reloaded.stage_detail == stored, "the stored evidence row is unchanged"
