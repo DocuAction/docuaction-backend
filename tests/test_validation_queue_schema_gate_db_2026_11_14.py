@@ -141,3 +141,43 @@ async def test_where_schema_mutation_is_allowed_behaviour_is_unchanged(empty_dat
     assert "validation_queue" in created
     assert not (created & set(tm.MIGRATION_OWNED_TABLES))
     assert "rce_record_comments" not in created
+
+
+# ── model-review follow-up, 2026-11-14 ───────────────────────────────────────
+
+async def test_a_check_that_cannot_be_made_is_unavailable_not_not_applied(
+        empty_database, monkeypatch):
+    """A failed existence check says nothing about the table. It used to be
+    reported as 409 "not applied", which tells an operator to run a migration."""
+    _production(monkeypatch)
+
+    def _broken():
+        raise RuntimeError("synthetic: no engine")
+
+    monkeypatch.setattr(database, "_get_engine", _broken)
+    with pytest.raises(HTTPException) as refused:
+        await vr._ensure_table()
+    assert refused.value.status_code == 503
+    assert refused.value.detail["code"] == "VALIDATION_QUEUE_UNAVAILABLE"
+    assert vr._table_present is False
+
+
+async def test_a_declined_queue_item_is_logged_with_what_was_not_queued(
+        empty_database, monkeypatch, caplog):
+    """The output was meant for human review and was not queued. The log line
+    must say which document and output, and why, so it can be found and queued
+    once the table exists. Identifiers only - never the content preview."""
+    import logging
+
+    _production(monkeypatch)
+    with caplog.at_level(logging.WARNING, logger=vr.logger.name):
+        out = await vr.auto_queue_output(
+            None, "synthetic-user", "default", "doc-SYN-1", "synthetic.txt", "out-SYN-9",
+            "summary", confidence=0.10, domain="healthcare",
+            content_preview="SYNTHETIC PREVIEW TEXT THAT MUST NOT BE LOGGED")
+    assert out is None
+    line = "\n".join(r.getMessage() for r in caplog.records)
+    assert "doc-SYN-1" in line and "out-SYN-9" in line
+    assert "VALIDATION_QUEUE_NOT_APPLIED" in line and "healthcare" in line
+    assert "SYNTHETIC PREVIEW TEXT" not in line
+    assert await empty_database() == set()

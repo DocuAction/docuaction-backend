@@ -88,9 +88,14 @@ async def _ensure_table():
                 found = (await conn.execute(
                     _text("select to_regclass(:name)"),
                     {"name": ValidationItem.__tablename__})).scalar()
-        except Exception as ex:  # noqa: BLE001 - unreadable is not "present"
+        except Exception as ex:  # noqa: BLE001 - unreadable is neither present nor absent
+            # The check could not be made. That says nothing about the table, so
+            # it is not reported as "not applied" (which tells an operator to run
+            # a migration): the queue is unavailable, and nothing is remembered.
             logger.warning("Validation queue table check failed: %s", type(ex).__name__)
-            found = None
+            raise HTTPException(503, detail={
+                "code": "VALIDATION_QUEUE_UNAVAILABLE",
+                "error": "the validation queue could not be checked; try again"})
         if found is None:
             raise _queue_not_applied()
         _table_present = True
@@ -135,11 +140,18 @@ async def auto_queue_output(
     """Automatically queue an output for validation if criteria met."""
     try:
         await _ensure_table()
-    except HTTPException:
-        # Called from inside other routes: a queue that has not been applied
-        # here must not fail the request that produced the output. Nothing is
-        # queued, nothing is created, and it is logged.
-        logger.warning("Validation queue not applied in this environment; output not queued")
+    except HTTPException as refused:
+        # Called from inside other routes: a queue that cannot be used here must
+        # not fail the request that produced the output. Nothing is queued and
+        # nothing is created - and because this output may have been due for
+        # human review, the line says WHICH one was not queued and why, so it
+        # can be found once the table exists. Identifiers only, never content.
+        detail = refused.detail if isinstance(refused.detail, dict) else {}
+        logger.warning(
+            "Validation queue unavailable (%s); output NOT queued for review: "
+            "document_id=%s output_id=%s action_type=%s domain=%s",
+            detail.get("code", refused.status_code), document_id, output_id,
+            action_type, domain)
         return None
 
     should_queue = False
