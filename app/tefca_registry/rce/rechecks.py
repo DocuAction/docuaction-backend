@@ -65,6 +65,7 @@ if TYPE_CHECKING:  # annotation-only: the runtime import stays function-local
 
 from app.Tefca import source_policy as sp
 from app.core import request_context
+from app.core.logging_config import sanitize_stored_error, sanitize_stored_error_tree
 from app.tefca_registry import models as reg
 from app.tefca_registry.rce import models as m
 from app.tefca_registry.rce import recheck_models as rm
@@ -607,7 +608,7 @@ async def run_batch(db, job_id, *, batch_size: Optional[int] = None) -> Dict[str
             logger.error("recheck %s: unhandled error for %s: %s", job.id, item.entity_ref,
                          type(exc).__name__, exc_info=True)
             item.state, item.processed_at = rm.ITEM_ERROR, datetime.utcnow()
-            item.detail = {"error": f"{type(exc).__name__}: {exc}"[:500]}
+            item.detail = {"error": item_error_text(exc)}
 
     job.processed_count = (job.processed_count or 0) + len(items)
     job.heartbeat_at = datetime.utcnow()
@@ -700,6 +701,28 @@ async def reap_stale_jobs(db, threshold_seconds: int = STALE_HEARTBEAT_SECONDS
     return out
 
 
+def item_error_text(exc: BaseException) -> str:
+    """What is stored for an entity whose recheck raised: the write rule every
+    other evidence writer uses (`safe_exception_text`) - a domain message, or
+    the class name only for a driver or library exception. Before 2026-11-14
+    this stored `f"{type(exc).__name__}: {exc}"`, the raw message."""
+    from app.core.logging_config import safe_exception_text
+    return safe_exception_text(exc, 500)
+
+
+def item_dto(item: RceRecheckItem) -> Dict[str, Any]:
+    """One targeted entity as a caller receives it. `detail` is masked on read
+    (rows written before the writer was fixed still hold a raw message); the
+    stored row is never rewritten."""
+    return {"entity_id": str(item.entity_id), "entity_ref": item.entity_ref,
+            "state": item.state, "prior_disposition": item.prior_disposition,
+            "new_disposition": item.new_disposition, "outcome": item.outcome,
+            "prior_evidence_id": str(item.prior_evidence_id)
+            if item.prior_evidence_id else None,
+            "processed_at": item.processed_at.isoformat() if item.processed_at else None,
+            "detail": sanitize_stored_error_tree(item.detail or {})}
+
+
 def job_dto(job: RceRecheckJob) -> Dict[str, Any]:
     return {
         "job_id": str(job.id), "intake_id": str(job.intake_id),
@@ -712,7 +735,9 @@ def job_dto(job: RceRecheckJob) -> Dict[str, Any]:
         "untargeted_remaining": job.untargeted_remaining,
         "processed_count": job.processed_count, "batch_size": job.batch_size,
         "attempt_count": job.attempt_count, "max_attempts": RceRecheckJob.MAX_ATTEMPTS,
-        "summary": job.summary or {}, "error_reason": job.error_reason,
+        "summary": job.summary or {},
+        # Masked on read by the one stored-error contract; the row is unchanged.
+        "error_reason": sanitize_stored_error(job.error_reason),
         "created_at": job.created_at.isoformat() if job.created_at else None,
         "completed_at": job.completed_at.isoformat() if job.completed_at else None,
         "is_compliance_approval": False,
@@ -754,13 +779,7 @@ async def list_items(db, job_id, *, limit: int = 100, offset: int = 0) -> Dict[s
         .limit(limit).offset(offset))).scalars().all()
     return {"job_id": str(job.id), "total": total, "count": len(rows),
             "limit": limit, "offset": offset,
-            "items": [{"entity_id": str(r.entity_id), "entity_ref": r.entity_ref,
-                       "state": r.state, "prior_disposition": r.prior_disposition,
-                       "new_disposition": r.new_disposition, "outcome": r.outcome,
-                       "prior_evidence_id": str(r.prior_evidence_id)
-                       if r.prior_evidence_id else None,
-                       "processed_at": r.processed_at.isoformat() if r.processed_at else None,
-                       "detail": r.detail or {}} for r in rows]}
+            "items": [item_dto(r) for r in rows]}
 
 
 async def items_csv(db, job_id) -> str:

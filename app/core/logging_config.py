@@ -264,13 +264,69 @@ def sanitize_stored_error(value: Any, *, failure_class: str | None = None) -> An
     return value
 
 
-def sanitize_stored_error_tree(value: Any) -> Any:
-    """`sanitize_stored_error` applied to every string in a nested structure
-    (a job's `stage_detail`). Dicts and lists are copied; nothing is mutated."""
+#: A bare code as a writer stores it under an error key: an exception class
+#: name ("TimeoutError") or a controlled token ("worker_stopped_without_reporting").
+_ERROR_CODE = re.compile(r"[A-Za-z_][A-Za-z_0-9.\-]{0,127}")
+#: The withheld form for ANY class, as `safe_exception_text` and this module write it.
+_ANY_WITHHELD = re.compile(
+    r"(?:[A-Z][A-Z_]*(?: did not complete)?: )?[A-Za-z_][A-Za-z_0-9]{0,127} "
+    r"\(message withheld from evidence; see the server log"
+    r"(?: for correlation id [A-Za-z0-9_.:\-]{1,64})?\)")
+
+
+def _is_error_key(key: Any) -> bool:
+    name = str(key).lower()
+    return name == "error" or name.endswith("_error")
+
+
+def _sanitize_error_value(value: str) -> str:
+    """A string stored under an error key (`stage_detail[stage]["error"]`,
+    `snapshot_error`, a stage event's `detail["error"]`).
+
+    The first runner stored `str(exc)` there: a bare message with no class
+    beside it, which `sanitize_stored_error` cannot tell from a controlled
+    string. So here the rule is turned round - only what a writer of this
+    application produces is shown:
+
+      * the withheld form ("Class (message withheld ...)");
+      * a controlled class in front of its message ("ValueError: ...");
+      * a bare code ("TimeoutError", "worker_stopped_without_reporting").
+
+    Anything else is withheld whole. A legacy DOMAIN message stored without its
+    class is withheld too; the job's own `error_reason` still carries it.
+    """
+    masked = sanitize_stored_error(value)
+    if masked != value:
+        return masked
+    if _ANY_WITHHELD.fullmatch(value) or _ERROR_CODE.fullmatch(value):
+        return value
+    lead = _CLASS_LEAD_IN.match(value)
+    if lead and (lead.group("cls") or lead.group("bare")) in CONTROLLED_FAILURE_CLASSES:
+        return value
+    return _ERROR_WITHHELD.strip()
+
+
+def sanitize_stored_error_tree(value: Any, *, strict_error_keys: bool = False,
+                               _under_error_key: bool = False) -> Any:
+    """`sanitize_stored_error` applied to every string in a nested structure.
+    Dicts and lists are copied; nothing is mutated.
+
+    `strict_error_keys=True` is for structures whose error keys were written by
+    the delivery runner (a job's `stage_detail`, a stage event's `detail`):
+    a string under a key named `error` or `*_error` is shown only in a shape a
+    writer produces (see `_sanitize_error_value`). Other keys, and every caller
+    that does not ask, keep the general rule."""
     if isinstance(value, dict):
-        return {k: sanitize_stored_error_tree(v) for k, v in value.items()}
+        return {k: sanitize_stored_error_tree(
+                    v, strict_error_keys=strict_error_keys,
+                    _under_error_key=strict_error_keys and _is_error_key(k))
+                for k, v in value.items()}
     if isinstance(value, (list, tuple)):
-        return [sanitize_stored_error_tree(v) for v in value]
+        return [sanitize_stored_error_tree(v, strict_error_keys=strict_error_keys,
+                                           _under_error_key=_under_error_key)
+                for v in value]
+    if _under_error_key and isinstance(value, str) and value:
+        return _sanitize_error_value(value)
     return sanitize_stored_error(value)
 
 

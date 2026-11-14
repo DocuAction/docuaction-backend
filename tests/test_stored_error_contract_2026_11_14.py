@@ -270,3 +270,118 @@ async def test_e_routes_mask_and_the_stored_row_is_not_rewritten(failed_jobs, ro
         assert SECRET not in json.dumps(await jobs.status_for_job(db, job), default=str)
         await db.refresh(job)
         assert job.error_reason == reason, "the stored evidence row is unchanged"
+
+
+# ── 2026-11-14, second pass: per-stage error values and the recheck path ─────
+#
+# The first runner stored `str(exc)` under `stage_detail[stage]["error"]`: a
+# bare driver message with no class beside it, which the general rule cannot
+# tell from a controlled string. Under an ERROR KEY the rule is the other way
+# round: only the shapes a writer of this application produces are shown.
+
+BARE_UNDER_ERROR_KEY = [
+    f"invalid input syntax for type uuid: \"{SECRET}\"",
+    f"duplicate key value violates unique constraint \"uq_x\" {SECRET}",
+    f"value too long for type character varying(500) {SECRET}",
+    f"connection to {SECRET} refused",
+]
+WRITER_SHAPES_UNDER_ERROR_KEY = [
+    "ValueError: declared delimiter not found",
+    "IntakeError: file is empty",
+    "RuntimeError (message withheld from evidence; see the server log for correlation id abc)",
+    "UniqueViolationError (message withheld from evidence; see the server log)",
+    "TimeoutError",                       # a bare class name, as connector readiness writes it
+    "worker_stopped_without_reporting",
+]
+
+
+@pytest.mark.parametrize("reason", BARE_UNDER_ERROR_KEY)
+def test_a_bare_message_under_an_error_key_is_withheld(reason):
+    stored = {"PROMOTION": {"error": reason, "completed": False, "note": "Controlled note"},
+              "RECONCILIATION": {"snapshot_error": reason},
+              "list": [{"error": reason}]}
+    before = json.dumps(stored, sort_keys=True)
+    out = sanitize_stored_error_tree(stored, strict_error_keys=True)
+    assert SECRET not in json.dumps(out), out
+    assert out["PROMOTION"]["completed"] is False and out["PROMOTION"]["note"] == "Controlled note"
+    assert "withheld" in out["PROMOTION"]["error"]
+    assert json.dumps(stored, sort_keys=True) == before, "the stored structure is not mutated"
+    assert sanitize_stored_error_tree(out, strict_error_keys=True) == out      # idempotent
+
+
+@pytest.mark.parametrize("reason", WRITER_SHAPES_UNDER_ERROR_KEY)
+def test_what_a_writer_produces_under_an_error_key_stays_readable(reason):
+    stored = {"QUALITY": {"error": reason}}
+    assert sanitize_stored_error_tree(stored, strict_error_keys=True) == stored
+
+
+def test_strictness_applies_to_error_keys_only_and_only_when_asked():
+    sentence = "The delivery is preserved and curated; resolve the stated condition."
+    stored = {"PROMOTION": {"reason": sentence, "note": sentence, "error": sentence}}
+    strict = sanitize_stored_error_tree(stored, strict_error_keys=True)
+    assert strict["PROMOTION"]["reason"] == sentence and strict["PROMOTION"]["note"] == sentence
+    assert strict["PROMOTION"]["error"] != sentence and "withheld" in strict["PROMOTION"]["error"]
+    assert sanitize_stored_error_tree(stored) == stored
+
+
+def test_job_to_dict_withholds_a_bare_per_stage_error_and_keeps_the_row():
+    import uuid
+
+    reason = BARE_UNDER_ERROR_KEY[0]
+    now = datetime.utcnow()
+    job = RceDeliveryJob(
+        id=uuid.uuid4(), state=RceDeliveryJob.STATE_FAILED, stage="PROMOTION",
+        created_at=now, started_at=now, failed_at=now,
+        error_reason="PROMOTION did not complete: ValueError: declared delimiter not found",
+        stage_detail={"PROMOTION": {"error": reason, "completed": False}})
+    out = job.to_dict()
+    assert SECRET not in json.dumps(out, default=str)
+    assert out["error_reason"].endswith("ValueError: declared delimiter not found")
+    assert job.stage_detail["PROMOTION"]["error"] == reason
+
+
+class TestTheRecheckPath:
+    """`rechecks._process_batch` stored `f"{type(exc).__name__}: {exc}"` for an
+    entity whose lookup raised, and the job and item readers returned stored
+    text unmasked. Both now go through the same contract: the writer stores
+    `safe_exception_text`, and the readers mask what older rows hold."""
+
+    def test_the_writer_stores_only_what_the_write_rule_allows(self):
+        from app.tefca_registry.rce import rechecks
+
+        class _Driver(Exception):
+            pass
+
+        _Driver.__module__ = "asyncpg.exceptions"
+        text = rechecks.item_error_text(_Driver(f"duplicate key {SECRET}"))
+        assert SECRET not in text and text.startswith("_Driver")
+        assert rechecks.item_error_text(ValueError("no NPI on record")) == "ValueError: no NPI on record"
+        assert len(rechecks.item_error_text(ValueError("x" * 5000))) <= 500
+
+    def test_the_readers_mask_what_an_older_row_holds(self):
+        import uuid
+
+        from app.tefca_registry.rce import rechecks
+        from app.tefca_registry.rce.recheck_models import RceRecheckItem, RceRecheckJob
+
+        legacy = f"UniqueViolationError: duplicate key value {SECRET}"
+        job = RceRecheckJob(id=uuid.uuid4(), intake_id=uuid.uuid4(), state="FAILED",
+                            error_reason=f"PROMOTION: DataError: bad value {SECRET}")
+        assert SECRET not in json.dumps(rechecks.job_dto(job), default=str)
+        assert job.error_reason.endswith(SECRET), "the stored row is unchanged"
+
+        controlled = RceRecheckJob(id=uuid.uuid4(), intake_id=uuid.uuid4(), state="FAILED",
+                                   error_reason="attempts exhausted (3); source still unavailable")
+        assert rechecks.job_dto(controlled)["error_reason"] == controlled.error_reason
+
+        item = RceRecheckItem(job_id=job.id, entity_id=uuid.uuid4(), entity_ref="SYNTHETIC-1",
+                              state="ERROR", detail={"error": legacy})
+        shown = rechecks.item_dto(item)
+        assert SECRET not in json.dumps(shown, default=str)
+        assert shown["detail"]["error"].startswith("UniqueViolationError")
+        assert item.detail == {"error": legacy}
+
+        sentence = "pinned PPEF snapshot 2026-10 no longer exists; nothing was looked up"
+        kept = RceRecheckItem(job_id=job.id, entity_id=uuid.uuid4(), entity_ref="SYNTHETIC-2",
+                              state="ERROR", detail={"error": sentence})
+        assert rechecks.item_dto(kept)["detail"]["error"] == sentence
