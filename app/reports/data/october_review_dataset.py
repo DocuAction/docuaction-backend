@@ -139,6 +139,21 @@ PDF_CHAR_ADVANCE_EM = 0.62
 PDF_CELL_INSET_PT = 7.0                 # left + right padding and the border
 PDF_MAIN_FONT_PT, PDF_MAIN_MAX_LINES = 8.0, 40
 PDF_DETAIL_FONT_PT, PDF_DETAIL_MAX_LINES = 7.5, 24
+#: The monospace identifier cells (td.mono). DejaVu Sans Mono advances 0.602 em,
+#: under the 0.62 em the estimate charges.
+PDF_MONO_FONT_PT = 7.0
+#: Submitted identifiers are kept verbatim whatever was submitted, so they get the
+#: same row budget as free text: an oversized value continues in monospace rows.
+#: AGT_Record_ID is not in this set - it is this system's own id and is the cell
+#: that carries the "(continued, part k of n)" label.
+PDF_MONO_SPLIT_COLUMNS = ("QHIN Number", "Submitted NPI (original, verbatim)")
+#: Tabs survive only in the detail cells (white-space: pre-wrap); there a tab
+#: advances to the next stop, at most `tab-size` space-widths. The stylesheet
+#: states tab-size as THIS number and the estimate charges every tab the full
+#: number of columns (a space is narrower than the 0.62 em column), so the
+#: estimate cannot fall below what the engine draws. Elsewhere a tab collapses to
+#: one space and this only over-estimates.
+PDF_TAB_COLUMNS = 8
 
 
 class DatasetRefused(ValueError):
@@ -395,7 +410,7 @@ td.classification { background: #faf8f4; }
 td.source { background: #f4f9f5; }
 td.mono { font-family: "DejaVu Sans Mono", Consolas, "Courier New", monospace; font-size: 7pt; }
 td.num { text-align: right; }
-td.verbatim { white-space: pre-wrap; font-size: 7.5pt; }
+td.verbatim { white-space: pre-wrap; tab-size: 8; font-size: 7.5pt; }
 .summary { width: 55%; }
 .summary td:last-child { width: 35%; }
 .chip { display: inline-block; max-width: 100%; border: 0.75pt solid #555; border-radius: 2pt;
@@ -427,7 +442,13 @@ def _chars_per_line(width_pct: float, font_pt: float) -> int:
     return max(4, int(inner / (font_pt * PDF_CHAR_ADVANCE_EM)))
 
 
-_TOKEN = re.compile(r"\n|[^\S\n]+|\S+")
+#: What ends a line in a rendered cell. The HTML parser hands the engine ONE line
+#: feed for CRLF and for a lone CR, so each is one break here and CRLF is one
+#: token - a slice can end after it, never between its two characters. The other
+#: vertical / separator characters are counted as breaks too: if an engine does
+#: not break on one, a slice is merely shorter than it had to be.
+_BREAK_CHARS = r"\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"
+_TOKEN = re.compile(rf"(?P<brk>\r\n|[{_BREAK_CHARS}])|(?P<gap>[^\S{_BREAK_CHARS}]+)|\S+")
 
 
 def split_for_rows(text: str, chars_per_line: int, max_lines: int) -> List[str]:
@@ -435,24 +456,25 @@ def split_for_rows(text: str, chars_per_line: int, max_lines: int) -> List[str]:
     wrapped lines of `chars_per_line`. "".join(result) == text, always: a slice
     boundary is a position in the string, never an edit to it. Cuts fall before
     a word (whitespace stays with the slice it ends), or inside a single run
-    longer than a whole slice. A newline counts as a line break (the detail
-    cells preserve them; elsewhere this only over-estimates), and a run of
-    newlines is cut after the one that fills the slice."""
+    longer than a whole slice. A line break - LF, CRLF (one break) or a lone CR -
+    counts as one (the detail cells preserve them; elsewhere this only
+    over-estimates), and a run of breaks is cut after the one that fills the
+    slice. A tab is charged `PDF_TAB_COLUMNS` columns, the most it can advance."""
     if not text:
         return [""]
     capacity = chars_per_line * max_lines
     slices: List[str] = []
     start = lines = col = 0
     for match in _TOKEN.finditer(text):
-        token, pos = match.group(), match.start()
-        if token == "\n":
+        token, pos, kind = match.group(), match.start(), match.lastgroup
+        if kind == "brk":
             lines, col = lines + 1, 0
-            if lines >= max_lines:                   # the slice is full: cut after this newline
-                slices.append(text[start:pos + 1])
-                start, lines = pos + 1, 0
+            if lines >= max_lines:                   # the slice is full: cut after this break
+                slices.append(text[start:match.end()])
+                start, lines = match.end(), 0
             continue
-        if token.isspace():
-            col += len(token)
+        if kind == "gap":
+            col += len(token) + (PDF_TAB_COLUMNS - 1) * token.count("\t")
             continue
         while len(token) > capacity:                 # one unbroken run longer than a slice
             if pos > start:
@@ -526,7 +548,10 @@ def to_html(dataset: Dict[str, Any]) -> str:
                 slices: Optional[List[str]] = None
                 if c == "Source_Line":
                     cells.append(f"<td class='{gcls} num'>{e(v)}</td>")
-                elif c in ("AGT_Record_ID", "QHIN Number", "Submitted NPI (original, verbatim)"):
+                elif c in PDF_MONO_SPLIT_COLUMNS:
+                    slices = split_for_rows(v, _chars_per_line(w, PDF_MONO_FONT_PT), PDF_MAIN_MAX_LINES)
+                    cells.append(f"<td class='{gcls} mono'>{e(slices[0])}</td>")
+                elif c == "AGT_Record_ID":
                     cells.append(f"<td class='{gcls} mono'>{e(v)}</td>")
                 elif c in ("Bucket", "Status"):
                     cells.append(f"<td class='{gcls}'>{_chip(v)}</td>")
@@ -546,7 +571,8 @@ def to_html(dataset: Dict[str, Any]) -> str:
                     more.append(f"<td class='{gcls} mono'>{continued(r[col[c]], part + 1, parts)}</td>")
                 else:
                     text = slices[part] if slices is not None and part < len(slices) else ""
-                    more.append(f"<td class='{gcls}'>{e(text)}</td>")
+                    mono = " mono" if c in PDF_MONO_SPLIT_COLUMNS else ""
+                    more.append(f"<td class='{gcls}{mono}'>{e(text)}</td>")
             body_rows.append("<tr class='continuation'>" + "".join(more) + "</tr>")
     notes_html = ("<ol class='notes'>" + "".join(f"<li>{e(n)}</li>" for n in notes) + "</ol>"
                   if notes else "")

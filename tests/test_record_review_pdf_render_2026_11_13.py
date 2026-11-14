@@ -458,7 +458,7 @@ def test_held_is_counted_once_inside_b4_and_findings_stay_a_separate_grain():
     assert held and all(r[b] == "B4" for r in held)
     assert summary["held_inside_b4"] == len(held)
     assert summary["buckets"]["B4"] == sum(1 for r in rows if r[b] == "B4")      # each record once
-    assert sum(summary["buckets"].values()) + summary["unclassified_non_held_count"] == len(rows) == 64
+    assert sum(summary["buckets"].values()) + summary["unclassified_non_held_count"] == len(rows) == 66
     assert summary["field_findings"] is None and summary["findings_counted_in_buckets"] is False
     assert summary["complete"] is False and summary["unclassified_non_held_count"] == 4
 

@@ -259,3 +259,95 @@ def test_a_section_heading_and_its_explanation_are_not_separated_by_a_page_break
     assert "break-inside: avoid" in note and "break-after: avoid" in note
     # the explanation is a p.note directly after the section heading
     assert re.search(r"<h2>Addresses and commentary \(verbatim\)</h2>\s*<p class='note'>", page)
+
+
+# ── review findings on #213 (CodeRabbit, 2026-11-14): CR / CRLF, tabs, oversized NPI ──
+
+_RENDERED_BREAK = re.compile(r"\r\n|[\r\n\x0b\x0c\x1c\x1d\x1e\x85  ]")
+
+
+def _rendered_lines(piece: str, per_line: int) -> int:
+    """Lines `piece` occupies as the PDF engine lays it out in a pre-wrap cell,
+    counted independently of split_for_rows: the HTML parser turns CRLF and a
+    lone CR into one line feed each, and a tab advances at most `tab-size: 8`
+    columns (the worst case is charged for every tab)."""
+    as_parsed = _RENDERED_BREAK.sub("\n", piece).replace("\t", " " * 8)
+    return _lines_needed(as_parsed, per_line)
+
+
+def test_a_run_of_carriage_returns_is_a_run_of_line_breaks():
+    """Before: "\r" was counted as horizontal whitespace, so 100 of them stayed
+    in ONE slice although the engine renders each as a line break."""
+    text = "x" + "\r" * 100 + "y"
+    slices = d.split_for_rows(text, 31, 24)
+    assert "".join(slices) == text
+    assert len(slices) == 5
+    assert all(_rendered_lines(piece, 31) <= 24 for piece in slices)
+
+
+def test_crlf_is_one_line_break_and_is_never_cut_in_half():
+    text = "a\r\n" * 100
+    slices = d.split_for_rows(text, 31, 24)
+    assert "".join(slices) == text
+    assert [piece.count("\r\n") for piece in slices] == [24, 24, 24, 24, 4]   # one break each, not two
+    assert not any(piece.endswith("\r") or piece.startswith("\n") for piece in slices)
+    mixed = "a\rb\nc\r\nd\n\re"                      # CR, LF, CRLF, then LF + CR (two breaks)
+    assert d.split_for_rows(mixed, 31, 2) == ["a\rb\n", "c\r\nd\n", "\re"]
+
+
+def test_a_tab_is_charged_its_widest_advance_and_the_css_states_that_advance():
+    """Before: a tab counted as ONE column, so "a\t" * 1000 was estimated at a
+    quarter of the width the pre-wrap detail cell gives it."""
+    text = "a\t" * 1000
+    slices = d.split_for_rows(text, 31, 24)
+    assert "".join(slices) == text
+    assert all(_rendered_lines(piece, 31) <= 24 for piece in slices)
+    # The estimate and the renderer use the same number: it is written into the CSS
+    # of the only cells that preserve tabs, not left to the engine's default.
+    assert d.PDF_TAB_COLUMNS == 8
+    assert re.search(r"td\.verbatim \{[^}]*tab-size: 8;", d.PDF_CSS)
+
+
+def test_no_slice_needs_more_lines_than_the_budget_with_cr_crlf_and_tabs():
+    import random
+
+    rng = random.Random(2026111401)
+    pieces = ["ab", "c", " ", "  ", "\t", "\t\t", "\r", "\r\n", "\n", "\n\r", "XYZ0123456789", "-_/"]
+    for _trial in range(3000):
+        per_line, budget = rng.randint(8, 40), rng.randint(1, 30)
+        text = "".join(rng.choice(pieces) * rng.randint(1, 6) for _ in range(rng.randint(0, 150)))
+        slices = d.split_for_rows(text, per_line, budget)
+        assert "".join(slices) == text
+        for i, piece in enumerate(slices):
+            assert not (piece.endswith("\r") and i + 1 < len(slices) and slices[i + 1].startswith("\n"))
+            assert _rendered_lines(piece, per_line) <= budget, (per_line, budget, piece[:80])
+
+
+def _main_rows(page):
+    main = page.split("<h2>Addresses and commentary", 1)[0].split("<tbody>")[-1]
+    return [re.findall(r"<td class='([^']*)'>(.*?)</td>", row, re.S)
+            for row in re.findall(r"<tr[^>]*>(.*?)</tr>", main, re.S)]
+
+
+@pytest.mark.parametrize("field,label", [("submitted_npi", "Submitted NPI (original, verbatim)"),
+                                         ("qhin_number", "QHIN Number")])
+def test_an_oversized_submitted_identifier_continues_in_monospace_rows(field, label):
+    """Before: the whole value went into ONE narrow cell whatever its length; it
+    never produced a continuation row."""
+    value = "1" * 10_000                              # synthetic; not an identifier
+    page = _page([_f(1, **{field: value})])
+    rows = _main_rows(page)
+    index = [c for _g, cs in d.PDF_COLUMN_GROUPS for c, _w in cs].index(label)
+    assert len(rows) > 1 and all(len(r) == len(rows[0]) for r in rows)
+    cells = [r[index] for r in rows]
+    assert "".join(text for _cls, text in cells) == value          # the value, whole and in order
+    assert all("mono" in cls.split() for cls, _text in cells)      # monospace on every slice
+    width = dict(c for _g, cs in d.PDF_COLUMN_GROUPS for c in cs)[label]
+    capacity = d._chars_per_line(width, d.PDF_MONO_FONT_PT) * d.PDF_MAIN_MAX_LINES
+    assert max(len(text) for _cls, text in cells) <= capacity
+    assert all("(continued, part" in r[1][1] for r in rows[1:])    # each names its record again
+
+
+def test_an_ordinary_npi_stays_in_one_row():
+    rows = _main_rows(_page([_f(1)]))
+    assert len(rows) == 1 and rows[0][4] == ("identity mono", "1234567893")
