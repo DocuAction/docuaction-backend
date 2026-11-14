@@ -312,13 +312,17 @@ async def test_sampling_validation_refuses_a_margin_the_formula_cannot_use(rolle
         with pytest.raises((ZeroDivisionError, ValueError, OverflowError)):
             qa_engine.cochran_n(1000, 0.95, broken)
     assert qa_engine.cochran_n(1000, 0.95, 1e-150) == 1000        # the formula still works here
+    # 1 / margin**2 is finite here; the confidence-dependent quotient is not.
+    assert math.isfinite(1.0 / (8e-155 * 8e-155))
+    with pytest.raises((ZeroDivisionError, ValueError, OverflowError)):
+        qa_engine.cochran_n(1000, 0.99, 8e-155)
 
     recorder = _Recorder()
     monkeypatch.setattr(qa_engine, "validate_sampling", recorder)
     db = rolled_back_db
     headers = await _headers(db, "viewer")
     async with _client(db) as client:
-        for bad in ("1e-200", "1e-160", "5e-324", "inf", "nan"):
+        for bad in ("1e-200", "1e-160", "5e-324", "inf", "nan", "8e-155&confidence=0.99"):
             r = await client.get(f"/api/tefca/qa/sampling-validation?margin={bad}", headers=headers)
             assert r.status_code == 422, (bad, r.status_code, r.text[:200])
             assert r.json()["code"] == "VALIDATION_ERROR" and "margin" in r.json()["error"]
