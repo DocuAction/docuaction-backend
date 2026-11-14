@@ -1,4 +1,5 @@
 """Synthetic regression evidence for the remaining delivery verification gaps."""
+import copy
 import json
 import os
 import uuid
@@ -47,10 +48,16 @@ def test_stage_serialization_masks_historical_driver_text_without_mutating_evide
         status="FAILED", started_at=now, completed_at=now,
         failure_class="DataError", failure_reason=RAW, detail=detail,
         correlation_id="synthetic", worker_id="synthetic", build_sha="test")
+    original = copy.deepcopy(detail)
     payload = event.to_dict()
     assert "SYNTHETIC_SECRET" not in json.dumps(payload)
     assert "[parameters:" not in json.dumps(payload)
-    assert event.failure_reason == RAW and event.detail == detail
+    # Compared against a deep copy taken BEFORE serialization: comparing the
+    # stored detail with the very object it holds would pass even if the
+    # serializer had masked it in place.
+    assert event.failure_reason == RAW
+    assert event.detail == original and detail == original
+    assert payload["detail"] is not event.detail
     assert payload["detail"]["count"] == 3
     assert payload["detail"]["note"] == "Controlled note"
 
@@ -224,7 +231,128 @@ async def test_partial_suffix_removal_cannot_expose_the_driver_message(rolled_ba
     assert event.failure_reason == reason
 
 
-def test_controlled_domain_reason_remains_readable_after_parameter_suffix_removal():
+def test_a_controlled_class_loses_its_message_once_a_parameter_suffix_was_removed():
+    """Contract 2026-11-14 (app/core/logging_config.py, rule 3): a removed
+    [SQL: ...] / [parameters: ...] fragment proves driver text is embedded in
+    the message, so the class name is kept and the message is withheld. This
+    replaces the earlier expectation that the message stayed readable."""
     from app.core.logging_config import sanitize_stored_error
     reason = "CURATION: ValueError: missing documented field"
-    assert sanitize_stored_error(reason + " [parameters: ('SYNTHETIC_SECRET',)]", failure_class="ValueError") == reason
+    out = sanitize_stored_error(reason + " [parameters: ('SYNTHETIC_SECRET',)]",
+                                failure_class="ValueError")
+    assert out == "ValueError (message withheld from evidence; see the server log)"
+    assert sanitize_stored_error(reason, failure_class="ValueError") == reason
+
+
+# -- 2026-11-14: the no-members path of a review cycle, and the stored-error
+#    contract (owned by app/core/logging_config.py) through the stage serializers.
+
+class _CycleUser:
+    email = "qa-gaps@synthetic-test.docuaction.invalid"
+    id = None
+    role = "program_manager"
+
+
+@pytest.mark.asyncio
+async def test_a_cycle_with_no_member_left_reports_no_records_requested_without_verifying(
+        rolled_back_db, monkeypatch):
+    """This call has no member to process. It must say so (NO_RECORDS_REQUESTED)
+    and still state the resolver configuration, and it must not run verification.
+
+    The delivery, its reconciliation gate, the frozen plan and the cycle row are
+    real. Only the list of members still unlinked is replaced with an empty one,
+    which is the state a converged cycle is in."""
+    from app.tefca_registry import review_cycle as rc
+    from app.tefca_registry.rce.promotion import promote_delivery
+    from rce_traceability_support import SYN, make_rows, run_quality_and_curation, seed_intake
+
+    db = rolled_back_db
+    intake, _job = await seed_intake(db, make_rows(1, arc="9.99.777.991"))
+    await run_quality_and_curation(db, intake)
+    await promote_delivery(db, intake, actor=SYN)
+    calls = []
+
+    async def _must_not_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("verification was invoked for a call with no members")
+
+    async def _none_left(_db, _sample_id):
+        return []
+
+    monkeypatch.setattr(ap, "verify_and_classify", _must_not_run)
+    monkeypatch.setattr(rc, "_unlinked_members", _none_left)
+    for source, expected, warned in ((None, "mock", True), ("db", "db", False)):
+        if source is None:
+            monkeypatch.delenv(er.ENV_VAR, raising=False)
+        else:
+            monkeypatch.setenv(er.ENV_VAR, source)
+        result = await rc.create_review_cycle(db, intake, user=_CycleUser(),
+                                              review_type="quarterly",
+                                              confidence=0.95, margin=0.10)
+        assert calls == []
+        assert result["linked_this_call"] == 0 and result["remaining"] == 0 and result["complete"]
+        verification = result["verification"]
+        assert verification["execution_status"] == "NO_RECORDS_REQUESTED"
+        assert verification["requested"] == 0 and verification["verified"] == 0
+        assert verification["resolver_source"] == expected
+        codes = [w["code"] for w in verification["configuration_warnings"]]
+        assert codes == (["REGISTRY_RESOLVER_NOT_EXCLUSIVE"] if warned else [])
+
+
+_TWO_MARKERS = ("<class 'asyncpg.exceptions.UniqueViolationError'>: duplicate key "
+                "SYNTHETIC_SECRET <class 'app.Marker'>")
+_CONTRACT_CASES = [
+    # a. bare driver message, no SQLAlchemy marker
+    ("UniqueViolationError", 'invalid input syntax for type uuid: "SYNTHETIC_SECRET"'),
+    # b. suffix removed, DETAIL payload would remain
+    ("UniqueViolationError", "DETAIL: Key (email)=(SYNTHETIC_SECRET) already exists "
+                             "[SQL: INSERT INTO x VALUES ($1)]"),
+    # c. a later class marker must not move the cut
+    ("UniqueViolationError", _TWO_MARKERS),
+    (None, _TWO_MARKERS),
+    (None, "PROMOTION did not complete: DataError: bad value SYNTHETIC_SECRET"),
+]
+
+
+@pytest.mark.parametrize("failure_class,reason", _CONTRACT_CASES)
+@pytest.mark.asyncio
+async def test_stored_error_contract_through_stage_to_dict_and_timeline(
+        rolled_back_db, failure_class, reason):
+    from app.core.logging_config import sanitize_stored_error
+    from app.tefca_registry.rce import stage_events
+    from rce_traceability_support import make_rows, seed_intake
+    db = rolled_back_db
+    intake, job = await seed_intake(db, make_rows(1, arc="9.99.777.990"))
+    recognisable = "DETAIL:" in reason or "<class" in reason or ": DataError: " in reason
+    stored_detail = ({"error": reason, "nested": [reason], "count": 2}
+                     if recognisable else {"count": 2})
+    event = await stage_events.record_instant(
+        db, job.id, "PROMOTION", status="FAILED", intake_id=intake,
+        failure_reason=reason, detail=copy.deepcopy(stored_detail))
+    event.failure_class = failure_class
+    await db.flush()
+    one = event.to_dict()
+    assert "SYNTHETIC_SECRET" not in json.dumps(one, default=str)
+    assert "app.Marker" not in one["failure_reason"]
+    timeline = await stage_events.timeline(db, job.id)
+    assert "SYNTHETIC_SECRET" not in json.dumps(timeline, default=str)
+    # e. idempotent, and the stored evidence is not rewritten
+    assert sanitize_stored_error(one["failure_reason"], failure_class=failure_class)         == one["failure_reason"]
+    await db.refresh(event)
+    assert event.failure_reason == reason
+
+
+@pytest.mark.parametrize("failure_class,reason", [
+    ("ValueError", "CURATION: ValueError: missing documented field"),
+    ("LineCountMismatch", "PARSING did not complete: LineCountMismatch: declared 10 lines, read 9"),
+    (None, "CURATION: ValueError: missing documented field"),
+    (None, "worker_stopped_without_reporting"),
+])
+def test_stored_error_contract_keeps_controlled_stage_reasons_readable(failure_class, reason):
+    now = datetime.utcnow()
+    event = tm.RceDeliveryStageEvent(
+        id=uuid.uuid4(), job_id=uuid.uuid4(), stage="CURATION", attempt=1,
+        status="FAILED", started_at=now, completed_at=now,
+        failure_class=failure_class, failure_reason=reason, detail={},
+        correlation_id="synthetic", worker_id="synthetic", build_sha="test")
+    assert event.to_dict()["failure_reason"] == reason
