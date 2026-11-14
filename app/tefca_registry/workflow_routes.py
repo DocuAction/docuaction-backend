@@ -70,8 +70,10 @@ async def qhin_organisation(
     canonical edge are reported under `unresolved` with the reason — never
     placed under a plausible QHIN.
     """
+    from app.core.path_ids import known_uuid
     from app.tefca_registry.qhin_workload import WorkloadRefused, qhin_rollup
 
+    intake_id = known_uuid(intake_id, "delivery")
     try:
         return await qhin_rollup(db, intake_id, sample_id=sample_id,
                                  include_held=include_held)
@@ -97,8 +99,10 @@ async def qhin_population(
     state — and nothing more. Evidence and determinations belong to the
     analyst's workspace.
     """
+    from app.core.path_ids import known_uuid
     from app.tefca_registry.qhin_workload import qhin_detail
 
+    intake_id = known_uuid(intake_id, "delivery")
     return await qhin_detail(db, intake_id, qhin_entity_id,
                              sample_id=sample_id, include_held=include_held,
                              limit=limit, offset=offset)

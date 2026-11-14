@@ -787,7 +787,8 @@ def _queue_item_dto(q: TEFCAAnalystQueue) -> dict:
 
 @tefca_router.get("/queue/tier2", summary="Tier-2 analyst queue")
 async def get_tier2_queue(
-    limit: int = 100, db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
+    # ge=0: a negative LIMIT reached PostgreSQL and came back as a 500 (found 2026-11-13).
+    limit: int = Query(100, ge=0), db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
     rows = (await db.execute(
         select(TEFCAAnalystQueue).where(
@@ -800,7 +801,7 @@ async def get_tier2_queue(
 
 @tefca_router.get("/queue/tier3", summary="Tier-3 SME escalation queue")
 async def get_tier3_queue(
-    limit: int = 100, db: AsyncSession = Depends(get_db), user=Depends(require_role("senior_analyst")),
+    limit: int = Query(100, ge=0), db: AsyncSession = Depends(get_db), user=Depends(require_role("senior_analyst")),
 ):
     rows = (await db.execute(
         select(TEFCAAnalystQueue).where(
@@ -3119,16 +3120,37 @@ async def qa_evidence_summary(db: AsyncSession = Depends(get_db), user=Depends(r
 
 @tefca_dashboard_router.get("/qa/sampling-validation", summary="Sampling validation vs Cochran @95% CI")
 async def qa_sampling_validation(
-    population: int = Query(94231), confidence: float = Query(0.95), margin: float = Query(0.05),
+    # margin > 0: Cochran's formula divides by margin squared, so margin=0 was a
+    # ZeroDivisionError and a 500 (found 2026-11-13). Every other value is unchanged.
+    population: int = Query(94231), confidence: float = Query(0.95), margin: float = Query(0.05, gt=0),
     db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
+    # `gt=0` alone admits a margin the formula cannot use: its square underflows
+    # to zero (1e-200), the quotient overflows (1e-160, or 8e-155 at 99%
+    # confidence), or it is not finite. Each was a 500 (review findings
+    # 2026-11-14). No floor is invented and the arithmetic is not restated here:
+    # the margin is refused exactly when Cochran's own calculation cannot produce
+    # a number for these parameters.
+    import math
+
+    from fastapi.exceptions import RequestValidationError
+
+    try:
+        usable = math.isfinite(margin) and qa_engine.cochran_n(population, confidence, margin) >= 0
+    except (ZeroDivisionError, ValueError, OverflowError):
+        usable = False
+    if not usable:
+        raise RequestValidationError([{
+            "type": "value_error", "loc": ("query", "margin"), "input": str(margin),
+            "msg": "margin cannot be used in Cochran's formula at this confidence"}])
     return await qa_engine.validate_sampling(db, population, confidence, margin, triggered_by="manual")
 
 
 @tefca_dashboard_router.get("/qa/internal-consistency",
                             summary="Internal consistency score (pipeline self-consistency — NOT inter-rater reliability)")
 async def qa_internal_consistency(
-    sample_size: int = Query(20), seed: int = Query(42),
+    # ge=0: a negative sample size raised ValueError in random.sample - a 500 (found 2026-11-13).
+    sample_size: int = Query(20, ge=0), seed: int = Query(42),
     db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
     return await qa_engine.internal_consistency_check(db, sample_size, seed, triggered_by="manual")
@@ -3137,7 +3159,8 @@ async def qa_internal_consistency(
 @tefca_dashboard_router.get("/qa/inter-rater",
                             summary="[deprecated alias] Internal consistency score — NOT true inter-rater reliability")
 async def qa_inter_rater(
-    sample_size: int = Query(20), seed: int = Query(42),
+    # ge=0: a negative sample size raised ValueError in random.sample - a 500 (found 2026-11-13).
+    sample_size: int = Query(20, ge=0), seed: int = Query(42),
     db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
     # Backward-compatible path; returns the honestly-labeled internal consistency

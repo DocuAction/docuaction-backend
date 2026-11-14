@@ -183,6 +183,9 @@ async def list_users(_admin=Depends(require_admin), db: AsyncSession = Depends(g
 
 @router.get("/users/{user_id}/activity")
 async def user_activity(user_id: str, _admin=Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    from app.core.path_ids import known_uuid
+
+    user_id = known_uuid(user_id, "user")
     result = await db.execute(
         select(AuditLog).where(AuditLog.user_id == user_id).order_by(desc(AuditLog.created_at)).limit(100)
     )
