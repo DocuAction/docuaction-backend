@@ -3125,6 +3125,19 @@ async def qa_sampling_validation(
     population: int = Query(94231), confidence: float = Query(0.95), margin: float = Query(0.05, gt=0),
     db: AsyncSession = Depends(get_db), user=Depends(require_role("viewer")),
 ):
+    # `gt=0` alone admits a margin the formula cannot use: its square underflows
+    # to zero (1e-200), the quotient overflows (1e-160), or it is not finite.
+    # Each was a 500 (review finding 2026-11-14). No floor is invented: the
+    # margin is refused exactly when 1 / margin**2 is not a finite number.
+    import math
+
+    from fastapi.exceptions import RequestValidationError
+
+    squared = margin * margin
+    if not math.isfinite(margin) or squared == 0.0 or not math.isfinite(1.0 / squared):
+        raise RequestValidationError([{
+            "type": "value_error", "loc": ("query", "margin"), "input": str(margin),
+            "msg": "margin must be a finite number whose square is usable in Cochran's formula"}])
     return await qa_engine.validate_sampling(db, population, confidence, margin, triggered_by="manual")
 
 

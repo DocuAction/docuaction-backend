@@ -296,3 +296,34 @@ def test_known_uuid_accepts_every_spelling_of_a_uuid_and_nothing_else():
         with pytest.raises(HTTPException) as exc:
             known_uuid(bad, "delivery")
         assert exc.value.status_code == 404 and exc.value.detail.startswith("No delivery ")
+
+
+async def test_sampling_validation_refuses_a_margin_the_formula_cannot_use(rolled_back_db, monkeypatch):
+    """Review finding 2026-11-14: `gt=0` admits a margin whose square underflows
+    to zero (1e-200 -> ZeroDivisionError) or overflows the quotient (1e-160 ->
+    NaN -> ValueError), and a non-finite margin; each was a 500. No floor is
+    invented: a margin is refused exactly when Cochran's term is not a finite
+    number for it."""
+    import math
+
+    from app.Tefca import qa_engine
+
+    for broken in (1e-200, 1e-160):
+        with pytest.raises((ZeroDivisionError, ValueError, OverflowError)):
+            qa_engine.cochran_n(1000, 0.95, broken)
+    assert qa_engine.cochran_n(1000, 0.95, 1e-150) == 1000        # the formula still works here
+
+    recorder = _Recorder()
+    monkeypatch.setattr(qa_engine, "validate_sampling", recorder)
+    db = rolled_back_db
+    headers = await _headers(db, "viewer")
+    async with _client(db) as client:
+        for bad in ("1e-200", "1e-160", "5e-324", "inf", "nan"):
+            r = await client.get(f"/api/tefca/qa/sampling-validation?margin={bad}", headers=headers)
+            assert r.status_code == 422, (bad, r.status_code, r.text[:200])
+            assert r.json()["code"] == "VALIDATION_ERROR" and "margin" in r.json()["error"]
+        assert recorder.calls == []
+        ok = await client.get("/api/tefca/qa/sampling-validation?margin=1e-150", headers=headers)
+        assert ok.status_code == 200
+    assert recorder.calls == [(94231, 0.95, 1e-150)]
+    assert math.isfinite(0.25 / (1e-150 * 1e-150))
