@@ -458,6 +458,33 @@ async def links_for_report(db, report_id: str) -> List[Dict[str, Any]]:
     return [_link_with_artifact(link, artifact) for link, artifact in rows]
 
 
+async def _job_report_verdicts(db, report_ids, job_id):
+    """One metadata-only read for all reports; never fetch report bodies."""
+    from app.tefca_registry import models as reg
+    from app.tefca_registry.rce.traceability_models import RceDeliveryReportLink
+
+    ids = sorted(set(report_ids))
+    if not ids:
+        return {}
+    rows = (await db.execute(select(
+        reg.ReviewReport.id, reg.ReviewReport.report_id,
+        reg.ReviewReport.report_data["dataset"]["delivery"].label("delivery"))
+        .where(reg.ReviewReport.report_id.in_(
+            select(RceDeliveryReportLink.report_id).where(RceDeliveryReportLink.job_id == job_id))))).all()
+    stored = {row.report_id: row for row in rows}
+    verdicts = {}
+    for report_id in ids:
+        row = stored.get(report_id)
+        delivery = (row.delivery or {}) if row is not None else {}
+        stored_job = str(delivery["job_id"]) if delivery.get("job_id") else None
+        ok = row is not None and stored_job == str(job_id)
+        verdicts[report_id] = {
+            "ok": ok, "code": None if ok else ("REPORT_NOT_STORED" if row is None else DELIVERY_MISMATCH),
+            "stored_job_id": stored_job,
+        }
+    return verdicts
+
+
 async def links_for_job(db, job_id) -> List[Dict[str, Any]]:
     """Link rows for the job, each VERIFIED against the stored report it
     names. A link whose stored report describes a different delivery (or none)
@@ -468,12 +495,9 @@ async def links_for_job(db, job_id) -> List[Dict[str, Any]]:
         stmt.where(L.job_id == job_id)
         .order_by(L.generated_at.desc(), L.report_id.desc(), _format_order(), L.id))).all()
     out = []
-    verdicts: Dict[str, Dict[str, Any]] = {}
+    verdicts = await _job_report_verdicts(db, (link.report_id for link, _ in rows), job_id)
     for link, artifact in rows:
-        verdict = verdicts.get(link.report_id)
-        if verdict is None:
-            verdict = await verify_report_delivery(db, link.report_id, job_id=job_id)
-            verdicts[link.report_id] = verdict
+        verdict = verdicts[link.report_id]
         if not verdict["ok"]:
             logger.error("job %s: link %s to report %s EXCLUDED (%s): stored report "
                          "describes job %s", job_id, link.id, link.report_id,
@@ -491,11 +515,12 @@ async def quarantined_links_for_job(db, job_id) -> List[Dict[str, Any]]:
     L = tm.RceDeliveryReportLink
     rows = (await db.execute(select(L).where(L.job_id == job_id))).scalars().all()
     out, seen = [], set()
+    verdicts = await _job_report_verdicts(db, (link.report_id for link in rows), job_id)
     for link in rows:
         if link.report_id in seen:
             continue
         seen.add(link.report_id)
-        verdict = await verify_report_delivery(db, link.report_id, job_id=job_id)
+        verdict = verdicts[link.report_id]
         if not verdict["ok"]:
             out.append({"report_id": link.report_id, "link_id": str(link.id),
                         "code": verdict["code"],

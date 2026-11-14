@@ -251,3 +251,45 @@ async def test_link_verification_never_reads_the_report_body(rolled_back_db, art
                   and "delivery" not in s]
     assert not whole_data, (
         f"link verification selected the whole report_data dataset:\n{whole_data[0][:400]}")
+
+
+@pytest.mark.parametrize("count", [1, 60])
+async def test_report_link_verification_has_constant_queries_and_keeps_mismatch_exclusion(rolled_back_db, count):
+    from sqlalchemy import event
+    from app.reports.data.delivery_report_links import links_for_job, quarantined_links_for_job
+    from app.tefca_registry import models as reg
+    from app.tefca_registry.rce.traceability_models import RceDeliveryReportLink
+
+    db = rolled_back_db
+    ids = await seed_delivery(db)
+    own, bad = set(), set()
+    token = uuid.uuid4().hex[:8]
+    for i, kind in enumerate(["own"] * count + ["foreign", "global", "missing"]):
+        report_id = f"SYN-{token}-{i}"
+        (own if kind == "own" else bad).add(report_id)
+        if kind != "missing":
+            stamp = {"job_id": str(ids["job_id"]), "intake_id": str(ids["intake_id"])} if kind == "own" else (
+                {"job_id": str(uuid.uuid4())} if kind == "foreign" else {})
+            db.add(reg.ReviewReport(report_id=report_id, report_type="delivery_processing",
+                report_data={"dataset": {"delivery": stamp}}, report_html="body must not be read"))
+        db.add(RceDeliveryReportLink(job_id=ids["job_id"], intake_id=ids["intake_id"],
+            snapshot_id=ids["snapshot_ids"][-1], report_id=report_id, report_type="delivery_processing",
+            template_version="test", generated_by="synthetic@x.invalid", correlation_id="synthetic-test"))
+    await db.flush()
+    conn = (await db.connection()).sync_connection
+    statements = []
+    def capture(_conn, _cursor, statement, _parameters, _context, _many):
+        statements.append(statement)
+    event.listen(conn, "before_cursor_execute", capture)
+    try:
+        links = await links_for_job(db, ids["job_id"])
+        assert len(statements) == 2, f"{count} reports required {len(statements)} queries"
+        statements.clear()
+        quarantine = await quarantined_links_for_job(db, ids["job_id"])
+        assert len(statements) == 2
+        assert all("report_html" not in sql for sql in statements)
+    finally:
+        event.remove(conn, "before_cursor_execute", capture)
+    assert {row["report_id"] for row in links} == own
+    assert {row["report_id"] for row in quarantine} == bad
+    assert {r["code"] for r in quarantine} == {"REPORT_NOT_STORED", "REPORT_DELIVERY_MISMATCH"}
