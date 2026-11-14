@@ -328,9 +328,9 @@ async def test_stored_error_contract_through_stage_to_dict_and_timeline(
     from rce_traceability_support import make_rows, seed_intake
     db = rolled_back_db
     intake, job = await seed_intake(db, make_rows(1, arc="9.99.777.990"))
-    recognisable = "DETAIL:" in reason or "<class" in reason or ": DataError: " in reason
-    stored_detail = ({"error": reason, "nested": [reason], "count": 2}
-                     if recognisable else {"count": 2})
+    # Every case, including the bare message with no class beside it: under an
+    # error key only a writer's own shapes are shown (contract, second pass).
+    stored_detail = {"error": reason, "attempts": [{"error": reason}], "count": 2}
     event = await stage_events.record_instant(
         db, job.id, "PROMOTION", status="FAILED", intake_id=intake,
         failure_reason=reason, detail=copy.deepcopy(stored_detail))
@@ -345,6 +345,7 @@ async def test_stored_error_contract_through_stage_to_dict_and_timeline(
     assert sanitize_stored_error(one["failure_reason"], failure_class=failure_class)         == one["failure_reason"]
     await db.refresh(event)
     assert event.failure_reason == reason
+    assert event.detail == stored_detail, "the stored detail is unchanged too"
 
 
 @pytest.mark.parametrize("failure_class,reason", [
